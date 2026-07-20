@@ -528,10 +528,9 @@ export async function backfillAppleCatalogueCommand(
   );
 }
 
-// The freshness tap (D8) has no CLI helper: it moved off the official Spotify budget onto the Apify
-// actor (the anchor-sweep model), so the BOX runs the actor + POSTs candidates to the agent-tier
-// verify+mint op directly — there is no Worker pass for the CLI to drive. See
-// docs/agents/hermes/scripts/label-releases-sweep.ts.
+// The freshness tap (D8) has no CLI helper: its box sweep POSTs the agent-tier
+// `backfill_label_releases` op over HTTP directly, avoiding the pinned-CLI version coupling that
+// broke an earlier run. See docs/agents/hermes/scripts/label-releases-sweep.ts.
 
 export type RecordingMbidsBackfillResult = {
   dryRun: boolean;

@@ -2512,11 +2512,11 @@ function addAdminCommands(program: Command): void {
       await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
     });
 
-  // The freshness tap (D8) has NO operator CLI command: it moved off the official Spotify budget
-  // onto the Apify actor `musicae~spotify-extended-scraper` (the anchor-sweep model), so the BOX runs
-  // the actor and POSTs candidates to the agent-tier verify+mint op directly — there is no Worker
-  // pass for a CLI to loop. Operate it via the box sweep (docs/agents/hermes/scripts/
-  // label-releases-sweep.sh), exactly like the catalogue anchor.
+  // The freshness tap (D8) has NO operator CLI command, deliberately. Its box sweep POSTs the
+  // agent-tier `backfill_label_releases` op over HTTP rather than shelling out here, because the
+  // baked box CLI is a PINNED release and a pin predating a flag fails the run outright (`Unknown
+  // option '--limit'`, seen live). Adding a command back would re-create that coupling for no gain.
+  // Operate it via the box sweep (docs/agents/hermes/scripts/label-releases-sweep.sh).
 
   // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
   // tables (artists + track_artists) for existing findings that predate Unit 1.

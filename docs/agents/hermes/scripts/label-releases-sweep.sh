@@ -10,22 +10,20 @@
 # (fluncle-hermes-operator skill). The pair is BAKED into the image at /opt/hermes-scripts/ and
 # auto-updates from main via pin-watch — no docker cp. See ../label-releases-timer/README.md.
 #
-# WHAT IT DOES (docs/catalogue-crawler.md § the freshness tap): fetch the DUE enabled seed labels from
-# the Worker with the box's agent token, run the Apify actor per label to find its fresh releases, and
-# POST each label's candidates to `backfill_label_releases` — where the WORKER re-runs the full gate
-# (artist-grounding + label attribution + dedupe) and mints the survivors. The tap is off the official
-# Spotify budget entirely (the anchor-sweep model); the Worker touches no Spotify API on this path.
+# WHAT IT DOES (docs/catalogue-crawler.md § the freshness tap): POST bounded passes of
+# `backfill_label_releases` with the box's agent token until the due seed labels are drained. The
+# WORKER does all of it — the official-Spotify fresh-release search, the artist-grounding + copyright
+# gate, the dedupe, the mint — and paces itself against the shared per-app call meter so a user's
+# playlist mint always finds window headroom. This wrapper is a TRIGGER; the box holds no Spotify
+# identity and no vendor token on this path.
 # Resumable by construction: the worklist is derived (the oldest-probed enabled labels) and completing
 # a label stamps its re-probe cadence, so a stopped tick loses nothing and re-running drains what is due.
 #
 # PRODUCTION PRE-REQS (see ../label-releases-timer/README.md):
 #   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected), sourced below:
-#       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (`backfill_label_releases` + the worklist read
-#                           are agent tier).
-#       APIFY_API_TOKEN   — the Apify account token that runs the Spotify-scraper actor. NOT a new
-#                           secret — the catalogue anchor sweep already provisions it; the tap reuses
-#                           the SAME one. Placeholder op://<vault>/APIFY_API_TOKEN/credential (concrete
-#                           path in the private companion + the timer README's activation section).
+#       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (`backfill_label_releases` is agent tier).
+#                           The ONLY secret this sweep needs; the tap's Spotify calls happen in the
+#                           Worker on the publish path's OAuth grant.
 set -euo pipefail
 
 # The docker-exec / runner context hands this a minimal PATH that omits /usr/local/bin (the bun
@@ -36,7 +34,7 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
 # Source the shared 0600 secrets file (the same single source every other sweep reads) so the
-# agent token + the Apify token are present.
+# agent token is present.
 LABEL_RELEASES_ENV_FILE="${LABEL_RELEASES_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${LABEL_RELEASES_ENV_FILE}" ]; then
   set -a

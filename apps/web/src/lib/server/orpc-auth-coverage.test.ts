@@ -432,7 +432,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The freshness tap's worklist (D8) — the enabled seed labels due for a fresh-release probe.
   // Agent tier (adminAuth only): a READ of machine state the box's `fluncle-label-releases` sweep
   // drains with its agent token, the `list_track_work` precedent. A pure read; it publishes nothing.
-  list_label_releases_work: "admin",
   // Every label with its crawl-seed state — admin tier (agent-allowed), the
   // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the
   // catalogue crawler makes with its agent token. A pure read; it publishes nothing.

@@ -4,149 +4,91 @@
 //
 // WHY THIS EXISTS. MusicBrainz WALKS the graph (the crawler), but its editorial database lags a
 // release by ~2 weeks, so a Friday drop is invisible on /fresh until the volunteers enter it. Spotify
-// has it day one. So this taps FRESHNESS: for each ENABLED seed label it finds the last-two-weeks
-// releases and mints METADATA-ONLY catalogue rows with their real (day-one) dates.
+// has it day one. So the tap finds each ENABLED seed label's last-two-weeks releases and mints
+// METADATA-ONLY catalogue rows with their real (day-one) dates.
 //
-// WHY THE APIFY ACTOR (the 2026-07-20 move — the anchor-sweep precedent). The first cut ran the
-// Spotify reads IN THE WORKER against the official dev-mode Spotify app — the same app the user paths
-// (adds, publish, the Frontier mints) depend on. That app is rate-limited to death at its tier
-// (batch endpoints 403, search `limit` ≤ 10, sustained 429s), and its budget is shared with the user
-// writes. So the tap moved OFF that budget onto the Apify actor `musicae~spotify-extended-scraper` —
-// the SAME actor + box-runs-actor / Worker-verifies split the catalogue ANCHOR already uses. The box
-// holds the Apify token; the Worker holds no Spotify identity on this path.
+// THIS SCRIPT IS A TRIGGER, NOT A PIPELINE. All the work — the Spotify search, the album/track reads,
+// the artist-grounding + copyright gate, the dedupe, the mint — happens in the WORKER
+// (`backfill_label_releases`, apps/web/src/lib/server/label-releases.ts). The box holds no Spotify
+// identity and no vendor token on this path; it just paces the Worker, one bounded pass per POST.
+//
+// WHY NOT THE ACTOR ANY MORE (2026-07-20). For half a day this sweep ran the Apify actor
+// `musicae~spotify-extended-scraper` itself and POSTed candidate albums for the Worker to verify —
+// to keep the tap off the official Spotify app's small shared budget. That is REVERTED: the actor's
+// ALBUM mode broke Spotify-side (an album search, an album-by-id, and a famous-album query all came
+// back `result:"0/N", albums:[]` while its TRACK mode kept working and the actor's own code was
+// untouched — a rotated persisted-query hash only its maintainer can re-fix). The alternatives were
+// measured dead too: apiharvest's actors 403 behind their residential proxy, and the working TRACK
+// mode cannot substitute (`tag:new` is ALBUM-only, and track results carry no release_date — the one
+// field this tap exists for). The official API's album search is documented and stable, and the
+// budget problem is now solved properly by the shared call meter the Worker paces itself against.
+// THE ANCHOR SWEEP STILL USES THE ACTOR (its TRACK mode works) and is untouched by this.
+//
+// WHY HTTP AND NOT THE CLI. The baked `fluncle` CLI is a PINNED release, so this sweep calls the
+// oRPC endpoint DIRECTLY with the agent token (the anchor-sweep precedent) rather than shelling out
+// to `fluncle admin backfills label-releases` — a pinned CLI that predates a flag fails the run
+// outright (`Unknown option '--limit'`, seen live). HTTP has no such version coupling.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (label-releases-sweep.sh) the host
 // timer docker-execs — see that file's header for the wire-up and ../label-releases-timer/README.md.
 //
 // ── THE LOOP, per tick ───────────────────────────────────────────────────────────────────────
-//   (a) FETCH the due seed labels from the Worker with the box's AGENT token
-//       (`GET /api/admin/backfill/label-releases/work`). Each row is `{ slug, name }`.
-//   (b) For each label RUN the Apify actor once (`albums:["label:\"<name>\" tag:new"]`), returning
-//       ONE dataset item PER fresh album — its metadata NESTED in `item.albums[0]`, its `tracks[]`
-//       (+ ISRCs) + `artists[]` at the item's top level.
-//   (c) MAP each item to a candidate ({ albumId, albumName, albumLabel, albumCopyright, releaseDate,
-//       artists, tracks }), reading the album fields from the nested `item.albums[0]`. An item with no
-//       album metadata OR no release_date is DROPPED (a null release_date row can never show on
-//       /fresh). `albumLabel`/`albumCopyright` come back NULL in this mode (measured live 2026-07-20)
-//       — the Worker gates on artist-grounding there.
-//   (d) POST the label's candidates to `backfill_label_releases`. The WORKER re-runs the FULL gate
-//       (artist-grounding + label attribution + dedupe — the box's match is NEVER trusted) and mints
-//       the survivors. Completing a label stamps its re-probe cadence, so an empty result is not
-//       re-asked (or re-billed) that window.
+// POST one bounded pass at a time until the work is done, because a pass is capped at a few labels
+// by design. It stops on: nothing due (`labelsProbed: 0`), a Spotify 429, a gone grant
+// (`configured: false`), or the pass fuse. THE ONE CASE IT WAITS ON is `budgetPaused` — the Worker
+// stepped back from the shared Spotify window to leave room for a user's playlist mint. That is the
+// system working, not a fault: the window is ~30s, so the sweep sleeps one window and carries on,
+// bounded by its own pause fuse so a permanently-busy app can never spin here all night.
 //
-// THE BOX DEPENDS ON NO NEW CLI COMMAND. The baked `fluncle` CLI is a PINNED release, so this sweep
-// calls the oRPC HTTP endpoints DIRECTLY with the agent token (the anchor-sweep precedent), never a
-// `fluncle admin …` subcommand a pin might not carry.
-//
-// COST. ~$0.005 per Apify result item → a handful of fresh albums per due label per day. With ~30
-// enabled labels re-probed daily, tens of result items → a few cents a day. Pause = stop the timer.
-// Attended burn = `--limit N`. Full cost math: ../label-releases-timer/README.md.
+// COST. Zero vendor spend and zero LLM tokens — the Worker's Spotify calls ride the OAuth grant we
+// already hold. Pause = stop the timer. Attended burn = `--limit N`.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
-// ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
+// ── Config (env; the shared ~/.fluncle-secrets.env supplies the token on the box) ──
 
 const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
 const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
-// The Apify token — referenced by ENV NAME only; the concrete op:// path lives in the private
-// companion + the timer README's activation section. Already on the box for the anchor sweep — the
-// tap reuses that SAME secret, so activating it needs no new provisioning.
-const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN ?? "";
-
-// The working actor (the anchor sweep's, verified live 2026-07-20). Overridable for a pinned/forked id.
-const APIFY_ACTOR = process.env.FLUNCLE_LABEL_RELEASES_ACTOR ?? "musicae~spotify-extended-scraper";
-
-/** Enabled seed labels probed per tick — small on purpose (each is a billed Apify album search).
- *  `--limit` overrides it for an attended backlog burn. */
+/** Enabled seed labels asked for per PASS. The Worker clamps this to its own per-pass cap; the
+ *  sweep loops passes until the due set is drained. `--limit` overrides it for an attended burn. */
 const BATCH = Number(process.env.FLUNCLE_LABEL_RELEASES_LABELS ?? "5");
 
-/** The actor's per-label fresh-album cap. `tag:new` spans two weeks; even a busy seed label ships
- *  fewer fresh records than this, so 10 is plenty (more candidates = more spend). */
-const SEARCH_KEYWORD_LIMIT = Number(process.env.FLUNCLE_LABEL_RELEASES_KEYWORD_LIMIT ?? "10");
+/** The pass fuse — the most bounded passes one tick will drive. At the Worker's 5-labels-per-pass
+ *  cap this is ~150 labels, comfortably more than the enabled seed set, so it only ever trips on a
+ *  pathological loop (a pass that keeps reporting work but never stamps). */
+const MAX_PASSES = Number(process.env.FLUNCLE_LABEL_RELEASES_MAX_PASSES ?? "30");
+
+/** How long to stand down when the Worker reports it stepped back from the shared Spotify window.
+ *  One meter window (`SPOTIFY_CALL_WINDOW_MS`, 30s) — long enough for the window to roll over. */
+const BUDGET_WAIT_MS = Number(process.env.FLUNCLE_LABEL_RELEASES_BUDGET_WAIT_MS ?? "30000");
+
+/** The pause fuse: consecutive budget stand-downs before the tick gives up and leaves the rest for
+ *  the next one. A busy app is a reason to come back later, never a reason to spin. */
+const MAX_BUDGET_WAITS = Number(process.env.FLUNCLE_LABEL_RELEASES_MAX_BUDGET_WAITS ?? "5");
 
 const log = (message: string) => console.error(`[label-releases-sweep] ${message}`);
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-/** One row of the freshness-tap worklist (the identity the actor query + POST-back read). */
-export type LabelWorkItem = { name?: string; slug?: string };
-
-/** One credited artist on an actor result album. */
-type ApifyArtist = { artist_id?: string; artist_name?: string };
-
-/** One inline track on an actor result album. */
-type ApifyTrack = {
-  track_duration_ms?: number;
-  track_id?: string;
-  track_isrc?: string;
-  track_name?: string;
-  track_uri?: string;
-  track_url?: string;
-};
-
-/** The album metadata — the actor NESTS it in `item.albums[0]`, NOT at the item's top level. */
-type ApifyAlbum = {
-  album_copyright?: null | string;
-  album_id?: string;
-  album_label?: null | string;
-  album_name?: string;
-  album_release_date?: string;
-  album_total_tracks?: number;
-  album_upc?: string;
-};
-
-/**
- * One item in the actor's `albums`-search result array = ONE album. Its metadata is NESTED under
- * `albums[0]` (verified live), while its `tracks[]` + `artists[]` sit at the item's top level. The
- * earlier flat shape read `item.album_*` and always got `undefined` — the null-release_date bug that
- * minted /fresh-invisible rows. `target`/`result`/`type`/`mode` are the actor's per-item metadata.
- */
-export type ApifyAlbumItem = {
-  albums?: ApifyAlbum[];
-  artists?: ApifyArtist[];
-  error?: null | string;
-  mode?: string;
-  result?: string;
-  success?: boolean;
-  target?: string;
-  tracks?: ApifyTrack[];
-  type?: string;
-};
-
-/** One credited artist in the verify+mint request body. */
-export type LabelReleaseArtistPayload = { id?: null | string; name: string };
-
-/** One track in the verify+mint request body. */
-export type LabelReleaseTrackPayload = {
-  durationMs?: null | number;
-  isrc?: null | string;
-  spotifyTrackId: string;
-  title: string;
-  uri?: null | string;
-  url?: null | string;
-};
-
-/** One candidate album in the `backfill_label_releases` request body. */
-export type LabelReleaseAlbumPayload = {
-  albumCopyright?: null | string;
-  albumId?: null | string;
-  albumLabel?: null | string;
-  albumName?: null | string;
-  artists: LabelReleaseArtistPayload[];
-  releaseDate?: null | string;
-  tracks: LabelReleaseTrackPayload[];
-};
-
-/** The verify+mint op's per-label verdict (only the fields this sweep tallies). */
-export type MintVerdict = {
+/** One bounded pass's verdict, as `backfill_label_releases` returns it (the fields the tick reads). */
+export type PassResult = {
   albumsMatched: number;
   albumsSeen: number;
-  found: boolean;
+  /** The Worker stepped back from the shared Spotify window at the tap's ceiling — wait, retry. */
+  budgetPaused: boolean;
+  /** False when the publish path's Spotify grant is gone — the tap is a whole no-op until reconnect. */
+  configured: boolean;
+  failedLabels: string[];
+  /** True when the pass ended on its per-pass single-fetch ceiling — more work remains. */
+  fetchCeilingHit: boolean;
+  /** Enabled seed labels whose search actually ran. 0 means nothing was due — the tick is done. */
+  labelsProbed: number;
   newRows: number;
+  rateLimited: boolean;
   skippedKnown: number;
-  skippedUnattributed: number;
+  skippedUndated: number;
   skippedUngrounded: number;
 };
 
@@ -154,92 +96,36 @@ export type MintVerdict = {
 export type LabelReleasesSummary = {
   albumsMatched: number;
   albumsSeen: number;
+  /** True when the tick ended standing down for the shared Spotify budget (not a fault). */
+  budgetPaused: boolean;
+  /** False when the Spotify grant is gone — nothing ran; the operator must reconnect Spotify. */
+  configured: boolean;
   error: null | string;
-  /** Labels whose Apify actor run THREW this tick (retried next tick — nothing stamped). */
+  /** Seed labels that hit a transient Spotify error on their search (backed off, re-probed later). */
   failedLabels: number;
-  /** Enabled seed labels the actor ran + POSTed for this tick. */
+  /** Enabled seed labels probed across every pass this tick. */
   labelsProbed: number;
   newRows: number;
   ok: boolean;
-  /** Rows this tick could not settle (a bad worklist row, or a POST that threw). */
-  skipped: number;
+  /** Bounded passes driven this tick. */
+  passes: number;
+  /** True when the tick stopped on a Spotify 429 (the backstop beneath the meter). */
+  rateLimited: boolean;
   skippedKnown: number;
-  skippedUnattributed: number;
+  skippedUndated: number;
   skippedUngrounded: number;
 };
 
-/** The injected effects — so the tick's mapping + routing are provable with stubs (no network). */
+/** The injected effects — so the tick's loop + stop conditions are provable with stubs (no network). */
 export type LabelReleasesDeps = {
-  fetchQueue: (limit: number) => Promise<LabelWorkItem[]>;
   log: (message: string) => void;
-  report: (labelSlug: string, candidates: LabelReleaseAlbumPayload[]) => Promise<MintVerdict>;
-  runActor: (labelName: string) => Promise<ApifyAlbumItem[]>;
+  /** Drive ONE bounded pass (the `backfill_label_releases` POST). */
+  runPass: (limit: number) => Promise<PassResult>;
+  /** Stand down for the shared Spotify window (stubbed to a no-op in tests). */
+  wait: (ms: number) => Promise<void>;
 };
 
-// ── Pure mappers (unit-tested against the real actor payload shape) ────────────
-
-/**
- * Map one actor result album to a candidate, or null when it is unusable. The album metadata is read
- * from the NESTED `item.albums[0]` (the tracks + artists stay at item level). A candidate is dropped
- * when it has no album metadata OR no `album_release_date`: a catalogue row with a null release_date
- * can never surface on /fresh (the /fresh window filters on it), so minting it is a silent no-op.
- */
-export function albumItemToCandidate(item: ApifyAlbumItem): LabelReleaseAlbumPayload | null {
-  if (item.success === false) {
-    return null;
-  }
-
-  const albumMeta = item.albums?.[0];
-
-  // No album metadata, or no day-one date → the row could never show on /fresh, so never mint it.
-  if (!albumMeta || !albumMeta.album_release_date) {
-    return null;
-  }
-
-  const tracks: LabelReleaseTrackPayload[] = (item.tracks ?? [])
-    .map((track): LabelReleaseTrackPayload | null => {
-      const spotifyTrackId = track.track_id?.trim();
-
-      if (!spotifyTrackId || !track.track_name) {
-        return null;
-      }
-
-      return {
-        durationMs: typeof track.track_duration_ms === "number" ? track.track_duration_ms : null,
-        isrc: track.track_isrc ?? null,
-        spotifyTrackId,
-        title: track.track_name,
-        uri: track.track_uri ?? null,
-        url: track.track_url ?? null,
-      };
-    })
-    .filter((track): track is LabelReleaseTrackPayload => track !== null);
-
-  if (tracks.length === 0) {
-    return null;
-  }
-
-  return {
-    albumCopyright: albumMeta.album_copyright ?? null,
-    albumId: albumMeta.album_id ?? null,
-    albumLabel: albumMeta.album_label ?? null,
-    albumName: albumMeta.album_name ?? null,
-    artists: (item.artists ?? [])
-      .filter((artist): artist is ApifyArtist & { artist_name: string } =>
-        Boolean(artist.artist_name),
-      )
-      .map((artist) => ({ id: artist.artist_id ?? null, name: artist.artist_name })),
-    releaseDate: albumMeta.album_release_date,
-    tracks,
-  };
-}
-
-/** Map the actor's result array to candidate albums, dropping the trackless ones. */
-export function mapAlbumItems(items: ApifyAlbumItem[]): LabelReleaseAlbumPayload[] {
-  return items
-    .map((item) => albumItemToCandidate(item))
-    .filter((candidate): candidate is LabelReleaseAlbumPayload => candidate !== null);
-}
+// ── Pure helpers ─────────────────────────────────────────────────────────────
 
 /** Parse `--limit N` (an attended backlog burn); default is the tick's `FLUNCLE_LABEL_RELEASES_LABELS`. */
 export function parseLimitArg(argv: string[], fallback: number): number {
@@ -252,6 +138,11 @@ export function parseLimitArg(argv: string[], fallback: number): number {
 
 // ── One tick, with injected effects ──────────────────────────────────────────
 
+/**
+ * Drive bounded passes until the due set is drained or a stop condition fires. The Worker owns every
+ * decision; this only decides whether to ask again. `budgetPaused` is the sole WAIT-and-retry case
+ * (the tap yielding the Spotify window to a user path); everything else either continues or stops.
+ */
 export async function runLabelReleasesTick(
   limit: number,
   deps: LabelReleasesDeps,
@@ -259,144 +150,134 @@ export async function runLabelReleasesTick(
   const summary: LabelReleasesSummary = {
     albumsMatched: 0,
     albumsSeen: 0,
+    budgetPaused: false,
+    configured: true,
     error: null,
     failedLabels: 0,
     labelsProbed: 0,
     newRows: 0,
     ok: true,
-    skipped: 0,
+    passes: 0,
+    rateLimited: false,
     skippedKnown: 0,
-    skippedUnattributed: 0,
+    skippedUndated: 0,
     skippedUngrounded: 0,
   };
 
-  let queue: LabelWorkItem[];
+  let budgetWaits = 0;
 
-  try {
-    queue = await deps.fetchQueue(limit);
-  } catch (error) {
-    summary.ok = false;
-    summary.error = error instanceof Error ? error.message : String(error);
-
-    return summary;
-  }
-
-  // Only rows carrying both a slug and a name are actionable; the rest are counted skipped.
-  const rows = queue.filter(
-    (row): row is { name: string; slug: string } => Boolean(row.slug) && Boolean(row.name),
-  );
-  summary.skipped += queue.length - rows.length;
-
-  for (const row of rows) {
-    let candidates: LabelReleaseAlbumPayload[];
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+    let result: PassResult;
 
     try {
-      candidates = mapAlbumItems(await deps.runActor(row.name));
+      result = await deps.runPass(limit);
     } catch (error) {
-      // A label's actor run failing is a per-label miss, not a tick abort — the next tick retries
-      // (the label is unstamped, so it is still due). Report it but keep draining the rest.
-      deps.log(
-        `actor run failed for ${row.slug}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      summary.failedLabels += 1;
+      // A failed pass ends the tick — the per-label cadence stamps are durable, so the next tick
+      // resumes from exactly where this one stopped. Nothing is lost by giving up here.
       summary.ok = false;
       summary.error = error instanceof Error ? error.message : String(error);
+
+      return summary;
+    }
+
+    summary.passes += 1;
+    summary.labelsProbed += result.labelsProbed;
+    summary.albumsSeen += result.albumsSeen;
+    summary.albumsMatched += result.albumsMatched;
+    summary.newRows += result.newRows;
+    summary.skippedKnown += result.skippedKnown;
+    summary.skippedUndated += result.skippedUndated;
+    summary.skippedUngrounded += result.skippedUngrounded;
+    summary.failedLabels += result.failedLabels.length;
+
+    if (!result.configured) {
+      // The Spotify grant is gone. Not a crash — a documented no-op until the operator reconnects.
+      summary.configured = false;
+      deps.log("spotify grant gone (configured:false) — reconnect Spotify to resume the tap");
+
+      return summary;
+    }
+
+    if (result.rateLimited) {
+      summary.rateLimited = true;
+      deps.log("stopped on a Spotify 429 — the next tick resumes");
+
+      return summary;
+    }
+
+    if (result.budgetPaused) {
+      // THE TAP YIELDED. The Worker stepped back to leave window headroom for a user's mint. Wait
+      // one window and ask again — bounded, so a permanently-busy app ends the tick instead.
+      budgetWaits += 1;
+      summary.budgetPaused = true;
+
+      if (budgetWaits > MAX_BUDGET_WAITS) {
+        deps.log(
+          `stood down ${MAX_BUDGET_WAITS}x for the shared Spotify budget — leaving the rest`,
+        );
+
+        return summary;
+      }
+
+      deps.log(`shared Spotify budget busy — standing down ${BUDGET_WAIT_MS}ms for a user path`);
+      await deps.wait(BUDGET_WAIT_MS);
       continue;
     }
 
-    try {
-      const verdict = await deps.report(row.slug, candidates);
-      summary.labelsProbed += 1;
-      summary.albumsSeen += verdict.albumsSeen;
-      summary.albumsMatched += verdict.albumsMatched;
-      summary.newRows += verdict.newRows;
-      summary.skippedKnown += verdict.skippedKnown;
-      summary.skippedUngrounded += verdict.skippedUngrounded;
-      summary.skippedUnattributed += verdict.skippedUnattributed;
-    } catch (error) {
-      // One label's POST failing never aborts the tick (the capture-sweep discipline).
-      deps.log(`${row.slug}: ${error instanceof Error ? error.message : String(error)}`);
-      summary.skipped += 1;
+    // A pass that probed nothing means nothing is due — the tick is done.
+    if (result.labelsProbed === 0) {
+      return summary;
     }
   }
+
+  deps.log(`hit the ${MAX_PASSES}-pass fuse — the next tick drains the rest`);
 
   return summary;
 }
 
 // ── The real (box-side) effects ───────────────────────────────────────────────
 
-async function fetchLabelQueue(limit: number): Promise<LabelWorkItem[]> {
-  const url = `${API_BASE_URL}/api/admin/backfill/label-releases/work?limit=${limit}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${API_TOKEN}` },
-    signal: AbortSignal.timeout(30_000),
-  });
-
-  if (!res.ok) {
-    throw new Error(
-      `label-releases queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
-  }
-
-  const body = (await res.json()) as { labels?: LabelWorkItem[] };
-
-  return Array.isArray(body.labels) ? body.labels : [];
-}
-
-async function runApifyActor(labelName: string): Promise<ApifyAlbumItem[]> {
-  const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${APIFY_API_TOKEN}`;
-  const res = await fetch(url, {
-    body: JSON.stringify({
-      albums: [`label:"${labelName}" tag:new`],
-      searchKeywordLimit: SEARCH_KEYWORD_LIMIT,
-    }),
-    headers: { "Content-Type": "application/json" },
-    method: "POST",
-    // Apify run-sync waits for the run to finish; one album search is well within this, with headroom.
-    signal: AbortSignal.timeout(300_000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`apify actor run failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
-  }
-
-  const body = (await res.json()) as unknown;
-
-  return Array.isArray(body) ? (body as ApifyAlbumItem[]) : [];
-}
-
-async function reportLabelReleases(
-  labelSlug: string,
-  candidates: LabelReleaseAlbumPayload[],
-): Promise<MintVerdict> {
+async function runPass(limit: number): Promise<PassResult> {
   const res = await fetch(`${API_BASE_URL}/api/admin/backfill/label-releases`, {
-    body: JSON.stringify({ candidates, labelSlug }),
+    body: JSON.stringify({ dryRun: false, limit }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,
       "Content-Type": "application/json",
     },
     method: "POST",
-    signal: AbortSignal.timeout(30_000),
+    // The Worker's pass makes a trickle of Spotify reads; generous, with headroom for a slow app.
+    signal: AbortSignal.timeout(120_000),
   });
 
   if (!res.ok) {
     throw new Error(
-      `backfill_label_releases ${labelSlug} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      `backfill_label_releases failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
     );
   }
 
-  const body = (await res.json()) as MintVerdict;
+  const body = (await res.json()) as Partial<PassResult>;
 
   return {
     albumsMatched: Number(body.albumsMatched ?? 0),
     albumsSeen: Number(body.albumsSeen ?? 0),
-    found: Boolean(body.found),
+    budgetPaused: Boolean(body.budgetPaused),
+    // Absent ⇒ configured: only an explicit `false` means the grant is gone.
+    configured: body.configured !== false,
+    failedLabels: Array.isArray(body.failedLabels) ? body.failedLabels : [],
+    fetchCeilingHit: Boolean(body.fetchCeilingHit),
+    labelsProbed: Number(body.labelsProbed ?? 0),
     newRows: Number(body.newRows ?? 0),
+    rateLimited: Boolean(body.rateLimited),
     skippedKnown: Number(body.skippedKnown ?? 0),
-    skippedUnattributed: Number(body.skippedUnattributed ?? 0),
+    skippedUndated: Number(body.skippedUndated ?? 0),
     skippedUngrounded: Number(body.skippedUngrounded ?? 0),
   };
 }
+
+const wait = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -408,22 +289,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (!APIFY_API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_apify_token" }));
-    process.exit(1);
-  }
-
   const limit = parseLimitArg(
     process.argv.slice(2),
     Number.isFinite(BATCH) && BATCH > 0 ? Math.trunc(BATCH) : 5,
   );
 
-  const summary = await runLabelReleasesTick(limit, {
-    fetchQueue: fetchLabelQueue,
-    log,
-    report: reportLabelReleases,
-    runActor: runApifyActor,
-  });
+  const summary = await runLabelReleasesTick(limit, { log, runPass, wait });
 
   console.log(JSON.stringify({ ...summary, elapsedMs: Date.now() - started }));
 
