@@ -1,6 +1,6 @@
 # RFC: artist-primary capture — authorization follows the artist, labels stay discovery
 
-**Status:** In flight (ratified in conversation 2026-07-20; spike numbers below). Prune when shipped.
+**Status:** In flight — slices 0 (#785) + 1 (#786) SHIPPED and live 2026-07-20 (gate active, graph 33%→62%, drain done: 13,193 edges / 9,432 full / 1,556 partial / 14,348 zero-matched). This file carries only the remaining slices. Prune when all ship.
 **Supersedes:** the `not-a-seed` four-state sketch (never built). Labels keep exactly the three states they have (`enabled` / `disabled` / `undecided`); no new label state ships.
 
 ## The model
@@ -25,8 +25,9 @@ Two axes, cleanly separated:
 
 ## Slices
 
-- **Slice 0 — graph backfill (prerequisite):** fold `tracks.artists_json` names onto EXISTING `artists` rows (exact fold + `artist_aliases`), writing `track_artists` edges idempotently. No minting from bare names (an artist row is an entity with a page — a name string is not enough identity); report the unmatched residual, which decides whether a paced MusicBrainz credit-sweep follow-up is worth it.
-- **Slice 1 — authorization core:** the qualified-artist set (precomputed, sweep-scale), the gate in `capturePriorityFor`'s caller path, `findingLabels` demoted, the new negative tier riding the existing `capture_priority >= 0` queue predicate, docs + tests.
+- **Slice 0 — graph backfill: SHIPPED (#785).** The 14,348-track zero-match residual ratified the credit sweep below.
+- **Slice 1 — authorization core: SHIPPED (#786).** Tier table + the `unauthorized` −3 sink + the `v4` fingerprint live; the `force_capture` floor preserved.
+- **Slice 1b — the MB credit sweep (next):** for each zero-matched track that carries a MusicBrainz recording id, one paced `inc=artist-credits` lookup through the shared MB client → mint identity-true `artists` rows by MB artist id (minting IS allowed here — a real id is real identity; reuse the crawler's artist-mint path) or match existing rows by `mb_artist_id`, then write the edges. A zero-matched track with NO MB identity is terminal-skipped. Own reliability stamp (never disturb the slice-0 stamp's semantics); ~14.3k tracks ≈ one MB call each, drained by a 5-minute box cron at a modest per-tick batch over ~a day and a half.
 - **Slice 2 (later) — preview-BPM gate:** free 30s-preview beat detection before capture; octave-folded acceptance (160–180 ∪ 80–90 ∪ ~320–360), reject only on a CONFIDENT out-of-band reading, no confident beat → pass (the piano-intro case). Analysis-only preview use; never feeds vectors (ratified canon).
 - **Slice 3 (later) — catalogue cleanup pass:** retire tracks/artists that should never have entered (operator-scoped; define "shouldn't" against this model first — likely: unauthorized + off-genre-confident + no graph affinity).
 
