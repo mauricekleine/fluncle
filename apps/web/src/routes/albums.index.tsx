@@ -7,17 +7,14 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount, tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
 import {
   type AlbumCatalogueEntry,
   type AlbumIndexEntry,
   listAlbumsCataloguePage,
   listAlbumsWithFindingCounts,
 } from "@/lib/server/albums";
-import {
-  type CatalogueHubNumberedPage,
-  CatalogueHubPageOutOfRangeError,
-} from "@/lib/server/labels";
+import { type CatalogueHubNumberedPage, type EditorialHubPage } from "@/lib/server/labels";
 
 // The albums index: every record Fluncle has logged a finding off, cover-led (the album art
 // IS the entity here), each linking to its `/album/<slug>` page — the internal-link hub that
@@ -29,11 +26,16 @@ import {
 // a real-anchor `?page=N` pager. Albums have NO A–Z lane — an album's identity is its cover, not a
 // title-initial, so browse-by-letter is not how records are dug — so the numbered pager IS the album
 // hub's crawl entry into the long tail.
+//
+// ONE `?page=N` walks BOTH sections: page N is slice N of the logged records and slice N of the long
+// tail, so the hub keeps a single pager and a single URL space however far the archive grows. The
+// logged list runs out first, and from there the deeper pages are pure long tail. A page past the end
+// of BOTH 404s — never a clamp to page 1, which would be a second URL for page 1's tiles.
 
 type AlbumsPageData =
   | {
       catalogue: CatalogueHubNumberedPage<AlbumCatalogueEntry>;
-      findings: AlbumIndexEntry[];
+      findings: EditorialHubPage<AlbumIndexEntry>;
       page: number;
       status: "found";
     }
@@ -41,22 +43,16 @@ type AlbumsPageData =
 
 async function resolveAlbumsPage(page: number | undefined): Promise<AlbumsPageData> {
   const requested = page ?? 1;
-  const [paged, findings] = await Promise.all([
-    listAlbumsCataloguePage(requested).catch((error: unknown) => {
-      if (error instanceof CatalogueHubPageOutOfRangeError) {
-        return null;
-      }
-
-      throw error;
-    }),
-    listAlbumsWithFindingCounts(),
+  const [catalogue, findings] = await Promise.all([
+    listAlbumsCataloguePage(requested),
+    listAlbumsWithFindingCounts(requested),
   ]);
 
-  if (paged === null) {
+  if (requested > Math.max(catalogue.pageCount, findings.pageCount)) {
     return { status: "missing" };
   }
 
-  return { catalogue: paged, findings, page: requested, status: "found" };
+  return { catalogue, findings, page: requested, status: "found" };
 }
 
 const fetchAlbumsPage = createServerFn({ method: "GET" })
@@ -94,7 +90,7 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
   // The ItemList stays Fluncle's CURATED list (the findings section only): the catalogue records'
   // pages are already carried by the sitemap. It rides as the `mainEntity` of a `CollectionPage`,
   // carrying `numberOfItems` so the list's size is machine-readable without counting.
-  const albums = loaderData.findings;
+  const albums = loaderData.findings.items;
   const collectionPage = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
@@ -169,13 +165,25 @@ function AlbumsPage() {
 
   const { catalogue, findings } = data;
   const buildHref = (page: number) => (page <= 1 ? "/albums" : `/albums?page=${page}`);
+  const pageCount = Math.max(catalogue.pageCount, findings.pageCount);
+  // ONE pager for the whole hub. It rides inside the long-tail section as before — but that section
+  // renders nothing when its slice is empty, and the logged list can still have pages left there, so
+  // the same pager is rendered on its own in that case rather than stranding the reader.
+  const pager = (
+    <CataloguePager
+      buildHref={buildHref}
+      label="More records, more pages"
+      page={data.page}
+      pageCount={pageCount}
+    />
+  );
   const renderTile = (album: AlbumCatalogueEntry) => (
     <li key={album.slug}>
       <Link params={{ slug: album.slug }} to="/album/$slug">
         <TrackArtwork
           alt=""
           className="artist-grid-cover"
-          src={albumCoverAtSize(album.coverImageUrl, "large")}
+          src={albumCoverAtSize(album.coverImageUrl, COVER_TILE_SIZE)}
         />
         <span className="artist-grid-line">{album.name}</span>
         <span className="artist-grid-count">{tracksCount(album.trackCount)}</span>
@@ -189,21 +197,21 @@ function AlbumsPage() {
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Albums</h1>
           <p className="log-index-intro">
-            Every drum &amp; bass record with a finding in the archive. {findings.length} logged.
+            Every drum &amp; bass record with a finding in the archive. {findings.total} logged.
           </p>
         </header>
 
-        {findings.length === 0 ? (
+        {findings.total === 0 ? (
           <p className="log-index-empty empty-scanlines">No albums logged yet. Quiet sector.</p>
-        ) : (
+        ) : findings.items.length > 0 ? (
           <ul aria-label="Albums" className="artist-grid">
-            {findings.map((album) => (
+            {findings.items.map((album) => (
               <li key={album.slug}>
                 <Link params={{ slug: album.slug }} to="/album/$slug">
                   <TrackArtwork
                     alt=""
                     className="artist-grid-cover"
-                    src={albumCoverAtSize(album.coverImageUrl, "large")}
+                    src={albumCoverAtSize(album.coverImageUrl, COVER_TILE_SIZE)}
                   />
                   <span className="artist-grid-line">{album.name}</span>
                   <span className="artist-grid-count">{findingsCount(album.findingCount)}</span>
@@ -211,7 +219,7 @@ function AlbumsPage() {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
 
         <CatalogueHubPageSection
           gridClassName="artist-grid"
@@ -219,16 +227,11 @@ function AlbumsPage() {
           headingId="albums-catalogue-heading"
           items={catalogue.items}
           listLabel="More records"
-          pager={
-            <CataloguePager
-              buildHref={buildHref}
-              label="More records, more pages"
-              page={catalogue.page}
-              pageCount={catalogue.pageCount}
-            />
-          }
+          pager={pager}
           renderTile={renderTile}
         />
+
+        {catalogue.items.length === 0 ? pager : null}
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>

@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -13,6 +14,11 @@ import { NavFooter } from "./nav-footer";
 // anchors (TanStack `<Link>` renders anchors) to every index, so a JS-blind crawler
 // still walks log ↔ artists ↔ galaxies ↔ logbook ↔ mixtapes ↔ the socials. Render
 // it through a router and assert the hrefs land in the static HTML.
+
+// The status pill in the colophon reads /api/status through react-query (one shared key, so
+// the home page's two pills cost one request) — so the SSR harness needs a QueryClient, exactly
+// as `__root.tsx` provides in the app. Retries off: nothing should fetch during SSR anyway.
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
 // The internal paths the footer links; the router needs them so Link builds hrefs.
 const INTERNAL_PATHS = [
@@ -34,7 +40,11 @@ const INTERNAL_PATHS = [
 async function renderFooter(): Promise<string> {
   const rootRoute = createRootRoute({
     // galaxiesLive: true so the gated Galaxies link renders into the output.
-    component: () => <NavFooter galaxiesLive={true} />,
+    component: () => (
+      <QueryClientProvider client={queryClient}>
+        <NavFooter galaxiesLive={true} />
+      </QueryClientProvider>
+    ),
   });
   const children = INTERNAL_PATHS.map((path) =>
     createRoute({ getParentRoute: () => rootRoute, path }),

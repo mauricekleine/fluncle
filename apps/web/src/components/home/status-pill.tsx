@@ -1,5 +1,5 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 // The home plate's footer heartbeat: a small ping-dot pill that CLIENT-FETCHES
@@ -82,38 +82,43 @@ function dotClass(tone: PillState["tone"]): string {
   return "bg-muted-foreground/50";
 }
 
+// The ONE query key every pill on the page shares. The pill is mounted twice on the
+// home page (the cover column's link hub AND the colophon), and react-query dedupes by
+// key — so the two mounts read the same heartbeat from ONE /api/status round-trip
+// instead of racing two identical requests at the origin on every home load.
+export const STATUS_PILL_QUERY_KEY = ["home-status-pill"] as const;
+
+/** Read /api/status and hand back its services list. Throws on anything unusable. */
+async function fetchStatusServices(signal: AbortSignal): Promise<StatusService[]> {
+  const response = await fetch("/api/status", { signal });
+
+  if (!response.ok) {
+    throw new Error(`status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as StatusResponse;
+
+  if (!Array.isArray(payload.services)) {
+    throw new Error("malformed status payload");
+  }
+
+  return payload.services;
+}
+
 export function HomeStatusPill() {
-  const [state, setState] = useState<PillState>({ tone: "loading" });
+  // Best-effort only: no retry and no focus refetch (a public query, AGENTS.md), and a
+  // failure leaves `data` undefined so the pill simply rests in its quiet neutral state.
+  // Never an error — this is a footer detail. `staleTime` keeps a client-side navigation
+  // back to the home page from re-asking for a signal that changes on the minute scale.
+  const { data } = useQuery({
+    queryFn: ({ signal }) => fetchStatusServices(signal),
+    queryKey: STATUS_PILL_QUERY_KEY,
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 60_000,
+  });
 
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadStatus(): Promise<void> {
-      try {
-        const response = await fetch("/api/status", { signal: controller.signal });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const payload = (await response.json()) as StatusResponse;
-
-        if (Array.isArray(payload.services)) {
-          setState(derivePillState(payload.services));
-        }
-      } catch {
-        // Best-effort only: a failed fetch (offline, aborted, malformed) leaves the
-        // pill in its quiet neutral state. Never an error — this is a footer detail.
-      }
-    }
-
-    void loadStatus();
-
-    return () => {
-      controller.abort();
-    };
-  }, []);
-
+  const state: PillState = data ? derivePillState(data) : { tone: "loading" };
   const tone = state.tone;
   const pinging = tone === "ok" || tone === "degraded" || tone === "down";
 
