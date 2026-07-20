@@ -220,6 +220,7 @@ export const SURFACES: readonly Surface[] = [
     exposedContent: [
       "the log index — every finding's coordinate page",
       "/log/:logId — one finding's permanent home (the Log ID resolves here)",
+      "/:coordinate — a bare coordinate typed at the root (the form on a video frame) 301s here",
     ],
     kind: "web_route",
     name: "web.log",

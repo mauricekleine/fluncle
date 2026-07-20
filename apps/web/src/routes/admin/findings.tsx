@@ -40,6 +40,7 @@ import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
+import { captionForPlatform } from "@/lib/server/mentions";
 import { listMixtapeMembershipsForTracks } from "@/lib/server/mixtapes";
 import {
   getContextNote,
@@ -313,15 +314,19 @@ const fetchPlanTargets = createServerFn({ method: "GET" }).handler(
 // preloaded for the whole page. Reads the public note.txt server-side (no CORS;
 // works in dev too, the binding is just empty there).
 const fetchCaption = createServerFn({ method: "GET" })
-  .validator((data: { logId: string }) => data)
+  .validator((data: { logId: string; trackId?: string }) => data)
   .handler(async ({ data }): Promise<{ caption: string }> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
     const captions = await readCaptions([data.logId]);
+    const raw = captions[data.logId] ?? "";
 
-    return { caption: captions[data.logId] ?? "" };
+    // The copied caption is the operator's manual TikTok paste (YouTube auto-pushes with
+    // its own handles), so it carries the finding's TikTok @handles — read here, at copy
+    // time, so the freshest artist_socials trust state applies.
+    return { caption: await captionForPlatform(data.trackId ?? "", "tiktok", raw) };
   });
 
 // Lazy context-note read — only when the operator opens a finding's Context cell to
@@ -822,10 +827,11 @@ function AdminBoardPage() {
       }
 
       setError(undefined);
-      const text = fetchCaption({ data: { logId: row.logId } }).then(({ caption }) =>
-        caption
-          ? new Blob([caption], { type: "text/plain" })
-          : Promise.reject(new Error("no caption")),
+      const text = fetchCaption({ data: { logId: row.logId, trackId: row.trackId } }).then(
+        ({ caption }) =>
+          caption
+            ? new Blob([caption], { type: "text/plain" })
+            : Promise.reject(new Error("no caption")),
       );
       navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]).then(
         () => markCopied(row.trackId),

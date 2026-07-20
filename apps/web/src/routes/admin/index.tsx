@@ -59,6 +59,7 @@ import { type Platform } from "@/lib/platforms";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { readAttentionSnapshot } from "@/lib/server/attention";
 import { readCaptions } from "@/lib/server/captions";
+import { captionForPlatform } from "@/lib/server/mentions";
 import { cn } from "@/lib/utils";
 
 // The operator's `/admin` home — the attention queue. Every action the system
@@ -101,15 +102,18 @@ const fetchAttention = createServerFn({ method: "GET" }).handler(async () => {
 // Lazy caption read for [Copy caption] — reads the public note.txt server-side
 // inside the tap (the board's gesture-safe clipboard pattern).
 const fetchCaption = createServerFn({ method: "GET" })
-  .validator((data: { logId: string }) => data)
+  .validator((data: { logId: string; trackId?: string }) => data)
   .handler(async ({ data }): Promise<{ caption: string }> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
     const captions = await readCaptions([data.logId]);
+    const raw = captions[data.logId] ?? "";
 
-    return { caption: captions[data.logId] ?? "" };
+    // The copied caption is the operator's manual TikTok paste (YouTube auto-pushes with
+    // its own handles), so it carries the finding's TikTok @handles at copy time.
+    return { caption: await captionForPlatform(data.trackId ?? "", "tiktok", raw) };
   });
 
 type QueueSearch = {
@@ -413,7 +417,7 @@ function AdminQueuePage() {
         return;
       }
       const logId = item.logId;
-      const text = fetchCaption({ data: { logId } }).then(({ caption }) =>
+      const text = fetchCaption({ data: { logId, trackId: item.trackId } }).then(({ caption }) =>
         caption
           ? new Blob([caption], { type: "text/plain" })
           : Promise.reject(new Error("no caption")),
