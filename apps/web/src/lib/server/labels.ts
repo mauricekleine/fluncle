@@ -27,7 +27,7 @@ import {
   type MergeLabelResult,
 } from "@fluncle/contracts";
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
-import { labelLogoUrl } from "../media";
+import { bestAlbumCoverUrl, labelLogoUrl } from "../media";
 import { getDb, typedRows } from "./db";
 
 // Re-exported so the label module is the one home for label string identity: the crawler
@@ -344,23 +344,22 @@ export type LabelRecord = {
   subLabels?: LabelLineageEdge[];
 };
 
-/** A row in the `/labels` index + a thin-gated sitemap candidate. */
+/**
+ * A row in the `/labels` editorial index — exactly the four fields the tile renders and nothing
+ * more. The catalogue count and the freshest-finding `lastmod` used to ride along "for the
+ * sitemap"; the sitemap has driven off `listLabelSitemapRows` for a while now, so both were dead
+ * weight — and the catalogue count in particular was a CATALOGUE-SCALE correlated subquery
+ * running once per editorial row on every `/labels` render.
+ */
 export type LabelIndexEntry = {
   /**
-   * Uncertified tracks linked to this label — the quieter rows the page will render. It is
-   * NOT shown in the index (the tier has no public name and is never counted aloud); it
-   * exists so the SITEMAP can apply the same renderable-track gate the PAGE applies, and an
-   * indexable page is therefore never orphaned from the sitemap. Zero until the catalogue
-   * lands.
+   * The label's cover — the freshest finding's album art, preferring that album's OWNED master
+   * through the Cloudflare Images ladder (the fallback for the logo).
    */
-  catalogueCount: number;
-  /** The label's cover — its freshest finding's Spotify album art (the fallback for the logo). */
   coverImageUrl: string | undefined;
   findingCount: number;
   /** The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined. */
   logoImageUrl: string | undefined;
-  /** ISO of the label's freshest finding — the sitemap `lastmod`. */
-  lastmod: string | undefined;
   name: string;
   slug: string;
 };
@@ -503,15 +502,142 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
     : undefined;
 }
 
+// ── THE EDITORIAL HALF OF A HUB (the findings-bounded top section) ────────────────────────────
+//
+// `/albums`, `/labels`, and `/artists` each open with Fluncle's own list — the entities he has
+// pulled a banger off — above the crawler's quieter long tail. That list is bounded by the
+// ARCHIVE rather than the catalogue, so it grows a row a day rather than a row a crawl. It still
+// grows without limit, though, and it used to SSR whole: ~80–120 tiles of markup, each carrying a
+// per-row correlated subquery, on every render of every page. So it is now WINDOWED on the same
+// 48-tile page the catalogue half uses, behind the SAME `?page=N` param — one pager for the whole
+// hub, no second interaction to learn: page N is slice N of both sections, and once the editorial
+// list runs out the deeper pages are pure long tail.
+//
+// The total is a SECOND, deliberately separate statement: `count(*) over ()` would report zero on
+// a page past the editorial list's end (the header's "N logged" and the pager's reach both need
+// the honest figure). It is a bare grouped count over the findings join — archive-bounded, no
+// correlated subqueries — so it costs a fraction of the slice it accompanies.
+
+/** One windowed page of a hub's editorial (findings-bounded) section. */
+export type EditorialHubPage<Entry> = {
+  items: Entry[];
+  page: number;
+  pageCount: number;
+  /** Every entity in the editorial list, counted in SQL — the header's figure and the pager's key. */
+  total: number;
+};
+
+/** The `limit ? offset ?` args for one editorial page (the shared 48-tile window). */
+export function editorialArgs(page: number): number[] {
+  return [CATALOGUE_HUB_DEFAULT_LIMIT, (Math.max(page, 1) - 1) * CATALOGUE_HUB_DEFAULT_LIMIT];
+}
+
+/** Count an editorial set from its grouped row source (`select 1 … group by …`), in SQL. */
+export async function countEditorial(groupedRows: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(`select count(*) as total from (${groupedRows})`);
+
+  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+}
+
+/** Assemble the editorial page envelope; page 1 of an empty list is a real (empty) page. */
+export function editorialPage<Entry>(
+  items: Entry[],
+  page: number,
+  total: number,
+): EditorialHubPage<Entry> {
+  return {
+    items,
+    page,
+    pageCount: Math.max(Math.ceil(total / CATALOGUE_HUB_DEFAULT_LIMIT), 1),
+    total,
+  };
+}
+
 /**
- * Every label with at least one coordinate-bearing finding, with its finding count, its
- * cover (the freshest finding's album art), and that finding's date (the sitemap
- * `lastmod`). Alphabetical by name — the `/labels` index order.
+ * The cover columns of ONE representative track, packed into a single correlated subquery.
+ *
+ * A cover now has two possible sources — the album's OWNED ≤1200² master on Fluncle's R2 (served
+ * through the Cloudflare Images ladder) and the raw provider URL the track was captured with — and
+ * `bestAlbumCoverUrl` needs FOUR columns to choose between them. Four separate correlated
+ * subqueries could each land on a different track, pairing one record's master with another's
+ * fallback; `json_object` keeps them on one picked row by construction, at one subquery's cost.
+ *
+ * `from`, `where`, and `order` are CONSTANT fragments from the call sites in this file (never
+ * reader input). The album join is `left`, so a track with no album entity still yields its raw
+ * cover.
+ */
+function coverJsonSelect(from: string, where: string, order: string): string {
+  return `(select json_object('u', t2.album_image_url, 'k', a2.image_key,
+                              's', a2.image_state, 'v', a2.image_updated_at)
+             from ${from}
+             left join albums a2 on a2.id = t2.album_id
+            where ${where}
+            order by ${order}
+            limit 1)`;
+}
+
+/** Any track on the entity, freshest release first — the CATALOGUE tile's cover. */
+const CATALOGUE_COVER_ORDER = `t2.release_date is null asc, t2.release_date desc, t2.track_id asc`;
+
+/** The freshest CERTIFIED finding on a label — the editorial `/labels` tile's cover. */
+const LABEL_FINDING_COVER_JSON = coverJsonSelect(
+  `findings f2 join tracks t2 on t2.track_id = f2.track_id`,
+  `t2.label_id = labels.id and f2.log_id is not null`,
+  `f2.added_at desc`,
+);
+
+/** Any track on a label — the catalogue `/labels` tile's cover. */
+const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(
+  `tracks t2`,
+  `t2.label_id = labels.id and t2.album_image_url is not null`,
+  CATALOGUE_COVER_ORDER,
+);
+
+// An ALBUM needs no packed subquery: it OWNS its master columns (`albums.image_key` and friends
+// sit on the row the hub already selects), so albums.ts pairs them with a plain `album_image_url`
+// subquery and calls `bestAlbumCoverUrl` directly. Only labels — whose cover is borrowed from
+// whichever record a track happens to sit on — need the four columns kept on one picked row.
+
+/** The four cover columns `coverJsonSelect` packs, as they come back off the wire. */
+type CoverJson = {
+  k?: null | string;
+  s?: null | string;
+  u?: null | string;
+  v?: null | string;
+};
+
+/** Resolve a `coverJsonSelect` column to the best cover URL — the owned master when resolved. */
+export function coverFromJson(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || raw === "") {
+    return undefined;
+  }
+
+  let parsed: CoverJson;
+
+  try {
+    parsed = JSON.parse(raw) as CoverJson;
+  } catch {
+    return undefined;
+  }
+
+  return bestAlbumCoverUrl({
+    imageKey: parsed.k,
+    imageState: parsed.s,
+    imageUpdatedAt: parsed.v,
+    spotifyUrl: parsed.u,
+  });
+}
+
+/**
+ * One windowed page of every label with at least one coordinate-bearing finding, with its finding
+ * count and its cover (the freshest finding's album art, preferring that album's owned master).
+ * Alphabetical by name — the `/labels` index order.
  *
  * The PUBLIC index read, and it is deliberately blind to `seed_state`: a skipped label's
  * findings render exactly as they always did (crawl scope, never storage — the rule at the
  * top of this file). It drives from the findings join, so it is bounded by the archive
- * rather than by the catalogue. The sitemap filters it further by the thin-content gate.
+ * rather than by the catalogue. The sitemap is a separate read (`listLabelSitemapRows`).
  */
 /**
  * Just the NAMES of the labels Fluncle has pulled a banger off — the typeahead pool for the
@@ -541,44 +667,47 @@ export async function listKnownLabelNames(): Promise<string[]> {
   return typedRows<{ name: string }>(result.rows).map((row) => row.name);
 }
 
-export async function listLabelsWithFindingCounts(): Promise<LabelIndexEntry[]> {
+export async function listLabelsWithFindingCounts(
+  page: number,
+): Promise<EditorialHubPage<LabelIndexEntry>> {
   const db = await getDb();
-  const result = await db.execute({
-    sql: `select labels.name as name, labels.slug as slug, labels.image_key as image_key,
-                 count(*) as finding_count,
-                 (select count(*) from tracks t3
-                    left join findings f3 on f3.track_id = t3.track_id
-                    where t3.label_id = labels.id and f3.track_id is null) as catalogue_count,
-                 max(findings.added_at) as lastmod,
-                 (select t2.album_image_url
-                    from findings f2 join tracks t2 on t2.track_id = f2.track_id
-                    where t2.label_id = labels.id and f2.log_id is not null
-                    order by f2.added_at desc limit 1) as cover_url
-          from labels
-          join tracks on tracks.label_id = labels.id
-          join findings on findings.track_id = tracks.track_id
-          where findings.log_id is not null
-          group by labels.id
-          order by labels.name collate nocase asc`,
-  });
+  const [slice, total] = await Promise.all([
+    db.execute({
+      args: editorialArgs(page),
+      sql: `select labels.name as name, labels.slug as slug, labels.image_key as image_key,
+                   count(*) as finding_count,
+                   ${LABEL_FINDING_COVER_JSON} as cover_json
+            from labels
+            join tracks on tracks.label_id = labels.id
+            join findings on findings.track_id = tracks.track_id
+            where findings.log_id is not null
+            group by labels.id
+            order by labels.name collate nocase asc
+            limit ? offset ?`,
+    }),
+    countEditorial(`select 1
+                    from labels
+                    join tracks on tracks.label_id = labels.id
+                    join findings on findings.track_id = tracks.track_id
+                    where findings.log_id is not null
+                    group by labels.id`),
+  ]);
 
-  return typedRows<{
-    catalogue_count: number;
-    cover_url: string | null;
+  const items = typedRows<{
+    cover_json: string | null;
     finding_count: number;
     image_key: string | null;
-    lastmod: string | null;
     name: string;
     slug: string;
-  }>(result.rows).map((row) => ({
-    catalogueCount: Number(row.catalogue_count),
-    coverImageUrl: row.cover_url ?? undefined,
+  }>(slice.rows).map((row) => ({
+    coverImageUrl: coverFromJson(row.cover_json),
     findingCount: Number(row.finding_count),
-    lastmod: row.lastmod ?? undefined,
     logoImageUrl: labelLogoUrl(row.image_key),
     name: row.name,
     slug: row.slug,
   }));
+
+  return editorialPage(items, page, total);
 }
 
 /** A sitemap candidate: an entity whose page clears the thin-content floor. */
@@ -692,8 +821,9 @@ export type LabelCatalogueEntry = {
 const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
 const HUB_RENDERABLE = `${HUB_CERTIFIED} + sum(case when findings.track_id is null then 1 else 0 end)`;
 
-/** A raw hub row — the union of every tile column the three entity kinds select (absent ⇒ undefined). */
+/** A raw hub TILE row — the union of every tile column the three entity kinds select. */
 type CatalogueHubRow = {
+  cover_json?: string | null;
   cover_url?: string | null;
   image_key?: string | null;
   image_state?: string | null;
@@ -701,16 +831,20 @@ type CatalogueHubRow = {
   image_url?: string | null;
   name: string;
   slug: string;
-  total: number;
   track_count: number;
 };
 
 /**
- * The entity-specific SQL for ONE hub, as CONSTANT fragments (never reader input). `from` is the
- * entity table joined to `tracks`; the generic appends the shared `left join findings`, the
- * `group by`, the floor `having`, and the slug order. `select` adds the tile columns `mapRow` reads.
+ * The entity-specific SQL for ONE hub, as CONSTANT fragments (never reader input).
+ *
+ * `from` is the entity table joined to `tracks` — the shape the GATED SCAN walks; the generic
+ * appends the shared `left join findings`, the `group by`, the floor `having`, and the slug order.
+ * `entity` is the bare entity table (with its alias, if any) the TILE LOOKUP reads: the gated scan
+ * yields slugs, and the tile columns are then fetched for those ≤48 slugs alone. `select` adds
+ * those tile columns, `mapRow` reads them.
  */
 export type CatalogueHubQuery<Entry> = {
+  entity: string;
   floor: number;
   from: string;
   groupBy: string;
@@ -722,6 +856,12 @@ export type CatalogueHubQuery<Entry> = {
 /** One NUMBERED page of a hub's findings-free section — the crawlable `?page=N` variant's payload. */
 export type CatalogueHubNumberedPage<Entry> = {
   items: Entry[];
+  /**
+   * Each present first letter → the page its first entity lands on (the A–Z fast lane). Absent
+   * when the reader did not ask for a lane (`/albums` has none) or on a hub that carries its own
+   * (`/tracks` has a YEAR lane instead).
+   */
+  letters?: CatalogueHubLetter[];
   page: number;
   pageCount: number;
   /** Every findings-free, floor-clearing entity the hub carries, counted in SQL — the pager's key. */
@@ -732,56 +872,93 @@ export type CatalogueHubNumberedPage<Entry> = {
 export type CatalogueHubLetter = { letter: string; page: number };
 
 /**
- * A page past the end of a hub's pager does not exist, and says so — the hub twin of
+ * A page past the end of a pager does not exist, and says so — the twin of
  * `CataloguePageOutOfRangeError` (catalogue-groups.ts), same semantics: a `?page=99` on a 3-page hub
  * is NOT clamped to page 1 (that would be a second URL for page 1's tiles, an infinite supply of
  * them for a crawler), it throws so the route can 404. Kept a hub-local class to keep labels.ts free
  * of a catalogue-groups import (which would close an artists→labels→catalogue-groups cycle).
+ *
+ * The three ENTITY hubs no longer raise it — they each carry an editorial section too, so only the
+ * ROUTE can tell whether a page is past the end of everything. `/tracks` (one section, one read)
+ * still does.
  */
 export class CatalogueHubPageOutOfRangeError extends Error {}
 
 /**
- * One OFFSET page of a hub's findings-free section. Reads the same grouped, floor-gated,
- * `sum(certified) = 0` set as the keyset read, plus `count(*) over ()` for the total. Throws
- * {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty hub is a
- * legitimate empty page, never a throw). The fragments are constants from the callers; only the
- * floor, page size, and offset are bound.
+ * One OFFSET page of a hub's findings-free section, plus its total and (optionally) its A–Z lane —
+ * from ONE pass over the gated set.
+ *
+ * ── WHY ONE PASS ────────────────────────────────────────────────────────────────────────────────
+ * `/artists` and `/labels` used to run this read AND a separate letter-lane read on every render:
+ * two catalogue-scale grouped `having` scans per request, the second one purely to count entities
+ * per initial. The gated set is now a MATERIALIZED CTE walked once and consumed by three arms of
+ * one compound select — the total, the page's slice, and the per-initial counts. `materialized` is
+ * load-bearing: a plain CTE is flattened and RE-EXECUTED per `union all` branch (the trap AGENTS.md
+ * records), which is exactly the two-scan cost this removes.
+ *
+ * ── WHY THE TILES ARE A SECOND STATEMENT ────────────────────────────────────────────────────────
+ * The gated scan carries only slug + renderable count. The tile columns (name, cover, owned-master
+ * key) come off a plain indexed `where slug in (…)` lookup of the ≤48 slugs the page actually
+ * shows, so the per-row cover subqueries run 48 times rather than once per entity in the gated set.
+ *
+ * A page past the end is NOT an error here: it returns an empty slice with the honest `total` and
+ * `pageCount`, and the ROUTE decides the 404 — it also carries an editorial section, which may
+ * still have rows on a page the catalogue half has run out on. Nothing is ever clamped to page 1.
+ *
+ * The fragments are constants from the callers; only the floor, page size, and offset are bound.
  */
 export async function listCatalogueHubPage<Entry>(
   query: CatalogueHubQuery<Entry>,
   page: number,
+  withLetters = false,
 ): Promise<CatalogueHubNumberedPage<Entry>> {
   const db = await getDb();
   const limit = CATALOGUE_HUB_DEFAULT_LIMIT;
+  // Arm 1 is the total (always exactly one row, so an empty page still reports an honest size);
+  // arm 2 is the page's slice; arm 3 is the A–Z lane's per-initial counts. `kind` discriminates,
+  // and `slug`/`n` carry the letter arm's payload — one column shape across all three arms.
+  const letterArm = withLetters
+    ? `union all
+       select 'letter' as kind, substr(g.slug, 1, 1) as slug, count(*) as n
+       from gated g group by substr(g.slug, 1, 1)`
+    : "";
 
   const result = await db.execute({
     args: [query.floor, limit, (page - 1) * limit],
-    sql: `select ${query.slugExpr} as slug, ${query.select},
-                 ${HUB_RENDERABLE} as track_count,
-                 count(*) over () as total
-          from ${query.from}
-          left join findings on findings.track_id = tracks.track_id
-          group by ${query.groupBy}
-          having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
-          order by ${query.slugExpr} asc
-          limit ? offset ?`,
+    sql: `with gated as materialized (
+            select ${query.slugExpr} as slug, ${HUB_RENDERABLE} as track_count
+            from ${query.from}
+            left join findings on findings.track_id = tracks.track_id
+            group by ${query.groupBy}
+            having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
+          )
+          select 'total' as kind, '' as slug, (select count(*) from gated) as n
+          union all
+          select * from (
+            select 'row' as kind, g.slug as slug, g.track_count as n
+            from gated g order by g.slug asc limit ? offset ?
+          )
+          ${letterArm}`,
   });
 
-  const rows = typedRows<CatalogueHubRow>(result.rows);
-
-  if (rows.length === 0) {
-    // A page past the end 404s; page 1 of a hub with no findings-free entities is a real empty page.
-    if (page > 1) {
-      throw new CatalogueHubPageOutOfRangeError();
-    }
-
-    return { items: [], page: 1, pageCount: 1, total: 0 };
-  }
-
-  const total = Number(rows[0]?.total ?? 0);
+  const rows = typedRows<{ kind: string; n: number; slug: string }>(result.rows);
+  const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
+  // A compound select gives no cross-arm order guarantee, so the arms are split and re-sorted
+  // here — over 48 slugs and ~27 letters, never a growing set.
+  const sliced = rows
+    .filter((row) => row.kind === "row")
+    .sort((left, right) => (left.slug < right.slug ? -1 : left.slug > right.slug ? 1 : 0));
+  const letters = letterPages(
+    rows
+      .filter((row) => row.kind === "letter")
+      .map((row) => ({ letter: row.slug, n: Number(row.n) }))
+      .sort((left, right) => (left.letter < right.letter ? -1 : 1)),
+    limit,
+  );
 
   return {
-    items: rows.map((row) => query.mapRow(row)),
+    items: await hubTiles(query, sliced),
+    letters,
     page,
     pageCount: Math.max(Math.ceil(total / limit), 1),
     total,
@@ -789,33 +966,34 @@ export async function listCatalogueHubPage<Entry>(
 }
 
 /**
- * Every present first letter of a name-sorted hub, mapped to the page it first appears on — the A–Z
- * fast lane's data. ONE bounded query: the per-first-char counts over the same having-gated set
- * (≤ ~37 rows — a–z, digits, a stray punct), folded to pages by {@link letterPages}. The lane links
- * `?page=N`, so a crawler reaches any region of the alphabet in two hops.
+ * The tile columns for one page's slugs — a bounded, index-driven `where slug in (…)` over the
+ * entity table alone. Returns them in the slice's slug order (the lookup's own order is not
+ * guaranteed), each carrying its renderable count off the gated scan.
  */
-export async function listCatalogueHubLetters<Entry>(
+async function hubTiles<Entry>(
   query: CatalogueHubQuery<Entry>,
-): Promise<CatalogueHubLetter[]> {
+  slice: { n: number; slug: string }[],
+): Promise<Entry[]> {
+  if (slice.length === 0) {
+    return [];
+  }
+
   const db = await getDb();
+  const slugs = slice.map((row) => row.slug);
   const result = await db.execute({
-    args: [query.floor],
-    sql: `select substr(slug, 1, 1) as letter, count(*) as n
-          from (
-            select ${query.slugExpr} as slug
-            from ${query.from}
-            left join findings on findings.track_id = tracks.track_id
-            group by ${query.groupBy}
-            having ${HUB_CERTIFIED} = 0 and ${HUB_RENDERABLE} >= ?
-          )
-          group by letter
-          order by letter asc`,
+    args: slugs,
+    sql: `select ${query.slugExpr} as slug, ${query.select}
+          from ${query.entity}
+          where ${query.slugExpr} in (${slugs.map(() => "?").join(", ")})`,
   });
 
-  return letterPages(
-    typedRows<{ letter: string; n: number }>(result.rows),
-    CATALOGUE_HUB_DEFAULT_LIMIT,
-  );
+  const bySlug = new Map(typedRows<CatalogueHubRow>(result.rows).map((row) => [row.slug, row]));
+
+  return slice.flatMap((row) => {
+    const tile = bySlug.get(row.slug);
+
+    return tile ? [query.mapRow({ ...tile, track_count: Number(row.n) })] : [];
+  });
 }
 
 /**
@@ -846,34 +1024,30 @@ export function letterPages(
 
 /** The LABELS hub's `?page=N` + A–Z reads, over the findings-free, floor-gated set of labels. */
 const LABELS_HUB_QUERY: CatalogueHubQuery<LabelCatalogueEntry> = {
+  entity: "labels",
   floor: LABEL_INDEX_MIN_TRACKS,
   from: "labels join tracks on tracks.label_id = labels.id",
   groupBy: "labels.id",
   mapRow: (row) => ({
-    coverImageUrl: row.cover_url ?? undefined,
+    coverImageUrl: coverFromJson(row.cover_json),
     logoImageUrl: labelLogoUrl(row.image_key ?? null),
     name: row.name,
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
   select: `labels.name as name, labels.image_key as image_key,
-           (select t2.album_image_url from tracks t2
-              where t2.label_id = labels.id and t2.album_image_url is not null
-              order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
-              limit 1) as cover_url`,
+           ${LABEL_CATALOGUE_COVER_JSON} as cover_json`,
   slugExpr: "labels.slug",
 };
 
-/** One numbered page of the `/labels` hub's findings-free section (the crawlable `?page=N` view). */
+/**
+ * One numbered page of the `/labels` hub's findings-free section (the crawlable `?page=N` view),
+ * carrying the A–Z fast lane: each present letter → the page its first label lands on.
+ */
 export function listLabelsCataloguePage(
   page: number,
 ): Promise<CatalogueHubNumberedPage<LabelCatalogueEntry>> {
-  return listCatalogueHubPage(LABELS_HUB_QUERY, page);
-}
-
-/** The `/labels` hub's A–Z fast lane: each present letter → the page its first label lands on. */
-export function listLabelsCatalogueLetters(): Promise<CatalogueHubLetter[]> {
-  return listCatalogueHubLetters(LABELS_HUB_QUERY);
+  return listCatalogueHubPage(LABELS_HUB_QUERY, page, true);
 }
 
 /**
