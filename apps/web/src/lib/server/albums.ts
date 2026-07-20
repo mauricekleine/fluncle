@@ -21,6 +21,7 @@
 // renderable-track thin-content gate. See docs/album-entity.md.
 
 import { randomUUID } from "node:crypto";
+import { type AlbumDetail, type AlbumListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl } from "../media";
 import { getDb, typedRows } from "./db";
@@ -29,7 +30,10 @@ import {
   type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
+  type CatalogueListPage,
   type EntitySitemapRow,
+  hubCountsBySlug,
+  hubFindingCountsBySlug,
   listCatalogueBrowsePage,
   listHubPage,
 } from "./labels";
@@ -455,6 +459,91 @@ const ALBUMS_BROWSE_QUERY: CatalogueBrowseQuery = {
 
 export function listAlbumsBrowsePage(page: number): Promise<CatalogueBrowsePage> {
   return listCatalogueBrowsePage(ALBUMS_BROWSE_QUERY, page);
+}
+
+// ── THE PUBLIC CATALOGUE LIST/GET API OPS (list_albums / get_album) ───────────────────────
+//
+// The album twin of the label API ops in labels.ts (read that section): the list is the SAME
+// unified `/albums` index the web page serves — built on the shared `listHubPage` off
+// `ALBUMS_HUB_QUERY`, so it can never disagree with the web hub or the MCP browse on which albums
+// exist — plus the one `findingCount` column the tile doesn't project. `get_album` resolves ANY
+// album that has a page (below-floor albums render on `/album/<slug>` too, just noindex).
+
+/** The owned-master columns + fallback subquery for one album's cover, by id. */
+const ALBUM_COVER_JSON = `${ALBUM_COVER_SELECT},
+           (select t2.album_image_url from tracks t2
+              where t2.album_id = albums.id and t2.album_image_url is not null
+              order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
+              limit 1) as cover_url`;
+
+/**
+ * One alphabetical page of the unified `/albums` index over the API — the `list_albums` read. The
+ * SAME floor-clearing set the `/albums` web page and the MCP browse serve (all three off
+ * `HUB_INCLUSION_HAVING`). Reuses the hub reader for the page + covers + pager, stamping each row's
+ * `findingCount` from the shared fragments.
+ */
+export async function listAlbumsApiPage(page: number): Promise<CatalogueListPage<AlbumListItem>> {
+  const hub = await listHubPage(ALBUMS_HUB_QUERY, page);
+  const findingCounts = await hubFindingCountsBySlug(
+    ALBUMS_HUB_QUERY,
+    hub.items.map((item) => item.slug),
+  );
+
+  return {
+    items: hub.items.map((item) => ({
+      certified: item.certified,
+      coverImageUrl: item.coverImageUrl,
+      findingCount: findingCounts.get(item.slug) ?? 0,
+      name: item.name,
+      slug: item.slug,
+      trackCount: item.trackCount,
+    })),
+    page: hub.page,
+    pageCount: hub.pageCount,
+    total: hub.total,
+  };
+}
+
+/** One album's cover, by id — the single-album read behind `get_album`. */
+async function albumCoverUrl(albumId: string): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [albumId],
+    sql: `select ${ALBUM_COVER_JSON} from albums where albums.id = ? limit 1`,
+  });
+  const row = typedRows<AlbumCoverRow>(result.rows)[0];
+
+  return row ? albumCover(row) : undefined;
+}
+
+/**
+ * One album's full public read — the `get_album` op's shape. Resolves ANY album that has a page (a
+ * below-floor album the browse index omits still renders on `/album/<slug>`, just noindex). Counts
+ * come from `hubCountsBySlug` (the same aggregates the hub gate uses), so a certified album's list
+ * row and get read agree. Undefined when no album carries the slug (the handler 404s).
+ */
+export async function getAlbumDetail(slug: string): Promise<AlbumDetail | undefined> {
+  const record = await getAlbumBySlug(slug);
+
+  if (!record) {
+    return undefined;
+  }
+
+  const counts = await hubCountsBySlug(ALBUMS_HUB_QUERY, slug);
+  const coverImageUrl = await albumCoverUrl(record.id);
+
+  return {
+    bio: record.bio,
+    certified: counts.certified,
+    coverImageUrl,
+    findingCount: counts.findingCount,
+    name: record.name,
+    releaseDate: record.releaseDate,
+    releaseGroupMbid: record.releaseGroupMbid,
+    slug: record.slug,
+    trackCount: counts.trackCount,
+    upc: record.upc,
+  };
 }
 
 // THE ALBUM EDGE IS WRITTEN INLINE, not deferred. The publish path calls `linkTrackToAlbum`

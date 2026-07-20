@@ -49,12 +49,11 @@ export const MixArtistSchema = z
  * archive (a key and a vector — i.e. one the engine can actually place), most-represented
  * first. `q` filters by name for the reader who wants someone the grid did not offer.
  *
- * Deliberately NOT `list_artists` (./artists.ts), which promises "artists with a published
- * finding" and is read by the CLI, the SSH terminal and llms.txt. That list is the artists
- * Fluncle has BEEN to — 67 of them — and seeding against it would fail the first stranger who
- * named a favourite he has not logged yet, which is nearly all of them. This list is the
- * artists Fluncle can MIX, which the catalogue makes a far larger and far more useful set.
- * Same noun, genuinely different question; hence a second op rather than a flag on the first.
+ * Deliberately NOT `list_artists` (./artists.ts), which lists every artist in the catalogue
+ * alphabetically and is read by the CLI, the SSH terminal and llms.txt. That list is a plain
+ * A–Z roster of who the archive knows about; seeding a mix wants only the artists with a
+ * RANKABLE track (a key and a vector), ranked by how represented they are — a genuinely
+ * different question. Same noun, hence a second op rather than a flag on the first.
  */
 export const listMixableArtists = oc
   .route({

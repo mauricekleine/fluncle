@@ -57,22 +57,24 @@ Generated from the `SURFACES` catalog. Each row is the registry `name`, its addr
 
 All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertises them.
 
-| Surface                 | Route                       | Exposes                                                                                                                                      | Weight    |
-| ----------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `api.tracks`            | `/api/v1/tracks`            | the archive as JSON, cursor-paginated (limit max 48, cursor)                                                                                 | primary   |
-| `api.track`             | `/api/v1/tracks/:idOrLogId` | one finding or mixtape by Spotify id or Log ID                                                                                               | secondary |
-| `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                                                                                                        | secondary |
-| `api.fresh`             | `/api/v1/tracks/fresh`      | what just came out — the newest releases over a 30-day window (release-dated), flat (limit max 100)                                          | secondary |
-| `api.mixtapes`          | `/api/v1/mixtapes`          | published mixtapes as JSON                                                                                                                   | secondary |
-| `api.artists`           | `/api/v1/artists`           | every artist with at least one published finding, finding-count ordered, plus `/api/v1/artists/{slug}`                                       | secondary |
-| `api.galaxies`          | `/api/v1/galaxies`          | every named sonic galaxy + member count as JSON, plus `/api/v1/galaxies/{slug}` for one galaxy's findings (empty/404 behind the launch gate) | secondary |
-| `api.search`            | `/api/v1/search`            | Spotify search candidates for submitting a track                                                                                             | secondary |
-| `api.search.archive`    | `/api/v1/search/archive`    | search the archive — a coordinate, an entity name, a bare word (FTS5), a natural-language query, or a sonic one ("sounds like …")            | primary   |
-| `api.submissions`       | `/api/v1/submissions`       | submit a track for review (POST)                                                                                                             | secondary |
-| `api.newsletter`        | `/api/v1/newsletter`        | subscribe to the newsletter (POST); the editions archive                                                                                     | secondary |
-| `api.stories`           | `/api/v1/stories`           | the Stories payload as JSON                                                                                                                  | tertiary  |
-| `api.radio.now-playing` | `/api/v1/radio/now-playing` | the radio shared-clock now-playing slot                                                                                                      | tertiary  |
-| `api.health`            | `/api/health`               | the liveness probe — the canonical web health check                                                                                          | tertiary  |
+| Surface                 | Route                       | Exposes                                                                                                                                        | Weight    |
+| ----------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `api.tracks`            | `/api/v1/tracks`            | the archive as JSON, cursor-paginated (limit max 48, cursor)                                                                                   | primary   |
+| `api.track`             | `/api/v1/tracks/:idOrLogId` | one finding or mixtape by Spotify id or Log ID                                                                                                 | secondary |
+| `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                                                                                                          | secondary |
+| `api.fresh`             | `/api/v1/tracks/fresh`      | what just came out — the newest releases over a 30-day window (release-dated), flat (limit max 100)                                            | secondary |
+| `api.mixtapes`          | `/api/v1/mixtapes`          | published mixtapes as JSON                                                                                                                     | secondary |
+| `api.albums`            | `/api/v1/albums`            | every album in the archive, alphabetical + paginated, plus `/api/v1/albums/{slug}` for one album's identity, cover, and counts                 | secondary |
+| `api.artists`           | `/api/v1/artists`           | every artist in the archive, alphabetical + paginated, plus `/api/v1/artists/{slug}` for one artist's identity, finding count, and track count | secondary |
+| `api.labels`            | `/api/v1/labels`            | every label in the archive, alphabetical + paginated, plus `/api/v1/labels/{slug}` for one label's identity, lineage, and counts               | secondary |
+| `api.galaxies`          | `/api/v1/galaxies`          | every named sonic galaxy + member count as JSON, plus `/api/v1/galaxies/{slug}` for one galaxy's findings (empty/404 behind the launch gate)   | secondary |
+| `api.search`            | `/api/v1/search`            | Spotify search candidates for submitting a track                                                                                               | secondary |
+| `api.search.archive`    | `/api/v1/search/archive`    | search the archive — a coordinate, an entity name, a bare word (FTS5), a natural-language query, or a sonic one ("sounds like …")              | primary   |
+| `api.submissions`       | `/api/v1/submissions`       | submit a track for review (POST)                                                                                                               | secondary |
+| `api.newsletter`        | `/api/v1/newsletter`        | subscribe to the newsletter (POST); the editions archive                                                                                       | secondary |
+| `api.stories`           | `/api/v1/stories`           | the Stories payload as JSON                                                                                                                    | tertiary  |
+| `api.radio.now-playing` | `/api/v1/radio/now-playing` | the radio shared-clock now-playing slot                                                                                                        | tertiary  |
+| `api.health`            | `/api/health`               | the liveness probe — the canonical web health check                                                                                            | tertiary  |
 
 ### Feeds — subscribable syndication documents
 
@@ -234,7 +236,9 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `api.tracks.random`         | secondary |           |           |           |
 | `api.fresh`                 | secondary |           |           |           |
 | `api.mixtapes`              | secondary |           |           |           |
+| `api.albums`                | secondary |           |           |           |
 | `api.artists`               | secondary |           |           |           |
+| `api.labels`                | secondary |           |           |           |
 | `api.galaxies`              | secondary |           |           |           |
 | `api.search`                | secondary |           |           |           |
 | `api.search.archive`        | primary   |           |           |           |
