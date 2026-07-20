@@ -59,6 +59,31 @@ export const SEEDED_MIXTAPE_TITLE = MIXTAPE.title;
 export const SEEDED_SAVE_TARGET_LOG_ID = FINDINGS[0]?.logId ?? "";
 export const SEEDED_SAVE_TARGET_TITLE = FINDINGS[0]?.title ?? "";
 
+// ── APPENDED: the reader/graph specs' identity handles ──────────────────────────────
+// Derived from the fixtures above, never a second description of them. The `/log` and graph
+// specs assert on identity (a coordinate, a slug, a name), so they need the values the base
+// fixtures already carry — not new rows. Nothing here changes what is seeded.
+
+/** The seeded finding coordinates, in feed order (index 0 is the newest). */
+export const SEEDED_FINDING_LOG_IDS = FINDINGS.map((finding) => finding.logId);
+
+/**
+ * The one finding wired into the FULL graph (artist ↔ label ↔ album) by `seedE2eData` below.
+ * Its `/log/<logId>` page is the reader spec's subject, and every graph page resolves through it.
+ */
+export const SEEDED_GRAPH_FINDING = {
+  artist: FINDINGS[0]?.artist ?? "",
+  logId: FINDINGS[0]?.logId ?? "",
+  title: FINDINGS[0]?.title ?? "",
+};
+
+/** The seeded graph entities — the `/artist`, `/label`, and `/album` pages' identities. */
+export const SEEDED_GRAPH_ENTITIES = {
+  album: { name: ALBUM.name, slug: ALBUM.slug },
+  artist: { name: ARTIST.name, slug: ARTIST.slug },
+  label: { name: LABEL.name, slug: LABEL.slug },
+};
+
 /** A base epoch for the descending `added_at` values (fixed, so runs are identical). */
 const BASE_EPOCH_MS = Date.UTC(2026, 0, 1, 12, 0, 0);
 
