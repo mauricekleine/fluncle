@@ -4,6 +4,7 @@ import {
   artistCentroidFingerprint,
   meanEmbedding,
   rankSimilarArtists,
+  rankSimilarToArtists,
   summarizeArtistSignature,
 } from "./artist-dossier";
 
@@ -107,6 +108,76 @@ describe("rankSimilarArtists — the similar-artists ranking", () => {
     ];
 
     expect(rankSimilarArtists("drift", withEmptyCandidate, 4).map((n) => n.slug)).toEqual(["echo"]);
+  });
+});
+
+describe("rankSimilarToArtists — the multi-artist 'sounds like these' probe math", () => {
+  // The same fixture as rankSimilarArtists: drift is +x, echo hugs +x, pulse is the diagonal, void
+  // is +y. The probe is the mean OF the selected artists' means, so it aims between them.
+  const groups: ArtistEmbeddingGroup[] = [
+    { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [[1, 0]] },
+    {
+      artistId: "echo",
+      imageUrl: "https://i.scdn.co/image/echo",
+      name: "Echo",
+      slug: "echo",
+      vectors: [
+        [2, 0],
+        [4, 1],
+      ],
+    },
+    { artistId: "pulse", imageUrl: undefined, name: "Pulse", slug: "pulse", vectors: [[1, 1]] },
+    { artistId: "void", imageUrl: undefined, name: "Void", slug: "void", vectors: [[0, 1]] },
+  ];
+
+  it("ranks by cosine to the AVERAGE of the selected artists, both selected excluded", () => {
+    // drift (+x) and void (+y) average to the diagonal — pulse sits exactly on it, echo is off toward
+    // +x. So pulse leads echo, and neither selected artist appears in its own results.
+    const results = rankSimilarToArtists(["drift", "void"], groups, 4);
+
+    expect(results.map((artist) => artist.slug)).toEqual(["pulse", "echo"]);
+    expect(results.some((artist) => artist.slug === "drift" || artist.slug === "void")).toBe(false);
+  });
+
+  it("with a SINGLE selected artist, equals the one-target rankSimilarArtists (the degenerate case)", () => {
+    expect(rankSimilarToArtists(["drift"], groups, 4)).toEqual(
+      rankSimilarArtists("drift", groups, 4),
+    );
+  });
+
+  it("weighs each selected artist equally regardless of catalogue depth (mean of means)", () => {
+    // echo carries TWO vectors, drift one; the probe is mean(mean(echo), mean(drift)), so echo's
+    // extra track does not tilt the probe toward it — the two selected weigh 1:1.
+    const results = rankSimilarToArtists(["drift", "echo"], groups, 4);
+
+    // Both selected are excluded; the remaining pulse (diagonal) and void (+y) rank by the probe.
+    expect(results.map((artist) => artist.slug)).toEqual(["pulse", "void"]);
+  });
+
+  it("honours the limit and returns [] for a non-positive one", () => {
+    expect(rankSimilarToArtists(["drift", "void"], groups, 1).map((a) => a.slug)).toEqual([
+      "pulse",
+    ]);
+    expect(rankSimilarToArtists(["drift", "void"], groups, 0)).toEqual([]);
+  });
+
+  it("returns [] when no selected artist has a vector to position from", () => {
+    expect(rankSimilarToArtists(["nobody"], groups, 4)).toEqual([]);
+
+    const withEmptySelected: ArtistEmbeddingGroup[] = [
+      { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [] },
+      { artistId: "echo", imageUrl: undefined, name: "Echo", slug: "echo", vectors: [[1, 0]] },
+    ];
+    expect(rankSimilarToArtists(["drift"], withEmptySelected, 4)).toEqual([]);
+  });
+
+  it("carries each neighbour's avatar through", () => {
+    const results = rankSimilarToArtists(["drift", "void"], groups, 4);
+
+    expect(results.find((artist) => artist.slug === "echo")?.imageUrl).toBe(
+      "https://i.scdn.co/image/echo",
+    );
+    expect(results.find((artist) => artist.slug === "pulse")?.imageUrl).toBeUndefined();
   });
 });
 

@@ -57,6 +57,7 @@ Public + private (`/me`) operations, with their OpenAPI `operationId`:
 | `GET /albums`, `GET /albums/{slug}`      | `listAlbums` / `getAlbum`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `albums`                  |
 | `GET /labels`, `GET /labels/{slug}`      | `listLabels` / `getLabel`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `labels`                  |
 | `GET /artists`, `GET /artists/{slug}`    | `listArtists` / `getArtist`                               | catalogue-scoped now (was findings-only); list is A–Z + paginated; CLI `artists`    |
+| `GET /artists/similar`                   | `listSimilarArtists`                                      | sounds-like-these multi-artist read (?slugs=a,b); literal path wins over {slug}     |
 | `POST /submissions`                      | `submitTrack`                                             | **operationId noun ≠ path noun** (`submissions` vs `Track`)                         |
 | `POST /newsletter`                       | `subscribeNewsletter`                                     | verb+Noun                                                                           |
 | `GET /me`                                | `getCurrentPrivateUser`                                   | the `Private` infix marks the cookie-auth tier                                      |

@@ -428,6 +428,7 @@ const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
+  nameExpr: "albums.name",
   select: `albums.name as name, ${ALBUM_COVER_SELECT},
            (select t2.album_image_url from tracks t2
               where t2.album_id = albums.id and t2.album_image_url is not null
@@ -442,8 +443,13 @@ const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
  * is its cover, and browse-by-title-initial is not how records are dug), so the numbered pager is
  * the album hub's crawl entry into the long tail.
  */
-export function listAlbumsHubPage(page: number): Promise<CatalogueHubNumberedPage<AlbumHubEntry>> {
-  return listHubPage(ALBUMS_HUB_QUERY, page);
+export function listAlbumsHubPage(
+  page: number,
+  nameFilter?: string,
+): Promise<CatalogueHubNumberedPage<AlbumHubEntry>> {
+  // Albums carry no A–Z lane at all, so the `withLetters` arm stays off either way; the name filter
+  // just narrows the gated set.
+  return listHubPage(ALBUMS_HUB_QUERY, page, false, nameFilter);
 }
 
 /** The ALBUMS full A–Z browse — every album with a page, certified or catalogue-only. */

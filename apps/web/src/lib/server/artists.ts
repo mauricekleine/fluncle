@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
+import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRows } from "./db";
 import {
@@ -11,6 +12,7 @@ import {
   type CatalogueListPage,
   type EntitySitemapRow,
   hubCountsBySlug,
+  hubCountsBySlugs,
   hubFindingCountsBySlug,
   listCatalogueBrowsePage,
   listHubPage,
@@ -400,6 +402,7 @@ const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
+  nameExpr: "a.name",
   select: `a.name as name, a.image_url as image_url, a.image_key as image_key,
            a.image_state as image_state, a.image_updated_at as image_updated_at`,
   slugExpr: "a.slug",
@@ -412,8 +415,11 @@ const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
  */
 export function listArtistsHubPage(
   page: number,
+  nameFilter?: string,
 ): Promise<CatalogueHubNumberedPage<ArtistHubEntry>> {
-  return listHubPage(ARTISTS_HUB_QUERY, page, true);
+  // A name search hides the A–Z lane (the reader is looking an artist up by name, not browsing the
+  // alphabet), so the letter arm is skipped when a filter is active.
+  return listHubPage(ARTISTS_HUB_QUERY, page, !nameFilter, nameFilter);
 }
 
 /** The ARTISTS full A–Z browse — every artist with a page, certified or catalogue-only. */
@@ -579,6 +585,107 @@ export async function getArtistListItemBySlug(slug: string): Promise<ArtistListI
     spotifyUrl: record.spotifyUrl,
     trackCount: counts.trackCount,
   };
+}
+
+// ── THE MULTI-ARTIST "SOUNDS LIKE THESE" READ (list_similar_artists + the /artists results view) ──
+//
+// Given a handful of artist slugs, the artists sitting sonically nearest to their AVERAGE position in
+// MuQ space — the "sounds like these" compare on /artists. The vector math + the exact
+// `vector_distance_cos` scan live in `listSimilarArtistNeighbours` (artist-dossier.ts); these two
+// projections add the counts the two consumers need, off the SHARED hub gate so `certified` /
+// `trackCount` / `findingCount` agree with everything else on the page. Both fetch counts for the
+// ≤12 result slugs in ONE indexed read (`hubCountsBySlugs`), never a round trip per neighbour.
+
+/**
+ * The "sounds like these" results as HUB TILES — the shape the `/artists` results view renders, so it
+ * reuses the exact hub tile treatment (a certified neighbour's name lit, an uncertified one plain —
+ * DESIGN.md's Unlit Rule). `certified` + `trackCount` ride the shared gate. Empty when no selected
+ * slug resolves to a stored centroid (nothing to rank from).
+ */
+export async function listSimilarArtistTiles(slugs: string[]): Promise<ArtistHubEntry[]> {
+  const neighbours = await listSimilarArtistNeighbours(slugs, SIMILAR_ARTISTS_LIMIT);
+
+  if (neighbours.length === 0) {
+    return [];
+  }
+
+  const counts = await hubCountsBySlugs(
+    ARTISTS_HUB_QUERY,
+    neighbours.map((neighbour) => neighbour.slug),
+  );
+
+  return neighbours.map((neighbour) => {
+    const entry = counts.get(neighbour.slug);
+
+    return {
+      certified: entry?.certified ?? false,
+      imageUrl: neighbour.imageUrl,
+      name: neighbour.name,
+      slug: neighbour.slug,
+      trackCount: entry?.trackCount ?? 0,
+    };
+  });
+}
+
+/**
+ * The "sounds like these" results as public API rows — the `list_similar_artists` op's shape (the
+ * same `ArtistListItem` the list/get ops emit). Carries `findingCount` + `spotifyUrl` alongside the
+ * shared-gate `certified` + `trackCount`, both fetched for the ≤12 result slugs in bounded reads.
+ * Empty when no selected slug resolves to a stored centroid.
+ */
+export async function listSimilarArtistsApi(slugs: string[]): Promise<ArtistListItem[]> {
+  const neighbours = await listSimilarArtistNeighbours(slugs, SIMILAR_ARTISTS_LIMIT);
+
+  if (neighbours.length === 0) {
+    return [];
+  }
+
+  const resultSlugs = neighbours.map((neighbour) => neighbour.slug);
+  const [counts, spotifyUrls] = await Promise.all([
+    hubCountsBySlugs(ARTISTS_HUB_QUERY, resultSlugs),
+    artistSpotifyUrlsBySlug(resultSlugs),
+  ]);
+
+  return neighbours.map((neighbour) => {
+    const entry = counts.get(neighbour.slug);
+
+    return {
+      certified: entry?.certified ?? false,
+      findingCount: entry?.findingCount ?? 0,
+      name: neighbour.name,
+      slug: neighbour.slug,
+      spotifyUrl: spotifyUrls.get(neighbour.slug),
+      trackCount: entry?.trackCount ?? 0,
+    };
+  });
+}
+
+/**
+ * The display NAMES for a bounded set of artist slugs, returned in the GIVEN slug order (an unknown
+ * slug is dropped) — the "sounds like these" results view names its anchors from this ("Closest in
+ * sound to X and Y."). One indexed `slug in (…)` read over the ≤6 compared slugs.
+ */
+export async function artistNamesBySlugs(slugs: string[]): Promise<string[]> {
+  if (slugs.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const placeholders = slugs.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: slugs,
+    sql: `select slug, name from artists where slug in (${placeholders})`,
+  });
+
+  const bySlug = new Map(
+    typedRows<{ name: string; slug: string }>(result.rows).map((row) => [row.slug, row.name]),
+  );
+
+  return slugs.flatMap((slug) => {
+    const name = bySlug.get(slug);
+
+    return name ? [name] : [];
+  });
 }
 
 export function parseArtistsJson(value: string): string[] {
