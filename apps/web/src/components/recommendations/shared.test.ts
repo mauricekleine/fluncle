@@ -143,6 +143,12 @@ describe("foldFrontierMint", () => {
     ).toEqual({ kind: "ok", playlistUrl: "https://open.spotify.com/playlist/x", status: "minted" });
   });
 
+  it("carries a building status through as ok (budget spent — the create was deferred)", () => {
+    expect(
+      foldFrontierMint({ body: { ok: true, status: "building" }, ok: true, status: 200 }),
+    ).toEqual({ kind: "ok", playlistUrl: undefined, status: "building" });
+  });
+
   it("a non-ok response is a plain error line", () => {
     expect(foldFrontierMint({ body: { message: "Rate limited" }, ok: false, status: 429 })).toEqual(
       {
@@ -227,6 +233,10 @@ describe("mintToastMessage", () => {
     expect(mintToastMessage("minted")).toBe("Done. It's on your Spotify.");
     expect(mintToastMessage("refreshed")).toBe("Refreshed with your latest picks.");
     expect(mintToastMessage("unchanged")).toBe("Already up to date.");
+  });
+
+  it("building reassures that the deferred playlist is coming (budget spent, minting open)", () => {
+    expect(mintToastMessage("building")).toBe("Saved. Your Spotify playlist is on its way.");
   });
 });
 

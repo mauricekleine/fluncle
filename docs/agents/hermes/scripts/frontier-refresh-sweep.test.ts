@@ -32,6 +32,8 @@ case "$(cat "$DIR/mode")" in
   switched) printf '{"ok":true,"total":2,"refreshed":0,"unchanged":0,"minted":0,"editionOnly":2,"skipped":0,"failed":0,"switchOff":true}\\n' ;;
   # A best-effort per-user Spotify fault — still a successful tick.
   partial)  printf '{"ok":true,"total":4,"refreshed":2,"unchanged":1,"minted":0,"editionOnly":0,"skipped":0,"failed":1,"switchOff":false}\\n' ;;
+  # The shared Spotify budget was spent mid-pass — the paced drain stopped, resumes next tick.
+  budget)   printf '{"ok":true,"total":5,"refreshed":2,"unchanged":0,"minted":0,"editionOnly":0,"skipped":0,"failed":0,"switchOff":false,"building":1,"budgetPaused":true}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
   crash)    printf 'boom\\n' >&2; exit 1 ;;
 esac
@@ -112,6 +114,15 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
 
     expect(summary.failed).toBe(1);
     expect(summary.ok).toBe(true);
+  });
+
+  test("surfaces budgetPaused + building when the paced drain stops on a spent budget", () => {
+    mode("budget");
+    const summary = run();
+
+    expect(summary.ok).toBe(true);
+    expect(summary.budgetPaused).toBe(true);
+    expect(summary.building).toBe(1);
   });
 
   test("a CLI error is reported as ok:false, never thrown", () => {

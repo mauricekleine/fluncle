@@ -140,6 +140,39 @@ function uri(id: string): string {
   return `spotify:track:${id}`;
 }
 
+/** Longer than the ~6-day paced-drain due-gate — advance `now` by this so a just-processed
+ * user is DUE again for the sweep (the drain otherwise rotates past a fresh stamp). */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Exhaust the shared Spotify budget window at `nowMs` — the meter's KV keys, pre-filled to
+ * the ceiling so `isSpotifyCallBudgetAvailable(nowMs)` reads false (a spent window). */
+function exhaustSpotifyBudget(nowMs: number): void {
+  settings.set("spotify_calls_window_start", new Date(nowMs).toISOString());
+  settings.set("spotify_calls_window_count", "24");
+}
+
+/** The live Spotify-call count in the meter's current window (0 when the window rolled). */
+function spotifyBudgetCount(nowMs: number): number {
+  const start = settings.get("spotify_calls_window_start");
+  const startMs = start ? Date.parse(start) : Number.NaN;
+
+  if (!Number.isFinite(startMs) || nowMs - startMs >= 30 * 1000) {
+    return 0;
+  }
+
+  return Number(settings.get("spotify_calls_window_count") ?? "0");
+}
+
+/** Whether the user has a paced-drain cursor row (they have been processed at least once). */
+async function hasRefreshCursor(userId: string): Promise<boolean> {
+  const query = await db.execute({
+    args: [userId],
+    sql: `select 1 from user_frontier_refresh where user_id = ? limit 1`,
+  });
+
+  return query.rows.length > 0;
+}
+
 /** How many editions a user has (the edition ledger, read directly). */
 async function editionCount(userId: string): Promise<number> {
   const query = await db.execute({
@@ -408,13 +441,16 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
     await seedUser(db, { email: "a@fluncle.com", id: "u-has" });
     await seedUser(db, { email: "b@fluncle.com", id: "u-draft" });
 
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
+
     // u-has commits an edition (dark). u-draft never does — pure draft phase.
     recs = result({ findings: [find("f1")] });
-    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-has" }));
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-has" }), now);
 
-    // A new desired list, so the walked user writes a fresh edition.
+    // A new desired list, so the walked user writes a fresh edition. The drain gates on the
+    // ~6-day cursor, so it only re-processes u-has a week on.
     recs = result({ findings: [find("f2")] });
-    const swept = await refreshAllFrontierPlaylists(500);
+    const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
     // Only the user with an edition is walked; the draft user is invisible to the sweep.
     expect(swept.total).toBe(1);
@@ -447,13 +483,15 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
       await import("./frontier-playlist");
 
     await seedUser(db, { email: "a@fluncle.com", id: "u1" });
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
     recs = result({ findings: [find("f1")] });
-    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
     spotifyCalls.length = 0;
 
-    // A changed list → the sweep writes edition #2, mirror skipped (dark).
+    // A changed list → the sweep writes edition #2, mirror skipped (dark). A week on, so the
+    // ~6-day cursor gate lets the drain re-process u1.
     recs = result({ findings: [find("f2")] });
-    const swept = await refreshAllFrontierPlaylists(500);
+    const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
     expect(swept).toMatchObject({ editionOnly: 1, ok: true, switchOff: true, total: 1 });
     expect(spotifyCalls).toEqual([]);
@@ -465,11 +503,12 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
       await import("./frontier-playlist");
 
     await seedUser(db, { email: "a@fluncle.com", id: "u1" });
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
     recs = result({ findings: [find("f1")] });
-    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
 
-    // The SAME list — the sweep's per-user hash-skip fires.
-    const swept = await refreshAllFrontierPlaylists(500);
+    // The SAME list a week on — the sweep's per-user hash-skip fires.
+    const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
     expect(swept).toMatchObject({ editionOnly: 0, total: 1, unchanged: 1 });
     expect(await editionCount("u1")).toBe(1);
@@ -481,15 +520,203 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
 
     settings.set("frontier.minting", "true");
     await seedUser(db, { email: "a@fluncle.com", id: "u1" });
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
     recs = result({ findings: [find("f1")] });
-    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
     spotifyCalls.length = 0;
 
     recs = result({ findings: [find("f2")] });
-    const swept = await refreshAllFrontierPlaylists(500);
+    const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
     expect(swept).toMatchObject({ ok: true, refreshed: 1, switchOff: false, total: 1 });
     expect(spotifyCalls.some((call) => call.init?.method === "PUT")).toBe(true);
+  });
+});
+
+describe("the shared Spotify budget — the mint defers instead of 429-ing (Slice B)", () => {
+  beforeEach(() => settings.set("frontier.minting", "true"));
+
+  it("mints SYNCHRONOUSLY when the budget is free, recording each write into the meter", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
+    recs = result({ findings: [find("f1")] });
+
+    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
+
+    expect(synced).toMatchObject({ status: "minted" });
+    expect(await hasPlaylistRow("u1")).toBe(true);
+    // Two Spotify writes fired (the create POST + the items PUT) — both recorded in the meter.
+    expect(spotifyBudgetCount(now)).toBe(2);
+    // A settled outcome stamps the paced-drain cursor, so the sweep rotates past this user.
+    expect(await hasRefreshCursor("u1")).toBe(true);
+  });
+
+  it("DEFERS the create when the budget is spent — status building, NO Spotify call, no cursor", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
+    exhaustSpotifyBudget(now);
+    recs = result({ findings: [find("f1")] });
+
+    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
+
+    // A distinct SUCCESS state, never a fault — the user never sees a 429.
+    expect(synced).toEqual({ ok: true, status: "building" });
+    // The edition (the shelf's source of truth) still landed synchronously.
+    expect(await editionCount("u1")).toBe(1);
+    // No Spotify write fired on the hot path, and no playlist row was created.
+    expect(spotifyCalls.some((call) => call.path === "/me/playlists")).toBe(false);
+    expect(await hasPlaylistRow("u1")).toBe(false);
+    // A deferred mint leaves the cursor UNSET so the user stays DUE for the paced drain.
+    expect(await hasRefreshCursor("u1")).toBe(false);
+  });
+
+  it("the paced drain COMPLETES a deferred pending mint once the budget frees", async () => {
+    const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
+      await import("./frontier-playlist");
+
+    await seedUser(db, { email: "a@fluncle.com", id: "u1" });
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
+    exhaustSpotifyBudget(now);
+    recs = result({ findings: [find("f1")] });
+
+    // Hot budget → deferred (building), edition written, no playlist yet.
+    const deferred = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
+    expect(deferred).toMatchObject({ status: "building" });
+    expect(await hasPlaylistRow("u1")).toBe(false);
+
+    // A later tick with a fresh budget window (rolled past the 30s window) — the drain finds
+    // the pending mint (no cursor ⇒ DUE) and completes the create.
+    const swept = await refreshAllFrontierPlaylists(5, now + 60_000);
+
+    expect(swept).toMatchObject({ budgetPaused: false, minted: 1, ok: true, total: 1 });
+    expect(await hasPlaylistRow("u1")).toBe(true);
+    expect(spotifyBudgetCount(now + 60_000)).toBe(2);
+  });
+
+  it("the kill switch beats the budget — a dark switch is edition_only even with a spent budget", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    settings.set("frontier.minting", "false");
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
+    exhaustSpotifyBudget(now);
+    recs = result({ findings: [find("f1")] });
+
+    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
+
+    // Dark minting returns edition_only (never building) — the budget gate sits BELOW the
+    // kill-switch gate, so a closed switch is still the honest dark outcome.
+    expect(synced).toEqual({ ok: true, status: "edition_only" });
+    expect(spotifyCalls).toEqual([]);
+  });
+
+  it("the hash-skip beats the budget — an unchanged list is unchanged, not building", async () => {
+    const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
+
+    const now = Date.parse("2026-07-01T00:00:00.000Z");
+    recs = result({ findings: [find("f1")] });
+    // Mint first (fresh budget) so the mirror hash is stored.
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
+    spotifyCalls.length = 0;
+
+    // Now spend the budget and re-run the SAME list — the mirror guard returns before the
+    // budget gate, so an unchanged week never needlessly defers.
+    exhaustSpotifyBudget(now);
+    const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
+
+    expect(synced).toMatchObject({ status: "unchanged" });
+    expect(spotifyCalls).toEqual([]);
+  });
+});
+
+describe("the paced drain — batches, stamps, resumes, pending-mints first (Slice A)", () => {
+  beforeEach(() => settings.set("frontier.minting", "true"));
+
+  it("drains in BATCHES, stamping each user so the next tick resumes with the rest", async () => {
+    const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
+      await import("./frontier-playlist");
+
+    const t0 = Date.parse("2026-07-01T00:00:00.000Z");
+    // Three users, each minted at t0 (cursor stamped at t0) → all DUE a week on.
+    for (const id of ["u1", "u2", "u3"]) {
+      await seedUser(db, { email: `${id}@fluncle.com`, id });
+      recs = result({ findings: [find(`${id}-a`)] });
+      await mintOrRefreshFrontierPlaylist(makeUser({ id }), t0);
+    }
+
+    const later = t0 + WEEK_MS;
+    // A changed list forces a real refresh for each.
+    recs = result({ findings: [find("shared-b")] });
+
+    // Batch of 2 → two refreshed, one still due.
+    const first = await refreshAllFrontierPlaylists(2, later);
+    expect(first).toMatchObject({ refreshed: 2, total: 2 });
+
+    // The next tick picks up exactly the remaining one (the first two are stamped `later`).
+    const second = await refreshAllFrontierPlaylists(2, later);
+    expect(second).toMatchObject({ refreshed: 1, total: 1 });
+
+    // A third tick finds nothing due — every user is now stamped `later`.
+    const third = await refreshAllFrontierPlaylists(2, later);
+    expect(third).toMatchObject({ refreshed: 0, total: 0 });
+  });
+
+  it("STOPS cleanly when the budget is exhausted, then RESUMES next tick", async () => {
+    const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
+      await import("./frontier-playlist");
+
+    const t0 = Date.parse("2026-07-01T00:00:00.000Z");
+    for (const id of ["u1", "u2"]) {
+      await seedUser(db, { email: `${id}@fluncle.com`, id });
+      recs = result({ findings: [find(`${id}-a`)] });
+      await mintOrRefreshFrontierPlaylist(makeUser({ id }), t0);
+    }
+
+    const later = t0 + WEEK_MS;
+    recs = result({ findings: [find("shared-b")] });
+    spotifyCalls.length = 0;
+
+    // Budget already spent at `later` → the pass stops before any user, processing none.
+    exhaustSpotifyBudget(later);
+    const paused = await refreshAllFrontierPlaylists(5, later);
+    expect(paused).toMatchObject({ budgetPaused: true, refreshed: 0, total: 2 });
+    expect(spotifyCalls).toEqual([]);
+
+    // A later tick with a fresh window drains both — the durable cursors resumed the work.
+    const resumed = await refreshAllFrontierPlaylists(5, later + 60_000);
+    expect(resumed).toMatchObject({ budgetPaused: false, refreshed: 2, total: 2 });
+  });
+
+  it("orders PENDING MINTS ahead of due refreshers", async () => {
+    const { mintOrRefreshFrontierPlaylist, refreshAllFrontierPlaylists } =
+      await import("./frontier-playlist");
+
+    const t0 = Date.parse("2026-07-01T00:00:00.000Z");
+
+    // A: minted at t0 (has a playlist row + a cursor) → a DUE refresher a week on.
+    await seedUser(db, { email: "a@fluncle.com", id: "u-refresh" });
+    recs = result({ findings: [find("a-1")] });
+    await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-refresh" }), t0);
+
+    // B: a pending mint — deferred under a spent budget, so it has an edition but NO playlist
+    // row and NO cursor.
+    await seedUser(db, { email: "b@fluncle.com", id: "u-pending" });
+    exhaustSpotifyBudget(t0);
+    recs = result({ findings: [find("b-1")] });
+    const deferred = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-pending" }), t0);
+    expect(deferred).toMatchObject({ status: "building" });
+
+    // A batch of ONE, a week on with a fresh budget: the pending mint (B) must be picked first.
+    recs = result({ findings: [find("shared-b")] });
+    const swept = await refreshAllFrontierPlaylists(1, t0 + WEEK_MS);
+
+    expect(swept).toMatchObject({ minted: 1, total: 1 });
+    // B got its first playlist. A was NOT reached this tick — had it been refreshed with the
+    // changed list it would have written a second edition, so its edition count proves it stayed
+    // put (its own mint wrote #1 only).
+    expect(await hasPlaylistRow("u-pending")).toBe(true);
+    expect(await editionCount("u-refresh")).toBe(1);
   });
 });
 

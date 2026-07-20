@@ -1321,6 +1321,12 @@ export function accountDeletionStatements({
       sql: `delete from user_frontier_playlists where user_id = ?`,
     },
     {
+      // The user's paced-drain cursor (the sweep's last-processed stamp). A logical FK
+      // (no SQL cascade), the sibling per-user precedent — deletion is application code.
+      args: [userId],
+      sql: `delete from user_frontier_refresh where user_id = ?`,
+    },
+    {
       args: [userId],
       sql: `delete from user_saved_sets where user_id = ?`,
     },

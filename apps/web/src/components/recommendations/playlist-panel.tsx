@@ -19,7 +19,6 @@ import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { SpotifyIcon } from "@/components/platform-icons";
 import { formatDateLong } from "@/lib/format";
-import { nextScheduledRun } from "@/lib/next-run";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
@@ -121,31 +120,6 @@ export function PlaylistPanel({
 
   const frontier = statusQuery.data ?? FRONTIER_CLOSED;
 
-  // When the next automatic refresh lands, in the reader's OWN timezone. The box re-mirrors
-  // every Frontier playlist weekly on a Fri 07:00 Amsterdam host timer
-  // (docs/agents/hermes/frontier-refresh-timer); we take that fixed wall-clock schedule, find
-  // its next fire, and read it back in the browser's locale + zone. Computed client-side and
-  // only shown once the status query resolves the playlist, so there is no SSR/timezone
-  // hydration split.
-  const refreshCadence = useMemo(() => {
-    const fire = nextScheduledRun(
-      { time: "07:00", tz: "Europe/Amsterdam", weekday: 5 },
-      new Date().toISOString(),
-    );
-
-    if (!fire) {
-      return "";
-    }
-
-    const when = new Date(fire);
-    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(when);
-    const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
-      when,
-    );
-
-    return `every ${weekday} at ${time}`;
-  }, []);
-
   // The one CTA the header shows, by phase (the shelf-from-editions triggers): DRAFT offers
   // the one-time "Get playlist" commitment; COMMITTED opens the synced playlist, or — for an
   // edition-only user whose Spotify half is still dark — shows nothing but the honest waiting
@@ -199,21 +173,15 @@ export function PlaylistPanel({
     }
   }
 
-  // The one meta fact the interface can't carry: the weekly freshening. One line, above the
-  // CTA: the last refresh and the standing cadence joined on a middle dot ("Refreshed
-  // Jul 17, 2026 · every Friday at 7:00 AM"), so the button is never sandwiched between two
-  // near-identical lines. The cadence half appends only once the status query resolves the
-  // playlist client-side — the same guard the old below-button line rode, so the SSR render
-  // stays byte-stable and the cadence lands as a post-hydration update (no timezone split).
-  const lastLine = !frontier.playlistUrl
+  // The one meta fact the interface can't carry: the weekly freshening. One quiet line above
+  // the CTA — the last refresh once the playlist exists ("Refreshed Jul 17, 2026"), the standing
+  // weekly promise before it. The refresh now drains paced across the day rather than on a fixed
+  // wall-clock slot, so the line stays honestly "every week" and never names a specific time.
+  const meta = !frontier.playlistUrl
     ? "Refreshed every week"
     : frontier.lastSyncedAt
       ? `Refreshed ${formatDateLong(frontier.lastSyncedAt)}`
       : "";
-  const meta =
-    frontier.playlistUrl && lastLine && refreshCadence
-      ? `${lastLine} · ${refreshCadence}`
-      : lastLine;
 
   return (
     <section className="rec-playlist">

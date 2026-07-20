@@ -19,10 +19,13 @@ import * as z from "zod";
  * empty request body keeps oRPC from pre-rejecting a bodyless POST.
  *
  * `status` reports what happened: `minted` (Spotify playlist created), `refreshed` (its
- * items changed), `unchanged` (nothing moved since the latest edition), or `edition_only`
+ * items changed), `unchanged` (nothing moved since the latest edition), `edition_only`
  * (the edition was written but the DEFAULT-DENY kill switch is closed, so no Spotify
- * playlist — the user's act still checkpoints an edition, `playlistUrl` absent).
- * `playlistUrl` is present on every outcome that has a playlist.
+ * playlist — the user's act still checkpoints an edition, `playlistUrl` absent), or
+ * `building` (the edition was written but the shared per-app Spotify budget was spent, so
+ * the playlist write was DEFERRED to the paced sweep — a distinct success state, never a
+ * 429 in the user's face; `playlistUrl` absent on a first mint, present on a deferred
+ * refresh). `playlistUrl` is present on every outcome that has a playlist.
  */
 export const mintPrivateFrontierPlaylist = oc
   .route({
@@ -37,7 +40,7 @@ export const mintPrivateFrontierPlaylist = oc
     z.object({
       ok: z.literal(true),
       playlistUrl: z.string().optional(),
-      status: z.enum(["minted", "refreshed", "unchanged", "edition_only"]),
+      status: z.enum(["minted", "refreshed", "unchanged", "edition_only", "building"]),
     }),
   );
 

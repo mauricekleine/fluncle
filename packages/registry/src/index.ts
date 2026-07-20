@@ -1172,13 +1172,13 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.frontier-refresh",
     operatorNotes:
-      "weekly (Fri 07:00 Amsterdam), run by a rave-02 HOST systemd timer (docs/agents/hermes/frontier-refresh-timer/). E2, the public recommendation machine: every verified user can mint ONE public 'Fluncle's Frontier' playlist on Fluncle's OWN Spotify account (no per-user OAuth), holding THEIR recommendations (the E1 blend); this cron is the Discover-Weekly-style refresh that keeps each one current. The walk + the Spotify item replaces all happen inside the Worker; the sweep just fires one `fluncle admin frontier refresh`. It respects the DEFAULT-DENY `frontier.minting` kill switch (a closed switch touches nothing), skips playlists whose recommendation set is unchanged (a per-row URI-hash mirror guard), and creates no new public authority — every playlist it touches already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier, so the box's existing agent-scoped token drives it: NO new secret. Zero LLM tokens. Source: docs/agents/hermes/scripts/frontier-refresh-sweep.*. See docs/the-ear.md § Fluncle's Frontier.",
+      "every ~15 min, run by a rave-02 HOST systemd timer (docs/agents/hermes/frontier-refresh-timer/). E2, the public recommendation machine: every verified user can mint ONE public 'Fluncle's Frontier' playlist on Fluncle's OWN Spotify account (no per-user OAuth), holding THEIR recommendations (the E1 blend); this cron keeps each one current. It is a PACED, RESUMABLE DRAIN, not a weekly burst: each tick fires one `fluncle admin frontier refresh` that processes only a small BATCH of DUE users inside the Worker (pending mints first, then users whose per-user cursor is older than ~6 days), so the whole crew refreshes ~weekly SPREAD across the day instead of one 07:00 pass that collided with Spotify's shared per-app budget and 429'd live user paths. It consults the shared Spotify budget and stops cleanly when the window is spent (`budgetPaused`), respects the DEFAULT-DENY `frontier.minting` kill switch (a closed switch touches nothing on Spotify), skips playlists whose recommendation set is unchanged (a per-row URI-hash mirror guard), and creates no new public authority — every playlist it touches already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier, so the box's existing agent-scoped token drives it: NO new secret. Zero LLM tokens. Source: docs/agents/hermes/scripts/frontier-refresh-sweep.*. See docs/the-ear.md § Fluncle's Frontier.",
     probeConfig: {
-      cadenceMs: 7 * 24 * 60 * MINUTE_MS,
+      cadenceMs: 15 * MINUTE_MS,
       cronName: "fluncle-frontier-refresh",
       kind: "cron",
     },
-    statusDescription: "refreshes every crew member's Frontier playlist",
+    statusDescription: "refreshes the crew's Frontier playlists, paced",
     title: "Frontier refresh",
     weights: { status: "hidden" },
   },

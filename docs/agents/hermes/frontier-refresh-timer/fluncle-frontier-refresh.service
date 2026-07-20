@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-frontier-refresh — rave-02 host trigger for the weekly Frontier playlist refresh (E2, the public recommendation machine)
+Description=fluncle-frontier-refresh — rave-02 host trigger for one tick of the paced Frontier-playlist drain (E2, the public recommendation machine)
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/frontier-refresh-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
@@ -17,8 +17,9 @@ Type=oneshot
 # existing agent-scoped token drives it.
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/frontier-refresh-sweep.sh
 # A PURE trigger — zero LLM tokens. The work is the mirror + the Spotify item replaces inside
-# the Worker; one `fluncle admin frontier refresh` walks up to its limit and stops. Give the
-# per-user Spotify round-trips headroom as the crew grows.
+# the Worker; one `fluncle admin frontier refresh` processes ONE paced batch of due users and
+# stops (the batch is small by design, so a tick is short). Headroom for the per-user Spotify
+# round-trips as the crew grows.
 TimeoutStartSec=900
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
