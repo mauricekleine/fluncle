@@ -66,6 +66,9 @@ import { resolveSweepPrompt } from "./prompt-fetch";
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
+// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 const SITE = process.env.FLUNCLE_SITE_URL ?? "https://www.fluncle.com";
 
 // The authoring model + optional effort, env-overridable (defaults match note-sweep).

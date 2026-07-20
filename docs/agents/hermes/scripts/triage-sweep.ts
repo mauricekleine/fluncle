@@ -57,6 +57,9 @@ const QUEUE_LIMIT = 100; // ceiling on the queue read (we only act on BATCH_CAP)
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
+// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
 // The authoring model. Env-configurable; default the note-sweep-proven Sonnet alias.
 const TRIAGE_CLAUDE_MODEL = process.env.TRIAGE_CLAUDE_MODEL ?? "claude-sonnet-4-6";
