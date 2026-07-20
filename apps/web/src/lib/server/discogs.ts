@@ -75,23 +75,48 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// A per-service serializer: each call runs after the previous one settles plus a
-// fixed gap, so concurrent callers (a backfill sweep + an on-add publish) still
-// share one honest rate budget. Module-level, so it spans requests in an isolate.
+// A per-service serializer with BOTH properties the musicbrainz.ts gate learned across
+// 2026-07-18/19 (see the long comment there): SINGLE-FILE — each call runs after the previous
+// settles, so concurrent callers share one honest rate budget — and WEDGE-IMMUNE — the wait on
+// the predecessor races a deadline on the CALLER'S OWN clock, because a predecessor whose
+// request context died (client timeout) can leave frozen timers/fetches the runtime never
+// settles. The old unbounded chain wedged label-images' isolates exactly that way (2026-07-20:
+// box ticks hit their poisoned isolate for hours while fresh connections resolved in seconds).
+// Slot pacing on top keeps the arrival gap honest even when a predecessor was raced past.
 function makeRateLimiter() {
   let tail: Promise<unknown> = Promise.resolve();
+  let nextSlotAt = 0;
+  const CHAIN_WAIT_FACTOR = 40;
 
   return <T>(call: () => Promise<T>): Promise<T> => {
-    const result = tail.then(call, call);
-    // Advance the gate past this call + the gap, swallowing its result/error so one
-    // failure never wedges the chain.
-    tail = result.then(
-      () => delay(rateLimitIntervalMs),
-      () => delay(rateLimitIntervalMs),
-    );
+    const prev = tail;
 
-    return result;
+    const run = (async () => {
+      const chainWait = rateLimitIntervalMs * CHAIN_WAIT_FACTOR;
+
+      if (chainWait > 0) {
+        await Promise.race([prev.then(noop, noop), delay(chainWait)]);
+      }
+
+      const now = Date.now();
+      const slotAt = Math.max(now, nextSlotAt);
+      nextSlotAt = slotAt + rateLimitIntervalMs;
+
+      if (slotAt > now) {
+        await delay(slotAt - now);
+      }
+
+      return call();
+    })();
+
+    tail = run.then(noop, noop);
+
+    return run;
   };
+}
+
+function noop(): void {
+  // Chain links only sequence; they never propagate results or rejections.
 }
 
 const throttleDiscogs = makeRateLimiter();
