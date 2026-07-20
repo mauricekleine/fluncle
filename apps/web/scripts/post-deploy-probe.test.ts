@@ -4,6 +4,7 @@ import {
   checkContent,
   judge,
   parseArgs,
+  pathnameOf,
   promoteTrackParamOps,
   retarget,
   tierOfPath,
@@ -24,6 +25,23 @@ describe("tierOfPath", () => {
     expect(tierOfPath("/me/csrf")).toBe("private");
     expect(tierOfPath("/tracks")).toBe("public");
     expect(tierOfPath("/search/archive")).toBe("public");
+  });
+});
+
+describe("pathnameOf", () => {
+  // The `:param` test must run on the PATH, not the raw URL: every absolute URL
+  // contains the scheme's colon, so testing the whole string would skip every
+  // surface that carries only a `url` and no `route` — silent drift, the exact
+  // failure this probe exists to catch.
+  it("excludes the scheme colon so only a real route param reads as parameterised", () => {
+    expect(pathnameOf("https://www.fluncle.com/rss.xml")).toBe("/rss.xml");
+    expect(pathnameOf("https://www.fluncle.com/rss.xml").includes(":")).toBe(false);
+    expect(pathnameOf("https://www.fluncle.com/artist/:slug/fresh.xml").includes(":")).toBe(true);
+    expect(pathnameOf("https://galaxy.fluncle.com").includes(":")).toBe(false);
+  });
+
+  it("returns an empty path for an unparseable URL", () => {
+    expect(pathnameOf("not a url")).toBe("");
   });
 });
 

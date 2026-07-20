@@ -166,6 +166,19 @@ function contentKindForFormat(apiFormat: string | undefined): ContentKind {
   return "text";
 }
 
+/**
+ * The path portion of an absolute URL. Used for the `:param` test, so the scheme's
+ * own colon can never be mistaken for a route parameter. A URL that will not parse
+ * yields "" (nothing to mistake for a param).
+ */
+export function pathnameOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
+
 /** The absolute URL a registry surface is probed at (its explicit `url`, else the
  * www route, else the subdomain host). */
 function surfaceUrl(surface: Surface): string | null {
@@ -255,24 +268,23 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
       continue;
     }
 
-    const route = surface.route ?? surface.url;
-
-    // Parameterised feeds (e.g. /artist/:slug/fresh.xml) have no fixed address to GET.
-    if (!route || route.includes(":")) {
-      if (route?.includes(":")) {
-        skipped.push({
-          className: surface.kind === "feed" ? "feed" : "discovery",
-          name: surface.name,
-          reason: "parameterised route — no fixed address to probe",
-        });
-      }
-
-      continue;
-    }
-
     const url = surfaceUrl(surface);
 
     if (!url) {
+      continue;
+    }
+
+    // Parameterised feeds (e.g. /artist/:slug/fresh.xml) have no fixed address to GET.
+    // Test the PATHNAME, never the raw URL — every absolute URL contains the scheme's
+    // colon, so checking the whole string would silently skip every surface that
+    // carries only a `url` and no `route`.
+    if (pathnameOf(url).includes(":")) {
+      skipped.push({
+        className: surface.kind === "feed" ? "feed" : "discovery",
+        name: surface.name,
+        reason: "parameterised route — no fixed address to probe",
+      });
+
       continue;
     }
 
