@@ -7,6 +7,7 @@ import { execSync } from "node:child_process";
 import mdx from "fumadocs-mdx/vite";
 import { resolve } from "node:path";
 import { defineConfig, type Plugin, type PluginOption, type Rollup } from "vite";
+import { clientChunkGroups } from "./scripts/client-chunk-groups";
 import * as docsConfig from "./source.config";
 
 // The Sentry release name = the build commit SHA (docs/error-tracking.md). On
@@ -170,6 +171,24 @@ export default defineConfig({
   // the same release on every event. See lib/sentry-config.ts.
   define: {
     "import.meta.env.VITE_FLUNCLE_SENTRY_RELEASE": JSON.stringify(sentryRelease),
+  },
+  // Chunking is set PER ENVIRONMENT, on the client only. A top-level
+  // `build.rollupOptions.output` is replaced by the per-environment output
+  // config that TanStack Start and the Cloudflare plugin set (the same reason
+  // the crawler banner is prepended in `generateBundle` rather than via
+  // `output.banner`), so the option has to be stated at this level to survive.
+  // The `ssr` environment is deliberately untouched: the Worker is one bundle
+  // loaded once per isolate, so splitting it buys nothing and risks cold start.
+  environments: {
+    client: {
+      build: {
+        rollupOptions: {
+          output: {
+            codeSplitting: { groups: [...clientChunkGroups] },
+          },
+        },
+      },
+    },
   },
   // fumadocs-ui (the /docs hub) imports from the `lucide-react` barrel. Without
   // pre-bundling, Vite dev serves the un-optimized barrel, whose ~1500 static
