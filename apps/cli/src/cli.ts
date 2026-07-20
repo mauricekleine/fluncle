@@ -3860,6 +3860,7 @@ async function runBackfillLabelReleases(
   let albumsMatched = 0;
   let newRows = 0;
   let skippedKnown = 0;
+  let skippedUngrounded = 0;
   let failedFetches = 0;
   let fetchCeilingHit = false;
 
@@ -3878,6 +3879,7 @@ async function runBackfillLabelReleases(
     albumsMatched += result.albumsMatched;
     newRows += result.newRows;
     skippedKnown += result.skippedKnown;
+    skippedUngrounded += result.skippedUngrounded;
     failedFetches += result.failedFetches;
     fetchCeilingHit = fetchCeilingHit || result.fetchCeilingHit;
     newTrackIds.push(...result.newTrackIds);
@@ -3887,7 +3889,7 @@ async function runBackfillLabelReleases(
     if (!options.json) {
       const verb = result.dryRun ? "would probe" : "probed";
       console.log(
-        `  …${verb} ${result.labelSlugs.length} label(s); ${result.albumsMatched} matched album(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.failedFetches} fetch-fail; ${result.failedLabels.length} search-fail`,
+        `  …${verb} ${result.labelSlugs.length} label(s); ${result.albumsMatched} matched album(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.skippedUngrounded} ungrounded; ${result.failedFetches} fetch-fail; ${result.failedLabels.length} search-fail`,
       );
     }
 
@@ -3928,6 +3930,7 @@ async function runBackfillLabelReleases(
         newTrackIds,
         rateLimited: throttled,
         skippedKnown,
+        skippedUngrounded,
       },
       0,
     );
@@ -3944,7 +3947,7 @@ async function runBackfillLabelReleases(
   const verb = dryRun ? "Would probe" : "Probed";
   const probedCount = dryRun ? labelSlugs.length : labelsProbed;
   console.log(
-    `${verb} ${probedCount} enabled seed label(s); ${albumsMatched} matched album(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${failedFetches} fetch-fail; ${failedLabels.length} search-fail.`,
+    `${verb} ${probedCount} enabled seed label(s); ${albumsMatched} matched album(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${skippedUngrounded} dropped for no known artist; ${failedFetches} fetch-fail; ${failedLabels.length} search-fail.`,
   );
 
   if (fetchCeilingHit) {

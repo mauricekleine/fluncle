@@ -81,18 +81,25 @@ import {
   parseProbeAlbum,
   parseProbeTrack,
   probeLabelReleases,
+  stripCopyrightPrefix,
 } from "./label-releases";
 import { listFreshReleases } from "./fresh";
 
 // ── Fixture builders (the Spotify JSON shapes) ──────────────────────────────────────────────────
 
 type AlbumFixture = {
+  /** The album's Spotify artist ids (the ARTIST-GROUNDING key). Defaults to the seeded known
+   *  artist, so a minting fixture is grounded unless it deliberately names an UNKNOWN artist. */
+  artistIds?: string[];
   copyrights: string[];
   id: string;
   name: string;
   releaseDate: string;
   trackIds: string[];
 };
+
+/** The Spotify artist id seeded into `artists` in beforeEach — the default grounding for a mint. */
+const KNOWN_ARTIST_ID = "sp_artist_known";
 
 type TrackFixture = {
   artistNames?: string[];
@@ -106,9 +113,11 @@ function searchBody(albumIds: string[]): unknown {
   return { albums: { items: albumIds.map((id) => ({ id })) } };
 }
 
-/** The SINGLE-album response (`GET /albums/{id}`) — the album object is the top-level body. */
+/** The SINGLE-album response (`GET /albums/{id}`) — the album object is the top-level body. Carries
+ *  `artists[].id` (the grounding key), defaulting to the seeded known artist. */
 function albumBody(album: AlbumFixture): unknown {
   return {
+    artists: (album.artistIds ?? [KNOWN_ARTIST_ID]).map((id) => ({ id, name: "Some Artist" })),
     copyrights: album.copyrights.map((text) => ({ text, type: "P" })),
     id: album.id,
     name: album.name,
@@ -183,11 +192,32 @@ async function seedEnabledLabel(
   });
 }
 
+/** Insert an artist carrying a `spotify_artist_id` — the grounding key. */
+async function seedArtist(client: Client, spotifyArtistId: string): Promise<void> {
+  const now = new Date().toISOString();
+
+  await client.execute({
+    args: [
+      `art_${spotifyArtistId}`,
+      "Known Artist",
+      `known-${spotifyArtistId}`,
+      spotifyArtistId,
+      now,
+      now,
+    ],
+    sql: `insert into artists (id, name, slug, spotify_artist_id, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)`,
+  });
+}
+
 let db: Client;
 
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
+  // The default grounding: a known artist whose Spotify id every un-overridden album fixture claims,
+  // so a minting fixture is grounded unless it deliberately names an UNKNOWN artist.
+  await seedArtist(db, KNOWN_ARTIST_ID);
   spotify.calls = [];
   spotify.grantGone = false;
   spotify.throwKind = null;
@@ -205,8 +235,12 @@ describe("parseLabelAlbumSearch", () => {
 });
 
 describe("parseProbeAlbum", () => {
-  it("reads copyrights + track ids + date off a SINGLE album body", () => {
+  it("reads copyrights + artist ids + track ids + date off a SINGLE album body", () => {
     const body = {
+      artists: [
+        { id: "sp_art_1", name: "A" },
+        { id: "sp_art_2", name: "B" },
+      ],
       copyrights: [{ text: "℗ 2026 Hospital Records", type: "P" }],
       id: "a1",
       name: "New EP",
@@ -219,10 +253,23 @@ describe("parseProbeAlbum", () => {
       id: "a1",
       name: "New EP",
       releaseDate: "2026-07-19",
+      spotifyArtistIds: ["sp_art_1", "sp_art_2"],
       trackIds: ["t1", "t2"],
     });
     expect(parseProbeAlbum(null)).toBeNull();
     expect(parseProbeAlbum({ name: "no id" })).toBeNull();
+  });
+});
+
+describe("stripCopyrightPrefix", () => {
+  it("strips leading ℗/© symbols + the copyright year, leaving the label portion", () => {
+    expect(stripCopyrightPrefix("℗ 2026 Hospital Records")).toBe("Hospital Records");
+    expect(stripCopyrightPrefix("© 2026 Med School")).toBe("Med School");
+    expect(stripCopyrightPrefix("(P) 2026 Foo")).toBe("Foo");
+    expect(stripCopyrightPrefix("© ℗ 2026 Bar")).toBe("Bar"); // repeated symbols
+    expect(stripCopyrightPrefix("2026 Baz")).toBe("Baz"); // year, no symbol
+    // A label whose own name starts with a number keeps it (only ONE leading year is peeled).
+    expect(stripCopyrightPrefix("℗ 2026 1985 Music")).toBe("1985 Music");
   });
 });
 
@@ -245,9 +292,14 @@ describe("parseProbeTrack", () => {
 });
 
 describe("copyrightMatchesLabel", () => {
-  it("matches a fold-substring of a copyright string, rejects an unrelated one", () => {
-    expect(copyrightMatchesLabel(["℗ 2026 Med School Recordings"], "Medschool")).toBe(true);
-    expect(copyrightMatchesLabel(["℗ 2026 Hospital Records Ltd"], "Hospital Records")).toBe(true);
+  it("requires EXACT-fold equality on the stripped label portion (not a substring)", () => {
+    // Exact attribution → match (fold absorbs the space + case).
+    expect(copyrightMatchesLabel(["℗ 2026 Med School"], "Medschool")).toBe(true);
+    expect(copyrightMatchesLabel(["℗ 2026 Hospital Records"], "Hospital Records")).toBe(true);
+    // A substring near-match is REJECTED — the whole point of the tightening.
+    expect(copyrightMatchesLabel(["℗ 2026 Silent Lens"], "Lens")).toBe(false);
+    // A longer real-label variant no longer sneaks through the loose substring match.
+    expect(copyrightMatchesLabel(["℗ 2026 Med School Recordings"], "Medschool")).toBe(false);
     expect(copyrightMatchesLabel(["℗ 2026 Some Other Label"], "Hospital Records")).toBe(false);
     expect(copyrightMatchesLabel([], "Hospital Records")).toBe(false);
   });
@@ -344,6 +396,74 @@ describe("probeLabelReleases", () => {
     expect(spotify.calls.some((path) => path.includes("t_junk"))).toBe(false);
   });
 
+  it("mints a KNOWN-artist album but SKIPS an unknown-artist one on the SAME label (grounding)", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+
+    setSpotifyFixture({
+      albums: [
+        // Both albums carry the EXACT copyright — the difference is ONLY the artist grounding.
+        {
+          artistIds: [KNOWN_ARTIST_ID], // an artist we already hold → grounded → MINTS
+          copyrights: ["℗ 2026 Medschool"],
+          id: "grounded",
+          name: "Real EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_known"],
+        },
+        {
+          artistIds: ["sp_artist_unknown"], // an artist absent from `artists` → SKIPPED
+          copyrights: ["℗ 2026 Medschool"],
+          id: "ungrounded",
+          name: "Debut EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_new"],
+        },
+      ],
+      searchAlbumIds: ["grounded", "ungrounded"],
+      tracks: [{ id: "t_known", isrc: "GB0000000001", title: "Real Track" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.albumsMatched).toBe(1); // only the grounded album will mint
+    expect(result.skippedUngrounded).toBe(1); // the unknown-artist album, dropped + counted
+    expect(result.newRows).toBe(1);
+    expect(result.newTrackIds).toEqual(["sp_t_known"]);
+    // The ungrounded album's track is NEVER minted, and its tracks are never even fetched.
+    const un = await db.execute("select 1 from tracks where track_id = 'sp_t_new'");
+    expect(un.rows).toHaveLength(0);
+    expect(spotify.calls.some((path) => path.includes("t_new"))).toBe(false);
+  });
+
+  it("SKIPS the homonym case — right label NAME, but all artists unknown (cross-genre junk)", async () => {
+    // "Earth Records" is a real seed label; a DIFFERENT "Earth Records" exists globally, whose
+    // copyright fold-EQUALS the seed name — so copyright alone would let its cross-genre releases in.
+    // Grounding (unknown artists) is what rejects them.
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Earth Records", slug: "earth-records" });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          artistIds: ["sp_artist_devotional", "sp_artist_folk"], // none in our archive
+          copyrights: ["℗ 2026 Earth Records"], // exact-fold match on the homonym
+          id: "homonym",
+          name: "Bhajans Vol 3",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_junk"],
+        },
+      ],
+      searchAlbumIds: ["homonym"],
+      tracks: [{ id: "t_junk", isrc: "IN0000000001", title: "Bhola Baba" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.skippedUngrounded).toBe(1);
+    expect(result.albumsMatched).toBe(0);
+    expect(result.newRows).toBe(0);
+    expect(Number((await db.execute("select count(*) as n from tracks")).rows[0]?.n)).toBe(0);
+  });
+
   it("uses ONLY the SINGLE endpoints — never the 403 batch endpoints (the tier contract)", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
 
@@ -417,7 +537,7 @@ describe("probeLabelReleases", () => {
     setSpotifyFixture({
       albums: [
         {
-          copyrights: ["℗ 2026 Med School Recordings"],
+          copyrights: ["℗ 2026 Med School"], // strips to "Med School" → fold-equals "Medschool"
           id: "alb1",
           name: "New EP",
           releaseDate: "2026-07-18",
