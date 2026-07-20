@@ -152,11 +152,11 @@ function pageParam(value: unknown): number | undefined {
 }
 
 // One composed string (not JSX fragments) so the count is a single SSR text node. The count clause
-// drops at ≤ 1 ("all 1 of them" is not a sentence).
+// drops at ≤ 1 ("1 drum & bass labels" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
-    ? `Every drum & bass label Fluncle holds, all ${countFormatter.format(total)} of them.`
-    : "Every drum & bass label Fluncle holds.";
+    ? `${countFormatter.format(total)} drum & bass labels, A to Z.`
+    : "Drum & bass labels, A to Z.";
 }
 
 function LabelsPage() {

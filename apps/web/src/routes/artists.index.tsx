@@ -156,11 +156,11 @@ function pageParam(value: unknown): number | undefined {
 
 // One composed string (not JSX fragments) so the count is a single SSR text node — a conditional
 // clause SSRs as several nodes split by hydration markers, which a naive text extractor misreads.
-// The count clause drops at ≤ 1 ("all 1 of them" is not a sentence).
+// The count clause drops at ≤ 1 ("1 drum & bass artists" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
-    ? `Every drum & bass artist Fluncle holds, all ${countFormatter.format(total)} of them.`
-    : "Every drum & bass artist Fluncle holds.";
+    ? `${countFormatter.format(total)} drum & bass artists, A to Z.`
+    : "Drum & bass artists, A to Z.";
 }
 
 function ArtistsPage() {

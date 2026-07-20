@@ -15,15 +15,13 @@ import {
 describe("tracksMastheadLine", () => {
   it("carries the held count as ONE composed string when the count is real", () => {
     // One string, one SSR text node — no comment-split fragments a text extractor can truncate.
-    expect(tracksMastheadLine(31788)).toBe(
-      "Every drum & bass track Fluncle holds, all 31,788 of them.",
-    );
-    expect(tracksMastheadLine(2)).toBe("Every drum & bass track Fluncle holds, all 2 of them.");
+    expect(tracksMastheadLine(31788)).toBe("31,788 drum & bass tracks, newest first.");
+    expect(tracksMastheadLine(2)).toBe("2 drum & bass tracks, newest first.");
   });
 
-  it("drops the count clause at 0 / 1 (never 'all 0 of them')", () => {
-    expect(tracksMastheadLine(0)).toBe("Every drum & bass track Fluncle holds.");
-    expect(tracksMastheadLine(1)).toBe("Every drum & bass track Fluncle holds.");
+  it("drops the count at 0 / 1 (never a bare '1 tracks')", () => {
+    expect(tracksMastheadLine(0)).toBe("Drum & bass tracks, newest first.");
+    expect(tracksMastheadLine(1)).toBe("Drum & bass tracks, newest first.");
   });
 });
 

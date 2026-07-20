@@ -590,14 +590,16 @@ function TracksPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Tracks</h1>
-          {/* Reference register (VOICE.md's Three Areas): one factual line naming the superset, with
-              the held count riding it. The newest-first order is SHOWN by the row date column (never
-              stated — the /fresh masthead rule), and the lit/unlit split is shown visually, never
-              verbally (the Unlit Rule). "holds", not "in the archive" — the archive is the CERTIFIED
-              collection, and this list is the wider superset. ONE composed string (see
-              tracksMastheadLine): a conditional JSX clause SSRs as comment-split text nodes, which
-              naive text extraction misreads as a missing count. */}
-          <p className="log-index-intro">{tracksMastheadLine(heldTotal)}</p>
+          {/* Reference register (VOICE.md's Three Areas): one factual line — the held count plus
+              the list's order (operator ruling 2026-07-20: count-led, no filler tail). The lit/unlit
+              split stays visual, never verbal (the Unlit Rule). On a FILTERED view the count drops:
+              heldTotal is the whole-archive figure, and captioning a filtered subset with it would
+              lie — the aria-live matchline under the filters owns that number. ONE composed string
+              (see tracksMastheadLine): a conditional JSX clause SSRs as comment-split text nodes,
+              which naive text extraction misreads as a missing count. */}
+          <p className="log-index-intro">
+            {tracksMastheadLine(tracksSearchHasFilters(filters) ? 0 : heldTotal)}
+          </p>
         </header>
 
         {/* Keyed by the search state: each pill seeds its local state from the URL, so a fresh URL
