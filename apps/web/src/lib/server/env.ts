@@ -207,6 +207,20 @@ async function loadLocalEnv(): Promise<void> {
     return;
   }
 
+  // Never hand the operator's real `.dev.vars` to the test suite. `import.meta.env.DEV`
+  // is true under vitest, so without this a test exercising a write path ran with LIVE
+  // credentials and fired the real integration (createSubmission POSTing to the real
+  // Discord webhook, once per seeded row). GitHub CI already runs this suite with no env
+  // at all — quality-checks.yml passes neither vars nor secrets, and `.dev.vars` does not
+  // exist on a runner — and it is green, so nothing here depends on these values. Skipping
+  // the load makes a local run match CI instead of being the one place with real keys.
+  // The no-network rail in src/test/block-network.ts is the second layer, at the transport.
+  if (process.env.VITEST) {
+    didLoadLocalEnv = true;
+
+    return;
+  }
+
   const { config } = await import("dotenv");
 
   config({ path: ".dev.vars" });
