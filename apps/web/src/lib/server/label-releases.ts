@@ -28,16 +28,28 @@
 //     re-resolve of Spotify's label string). `capture_status` is never named at insert — the DDL
 //     default lands, so the row is nobody's capture work item until the operator rules.
 //
-// ── THE FUZZY-SEARCH + COPYRIGHTS POST-FILTER (mandatory) ─────────────────────────────────────
+// ── THE TWO-SIGNAL GATE: artist-grounding AND an exact copyright match (mandatory) ────────────
 // `GET /search?type=album&q=label:"<name>" tag:new` finds a label's last-two-weeks releases with
 // day-one dates — but its `label:` filter is FUZZY for generic names (live: `label:"RAM Records"`
-// returned 93 junk albums; `label:"Hospital Records"` returned exactly its 2 real ones). Worse,
-// OUR Spotify tier has NO `label` field on the full album object at all. So the post-filter is the
-// `copyrights` array (present at our tier): an album is kept ONLY when the seed label's name
-// FOLD-matches one of its ℗/© strings. No copyright match ⇒ skip (never mint on the fuzzy hit
-// alone). Album-track objects carry no ISRC at our tier either, so each kept album's tracks are
-// fetched one at a time (`GET /tracks/{id}`) for `external_ids.isrc` + duration. SINGLES ONLY: the
-// batch endpoints (`/albums?ids=`, `/tracks?ids=`) are 403 at our tier — see MAX_FETCHES_PER_PASS.
+// returned 93 junk albums), and OUR Spotify tier has NO `label` field on the album object at all.
+// A single loose filter is not enough: the FIRST live drain minted 195 rows, MANY cross-genre (an
+// Indian devotional record, Brazilian live albums, a Christmas record) that reached PUBLIC /fresh —
+// because a loose SUBSTRING copyright match caught homonym labels worldwide ("Lens" ⊂ "Silent Lens";
+// "Pilot." ⊂ Brazilian "Kelton Piloto"). So an album mints ONLY when BOTH signals agree:
+//   (A) ARTIST-GROUNDING (the primary identity/genre anchor) — at least one of the album's Spotify
+//       artist ids (`artists[].id`, carried on the album object — a LOCAL DB lookup, no extra call)
+//       is already in our `artists.spotify_artist_id`. This killed 100% of the cross-genre junk
+//       (every junk row was by an artist we had never certified). See `knownSpotifyArtistIds`.
+//   (B) EXACT COPYRIGHT MATCH (the secondary attribution confirmation) — the copyright's label
+//       portion (`stripCopyrightPrefix`, dropping the ℗/© + year) fold-EQUALS the seed name, not a
+//       substring `includes`. See `copyrightMatchesLabel`.
+// THE DELIBERATE TRADEOFF: a brand-NEW artist's debut on a real seed label is skipped until they
+// exist in our archive — the MB tail-first re-arm backfills that within a day or two. Correctness
+// over completeness is the right call for a public surface.
+//
+// Album-track objects carry no ISRC at our tier, so each kept album's tracks are fetched one at a
+// time (`GET /tracks/{id}`) for `external_ids.isrc` + duration. SINGLES ONLY: the batch endpoints
+// (`/albums?ids=`, `/tracks?ids=`) are 403 at our tier — see MAX_FETCHES_PER_PASS.
 //
 // ── THE DEDUPE CONTRACT (the load-bearing design point — catalogue-dedupe.ts) ─────────────────
 // This probe and the MB crawl converge on ONE row per recording from EITHER direction:
@@ -119,12 +131,15 @@ type LabelProbeRow = {
   slug: string;
 };
 
-/** A parsed full album (`GET /albums/{id}`) — the fields the copyrights post-filter + the mint read. */
+/** A parsed full album (`GET /albums/{id}`) — the fields the two-signal gate + the mint read. */
 export type ProbeAlbum = {
   copyrights: string[];
   id: string;
   name: null | string;
   releaseDate: null | string;
+  /** The album's Spotify artist ids (`artists[].id`) — the ARTIST-GROUNDING key. Carried on the
+   *  album object itself, so grounding is a local DB lookup, never an extra Spotify call. */
+  spotifyArtistIds: string[];
   trackIds: string[];
 };
 
@@ -141,9 +156,9 @@ export type ProbeTrack = {
 
 /** One probe pass's honest numbers — the op summary + the CLI/cron readout. */
 export type LabelReleasesProbeResult = {
-  /** Albums that PASSED the copyrights post-filter (genuinely this label's) across every label. */
+  /** Albums that PASSED BOTH signals (artist-grounded AND exact copyright match) and will mint. */
   albumsMatched: number;
-  /** Albums the label search returned across every label this pass (before the copyrights filter). */
+  /** Albums the label search returned across every label this pass (before the two-signal gate). */
   albumsSeen: number;
   /** False when the Spotify grant is gone — the whole tap is a no-op this tick (reconnect needed). */
   configured: boolean;
@@ -169,6 +184,9 @@ export type LabelReleasesProbeResult = {
   /** Tracks skipped because they already exist in the archive (Spotify id / uri / ISRC / same-album
    *  title fold) — the dedupe contract, working. */
   skippedKnown: number;
+  /** Albums that passed the EXACT copyright match but were DROPPED for artist-grounding — no artist
+   *  on the album is in our archive yet (a homonym label, or a debut awaiting the MB backfill). */
+  skippedUngrounded: number;
 };
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────────────────────────────
@@ -208,6 +226,7 @@ export function parseProbeAlbum(body: unknown): ProbeAlbum | null {
   }
 
   const album = body as {
+    artists?: Array<{ id?: unknown }>;
     copyrights?: Array<{ text?: unknown }>;
     id?: unknown;
     name?: unknown;
@@ -227,6 +246,9 @@ export function parseProbeAlbum(body: unknown): ProbeAlbum | null {
     id,
     name: asString(album.name),
     releaseDate: asString(album.release_date),
+    spotifyArtistIds: (Array.isArray(album.artists) ? album.artists : [])
+      .map((artist) => asString(artist?.id))
+      .filter((aid): aid is string => Boolean(aid)),
     trackIds: (Array.isArray(album.tracks?.items) ? album.tracks.items : [])
       .map((track) => asString(track?.id))
       .filter((tid): tid is string => Boolean(tid)),
@@ -279,12 +301,23 @@ export function parseProbeTrack(body: unknown): ProbeTrack | null {
 }
 
 /**
- * THE POST-FILTER: does one of an album's copyright strings name the seed label? The seed label's
- * name is FOLD-matched (the shared `labelFold`: casefold to bare alphanumerics) as a SUBSTRING of a
- * folded ℗/© string — so "Med School" matches "℗ 2026 Med School Recordings" and a junk album whose
- * copyright names a different label is rejected. The fuzzy `label:` search hit ALONE is never enough
- * (that is how `label:"RAM Records"` returns 93 wrong albums); the copyright is the corroboration.
- * Pure, so the probe tests pin it directly.
+ * Strip a copyright string's leading notice down to its LABEL-ATTRIBUTION portion: the ℗/© (or
+ * `(P)`/`(C)`) symbol(s) and the copyright year. `"℗ 2026 Hospital Records" → "Hospital Records"`.
+ * Symbols may repeat (`"© ℗ 2026 …"`) and precede a single 4-digit year. Exported for the tests.
+ */
+export function stripCopyrightPrefix(text: string): string {
+  return text.replace(/^\s*(?:[℗©]\s*|\((?:p|c)\)\s*)*(?:\d{4}\s+)?/iu, "").trim();
+}
+
+/**
+ * THE COPYRIGHT SIGNAL (secondary): does one of an album's copyright strings name the seed label
+ * EXACTLY? The copyright's label portion (`stripCopyrightPrefix`) is fold-compared to the seed name
+ * for EQUALITY — not a substring `includes`. This is deliberate: a loose substring match caught
+ * homonym labels worldwide for generic seed names ("Lens" matched any copyright containing "lens" —
+ * "℗ 2026 Silent Lens"; "Pilot." matched Brazilian "Kelton Piloto"), spraying cross-genre junk onto
+ * a PUBLIC surface. Exact-fold-equal rejects "silent lens" ≠ "lens" while still confirming a real
+ * "℗ 2026 <Seed Label>" attribution. It is the SECONDARY confirmation — the ARTIST-GROUNDING gate
+ * (`knownSpotifyArtistIds`) is the primary identity/genre anchor. Pure, so the probe tests pin it.
  */
 export function copyrightMatchesLabel(copyrights: string[], seedLabelName: string): boolean {
   const want = labelFold(seedLabelName);
@@ -293,7 +326,7 @@ export function copyrightMatchesLabel(copyrights: string[], seedLabelName: strin
     return false;
   }
 
-  return copyrights.some((text) => labelFold(text).includes(want));
+  return copyrights.some((text) => labelFold(stripCopyrightPrefix(text)) === want);
 }
 
 // ── Identity ─────────────────────────────────────────────────────────────────────────────────
@@ -505,6 +538,34 @@ async function unmintedSpotifyTrackIds(spotifyTrackIds: string[]): Promise<strin
 
   return spotifyTrackIds.filter(
     (id) => !held.has(labelReleaseTrackId(id)) && !held.has(id) && !held.has(`spotify:track:${id}`),
+  );
+}
+
+/**
+ * THE ARTIST-GROUNDING gate (the primary identity/genre anchor): of a set of Spotify artist ids,
+ * the ones already in our archive (`artists.spotify_artist_id`). An album mints ONLY when at least
+ * one of ITS artist ids is in this set — which kills 100% of the cross-genre junk the fuzzy Spotify
+ * `label:` search returns (an Indian devotional record, a Brazilian live album — every one by an
+ * artist we have never certified), while keeping a real seed-label release (whose artists we already
+ * hold). A local, indexed lookup on the unique `spotify_artist_id` — NO extra Spotify call; the
+ * album object already carries `artists[].id`. The `in` list is bounded by the pass's few albums.
+ */
+async function knownSpotifyArtistIds(spotifyArtistIds: string[]): Promise<Set<string>> {
+  const ids = [...new Set(spotifyArtistIds.filter(Boolean))];
+
+  if (ids.length === 0) {
+    return new Set();
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: ids,
+    sql: `select spotify_artist_id from artists
+          where spotify_artist_id in (${ids.map(() => "?").join(", ")})`,
+  });
+
+  return new Set(
+    typedRows<{ spotify_artist_id: string }>(result.rows).map((row) => row.spotify_artist_id),
   );
 }
 
@@ -736,8 +797,30 @@ async function probeOneLabel(
     }
   }
 
-  // 3. THE POST-FILTER: keep only albums whose copyrights name the seed label.
-  const matched = albums.filter((album) => copyrightMatchesLabel(album.copyrights, label.name));
+  // 3. THE TWO-SIGNAL GATE (belt and suspenders — both required before an album mints onto PUBLIC
+  //    /fresh): (a) ARTIST-GROUNDING — at least one of the album's Spotify artist ids is already in
+  //    our archive (the primary identity/genre anchor, `knownSpotifyArtistIds`), AND (b) the EXACT
+  //    copyright label match (the secondary attribution confirmation, `copyrightMatchesLabel`). The
+  //    first live drain minted 195 rows, many cross-genre (an Indian devotional record, Brazilian
+  //    live albums) because the fuzzy `label:` search + a loose substring copyright match let homonym
+  //    labels through; both were by artists we had never certified. Grounding is what closes that.
+  //
+  //    THE DELIBERATE TRADEOFF: a brand-NEW artist's debut on a real seed label is SKIPPED until they
+  //    exist in our archive — D7's MusicBrainz tail-first re-arm backfills that within a day or two.
+  //    Correctness over completeness is the right call for a public surface.
+  const copyrightOk = albums.filter((album) => copyrightMatchesLabel(album.copyrights, label.name));
+  const known = await knownSpotifyArtistIds(copyrightOk.flatMap((album) => album.spotifyArtistIds));
+  const matched: ProbeAlbum[] = [];
+
+  for (const album of copyrightOk) {
+    if (album.spotifyArtistIds.some((id) => known.has(id))) {
+      matched.push(album);
+    } else {
+      // Right label name, but no artist we know — a homonym label or a debut. Dropped, counted.
+      result.skippedUngrounded += 1;
+    }
+  }
+
   result.albumsMatched += matched.length;
 
   // 4. Mint the un-held tracks of each matched album, each fetched as a SINGLE `GET /tracks/{id}`.
@@ -829,6 +912,7 @@ export async function probeLabelReleases({
     newTrackIds: [],
     rateLimited: false,
     skippedKnown: 0,
+    skippedUngrounded: 0,
   };
 
   const cap = Math.max(1, Math.min(limit, PROBE_LABELS_PER_PASS));
