@@ -163,6 +163,17 @@ export async function startLibsql(): Promise<Subprocess> {
   return proc;
 }
 
+/** The tail of this run's turso log, formatted for an error message. */
+function readTursoLog(): string {
+  try {
+    const tail = readFileSync(TURSO_LOG_FILE, "utf8").trim().split("\n").slice(-20).join("\n");
+
+    return tail ? `--- turso dev output ---\n${tail}` : `(${TURSO_LOG_FILE} was empty)`;
+  } catch {
+    return `(could not read ${TURSO_LOG_FILE})`;
+  }
+}
+
 /** Wait for the local libSQL server to answer a trivial query. */
 async function waitForDb(proc: Subprocess): Promise<void> {
   const { createClient } = await import("@libsql/client");
@@ -171,9 +182,9 @@ async function waitForDb(proc: Subprocess): Promise<void> {
 
   while (Date.now() < deadline) {
     if (proc.exitCode !== null) {
-      throw new Error(
-        `turso dev exited (code ${proc.exitCode}) during boot — see ${TURSO_LOG_FILE}`,
-      );
+      // Inline the log: on CI nobody can open the file, so a boot failure has to
+      // explain itself in the job output (e.g. `turso dev` needs `sqld` on PATH).
+      throw new Error(`turso dev exited (code ${proc.exitCode}) during boot.\n${readTursoLog()}`);
     }
 
     try {

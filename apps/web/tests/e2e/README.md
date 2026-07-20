@@ -10,6 +10,8 @@ bun run --cwd apps/web test:e2e:report    # open the HTML report from the last r
 
 It is deliberately NOT wired into `bun run test` — `turbo run test` runs inside the Cloudflare deploy gate, where no browser exists.
 
+Needs the `turso` CLI **and** `sqld` on PATH: `turso dev` is only a launcher and execs `sqld` separately, so a machine with just the CLI fails at boot with _"Could not start libsql-server … make sure sqld is on your PATH"_. A dev Mac gets both from Homebrew (`turso`, `sqld`); CI installs both from pinned release tarballs.
+
 ## What the stack is
 
 One Bun orchestrator, `scripts/e2e-stack.ts`, is Playwright's `webServer`. It builds everything in order, then runs Vite in the foreground:

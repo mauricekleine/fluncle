@@ -19,9 +19,13 @@ permissions:
   contents: read
 
 env:
-  # Pinned so a CI run never picks up a surprise CLI. The e2e stack shells out to
-  # `turso dev` for its throwaway libSQL server.
+  # Both pinned so a CI run never picks up a surprise build. The e2e stack shells
+  # out to `turso dev` for its throwaway libSQL server, and `turso dev` is only a
+  # launcher — it execs `sqld`, which must be on PATH separately (on a dev Mac both
+  # arrive via Homebrew; a runner has neither). The sqld version matches the one
+  # local dev runs, so CI and a laptop exercise the same server.
   TURSO_CLI_VERSION: v1.0.30
+  SQLD_VERSION: v0.24.31
 
 jobs:
   e2e:
@@ -60,6 +64,16 @@ jobs:
           sudo install -m 0755 /tmp/turso /usr/local/bin/turso
           turso --version
 
+      # `turso dev` execs `sqld`; without it the stack fails at boot with
+      # "Could not start libsql-server … make sure sqld is on your PATH".
+      - name: Install sqld (libsql-server)
+        run: |
+          curl -sSfL -o /tmp/sqld.tar.xz \
+            "https://github.com/tursodatabase/libsql/releases/download/libsql-server-${SQLD_VERSION}/libsql-server-x86_64-unknown-linux-gnu.tar.xz"
+          tar -xJf /tmp/sqld.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/libsql-server-x86_64-unknown-linux-gnu/sqld /usr/local/bin/sqld
+          sqld --version
+
       - name: Cache Playwright browsers
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -84,4 +98,6 @@ jobs:
           path: |
             apps/web/playwright-report/
             apps/web/test-results/
+            apps/web/.dev/e2e-turso.log
           retention-days: 7
+          include-hidden-files: true
