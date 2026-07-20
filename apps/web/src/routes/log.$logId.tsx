@@ -557,7 +557,7 @@ function LogPage() {
           <h2>How to read the coordinate</h2>
           <p>
             <span className="log-decode-part">{sector}</span> counts the days from the start of my
-            log, 2026-05-30, to the day I found this one.{" "}
+            log, May 30, 2026, to the day I found this one.{" "}
             <span className="log-decode-part">{tail}</span> comes from the recording itself, so this
             track keeps the same code forever. Found, not numbered. Stamped once, never changed.{" "}
             <Link to="/about">More on Log IDs and the Galaxy</Link>.
