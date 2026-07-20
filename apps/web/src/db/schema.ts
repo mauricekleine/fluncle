@@ -108,6 +108,20 @@ export const tracks = sqliteTable(
     // visitor's account region). NULL until the ISRC resolves (or forever, if it never
     // does — a missing link is honest, a wrong one is not).
     appleMusicUrl: text("apple_music_url"),
+    // The MB CREDIT SWEEP's per-ROW reliability stamp (RFC artist-primary-capture, slice 1b). Slice
+    // 0's name-fold left a ~14.3k ZERO-MATCHED residual (a track slice 0 stamped but wrote no edge —
+    // no credited name folded to an existing identity). `backfill_artist_credits` picks up that
+    // residual: for a zero-matched track carrying a MusicBrainz recording identity (`mb_recording_id`,
+    // or the `mb_` PK prefix a crawler-born row carries) it fetches the recording's artist-credits
+    // through the shared MB client and MINTS identity-true `artists` rows by MB artist id (a real id
+    // IS identity), then writes the edges. This stamp retires EVERY visited row — one that gained
+    // edges, AND one terminally skipped for carrying no MB identity — so the worklist drains and a
+    // re-run is a cheap no-op (the `artist_edges_backfilled_at` discipline, one column over — and
+    // DISTINCT from it: this sweep never disturbs slice 0's stamp). NULL until this sweep has visited
+    // the row; a track that slice 0 already edged never enters the worklist (the anti-join excludes
+    // it). Internal reliability state — no public surface, no lastmod (a `tracks` write moves no
+    // finding).
+    artistCreditsBackfilledAt: text("artist_credits_backfilled_at"),
     // The track_artists graph backfill's per-ROW reliability stamp (RFC artist-primary-capture,
     // slice 0). The graph is crawl-era-only — history carries artist NAMES in `artists_json` but no
     // identity edge — and `backfill_artist_edges` folds those names onto EXISTING `artists` rows. A
@@ -500,6 +514,21 @@ export const tracks = sqliteTable(
     index("tracks_artist_edges_backfill_queue_idx")
       .on(table.trackId)
       .where(sql`${table.artistEdgesBackfilledAt} is null`),
+    // The MB CREDIT-SWEEP queue — "slice 0 attempted it, this sweep has not" (backfill-artist-
+    // credits.ts, `backfill_artist_credits`, RFC artist-primary-capture slice 1b). PARTIAL for the
+    // `tracks_artist_edges_backfill_queue_idx` reason: the worklist is DERIVED and this predicate
+    // matches a SHRINKING slice of a growing table (a row leaves the moment this sweep stamps it).
+    // Both conditions ARE the worklist's non-join gates, so the index precisely fronts the candidate
+    // walk: `artist_edges_backfilled_at is not null` (slice 0 has ruled) keeps out the ~12k rows
+    // minted WITH edges (publish/crawler) that slice 0 never visited, and `artist_credits_backfilled_at
+    // is null` is the drain gate. The worklist's third leg — "no `track_artists` edge yet" (the
+    // zero-matched residual) — is an anti-join riding `track_artists_track_id_idx`, so this index
+    // carries only the ordered `track_id` candidate walk the two stamps gate.
+    index("tracks_artist_credits_backfill_queue_idx")
+      .on(table.trackId)
+      .where(
+        sql`${table.artistCreditsBackfilledAt} is null and ${table.artistEdgesBackfilledAt} is not null`,
+      ),
     // The MuQ EMBED queue — "audio on file, no vector yet" (track-work.ts, `kind: "embed"`).
     // PARTIAL, for the same reason the anchor queue is: the worklist is DERIVED, and the
     // predicate matches a shrinking slice of a growing table, so the index shrinks as the

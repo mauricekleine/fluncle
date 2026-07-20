@@ -1,0 +1,21 @@
+[Unit]
+Description=fluncle-artist-credits timer — mint one bounded batch of identity-true artists from MusicBrainz credits every 5m on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# First tick shortly after boot (staggered at 4min — mod-5 residue 4, clear of the other 5-min
+# sweeps' minutes: enrich=1, context-note=2, capture=3, embed=3), then every 5m. Each worklist row
+# is one paced ~1.1s MusicBrainz call, so a batch is 40 rows (~under a minute) and the ~14.3k
+# zero-matched residual drains at ~40/tick over ~a day and a half — a 5-minute cadence keeps that
+# reasonable without ever storming MusicBrainz (the Worker paces 1 req/s and circuit-breaks on a
+# throttle). A tick that finds the residual drained is a cheap no-op.
+#
+# The `tracks` worklist is the durable state (the `artist_credits_backfilled_at` stamp on every
+# visited row — edged or terminally skipped — DISTINCT from slice 0's `artist_edges_backfilled_at`),
+# so a tick missed across a reboot costs nothing — Persistent catches it up and the next tick resumes
+# from the top; the stamps re-skip the rows already handled.
+OnBootSec=4min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -214,6 +214,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // metadata enrichment (resolve each finding's Apple Music URL EXACTLY by ISRC, no
   // publish), so the box's agent-token cron drives it, the `backfill_discogs` precedent.
   backfill_apple_music: "admin",
+  // The MB credit sweep (RFC artist-primary-capture, slice 1b) — agent tier (adminAuth only): mints
+  // identity-true artists BY MB id + writes edges for slice 0's zero-matched residual, writes
+  // catalogue-graph identity only (no publish, no certification), so the box's agent-token
+  // `fluncle-artist-credits` cron drives it, the `backfill_recording_mbids` precedent.
+  backfill_artist_credits: "admin",
   // The track_artists graph backfill (RFC artist-primary-capture, slice 0) — agent tier (adminAuth
   // only): folds artists_json names onto existing artist identities, mints nothing, publishes
   // nothing, so the box's agent-token `fluncle-artist-edges` cron drives it.

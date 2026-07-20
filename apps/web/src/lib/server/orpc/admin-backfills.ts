@@ -25,6 +25,7 @@ import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { resolveLabelLineage } from "../label-lineage";
 import { resolveArtistEdges } from "../backfill-artist-edges";
+import { resolveArtistCredits } from "../backfill-artist-credits";
 import { adminAuth } from "../orpc-auth";
 import { resolveRecordingMbids } from "../recording-mbids";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
@@ -375,9 +376,44 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/backfill/artist-credits — agent tier (`adminAuth`): the MB credit sweep (RFC
+  // artist-primary-capture, slice 1b). Completes slice 0's zero-matched residual — for each
+  // zero-matched track with a MusicBrainz recording identity, one paced `inc=artist-credits` lookup
+  // through the shared MB client mints/matches artists BY MB id and writes the edges. Catalogue-graph
+  // identity only (no publish, no certification), so the box's agent-token cron drives it, the
+  // `backfill_recording_mbids` precedent.
+  const backfillArtistCreditsHandler = os.backfill_artist_credits
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await resolveArtistCredits(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+          query.cursor ?? undefined,
+        );
+
+        return {
+          adoptedArtists: result.adoptedArtists,
+          dryRun: result.dryRun,
+          edgesWritten: result.edgesWritten,
+          matchedArtists: result.matchedArtists,
+          mintedArtists: result.mintedArtists,
+          nextCursor: result.nextCursor,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          scanned: result.scanned,
+          skippedNoIdentity: result.skippedNoIdentity,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
+    backfill_artist_credits: backfillArtistCreditsHandler,
     backfill_artist_edges: backfillArtistEdgesHandler,
     backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
