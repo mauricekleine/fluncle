@@ -958,6 +958,25 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // The cross join is `vectored × embedded findings` and nothing else — the batch is what
   // bounds it. `row_number()` picks each candidate's single nearest finding (ties break on
   // the finding's id, so a tick is deterministic). Only `(cid, fid, dist)` comes back.
+  //
+  // ── WHY BOTH SIDES ARE `MATERIALIZED`, AND WHY THE INNER JOIN IS A `CROSS JOIN` ────
+  // This is the CTE-FLATTENING trap (AGENTS.md § Database; docs/local-database.md "Local is
+  // not production"), in its cross-join form. A plain CTE is flattened into the enclosing
+  // query, so `pair` became a nested loop that RE-EXECUTED the whole `finding_vec` arm once
+  // per candidate — and with no `sqlite_stat1` to tell it `findings` is tiny, the planner
+  // drove that arm off a full `SCAN` of `tracks`, dragging every 4 KB `embedding_blob` in
+  // the catalogue through the loop. Measured in prod (Sentry, 2026-07-18→20): p95 27.0 s,
+  // avg 11.3 s per call for 250 candidates × 80 findings — 20k cosines that are microseconds
+  // of arithmetic behind hundreds of megabytes of blob I/O. It scaled with the CATALOGUE
+  // (the thing the crawler grows), not with the archive it is ranking against.
+  //
+  // `as materialized` walks each side ONCE into a temp b-tree; the `cross join` pins
+  // `findings` (small, and bounded by the archive) as the driver so the finding arm is a
+  // scan of `findings` + a primary-key lookup per row instead of a scan of `tracks`. The
+  // pair loop then reads two small temp tables. Same rows, same winners — a planner shape,
+  // not a semantic change. The `embedding_blob is not null` guards move INTO the CTEs so the
+  // materialized sides carry only rows the distance can actually be computed on (they were
+  // already required by `pair`'s `where`, so the result set is unchanged).
   const winners = new Map<string, WinnerRow>();
 
   if (vectored.length > 0 && embeddedFindings > 0) {
@@ -965,15 +984,17 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     const placeholders = ids.map(() => "?").join(", ");
     const rankedResult = await db.execute({
       args: ids,
-      sql: `with finding_vec as (
+      sql: `with finding_vec as materialized (
               select ft.track_id as fid, ft.embedding_blob as fvec
               from findings
-              join tracks ft on ft.track_id = findings.track_id
+              cross join tracks ft on ft.track_id = findings.track_id
+              where ft.embedding_blob is not null
             ),
-            candidate_vec as (
+            candidate_vec as materialized (
               select ct.track_id as cid, ct.embedding_blob as cvec
               from tracks ct
               where ct.track_id in (${placeholders})
+                and ct.embedding_blob is not null
             ),
             pair as (
               select candidate_vec.cid as cid,
@@ -981,7 +1002,6 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
                      vector_distance_cos(candidate_vec.cvec, finding_vec.fvec) as dist
               from candidate_vec
               join finding_vec
-              where candidate_vec.cvec is not null and finding_vec.fvec is not null
             )
             select cid, fid, dist from (
               select cid, fid, dist,
