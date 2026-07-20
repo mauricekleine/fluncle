@@ -228,7 +228,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
       : `${siteUrl}/label/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
-  const title = `${name} · Fluncle's Findings`;
+  const title = `${name} · Fluncle`;
   // The factual bio is the honest, UNIQUE description when one is authored — the same objective
   // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
   // many labels), it falls back to the templated line verbatim, so nothing regresses: it still
@@ -240,8 +240,8 @@ function labelHead(loaderData: LabelPageData | undefined) {
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
-        ? `Every banger Fluncle has found on ${name} and logged in the Galaxy, ${findings.length} so far, each with a coordinate.`
-        : `The records released on ${name}, charted in Fluncle's Galaxy.`;
+        ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
+        : `Drum & bass records released on ${name}, with the artists behind them.`;
   // The label's representative image, up the same ladder every surface uses: its OWN logo first,
   // then the freshest finding's cover, then the site cover as the final floor.
   const coverFinding = findings[0];
@@ -406,7 +406,7 @@ function LabelPage() {
 
         {/* Every band below is conditional: an empty one renders nothing at all, so this page
             is only ever about what it actually carries (components/graph-sections.tsx). */}
-        <FindingsGrid findings={findings} label={`Findings on ${name}`} />
+        <FindingsGrid findings={findings} label="Recommended by Fluncle" />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 
@@ -444,7 +444,7 @@ function LabelPage() {
 
         <footer className="log-plate-footer">
           <Link to="/labels">All labels</Link>
-          <Link to="/">Back to the archive</Link>
+          <Link to="/">Home</Link>
         </footer>
       </article>
     </main>

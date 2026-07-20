@@ -301,7 +301,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getArtistBySlug.mockResolvedValue(ARTIST);
     const withoutBio = await resolveArtistPageData("drift", "name", 1);
     expect(metaDescription(withoutBio)).toBe(
-      "Every Drift banger Fluncle has found and logged in the Galaxy, 1 so far, each with a coordinate.",
+      "Drum & bass tracks by Drift that Fluncle recommends, 1 so far, with the labels and releases behind them.",
     );
   });
 });
@@ -340,7 +340,7 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
   async function renderFindingsGrid(findings: unknown[]): Promise<string> {
     const rootRoute = createRootRoute({
       component: () =>
-        createElement(FindingsGrid, { findings, label: "Findings featuring Drift" } as never),
+        createElement(FindingsGrid, { findings, label: "Recommended by Fluncle" } as never),
     });
     // The band's covers link to /log/$logId — the router needs the route so Link builds the href.
     const logRoute = createRoute({ getParentRoute: () => rootRoute, path: "/log/$logId" });
