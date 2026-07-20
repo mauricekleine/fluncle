@@ -22,10 +22,15 @@
 
 import { randomUUID } from "node:crypto";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import { bestAlbumCoverUrl } from "../media";
 import { getDb, typedRows } from "./db";
 import {
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
+  countEditorial,
+  type EditorialHubPage,
+  editorialArgs,
+  editorialPage,
   type EntitySitemapRow,
   listCatalogueHubPage,
 } from "./labels";
@@ -73,21 +78,16 @@ export type AlbumRecord = {
   upc?: string;
 };
 
-/** A row in the `/albums` index + a thin-gated sitemap candidate. */
+/**
+ * A row in the `/albums` editorial index — exactly the four fields the tile renders. The catalogue
+ * count and the freshest-finding `lastmod` used to ride along "for the sitemap"; the sitemap has
+ * driven off `listAlbumSitemapRows` for a while now, so both were dead weight — and the catalogue
+ * count in particular was a CATALOGUE-SCALE correlated subquery per editorial row, on every render.
+ */
 export type AlbumIndexEntry = {
-  /**
-   * Uncertified tracks linked to this album — the quieter rows the page will render. It is
-   * NOT shown in the index (the tier has no public name and is never counted aloud); it
-   * exists so the SITEMAP can apply the same renderable-track gate the PAGE applies, and an
-   * indexable page is therefore never orphaned from the sitemap. Zero until the catalogue
-   * lands.
-   */
-  catalogueCount: number;
-  /** The album's cover — its freshest finding's Spotify album art. */
+  /** The album's cover — its OWNED master when resolved, else its freshest finding's album art. */
   coverImageUrl: string | undefined;
   findingCount: number;
-  /** ISO of the album's freshest finding — the sitemap `lastmod`. */
-  lastmod: string | undefined;
   name: string;
   slug: string;
 };
@@ -348,50 +348,78 @@ export async function listAlbumsMissingBio(limit: number): Promise<AlbumBioWorkI
 }
 
 /**
- * Every album with at least one coordinate-bearing finding, with its finding count, its
- * cover (the freshest finding's album art), and that finding's date (the sitemap
- * `lastmod`). Alphabetical by name — the `/albums` index order.
+ * The album's own cover columns + the raw provider fallback, as `bestAlbumCoverUrl` wants them:
+ * the OWNED ≤1200² master on Fluncle's R2 (served through the Cloudflare Images ladder) when the
+ * cover-masters sweep has resolved one, else the freshest finding's captured album art. An album
+ * OWNS these columns, so no packed subquery is needed — see cover-masters.ts + docs/album-artwork.md.
+ */
+const ALBUM_COVER_SELECT = `albums.image_key as image_key, albums.image_state as image_state,
+           albums.image_updated_at as image_updated_at`;
+
+/** The four cover columns as they come off an `albums`-rooted read. */
+type AlbumCoverRow = {
+  cover_url?: null | string;
+  image_key?: null | string;
+  image_state?: null | string;
+  image_updated_at?: null | string;
+};
+
+function albumCover(row: AlbumCoverRow): string | undefined {
+  return bestAlbumCoverUrl({
+    imageKey: row.image_key,
+    imageState: row.image_state,
+    imageUpdatedAt: row.image_updated_at,
+    spotifyUrl: row.cover_url,
+  });
+}
+
+/**
+ * One windowed page of every album with at least one coordinate-bearing finding, with its finding
+ * count and its cover. Alphabetical by name — the `/albums` index order.
  *
  * BOUNDED BY THE ARCHIVE, NOT THE CATALOGUE: it drives from the findings join, so an
  * album Fluncle has never certified anything on is never listed, however many catalogue
- * tracks hang off it. The sitemap filters this list further by the thin-content gate.
+ * tracks hang off it. The sitemap is a separate read (`listAlbumSitemapRows`).
  */
-export async function listAlbumsWithFindingCounts(): Promise<AlbumIndexEntry[]> {
+export async function listAlbumsWithFindingCounts(
+  page: number,
+): Promise<EditorialHubPage<AlbumIndexEntry>> {
   const db = await getDb();
-  const result = await db.execute({
-    sql: `select albums.name as name, albums.slug as slug,
-                 count(*) as finding_count,
-                 (select count(*) from tracks t3
-                    left join findings f3 on f3.track_id = t3.track_id
-                    where t3.album_id = albums.id and f3.track_id is null) as catalogue_count,
-                 max(findings.added_at) as lastmod,
-                 (select t2.album_image_url
-                    from findings f2 join tracks t2 on t2.track_id = f2.track_id
-                    where t2.album_id = albums.id and f2.log_id is not null
-                    order by f2.added_at desc limit 1) as cover_url
-          from albums
-          join tracks on tracks.album_id = albums.id
-          join findings on findings.track_id = tracks.track_id
-          where findings.log_id is not null
-          group by albums.id
-          order by albums.name collate nocase asc`,
-  });
+  const [slice, total] = await Promise.all([
+    db.execute({
+      args: editorialArgs(page),
+      sql: `select albums.name as name, albums.slug as slug,
+                   count(*) as finding_count, ${ALBUM_COVER_SELECT},
+                   (select t2.album_image_url
+                      from findings f2 join tracks t2 on t2.track_id = f2.track_id
+                      where t2.album_id = albums.id and f2.log_id is not null
+                      order by f2.added_at desc limit 1) as cover_url
+            from albums
+            join tracks on tracks.album_id = albums.id
+            join findings on findings.track_id = tracks.track_id
+            where findings.log_id is not null
+            group by albums.id
+            order by albums.name collate nocase asc
+            limit ? offset ?`,
+    }),
+    countEditorial(`select 1
+                    from albums
+                    join tracks on tracks.album_id = albums.id
+                    join findings on findings.track_id = tracks.track_id
+                    where findings.log_id is not null
+                    group by albums.id`),
+  ]);
 
-  return typedRows<{
-    catalogue_count: number;
-    cover_url: string | null;
-    finding_count: number;
-    lastmod: string | null;
-    name: string;
-    slug: string;
-  }>(result.rows).map((row) => ({
-    catalogueCount: Number(row.catalogue_count),
-    coverImageUrl: row.cover_url ?? undefined,
+  const items = typedRows<AlbumCoverRow & { finding_count: number; name: string; slug: string }>(
+    slice.rows,
+  ).map((row) => ({
+    coverImageUrl: albumCover(row),
     findingCount: Number(row.finding_count),
-    lastmod: row.lastmod ?? undefined,
     name: row.name,
     slug: row.slug,
   }));
+
+  return editorialPage(items, page, total);
 }
 
 /**
@@ -411,7 +439,7 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
   const db = await getDb();
   const result = await db.execute({
     args: [minTracks],
-    sql: `select albums.slug as slug,
+    sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
                     from findings f2 join tracks t2 on t2.track_id = f2.track_id
@@ -426,15 +454,13 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
           order by albums.slug asc`,
   });
 
-  return typedRows<{
-    cover_url: string | null;
-    lastmod: string | null;
-    slug: string;
-  }>(result.rows).map((row) => ({
-    coverImageUrl: row.cover_url ?? undefined,
-    lastmod: row.lastmod ?? undefined,
-    slug: row.slug,
-  }));
+  return typedRows<AlbumCoverRow & { lastmod: string | null; slug: string }>(result.rows).map(
+    (row) => ({
+      coverImageUrl: albumCover(row),
+      lastmod: row.lastmod ?? undefined,
+      slug: row.slug,
+    }),
+  );
 }
 
 /** An album tile in the "also in the catalogue" section — the quiet, unlit twin of a hub row. */
@@ -449,16 +475,17 @@ export type AlbumCatalogueEntry = {
 
 /** The ALBUMS hub's `?page=N` read, over the findings-free, floor-gated set of records. */
 const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumCatalogueEntry> = {
+  entity: "albums",
   floor: ALBUM_INDEX_MIN_TRACKS,
   from: "albums join tracks on tracks.album_id = albums.id",
   groupBy: "albums.id",
   mapRow: (row) => ({
-    coverImageUrl: row.cover_url ?? undefined,
+    coverImageUrl: albumCover(row),
     name: row.name,
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
-  select: `albums.name as name,
+  select: `albums.name as name, ${ALBUM_COVER_SELECT},
            (select t2.album_image_url from tracks t2
               where t2.album_id = albums.id and t2.album_image_url is not null
               order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc

@@ -7,18 +7,14 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount, tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
+import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
 import {
   type ArtistCatalogueEntry,
   type ArtistIndexEntry,
   listArtistsCataloguePage,
-  listArtistsCatalogueLetters,
   listArtistsWithFindingCounts,
 } from "@/lib/server/artists";
-import {
-  type CatalogueHubLetter,
-  type CatalogueHubNumberedPage,
-  CatalogueHubPageOutOfRangeError,
-} from "@/lib/server/labels";
+import { type CatalogueHubNumberedPage, type EditorialHubPage } from "@/lib/server/labels";
 
 // The artists index: every artist Fluncle has logged a finding from, cover-led, each linking to
 // its `/artist/<slug>` page — the internal-link hub that keeps the artist pages from being orphans
@@ -32,38 +28,35 @@ import {
 type ArtistsPageData =
   | {
       catalogue: CatalogueHubNumberedPage<ArtistCatalogueEntry>;
-      findings: ArtistIndexEntry[];
-      // Each present first letter → the page its first findings-free artist lands on (the A–Z lane).
-      letters: CatalogueHubLetter[];
+      findings: EditorialHubPage<ArtistIndexEntry>;
       // The current page (1 for the bare `/artists`) — the head's per-page canonical keys off it.
       page: number;
       status: "found";
     }
   | { status: "missing" };
 
-// Resolve the hub's data: the findings grid + one static OFFSET slice of the findings-free section.
-// A bare `/artists` (or `?page=1`) is page 1; a `?page=N` is the Nth slice. A page past the end
-// throws `CatalogueHubPageOutOfRangeError`, which maps to a 404 (never a clamp to page 1 — that
-// would be a second URL for page 1's tiles).
+// Resolve the hub's data in TWO reads, one per section. A bare `/artists` (or `?page=1`) is page 1;
+// a `?page=N` is the Nth slice of BOTH sections, so the hub keeps a single pager and a single URL
+// space however far the archive grows. The logged list runs out first, and from there the deeper
+// pages are pure long tail. A page past the end of BOTH 404s — never a clamp to page 1, which would
+// be a second URL for page 1's tiles.
+//
+// The A–Z lane no longer costs a read of its own: it rides on the long-tail page's single scan
+// (`listArtistsCataloguePage`), which used to be shadowed by a second, catalogue-scale grouped scan
+// whose only job was counting entities per initial. That second scan made this the slowest page on
+// the site.
 async function resolveArtistsPage(page: number | undefined): Promise<ArtistsPageData> {
   const requested = page ?? 1;
-  const [paged, findings, letters] = await Promise.all([
-    listArtistsCataloguePage(requested).catch((error: unknown) => {
-      if (error instanceof CatalogueHubPageOutOfRangeError) {
-        return null;
-      }
-
-      throw error;
-    }),
-    listArtistsWithFindingCounts(),
-    listArtistsCatalogueLetters(),
+  const [catalogue, findings] = await Promise.all([
+    listArtistsCataloguePage(requested),
+    listArtistsWithFindingCounts(requested),
   ]);
 
-  if (paged === null) {
+  if (requested > Math.max(catalogue.pageCount, findings.pageCount)) {
     return { status: "missing" };
   }
 
-  return { catalogue: paged, findings, letters, page: requested, status: "found" };
+  return { catalogue, findings, page: requested, status: "found" };
 }
 
 const fetchArtistsPage = createServerFn({ method: "GET" })
@@ -103,7 +96,7 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
   // pages are already carried by the sitemap. It rides as the `mainEntity` of a `CollectionPage` —
   // the honest shape for "this page is a hub OF a list" — carrying `numberOfItems` so a crawler
   // knows the list's size without counting.
-  const artists = loaderData.findings;
+  const artists = loaderData.findings.items;
   const collectionPage = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
@@ -183,13 +176,31 @@ function ArtistsPage() {
     return null;
   }
 
-  const { catalogue, findings, letters } = data;
+  const { catalogue, findings } = data;
   const buildHref = (page: number) => (page <= 1 ? "/artists" : `/artists?page=${page}`);
-  const lane = <HubLetterLane buildHref={buildHref} label="Artists A to Z" letters={letters} />;
+  const pageCount = Math.max(catalogue.pageCount, findings.pageCount);
+  const lane = (
+    <HubLetterLane buildHref={buildHref} label="Artists A to Z" letters={catalogue.letters ?? []} />
+  );
+  // ONE pager for the whole hub. It rides inside the long-tail section as before — but that section
+  // renders nothing when its slice is empty, and the logged list can still have pages left there, so
+  // the same pager is rendered on its own in that case rather than stranding the reader.
+  const pager = (
+    <CataloguePager
+      buildHref={buildHref}
+      label="More artists, more pages"
+      page={data.page}
+      pageCount={pageCount}
+    />
+  );
   const renderTile = (artist: ArtistCatalogueEntry) => (
     <li key={artist.slug}>
       <Link params={{ slug: artist.slug }} to="/artist/$slug">
-        <ArtistAvatar className="artist-card-avatar" name={artist.name} src={artist.imageUrl} />
+        <ArtistAvatar
+          className="artist-card-avatar"
+          name={artist.name}
+          src={albumCoverAtSize(artist.imageUrl, COVER_TILE_SIZE)}
+        />
         <span className="artist-grid-line">{artist.name}</span>
         <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
       </Link>
@@ -202,21 +213,21 @@ function ArtistsPage() {
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Artists</h1>
           <p className="log-index-intro">
-            Every drum &amp; bass artist with a finding in the archive. {findings.length} logged.
+            Every drum &amp; bass artist with a finding in the archive. {findings.total} logged.
           </p>
         </header>
 
-        {findings.length === 0 ? (
+        {findings.total === 0 ? (
           <p className="log-index-empty empty-scanlines">No artists logged yet. Quiet sector.</p>
-        ) : (
+        ) : findings.items.length > 0 ? (
           <ul className="artist-avatar-grid" aria-label="Artists">
-            {findings.map((artist) => (
+            {findings.items.map((artist) => (
               <li key={artist.slug}>
                 <Link params={{ slug: artist.slug }} to="/artist/$slug">
                   <ArtistAvatar
                     className="artist-card-avatar"
                     name={artist.name}
-                    src={artist.imageUrl}
+                    src={albumCoverAtSize(artist.imageUrl, COVER_TILE_SIZE)}
                   />
                   <span className="artist-grid-line">{artist.name}</span>
                   <span className="artist-grid-count">{findingsCount(artist.findingCount)}</span>
@@ -224,7 +235,7 @@ function ArtistsPage() {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
 
         <CatalogueHubPageSection
           gridClassName="artist-avatar-grid"
@@ -233,16 +244,11 @@ function ArtistsPage() {
           items={catalogue.items}
           lane={lane}
           listLabel="More artists"
-          pager={
-            <CataloguePager
-              buildHref={buildHref}
-              label="More artists, more pages"
-              page={catalogue.page}
-              pageCount={catalogue.pageCount}
-            />
-          }
+          pager={pager}
           renderTile={renderTile}
         />
+
+        {catalogue.items.length === 0 ? pager : null}
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>

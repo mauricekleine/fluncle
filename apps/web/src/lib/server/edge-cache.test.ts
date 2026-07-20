@@ -1,15 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  edgeCachePolicyFor,
   entityPurgeUrl,
   FRESH_SECONDS,
+  HUB_CACHE_POLICY,
+  HUB_FRESH_SECONDS,
+  HUB_SWR_SECONDS,
   isCacheableEntityRequest,
+  isCacheableHubRequest,
   isCacheableLogPath,
   logPurgeUrls,
+  PAGE_CACHE_POLICY,
   PUBLIC_CACHE_CONTROL,
   purgeEntityCache,
   purgeEntityCaches,
   purgeLogCache,
   SWR_SECONDS,
+  withEdgeCache,
 } from "./edge-cache";
 
 // Pure-logic coverage for the /log edge cache. The parts that only prod can prove —
@@ -56,16 +63,255 @@ describe("PUBLIC_CACHE_CONTROL", () => {
     expect(PUBLIC_CACHE_CONTROL).toContain("public");
     expect(PUBLIC_CACHE_CONTROL).toContain("max-age=0");
     expect(PUBLIC_CACHE_CONTROL).toContain("s-maxage=300");
-    expect(PUBLIC_CACHE_CONTROL).toContain("stale-while-revalidate=86400");
+    expect(PUBLIC_CACHE_CONTROL).toContain("stale-while-revalidate=3600");
   });
 
-  it("uses a short fresh window and a long stale tail", () => {
-    // The shape the design argues for: a short fresh window (an edit surfaces fast
-    // even if a purge is missed) with a long stale tail (a quiet archive collapses
-    // traffic onto one render). Pin the ordering so a swap can't invert them.
+  it("keeps the stale tail inside the deploy cadence, not a whole day", () => {
+    // The shape the design argues for: a short fresh window (an edit surfaces fast even
+    // if a purge is missed) with a stale tail that still collapses traffic onto one
+    // render — but BOUNDED, because the SSR document references build-scoped hashed
+    // asset URLs. HTML that outlives its build hands a client dead `/assets/<hash>.js`
+    // URLs and breaks client-side navigation. Deploys land many times a day, so a
+    // day-long tail was strictly wrong; an hour keeps it inside the cadence.
     expect(FRESH_SECONDS).toBe(300);
-    expect(SWR_SECONDS).toBe(86_400);
+    expect(SWR_SECONDS).toBe(3_600);
     expect(SWR_SECONDS).toBeGreaterThan(FRESH_SECONDS);
+    expect(SWR_SECONDS).toBeLessThanOrEqual(3_600);
+  });
+
+  it("stores an entry for the whole fresh+stale window under each policy", () => {
+    // The stored hard TTL must cover the full window, or a stale-serve is impossible and
+    // every request past the fresh window pays a cold render.
+    expect(PAGE_CACHE_POLICY.storedMaxAge).toBe(FRESH_SECONDS + SWR_SECONDS);
+    expect(HUB_CACHE_POLICY.storedMaxAge).toBe(HUB_FRESH_SECONDS + HUB_SWR_SECONDS);
+  });
+});
+
+describe("the hub policy", () => {
+  it("holds a hub fresh for a minute with a short stale tail", () => {
+    // A hub/index invalidates on ANY member change across four entity kinds and several
+    // write paths (including the catalogue crawler), so it is deliberately NOT purged —
+    // an explicit purge would be a wide, easy-to-miss fan-out and the crawler alone would
+    // purge continuously. A 60s ceiling is the invalidation instead: bounded, self-healing,
+    // and still enough to collapse effectively all traffic onto one render per minute.
+    expect(HUB_FRESH_SECONDS).toBe(60);
+    expect(HUB_SWR_SECONDS).toBe(600);
+    expect(HUB_FRESH_SECONDS).toBeLessThan(FRESH_SECONDS);
+    expect(HUB_CACHE_POLICY.cacheControl).toBe(
+      "public, max-age=0, s-maxage=60, stale-while-revalidate=600",
+    );
+  });
+});
+
+describe("isCacheableHubRequest", () => {
+  it("matches the six public hub/index pages on their canonical query-less URL", () => {
+    for (const path of ["/", "/artists", "/albums", "/labels", "/tracks", "/fresh"]) {
+      expect(isCacheableHubRequest(path, "")).toBe(true);
+    }
+
+    // A single trailing slash is the same canonical page.
+    expect(isCacheableHubRequest("/artists/", "")).toBe(true);
+  });
+
+  it("does NOT cache a paginated/filtered/sorted variant (the cache key drops the query)", () => {
+    // THE safety property for the hubs: the cache key strips the query string, so caching
+    // `?page=2` would serve page 2's body back for page 1. Every hub takes search params
+    // that change what it renders (`page` on the three indexes, `galaxy`/`sort` on
+    // /tracks, `view` on /fresh, `story` on home), so a query-bearing request must flow
+    // through UNCACHED.
+    expect(isCacheableHubRequest("/artists", "?page=2")).toBe(false);
+    expect(isCacheableHubRequest("/albums", "?page=3")).toBe(false);
+    expect(isCacheableHubRequest("/labels", "?page=2")).toBe(false);
+    expect(isCacheableHubRequest("/tracks", "?galaxy=drift")).toBe(false);
+    expect(isCacheableHubRequest("/tracks", "?sort=oldest")).toBe(false);
+    expect(isCacheableHubRequest("/fresh", "?view=labels")).toBe(false);
+    expect(isCacheableHubRequest("/", "?story=2026.A.7Q")).toBe(false);
+  });
+
+  it("does NOT match a neighbouring or malformed path", () => {
+    expect(isCacheableHubRequest("/artist/sub-focus", "")).toBe(false);
+    expect(isCacheableHubRequest("/artists/sub-focus", "")).toBe(false);
+    expect(isCacheableHubRequest("/tracksy", "")).toBe(false);
+    expect(isCacheableHubRequest("/admin", "")).toBe(false);
+    expect(isCacheableHubRequest("/admin/tracks", "")).toBe(false);
+    expect(isCacheableHubRequest("/account", "")).toBe(false);
+    expect(isCacheableHubRequest("/recommendations", "")).toBe(false);
+    expect(isCacheableHubRequest("/chat", "")).toBe(false);
+    // A doubled root is not the root: it must not fold onto the `/` entry.
+    expect(isCacheableHubRequest("//", "")).toBe(false);
+  });
+});
+
+describe("edgeCachePolicyFor", () => {
+  it("routes each cacheable surface to its policy", () => {
+    expect(edgeCachePolicyFor("/log", "")).toBe(PAGE_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/log/2026.A.7Q", "")).toBe(PAGE_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/artist/sub-focus", "")).toBe(PAGE_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/", "")).toBe(HUB_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/artists", "")).toBe(HUB_CACHE_POLICY);
+    expect(edgeCachePolicyFor("/fresh", "")).toBe(HUB_CACHE_POLICY);
+  });
+
+  it("returns undefined — never a policy — for anything not on the cacheable list", () => {
+    // `undefined` is what tells server.ts to bypass the shared cache entirely. Every
+    // account/admin/personalized surface must land here, as must an unknown path.
+    for (const path of [
+      "/admin",
+      "/admin/tracks",
+      "/account",
+      "/recommendations",
+      "/chat",
+      "/api/v1/tracks",
+      "/logbook",
+      "/galaxies",
+      "/nope",
+    ]) {
+      expect(edgeCachePolicyFor(path, "")).toBeUndefined();
+    }
+  });
+
+  it("returns undefined for a query-bearing entity or hub URL", () => {
+    expect(edgeCachePolicyFor("/artists", "?page=2")).toBeUndefined();
+    expect(edgeCachePolicyFor("/artist/sub-focus", "?page=2")).toBeUndefined();
+  });
+});
+
+describe("withEdgeCache", () => {
+  // Exercise the store/serve/stale machinery against a fake `caches.default`. The real
+  // Workers cache is absent under Node, so the module's `edgeCache()` lookup finds
+  // nothing and every path renders straight through — install a stand-in so the policy
+  // plumbing (which TTL is written where) is actually proven rather than argued.
+  function installFakeCache(): { entries: Map<string, Response>; restore: () => void } {
+    const entries = new Map<string, Response>();
+    const cache = {
+      delete: async (key: Request) => entries.delete(key.url),
+      match: async (key: Request) => {
+        const stored = entries.get(key.url);
+
+        return stored ? stored.clone() : undefined;
+      },
+      put: async (key: Request, response: Response) => {
+        entries.set(key.url, response);
+      },
+    };
+    const globals = globalThis as { caches?: unknown };
+    const previous = globals.caches;
+    globals.caches = { default: cache };
+
+    return {
+      entries,
+      restore: () => {
+        globals.caches = previous;
+      },
+    };
+  }
+
+  function html(body: string): Response {
+    return new Response(body, { headers: { "content-type": "text/html; charset=utf-8" } });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stores under the CANONICAL origin + path, dropping the incoming host", async () => {
+    const fake = installFakeCache();
+
+    try {
+      await withEdgeCache(
+        new Request("https://preview.example.com/artists"),
+        async () => html("hubs"),
+        HUB_CACHE_POLICY,
+      );
+      await Promise.resolve();
+
+      expect([...fake.entries.keys()]).toEqual(["https://www.fluncle.com/artists"]);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("serves the stored copy on the next hit and tags the policy's directive", async () => {
+    const fake = installFakeCache();
+    const render = vi.fn(async () => html("hubs"));
+
+    try {
+      const miss = await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        render,
+        HUB_CACHE_POLICY,
+      );
+
+      expect(miss.headers.get("x-edge-cache")).toBe("miss");
+      expect(miss.headers.get("Cache-Control")).toBe(HUB_CACHE_POLICY.cacheControl);
+      await Promise.resolve();
+
+      const hit = await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        render,
+        HUB_CACHE_POLICY,
+      );
+
+      expect(hit.headers.get("x-edge-cache")).toBe("fresh");
+      // The hub directive, not the page one — a hub must never inherit the longer TTL.
+      expect(hit.headers.get("Cache-Control")).toBe(HUB_CACHE_POLICY.cacheControl);
+      expect(await hit.text()).toBe("hubs");
+      // Still one render: the whole point.
+      expect(render).toHaveBeenCalledTimes(1);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("goes stale at the POLICY's fresh window, so a hub expires long before a page", async () => {
+    const fake = installFakeCache();
+
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        async () => html("hubs"),
+        HUB_CACHE_POLICY,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 90s: past the hub's 60s fresh window, well inside the page policy's 300s one.
+      vi.setSystemTime(new Date("2026-07-20T00:01:30.000Z"));
+
+      const stale = await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        async () => html("hubs"),
+        HUB_CACHE_POLICY,
+      );
+
+      expect(stale.headers.get("x-edge-cache")).toBe("stale");
+    } finally {
+      vi.useRealTimers();
+      fake.restore();
+    }
+  });
+
+  it("never stores a non-200 or non-HTML response", async () => {
+    const fake = installFakeCache();
+
+    try {
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        async () => new Response("nope", { status: 500 }),
+        HUB_CACHE_POLICY,
+      );
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/tracks"),
+        async () => new Response("{}", { headers: { "content-type": "application/json" } }),
+        HUB_CACHE_POLICY,
+      );
+      await Promise.resolve();
+
+      expect(fake.entries.size).toBe(0);
+    } finally {
+      fake.restore();
+    }
   });
 });
 
@@ -124,8 +370,9 @@ describe("isCacheableEntityRequest", () => {
   });
 
   it("does NOT match the plural INDEX pages or a nested/foreign path", () => {
-    // The indexes (`/artists`) invalidate on any member change, so they ride the fresh
-    // window, not this cache — and a nested path isn't a detail page.
+    // The indexes (`/artists`) are cached, but under the separate HUB policy — they must
+    // not be caught by the DETAIL predicate (which carries the longer, purge-backed TTL).
+    // A nested path isn't a detail page either.
     expect(isCacheableEntityRequest("/artists", "")).toBe(false);
     expect(isCacheableEntityRequest("/albums", "")).toBe(false);
     expect(isCacheableEntityRequest("/labels", "")).toBe(false);
