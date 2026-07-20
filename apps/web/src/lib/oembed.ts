@@ -3,7 +3,7 @@
 // type="application/json+oembed">` on a Fluncle page fetches `/oembed?url=…` and
 // gets back a provider envelope: a `rich` card (an <iframe> pointing at
 // `/embed/<logId>`) for a finding or mixtape, or a `link` type (title + thumbnail)
-// for an artist page or the mixtapes index. This module is PURE — URL parsing and
+// for an artist / label / album page or the mixtapes index. This module is PURE — URL parsing and
 // the two payload builders, no I/O — so the route (../routes/oembed.ts) does the
 // data resolution and this stays unit-testable (see oembed.test.ts).
 
@@ -31,12 +31,15 @@ const CANONICAL_HOSTS = new Set(["fluncle.com", "www.fluncle.com"]);
 
 /**
  * What a submitted `url` resolves to. `log` covers both a finding and a mixtape
- * (they share the `/log/<logId>` route); `artist` and `mixtapes` are the two
- * `link`-type surfaces (no per-item embed card).
+ * (they share the `/log/<logId>` route); `artist`, `label`, `album`, and
+ * `mixtapes` are the `link`-type surfaces (a graph/collection page, no per-item
+ * embed card).
  */
 export type OembedTarget =
   | { kind: "log"; logId: string }
   | { kind: "artist"; slug: string }
+  | { kind: "label"; slug: string }
+  | { kind: "album"; slug: string }
   | { kind: "mixtapes" };
 
 /**
@@ -65,9 +68,17 @@ export function parseOembedTarget(rawUrl: string): OembedTarget | undefined {
     return { kind: "log", logId: decodeURIComponent(segments[1]) };
   }
 
-  // /artist/<slug>
+  // /artist/<slug>, /label/<slug>, /album/<slug> — the graph pages.
   if (segments.length === 2 && segments[0] === "artist" && segments[1]) {
     return { kind: "artist", slug: decodeURIComponent(segments[1]) };
+  }
+
+  if (segments.length === 2 && segments[0] === "label" && segments[1]) {
+    return { kind: "label", slug: decodeURIComponent(segments[1]) };
+  }
+
+  if (segments.length === 2 && segments[0] === "album" && segments[1]) {
+    return { kind: "album", slug: decodeURIComponent(segments[1]) };
   }
 
   // /mixtapes — the collection index (no per-mixtape path; a single mixtape lives

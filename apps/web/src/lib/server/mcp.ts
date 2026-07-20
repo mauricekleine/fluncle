@@ -130,6 +130,13 @@ tools.push({
   name: "get_recent_tracks",
 });
 
+// The realized MCP tool names, in tools/list order, minus the deprecated alias — the ONE source
+// the discovery docs derive their tool list from (agent-discovery.ts's SKILL.md) so it can never go
+// stale as tools are added or renamed.
+export const mcpToolNames: string[] = tools
+  .filter((tool) => !tool.deprecated)
+  .map((tool) => tool.name);
+
 // ── Resources: the archive as a readable corpus ────────────────────────────
 //
 // Every finding/mixtape with a coordinate is addressable at its own MCP resource
@@ -405,7 +412,7 @@ async function dispatch(message: unknown, request: Request): Promise<JsonRpcResp
       return success(id, {
         capabilities: MCP_CAPABILITIES,
         instructions:
-          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
+          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, browse every artist, album, and label in the archive A to Z (each flagged when Fluncle has certified a finding there), list the tracks on one album, artist, or label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
         protocolVersion: requested || PROTOCOL_VERSION,
         serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
       });

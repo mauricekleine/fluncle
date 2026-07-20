@@ -35,9 +35,13 @@ export type ToolTier = "lore-canon" | "catalogue" | "system";
  *   - `chainCard`      — a `build_set` mix chain (seed + ordered steps + the `/mix` setUrl).
  *   - `neighbourList`  — a `get_similar_artists` list of nearest artist entities.
  *   - `acknowledgement`— a write's `{ ok }` receipt (a submission id, a newsletter board).
+ *   - `browseIndex`    — a paginated A–Z index of entity rows (name/slug/certified/trackCount) with
+ *                        its page/pageCount/total; the whole-catalogue browse (list_artists/albums/
+ *                        labels). Naming an entity is always allowed, so both transports share it.
  */
 export type Projection =
   | "acknowledgement"
+  | "browseIndex"
   | "chainCard"
   | "compactCard"
   | "entityCard"
@@ -309,32 +313,53 @@ export const getSimilarArtistsSpec = defineSpec({
   transports: ["mcp", "chat"],
 });
 
-// ── The catalogue browse tools (PR-5) ────────────────────────────────────────────────
+// ── The catalogue browse tools (PR-5 + Slice F) ───────────────────────────────────────
 //
-// Three name→slug→id reads over the existing anti-join catalogue reads. Each returns an album's /
-// artist's / label's records that Fluncle knows are out there but has never certified — a
-// catalogue-only result BY CONSTRUCTION (the reads anti-join findings). Chat gets the catalogue-only
-// two-bucket ({ findings: [], catalogue }), which renders bare/unheaded (the Unlit Rule); the MCP
-// world-serves the flat catalogue list, each row certified-tagged (like list_fresh). MCP + chat
-// only, like get_artist/get_label/build_set — there is no name-keyed public HTTP endpoint for these
-// (the web reads take a pre-computed slug), and this PR adds none. A codified WebMCP asymmetry.
+// TWO shapes here. The `list_*_catalogue` reads take ONE album/artist/label BY NAME and return the
+// tracks on it Fluncle has never certified — a catalogue-only result BY CONSTRUCTION (the reads
+// anti-join findings). The `list_{artists,albums,labels}` reads (Slice F) are the other half an
+// agent needs: the WHOLE alphabetical index of every artist/album/label with a page, each row
+// flagged certified or not, so an agent can DISCOVER the catalogue rather than only confirm a name
+// it already knows.
+//
+// Chat gets the catalogue-only two-bucket ({ findings: [], catalogue }) for the `_catalogue` reads,
+// which renders bare/unheaded (the Unlit Rule); the MCP world-serves the flat catalogue list, each
+// row certified-tagged (like list_fresh). The `list_*` browse index is register-neutral (naming an
+// entity is always allowed — the Unlit Rule silences uncertified TRACKS, never entities), so both
+// transports share the `browseIndex` shape. All six are MCP + chat only, like get_artist/get_label:
+// the web reads take a pre-computed slug, so there is no name-keyed public HTTP twin. A codified
+// WebMCP asymmetry.
+//
+// PAGINATION: every one takes an optional `page` (1-based). The `_catalogue` reads page over the
+// grouped web read (a page of the entity's records/artists), so nothing past the first page is
+// stranded; the `list_*` browse reads page 50 rows at a time over the A–Z index.
 //
 // `tier: "catalogue"` — unlike search_archive/list_fresh (both registers ⇒ lore-canon), a browse
-// returns ONLY the catalogue register. The descriptions signal that register ("named and listed,
-// never spoken as found") without naming a leakable tier-noun or any mechanism (the Flat Copy Test).
+// returns the catalogue register. The descriptions state plainly what each lists and keep the
+// certified/uncertified split factual (a certified entry carries a Log ID), naming no leakable
+// tier-noun and no query mechanism (the Flat Copy Test).
 //
-// NOTE on the `title`s: they name the internal tier word ("catalogue"). That is a TOOLING-REGISTER
-// surface only (a human label for the tool in an MCP client / the workbench) — it must NEVER be
-// rendered as crew-facing card chrome. The chat card stays bare/unheaded (DESIGN.md §157, the Unlit
-// Rule); the tier is never a noun the crew reads.
+// NOTE on the `title`s: they name the internal tier word ("catalogue") or "browse". That is a
+// TOOLING-REGISTER surface only (a human label for the tool in an MCP client / the workbench) — it
+// must NEVER be rendered as crew-facing card chrome. The chat card stays bare/unheaded (DESIGN.md
+// §157, the Unlit Rule); the tier is never a noun the crew reads.
+
+/** The 1-based page param the browse reads share. */
+const browsePageInput = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe("Which page to read (1-based, default 1).");
 
 export const listAlbumCatalogueSpec = defineSpec({
   access: "public",
   description:
-    "List the tracks on one album Fluncle knows, BY NAME (e.g. Colours). These are records he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries its artists, its title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no album he knows.",
+    "List the tracks on one album Fluncle knows, by the album's title (e.g. Colours). Returns the tracks on it he has not certified as findings, so none carries a Log ID; each row is its artists, its title, and a Spotify link when there's one. Returns 24 tracks a page; pass page to read the rest. Returns nothing when the name matches no album he knows.",
   effect: "read",
   input: z.object({
     name: z.string().min(1).describe("The album's title, as it reads on a record (e.g. Colours)."),
+    page: browsePageInput,
   }),
   name: "list_album_catalogue",
   project: { chat: "twoBucket", mcp: "publicRecord" },
@@ -346,10 +371,11 @@ export const listAlbumCatalogueSpec = defineSpec({
 export const listArtistCatalogueSpec = defineSpec({
   access: "public",
   description:
-    "List one artist's tracks Fluncle knows, BY NAME (e.g. Netsky). These are records of theirs he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries the artists, the title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no artist he knows.",
+    "List one artist's tracks Fluncle knows, by name (e.g. Netsky). Returns the records of theirs he has not certified as findings, so none carries a Log ID; each row is the artists, the title, and a Spotify link when there's one. Returns one page of their records a call; pass page to walk the rest. Returns nothing when the name matches no artist he knows.",
   effect: "read",
   input: z.object({
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
+    page: browsePageInput,
   }),
   name: "list_artist_catalogue",
   project: { chat: "twoBucket", mcp: "publicRecord" },
@@ -361,18 +387,58 @@ export const listArtistCatalogueSpec = defineSpec({
 export const listLabelCatalogueSpec = defineSpec({
   access: "public",
   description:
-    "List the tracks on one label Fluncle knows, BY NAME (e.g. Hospital Records). These are records on it he knows are out there but has never certified as a finding: named and listed only, never spoken as found. Each row carries the artists, the title, and a Spotify link when there's one, nothing more. Returns nothing when the name matches no label he knows.",
+    "List the tracks on one label Fluncle knows, by name (e.g. Hospital Records). Returns the tracks on it he has not certified as findings, so none carries a Log ID; each row is the artists, the title, and a Spotify link when there's one. Returns one page of the label's artists a call; pass page to walk the rest. Returns nothing when the name matches no label he knows.",
   effect: "read",
   input: z.object({
     name: z
       .string()
       .min(1)
       .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
+    page: browsePageInput,
   }),
   name: "list_label_catalogue",
   project: { chat: "twoBucket", mcp: "publicRecord" },
   tier: "catalogue",
   title: "List a label's catalogue",
+  transports: ["mcp", "chat"],
+});
+
+export const listArtistsSpec = defineSpec({
+  access: "public",
+  description:
+    "List every artist in Fluncle's drum & bass archive, A to Z. Each row is the artist's name, the slug of their page, whether Fluncle has certified a finding from them, and how many of their tracks the archive holds. A certified artist has a finding logged under a Log ID; the rest he knows are out there but has not yet logged. Returns 50 a page; pass page to walk the whole index.",
+  effect: "read",
+  input: z.object({ page: browsePageInput }),
+  name: "list_artists",
+  project: { chat: "browseIndex", mcp: "browseIndex" },
+  tier: "catalogue",
+  title: "Browse all artists",
+  transports: ["mcp", "chat"],
+});
+
+export const listAlbumsSpec = defineSpec({
+  access: "public",
+  description:
+    "List every album in Fluncle's drum & bass archive, A to Z. Each row is the album's title, the slug of its page, whether Fluncle has certified a finding from it, and how many of its tracks the archive holds. A certified album has a finding logged under a Log ID; the rest he knows are out there but has not yet logged. Returns 50 a page; pass page to walk the whole index.",
+  effect: "read",
+  input: z.object({ page: browsePageInput }),
+  name: "list_albums",
+  project: { chat: "browseIndex", mcp: "browseIndex" },
+  tier: "catalogue",
+  title: "Browse all albums",
+  transports: ["mcp", "chat"],
+});
+
+export const listLabelsSpec = defineSpec({
+  access: "public",
+  description:
+    "List every label in Fluncle's drum & bass archive, A to Z. Each row is the label's name, the slug of its page, whether Fluncle has certified a finding on it, and how many of its tracks the archive holds. A certified label has a finding logged under a Log ID; the rest he knows are out there but has not yet logged. Returns 50 a page; pass page to walk the whole index.",
+  effect: "read",
+  input: z.object({ page: browsePageInput }),
+  name: "list_labels",
+  project: { chat: "browseIndex", mcp: "browseIndex" },
+  tier: "catalogue",
+  title: "Browse all labels",
   transports: ["mcp", "chat"],
 });
 
@@ -443,6 +509,9 @@ export const SHARED_TOOL_SPECS: ToolSpec[] = [
   listAlbumCatalogueSpec,
   listArtistCatalogueSpec,
   listLabelCatalogueSpec,
+  listArtistsSpec,
+  listAlbumsSpec,
+  listLabelsSpec,
   submitTrackSpec,
   subscribeNewsletterSpec,
 ];

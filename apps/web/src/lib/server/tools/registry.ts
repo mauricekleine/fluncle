@@ -32,21 +32,29 @@ import { logPageUrl } from "../../fluncle-links";
 import { isLogId, isMixtapeLogId } from "../../log-id";
 import { MAX_SET_LENGTH, mixReasonLabel, serializeSet, setToken } from "../../mix-set";
 import { type MixtapeDTO, mixtapeDisplayTitle } from "../../mixtapes";
-import { albumSlug, getAlbumBySlug } from "../albums";
+import { albumSlug, getAlbumBySlug, listAlbumsBrowsePage } from "../albums";
 import { getArtistNeighbours } from "../artist-dossier";
 import {
   countArtistFindings,
   getArtistBySlug,
   getPublicArtistSocials,
+  listArtistsBrowsePage,
   toArtistSlug,
 } from "../artists";
 import {
   CATALOGUE_SORT_DEFAULT,
+  CataloguePageOutOfRangeError,
   listArtistCatalogue,
   listLabelCatalogue,
 } from "../catalogue-groups";
 import { type FreshRecord, type FreshTrack, listFreshTracks } from "../fresh";
-import { getConfirmedAliasNames, getLabelBySlug, labelSlug } from "../labels";
+import {
+  type CatalogueBrowsePage,
+  getConfirmedAliasNames,
+  getLabelBySlug,
+  labelSlug,
+  listLabelsBrowsePage,
+} from "../labels";
 import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
 import { assertRateLimit } from "../rate-limit";
@@ -83,8 +91,11 @@ import {
   getLabelSpec,
   getSimilarArtistsSpec,
   listAlbumCatalogueSpec,
+  listAlbumsSpec,
   listArtistCatalogueSpec,
+  listArtistsSpec,
   listLabelCatalogueSpec,
+  listLabelsSpec,
   searchArchiveSpec,
   submitTrackSpec,
   subscribeNewsletterSpec,
@@ -157,6 +168,11 @@ function clampInt(value: unknown, max: number, fallback: number): number {
   }
 
   return Math.min(value, max);
+}
+
+/** Clamp a `page` arg to a positive integer, defaulting to 1 — the browse tools' tolerant page. */
+function clampPage(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : 1;
 }
 
 /** Coerce an incoming `list_fresh` view arg to the advertised enum, defaulting to `all`. */
@@ -443,25 +459,80 @@ function catalogueItemToChat(
   };
 }
 
+/** One page's pagination facts, carried onto every browse projection. */
+type BrowsePagination = { page: number; pageCount: number; total: number };
+
 /**
- * Project a browse tool's chat-shaped catalogue rows per transport. Chat gets the catalogue-only
- * two-bucket ({ findings: [], catalogue }) that renders bare/unheaded; the MCP world-serves the flat
- * catalogue list, each row certified-tagged (mirrors how list_fresh's MCP projection serves its
- * uncertified rows — never a coordinate, so an agent reads them as records, not findings).
+ * Project a `list_*_catalogue` tool's chat-shaped catalogue rows per transport, with its pagination.
+ * Chat gets the catalogue-only two-bucket ({ findings: [], catalogue }) that renders bare/unheaded;
+ * the MCP world-serves the flat catalogue list, each row certified-tagged (mirrors how list_fresh's
+ * MCP projection serves its uncertified rows — never a coordinate, so an agent reads them as records,
+ * not findings). Both carry `page`/`pageCount` so an agent knows there is more to walk.
  */
 function projectCatalogueBrowse(
   catalogue: ReturnType<typeof catalogueItemToChat>[],
-  total: number,
+  pagination: BrowsePagination,
   ctx: ToolCtx,
 ) {
   if (ctx.transport === "chat") {
-    return { catalogue, findings: [], ok: true as const };
+    return {
+      catalogue,
+      findings: [],
+      ok: true as const,
+      page: pagination.page,
+      pageCount: pagination.pageCount,
+    };
   }
 
   return {
     catalogue: catalogue.map((row) => ({ certified: false as const, ...row })),
     ok: true as const,
-    total,
+    page: pagination.page,
+    pageCount: pagination.pageCount,
+    total: pagination.total,
+  };
+}
+
+/**
+ * Run a grouped catalogue read (artist/label) for one page and flatten it to browse rows. A page
+ * past the end throws `CataloguePageOutOfRangeError` (as the web route relies on); here it is the
+ * honest empty page, so an agent walking pages just runs out rather than erroring.
+ */
+async function pagedGroupedCatalogue<
+  TPage extends { page: number; pageCount: number; totalTracks: number },
+>(
+  read: () => Promise<TPage>,
+  flatten: (page: TPage) => ReturnType<typeof catalogueItemToChat>[],
+  page: number,
+): Promise<{ pagination: BrowsePagination; rows: ReturnType<typeof catalogueItemToChat>[] }> {
+  try {
+    const loaded = await read();
+
+    return {
+      pagination: { page: loaded.page, pageCount: loaded.pageCount, total: loaded.totalTracks },
+      rows: flatten(loaded),
+    };
+  } catch (error) {
+    if (error instanceof CataloguePageOutOfRangeError) {
+      return { pagination: { page, pageCount: page, total: 0 }, rows: [] };
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * The `list_{artists,albums,labels}` browse index — a page of the whole A–Z index, register-neutral
+ * (naming an entity is always allowed), so both transports serve the identical shape: entity rows
+ * each carrying `certified`, plus the page/pageCount/total an agent pages by.
+ */
+function projectBrowseIndex(page: CatalogueBrowsePage) {
+  return {
+    items: page.items,
+    ok: true as const,
+    page: page.page,
+    pageCount: page.pageCount,
+    total: page.total,
   };
 }
 
@@ -1104,19 +1175,25 @@ const listAlbumCatalogueTool = {
   ...listAlbumCatalogueSpec,
   execute: async (args, ctx) => {
     const name = asTrimmedString((args as { name?: unknown }).name);
+    const page = clampPage((args as { page?: unknown }).page);
     const slug = name ? albumSlug(name) : undefined;
     const album = slug ? await getAlbumBySlug(slug) : undefined;
 
     if (!album) {
-      return projectCatalogueBrowse([], 0, ctx);
+      return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
+    // The album read returns the whole (already bounded) track list; page over it in the isolate so
+    // rows past the first CATALOGUE_BROWSE_LIMIT are reachable. The set is ≤ the read's own cap, so
+    // this is a bounded slice, never a growing scan.
     const slice = await listCatalogueTracksByAlbum(album.id);
+    const pageCount = Math.max(Math.ceil(slice.tracks.length / CATALOGUE_BROWSE_LIMIT), 1);
+    const start = (page - 1) * CATALOGUE_BROWSE_LIMIT;
     const catalogue = slice.tracks
-      .slice(0, CATALOGUE_BROWSE_LIMIT)
+      .slice(start, start + CATALOGUE_BROWSE_LIMIT)
       .map((item) => catalogueItemToChat(item, { release: album.name }));
 
-    return projectCatalogueBrowse(catalogue, slice.total, ctx);
+    return projectCatalogueBrowse(catalogue, { page, pageCount, total: slice.total }, ctx);
   },
 } satisfies ToolDef;
 
@@ -1124,23 +1201,27 @@ const listArtistCatalogueTool = {
   ...listArtistCatalogueSpec,
   execute: async (args, ctx) => {
     const name = asTrimmedString((args as { name?: unknown }).name);
+    const page = clampPage((args as { page?: unknown }).page);
     const slug = name ? toArtistSlug(name) : "";
     const artist = slug ? await getArtistBySlug(slug) : undefined;
 
     if (!artist) {
-      return projectCatalogueBrowse([], 0, ctx);
+      return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
-    // The artist's catalogue is grouped by record; flatten the first page, each row keeping its
-    // record name as quiet context (never a per-track lit claim).
-    const page = await listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, 1);
-    const catalogue = page.groups
-      .flatMap((record) =>
-        record.tracks.map((item) => catalogueItemToChat(item, { release: record.name })),
-      )
-      .slice(0, CATALOGUE_BROWSE_LIMIT);
+    // The artist's catalogue is grouped by record; a browse returns one whole GROUP PAGE flattened
+    // (bounded by GRAPH_GROUP_ROW_CEILING), each row keeping its record name as quiet context. Paging
+    // over group pages reaches every record — the fix for the old first-page-only, ≤24-row cap.
+    const { pagination, rows } = await pagedGroupedCatalogue(
+      () => listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, page),
+      (loaded) =>
+        loaded.groups.flatMap((record) =>
+          record.tracks.map((item) => catalogueItemToChat(item, { release: record.name })),
+        ),
+      page,
+    );
 
-    return projectCatalogueBrowse(catalogue, page.totalTracks, ctx);
+    return projectCatalogueBrowse(rows, pagination, ctx);
   },
 } satisfies ToolDef;
 
@@ -1148,28 +1229,55 @@ const listLabelCatalogueTool = {
   ...listLabelCatalogueSpec,
   execute: async (args, ctx) => {
     const name = asTrimmedString((args as { name?: unknown }).name);
+    const page = clampPage((args as { page?: unknown }).page);
     const slug = name ? labelSlug(name) : undefined;
     const label = slug ? await getLabelBySlug(slug) : undefined;
 
     if (!label) {
-      return projectCatalogueBrowse([], 0, ctx);
+      return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
-    // The label's catalogue is grouped by artist then record; flatten the first page, each row
-    // keeping the label name (and its record) as quiet context.
-    const page = await listLabelCatalogue(label.id, CATALOGUE_SORT_DEFAULT, 1);
-    const catalogue = page.groups
-      .flatMap((group) =>
-        group.records.flatMap((record) =>
-          record.tracks.map((item) =>
-            catalogueItemToChat(item, { label: label.name, release: record.name }),
+    // The label's catalogue is grouped by artist then record; a browse returns one whole GROUP PAGE
+    // (its artists) flattened, each row keeping the label name and its record as quiet context.
+    const { pagination, rows } = await pagedGroupedCatalogue(
+      () => listLabelCatalogue(label.id, CATALOGUE_SORT_DEFAULT, page),
+      (loaded) =>
+        loaded.groups.flatMap((group) =>
+          group.records.flatMap((record) =>
+            record.tracks.map((item) =>
+              catalogueItemToChat(item, { label: label.name, release: record.name }),
+            ),
           ),
         ),
-      )
-      .slice(0, CATALOGUE_BROWSE_LIMIT);
+      page,
+    );
 
-    return projectCatalogueBrowse(catalogue, page.totalTracks, ctx);
+    return projectCatalogueBrowse(rows, pagination, ctx);
   },
+} satisfies ToolDef;
+
+// ── The full A–Z browse tools (Slice F) ──────────────────────────────────────────────
+//
+// Each pages the whole alphabetical index of one entity kind through its `list*BrowsePage` server
+// read (the sitemap's floor-gated set, in SQL, certified + catalogue alike). Register-neutral — a
+// row is an ENTITY, and naming one is always allowed — so both transports serve the same shape.
+
+const listArtistsTool = {
+  ...listArtistsSpec,
+  execute: async (args) =>
+    projectBrowseIndex(await listArtistsBrowsePage(clampPage((args as { page?: unknown }).page))),
+} satisfies ToolDef;
+
+const listAlbumsTool = {
+  ...listAlbumsSpec,
+  execute: async (args) =>
+    projectBrowseIndex(await listAlbumsBrowsePage(clampPage((args as { page?: unknown }).page))),
+} satisfies ToolDef;
+
+const listLabelsTool = {
+  ...listLabelsSpec,
+  execute: async (args) =>
+    projectBrowseIndex(await listLabelsBrowsePage(clampPage((args as { page?: unknown }).page))),
 } satisfies ToolDef;
 
 // ── The write tools PR-2 lifted into the shared registry ─────────────────────────────
@@ -1251,6 +1359,9 @@ export const SHARED_TOOLS: ToolDef[] = [
   listAlbumCatalogueTool,
   listArtistCatalogueTool,
   listLabelCatalogueTool,
+  listArtistsTool,
+  listAlbumsTool,
+  listLabelsTool,
   submitTrackTool,
   subscribeNewsletterTool,
 ];
@@ -1324,9 +1435,12 @@ export function sharedChatTools(request?: Request) {
     get_status: toAiSdkTool(getStatusTool, request),
     get_track: toAiSdkTool(getTrackTool, request),
     list_album_catalogue: toAiSdkTool(listAlbumCatalogueTool, request),
+    list_albums: toAiSdkTool(listAlbumsTool, request),
     list_artist_catalogue: toAiSdkTool(listArtistCatalogueTool, request),
+    list_artists: toAiSdkTool(listArtistsTool, request),
     list_fresh: toAiSdkTool(listFreshTool, request),
     list_label_catalogue: toAiSdkTool(listLabelCatalogueTool, request),
+    list_labels: toAiSdkTool(listLabelsTool, request),
     list_tracks: toAiSdkTool(listTracksTool, request),
     search_archive: toAiSdkTool(searchArchiveTool, request),
     submit_track: toAiSdkTool(submitTrackTool, request),

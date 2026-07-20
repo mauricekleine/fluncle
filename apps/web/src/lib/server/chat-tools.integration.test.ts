@@ -644,7 +644,13 @@ describe("list_album_catalogue / list_artist_catalogue / list_label_catalogue", 
     ] as const) {
       const result = await toolExecute(name)({ name: "Nothing Of His" });
 
-      expect(result, name).toEqual({ catalogue: [], findings: [], ok: true });
+      expect(result, name).toEqual({
+        catalogue: [],
+        findings: [],
+        ok: true,
+        page: 1,
+        pageCount: 1,
+      });
     }
   });
 });

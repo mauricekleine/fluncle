@@ -60,6 +60,9 @@ vi.mock("@tanstack/react-start/server-entry", () => ({
 
 vi.mock("./lib/server/mcp", () => ({
   handleMcp: hoisted.handleMcp,
+  // agent-discovery.ts derives its SKILL.md tool list from this at import time; the routing tests
+  // never read that list, so an empty set keeps the module importable without pulling the real MCP.
+  mcpToolNames: [],
 }));
 
 vi.mock("./lib/server/agent-discovery", async (importOriginal) => {

@@ -9,14 +9,16 @@ import {
   type OembedResponse,
   parseOembedTarget,
 } from "@/lib/oembed";
+import { getAlbumBySlug } from "@/lib/server/albums";
 import { getArtistBySlug } from "@/lib/server/artists";
+import { getLabelBySlug } from "@/lib/server/labels";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
-import { getFindingsByArtist } from "@/lib/server/tracks";
+import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "@/lib/server/tracks";
 
 // The oEmbed 1.0 provider endpoint (https://oembed.com). A consumer that found a
 // page's `<link rel="alternate" type="application/json+oembed" href="…/oembed?url=…">`
 // fetches this and gets a provider envelope it can unfurl — a `rich` iframe card for
-// a finding/mixtape, a `link` for an artist page or the mixtapes index.
+// a finding/mixtape, a `link` for an artist / label / album page or the mixtapes index.
 //
 // This is a root-level document emitter at the spec's fixed path `/oembed` (the
 // discovery link and every consumer hardcode it), taking an external query-string
@@ -118,7 +120,49 @@ async function resolveOembed(
     return buildLinkResponse({
       authorName: artist.name,
       thumbnailUrl,
-      title: `${artist.name} · Fluncle's Findings`,
+      title: `${artist.name} · Fluncle`,
+    });
+  }
+
+  if (target.kind === "label") {
+    const label = await getLabelBySlug(target.slug);
+
+    if (!label) {
+      return undefined;
+    }
+
+    // Prefer a finding's cover, then the label's own logo, then the house cover.
+    const cover = (await getFindingsByLabel(label.id))[0];
+    const thumbnailUrl =
+      (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
+      label.logoImageUrl ??
+      `${siteUrl}/fluncle-cover.png`;
+
+    return buildLinkResponse({
+      authorName: label.name,
+      thumbnailUrl,
+      title: `${label.name} · Fluncle`,
+    });
+  }
+
+  if (target.kind === "album") {
+    const album = await getAlbumBySlug(target.slug);
+
+    if (!album) {
+      return undefined;
+    }
+
+    const cover = (await getFindingsByAlbum(album.id))[0];
+    const thumbnailUrl =
+      (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
+      `${siteUrl}/fluncle-cover.png`;
+    // A record's author is its artist(s); the cover finding carries them when the album has one.
+    const authorName = cover && cover.artists.length > 0 ? cover.artists.join(", ") : undefined;
+
+    return buildLinkResponse({
+      thumbnailUrl,
+      title: `${album.name} · Fluncle`,
+      ...(authorName ? { authorName } : {}),
     });
   }
 
@@ -154,7 +198,10 @@ export const Route = createFileRoute("/oembed")({
         const target = parseOembedTarget(rawUrl);
 
         if (!target) {
-          return errorResponse(404, "No Fluncle finding, mixtape, or artist at that URL.");
+          return errorResponse(
+            404,
+            "No Fluncle finding, mixtape, artist, label, or album at that URL.",
+          );
         }
 
         const maxwidth = parseDimension(url.searchParams.get("maxwidth"));
@@ -162,7 +209,10 @@ export const Route = createFileRoute("/oembed")({
         const payload = await resolveOembed(target, maxwidth, maxheight);
 
         if (!payload) {
-          return errorResponse(404, "No Fluncle finding, mixtape, or artist at that URL.");
+          return errorResponse(
+            404,
+            "No Fluncle finding, mixtape, artist, label, or album at that URL.",
+          );
         }
 
         return jsonResponse(payload);

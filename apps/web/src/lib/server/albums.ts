@@ -25,9 +25,12 @@ import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl } from "../media";
 import { getDb, typedRows } from "./db";
 import {
+  type CatalogueBrowsePage,
+  type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
   type EntitySitemapRow,
+  listCatalogueBrowsePage,
   listHubPage,
 } from "./labels";
 
@@ -437,6 +440,21 @@ const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
  */
 export function listAlbumsHubPage(page: number): Promise<CatalogueHubNumberedPage<AlbumHubEntry>> {
   return listHubPage(ALBUMS_HUB_QUERY, page);
+}
+
+/** The ALBUMS full A–Z browse — every album with a page, certified or catalogue-only. */
+// Derives its scan + floor from ALBUMS_HUB_QUERY (the web hub's), so the MCP browse and the
+// /albums page can never diverge on which albums exist; only the projection differs (name inline).
+const ALBUMS_BROWSE_QUERY: CatalogueBrowseQuery = {
+  floor: ALBUMS_HUB_QUERY.floor,
+  from: ALBUMS_HUB_QUERY.from,
+  groupBy: ALBUMS_HUB_QUERY.groupBy,
+  nameExpr: "albums.name",
+  slugExpr: ALBUMS_HUB_QUERY.slugExpr,
+};
+
+export function listAlbumsBrowsePage(page: number): Promise<CatalogueBrowsePage> {
+  return listCatalogueBrowsePage(ALBUMS_BROWSE_QUERY, page);
 }
 
 // THE ALBUM EDGE IS WRITTEN INLINE, not deferred. The publish path calls `linkTrackToAlbum`
