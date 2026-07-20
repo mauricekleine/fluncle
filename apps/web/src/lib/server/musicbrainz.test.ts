@@ -48,6 +48,33 @@ describe("mbFetch pacing", () => {
     expect(calls).toBe(2);
   });
 
+  it("serializes in-flight calls — the second fires only after a SLOW (but alive) first settles", async () => {
+    // The 2026-07-19 regression: arrival pacing alone let calls overlap when one ran long,
+    // and under MusicBrainz's evening slowdown the overlap compounded into real 503
+    // throttling. One call in flight at a time is the etiquette MB expects.
+    setMusicbrainzRateLimitForTests(10);
+
+    const events: string[] = [];
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1;
+      const id = calls;
+      events.push(`start-${id}`);
+
+      if (id === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+
+      events.push(`end-${id}`);
+
+      return jsonResponse({});
+    }) as unknown as typeof fetch;
+
+    await Promise.all([mbFetch("/label/slow"), mbFetch("/label/second")]);
+
+    expect(events).toEqual(["start-1", "end-1", "start-2", "end-2"]);
+  });
+
   it("paces two callers at least the rate-limit interval apart", async () => {
     setMusicbrainzRateLimitForTests(50);
 
