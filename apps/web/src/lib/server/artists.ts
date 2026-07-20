@@ -3,11 +3,13 @@ import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-so
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
 import {
-  type CatalogueHubLetter,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
+  countEditorial,
+  type EditorialHubPage,
+  editorialArgs,
+  editorialPage,
   type EntitySitemapRow,
-  listCatalogueHubLetters,
   listCatalogueHubPage,
 } from "./labels";
 import { logEvent } from "./log";
@@ -73,13 +75,16 @@ export type ArtistSocialLink = {
   url: string;
 };
 
-/** A row in the `/artists` index + a thin-gated sitemap candidate. */
+/**
+ * A row in the `/artists` editorial index — exactly the three fields the card renders. A
+ * representative album cover and the freshest-finding `lastmod` used to ride along "for the
+ * sitemap"; the sitemap has driven off `listArtistSitemapRows` for a while now, so both were dead
+ * weight — and the cover in particular was a correlated subquery per row, on every render.
+ */
 export type ArtistIndexEntry = {
-  coverImageUrl: string | undefined;
   findingCount: number;
-  /** The artist's canonical Spotify avatar (null → the index renders a monogram tile). */
+  /** The artist's avatar — their OWNED master when resolved, else the raw Spotify profile image. */
   imageUrl: string | undefined;
-  lastmod: string | undefined;
   name: string;
   slug: string;
 };
@@ -328,44 +333,46 @@ export async function countArtistFindings(artistId: string): Promise<number> {
   return typeof count === "number" ? count : 0;
 }
 
-/**
- * Every artist that has at least one coordinate-bearing finding, with its finding
- * count, a representative cover (the most-recent finding's album art), and the
- * freshest finding date (sitemap lastmod). Ordered alphabetically by name
- * (case-insensitive) — the `/artists` index order; the sitemap filters this to
- * `ARTIST_INDEX_MIN_FINDINGS`+ (the thin-content gate).
- */
-export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
-                 a.image_key as image_key, a.image_state as image_state,
-                 a.image_updated_at as image_updated_at,
-                 count(t.track_id) as finding_count,
-                 max(t.added_at) as lastmod,
-                 (select t2.album_image_url
-                    from (findings join tracks on tracks.track_id = findings.track_id) t2
-                    join track_artists ta2 on ta2.track_id = t2.track_id
-                    where ta2.artist_id = a.id and t2.log_id is not null
-                    order by t2.added_at desc limit 1) as cover_url
-          from artists a
+/** The findings-joined row source both the `/artists` editorial slice and its total group over. */
+const ARTISTS_EDITORIAL_FROM = `from artists a
           join track_artists ta on ta.artist_id = a.id
-          join (findings join tracks on tracks.track_id = findings.track_id) t on t.track_id = ta.track_id and t.log_id is not null
-          group by a.id
-          order by a.name collate nocase asc`,
-  });
+          join (findings join tracks on tracks.track_id = findings.track_id) t
+            on t.track_id = ta.track_id and t.log_id is not null
+          group by a.id`;
 
-  const entries: ArtistIndexEntry[] = [];
+/**
+ * One windowed page of every artist that has at least one coordinate-bearing finding, with its
+ * finding count and its avatar. Ordered alphabetically by name (case-insensitive) — the `/artists`
+ * index order. The sitemap is a separate read (`listArtistSitemapRows`).
+ */
+export async function listArtistsWithFindingCounts(
+  page: number,
+): Promise<EditorialHubPage<ArtistIndexEntry>> {
+  const db = await getDb();
+  const [slice, total] = await Promise.all([
+    db.execute({
+      args: editorialArgs(page),
+      sql: `select a.name as name, a.slug as slug, a.image_url as image_url,
+                   a.image_key as image_key, a.image_state as image_state,
+                   a.image_updated_at as image_updated_at,
+                   count(t.track_id) as finding_count
+            ${ARTISTS_EDITORIAL_FROM}
+            order by a.name collate nocase asc
+            limit ? offset ?`,
+    }),
+    countEditorial(`select 1 ${ARTISTS_EDITORIAL_FROM}`),
+  ]);
 
-  for (const raw of result.rows) {
+  const items: ArtistIndexEntry[] = [];
+
+  for (const raw of slice.rows) {
     const row = raw as Record<string, unknown>;
     const name = row["name"];
     const slug = row["slug"];
     const findingCount = row["finding_count"];
 
     if (typeof name === "string" && typeof slug === "string" && typeof findingCount === "number") {
-      entries.push({
-        coverImageUrl: optionalText(row["cover_url"]),
+      items.push({
         findingCount,
         // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
         imageUrl: bestArtistAvatarUrl({
@@ -374,14 +381,13 @@ export async function listArtistsWithFindingCounts(): Promise<ArtistIndexEntry[]
           imageUpdatedAt: optionalText(row["image_updated_at"]),
           imageUrl: optionalText(row["image_url"]),
         }),
-        lastmod: optionalText(row["lastmod"]),
         name,
         slug,
       });
     }
   }
 
-  return entries;
+  return editorialPage(items, page, total);
 }
 
 /**
@@ -443,6 +449,7 @@ export type ArtistCatalogueEntry = {
 
 /** The ARTISTS hub's `?page=N` + A–Z reads, over the findings-free, floor-gated set of artists. */
 const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistCatalogueEntry> = {
+  entity: "artists a",
   floor: ARTIST_INDEX_MIN_FINDINGS,
   from: "artists a join track_artists ta on ta.artist_id = a.id join tracks on tracks.track_id = ta.track_id",
   groupBy: "a.id",
@@ -463,16 +470,14 @@ const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistCatalogueEntry> = {
   slugExpr: "a.slug",
 };
 
-/** One numbered page of the `/artists` hub's findings-free section (the crawlable `?page=N` view). */
+/**
+ * One numbered page of the `/artists` hub's findings-free section (the crawlable `?page=N` view),
+ * carrying the A–Z fast lane: each present letter → the page its first artist lands on.
+ */
 export function listArtistsCataloguePage(
   page: number,
 ): Promise<CatalogueHubNumberedPage<ArtistCatalogueEntry>> {
-  return listCatalogueHubPage(ARTISTS_HUB_QUERY, page);
-}
-
-/** The `/artists` hub's A–Z fast lane: each present letter → the page its first artist lands on. */
-export function listArtistsCatalogueLetters(): Promise<CatalogueHubLetter[]> {
-  return listCatalogueHubLetters(ARTISTS_HUB_QUERY);
+  return listCatalogueHubPage(ARTISTS_HUB_QUERY, page, true);
 }
 
 /** An artist chip on a graph page (the label's roster, the album's credits). */
