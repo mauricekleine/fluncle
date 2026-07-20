@@ -61,8 +61,9 @@ import {
   artistNeedsLook,
   type ArtistOverviewItem,
   type ArtistSocial,
+  type FreshLinkEntry,
   listAllArtistsWithSocials,
-  unreviewedSocials,
+  partitionFreshLinks,
 } from "@/lib/server/artists";
 import { cn } from "@/lib/utils";
 
@@ -374,10 +375,13 @@ function AdminArtistsPage() {
   );
 }
 
-// The FRESH LINKS section — every unreviewed link (`reviewedAt === null`) across the archive,
-// grouped by artist, so the operator reviews exactly what's new since he last looked instead of
-// re-reviewing whole artists. Each row is one link with Approve (mark reviewed + promote a
-// candidate) and Remove. Hidden entirely when nothing is fresh (the resting state). Reads the
+// The FRESH LINKS section — every unreviewed link (`reviewedAt === null`) across the archive, so the
+// operator reviews exactly what's new since he last looked instead of re-reviewing whole artists.
+// SPLIT by mention-loop impact (partitionFreshLinks): "High priority" holds the links whose artist
+// has a finding — once approved, a tiktok/youtube handle there feeds the caption mention loop the
+// moment that finding's video posts (lib/server/mentions.ts) — and leads; "Everything else" holds
+// the catalogue-only artists below, in the queue's prior order. Each row keeps its identical UI
+// (Approve / edit / Remove). Hidden entirely when nothing is fresh (the resting state). Reads the
 // full list, not the search-filtered one — fresh work is global, not scoped to a name filter.
 function FreshLinksSection({
   artists,
@@ -392,19 +396,11 @@ function FreshLinksSection({
   onRemove: (socialId: string) => void;
   onSaved: () => void;
 }) {
-  const groups = useMemo(
-    () =>
-      artists
-        .map((artist) => ({ artist, fresh: unreviewedSocials(artist.socials) }))
-        .filter((group) => group.fresh.length > 0),
-    [artists],
-  );
+  const { everythingElse, highPriority } = useMemo(() => partitionFreshLinks(artists), [artists]);
 
-  if (groups.length === 0) {
+  if (highPriority.length === 0 && everythingElse.length === 0) {
     return null;
   }
-
-  const total = groups.reduce((sum, group) => sum + group.fresh.length, 0);
 
   return (
     <section className="mb-5 overflow-hidden rounded-lg border border-primary/30 bg-primary/5">
@@ -412,25 +408,78 @@ function FreshLinksSection({
         <SparkleIcon aria-hidden="true" className="size-4 shrink-0 text-primary" weight="fill" />
         <h2 className="text-sm font-medium">Fresh links</h2>
         <span className="text-xs text-muted-foreground tabular-nums">
-          {total} {total === 1 ? "link" : "links"} to review
+          {highPriority.length + everythingElse.length} to review
         </span>
       </div>
-      <ul className="m-0 flex list-none flex-col divide-y divide-border/60 p-0">
-        {groups.flatMap(({ artist, fresh }) =>
-          fresh.map((social) => (
-            <FreshLinkRow
-              artistName={artist.name}
-              busy={busy}
-              key={social.id}
-              onApprove={() => onApprove(social.id)}
-              onRemove={() => onRemove(social.id)}
-              onSaved={onSaved}
-              social={social}
-            />
-          )),
-        )}
-      </ul>
+
+      {highPriority.length > 0 ? (
+        <FreshLinkGroup
+          busy={busy}
+          entries={highPriority}
+          hint="A fresh tiktok or youtube link here can land in a finding's caption, so review these first."
+          label="High priority"
+          onApprove={onApprove}
+          onRemove={onRemove}
+          onSaved={onSaved}
+        />
+      ) : null}
+
+      {everythingElse.length > 0 ? (
+        <FreshLinkGroup
+          busy={busy}
+          entries={everythingElse}
+          label="Everything else"
+          onApprove={onApprove}
+          onRemove={onRemove}
+          onSaved={onSaved}
+        />
+      ) : null}
     </section>
+  );
+}
+
+// One subsection of the fresh-links board — a labeled group ("High priority" / "Everything else")
+// with its own count, then the identical link rows. Rendered only when it has entries.
+function FreshLinkGroup({
+  busy,
+  entries,
+  hint,
+  label,
+  onApprove,
+  onRemove,
+  onSaved,
+}: {
+  busy: boolean;
+  entries: FreshLinkEntry[];
+  hint?: string;
+  label: string;
+  onApprove: (socialId: string) => void;
+  onRemove: (socialId: string) => void;
+  onSaved: () => void;
+}) {
+  return (
+    <div className="border-b border-primary/10 last:border-b-0">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-4 pt-3 pb-1">
+        <h3 className="text-xs font-medium">{label}</h3>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {entries.length} {entries.length === 1 ? "link" : "links"}
+        </span>
+        {hint ? <p className="basis-full text-[11px] text-muted-foreground">{hint}</p> : null}
+      </div>
+      <ul className="m-0 flex list-none flex-col divide-y divide-border/60 p-0">
+        {entries.map(({ artist, social }) => (
+          <FreshLinkRow
+            artistName={artist.name}
+            busy={busy}
+            key={social.id}
+            onApprove={() => onApprove(social.id)}
+            onRemove={() => onRemove(social.id)}
+            onSaved={onSaved}
+            social={social}
+          />
+        ))}
+      </ul>
+    </div>
   );
 }
 
