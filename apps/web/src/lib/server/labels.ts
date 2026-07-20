@@ -693,6 +693,15 @@ export type LabelHubEntry = {
 const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
 const HUB_RENDERABLE = `${HUB_CERTIFIED} + sum(case when findings.track_id is null then 1 else 0 end)`;
 
+/**
+ * The hub inclusion gate, single-sourced (the trailing `?` binds the floor): a CERTIFIED entity is
+ * always in; an uncertified catalogue entity is in only when its page clears the thin-content floor.
+ * The web hubs (`listHubPage`) and the MCP browse (`listCatalogueBrowsePage`) both drive their
+ * `having` off THIS fragment, so the two indexes can never disagree on which entities exist.
+ * `tools/browse.test.ts` asserts both reads embed it.
+ */
+export const HUB_INCLUSION_HAVING = `${HUB_CERTIFIED} > 0 or ${HUB_RENDERABLE} >= ?`;
+
 /** A raw hub TILE row — the union of every tile column the three entity kinds select. The gated scan
     stamps `track_count` + `certified` onto it; the rest are the entity's own columns. */
 type CatalogueHubRow = {
@@ -813,7 +822,7 @@ export async function listHubPage<Entry>(
             from ${query.from}
             left join findings on findings.track_id = tracks.track_id
             group by ${query.groupBy}
-            having ${HUB_CERTIFIED} > 0 or ${HUB_RENDERABLE} >= ?
+            having ${HUB_INCLUSION_HAVING}
           )
           select 'total' as kind, '' as slug, (select count(*) from gated) as n, 0 as cert
           union all
@@ -907,6 +916,117 @@ export function letterPages(
   return [...byLetter].map(([letter, page]) => ({ letter, page }));
 }
 
+// ── THE FULL A–Z BROWSE: the hub index, MCP-shaped ────────────────────────────────────────────
+//
+// `listHubPage` above already folds certified + floor-clearing catalogue into ONE alphabetical
+// index (the `HUB_INCLUSION_HAVING` gate) for the /artists //albums //labels web pages. The MCP
+// browse tools (list_artists/list_albums/list_labels) need the SAME entity set — same gate, same
+// floor, certified-always-in — but not the web tile: an agent reads name/slug/certified/trackCount,
+// never a cover. So this read shares the ONE gate fragment with `listHubPage` (they can never drift
+// on which entities exist) and keeps a lighter projection — the entity NAME is a bare grouped column
+// in the gated scan (no cover subquery, no second tile lookup), so one statement answers it.
+
+/** One row of the full A–Z catalogue browse — an entity, whether Fluncle has certified it, its size. */
+export type CatalogueBrowseRow = {
+  /** True when Fluncle has certified at least one finding on the entity (a track with a Log ID). */
+  certified: boolean;
+  name: string;
+  slug: string;
+  /** Renderable tracks the entity carries — its findings plus the quieter catalogue rows. */
+  trackCount: number;
+};
+
+export type CatalogueBrowsePage = {
+  items: CatalogueBrowseRow[];
+  page: number;
+  pageCount: number;
+  /** Every floor-clearing entity the browse carries, counted in SQL — the pager's key. */
+  total: number;
+};
+
+/**
+ * The entity-specific SQL for one browse read, as CONSTANT fragments (never reader input). `from`
+ * is the entity table joined to `tracks` (the gated scan's shape); the generic appends the shared
+ * `left join findings`, the `group by`, the floor `having`, and the slug order. `nameExpr`/`slugExpr`
+ * are bare grouped columns off the entity table.
+ */
+export type CatalogueBrowseQuery = {
+  floor: number;
+  from: string;
+  groupBy: string;
+  nameExpr: string;
+  slugExpr: string;
+};
+
+/** How many rows one browse page carries — a bounded, documented slice of a catalogue-scale index. */
+export const CATALOGUE_BROWSE_PAGE_SIZE = 50;
+
+/**
+ * One numbered page of the full A–Z browse — every entity `listHubPage` would list (certified +
+ * floor-clearing catalogue), from ONE pass over the gated set. It reuses `HUB_INCLUSION_HAVING` (the
+ * ONE gate `listHubPage` drives off, so the MCP browse and the web hubs can never disagree on which
+ * entities exist) and the same hosted-proven `materialized` CTE shape, but keeps a lighter projection
+ * than the web hub: the entity NAME is a bare grouped column, so there is no second tile lookup and
+ * no cover subquery an agent would only discard. A page past the end returns an empty slice with the
+ * honest total.
+ */
+export async function listCatalogueBrowsePage(
+  query: CatalogueBrowseQuery,
+  page: number,
+): Promise<CatalogueBrowsePage> {
+  const db = await getDb();
+  const limit = CATALOGUE_BROWSE_PAGE_SIZE;
+  const result = await db.execute({
+    args: [query.floor, limit, (page - 1) * limit],
+    // Arm 1 is the total (always one row, so an empty page still reports an honest size); arm 2 is
+    // the page's slice, ordered and windowed by SQL. `kind` discriminates; a compound select gives
+    // no cross-arm order, so the rows are re-sorted below over the ≤ page-size slice, never a
+    // growing set. The gate is `HUB_INCLUSION_HAVING`, shared verbatim with `listHubPage`.
+    sql: `with gated as materialized (
+            select ${query.slugExpr} as slug, ${query.nameExpr} as name,
+                   ${HUB_RENDERABLE} as track_count, (${HUB_CERTIFIED} > 0) as certified
+            from ${query.from}
+            left join findings on findings.track_id = tracks.track_id
+            group by ${query.groupBy}
+            having ${HUB_INCLUSION_HAVING}
+          )
+          select 'total' as kind, '' as slug, '' as name, 0 as track_count, 0 as certified,
+                 (select count(*) from gated) as n
+          union all
+          select * from (
+            select 'row' as kind, g.slug as slug, g.name as name, g.track_count as track_count,
+                   g.certified as certified, 0 as n
+            from gated g order by g.slug asc limit ? offset ?
+          )`,
+  });
+
+  const rows = typedRows<{
+    certified: number;
+    kind: string;
+    n: number;
+    name: string;
+    slug: string;
+    track_count: number;
+  }>(result.rows);
+  const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
+  const items = rows
+    .filter((row) => row.kind === "row")
+    .sort((left, right) => (left.slug < right.slug ? -1 : left.slug > right.slug ? 1 : 0))
+    .map((row) => ({
+      certified: Number(row.certified) > 0,
+      name: row.name,
+      slug: row.slug,
+      trackCount: Number(row.track_count),
+    }));
+
+  return {
+    items,
+    page,
+    pageCount: Math.max(Math.ceil(total / limit), 1),
+    total,
+  };
+}
+
 /** The LABELS hub's `?page=N` + A–Z reads, over every floor-clearing label (certified + catalogue). */
 const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   entity: "labels",
@@ -933,6 +1053,20 @@ const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
  */
 export function listLabelsHubPage(page: number): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
   return listHubPage(LABELS_HUB_QUERY, page, true);
+}
+
+// Derives its scan + floor from LABELS_HUB_QUERY (the web hub's), so the MCP browse and the
+// /labels page can never diverge on which labels exist; only the projection differs (name inline).
+const LABELS_BROWSE_QUERY: CatalogueBrowseQuery = {
+  floor: LABELS_HUB_QUERY.floor,
+  from: LABELS_HUB_QUERY.from,
+  groupBy: LABELS_HUB_QUERY.groupBy,
+  nameExpr: "labels.name",
+  slugExpr: LABELS_HUB_QUERY.slugExpr,
+};
+
+export function listLabelsBrowsePage(page: number): Promise<CatalogueBrowsePage> {
+  return listCatalogueBrowsePage(LABELS_BROWSE_QUERY, page);
 }
 
 /**

@@ -3,9 +3,12 @@ import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-so
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRow, typedRows } from "./db";
 import {
+  type CatalogueBrowsePage,
+  type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
   type EntitySitemapRow,
+  listCatalogueBrowsePage,
   listHubPage,
 } from "./labels";
 import { logEvent } from "./log";
@@ -407,6 +410,21 @@ export function listArtistsHubPage(
   page: number,
 ): Promise<CatalogueHubNumberedPage<ArtistHubEntry>> {
   return listHubPage(ARTISTS_HUB_QUERY, page, true);
+}
+
+/** The ARTISTS full A–Z browse — every artist with a page, certified or catalogue-only. */
+// Derives its scan + floor from ARTISTS_HUB_QUERY (the web hub's), so the MCP browse and the
+// /artists page can never diverge on which artists exist; only the projection differs (name inline).
+const ARTISTS_BROWSE_QUERY: CatalogueBrowseQuery = {
+  floor: ARTISTS_HUB_QUERY.floor,
+  from: ARTISTS_HUB_QUERY.from,
+  groupBy: ARTISTS_HUB_QUERY.groupBy,
+  nameExpr: "a.name",
+  slugExpr: ARTISTS_HUB_QUERY.slugExpr,
+};
+
+export function listArtistsBrowsePage(page: number): Promise<CatalogueBrowsePage> {
+  return listCatalogueBrowsePage(ARTISTS_BROWSE_QUERY, page);
 }
 
 /** An artist chip on a graph page (the label's roster, the album's credits). */

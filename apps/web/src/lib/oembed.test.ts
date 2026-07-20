@@ -29,6 +29,20 @@ describe("parseOembedTarget", () => {
     });
   });
 
+  it("maps a /label/<slug> URL to a label target", () => {
+    expect(parseOembedTarget("https://www.fluncle.com/label/hospital-records")).toEqual({
+      kind: "label",
+      slug: "hospital-records",
+    });
+  });
+
+  it("maps an /album/<slug> URL to an album target", () => {
+    expect(parseOembedTarget("https://www.fluncle.com/album/colours")).toEqual({
+      kind: "album",
+      slug: "colours",
+    });
+  });
+
   it("maps the /mixtapes index to a mixtapes target", () => {
     expect(parseOembedTarget("https://www.fluncle.com/mixtapes")).toEqual({ kind: "mixtapes" });
   });

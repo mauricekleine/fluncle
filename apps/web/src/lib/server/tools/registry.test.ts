@@ -69,9 +69,12 @@ const ALL_TOOL_NAMES = [
   "get_status",
   "get_track",
   "list_album_catalogue",
+  "list_albums",
   "list_artist_catalogue",
+  "list_artists",
   "list_fresh",
   "list_label_catalogue",
+  "list_labels",
   "list_tracks",
   "search_archive",
   "submit_track",
@@ -203,6 +206,9 @@ describe("tool-set parity — each transport gets exactly its declared projectio
       "list_album_catalogue",
       "list_artist_catalogue",
       "list_label_catalogue",
+      "list_artists",
+      "list_albums",
+      "list_labels",
     ]) {
       expect(byName(name).transports.sort(), name).toEqual(["chat", "mcp"]);
     }
@@ -394,27 +400,74 @@ describe("the catalogue browse tools — the unlit register, by name (PR-5)", ()
     }
   });
 
-  it("each takes a single required name", () => {
+  it("each takes a required name and an optional page", () => {
     for (const name of BROWSE_TOOLS) {
       const schema = toInputJsonSchema(byName(name)) as {
-        properties: { name: { type: string } };
+        properties: { name: { type: string }; page: { minimum: number; type: string } };
         required: string[];
       };
 
       expect(schema.properties.name.type, name).toBe("string");
       expect(schema.required, name).toEqual(["name"]);
+      // `page` is the optional pager (1-based); it never becomes required.
+      expect(schema.properties.page, name).toMatchObject({ minimum: 1, type: "integer" });
     }
   });
 
-  it("names the tier in neither the description nor the title (mechanism-free, Flat Copy Test)", () => {
-    // The register discipline reads "named and listed, never spoken as found" — never a mechanism
-    // word (anti-join / uncertified / the catalogue table), which would teach a leakable tier.
+  it("states the certified split plainly and leaks no mechanism word (Flat Copy Test)", () => {
+    // Slice F neutralised these: the description states factually that the rows are not certified
+    // findings (so none carries a Log ID) and names no mechanism word (anti-join / uncertified /
+    // the catalogue table), which would teach a leakable tier.
     for (const name of BROWSE_TOOLS) {
       const spec = byName(name);
       const text = `${spec.description} ${spec.title}`.toLowerCase();
 
-      expect(text, `${name} description`).toContain("named and listed only, never spoken as found");
+      expect(text, `${name} description`).toContain("not certified as findings");
+      expect(text, `${name} description`).toContain("log id");
       for (const banned of ["anti-join", "uncertified", "catalogue table"]) {
+        expect(text, `${name} leaks "${banned}"`).not.toContain(banned);
+      }
+    }
+  });
+});
+
+describe("the full A–Z browse tools (Slice F) — list_artists / list_albums / list_labels", () => {
+  const LIST_ALL_TOOLS = ["list_artists", "list_albums", "list_labels"];
+
+  it("are catalogue-tier reads on MCP + chat, register-neutral (browseIndex both ways)", () => {
+    for (const name of LIST_ALL_TOOLS) {
+      const spec = byName(name);
+      expect(spec.tier, name).toBe("catalogue");
+      expect(spec.effect, name).toBe("read");
+      expect(spec.access, name).toBe("public");
+      expect(spec.transports.sort(), name).toEqual(["chat", "mcp"]);
+      // Naming an entity is always allowed, so both transports share the one browse shape.
+      expect(spec.project, name).toEqual({ chat: "browseIndex", mcp: "browseIndex" });
+    }
+  });
+
+  it("take only an optional page (no required arg)", () => {
+    for (const name of LIST_ALL_TOOLS) {
+      const schema = toInputJsonSchema(byName(name)) as {
+        properties: { page: { minimum: number; type: string } };
+        required?: string[];
+      };
+
+      expect(schema.properties.page, name).toMatchObject({ minimum: 1, type: "integer" });
+      expect(schema.required ?? [], name).toEqual([]);
+    }
+  });
+
+  it("state the certified split plainly and leak no mechanism word (Flat Copy Test)", () => {
+    for (const name of LIST_ALL_TOOLS) {
+      const spec = byName(name);
+      const text = `${spec.description} ${spec.title}`.toLowerCase();
+
+      expect(text, `${name} description`).toContain("a to z");
+      expect(text, `${name} description`).toContain("certified");
+      expect(text, `${name} description`).toContain("log id");
+      // "catalogue" is the internal tier noun — never minted as a public tier name (Unlit Rule).
+      for (const banned of ["catalogue", "anti-join", "sitemap", "having", "renderable"]) {
         expect(text, `${name} leaks "${banned}"`).not.toContain(banned);
       }
     }

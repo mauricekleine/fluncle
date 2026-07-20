@@ -32,7 +32,7 @@ Fluncle's archive is a graph: every finding links to the artists who made it, th
 - Labels: https://www.fluncle.com/label/<slug>
 - Albums: https://www.fluncle.com/album/<slug>
 
-Each page leads with the findings Fluncle has logged there. An artist, label, or record Fluncle has come across while charting the wider archive but has not yet certified a finding from still gets a page: an honest record of what they put out, findings first, the rest of the tracks below. A page with too little on it stays reachable but out of the index. The `/artists`, `/labels`, and `/albums` indexes stay Fluncle's own list — only the ones he has pulled a banger from.
+Each page leads with the findings Fluncle has logged there. An artist, label, or record Fluncle has come across while charting the wider archive but has not yet certified a finding from still gets a page: an honest record of what they put out, findings first, the rest of the tracks below. A page with too little on it stays reachable but out of the index. The `/artists`, `/labels`, and `/albums` indexes list every artist, label, and album in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold.
 
 - [Artists API](https://www.fluncle.com/api/v1/artists): all artists with at least one finding, finding-count ordered, as JSON
 - [Artist by slug](https://www.fluncle.com/api/v1/artists/{slug}): one artist's identity and finding count, as JSON

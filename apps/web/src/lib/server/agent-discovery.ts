@@ -9,6 +9,7 @@ import { fluncleDescription } from "../identity";
 import { type FeedItem } from "../mixtapes";
 import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { sha256Hex } from "./hash";
+import { mcpToolNames } from "./mcp";
 import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } from "./tracks";
 
 // Agent-facing discovery surfaces served ahead of the TanStack router:
@@ -336,9 +337,9 @@ ${tracks.join("\n")}
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
-- [The artists](${siteUrl}/artists): every artist Fluncle has found a banger from. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings and their verified identity links
-- [The labels](${siteUrl}/labels): every record label Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
-- [The albums](${siteUrl}/albums): every record Fluncle has found a banger on. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
+- [The artists](${siteUrl}/artists): every artist in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings and their verified identity links
+- [The labels](${siteUrl}/labels): every label in the archive, A to Z, the ones Fluncle has certified a finding on marked in gold. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
+- [The albums](${siteUrl}/albums): every record in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold. Each resolves to a page at ${siteUrl}/album/{slug}: that record's findings, its artists, and the label it came out on
 - [What just came out](${siteUrl}/fresh): the newest drum & bass across the whole archive, freshest first. Every release from the last 30 days, ordered by when it came out (not by when Fluncle found it)
 
 ## Submit
@@ -565,7 +566,7 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 
 The archive is a full MCP server (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`, not just tools:
 
-- **Tools**: \`list_tracks\`, \`get_track\` (read one finding/mixtape by Log ID coordinate or Spotify id), \`get_random_track\`, \`search_tracks\`, \`submit_track\`, \`subscribe_newsletter\`.
+- **Tools** (derived from the live tool set; call \`tools/list\` for each tool's full schema): ${mcpToolNames.map((name) => `\`${name}\``).join(", ")}. Includes the archive reads (\`list_tracks\`, \`get_track\` by Log ID coordinate or Spotify id, \`search_archive\`), the artist/label/album browse (\`list_artists\`, \`list_albums\`, \`list_labels\` walk the whole archive A to Z; \`list_artist_catalogue\`, \`list_label_catalogue\`, \`list_album_catalogue\` list one entity's tracks), and the writes (\`submit_track\`, \`subscribe_newsletter\`).
 - **Resources**: read the archive as a corpus, each finding at \`fluncle://finding/<logId>\` and each mixtape at \`fluncle://mixtape/<logId>\`, returning its public record.
 - **Prompts**: Fluncle-voiced starting points. \`recommend_finding\` (a finding for a mood), \`walk_recent_night\`, \`decode_coordinate\`.
 

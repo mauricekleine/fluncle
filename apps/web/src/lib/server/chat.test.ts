@@ -226,9 +226,12 @@ describe("buildChatTools — the MCP hands", () => {
       "get_status",
       "get_track",
       "list_album_catalogue",
+      "list_albums",
       "list_artist_catalogue",
+      "list_artists",
       "list_fresh",
       "list_label_catalogue",
+      "list_labels",
       "list_tracks",
       "search_archive",
       "submit_track",
@@ -803,7 +806,13 @@ describe("the catalogue browse tools — name → the unlit catalogue bucket (PR
     ] as const) {
       const result = await browseExecutor(name)({ name: "Nothing Of His" }, {} as never);
 
-      expect(result, name).toEqual({ catalogue: [], findings: [], ok: true });
+      expect(result, name).toEqual({
+        catalogue: [],
+        findings: [],
+        ok: true,
+        page: 1,
+        pageCount: 1,
+      });
     }
     // Not one of the reads was reached — an unresolved name never touches the anti-join.
     expect(listCatalogueTracksByAlbum).not.toHaveBeenCalled();

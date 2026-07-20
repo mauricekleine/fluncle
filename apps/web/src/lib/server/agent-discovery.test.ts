@@ -124,6 +124,26 @@ describe("handleAgentDiscovery — /llms.txt", () => {
   });
 });
 
+describe("handleAgentDiscovery — the fluncle-api SKILL.md tool list", () => {
+  it("derives its tool list from the live MCP tool set, so it can never go stale", async () => {
+    const { mcpToolNames } = await import("./mcp");
+    const res = await handleAgentDiscovery(
+      new Request("https://www.fluncle.com/.well-known/agent-skills/fluncle-api/SKILL.md"),
+    );
+    const body = (await res?.text()) ?? "";
+
+    expect(res?.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
+    // Every realized MCP tool name — including Slice F's browse tools — appears verbatim; a tool
+    // added or renamed shows up here without a hand-edit.
+    for (const name of mcpToolNames) {
+      expect(body, `SKILL.md is missing tool ${name}`).toContain(`\`${name}\``);
+    }
+    for (const name of ["list_artists", "list_albums", "list_labels"]) {
+      expect(mcpToolNames, `${name} should be a live MCP tool`).toContain(name);
+    }
+  });
+});
+
 describe("handleAgentDiscovery — the A2A agent card", () => {
   async function fetchCard(path: string) {
     const res = await handleAgentDiscovery(new Request(`https://www.fluncle.com${path}`));
