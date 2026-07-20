@@ -22,6 +22,11 @@ import { chromium } from "@playwright/test";
 import { BASE_URL } from "./stack";
 
 const MAX_ATTEMPTS = 5;
+// The FIRST load compiles the whole client module graph on demand, which on a CI
+// runner takes well over Playwright's 30s default navigation timeout. A page made
+// with `browser.newPage()` does not inherit the config's timeouts, so it is set
+// explicitly here — and a timeout is treated as "not settled yet", not as fatal.
+const WARM_UP_TIMEOUT_MS = 150_000;
 
 export default async function globalSetup(): Promise<void> {
   const browser = await chromium.launch();
@@ -36,9 +41,18 @@ export default async function globalSetup(): Promise<void> {
       };
 
       page.on("pageerror", onError);
-      await page.goto(BASE_URL, { waitUntil: "networkidle" });
-      // Let any post-load re-optimization surface before judging the attempt.
-      await page.waitForTimeout(500);
+
+      try {
+        await page.goto(BASE_URL, { timeout: WARM_UP_TIMEOUT_MS, waitUntil: "networkidle" });
+        // Let any post-load re-optimization surface before judging the attempt.
+        await page.waitForTimeout(500);
+      } catch (error) {
+        sawError = true;
+        console.log(
+          `e2e: warm-up load did not settle (${(error as Error).message.split("\n")[0]})`,
+        );
+      }
+
       page.off("pageerror", onError);
 
       if (!sawError) {
