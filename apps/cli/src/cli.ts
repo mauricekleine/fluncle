@@ -2504,20 +2504,11 @@ function addAdminCommands(program: Command): void {
       await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
     });
 
-  // `backfill_label_releases` → `admin backfills label-releases`. The freshness tap (D8): a bounded
-  // probe over ENABLED seed labels that mints day-one catalogue rows from Spotify's fresh releases
-  // (fuzzy `label:` search + copyrights post-filter), closing the ~2-week MusicBrainz-editorial-lag
-  // on /fresh. Catalogue identity only.
-  backfill
-    .command("label-releases")
-    .description("Tap Spotify's fresh releases for enabled seed labels into catalogue rows")
-    .option("--dry-run", "Report the labels that would be probed without any Spotify call", false)
-    .option("--limit <limit>", "Max enabled seed labels to probe per pass", "5")
-    .option("--json", "Print JSON", false)
-    .action(async (options: BackfillSyncOptions) => {
-      const { backfillLabelReleasesCommand } = await import("./commands/admin-tracks");
-      await runBackfillLabelReleases(options, backfillLabelReleasesCommand);
-    });
+  // The freshness tap (D8) has NO operator CLI command: it moved off the official Spotify budget
+  // onto the Apify actor `musicae~spotify-extended-scraper` (the anchor-sweep model), so the BOX runs
+  // the actor and POSTs candidates to the agent-tier verify+mint op directly — there is no Worker
+  // pass for a CLI to loop. Operate it via the box sweep (docs/agents/hermes/scripts/
+  // label-releases-sweep.sh), exactly like the catalogue anchor.
 
   // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
   // tables (artists + track_artists) for existing findings that predate Unit 1.
@@ -3841,121 +3832,6 @@ async function runBackfillAppleCatalogue(
 
   if (failed.length > 0) {
     process.exitCode = 1;
-  }
-}
-
-async function runBackfillLabelReleases(
-  options: BackfillSyncOptions,
-  backfillLabelReleasesCommand: typeof import("./commands/admin-tracks").backfillLabelReleasesCommand,
-): Promise<void> {
-  const perPass = parseListLimit(options.limit);
-  const newTrackIds: string[] = [];
-  const labelSlugs: string[] = [];
-  const failedLabels: string[] = [];
-  let dryRun = options.dryRun;
-  let throttled = false;
-  let configured = true;
-  let labelsProbed = 0;
-  let albumsSeen = 0;
-  let albumsMatched = 0;
-  let newRows = 0;
-  let skippedKnown = 0;
-  let skippedUngrounded = 0;
-  let failedFetches = 0;
-  let fetchCeilingHit = false;
-
-  // No cursor: each pass advances the probed labels' `label_releases_checked_at`, so the CLI loops
-  // until a pass probes nothing (the enabled labels are all fresh this window), Spotify throttles, or
-  // the grant is gone. The hard pass cap defends against a pathological loop (a pass probes ≥1 label
-  // when any is eligible, so ~ceil(enabledLabels / perPass) passes drain the window).
-  const MAX_PASSES = 100;
-
-  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
-    const result = await backfillLabelReleasesCommand(perPass, options.dryRun);
-    dryRun = result.dryRun;
-    configured = result.configured;
-    labelsProbed += result.labelsProbed;
-    albumsSeen += result.albumsSeen;
-    albumsMatched += result.albumsMatched;
-    newRows += result.newRows;
-    skippedKnown += result.skippedKnown;
-    skippedUngrounded += result.skippedUngrounded;
-    failedFetches += result.failedFetches;
-    fetchCeilingHit = fetchCeilingHit || result.fetchCeilingHit;
-    newTrackIds.push(...result.newTrackIds);
-    labelSlugs.push(...result.labelSlugs);
-    failedLabels.push(...result.failedLabels);
-
-    if (!options.json) {
-      const verb = result.dryRun ? "would probe" : "probed";
-      console.log(
-        `  …${verb} ${result.labelSlugs.length} label(s); ${result.albumsMatched} matched album(s); ${result.newRows} new; ${result.skippedKnown} known; ${result.skippedUngrounded} ungrounded; ${result.failedFetches} fetch-fail; ${result.failedLabels.length} search-fail`,
-      );
-    }
-
-    if (!result.configured) {
-      break;
-    }
-
-    if (result.rateLimited) {
-      throttled = true;
-      break;
-    }
-
-    // A dry run reports the eligible set once and does not advance any stamp, so a second pass would
-    // repeat it forever — stop after the single preview pass.
-    if (result.dryRun) {
-      break;
-    }
-
-    // A pass that probed no label drained the eligible worklist this window.
-    if (result.labelsProbed === 0) {
-      break;
-    }
-  }
-
-  if (options.json) {
-    printSweepJson(
-      {
-        albumsMatched,
-        albumsSeen,
-        configured,
-        dryRun,
-        failedFetches,
-        failedLabels,
-        fetchCeilingHit,
-        labelSlugs,
-        labelsProbed,
-        newRows,
-        newTrackIds,
-        rateLimited: throttled,
-        skippedKnown,
-        skippedUngrounded,
-      },
-      0,
-    );
-    return;
-  }
-
-  if (!configured) {
-    console.log(
-      "Label-releases tap is a no-op — the Worker's Spotify grant is gone; reconnect Spotify.",
-    );
-    return;
-  }
-
-  const verb = dryRun ? "Would probe" : "Probed";
-  const probedCount = dryRun ? labelSlugs.length : labelsProbed;
-  console.log(
-    `${verb} ${probedCount} enabled seed label(s); ${albumsMatched} matched album(s); ${newRows} new catalogue row(s); ${skippedKnown} already known; ${skippedUngrounded} dropped for no known artist; ${failedFetches} fetch-fail; ${failedLabels.length} search-fail.`,
-  );
-
-  if (fetchCeilingHit) {
-    console.log("  (a pass ended early on the single-fetch ceiling — resumes next tick)");
-  }
-
-  for (const slug of failedLabels) {
-    console.log(`  search error: ${slug}`);
   }
 }
 

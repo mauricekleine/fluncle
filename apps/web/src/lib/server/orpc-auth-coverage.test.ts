@@ -228,9 +228,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // facts + parent imprint onto the `labels` row (never mints a label, publishes nothing), so the
   // box's agent-token cron drives it, the `backfill_label_images` precedent.
   backfill_label_lineage: "admin",
-  // The freshness tap (D8) — agent tier (adminAuth only): internal metadata acquisition (mint
-  // day-one catalogue rows from Spotify's fresh releases for ENABLED seed labels, no publish, no
-  // certification), so the box's agent-token cron drives it, the `backfill_apple_catalogue` twin.
+  // The freshness tap (D8) — agent tier (adminAuth only): the verify+mint receiver for a seed
+  // label's Apify-supplied fresh releases (mint day-one catalogue rows, no publish, no
+  // certification), so the box's agent-token cron drives it, the `anchor_track` twin.
   backfill_label_releases: "admin",
   backfill_lastfm: "admin",
   // The MusicBrainz recording-MBID fill — agent tier (adminAuth only): the MusicBrainz identity
@@ -425,6 +425,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The open label-alias candidates the `/admin/labels` review section reads — admin tier
   // (agent-allowed), the list_labels_admin precedent. A pure read; it publishes nothing.
   list_label_aliases: "admin",
+  // The freshness tap's worklist (D8) — the enabled seed labels due for a fresh-release probe.
+  // Agent tier (adminAuth only): a READ of machine state the box's `fluncle-label-releases` sweep
+  // drains with its agent token, the `list_track_work` precedent. A pure read; it publishes nothing.
+  list_label_releases_work: "admin",
   // Every label with its crawl-seed state — admin tier (agent-allowed), the
   // list_galaxies_admin precedent: `?seedState=enabled` is the seed-set read the
   // catalogue crawler makes with its agent token. A pure read; it publishes nothing.

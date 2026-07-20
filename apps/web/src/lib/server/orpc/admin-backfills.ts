@@ -20,7 +20,7 @@ import {
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
-import { probeLabelReleases } from "../label-releases";
+import { listDueFreshnessLabels, mintLabelReleases } from "../label-releases";
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { resolveLabelLineage } from "../label-lineage";
@@ -163,36 +163,43 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/backfill/label-releases — agent tier (`adminAuth`): the FRESHNESS TAP (D8). A
-  // bounded probe over ENABLED seed labels that mints day-one catalogue rows from Spotify's fresh
-  // releases (fuzzy `label:` search + copyrights post-filter) — catalogue identity only (no publish,
-  // no certification, no graph expansion), so the box's agent-token cron drives it. Reuses the
-  // publish path's Spotify OAuth; a no-op until the operator has connected Spotify.
+  // GET /admin/backfill/label-releases/work — agent tier (`adminAuth`): the FRESHNESS TAP's worklist,
+  // the `list_track_work` precedent. The enabled seed labels DUE for a fresh-release probe (slug +
+  // name); the box's Apify sweep builds its `label:"<name>" tag:new` actor query off each. A pure read.
+  const listLabelReleasesWorkHandler = os.list_label_releases_work
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const labels = await listDueFreshnessLabels(input.limit);
+
+        return { labels, ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/backfill/label-releases — agent tier (`adminAuth`): the FRESHNESS TAP's verify+mint
+  // receiver (D8), the `anchor_track` precedent. The box ran the Apify actor for ONE enabled seed
+  // label and POSTs the result albums; the SERVER re-runs the full gate (grounding + attribution +
+  // dedupe) and mints the survivors as catalogue rows — catalogue identity only (no publish, no
+  // certification, no graph expansion), so the box's agent-token cron drives it. The Worker touches
+  // NO official Spotify API on this path; the tap is on Apify's separate budget.
   const backfillLabelReleasesHandler = os.backfill_label_releases
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
-        const { query } = input;
-        const result = await probeLabelReleases({
-          dryRun: parseBool(query.dryRun),
-          limit: parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
-        });
+        const result = await mintLabelReleases(input.labelSlug, input.candidates);
 
         return {
           albumsMatched: result.albumsMatched,
           albumsSeen: result.albumsSeen,
-          configured: result.configured,
-          dryRun: result.dryRun,
-          failedFetches: result.failedFetches,
-          failedLabels: result.failedLabels,
-          fetchCeilingHit: result.fetchCeilingHit,
-          labelSlugs: result.labelSlugs,
-          labelsProbed: result.labelsProbed,
+          found: result.found,
+          labelSlug: result.labelSlug,
           newRows: result.newRows,
           newTrackIds: result.newTrackIds,
           ok: true as const,
-          rateLimited: result.rateLimited,
           skippedKnown: result.skippedKnown,
+          skippedUnattributed: result.skippedUnattributed,
           skippedUngrounded: result.skippedUngrounded,
         };
       } catch (error) {
@@ -349,5 +356,6 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_label_releases: backfillLabelReleasesHandler,
     backfill_lastfm: backfillLastfmHandler,
     backfill_recording_mbids: backfillRecordingMbidsHandler,
+    list_label_releases_work: listLabelReleasesWorkHandler,
   };
 }
