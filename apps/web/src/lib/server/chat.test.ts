@@ -1078,18 +1078,100 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     expect(hasKeyDeep(withoutBio, "bio")).toBe(false);
   });
 
-  it("get_label returns found:false for a label with no certified finding on it", async () => {
+  it("get_label returns the UNLIT entity (name + catalogue, no findings) for a catalogue-only label", async () => {
+    // He has certified nothing on this label, but the label row EXISTS and carries records in the
+    // catalogue. The Unlit Rule silences uncertified TRACKS, never the label entity — so instead of
+    // the old found:false, get_label names the label and lists the records on it in the unlit
+    // register. Mirrors the get_artist unlit-entity behaviour exactly.
     getLabelBySlug.mockResolvedValue({
+      bio: "A young imprint out past the certified sectors.",
       id: "lbl-2",
-      logoImageUrl: undefined,
+      logoImageUrl: "https://found.example/empty-imprint.png",
       name: "Empty Imprint",
       slug: "empty-imprint",
     });
     getFindingsByLabel.mockResolvedValue([]);
+    getConfirmedAliasNames.mockResolvedValue(["Empty"]);
+    listLabelCatalogue.mockResolvedValue({
+      groups: [
+        {
+          name: "Some Artist",
+          recordCount: 1,
+          records: [
+            {
+              name: "Debut EP",
+              releaseDate: undefined,
+              slug: "debut-ep",
+              tracks: [
+                {
+                  artists: ["Some Artist"],
+                  spotifyUrl: "https://open.spotify.com/track/z",
+                  title: "Drift",
+                  trackId: "a",
+                },
+              ],
+            },
+          ],
+          slug: "some-artist",
+          truncated: false,
+        },
+      ],
+      page: 1,
+      pageCount: 1,
+      totalGroups: 1,
+      totalTracks: 1,
+    });
 
-    const result = await labelExecutor()({ name: "Empty Imprint" }, {} as never);
+    const result = (await labelExecutor()({ name: "Empty Imprint" }, {} as never)) as {
+      label: {
+        aliases?: string[];
+        bio?: string;
+        catalogue?: { release?: string; title: string }[];
+        findings?: unknown[];
+        name?: string;
+        slug?: string;
+      };
+    };
 
-    expect(result).toEqual({ found: false, ok: true });
+    // Not the old found:false — the entity resolves and names the label.
+    expect(result.label).toBeDefined();
+    expect(result.label.name).toBe("Empty Imprint");
+    expect(result.label.slug).toBe("empty-imprint");
+    // The catalogue is the SAME grouped read the /label page uses (name → slug → id → the read).
+    expect(listLabelCatalogue).toHaveBeenCalledWith("lbl-2", "name", 1);
+    expect(result.label.catalogue).toHaveLength(1);
+    const row = result.label.catalogue?.[0];
+    expect(row?.title).toBe("Drift");
+    expect(row?.release).toBe("Debut EP");
+    // An unlit row never carries a coordinate (the wire-level Unlit Rule).
+    expect(row).not.toHaveProperty("coordinate");
+    // Aliases + bio still ride (naming a label is always allowed); no findings, no findingCount.
+    expect(result.label.aliases).toEqual(["Empty"]);
+    expect(result.label.bio).toBe("A young imprint out past the certified sectors.");
+    expect(result.label).not.toHaveProperty("findingCount");
+    // dropEmpty strips the empty findings array, so the entity carries no findings at all.
+    expect(result.label.findings ?? []).toEqual([]);
+  });
+
+  it("get_label still names a resolved label even with an empty catalogue (never found:false)", async () => {
+    // A resolved label with neither findings nor catalogue is still NAMED — the entity carries its
+    // name (and aliases/bio when present), never the old found:false. Naming a label is allowed.
+    getLabelBySlug.mockResolvedValue({
+      id: "lbl-3",
+      logoImageUrl: undefined,
+      name: "Faint Imprint",
+      slug: "faint-imprint",
+    });
+    getFindingsByLabel.mockResolvedValue([]);
+    // listLabelCatalogue defaults to empty groups (beforeEach).
+
+    const result = (await labelExecutor()({ name: "Faint Imprint" }, {} as never)) as {
+      found?: boolean;
+      label?: { name?: string };
+    };
+
+    expect(result.found).toBeUndefined();
+    expect(result.label?.name).toBe("Faint Imprint");
   });
 
   it("never leaks a previewUrl onto a get_artist or get_label output (the token stays server-side)", async () => {

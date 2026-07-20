@@ -958,14 +958,41 @@ const getLabelTool = {
       return { found: false, ok: true };
     }
 
-    const certified = compactCertifiedFindings(await getFindingsByLabel(label.id));
+    const [certifiedFindings, aliases] = await Promise.all([
+      getFindingsByLabel(label.id),
+      getConfirmedAliasNames(label.id),
+    ]);
+    const certified = compactCertifiedFindings(certifiedFindings);
 
-    // A label Fluncle has no certified finding on is not something he speaks about.
+    // Naming a label is always allowed (the Unlit Rule silences uncertified TRACKS, never the label
+    // entity). When Fluncle has certified nothing on this label, hand back the UNLIT entity — its
+    // name, aliases, and bio, plus the records on it Fluncle knows are out there but has never
+    // certified — so the model can name the label and LIST its catalogue, never present them as one
+    // of Fluncle's Findings. The catalogue is the SAME grouped read the /label page uses, flattened
+    // to a bounded, coordinate-free row slice (the unlit register).
     if (certified.length === 0) {
-      return { found: false, ok: true };
-    }
+      const page = await listLabelCatalogue(label.id, CATALOGUE_SORT_DEFAULT, 1);
+      const catalogue = page.groups
+        .flatMap((group) =>
+          group.records.flatMap((record) =>
+            record.tracks.map((item) => catalogueItemToChat(item, { release: record.name })),
+          ),
+        )
+        .slice(0, CATALOGUE_BROWSE_LIMIT);
 
-    const aliases = await getConfirmedAliasNames(label.id);
+      return {
+        label: dropEmpty({
+          aliases,
+          bio: label.bio,
+          catalogue,
+          findings: [],
+          logoUrl: label.logoImageUrl,
+          name: label.name,
+          slug: label.slug,
+        }),
+        ok: true,
+      };
+    }
 
     return {
       label: dropEmpty({
