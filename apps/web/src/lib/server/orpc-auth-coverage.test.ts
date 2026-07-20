@@ -208,6 +208,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // metadata enrichment (resolve each finding's Apple Music URL EXACTLY by ISRC, no
   // publish), so the box's agent-token cron drives it, the `backfill_discogs` precedent.
   backfill_apple_music: "admin",
+  // The track_artists graph backfill (RFC artist-primary-capture, slice 0) — agent tier (adminAuth
+  // only): folds artists_json names onto existing artist identities, mints nothing, publishes
+  // nothing, so the box's agent-token `fluncle-artist-edges` cron drives it.
+  backfill_artist_edges: "admin",
   // The artist-avatar backfill — agent tier (adminAuth only): internal + reversible
   // enrichment (fetch each artist's Spotify image), same tier as backfill_artists.
   backfill_artist_images: "admin",

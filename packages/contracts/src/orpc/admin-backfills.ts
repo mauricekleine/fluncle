@@ -654,10 +654,68 @@ export const backfillRecordingMbids = oc
     }),
   );
 
+/**
+ * `backfill_artist_edges` → `POST /admin/backfill/artist-edges` (operationId
+ * `backfillArtistEdges`).
+ *
+ * Agent tier (`adminAuth`): the track_artists graph backfill (RFC artist-primary-capture, slice 0).
+ * It folds each edge-less track's `artists_json` NAMES onto EXISTING `artists` rows — exact
+ * case-insensitive fold, then `artist_aliases` (auto|confirmed) — and writes the `track_artists`
+ * edges `insert or ignore`. It MINTS NOTHING (a bare name is not enough identity), makes NO vendor
+ * call (pure DB matching), and stamps every visited track (`artist_edges_backfilled_at`) so the
+ * worklist drains and a re-run is a no-op — catalogue-graph identity only (no publish, no
+ * certification), so the box's agent-token cron drives it, the `backfill_recording_mbids` precedent.
+ * Returns `{ ok, dryRun, scanned, edgesWritten, fullyMatched(+Count), partiallyMatched(+Count),
+ * zeroMatched(+Count), unmatchedNames, nextCursor }` — `unmatchedNames` is the residual (credited
+ * names with no identity) a future paced MusicBrainz credit-sweep would mint from.
+ */
+export const backfillArtistEdges = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillArtistEdges",
+    path: "/admin/backfill/artist-edges",
+    summary: "Fold artists_json names onto existing artist identities → track_artists (batched)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      // `track_artists` edges written this pass (or, in a dry run, the count that WOULD be written).
+      edgesWritten: z.number(),
+      // Track ids where EVERY credited name matched an existing identity.
+      fullyMatched: z.array(z.string()),
+      fullyMatchedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      // Track ids where SOME names matched and some did not — their unmatched names feed the residual.
+      partiallyMatched: z.array(z.string()),
+      partiallyMatchedCount: z.number(),
+      // Tracks VISITED this pass (fully + partially + zero) — the CLI loop's cap unit.
+      scanned: z.number(),
+      // Total credited names across the batch that matched NO identity — the residual a future paced
+      // MusicBrainz credit-sweep would mint from.
+      unmatchedNames: z.number(),
+      // Track ids where NO credited name matched an identity.
+      zeroMatched: z.array(z.string()),
+      zeroMatchedCount: z.number(),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_apple_catalogue: backfillAppleCatalogue,
   backfill_apple_music: backfillAppleMusic,
+  backfill_artist_edges: backfillArtistEdges,
   backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,

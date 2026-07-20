@@ -2585,6 +2585,22 @@ function addAdminCommands(program: Command): void {
       await runBackfillRecordingMbids(options, backfillRecordingMbidsCommand);
     });
 
+  // `backfill_artist_edges` → `admin backfills artist-edges`. The track_artists graph backfill (RFC
+  // artist-primary-capture, slice 0): folds each edge-less track's artists_json NAMES onto EXISTING
+  // artist identities (exact fold + artist_aliases) and writes the edges. No vendor call, mints
+  // nothing. Default `--limit` EQUALS the op's server MAX_BATCH (200) so the cursor loop fires one
+  // HTTP request per tick.
+  backfill
+    .command("artist-edges")
+    .description("Fold artists_json names onto existing artist identities → track_artists")
+    .option("--dry-run", "Report the classification without writing edges or stamps", false)
+    .option("--limit <limit>", "Max tracks to visit", "200")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillArtistEdgesCommand } = await import("./commands/admin-tracks");
+      await runBackfillArtistEdges(options, backfillArtistEdgesCommand);
+    });
+
   // `backfill_cover_masters` → `admin backfills cover-masters --kind album|artist`. Gives each
   // album/artist its OWN ≤1200²-capped cover master (best source wins), downloaded once into R2,
   // instead of hotlinking a third party. The box cron runs both kinds per tick.
@@ -4310,6 +4326,75 @@ async function runBackfillRecordingMbids(
   if (failed.length > 0) {
     process.exitCode = 1;
   }
+}
+
+// `admin backfills artist-edges`: one bounded pass of the track_artists graph backfill (RFC
+// artist-primary-capture, slice 0). The Worker folds each edge-less track's artists_json names onto
+// EXISTING artist identities (exact fold + artist_aliases) and writes the edges — no vendor call,
+// mints nothing. The cap is on tracks VISITED; the loop drains the track-id cursor until the cap is
+// met or the worklist is exhausted. `--limit` defaults to the op's server MAX_BATCH (200), so a full
+// first page equals the limit and the loop stops after ONE HTTP request.
+async function runBackfillArtistEdges(
+  options: BackfillSyncOptions,
+  backfillArtistEdgesCommand: typeof import("./commands/admin-tracks").backfillArtistEdgesCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit) ?? 200;
+  const fullyMatched: string[] = [];
+  const partiallyMatched: string[] = [];
+  const zeroMatched: string[] = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let edgesWritten = 0;
+  let scanned = 0;
+  let unmatchedNames = 0;
+
+  while (scanned < limit) {
+    const remaining = limit - scanned;
+    const result = await backfillArtistEdgesCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    scanned += result.scanned;
+    edgesWritten += result.edgesWritten;
+    unmatchedNames += result.unmatchedNames;
+    fullyMatched.push(...result.fullyMatched);
+    partiallyMatched.push(...result.partiallyMatched);
+    zeroMatched.push(...result.zeroMatched);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would write" : "wrote";
+      console.log(
+        `  …visited ${result.scanned}; ${verb} ${result.edgesWritten} edge(s); ${result.fullyMatchedCount} full, ${result.partiallyMatchedCount} partial, ${result.zeroMatchedCount} zero; ${result.unmatchedNames} name(s) unmatched`,
+      );
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printJson({
+      dryRun,
+      edgesWritten,
+      fullyMatched,
+      fullyMatchedCount: fullyMatched.length,
+      ok: true,
+      partiallyMatched,
+      partiallyMatchedCount: partiallyMatched.length,
+      scanned,
+      unmatchedNames,
+      zeroMatched,
+      zeroMatchedCount: zeroMatched.length,
+    });
+
+    return;
+  }
+
+  const verb = dryRun ? "Would write" : "Wrote";
+  console.log(
+    `${verb} ${edgesWritten} track_artists edge(s) over ${scanned} track(s): ${fullyMatched.length} fully matched, ${partiallyMatched.length} partially, ${zeroMatched.length} with none; ${unmatchedNames} credited name(s) left unmatched.`,
+  );
 }
 
 // `admin artists resolve --queue`: the resolve worklist (artists awaiting social
