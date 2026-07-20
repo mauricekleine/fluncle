@@ -247,7 +247,10 @@ export const setPublishAdvance = oc
  * — append-only (velocity), idempotent per day (a same-day re-run lands `inserted: 0`). Bounded to
  * ≤25 Postiz requests/run (the platform's 30/hour cap). It also reads the Simple-Analytics
  * social→site referrer arrivals (best-effort, one non-Postiz request), returned for observability.
- * Internal write only (no public lastmod moves). Returns the per-run outcome.
+ * When @fluncle's TikTok account is connected it additionally reads `POST /v2/video/list/` and
+ * appends each video's OWN metrics under the `tiktok_display` source (independent of Postiz; a clean
+ * no-op when TikTok is unconfigured/unconnected). Internal write only (no public lastmod moves).
+ * Returns the per-run outcome.
  */
 export const recordSocialMetrics = oc
   .route({
@@ -282,6 +285,20 @@ export const recordSocialMetrics = oc
         arrivals: z.array(z.object({ pageviews: z.number().int(), platform: z.string() })),
         configured: z.boolean(),
         total: z.number().int(),
+      }),
+      /** The TikTok Display-API half — @fluncle's own per-video metrics into the `tiktok_display`
+       *  source. All zero + `configured: false` when TikTok is unconfigured/unconnected (no-op). */
+      tiktok: z.object({
+        /** TikTok is configured (creds set) AND connected (a `tiktok_auth` row exists). */
+        configured: z.boolean(),
+        /** Videos read from `video/list` this run. */
+        fetched: z.number().int(),
+        /** Snapshot rows appended (0 on a same-day re-run — idempotent by day). */
+        inserted: z.number().int(),
+        /** Fetched videos matched to a published tiktok post by native video id. */
+        matched: z.number().int(),
+        /** Fetched videos with no matching post row (may predate the archive) — skipped. */
+        skipped: z.number().int(),
       }),
     }),
   );

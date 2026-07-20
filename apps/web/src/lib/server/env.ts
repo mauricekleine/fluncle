@@ -106,9 +106,20 @@ const envKeys = [
   // developer console.
   "TWITCH_CLIENT_ID",
   "TWITCH_CLIENT_SECRET",
-  // TikTok — Display API `user.info.stats` (own account only) for follower + likes
-  // totals. `client_key`/`client_secret` from the TikTok developer app (note TikTok's
-  // "client_key", not "client_id").
+  // TikTok — the Display API OAuth (Login Kit v2), our own connect for @fluncle. The
+  // daily social-metrics snapshot reads `POST /v2/video/list/` PER-VIDEO metrics into the
+  // `social_metrics` ledger under the `tiktok_display` source (TikTok's own authoritative
+  // numbers, alongside the Postiz source). CHANNEL-level TikTok stats are NOT read here —
+  // the /reach collector already gets those via Postiz (platform-stats.ts `collectTiktok`),
+  // so this leg is per-video only, no duplication. TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET
+  // are the TikTok developer app's credentials (note TikTok's "client_key", not
+  // "client_id"); TIKTOK_REDIRECT_URI is the exact registered callback URL
+  // (…/api/admin/tiktok/auth/callback). All three read via readOptionalEnv, so the whole
+  // leg is a clean NO-OP until they are set AND the operator connects — exactly like the
+  // Twitch/Instagram reach legs. Sandbox vs production is a pure SECRET SWAP (same code).
+  "TIKTOK_CLIENT_KEY",
+  "TIKTOK_CLIENT_SECRET",
+  "TIKTOK_REDIRECT_URI",
   // Instagram — the "Instagram API with Instagram Login" business flow (NOT the
   // Facebook-Login variant), `instagram_business_basic` scope → `followers_count`. The
   // Instagram App ID/Secret from the Meta app dashboard. The stored token is a 60-day

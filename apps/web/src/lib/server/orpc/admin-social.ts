@@ -424,6 +424,13 @@ export function adminSocialHandlers(os: Implementer) {
           configured: result.referrals.configured,
           total: result.referrals.total,
         },
+        tiktok: {
+          configured: result.tiktok.configured,
+          fetched: result.tiktok.fetched,
+          inserted: result.tiktok.inserted,
+          matched: result.tiktok.matched,
+          skipped: result.tiktok.skipped,
+        },
       };
     } catch (error) {
       throw toFault(error);

@@ -1861,6 +1861,14 @@ function addAdminCommands(program: Command): void {
     });
 
   auth
+    .command("tiktok")
+    .description("Authorize TikTok access (Display API per-video metrics)")
+    .action(async () => {
+      const { authTikTokCommand } = await import("./commands/auth-tiktok");
+      await authTikTokCommand();
+    });
+
+  auth
     .command("lastfm")
     .description(
       "Authorize Last.fm access (love-on-add). Run once for the URL, then again with --token",
