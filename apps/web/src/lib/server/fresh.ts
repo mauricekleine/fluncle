@@ -26,7 +26,7 @@
 // complement for the unlit half — is the same structural guard the rest of `tracks.ts` uses:
 // a catalogue row has no `findings` columns to map, so it cannot leak into a finding surface.
 
-import { bestArtistAvatarUrl } from "../media";
+import { bestAlbumCoverUrl, bestArtistAvatarUrl } from "../media";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
@@ -118,8 +118,9 @@ export type FreshSection = {
 export type FreshRecord = {
   /** The credited artists, folded distinct across the record's fresh tracks. */
   artists: string[];
-  /** The record's own cover art (any of its tracks' album art) — a raw provider URL, resized at
-      render via {@link albumCoverAtSize}. Undefined when no track on the record carries art. */
+  /** The record's cover: its OWNED ≤1200² master through the Cloudflare Images ladder when the
+      cover-masters sweep has resolved one, else the raw provider art off one of its tracks. Either
+      way `albumCoverAtSize` takes it down to the render rung. Undefined when the record has neither. */
   coverImageUrl: string | undefined;
   name: string;
   releaseDate: string;
@@ -153,6 +154,9 @@ type FreshCatalogueRow = LeadArtistRow & {
 type FreshRecordRow = {
   artists: string | null;
   cover_url: string | null;
+  image_key: string | null;
+  image_state: string | null;
+  image_updated_at: string | null;
   name: string;
   release_date: string;
   slug: string;
@@ -224,12 +228,22 @@ export async function listFreshReleases(
     // JSON is touched, and the aggregation stays in SQL (AGENTS.md: never fold a growing table in the
     // isolate). `group_concat(distinct …)` folds the credited artists across the record's fresh rows,
     // and `count(distinct tracks.track_id)` counts the tracks (never the artist-multiplied join rows).
+    //
+    // THE COVER comes off the ALBUM ENTITY first: `al.image_key`/`image_state`/`image_updated_at`
+    // are the album's OWN columns (grouped by `al.id`, so they are constant across the group — the
+    // `listAlbumsWithFindingCounts` shape), and `bestAlbumCoverUrl` serves the owned ≤1200² master
+    // through the Cloudflare Images ladder when the sweep has resolved one. The correlated
+    // `album_image_url` subquery stays as the FALLBACK for a record with no master yet — and
+    // because the master rides the album row rather than a second subquery, the two can never pair
+    // one record's master with another's fallback. See docs/album-artwork.md.
     db.execute({
       args: [recordsWindowStart, today, FRESH_RECORDS_LIMIT],
       sql: `select al.slug as slug, min(al.name) as name,
                    max(tracks.release_date) as release_date,
                    count(distinct tracks.track_id) as track_count,
                    group_concat(distinct credit.value) as artists,
+                   al.image_key as image_key, al.image_state as image_state,
+                   al.image_updated_at as image_updated_at,
                    (select t2.album_image_url
                       from tracks t2
                       where t2.album_id = al.id and t2.album_image_url is not null
@@ -268,7 +282,12 @@ export async function listFreshReleases(
       .split(",")
       .map((name) => name.trim())
       .filter(Boolean),
-    coverImageUrl: row.cover_url ?? undefined,
+    coverImageUrl: bestAlbumCoverUrl({
+      imageKey: row.image_key,
+      imageState: row.image_state,
+      imageUpdatedAt: row.image_updated_at,
+      spotifyUrl: row.cover_url,
+    }),
     name: row.name,
     releaseDate: row.release_date,
     slug: row.slug,

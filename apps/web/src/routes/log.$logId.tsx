@@ -17,8 +17,9 @@ import { LogObservation } from "@/components/log/log-observation";
 import { MixtapeVideoPlayer } from "@/components/mixtape-video-player";
 import { SaveFindingButton } from "@/components/save-finding-button";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { SubscribeDialog } from "@/components/subscribe-dialog";
 import { Button } from "@fluncle/ui/components/button";
-import { siteUrl } from "@/lib/fluncle-links";
+import { siteUrl, spotifyPlaylistUrl } from "@/lib/fluncle-links";
 import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
@@ -584,6 +585,41 @@ function LogPage() {
             </ul>
           </section>
         ) : undefined}
+
+        {/*
+          The trail handoff. A finding is one waypoint on the trail Fluncle leaves for the
+          crew (LORE.md); this block hands the arriving reader the way onward — the whole
+          run (the Spotify playlist, the highest-value zero-login return) and the mothership
+          (the Friday newsletter, reusing the ratified SubscribeDialog + its canon copy). It
+          sits AFTER the finding and "Close in sound", never above the video: the music-first
+          hierarchy leads, the trail follows. No banner, no gradient — a quiet line in the
+          plate flow, the buttons carrying the literal actions per the Chrome Rule.
+        */}
+        <section aria-label="Follow the trail" className="log-trail">
+          <p className="log-trail-lede">
+            You&rsquo;ve landed on one waypoint. I keep the rest of the trail on the playlist, and I
+            send fresh bangers out every Friday.
+          </p>
+          <div className="log-actions">
+            <Button
+              nativeButton={false}
+              render={
+                <a
+                  aria-label="Fluncle playlist on Spotify"
+                  href={spotifyPlaylistUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                />
+              }
+              size="lg"
+              variant="outline"
+            >
+              <BrandIcon icon={siSpotify} />
+              Playlist
+            </Button>
+            <SubscribeDialog label="Newsletter" />
+          </div>
+        </section>
 
         {/*
           The old "More in the {galaxy} galaxy" related row is removed (browse-by-feel
