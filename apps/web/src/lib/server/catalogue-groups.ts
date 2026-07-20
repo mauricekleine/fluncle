@@ -74,6 +74,27 @@
 // ONE nameless group, forced last under every sort, rendered with NO HEADING — bare unlit
 // rows, exactly as the flat list always did. There is no honest name for a bucket of tracks
 // whose record we do not know, so it is given none.
+//
+// ── ONE STATEMENT, ONE WALK ────────────────────────────────────────────────────────────
+// Both reads used to arrive in WAVES: the artist page ran a `group by` for the page of groups
+// and then a second statement for those groups' tracks; the label page ran three (a total, the
+// groups, the tracks). Every one of those waves is a Worker→Turso→Ireland round trip, and
+// `explain query plan` showed each wave repeating the SAME indexed walk of the entity's rows
+// (`track_artists_artist_id_idx` / `tracks_label_id_idx`) — the group-key filter on the second
+// wave is `lower(coalesce(album, ''))`, an expression no index can seek, so it never bounded
+// anything. Two waves, twice the walk, and the artist page's cost tracked discography size.
+//
+// So both reads are now ONE statement that walks the entity's rows ONCE. The group aggregates
+// that the `group by` used to produce come from WINDOWS over that single walk instead
+// (`min(…) over (partition by group_key)`), the page of groups is cut by `dense_rank()` over
+// the same group order rather than `limit`/`offset`, and the per-group cap stays exactly where
+// it was — a `row_number()` partition, applied in the same `where` as the group window. The
+// caps, the order, the totals and the pager are unchanged; the wire carries the same ≤
+// `GRAPH_GROUP_ROW_CEILING` rows. What changed is that it takes one trip to Ireland, not two.
+//
+// Nothing is materialised into a temp table on the way: each CTE level is referenced exactly
+// once, so there is no CTE-flattening re-execution to guard against and no copy of a growing
+// row set into temp storage (the trap docs/local-database.md records).
 
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
@@ -157,17 +178,6 @@ export type CatalogueGroupPage<TGroup> = {
   totalTracks: number;
 };
 
-type GroupRow = {
-  group_key: string;
-  name: string;
-  record_count: number;
-  release_date: string | null;
-  slug: string | null;
-  total_groups: number;
-  total_tracks: number;
-  track_count: number;
-};
-
 type GroupTrackRow = {
   album: string | null;
   album_slug: string | null;
@@ -178,6 +188,28 @@ type GroupTrackRow = {
   spotify_url: string | null;
   title: string;
   track_id: string;
+};
+
+/**
+ * One rendered row, carrying its GROUP's aggregates alongside its own columns — the shape the
+ * single-statement read returns. The group columns repeat down every row of a group (a window
+ * produced them, not a `group by`), which is what lets one statement answer both questions.
+ */
+type GroupedTrackRow = GroupTrackRow & {
+  /** The group's rendered name — `''` for the artist page's nameless bucket. */
+  group_name: string;
+  /** The newest release on the whole group — the group's sort key and rendered date. */
+  group_release_date: string | null;
+  /** `/album/<slug>` or `/artist/<slug>` for the group's heading, when an entity exists. */
+  group_slug: string | null;
+  /** How many records the WHOLE group carries (the label page's `recordCount`). */
+  record_count: number;
+  /** Every group the entity carries, counted over the whole walk. */
+  total_groups: number;
+  /** Every uncertified track the entity carries, counted over the whole walk. */
+  total_tracks: number;
+  /** How many rows the WHOLE group carries, before the per-group cap. */
+  track_count: number;
 };
 
 /** The recording identity a loaded catalogue row exposes to the render-time dedupe fold. */
@@ -196,25 +228,46 @@ function groupRowIdentity(row: GroupTrackRow): RecordingIdentity {
  * The group ORDER, in SQL. Both sorts force the nameless bucket last, and both put undated
  * groups after dated ones — a group's date is the NEWEST release on it, so an artist whose
  * every release is undated sorts to the back rather than (as SQLite would have it) the front.
- * Ordering by the SELECT's own aliases, which SQLite resolves after grouping.
+ *
+ * It reads the group's WINDOWED aggregates (`group_name` / `group_release_date`), which repeat
+ * down every row of the group, so the same expression that once ordered a `group by` result now
+ * ranks the rows of one walk.
  */
 function groupOrderSql(sort: CatalogueSort): string {
   const namelessLast = `(group_key = '') asc`;
 
   return sort === "recent"
-    ? `${namelessLast}, (release_date is null) asc, release_date desc, name collate nocase asc`
-    : `${namelessLast}, name collate nocase asc`;
+    ? `${namelessLast}, (group_release_date is null) asc, group_release_date desc,
+       group_name collate nocase asc`
+    : `${namelessLast}, group_name collate nocase asc`;
 }
 
-/** The order WITHIN a group — the same rule, so a truncated group drops its tail, not its head. */
-function trackOrderSql(sort: CatalogueSort): string {
-  const namelessRecordLast = `(tracks.album is null) asc`;
+/**
+ * The group order with a STRICT tiebreaker, for the `dense_rank()` that cuts the page.
+ *
+ * A rank is what pagination keys off, so two different groups must never share one: `group_key`
+ * is the group's identity, so appending it makes the order total. It can only ever break an
+ * exact tie — a pair the old `limit`/`offset` ordered arbitrarily — so the page a reader sees is
+ * unchanged and the pager is now stable across requests, which is the whole point of A–Z.
+ */
+function groupRankOrderSql(sort: CatalogueSort): string {
+  return `${groupOrderSql(sort)}, group_key asc`;
+}
+
+/**
+ * The order WITHIN a group — the same rule, so a truncated group drops its tail, not its head.
+ * `prefix` qualifies the track's own columns, which live on the walk's CTE rather than on
+ * `tracks` once the read is one statement.
+ */
+function trackOrderSql(sort: CatalogueSort, prefix: string): string {
+  const namelessRecordLast = `(${prefix}album is null) asc`;
 
   return sort === "recent"
-    ? `${namelessRecordLast}, (tracks.release_date is null) asc, tracks.release_date desc,
-       tracks.album collate nocase asc, tracks.title collate nocase asc`
-    : `${namelessRecordLast}, tracks.album collate nocase asc,
-       (tracks.release_date is null) asc, tracks.release_date asc, tracks.title collate nocase asc`;
+    ? `${namelessRecordLast}, (${prefix}release_date is null) asc, ${prefix}release_date desc,
+       ${prefix}album collate nocase asc, ${prefix}title collate nocase asc`
+    : `${namelessRecordLast}, ${prefix}album collate nocase asc,
+       (${prefix}release_date is null) asc, ${prefix}release_date asc,
+       ${prefix}title collate nocase asc`;
 }
 
 function toTrack(row: GroupTrackRow): CatalogueTrackItem {
@@ -248,33 +301,61 @@ export async function listArtistCatalogue(
   page: number,
 ): Promise<CatalogueGroupPage<CatalogueRecord>> {
   const db = await getDb();
+  const offset = (page - 1) * GRAPH_GROUP_PAGE_SIZE;
 
-  // The record groups, ordered + windowed in SQL. `count(*) over ()` runs AFTER `group by`, so
-  // it counts GROUPS; `sum(count(*)) over ()` totals the tracks across every group. One round
-  // trip brings back the page, the group total AND the honest track total, and the groups past
-  // the window never cross the wire.
+  // ONE walk of the artist's rows, through the indexed `track_artists.artist_id` seek. `base`
+  // is that walk; `ranked` hangs the record's aggregates off it as windows and caps each record
+  // at `GRAPH_GROUP_TRACK_LIMIT` rows; `paged` ranks the records in the reader's order; and
+  // `counted` reads the record total off that rank. The final `where` is where both bounds land
+  // at once — the page of records AND the per-record cap — so nothing past either crosses the
+  // wire. `count(*) over ()` in `ranked` runs over the walk, so it is the honest TRACK total.
   const result = await db.execute({
-    args: [artistId, GRAPH_GROUP_PAGE_SIZE, (page - 1) * GRAPH_GROUP_PAGE_SIZE],
-    sql: `select lower(coalesce(tracks.album, '')) as group_key,
-                 coalesce(min(tracks.album), '') as name,
-                 min(al.slug) as slug,
-                 max(tracks.release_date) as release_date,
-                 count(*) as track_count,
-                 1 as record_count,
-                 count(*) over () as total_groups,
-                 sum(count(*)) over () as total_tracks
-          from tracks
-          join track_artists ta on ta.track_id = tracks.track_id
-          left join findings on findings.track_id = tracks.track_id
-          left join albums al on al.id = tracks.album_id
-          where ta.artist_id = ? and findings.track_id is null
-                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
-          group by lower(coalesce(tracks.album, ''))
-          order by ${groupOrderSql(sort)}
-          limit ? offset ?`,
+    args: [artistId, GRAPH_GROUP_TRACK_LIMIT, offset, offset + GRAPH_GROUP_PAGE_SIZE],
+    sql: `with base as (
+            select tracks.track_id as track_id, tracks.title as title,
+                   tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
+                   tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
+                   tracks.release_date as release_date,
+                   lower(coalesce(tracks.album, '')) as group_key
+            from tracks
+            join track_artists ta on ta.track_id = tracks.track_id
+            left join findings on findings.track_id = tracks.track_id
+            left join albums al on al.id = tracks.album_id
+            where ta.artist_id = ? and findings.track_id is null
+                  and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+          ),
+          ranked as (
+            select base.*,
+                   coalesce(min(base.album) over (partition by base.group_key), '') as group_name,
+                   min(base.album_slug) over (partition by base.group_key) as group_slug,
+                   max(base.release_date) over (partition by base.group_key)
+                     as group_release_date,
+                   count(*) over (partition by base.group_key) as track_count,
+                   1 as record_count,
+                   count(*) over () as total_tracks,
+                   row_number() over (
+                     partition by base.group_key
+                     order by ${trackOrderSql(sort, "base.")}
+                   ) as rn
+            from base
+          ),
+          paged as (
+            select ranked.*,
+                   dense_rank() over (order by ${groupRankOrderSql(sort)}) as group_rn
+            from ranked
+          ),
+          counted as (
+            select paged.*, max(paged.group_rn) over () as total_groups from paged
+          )
+          select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 release_date, group_key, group_name, group_slug, group_release_date,
+                 track_count, record_count, total_tracks, total_groups
+          from counted
+          where rn <= ? and group_rn > ? and group_rn <= ?
+          order by group_rn asc, rn asc`,
   });
 
-  const rows = typedRows<GroupRow>(result.rows);
+  const rows = typedRows<GroupedTrackRow>(result.rows);
 
   if (rows.length === 0) {
     if (page > 1) {
@@ -285,26 +366,16 @@ export async function listArtistCatalogue(
   }
 
   const totalGroups = Number(rows[0]?.total_groups ?? 0);
-  const tracks = await fetchGroupTracks(
-    `join track_artists ta on ta.track_id = tracks.track_id`,
-    `ta.artist_id = ?`,
-    artistId,
-    `lower(coalesce(tracks.album, ''))`,
-    rows.map((row) => row.group_key),
-    sort,
-  );
-  const byRecord = groupBy(tracks, (row) => row.group_key);
   let removed = 0;
-  const groups = rows.map((row) => {
-    const held = byRecord.get(row.group_key) ?? [];
+  const groups = intoGroups(rows).map(({ head, rows: held }) => {
     const deduped = dedupeByRecordingIdentity(held, groupRowIdentity);
 
     removed += held.length - deduped.length;
 
     return {
-      name: row.name === "" ? undefined : row.name,
-      releaseDate: row.release_date ?? undefined,
-      slug: row.slug ?? undefined,
+      name: head.group_name === "" ? undefined : head.group_name,
+      releaseDate: head.group_release_date ?? undefined,
+      slug: head.group_slug ?? undefined,
       tracks: deduped.map(toTrack),
     };
   });
@@ -349,76 +420,118 @@ export async function listLabelCatalogue(
   page: number,
 ): Promise<CatalogueGroupPage<CatalogueArtistGroup>> {
   const db = await getDb();
+  const offset = (page - 1) * GRAPH_GROUP_PAGE_SIZE;
 
-  // The label's TRUE uncertified total, counted over TRACKS — never over the exploded credits
-  // below (a two-artist track is two credit rows and one track). The thin-content gate keys off
-  // this number, so it has to be the honest one.
-  const totals = await db.execute({
-    args: [labelId],
-    sql: `select count(*) as total_tracks
-          from tracks
-          left join findings on findings.track_id = tracks.track_id
-          where tracks.label_id = ? and findings.track_id is null
-                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`,
-  });
-  const totalTracks = Number(
-    typedRows<{ total_tracks: number }>(totals.rows)[0]?.total_tracks ?? 0,
-  );
-
+  // ONE walk of the label's rows — the `tracks.label_id` seek, exploded through `json_each`
+  // exactly once instead of once per wave. The levels mirror the artist read; two of them earn
+  // their keep here specifically:
+  //
+  //   - `record_count` is a count of DISTINCT records, and SQLite has no `count(distinct …)`
+  //     window. `dense_rank()` over the record key inside the artist's partition numbers the
+  //     records 1…n, so its MAX over that partition IS the distinct count — over the whole
+  //     group, before the cap, exactly as the old `count(distinct …)` was.
+  //   - `artist_slug` joins `artist_slugs`, a name-folded view of `artists`, not `artists`
+  //     itself. Two artist entities can carry the same name (the crawler mints one per stable
+  //     Spotify id), and joining the raw table multiplies the credit row by however many of them
+  //     there are — harmless under a `group by`, but this statement carries the TRACK rows too,
+  //     so a bare join would render a track twice and inflate the group's counts. Folding first
+  //     picks the same slug the old `min(a.slug)` did and multiplies nothing. It is a join
+  //     rather than a per-row subquery on purpose: `artists.name` has no NOCASE index, so the
+  //     planner builds ONE transient index for the join, where a subquery would re-scan
+  //     `artists` for every credit on the label.
+  //   - `total_tracks` is the label's TRUE uncertified total, counted over TRACKS and never
+  //     over the exploded credits (a two-artist track is two credit rows and one track). It
+  //     stays its own uncorrelated count — SQLite evaluates it once — so the thin-content gate
+  //     keeps the honest number without costing a second trip to Ireland.
   const result = await db.execute({
-    args: [labelId, GRAPH_GROUP_PAGE_SIZE, (page - 1) * GRAPH_GROUP_PAGE_SIZE],
-    sql: `select lower(credit.value) as group_key,
-                 min(credit.value) as name,
-                 min(a.slug) as slug,
-                 max(tracks.release_date) as release_date,
-                 count(*) as track_count,
-                 count(distinct lower(coalesce(tracks.album, ''))) as record_count,
-                 count(*) over () as total_groups,
-                 0 as total_tracks
-          from tracks
-          left join findings on findings.track_id = tracks.track_id
-          join json_each(tracks.artists_json) credit
-          left join artists a on a.name = credit.value collate nocase
-          where tracks.label_id = ? and findings.track_id is null
-                and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
-          group by lower(credit.value)
-          order by ${groupOrderSql(sort)}
-          limit ? offset ?`,
+    args: [labelId, labelId, GRAPH_GROUP_TRACK_LIMIT, offset, offset + GRAPH_GROUP_PAGE_SIZE],
+    sql: `with artist_slugs as (
+            select a.name as name, min(a.slug) as slug
+            from artists a
+            group by a.name collate nocase
+          ),
+          base as (
+            select tracks.track_id as track_id, tracks.title as title,
+                   tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
+                   tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
+                   tracks.release_date as release_date,
+                   lower(credit.value) as group_key, credit.value as credit_name,
+                   asl.slug as artist_slug
+            from tracks
+            left join findings on findings.track_id = tracks.track_id
+            join json_each(tracks.artists_json) credit
+            left join artist_slugs asl on asl.name = credit.value collate nocase
+            left join albums al on al.id = tracks.album_id
+            where tracks.label_id = ? and findings.track_id is null
+                  and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+          ),
+          ranked as (
+            select base.*,
+                   min(base.credit_name) over (partition by base.group_key) as group_name,
+                   min(base.artist_slug) over (partition by base.group_key) as group_slug,
+                   max(base.release_date) over (partition by base.group_key)
+                     as group_release_date,
+                   count(*) over (partition by base.group_key) as track_count,
+                   dense_rank() over (
+                     partition by base.group_key
+                     order by lower(coalesce(base.album, ''))
+                   ) as record_rank,
+                   row_number() over (
+                     partition by base.group_key
+                     order by ${trackOrderSql(sort, "base.")}
+                   ) as rn
+            from base
+          ),
+          paged as (
+            select ranked.*,
+                   max(ranked.record_rank) over (partition by ranked.group_key) as record_count,
+                   dense_rank() over (order by ${groupRankOrderSql(sort)}) as group_rn
+            from ranked
+          ),
+          counted as (
+            select paged.*, max(paged.group_rn) over () as total_groups from paged
+          )
+          select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 release_date, group_key, group_name, group_slug, group_release_date,
+                 track_count, record_count, total_groups,
+                 (select count(*)
+                  from tracks
+                  left join findings on findings.track_id = tracks.track_id
+                  where tracks.label_id = ? and findings.track_id is null
+                        and tracks.duplicate_of_track_id is null
+                        and tracks.dismissed_at is null) as total_tracks
+          from counted
+          where rn <= ? and group_rn > ? and group_rn <= ?
+          order by group_rn asc, rn asc`,
   });
 
-  const rows = typedRows<GroupRow>(result.rows);
+  const rows = typedRows<GroupedTrackRow>(result.rows);
 
   if (rows.length === 0) {
     if (page > 1) {
       throw new CataloguePageOutOfRangeError();
     }
 
-    return { ...EMPTY, totalTracks };
+    // No credited row means nothing renders, so nothing counts: the thin-content gate reads
+    // what the page can actually show, and a label whose every uncertified track is credited to
+    // no one shows none of them.
+    return { ...EMPTY, totalTracks: 0 };
   }
 
+  const totalTracks = Number(rows[0]?.total_tracks ?? 0);
   const totalGroups = Number(rows[0]?.total_groups ?? 0);
-  const tracks = await fetchGroupTracks(
-    `join json_each(tracks.artists_json) credit`,
-    `tracks.label_id = ?`,
-    labelId,
-    `lower(credit.value)`,
-    rows.map((row) => row.group_key),
-    sort,
-  );
-  const byArtist = groupBy(tracks, (row) => row.group_key);
   let removed = 0;
-  const groups = rows.map((row) => {
-    const held = byArtist.get(row.group_key) ?? [];
+  const groups = intoGroups(rows).map(({ head, rows: held }) => {
     const records = intoRecords(held);
 
     removed += records.removed;
 
     return {
-      name: row.name,
-      recordCount: Number(row.record_count),
+      name: head.group_name,
+      recordCount: Number(head.record_count),
       records: records.records,
-      slug: row.slug ?? undefined,
-      truncated: Number(row.track_count) > held.length,
+      slug: head.group_slug ?? undefined,
+      truncated: Number(head.track_count) > held.length,
     };
   });
 
@@ -437,68 +550,27 @@ export async function listLabelCatalogue(
 // ── The shared machinery ────────────────────────────────────────────────────────────────
 
 /**
- * The one read that could grow without bound, and so the one that is capped hardest:
- * `row_number() over (partition by …)` caps EVERY group at {@link GRAPH_GROUP_TRACK_LIMIT} rows
- * INSIDE SQLite, so the wire carries at most `GRAPH_GROUP_ROW_CEILING` rows however prolific one
- * artist is. The `join`/`where`/key fragments are CONSTANTS from the two callers above (never
- * reader input); every value is bound.
+ * The rows come back in group order (the SQL's `group_rn`, then `rn`), so one consecutive pass
+ * splits them back into groups — no map, no re-sort, and the SQL's order is what renders. Every
+ * group on the page carries at least one row by construction, so no group can be lost here.
  */
-async function fetchGroupTracks(
-  joinSql: string,
-  whereSql: string,
-  entityId: string,
-  keySql: string,
-  keys: string[],
-  sort: CatalogueSort,
-): Promise<GroupTrackRow[]> {
-  if (keys.length === 0) {
-    return [];
-  }
-
-  const db = await getDb();
-  const placeholders = keys.map(() => "?").join(", ");
-  const result = await db.execute({
-    args: [entityId, ...keys, GRAPH_GROUP_TRACK_LIMIT],
-    sql: `select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
-                 release_date, group_key
-          from (
-            select tracks.track_id as track_id, tracks.title as title,
-                   tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
-                   tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
-                   tracks.release_date as release_date,
-                   ${keySql} as group_key,
-                   row_number() over (
-                     partition by ${keySql}
-                     order by ${trackOrderSql(sort)}
-                   ) as rn
-            from tracks
-            ${joinSql}
-            left join findings on findings.track_id = tracks.track_id
-            left join albums al on al.id = tracks.album_id
-            where ${whereSql} and findings.track_id is null
-                  and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
-                  and ${keySql} in (${placeholders})
-          )
-          where rn <= ?`,
-  });
-
-  return typedRows<GroupTrackRow>(result.rows);
-}
-
-function groupBy<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
-  const map = new Map<string, T[]>();
+function intoGroups(
+  rows: GroupedTrackRow[],
+): Array<{ head: GroupedTrackRow; rows: GroupedTrackRow[] }> {
+  const groups: Array<{ head: GroupedTrackRow; rows: GroupedTrackRow[] }> = [];
 
   for (const row of rows) {
-    const held = map.get(key(row));
+    const current = groups.at(-1);
 
-    if (held) {
-      held.push(row);
-    } else {
-      map.set(key(row), [row]);
+    if (current && current.head.group_key === row.group_key) {
+      current.rows.push(row);
+      continue;
     }
+
+    groups.push({ head: row, rows: [row] });
   }
 
-  return map;
+  return groups;
 }
 
 /**
