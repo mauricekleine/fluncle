@@ -291,10 +291,11 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
     // it and would be a lie if it were. The SITEMAP is the machine's complete map of pages that
     // exist, and it DOES carry Metalheadz (asserted below). Narrower hub, complete sitemap.
     const { listLabelsWithFindingCounts } = await import("./labels");
-    const entries = await listLabelsWithFindingCounts();
+    const entries = await listLabelsWithFindingCounts(1);
 
-    expect(entries.map((entry) => entry.slug)).toEqual(["hospital-records"]);
-    expect(entries[0]).toMatchObject({ catalogueCount: CROWDED_LABEL, findingCount: 1 });
+    expect(entries.items.map((entry) => entry.slug)).toEqual(["hospital-records"]);
+    expect(entries.items[0]).toMatchObject({ findingCount: 1 });
+    expect(entries.total).toBe(1);
   });
 });
 

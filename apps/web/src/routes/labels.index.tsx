@@ -7,15 +7,13 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount, tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize } from "@/lib/media";
+import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
 import {
-  type CatalogueHubLetter,
   type CatalogueHubNumberedPage,
-  CatalogueHubPageOutOfRangeError,
+  type EditorialHubPage,
   type LabelCatalogueEntry,
   type LabelIndexEntry,
   listLabelsCataloguePage,
-  listLabelsCatalogueLetters,
   listLabelsWithFindingCounts,
 } from "@/lib/server/labels";
 
@@ -37,32 +35,29 @@ import {
 type LabelsPageData =
   | {
       catalogue: CatalogueHubNumberedPage<LabelCatalogueEntry>;
-      findings: LabelIndexEntry[];
-      letters: CatalogueHubLetter[];
+      findings: EditorialHubPage<LabelIndexEntry>;
       page: number;
       status: "found";
     }
   | { status: "missing" };
 
+// ONE `?page=N` walks BOTH sections: page N is slice N of the logged labels and slice N of the long
+// tail, so the hub keeps a single pager and a single URL space however far the archive grows. The
+// logged list runs out first, and from there the deeper pages are pure long tail. A page past the end
+// of BOTH 404s — never a clamp to page 1, which would be a second URL for page 1's tiles. The A–Z
+// lane now rides on the long-tail read itself, off the same single scan.
 async function resolveLabelsPage(page: number | undefined): Promise<LabelsPageData> {
   const requested = page ?? 1;
-  const [paged, findings, letters] = await Promise.all([
-    listLabelsCataloguePage(requested).catch((error: unknown) => {
-      if (error instanceof CatalogueHubPageOutOfRangeError) {
-        return null;
-      }
-
-      throw error;
-    }),
-    listLabelsWithFindingCounts(),
-    listLabelsCatalogueLetters(),
+  const [catalogue, findings] = await Promise.all([
+    listLabelsCataloguePage(requested),
+    listLabelsWithFindingCounts(requested),
   ]);
 
-  if (paged === null) {
+  if (requested > Math.max(catalogue.pageCount, findings.pageCount)) {
     return { status: "missing" };
   }
 
-  return { catalogue: paged, findings, letters, page: requested, status: "found" };
+  return { catalogue, findings, page: requested, status: "found" };
 }
 
 const fetchLabelsPage = createServerFn({ method: "GET" })
@@ -101,7 +96,7 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
   // pages are already carried by the sitemap, and the hub's structured data should mirror what the
   // hub is editorially about, never balloon to catalogue size. It rides as the `mainEntity` of a
   // `CollectionPage`, carrying `numberOfItems` so the list's size is machine-readable.
-  const labels = loaderData.findings;
+  const labels = loaderData.findings.items;
   const collectionPage = {
     "@context": "https://schema.org",
     "@type": "CollectionPage",
@@ -177,16 +172,30 @@ function LabelsPage() {
     return null;
   }
 
-  const { catalogue, findings, letters } = data;
+  const { catalogue, findings } = data;
   const buildHref = (page: number) => (page <= 1 ? "/labels" : `/labels?page=${page}`);
-  const lane = <HubLetterLane buildHref={buildHref} label="Labels A to Z" letters={letters} />;
+  const pageCount = Math.max(catalogue.pageCount, findings.pageCount);
+  const lane = (
+    <HubLetterLane buildHref={buildHref} label="Labels A to Z" letters={catalogue.letters ?? []} />
+  );
+  // ONE pager for the whole hub. It rides inside the long-tail section as before — but that section
+  // renders nothing when its slice is empty, and the logged list can still have pages left there, so
+  // the same pager is rendered on its own in that case rather than stranding the reader.
+  const pager = (
+    <CataloguePager
+      buildHref={buildHref}
+      label="More labels, more pages"
+      page={data.page}
+      pageCount={pageCount}
+    />
+  );
   const renderTile = (label: LabelCatalogueEntry) => (
     <li key={label.slug}>
       <Link params={{ slug: label.slug }} to="/label/$slug">
         <TrackArtwork
           alt=""
           className="artist-grid-cover"
-          src={label.logoImageUrl ?? albumCoverAtSize(label.coverImageUrl, "large")}
+          src={label.logoImageUrl ?? albumCoverAtSize(label.coverImageUrl, COVER_TILE_SIZE)}
         />
         <span className="artist-grid-line">{label.name}</span>
         <span className="artist-grid-count">{tracksCount(label.trackCount)}</span>
@@ -200,21 +209,23 @@ function LabelsPage() {
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Labels</h1>
           <p className="log-index-intro">
-            Every drum &amp; bass label with a finding in the archive. {findings.length} logged.
+            Every drum &amp; bass label with a finding in the archive. {findings.total} logged.
           </p>
         </header>
 
-        {findings.length === 0 ? (
+        {findings.total === 0 ? (
           <p className="log-index-empty empty-scanlines">No labels logged yet. Quiet sector.</p>
-        ) : (
+        ) : findings.items.length > 0 ? (
           <ul aria-label="Labels" className="artist-grid">
-            {findings.map((label) => (
+            {findings.items.map((label) => (
               <li key={label.slug}>
                 <Link params={{ slug: label.slug }} to="/label/$slug">
                   <TrackArtwork
                     alt=""
                     className="artist-grid-cover"
-                    src={label.logoImageUrl ?? albumCoverAtSize(label.coverImageUrl, "large")}
+                    src={
+                      label.logoImageUrl ?? albumCoverAtSize(label.coverImageUrl, COVER_TILE_SIZE)
+                    }
                   />
                   <span className="artist-grid-line">{label.name}</span>
                   <span className="artist-grid-count">{findingsCount(label.findingCount)}</span>
@@ -222,7 +233,7 @@ function LabelsPage() {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
 
         <CatalogueHubPageSection
           gridClassName="artist-grid"
@@ -231,16 +242,11 @@ function LabelsPage() {
           items={catalogue.items}
           lane={lane}
           listLabel="More labels"
-          pager={
-            <CataloguePager
-              buildHref={buildHref}
-              label="More labels, more pages"
-              page={catalogue.page}
-              pageCount={catalogue.pageCount}
-            />
-          }
+          pager={pager}
           renderTile={renderTile}
         />
+
+        {catalogue.items.length === 0 ? pager : null}
 
         <footer className="log-plate-footer">
           <Link to="/">Back to the archive</Link>
