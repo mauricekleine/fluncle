@@ -60,6 +60,7 @@
     "skills:install": "bun run scripts/install-skills.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
     "test": "turbo run test",
+    "test:scripts": "bun test --cwd docs/agents/hermes/scripts && bun test --cwd packages/skills/fluncle-track-enrichment/scripts",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
     "typecheck": "turbo run typecheck",
     "doctor": "npx react-doctor@latest"

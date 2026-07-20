@@ -74,6 +74,12 @@ jobs:
       - name: Run Tests
         run: bun run test
 
+      # The Hermes sweep + track-enrichment scripts live outside the workspaces, so
+      # `turbo run test` never sees them — ~400 tests, including the proof that their
+      # no-network rail is armed, went unrun until this step existed.
+      - name: Run Script Tests
+        run: bun run test:scripts
+
       - name: Build Go (apps/ssh)
         run: go build -C apps/ssh ./...
 

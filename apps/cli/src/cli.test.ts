@@ -678,8 +678,20 @@ async function runCli(
   stderr: string;
   stdout: string;
 }> {
+  // A spawned CLI is its OWN process: the in-process no-network rail (bunfig's
+  // `[test] preload`) does not reach it, and neither does a stubbed `globalThis.fetch`.
+  // So the subprocess gets its own two rails — NODE_ENV=test, which stops `loadEnv`
+  // reading the operator's real production token (src/env.ts), and a base URL pointed at
+  // a closed loopback port, so a command that slips past its validation gate dies on
+  // ECONNREFUSED instead of reaching the live archive. A test that wants a real fixture
+  // server still overrides FLUNCLE_API_BASE_URL through `env`, which wins on the spread.
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
-    env: env ? { ...process.env, ...env } : undefined,
+    env: {
+      ...process.env,
+      FLUNCLE_API_BASE_URL: "http://127.0.0.1:1",
+      NODE_ENV: "test",
+      ...env,
+    },
     stderr: "pipe",
     stdout: "pipe",
   });

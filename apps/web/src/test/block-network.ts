@@ -1,68 +1,27 @@
-// A global rail: no test may reach the real internet.
+// The vitest end of the repo-wide no-network rail. Wired as `setupFiles` in
+// vitest.config.ts; the implementation (and the incident that motivates it) lives in
+// packages/test-support, shared with every `bun test` package and with the e2e stack's
+// server-side guard.
 //
-// Why this exists: server modules read their config through `readOptionalEnv` /
-// `readEnvs` (src/lib/server/env.ts), which call `loadLocalEnv()` — and that loads
-// the operator's real `.dev.vars` into `process.env`. So a test that exercises a
-// write path picks up LIVE credentials and fires the real integration: creating a
-// submission POSTed to the real Discord webhook, once per test row, on every local
-// run AND inside the Cloudflare deploy gate. (Observed 2026-07-20: the write-rails
-// and chat-tools suites spamming the crew's Discord channel.)
+// Why it exists, briefly: server modules read their config through `readOptionalEnv`
+// (src/lib/server/env.ts), which loaded the operator's real `.dev.vars` whenever "are we
+// in dev?" was true — true under vitest. So a write-path test ran with LIVE credentials
+// and fired the real integration: `createSubmission` POSTing to the crew's actual Discord
+// webhook, once per seeded row, on every local run AND inside the Cloudflare deploy gate.
 //
-// Mocking each seam per test file is the fragile fix — it protects only the seams
-// someone remembered. This blocks the transport instead, so a NEW outbound call in
-// a NEW test is inert by default and the next integration cannot repeat the trick.
-//
-// A test that wants to exercise HTTP still can: `vi.stubGlobal("fetch", …)` (the
-// established pattern in ~18 files) replaces this wrapper wholesale, and mocking a
-// wrapper module bypasses it entirely. This only catches the calls nobody meant to
-// make — and it throws loudly rather than silently swallowing, so the offender is
-// named at the call site.
+// A test that wants HTTP still can: `vi.stubGlobal("fetch", …)` replaces this wrapper
+// wholesale, and mocking a wrapper module bypasses it entirely. The rail only catches the
+// calls nobody meant to make — and it rejects loudly, naming the offender.
 
+import { installNoNetworkRail } from "@fluncle/test-support/no-network";
 import { afterAll, beforeAll } from "vitest";
 
-/** Hosts a test may talk to: loopback only (a local libSQL server, a test fixture server). */
-function isLoopback(urlString: string): boolean {
-  try {
-    const { hostname } = new URL(urlString);
-
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
-  } catch {
-    // A non-absolute URL never leaves the process; let it through to fail on its own terms.
-    return true;
-  }
-}
-
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-
-  if (input instanceof URL) {
-    return input.href;
-  }
-
-  return input.url;
-}
-
-const realFetch = globalThis.fetch;
+let restore: () => void = () => {};
 
 beforeAll(() => {
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const url = requestUrl(input);
-
-    if (isLoopback(url)) {
-      return realFetch(input, init);
-    }
-
-    return Promise.reject(
-      new Error(
-        `Blocked outbound request to ${url} — tests must not reach the network. ` +
-          `Mock the wrapper module for this integration, or stub global fetch in this file.`,
-      ),
-    );
-  }) as typeof globalThis.fetch;
+  restore = installNoNetworkRail();
 });
 
 afterAll(() => {
-  globalThis.fetch = realFetch;
+  restore();
 });

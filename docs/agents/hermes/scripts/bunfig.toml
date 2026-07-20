@@ -1,0 +1,6 @@
+# These sweeps exist to call real APIs — Firecrawl, MusicBrainz, Apify, Sentry, the
+# Fluncle admin API — with the box's live token. Their tests must never do the same.
+# `[test] preload` runs ONLY under `bun test`, so the sweeps themselves are untouched
+# when the box runs them. See packages/test-support.
+[test]
+preload = ["@fluncle/test-support/preload"]

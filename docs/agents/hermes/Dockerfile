@@ -209,12 +209,14 @@ RUN arch="$(uname -m)" \
 
 # Bake the on-box sweep scripts so they ride the image (auto-update via pin-watch) and are
 # read straight from here by the host-timer units — no docker cp, no /opt/data projection.
-# Exclude the co-located tests and clip-drip-sweep.sh (a deliberately un-deployed cron). Keep
+# Exclude the co-located tests, their bunfig.toml (a test-only no-network preload whose
+# workspace package does not exist on the box), and clip-drip-sweep.sh (an un-deployed cron). Keep
 # provision-rave-03.sh — it is NOT operator-only: render-conductor.sh execs it as a sibling
 # (`$SCRIPT_DIR/provision-rave-03.sh`) on a render-box cold start, so the render timer needs it
 # baked here too. World-readable + exec so the non-root hermes cron user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
 RUN rm -f /opt/hermes-scripts/*.test.ts \
+          /opt/hermes-scripts/bunfig.toml \
           /opt/hermes-scripts/clip-drip-sweep.sh \
  && chmod -R a+rX /opt/hermes-scripts \
  && chmod +x /opt/hermes-scripts/*.sh /opt/hermes-scripts/*.py

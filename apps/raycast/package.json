@@ -16,6 +16,7 @@
     "react": "~19.2.7"
   },
   "devDependencies": {
+    "@fluncle/test-support": "workspace:*",
     "@raycast/eslint-config": "~2.2.0",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

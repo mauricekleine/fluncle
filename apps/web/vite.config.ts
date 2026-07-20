@@ -158,6 +158,58 @@ function crawlerBannerPlugin(): Plugin {
   };
 }
 
+// The SERVER half of the e2e no-network rail.
+//
+// `tests/e2e/browser.ts`'s `blockExternalRequests` stubs what the BROWSER asks for. It
+// cannot touch what the dev server does behind that request — and the dev server reaches
+// the real internet: `/podcast.xml` fires a HEAD at the production R2 CDN for every
+// mixtape in the seed, `/api/preview/:id` falls through to `itunes.apple.com`, and the
+// search dialog's LLM tier POSTs to `openrouter.ai` with the template's fake key (fake is
+// truthy, so the "unprovisioned" guard never trips). Fake credentials make those calls
+// fail; they do not make them not happen.
+//
+// So the worker gets the same rail as the unit suites, from the same implementation. Two
+// independent gates keep it out of production: `apply: "serve"` means it does not exist in
+// a build at all, and the plugin is only added to the array when the e2e stack sets the
+// flag. `scripts/e2e-stack.ts` is the only thing that sets it.
+const E2E_BLOCK_OUTBOUND_FLAG = "FLUNCLE_E2E_BLOCK_OUTBOUND";
+const E2E_NO_NETWORK_MODULE = "\0virtual:fluncle-e2e-no-network";
+
+function e2eNoNetworkGuard(): Plugin {
+  return {
+    apply: "serve",
+    enforce: "pre",
+    load(id) {
+      if (id === E2E_NO_NETWORK_MODULE) {
+        // The one rail, shared with every `bun test` package and the vitest suite.
+        return [
+          'import { installNoNetworkRail } from "@fluncle/test-support/no-network";',
+          "installNoNetworkRail();",
+        ].join("\n");
+      }
+    },
+    name: "fluncle-e2e-no-network",
+    resolveId(id) {
+      if (id === E2E_NO_NETWORK_MODULE) {
+        return id;
+      }
+    },
+    // Prepended to the Worker entry (wrangler's `main`), so the rail is armed inside
+    // workerd before any handler runs. The client environment is left alone — the browser
+    // side is Playwright's `blockExternalRequests`.
+    transform(code, id) {
+      if (this.environment.name !== "ssr" || !id.endsWith("/src/server.ts")) {
+        return;
+      }
+
+      return {
+        code: `import ${JSON.stringify(E2E_NO_NETWORK_MODULE)};\n${code}`,
+        map: null,
+      };
+    },
+  };
+}
+
 export default defineConfig({
   // Hidden source maps so the Sentry plugin can upload them, WITHOUT emitting a
   // `//# sourceMappingURL=` comment (browsers never fetch them) — and the plugin
@@ -201,6 +253,8 @@ export default defineConfig({
     // Keep server-only `node:crypto` from throwing during client module-eval in
     // dev (which would abort hydration). Client env only; see the plugin comment.
     clientNodeCryptoStub(),
+    // Only when the e2e stack asks for it; see the plugin's comment.
+    process.env[E2E_BLOCK_OUTBOUND_FLAG] === "1" ? e2eNoNetworkGuard() : null,
     // Fumadocs MDX: compiles content/docs/*.mdx for the /docs hub and emits the
     // generated .source index the docs routes read. Runs before tanstackStart
     // so the virtual collections resolve during route compilation.
