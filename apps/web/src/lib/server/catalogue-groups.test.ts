@@ -11,7 +11,7 @@
 //      a crawl-only artist with no entity still appears (grouped by their raw name, no link),
 //      and nothing here ever carries a coordinate.
 
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -29,6 +29,8 @@ import {
   CataloguePageOutOfRangeError,
   flattenArtistGroups,
   flattenRecords,
+  GRAPH_GROUP_PAGE_SIZE,
+  GRAPH_GROUP_ROW_CEILING,
   GRAPH_GROUP_TRACK_LIMIT,
   listArtistCatalogue,
   listLabelCatalogue,
@@ -493,5 +495,264 @@ describe("the duplicate defence (a recording renders once)", () => {
     expect(rendered).not.toContain("t_original_version");
     expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
     expect(page.totalTracks).toBe(3);
+  });
+});
+
+// ── The single-statement shape (P5) ─────────────────────────────────────────────────────
+//
+// Both grouped reads used to arrive in WAVES — the artist page in two statements, the label page
+// in three — and every wave is a round trip from the Worker to Turso in Ireland, each repeating
+// the SAME indexed walk of the entity's rows. They are now ONE statement each, with the page of
+// groups cut by `dense_rank()` instead of `limit`/`offset` and the group aggregates carried by
+// windows. That rewrite is invisible from the outside, which is exactly why it needs pinning:
+// the round-trip count is the guarantee, and the pager + the two SQL counts are what could
+// silently drift now that they ride on windows rather than a `group by`.
+
+describe("one statement, one walk", () => {
+  /** Counts the statements a read issues, so a re-introduced wave fails here. */
+  function countStatements(): { calls: string[] } {
+    const calls: string[] = [];
+    const original = db.execute.bind(db);
+
+    vi.spyOn(db, "execute").mockImplementation(((stmt: InStatement) => {
+      calls.push(typeof stmt === "string" ? stmt : stmt.sql);
+
+      return original(stmt);
+    }) as typeof db.execute);
+
+    return { calls };
+  }
+
+  it("reads an artist's whole catalogue page in a single round trip", async () => {
+    await seedArtist("art_hybrid", "Hybrid Minds", "hybrid-minds");
+    await seedCatalogueTrack({
+      album: "Elements",
+      artists: ["Hybrid Minds"],
+      labelId: "lbl_1",
+      releaseDate: "2016-01-01",
+      trackId: "t_h1",
+    });
+    await backfillArtistLinks(db);
+
+    const artist = await getArtistBySlug("hybrid-minds");
+
+    if (!artist) {
+      throw new Error("artist missing");
+    }
+
+    const spy = countStatements();
+    const page = await listArtistCatalogue(artist.id, "name", 1);
+
+    expect(spy.calls).toHaveLength(1);
+    expect(page.groups).toHaveLength(1);
+    expect(page.totalTracks).toBe(1);
+  });
+
+  it("reads a label's whole catalogue page in a single round trip", async () => {
+    await seedCatalogueTrack({
+      album: "Elements",
+      artists: ["Hybrid Minds"],
+      labelId: "lbl_1",
+      releaseDate: "2016-01-01",
+      trackId: "t_h1",
+    });
+
+    const spy = countStatements();
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+
+    expect(spy.calls).toHaveLength(1);
+    expect(page.groups).toHaveLength(1);
+    expect(page.totalTracks).toBe(1);
+  });
+});
+
+describe("the pager, now cut by dense_rank", () => {
+  // One group per record, more of them than fit on a page, so the pager has to carry the rest.
+  const RECORDS = GRAPH_GROUP_PAGE_SIZE + 5;
+
+  beforeEach(async () => {
+    await seedArtist("art_calibre", "Calibre", "calibre");
+
+    for (let i = 0; i < RECORDS; i++) {
+      await seedCatalogueTrack({
+        album: `Record ${String(i).padStart(2, "0")}`,
+        artists: ["Calibre"],
+        labelId: "lbl_1",
+        // Dates ascend with the name, so "recent" is the exact reverse of "name" — a pager that
+        // silently ignored the sort would still look right under one of them.
+        releaseDate: `20${String(10 + i).padStart(2, "0")}-01-01`,
+        trackId: `t_${i}`,
+      });
+    }
+
+    await backfillArtistLinks(db);
+  });
+
+  it("partitions an artist's records across pages with no gap and no repeat", async () => {
+    const artist = await getArtistBySlug("calibre");
+
+    if (!artist) {
+      throw new Error("artist missing");
+    }
+
+    const first = await listArtistCatalogue(artist.id, "name", 1);
+    const second = await listArtistCatalogue(artist.id, "name", 2);
+
+    expect(first.totalGroups).toBe(RECORDS);
+    expect(first.pageCount).toBe(2);
+    expect(first.groups).toHaveLength(GRAPH_GROUP_PAGE_SIZE);
+    expect(second.groups).toHaveLength(RECORDS - GRAPH_GROUP_PAGE_SIZE);
+
+    const names = [...first.groups, ...second.groups].map((group) => group.name ?? "");
+
+    // Every record appears exactly once, and the two pages read as one A–Z run.
+    expect(new Set(names).size).toBe(RECORDS);
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+    // The track total is the WHOLE artist's, not the page's — the thin-content gate reads it.
+    expect(first.totalTracks).toBe(RECORDS);
+  });
+
+  it("keeps the pages disjoint under 'recent' too, newest record first", async () => {
+    const artist = await getArtistBySlug("calibre");
+
+    if (!artist) {
+      throw new Error("artist missing");
+    }
+
+    const first = await listArtistCatalogue(artist.id, "recent", 1);
+    const second = await listArtistCatalogue(artist.id, "recent", 2);
+    const names = [...first.groups, ...second.groups].map((group) => group.name ?? "");
+
+    expect(new Set(names).size).toBe(RECORDS);
+    // Newest release leads, and the run descends across the page boundary.
+    expect(names).toEqual([...names].sort((a, b) => b.localeCompare(a)));
+  });
+
+  it("holds the page's hard row ceiling when every group is over its own cap", async () => {
+    // Every record on the page carries more tracks than one group may contribute, so the ceiling
+    // is the only thing standing between a crawled artist and a dump.
+    for (let record = 0; record < RECORDS; record++) {
+      for (let track = 1; track <= GRAPH_GROUP_TRACK_LIMIT + 3; track++) {
+        await seedCatalogueTrack({
+          album: `Record ${String(record).padStart(2, "0")}`,
+          artists: ["Calibre"],
+          labelId: "lbl_1",
+          releaseDate: "2015-01-01",
+          trackId: `t_${record}_${track}`,
+        });
+      }
+    }
+
+    await backfillArtistLinks(db);
+
+    const artist = await getArtistBySlug("calibre");
+
+    if (!artist) {
+      throw new Error("artist missing");
+    }
+
+    const page = await listArtistCatalogue(artist.id, "name", 1);
+
+    expect(page.groups).toHaveLength(GRAPH_GROUP_PAGE_SIZE);
+    expect(flattenRecords(page.groups)).toHaveLength(GRAPH_GROUP_ROW_CEILING);
+
+    for (const group of page.groups) {
+      expect(group.tracks.length).toBeLessThanOrEqual(GRAPH_GROUP_TRACK_LIMIT);
+    }
+  });
+});
+
+describe("the label's two SQL counts, over the whole group", () => {
+  it("counts a two-artist track ONCE in the total, while both artists still carry it", async () => {
+    // The total is counted over TRACKS; the groups are counted over CREDITS. One statement now
+    // carries both, so the two must not bleed into each other. Seeded past the page size so the
+    // total is genuinely the SQL count of the whole label rather than the rendered row count.
+    const solo = GRAPH_GROUP_PAGE_SIZE + 2;
+
+    for (let i = 0; i < solo; i++) {
+      await seedCatalogueTrack({
+        album: `Record ${String(i).padStart(2, "0")}`,
+        artists: [`Artist ${String(i).padStart(2, "0")}`],
+        labelId: "lbl_1",
+        releaseDate: "2020-01-01",
+        trackId: `t_solo_${i}`,
+      });
+    }
+
+    // One more track, credited to two of those same artists — one track, two credits.
+    await seedCatalogueTrack({
+      album: "Split",
+      artists: ["Artist 00", "Artist 01"],
+      labelId: "lbl_1",
+      releaseDate: "2021-01-01",
+      trackId: "t_pair",
+    });
+
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+
+    expect(page.totalGroups).toBe(solo);
+    // solo + 1 TRACKS (solo + 2 credits) — the total counts the tracks.
+    expect(page.totalTracks).toBe(solo + 1);
+    expect(page.groups).toHaveLength(GRAPH_GROUP_PAGE_SIZE);
+
+    // …and the shared track is still in BOTH artists' groups, credited twice, dropped nowhere.
+    const first = page.groups.find((group) => group.name === "Artist 00");
+    const second = page.groups.find((group) => group.name === "Artist 01");
+
+    expect(flattenRecords(first?.records ?? []).map((track) => track.trackId)).toContain("t_pair");
+    expect(flattenRecords(second?.records ?? []).map((track) => track.trackId)).toContain("t_pair");
+  });
+
+  it("renders a credit ONCE when two artist entities share its name", async () => {
+    // The crawler mints an artist per stable Spotify id, so two entities can carry one name. The
+    // slug lookup must not multiply the credit's TRACK rows by however many of them there are —
+    // the group would render every track twice and count them twice.
+    await seedArtist("art_serum_a", "Serum", "serum");
+    await seedArtist("art_serum_b", "Serum", "serum-2");
+    await seedCatalogueTrack({
+      album: "Rudeboy",
+      artists: ["Serum"],
+      labelId: "lbl_1",
+      releaseDate: "2019-01-01",
+      trackId: "t_one",
+    });
+
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+    const group = page.groups[0];
+
+    expect(page.totalGroups).toBe(1);
+    expect(page.totalTracks).toBe(1);
+    expect(group?.recordCount).toBe(1);
+    expect(group?.truncated).toBe(false);
+    expect(flattenRecords(group?.records ?? []).map((track) => track.trackId)).toEqual(["t_one"]);
+    // The heading still links — to the first slug, exactly as the old `min(a.slug)` chose.
+    expect(group?.slug).toBe("serum");
+  });
+
+  it("counts a truncated group's records over the WHOLE group, not the rendered slice", async () => {
+    // Two records, both far past the per-group cap. The cap drops rows from the SECOND record
+    // entirely, so a record count taken over what rendered would say one — it must say two.
+    for (const album of ["Alpha", "Beta"]) {
+      for (let i = 0; i < GRAPH_GROUP_TRACK_LIMIT; i++) {
+        await seedCatalogueTrack({
+          album,
+          artists: ["Total Science"],
+          labelId: "lbl_1",
+          releaseDate: "2012-01-01",
+          trackId: `t_${album}_${i}`,
+        });
+      }
+    }
+
+    const page = await listLabelCatalogue("lbl_1", "name", 1);
+    const group = page.groups[0];
+
+    expect(group?.recordCount).toBe(2);
+    expect(group?.truncated).toBe(true);
+    expect(flattenRecords(group?.records ?? [])).toHaveLength(GRAPH_GROUP_TRACK_LIMIT);
+    // Only the first record fits under the cap, so that is all the page renders.
+    expect(group?.records.map((record) => record.name)).toEqual(["Alpha"]);
+    // The label's total still counts every track it carries.
+    expect(page.totalTracks).toBe(GRAPH_GROUP_TRACK_LIMIT * 2);
   });
 });
