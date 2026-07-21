@@ -439,7 +439,7 @@ describe("sweep commands surface partial failure", () => {
   test("requeue-analysis --json dry-run with nothing failed keeps ok:true and exit 0", async () => {
     await withStubApi(
       (req, url) => {
-        if (req.method === "GET" && url.pathname === "/api/admin/tracks") {
+        if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
           return Response.json({ totalCount: 1, tracks: [oneFinding] });
         }
 
@@ -467,11 +467,11 @@ describe("sweep commands surface partial failure", () => {
   test("requeue-analysis --apply --json with a failed flip reports ok:false, failedCount, exit 1", async () => {
     await withStubApi(
       (req, url) => {
-        if (req.method === "GET" && url.pathname === "/api/admin/tracks") {
+        if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
           return Response.json({ totalCount: 1, tracks: [oneFinding] });
         }
 
-        if (req.method === "PATCH" && url.pathname === "/api/admin/tracks/t1") {
+        if (req.method === "PATCH" && url.pathname === "/api/v1/admin/tracks/t1") {
           return Response.json(
             { code: "boom", message: "update exploded", ok: false },
             { status: 500 },
@@ -504,11 +504,11 @@ describe("sweep commands surface partial failure", () => {
   test("requeue-analysis --apply non-JSON with a failed flip still exits 1 (regression pin)", async () => {
     await withStubApi(
       (req, url) => {
-        if (req.method === "GET" && url.pathname === "/api/admin/tracks") {
+        if (req.method === "GET" && url.pathname === "/api/v1/admin/tracks") {
           return Response.json({ totalCount: 1, tracks: [oneFinding] });
         }
 
-        if (req.method === "PATCH" && url.pathname === "/api/admin/tracks/t1") {
+        if (req.method === "PATCH" && url.pathname === "/api/v1/admin/tracks/t1") {
           return Response.json(
             { code: "boom", message: "update exploded", ok: false },
             { status: 500 },
@@ -536,7 +536,7 @@ describe("sweep commands surface partial failure", () => {
   test("backfills lastfm --json with a failed love reports ok:false, failedCount, exit 1", async () => {
     await withStubApi(
       (req, url) => {
-        if (req.method === "POST" && url.pathname === "/api/admin/backfill/lastfm") {
+        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/lastfm") {
           return Response.json({
             dryRun: false,
             failed: [{ error: "vendor 500", logId: "001.1.AA" }],
@@ -577,7 +577,7 @@ describe("sweep commands surface partial failure", () => {
   test("backfills lastfm --json with nothing failed keeps ok:true and exit 0", async () => {
     await withStubApi(
       (req, url) => {
-        if (req.method === "POST" && url.pathname === "/api/admin/backfill/lastfm") {
+        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/lastfm") {
           return Response.json({
             dryRun: false,
             failed: [],
@@ -615,7 +615,7 @@ describe("sweep commands surface partial failure", () => {
   test("backfills artist-images --json with a failed fill reports ok:false, failedCount, exit 1", async () => {
     await withStubApi(
       (req, url) => {
-        if (req.method === "POST" && url.pathname === "/api/admin/backfill/artist-images") {
+        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
           return Response.json({
             dryRun: false,
             failed: [{ artistId: "a1", error: "spotify 500" }],

@@ -203,7 +203,7 @@ function ClipLibraryPage() {
 
   const deleteClip = useMutation({
     mutationFn: async (clipId: string) => {
-      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clipId)}`, {
+      const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clipId)}`, {
         method: "DELETE",
       });
 
@@ -222,7 +222,7 @@ function ClipLibraryPage() {
   // state at once (the Switch tracks it instantly), roll back on error, re-read on settle.
   const setPaused = useMutation<void, Error, boolean, { previous?: typeof drip }>({
     mutationFn: async (paused: boolean) => {
-      const response = await fetch("/api/admin/clips/drip/state", {
+      const response = await fetch("/api/v1/admin/clips/drip/state", {
         body: JSON.stringify({ paused }),
         headers: { "content-type": "application/json" },
         method: "PUT",
@@ -259,7 +259,7 @@ function ClipLibraryPage() {
     // queue tail), snapshotting a fresh caption each. Same contract carrier as the per-clip
     // schedule op — a plain fetch to the REST path, gated by the web admin grant.
     mutationFn: async (clipIds: string[]) => {
-      const response = await fetch("/api/admin/clips/schedule", {
+      const response = await fetch("/api/v1/admin/clips/schedule", {
         body: JSON.stringify({ clipIds }),
         headers: { "content-type": "application/json" },
         method: "POST",

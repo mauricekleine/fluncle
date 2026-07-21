@@ -71,14 +71,16 @@ export type AppendedVersion = { ok: true; version: number };
 
 /** Every registered prompt with its live body and full history (`list_prompts`). */
 export async function promptsListCommand(): Promise<PromptDetail[]> {
-  const response = await adminApiGet<{ ok: true; prompts: PromptDetail[] }>("/api/admin/prompts");
+  const response = await adminApiGet<{ ok: true; prompts: PromptDetail[] }>(
+    "/api/v1/admin/prompts",
+  );
 
   return response.prompts;
 }
 
 /** The body running right now, plus its version and source (`get_prompt`). */
 export async function promptGetCommand(slug: string): Promise<ResolvedPrompt> {
-  return adminApiGet<ResolvedPrompt>(`/api/admin/prompts/${encodeURIComponent(slug)}`);
+  return adminApiGet<ResolvedPrompt>(`/api/v1/admin/prompts/${encodeURIComponent(slug)}`);
 }
 
 /**
@@ -138,7 +140,7 @@ export async function promptUpdateCommand(
   const body = resolveBody(options);
   const note = options.note?.trim();
   const response = await adminApiPost<AppendedVersion>(
-    `/api/admin/prompts/${encodeURIComponent(slug)}`,
+    `/api/v1/admin/prompts/${encodeURIComponent(slug)}`,
     note ? { body, note } : { body },
   );
 
@@ -205,7 +207,7 @@ async function restore(
   }
 
   const response = await adminApiPost<AppendedVersion>(
-    `/api/admin/prompts/${encodeURIComponent(detail.slug)}`,
+    `/api/v1/admin/prompts/${encodeURIComponent(detail.slug)}`,
     { body: input.body, note: input.note },
   );
 

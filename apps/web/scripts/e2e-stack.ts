@@ -13,7 +13,7 @@
  *   5. seed the committed synthetic dataset
  *   6. boot Vite on :3140 (foreground) and stay alive as its parent
  *
- * Playwright waits for `/api/health`, runs the suite, then SIGTERMs this process
+ * Playwright waits for `/api/v1/health`, runs the suite, then SIGTERMs this process
  * on teardown. The signal traps below kill turso + Vite and restore `.dev.vars`,
  * so the checkout is left exactly as it was found. A crash that skips the traps is
  * still self-healing: the next `materializeDevVars` restores from the backup it

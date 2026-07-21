@@ -18,7 +18,7 @@ export async function describeAlbumCommand(
   options: { bio: string; dryRun?: boolean; promptVersion?: number },
 ): Promise<EntityBioResult> {
   return adminApiPost<EntityBioResult>(
-    `/api/admin/albums/${encodeURIComponent(slug)}/bio`,
+    `/api/v1/admin/albums/${encodeURIComponent(slug)}/bio`,
     buildBioBody(options),
   );
 }
@@ -27,14 +27,14 @@ export async function describeAlbumCommand(
 // titles + the assembled `describe_album` prompt, returned ready-to-author. The box's bio
 // sweep calls this per queued entity, then runs `claude -p` on the returned prompt.
 export async function draftAlbumBioCommand(slug: string): Promise<EntityBioDraft> {
-  return adminApiGet<EntityBioDraft>(`/api/admin/albums/${encodeURIComponent(slug)}/bio-draft`);
+  return adminApiGet<EntityBioDraft>(`/api/v1/admin/albums/${encodeURIComponent(slug)}/bio-draft`);
 }
 
 // The BIO queue: albums with findings but no bio yet, oldest first — the worklist the
 // `describe_album` cron drains (each row is a `admin albums describe <slug>`).
 export async function albumsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
   const response = await adminApiGet<{ albums: EntityBioWorkItem[]; ok: boolean }>(
-    `/api/admin/albums/bio-queue?limit=${limit}`,
+    `/api/v1/admin/albums/bio-queue?limit=${limit}`,
   );
 
   return response.albums;

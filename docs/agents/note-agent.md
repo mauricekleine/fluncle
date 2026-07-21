@@ -19,7 +19,7 @@ The `context_note` is the auto-note's **primary fuel**: it carries the release c
 
 The context note says what a record IS. It says nothing about where it LANDS — and a note is a placement as much as a verdict. So the authoring prompt also carries **the notes of the finding's nearest neighbours in vibe space**: the six findings that sound most like it, each with the note already standing on it.
 
-Those neighbours come from the **MuQ audio embedding** (`get_similar_findings` → `fluncle tracks similar` — an exact cosine scan ranked in SQL, the probe bound as a raw blob), **never from `features_json`**. A note encodes a subjective read of how a finding FEELS; two tracks can measure nearly identical and still sit nowhere near each other by feel, and a feature-twin's note would carry the wrong vibe. The embedding is the space the note's neighbours live in.
+Those neighbours come from the **MuQ audio embedding** (`list_similar_tracks` → `fluncle tracks similar` — an exact cosine scan ranked in SQL, the probe bound as a raw blob), **never from `features_json`**. A note encodes a subjective read of how a finding FEELS; two tracks can measure nearly identical and still sit nowhere near each other by feel, and a feature-twin's note would carry the wrong vibe. The embedding is the space the note's neighbours live in.
 
 They go into the prompt for two reasons, and the second one is the load-bearing half:
 

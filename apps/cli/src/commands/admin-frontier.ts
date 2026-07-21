@@ -43,7 +43,7 @@ export async function frontierRefreshCommand(options: {
   const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
 
   return adminApiPost<FrontierRefreshSummary>(
-    "/api/admin/frontier-playlists/refresh",
+    "/api/v1/admin/frontier-playlists/refresh",
     limit ? { limit } : {},
   );
 }
@@ -53,10 +53,10 @@ export type FrontierMintingState = { ok: true; open: boolean };
 
 /** `fluncle admin frontier status` — read the kill switch (agent-allowed). */
 export async function frontierStatusCommand(): Promise<FrontierMintingState> {
-  return adminApiGet<FrontierMintingState>("/api/admin/frontier/minting");
+  return adminApiGet<FrontierMintingState>("/api/v1/admin/frontier/minting");
 }
 
 /** `fluncle admin frontier open|close` — flip the kill switch (operator only). */
 export async function frontierSetMintingCommand(open: boolean): Promise<FrontierMintingState> {
-  return adminApiPut<FrontierMintingState>("/api/admin/frontier/minting", { open });
+  return adminApiPut<FrontierMintingState>("/api/v1/admin/frontier/minting", { open });
 }

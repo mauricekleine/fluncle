@@ -106,14 +106,15 @@ So the API is mostly clean REST (method = verb, path = resource), with a recurri
 
 | Tool name              | Title                       | API equivalent                             | CLI equivalent  |
 | ---------------------- | --------------------------- | ------------------------------------------ | --------------- |
-| `list_tracks`          | Recent findings             | `listTracks`                               | `recent`        |
+| `list_findings`        | Recent findings             | `listFindings` (`GET /findings`)           | `recent`        |
+| `list_tracks`          | Browse the archive          | `listTracks` (`GET /tracks`)               | (no public CLI) |
 | `get_track`            | Read one finding            | `getTrack` (`GET /tracks/{idOrLogId}`)     | `tracks get`    |
 | `get_random_track`     | Random finding              | `getRandomTrack`                           | `random`        |
 | `search_tracks`        | Search tracks               | `searchTracks`                             | (no public CLI) |
 | `submit_track`         | Submit a track              | `submitTrack` (`POST /submissions`)        | `submit`        |
 | `subscribe_newsletter` | Subscribe to the newsletter | `subscribeNewsletter` (`POST /newsletter`) | `subscribe`     |
 
-Casing is `snake_case`. `list_tracks` (renamed from `get_recent_tracks`, which under-described the mixtapes-inclusive payload) keeps `get_recent_tracks` as a deprecation alias in `tools/list` for a window.
+Casing is `snake_case`. The vocabulary cut (ratified 2026-07-21) split the two: `list_findings` is the found-order FEED (findings + published mixtapes, at `GET /findings`), and `list_tracks` is reborn as the release-ordered whole-archive ENUMERATOR (at `GET /tracks`, with a tri-state `certified` filter). The old `get_recent_tracks` MCP alias was removed with no replacement alias — clean cut, no back-compat shim.
 
 Beyond tools, the server MCP also serves **resources** (the archive as a corpus — `fluncle://finding/<logId>`, `fluncle://mixtape/<logId>`) and Fluncle-voiced **prompts** (`recommend_finding`, `walk_recent_night`, `decode_coordinate`), named `verb_noun` like the tools. Both are server-MCP only: `navigator.modelContext` has no resource/prompt primitive, so the browser WebMCP surface mirrors the tool set alone.
 
@@ -125,7 +126,7 @@ Deep links (`parseBootCommand`): `latest`, `random`, or a bare Log ID coordinate
 
 Menu item labels (`menuItems()`, 11 items): `Latest bangers`, `Artist archive`, `Sonic galaxies`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `System status`, `About`, `Quit`. Title Case, in-fiction nouns. `Sonic galaxies` opens the browse-by-feel galaxies screen (list + open, cloning `Artist archive`); it reads the same public `list_galaxies`/`get_galaxy` ops the CLI's `fluncle galaxies [slug]` does, so the operation reads the same across CLI, API, and SSH.
 
-Note the deep-link `latest` maps to the CLI's `recent`, the API's `listTracks`, and the MCP's `get_recent_tracks` — **four names for one read.**
+Note the deep-link `latest` maps to the CLI's `recent`, the API's `listFindings` (`GET /findings`), and the MCP's `list_findings` — **four names for one read**, all naming the found-order feed after the vocabulary cut.
 
 ### 1.5 Admin board (user-facing verbs)
 

@@ -12,7 +12,7 @@
 // THE TICK (all deterministic — no model time):
 //   1. PROBE each service in parallel, each with a short timeout (3–5s) so one hung
 //      target can't blow the runner's ~120s budget:
-//        web         — GET ${HEALTHCHECK_WORKER_URL}/api/health, timed.
+//        web         — GET ${HEALTHCHECK_WORKER_URL}/api/v1/health, timed.
 //        r2          — HEAD ${HEALTHCHECK_R2_PROBE_URL}.
 //        dns         — dig +short ${HEALTHCHECK_DNS_QUERY} (non-empty answer = ok).
 //        ssh         — TCP-connect ${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}.
@@ -35,7 +35,7 @@
 //   3. ALERT: if any service transitioned to `down`, OR any recovered (down → ok/
 //      degraded), Discord-ping once (best-effort) naming what changed. Nothing
 //      changed → no ping (no spam).
-//   4. POST the snapshot to ${HEALTHCHECK_WORKER_URL}/api/admin/health (record_health,
+//   4. POST the snapshot to ${HEALTHCHECK_WORKER_URL}/api/v1/admin/health (record_health,
 //      Authorization: Bearer ${FLUNCLE_API_TOKEN}). Best-effort: the alert already
 //      fired, so a failed POST is logged, never thrown.
 //
@@ -176,7 +176,7 @@ function runQuiet(
 }
 
 // ---------------------------------------------------------------------------
-// PROBE: web — GET ${WORKER_URL}/api/health, timed. ok on a 200; down otherwise.
+// PROBE: web — GET ${WORKER_URL}/api/v1/health, timed. ok on a 200; down otherwise.
 // The message reports the code + elapsed ms (no host).
 // ---------------------------------------------------------------------------
 
@@ -190,7 +190,7 @@ async function probeWeb(): Promise<Check> {
   const started = Date.now();
 
   try {
-    const response = await fetchWithTimeout(`${WORKER_URL}/api/health`, { method: "GET" });
+    const response = await fetchWithTimeout(`${WORKER_URL}/api/v1/health`, { method: "GET" });
     const latencyMs = Date.now() - started;
 
     if (response.status === 200) {
@@ -213,11 +213,11 @@ async function probeWeb(): Promise<Check> {
 }
 
 // ---------------------------------------------------------------------------
-// PROBE: db — GET ${WORKER_URL}/api/status and read `dbProbe.roundTripMs`, the WORKER's own
+// PROBE: db — GET ${WORKER_URL}/api/v1/status and read `dbProbe.roundTripMs`, the WORKER's own
 // `select 1` round-trip to the Turso primary (aws-eu-west-1, Dublin). That is the path a
 // visitor's page load pays (edge Worker → Dublin), NOT this box's path — the honest read on
 // Turso latency + jitter over time. ok when snappy, degraded when it drags, down when the
-// Worker could not reach Turso (the field is null) or /api/status is unreachable. Recording
+// Worker could not reach Turso (the field is null) or /api/v1/status is unreachable. Recording
 // it as its own service feeds the sample into the existing `service_check_samples` uptime bar.
 // ---------------------------------------------------------------------------
 
@@ -232,12 +232,12 @@ async function probeDb(): Promise<Check> {
   }
 
   try {
-    const response = await fetchWithTimeout(`${WORKER_URL}/api/status`, { method: "GET" });
+    const response = await fetchWithTimeout(`${WORKER_URL}/api/v1/status`, { method: "GET" });
 
     if (response.status !== 200) {
       return {
         latencyMs: null,
-        message: msg(`/api/status HTTP ${response.status}`),
+        message: msg(`/api/v1/status HTTP ${response.status}`),
         service,
         status: "down",
       };
@@ -268,7 +268,7 @@ async function probeDb(): Promise<Check> {
     const reason =
       error instanceof Error && error.name === "AbortError" ? "timeout" : "unreachable";
 
-    return { latencyMs: null, message: msg(`/api/status ${reason}`), service, status: "down" };
+    return { latencyMs: null, message: msg(`/api/v1/status ${reason}`), service, status: "down" };
   }
 }
 
@@ -1047,7 +1047,7 @@ async function postSnapshot(at: string, checks: CheckWithTransition[]): Promise<
   for (let attempt = 1; attempt <= POST_ATTEMPTS; attempt++) {
     try {
       const response = await fetchWithTimeout(
-        `${WORKER_URL}/api/admin/health`,
+        `${WORKER_URL}/api/v1/admin/health`,
         {
           body,
           headers: {

@@ -200,9 +200,17 @@ function agentCard() {
       {
         description:
           "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first, cursor-paginated.",
-        examples: ["List the latest findings", "Page through Fluncle's archive"],
-        id: "list-tracks",
+        examples: ["List the latest findings"],
+        id: "list-findings",
         name: "Recent findings",
+        tags: ["drum-and-bass", "archive", "catalogue"],
+      },
+      {
+        description:
+          "List every track Fluncle holds, newest release first, one numbered page at a time; certified=true narrows to findings, certified=false to the rest.",
+        examples: ["Page through Fluncle's archive"],
+        id: "list-tracks",
+        name: "Every track",
         tags: ["drum-and-bass", "archive", "catalogue"],
       },
       {
@@ -332,10 +340,11 @@ ${tracks.join("\n")}
 
 - [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
 - [Fresh releases feed](${siteUrl}/fresh.xml): the newest drum & bass RELEASES over the last 30 days, as RSS (also ${siteUrl}/fresh.json as a JSON Feed) — release-dated (when a tune came out), not found-dated
-- [Tracks API](${siteUrl}/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Findings API](${siteUrl}/api/v1/findings): the feed as JSON, newest found first, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Tracks API](${siteUrl}/api/v1/tracks): every track, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest
 - [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out — the newest releases over a 30-day window, as JSON; accepts limit (max 100)
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
-- [Artists API](${siteUrl}/api/v1/artists): every artist with a published finding, most findings first, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
+- [Artists API](${siteUrl}/api/v1/artists): every artist Fluncle holds, A to Z, paginated, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
 - [The artists](${siteUrl}/artists): every artist in the archive, A to Z, the ones Fluncle has certified a finding from marked in gold. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings and their verified identity links
 - [The labels](${siteUrl}/labels): every label in the archive, A to Z, the ones Fluncle has certified a finding on marked in gold. Each resolves to a page at ${siteUrl}/label/{slug}: that label's findings, the artists on it, and the rest of its catalogue
@@ -402,13 +411,13 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 ## The findings (${totalCount})
 
 ${findings}
-${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${siteUrl}/api/v1/tracks._\n` : ""}
+${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${siteUrl}/api/v1/findings._\n` : ""}
 ## More
 
 - The map: ${siteUrl}/llms.txt
 - The playlist: ${spotifyPlaylistUrl}
 - The Telegram feed: ${telegramUrl}
-- The JSON API: ${siteUrl}/api/v1/tracks
+- The JSON API: ${siteUrl}/api/v1/findings
 - The artists: ${siteUrl}/artists
 - The labels: ${siteUrl}/labels
 - The albums: ${siteUrl}/albums
@@ -544,7 +553,8 @@ Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok
 
 ## Read the archive
 
-- \`GET /api/v1/tracks\` lists certified tracks, newest found first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the date found). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
+- \`GET /api/v1/findings\` lists certified tracks, newest found first. Query params: \`limit\` (1 to 48, default 16), \`cursor\` (opaque, from \`nextCursor\`), \`since\` and \`until\` (ISO 8601 bounds on the date found). Response: \`{"tracks": [...], "totalCount": n, "nextCursor": "..."}\`. Page until \`nextCursor\` disappears.
+- \`GET /api/v1/tracks\` lists every track Fluncle holds, newest release first. Query params: \`page\` (1-based), \`certified\` (\`true\` for findings only, \`false\` for the rest).
 - \`GET /api/v1/tracks/random\` returns one pick from the archive: \`{"ok": true, "track": {...}}\`.
 
 Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImageUrl\`, \`note\`, \`spotifyUrl\`, \`addedAt\` (the timestamp it was found), \`addedToSpotify\`, and \`postedToTelegram\`. The \`note\` is Fluncle's own line about the tune; quote it as his.
@@ -566,7 +576,7 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 
 The archive is a full MCP server (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`, not just tools:
 
-- **Tools** (derived from the live tool set; call \`tools/list\` for each tool's full schema): ${mcpToolNames.map((name) => `\`${name}\``).join(", ")}. Includes the archive reads (\`list_tracks\`, \`get_track\` by Log ID coordinate or Spotify id, \`search_archive\`), the artist/label/album browse (\`list_artists\`, \`list_albums\`, \`list_labels\` walk the whole archive A to Z; \`list_artist_catalogue\`, \`list_label_catalogue\`, \`list_album_catalogue\` list one entity's tracks), and the writes (\`submit_track\`, \`subscribe_newsletter\`).
+- **Tools** (derived from the live tool set; call \`tools/list\` for each tool's full schema): ${mcpToolNames.map((name) => `\`${name}\``).join(", ")}. Includes the archive reads (\`list_findings\` the found-order feed, \`list_tracks\` the whole-archive release-ordered browse, \`get_track\` by Log ID coordinate or Spotify id, \`search_archive\`), the artist/label/album browse (\`list_artists\`, \`list_albums\`, \`list_labels\` walk the whole archive A to Z; \`list_artist_catalogue\`, \`list_label_catalogue\`, \`list_album_catalogue\` list one entity's tracks), and the writes (\`submit_track\`, \`subscribe_newsletter\`).
 - **Resources**: read the archive as a corpus, each finding at \`fluncle://finding/<logId>\` and each mixtape at \`fluncle://mixtape/<logId>\`, returning its public record.
 - **Prompts**: Fluncle-voiced starting points. \`recommend_finding\` (a finding for a mood), \`walk_recent_night\`, \`decode_coordinate\`.
 

@@ -76,7 +76,7 @@ const W_EDGE = 0.6;
 const W_COLOR = 0.2;
 const W_LUMA = 0.2;
 
-const FEED_URL = "https://www.fluncle.com/api/tracks";
+const FEED_URL = "https://www.fluncle.com/api/v1/findings";
 const posterUrl = (logId: string): string => `https://found.fluncle.com/${logId}/poster.jpg`;
 
 // ---------------------------------------------------------------------------

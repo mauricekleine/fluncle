@@ -2,7 +2,7 @@ import { getApiBaseUrl } from "./env";
 
 // The CLI's live-set callout: one quiet Nebula-Violet line at the top of every
 // non-admin, human command while Fluncle is on the decks (the cross-surface
-// live-on-Twitch beat). Read best-effort off /api/status — it never blocks, never
+// live-on-Twitch beat). Read best-effort off /api/v1/status — it never blocks, never
 // fails a command, and never prints when piped or in --json (TTY-gated), so it
 // can't pollute scriptable output. Offline almost always, so it usually prints
 // nothing at all.
@@ -12,7 +12,7 @@ import { getApiBaseUrl } from "./env";
 const NEBULA_VIOLET = "\x1b[38;2;171;123;255m";
 const RESET = "\x1b[0m";
 
-// How long to wait on /api/status before giving up — short, since this is a
+// How long to wait on /api/v1/status before giving up — short, since this is a
 // best-effort flourish on top of the real command, not the command itself.
 const TIMEOUT_MS = 1500;
 
@@ -60,7 +60,9 @@ export async function maybePrintLiveCallout(args: string[]): Promise<void> {
 
     let data: LiveStatus;
     try {
-      const response = await fetch(`${getApiBaseUrl()}/api/status`, { signal: controller.signal });
+      const response = await fetch(`${getApiBaseUrl()}/api/v1/status`, {
+        signal: controller.signal,
+      });
 
       if (!response.ok) {
         return;

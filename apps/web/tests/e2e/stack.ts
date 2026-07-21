@@ -20,7 +20,7 @@
 // server), and the Playwright runner is Node — no `Bun` globals. So the whole
 // stack (materialize `.dev.vars` → boot libSQL → migrate → seed → boot Vite) is
 // built by ONE Bun script that IS the `webServer` command, and Playwright simply
-// waits for `/api/health`. That also fixes the DB-URL trap below cleanly: the file
+// waits for `/api/v1/health`. That also fixes the DB-URL trap below cleanly: the file
 // is materialized before Vite ever reads it.
 //
 // THE DB-URL CONTRACT (proven by smoke-routine, not assumed): the dev worker runs

@@ -134,10 +134,12 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_radio_now_playing",
   "get_random_radio_track",
   "get_random_track",
-  "get_similar_findings",
   "get_track",
   "list_artists",
-  // The multi-artist "sounds like these" sonic read — public, no auth (the /artists compare).
+  // The public found-order FEED (findings + published mixtapes) and the sonic "more like this" row.
+  "list_findings",
+  "list_similar_tracks",
+  // The "sounds like these" sonic read over 1 to 6 artist anchors — public, no auth (the /artists compare).
   "list_similar_artists",
   "list_editions",
   "list_galaxies",

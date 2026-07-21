@@ -123,7 +123,7 @@ function asNotation(value: unknown): KeyNotation | null {
  */
 async function pushPreferenceToAccount(next: KeyNotation): Promise<void> {
   try {
-    const tokenResponse = await fetch("/api/me/csrf");
+    const tokenResponse = await fetch("/api/v1/me/csrf");
 
     if (!tokenResponse.ok) {
       return;
@@ -131,7 +131,7 @@ async function pushPreferenceToAccount(next: KeyNotation): Promise<void> {
 
     const { csrfToken } = (await tokenResponse.json()) as { csrfToken?: string };
 
-    await fetch("/api/me/preferences", {
+    await fetch("/api/v1/me/preferences", {
       body: JSON.stringify({ keyNotation: next }),
       headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken ?? "" },
       method: "PATCH",
@@ -156,7 +156,9 @@ export async function syncKeyNotationFromAccount(options?: { force?: boolean }):
   accountSyncStarted = true;
 
   try {
-    const me = (await fetch("/api/me").then((response) => response.json())) as { user?: unknown };
+    const me = (await fetch("/api/v1/me").then((response) => response.json())) as {
+      user?: unknown;
+    };
 
     if (!me.user) {
       signedIn = false;
@@ -165,7 +167,7 @@ export async function syncKeyNotationFromAccount(options?: { force?: boolean }):
 
     signedIn = true;
 
-    const body = (await fetch("/api/me/preferences").then((response) => response.json())) as {
+    const body = (await fetch("/api/v1/me/preferences").then((response) => response.json())) as {
       preferences?: { keyNotation?: unknown };
     };
     const profileNotation = asNotation(body.preferences?.keyNotation);

@@ -1,5 +1,5 @@
 // The `admin-submissions` domain router module — the submission-review queue.
-// Each handler reuses the live `/api/admin/submissions/*` route logic verbatim;
+// Each handler reuses the live `/api/v1/admin/submissions/*` route logic verbatim;
 // the auth tier moves to the oRPC procedure middleware (../orpc-auth).
 //
 //   - `list_submissions` / `get_submission` — admin tier (live `requireAdmin`):

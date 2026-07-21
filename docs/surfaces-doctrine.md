@@ -59,7 +59,8 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 | Surface                 | Route                       | Exposes                                                                                                                                        | Weight    |
 | ----------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `api.tracks`            | `/api/v1/tracks`            | the archive as JSON, cursor-paginated (limit max 48, cursor)                                                                                   | primary   |
+| `api.findings`          | `/api/v1/findings`          | the feed as JSON — findings and published mixtapes, newest found first, cursor-paginated (limit max 48, cursor)                                | primary   |
+| `api.tracks`            | `/api/v1/tracks`            | every track Fluncle holds as JSON, newest release first, numbered pages (page); tri-state `certified` filter                                   | primary   |
 | `api.track`             | `/api/v1/tracks/:idOrLogId` | one finding or mixtape by Spotify id or Log ID                                                                                                 | secondary |
 | `api.tracks.random`     | `/api/v1/tracks/random`     | one finding at random                                                                                                                          | secondary |
 | `api.fresh`             | `/api/v1/tracks/fresh`      | what just came out — the newest releases over a 30-day window (release-dated), flat (limit max 100)                                            | secondary |
@@ -74,7 +75,7 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `api.newsletter`        | `/api/v1/newsletter`        | subscribe to the newsletter (POST); the editions archive                                                                                       | secondary |
 | `api.stories`           | `/api/v1/stories`           | the Stories payload as JSON                                                                                                                    | tertiary  |
 | `api.radio.now-playing` | `/api/v1/radio/now-playing` | the radio shared-clock now-playing slot                                                                                                        | tertiary  |
-| `api.health`            | `/api/health`               | the liveness probe — the canonical web health check                                                                                            | tertiary  |
+| `api.health`            | `/api/v1/health`            | the liveness probe — the canonical web health check                                                                                            | tertiary  |
 
 ### Feeds — subscribable syndication documents
 
@@ -109,9 +110,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs), **resources** (the archive as a readable corpus, one URI per coordinate), and **prompts** (Fluncle-voiced starting points). Streamable HTTP, no auth. Resources and prompts are server-MCP only — `navigator.modelContext` (the browser WebMCP surface, `lib/webmcp.ts`) has no resource/prompt primitive, so it mirrors the tool set alone (the browser read path is the `get_track` tool).
 
-| Surface      | Route  | Exposes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Weight  |
-| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
-| `mcp.server` | `/mcp` | **tools**: `list_tracks`, `list_fresh`, `get_track`, `get_random_track`, `get_status`, `search_archive`, `get_artist`, `get_label`, `build_set`, `get_similar_artists`, `list_album_catalogue`, `list_artist_catalogue`, `list_label_catalogue`, `search_tracks`, `submit_track`, `subscribe_newsletter`. **resources**: each finding/mixtape at `fluncle://finding/<logId>` or `fluncle://mixtape/<logId>` (its public `/log` record). **prompts**: `recommend_finding`, `walk_recent_night`, `decode_coordinate` | primary |
+| Surface      | Route  | Exposes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Weight  |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `mcp.server` | `/mcp` | **tools**: `list_findings`, `list_tracks`, `list_fresh`, `get_track`, `get_random_track`, `get_status`, `search_archive`, `get_artist`, `get_label`, `build_set`, `list_similar_artists`, `list_album_catalogue`, `list_artist_catalogue`, `list_label_catalogue`, `search_tracks`, `submit_track`, `subscribe_newsletter`. **resources**: each finding/mixtape at `fluncle://finding/<logId>` or `fluncle://mixtape/<logId>` (its public `/log` record). **prompts**: `recommend_finding`, `walk_recent_night`, `decode_coordinate` | primary |
 
 ### DNS — the delegated authoritative zone
 
@@ -234,6 +235,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `subdomain.dig`             | tertiary  |           |           |           |
 | `subdomain.status`          | tertiary  |           |           | tertiary  |
 | `subdomain.onion`           | tertiary  |           |           | tertiary  |
+| `api.findings`              | primary   |           |           | secondary |
 | `api.tracks`                | primary   |           |           | secondary |
 | `api.track`                 | secondary |           |           |           |
 | `api.tracks.random`         | secondary |           |           |           |

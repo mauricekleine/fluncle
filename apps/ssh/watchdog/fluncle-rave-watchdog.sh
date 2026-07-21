@@ -11,12 +11,12 @@
 #      alerts when these pings stop, catching rave-01 itself going dark. (The Hermes
 #      box, "rave-02", has the symmetric beacon in fluncle-healthcheck.ts.)
 #
-#   2. CROSS-PING — read ${WATCH_STATUS_URL} (the public /api/status), pull the one
+#   2. CROSS-PING — read ${WATCH_STATUS_URL} (the public /api/v1/status), pull the one
 #      integer secondsSinceProberReport, and if it exceeds ${WATCH_STALE_MINUTES}
 #      (default 30) × 60, the rave-02 prober has gone dark (its healthcheck cron
 #      stopped POSTing snapshots) → Discord-ping ONCE on the flip into-stale and once
 #      on recovery (a no-spam transition state file, same shape as the healthcheck
-#      cron). If /api/status is unreachable, log + SKIP the freshness check this
+#      cron). If /api/v1/status is unreachable, log + SKIP the freshness check this
 #      round — that is the healthcheck cron's + the external beacons' job, not ours.
 #      (It reads secondsSinceProberReport — the `hermes` service's staleness, posted
 #      ONLY by rave-02's cron — so job 3's own onion post below can never mask it.)
@@ -38,7 +38,7 @@
 # README. Required env (names only):
 #
 #   RAVE01_BEACON_URL    — rave-01's external dead-man's-switch beacon (silent ping).
-#   WATCH_STATUS_URL     — the public /api/status URL (the cross-ping source).
+#   WATCH_STATUS_URL     — the public /api/v1/status URL (the cross-ping source).
 #   WATCH_STALE_MINUTES  — staleness threshold in minutes (optional; default 30).
 #   DISCORD_ALERT_WEBHOOK — the Discord webhook for the transition alerts.
 #   WATCH_ONION_URL      — the onion health URL (job 3; unset skips the onion probe).
@@ -62,7 +62,7 @@ DISCORD_ALERT_WEBHOOK="${DISCORD_ALERT_WEBHOOK:-}"
 # (rave-01 hosts the onion, so it has Tor; rave-02 does not) and POST an `onion`
 # service check to record_health so it shows on /status. All optional — unset any of
 # the four below and the onion job is skipped silently.
-WATCH_ONION_URL="${WATCH_ONION_URL:-}"               # the onion health URL (http://<addr>.onion/api/health)
+WATCH_ONION_URL="${WATCH_ONION_URL:-}"               # the onion health URL (http://<addr>.onion/api/v1/health)
 WATCH_TOR_SOCKS="${WATCH_TOR_SOCKS:-127.0.0.1:9050}" # rave-01's Tor SOCKS proxy (tor default)
 WATCH_ONION_TIMEOUT="${WATCH_ONION_TIMEOUT:-30}"     # seconds per attempt — Tor is slow, give it room
 WATCH_ONION_ATTEMPTS="${WATCH_ONION_ATTEMPTS:-3}"    # retries before declaring down (filters flaky Tor circuits)
@@ -122,7 +122,7 @@ write_stale() {
   printf '{ "stale": %s }\n' "${stale}" >"${STATE_FILE}"
 }
 
-# --- Parse the single integer secondsSinceProberReport from /api/status ----------
+# --- Parse the single integer secondsSinceProberReport from /api/v1/status ----------
 # Prefer a no-jq parse (grep/sed on that one field). python3 is an accepted fallback
 # when present, but we never hard-depend on jq. Prints the integer, or nothing on a
 # miss (null / field absent / unparseable).
@@ -169,12 +169,12 @@ cross_ping() {
     return 0
   fi
 
-  # Fetch /api/status. Unreachable web ⇒ log + SKIP the freshness check (NOT an alert:
+  # Fetch /api/v1/status. Unreachable web ⇒ log + SKIP the freshness check (NOT an alert:
   # web-down is the healthcheck cron's job + the external beacons cover a systemic
   # outage). We leave the prior stale-flag untouched so the next reachable round decides.
   local body
   if ! body="$("${CURL_BIN}" -sS --max-time 10 "${WATCH_STATUS_URL}")"; then
-    log "/api/status unreachable — skipping the freshness check this round"
+    log "/api/v1/status unreachable — skipping the freshness check this round"
     return 0
   fi
 
@@ -295,7 +295,7 @@ probe_and_post_onion() {
   if ! "${CURL_BIN}" -sS -o /dev/null -X POST \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-    -d "${body}" --max-time 10 "${WATCH_WORKER_URL%/}/api/admin/health"; then
+    -d "${body}" --max-time 10 "${WATCH_WORKER_URL%/}/api/v1/admin/health"; then
     log "onion record_health POST failed (best-effort, ignored)"
   fi
 }

@@ -22,7 +22,7 @@ import { buildSaveSetBody, canSaveSet } from "@/lib/mix-save";
 //
 // THE ACCOUNT NEVER GATES THE TOOL. A signed-OUT visitor sees NOTHING here — no button, no
 // upsell — so `/mix` reads identically whether or not you have an account. We only render once
-// `/api/me` confirms a session, so nothing new appears for the anonymous stranger the tool is
+// `/api/v1/me` confirms a session, so nothing new appears for the anonymous stranger the tool is
 // built for.
 //
 // THE RULING (2026-07-14) — one save-set contract on web AND mobile:
@@ -61,7 +61,7 @@ export function SaveSetDialog({
   useEffect(() => {
     let cancelled = false;
 
-    void fetch("/api/me")
+    void fetch("/api/v1/me")
       .then((res) => res.json() as Promise<{ user: unknown }>)
       .then((body) => {
         if (!cancelled) {
@@ -82,7 +82,7 @@ export function SaveSetDialog({
     setBusy(true);
 
     try {
-      const tokenResponse = await fetch("/api/me/csrf");
+      const tokenResponse = await fetch("/api/v1/me/csrf");
 
       if (tokenResponse.status === 401) {
         // The session lapsed between the check and the click — send them to sign in.
@@ -100,7 +100,7 @@ export function SaveSetDialog({
       if (reference?.id) {
         // The chain is opened from (or already saved to) an account set — UPDATE that set in
         // place. Save never mints siblings of the set you are editing.
-        response = await fetch(`/api/me/saved-sets/${reference.id}`, {
+        response = await fetch(`/api/v1/me/saved-sets/${reference.id}`, {
           body,
           headers,
           method: "PATCH",
@@ -108,7 +108,7 @@ export function SaveSetDialog({
 
         if (response.status === 404) {
           // The set was deleted on another device — create anew and adopt it.
-          response = await fetch("/api/me/saved-sets", { body, headers, method: "POST" });
+          response = await fetch("/api/v1/me/saved-sets", { body, headers, method: "POST" });
 
           if (response.ok) {
             await adopt(response, savedName);
@@ -117,7 +117,7 @@ export function SaveSetDialog({
           onAdopt({ id: reference.id, name: savedName });
         }
       } else {
-        response = await fetch("/api/me/saved-sets", { body, headers, method: "POST" });
+        response = await fetch("/api/v1/me/saved-sets", { body, headers, method: "POST" });
 
         if (response.ok) {
           await adopt(response, savedName);

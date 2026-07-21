@@ -146,7 +146,7 @@ function JoinButton({ glow }: { glow: boolean }): ReactNode {
  * The signed-in door. A quiet trigger (glyph + name + caret) opening the account
  * menu. `signOut` clears the session then reloads: better-auth drops the session
  * atom (so this trigger swaps back to Join on its own), and the reload also refreshes
- * any signed-in surface reading `/api/me` (the account page), so no stale signed-in
+ * any signed-in surface reading `/api/v1/me` (the account page), so no stale signed-in
  * view survives the sign-out anywhere.
  */
 function AccountMenu({ image, name }: { image: null | string; name: string }): ReactNode {
@@ -154,7 +154,7 @@ function AccountMenu({ image, name }: { image: null | string; name: string }): R
     await authClient.signOut();
     // A full reload is the cleanest way to flush EVERY signed-in surface at once —
     // this trigger reacts to the session atom on its own, but the account page reads
-    // `/api/me` in an effect, so only a reload guarantees it re-reads signed-out.
+    // `/api/v1/me` in an effect, so only a reload guarantees it re-reads signed-out.
     globalThis.location.reload();
   }
 

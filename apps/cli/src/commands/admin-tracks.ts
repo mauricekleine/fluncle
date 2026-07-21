@@ -3,7 +3,7 @@ import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 import { trackUpdateCommand } from "./track";
 
-// Mirrors the /api/admin/tracks page cap. The order + hasVideo + hasContext +
+// Mirrors the /api/v1/admin/tracks page cap. The order + hasVideo + hasContext +
 // hasObservation + status filters are applied in SQL by listTracks; the CLI just
 // pages through the matching rows.
 const pageSize = 48;
@@ -87,7 +87,7 @@ async function fetchAdminTracks(options: {
       params.set("cursor", cursor);
     }
 
-    const response = await adminApiGet<TracksResponse>(`/api/admin/tracks?${params.toString()}`);
+    const response = await adminApiGet<TracksResponse>(`/api/v1/admin/tracks?${params.toString()}`);
 
     for (const apiTrack of response.tracks) {
       const track = mapTrack(apiTrack);
@@ -225,7 +225,9 @@ export async function trackWorkCommand(options: {
     params.set("count", "true");
   }
 
-  const response = await adminApiGet<TrackWorkPage>(`/api/admin/tracks/work?${params.toString()}`);
+  const response = await adminApiGet<TrackWorkPage>(
+    `/api/v1/admin/tracks/work?${params.toString()}`,
+  );
 
   return { queued: response.queued, tracks: response.tracks ?? [] };
 }
@@ -399,7 +401,7 @@ export async function backfillLastfmCommand(
     params.set("cursor", cursor);
   }
 
-  return adminApiPost<LastfmBackfillResult>(`/api/admin/backfill/lastfm?${params.toString()}`);
+  return adminApiPost<LastfmBackfillResult>(`/api/v1/admin/backfill/lastfm?${params.toString()}`);
 }
 
 export type DiscogsBackfillResult = {
@@ -439,7 +441,7 @@ export async function backfillDiscogsCommand(
     params.set("cursor", cursor);
   }
 
-  return adminApiPost<DiscogsBackfillResult>(`/api/admin/backfill/discogs?${params.toString()}`);
+  return adminApiPost<DiscogsBackfillResult>(`/api/v1/admin/backfill/discogs?${params.toString()}`);
 }
 
 export type AppleMusicBackfillResult = {
@@ -492,7 +494,7 @@ export async function backfillAppleMusicCommand(
   }
 
   return adminApiPost<AppleMusicBackfillResult>(
-    `/api/admin/backfill/apple-music?${params.toString()}`,
+    `/api/v1/admin/backfill/apple-music?${params.toString()}`,
   );
 }
 
@@ -524,7 +526,7 @@ export async function backfillAppleCatalogueCommand(
   const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
 
   return adminApiPost<AppleCatalogueBackfillResult>(
-    `/api/admin/backfill/apple-catalogue?${params.toString()}`,
+    `/api/v1/admin/backfill/apple-catalogue?${params.toString()}`,
   );
 }
 
@@ -566,7 +568,7 @@ export async function backfillRecordingMbidsCommand(
   }
 
   return adminApiPost<RecordingMbidsBackfillResult>(
-    `/api/admin/backfill/recording-mbids?${params.toString()}`,
+    `/api/v1/admin/backfill/recording-mbids?${params.toString()}`,
   );
 }
 
@@ -609,7 +611,7 @@ export async function backfillArtistEdgesCommand(
   }
 
   return adminApiPost<ArtistEdgesBackfillResult>(
-    `/api/admin/backfill/artist-edges?${params.toString()}`,
+    `/api/v1/admin/backfill/artist-edges?${params.toString()}`,
   );
 }
 
@@ -653,7 +655,7 @@ export async function backfillArtistCreditsCommand(
   }
 
   return adminApiPost<ArtistCreditsBackfillResult>(
-    `/api/admin/backfill/artist-credits?${params.toString()}`,
+    `/api/v1/admin/backfill/artist-credits?${params.toString()}`,
   );
 }
 
@@ -720,5 +722,5 @@ export async function mixableOrderCommand(
     params.set("seed", seed);
   }
 
-  return adminApiGet<MixableOrderResult>(`/api/admin/tracks/mixable-order?${params.toString()}`);
+  return adminApiGet<MixableOrderResult>(`/api/v1/admin/tracks/mixable-order?${params.toString()}`);
 }

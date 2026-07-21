@@ -204,7 +204,7 @@ function RowMenu({ row }: { row: BoardRow }) {
           <DropdownMenuItem
             disabled={!row.logId}
             render={
-              row.logId ? <a href={`/api/admin/tracks/${row.trackId}/silent-clip`} /> : undefined
+              row.logId ? <a href={`/api/v1/admin/tracks/${row.trackId}/silent-clip`} /> : undefined
             }
           >
             <DownloadSimpleIcon aria-hidden="true" className="size-4" />

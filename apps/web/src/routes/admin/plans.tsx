@@ -88,7 +88,7 @@ import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 //
 // Reads run SERVER-SIDE (createServerFn calling the server helpers in-process — no
 // cross-origin fetch, no CORS); writes go through the operator-tier oRPC routes at
-// `/api/admin/recordings/*`. The findings builder + live session autosave; attaching a
+// `/api/v1/admin/recordings/*`. The findings builder + live session autosave; attaching a
 // take is one click.
 
 const PLANS_KEY = ["admin", "plans"] as const;
@@ -218,7 +218,7 @@ function AdminPlansPage() {
     setCreating(true);
     setError(undefined);
     try {
-      const response = await fetch("/api/admin/recordings", {
+      const response = await fetch("/api/v1/admin/recordings", {
         body: JSON.stringify({ kind: "plan" }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -1100,7 +1100,7 @@ async function readError(response: Response): Promise<string> {
 }
 
 async function searchAdminTracks(q: string): Promise<TrackListItem[]> {
-  const response = await fetch(`/api/admin/tracks?q=${encodeURIComponent(q)}&limit=20`);
+  const response = await fetch(`/api/v1/admin/tracks?q=${encodeURIComponent(q)}&limit=20`);
   if (!response.ok) {
     throw new Error(await readError(response));
   }
@@ -1110,7 +1110,7 @@ async function searchAdminTracks(q: string): Promise<TrackListItem[]> {
 
 // PATCH a recording (the plan's live session, or a take's plan link). Operator-tier oRPC.
 async function patchRecording(id: string, body: { parentId?: string; plannedFor?: string }) {
-  const response = await fetch(`/api/admin/recordings/${encodeURIComponent(id)}`, {
+  const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}`, {
     body: JSON.stringify(body),
     headers: { "Content-Type": "application/json" },
     method: "PATCH",
@@ -1123,7 +1123,7 @@ async function patchRecording(id: string, body: { parentId?: string; plannedFor?
 // Replace the plan's cues (its findings) — each finding's `trackId` is the cue's honest
 // `finding_id`. Operator-tier oRPC (`replace_recording_cues`); positions reindex from order.
 async function replaceCues(id: string, members: MemberRef[]) {
-  const response = await fetch(`/api/admin/recordings/${encodeURIComponent(id)}/cues`, {
+  const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}/cues`, {
     body: JSON.stringify({
       cues: members.map((member, index) => ({
         artistsText: member.artists.join(", "),
@@ -1141,7 +1141,7 @@ async function replaceCues(id: string, members: MemberRef[]) {
 }
 
 async function deleteRecording(id: string) {
-  const response = await fetch(`/api/admin/recordings/${encodeURIComponent(id)}`, {
+  const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!response.ok) {

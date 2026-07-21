@@ -5,7 +5,7 @@
 // These pin the three semantics slice 3 adds on top of the untouched device path: the
 // anonymous NO-OP (a session-less user never adopts and never mirrors), the adopt PRECEDENCE
 // (the profile's stored notation wins over the device value on sign-in), and the
-// fire-and-forget MIRROR (a toggle while signed in PATCHes `/api/me/preferences` with the
+// fire-and-forget MIRROR (a toggle while signed in PATCHes `/api/v1/me/preferences` with the
 // closed `{ keyNotation }` payload, and a failed mirror never reverts the device value). The
 // `meFetch` layer is mocked — no network, no native auth client.
 //
@@ -53,14 +53,14 @@ assertEqual(formatKey("F major", "camelot"), "7B", "camelot maps a parseable key
 assertEqual(formatKey("F major", "scales"), "F major", "scales reads verbatim");
 assertEqual(formatKey("", "camelot"), "", "empty key stays empty");
 
-// 1. ANONYMOUS NO-OP. A session-less user (GET /api/me → user: null) never adopts a profile
+// 1. ANONYMOUS NO-OP. A session-less user (GET /api/v1/me → user: null) never adopts a profile
 //    value and never fetches preferences.
 calls = [];
 responder = () => ({ user: null });
 await syncKeyNotationFromAccount();
 assertEqual(getKeyNotation(), "scales", "anonymous sync leaves the default device value");
 assertEqual(
-  calls.some((call) => call.path === "/api/me/preferences"),
+  calls.some((call) => call.path === "/api/v1/me/preferences"),
   false,
   "anonymous sync never reads preferences (it stops at the null session)",
 );
@@ -77,14 +77,14 @@ assertEqual(calls.length, 0, "an anonymous toggle makes no /me call");
 setKeyNotation("scales"); // device now "scales" (still anonymous → no mirror)
 calls = [];
 responder = (path) =>
-  path === "/api/me/preferences"
+  path === "/api/v1/me/preferences"
     ? { preferences: { keyNotation: "camelot" } }
     : { user: { id: "u1" } };
 await syncKeyNotationFromAccount({ force: true });
 assertEqual(getKeyNotation(), "camelot", "the profile's notation wins over the device value");
-assertEqual(calls[0]?.path, "/api/me", "sign-in adopt probes the session first");
+assertEqual(calls[0]?.path, "/api/v1/me", "sign-in adopt probes the session first");
 assertEqual(
-  calls.some((call) => call.path === "/api/me/preferences" && call.method === "GET"),
+  calls.some((call) => call.path === "/api/v1/me/preferences" && call.method === "GET"),
   true,
   "a live session reads the profile preferences",
 );
@@ -95,7 +95,7 @@ calls = [];
 setKeyNotation("scales");
 assertEqual(getKeyNotation(), "scales", "the mirror toggle updates the device immediately");
 const patch = calls.find((call) => call.method === "PATCH");
-assertEqual(patch?.path, "/api/me/preferences", "the mirror PATCHes the preferences endpoint");
+assertEqual(patch?.path, "/api/v1/me/preferences", "the mirror PATCHes the preferences endpoint");
 assertEqual(
   patch?.body,
   JSON.stringify({ keyNotation: "scales" }),

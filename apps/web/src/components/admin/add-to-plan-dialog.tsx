@@ -272,7 +272,7 @@ export function AddToPlanDialog({
 // Start a fresh plan (`create_recording` kind=plan) — the server mints its
 // Galaxy-vocab handle; the caller then appends the finding as its first cue.
 async function createPlan(): Promise<string> {
-  const response = await fetch("/api/admin/recordings", {
+  const response = await fetch("/api/v1/admin/recordings", {
     body: JSON.stringify({ kind: "plan" }),
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -293,7 +293,7 @@ async function createPlan(): Promise<string> {
 // this finding at the end (`replace_recording_cues` reindexes positions from the
 // array order). The cue carries the honest `finding_id` plus the snapshot text.
 async function appendCue(plan: PlanTarget, track: DialogTrack): Promise<void> {
-  const response = await fetch(`/api/admin/recordings/${encodeURIComponent(plan.id)}/cues`, {
+  const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(plan.id)}/cues`, {
     body: JSON.stringify({
       cues: [
         ...plan.cues,

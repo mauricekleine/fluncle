@@ -318,7 +318,7 @@ export const contextTrack = oc
  *
  * TWO GATES: the VOICE gate (as above) and the ECHO gate — the anti-sameness rail on
  * the vibe-neighbour layer. The note is authored with the notes of the finding's SONIC
- * NEIGHBOURS in the prompt (the MuQ nearest neighbours, `get_similar_findings`); the
+ * NEIGHBOURS in the prompt (the MuQ nearest neighbours, `list_similar_tracks`); the
  * Worker re-reads those same notes and hard-fails a line that lifts a phrase from one
  * or reuses its words wholesale (`note_echoes_neighbours`). The neighbourhood informs
  * the note; it never templates it. A rejected note is not stored — the note is optional

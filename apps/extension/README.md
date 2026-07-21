@@ -14,7 +14,7 @@ A Chrome extension (Manifest V3) that surfaces the findings hidden across the we
 The lens scans locally. No page content, URL, DOM text, or browsing history ever leaves the browser. The only network call is a public read of a single finding by its Log ID, made only after a valid coordinate is detected on the page:
 
 ```
-GET https://www.fluncle.com/api/tracks/<id>
+GET https://www.fluncle.com/api/v1/tracks/<id>
 ```
 
 That is the sole entry in `host_permissions`. Page scanning is granted declaratively by the content script's `<all_urls>` match, so no broad host permission is requested for it — which keeps the install warning light. (The brief's fallback to optional host permissions isn't needed with this split.)
@@ -24,7 +24,7 @@ That is the sole entry in `host_permissions`. Page scanning is granted declarati
 ```text
 src/coordinate.ts   The regex + every derivation (web URL, dig, ssh, casing rules). One owner.
 src/coordinate.test.ts  bun:test coverage for the regex and derivations.
-src/api.ts          The one network call: GET /api/tracks/<id>, narrowed to the fields shown.
+src/api.ts          The one network call: GET /api/v1/tracks/<id>, narrowed to the fields shown.
 src/content.ts      The lens: scan, linkify, dedupe marker, MutationObserver + debounce, hover cards.
 src/content.css     Injected styles for the link + hover card (Nostalgic Cosmos, scoped to .fluncle-lens-*).
 src/popup.ts/.html  Toolbar popup: lists the active tab's findings via a message to the content script.

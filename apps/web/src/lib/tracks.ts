@@ -2,7 +2,7 @@ import { type RadioNowPlaying } from "@fluncle/contracts";
 import { type TrackListItem, type TrackListPage } from "./server/tracks";
 import { type FeedItem } from "./mixtapes";
 
-// Client reads use the public /api/tracks contract produced by lib/server/tracks.ts.
+// Client reads use the public /api/v1/findings feed contract produced by lib/server/tracks.ts.
 export type Track = TrackListItem;
 
 export type { RadioNowPlaying };
@@ -22,7 +22,7 @@ export async function fetchTracks({
     params.set("cursor", cursor);
   }
 
-  const response = await fetch(`/api/tracks?${params.toString()}`);
+  const response = await fetch(`/api/v1/findings?${params.toString()}`);
 
   if (!response.ok) {
     throw new Error(`Failed to load tracks: ${response.status}`);

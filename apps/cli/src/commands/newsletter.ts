@@ -93,7 +93,7 @@ export async function newsletterDraftCommand(
   options: NewsletterDraftOptions,
 ): Promise<EditionResponse> {
   return adminApiPost<EditionResponse>(
-    "/api/admin/newsletter/editions",
+    "/api/v1/admin/newsletter/editions",
     buildBody(options, { requireContent: true }),
   );
 }
@@ -104,7 +104,7 @@ export async function newsletterUpdateCommand(
   options: NewsletterUpdateOptions,
 ): Promise<EditionResponse> {
   return adminApiPatch<EditionResponse>(
-    `/api/admin/newsletter/editions/${encodeURIComponent(id)}`,
+    `/api/v1/admin/newsletter/editions/${encodeURIComponent(id)}`,
     buildBody(options, { requireContent: false }),
   );
 }
@@ -116,7 +116,7 @@ export async function newsletterUpdateCommand(
  */
 export async function newsletterSendCommand(id: string): Promise<EditionResponse> {
   return adminApiPost<EditionResponse>(
-    `/api/admin/newsletter/editions/${encodeURIComponent(id)}/send`,
+    `/api/v1/admin/newsletter/editions/${encodeURIComponent(id)}/send`,
   );
 }
 
@@ -127,7 +127,7 @@ export async function newsletterSendCommand(id: string): Promise<EditionResponse
  * read the last sent edition's `windowUntil` cutoff for the self-healing window.
  */
 export async function newsletterListCommand(): Promise<EditionListItem[]> {
-  const response = await adminApiGet<EditionsResponse>("/api/admin/newsletter/editions");
+  const response = await adminApiGet<EditionsResponse>("/api/v1/admin/newsletter/editions");
 
   return response.editions;
 }
@@ -139,5 +139,7 @@ export async function newsletterListCommand(): Promise<EditionListItem[]> {
  * window so the dropped finds re-enter the next edition. A valid AGENT token gets a 403.
  */
 export async function newsletterDeleteCommand(id: string): Promise<{ id: string }> {
-  return adminApiDelete<{ id: string }>(`/api/admin/newsletter/editions/${encodeURIComponent(id)}`);
+  return adminApiDelete<{ id: string }>(
+    `/api/v1/admin/newsletter/editions/${encodeURIComponent(id)}`,
+  );
 }

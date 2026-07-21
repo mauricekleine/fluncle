@@ -16,14 +16,14 @@ import { adminApiPost, adminApiPut } from "../api";
 /** Run ONE bounded tick of the auto-advance (admin tier — the box's agent token drives the
  *  cron form of this). Returns the tick's report: what it pushed, held, and why. */
 export async function publishAdvanceCommand(): Promise<PublishAdvanceResponse> {
-  return adminApiPost<PublishAdvanceResponse>("/api/admin/social/publish/advance", {});
+  return adminApiPost<PublishAdvanceResponse>("/api/v1/admin/social/publish/advance", {});
 }
 
 /** Pause or resume the whole auto-advance — the kill switch (operator tier). Pausing halts
  *  every future auto-publish within one tick; nothing else about a finding changes. */
 export async function publishAdvancePauseCommand(paused: boolean): Promise<boolean> {
   const response = await adminApiPut<PublishAdvanceStateResponse>(
-    "/api/admin/social/publish/advance/state",
+    "/api/v1/admin/social/publish/advance/state",
     { paused },
   );
 

@@ -349,7 +349,7 @@ async function createRecording(
   recordedAtLocal: string,
 ): Promise<{ id: string; title: string }> {
   const recordedAt = recordedAtLocal ? new Date(recordedAtLocal).toISOString() : undefined;
-  const response = await fetch("/api/admin/recordings", {
+  const response = await fetch("/api/v1/admin/recordings", {
     body: JSON.stringify({ recordedAt, title }),
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -371,7 +371,7 @@ async function createRecording(
 
 // Drop a recording after a failed/cancelled upload — the "never a phantom recording" cleanup.
 async function deleteRecording(id: string): Promise<void> {
-  await fetch(`/api/admin/recordings/${encodeURIComponent(id)}`, {
+  await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}`, {
     credentials: "same-origin",
     method: "DELETE",
   });

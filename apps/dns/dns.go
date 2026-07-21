@@ -65,7 +65,7 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// lookup decides whether the finding exists (NXDOMAIN if it does not).
 	label := strings.TrimSuffix(name, "."+zone)
 
-	// The reserved `live` label answers the live-set callout off /api/status, not a
+	// The reserved `live` label answers the live-set callout off /api/v1/status, not a
 	// finding lookup. It always exists (NODATA, never NXDOMAIN, for non-TXT types).
 	if label == liveLabel {
 		h.answerLive(m, q)

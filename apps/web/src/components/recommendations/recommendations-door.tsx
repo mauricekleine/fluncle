@@ -113,12 +113,12 @@ export function RecommendationsDoor({
     mutationFn: async (op: { kind: "add" | "remove"; trackId: string }) => {
       const response =
         op.kind === "add"
-          ? await fetch("/api/me/rec-seeds", {
+          ? await fetch("/api/v1/me/rec-seeds", {
               body: JSON.stringify({ trackId: op.trackId }),
               headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
               method: "POST",
             })
-          : await fetch(`/api/me/rec-seeds/${encodeURIComponent(op.trackId)}`, {
+          : await fetch(`/api/v1/me/rec-seeds/${encodeURIComponent(op.trackId)}`, {
               headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
               method: "DELETE",
             });

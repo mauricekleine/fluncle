@@ -49,10 +49,11 @@ export function artistsHandlers(os: Implementer) {
     }
   });
 
-  // `list_similar_artists` — the "sounds like these" multi-artist sonic read. `slugs` is the
-  // comma-separated pool (2..MAX validated artist slugs; a 1-slug / junk / over-cap request 400s
-  // here, the get_mixable_order in-handler precedent). The ranking + exclusion of the given artists
-  // happens in `listSimilarArtistsApi`.
+  // `list_similar_artists` — the "sounds like these" sonic read over 1 to MAX anchors. `slugs` is the
+  // comma-separated pool (1..MAX validated artist slugs; an empty / junk / over-cap request 400s
+  // here, the get_mixable_order in-handler precedent). A single anchor takes the same averaged-probe
+  // path — an average of one is itself. The ranking + exclusion of the given artists happens in
+  // `listSimilarArtistsApi`.
   const listSimilarArtistsHandler = os.list_similar_artists.handler(async ({ input }) => {
     const slugs = [
       ...new Set(
@@ -63,13 +64,13 @@ export function artistsHandlers(os: Implementer) {
       ),
     ];
 
-    if (slugs.length < 2 || slugs.length > MAX_SIMILAR_ARTISTS_INPUT) {
+    if (slugs.length < 1 || slugs.length > MAX_SIMILAR_ARTISTS_INPUT) {
       throw new ORPCError("BAD_REQUEST", {
         data: {
           apiCode: "invalid_request",
-          apiMessage: `Provide 2 to ${MAX_SIMILAR_ARTISTS_INPUT} artist slugs to compare`,
+          apiMessage: `Provide 1 to ${MAX_SIMILAR_ARTISTS_INPUT} artist slugs to compare`,
         },
-        message: `Provide 2 to ${MAX_SIMILAR_ARTISTS_INPUT} artist slugs to compare`,
+        message: `Provide 1 to ${MAX_SIMILAR_ARTISTS_INPUT} artist slugs to compare`,
       });
     }
 

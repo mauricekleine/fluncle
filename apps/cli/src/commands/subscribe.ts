@@ -13,7 +13,7 @@ export async function subscribeCommand(email?: string, json?: boolean): Promise<
     throw new CliError("invalid_email", "Enter a valid email address.");
   }
 
-  await publicApiPost<SubscribeResponse>("/api/newsletter", {
+  await publicApiPost<SubscribeResponse>("/api/v1/newsletter", {
     email: address,
   } satisfies NewsletterRequest);
 

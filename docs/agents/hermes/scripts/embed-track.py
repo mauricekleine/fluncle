@@ -26,7 +26,7 @@
 # window's activation tensors before the next forward so peak RAM is bounded by a single
 # ~30s window (never the whole song) — mean-pool each window over its time axis to a 1024-d
 # vector, then MEAN-POOL those per-window vectors into ONE 1024-d vector and L2-normalize.
-# The output shape (1024-d, L2-normalized) is unchanged, so downstream `get_similar_findings`
+# The output shape (1024-d, L2-normalized) is unchanged, so downstream `list_similar_tracks`
 # cosine is unchanged; only the decode→window→pool path differs.
 #
 # The torch trio (torch + torchaudio + torchvision, matched CPU builds) + muq + Python 3.11

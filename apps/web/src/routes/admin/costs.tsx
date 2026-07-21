@@ -322,7 +322,7 @@ function CostsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const response = await fetch(`/api/admin/subscriptions/${id}`, {
+      const response = await fetch(`/api/v1/admin/subscriptions/${id}`, {
         credentials: "same-origin",
         method: "DELETE",
       });
@@ -729,7 +729,7 @@ function CostDialog({
 
     try {
       const response = await fetch(
-        editing ? `/api/admin/subscriptions/${editing.id}` : "/api/admin/subscriptions",
+        editing ? `/api/v1/admin/subscriptions/${editing.id}` : "/api/v1/admin/subscriptions",
         {
           body: JSON.stringify(body),
           credentials: "same-origin",

@@ -9,7 +9,7 @@ export type SearchResult = {
 
 export async function searchTracks(query: string): Promise<SearchResult[]> {
   const params = new URLSearchParams({ q: query });
-  const response = await fetch(`/api/search?${params.toString()}`);
+  const response = await fetch(`/api/v1/search?${params.toString()}`);
   const data = (await response.json()) as {
     ok?: boolean;
     results?: SearchResult[];
@@ -34,7 +34,7 @@ export async function submitTrack({
   honeypot?: string;
   note?: string;
 }): Promise<void> {
-  const response = await fetch("/api/submissions", {
+  const response = await fetch("/api/v1/submissions", {
     body: JSON.stringify({
       album: candidate.album,
       artists: candidate.artists,

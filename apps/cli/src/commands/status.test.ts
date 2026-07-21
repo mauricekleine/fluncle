@@ -31,7 +31,7 @@ function snapshot(
 }
 
 // Capture every public API path the command requests so the test can prove it
-// reads the public, non-oRPC /api/status resource (not an admin path).
+// reads the public, non-oRPC /api/v1/status resource (not an admin path).
 let requestedPaths: string[] = [];
 
 await mock.module("../api", () => ({
@@ -50,10 +50,10 @@ describe("status command — the public status read", () => {
     requestedPaths = [];
   });
 
-  test("GETs the public /api/status resource (no auth, no admin path)", async () => {
+  test("GETs the public /api/v1/status resource (no auth, no admin path)", async () => {
     const result = await statusCommand();
 
-    expect(requestedPaths).toEqual(["/api/status"]);
+    expect(requestedPaths).toEqual(["/api/v1/status"]);
     expect(result.services[0]?.service).toBe("web");
   });
 });

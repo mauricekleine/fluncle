@@ -638,7 +638,7 @@ function addTrackCommands(program: Command): void {
       await runTrackGet(idOrLogId, options, trackGetCommand);
     });
 
-  // `get_similar_findings` → `tracks similar` (Convention B). The finding's sonic
+  // `list_similar_tracks` → `tracks similar` (Convention B). The finding's sonic
   // neighbours, off the MuQ embedding — the same "more like this" cluster the /log page
   // shows, with each neighbour's editorial note. The auto-note sweep reads this to hear
   // the region of the archive a finding lands in before it writes about it.

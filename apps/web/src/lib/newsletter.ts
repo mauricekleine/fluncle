@@ -5,7 +5,7 @@ export async function subscribeToNewsletter({
   email: string;
   honeypot?: string;
 }): Promise<void> {
-  const response = await fetch("/api/newsletter", {
+  const response = await fetch("/api/v1/newsletter", {
     body: JSON.stringify({ email, honeypot }),
     headers: { "Content-Type": "application/json" },
     method: "POST",

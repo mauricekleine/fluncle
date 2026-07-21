@@ -59,7 +59,7 @@ const EXAMPLE_QUERIES = ["netsky", "hospital records", "tracks that sound like N
 
 const MIN_QUERY_LENGTH = 2;
 
-const FRONTIER_PATH = "/api/me/frontier-playlist";
+const FRONTIER_PATH = "/api/v1/me/frontier-playlist";
 
 async function readFrontier(): Promise<FrontierState> {
   const response = await fetch(FRONTIER_PATH);

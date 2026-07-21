@@ -225,7 +225,7 @@ function SaveControl({
 }) {
   const save = useMutation({
     mutationFn: async (): Promise<"error" | "saved"> => {
-      const response = await fetch("/api/me/saved-findings", {
+      const response = await fetch("/api/v1/me/saved-findings", {
         body: JSON.stringify(savedFindingBody({ logId, trackId })),
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "POST",

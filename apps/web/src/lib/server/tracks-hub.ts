@@ -58,7 +58,7 @@
 // masthead number, never the 404 decision (that reads the id slice's emptiness), and the same 60 s
 // window is already what the bare hub's edge cache accepts.
 
-import { type SearchFilters } from "@fluncle/contracts/orpc";
+import { type CatalogueTrackListItem, type SearchFilters } from "@fluncle/contracts/orpc";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
@@ -93,6 +93,12 @@ export const TRACKS_HUB_PAGE_SIZE = 48;
 export type TracksHubFilters = {
   bpmMax?: number;
   bpmMin?: number;
+  // The `list_tracks` API enumerator's tri-state certification filter (the machine twin's ONE filter):
+  // `true` narrows to certified findings, `false` to the uncertified rows, `undefined` returns both.
+  // Folded into the SAME compiled clause set as every other filter (one gate, no forked query); because
+  // it reads a `findings` column, `findingsJoinFor` turns the LEFT JOIN on for it by itself. The web
+  // `/tracks` page never sets it (its register split is visual, not a filter) — this is API-only.
+  certified?: boolean;
   galaxy?: string;
   key?: string;
   label?: string;
@@ -178,6 +184,16 @@ export function tracksHubClauses(filters: TracksHubFilters): Clause[] {
 
   if (filters.galaxy) {
     clauses.push(galaxyClause(filters.galaxy));
+  }
+
+  // The API enumerator's tri-state certification filter. `findings.track_id` is the presence key, so
+  // `is not null` selects the certified findings and `is null` the uncertified rows; either reads a
+  // `findings` column, so `findingsJoinFor` includes the LEFT JOIN for it automatically. Absent, no
+  // clause is added and both registers appear (the web page's default).
+  if (filters.certified === true) {
+    clauses.push({ args: [], sql: `findings.track_id is not null` });
+  } else if (filters.certified === false) {
+    clauses.push({ args: [], sql: `findings.track_id is null` });
   }
 
   return clauses;
@@ -339,6 +355,44 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
       title: row.title,
       trackId: row.track_id,
     },
+  };
+}
+
+/**
+ * Flatten one hub entry into the lean `list_tracks` API row (`CatalogueTrackListItem`) — the machine
+ * twin of what the web row renders. A finding carries its `logId` coordinate, cover, and record +
+ * imprint edges; an uncertified row carries neither coordinate nor cover (the Unlit Rule holds by
+ * construction, since the finding-only fields are read only in the `finding` arm). The heavy DTO
+ * (note/video/features) never crosses this boundary — a browse enumerator wants the identity, not the
+ * lore.
+ */
+export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackListItem {
+  if (entry.kind === "finding") {
+    const finding = entry.finding;
+
+    return {
+      album: finding.album,
+      albumSlug: finding.albumSlug,
+      artists: finding.artists,
+      certified: true,
+      coverImageUrl: finding.albumImageUrl,
+      label: finding.label,
+      labelSlug: finding.labelSlug,
+      logId: finding.logId,
+      releaseDate: (finding.releaseDate ?? entry.releaseDate) || undefined,
+      spotifyUrl: finding.spotifyUrl,
+      title: finding.title,
+    };
+  }
+
+  return {
+    artists: entry.track.artists,
+    certified: false,
+    label: entry.label,
+    labelSlug: entry.labelSlug,
+    releaseDate: entry.releaseDate || undefined,
+    spotifyUrl: entry.track.spotifyUrl,
+    title: entry.track.title,
   };
 }
 

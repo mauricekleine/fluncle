@@ -27,8 +27,8 @@
 //      edition's `windowUntil`, or now-7d if none. The window self-heals: only SENT
 //      editions anchor it, so a skipped week widens the next window instead of
 //      dropping finds.
-//   3. FETCH (deterministic): `/api/tracks?since&until&limit=48` (paged via
-//      nextCursor) for findings + `/api/mixtapes` filtered to the window. Public reads,
+//   3. FETCH (deterministic): `/api/v1/findings?since&until&limit=48` (paged via
+//      nextCursor) for findings + `/api/v1/mixtapes` filtered to the window. Public reads,
 //      no auth. Findings are capped (FIND_CAP, newest-first) to keep the one authoring
 //      call inside the cron runner's 120s budget; a cap hit is logged.
 //   4. ZERO-FIND RULE (deterministic): no findings AND no mixtapes → author nothing,
@@ -79,7 +79,7 @@ const NEWSLETTER_CLAUDE_EFFORT = process.env.NEWSLETTER_CLAUDE_EFFORT;
 // runner's 120s kill (a normal week is well under this; a huge self-healed backlog
 // window is the only case that hits it — newest-first, the rest roll to next week).
 const FIND_CAP = Number(process.env.NEWSLETTER_FIND_CAP ?? "50");
-const PAGE_LIMIT = 48; // /api/tracks page size (matches the doctrine)
+const PAGE_LIMIT = 48; // /api/v1/findings page size (matches the doctrine)
 const PAGE_CAP = 12; // hard ceiling on pages fetched (backstop against a cursor loop)
 
 // The anti-sameness rail (the light half — the ledger holds the heavy rail until ≥4
@@ -322,7 +322,7 @@ function fetchFindings(since: string, until: string): Finding[] {
     }
 
     const response = curlJson<{ nextCursor?: string; tracks?: Finding[] }>(
-      `${SITE}/api/tracks?${params.toString()}`,
+      `${SITE}/api/v1/findings?${params.toString()}`,
     );
 
     findings.push(...(response.tracks ?? []));
@@ -344,7 +344,7 @@ function fetchFindings(since: string, until: string): Finding[] {
 }
 
 function fetchMixtapes(since: string, until: string): Mixtape[] {
-  const response = curlJson<{ mixtapes?: Mixtape[] }>(`${SITE}/api/mixtapes`);
+  const response = curlJson<{ mixtapes?: Mixtape[] }>(`${SITE}/api/v1/mixtapes`);
   const sinceMs = Date.parse(since);
   const untilMs = Date.parse(until);
 

@@ -9,7 +9,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { foldFrontierMint, mintToastMessage } from "./shared";
 
-const FRONTIER_PATH = "/api/me/frontier-playlist";
+const FRONTIER_PATH = "/api/v1/me/frontier-playlist";
 
 /** What the door hands the panel: the one gesture, its pending flag, and its toast line. */
 export type FrontierMint = {

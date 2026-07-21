@@ -110,7 +110,7 @@ function ensureAudio(): HTMLAudioElement {
 }
 
 // `src` overrides the default preview proxy: the admin quarantine lens auditions the CAPTURED
-// bytes (`/api/admin/tracks/:id/source-audio`) through this same singleton, so starting a
+// bytes (`/api/v1/admin/tracks/:id/source-audio`) through this same singleton, so starting a
 // captured audition stops a preview and vice versa. One element, one thing playing, everywhere.
 function start(trackId: string, src?: string): void {
   const element = ensureAudio();

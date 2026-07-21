@@ -420,7 +420,7 @@ export function AdminSidebar({ current }: { current: AdminNavCurrent }) {
           <KeyNotationCog />
           <SidebarMenuItem>
             <SidebarMenuButton
-              render={<a aria-label="Sign out" href="/api/admin/logout" />}
+              render={<a aria-label="Sign out" href="/api/v1/admin/logout" />}
               tooltip="Sign out"
             >
               <SignOutIcon aria-hidden="true" />

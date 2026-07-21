@@ -26,7 +26,7 @@ export { parseBool, parseLimit } from "../query-params";
 
 /**
  * Parse the `page` query arg of a catalogue list op (list_albums / list_labels / list_artists).
- * Tolerant like `list_tracks`: any non-positive-integer value degrades to page 1 — never a 400.
+ * Tolerant like `list_findings`: any non-positive-integer value degrades to page 1 — never a 400.
  * The page SIZE is fixed by the shared hub reader (the API list serves the same paged index the
  * web hub does), so there is no `limit` to parse.
  */

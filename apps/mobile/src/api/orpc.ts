@@ -22,5 +22,5 @@ const link = new OpenAPILink(contract, {
 
 const client: JsonifiedClient<ContractRouterClient<typeof contract>> = createORPCClient(link);
 
-/** Typed TanStack Query utilities (the contract is flat: `orpc.list_tracks.infiniteOptions(...)`, …). */
+/** Typed TanStack Query utilities (the contract is flat: `orpc.list_findings.infiniteOptions(...)`, …). */
 export const orpc = createTanstackQueryUtils(client);

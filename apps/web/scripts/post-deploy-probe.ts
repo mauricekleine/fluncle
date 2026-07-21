@@ -351,7 +351,7 @@ const TRACK_ID_PARAMS = new Set(["idOrLogId", "logId", "trackId"]);
 /**
  * Promote the track-id-family public parameterised GET ops from skipped → fired,
  * substituting a REAL Log ID fetched from the public archive list. Ops whose single
- * param is a track id (`get_track`, `get_similar_findings`, `list_mixable_tracks`)
+ * param is a track id (`get_track`, `list_similar_tracks`, `list_mixable_tracks`)
  * gain live coverage; every other parameterised public read stays skipped.
  * Best-effort: if no sample id is available, nothing is promoted (the ops remain
  * honestly skipped).
@@ -580,7 +580,7 @@ async function runPool(
 /** Fetch one real Log ID from the public archive list, for the track-param ops. Null on any failure. */
 async function bootstrapSampleLogId(baseUrl: string, fetchImpl: FetchLike): Promise<string | null> {
   try {
-    const response = await fetchWithRetry(`${baseUrl}${API_PREFIX}/tracks?limit=1`, fetchImpl);
+    const response = await fetchWithRetry(`${baseUrl}${API_PREFIX}/findings?limit=1`, fetchImpl);
 
     if (!response.ok) {
       return null;

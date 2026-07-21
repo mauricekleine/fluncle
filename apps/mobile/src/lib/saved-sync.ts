@@ -16,7 +16,7 @@ import { type SavedFinding, savedKey } from "@/lib/saved-store";
 
 /**
  * One saved finding as the account list returns it — the `me-saved` contract's
- * `SavedFinding` (GET /api/me/saved-findings). The account carries only identity + the
+ * `SavedFinding` (GET /api/v1/me/saved-findings). The account carries only identity + the
  * render-minimal fields; the device snapshot's richer fields (album art, bpm, key, galaxy,
  * spotify) are device-capture only and are absent here.
  */
@@ -38,7 +38,7 @@ export type SyncFetch = (
   init?: { body?: string; method?: string },
 ) => Promise<{ json: () => Promise<unknown>; ok: boolean }>;
 
-const SAVED_FINDINGS_PATH = "/api/me/saved-findings";
+const SAVED_FINDINGS_PATH = "/api/v1/me/saved-findings";
 
 /**
  * Adapt an account row to the device snapshot shape. The account list drops the device-only
