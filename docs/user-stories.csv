@@ -1,5 +1,5 @@
 register,entity,id,story,web,api,cli,mcp,chat,ssh,feeds,mobile
-catalogue,track,browse-every-track,"As a listener, I want to browse every track in the archive, newest release first.",yes,no,no,no,no,no,no,no
+catalogue,track,browse-every-track,"As a listener, I want to browse every track in the archive, newest release first.",yes,yes,no,yes,yes,no,no,no
 catalogue,track,filter-tracks,"As a listener, I want to filter tracks by release year, tempo, key, label, and galaxy.",yes,yes,partial,partial,partial,no,no,partial
 catalogue,track,see-new-releases,"As a listener, I want to see what just came out in drum & bass.",yes,yes,yes,yes,yes,yes,yes,no
 catalogue,cross,search-archive,"As a listener, I want to search the whole archive by name, coordinate, or a plain-language query.",yes,yes,yes,yes,yes,no,n/a,yes
@@ -7,8 +7,8 @@ catalogue,track,find-similar-tracks,"As a listener, I want to find tracks that s
 catalogue,track,open-by-coordinate,"As a listener, I want to open any track or mixtape by its Log ID coordinate.",yes,yes,yes,yes,yes,yes,partial,yes
 catalogue,artist,browse-every-artist,"As a listener, I want to browse every drum & bass artist, A to Z.",yes,yes,yes,yes,yes,partial,no,no
 catalogue,artist,artist-profile,"As a listener, I want an artist's profile: bio, releases, and where to follow them.",yes,yes,yes,yes,yes,no,partial,no
-catalogue,artist,similar-to-one-artist,"As a listener, I want artists similar to one artist I like.",yes,no,no,yes,yes,no,n/a,no
-catalogue,artist,sounds-like-selected-artists,"As a listener, I want to multi-select artists I like and see who sounds like all of them.",yes,yes,no,no,no,no,n/a,no
+catalogue,artist,similar-to-one-artist,"As a listener, I want artists similar to one artist I like.",yes,yes,no,yes,yes,no,n/a,no
+catalogue,artist,sounds-like-selected-artists,"As a listener, I want to multi-select artists I like and see who sounds like all of them.",yes,yes,no,yes,no,no,n/a,no
 catalogue,artist,follow-artist-releases,"As a fan, I want to follow one artist's new releases.",partial,partial,no,no,no,no,yes,no
 catalogue,album,browse-every-album,"As a listener, I want to browse every album and EP, A to Z.",yes,yes,yes,yes,yes,no,no,no
 catalogue,album,album-page,"As a listener, I want an album's page: tracklist, artists, label.",yes,yes,yes,yes,partial,no,partial,no
