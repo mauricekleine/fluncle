@@ -312,7 +312,7 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  *
  * A GALAXY (a named, non-retired sonic cluster) and a published MIXTAPE (matched by TITLE) are
  * two more jump nodes with a page — the galaxy's `/galaxies/<slug>`, the mixtape's `/log/<F-logId>`
- * (its page IS its log page). Both reads are archive-sized (galaxies and mixtapes are dozens),
+ * (its page IS its log page). Both reads are archive-sized (galaxies and mixtapes are a handful today, dozens at most),
  * so they stay cheap exact/prefix lookups; a galaxy that is unnamed/retired and a mixtape that is
  * unpublished never surface.
  *
@@ -367,7 +367,7 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
 
   if (kind === "mixtape") {
     // A PUBLISHED mixtape, matched by TITLE. Its `slug` is its Log ID — its page IS its log page,
-    // so the mapper builds `/log/<log_id>`. Archive-sized (mixtapes are dozens).
+    // so the mapper builds `/log/<log_id>`. Archive-sized (mixtapes are a handful today, dozens at most).
     return {
       buildArgs: (needle, limit) => [needle, limit],
       sql: `select mixtapes.title as name, mixtapes.log_id as slug
@@ -444,7 +444,7 @@ function entityImageUrl(kind: SearchEntity["kind"], row: EntityRow): string | un
  *
  * The prefix mode is the affordance that makes a search box feel like navigation: type `net`,
  * see Netsky; type `hospi`, see Hospital Records. Cheap either way — every entity table is
- * bounded by the ARCHIVE (a label/album by the hub floor; galaxies and mixtapes are dozens), not
+ * bounded by the ARCHIVE (a label/album by the hub floor; galaxies and mixtapes are a handful, dozens at most), not
  * by the catalogue, so this stays tens-to-hundreds of rows however deep the catalogue gets.
  */
 async function matchEntities(

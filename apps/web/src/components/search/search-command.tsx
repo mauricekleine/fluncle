@@ -75,12 +75,12 @@ type SearchEntity = {
 };
 
 /**
- * The three graph nodes that HAVE a page, in the order they render — and the order a reader
+ * The graph nodes that HAVE a page, in the order they render — and the order a reader
  * means, because a name is most often a person. Each gets the identical row: the picture, the
  * name, the arrow. An artist is the precedent and a label and an album are not a lesser
  * citizen of it; the only thing `kind` decides is which page the arrow goes to.
  *
- * The heading names the KIND, which it is allowed to do because all three are named objects in
+ * The heading names the KIND, which it is allowed to do because all of them are named objects in
  * Fluncle's world — unlike the uncertified tracks below, which have no name and get no heading
  * (the Unlit Rule, above).
  */

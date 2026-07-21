@@ -25,7 +25,7 @@ It was not always so. Search shipped before the label and album pages did, so th
 Two rails hold:
 
 - **A label or an album is offered when it clears the shared hub gate.** Search offers exactly the labels/albums the `/labels` + `/albums` hubs and the API list — a certified finding **or** a page that clears the thin-content floor (the same `HUB_INCLUSION_HAVING` fragment from `labels.ts`). This replaced the old certified-only guard when the unified hub index shipped: a catalogue-only label with enough renderable tracks now has a real page, so withholding it would be the lie. A below-floor imprint (the [catalogue crawler](./catalogue-crawler.md) mints a `labels` row for every one it walks past) still declines the jump and falls back to the filter it always was — never a dead link.
-- **The entity reads are archive-sized, not catalogue-sized** — a label/album is bounded by that floor, and galaxies and mixtapes are dozens — so the exact/prefix match stays a cheap read however deep the catalogue gets. A galaxy resolves only when it is **named and not retired**; a mixtape only when it is **published**.
+- **The entity reads are archive-sized, not catalogue-sized** — a label/album is bounded by that floor, and galaxies and mixtapes are a handful today, dozens at most — so the exact/prefix match stays a cheap read however deep the catalogue gets. A galaxy resolves only when it is **named and not retired**; a mixtape only when it is **published**.
 
 ### An artist answers to every name
 
