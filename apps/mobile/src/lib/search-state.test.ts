@@ -93,6 +93,16 @@ assertEqual(groups[1]?.kind, "album", "albums follow (labels dropped, none prese
 
 assertEqual(partitionEntities([]).length, 0, "no entities → no groups");
 
+// 8b. The galaxy + mixtape kinds render in their own groups, after albums.
+const withGalaxyAndMixtape = partitionEntities([
+  { kind: "mixtape", name: "Summer Voyage", slug: "005.F.03", url: "/log/005.F.03" },
+  { kind: "galaxy", name: "Amber Drift", slug: "amber-drift", url: "/galaxies/amber-drift" },
+  { kind: "artist", name: "Netsky", slug: "netsky" },
+]);
+assertEqual(withGalaxyAndMixtape.length, 3, "artist, galaxy, and mixtape groups render");
+assertEqual(withGalaxyAndMixtape[1]?.heading, "Galaxies", "galaxies follow albums");
+assertEqual(withGalaxyAndMixtape[2]?.heading, "Mixtapes", "mixtapes come last");
+
 // 9. Track partitioning (operator ruling 2026-07-12): certified "Fluncle's Findings"
 //    ALWAYS before uncertified "Tracks", order preserved within each, empty groups dropped.
 function hit(trackId: string, certified: boolean): SearchHit {
@@ -135,4 +145,14 @@ assertEqual(
   entityWebPath({ kind: "label", slug: "hospital-records" }),
   "/label/hospital-records",
   "label → /label/<slug>",
+);
+assertEqual(
+  entityWebPath({ kind: "galaxy", slug: "amber-drift", url: "/galaxies/amber-drift" }),
+  "/galaxies/amber-drift",
+  "galaxy → its own url (plural segment)",
+);
+assertEqual(
+  entityWebPath({ kind: "mixtape", slug: "005.F.03", url: "/log/005.F.03" }),
+  "/log/005.F.03",
+  "mixtape → its own url (the log page)",
 );

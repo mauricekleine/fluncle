@@ -616,6 +616,255 @@ describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
   });
 });
 
+// ── Tier 2 · a galaxy and a mixtape are jump nodes too ───────────────────────────────
+
+// Beyond the artist/label/album graph, search resolves a NAMED galaxy (`/galaxies/<slug>`) and a
+// PUBLISHED mixtape by its TITLE — whose page IS its log page (`/log/<F-logId>`). Both are archive-
+// sized reads and both are a pure jump: the row carries its own `url` so a consumer never has to
+// special-case the plural galaxy segment or the mixtape's log route.
+describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
+  beforeEach(async () => {
+    // A named, non-retired galaxy (public) + a retired one and an unnamed one (both admin-only).
+    await db.execute({
+      args: [],
+      sql: `insert into galaxies (id, handle, name, slug, centroid_json, created_at, updated_at)
+            values ('g-named', 'gx-01', 'Amber Drift', 'amber-drift', '[]', '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into galaxies (id, handle, name, slug, centroid_json, retired_at, created_at, updated_at)
+            values ('g-dead', 'gx-02', 'Faded Sector', 'faded-sector', '[]', '2026-07-02', '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into galaxies (id, handle, centroid_json, created_at, updated_at)
+            values ('g-unnamed', 'gx-03', '[]', '2026-07-01', '2026-07-01')`,
+    });
+
+    // A published mixtape (minted, log_id set) + a distributing one (unminted) that must NOT resolve.
+    await db.execute({
+      args: [],
+      sql: `insert into mixtapes (id, title, log_id, status, created_at, updated_at)
+            values ('m-pub', 'Summer Voyage', '005.F.03', 'published', '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into mixtapes (id, title, status, created_at, updated_at)
+            values ('m-dist', 'Winter Draft', 'distributing', '2026-07-01', '2026-07-01')`,
+    });
+  });
+
+  it("jumps to a named galaxy's page, carrying the plural-segment url", async () => {
+    const result = await searchArchive({ q: "Amber Drift" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBe("/galaxies/amber-drift");
+    expect(result.entities).toEqual([
+      { kind: "galaxy", name: "Amber Drift", slug: "amber-drift", url: "/galaxies/amber-drift" },
+    ]);
+    // A pure jump — no column filter maps to a galaxy, so nothing lists under it.
+    expect(result.results).toEqual([]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("never resolves a retired or an unnamed galaxy", async () => {
+    expect((await searchArchive({ q: "Faded Sector" })).entities).toEqual([]);
+    // The unnamed galaxy has no public name to match on at all.
+    const named = await searchArchive({ q: "amber" });
+
+    expect(named.entities.map((entity) => entity.slug)).toEqual(["amber-drift"]);
+  });
+
+  it("jumps to a published mixtape by title — its page IS its log page", async () => {
+    const result = await searchArchive({ q: "Summer Voyage" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBe("/log/005.F.03");
+    expect(result.entities[0]).toMatchObject({
+      kind: "mixtape",
+      name: "Summer Voyage",
+      slug: "005.F.03",
+      url: "/log/005.F.03",
+    });
+    // Its cover derives from the Log ID (never stored), same as every mixtape surface.
+    expect(result.entities[0]?.imageUrl).toContain("/api/mixtape-cover/005.F.03");
+    expect(result.results).toEqual([]);
+  });
+
+  it("never resolves a mixtape that is not published yet", async () => {
+    const result = await searchArchive({ q: "Winter Draft" });
+
+    expect(result.entities).toEqual([]);
+    expect(result.redirect).toBeUndefined();
+  });
+
+  it("prefix-matches a galaxy and a mixtape as tier-3 jump targets", async () => {
+    const entities = (await searchArchive({ q: "summ" })).entities;
+
+    expect(entities).toHaveLength(1);
+    expect(entities[0]).toMatchObject({
+      kind: "mixtape",
+      name: "Summer Voyage",
+      slug: "005.F.03",
+      url: "/log/005.F.03",
+    });
+  });
+});
+
+// ── The entity gate follows the shared hub floor ─────────────────────────────────────
+
+// A label/album is offered as a JUMP when it clears the SAME gate the /labels + /albums hubs and the
+// API list drive off (`HUB_INCLUSION_HAVING`): a certified finding OR a page over the thin-content
+// floor. So a catalogue-only label with enough renderable tracks is a real destination now — while a
+// below-floor imprint still declines the jump and falls back to the filter chip it always was.
+describe("the entity gate follows the shared hub floor (not certified-only)", () => {
+  beforeEach(async () => {
+    // A catalogue-only label with THREE uncertified tracks — no finding, but it clears the floor
+    // (LABEL_INDEX_MIN_TRACKS = 3), so its `/label/<slug>` page exists and search should offer it.
+    for (const n of [1, 2, 3]) {
+      await seed(db, {
+        artists: [`Sunk`],
+        label: "Sofa Sound",
+        title: `Sofa Cut ${n}`,
+        trackId: `sofa-${n}`,
+      });
+    }
+
+    // A below-floor imprint — ONE uncertified track — that must still decline the jump.
+    await seed(db, {
+      artists: ["Lonely"],
+      label: "Lone Imprint",
+      title: "Only One",
+      trackId: "lone-1",
+    });
+  });
+
+  it("OFFERS a catalogue-only label that clears the floor — no certified finding needed", async () => {
+    const result = await searchArchive({ q: "Sofa Sound" });
+
+    expect(result.kind).toBe("entity");
+    expect(result.redirect).toBe("/label/sofa-sound");
+    expect(result.entities.map((entity) => entity.slug)).toEqual(["sofa-sound"]);
+    // The three uncertified rows list under it, exactly as the hub would show them.
+    expect(result.results.map((hit) => hit.trackId).sort()).toEqual(["sofa-1", "sofa-2", "sofa-3"]);
+  });
+
+  it("does NOT offer a below-floor label — it stays the filter chip it always was", async () => {
+    const result = await searchArchive({ q: "Lone Imprint" });
+
+    expect(result.entities).toEqual([]);
+    expect(result.redirect).toBeUndefined();
+    expect(result.filters).toEqual({ label: "Lone Imprint" });
+  });
+});
+
+// ── The compound sonic tier · sound like several artists ─────────────────────────────
+
+// `soundsLikeArtists` — the compound query "songs by artists that sound like Koven and Maduk in A
+// minor". The server resolves each name/slug to an artist, averages their stored `artist_centroids`
+// into ONE probe, ranks TRACKS by it, and every OTHER filter is the btree pre-filter in FRONT of the
+// scan. Anchored on real centroids: an unresolved name does not weigh in, and a probe of nothing
+// declines. The LLM only ever EMITS the filter — a hand-built one works with the model down.
+describe("the compound sonic tier — sound like several artists", () => {
+  beforeEach(async () => {
+    // Two artists with stored centroids. Koven sits at 0.05 (nearest 1991@0.0, then netsky@0.1);
+    // Maduk sits at 1.15 (near andromedik@1.2). The centroid is the artist's position in MuQ space.
+    for (const artist of [
+      { angle: 0.05, id: "a-koven", name: "Koven", slug: "koven" },
+      { angle: 1.15, id: "a-maduk", name: "Maduk", slug: "maduk" },
+    ]) {
+      await db.execute({
+        args: [artist.id, artist.name, artist.slug],
+        sql: `insert into artists (id, name, slug, created_at, updated_at)
+              values (?, ?, ?, '2026-07-01', '2026-07-01')`,
+      });
+      const vector = angleVector(artist.angle);
+
+      await db.execute({
+        args: [artist.id, new Uint8Array(vector.buffer)],
+        sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+              values (?, ?, '2026-07-01', 'corpus-1', 4)`,
+      });
+    }
+  });
+
+  it("ranks tracks by the artist's centroid, echoes the resolved name, and carries no anchor", async () => {
+    translateQuery.mockResolvedValue({ soundsLikeArtists: ["Koven"] });
+
+    const result = await searchArchive({ q: "songs by artists that sound like Koven" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.anchor).toBeUndefined();
+    // Pure distance to Koven's centroid (0.05): 1991 (0.0) → netsky (0.1) → uncertified (0.3) →
+    // andromedik (1.2). Every embedded track ranks; none is excluded (there is no anchor track).
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-1991",
+      "certified-netsky",
+      "uncertified-netsky",
+      "certified-andromedik",
+    ]);
+    // The transparency echo is the RESOLVED name, so the reader sees what the vibe was built from.
+    expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
+  });
+
+  it("resolves a SLUG too, and averages several artists into one probe (equal weight each)", async () => {
+    translateQuery.mockResolvedValue({ soundsLikeArtists: ["koven", "Maduk"] });
+
+    const result = await searchArchive({ q: "acts like koven and Maduk" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.results.length).toBeGreaterThan(0);
+    expect(result.filters?.soundsLikeArtists).toEqual(["Koven", "Maduk"]);
+  });
+
+  it("applies every other filter as a btree pre-filter BEFORE the vector scan (one pass)", async () => {
+    translateQuery.mockResolvedValue({ key: "A minor", soundsLikeArtists: ["Koven"] });
+    const spy = vi.spyOn(db, "execute");
+
+    const result = await searchArchive({ q: "artists that sound like Koven in A minor" });
+
+    // Only the A-minor tracks survive the pre-filter, still ordered by distance to Koven's centroid:
+    // certified-netsky (0.1) then uncertified-netsky (0.3). andromedik/1991 are filtered out by key.
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+
+    // Pin the ratified SQL SHAPE: one exact vector pass, the btree pre-filter in the SAME statement,
+    // ordered by distance — never a union-all fan-out (the CTE-flattening trap), never an ANN index.
+    const scan = spy.mock.calls
+      .map((call) => call[0])
+      .find(
+        (arg) =>
+          typeof arg === "object" &&
+          arg !== null &&
+          typeof (arg as { sql?: unknown }).sql === "string" &&
+          (arg as { sql: string }).sql.includes("vector_distance_cos"),
+      ) as { sql: string } | undefined;
+
+    expect(scan).toBeDefined();
+    const sql = scan?.sql ?? "";
+
+    expect(sql).toContain("vector_distance_cos(tracks.embedding_blob, ?)");
+    expect(sql).toContain("lower(tracks.key) in"); // the btree pre-filter, in the same statement
+    expect(sql).toContain("order by dist asc");
+    expect(sql).not.toContain("union all"); // one pass, no fan-out
+    expect((sql.match(/vector_distance_cos/g) ?? []).length).toBe(1);
+
+    spy.mockRestore();
+  });
+
+  it("DECLINES when no named artist resolves to a centroid — never invents a vibe", async () => {
+    translateQuery.mockResolvedValue({ soundsLikeArtists: ["Nobody At All"] });
+
+    const result = await searchArchive({ q: "artists that sound like Nobody At All" });
+
+    // The probe is nothing, so the compound tier declines and the query falls through — never a
+    // sonic result built from an artist that does not exist.
+    expect(result.kind).not.toBe("sonic");
+  });
+});
+
 // ── THE DEGRADATION ──────────────────────────────────────────────────────────────────
 
 describe("the LLM is down — search degrades, it never breaks", () => {

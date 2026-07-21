@@ -37,9 +37,12 @@ type SearchHit = {
 
 // A graph node the query named — a jump target with a page, not a result row.
 type SearchEntity = {
-  kind: "album" | "artist" | "label";
+  kind: "album" | "artist" | "galaxy" | "label" | "mixtape";
   name: string;
   slug: string;
+  // The page this entity IS, when it is not the `/<kind>/<slug>` default (a galaxy's plural
+  // segment, a mixtape's log page). Server-supplied so the CLI never special-cases the route.
+  url?: string;
 };
 
 // The slice of the `search_archive` envelope this command reads.
@@ -51,12 +54,13 @@ type SearchArchiveResponse = {
 };
 
 // `Artist  Name  https://…/artist/<slug>` — a jump target with its page link.
-// `kind` doubles as the route segment (`/artist/<slug>`, `/label/<slug>`,
-// `/album/<slug>`), so the same value titles the line and builds the URL.
+// `kind` titles the line; the link is the row's own `url` when it carries one (a galaxy's
+// plural segment, a mixtape's log page), else the `/<kind>/<slug>` default.
 function entityLine(entity: SearchEntity): string {
   const kind = `${entity.kind[0]?.toUpperCase() ?? ""}${entity.kind.slice(1)}`;
+  const path = entity.url ?? `/${entity.kind}/${entity.slug}`;
 
-  return `${kind}  ${entity.name}  ${webBaseUrl}/${entity.kind}/${entity.slug}`;
+  return `${kind}  ${entity.name}  ${webBaseUrl}${path}`;
 }
 
 // The track table, padded on the coordinate column like `fresh`:

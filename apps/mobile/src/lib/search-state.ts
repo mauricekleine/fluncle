@@ -61,17 +61,20 @@ export function searchView({
 export type EntityGroup = { entities: SearchEntity[]; heading: string; kind: SearchEntity["kind"] };
 
 /**
- * The three graph nodes that HAVE a page, in the order they render — the same order
- * and the same headings the web palette uses (a name is most often a person, so
- * artists lead). A group with no entities drops out entirely. The heading is allowed
- * to name the kind because all three are named objects in Fluncle's world (the Unlit
- * Rule: only the uncertified tracks below get no heading).
+ * The graph nodes that HAVE a page, in the order they render — the same order and the
+ * same headings the web palette uses (a name is most often a person, so artists lead,
+ * then the imprint/record it came off, then the wider structures). A group with no
+ * entities drops out entirely. The heading is allowed to name the kind because all of
+ * them are named objects in Fluncle's world (the Unlit Rule: only the uncertified tracks
+ * below get no heading).
  */
 export function partitionEntities(entities: SearchEntity[]): EntityGroup[] {
   const order: EntityGroup[] = [
     { entities: [], heading: "Artists", kind: "artist" },
     { entities: [], heading: "Labels", kind: "label" },
     { entities: [], heading: "Albums", kind: "album" },
+    { entities: [], heading: "Galaxies", kind: "galaxy" },
+    { entities: [], heading: "Mixtapes", kind: "mixtape" },
   ];
   for (const entity of entities) {
     const group = order.find((g) => g.kind === entity.kind);
@@ -82,9 +85,13 @@ export function partitionEntities(entities: SearchEntity[]): EntityGroup[] {
   return order.filter((g) => g.entities.length > 0);
 }
 
-/** The public path a jump-target entity opens on the web (the app has no such page). */
-export function entityWebPath(entity: Pick<SearchEntity, "kind" | "slug">): string {
-  return `/${entity.kind}/${entity.slug}`;
+/**
+ * The public path a jump-target entity opens on the web (the app has no such page). The row's
+ * own `url` when it carries one (a galaxy's plural segment, a mixtape's log page), else the
+ * `/<kind>/<slug>` default.
+ */
+export function entityWebPath(entity: Pick<SearchEntity, "kind" | "slug" | "url">): string {
+  return entity.url ?? `/${entity.kind}/${entity.slug}`;
 }
 
 /** One track group as it renders: a heading, its rows, and whether they are certified. */

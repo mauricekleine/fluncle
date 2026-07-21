@@ -64,17 +64,23 @@ type SearchHit = {
   trackId: string;
 };
 
-type EntityKind = "album" | "artist" | "label";
+type EntityKind = "album" | "artist" | "galaxy" | "label" | "mixtape";
 
-type SearchEntity = { imageUrl?: string; kind: EntityKind; name: string; slug: string };
+type SearchEntity = {
+  imageUrl?: string;
+  kind: EntityKind;
+  name: string;
+  slug: string;
+  url?: string;
+};
 
 /**
- * The three graph nodes that HAVE a page, in the order they render — and the order a reader
+ * The graph nodes that HAVE a page, in the order they render — and the order a reader
  * means, because a name is most often a person. Each gets the identical row: the picture, the
  * name, the arrow. An artist is the precedent and a label and an album are not a lesser
  * citizen of it; the only thing `kind` decides is which page the arrow goes to.
  *
- * The heading names the KIND, which it is allowed to do because all three are named objects in
+ * The heading names the KIND, which it is allowed to do because all of them are named objects in
  * Fluncle's world — unlike the uncertified tracks below, which have no name and get no heading
  * (the Unlit Rule, above).
  */
@@ -82,6 +88,8 @@ const ENTITY_GROUPS = [
   { heading: "Artists", kind: "artist" },
   { heading: "Labels", kind: "label" },
   { heading: "Albums", kind: "album" },
+  { heading: "Galaxies", kind: "galaxy" },
+  { heading: "Mixtapes", kind: "mixtape" },
 ] as const satisfies readonly { heading: string; kind: EntityKind }[];
 
 type SearchFilters = {
@@ -92,6 +100,7 @@ type SearchFilters = {
   key?: string;
   label?: string;
   soundsLike?: string;
+  soundsLikeArtists?: string[];
   text?: string;
   yearMax?: number;
   yearMin?: number;
@@ -240,6 +249,9 @@ function FilterChips({ filters }: { filters: SearchFilters }): ReactNode {
     filters.artist && `artist: ${filters.artist}`,
     filters.label && `label: ${filters.label}`,
     filters.album && `album: ${filters.album}`,
+    filters.soundsLikeArtists &&
+      filters.soundsLikeArtists.length > 0 &&
+      `sounds like: ${filters.soundsLikeArtists.join(", ")}`,
     filters.key && `key: ${formatKey(filters.key, notation)}`,
     filters.bpmMin !== undefined && `bpm ≥ ${filters.bpmMin}`,
     filters.bpmMax !== undefined && `bpm ≤ ${filters.bpmMax}`,
@@ -312,9 +324,10 @@ function SearchDialog({
     [close, navigate],
   );
 
-  /** An entity goes to its page. `kind` is the only thing that picks the route. */
+  /** An entity goes to its page — the row's own `url` when it carries one (a galaxy's plural
+      segment, a mixtape's log page), else the `/<kind>/<slug>` default. */
   const pickEntity = useCallback(
-    (entity: SearchEntity) => goTo(`/${entity.kind}/${entity.slug}`),
+    (entity: SearchEntity) => goTo(entity.url ?? `/${entity.kind}/${entity.slug}`),
     [goTo],
   );
 
