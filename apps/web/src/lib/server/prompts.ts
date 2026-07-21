@@ -319,6 +319,7 @@ Return ONLY a JSON object with any of these keys (omit a key the query does not 
   yearMin   number  — a lower release-year bound
   yearMax   number  — an upper release-year bound
   soundsLike string — a TRACK REFERENCE the user wants sonic neighbours of ("sounds like X", "similar to X")
+  soundsLikeArtists array of strings — 1 to 6 ARTIST names the user wants tracks that sound LIKE ("artists that sound like X and Y")
   text      string  — any remaining words that are none of the above
 
 Rules:
@@ -326,7 +327,8 @@ Rules:
 - NEVER name a track that the user did not name. You do not know what is in this archive, and you are not being asked.
 - "in A minor" → key. "at 174" / "around 174 bpm" → bpmMin and bpmMax spanning it. "under 172" → bpmMax. "from 2019" → yearMin and yearMax = 2019.
 - This is drum & bass (165–180 BPM). Do NOT turn a vague word like "fast", "slow", "heavy" or "liquid" into a number — leave it in \`text\`.
-- "sounds like <X>", "similar to <X>", "like <X> but ..." → soundsLike: "<X>". Anything else in the query still fills the other keys.
+- "sounds like <X>", "similar to <X>", "like <X> but ..." where X is ONE track → soundsLike: "<X>". Anything else in the query still fills the other keys.
+- "artists that sound like <X> and <Y>", "songs by acts like <X>, <Y>" → soundsLikeArtists: ["<X>", "<Y>"] (copy each name verbatim). Any key/BPM/year/label in the same query still fills its own key: "artists that sound like Koven and Maduk in A minor before 2020" → {"soundsLikeArtists": ["Koven", "Maduk"], "key": "A minor", "yearMax": 2020}.
 - If the query names nothing you can map, return {"text": "<the query>"}.
 - Output the JSON object and nothing else. No prose, no markdown fence.`;
 
