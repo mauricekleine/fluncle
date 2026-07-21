@@ -78,7 +78,11 @@ const SERVICE_CHECK_SAMPLES_KEEP = 90;
 // auto-follow cron was removed (2026-07-08), but the box's old-image healthcheck keeps
 // upserting it until it re-bakes, and the upserted row lingers after. Add an id here
 // when a probe is retired; remove it once the underlying `service_status` row is dropped.
-const RETIRED_SERVICE_IDS = new Set(["automation", "cron.artist-follow"]);
+// `cron.apple-releases` was the freshness tap's working name for less than a day
+// (2026-07-19): it registered, reported once, and shipped renamed as `cron.label-releases`
+// before any timer existed — leaving the classic orphaned row (bare-slug title, permanent
+// "never run") on /status.
+const RETIRED_SERVICE_IDS = new Set(["automation", "cron.apple-releases", "cron.artist-follow"]);
 
 /**
  * How long a cron may report "no runs yet" before that stops meaning "freshly rebuilt box"
