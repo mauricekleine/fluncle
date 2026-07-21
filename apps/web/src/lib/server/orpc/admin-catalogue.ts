@@ -35,6 +35,10 @@
 
 import { ORPCError } from "@orpc/server";
 import { type AnchorCandidate, anchorTrack, AnchorTrackError, resolveAnchorFree } from "../anchor";
+import {
+  isAnchorSpotifySearchEnabled,
+  setAnchorSpotifySearchEnabled,
+} from "../anchor-spotify-search";
 import { resetAppleBreaker } from "../apple-breaker";
 import {
   getCatalogueCaptureState,
@@ -381,6 +385,24 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  // PUT /admin/catalogue/anchor/search — OPERATOR tier. Flip the DARK flag for slice 2's Spotify
+  // anchor-search rungs (anchor-spotify-search.ts). Operator-only, the `set_capture_budget` rule: the
+  // rungs point the shared official Spotify app (mints/publish) at the catalogue, which starved under
+  // 429s — a machine does not get to arm that. Returns the flag as stored so the CLI/operator reads
+  // back the real state, not an echo.
+  const setAnchorSearchHandler = os.set_anchor_search
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setAnchorSpotifySearchEnabled(input.enabled);
+
+        return { enabled: await isAnchorSpotifySearchEnabled(), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // GET /admin/catalogue/capture-budget — the spend readout. Admin tier (agent-allowed READ,
   // the `get_crawl_status` precedent): reading what a budget has left publishes nothing and
   // spends nothing, and the box's sweeps are entitled to know why the queue went quiet.
@@ -453,6 +475,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     resolve_anchor: resolveAnchorHandler,
+    set_anchor_search: setAnchorSearchHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,
     verify_capture: verifyCaptureHandler,

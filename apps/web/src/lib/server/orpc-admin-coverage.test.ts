@@ -511,6 +511,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // state with its agent token each minute.
   "POST /admin/twitch/live": "record_live_state",
   "POST /admin/youtube/token": "mint_youtube_token",
+  // The DARK flag for slice 2's Spotify anchor-search rungs — contract-only oRPC (no TanStack route
+  // file). OPERATOR tier: it arms the shared official Spotify app (mints/publish) against the
+  // catalogue, the `set_capture_budget` money/rate-judgement class. Static `/search` nests under the
+  // `/anchor` POST above.
+  "PUT /admin/catalogue/anchor/search": "set_anchor_search",
   // The catalogue capture budget + its kill switch — contract-only oRPC (no TanStack route
   // file). OPERATOR tier: it decides how much of the operator's money a metered residential
   // proxy may spend, so the box's agent token 403s on it (an agent may not raise its own
