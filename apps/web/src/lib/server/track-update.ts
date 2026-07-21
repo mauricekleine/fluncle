@@ -97,7 +97,7 @@ export type TrackUpdate = {
    * converts it to the native `embedding_blob` server-side. Internal analysis fuel like
    * `features` — written by the on-box `fluncle-embed` cron, never rendered, so writing it does NOT bump
    * updated_at (a whole-archive embed backfill must move no public lastmod). It IS the
-   * sonic-similarity space `get_similar_findings` ranks over; the handler validates the
+   * sonic-similarity space `list_similar_tracks` ranks over; the handler validates the
    * 1024-d shape before it reaches here. See docs/track-lifecycle.md.
    */
   embedding?: string;

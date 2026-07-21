@@ -72,7 +72,7 @@ export async function presignRecordingUpload(
   contentType: string | undefined,
 ): Promise<RecordingPresign> {
   const response = await fetch(
-    `/api/admin/recordings/${encodeURIComponent(recordingId)}/set-video/presign`,
+    `/api/v1/admin/recordings/${encodeURIComponent(recordingId)}/set-video/presign`,
     {
       body: JSON.stringify({ contentType, partCount }),
       credentials: "same-origin",

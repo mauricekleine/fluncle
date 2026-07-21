@@ -500,7 +500,7 @@ function AdminBoardPage() {
   // the advance but can never turn it on.
   const setAdvancePaused = useMutation<void, Error, boolean, { previous?: { paused: boolean } }>({
     mutationFn: async (paused: boolean) => {
-      const response = await fetch("/api/admin/social/publish/advance/state", {
+      const response = await fetch("/api/v1/admin/social/publish/advance/state", {
         body: JSON.stringify({ paused }),
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
@@ -855,7 +855,9 @@ function AdminBoardPage() {
     setError(undefined);
 
     try {
-      const response = await fetch("/api/admin/spotify/auth/start", { credentials: "same-origin" });
+      const response = await fetch("/api/v1/admin/spotify/auth/start", {
+        credentials: "same-origin",
+      });
       const data = (await response.json()) as { authUrl?: string };
 
       if (!response.ok || !data.authUrl) {
@@ -909,7 +911,7 @@ function AdminBoardPage() {
       setNoteError(undefined);
 
       try {
-        const response = await fetch(`/api/admin/tracks/${noteRow.trackId}`, {
+        const response = await fetch(`/api/v1/admin/tracks/${noteRow.trackId}`, {
           body: JSON.stringify({ note }),
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
@@ -943,7 +945,7 @@ function AdminBoardPage() {
       // Re-queue the finding for the on-box `fluncle-enrich` cron: PATCH the
       // status back to "pending" (queue-eligible). The cron picks it up on its
       // next ~5-min tick, analyzes on-box, and writes "done"/"failed" back.
-      const response = await fetch(`/api/admin/tracks/${enrichRow.trackId}`, {
+      const response = await fetch(`/api/v1/admin/tracks/${enrichRow.trackId}`, {
         body: JSON.stringify({ enrichmentStatus: "pending" }),
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },

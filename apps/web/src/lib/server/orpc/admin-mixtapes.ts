@@ -1,6 +1,6 @@
 // The `admin-mixtapes` domain router module — the audio→Mixcloud /
 // video→YouTube distribution control plane for PROMOTED mixtapes. Each handler
-// reuses the live `/api/admin/mixtapes/*` route logic verbatim; the auth tier
+// reuses the live `/api/v1/admin/mixtapes/*` route logic verbatim; the auth tier
 // moves to the oRPC procedure middleware (../orpc-auth). The draft-authoring
 // handlers (create/members/publish/delete) retired with draft mixtapes — a
 // mixtape is only ever born via `promote_recording`; plans own pre-publish

@@ -4,7 +4,7 @@
 // + raw SQL + `typedRow`, one single-row table (`live_state`). Two halves:
 //
 //   - READ (every surface): `getLiveState` — the single read source for the web
-//     home loader, `/api/status`, the MCP live-note, and (via /api/status) SSH,
+//     home loader, `/api/v1/status`, the MCP live-note, and (via /api/status) SSH,
 //     CLI, and dig. Applies the STALENESS GUARD: a flag older than the window is
 //     treated as offline, so a dead poller mid-set can never strand a permanent
 //     "LIVE" banner. Auto-clear is self-healing regardless of poller health.
@@ -64,7 +64,7 @@ const OFFLINE: LiveState = { on: false, startedAt: null, title: null, url: twitc
  * for every surface. Returns offline when the flag is off, missing, or stale (older
  * than `STALENESS_MS`). Resilient by design: any read error (e.g. the table not yet
  * migrated during a deploy window) returns offline rather than throwing, so the
- * home loader / `/api/status` / MCP never break on a live read.
+ * home loader / `/api/v1/status` / MCP never break on a live read.
  */
 export async function getLiveState(): Promise<LiveState> {
   try {

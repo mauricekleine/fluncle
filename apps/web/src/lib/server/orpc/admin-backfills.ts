@@ -1,5 +1,5 @@
 // The `admin-backfills` domain router module — the maintenance sweeps. Each
-// handler reuses the live `/api/admin/backfill/*` route logic verbatim; the auth
+// handler reuses the live `/api/v1/admin/backfill/*` route logic verbatim; the auth
 // tier moves from the per-handler `requireOperator` to the oRPC procedure
 // middleware (../orpc-auth).
 //

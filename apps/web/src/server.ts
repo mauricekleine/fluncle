@@ -53,8 +53,8 @@ const NOISE_TRACE_MATCHERS = [
 ];
 const serverEntry = createServerEntry({
   async fetch(request) {
-    // oRPC owns the API operations it has contracts for, dual-mounted under
-    // `/api/v1` and `/api`. It returns null when no procedure matched (the
+    // oRPC owns the API operations it has contracts for, mounted at the single
+    // canonical `/api/v1` prefix. It returns null when no procedure matched (the
     // `matched: false` fall-through), so every unconverted route — and every
     // non-API request — flows on to the existing handlers unchanged. This is the
     // incremental-migration seam; it sits ahead of

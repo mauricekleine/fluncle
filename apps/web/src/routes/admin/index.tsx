@@ -446,7 +446,7 @@ function AdminQueuePage() {
       }
       setBusyId(item.id);
       try {
-        const response = await fetch(`/api/admin/tracks/${item.trackId}/social/tiktok/draft`, {
+        const response = await fetch(`/api/v1/admin/tracks/${item.trackId}/social/tiktok/draft`, {
           credentials: "same-origin",
           method: "POST",
         });
@@ -478,7 +478,7 @@ function AdminQueuePage() {
       }
       setBusyId(item.id);
       try {
-        const response = await fetch(`/api/admin/tracks/${item.trackId}/social/tiktok`, {
+        const response = await fetch(`/api/v1/admin/tracks/${item.trackId}/social/tiktok`, {
           body: JSON.stringify({ status: "published", url }),
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },

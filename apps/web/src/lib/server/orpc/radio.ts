@@ -34,7 +34,7 @@ import { apiFault, type Implementer } from "./_shared";
 //
 // This is also the radio's public-strip choke point: every finding served by these public
 // ops passes through here, so it runs the `toPublicTrackListItem` public-strip (the same one
-// the `list_tracks` feed runs) BEFORE the galaxy gate. The radio hydrates its slots from the
+// the `list_findings` feed runs) BEFORE the galaxy gate. The radio hydrates its slots from the
 // FAT DTO (`getRandomRadioTrack`/`getTrackByIdOrLogId` → `toTrackListItem`), which populates
 // `sourceAudioKey` + the internal provenance fields; without this the private R2 key of the
 // captured full song would world-serve on the radio.

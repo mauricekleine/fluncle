@@ -108,7 +108,7 @@ if [[ "${VERIFY}" -eq 1 ]]; then
   "${SSH[@]}" 'sudo systemctl start fluncle-rave-watchdog.service 2>/dev/null || true; sudo systemctl start fluncle-ssh-freshen.service 2>/dev/null || true' || true
   sleep 6
   printf 'push-agent-token: /status rows (expect ok, freshly posted):\n' >&2
-  status_json="$(curl -fsS "${WORKER_URL%/}/api/status?cb=$(date +%s)" 2>/dev/null || true)"
+  status_json="$(curl -fsS "${WORKER_URL%/}/api/v1/status?cb=$(date +%s)" 2>/dev/null || true)"
   for svc in onion self-deploy-ssh; do
     # service and status are not adjacent in the JSON (alphabetical keys put `since`
     # between them), so match within the object: service…status, no `}` crossed.

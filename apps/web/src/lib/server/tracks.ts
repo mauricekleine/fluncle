@@ -199,7 +199,7 @@ export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_m
 // ── The lean LIST projection (Finding B4) ──
 //
 // Every PUBLIC list surface (the homepage feed, /log index, Stories, llms.txt paging,
-// the public `list_tracks`/`list_stories` ops) renders a handful of per-row fields but
+// the public `list_findings`/`list_stories` ops) renders a handful of per-row fields but
 // used to over-fetch three HEAVY ones that none of them read: `observation_alignment_json`
 // (the spoken observation's word-timing arrays — big), `features_json` (the spectral
 // summary), and `video_model_reasoning`. Shipping them on every list row bloats the SSR
@@ -493,7 +493,7 @@ const PRIVATE_TRACK_FIELDS = [
 export function toPublicTrackListItem<T extends object>(item: T): T {
   // Read each optional field through a cast (not a `{ …?: string }` param type — that WEAK
   // type would reject a FeedItem's mixtape arm, which shares no property with it, at the
-  // `list_tracks` map). Only clone when a private field is actually present, so a mixtape or
+  // `list_findings` map). Only clone when a private field is actually present, so a mixtape or
   // a finding carrying none of them returns the exact same reference as before.
   let result = item;
 
@@ -1191,7 +1191,7 @@ export async function getTrackNeighbors(track: {
  * cluster (docs/track-lifecycle.md). Loads the target's MuQ embedding, has the DATABASE
  * cosine-rank it against every OTHER coordinate-bearing finding's vector, and hydrates
  * the winners in similarity order. Powers the `/log` "more like this" row and the public
- * `get_similar_findings` op; a future "play something like this" radio hook reads the
+ * `list_similar_tracks` op; a future "play something like this" radio hook reads the
  * same function.
  *
  * THE RANKING IS AN EXACT SCAN IN SQL — `order by vector_distance_cos(vector, ?) limit N`
@@ -2039,7 +2039,7 @@ export async function getFindingsByGalaxyRanked(
  * NOT NULL`). Returns the trackIds that have one as a Set — the admin board turns it
  * into the Embeddings cell status. The embedding vector is INTERNAL analysis fuel: it
  * never rides the public `TrackListItem` contract (only its presence, admin-only, and
- * the derived `get_similar_findings` neighbours do), so the board reads it through
+ * the derived `list_similar_tracks` neighbours do), so the board reads it through
  * this gated path like `context_note`. One batch query for the whole page, no N+1.
  * See docs/track-lifecycle.md.
  */

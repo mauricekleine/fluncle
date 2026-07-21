@@ -528,7 +528,22 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
-    exposedContent: ["the archive as JSON, cursor-paginated (limit max 48, cursor)"],
+    exposedContent: [
+      "the feed as JSON — findings and published mixtapes, newest found first, cursor-paginated (limit max 48, cursor)",
+    ],
+    kind: "api",
+    name: "api.findings",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/api/v1/findings",
+    url: `${SITE}/api/v1/findings`,
+    weights: { status: "secondary", web: "primary" },
+  },
+  {
+    apiFormat: "application/json",
+    discoveryUrl: `${SITE}/api/v1/openapi.json`,
+    exposedContent: [
+      "every track Fluncle holds as JSON, newest release first, numbered pages (page); certified filters to findings, uncertified to the rest, omitted to both",
+    ],
     kind: "api",
     name: "api.tracks",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
@@ -560,7 +575,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
     // Ordered by tracks.release_date, NOT findings.added_at — "what just came OUT", the release-date
-    // twin of the found-date /api/v1/tracks feed. Uncertified rows carry no coordinate (Unlit Rule).
+    // twin of the found-date /api/v1/findings feed. Uncertified rows carry no coordinate (Unlit Rule).
     exposedContent: [
       "what just came out — newest drum & bass releases over a 30-day window, flat (limit max 100)",
     ],
@@ -712,8 +727,8 @@ export const SURFACES: readonly Surface[] = [
     operatorNotes:
       "Linked as the `status` relation from /.well-known/api-catalog. Service `web` on /status.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
-    route: "/api/health",
-    url: `${SITE}/api/health`,
+    route: "/api/v1/health",
+    url: `${SITE}/api/v1/health`,
     weights: { status: "tertiary", web: "tertiary" },
   },
 
@@ -937,7 +952,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/.well-known/mcp/server-card.json`,
     exposedContent: [
-      "the archive as MCP tools (Streamable HTTP, no auth): list_tracks, list_fresh, get_track, get_random_track, get_status, search_archive, get_artist, get_label, build_set, get_similar_artists, list_album_catalogue, list_artist_catalogue, list_label_catalogue, search_tracks, submit_track, subscribe_newsletter",
+      "the archive as MCP tools (Streamable HTTP, no auth): list_findings, list_tracks, list_fresh, get_track, get_random_track, get_status, search_archive, get_artist, get_label, build_set, list_similar_artists, list_album_catalogue, list_artist_catalogue, list_label_catalogue, search_tracks, submit_track, subscribe_newsletter",
       "the archive as MCP resources: each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId> (its public record)",
       "Fluncle-voiced MCP prompts: recommend_finding, walk_recent_night, decode_coordinate",
     ],

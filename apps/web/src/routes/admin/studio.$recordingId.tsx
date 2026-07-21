@@ -349,7 +349,7 @@ function StudioEditorBody({
       });
 
       const response = await fetch(
-        `/api/admin/recordings/${encodeURIComponent(recordingId)}/clips`,
+        `/api/v1/admin/recordings/${encodeURIComponent(recordingId)}/clips`,
         {
           body: JSON.stringify({ inMs: window.inMs, outMs: window.outMs, xOffset }),
           headers: { "Content-Type": "application/json" },
@@ -374,7 +374,7 @@ function StudioEditorBody({
 
   const deleteClip = useMutation({
     mutationFn: async (clipId: string) => {
-      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clipId)}`, {
+      const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clipId)}`, {
         method: "DELETE",
       });
 
@@ -405,7 +405,7 @@ function StudioEditorBody({
   >({
     mutationFn: async (next) => {
       const response = await fetch(
-        `/api/admin/recordings/${encodeURIComponent(recordingId)}/cues`,
+        `/api/v1/admin/recordings/${encodeURIComponent(recordingId)}/cues`,
         {
           body: JSON.stringify({
             cues: next.map((cue, index) => ({
@@ -904,7 +904,7 @@ function ResyncFromCues({ cuedCount, mixtapeId }: { cuedCount: number; mixtapeId
 
       for (const platform of legs) {
         const response = await fetch(
-          `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/${platform}/resync`,
+          `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/${platform}/resync`,
           { method: "POST" },
         );
 
@@ -1009,7 +1009,7 @@ function PublishAction({ recordingId }: { recordingId: string }) {
   const promote = useMutation({
     mutationFn: async () => {
       const response = await fetch(
-        `/api/admin/recordings/${encodeURIComponent(recordingId)}/promote`,
+        `/api/v1/admin/recordings/${encodeURIComponent(recordingId)}/promote`,
         { method: "POST" },
       );
 
@@ -1241,7 +1241,7 @@ function DistributionStrip({ mixtapeId, status }: { mixtapeId: string; status: s
 
     try {
       const response = await fetch(
-        `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/publish`,
+        `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/publish`,
         { method: "POST" },
       );
 
@@ -1362,7 +1362,7 @@ function AnnounceControl({
     setError(undefined);
 
     try {
-      const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}/announce`, {
+      const response = await fetch(`/api/v1/admin/mixtapes/${encodeURIComponent(id)}/announce`, {
         method: "POST",
       });
 
@@ -1523,7 +1523,9 @@ function isActivationTarget(target: EventTarget | null): boolean {
 }
 
 async function fetchClips(recordingId: string): Promise<ClipDTO[]> {
-  const response = await fetch(`/api/admin/clips?recordingId=${encodeURIComponent(recordingId)}`);
+  const response = await fetch(
+    `/api/v1/admin/clips?recordingId=${encodeURIComponent(recordingId)}`,
+  );
 
   if (!response.ok) {
     throw new Error(await readError(response));
@@ -1535,7 +1537,7 @@ async function fetchClips(recordingId: string): Promise<ClipDTO[]> {
 }
 
 async function fetchMixtapeSocial(mixtapeId: string): Promise<MixtapeSocialPostItem[]> {
-  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`);
+  const response = await fetch(`/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`);
 
   if (!response.ok) {
     throw new Error(await readError(response));
@@ -1553,7 +1555,7 @@ async function saveMixtape(
   id: string,
   body: { note?: string; setVideoAt?: string; soundcloudUrl?: string },
 ) {
-  const response = await fetch(`/api/admin/mixtapes/${encodeURIComponent(id)}`, {
+  const response = await fetch(`/api/v1/admin/mixtapes/${encodeURIComponent(id)}`, {
     body: JSON.stringify(body),
     headers: { "Content-Type": "application/json" },
     method: "PATCH",

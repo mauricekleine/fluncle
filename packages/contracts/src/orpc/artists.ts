@@ -77,8 +77,9 @@ export const getArtist = oc
  * `list_similar_artists` → `GET /artists/similar?slugs=a,b,c` (operationId `listSimilarArtists`).
  *
  * The artists sitting sonically nearest to the AVERAGE of the given artists' audio positions — the
- * "sounds like these" compare. `slugs` is a comma-separated list of 2+ artist slugs (capped at 6; a
- * blank/whitespace list resolves to none). The response is `{ ok: true, artists }` — up to twelve
+ * "sounds like these" compare. `slugs` is a comma-separated list of 1 to 6 artist slugs (a single
+ * anchor takes the same averaged-probe path — an average of one is itself; a blank/whitespace list
+ * resolves to none). The response is `{ ok: true, artists }` — up to twelve
  * `ArtistListItem`s ordered nearest first, the given artists excluded from their own results, each
  * carrying its `certified` flag (an uncertified neighbour is a real result, never a certified one).
  * A literal path under `/artists`, so it takes precedence over `/artists/{slug}` the same way

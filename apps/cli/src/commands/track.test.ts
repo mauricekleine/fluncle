@@ -262,7 +262,7 @@ describe("trackVideoCommand bundle guard", () => {
       });
       expect(putUrls).toEqual(["https://r2/put?sig=p", "https://r2/put?sig=b"]);
       // Exactly ONE admin POST — the presign; finalize was never called.
-      expect(postCalls).toEqual(["/api/admin/tracks/032.0.4L/video/uploads"]);
+      expect(postCalls).toEqual(["/api/v1/admin/tracks/032.0.4L/video/uploads"]);
     } finally {
       globalThis.fetch = realFetch;
       adminApiPostImpl = async () => {

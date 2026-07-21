@@ -12,7 +12,7 @@ vi.mock("./log-resolver", () => ({
   resolveLogPageTarget: (...args: unknown[]) => resolveLogPageTarget(...args),
 }));
 
-// The tracks server module backs the `list_tracks` + `get_random_track` reads.
+// The tracks server module backs the `list_findings` feed + `get_random_track` reads.
 // `decodeTrackCursor` is the real implementation re-exported so the handler's
 // cursor decode behaves exactly as production; the data fetchers are mocked.
 const listTracks = vi.fn();
@@ -38,6 +38,20 @@ vi.mock("./tracks", async (importOriginal) => {
   };
 });
 
+// The reborn `list_tracks` enumerator reads the `/tracks` hub. `listTracksHubPage`
+// is mocked so the handler never touches Turso; `toCatalogueTrackListItem` (the lean
+// mapper) stays real so the wire shape is exercised end to end.
+const listTracksHubPage = vi.fn();
+
+vi.mock("./tracks-hub", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tracks-hub")>();
+
+  return {
+    ...actual,
+    listTracksHubPage: (...args: unknown[]) => listTracksHubPage(...args),
+  };
+});
+
 // The radio ops gate the finding's galaxy behind the browse-by-feel launch gate
 // (nothing public renders a galaxy until the whole map is named). Mocked so the
 // radio reads never touch Turso; defaults to a fully-named map (galaxy passes
@@ -56,6 +70,7 @@ vi.mock("./galaxies-map", async (importOriginal) => {
 beforeEach(() => {
   resolveLogPageTarget.mockReset();
   listTracks.mockReset();
+  listTracksHubPage.mockReset();
   getRandomTrack.mockReset();
   getRandomRadioTrack.mockReset();
   getRadioEligibleTracks.mockReset();
@@ -96,14 +111,14 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     expect(resolveLogPageTarget).toHaveBeenCalledWith("abc");
   });
 
-  it("serves the same handler on the bare /api alias", async () => {
+  it("no longer serves the bare /api alias — the back-compat mount is gone (falls through)", async () => {
     resolveLogPageTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(get("https://www.fluncle.com/api/tracks/abc"));
-
-    expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
+    // The vocabulary cut removed the bare `/api` alias: only `/api/v1` is oRPC's, so
+    // a bare `/api/tracks/*` request falls through to TanStack (null), never served here.
+    expect(await handleOrpc(get("https://www.fluncle.com/api/tracks/abc"))).toBeNull();
+    expect(resolveLogPageTarget).not.toHaveBeenCalled();
   });
 
   it("serves a mixtape arm as { ok: true, mixtape }", async () => {
@@ -164,17 +179,14 @@ describe("oRPC public read — GET /health (get_health)", () => {
     expect(await readJson(response)).toEqual({ ok: true, sha: expectedSha });
   });
 
-  it("serves the same handler on the bare /api alias", async () => {
+  it("no longer serves the bare /api alias — the back-compat mount is gone (falls through)", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(get("https://www.fluncle.com/api/health"));
-
-    expect(response?.status).toBe(200);
-    expect(response?.headers.get("Cache-Control")).toBe("no-store");
-    expect(await readJson(response)).toEqual({ ok: true, sha: expectedSha });
+    // Bare `/api/health` is no longer an oRPC mount; it falls through to TanStack.
+    expect(await handleOrpc(get("https://www.fluncle.com/api/health"))).toBeNull();
   });
 });
 
-describe("oRPC public read — GET /tracks (list_tracks)", () => {
+describe("oRPC public read — GET /findings (list_findings)", () => {
   const PAGE = {
     nextCursor: "eyJhZGRlZEF0IjoiMjAyNi0wMS0wMSJ9",
     totalCount: 42,
@@ -185,7 +197,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     listTracks.mockResolvedValueOnce(PAGE);
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/findings"));
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual(PAGE);
@@ -195,7 +207,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     listTracks.mockResolvedValueOnce(PAGE);
 
     const { handleOrpc } = await import("./orpc");
-    await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
+    await handleOrpc(get("https://www.fluncle.com/api/v1/findings"));
 
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
@@ -214,7 +226,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     const cursor = encodeTrackCursor({ addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" });
 
     const { handleOrpc } = await import("./orpc");
-    await handleOrpc(get(`https://www.fluncle.com/api/v1/tracks?limit=100&cursor=${cursor}`));
+    await handleOrpc(get(`https://www.fluncle.com/api/v1/findings?limit=100&cursor=${cursor}`));
 
     expect(listTracks).toHaveBeenCalledWith({
       cursor: { addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" },
@@ -231,7 +243,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
 
     const { handleOrpc } = await import("./orpc");
     await handleOrpc(
-      get("https://www.fluncle.com/api/v1/tracks?since=2026-01-01&until=2026-02-01T00:00:00Z"),
+      get("https://www.fluncle.com/api/v1/findings?since=2026-01-01&until=2026-02-01T00:00:00Z"),
     );
 
     expect(listTracks).toHaveBeenCalledWith({
@@ -248,7 +260,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     listTracks.mockResolvedValueOnce(PAGE);
 
     const { handleOrpc } = await import("./orpc");
-    await handleOrpc(get("https://www.fluncle.com/api/v1/tracks?limit=abc&since=not-a-date"));
+    await handleOrpc(get("https://www.fluncle.com/api/v1/findings?limit=abc&since=not-a-date"));
 
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
@@ -266,7 +278,7 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
     listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/findings"));
 
     expect(response?.status).toBe(200);
     const body = (await readJson(response)) as { tracks: Array<Record<string, unknown>> };
@@ -276,10 +288,84 @@ describe("oRPC public read — GET /tracks (list_tracks)", () => {
   });
 });
 
+describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)", () => {
+  // One certified hub entry — the real `toCatalogueTrackListItem` mapper flattens it.
+  const FINDING_ENTRY = {
+    artistLinks: [],
+    finding: { ...TRACK, artistAvatarUrl: undefined, logId: "012.8.0A" },
+    kind: "finding" as const,
+    releaseDate: "2026-01-01",
+  };
+  const HUB_PAGE = { items: [FINDING_ENTRY], page: 1, pageCount: 3, total: 120 };
+
+  it("serves the numbered-page envelope with lean, mapped rows", async () => {
+    listTracksHubPage.mockResolvedValueOnce(HUB_PAGE);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks"));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as {
+      ok: true;
+      page: number;
+      pageCount: number;
+      total: number;
+      tracks: Array<Record<string, unknown>>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.page).toBe(1);
+    expect(body.pageCount).toBe(3);
+    expect(body.total).toBe(120);
+    // The lean row carries the finding's identity + coordinate, and NOTHING heavy.
+    expect(body.tracks[0]?.certified).toBe(true);
+    expect(body.tracks[0]?.title).toBe(TRACK.title);
+    expect(body.tracks[0]?.logId).toBe("012.8.0A");
+    expect(body.tracks[0]).not.toHaveProperty("note");
+    expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
+    // Page 1, no certified filter (both registers).
+    expect(listTracksHubPage).toHaveBeenCalledWith({ certified: undefined }, 1);
+  });
+
+  it("folds the tri-state certified param into the hub filter", async () => {
+    listTracksHubPage.mockResolvedValue(HUB_PAGE);
+
+    const { handleOrpc } = await import("./orpc");
+    await handleOrpc(get("https://www.fluncle.com/api/v1/tracks?certified=true&page=2"));
+    expect(listTracksHubPage).toHaveBeenCalledWith({ certified: true }, 2);
+
+    await handleOrpc(get("https://www.fluncle.com/api/v1/tracks?certified=false"));
+    expect(listTracksHubPage).toHaveBeenCalledWith({ certified: false }, 1);
+  });
+
+  it("degrades a junk page to 1 (never 400s)", async () => {
+    listTracksHubPage.mockResolvedValueOnce(HUB_PAGE);
+
+    const { handleOrpc } = await import("./orpc");
+    await handleOrpc(get("https://www.fluncle.com/api/v1/tracks?page=abc"));
+
+    expect(listTracksHubPage).toHaveBeenCalledWith({ certified: undefined }, 1);
+  });
+
+  it("404s a page past the end (never clamps to page 1)", async () => {
+    const { CatalogueHubPageOutOfRangeError } = await import("./labels");
+    listTracksHubPage.mockRejectedValueOnce(new CatalogueHubPageOutOfRangeError());
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks?page=999"));
+
+    expect(response?.status).toBe(404);
+    expect(await readJson(response)).toEqual({
+      code: "not_found",
+      message: expect.any(String),
+      ok: false,
+    });
+  });
+});
+
 describe("oRPC public read — GET /stories (list_stories)", () => {
   it("STRIPS the private sourceAudioKey from every story before it world-serves", async () => {
     // Stories are the `hasVideo` findings — exactly the ones most likely captured — so the
-    // lean projection's `sourceAudioKey` must be stripped like the `list_tracks` feed's.
+    // lean projection's `sourceAudioKey` must be stripped like the `list_findings` feed's.
     const captured = { ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a", trackId: "captured" };
     listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
 
@@ -603,11 +689,13 @@ const PUBLIC_OPERATION_IDS = [
   "getRadioNowPlaying",
   "getRandomRadioTrack",
   "getRandomTrack",
-  "getSimilarFindings",
   "getTrack",
   "listAlbums",
   "listArtists",
   "listEditions",
+  // The found-order FEED (findings + published mixtapes) and the sonic "more like this" row.
+  "listFindings",
+  "listSimilarTracks",
   "listGalaxies",
   "listLabels",
   "listMixOpeners",

@@ -96,7 +96,7 @@ export default function MixScreen() {
   useSavedSetHydration(load);
 
   // The Save-set pill is shown ONLY to a signed-in reader (the never-gates law: a signed-out
-  // Decks is byte-for-byte unchanged — no button, no upsell). Confirmed via `/api/me`, exactly
+  // Decks is byte-for-byte unchanged — no button, no upsell). Confirmed via `/api/v1/me`, exactly
   // as the web ShareSetButton does, so a lapsed cookie never shows a broken control.
   const signedIn = useIsSignedIn();
   // A brief inline confirmation, the account modal's live-region grammar. Cleared on the next
@@ -639,7 +639,7 @@ function HeaderAction({
   );
 }
 
-// A one-shot `/api/me` probe — true once the server confirms a session. Mirrors the web
+// A one-shot `/api/v1/me` probe — true once the server confirms a session. Mirrors the web
 // ShareSetButton's gate exactly: a failed check leaves it false, so a signed-out (or
 // lapsed-cookie) reader never sees the Save-set pill (the never-gates law).
 function useIsSignedIn(): boolean {
@@ -652,7 +652,7 @@ function useIsSignedIn(): boolean {
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      void meFetch("/api/me")
+      void meFetch("/api/v1/me")
         .then((res) => res.json() as Promise<{ user: unknown }>)
         .then((body) => {
           if (active) {

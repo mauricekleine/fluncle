@@ -38,7 +38,7 @@ export async function galaxyGetCommand(
 
 /** The FULL admin map (named + unnamed + retired). `fluncle admin galaxies map`. */
 export async function galaxyMapReadCommand(): Promise<GalaxyAdminItem[]> {
-  const response = await adminApiGet<GalaxiesAdminResponse>("/api/admin/galaxies");
+  const response = await adminApiGet<GalaxiesAdminResponse>("/api/v1/admin/galaxies");
   return response.galaxies;
 }
 
@@ -62,7 +62,7 @@ export async function galaxyEmbeddingsCommand(options: {
 
   const query = params.toString();
   return adminApiGet<TrackEmbeddingsResponse>(
-    `/api/admin/tracks/embeddings${query ? `?${query}` : ""}`,
+    `/api/v1/admin/tracks/embeddings${query ? `?${query}` : ""}`,
   );
 }
 
@@ -79,7 +79,7 @@ export async function galaxyMapWriteCommand(
     retire?: boolean;
   }>,
 ): Promise<GalaxyAdminItem[]> {
-  const response = await adminApiPut<GalaxyMapUpdateResponse>("/api/admin/galaxies/map", {
+  const response = await adminApiPut<GalaxyMapUpdateResponse>("/api/v1/admin/galaxies/map", {
     clusters,
   });
   return response.galaxies;

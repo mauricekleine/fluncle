@@ -58,7 +58,7 @@ function DevicePage() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    void fetch("/api/me")
+    void fetch("/api/v1/me")
       .then((res) => res.json() as Promise<Me>)
       .then(setMe)
       .catch(() => setMe({ ok: true, user: null }));

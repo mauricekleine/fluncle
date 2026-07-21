@@ -729,7 +729,7 @@ function CatalogueRow({
             // Fluncle owns, instead of a dead artwork.
             auditionSrc={
               lens === "quarantine" || (!track.hasPreview && track.hasCapturedAudio)
-                ? `/api/admin/tracks/${encodeURIComponent(track.trackId)}/source-audio`
+                ? `/api/v1/admin/tracks/${encodeURIComponent(track.trackId)}/source-audio`
                 : undefined
             }
             cover={track.albumImageUrl}

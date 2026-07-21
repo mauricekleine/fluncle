@@ -32,5 +32,5 @@ export type ReachCollectResult = {
  * were actually written (a same-day re-run lands `inserted: 0`).
  */
 export async function reachCollectCommand(): Promise<ReachCollectResult> {
-  return adminApiPost<ReachCollectResult>("/api/admin/reach/collect", {});
+  return adminApiPost<ReachCollectResult>("/api/v1/admin/reach/collect", {});
 }

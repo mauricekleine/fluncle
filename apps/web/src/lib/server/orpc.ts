@@ -208,9 +208,10 @@ function encodeErrorBody(error: ORPCError<string, unknown>) {
   };
 }
 
-// One handler instance, reused across requests. Dual-mounted under `/api/v1` and
-// `/api` to preserve the permanent back-compat alias for every migrated route:
-// each request is tried against the canonical prefix first, then the bare one.
+// One handler instance, reused across requests. Mounted at the single canonical
+// `/api/v1` prefix — the bare `/api/*` back-compat alias is GONE (the vocabulary
+// cut: no aliases, no shims). A bare `/api/*` oRPC path falls through to the
+// TanStack router (a 404), so every consumer reads the versioned surface.
 // `customErrorResponseBodyEncoder` rewrites every thrown error into the legacy
 // `jsonError` body (see above), so error-shape parity is a rails concern, not a
 // per-handler one.
@@ -218,10 +219,9 @@ const handler = new OpenAPIHandler(router, {
   customErrorResponseBodyEncoder: encodeErrorBody,
 });
 
-const PRIMARY_PREFIX = "/api/v1";
-const ALIAS_PREFIX = "/api";
+const API_PREFIX = "/api/v1";
 
-// The live /api/health route sets `Cache-Control: no-store` so a liveness poll is
+// The live /api/v1/health route sets `Cache-Control: no-store` so a liveness poll is
 // never cached. oRPC owns the response framing, so the header is reapplied here on
 // a matched health response — parity without a per-handler header plugin.
 const HEALTH_SUFFIX = "/health";
@@ -229,23 +229,21 @@ const HEALTH_SUFFIX = "/health";
 /**
  * Try to serve `request` with oRPC. Returns the `Response` when a procedure
  * matched, or `null` to fall through to the existing TanStack router (the
- * `matched: false` seam). Mounted at both `/api/v1` and `/api`; the canonical
- * versioned prefix is tried unless the path is under the bare alias.
+ * `matched: false` seam). Mounted at the single canonical `/api/v1` prefix.
  */
 export async function handleOrpc(request: Request): Promise<Response | null> {
   const url = new URL(request.url);
 
-  // Only the /api surface is ours to consider; everything else (HTML, assets,
-  // /docs, the MCP/discovery seams) is never an oRPC request, so skip the work.
-  if (url.pathname !== ALIAS_PREFIX && !url.pathname.startsWith(`${ALIAS_PREFIX}/`)) {
+  // Only the versioned `/api/v1` surface is oRPC's; everything else (HTML, assets,
+  // /docs, the bare `/api/*` file-route carve-outs, the MCP/discovery seams) is
+  // never an oRPC request, so skip the work.
+  if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
     return null;
   }
 
-  const prefix = url.pathname.startsWith(`${PRIMARY_PREFIX}/`) ? PRIMARY_PREFIX : ALIAS_PREFIX;
-
   const { matched, response } = await handler.handle(request, {
     context: { request },
-    prefix,
+    prefix: API_PREFIX,
   });
 
   if (!matched) {
@@ -254,7 +252,7 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
 
   // Reapply the liveness probe's no-store directive (the one header the live
   // route set that oRPC's framing would otherwise drop).
-  if (url.pathname === `${prefix}${HEALTH_SUFFIX}`) {
+  if (url.pathname === `${API_PREFIX}${HEALTH_SUFFIX}`) {
     response.headers.set("Cache-Control", "no-store");
   }
 
@@ -372,7 +370,7 @@ function isAdminPath(path: string | undefined): boolean {
 
 /**
  * The PUBLIC OpenAPI 3.1 document, generated from the contract router with the
- * admin tier filtered out. Served at /api/v1/openapi.json (+ the /api alias) and
+ * admin tier filtered out. Served at /api/v1/openapi.json and
  * consumed by Scalar (/docs/api) and the Postman route. The richer `info`
  * (summary/description/contact) and the absolute server URL are carried over from
  * the retired static `public/openapi.json` so the published surface keeps its

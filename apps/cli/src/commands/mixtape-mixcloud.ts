@@ -7,7 +7,7 @@
 //   distributeMixcloud(mixtapeId, audioPath, onProgress?) → fetch the mixtape,
 //     build the multipart body (mp3 + name + description + picture + tags +
 //     sections), POST /upload/, read the cloudcast key back via /<user>/cloudcasts/,
-//     then POST the resolved URL to /api/admin/mixtapes/:id/mixcloud/finalize.
+//     then POST the resolved URL to /api/v1/admin/mixtapes/:id/mixcloud/finalize.
 //
 //   authMixcloudCommand() → a thin trigger (like auth youtube): GET the admin
 //     start route and print the consent URL. The OAuth code exchange + token
@@ -129,7 +129,7 @@ export async function distributeMixcloud(
   const url = `https://www.mixcloud.com${result.key}`;
 
   onProgress?.("Mixcloud: recording the link…");
-  await adminApiPost(`/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/finalize`, {
+  await adminApiPost(`/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/finalize`, {
     externalId,
     url,
   });
@@ -151,7 +151,7 @@ export async function distributeMixcloud(
  */
 export async function resyncMixcloud(mixtapeId: string): Promise<MixcloudResyncResult> {
   const response = await adminApiPost<MixtapeMixcloudResyncResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/resync`,
+    `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/mixcloud/resync`,
   );
 
   return { url: response.url };
@@ -160,7 +160,9 @@ export async function resyncMixcloud(mixtapeId: string): Promise<MixcloudResyncR
 // ── Auth (thin trigger) ──────────────────────────────────────────────────────
 
 export async function authMixcloudCommand(): Promise<void> {
-  const response = await adminApiGet<MixcloudAuthStartResponse>("/api/admin/mixcloud/auth/start");
+  const response = await adminApiGet<MixcloudAuthStartResponse>(
+    "/api/v1/admin/mixcloud/auth/start",
+  );
 
   console.log(`Open this Mixcloud authorization URL:
 
@@ -208,7 +210,7 @@ function mixtapeTags(_mixtape: MixtapeListItem): string[] {
 // time for the direct upload. A 400 means Mixcloud isn't connected yet.
 async function fetchMixcloudToken(): Promise<string> {
   try {
-    const response = await adminApiPost<MixcloudTokenResponse>("/api/admin/mixcloud/token");
+    const response = await adminApiPost<MixcloudTokenResponse>("/api/v1/admin/mixcloud/token");
 
     return response.accessToken;
   } catch {

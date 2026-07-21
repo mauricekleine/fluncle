@@ -96,9 +96,9 @@ const readFetch = createMeFetch({
   fetchImpl: fakeFetch(readCalls),
   getCookie: () => "sid=1",
 });
-await readFetch("/api/me");
+await readFetch("/api/v1/me");
 assertEqual(readCalls.length, 1, "a read makes exactly one call — no CSRF fetch");
-assertEqual(readCalls[0]?.url, "https://api.test/api/me", "read hits the base + path");
+assertEqual(readCalls[0]?.url, "https://api.test/api/v1/me", "read hits the base + path");
 assertEqual(readCalls[0]?.headers.Cookie, "sid=1", "read carries the cookie");
 assertEqual(readCalls[0]?.headers.Origin, ME_ORIGIN, "read carries the origin");
 assertEqual(readCalls[0]?.headers[CSRF_HEADER], undefined, "read carries no CSRF");
@@ -111,12 +111,12 @@ const writeFetch = createMeFetch({
   fetchImpl: fakeFetch(writeCalls),
   getCookie: () => "sid=9",
 });
-await writeFetch("/api/me/delete", { body: "{}", method: "POST" });
+await writeFetch("/api/v1/me/delete", { body: "{}", method: "POST" });
 assertEqual(writeCalls.length, 2, "a mutation makes two calls: CSRF then the write");
 assertEqual(writeCalls[0]?.url, `https://api.test${CSRF_ENDPOINT}`, "first call is the CSRF fetch");
 assertEqual(writeCalls[0]?.method, "GET", "CSRF fetch is a GET");
 assertEqual(writeCalls[0]?.headers.Cookie, "sid=9", "CSRF fetch carries the cookie");
-assertEqual(writeCalls[1]?.url, "https://api.test/api/me/delete", "second call is the write");
+assertEqual(writeCalls[1]?.url, "https://api.test/api/v1/me/delete", "second call is the write");
 assertEqual(writeCalls[1]?.method, "POST", "the write is a POST");
 assertEqual(writeCalls[1]?.headers[CSRF_HEADER], "srv-tok", "the write attaches the server token");
 assertEqual(writeCalls[1]?.headers["Content-Type"], "application/json", "the write is JSON");
@@ -140,7 +140,7 @@ const goneFetch = createMeFetch({
   }) as unknown as typeof fetch,
   getCookie: () => "sid=x",
 });
-await goneFetch("/api/me/delete", { body: "{}", method: "POST" });
+await goneFetch("/api/v1/me/delete", { body: "{}", method: "POST" });
 assertEqual(
   goneCalls[1]?.headers[CSRF_HEADER],
   undefined,

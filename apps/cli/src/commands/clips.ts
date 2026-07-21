@@ -166,7 +166,9 @@ export async function clipsListCommand(
   }
 
   const query = params.toString();
-  const response = await adminApiGet<ClipsResponse>(`/api/admin/clips${query ? `?${query}` : ""}`);
+  const response = await adminApiGet<ClipsResponse>(
+    `/api/v1/admin/clips${query ? `?${query}` : ""}`,
+  );
 
   return response.clips;
 }
@@ -174,7 +176,7 @@ export async function clipsListCommand(
 /** Every clip's Instagram drip-feed row (schedule + status). `list` merges these onto the
  *  clip rows so each clip shows its `scheduled/posted/failed` state. */
 export async function clipPostsListCommand(): Promise<ClipSocialPost[]> {
-  const response = await adminApiGet<ClipSocialPostsResponse>("/api/admin/clips/social");
+  const response = await adminApiGet<ClipSocialPostsResponse>("/api/v1/admin/clips/social");
 
   return response.posts;
 }
@@ -186,7 +188,7 @@ export async function clipScheduleCommand(
   scheduledFor: string,
 ): Promise<ClipSocialPost> {
   const response = await adminApiPatch<ClipScheduleResponse>(
-    `/api/admin/clips/${encodeURIComponent(clipId)}/schedule`,
+    `/api/v1/admin/clips/${encodeURIComponent(clipId)}/schedule`,
     { scheduledFor },
   );
 
@@ -195,7 +197,7 @@ export async function clipScheduleCommand(
 
 /** Pause or resume the whole clip drip-feed — the kill switch (operator tier). */
 export async function clipDripPauseCommand(paused: boolean): Promise<boolean> {
-  const response = await adminApiPut<ClipDripStateResponse>("/api/admin/clips/drip/state", {
+  const response = await adminApiPut<ClipDripStateResponse>("/api/v1/admin/clips/drip/state", {
     paused,
   });
 
@@ -286,7 +288,7 @@ export async function clipCutCommand(
 
     onProgress(`Clip ${clipId}: uploading ${(sizeBytes / 1_000_000).toFixed(1)} MB…`);
     const presign = await adminApiPost<ClipPresignResponse>(
-      `/api/admin/clips/${encodeURIComponent(clipId)}/cut/presign`,
+      `/api/v1/admin/clips/${encodeURIComponent(clipId)}/cut/presign`,
       { contentType: "video/mp4" },
     );
 
@@ -295,7 +297,7 @@ export async function clipCutCommand(
     // Mark the cut done + purge the stale edge renditions (server-side; the box has no
     // Cloudflare creds). A bodyless POST — clipId rides the path.
     await adminApiPost<ClipCutFinalizeResponse>(
-      `/api/admin/clips/${encodeURIComponent(clipId)}/cut/finalize`,
+      `/api/v1/admin/clips/${encodeURIComponent(clipId)}/cut/finalize`,
     );
 
     onProgress(`Clip ${clipId}: done → ${FOUND_BASE}/${presign.key}`);

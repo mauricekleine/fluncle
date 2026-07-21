@@ -13,7 +13,7 @@ export async function addCommand(
   spotifyUrl: string,
   options: AddOptions,
 ): Promise<AddCommandResult> {
-  const result = await adminApiPost<AddCommandResult>("/api/admin/tracks", {
+  const result = await adminApiPost<AddCommandResult>("/api/v1/admin/tracks", {
     dryRun: options.dryRun,
     note: options.note,
     spotifyUrl,

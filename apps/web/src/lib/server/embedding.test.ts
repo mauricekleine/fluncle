@@ -3,7 +3,7 @@ import { coerceEmbedding, cosineSimilarity, EMBEDDING_DIMS, rankBySimilarity } f
 
 // The pure core of the MuQ audio-embedding pipeline (docs/track-lifecycle.md):
 // the shape gate the embed step's write-back leans on (coerce) and the cosine
-// ranking the public `get_similar_findings` op + the `/log` "more like this" row read.
+// ranking the public `list_similar_tracks` op + the `/log` "more like this" row read.
 // Fixture vectors only — no DB, no network.
 
 /** A dense 1024-d vector, each slot from `fill(index)` (defaults to 0). */

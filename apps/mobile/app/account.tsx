@@ -35,7 +35,7 @@ import { color, font, radius } from "@/theme/tokens";
 // the app's own two-tap arm idiom (the Decks "Start over" precedent), since the web's
 // AlertDialog has no native analogue here.
 
-// The current session, user-or-null — the shape GET /api/me returns (meResponse).
+// The current session, user-or-null — the shape GET /api/v1/me returns (meResponse).
 type Me = {
   ok: true;
   user: null | {
@@ -55,7 +55,7 @@ export default function AccountScreen() {
 
   async function refresh() {
     try {
-      const next = (await meFetch("/api/me").then((res) => res.json())) as Me;
+      const next = (await meFetch("/api/v1/me").then((res) => res.json())) as Me;
       setMe(next);
     } catch {
       setMe({ ok: true, user: null });
@@ -359,7 +359,7 @@ function SignedInPanel({
     setBusy("delete");
     setError("");
     try {
-      const response = await meFetch("/api/me/delete", { body: "{}", method: "POST" });
+      const response = await meFetch("/api/v1/me/delete", { body: "{}", method: "POST" });
       if (!response.ok) {
         setError("Could not delete account. Try again in a moment.");
         disarm();

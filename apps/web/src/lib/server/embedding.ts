@@ -3,7 +3,7 @@
 // produces a 1024-d MuQ vector per finding and the agent-tier `update_track` path
 // stores it as a native libSQL `F32_BLOB(1024)` in `tracks.embedding_blob` (the form
 // the DATABASE can rank) via `vector32()` — the sole stored form and the source of
-// truth. Everything downstream — `get_similar_findings`, the `/mix` rail, a galaxy's
+// truth. Everything downstream — `list_similar_tracks`, the `/mix` rail, a galaxy's
 // core-first order, the `fluncle-cluster` corpus read — ranks IN SQL against the blob.
 //
 // WHY THE RANKING MOVED INTO SQL. It used to store the vector as JSON too and pull every

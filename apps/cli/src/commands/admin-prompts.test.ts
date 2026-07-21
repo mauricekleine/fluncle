@@ -67,7 +67,7 @@ await mock.module("../api", () => ({
   adminApiGet: async (path: string) => {
     gets.push(path);
 
-    if (path === "/api/admin/prompts") {
+    if (path === "/api/v1/admin/prompts") {
       return { ok: true, prompts: registry };
     }
 
@@ -182,7 +182,7 @@ describe("the reads", () => {
   test("get resolves one slug over the lean agent-tier path", async () => {
     const resolved = await promptGetCommand("note_author");
 
-    expect(gets).toEqual(["/api/admin/prompts/note_author"]);
+    expect(gets).toEqual(["/api/v1/admin/prompts/note_author"]);
     expect(resolved.version).toBe(2);
   });
 
@@ -259,7 +259,7 @@ describe("update — the one write", () => {
     expect(posts).toEqual([
       {
         body: { body: "A new body.\n", note: "tightened" },
-        path: "/api/admin/prompts/note_author",
+        path: "/api/v1/admin/prompts/note_author",
       },
     ]);
     expect(result.version).toBe(3);
@@ -311,7 +311,7 @@ describe("rollback and reset — the safety net, composed over the same one writ
     expect(posts).toEqual([
       {
         body: { body: NOTE_V1, note: "rolled back to v1" },
-        path: "/api/admin/prompts/note_author",
+        path: "/api/v1/admin/prompts/note_author",
       },
     ]);
     expect(result).toEqual({ from: 1, skipped: false, slug: "note_author", version: 3 });
@@ -349,7 +349,7 @@ describe("rollback and reset — the safety net, composed over the same one writ
     expect(posts).toEqual([
       {
         body: { body: NOTE_DEFAULT, note: "reset to the repo's baked default" },
-        path: "/api/admin/prompts/note_author",
+        path: "/api/v1/admin/prompts/note_author",
       },
     ]);
     expect(result).toEqual({ from: 0, skipped: false, slug: "note_author", version: 3 });

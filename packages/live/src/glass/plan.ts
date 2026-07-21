@@ -48,7 +48,7 @@ async function loadTracklist(): Promise<TracklistItem[]> {
 async function fetchVehicleMap(): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
   try {
-    const r = await fetch("https://www.fluncle.com/api/tracks?limit=500");
+    const r = await fetch("https://www.fluncle.com/api/v1/findings?limit=500");
     if (r.ok) {
       const d = (await r.json()) as unknown;
       const items = Array.isArray(d)

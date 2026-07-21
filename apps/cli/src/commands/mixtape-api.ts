@@ -10,7 +10,7 @@ import { CliError } from "../output";
 export type MixtapeListItem = MixtapeDTO;
 
 export async function mixtapeListCommand(): Promise<MixtapeListItem[]> {
-  const response = await adminApiGet<MixtapesResponse>("/api/admin/mixtapes");
+  const response = await adminApiGet<MixtapesResponse>("/api/v1/admin/mixtapes");
 
   return response.mixtapes;
 }

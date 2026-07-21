@@ -283,7 +283,7 @@ describe("mapTrack — faithful sourceAudioKey passthrough", () => {
   });
 
   test("yields no key when the public path already stripped it (never invents one)", () => {
-    // On `/api/tracks` the server runs `toPublicTrackListItem`, so the key arrives undefined;
+    // On `/api/v1/tracks` the server runs `toPublicTrackListItem`, so the key arrives undefined;
     // mapTrack passes that through untouched and JSON.stringify omits it — `fluncle recent`
     // never surfaces the private capture key.
     const mapped = mapTrack(finding("track_public", "005.1.1"));

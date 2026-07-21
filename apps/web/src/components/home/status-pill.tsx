@@ -90,7 +90,7 @@ export const STATUS_PILL_QUERY_KEY = ["home-status-pill"] as const;
 
 /** Read /api/status and hand back its services list. Throws on anything unusable. */
 async function fetchStatusServices(signal: AbortSignal): Promise<StatusService[]> {
-  const response = await fetch("/api/status", { signal });
+  const response = await fetch("/api/v1/status", { signal });
 
   if (!response.ok) {
     throw new Error(`status ${response.status}`);

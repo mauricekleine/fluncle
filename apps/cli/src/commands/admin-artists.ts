@@ -62,7 +62,7 @@ export async function describeArtistCommand(
   options: { bio: string; dryRun?: boolean; promptVersion?: number },
 ): Promise<EntityBioResult> {
   return adminApiPost<EntityBioResult>(
-    `/api/admin/artists/${encodeURIComponent(slug)}/bio`,
+    `/api/v1/admin/artists/${encodeURIComponent(slug)}/bio`,
     buildBioBody(options),
   );
 }
@@ -71,14 +71,14 @@ export async function describeArtistCommand(
 // titles + the assembled `describe_artist` prompt, returned ready-to-author. The box's bio
 // sweep calls this per queued entity, then runs `claude -p` on the returned prompt.
 export async function draftArtistBioCommand(slug: string): Promise<EntityBioDraft> {
-  return adminApiGet<EntityBioDraft>(`/api/admin/artists/${encodeURIComponent(slug)}/bio-draft`);
+  return adminApiGet<EntityBioDraft>(`/api/v1/admin/artists/${encodeURIComponent(slug)}/bio-draft`);
 }
 
 // The BIO queue: artists with findings but no bio yet, oldest first — the worklist the
 // `describe_artist` cron drains (each row is a `admin artists describe <slug>`).
 export async function artistsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
   const response = await adminApiGet<{ artists: EntityBioWorkItem[]; ok: boolean }>(
-    `/api/admin/artists/bio-queue?limit=${limit}`,
+    `/api/v1/admin/artists/bio-queue?limit=${limit}`,
   );
 
   return response.artists;
@@ -133,7 +133,7 @@ export async function listArtistsCommand(
     params.set("cursor", cursor);
   }
 
-  return adminApiGet<ArtistsResolveQueueResult>(`/api/admin/artists?${params.toString()}`);
+  return adminApiGet<ArtistsResolveQueueResult>(`/api/v1/admin/artists?${params.toString()}`);
 }
 
 // Trigger the Worker's social resolution for one artist: the MB url-rels walk +
@@ -142,7 +142,7 @@ export async function listArtistsCommand(
 // Firecrawl rows as `status=candidate` (operator-confirm before public).
 export async function resolveArtistCommand(artistId: string): Promise<ArtistResolveResult> {
   return adminApiPost<ArtistResolveResult>(
-    `/api/admin/artists/${encodeURIComponent(artistId)}/resolve`,
+    `/api/v1/admin/artists/${encodeURIComponent(artistId)}/resolve`,
   );
 }
 
@@ -172,7 +172,7 @@ export async function rankArtistsCommand(options: {
 }): Promise<{ summary: RankArtistsSummary }> {
   const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
   const response = await adminApiPost<{ ok: true; summary: RankArtistsSummary }>(
-    "/api/admin/artists/rank",
+    "/api/v1/admin/artists/rank",
     limit ? { limit } : {},
   );
 
@@ -227,7 +227,7 @@ export async function backfillArtistImagesCommand(
   }
 
   return adminApiPost<ArtistImagesBackfillResult>(
-    `/api/admin/backfill/artist-images?${params.toString()}`,
+    `/api/v1/admin/backfill/artist-images?${params.toString()}`,
   );
 }
 
@@ -248,5 +248,5 @@ export async function backfillArtistsCommand(
     params.set("cursor", cursor);
   }
 
-  return adminApiPost<ArtistsBackfillResult>(`/api/admin/backfill/artists?${params.toString()}`);
+  return adminApiPost<ArtistsBackfillResult>(`/api/v1/admin/backfill/artists?${params.toString()}`);
 }

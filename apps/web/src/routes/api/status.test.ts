@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The public /api/status resource, driven through its exported `serverHandlers.GET`. The
+// The public /api/v1/status resource, driven through its exported `serverHandlers.GET`. The
 // service store + live state are mocked; the focus is the WORKER-vantage `dbProbe` — the
 // Worker's own `select 1` round-trip to the Turso primary — added so the healthcheck cron can
 // record Turso latency/jitter over time as the `db` service. It must appear on success and be
@@ -14,7 +14,7 @@ vi.mock("@/lib/server/db", () => ({ getDb: async () => ({ execute: dbExecute }) 
 vi.mock("@/lib/server/status", () => ({ getServiceStatuses: () => getServiceStatuses() }));
 vi.mock("@/lib/server/live", () => ({ getLiveState: () => getLiveState() }));
 
-const { serverHandlers } = await import("./status");
+const { serverHandlers } = await import("./v1/status");
 
 async function readJson(): Promise<Record<string, unknown>> {
   const get = serverHandlers.GET;

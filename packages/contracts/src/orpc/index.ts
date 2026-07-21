@@ -366,10 +366,11 @@ export { listStories } from "./stories";
 export { type SubmissionBody, submitTrack } from "./submissions";
 export {
   getRandomTrack,
-  getSimilarFindings,
   getTrack,
+  listFindings,
   listFresh,
   listMixableTracks,
+  listSimilarTracks,
   listTracks,
 } from "./tracks";
 export { recordLiveState } from "./admin-twitch";
@@ -380,6 +381,8 @@ export {
   UserStatusSchema,
 } from "./admin-users";
 export {
+  type CatalogueTrackListItem,
+  CatalogueTrackListItemSchema,
   type ClipDTO,
   ClipDTOSchema,
   EditionContentSchema,

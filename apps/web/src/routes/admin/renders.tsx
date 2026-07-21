@@ -626,10 +626,13 @@ function EmptyRow({ children }: { children: ReactNode }) {
 // trackId path param is the whole input; no content-type, mirroring adminApiPost).
 // The browser admin grant cookie is the operator carrier, so it satisfies the tier.
 async function postVideoAction(trackId: string, action: "purge" | "requeue"): Promise<void> {
-  const response = await fetch(`/api/admin/tracks/${encodeURIComponent(trackId)}/video/${action}`, {
-    credentials: "same-origin",
-    method: "POST",
-  });
+  const response = await fetch(
+    `/api/v1/admin/tracks/${encodeURIComponent(trackId)}/video/${action}`,
+    {
+      credentials: "same-origin",
+      method: "POST",
+    },
+  );
 
   if (!response.ok) {
     throw new Error(await readError(response));

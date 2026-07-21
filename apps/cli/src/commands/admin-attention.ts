@@ -13,7 +13,7 @@ import { adminApiGet } from "../api";
 
 /** Read the attention-queue digest — the non-printing getter Raycast + the runner share. */
 export async function attentionQueueCommand(): Promise<AttentionQueue> {
-  const response = await adminApiGet<AttentionResponse>("/api/admin/attention");
+  const response = await adminApiGet<AttentionResponse>("/api/v1/admin/attention");
 
   return response.attention;
 }

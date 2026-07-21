@@ -5,7 +5,7 @@ import { adminApiGet } from "../api";
 // the signed authorize URL and print it. The operator opens it, approves @fluncle, and
 // TikTok redirects to the admin callback, which stores the refresh token server-side.
 export async function authTikTokCommand(): Promise<void> {
-  const response = await adminApiGet<TikTokAuthStartResponse>("/api/admin/tiktok/auth/start");
+  const response = await adminApiGet<TikTokAuthStartResponse>("/api/v1/admin/tiktok/auth/start");
 
   console.log(`Open this TikTok authorization URL:
 

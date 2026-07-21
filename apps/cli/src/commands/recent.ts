@@ -7,7 +7,7 @@ export type RecentItem = MixtapeDTO | TrackListItem;
 
 export type { TracksResponse };
 
-// /api/tracks caps a single page at 48. `recent` only ever wants the newest few,
+// /api/v1/findings caps a single page at 48. `recent` only ever wants the newest few,
 // but an explicit `--limit` above the page cap pages through with the cursor so
 // the requested count is honoured rather than silently clipped at one page.
 const pageSize = 48;
@@ -41,7 +41,7 @@ export async function fetchRecentPage(cursor?: string, limit = 10): Promise<Rece
     params.set("cursor", cursor);
   }
 
-  const response = await publicApiGet<TracksResponse>(`/api/tracks?${params.toString()}`);
+  const response = await publicApiGet<TracksResponse>(`/api/v1/findings?${params.toString()}`);
 
   return {
     nextCursor: response.nextCursor,
@@ -63,7 +63,7 @@ export async function recentCommand(limit: number): Promise<RecentItem[]> {
       params.set("cursor", cursor);
     }
 
-    const response = await publicApiGet<TracksResponse>(`/api/tracks?${params.toString()}`);
+    const response = await publicApiGet<TracksResponse>(`/api/v1/findings?${params.toString()}`);
 
     for (const apiTrack of response.tracks) {
       results.push(mapTrack(apiTrack));

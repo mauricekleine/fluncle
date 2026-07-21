@@ -53,6 +53,10 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // precedence over `/artists/{slug}` the same way `/tracks/random` does over `/tracks/{idOrLogId}`.
   "GET /artists/similar": "list_similar_artists",
   "GET /artists/{slug}": "get_artist",
+  // The FEED — findings interleaved with published mixtapes, newest FOUND first. Contract-only oRPC
+  // (no TanStack route file under /api/v1/findings; oRPC serves it straight off the registry). The
+  // found-order twin of the release-ordered `list_tracks` enumerator.
+  "GET /findings": "list_findings",
   // The galaxies domain — contract-only oRPC (browse-by-feel RFC). No TanStack route
   // file under /api/v1/galaxies; oRPC serves these straight off the registry. Public
   // reads, no auth. (The game's `/galaxy` route + galaxy.fluncle.com are unrelated.)
@@ -118,7 +122,7 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // oRPC — no TanStack route file under /api/v1/tracks (oRPC serves it straight off the
   // registry), so it has no route-file basename to enumerate; documented here as part of
   // the public surface net.
-  "GET /tracks/{idOrLogId}/similar": "get_similar_findings",
+  "GET /tracks/{idOrLogId}/similar": "list_similar_tracks",
   "PATCH /me/preferences": "update_private_preferences",
   "PATCH /me/profile": "update_private_profile",
   "POST /devices": "register_device",

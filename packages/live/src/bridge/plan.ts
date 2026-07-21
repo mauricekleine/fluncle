@@ -3,7 +3,7 @@
 // mixtape/plan logId, assemble the ordered, enriched tracklist the glass renders:
 //
 //   1. Members (order + logId/title/artists/durationMs/videoVehicle/grain/register)
-//      come from the PUBLIC API — GET /api/tracks/<mixtapeLogId> returns the
+//      come from the PUBLIC API — GET /api/v1/tracks/<mixtapeLogId> returns the
 //      MixtapeDTO with its members. A committed fixture is the offline fallback so
 //      /plan always serves a full plan even with no network.
 //   2. Each finding's palette + seed + Found date come from its props.json on R2
@@ -57,7 +57,7 @@ type PlanMember = {
 /** Fetch a mixtape/plan's ordered members from the public API. */
 async function fetchMembers(mixtapeLogId: string): Promise<PlanMember[] | null> {
   try {
-    const res = await fetch(`${WEB_BASE}/api/tracks/${mixtapeLogId}`);
+    const res = await fetch(`${WEB_BASE}/api/v1/tracks/${mixtapeLogId}`);
     if (!res.ok) {
       return null;
     }
@@ -120,7 +120,7 @@ export type PlanRef = { kind: "logId"; value: string } | { kind: "handle"; value
 
 /**
  * Route a `--plan` value to its resolver. A coordinate (`isLogId`) is a MIXTAPE logId (the
- * `/api/tracks` mixtape route); anything else is a plan HANDLE (a galaxy slug — the normal
+ * `/api/v1/tracks` mixtape route); anything else is a plan HANDLE (a galaxy slug — the normal
  * live flow). Pure, so the shape-detection + routing is unit-tested without the network.
  */
 export function classifyPlanRef(value: string): PlanRef {
@@ -225,10 +225,10 @@ async function adminJson<T>(auth: AdminAuth, path: string): Promise<T | null> {
   }
 }
 
-/** Public track by id OR logId → the fields a PlanMember needs (`/api/tracks/{idOrLogId}`). */
+/** Public track by id OR logId → the fields a PlanMember needs (`/api/v1/tracks/{idOrLogId}`). */
 async function fetchTrackMember(idOrLogId: string): Promise<PlanMember | null> {
   try {
-    const res = await fetch(`${WEB_BASE}/api/tracks/${encodeURIComponent(idOrLogId)}`);
+    const res = await fetch(`${WEB_BASE}/api/v1/tracks/${encodeURIComponent(idOrLogId)}`);
     if (!res.ok) {
       return null;
     }
@@ -281,7 +281,7 @@ async function fetchMembersByHandle(handle: string): Promise<PlanMember[] | null
   }
   const list = await adminJson<{ recordings?: Array<PlanCandidate & { tracklist?: unknown }> }>(
     auth,
-    "/api/admin/recordings?kind=plan",
+    "/api/v1/admin/recordings?kind=plan",
   );
   const plan = list?.recordings ? matchPlanByHandle(list.recordings, handle) : null;
   if (!plan) {
@@ -289,7 +289,7 @@ async function fetchMembersByHandle(handle: string): Promise<PlanMember[] | null
   }
   const full = await adminJson<{ recording?: { tracklist?: Array<{ findingId?: string }> } }>(
     auth,
-    `/api/admin/recordings/${encodeURIComponent(plan.id)}`,
+    `/api/v1/admin/recordings/${encodeURIComponent(plan.id)}`,
   );
   const cues = full?.recording?.tracklist ?? [];
   const resolved = await Promise.all(
@@ -413,7 +413,7 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 }
 
-/** One public feed row (`/api/tracks`) — only the fields the VJ pool builds a member from.
+/** One public feed row (`/api/v1/findings`) — only the fields the VJ pool builds a member from.
  * `bpm`/`key` (Fluncle's DSP bpm + scale-text key) ride along as the resolver's coarse guards. */
 type TrackFeedRow = {
   logId?: string;
@@ -431,7 +431,7 @@ const VJ_FEED_PAGE_LIMIT = 100;
 const VJ_FEED_MAX_PAGES = 20;
 
 /**
- * Drain the WHOLE public archive from the merged feed (`GET /api/tracks`), following
+ * Drain the WHOLE public archive from the merged feed (`GET /api/v1/findings`), following
  * `nextCursor` page to page. The cursor is opaque base64 (it can contain `=` / `+` / `/`), so
  * it goes through `URLSearchParams`, which percent-encodes it — a raw `?cursor=` concat would
  * corrupt it. The feed rows carry the member metadata directly (`logId`/`title`/`artists`/
@@ -449,7 +449,7 @@ export async function fetchAllArchiveRows(): Promise<TrackFeedRow[]> {
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   for (let page = 0; page < VJ_FEED_MAX_PAGES; page++) {
-    const url = new URL(`${WEB_BASE}/api/tracks`);
+    const url = new URL(`${WEB_BASE}/api/v1/findings`);
     url.searchParams.set("limit", String(VJ_FEED_PAGE_LIMIT));
     if (cursor !== undefined) {
       url.searchParams.set("cursor", cursor); // URLSearchParams percent-encodes the base64
@@ -458,11 +458,11 @@ export async function fetchAllArchiveRows(): Promise<TrackFeedRow[]> {
     try {
       res = await fetch(url);
     } catch (cause) {
-      throw new Error(`RANDOM-VJ: /api/tracks fetch failed (page ${page + 1})`, { cause });
+      throw new Error(`RANDOM-VJ: /api/v1/findings fetch failed (page ${page + 1})`, { cause });
     }
     if (!res.ok) {
       throw new Error(
-        `RANDOM-VJ: /api/tracks returned ${res.status} ${res.statusText} (page ${page + 1}) — a ` +
+        `RANDOM-VJ: /api/v1/findings returned ${res.status} ${res.statusText} (page ${page + 1}) — a ` +
           `Cloudflare user-agent/rule change can 403 the bridge; VJ mode needs the feed to enumerate the archive.`,
       );
     }
@@ -476,7 +476,7 @@ export async function fetchAllArchiveRows(): Promise<TrackFeedRow[]> {
     }
     if (seenCursors.has(next)) {
       throw new Error(
-        `RANDOM-VJ: /api/tracks returned a repeating cursor after ${page + 1} page(s) — refusing ` +
+        `RANDOM-VJ: /api/v1/findings returned a repeating cursor after ${page + 1} page(s) — refusing ` +
           `to page forever (server bug?).`,
       );
     }
@@ -484,7 +484,7 @@ export async function fetchAllArchiveRows(): Promise<TrackFeedRow[]> {
     cursor = next;
   }
   throw new Error(
-    `RANDOM-VJ: /api/tracks exceeded ${VJ_FEED_MAX_PAGES} pages — refusing to page forever (server bug?).`,
+    `RANDOM-VJ: /api/v1/findings exceeded ${VJ_FEED_MAX_PAGES} pages — refusing to page forever (server bug?).`,
   );
 }
 
@@ -526,7 +526,7 @@ export async function buildAllFindingsPlan(): Promise<PlanEntry[]> {
     throw new Error(
       `RANDOM-VJ: the archive pool is empty — the feed yielded ${rows.length} row(s), ` +
         `${members.length} of which resolved to non-mixtape findings. VJ mode has nothing to show; ` +
-        `refusing to boot a dead show. Check ${WEB_BASE}/api/tracks.`,
+        `refusing to boot a dead show. Check ${WEB_BASE}/api/v1/findings.`,
     );
   }
   return plan;

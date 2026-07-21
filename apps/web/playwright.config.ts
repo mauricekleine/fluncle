@@ -8,7 +8,7 @@ import { BASE_URL } from "./tests/e2e/stack";
 // (dedicated ports, a dummy env, a fresh DB seeded with committed synthetic
 // fixtures). The `webServer` below IS the stack: `scripts/e2e-stack.ts` boots
 // libSQL, migrates, seeds, and runs Vite in the foreground; Playwright waits for
-// `/api/health`, runs the suite, then SIGTERMs it.
+// `/api/v1/health`, runs the suite, then SIGTERMs it.
 //
 // The stack is NOT built in `globalSetup`: Playwright starts the `webServer`
 // BEFORE globalSetup runs (globalSetup may even fetch the server), so it has to be
@@ -69,7 +69,7 @@ export default defineConfig({
     stdout: "pipe",
     // Generous: the command boots libSQL + migrates + seeds before Vite starts.
     timeout: 180_000,
-    url: `${BASE_URL}/api/health`,
+    url: `${BASE_URL}/api/v1/health`,
   },
   workers: 1,
 });

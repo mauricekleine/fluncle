@@ -34,7 +34,7 @@ import { type NewCue, parseArtists, recordingCueProgress } from "@/lib/recording
 // unchanged). This drives the clip cut's changing on-screen Log ID (`resolveClipTracks`).
 
 // What the finding-picker search returns (a subset of the admin track row). Kept local so
-// the rail stays a thin view over `/api/admin/tracks`.
+// the rail stays a thin view over `/api/v1/admin/tracks`.
 type CueFinding = {
   albumImageUrl?: string;
   artists: string[];
@@ -442,7 +442,7 @@ function useDebounced<T>(value: T, delayMs: number): T {
 }
 
 async function searchCueFindings(q: string): Promise<CueFinding[]> {
-  const response = await fetch(`/api/admin/tracks?q=${encodeURIComponent(q)}&limit=20`);
+  const response = await fetch(`/api/v1/admin/tracks?q=${encodeURIComponent(q)}&limit=20`);
 
   if (!response.ok) {
     return [];

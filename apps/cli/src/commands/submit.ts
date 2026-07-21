@@ -23,7 +23,9 @@ export async function submitCommand(input: string | undefined): Promise<void> {
     throw new CliError("missing_query", "Missing search input");
   }
 
-  const response = await publicApiGet<SearchResponse>(`/api/search?q=${encodeURIComponent(query)}`);
+  const response = await publicApiGet<SearchResponse>(
+    `/api/v1/search?q=${encodeURIComponent(query)}`,
+  );
 
   if (response.results.length === 0) {
     throw new CliError("no_results", "No Spotify tracks found.");
@@ -38,7 +40,7 @@ export async function submitCommand(input: string | undefined): Promise<void> {
   const note = await promptLine("Note (optional): ", PROMPT_NON_INTERACTIVE_MESSAGE);
   const contact = await promptLine("Contact (optional): ", PROMPT_NON_INTERACTIVE_MESSAGE);
 
-  await publicApiPost<SubmissionResponse>("/api/submissions", {
+  await publicApiPost<SubmissionResponse>("/api/v1/submissions", {
     album: selected.album,
     artists: selected.artists,
     artworkUrl: selected.artworkUrl,

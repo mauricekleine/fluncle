@@ -26,7 +26,7 @@ export type MixtapeUpdateOptions = {
 };
 
 export async function mixtapesCommand(): Promise<MixtapeListItem[]> {
-  const response = await publicApiGet<MixtapesResponse>("/api/mixtapes");
+  const response = await publicApiGet<MixtapesResponse>("/api/v1/mixtapes");
 
   return response.mixtapes;
 }
@@ -36,7 +36,7 @@ export async function mixtapeUpdateCommand(
   options: MixtapeUpdateOptions,
 ): Promise<MixtapeUpdateResponse> {
   return adminApiPatch<MixtapeUpdateResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(id)}`,
+    `/api/v1/admin/mixtapes/${encodeURIComponent(id)}`,
     buildBody(options),
   );
 }
@@ -199,7 +199,7 @@ export async function mixtapeResyncCommand(
   // No selector → re-sync every platform the mixtape is actually distributed to.
   if (!explicit) {
     const social = await adminApiGet<MixtapeSocialShowResponse>(
-      `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`,
+      `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`,
     );
     const platforms = new Set(social.posts.map((post) => post.platform));
     doYoutube = platforms.has("youtube");
