@@ -149,6 +149,9 @@ describe("runAnchorTick", () => {
               ? { anchored: true, verifiedBy: "search" }
               : { anchored: false, verifiedBy: null },
         ),
+      // The free rung misses by default, so every row falls through to the Apify fallback — the
+      // pre-waterfall behaviour the existing assertions were written against.
+      resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
       runActor: () => Promise.resolve(APIFY_SAMPLE),
       ...overrides,
     };
@@ -179,6 +182,63 @@ describe("runAnchorTick", () => {
     expect(summary.missed).toBe(1);
     // The grouping routed the two Hold-Tight candidates to that row, one to FAU, none to mb_none.
     expect(posted).toEqual({ mb_fau: 1, mb_hold: 2, mb_none: 0 });
+  });
+
+  test("a free-rung (ListenBrainz) hit anchors the row and NEVER spends Apify on it", async () => {
+    const actorQueries: string[][] = [];
+    const reported: string[] = [];
+
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        // The free rung anchors mb_hold; the other two miss and fall through to Apify.
+        report: (trackId) => {
+          reported.push(trackId);
+
+          return Promise.resolve(
+            trackId === "mb_fau"
+              ? { anchored: true, verifiedBy: "search" }
+              : { anchored: false, verifiedBy: null },
+          );
+        },
+        resolveFree: (trackId) =>
+          Promise.resolve(
+            trackId === "mb_hold"
+              ? { anchored: true, verifiedBy: "isrc" }
+              : { anchored: false, verifiedBy: null },
+          ),
+        runActor: (queries) => {
+          actorQueries.push(queries);
+
+          return Promise.resolve(APIFY_SAMPLE);
+        },
+      }),
+    );
+
+    expect(summary.anchoredByListenbrainz).toBe(1);
+    expect(summary.anchoredBySearch).toBe(1); // mb_fau, via the Apify fallback
+    expect(summary.missed).toBe(1); // mb_none
+    // The Apify actor ran ONLY over the free-rung misses — mb_hold's query never reached it.
+    expect(actorQueries.flat()).toEqual(["Technimatic For All of Us", "No Candidates Here"]);
+    // And mb_hold was never POSTed to the paid anchor_track path.
+    expect(reported).not.toContain("mb_hold");
+  });
+
+  test("a free rung that THROWS still lets the row spend Apify (never starves anchoring)", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        // The free rung errors on every row; each must still fall through to the Apify fallback.
+        resolveFree: () => Promise.reject(new Error("resolve_anchor 500")),
+      }),
+    );
+
+    expect(summary.ok).toBe(true);
+    expect(summary.anchoredByListenbrainz).toBe(0);
+    // The Apify fallback still ran on all three: mb_hold → isrc, mb_fau → search, mb_none → miss.
+    expect(summary.anchoredByIsrc).toBe(1);
+    expect(summary.anchoredBySearch).toBe(1);
+    expect(summary.missed).toBe(1);
   });
 
   test("skips a worklist row missing a trackId or query", async () => {
