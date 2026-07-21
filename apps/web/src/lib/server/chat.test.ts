@@ -129,7 +129,7 @@ beforeEach(() => {
   // suite overrides it with the release rows it needs.
   listFreshTracks.mockReset();
   listFreshTracks.mockResolvedValue({ albums: [], tracks: [], windowDays: 30 });
-  // get_similar_artists defaults to "no neighbours yet"; its suite overrides with real neighbours.
+  // list_similar_artists defaults to "no neighbours yet"; its suite overrides with real neighbours.
   getArtistNeighbours.mockReset();
   getArtistNeighbours.mockResolvedValue([]);
   // The catalogue browse reads default to "no such record" so an unrelated test never trips them;
@@ -222,16 +222,17 @@ describe("buildChatTools — the MCP hands", () => {
       "get_artist",
       "get_label",
       "get_random_track",
-      "get_similar_artists",
       "get_status",
       "get_track",
       "list_album_catalogue",
       "list_albums",
       "list_artist_catalogue",
       "list_artists",
+      "list_findings",
       "list_fresh",
       "list_label_catalogue",
       "list_labels",
+      "list_similar_artists",
       "list_tracks",
       "search_archive",
       "submit_track",
@@ -605,12 +606,12 @@ describe("buildChatTools — the MCP hands", () => {
   });
 });
 
-describe("get_similar_artists — the artist-discovery read", () => {
+describe("list_similar_artists — the artist-discovery read", () => {
   function similarExecutor() {
-    const execute = buildChatTools().get_similar_artists?.execute;
+    const execute = buildChatTools().list_similar_artists?.execute;
 
     if (typeof execute !== "function") {
-      throw new Error("get_similar_artists executor missing");
+      throw new Error("list_similar_artists executor missing");
     }
 
     return execute;

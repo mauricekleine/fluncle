@@ -43,7 +43,7 @@ function AdminLoginPage() {
           ) : undefined}
           <Button
             nativeButton={false}
-            render={<a href="/api/admin/spotify/auth/login" />}
+            render={<a href="/api/v1/admin/spotify/auth/login" />}
             size="lg"
           >
             <BrandIcon icon={siSpotify} />

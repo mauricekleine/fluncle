@@ -177,7 +177,7 @@ export async function fingerprintPlan(
  */
 export async function fingerprintSourceAudio(logId: string, auth: AdminAuth): Promise<Fingerprint> {
   try {
-    const res = await fetch(`${auth.base}/api/admin/tracks/${logId}/source-audio`, {
+    const res = await fetch(`${auth.base}/api/v1/admin/tracks/${logId}/source-audio`, {
       headers: { Authorization: `Bearer ${auth.token}` },
     });
     if (!res.ok) {

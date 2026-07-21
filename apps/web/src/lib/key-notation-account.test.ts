@@ -42,19 +42,19 @@ function stubFetch(routes: {
   onPatch?: (body: unknown) => void;
 }): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === "/api/me") {
+    if (url === "/api/v1/me") {
       return new Response(JSON.stringify({ ok: true, user: routes.me?.user ?? null }));
     }
 
-    if (url === "/api/me/preferences" && (init?.method ?? "GET") === "GET") {
+    if (url === "/api/v1/me/preferences" && (init?.method ?? "GET") === "GET") {
       return new Response(JSON.stringify({ ok: true, preferences: routes.preferencesGet ?? {} }));
     }
 
-    if (url === "/api/me/csrf") {
+    if (url === "/api/v1/me/csrf") {
       return new Response(JSON.stringify({ csrfToken: "tok", ok: true }));
     }
 
-    if (url === "/api/me/preferences" && init?.method === "PATCH") {
+    if (url === "/api/v1/me/preferences" && init?.method === "PATCH") {
       routes.onPatch?.(JSON.parse(typeof init.body === "string" ? init.body : "{}"));
 
       return new Response(JSON.stringify({ ok: true, preferences: {} }));
@@ -131,7 +131,7 @@ describe("key-notation account sync (toggle write-through)", () => {
 
     // The profile mirror is fire-and-forget (csrf → PATCH); flush the microtasks.
     await vi.waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => url === "/api/me/csrf")).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => url === "/api/v1/me/csrf")).toBe(true);
       expect(patched).toEqual([{ keyNotation: "camelot" }]);
     });
   });

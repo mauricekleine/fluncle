@@ -28,7 +28,7 @@ export type PlanEntry = {
    * Fluncle's stored DSP bpm + scale-text key (`"A minor"`), threaded through from the
    * public feed row so a `PlanEntry[]` is structurally a `Finding[]` — the deck-identity
    * resolver (`identity.ts`) reads them as COARSE GUARDS when matching an on-flip OCR read
-   * to this plan. Only the RANDOM-VJ pool (`--plan all`, sourced from `/api/tracks`) carries
+   * to this plan. Only the RANDOM-VJ pool (`--plan all`, sourced from `/api/v1/findings`) carries
    * them; the mixtape/handle path leaves them undefined (the resolver's guards are optional).
    */
   bpm?: number | null;

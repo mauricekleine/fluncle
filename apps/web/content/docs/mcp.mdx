@@ -23,17 +23,16 @@ Point any MCP client at the endpoint. For a client that reads a config block:
 
 ## Tools
 
-The archive, as five tools:
+The archive, as tools:
 
-| Tool                   | Does                                          |
-| ---------------------- | --------------------------------------------- |
-| `list_tracks`          | The latest findings, newest first.            |
-| `get_random_track`     | One finding, pulled at random.                |
-| `search_tracks`        | Search Spotify for a candidate.               |
-| `submit_track`         | Recommend a track for review (not a publish). |
-| `subscribe_newsletter` | Board the mothership.                         |
-
-(`get_recent_tracks` still works as a deprecated alias of `list_tracks` for a window.)
+| Tool                   | Does                                                    |
+| ---------------------- | ------------------------------------------------------- |
+| `list_findings`        | The latest findings and mixtapes, newest found first.   |
+| `list_tracks`          | Every track Fluncle holds, newest release first, paged. |
+| `get_random_track`     | One finding, pulled at random.                          |
+| `search_tracks`        | Search Spotify for a candidate.                         |
+| `submit_track`         | Recommend a track for review (not a publish).           |
+| `subscribe_newsletter` | Board the mothership.                                   |
 
 `submit_track` is a recommendation, like the [CLI](/docs/cli)'s submit: it queues a track, and Fluncle listens before anything joins the archive.
 

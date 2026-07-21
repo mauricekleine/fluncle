@@ -49,6 +49,6 @@ export async function backfillCoverMastersCommand(
   }
 
   return adminApiPost<CoverMastersBackfillResult>(
-    `/api/admin/backfill/cover-masters?${params.toString()}`,
+    `/api/v1/admin/backfill/cover-masters?${params.toString()}`,
   );
 }

@@ -96,7 +96,7 @@ export function SubmissionsTray({
         await publishSubmission(submission);
 
         const response = await fetch(
-          `/api/admin/submissions/${encodeURIComponent(submission.id)}/approve`,
+          `/api/v1/admin/submissions/${encodeURIComponent(submission.id)}/approve`,
           { credentials: "same-origin", method: "POST" },
         );
 
@@ -111,7 +111,7 @@ export function SubmissionsTray({
     (submission: Submission) =>
       run(submission, async () => {
         const response = await fetch(
-          `/api/admin/submissions/${encodeURIComponent(submission.id)}/reject`,
+          `/api/v1/admin/submissions/${encodeURIComponent(submission.id)}/reject`,
           { credentials: "same-origin", method: "POST" },
         );
 
@@ -299,7 +299,7 @@ function formatTrackLine(submission: Submission): string {
 // duplicate/incomplete_duplicate is a pass: the finding is already in the
 // archive, which is exactly what approving asserts.
 async function publishSubmission(submission: Submission): Promise<void> {
-  const response = await fetch("/api/admin/tracks", {
+  const response = await fetch("/api/v1/admin/tracks", {
     body: JSON.stringify({
       note: submission.note,
       spotifyUrl: submission.spotifyUrl,

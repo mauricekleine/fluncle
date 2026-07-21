@@ -30,7 +30,7 @@ export async function noteHeldCommand(options: {
 }): Promise<NoteRejectionsResponse> {
   const query = options.settled ? "?open=false" : "";
 
-  return adminApiGet<NoteRejectionsResponse>(`/api/admin/note-rejections${query}`);
+  return adminApiGet<NoteRejectionsResponse>(`/api/v1/admin/note-rejections${query}`);
 }
 
 /**
@@ -56,12 +56,12 @@ export async function noteGateCommand(options: {
   // No dial named ⇒ a pure read. Reuse the ledger read rather than adding a second GET op
   // for a value it already carries.
   if (Object.keys(patch).length === 0) {
-    const response = await adminApiGet<NoteRejectionsResponse>("/api/admin/note-rejections");
+    const response = await adminApiGet<NoteRejectionsResponse>("/api/v1/admin/note-rejections");
 
     return response.gate;
   }
 
-  const response = await adminApiPatch<NoteGateResponse>("/api/admin/note-gate", patch);
+  const response = await adminApiPatch<NoteGateResponse>("/api/v1/admin/note-gate", patch);
 
   return response.gate;
 }

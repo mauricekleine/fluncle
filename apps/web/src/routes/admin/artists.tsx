@@ -179,7 +179,7 @@ async function mutateJson<T>(url: string, method: "POST" | "DELETE"): Promise<T>
 // owned + confirmed + reviewed (correct AND approve in one act). A validation failure comes
 // back as a 400 whose message the row shows inline (quiet, no toast).
 async function patchSocialUrl(socialId: string, url: string): Promise<{ message?: string }> {
-  const response = await fetch(`/api/admin/artists/socials/${socialId}`, {
+  const response = await fetch(`/api/v1/admin/artists/socials/${socialId}`, {
     body: JSON.stringify({ url }),
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -239,26 +239,27 @@ function AdminArtistsPage() {
   // "Looks good" — acknowledge the whole link list (review_artist): stamp it seen + promote any
   // surviving candidates. Clears needs-a-look until a NEW link is discovered.
   const reviewArtist = useMutation({
-    mutationFn: (artistId: string) => mutateJson(`/api/admin/artists/${artistId}/review`, "POST"),
+    mutationFn: (artistId: string) =>
+      mutateJson(`/api/v1/admin/artists/${artistId}/review`, "POST"),
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: invalidate,
   });
   const removeSocial = useMutation({
     mutationFn: (socialId: string) =>
-      mutateJson(`/api/admin/artists/socials/${socialId}`, "DELETE"),
+      mutateJson(`/api/v1/admin/artists/socials/${socialId}`, "DELETE"),
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: invalidate,
   });
   // Approve ONE fresh link (the fresh-links section) — mark it reviewed + promote a candidate.
   const reviewSocial = useMutation({
     mutationFn: (socialId: string) =>
-      mutateJson(`/api/admin/artists/socials/${socialId}/review`, "POST"),
+      mutateJson(`/api/v1/admin/artists/socials/${socialId}/review`, "POST"),
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: invalidate,
   });
   const addSocial = useMutation({
     mutationFn: (input: { artistId: string; platform: string; url: string }) =>
-      fetch(`/api/admin/artists/${input.artistId}/socials`, {
+      fetch(`/api/v1/admin/artists/${input.artistId}/socials`, {
         body: JSON.stringify({ platform: input.platform, url: input.url }),
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },

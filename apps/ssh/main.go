@@ -2091,7 +2091,7 @@ func (m model) fetchLatest() tea.Cmd {
 			Tracks     []track `json:"tracks"`
 			TotalCount int     `json:"totalCount"`
 		}
-		err := m.app.getJSON("/api/tracks?limit=16", &response)
+		err := m.app.getJSON("/api/v1/findings?limit=16", &response)
 		return tracksMsg{tracks: response.Tracks, total: response.TotalCount, err: err}
 	}
 }
@@ -2116,7 +2116,7 @@ func (m model) fetchArtists() tea.Cmd {
 			Artists []artist `json:"artists"`
 			OK      bool     `json:"ok"`
 		}
-		err := m.app.getJSON("/api/artists", &response)
+		err := m.app.getJSON("/api/v1/artists", &response)
 		return artistsMsg{artists: response.Artists, err: err}
 	}
 }
@@ -2150,7 +2150,7 @@ func (m model) fetchMixtapes() tea.Cmd {
 			Mixtapes []mixtape `json:"mixtapes"`
 			OK       bool      `json:"ok"`
 		}
-		err := m.app.getJSON("/api/mixtapes", &response)
+		err := m.app.getJSON("/api/v1/mixtapes", &response)
 		return mixtapesMsg{mixtapes: response.Mixtapes, err: err}
 	}
 }
@@ -2160,7 +2160,7 @@ func (m model) fetchFooter() tea.Cmd {
 		var response struct {
 			Tracks []track `json:"tracks"`
 		}
-		err := m.app.getJSON("/api/tracks?limit=1", &response)
+		err := m.app.getJSON("/api/v1/findings?limit=1", &response)
 		if err != nil || len(response.Tracks) == 0 {
 			return footerMsg{err: err}
 		}
@@ -2173,7 +2173,7 @@ func (m model) fetchRandom() tea.Cmd {
 		var response struct {
 			Track track `json:"track"`
 		}
-		err := m.app.getJSON("/api/tracks/random", &response)
+		err := m.app.getJSON("/api/v1/tracks/random", &response)
 		return randomMsg{track: response.Track, err: err}
 	}
 }
@@ -2185,7 +2185,7 @@ func (m model) fetchLatestDetail() tea.Cmd {
 		var response struct {
 			Tracks []track `json:"tracks"`
 		}
-		if err := m.app.getJSON("/api/tracks?limit=1", &response); err != nil {
+		if err := m.app.getJSON("/api/v1/findings?limit=1", &response); err != nil {
 			return detailMsg{err: err}
 		}
 		if len(response.Tracks) == 0 {
@@ -2204,7 +2204,7 @@ func (m model) fetchByCoord(coord string) tea.Cmd {
 			Track   *track   `json:"track"`
 			Mixtape *mixtape `json:"mixtape"`
 		}
-		if err := m.app.getJSON("/api/tracks/"+url.PathEscape(coord), &response); err != nil {
+		if err := m.app.getJSON("/api/v1/tracks/"+url.PathEscape(coord), &response); err != nil {
 			return detailMsg{err: errors.New("No coordinate reads " + coord + ". " + err.Error())}
 		}
 		if response.Mixtape != nil {
@@ -2259,7 +2259,7 @@ func (m model) search(query string) tea.Cmd {
 		var response struct {
 			Results []searchResult `json:"results"`
 		}
-		err := m.app.getJSON("/api/search?q="+url.QueryEscape(query), &response)
+		err := m.app.getJSON("/api/v1/search?q="+url.QueryEscape(query), &response)
 		return searchMsg{results: response.Results, err: err}
 	}
 }
@@ -2292,7 +2292,7 @@ func (m model) submit() tea.Cmd {
 		Title:          pending.Title,
 	}
 	return func() tea.Msg {
-		err := m.app.postJSON("/api/submissions", body, nil)
+		err := m.app.postJSON("/api/v1/submissions", body, nil)
 		return submitMsg{err: err}
 	}
 }
@@ -2304,7 +2304,7 @@ type newsletterRequest struct {
 func (m model) subscribe(email string) tea.Cmd {
 	body := newsletterRequest{Email: email}
 	return func() tea.Msg {
-		err := m.app.postJSON("/api/newsletter", body, nil)
+		err := m.app.postJSON("/api/v1/newsletter", body, nil)
 		return subscribeMsg{err: err}
 	}
 }

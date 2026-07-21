@@ -19,8 +19,8 @@ export type Me = {
 
 export async function meCommand(): Promise<Me> {
   const [me, progress] = await Promise.all([
-    userApiGet<MeResponse>("/api/me"),
-    userApiGet<GalaxyProgress>("/api/me/galaxy-progress"),
+    userApiGet<MeResponse>("/api/v1/me"),
+    userApiGet<GalaxyProgress>("/api/v1/me/galaxy-progress"),
   ]);
 
   if (!me.user) {

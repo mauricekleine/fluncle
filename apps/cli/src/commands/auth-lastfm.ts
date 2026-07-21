@@ -19,7 +19,7 @@ import { adminApiGet, adminApiPost } from "../api";
 export async function authLastfmCommand(options: { token?: string }): Promise<void> {
   if (options.token?.trim()) {
     const response = await adminApiPost<LastfmAuthSessionResponse>(
-      "/api/admin/lastfm/auth/session",
+      "/api/v1/admin/lastfm/auth/session",
       { token: options.token.trim() },
     );
 
@@ -36,7 +36,7 @@ Also store it in 1Password (Fluncle vault) alongside the API key + shared secret
     return;
   }
 
-  const response = await adminApiGet<LastfmAuthStartResponse>("/api/admin/lastfm/auth/start");
+  const response = await adminApiGet<LastfmAuthStartResponse>("/api/v1/admin/lastfm/auth/start");
 
   console.log(`Open this Last.fm authorization URL (logged in as fluncle) and click "Yes, allow access":
 

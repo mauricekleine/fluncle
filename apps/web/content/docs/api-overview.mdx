@@ -19,14 +19,20 @@ The stable, versioned base is:
 https://www.fluncle.com/api/v1
 ```
 
-The bare `/api/*` path is a permanent alias, so an old link keeps resolving.
-
 ## A taste
 
 The findings, newest first:
 
 ```bash
-curl https://www.fluncle.com/api/v1/tracks?limit=3
+curl https://www.fluncle.com/api/v1/findings?limit=3
+```
+
+The list is paginated with `limit` and a cursor; the head is always the latest finding.
+
+Every track Fluncle holds, newest release first:
+
+```bash
+curl "https://www.fluncle.com/api/v1/tracks?page=1&certified=true"
 ```
 
 A single finding by its [Log ID](/docs/log-id):
@@ -34,8 +40,6 @@ A single finding by its [Log ID](/docs/log-id):
 ```bash
 curl https://www.fluncle.com/api/v1/tracks/241.7.3A
 ```
-
-The list is paginated with `limit` and a cursor; the head is always the latest finding.
 
 ## The spec
 

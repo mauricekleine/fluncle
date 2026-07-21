@@ -162,7 +162,7 @@ function HomePage() {
   // and risk a scroll jump for someone reading deep in the list.
   //
   // `staleTime` is what makes the SEED actually count. Without it the seeded page
-  // is stale the instant it hydrates, so every home load fired a `/api/tracks`
+  // is stale the instant it hydrates, so every home load fired a `/api/v1/tracks`
   // refetch for the exact ten rows SSR had just delivered — a guaranteed duplicate
   // round-trip on the site's front door. A minute of trust matches the pill below
   // it and the pace the archive actually moves at; a real navigation back to `/`

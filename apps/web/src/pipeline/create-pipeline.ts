@@ -1166,7 +1166,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   }
   async function applyStatus(): Promise<void> {
     try {
-      const r = await fetch("/api/status", { cache: "no-store" });
+      const r = await fetch("/api/v1/status", { cache: "no-store" });
       if (!r.ok) {
         return;
       }

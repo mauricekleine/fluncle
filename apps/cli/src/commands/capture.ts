@@ -16,7 +16,7 @@ import { adminApiGet, adminApiPut } from "../api";
 
 /** The spend readout: what the catalogue captured in the last 24h, and what is left. */
 export async function captureBudgetCommand(): Promise<CaptureBudgetState> {
-  return adminApiGet<CaptureBudgetResponse>("/api/admin/catalogue/capture-budget");
+  return adminApiGet<CaptureBudgetResponse>("/api/v1/admin/catalogue/capture-budget");
 }
 
 /**
@@ -29,5 +29,5 @@ export async function setCaptureBudgetCommand(input: {
   dailyTracks?: number;
   paused?: boolean;
 }): Promise<CaptureBudgetState> {
-  return adminApiPut<CaptureBudgetResponse>("/api/admin/catalogue/capture-budget", input);
+  return adminApiPut<CaptureBudgetResponse>("/api/v1/admin/catalogue/capture-budget", input);
 }

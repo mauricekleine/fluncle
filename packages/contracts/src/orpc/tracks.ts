@@ -5,6 +5,7 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 import {
+  CatalogueTrackListItemSchema,
   FeedItemSchema,
   FreshAlbumSchema,
   FreshTrackSchema,
@@ -39,10 +40,12 @@ export const getTrack = oc
   );
 
 /**
- * `list_tracks` → `GET /tracks` (operationId `listTracks`).
+ * `list_findings` → `GET /findings` (operationId `listFindings`).
  *
- * The public merged feed — findings interleaved with published mixtapes, newest
- * first, keyset-paginated. The query params mirror the live route exactly:
+ * The public merged FEED — findings interleaved with published mixtapes, newest FOUND first,
+ * keyset-paginated. This is the found-order stream the homepage, the feeds, and the newsletter
+ * agent read (the day Fluncle found each one — the Found Rule), the twin of the release-ordered
+ * `list_tracks` enumerator below. The query params mirror the live route exactly:
  *   - `limit`   — page size (default 16, clamped to 48). Kept as a raw string and
  *                 parsed in-handler so an invalid value degrades to the default
  *                 exactly as the live route does (rather than 400-ing on a
@@ -60,12 +63,12 @@ export const getTrack = oc
  * The response is the `FeedListPage` itself — NO `ok` envelope (the page is the
  * body, mirroring `TracksResponse` in ../index.ts).
  */
-export const listTracks = oc
+export const listFindings = oc
   .route({
     method: "GET",
-    operationId: "listTracks",
-    path: "/tracks",
-    summary: "List the merged feed (findings + published mixtapes)",
+    operationId: "listFindings",
+    path: "/findings",
+    summary: "List the feed of findings and published mixtapes, newest found first",
     tags: ["Tracks"],
   })
   .input(
@@ -81,6 +84,48 @@ export const listTracks = oc
       nextCursor: z.string().optional(),
       totalCount: z.number(),
       tracks: z.array(FeedItemSchema),
+    }),
+  );
+
+/**
+ * `list_tracks` → `GET /tracks` (operationId `listTracks`).
+ *
+ * The whole-archive ENUMERATOR — every track Fluncle holds, findings and the quieter rows alike,
+ * newest RELEASE first, one numbered page at a time. This is the machine twin of the web `/tracks`
+ * page: it reads the SAME hosted-proven hub shape, so the two never disagree. The certified findings
+ * carry their `logId` coordinate + cover; the uncertified rows carry neither (the Unlit Rule, in the
+ * row shape). Distinct from the found-order `list_findings` feed above: this is ordered by RELEASE
+ * date (when the tune came OUT), never the day Fluncle found it (the Found Rule).
+ *
+ *   - `page`      — the 1-based page number (a tolerant optional string, default 1). Past-the-end is a
+ *                   404, never a clamp to page 1.
+ *   - `certified` — the tri-state filter: `true` returns only the certified findings, `false` only the
+ *                   rest, omitted returns everything. This is the ONE filter on the enumerator.
+ *
+ * The response mirrors the `/albums` + `/labels` hub envelope: `{ ok: true, tracks, page, pageCount,
+ * total }`.
+ */
+export const listTracks = oc
+  .route({
+    method: "GET",
+    operationId: "listTracks",
+    path: "/tracks",
+    summary: "List every track Fluncle holds, newest release first, one page at a time",
+    tags: ["Tracks"],
+  })
+  .input(
+    z.object({
+      certified: z.enum(["true", "false"]).optional(),
+      page: z.string().optional(),
+    }),
+  )
+  .output(
+    z.object({
+      ok: z.literal(true),
+      page: z.number(),
+      pageCount: z.number(),
+      total: z.number(),
+      tracks: z.array(CatalogueTrackListItemSchema),
     }),
   );
 
@@ -103,8 +148,8 @@ export const getRandomTrack = oc
   .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
 
 /**
- * `get_similar_findings` → `GET /tracks/{idOrLogId}/similar` (operationId
- * `getSimilarFindings`).
+ * `list_similar_tracks` → `GET /tracks/{idOrLogId}/similar` (operationId
+ * `listSimilarTracks`).
  *
  * The N sonically-nearest findings to the given one — the automatic "more like this"
  * cluster (docs/track-lifecycle.md). Loads the target's MuQ audio
@@ -114,17 +159,17 @@ export const getRandomTrack = oc
  * something like this" hook.
  *
  * `limit` is a tolerant optional string (default 6, clamped to 24), parsed in-handler
- * so a bad value degrades to the default rather than 400-ing — mirrors `list_tracks`.
+ * so a bad value degrades to the default rather than 400-ing — mirrors `list_findings`.
  * An unknown coordinate, a finding with no embedding yet (the embed cron hasn't
  * drained it), or an otherwise-empty archive all yield `{ ok: true, findings: [] }` —
  * a quiet empty row, never an error.
  */
-export const getSimilarFindings = oc
+export const listSimilarTracks = oc
   .route({
     method: "GET",
-    operationId: "getSimilarFindings",
+    operationId: "listSimilarTracks",
     path: "/tracks/{idOrLogId}/similar",
-    summary: "Get the sonically-nearest findings to one (by Spotify trackId or Log ID)",
+    summary: "List the sonically-nearest findings to one (by Spotify trackId or Log ID)",
     tags: ["Tracks"],
   })
   .input(z.object({ idOrLogId: z.string(), limit: z.string().optional() }))
@@ -153,7 +198,7 @@ export const getSimilarFindings = oc
  * (`tasteSubScore`). Absent or unresolvable, the rail is the plain mixability order.
  *
  * `limit` is a tolerant optional string (default 12, clamped to 32), parsed in-handler
- * so a bad value degrades rather than 400-ing (mirrors `get_similar_findings`).
+ * so a bad value degrades rather than 400-ing (mirrors `list_similar_tracks`).
  * `exclude` is a comma-separated list of the already-chained tracks — Log IDs or Spotify
  * track ids, mixed freely, because a chain now holds both kinds. Excluded SERVER-SIDE so
  * a deep chain can't silently empty the rail.
@@ -187,7 +232,7 @@ export const listMixableTracks = oc
  * WHAT JUST CAME OUT: the newest drum & bass RELEASES over a trailing 30-day window, newest release
  * first, flat and capped (`limit`, a tolerant string, default 50, max 100). Ordered by
  * `tracks.release_date` — NOT `findings.added_at` — so this is "just landed", never "Fluncle found"
- * (VOICE.md's Found Rule; the opposite date axis from `list_tracks`). Every track is unlit-safe: an
+ * (VOICE.md's Found Rule; the opposite date axis from `list_findings`). Every track is unlit-safe: an
  * uncertified catalogue row carries no `logId` and no cover (the Unlit Rule, structural in the DTO).
  * `albums` are the album entities those releases sit on.
  */
@@ -210,9 +255,10 @@ export const listFresh = oc
 
 export const tracksContract = {
   get_random_track: getRandomTrack,
-  get_similar_findings: getSimilarFindings,
   get_track: getTrack,
+  list_findings: listFindings,
   list_fresh: listFresh,
   list_mixable_tracks: listMixableTracks,
+  list_similar_tracks: listSimilarTracks,
   list_tracks: listTracks,
 };

@@ -1,5 +1,5 @@
 // The `admin-tracks` domain router module — the admin wave's pilot (every admin
-// pattern the fan-out reuses). Each handler reuses the live `/api/admin/tracks/*`
+// pattern the fan-out reuses). Each handler reuses the live `/api/v1/admin/tracks/*`
 // route logic verbatim; the auth tier moves from the per-handler `requireAdmin` /
 // `requireOperator` to the oRPC procedure middleware (../orpc-auth), and the
 // field-level role check reads `context.role` in-handler.
@@ -91,7 +91,7 @@ const ADMIN_LIST_MAX_LIMIT = 48;
 // How many sonic neighbours the note reads. Six is the same window the `/log` "more
 // like this" row shows: wide enough to describe a region of the archive, tight enough
 // that every one of them genuinely sounds like the finding. The neighbours come from
-// the MuQ audio EMBEDDING (`get_similar_findings` — an exact cosine scan in SQL, the
+// the MuQ audio EMBEDDING (`list_similar_tracks` — an exact cosine scan in SQL, the
 // probe bound as a raw blob), never from `features_json`: the note encodes a
 // subjective read of how a finding FEELS, and two tracks can measure nearly identical
 // yet sit nowhere near each other by feel. The embedding is the space the note's
@@ -815,7 +815,7 @@ export function adminTracksHandlers(os: Implementer) {
       const note = gateNoteText(body.note);
 
       // Echo-gate it against the finding's sonic neighbourhood — the SAME notes the
-      // authoring prompt showed the agent (`get_similar_findings`, the MuQ nearest
+      // authoring prompt showed the agent (`list_similar_tracks`, the MuQ nearest
       // neighbours, ranked in SQL). A lifted phrase or wholesale word overlap hard-fails
       // here with `note_echoes_neighbours`/422, so the vibe-neighbour layer can never
       // quietly flatten a region into one voice. A finding with no embedding yet, or the

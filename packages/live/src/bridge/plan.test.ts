@@ -161,7 +161,7 @@ describe("buildAllFindingsPlan", () => {
   ): ((url: string) => Promise<Response>) => {
     return async (url: string): Promise<Response> => {
       const u = new URL(url);
-      if (u.pathname === "/api/tracks") {
+      if (u.pathname === "/api/v1/findings") {
         const cursor = u.searchParams.get("cursor") ?? "";
         const page = pages[cursor];
         return page ? json(page) : notFound();
@@ -225,7 +225,7 @@ describe("buildAllFindingsPlan", () => {
     globalThis.fetch = mock(async (): Promise<Response> => notFound()) as unknown as typeof fetch;
     const error = await capture(() => buildAllFindingsPlan());
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/\/api\/tracks returned 404/);
+    expect((error as Error).message).toMatch(/\/api\/v1\/findings returned 404/);
   });
 
   test("a thrown fetch (network fault / 403) THROWS, naming the cause", async () => {
@@ -233,7 +233,7 @@ describe("buildAllFindingsPlan", () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
     const error = await capture(() => buildAllFindingsPlan());
-    expect((error as Error).message).toMatch(/\/api\/tracks fetch failed/);
+    expect((error as Error).message).toMatch(/\/api\/v1\/findings fetch failed/);
   });
 
   test("a feed of only the mixtape THROWS (empty pool after exclusion, no dead show)", async () => {

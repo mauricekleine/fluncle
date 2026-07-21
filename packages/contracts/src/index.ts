@@ -170,19 +170,19 @@ export type GalaxiesResponse = Ok<{ galaxies: GalaxyListItem[] }>;
 export type GalaxyResponse = Ok<{ findings: TrackListItem[]; galaxy: GalaxyListItem }>;
 
 /**
- * One galaxy in the FULL admin shape (`GET /api/admin/galaxies`, the map writes).
+ * One galaxy in the FULL admin shape (`GET /api/v1/admin/galaxies`, the map writes).
  * Inferred from `GalaxyAdminItemSchema` (./orpc/admin-galaxies.ts) — every column the
  * naming view + the `fluncle-cluster` cron read (centroid, handle, name/slug, evidence).
  */
 export type GalaxyAdminItem = z.infer<typeof GalaxyAdminItemSchema>;
 
-/** `GET /api/admin/galaxies` response — the full map (named + unnamed + retired). */
+/** `GET /api/v1/admin/galaxies` response — the full map (named + unnamed + retired). */
 export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
-/** `PATCH /api/admin/galaxies/:id` response — the one updated galaxy. */
+/** `PATCH /api/v1/admin/galaxies/:id` response — the one updated galaxy. */
 export type GalaxyUpdateResponse = Ok<{ galaxy: GalaxyAdminItem }>;
 
-/** `PUT /api/admin/galaxies/map` response — the full resulting map (with minted ids). */
+/** `PUT /api/v1/admin/galaxies/map` response — the full resulting map (with minted ids). */
 export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
 // ── Labels (the entity + the operator's crawl-seed control) ──────────────────
@@ -196,26 +196,26 @@ export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
 
 /**
- * One label in the admin shape (`GET /api/admin/labels`). Inferred from
+ * One label in the admin shape (`GET /api/v1/admin/labels`). Inferred from
  * `LabelAdminItemSchema` (./orpc/admin-labels.ts). `slug` is the identity + the join key
  * back to the raw `tracks.label` string; `findingCount` is derived, never stored.
  */
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
 
-/** `GET /api/admin/labels` response — every label (optionally one seed state). */
+/** `GET /api/v1/admin/labels` response — every label (optionally one seed state). */
 export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
 
-/** `PATCH /api/admin/labels/:id` response — the one ruled label. */
+/** `PATCH /api/v1/admin/labels/:id` response — the one ruled label. */
 export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
 
 /**
- * The label-merge summary (`POST /api/admin/labels/:slug/merge`, RFC musickit-second-authority U2b).
+ * The label-merge summary (`POST /api/v1/admin/labels/:slug/merge`, RFC musickit-second-authority U2b).
  * Inferred from `MergeLabelResultSchema` (./orpc/admin-labels.ts): what re-pointed, the canonical
  * fields filled from the loser, the alias written, and the resolved crawl-seed state.
  */
 export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
 
-/** `POST /api/admin/labels/:slug/merge` response — the merge summary. */
+/** `POST /api/v1/admin/labels/:slug/merge` response — the merge summary. */
 export type MergeLabelResponse = Ok<{ result: MergeLabelResult }>;
 
 // ── Users (the account roster — the operator's read-only rollout window) ───────
@@ -224,14 +224,14 @@ export type MergeLabelResponse = Ok<{ result: MergeLabelResult }>;
 export type UserStatus = z.infer<typeof UserStatusSchema>;
 
 /**
- * One account in the admin roster shape (`GET /api/admin/users`). Inferred from
+ * One account in the admin roster shape (`GET /api/v1/admin/users`). Inferred from
  * `UserAdminItemSchema` (./orpc/admin-users.ts) — the verified/status flags plus the
  * per-user artifact counts (saved findings, saved sets, whether Galaxy progress exists),
  * every count DERIVED, never stored.
  */
 export type UserAdminItem = z.infer<typeof UserAdminItemSchema>;
 
-/** `GET /api/admin/users` response — every account, newest-first. */
+/** `GET /api/v1/admin/users` response — every account, newest-first. */
 export type UsersAdminResponse = Ok<{ users: UserAdminItem[] }>;
 
 /** Where a label-alias spelling came from (RFC musickit-second-authority, U2a). */
@@ -303,7 +303,7 @@ export type CatalogueTrackItem = z.infer<typeof CatalogueTrackItemSchema>;
 /** The catalogue's shape in four scoped counts. */
 export type CatalogueSummary = z.infer<typeof CatalogueSummarySchema>;
 
-/** `GET /api/admin/catalogue` response — one lens's page, plus the summary. */
+/** `GET /api/v1/admin/catalogue` response — one lens's page, plus the summary. */
 export type CatalogueResponse = Ok<{ summary: CatalogueSummary; tracks: CatalogueTrackItem[] }>;
 
 /**
@@ -313,7 +313,7 @@ export type CatalogueResponse = Ok<{ summary: CatalogueSummary; tracks: Catalogu
  */
 export type CaptureBudgetState = z.infer<typeof CaptureBudgetStateSchema>;
 
-/** `GET`/`PUT /api/admin/catalogue/capture-budget` response — the full state, either way. */
+/** `GET`/`PUT /api/v1/admin/catalogue/capture-budget` response — the full state, either way. */
 export type CaptureBudgetResponse = Ok<CaptureBudgetState>;
 
 // ── The audio pipeline's work queues (docs/gpu-batch-embed.md) ───────────────────
@@ -331,13 +331,13 @@ export type TrackWorkScope = z.infer<typeof TrackWorkScopeSchema>;
 /** One row of pipeline work. `certified` is the rail's flag: false = never write a note. */
 export type TrackWorkItem = z.infer<typeof TrackWorkItemSchema>;
 
-/** `GET /api/admin/tracks/work` response — one stage's worklist, in drain order. */
+/** `GET /api/v1/admin/tracks/work` response — one stage's worklist, in drain order. */
 export type TrackWorkResponse = Ok<{ tracks: TrackWorkItem[] }>;
 
 /** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
 export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;
 
-/** `GET /api/admin/tracks/embeddings` response — a cursor page of the embedded corpus. */
+/** `GET /api/v1/admin/tracks/embeddings` response — a cursor page of the embedded corpus. */
 export type TrackEmbeddingsResponse = Ok<{
   embeddings: TrackEmbedding[];
   nextCursor: string | null;
@@ -387,8 +387,8 @@ export type ServiceHealthStatus = z.infer<typeof ServiceHealthStatusSchema>;
 export type TrackFeatures = z.infer<typeof TrackFeaturesSchema>;
 
 /**
- * A finding as the feed/log/admin board renders it; emitted by `/api/tracks` and
- * `/api/tracks/:id`. Inferred from `TrackListItemSchema` (./orpc/_shared.ts), the
+ * A finding as the feed/log/admin board renders it; emitted by `/api/v1/findings` and
+ * `/api/v1/tracks/:id`. Inferred from `TrackListItemSchema` (./orpc/_shared.ts), the
  * schema the route validates its body against — so this DTO cannot drift from the
  * wire. Field docs live on the schema.
  */
@@ -467,7 +467,7 @@ export type MixtapeMember = TrackListItem & {
 };
 
 /**
- * A mixtape as the `/mixtapes` surface + `/api/mixtapes` emit it. `status` is
+ * A mixtape as the `/mixtapes` surface + `/api/v1/mixtapes` emit it. `status` is
  * always present (NOT NULL column). Inferred from `MixtapeDTOSchema`
  * (./orpc/_shared.ts) — its `members` is the `MixtapeMember` shape (a finding +
  * optional cue) and its `externalUrls` the `MixtapeExternalUrls` shape.
@@ -479,18 +479,18 @@ export type MixtapeDTO = z.infer<typeof MixtapeDTOSchema>;
 /** A feed item: a finding or a mixtape. */
 export type FeedItem = MixtapeDTO | TrackListItem;
 
-/** The merged feed page (findings + mixtapes); emitted by `/api/tracks` when unwindowed. */
+/** The merged feed page (findings + mixtapes); emitted by `/api/v1/findings` when unwindowed. */
 export type FeedListPage = Omit<TrackListPage, "tracks"> & {
   tracks: FeedItem[];
 };
 
-/** `/api/tracks` response (the merged feed page; no `ok` envelope — the page is the body). */
+/** `/api/v1/findings` response (the merged feed page; no `ok` envelope — the page is the body). */
 export type TracksResponse = FeedListPage;
 
-/** `/api/tracks/random` response. */
+/** `/api/v1/tracks/random` response. */
 export type RandomTrackResponse = Ok<{ track: TrackListItem }>;
 
-/** `/api/tracks/:idOrLogId` response: a finding or a mixtape. */
+/** `/api/v1/tracks/:idOrLogId` response: a finding or a mixtape. */
 export type TrackGetResponse = Ok<{ track: TrackListItem }> | Ok<{ mixtape: MixtapeDTO }>;
 
 // ── Radio (the shared broadcast clock) ───────────────────────────────────────
@@ -518,11 +518,11 @@ export type MixtapesResponse = Ok<{ mixtapes: MixtapeDTO[] }>;
 /** A clip row as the clip ops emit it. */
 export type ClipDTO = z.infer<typeof ClipDTOSchema>;
 
-/** `GET /api/admin/clips` response: every clip (optionally filtered by mixtape/status). */
+/** `GET /api/v1/admin/clips` response: every clip (optionally filtered by mixtape/status). */
 export type ClipsResponse = Ok<{ clips: ClipDTO[] }>;
 
 /**
- * `POST /api/admin/clips/:clipId/cut/presign` response (Unit C): the single presigned
+ * `POST /api/v1/admin/clips/:clipId/cut/presign` response (Unit C): the single presigned
  * PUT URL the box streams `<clipId>/footage.mp4` to, plus the exact `contentType`
  * it MUST replay on the PUT (baked into the signature).
  */
@@ -533,7 +533,7 @@ export type ClipPresignResponse = Ok<{
   url: string;
 }>;
 
-/** `POST /api/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
+/** `POST /api/v1/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
 export type ClipCutFinalizeResponse = Ok<{ clip: ClipDTO }>;
 
 // ── Clip drip-feed (clip-drip-feed RFC) ──────────────────────────────────────
@@ -553,13 +553,13 @@ export type ClipSocialPost = {
   updatedAt: string;
 };
 
-/** `GET /api/admin/clips/social` response: every clip's drip-feed row. */
+/** `GET /api/v1/admin/clips/social` response: every clip's drip-feed row. */
 export type ClipSocialPostsResponse = Ok<{ posts: ClipSocialPost[] }>;
 
-/** `PATCH /api/admin/clips/:clipId/schedule` response: the (re)scheduled clip post. */
+/** `PATCH /api/v1/admin/clips/:clipId/schedule` response: the (re)scheduled clip post. */
 export type ClipScheduleResponse = Ok<{ post: ClipSocialPost }>;
 
-/** `PUT /api/admin/clips/drip/state` response: the resulting paused state. */
+/** `PUT /api/v1/admin/clips/drip/state` response: the resulting paused state. */
 export type ClipDripStateResponse = Ok<{ paused: boolean }>;
 
 // ── Recordings (RFC recording-primitive, Design B) ───────────────────────────
@@ -574,14 +574,14 @@ export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema
 /** A recording row as the recording ops emit it (with the promoted logId/mixtapeId if any). */
 export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
 
-/** `GET /api/admin/recordings` response: every recording, newest first. */
+/** `GET /api/v1/admin/recordings` response: every recording, newest first. */
 export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
 
 /** The `{ recording }` envelope create/get/update/promote return. */
 export type RecordingResponse = Ok<{ recording: RecordingDTO }>;
 
 /**
- * `POST /api/admin/recordings/:recordingId/set-video/presign` response: the opened
+ * `POST /api/v1/admin/recordings/:recordingId/set-video/presign` response: the opened
  * multipart upload's id + owned key plus every presigned URL the CLI needs to drive it
  * (one PUT URL per part, the completion POST URL, the abort DELETE URL). The clone of
  * the mixtape set-video presign targeting `recordings/<recordingId>/set.mp4`.
@@ -611,7 +611,7 @@ export type AttentionSourceCount = z.infer<typeof AttentionSourceCountSchema>;
 /** The menu-bar digest of the attention snapshot (`get_attention`). */
 export type AttentionQueue = z.infer<typeof AttentionQueueSchema>;
 
-/** `GET /api/admin/attention` response — the queue digest + the day's dispatch. */
+/** `GET /api/v1/admin/attention` response — the queue digest + the day's dispatch. */
 export type AttentionResponse = Ok<{ attention: AttentionQueue }>;
 
 // ── Edition (the newsletter archive) ─────────────────────────────────────────
@@ -709,54 +709,54 @@ export type SubscriptionResponse = Ok<{ subscription: SubscriptionDTO }>;
  */
 export type MixtapeSocialPostItem = z.infer<typeof MixtapeSocialPostItemSchema>;
 
-/** `/api/admin/mixtapes/:id/social` response: the mixtape's per-platform distribution rows. */
+/** `/api/v1/admin/mixtapes/:id/social` response: the mixtape's per-platform distribution rows. */
 export type MixtapeSocialShowResponse = Ok<{ mixtapeId: string; posts: MixtapeSocialPostItem[] }>;
 
 /** A distribution finalize (any platform): the mixtape after the link was recorded. */
 export type MixtapeDistributeFinalizeResponse = Ok<{ mixtape: MixtapeDTO; platform: string }>;
 
-/** `/api/admin/youtube/auth/start` response (mirrors the Spotify shape). */
+/** `/api/v1/admin/youtube/auth/start` response (mirrors the Spotify shape). */
 export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
 
-/** `/api/admin/mixcloud/auth/start` response. */
+/** `/api/v1/admin/mixcloud/auth/start` response. */
 export type MixcloudAuthStartResponse = Ok<{ authUrl: string }>;
 
-/** `/api/admin/tiktok/auth/start` response (mirrors the YouTube shape). */
+/** `/api/v1/admin/tiktok/auth/start` response (mirrors the YouTube shape). */
 export type TikTokAuthStartResponse = Ok<{ authUrl: string }>;
 
 /**
- * `/api/admin/lastfm/auth/start` response: the Last.fm desktop-auth request token
+ * `/api/v1/admin/lastfm/auth/start` response: the Last.fm desktop-auth request token
  * plus the authorize URL to approve it in-browser (logged in as `fluncle`). The
- * token is then handed to `/api/admin/lastfm/auth/session` to mint the session key.
+ * token is then handed to `/api/v1/admin/lastfm/auth/session` to mint the session key.
  */
 export type LastfmAuthStartResponse = Ok<{ authUrl: string; token: string }>;
 
 /**
- * `/api/admin/lastfm/auth/session` response: the durable (non-expiring) session
+ * `/api/v1/admin/lastfm/auth/session` response: the durable (non-expiring) session
  * key Maurice sets as the LASTFM_SESSION_KEY Worker secret, plus the authenticated
  * Last.fm username.
  */
 export type LastfmAuthSessionResponse = Ok<{ name: string; sessionKey: string }>;
 
-/** `/api/admin/mixcloud/token` response: the access token for the CLI-direct upload. */
+/** `/api/v1/admin/mixcloud/token` response: the access token for the CLI-direct upload. */
 export type MixcloudTokenResponse = Ok<{ accessToken: string }>;
 
 /**
- * `/api/admin/mixtapes/:id/youtube/initiate` response: the resumable session URI
+ * `/api/v1/admin/mixtapes/:id/youtube/initiate` response: the resumable session URI
  * AND a short-lived access token — the YouTube data PUT is NOT self-authorizing,
  * so the CLI needs the Bearer token alongside the URI.
  */
 export type MixtapeYouTubeInitiateResponse = Ok<{ accessToken: string; sessionUri: string }>;
 
 /**
- * `/api/admin/mixtapes/:id/youtube/resync` response: the live video URL + id after
+ * `/api/v1/admin/mixtapes/:id/youtube/resync` response: the live video URL + id after
  * its description + chapters were re-derived from the current cues and pushed via
  * `videos.update` (no re-upload).
  */
 export type MixtapeYouTubeResyncResponse = Ok<{ url: string; videoId: string }>;
 
 /**
- * `/api/admin/mixtapes/:id/mixcloud/resync` response: the live cloudcast URL after
+ * `/api/v1/admin/mixtapes/:id/mixcloud/resync` response: the live cloudcast URL after
  * its `sections[]` tracklist was re-derived from the current cues and pushed via the
  * Mixcloud edit endpoint (sections-only, no audio re-upload). Server-side (the Worker
  * holds the `mixcloud_auth` token), the parity twin of the YouTube leg.
@@ -764,7 +764,7 @@ export type MixtapeYouTubeResyncResponse = Ok<{ url: string; videoId: string }>;
 export type MixtapeMixcloudResyncResponse = Ok<{ url: string }>;
 
 /**
- * `/api/admin/mixtapes/:id/set-video/presign` response (Fluncle Studio Unit A): the
+ * `/api/v1/admin/mixtapes/:id/set-video/presign` response (Fluncle Studio Unit A): the
  * opened multipart upload's id + key plus every presigned URL the CLI needs to drive
  * it — one PUT URL per part, the completion POST URL, and the abort DELETE URL. The
  * ~1.5GB rendition streams straight to R2; the Worker never proxies the bytes.
@@ -784,7 +784,7 @@ export type MixtapeSetVideoPresignResponse = Ok<{
 export type SubmissionSource = "web" | "cli" | "ssh";
 export type SubmissionStatus = "pending" | "approved" | "rejected";
 
-/** A finding submission as `/api/submissions` records it. Inferred from `SubmissionSchema` (./orpc/_shared.ts). */
+/** A finding submission as `/api/v1/submissions` records it. Inferred from `SubmissionSchema` (./orpc/_shared.ts). */
 export type Submission = z.infer<typeof SubmissionSchema>;
 
 export type SubmissionsResponse = Ok<{ submissions: Submission[] }>;
@@ -820,7 +820,7 @@ export type PublishAdvanceHeld = {
   trackId: string;
 };
 
-/** `POST /api/admin/social/publish/advance` response: one bounded tick of the render →
+/** `POST /api/v1/admin/social/publish/advance` response: one bounded tick of the render →
  *  publish auto-advance. `paused: true` ⇒ the kill switch was on and nothing was pushed. */
 export type PublishAdvanceResponse = Ok<{
   candidates: number;
@@ -830,17 +830,17 @@ export type PublishAdvanceResponse = Ok<{
   pushed: PublishAdvancePush[];
 }>;
 
-/** `PUT /api/admin/social/publish/advance/state` response: the resulting paused state
+/** `PUT /api/v1/admin/social/publish/advance/state` response: the resulting paused state
  *  (the auto-advance's kill switch). */
 export type PublishAdvanceStateResponse = Ok<{ paused: boolean }>;
 
-/** `/api/admin/tracks/:id/social` response. */
+/** `/api/v1/admin/tracks/:id/social` response. */
 export type TrackSocialShowResponse = Ok<{ posts: SocialPostItem[]; trackId: string }>;
 
-/** `/api/admin/tracks/:id/social/:platform` PATCH response. */
+/** `/api/v1/admin/tracks/:id/social/:platform` PATCH response. */
 export type TrackSocialUpdateResponse = Ok<{ platform: string; status: string; trackId: string }>;
 
-/** `/api/admin/tracks/:id/social/:platform/draft` POST response. */
+/** `/api/v1/admin/tracks/:id/social/:platform/draft` POST response. */
 export type TrackDraftResponse = Ok<{
   externalId: string;
   platform: string;
@@ -850,14 +850,14 @@ export type TrackDraftResponse = Ok<{
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
-/** A Spotify search candidate (`/api/search`). Inferred from `TrackSearchResultSchema` (./orpc/_shared.ts). */
+/** A Spotify search candidate (`/api/v1/search`). Inferred from `TrackSearchResultSchema` (./orpc/_shared.ts). */
 export type TrackSearchResult = z.infer<typeof TrackSearchResultSchema>;
 
 export type SearchResponse = Ok<{ results: TrackSearchResult[] }>;
 
 // ── Add / publish ────────────────────────────────────────────────────────────
 
-/** `/api/admin/tracks` POST response (the add-track result). */
+/** `/api/v1/admin/tracks` POST response (the add-track result). */
 export type PublishTrackResult = {
   addedToSpotify: boolean;
   dryRun: boolean;
@@ -891,10 +891,10 @@ export type PresignedUpload = {
   url: string;
 };
 
-/** `/api/admin/tracks/:id/video/uploads` response. */
+/** `/api/v1/admin/tracks/:id/video/uploads` response. */
 export type PresignResponse = Ok<{ logId: string; trackId: string; uploads: PresignedUpload[] }>;
 
-/** `/api/admin/tracks/:id/video/finalize` response. */
+/** `/api/v1/admin/tracks/:id/video/finalize` response. */
 export type FinalizeResponse = Ok<{ logId: string; trackId: string; videoUrl: string }>;
 
 // ── Newsletter ───────────────────────────────────────────────────────────────
@@ -903,12 +903,12 @@ export type SubscribeResponse = Ok<{}>;
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-/** `/api/admin/spotify/auth/start` response. */
+/** `/api/v1/admin/spotify/auth/start` response. */
 export type SpotifyAuthStartResponse = Ok<{ authUrl: string }>;
 
 // ── Track update ─────────────────────────────────────────────────────────────
 
-/** `/api/admin/tracks/:id` PATCH response. */
+/** `/api/v1/admin/tracks/:id` PATCH response. */
 export type TrackUpdateResult = {
   fields: string[];
   trackId: string;

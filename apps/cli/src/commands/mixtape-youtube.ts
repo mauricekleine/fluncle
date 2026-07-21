@@ -94,7 +94,7 @@ export async function distributeYoutube(
 
   onProgress?.("Recording the YouTube link");
   await adminApiPost<MixtapeDistributeFinalizeResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/finalize`,
+    `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/finalize`,
     { videoId },
   );
 
@@ -104,7 +104,7 @@ export async function distributeYoutube(
 export async function publishYoutubeCommand(idOrLogId: string): Promise<{ url: string }> {
   const mixtapeId = await resolveMixtapeId(idOrLogId);
   const response = await adminApiPost<{ ok: true; url: string }>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/publish`,
+    `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/publish`,
   );
 
   return { url: response.url };
@@ -118,14 +118,14 @@ export async function publishYoutubeCommand(idOrLogId: string): Promise<{ url: s
  */
 export async function resyncYoutube(mixtapeId: string): Promise<YoutubeResyncResult> {
   const response = await adminApiPost<MixtapeYouTubeResyncResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/resync`,
+    `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/resync`,
   );
 
   return { url: response.url, videoId: response.videoId };
 }
 
 export async function authYoutubeCommand(): Promise<void> {
-  const response = await adminApiGet<YouTubeAuthStartResponse>("/api/admin/youtube/auth/start");
+  const response = await adminApiGet<YouTubeAuthStartResponse>("/api/v1/admin/youtube/auth/start");
 
   console.log(`Open this YouTube authorization URL:
 
@@ -140,7 +140,7 @@ async function initiate(
   contentType: string,
 ): Promise<{ accessToken: string; sessionUri: string }> {
   const response = await adminApiPost<MixtapeYouTubeInitiateResponse>(
-    `/api/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/initiate`,
+    `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/initiate`,
     { contentLength, contentType },
   );
 
@@ -150,7 +150,7 @@ async function initiate(
 // Re-mint a fresh access token without opening a new session (for resume-on-401).
 async function mintToken(): Promise<string> {
   const response = await adminApiPost<{ accessToken: string; ok: true }>(
-    "/api/admin/youtube/token",
+    "/api/v1/admin/youtube/token",
   );
 
   return response.accessToken;
@@ -264,7 +264,7 @@ export function nextOffset(rangeHeader: string | null, fallback: number): number
 }
 
 async function resolveMixtapeId(idOrLogId: string): Promise<string> {
-  const response = await adminApiGet<MixtapesResponse>("/api/admin/mixtapes");
+  const response = await adminApiGet<MixtapesResponse>("/api/v1/admin/mixtapes");
   const match = response.mixtapes.find(
     (mixtape) => mixtape.id === idOrLogId || mixtape.logId === idOrLogId,
   );

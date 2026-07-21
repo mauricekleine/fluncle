@@ -13,10 +13,10 @@ import { CliError } from "../output";
 export type TrackGetResult = TrackGetResponse;
 
 export async function trackGetCommand(idOrLogId: string): Promise<TrackGetResult> {
-  return publicApiGet<TrackGetResult>(`/api/tracks/${encodeURIComponent(idOrLogId)}`);
+  return publicApiGet<TrackGetResult>(`/api/v1/tracks/${encodeURIComponent(idOrLogId)}`);
 }
 
-// `get_similar_findings` → `fluncle tracks similar <id|logId>` (Convention B). The
+// `list_similar_tracks` → `fluncle tracks similar <id|logId>` (Convention B). The
 // finding's SONIC neighbours — the MuQ-embedding nearest neighbours the `/log` "more
 // like this" row shows, ranked in SQL. A public read, and the auto-note's second fuel:
 // the note sweep reads this to learn what the region of the archive around a finding
@@ -31,7 +31,7 @@ export async function trackSimilarCommand(
   const query = limit === undefined ? "" : `?limit=${encodeURIComponent(String(limit))}`;
 
   return publicApiGet<TrackSimilarResult>(
-    `/api/tracks/${encodeURIComponent(idOrLogId)}/similar${query}`,
+    `/api/v1/tracks/${encodeURIComponent(idOrLogId)}/similar${query}`,
   );
 }
 
@@ -40,11 +40,11 @@ export async function trackSimilarCommand(
 // observation, the editorial note) — the authoritative by-coordinate read, so a
 // lookup never has to scan a list (and can't misread a live finding as nonexistent).
 // Agent-allowed read (the admin tier). Distinct from the public `tracks get`, which
-// hits `/api/tracks/{idOrLogId}` and only carries the public projection.
+// hits `/api/v1/tracks/{idOrLogId}` and only carries the public projection.
 export type TrackGetAdminResult = { ok: true; track: TrackListItem };
 
 export async function trackGetAdminCommand(idOrLogId: string): Promise<TrackGetAdminResult> {
-  return adminApiGet<TrackGetAdminResult>(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}`);
+  return adminApiGet<TrackGetAdminResult>(`/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}`);
 }
 
 export type TrackUpdateOptions = {
@@ -305,7 +305,7 @@ export async function trackVideoCommand(
 
   // Phase 1: ask the Worker to sign a PUT URL for each artifact we have.
   const presign = await adminApiPost<PresignResponse>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/uploads`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/video/uploads`,
     { fields: present.map((spec) => spec.field) },
   );
 
@@ -372,7 +372,7 @@ export async function trackVideoCommand(
     files.reasoning?.trim().slice(0, 120) || manifest.reasoning || DEFAULT_VIDEO_REASONING;
   const squared = Boolean(urls["footage"] && urls["footage-social"]);
   const finalize = await adminApiPost<FinalizeResponse>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/video/finalize`,
     {
       videoModel,
       videoModelReasoning,
@@ -446,7 +446,7 @@ export async function trackDraftCommand(
   platform: string,
 ): Promise<TrackDraftResult> {
   return adminApiPost(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social/${platform}/draft`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/social/${platform}/draft`,
   );
 }
 
@@ -479,14 +479,14 @@ export async function trackSocialUpdateCommand(
   }
 
   return adminApiPatch(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social/${platform}`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/social/${platform}`,
     body,
   );
 }
 
 // Lists a track's per-platform publication state.
 export async function trackSocialShowCommand(idOrLogId: string): Promise<TrackSocialShowResponse> {
-  return adminApiGet(`/api/admin/tracks/${encodeURIComponent(idOrLogId)}/social`);
+  return adminApiGet(`/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/social`);
 }
 
 // `fluncle admin tracks social --capture` — the capture SWEEP. Drains the "pushed
@@ -509,7 +509,7 @@ export async function trackSocialCaptureCommand(limit?: number): Promise<TrackSo
   // other JSON admin POSTs.
   const body = limit === undefined ? {} : { limit: String(limit) };
 
-  return adminApiPost<TrackSocialCaptureResult>(`/api/admin/social/posts/capture`, body);
+  return adminApiPost<TrackSocialCaptureResult>(`/api/v1/admin/social/posts/capture`, body);
 }
 
 export async function trackUpdateCommand(
@@ -564,7 +564,7 @@ export async function trackUpdateCommand(
   }
 
   return adminApiPatch<TrackUpdateResponse>(
-    `/api/admin/tracks/${encodeURIComponent(trackId)}`,
+    `/api/v1/admin/tracks/${encodeURIComponent(trackId)}`,
     body,
   );
 }
@@ -592,7 +592,7 @@ export async function trackRequeueVideoCommand(
   idOrLogId: string,
 ): Promise<TrackRequeueVideoResponse> {
   return adminApiPost<TrackRequeueVideoResponse>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/requeue`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/video/requeue`,
   );
 }
 
@@ -613,7 +613,7 @@ export type TrackPurgeVideoResponse = {
 
 export async function trackPurgeVideoCommand(idOrLogId: string): Promise<TrackPurgeVideoResponse> {
   return adminApiPost<TrackPurgeVideoResponse>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/video/purge`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/video/purge`,
   );
 }
 
@@ -687,7 +687,7 @@ export async function trackObserveCommand(
   }
 
   return adminApiPost<TrackObserveResult>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/observe`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/observe`,
     body,
   );
 }
@@ -735,7 +735,7 @@ export async function trackContextCommand(
   }
 
   return adminApiPost<TrackContextResult>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/context`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/context`,
     body,
   );
 }
@@ -806,7 +806,7 @@ export async function trackNoteCommand(
   }
 
   return adminApiPost<TrackNoteResult>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/note`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/note`,
     body,
   );
 }

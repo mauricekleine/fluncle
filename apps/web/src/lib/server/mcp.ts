@@ -62,9 +62,9 @@ type ToolResult = {
 };
 
 type McpTool = {
-  // A deprecated alias kept in tools/list for a deprecation window. Convention B
-  // renamed `get_recent_tracks` → `list_tracks`;
-  // existing agents still calling the old name resolve to the same execute.
+  // Reserved for a deprecated alias kept in tools/list (filtered out of `mcpToolNames`).
+  // None today — the vocabulary cut retired the last one (`get_recent_tracks`) with no
+  // replacement shim.
   deprecated?: boolean;
   description: string;
   execute: (args: Record<string, unknown>, request: Request) => Promise<unknown>;
@@ -108,31 +108,17 @@ const mcpOnlyTools: McpTool[] = [
 
 // The realized MCP tool set: the shared read tools projected from the registry, then the
 // MCP-only verbs. `toMcpTool` bridges the dispatcher's positional (args, request) call and
-// leaves the args un-validated, so the limit tools keep their tolerant clamp.
+// leaves the args un-validated, so the limit tools keep their tolerant clamp. The vocabulary
+// cut retired the `get_recent_tracks` deprecation alias — no back-compat shims — so the tool
+// set is exactly the shared MCP tools plus the MCP-only verbs.
 const tools: McpTool[] = [
   ...SHARED_TOOLS.filter((tool) => tool.transports.includes("mcp")).map(toMcpTool),
   ...mcpOnlyTools,
 ];
 
-// `get_recent_tracks` deprecation alias of `list_tracks` (Convention B §4). Shares
-// the canonical tool's execute + schema so the two never drift; kept in tools/list
-// for a deprecation window so agents pinned to the old name keep working.
-const listTracksTool = tools.find((tool) => tool.name === "list_tracks");
-
-if (!listTracksTool) {
-  throw new Error("list_tracks tool missing from the MCP tool list");
-}
-
-tools.push({
-  ...listTracksTool,
-  deprecated: true,
-  description: `[Deprecated: use list_tracks] ${listTracksTool.description}`,
-  name: "get_recent_tracks",
-});
-
-// The realized MCP tool names, in tools/list order, minus the deprecated alias — the ONE source
-// the discovery docs derive their tool list from (agent-discovery.ts's SKILL.md) so it can never go
-// stale as tools are added or renamed.
+// The realized MCP tool names, in tools/list order — the ONE source the discovery docs derive
+// their tool list from (agent-discovery.ts's SKILL.md) so it can never go stale as tools are
+// added or renamed.
 export const mcpToolNames: string[] = tools
   .filter((tool) => !tool.deprecated)
   .map((tool) => tool.name);
@@ -221,7 +207,7 @@ const prompts: McpPrompt[] = [
 
       return `A crew member wants a drum & bass tune for this mood: "${mood}".
 
-Dig through Fluncle's archive to answer. Call list_tracks and get_random_track to range over it, read the contenders with get_track (or their fluncle://finding/<coordinate> resources), and lean on each finding's note, BPM, key, and galaxy. Pick the ONE that lands the mood best. Reply in a single warm line, the way Fluncle would text it to the crew: name the artist and title, drop its Log ID coordinate, and say in a breath why it's the one. No lists, no preamble.`;
+Dig through Fluncle's archive to answer. Call list_findings and get_random_track to range over it, read the contenders with get_track (or their fluncle://finding/<coordinate> resources), and lean on each finding's note, BPM, key, and galaxy. Pick the ONE that lands the mood best. Reply in a single warm line, the way Fluncle would text it to the crew: name the artist and title, drop its Log ID coordinate, and say in a breath why it's the one. No lists, no preamble.`;
     },
     description: "Match a mood to one finding from the archive, handed over in Fluncle's voice.",
     name: "recommend_finding",
@@ -240,7 +226,7 @@ Dig through Fluncle's archive to answer. Call list_tracks and get_random_track t
 
       return `Walk me through Fluncle's ${count} most recent findings, like a late-night dig.
 
-Call list_tracks with limit ${count} to pull them, then read each one with get_track (or its fluncle://finding/<coordinate> resource). Go newest to oldest. For each, give one warm line in Fluncle's voice: the artist and title, its Log ID coordinate, and the one thing that made it worth logging. Keep the whole thing moving; end on where the night leaves you.`;
+Call list_findings with limit ${count} to pull them, then read each one with get_track (or its fluncle://finding/<coordinate> resource). Go newest to oldest. For each, give one warm line in Fluncle's voice: the artist and title, its Log ID coordinate, and the one thing that made it worth logging. Keep the whole thing moving; end on where the night leaves you.`;
     },
     description: "Walk the most recent findings, one warm line each, in Fluncle's voice.",
     name: "walk_recent_night",

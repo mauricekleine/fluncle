@@ -57,8 +57,8 @@ dig +short latest.dig.fluncle.com TXT \
 
 `fluncle-dns` keeps no database. On each query it reads the public API and renders the result as TXT, with a short in-memory cache so a hot coordinate or a `dig` retry storm does not hammer the API.
 
-- A coordinate or `random` → `GET /api/tracks/<id>` (the stable `/api/*` path is a permanent alias).
-- `latest` → `GET /api/tracks?limit=1` (the list is newest-first; the head is the latest finding).
+- A coordinate or `random` → `GET /api/v1/tracks/<id>`.
+- `latest` → `GET /api/v1/findings?limit=1` (the list is newest-first; the head is the latest finding).
 
 Everything is environment-configurable (see `apps/dns/config.go`):
 

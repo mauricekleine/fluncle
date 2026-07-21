@@ -284,7 +284,7 @@ export const tracks = sqliteTable(
     duplicateOfTrackId: text("duplicate_of_track_id"),
     durationMs: integer("duration_ms").notNull(),
     // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
-    // libSQL `F32_BLOB(1024)`. Every similarity read (`get_similar_findings`, the `/mix`
+    // libSQL `F32_BLOB(1024)`. Every similarity read (`list_similar_tracks`, the `/mix`
     // rail, a galaxy's core-first order, the `fluncle-cluster` corpus read) ranks with
     // `vector_distance_cos(embedding_blob, ?)` IN SQL and ships back only the winners —
     // never the vectors. This is the SOLE stored form and the source of truth: the

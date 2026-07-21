@@ -6,7 +6,7 @@ export function SaveFindingButton({ logId, trackId }: { logId: string; trackId: 
   const [label, setLabel] = useState("Save finding");
 
   async function save() {
-    const tokenResponse = await fetch("/api/me/csrf");
+    const tokenResponse = await fetch("/api/v1/me/csrf");
 
     if (tokenResponse.status === 401) {
       window.location.href = "/account";
@@ -14,7 +14,7 @@ export function SaveFindingButton({ logId, trackId }: { logId: string; trackId: 
     }
 
     const { csrfToken } = (await tokenResponse.json()) as { csrfToken?: string };
-    const response = await fetch("/api/me/saved-findings", {
+    const response = await fetch("/api/v1/me/saved-findings", {
       body: JSON.stringify({ logId, trackId }),
       headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken ?? "" },
       method: "POST",

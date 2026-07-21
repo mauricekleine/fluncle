@@ -684,7 +684,10 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
       "get_artist",
       "get_label",
       "build_set",
-      "get_similar_artists",
+      "list_similar_artists",
+      // The found-order feed + the reborn whole-archive enumerator (the vocabulary cut).
+      "list_findings",
+      "list_tracks",
       // The three catalogue browse reads (PR-5).
       "list_album_catalogue",
       "list_artist_catalogue",
@@ -822,14 +825,14 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     expect(set.seed.coordinate).toBe("004.7.2I");
   });
 
-  it("get_similar_artists returns the nearest artists by name", async () => {
+  it("list_similar_artists returns the nearest artists by name", async () => {
     getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Koven", slug: "koven" });
     getArtistNeighboursMock.mockResolvedValue([
       { name: "Camo & Krooked", slug: "camo-krooked" },
       { name: "Metrik", slug: "metrik" },
     ]);
 
-    const { data, isError } = await callTool("get_similar_artists", { name: "Koven" });
+    const { data, isError } = await callTool("list_similar_artists", { name: "Koven" });
 
     expect(isError).toBe(false);
     expect(getArtistNeighboursMock).toHaveBeenCalledWith("art-1", expect.any(Number));
@@ -837,10 +840,10 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     expect(similar.map((artist) => artist.slug)).toEqual(["camo-krooked", "metrik"]);
   });
 
-  it("get_similar_artists returns found:false for an unlogged name", async () => {
+  it("list_similar_artists returns found:false for an unlogged name", async () => {
     getArtistBySlugMock.mockResolvedValue(undefined);
 
-    const { data } = await callTool("get_similar_artists", { name: "Nobody" });
+    const { data } = await callTool("list_similar_artists", { name: "Nobody" });
 
     expect(data.found).toBe(false);
     expect(getArtistNeighboursMock).not.toHaveBeenCalled();

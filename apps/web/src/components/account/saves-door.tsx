@@ -232,7 +232,7 @@ function SavedFindingRow({
       // `requireJsonMutation` 415s ANY mutation without a JSON content-type — DELETEs
       // included (browser-verified; the monolith's remove shipped without it and never
       // worked). The saved-set mutations already carry it; this matches them.
-      const response = await fetch(`/api/me/saved-findings/${finding.trackId}`, {
+      const response = await fetch(`/api/v1/me/saved-findings/${finding.trackId}`, {
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "DELETE",
       });
@@ -444,7 +444,7 @@ function SavedSetRow({
 
   async function rename(event: React.FormEvent) {
     event.preventDefault();
-    const response = await fetch(`/api/me/saved-sets/${set.id}`, {
+    const response = await fetch(`/api/v1/me/saved-sets/${set.id}`, {
       body: JSON.stringify({ name }),
       headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
       method: "PATCH",
@@ -456,7 +456,7 @@ function SavedSetRow({
   }
 
   async function remove() {
-    const response = await fetch(`/api/me/saved-sets/${set.id}`, {
+    const response = await fetch(`/api/v1/me/saved-sets/${set.id}`, {
       headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
       method: "DELETE",
     });
@@ -595,7 +595,7 @@ function WatchRow({
   watch: Watch;
 }) {
   async function unwatch() {
-    const response = await fetch(`/api/me/watches/${watch.id}`, {
+    const response = await fetch(`/api/v1/me/watches/${watch.id}`, {
       headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
       method: "DELETE",
     });

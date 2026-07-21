@@ -117,7 +117,7 @@ export function usePublish(boardKey: readonly unknown[]) {
   const pushDraft = useCallback(
     (trackId: string, platform: string) =>
       run(`${trackId}:${platform}:draft`, async () => {
-        const response = await fetch(`/api/admin/tracks/${trackId}/social/${platform}/draft`, {
+        const response = await fetch(`/api/v1/admin/tracks/${trackId}/social/${platform}/draft`, {
           credentials: "same-origin",
           method: "POST",
         });
@@ -143,7 +143,7 @@ export function usePublish(boardKey: readonly unknown[]) {
   const setStatus = useCallback(
     (trackId: string, platform: string, status: string, url?: string) =>
       run(`${trackId}:${platform}:${status}`, async () => {
-        const response = await fetch(`/api/admin/tracks/${trackId}/social/${platform}`, {
+        const response = await fetch(`/api/v1/admin/tracks/${trackId}/social/${platform}`, {
           body: JSON.stringify({ status, ...(url ? { url } : {}) }),
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },

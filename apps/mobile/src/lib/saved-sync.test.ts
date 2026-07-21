@@ -122,7 +122,7 @@ function mockFetch(calls: Call[], list: RemoteSavedFinding[], listOk = true): Sy
   return async (path, init) => {
     const method = (init?.method ?? "GET").toUpperCase();
     calls.push({ body: init?.body, method, path });
-    if (path === "/api/me/saved-findings" && method === "GET") {
+    if (path === "/api/v1/me/saved-findings" && method === "GET") {
       return { json: async () => ({ ok: true, savedFindings: list }), ok: listOk };
     }
     return { json: async () => ({ ok: true }), ok: true };
@@ -143,7 +143,7 @@ assertEqual(happy.merged.length, 2, "the union is A + B");
 assertEqual(happy.merged[0]?.logId, "A", "union is newest-first");
 assertEqual(happyCalls[0]?.method, "GET", "the list is pulled first");
 const post = happyCalls.find((call) => call.method === "POST");
-assertEqual(post?.path, "/api/me/saved-findings", "the push hits the save op");
+assertEqual(post?.path, "/api/v1/me/saved-findings", "the push hits the save op");
 assertEqual(post?.body, JSON.stringify({ logId: "A", trackId: "t-A" }), "the push carries A's ids");
 
 // 6. Idempotence: when the account already has every device save, nothing is pushed.
@@ -178,10 +178,10 @@ assertEqual(
 const mirrorCalls: Call[] = [];
 await pushSavedFinding(mockFetch(mirrorCalls, []), { logId: "M", trackId: "t-M" });
 assertEqual(mirrorCalls[0]?.method, "POST", "a mirror-save POSTs");
-assertEqual(mirrorCalls[0]?.path, "/api/me/saved-findings", "to the save op");
+assertEqual(mirrorCalls[0]?.path, "/api/v1/me/saved-findings", "to the save op");
 const delCalls: Call[] = [];
 await deleteSavedFinding(mockFetch(delCalls, []), "t-M");
 assertEqual(delCalls[0]?.method, "DELETE", "a mirror-unsave DELETEs");
-assertEqual(delCalls[0]?.path, "/api/me/saved-findings/t-M", "by trackId in the path");
+assertEqual(delCalls[0]?.path, "/api/v1/me/saved-findings/t-M", "by trackId in the path");
 
 console.log("saved-sync.test.ts: all assertions passed");

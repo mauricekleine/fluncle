@@ -5,7 +5,7 @@
 // Native has NO cookie jar: the Better Auth Expo client stores the session cookie in
 // SecureStore and hands it back via `authClient.getCookie()`. This helper replays that
 // cookie as a `Cookie` header (the server's `getSession` reads it exactly as a browser's),
-// and for a mutation it first GETs `/api/me/csrf` (with the cookie) and attaches the
+// and for a mutation it first GETs `/api/v1/me/csrf` (with the cookie) and attaches the
 // returned token as `x-fluncle-csrf` — the same two-step the web account page does.
 //
 // THE ORIGIN HEADER is load-bearing on native. The server's `requireJsonMutation` gate
@@ -26,7 +26,7 @@ import { API_BASE } from "@/config";
 export const ME_ORIGIN = new URL(API_BASE).origin;
 
 /** The mutation-token endpoint (GET, cookie-authenticated) and the header it feeds. */
-export const CSRF_ENDPOINT = "/api/me/csrf";
+export const CSRF_ENDPOINT = "/api/v1/me/csrf";
 export const CSRF_HEADER = "x-fluncle-csrf";
 
 const MUTATION_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
@@ -83,7 +83,7 @@ export type MeFetchDeps = {
 /** The fetch signature every account slice consumes. */
 export type MeFetch = (path: string, init?: MeRequestInit) => Promise<Response>;
 
-// GET /api/me/csrf with the session cookie → the short-lived mutation token, or null if the
+// GET /api/v1/me/csrf with the session cookie → the short-lived mutation token, or null if the
 // session is gone (a null token means the mutation below will 403, the honest outcome).
 async function fetchCsrfToken(
   deps: Required<Pick<MeFetchDeps, "baseUrl" | "fetchImpl">>,

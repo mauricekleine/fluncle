@@ -14,7 +14,7 @@ import { authClient } from "@/lib/auth-client";
 //
 // THE SESSION IS RESOLVED CLIENT-SIDE FIRST (`authClient.useSession()`, the shared store the
 // crew slot already reads on every page), so a signed-OUT visit costs the origin NOTHING —
-// these are PUBLIC pages, and a guaranteed-401 `/api/me/watches` on every anonymous view was
+// these are PUBLIC pages, and a guaranteed-401 `/api/v1/me/watches` on every anonymous view was
 // both a wasted round-trip and the console error behind a Lighthouse best-practices ding.
 // Once a session IS known — including a sign-in later in the same session, which re-runs the
 // check — the one fetch tells us whether THIS entity is already watched, so the control
@@ -57,7 +57,7 @@ export function WatchButton({
       return;
     }
 
-    void fetch("/api/me/watches")
+    void fetch("/api/v1/me/watches")
       .then(async (res) => {
         if (res.status === 401) {
           if (!cancelled) {
@@ -90,7 +90,7 @@ export function WatchButton({
   }, [entityId, kind, userId]);
 
   async function csrf(): Promise<string | undefined> {
-    const res = await fetch("/api/me/csrf");
+    const res = await fetch("/api/v1/me/csrf");
 
     if (res.status === 401) {
       // The session lapsed between the mount check and the click — send them to sign in.
@@ -114,7 +114,7 @@ export function WatchButton({
         return;
       }
 
-      const response = await fetch("/api/me/watches", {
+      const response = await fetch("/api/v1/me/watches", {
         body: JSON.stringify({ entityId, kind }),
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": token },
         method: "POST",
@@ -151,7 +151,7 @@ export function WatchButton({
         return;
       }
 
-      const response = await fetch(`/api/me/watches/${watchId}`, {
+      const response = await fetch(`/api/v1/me/watches/${watchId}`, {
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": token },
         method: "DELETE",
       });

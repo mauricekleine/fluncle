@@ -17,7 +17,7 @@ import (
 var errNotFound = errors.New("finding not found")
 
 // track is the subset of a Fluncle finding the DNS surface exposes. Field names
-// match the public /api/tracks JSON.
+// match the public /api/v1/tracks JSON.
 type track struct {
 	LogID       string   `json:"logId"`
 	Artists     []string `json:"artists"`
@@ -32,27 +32,27 @@ type track struct {
 	Type        string   `json:"type"`
 }
 
-// trackResponse is the envelope returned by GET /api/tracks/<id>.
+// trackResponse is the envelope returned by GET /api/v1/tracks/<id>.
 type trackResponse struct {
 	OK    bool   `json:"ok"`
 	Track *track `json:"track"`
 }
 
-// listResponse is the envelope returned by GET /api/tracks (newest first).
+// listResponse is the envelope returned by GET /api/v1/findings (newest found first).
 type listResponse struct {
 	Tracks []track `json:"tracks"`
 }
 
 // liveInfo is the cross-surface live-set callout the DNS surface exposes (the
 // `live` label). Whether Fluncle is on the decks right now, plus the public title
-// and the Twitch url. Read off /api/status `.live` (staleness already applied).
+// and the Twitch url. Read off /api/v1/status `.live` (staleness already applied).
 type liveInfo struct {
 	On    bool
 	Title string
 	URL   string
 }
 
-// statusResponse is the subset of GET /api/status the DNS surface reads — only the
+// statusResponse is the subset of GET /api/v1/status the DNS surface reads — only the
 // live-set callout block. `Live` is absent/nil on older payloads ⇒ treated offline.
 type statusResponse struct {
 	Live *struct {
@@ -71,7 +71,7 @@ type apiClient struct {
 	cache
 
 	// A tiny separate TTL slot for the live-set callout (one global value, not
-	// keyed like findings), so a `dig live` retry storm does not hammer /api/status.
+	// keyed like findings), so a `dig live` retry storm does not hammer /api/v1/status.
 	liveMu  sync.Mutex
 	liveVal liveInfo
 	liveExp time.Time
@@ -91,7 +91,7 @@ func newAPIClient(base string, timeout, cacheTTL time.Duration) *apiClient {
 // trailing letter as case-significant (it wants the canonical uppercase form).
 // So we canonicalise here: the reserved keywords match case-insensitively and
 // route to their endpoints; everything else is treated as a coordinate and
-// uppercased before hitting /api/tracks/<id>.
+// uppercased before hitting /api/v1/tracks/<id>.
 func (c *apiClient) lookup(label string) (*track, error) {
 	lower := strings.ToLower(label)
 
@@ -122,13 +122,13 @@ func (c *apiClient) fetch(key string) (*track, error) {
 	case "latest":
 		return c.fetchLatest()
 	default:
-		// "random" and any coordinate are served by /api/tracks/<id>.
+		// "random" and any coordinate are served by /api/v1/tracks/<id>.
 		return c.fetchByID(key)
 	}
 }
 
 func (c *apiClient) fetchByID(id string) (*track, error) {
-	u := fmt.Sprintf("%s/api/tracks/%s", c.base, url.PathEscape(id))
+	u := fmt.Sprintf("%s/api/v1/tracks/%s", c.base, url.PathEscape(id))
 	body, status, err := c.do(u)
 	if err != nil {
 		return nil, err
@@ -152,7 +152,7 @@ func (c *apiClient) fetchByID(id string) (*track, error) {
 // fetchLatest returns the newest finding. The API has no /latest alias, so we
 // read the default list (newest first) and take the head.
 func (c *apiClient) fetchLatest() (*track, error) {
-	u := fmt.Sprintf("%s/api/tracks?limit=1", c.base)
+	u := fmt.Sprintf("%s/api/v1/findings?limit=1", c.base)
 	body, status, err := c.do(u)
 	if err != nil {
 		return nil, err
@@ -171,7 +171,7 @@ func (c *apiClient) fetchLatest() (*track, error) {
 	return &t, nil
 }
 
-// liveStatus returns the current live-set callout, reading /api/status `.live`
+// liveStatus returns the current live-set callout, reading /api/v1/status `.live`
 // behind the small TTL cache. Offline (On=false) on any absent `live` block.
 func (c *apiClient) liveStatus() (liveInfo, error) {
 	c.liveMu.Lock()
@@ -182,7 +182,7 @@ func (c *apiClient) liveStatus() (liveInfo, error) {
 	}
 	c.liveMu.Unlock()
 
-	u := fmt.Sprintf("%s/api/status", c.base)
+	u := fmt.Sprintf("%s/api/v1/status", c.base)
 	body, status, err := c.do(u)
 	if err != nil {
 		return liveInfo{}, err

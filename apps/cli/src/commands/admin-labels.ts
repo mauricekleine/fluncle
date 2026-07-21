@@ -20,7 +20,7 @@ export async function mergeLabelCommand(
   canonicalSlug: string,
 ): Promise<MergeLabelResult> {
   const response = await adminApiPost<{ ok: boolean; result: MergeLabelResult }>(
-    `/api/admin/labels/${encodeURIComponent(losingSlug)}/merge`,
+    `/api/v1/admin/labels/${encodeURIComponent(losingSlug)}/merge`,
     { canonicalSlug },
   );
 
@@ -39,7 +39,7 @@ export async function describeLabelCommand(
   options: { bio: string; dryRun?: boolean; promptVersion?: number },
 ): Promise<EntityBioResult> {
   return adminApiPost<EntityBioResult>(
-    `/api/admin/labels/${encodeURIComponent(slug)}/bio`,
+    `/api/v1/admin/labels/${encodeURIComponent(slug)}/bio`,
     buildBioBody(options),
   );
 }
@@ -48,14 +48,14 @@ export async function describeLabelCommand(
 // titles + the assembled `describe_label` prompt, returned ready-to-author. The box's bio
 // sweep calls this per queued entity, then runs `claude -p` on the returned prompt.
 export async function draftLabelBioCommand(slug: string): Promise<EntityBioDraft> {
-  return adminApiGet<EntityBioDraft>(`/api/admin/labels/${encodeURIComponent(slug)}/bio-draft`);
+  return adminApiGet<EntityBioDraft>(`/api/v1/admin/labels/${encodeURIComponent(slug)}/bio-draft`);
 }
 
 // The BIO queue: labels with findings but no bio yet, oldest first — the worklist the
 // `describe_label` cron drains (each row is a `admin labels describe <slug>`).
 export async function labelsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
   const response = await adminApiGet<{ labels: EntityBioWorkItem[]; ok: boolean }>(
-    `/api/admin/labels/bio-queue?limit=${limit}`,
+    `/api/v1/admin/labels/bio-queue?limit=${limit}`,
   );
 
   return response.labels;
@@ -95,7 +95,7 @@ export async function backfillLabelImagesCommand(
   }
 
   return adminApiPost<LabelImagesBackfillResult>(
-    `/api/admin/backfill/label-images?${params.toString()}`,
+    `/api/v1/admin/backfill/label-images?${params.toString()}`,
   );
 }
 
@@ -134,6 +134,6 @@ export async function backfillLabelLineageCommand(
   }
 
   return adminApiPost<LabelLineageBackfillResult>(
-    `/api/admin/backfill/label-lineage?${params.toString()}`,
+    `/api/v1/admin/backfill/label-lineage?${params.toString()}`,
   );
 }

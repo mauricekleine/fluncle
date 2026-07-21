@@ -10,7 +10,7 @@ export type LifetimeProgress = {
 let csrfTokenPromise: Promise<string | undefined> | undefined;
 
 async function csrfHeaders(): Promise<HeadersInit | undefined> {
-  csrfTokenPromise ??= fetch("/api/me/csrf")
+  csrfTokenPromise ??= fetch("/api/v1/me/csrf")
     .then(async (response) => {
       if (response.status === 401) {
         return undefined;
@@ -63,7 +63,7 @@ export function mergeProgress(
 }
 
 export async function fetchLifetimeProgress(): Promise<LifetimeProgress | undefined> {
-  const response = await fetch("/api/me/galaxy-progress");
+  const response = await fetch("/api/v1/me/galaxy-progress");
 
   if (response.status === 401) {
     return undefined;
@@ -85,7 +85,7 @@ export async function fetchLifetimeProgress(): Promise<LifetimeProgress | undefi
  */
 export async function fetchCrewNumber(): Promise<number | undefined> {
   try {
-    const response = await fetch("/api/me");
+    const response = await fetch("/api/v1/me");
 
     if (!response.ok) {
       return undefined;
@@ -106,7 +106,7 @@ export function persistLoggedLogId(logId: string): void {
       return;
     }
 
-    void fetch("/api/me/galaxy-progress/logs", {
+    void fetch("/api/v1/me/galaxy-progress/logs", {
       body: JSON.stringify({ logId }),
       headers,
       method: "POST",
@@ -120,7 +120,7 @@ export function persistProgressCounters(counters: { deaths?: number; wins?: numb
       return;
     }
 
-    void fetch("/api/me/galaxy-progress", {
+    void fetch("/api/v1/me/galaxy-progress", {
       body: JSON.stringify(counters),
       headers,
       method: "PUT",

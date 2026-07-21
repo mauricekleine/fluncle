@@ -259,7 +259,7 @@ After the first deploy, add `fluncle.com` in the Cloudflare Workers custom domai
 
 The web Worker also serves a small, stateless [Model Context Protocol](https://modelcontextprotocol.io) server at `https://www.fluncle.com/mcp` (Streamable HTTP, no sessions, no auth): the same archive the public API exposes, over the full protocol — tools, resources, and prompts. It is a thin layer over the internal functions the `/api` routes already use, so validation, the submission rate limit, and the submitter hash stay identical.
 
-- **Tools**: `list_tracks` (deprecated alias `get_recent_tracks`), `get_track` (read one finding/mixtape by Log ID coordinate or Spotify id), `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter`.
+- **Tools**: `list_findings` (the found-order feed of findings + mixtapes), `list_tracks` (every track Fluncle holds, newest release first, paged, with a tri-state `certified` filter), `get_track` (read one finding/mixtape by Log ID coordinate or Spotify id), `get_random_track`, `get_status`, `search_tracks`, `submit_track`, `subscribe_newsletter`.
 - **Resources**: the archive as a readable corpus — each finding at `fluncle://finding/<logId>` and each mixtape at `fluncle://mixtape/<logId>`, returning only the public record its `/log` page shows.
 - **Prompts**: Fluncle-voiced starting points — `recommend_finding` (a finding for a mood), `walk_recent_night`, `decode_coordinate`.
 

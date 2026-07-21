@@ -26,7 +26,7 @@ type PreviewArchiveStatus = {
   trackId: string;
 };
 
-// The `/api/tracks` feed items this command works over — a finding (`TrackListItem`),
+// The `/api/v1/findings` feed items this command works over — a finding (`TrackListItem`),
 // imported from the contract so the shape can't drift from the wire (Finding B20). The
 // backfill loop skips the feed's mixtape arm (`type === "mixtape"`), which carries no
 // preview, so every item it resolves is a finding.
@@ -54,7 +54,7 @@ export async function previewArchiveUploadCommand(
   form.append("mime", options.mime);
 
   return adminApiPostForm<PreviewArchiveResult>(
-    `/api/admin/tracks/${encodeURIComponent(idOrLogId)}/preview`,
+    `/api/v1/admin/tracks/${encodeURIComponent(idOrLogId)}/preview`,
     form,
   );
 }
@@ -84,7 +84,7 @@ export async function previewArchiveBackfillCommand(
 
   while (result.archived.length < (options.limit ?? Number.POSITIVE_INFINITY)) {
     const page = await publicApiGet<TracksResponse>(
-      `/api/tracks?limit=48${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+      `/api/v1/findings?limit=48${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
     );
 
     for (const track of page.tracks) {
@@ -104,7 +104,7 @@ export async function previewArchiveBackfillCommand(
       }
 
       const status = await adminApiGet<PreviewArchiveStatus>(
-        `/api/admin/tracks/${encodeURIComponent(track.trackId)}/preview`,
+        `/api/v1/admin/tracks/${encodeURIComponent(track.trackId)}/preview`,
       );
 
       if (status.archived) {
@@ -154,7 +154,7 @@ async function uploadResolvedPreview(trackId: string, preview: ResolvedPreview):
   form.append("source", preview.source);
   form.append("mime", preview.mime);
 
-  await adminApiPostForm(`/api/admin/tracks/${encodeURIComponent(trackId)}/preview`, form);
+  await adminApiPostForm(`/api/v1/admin/tracks/${encodeURIComponent(trackId)}/preview`, form);
 }
 
 async function resolvePreview(track: Track): Promise<ResolvedPreview | undefined> {

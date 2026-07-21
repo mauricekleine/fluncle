@@ -210,9 +210,11 @@ describe("handleAgentDiscovery — the A2A agent card", () => {
     const card = await fetchCard("/.well-known/agent-card.json");
 
     // Each skill maps 1:1 to a real op the public API + MCP server expose (the MCP tool
-    // list is the source of truth): search / list / read tracks, submit, subscribe.
+    // list is the source of truth): search, the findings feed, the track enumerator,
+    // read one, submit, subscribe.
     expect(card.skills.map((skill: { id: string }) => skill.id)).toEqual([
       "search-tracks",
+      "list-findings",
       "list-tracks",
       "get-track",
       "submit-track",

@@ -29,7 +29,7 @@ export function storiesHandlers(os: Implementer) {
       const page = await listTracks({ cursor, hasVideo: true, lean: true, limit });
 
       // Strip the private capture key (and the internal provenance fields) from every
-      // item before it world-serves — the same public-strip the `list_tracks` feed runs
+      // item before it world-serves — the same public-strip the `list_findings` feed runs
       // (orpc/tracks.ts). The lean projection still populates `sourceAudioKey`, so without
       // this the private R2 key of the captured full song would ship on this public feed.
       return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };

@@ -25,7 +25,7 @@ export async function logbookGapsCommand(
   limit?: number,
 ): Promise<{ gaps: LogbookGap[]; spent: LogbookSpentEntry[] }> {
   const query = typeof limit === "number" ? `?limit=${encodeURIComponent(String(limit))}` : "";
-  const response = await adminApiGet<LogbookGapsResponse>(`/api/admin/logbook/gaps${query}`);
+  const response = await adminApiGet<LogbookGapsResponse>(`/api/v1/admin/logbook/gaps${query}`);
 
   return { gaps: response.gaps, spent: response.spent };
 }
@@ -80,7 +80,7 @@ export async function logbookCreateCommand(
   sector: string,
   options: LogbookWriteOptions,
 ): Promise<LogbookEntryResponse> {
-  return adminApiPost<LogbookEntryResponse>(`/api/admin/logbook/${encodeURIComponent(sector)}`, {
+  return adminApiPost<LogbookEntryResponse>(`/api/v1/admin/logbook/${encodeURIComponent(sector)}`, {
     body: resolveBody(options),
     // PROVENANCE — omitted when the sweep fell back to its baked-in prompt, so the column
     // stays NULL (docs/agents/prompt-registry.md).
@@ -97,8 +97,11 @@ export async function logbookUpdateCommand(
   sector: string,
   options: LogbookWriteOptions,
 ): Promise<LogbookEntryResponse> {
-  return adminApiPatch<LogbookEntryResponse>(`/api/admin/logbook/${encodeURIComponent(sector)}`, {
-    body: resolveBody(options),
-    title: requireTitle(options),
-  });
+  return adminApiPatch<LogbookEntryResponse>(
+    `/api/v1/admin/logbook/${encodeURIComponent(sector)}`,
+    {
+      body: resolveBody(options),
+      title: requireTitle(options),
+    },
+  );
 }

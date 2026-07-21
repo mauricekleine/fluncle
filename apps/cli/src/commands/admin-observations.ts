@@ -32,7 +32,7 @@ export async function observationHeldCommand(options: {
 }): Promise<ObservationRejectionsResponse> {
   const query = options.settled ? "?open=false" : "";
 
-  return adminApiGet<ObservationRejectionsResponse>(`/api/admin/observation-rejections${query}`);
+  return adminApiGet<ObservationRejectionsResponse>(`/api/v1/admin/observation-rejections${query}`);
 }
 
 /**
@@ -58,14 +58,14 @@ export async function observationGateCommand(options: {
   // No dial named ⇒ a pure read, off the ledger response it already carries.
   if (Object.keys(patch).length === 0) {
     const response = await adminApiGet<ObservationRejectionsResponse>(
-      "/api/admin/observation-rejections",
+      "/api/v1/admin/observation-rejections",
     );
 
     return response.gate;
   }
 
   const response = await adminApiPatch<ObservationGateResponse>(
-    "/api/admin/observation-gate",
+    "/api/v1/admin/observation-gate",
     patch,
   );
 

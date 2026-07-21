@@ -88,7 +88,7 @@ export function AddFindingDialog({ onAdded, onOpenChange, open }: AddFindingDial
       setError(undefined);
 
       try {
-        const response = await fetch("/api/admin/tracks", {
+        const response = await fetch("/api/v1/admin/tracks", {
           body: JSON.stringify({
             note: note.trim() || undefined,
             spotifyUrl: link.trim(),
@@ -334,7 +334,7 @@ function TrackLine({
 // renders without it.
 async function fetchExistingTrack(trackId: string): Promise<TrackListItem | undefined> {
   try {
-    const response = await fetch(`/api/admin/tracks/${encodeURIComponent(trackId)}`, {
+    const response = await fetch(`/api/v1/admin/tracks/${encodeURIComponent(trackId)}`, {
       credentials: "same-origin",
     });
 

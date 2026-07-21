@@ -84,7 +84,7 @@ function useClipCaption(clip: ClipDTO, enabled: boolean) {
   return useQuery<ClipCaption>({
     enabled,
     queryFn: async () => {
-      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clip.id)}/caption`);
+      const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clip.id)}/caption`);
 
       if (!response.ok) {
         throw new Error(await readError(response));
@@ -145,7 +145,7 @@ export function ClipCard({
 
   const saveCaption = useMutation<ClipDTO, Error, string>({
     mutationFn: async (caption: string) => {
-      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clip.id)}`, {
+      const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clip.id)}`, {
         body: JSON.stringify({ caption }),
         headers: { "content-type": "application/json" },
         method: "PATCH",
@@ -316,7 +316,7 @@ function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined
       // `null` unschedules (delete the row); a value sets/overrides the slot. Both funnel
       // through the same route pair (delete vs the operator schedule op).
       if (scheduledFor === null) {
-        const response = await fetch(`/api/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
+        const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
           method: "DELETE",
         });
 
@@ -327,7 +327,7 @@ function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined
         return;
       }
 
-      const response = await fetch(`/api/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
+      const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
         body: JSON.stringify({ scheduledFor }),
         headers: { "content-type": "application/json" },
         method: "PATCH",

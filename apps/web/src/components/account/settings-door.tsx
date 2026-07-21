@@ -204,7 +204,7 @@ export function SettingsDoor({
     setSettingsBusy(true);
 
     try {
-      const response = await fetch("/api/me/profile", {
+      const response = await fetch("/api/v1/me/profile", {
         body: JSON.stringify({ name, username }),
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "PATCH",
@@ -312,7 +312,7 @@ export function SettingsDoor({
     setDangerMessage("");
 
     try {
-      const response = await fetch("/api/me/export", {
+      const response = await fetch("/api/v1/me/export", {
         body: "{}",
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "POST",
@@ -342,7 +342,7 @@ export function SettingsDoor({
     setDangerBusy("delete");
 
     try {
-      const response = await fetch("/api/me/delete", {
+      const response = await fetch("/api/v1/me/delete", {
         body: "{}",
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "POST",

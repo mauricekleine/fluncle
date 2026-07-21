@@ -326,7 +326,7 @@ export function ClaimUsernameDialog({
     setError("");
 
     try {
-      const response = await fetch("/api/me/profile", {
+      const response = await fetch("/api/v1/me/profile", {
         body: JSON.stringify({ name: user.name || value, username: value }),
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "PATCH",

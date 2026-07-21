@@ -9,7 +9,7 @@ import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // The `get_galaxy` page bounds — a galaxy can grow well past render size before the
 // operator splits it, so it is paginated from day one. Tolerant string parse (a bad
-// value degrades to the default, never 400s — the `list_tracks` habit).
+// value degrades to the default, never 400s — the `list_findings` habit).
 const GALAXY_FINDINGS_DEFAULT_LIMIT = 24;
 const GALAXY_FINDINGS_MAX_LIMIT = 100;
 

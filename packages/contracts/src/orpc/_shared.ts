@@ -70,7 +70,7 @@ export const TrackListItemSchema = z
     bpm: z.number().optional(),
     // Who last set bpm/key — the source-hierarchy provenance (operator > rekordbox > DSP;
     // apps/web track-update.ts). ADMIN-ONLY on this DTO: `toPublicTrackListItem` strips both
-    // before any public read, so they arrive undefined on `/api/tracks` and are present only
+    // before any public read, so they arrive undefined on `/api/v1/findings` and are present only
     // on the admin path. The Rekordbox sync reads them to skip an operator-graded row and to
     // detect a matching-but-unstamped value that still needs a protective `rekordbox` stamp.
     bpmSource: z.string().optional(),
@@ -257,6 +257,40 @@ export const FreshTrackSchema = z
   })
   .meta({ id: "FreshTrack" });
 
+/**
+ * One row of the whole-archive `/tracks` enumerator (`list_tracks`) — every track Fluncle holds,
+ * newest RELEASE first, findings and the quieter rows together. A DELIBERATELY LEAN row that mirrors
+ * the web `/tracks` hub: a track has no page of its own, so it carries no slug — a certified finding
+ * carries its `logId` coordinate + its `coverImageUrl`, an uncertified row carries NEITHER (present ⇔
+ * `certified`, so a consumer physically cannot render an uncertified row as a named finding — the
+ * Unlit Rule). `album`/`albumSlug` and `label`/`labelSlug` carry the record + imprint graph edges
+ * (the slug present only when that entity has a page); `releaseDate` is the day the tune came OUT,
+ * never the day Fluncle found it (the Found Rule).
+ */
+export const CatalogueTrackListItemSchema = z
+  .object({
+    album: z.string().optional(),
+    /** `/album/<slug>` — present only when the record has a page. */
+    albumSlug: z.string().optional(),
+    artists: z.array(z.string()),
+    certified: z.boolean(),
+    /** The album cover. Present ⇔ `certified` (an uncertified row leads with nothing — Unlit Rule). */
+    coverImageUrl: z.string().optional(),
+    label: z.string().optional(),
+    /** `/label/<slug>` — present only when the imprint has a page. */
+    labelSlug: z.string().optional(),
+    /** The permanent coordinate. Present ⇔ `certified` (structurally). */
+    logId: z.string().optional(),
+    /** `YYYY-MM-DD` — the RELEASE date, never the Found date. */
+    releaseDate: z.string().optional(),
+    spotifyUrl: z.string().optional(),
+    title: z.string(),
+  })
+  .meta({ id: "CatalogueTrackListItem" });
+
+/** The TS shape of a `/tracks` enumerator row, derived from the schema (one definition, no drift). */
+export type CatalogueTrackListItem = z.infer<typeof CatalogueTrackListItemSchema>;
+
 /** An album entity a fresh release sits on — the browse-graph half of `/fresh`. */
 export const FreshAlbumSchema = z
   .object({
@@ -294,7 +328,7 @@ const MixtapeMemberSchema = TrackListItemSchema.extend({
   startMs: z.number().optional(),
 }).meta({ id: "MixtapeMember" });
 
-/** A mixtape as `/mixtapes` + `/api/mixtapes` emit it (`MixtapeDTO` in ../index.ts). */
+/** A mixtape as `/mixtapes` + `/api/v1/mixtapes` emit it (`MixtapeDTO` in ../index.ts). */
 export const MixtapeDTOSchema = z
   .object({
     addedAt: z.string().optional(),
@@ -348,7 +382,7 @@ export const FeedItemSchema = z
   .union([TrackListItemSchema, MixtapeDTOSchema])
   .meta({ id: "FeedItem" });
 
-/** A Spotify search candidate (`TrackSearchResult` in ../index.ts; `/api/search`). */
+/** A Spotify search candidate (`TrackSearchResult` in ../index.ts; `/api/v1/search`). */
 export const TrackSearchResultSchema = z
   .object({
     album: z.string().optional(),
@@ -633,7 +667,7 @@ export const MixtapeSocialPostItemSchema = z
   })
   .meta({ id: "MixtapeSocialPostItem" });
 
-/** A finding submission as `/api/submissions` records it (`Submission` in ../index.ts). */
+/** A finding submission as `/api/v1/submissions` records it (`Submission` in ../index.ts). */
 export const SubmissionSchema = z
   .object({
     album: z.string().optional(),

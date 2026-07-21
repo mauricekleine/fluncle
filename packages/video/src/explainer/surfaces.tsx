@@ -466,7 +466,7 @@ const Crawler: React.FC = () => (
     <div>&gt; Fluncle discovers &amp; certifies drum &amp; bass bangers,</div>
     <div>&gt; logs each as a finding, keeps the full archive…</div>
     <div style={{ color: c.eclipseGold, marginTop: 18 }}># MCP tools</div>
-    <div>&gt; list_tracks · get_random_track · get_status</div>
+    <div>&gt; list_findings · get_random_track · get_status</div>
     <div>&gt; search_tracks · submit_track</div>
   </div>
 );

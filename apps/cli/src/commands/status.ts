@@ -2,12 +2,12 @@ import { type ServiceHealthStatus } from "@fluncle/contracts";
 import { liveSurfaces } from "@fluncle/registry";
 import { publicApiGet } from "../api";
 
-// The three-state service-health enum the /api/status endpoint emits is the
+// The three-state service-health enum the /api/v1/status endpoint emits is the
 // `admin-health` contract's `ServiceHealthStatus` (single source of truth in
-// `@fluncle/contracts`). The rest of the /api/status shape below is a non-oRPC
+// `@fluncle/contracts`). The rest of the /api/v1/status shape below is a non-oRPC
 // resource read (carved out of the contract-coverage net), so it is mirrored here.
 
-// One service row as the public /api/status endpoint emits it. This is the
+// One service row as the public /api/v1/status endpoint emits it. This is the
 // machine-readable sibling of the /status HTML dashboard — a non-oRPC resource
 // read (carved out of the contract-coverage net), so there is no generated
 // response type to import; the wire shape is mirrored here.
@@ -20,7 +20,7 @@ export type StatusService = {
   status: ServiceHealthStatus;
 };
 
-// The full /api/status payload: the service grid plus the server-computed
+// The full /api/v1/status payload: the service grid plus the server-computed
 // freshness gaps (no client clock skew). `freshestReportAt` /
 // `secondsSinceFreshestReport` are null until the healthcheck cron has written
 // at least one snapshot.
@@ -35,7 +35,7 @@ export type StatusResponse = {
 // The current health of Fluncle's services, read from the public status snapshot
 // the healthcheck cron posts. A thin GET — no auth, no business logic.
 export async function statusCommand(): Promise<StatusResponse> {
-  return publicApiGet<StatusResponse>("/api/status");
+  return publicApiGet<StatusResponse>("/api/v1/status");
 }
 
 // The registry tags the surfaces it expects a /status probe to cover by writing

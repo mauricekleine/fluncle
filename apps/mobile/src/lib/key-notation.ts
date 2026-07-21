@@ -6,7 +6,7 @@
 // DEVICE-LOCAL BY DEFAULT, PROFILE-SYNCED WHEN SIGNED IN. The choice lives on this phone
 // for everyone (an anonymous user uses it exactly as before — the account NEVER gates it,
 // it only syncs). When a session is present, it ALSO rides on the user's profile
-// (`/api/me/preferences`): the stored value is adopted on sign-in (the synced truth wins
+// (`/api/v1/me/preferences`): the stored value is adopted on sign-in (the synced truth wins
 // over the device), and every toggle is mirrored to the profile fire-and-forget so it
 // follows the user across devices and surfaces.
 //
@@ -124,7 +124,7 @@ async function pushPreferenceToAccount(next: KeyNotation): Promise<void> {
   }
 
   try {
-    await meFetch("/api/me/preferences", {
+    await meFetch("/api/v1/me/preferences", {
       body: JSON.stringify({ keyNotation: next }),
       method: "PATCH",
     });
@@ -151,7 +151,9 @@ export async function syncKeyNotationFromAccount(options?: { force?: boolean }):
   accountSyncStarted = true;
 
   try {
-    const me = (await meFetch("/api/me").then((response) => response.json())) as { user?: unknown };
+    const me = (await meFetch("/api/v1/me").then((response) => response.json())) as {
+      user?: unknown;
+    };
 
     if (!me.user) {
       signedIn = false;
@@ -160,7 +162,7 @@ export async function syncKeyNotationFromAccount(options?: { force?: boolean }):
 
     signedIn = true;
 
-    const body = (await meFetch("/api/me/preferences").then((response) => response.json())) as {
+    const body = (await meFetch("/api/v1/me/preferences").then((response) => response.json())) as {
       preferences?: { keyNotation?: unknown };
     };
     const profileNotation = asNotation(body.preferences?.keyNotation);

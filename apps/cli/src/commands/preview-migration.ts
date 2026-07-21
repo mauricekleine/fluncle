@@ -1,7 +1,7 @@
 import { adminApiPost } from "../api";
 
 // REF-05 — the thin HTTP client for the operator-tier preview-bucket migration op
-// (`migrate_preview_archive`, POST /api/admin/migrations/preview-archive). The
+// (`migrate_preview_archive`, POST /api/v1/admin/migrations/preview-archive). The
 // Worker owns the R2 bindings + the whole copy/verify/delete state machine; this
 // just carries the query params and returns the envelope. Dry-run by default: the
 // caller must pass `dryRun: false` to actually copy or delete.
@@ -53,6 +53,6 @@ export async function migratePreviewArchiveCommand(args: {
   }
 
   return adminApiPost<PreviewMigrationResult>(
-    `/api/admin/migrations/preview-archive?${params.toString()}`,
+    `/api/v1/admin/migrations/preview-archive?${params.toString()}`,
   );
 }

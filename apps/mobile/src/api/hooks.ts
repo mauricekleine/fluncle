@@ -18,7 +18,7 @@ function isFinding(item: FeedItem): item is TrackListItem {
 /** The findings feed (the Stories pager + the archive both read this). */
 export function useFindingsFeed() {
   return useInfiniteQuery(
-    orpc.list_tracks.infiniteOptions({
+    orpc.list_findings.infiniteOptions({
       getNextPageParam: (last) => last.nextCursor,
       initialPageParam: undefined as string | undefined,
       input: (cursor: string | undefined) => ({ cursor }),

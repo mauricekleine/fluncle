@@ -7,7 +7,7 @@
 // render (vitest env = node, no DOM — the catalogue-hub-section.test.tsx style).
 //
 // The session is now read from the shared client store BEFORE any request goes out, so an
-// anonymous visitor costs the origin nothing at all — no guaranteed-401 `/api/me/watches`. That
+// anonymous visitor costs the origin nothing at all — no guaranteed-401 `/api/v1/me/watches`. That
 // half is a network fact, verified in a real browser past hydration rather than here.
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";

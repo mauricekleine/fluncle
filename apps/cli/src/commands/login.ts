@@ -191,10 +191,10 @@ async function pollForToken(
 }
 
 async function fetchSessionUser(baseUrl: string, token: string): Promise<SessionUser | undefined> {
-  // The Worker's `/api/me` returns the user-or-null envelope; with the bearer
+  // The Worker's `/api/v1/me` returns the user-or-null envelope; with the bearer
   // plugin it resolves the just-minted session token. Best-effort: a miss here
   // doesn't fail the login (the token is still good), it just skips the cached name.
-  const response = await fetch(`${baseUrl}/api/me`, {
+  const response = await fetch(`${baseUrl}/api/v1/me`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 

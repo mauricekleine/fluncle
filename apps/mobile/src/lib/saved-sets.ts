@@ -13,10 +13,10 @@
 import { type MixTrack } from "@fluncle/contracts";
 
 /** The API path for the saved-sets endpoints (list/save/delete). */
-export const SAVED_SETS_PATH = "/api/me/saved-sets";
+export const SAVED_SETS_PATH = "/api/v1/me/saved-sets";
 
 /**
- * One saved set as `list_private_saved_sets` returns it (GET /api/me/saved-sets). `setTokens`
+ * One saved set as `list_private_saved_sets` returns it (GET /api/v1/me/saved-sets). `setTokens`
  * is the serialized `?set=` chain and `taste` the serialized `?taste=` seed — echoed VERBATIM,
  * so opening a set is a matter of handing them back to the builder's parse helpers. `taste` is
  * absent when the chain carried no seed.

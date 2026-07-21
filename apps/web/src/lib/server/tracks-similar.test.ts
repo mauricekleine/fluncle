@@ -5,7 +5,7 @@ import { createIntegrationDb, seedTrack } from "./integration-db";
 import { getSimilarFindings } from "./tracks";
 
 // The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data source for
-// the public `get_similar_findings` op AND the `/log` row.
+// the public `list_similar_tracks` op AND the `/log` row.
 //
 // THIS SUITE RUNS AGAINST REAL libSQL, not a mocked `execute`. It has to: the ranking now
 // happens IN SQL (`vector_distance_cos` over an `F32_BLOB(1024)`, the probe bound as raw

@@ -13,7 +13,7 @@
 # SSH app, the on-box automation crons, the scale-to-zero render box, Hermes itself),
 # detects status TRANSITIONS against a local state file, Discord-pings ONLY on a
 # transition (a service going down OR recovering — never on a steady state, so no
-# spam), and POSTs the snapshot to the agent-tier `POST /api/admin/health`
+# spam), and POSTs the snapshot to the agent-tier `POST /api/v1/admin/health`
 # (oRPC `record_health`) that feeds the public page.
 #
 # Why a .sh that execs a .ts: this thin bash wrapper sets up the PATH, sources the
@@ -29,7 +29,7 @@
 # note in 1Password, referenced neutrally — never inlined here. Required keys:
 #
 #   HEALTHCHECK_WORKER_URL   — the Worker origin, e.g. https://www.fluncle.com
-#                              (the web probe GETs ${HEALTHCHECK_WORKER_URL}/api/health;
+#                              (the web probe GETs ${HEALTHCHECK_WORKER_URL}/api/v1/health;
 #                              also the POST target for the health snapshot).
 #   HEALTHCHECK_R2_PROBE_URL — a known public R2 object URL (HEAD probe).
 #   HEALTHCHECK_DNS_QUERY    — a name to `dig +short` (DNS probe).

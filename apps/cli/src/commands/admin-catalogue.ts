@@ -51,7 +51,7 @@ export async function catalogueRankCommand(options: { limit?: string }): Promise
     ok: true;
     summary: RankCatalogueSummary;
     telescope?: TelescopeSyncOutcome;
-  }>("/api/admin/catalogue/rank", limit ? { limit } : {});
+  }>("/api/v1/admin/catalogue/rank", limit ? { limit } : {});
 
   return { summary: response.summary, telescope: response.telescope };
 }
@@ -80,7 +80,7 @@ export type RecordDemandSummary = {
  */
 export async function catalogueDemandCommand(): Promise<RecordDemandSummary> {
   const response = await adminApiPost<{ ok: true; summary: RecordDemandSummary }>(
-    "/api/admin/catalogue/demand",
+    "/api/v1/admin/catalogue/demand",
     {},
   );
 
@@ -121,7 +121,7 @@ export async function catalogueListCommand(options: {
     params.set("limit", options.limit);
   }
 
-  return adminApiGet<CatalogueResponse>(`/api/admin/catalogue?${params.toString()}`);
+  return adminApiGet<CatalogueResponse>(`/api/v1/admin/catalogue?${params.toString()}`);
 }
 
 /**
@@ -131,7 +131,7 @@ export async function catalogueListCommand(options: {
  * § Wrong audio). `cleared: false` when the row was not actually quarantined.
  */
 export async function clearWrongAudioCommand(trackId: string): Promise<{ cleared: boolean }> {
-  return adminApiPost<{ cleared: boolean; ok: true }>("/api/admin/catalogue/wrong-audio/clear", {
+  return adminApiPost<{ cleared: boolean; ok: true }>("/api/v1/admin/catalogue/wrong-audio/clear", {
     trackId,
   });
 }
@@ -148,7 +148,7 @@ export async function requeueUnmatchedCommand(): Promise<{
   skippedVetoed: number;
 }> {
   return adminApiPost<{ ok: true; requeued: number; skippedVetoed: number }>(
-    "/api/admin/catalogue/captures/requeue-unmatched",
+    "/api/v1/admin/catalogue/captures/requeue-unmatched",
     {},
   );
 }
@@ -161,7 +161,7 @@ export async function requeueUnmatchedCommand(): Promise<{
  * duplicate veto, never the verification gate. `forced: false` when the row was not actually vetoed.
  */
 export async function forceCaptureCommand(trackId: string): Promise<{ forced: boolean }> {
-  return adminApiPost<{ forced: boolean; ok: true }>("/api/admin/catalogue/force-capture", {
+  return adminApiPost<{ forced: boolean; ok: true }>("/api/v1/admin/catalogue/force-capture", {
     trackId,
   });
 }
@@ -174,7 +174,7 @@ export async function forceCaptureCommand(trackId: string): Promise<{ forced: bo
  * track is not a captured finding (or already flagged).
  */
 export async function flagWrongAudioCommand(trackId: string): Promise<{ flagged: boolean }> {
-  return adminApiPost<{ flagged: boolean; ok: true }>("/api/admin/catalogue/wrong-audio/flag", {
+  return adminApiPost<{ flagged: boolean; ok: true }>("/api/v1/admin/catalogue/wrong-audio/flag", {
     trackId,
   });
 }
@@ -188,7 +188,7 @@ export async function certifyTrackCommand(
   trackId: string,
   note?: string,
 ): Promise<{ logId: string }> {
-  return adminApiPost<{ logId: string; ok: true }>("/api/admin/catalogue/certify", {
+  return adminApiPost<{ logId: string; ok: true }>("/api/v1/admin/catalogue/certify", {
     ...(note ? { note } : {}),
     trackId,
   });
@@ -204,7 +204,7 @@ export async function setTrackDismissedCommand(
   trackId: string,
   dismissed: boolean,
 ): Promise<{ changed: boolean }> {
-  return adminApiPut<{ changed: boolean; ok: true }>("/api/admin/catalogue/dismissed", {
+  return adminApiPut<{ changed: boolean; ok: true }>("/api/v1/admin/catalogue/dismissed", {
     dismissed,
     trackId,
   });
@@ -243,7 +243,7 @@ export async function listUnverifiedCapturesCommand(options: {
   }
 
   return adminApiGet<{ ok: true; tracks: CaptureVerifyItem[] }>(
-    `/api/admin/catalogue/captures/unverified?${params.toString()}`,
+    `/api/v1/admin/catalogue/captures/unverified?${params.toString()}`,
   );
 }
 
@@ -257,7 +257,7 @@ export async function verifyCaptureCommand(
   trackId: string,
   verdict: "match" | "mismatch" | "no-preview",
 ): Promise<{ action: string }> {
-  return adminApiPost<{ action: string; ok: true }>("/api/admin/catalogue/captures/verify", {
+  return adminApiPost<{ action: string; ok: true }>("/api/v1/admin/catalogue/captures/verify", {
     trackId,
     verdict,
   });
@@ -320,10 +320,10 @@ export async function crawlCatalogueCommand(
     params.set("dryRun", "true");
   }
 
-  return adminApiPost<CrawlPassResult>(`/api/admin/catalogue/crawl?${params.toString()}`);
+  return adminApiPost<CrawlPassResult>(`/api/v1/admin/catalogue/crawl?${params.toString()}`);
 }
 
 /** Read the crawl frontier's state, the catalogue's size, and the seed set. */
 export async function crawlStatusCommand(): Promise<CrawlStatusResult> {
-  return adminApiGet<CrawlStatusResult>("/api/admin/catalogue/crawl");
+  return adminApiGet<CrawlStatusResult>("/api/v1/admin/catalogue/crawl");
 }

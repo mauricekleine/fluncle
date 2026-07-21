@@ -13,7 +13,7 @@ export type { Submission };
 type JsonOptions = { json?: boolean };
 
 export async function listSubmissionsCommand(options: JsonOptions = {}): Promise<void> {
-  const response = await adminApiGet<SubmissionsResponse>("/api/admin/submissions");
+  const response = await adminApiGet<SubmissionsResponse>("/api/v1/admin/submissions");
 
   if (options.json) {
     printJson({ ok: true, submissions: response.submissions });
@@ -47,7 +47,7 @@ export async function rejectSubmissionCommand(
   options: JsonOptions = {},
 ): Promise<void> {
   const response = await adminApiPost<SubmissionResponse>(
-    `/api/admin/submissions/${encodeURIComponent(submissionId)}/reject`,
+    `/api/v1/admin/submissions/${encodeURIComponent(submissionId)}/reject`,
   );
 
   if (options.json) {
@@ -86,7 +86,7 @@ export async function approveSubmissionCommand(
   });
 
   const response = await adminApiPost<SubmissionResponse>(
-    `/api/admin/submissions/${encodeURIComponent(submission.id)}/approve`,
+    `/api/v1/admin/submissions/${encodeURIComponent(submission.id)}/approve`,
   );
 
   if (options.json) {
@@ -106,7 +106,7 @@ export async function triageSubmissionCommand(
   options: JsonOptions & { promptVersion?: number } = {},
 ): Promise<void> {
   const response = await adminApiPost<SubmissionResponse>(
-    `/api/admin/submissions/${encodeURIComponent(submissionId)}/triage`,
+    `/api/v1/admin/submissions/${encodeURIComponent(submissionId)}/triage`,
     {
       // PROVENANCE — omitted when the sweep fell back to its baked-in prompt, so the
       // column stays NULL (docs/agents/prompt-registry.md).
@@ -129,7 +129,7 @@ export async function triageSubmissionCommand(
 
 async function fetchSubmission(submissionId: string): Promise<Submission> {
   const response = await adminApiGet<SubmissionResponse>(
-    `/api/admin/submissions/${encodeURIComponent(submissionId)}`,
+    `/api/v1/admin/submissions/${encodeURIComponent(submissionId)}`,
   );
 
   return response.submission;

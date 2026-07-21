@@ -1,5 +1,5 @@
 // The `admin-social` domain router module — a finding's per-platform publication
-// control plane. Each handler reuses the live `/api/admin/tracks/*/social/*`
+// control plane. Each handler reuses the live `/api/v1/admin/tracks/*/social/*`
 // route logic verbatim; the auth tier moves to the oRPC procedure middleware
 // (../orpc-auth), and the `draft` route's field-level operator guard reads
 // `context.role` in-handler.

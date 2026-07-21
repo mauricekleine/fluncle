@@ -56,7 +56,7 @@ type JsonOptions = { json?: boolean };
 /** Resolve one recording by id — the non-printing getter the clip cut reads. */
 export async function recordingGet(id: string): Promise<RecordingDTO> {
   const response = await adminApiGet<RecordingResponse>(
-    `/api/admin/recordings/${encodeURIComponent(id)}`,
+    `/api/v1/admin/recordings/${encodeURIComponent(id)}`,
   );
 
   return response.recording;
@@ -83,7 +83,7 @@ export async function recordingsListCommand(options: RecordingListOptions = {}):
   }
 
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  const response = await adminApiGet<RecordingsResponse>(`/api/admin/recordings${suffix}`);
+  const response = await adminApiGet<RecordingsResponse>(`/api/v1/admin/recordings${suffix}`);
 
   if (options.json) {
     printJson({ ok: true, recordings: response.recordings });
@@ -127,7 +127,7 @@ export async function recordingCreateCommand(options: RecordingCreateOptions = {
   // A PLAN is a videoless recording: no --video, no --title — the server mints the
   // Galaxy-vocab handle. RFC plan→recording→mixtape §1.
   if (options.plan) {
-    const created = await adminApiPost<RecordingResponse>("/api/admin/recordings", {
+    const created = await adminApiPost<RecordingResponse>("/api/v1/admin/recordings", {
       kind: "plan",
       recordedAt: options.recordedAt,
     });
@@ -159,7 +159,7 @@ export async function recordingCreateCommand(options: RecordingCreateOptions = {
     throw new CliError("file_not_found", `Set-video master not found: ${options.video}`);
   }
 
-  const created = await adminApiPost<RecordingResponse>("/api/admin/recordings", {
+  const created = await adminApiPost<RecordingResponse>("/api/v1/admin/recordings", {
     recordedAt: options.recordedAt,
     title,
   });
@@ -174,7 +174,7 @@ export async function recordingCreateCommand(options: RecordingCreateOptions = {
 
   const upload = await uploadRenditionMultipart(
     options.video,
-    `/api/admin/recordings/${encodeURIComponent(recording.id)}/set-video/presign`,
+    `/api/v1/admin/recordings/${encodeURIComponent(recording.id)}/set-video/presign`,
     log,
   );
 
@@ -233,7 +233,7 @@ export async function recordingUpdateCommand(
   }
 
   const response = await adminApiPatch<RecordingResponse>(
-    `/api/admin/recordings/${encodeURIComponent(id)}`,
+    `/api/v1/admin/recordings/${encodeURIComponent(id)}`,
     body,
   );
 
@@ -253,7 +253,7 @@ export async function recordingDeleteCommand(
     throw new CliError("missing_id", "Missing recording id for: delete");
   }
 
-  await adminApiDelete(`/api/admin/recordings/${encodeURIComponent(id)}`);
+  await adminApiDelete(`/api/v1/admin/recordings/${encodeURIComponent(id)}`);
 
   if (options.json) {
     printJson({ ok: true });
@@ -272,7 +272,7 @@ export async function recordingPromoteCommand(
   }
 
   const response = await adminApiPost<RecordingResponse>(
-    `/api/admin/recordings/${encodeURIComponent(id)}/promote`,
+    `/api/v1/admin/recordings/${encodeURIComponent(id)}/promote`,
   );
   const recording = response.recording;
 
@@ -316,7 +316,7 @@ export async function recordingReplaceCuesCommand(
   }
 
   const response = await adminApiPut<RecordingResponse>(
-    `/api/admin/recordings/${encodeURIComponent(id)}/cues`,
+    `/api/v1/admin/recordings/${encodeURIComponent(id)}/cues`,
     { cues },
   );
 

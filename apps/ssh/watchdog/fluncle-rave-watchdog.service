@@ -9,7 +9,7 @@ Type=oneshot
 # Drop the script at /opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh (see README).
 ExecStart=/opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh
 
-# All inputs (the two beacon URLs, the /api/status URL, the staleness threshold, the
+# All inputs (the two beacon URLs, the /api/v1/status URL, the staleness threshold, the
 # Discord webhook) come from an operator-placed file kept OUT of the repo — values
 # live in the ops runbook note in 1Password. Create it 0600, owned root (the unit
 # reads it as root before dropping to the DynamicUser). See the README.

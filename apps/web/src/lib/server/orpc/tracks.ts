@@ -5,6 +5,8 @@
 import { ORPCError } from "@orpc/server";
 import { parseSetParam, parseTasteParam } from "../../mix-set";
 import { clampFreshLimit, listFreshTracks } from "../fresh";
+import { CatalogueHubPageOutOfRangeError } from "../labels";
+import { listTracksHubPage, toCatalogueTrackListItem } from "../tracks-hub";
 import {
   decodeTrackCursor,
   getMixableTracks,
@@ -16,17 +18,17 @@ import {
 import { resolveLogPageTarget } from "../log-resolver";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
-// Feed page-size bounds, ported verbatim from the live /api/tracks route.
+// Feed page-size bounds, ported verbatim from the live feed route.
 const LIST_DEFAULT_LIMIT = 16;
 const LIST_MAX_LIMIT = 48;
 
 // "More like this" row bounds — a small default (matches the `/log` row) with a
-// modest ceiling; the op parses the limit tolerantly like the feed's `list_tracks`.
+// modest ceiling; the op parses the limit tolerantly like the `list_findings` feed.
 const SIMILAR_DEFAULT_LIMIT = 6;
 const SIMILAR_MAX_LIMIT = 24;
 
 // `/mix` rail bounds — a fuller default than "more like this" (the crew builds a set
-// off it), still modestly capped; parsed tolerantly like the feed's `list_tracks`.
+// off it), still modestly capped; parsed tolerantly like the `list_findings` feed.
 const MIXABLE_DEFAULT_LIMIT = 12;
 const MIXABLE_MAX_LIMIT = 32;
 
@@ -77,11 +79,11 @@ export function tracksHandlers(os: Implementer) {
     }
   });
 
-  // `list_tracks` — the public merged feed (findings + published mixtapes). Port
-  // of /api/tracks GET: clamp the limit, decode the cursor, normalize the
-  // discovery window, and drop mixtapes when a window is present. The response is
-  // the FeedListPage itself — no `ok` envelope.
-  const listTracksHandler = os.list_tracks.handler(async ({ input }) => {
+  // `list_findings` — the public merged FEED (findings + published mixtapes, newest
+  // FOUND first). Port of the feed route GET: clamp the limit, decode the cursor,
+  // normalize the discovery window, and drop mixtapes when a window is present. The
+  // response is the FeedListPage itself — no `ok` envelope.
+  const listFindingsHandler = os.list_findings.handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
       const cursor = decodeTrackCursor(input.cursor ?? null);
@@ -93,7 +95,7 @@ export function tracksHandlers(os: Implementer) {
         includeMixtapes: since === undefined && until === undefined,
         // The public feed reads the lean list projection (Finding B4): no list surface
         // renders the heavy caption/feature/reasoning fields, and they stay optional on
-        // the `list_tracks` contract, so their absence here is additive (get_track still
+        // the `list_findings` contract, so their absence here is additive (get_track still
         // serves the fat single-finding shape for anyone who needs them).
         lean: true,
         limit,
@@ -104,6 +106,43 @@ export function tracksHandlers(os: Implementer) {
       // Strip the private capture key from every item before it world-serves.
       return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
     } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // `list_tracks` — the whole-archive ENUMERATOR (every track Fluncle holds, newest
+  // RELEASE first, numbered pages). The machine twin of the web `/tracks` page: it
+  // reads the SAME hosted-proven `listTracksHubPage` hub, so the two never disagree
+  // and no new scan over the growing table is invented here. The ONE filter is the
+  // tri-state `certified` (findings only / uncertified only / all), folded into the
+  // hub's compiled clause set (one gate). A page past the end 404s (never clamps to
+  // page 1). Each row is the LEAN `CatalogueTrackListItem` — a finding carries its
+  // coordinate + cover, an uncertified row carries neither (the Unlit Rule, structural
+  // in the mapper), and the heavy DTO never crosses this boundary.
+  const listTracksHandler = os.list_tracks.handler(async ({ input }) => {
+    try {
+      // Tolerant page parse (mirrors the web route's `pageParam`): junk / absent / < 1
+      // folds to page 1, rather than 400-ing.
+      const parsedPage = Math.trunc(Number(input.page));
+      const page = Number.isFinite(parsedPage) && parsedPage >= 1 ? parsedPage : 1;
+      const certified = input.certified === undefined ? undefined : input.certified === "true";
+
+      const result = await listTracksHubPage({ certified }, page);
+
+      return {
+        ok: true as const,
+        page: result.page,
+        pageCount: result.pageCount,
+        total: result.total,
+        tracks: result.items.map(toCatalogueTrackListItem),
+      };
+    } catch (error) {
+      // A page past the end is a 404 (never a clamp to page 1 — that would be a second
+      // URL for page 1's rows), exactly like the web route.
+      if (error instanceof CatalogueHubPageOutOfRangeError) {
+        throw new ORPCError("NOT_FOUND", { message: `No page ${input.page ?? 1} of tracks` });
+      }
+
       throw apiFault(error);
     }
   });
@@ -133,13 +172,13 @@ export function tracksHandlers(os: Implementer) {
     }
   });
 
-  // `get_similar_findings` — the N sonically-nearest findings (the "more like this"
+  // `list_similar_tracks` — the N sonically-nearest findings (the "more like this"
   // cluster). Cosine-ranks the target's MuQ embedding against every other
   // coordinate-bearing finding's, self excluded, similarity order. An unknown
   // coordinate / an un-embedded finding / an empty archive all resolve to
   // `{ ok: true, findings: [] }` (a quiet empty row, never a fault). The limit is
   // parsed tolerantly like the feed's, degrading to the default rather than 400-ing.
-  const getSimilarFindingsHandler = os.get_similar_findings.handler(async ({ input }) => {
+  const listSimilarTracksHandler = os.list_similar_tracks.handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, SIMILAR_DEFAULT_LIMIT, SIMILAR_MAX_LIMIT);
       const findings = await getSimilarFindings(input.idOrLogId, limit);
@@ -167,7 +206,7 @@ export function tracksHandlers(os: Implementer) {
   // was cleaning up after.
   //
   // RATE LIMIT: accept-risk, no limiter (Decision 2). One key-pre-filtered archive scan,
-  // comparable to the existing uncached `get_similar_findings`. Revisit at archive growth —
+  // comparable to the existing uncached `list_similar_tracks`. Revisit at archive growth —
   // this is now a PUBLIC page's hot path rather than an admin-gated one.
   const listMixableTracksHandler = os.list_mixable_tracks.handler(async ({ input }) => {
     try {
@@ -191,7 +230,7 @@ export function tracksHandlers(os: Implementer) {
   });
 
   // `list_fresh` — WHAT JUST CAME OUT: the flat, capped list of newest RELEASES over the trailing
-  // 30-day window (the release-date axis, the opposite of `list_tracks`' found-date feed). The lib
+  // 30-day window (the release-date axis, the opposite of `list_findings`' found-date feed). The lib
   // read returns the unlit-safe shape verbatim (an uncertified row carries no logId/cover), so this
   // is a thin pass-through; the tolerant `limit` string is clamped to [1, 100] (default 50).
   const listFreshHandler = os.list_fresh.handler(async ({ input }) => {
@@ -205,10 +244,11 @@ export function tracksHandlers(os: Implementer) {
 
   return {
     get_random_track: getRandomTrackHandler,
-    get_similar_findings: getSimilarFindingsHandler,
     get_track: getTrack,
+    list_findings: listFindingsHandler,
     list_fresh: listFreshHandler,
     list_mixable_tracks: listMixableTracksHandler,
+    list_similar_tracks: listSimilarTracksHandler,
     list_tracks: listTracksHandler,
   };
 }
