@@ -3,15 +3,15 @@
 // ── THE RULE THIS FILE EXISTS TO ENFORCE ─────────────────────────────────────────────
 // The LLM never sees the archive, never names a track, and never returns one. It is handed
 // a sentence and it emits a `SearchFilters` object — `{ artist?, label?, key?, bpmMin?,
-// bpmMax?, yearMin?, yearMax?, text?, soundsLike? }` — which `search.ts` then executes as
-// SQL over real columns. So a hallucinated track is not a bug we mitigate; it is a thing
-// the architecture cannot express. The worst a bad parse can do is filter for something
-// that is not in the archive and return an honest empty state.
+// bpmMax?, yearMin?, yearMax?, text?, soundsLike?, soundsLikeArtists? }` — which `search.ts`
+// then executes as SQL over real columns. So a hallucinated track is not a bug we mitigate; it
+// is a thing the architecture cannot express. The worst a bad parse can do is filter for
+// something that is not in the archive and return an honest empty state.
 //
-// `soundsLike` is the one place language reaches for a track, and even there it reaches for
-// a REFERENCE, not a result: the server resolves that string against the archive, and if it
-// resolves to nothing, the sonic tier declines. The vibe is always anchored on a row that
-// exists.
+// `soundsLike` and `soundsLikeArtists` are the two places language reaches for SOUND, and even
+// there they reach for a REFERENCE, not a result: the server resolves the track string / the
+// artist names against the archive, and if they resolve to nothing, the sonic tier declines.
+// The vibe is always anchored on rows that exist.
 //
 // ── AND IT IS NEVER ON THE HOT PATH ──────────────────────────────────────────────────
 // Three of the four tiers answer without a model at all (a coordinate, an exact entity, a

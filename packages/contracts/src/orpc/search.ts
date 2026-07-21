@@ -42,6 +42,12 @@ export const searchTracks = oc
  * `soundsLike` is the sonic hook: a free-text reference to a real track, which the server
  * resolves against the archive and turns into that track's MuQ embedding. It is anchored on
  * a row that exists, so even the "vibe" query cannot be invented.
+ *
+ * `soundsLikeArtists` is the COMPOUND sonic hook — 1–6 artist names or slugs ("songs by artists
+ * that sound like Koven and Maduk in A minor"). The server resolves each to an artist, averages
+ * their stored `artist_centroids` into one probe, and ranks TRACKS by it, with every other filter
+ * (key/BPM/year/label) applied as a btree pre-filter first. Like `soundsLike`, it is anchored on
+ * real rows — an unresolved name simply does not weigh in, and a probe of nothing declines.
  */
 export const SearchFiltersSchema = z
   .object({
@@ -52,6 +58,7 @@ export const SearchFiltersSchema = z
     key: z.string().optional(),
     label: z.string().optional(),
     soundsLike: z.string().optional(),
+    soundsLikeArtists: z.array(z.string()).max(6).optional(),
     text: z.string().optional(),
     yearMax: z.number().optional(),
     yearMin: z.number().optional(),
@@ -91,18 +98,23 @@ export const SearchHitSchema = z
 /**
  * An entity a query named or prefixed — a jump target, not a result row.
  *
- * The three nodes of the graph that have a PAGE: an artist (`/artist/<slug>`), a label
- * (`/label/<slug>`), an album (`/album/<slug>`). They are one shape because they are one
- * affordance: the thing you searched for, offered as a destination, with its cover or its
- * portrait. `kind` decides the route and nothing else. (The log is the fourth node, and it
- * needs no entity row — a coordinate resolves straight to its finding.)
+ * The nodes of the graph that have a PAGE: an artist (`/artist/<slug>`), a label
+ * (`/label/<slug>`), an album (`/album/<slug>`), a named galaxy (`/galaxies/<slug>`), and a
+ * published mixtape — whose page IS its log page (`/log/<F-logId>`). They are one shape because
+ * they are one affordance: the thing you searched for, offered as a destination, with its cover
+ * or its portrait. For most kinds the route is `/<kind>/<slug>`; where it is not (a galaxy's
+ * plural segment, a mixtape's log page), the row carries an explicit `url`, so a consumer never
+ * has to special-case the route. (A plain log coordinate needs no entity row — it resolves
+ * straight to its finding.)
  */
 export const SearchEntitySchema = z
   .object({
     imageUrl: z.string().optional(),
-    kind: z.enum(["album", "artist", "label"]),
+    kind: z.enum(["album", "artist", "galaxy", "label", "mixtape"]),
     name: z.string(),
     slug: z.string(),
+    /** The page this entity IS, when it is not the `/<kind>/<slug>` default (galaxy, mixtape). */
+    url: z.string().optional(),
   })
   .meta({ id: "SearchEntity" });
 

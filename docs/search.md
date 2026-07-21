@@ -6,26 +6,26 @@ A feed carries sixty findings. It cannot carry an archive. Search is the surface
 
 A query is resolved by trying tiers **in order**, stopping at the first that answers. The order is a performance decision and a safety decision at once.
 
-| #   | Tier              | Example                              | What answers it                                           | Costs                              |
-| --- | ----------------- | ------------------------------------ | --------------------------------------------------------- | ---------------------------------- |
-| 1   | **Coordinate**    | `004.7.2I`, `fluncle://004.7.2I`     | A regex + one indexed lookup                              | —                                  |
-| 2   | **Exact entity**  | `Netsky`, `Hospital Records`         | One indexed lookup on `artists` / `labels` / `albums`     | —                                  |
-| 3   | **Bare token**    | `netsky`                             | FTS5 (bm25) + an entity prefix match                      | ~114 ms at 100k (measured, hosted) |
-| 3½  | **Sonic phrase**  | `tracks that sound like Nine Clouds` | A regex → the anchor's MuQ vector → `vector_distance_cos` | one vector scan                    |
-| 4   | **Anything else** | `Andromedik tracks in A minor`       | A small LLM emits `SearchFilters`; **SQL** retrieves      | one model call, 3s deadline        |
+| #   | Tier              | Example                              | What answers it                                                                 | Costs                              |
+| --- | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------- |
+| 1   | **Coordinate**    | `004.7.2I`, `fluncle://004.7.2I`     | A regex + one indexed lookup                                                    | —                                  |
+| 2   | **Exact entity**  | `Netsky`, `Hospital Records`         | One indexed lookup on `artists` / `labels` / `albums` / `galaxies` / `mixtapes` | —                                  |
+| 3   | **Bare token**    | `netsky`                             | FTS5 (bm25) + an entity prefix match                                            | ~114 ms at 100k (measured, hosted) |
+| 3½  | **Sonic phrase**  | `tracks that sound like Nine Clouds` | A regex → the anchor's MuQ vector → `vector_distance_cos`                       | one vector scan                    |
+| 4   | **Anything else** | `Andromedik tracks in A minor`       | A small LLM emits `SearchFilters`; **SQL** retrieves                            | one model call, 3s deadline        |
 
 **Tiers 1–3½ are most of what anyone types, and none of them costs a model call.** That is the point of the ordering: the LLM is never on the hot path of a common query.
 
-### An artist, a label, and an album are one affordance
+### Every graph node with a page is one affordance
 
-Tier 2 and tier 3 both hand back **entities** — jump targets that sit above the rows. There are three kinds and they are deliberately **one row, one shape, one code path**: the picture, the name, the arrow, and a page to land on (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>` — the graph pages in [docs/album-entity.md](./album-entity.md)). `kind` decides the route and nothing else. Search a label and you are offered the label, with its tracks under it; the same is true of a record, and of a person.
+Tier 2 and tier 3 both hand back **entities** — jump targets that sit above the rows. There are five kinds and they are deliberately **one row, one shape, one code path**: the picture, the name, the arrow, and a page to land on — an artist (`/artist/<slug>`), a label (`/label/<slug>`), an album (`/album/<slug>`), a named galaxy (`/galaxies/<slug>`), and a published mixtape whose page IS its log page (`/log/<F-logId>`). `kind` picks the route for the first three; where it does not (a galaxy's plural segment, a mixtape's log page), the row carries an explicit `url`, so no consumer special-cases the route. Search a label and you are offered the label, with its tracks under it; the same is true of a record, a person, a galaxy, and a mixtape — though a galaxy and a mixtape are a **pure jump** (a mixtape is itself one finding; a galaxy has no column filter to list under it), so they carry no track list.
 
 It was not always so. Search shipped before the label and album pages did, so those two came back as a bare `label: …` filter chip — the one thing the reader actually searched for, withheld, because a redirect would have been a 404. That is gone; the chip row now belongs to the model's filters alone (tier 4), which is what it was always for.
 
 Two rails hold:
 
-- **A label or an album is offered only with a certified finding on it.** The [catalogue crawler](./catalogue-crawler.md) mints a `labels` row for every imprint it walks past, and a page with nothing certified on it is a destination that is an empty room. Those decline the jump and fall back to being the filter they always were — never a dead link. (An `albums` row is minted only off a finding by construction, so its guard is a belt-and-braces twin of the label's.)
-- **The entity tables are archive-sized, not catalogue-sized** — an album and a label earn a row only off a certified finding — so the prefix match stays a cheap read however deep the catalogue gets.
+- **A label or an album is offered when it clears the shared hub gate.** Search offers exactly the labels/albums the `/labels` + `/albums` hubs and the API list — a certified finding **or** a page that clears the thin-content floor (the same `HUB_INCLUSION_HAVING` fragment from `labels.ts`). This replaced the old certified-only guard when the unified hub index shipped: a catalogue-only label with enough renderable tracks now has a real page, so withholding it would be the lie. A below-floor imprint (the [catalogue crawler](./catalogue-crawler.md) mints a `labels` row for every one it walks past) still declines the jump and falls back to the filter it always was — never a dead link.
+- **The entity reads are archive-sized, not catalogue-sized** — a label/album is bounded by that floor, and galaxies and mixtapes are dozens — so the exact/prefix match stays a cheap read however deep the catalogue gets. A galaxy resolves only when it is **named and not retired**; a mixtape only when it is **published**.
 
 ### An artist answers to every name
 
@@ -38,7 +38,7 @@ Two rules carry the trust and the tie:
 
 ### The model emits filters, never rows
 
-Tier 4's model is handed a sentence and returns a `SearchFilters` object — `{ artist?, label?, album?, key?, bpmMin?, bpmMax?, yearMin?, yearMax?, text?, soundsLike? }` — which the server compiles into bound SQL over real columns. It never sees a track, never names one, and never returns one. **A hallucinated finding is not a risk that is mitigated here; it is a thing the architecture cannot express.** The worst a bad parse can do is filter for something that is not in the archive and return an honest empty state.
+Tier 4's model is handed a sentence and returns a `SearchFilters` object — `{ artist?, label?, album?, key?, bpmMin?, bpmMax?, yearMin?, yearMax?, text?, soundsLike?, soundsLikeArtists? }` — which the server compiles into bound SQL over real columns. It never sees a track, never names one, and never returns one. **A hallucinated finding is not a risk that is mitigated here; it is a thing the architecture cannot express.** The worst a bad parse can do is filter for something that is not in the archive and return an honest empty state.
 
 The schema is the safety property. A model that tries to hand back tracks hands back nothing (`parseFilterReply` validates against the Zod schema, and the schema has no field that could carry a result).
 
@@ -60,6 +60,12 @@ Asked _"Andromedik tracks in A minor"_ with no model, it still surfaces the Andr
 The model still owns what the regex cannot see: an unusual phrasing, and — the real prize — a **compound** query (`like Nine Clouds but on Hospital Records`), where the reference is only half the question and the other half becomes the btree pre-filter in front of the vector scan.
 
 The reference is always resolved to a **real, embedded row** in the archive. If it resolves to nothing, the tier declines. **The vibe is always anchored on a track that exists.**
+
+### Sound like several artists — the compound artist query
+
+`soundsLikeArtists` (1–6 artist names or slugs) is the other sonic hook: _"songs by artists that sound like Koven and Maduk in A minor from before 2020"_. The server resolves each name to an artist (the alias-tolerant read the entity tier uses), reads their stored `artist_centroids`, averages them into **one probe** (the mean of means, so each named artist weighs equally regardless of catalogue depth), and ranks **tracks** by `vector_distance_cos` against it — the same one-pass exact scan, with every other filter (key/BPM/year/label) applied as the btree pre-filter first. A name that resolves to no artist (or one with no centroid yet) simply does not weigh in; a probe of nothing declines. The response echoes the **resolved** artist names back in `filters.soundsLikeArtists`, so the reader sees which artists the vibe was actually built from.
+
+It is a plain filter like any other: the LLM only ever _emits_ it, and a hand-built `soundsLikeArtists` filter works with the model down.
 
 ## The vector rules (non-negotiable)
 
