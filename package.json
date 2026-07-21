@@ -58,6 +58,7 @@
     "lint": "oxlint --ignore-path .prettierignore --type-aware --deny-warnings",
     "lint:fix": "oxlint --fix --ignore-path .prettierignore --type-aware --deny-warnings",
     "skills:install": "bun run scripts/install-skills.ts",
+    "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
     "test": "turbo run test",
     "test:scripts": "bun test --cwd docs/agents/hermes/scripts && bun test --cwd packages/skills/fluncle-track-enrichment/scripts",
