@@ -9,11 +9,14 @@
 // — adds, publish, the Frontier playlist mints). So ALL catalogue anchor-filling moved onto THIS
 // box sweep. See docs/catalogue-crawler.md § the anchor.
 //
-// THE RESOLVER WATERFALL (slice 1). Apify used to be the SOLE candidate source, so an Apify outage
-// stopped anchoring dead. This sweep now runs a two-rung waterfall per row: a FREE ListenBrainz rung
-// first, and the metered Apify search only as the fallback. A free-rung hit spends nothing, and when
-// Apify is down the free rung still anchors its share (graceful degradation) — the whole point of the
-// slice.
+// THE RESOLVER WATERFALL (slices 1-2). Apify used to be the SOLE candidate source, so an Apify outage
+// stopped anchoring dead. This sweep runs a waterfall per row, all resolved through ONE `resolve_anchor`
+// call the box makes FIRST: the FREE ListenBrainz rung, then — when the server's dark flag
+// `anchor_spotify_search_enabled` is on (slice 2) — the free Spotify SEARCH rungs (exact ISRC, then
+// fuzzy), and the metered Apify search only as the LAST resort. Any earlier hit spends no Apify money,
+// and when Apify is down the free rungs still anchor their share (graceful degradation). The Spotify
+// rungs share the official app with user-facing mints, so the box PACES them under a 60/min ceiling
+// (`spotifySearchPaceMs`); when the flag is off they never run and the sweep is exactly slice 1.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (anchor-sweep.sh) the host timer
@@ -109,18 +112,29 @@ export type AnchorCandidatePayload = {
   title: string;
 };
 
-export type AnchorVerdict = { anchored: boolean; verifiedBy: "isrc" | "search" | null };
+export type AnchorVerdict = {
+  anchored: boolean;
+  /** Which free rung anchored (`resolve_anchor` only) — drives the per-rung tally. Null on the Apify path. */
+  source?: "listenbrainz" | "spotify-isrc" | "spotify-search" | null;
+  /** True iff `resolve_anchor` issued a Spotify SEARCH this call — the box's pacer signal (slice 2). */
+  spotifySearchDone?: boolean;
+  verifiedBy: "isrc" | "search" | null;
+};
 
 /** One tick's honest tally — the JSON summary line. */
 export type AnchorSummary = {
-  /** Rows anchored by the FREE ListenBrainz rung — the waterfall's win (no Apify spent). */
-  anchoredByListenbrainz: number;
   /** Rows anchored by the Apify FALLBACK via the exact-ISRC gate. */
   anchoredByIsrc: number;
+  /** Rows anchored by the FREE ListenBrainz rung — the waterfall's cheapest win (no Apify spent). */
+  anchoredByListenbrainz: number;
   /** Rows anchored by the Apify FALLBACK via the verified-search gate. */
   anchoredBySearch: number;
+  /** Rows anchored by the DARK Spotify ISRC-search rung (slice 2 — free of Apify, flag-gated). */
+  anchoredBySpotifyIsrc: number;
+  /** Rows anchored by the DARK Spotify fuzzy-search rung (slice 2 — free of Apify, flag-gated). */
+  anchoredBySpotifySearch: number;
   error: null | string;
-  /** Rows that verified nothing on EITHER rung (a clean full miss — stamped, backed off). */
+  /** Rows that verified nothing on ANY rung (a clean full miss — stamped, backed off). */
   missed: number;
   ok: boolean;
   /** Rows this tick could not settle (a bad worklist row, or an anchor POST that threw). */
@@ -131,11 +145,48 @@ export type AnchorSummary = {
 export type AnchorDeps = {
   fetchQueue: (limit: number) => Promise<AnchorWorkItem[]>;
   log: (message: string) => void;
+  /** A monotonic clock (ms). Injected so the Spotify-search pacer is deterministic in tests. */
+  now: () => number;
   report: (trackId: string, candidates: AnchorCandidatePayload[]) => Promise<AnchorVerdict>;
-  /** The FREE first rung — the server resolves + verifies a ListenBrainz candidate for this row. */
+  /** The FREE first rung — the server resolves + verifies ListenBrainz + (dark) Spotify search for this row. */
   resolveFree: (trackId: string) => Promise<AnchorVerdict>;
   runActor: (queries: string[]) => Promise<ApifyResultItem[]>;
+  /** Pause for `ms`. Injected so the Spotify-search pacer can be driven by a fake clock in tests. */
+  sleep: (ms: number) => Promise<void>;
 };
+
+/**
+ * THE 60/min SPOTIFY-SEARCH CEILING (slice 2). The dark Spotify search rungs share the ONE official
+ * app that also serves user-facing mints/publish — the app that starved under 429s at catalogue scale
+ * — so the box paces them well under Spotify's limit. `resolve_anchor` issues at most TWO searches per
+ * row (exact ISRC, then fuzzy), so holding consecutive search-bearing calls ≥ 2s apart caps the rate
+ * at ≤ 2 searches / 2s = 60/min. The existing Spotify 429/Retry-After backoff (apps/web spotify.ts) is
+ * the second half: if we ever do approach the wall, anchor search backs off and yields the token, so a
+ * mint always has headroom — the pacer keeps us far from the wall, the backoff guarantees priority.
+ * The pacer only bites when a call actually SEARCHED (`spotifySearchDone`), so a flag-OFF sweep (LB +
+ * Apify only) runs at full speed.
+ */
+export const SPOTIFY_SEARCH_MIN_INTERVAL_MS = 2000;
+
+/**
+ * How long to wait before the next `resolve_anchor` call so consecutive Spotify-search-bearing calls
+ * stay ≥ `minIntervalMs` apart (start-to-start). `lastSearchStartMs` is null until the first call that
+ * issued a Spotify search, so a sweep that never searches never waits. Pure, so the ceiling is proven
+ * without real timers.
+ */
+export function spotifySearchPaceMs(
+  lastSearchStartMs: null | number,
+  nowMs: number,
+  minIntervalMs: number = SPOTIFY_SEARCH_MIN_INTERVAL_MS,
+): number {
+  if (lastSearchStartMs === null) {
+    return 0;
+  }
+
+  const elapsed = nowMs - lastSearchStartMs;
+
+  return elapsed >= minIntervalMs ? 0 : minIntervalMs - elapsed;
+}
 
 // ── Pure mappers (unit-tested against the real pilot payloads) ────────────────
 
@@ -218,6 +269,8 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     anchoredByIsrc: 0,
     anchoredByListenbrainz: 0,
     anchoredBySearch: 0,
+    anchoredBySpotifyIsrc: 0,
+    anchoredBySpotifySearch: 0,
     error: null,
     missed: 0,
     ok: true,
@@ -246,18 +299,45 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     return summary;
   }
 
-  // ── RUNG 1: THE FREE LISTENBRAINZ RUNG, per row. A hit here anchors for free and this row NEVER
-  // reaches the metered Apify rung below. Only the misses fall through to `apifyRows`. The free rung
-  // failing (a Worker error, a network blip) is treated exactly like a miss — the row still gets its
-  // paid turn — so a flaky free rung can never STARVE anchoring, only fail to save money on that row.
+  // ── RUNG 1-3: THE FREE (non-Apify) RUNGS, per row, via ONE `resolve_anchor` call: the FREE
+  // ListenBrainz rung, then the DARK Spotify search rungs (slice 2, server-gated behind the default-off
+  // flag). A hit here anchors WITHOUT Apify money and this row NEVER reaches the metered Apify rung
+  // below. Only the misses fall through to `apifyRows`. The free path failing (a Worker error, a
+  // network blip) is treated exactly like a miss — the row still gets its paid turn — so a flaky free
+  // path can never STARVE anchoring, only fail to save money on that row.
+  //
+  // PACING: when a call actually issued a Spotify search (`spotifySearchDone`), the next call waits so
+  // consecutive search-bearing calls stay ≥ 2s apart — the 60/min ceiling on the shared official app
+  // (see `spotifySearchPaceMs`). A flag-OFF sweep never searches, so it never waits.
   const apifyRows: { anchorQuery: string; trackId: string }[] = [];
+  let lastSearchStartMs: null | number = null;
 
   for (const row of rows) {
+    const waitMs = spotifySearchPaceMs(lastSearchStartMs, deps.now());
+
+    if (waitMs > 0) {
+      await deps.sleep(waitMs);
+    }
+
+    const startMs = deps.now();
+
     try {
       const verdict = await deps.resolveFree(row.trackId);
 
+      if (verdict.spotifySearchDone) {
+        lastSearchStartMs = startMs;
+      }
+
       if (verdict.anchored) {
-        summary.anchoredByListenbrainz += 1;
+        if (verdict.source === "spotify-isrc") {
+          summary.anchoredBySpotifyIsrc += 1;
+        } else if (verdict.source === "spotify-search") {
+          summary.anchoredBySpotifySearch += 1;
+        } else {
+          // "listenbrainz" (or a pre-slice-2 server that omits `source`) — the free ListenBrainz rung.
+          summary.anchoredByListenbrainz += 1;
+        }
+
         continue;
       }
     } catch (error) {
@@ -387,10 +467,12 @@ async function reportAnchor(
 }
 
 /**
- * The FREE first rung — the SERVER resolves a ListenBrainz candidate for this row (recording MBID →
- * Spotify ids, no auth) + a single by-id Spotify metadata read, verifies it against the same gate,
- * and, on a hit, writes the anchor. The box supplies no candidates; it just hands over the trackId.
- * Only when this misses does the caller spend the metered Apify search.
+ * The FREE (non-Apify) rungs — the SERVER resolves this row from ListenBrainz (recording MBID →
+ * Spotify ids, no auth) + one by-id read and, when the dark flag is on, from the Spotify SEARCH rungs
+ * (slice 2), verifies each against the same gate, and on a hit writes the anchor. The box supplies no
+ * candidates; it just hands over the trackId. Only when ALL of these miss does the caller spend the
+ * metered Apify search. `source` tells which rung anchored (for the tally); `spotifySearchDone` tells
+ * whether a Spotify search was issued (for the pacer).
  */
 async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
   const res = await fetch(`${API_BASE_URL}/api/admin/catalogue/anchor/resolve`, {
@@ -411,7 +493,12 @@ async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
 
   const body = (await res.json()) as AnchorVerdict;
 
-  return { anchored: Boolean(body.anchored), verifiedBy: body.verifiedBy ?? null };
+  return {
+    anchored: Boolean(body.anchored),
+    source: body.source ?? null,
+    spotifySearchDone: Boolean(body.spotifySearchDone),
+    verifiedBy: body.verifiedBy ?? null,
+  };
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -446,9 +533,11 @@ async function main(): Promise<void> {
   const summary = await runAnchorTick(limit, {
     fetchQueue: fetchAnchorQueue,
     log,
+    now: () => Date.now(),
     report: reportAnchor,
     resolveFree: resolveAnchorFree,
     runActor: runApifyActor,
+    sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
   console.log(JSON.stringify({ ...summary, elapsedMs: Date.now() - started }));

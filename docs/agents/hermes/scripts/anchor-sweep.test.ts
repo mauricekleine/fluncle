@@ -17,6 +17,8 @@ import {
   itemToCandidate,
   parseLimitArg,
   runAnchorTick,
+  SPOTIFY_SEARCH_MIN_INTERVAL_MS,
+  spotifySearchPaceMs,
 } from "./anchor-sweep";
 
 // A representative slice of the actor's output (artists + album on) — two candidates for one query.
@@ -141,6 +143,8 @@ describe("runAnchorTick", () => {
           { anchorQuery: "No Candidates Here", trackId: "mb_none" },
         ]),
       log: () => {},
+      // A fixed clock + a no-op sleep by default: the pacer is exercised in its own tests below.
+      now: () => 0,
       report: (trackId) =>
         Promise.resolve(
           trackId === "mb_hold"
@@ -153,6 +157,7 @@ describe("runAnchorTick", () => {
       // pre-waterfall behaviour the existing assertions were written against.
       resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
       runActor: () => Promise.resolve(APIFY_SAMPLE),
+      sleep: () => Promise.resolve(),
       ...overrides,
     };
   }
@@ -182,6 +187,107 @@ describe("runAnchorTick", () => {
     expect(summary.missed).toBe(1);
     // The grouping routed the two Hold-Tight candidates to that row, one to FAU, none to mb_none.
     expect(posted).toEqual({ mb_fau: 1, mb_hold: 2, mb_none: 0 });
+  });
+
+  test("slice 2: the dark Spotify search rungs tally separately and never spend Apify", async () => {
+    const reported: string[] = [];
+
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        report: (trackId) => {
+          reported.push(trackId);
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+        // The server resolved mb_hold via the Spotify ISRC rung and mb_fau via the fuzzy rung (each
+        // a Spotify search); mb_none missed every free rung and falls to Apify.
+        resolveFree: (trackId) =>
+          Promise.resolve(
+            trackId === "mb_hold"
+              ? {
+                  anchored: true,
+                  source: "spotify-isrc",
+                  spotifySearchDone: true,
+                  verifiedBy: "isrc",
+                }
+              : trackId === "mb_fau"
+                ? {
+                    anchored: true,
+                    source: "spotify-search",
+                    spotifySearchDone: true,
+                    verifiedBy: "search",
+                  }
+                : { anchored: false, source: null, spotifySearchDone: true, verifiedBy: null },
+          ),
+      }),
+    );
+
+    expect(summary.anchoredBySpotifyIsrc).toBe(1);
+    expect(summary.anchoredBySpotifySearch).toBe(1);
+    expect(summary.anchoredByListenbrainz).toBe(0);
+    expect(summary.missed).toBe(1); // mb_none, via the Apify fallback
+    // Only the full-miss row reached the paid anchor_track path.
+    expect(reported).toEqual(["mb_none"]);
+  });
+
+  test("slice 2: the pacer spaces consecutive Spotify-search calls by ≥ the ceiling interval", async () => {
+    const sleeps: number[] = [];
+    let clock = 0;
+
+    await runAnchorTick(
+      50,
+      deps({
+        // Every free-rung call issues a Spotify search, so every call after the first must be paced.
+        now: () => clock,
+        resolveFree: () => {
+          clock += 10; // each call advances the clock a little (far less than the interval)
+          return Promise.resolve({
+            anchored: false,
+            source: null,
+            spotifySearchDone: true,
+            verifiedBy: null,
+          });
+        },
+        sleep: (ms) => {
+          sleeps.push(ms);
+          clock += ms; // honouring the sleep advances the fake clock
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    // Three rows → the first runs free, the next two are paced by ~the full interval (minus the tiny
+    // clock drift from the prior call). None is below the ceiling interval's near-full value.
+    expect(sleeps.length).toBe(2);
+    for (const ms of sleeps) {
+      expect(ms).toBeGreaterThan(SPOTIFY_SEARCH_MIN_INTERVAL_MS - 100);
+      expect(ms).toBeLessThanOrEqual(SPOTIFY_SEARCH_MIN_INTERVAL_MS);
+    }
+  });
+
+  test("slice 2: a flag-OFF sweep (no Spotify search) is never paced — full speed", async () => {
+    const sleeps: number[] = [];
+
+    await runAnchorTick(
+      50,
+      deps({
+        // The server never searched (flag off / Friday window): spotifySearchDone is false throughout.
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: false,
+            source: null,
+            spotifySearchDone: false,
+            verifiedBy: null,
+          }),
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
+      }),
+    );
+
+    expect(sleeps).toEqual([]);
   });
 
   test("a free-rung (ListenBrainz) hit anchors the row and NEVER spends Apify on it", async () => {
@@ -275,5 +381,29 @@ describe("runAnchorTick", () => {
 
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("queue down");
+  });
+});
+
+describe("spotifySearchPaceMs — the 60/min ceiling", () => {
+  test("no wait before the first Spotify search (null last-start)", () => {
+    expect(spotifySearchPaceMs(null, 10_000)).toBe(0);
+  });
+
+  test("waits out the remainder of the interval since the last search", () => {
+    // 500ms elapsed since the last search's start → wait the remaining 1500ms.
+    expect(spotifySearchPaceMs(0, 500)).toBe(SPOTIFY_SEARCH_MIN_INTERVAL_MS - 500);
+  });
+
+  test("no wait once the interval has fully elapsed", () => {
+    expect(spotifySearchPaceMs(0, SPOTIFY_SEARCH_MIN_INTERVAL_MS)).toBe(0);
+    expect(spotifySearchPaceMs(0, SPOTIFY_SEARCH_MIN_INTERVAL_MS + 5_000)).toBe(0);
+  });
+
+  test("the ceiling holds: ≤ 2 searches per interval ⇒ ≤ 60/min", () => {
+    // resolve_anchor issues at most 2 searches per row, and consecutive search-bearing calls are
+    // held ≥ 2s apart, so the sustained rate is ≤ 2 / 2s = 60/min.
+    const searchesPerCall = 2;
+    const callsPerMinute = 60_000 / SPOTIFY_SEARCH_MIN_INTERVAL_MS;
+    expect(callsPerMinute * searchesPerCall).toBeLessThanOrEqual(60);
   });
 });

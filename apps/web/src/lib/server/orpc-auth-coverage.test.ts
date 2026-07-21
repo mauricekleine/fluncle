@@ -664,6 +664,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // precedent. Watching only saves the entity to the caller's account.
   save_private_watch: "private-session",
   send_edition: "operator",
+  // The dark flag for slice 2's Spotify anchor-search rungs — operator tier: it arms the shared
+  // official Spotify app (mints/publish) against the catalogue, which starved under 429s. A machine
+  // does not get to point that token at the catalogue — the `set_capture_budget` rule.
+  set_anchor_search: "operator",
   // The catalogue capture budget + its kill switch — operator tier, like `set_clip_drip`
   // and `set_publish_advance`. It is the ONE operator-tier op in the `admin-catalogue`
   // domain, and deliberately so: every other op there is free (the crawler moves metadata,

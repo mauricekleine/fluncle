@@ -104,7 +104,12 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     const result = await resolveAnchorFree("mb_rec-1");
 
-    expect(result).toEqual({ anchored: true, verifiedBy: "isrc" });
+    expect(result).toEqual({
+      anchored: true,
+      source: "listenbrainz",
+      spotifySearchDone: false,
+      verifiedBy: "isrc",
+    });
     const state = await anchorState("mb_rec-1");
     expect(text(state.uri)).toBe("spotify:track:lbAnchor001");
     expect(state.attempted).not.toBeNull();
@@ -144,7 +149,12 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     const result = await resolveAnchorFree("mb_search");
 
-    expect(result).toEqual({ anchored: true, verifiedBy: "search" });
+    expect(result).toEqual({
+      anchored: true,
+      source: "listenbrainz",
+      spotifySearchDone: false,
+      verifiedBy: "search",
+    });
     expect(text((await anchorState("mb_search")).uri)).toBe("spotify:track:lbDribble");
   });
 });
@@ -181,7 +191,12 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
 
     const result = await resolveAnchorFree("mb_wrong");
 
-    expect(result).toEqual({ anchored: false, verifiedBy: null });
+    expect(result).toEqual({
+      anchored: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
     const state = await anchorState("mb_wrong");
     expect(state.uri).toBeNull();
     // THE KEY GUARANTEE: a free-rung miss does NOT stamp the re-ask backoff.
@@ -197,7 +212,12 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     const result = await resolveAnchorFree("mb_nombid");
 
-    expect(result).toEqual({ anchored: false, verifiedBy: null });
+    expect(result).toEqual({
+      anchored: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
     expect(lookupSpotifyIdsByMbid).not.toHaveBeenCalled();
     expect(fetchTrackMetadata).not.toHaveBeenCalled();
     expect((await anchorState("mb_nombid")).attempted).toBeNull();
@@ -211,7 +231,12 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     const result = await resolveAnchorFree("mb_lbmiss");
 
-    expect(result).toEqual({ anchored: false, verifiedBy: null });
+    expect(result).toEqual({
+      anchored: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
     expect(fetchTrackMetadata).not.toHaveBeenCalled();
     expect((await anchorState("mb_lbmiss")).attempted).toBeNull();
   });
@@ -230,7 +255,12 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     const result = await resolveAnchorFree("mb_sperr");
 
-    expect(result).toEqual({ anchored: false, verifiedBy: null });
+    expect(result).toEqual({
+      anchored: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
     expect((await anchorState("mb_sperr")).attempted).toBeNull();
   });
 });

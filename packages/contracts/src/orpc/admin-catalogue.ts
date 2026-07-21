@@ -779,28 +779,62 @@ export const anchorTrack = oc
  * Apify search (`anchor_track`) when this MISSES — so an Apify outage still leaves this rung anchoring
  * its share. A HIT stamps the anchor + the attempt exactly like `anchor_track`; a MISS leaves the row
  * UNSTAMPED so the Apify fallback (or the next tick) still runs on it. It writes only catalogue-
- * identity columns and never certifies, so the box's agent token drives it. `{ ok, anchored,
- * verifiedBy }` — the same envelope as `anchor_track`. 404 when the track does not exist; 409 when it
- * is certified or already anchored.
+ * identity columns and never certifies, so the box's agent token drives it. 404 when the track does
+ * not exist; 409 when it is certified or already anchored.
+ *
+ * SLICE 2 — the DARK Spotify SEARCH rungs (`anchor_spotify_search_enabled`, default OFF). When the
+ * ListenBrainz rung misses AND the flag is on AND we are outside the Friday-refresh window, this also
+ * resolves the row against the shared official Spotify app's SEARCH (exact ISRC, then fuzzy) before it
+ * returns a miss — the ~75-85% Apify cost cut. `source` names which rung anchored (`listenbrainz` |
+ * `spotify-isrc` | `spotify-search`), so the sweep can tally per rung. `spotifySearchDone` is true iff
+ * this call issued a Spotify SEARCH — the signal the box's pacer throttles on to hold the 60/min
+ * ceiling; when the flag is OFF it is always false and NO Spotify search ran (the load-bearing gate).
  */
 export const resolveAnchor = oc
   .route({
     method: "POST",
     operationId: "resolveAnchor",
     path: "/admin/catalogue/anchor/resolve",
-    summary: "Resolve a catalogue row's Spotify anchor from the free ListenBrainz rung",
+    summary:
+      "Resolve a catalogue row's Spotify anchor from the free rungs (ListenBrainz + dark Spotify search)",
     tags: ["Admin"],
   })
   .input(z.object({ trackId: z.string().min(1) }))
   .output(
     z.object({
-      /** True when the free rung verified a candidate and the anchor was written. */
+      /** True when a free rung verified a candidate and the anchor was written. */
       anchored: z.boolean(),
       ok: z.literal(true),
-      /** Which rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
+      /** Which rung anchored, or null on a miss. `spotify-*` only ever when the dark flag is on. */
+      source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),
+      /** True iff a Spotify SEARCH was issued this call — the box's pacer signal. OFF flag ⇒ false. */
+      spotifySearchDone: z.boolean(),
+      /** Which gate rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
       verifiedBy: z.enum(["isrc", "search"]).nullable(),
     }),
   );
+
+/**
+ * `set_anchor_search` → `PUT /admin/catalogue/anchor/search` (operationId `setAnchorSearch`).
+ *
+ * OPERATOR tier — the DARK FLAG for slice 2's Spotify SEARCH rungs (`anchor_spotify_search_enabled`
+ * on the shared `settings` KV, the `set_capture_budget` shape). The Spotify search rungs call the ONE
+ * official app that also serves user-facing mints/publish, which STARVED under 429s at catalogue
+ * scale — so they ship DEFAULT OFF and flip on only by a deliberate operator act (a machine does not
+ * get to point the shared token at the catalogue). `enabled: true` writes `"true"`; anything else
+ * leaves the rungs SKIPPED. Returns the flag as stored, so one call both writes and reads back. The
+ * flip takes effect on the next `resolve_anchor` tick, with no deploy — the kill-switch discipline.
+ */
+export const setAnchorSearch = oc
+  .route({
+    method: "PUT",
+    operationId: "setAnchorSearch",
+    path: "/admin/catalogue/anchor/search",
+    summary: "Flip the dark flag for the Spotify anchor-search rungs (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ enabled: z.boolean() }))
+  .output(z.object({ enabled: z.boolean(), ok: z.literal(true) }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CAPTURE BUDGET — the brake on what the two above cost. docs/the-ear.md.
@@ -944,6 +978,7 @@ export const adminCatalogueContract = {
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
   resolve_anchor: resolveAnchor,
+  set_anchor_search: setAnchorSearch,
   set_capture_budget: setCaptureBudget,
   set_track_dismissed: setTrackDismissed,
   verify_capture: verifyCapture,
