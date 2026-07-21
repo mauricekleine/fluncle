@@ -314,6 +314,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // rank_catalogue/verify_capture precedent): the box's `fluncle-anchor` Apify sweep POSTs verified
   // candidates and the Worker writes only catalogue-identity columns (never a certification).
   "POST /admin/catalogue/anchor": "anchor_track",
+  // The FREE first rung of the resolver waterfall (slice 1) — contract-only oRPC (no TanStack route
+  // file). AGENT tier (the anchor_track precedent): the box's `fluncle-anchor` sweep calls it first
+  // per row (server resolves ListenBrainz → Spotify by-id, verifies, writes) and spends Apify only on
+  // a miss. `resolve_anchor` does not match a public prefix, so it MUST be listed here to satisfy the
+  // "holds exactly" check. Static `/resolve` beats no param — it nests under the `/anchor` POST above.
+  "POST /admin/catalogue/anchor/resolve": "resolve_anchor",
   // The operator's reset for the cross-cutting Apple failure-regime breaker (RFC musickit U1) —
   // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
   // external integration a machine should not silently un-brake (the `set_capture_budget` rule).

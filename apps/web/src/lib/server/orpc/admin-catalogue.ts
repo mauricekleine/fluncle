@@ -34,7 +34,7 @@
 // `input.query.*` and applies the same tolerant parse/clamp the backfills do.
 
 import { ORPCError } from "@orpc/server";
-import { type AnchorCandidate, anchorTrack, AnchorTrackError } from "../anchor";
+import { type AnchorCandidate, anchorTrack, AnchorTrackError, resolveAnchorFree } from "../anchor";
 import { resetAppleBreaker } from "../apple-breaker";
 import {
   getCatalogueCaptureState,
@@ -355,6 +355,32 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/catalogue/anchor/resolve — AGENT tier. The FREE first rung of the resolver waterfall
+  // (docs/catalogue-crawler.md § the anchor). The box supplies NO candidates: the server resolves one
+  // from ListenBrainz (recording MBID → Spotify ids, free) + a single by-id Spotify metadata read, and
+  // runs it through the SAME verification gate `anchor_track` uses. The box's `fluncle-anchor` sweep
+  // calls this first per row and spends Apify only on a miss. Same `AnchorTrackError` → status mapping.
+  const resolveAnchorHandler = os.resolve_anchor.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const result = await resolveAnchorFree(input.trackId);
+
+      return { ...result, ok: true as const };
+    } catch (error) {
+      if (error instanceof AnchorTrackError) {
+        throw new ORPCError(error.reason === "not_found" ? "NOT_FOUND" : "CONFLICT", {
+          data: {
+            apiCode: error.reason,
+            apiMessage: error.message,
+          },
+          message: error.message,
+          status: error.reason === "not_found" ? 404 : 409,
+        });
+      }
+
+      throw apiFault(error);
+    }
+  });
+
   // GET /admin/catalogue/capture-budget — the spend readout. Admin tier (agent-allowed READ,
   // the `get_crawl_status` precedent): reading what a budget has left publishes nothing and
   // spends nothing, and the box's sweeps are entitled to know why the queue went quiet.
@@ -426,6 +452,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     record_demand: recordDemandHandler,
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
+    resolve_anchor: resolveAnchorHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,
     verify_capture: verifyCaptureHandler,

@@ -7,8 +7,13 @@
 // Filling that anchor used to run IN THE WORKER against the official dev-mode Spotify app, and at
 // catalogue scale it starved under sustained 429s (the official app must stay for user-facing paths
 // — adds, publish, the Frontier playlist mints). So ALL catalogue anchor-filling moved onto THIS
-// box sweep, driven by an Apify actor that has its own Spotify budget. See docs/catalogue-crawler.md
-// § the anchor.
+// box sweep. See docs/catalogue-crawler.md § the anchor.
+//
+// THE RESOLVER WATERFALL (slice 1). Apify used to be the SOLE candidate source, so an Apify outage
+// stopped anchoring dead. This sweep now runs a two-rung waterfall per row: a FREE ListenBrainz rung
+// first, and the metered Apify search only as the fallback. A free-rung hit spends nothing, and when
+// Apify is down the free rung still anchors its share (graceful degradation) — the whole point of the
+// slice.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (anchor-sweep.sh) the host timer
@@ -19,21 +24,26 @@
 //   (a) FETCH the anchor worklist from the Worker with the box's AGENT token
 //       (`GET /api/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery`
 //       (the row's artists + title) so this driver stays dumb and never builds the query.
-//   (b) RUN the Apify actor once per chunk of queries (`run-sync-get-dataset-items`), each query a
-//       keyword search returning up to `searchKeywordLimit` candidates.
-//   (c) GROUP the actor's flat result array by `target` (the query string) and map each to a
-//       candidate ({ spotifyTrackId, isrc, durationMs, title, artists, albumImageUrl }).
-//   (d) POST each row's candidates to `anchor_track`. The WORKER re-runs the full verification
-//       (the box's own match is NEVER trusted) and, on a hit, writes the anchor. Every attempt
-//       stamps the row's re-ask backoff, so a missed row is not re-asked (or re-billed) for weeks.
+//   (b) FREE RUNG first: POST each row's trackId to `resolve_anchor`. The WORKER resolves a
+//       ListenBrainz candidate (recording MBID → Spotify ids, no auth) + one by-id Spotify metadata
+//       read, verifies it against the SAME gate, and on a hit writes the anchor for free. A hit here
+//       means this row NEVER reaches the paid Apify rung.
+//   (c) APIFY FALLBACK, over the free-rung MISSES only: RUN the Apify actor once per chunk of
+//       queries (`run-sync-get-dataset-items`), GROUP its flat result array by `target` (the query),
+//       map each to a candidate, and POST each row's candidates to `anchor_track`.
+//   The WORKER re-runs the full verification on BOTH rungs (no source's match is EVER trusted) and,
+//   on a hit, writes the anchor. Every FULL attempt stamps the row's re-ask backoff (a free-rung
+//   miss does NOT — it leaves the Apify rung its turn), so a missed row is not re-billed for weeks.
 //
 // THE BOX DEPENDS ON NO NEW CLI COMMAND. The baked `fluncle` CLI is a PINNED release, so this
 // sweep calls the oRPC HTTP endpoints DIRECTLY with the agent token (the verify-captures.ts
-// precedent), never a `fluncle admin …` subcommand that a pin might not carry.
+// precedent), never a `fluncle admin …` subcommand that a pin might not carry. No new secret and no
+// new timer: the free rung rides the same agent token, base URL, and host timer as the Apify rung.
 //
-// COST. ~$0.005 per Apify result item → ~$0.015/row at searchKeywordLimit 3. The default pace
-// (15 rows/tick, hourly) is ~360 rows/day ≈ $5-6/day while the backlog drains. Pause = stop the
-// timer. Attended burn = `--limit N`. Full cost math: ../anchor-timer/README.md.
+// COST. ~$0.005 per Apify result item → ~$0.015/row at searchKeywordLimit 3 — but ONLY on the rows
+// the free rung misses. ListenBrainz is free, so the ~30% of rows it resolves cost nothing (bar one
+// cheap by-id Spotify read each, no search), cutting the Apify bill by roughly a third. Pause = stop
+// the timer. Attended burn = `--limit N`. Full cost math: ../anchor-timer/README.md.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -103,10 +113,14 @@ export type AnchorVerdict = { anchored: boolean; verifiedBy: "isrc" | "search" |
 
 /** One tick's honest tally — the JSON summary line. */
 export type AnchorSummary = {
+  /** Rows anchored by the FREE ListenBrainz rung — the waterfall's win (no Apify spent). */
+  anchoredByListenbrainz: number;
+  /** Rows anchored by the Apify FALLBACK via the exact-ISRC gate. */
   anchoredByIsrc: number;
+  /** Rows anchored by the Apify FALLBACK via the verified-search gate. */
   anchoredBySearch: number;
   error: null | string;
-  /** Rows POSTed that verified nothing (a clean miss — stamped, backed off). */
+  /** Rows that verified nothing on EITHER rung (a clean full miss — stamped, backed off). */
   missed: number;
   ok: boolean;
   /** Rows this tick could not settle (a bad worklist row, or an anchor POST that threw). */
@@ -118,6 +132,8 @@ export type AnchorDeps = {
   fetchQueue: (limit: number) => Promise<AnchorWorkItem[]>;
   log: (message: string) => void;
   report: (trackId: string, candidates: AnchorCandidatePayload[]) => Promise<AnchorVerdict>;
+  /** The FREE first rung — the server resolves + verifies a ListenBrainz candidate for this row. */
+  resolveFree: (trackId: string) => Promise<AnchorVerdict>;
   runActor: (queries: string[]) => Promise<ApifyResultItem[]>;
 };
 
@@ -200,6 +216,7 @@ export function groupCandidatesByTarget(
 export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<AnchorSummary> {
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
+    anchoredByListenbrainz: 0,
     anchoredBySearch: 0,
     error: null,
     missed: 0,
@@ -229,8 +246,37 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     return summary;
   }
 
-  // Run the actor in bounded chunks so a big `--limit` burn never one-shots a giant run-sync call.
-  for (const batch of chunk(rows, APIFY_QUERY_CHUNK)) {
+  // ── RUNG 1: THE FREE LISTENBRAINZ RUNG, per row. A hit here anchors for free and this row NEVER
+  // reaches the metered Apify rung below. Only the misses fall through to `apifyRows`. The free rung
+  // failing (a Worker error, a network blip) is treated exactly like a miss — the row still gets its
+  // paid turn — so a flaky free rung can never STARVE anchoring, only fail to save money on that row.
+  const apifyRows: { anchorQuery: string; trackId: string }[] = [];
+
+  for (const row of rows) {
+    try {
+      const verdict = await deps.resolveFree(row.trackId);
+
+      if (verdict.anchored) {
+        summary.anchoredByListenbrainz += 1;
+        continue;
+      }
+    } catch (error) {
+      deps.log(
+        `free rung ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    apifyRows.push(row);
+  }
+
+  // Every row the free rung anchored is done; only the misses cost Apify money.
+  if (apifyRows.length === 0) {
+    return summary;
+  }
+
+  // ── RUNG 2: THE APIFY FALLBACK, over the free-rung misses only. Run the actor in bounded chunks so
+  // a big `--limit` burn never one-shots a giant run-sync call.
+  for (const batch of chunk(apifyRows, APIFY_QUERY_CHUNK)) {
     let byTarget: Map<string, AnchorCandidatePayload[]>;
 
     try {
@@ -340,6 +386,34 @@ async function reportAnchor(
   return { anchored: Boolean(body.anchored), verifiedBy: body.verifiedBy ?? null };
 }
 
+/**
+ * The FREE first rung — the SERVER resolves a ListenBrainz candidate for this row (recording MBID →
+ * Spotify ids, no auth) + a single by-id Spotify metadata read, verifies it against the same gate,
+ * and, on a hit, writes the anchor. The box supplies no candidates; it just hands over the trackId.
+ * Only when this misses does the caller spend the metered Apify search.
+ */
+async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
+  const res = await fetch(`${API_BASE_URL}/api/admin/catalogue/anchor/resolve`, {
+    body: JSON.stringify({ trackId }),
+    headers: {
+      Authorization: `Bearer ${API_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `resolve_anchor ${trackId} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+
+  const body = (await res.json()) as AnchorVerdict;
+
+  return { anchored: Boolean(body.anchored), verifiedBy: body.verifiedBy ?? null };
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 /** Parse `--limit N` (an attended backlog burn); default is the hourly `FLUNCLE_ANCHOR_BATCH`. */
@@ -373,6 +447,7 @@ async function main(): Promise<void> {
     fetchQueue: fetchAnchorQueue,
     log,
     report: reportAnchor,
+    resolveFree: resolveAnchorFree,
     runActor: runApifyActor,
   });
 

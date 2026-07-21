@@ -763,6 +763,45 @@ export const anchorTrack = oc
     }),
   );
 
+/**
+ * `resolve_anchor` → `POST /admin/catalogue/anchor/resolve` (operationId `resolveAnchor`).
+ *
+ * Admin tier (AGENT-allowed WRITE), the `anchor_track` sibling and precedent. The FREE first rung of
+ * the resolver waterfall (docs/catalogue-crawler.md § the anchor): given only a catalogue row's id,
+ * the SERVER resolves its Spotify anchor for free — it reads the row's MusicBrainz recording MBID,
+ * asks ListenBrainz labs for the Spotify track ids of that recording (no auth, no spend), fetches the
+ * first id's metadata with ONE by-id Spotify read (never a search), and runs that candidate through
+ * the SAME verification gate `anchor_track` uses. Unlike `anchor_track`, the box supplies no
+ * candidates — this rung fetches them itself, because ListenBrainz is free and the Spotify by-id read
+ * needs the Worker's own token.
+ *
+ * The box's `fluncle-anchor` sweep calls this FIRST per worklist row and only spends the metered
+ * Apify search (`anchor_track`) when this MISSES — so an Apify outage still leaves this rung anchoring
+ * its share. A HIT stamps the anchor + the attempt exactly like `anchor_track`; a MISS leaves the row
+ * UNSTAMPED so the Apify fallback (or the next tick) still runs on it. It writes only catalogue-
+ * identity columns and never certifies, so the box's agent token drives it. `{ ok, anchored,
+ * verifiedBy }` — the same envelope as `anchor_track`. 404 when the track does not exist; 409 when it
+ * is certified or already anchored.
+ */
+export const resolveAnchor = oc
+  .route({
+    method: "POST",
+    operationId: "resolveAnchor",
+    path: "/admin/catalogue/anchor/resolve",
+    summary: "Resolve a catalogue row's Spotify anchor from the free ListenBrainz rung",
+    tags: ["Admin"],
+  })
+  .input(z.object({ trackId: z.string().min(1) }))
+  .output(
+    z.object({
+      /** True when the free rung verified a candidate and the anchor was written. */
+      anchored: z.boolean(),
+      ok: z.literal(true),
+      /** Which rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
+      verifiedBy: z.enum(["isrc", "search"]).nullable(),
+    }),
+  );
+
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CAPTURE BUDGET — the brake on what the two above cost. docs/the-ear.md.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -904,6 +943,7 @@ export const adminCatalogueContract = {
   record_demand: recordDemand,
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
+  resolve_anchor: resolveAnchor,
   set_capture_budget: setCaptureBudget,
   set_track_dismissed: setTrackDismissed,
   verify_capture: verifyCapture,

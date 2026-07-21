@@ -627,6 +627,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // spend-adjacent external integration a machine should not silently un-brake (the
   // `set_capture_budget` neighbour's rule).
   reset_apple_breaker: "operator",
+  // The free ListenBrainz anchor rung (the resolver waterfall, slice 1) — ADMIN tier (adminAuth
+  // only, no operatorGuard), the anchor_track precedent: the box's `fluncle-anchor` sweep drives it
+  // with the agent token. It writes only catalogue-identity columns (`spotify_uri`/`spotify_url`),
+  // never a certification, so an agent may drive it.
+  resolve_anchor: "admin",
   // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
   // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
   resolve_artist: "admin",

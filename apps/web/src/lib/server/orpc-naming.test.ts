@@ -60,7 +60,10 @@ const APPROVED_VERBS = new Set<string>([
   "anchor",
   "authorize",
   "backfill",
-  // `resolve` — resolve an artist's social profiles from MB + Firecrawl (the artist-relationship epic).
+  // `resolve` — walk an external authority to fix an entity's cross-platform identity. `resolve_artist`
+  // resolves an artist's social profiles from MB + Firecrawl (the artist-relationship epic);
+  // `resolve_anchor` resolves a catalogue row's Spotify anchor from ListenBrainz (the anchor waterfall's
+  // free rung). Distinct from `anchor` (verify box-supplied candidates) — this FETCHES them itself.
   "resolve",
   // `capture` (recover the public YouTube/TikTok post URLs Postiz withholds on
   // create, building each from the platform's native content id) — added
