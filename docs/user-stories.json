@@ -13,17 +13,46 @@
     "cellDefault": "A surface omitted from a story's support map means state \"no\"."
   },
   "surfaces": [
-    { "id": "web", "label": "Web", "note": "fluncle.com public routes" },
-    { "id": "api", "label": "API", "note": "public /api/v1 oRPC ops" },
-    { "id": "cli", "label": "CLI", "note": "the fluncle CLI, non-admin" },
-    { "id": "mcp", "label": "MCP", "note": "MCP tools/resources/prompts" },
-    { "id": "ssh", "label": "SSH", "note": "ssh rave.fluncle.com" },
+    {
+      "id": "web",
+      "label": "Web",
+      "note": "fluncle.com public routes"
+    },
+    {
+      "id": "api",
+      "label": "API",
+      "note": "public /api/v1 oRPC ops"
+    },
+    {
+      "id": "cli",
+      "label": "CLI",
+      "note": "the fluncle CLI, non-admin"
+    },
+    {
+      "id": "mcp",
+      "label": "MCP",
+      "note": "MCP tools/resources/prompts"
+    },
+    {
+      "id": "chat",
+      "label": "ChatDnB",
+      "note": "/chat — verified-email crew door; the 18 chat-transport tools, generative-UI cards"
+    },
+    {
+      "id": "ssh",
+      "label": "SSH",
+      "note": "ssh rave.fluncle.com"
+    },
     {
       "id": "feeds",
       "label": "Feeds",
       "note": "RSS/Atom/JSON, podcast, llms.txt, oEmbed, sitemap, DNS"
     },
-    { "id": "mobile", "label": "Mobile", "note": "the Expo app (App Store review)" }
+    {
+      "id": "mobile",
+      "label": "Mobile",
+      "note": "the Expo app (App Store review)"
+    }
   ],
   "stories": [
     {
@@ -32,12 +61,18 @@
       "register": "catalogue",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/tracks (?page=N)" },
+        "web": {
+          "state": "yes",
+          "evidence": "/tracks (?page=N)"
+        },
         "api": {
           "state": "no",
           "note": "no catalogue-wide track list op; list_tracks is the findings feed"
         },
-        "feeds": { "state": "no", "note": "feeds carry findings + the 30-day fresh window only" }
+        "feeds": {
+          "state": "no",
+          "note": "feeds carry findings + the 30-day fresh window only"
+        }
       }
     },
     {
@@ -46,15 +81,31 @@
       "register": "catalogue",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/tracks filter bar (year/BPM/key/label/galaxy)" },
-        "api": { "state": "yes", "evidence": "search_archive filters" },
+        "web": {
+          "state": "yes",
+          "evidence": "/tracks filter bar (year/BPM/key/label/galaxy)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "search_archive filters"
+        },
         "cli": {
           "state": "partial",
           "evidence": "search <query>",
           "note": "via the NL search tier, no dedicated flags"
         },
-        "mcp": { "state": "partial", "evidence": "search_archive" },
-        "mobile": { "state": "partial", "evidence": "Archive tab search" }
+        "mcp": {
+          "state": "partial",
+          "evidence": "search_archive"
+        },
+        "mobile": {
+          "state": "partial",
+          "evidence": "Archive tab search"
+        },
+        "chat": {
+          "evidence": "search_archive (NL filters)",
+          "state": "partial"
+        }
       }
     },
     {
@@ -63,12 +114,34 @@
       "register": "catalogue",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/fresh (?view=)" },
-        "api": { "state": "yes", "evidence": "list_fresh" },
-        "cli": { "state": "yes", "evidence": "fresh" },
-        "mcp": { "state": "yes", "evidence": "list_fresh" },
-        "ssh": { "state": "yes", "evidence": "fresh menu + deep-link" },
-        "feeds": { "state": "yes", "evidence": "/fresh.xml, /fresh.json" }
+        "web": {
+          "state": "yes",
+          "evidence": "/fresh (?view=)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_fresh"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "fresh"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "list_fresh"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "fresh menu + deep-link"
+        },
+        "feeds": {
+          "state": "yes",
+          "evidence": "/fresh.xml, /fresh.json"
+        },
+        "chat": {
+          "evidence": "list_fresh (register-split)",
+          "state": "yes"
+        }
       }
     },
     {
@@ -77,13 +150,37 @@
       "register": "catalogue",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "⌘K search (search_archive)" },
-        "api": { "state": "yes", "evidence": "search_archive" },
-        "cli": { "state": "yes", "evidence": "search <query>" },
-        "mcp": { "state": "yes", "evidence": "search_archive" },
-        "ssh": { "state": "no", "note": "only the Spotify lookup inside Submit" },
-        "feeds": { "state": "n/a" },
-        "mobile": { "state": "yes", "evidence": "Archive tab (search_archive)" }
+        "web": {
+          "state": "yes",
+          "evidence": "⌘K search (search_archive)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "search_archive"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "search <query>"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "search_archive"
+        },
+        "ssh": {
+          "state": "no",
+          "note": "only the Spotify lookup inside Submit"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Archive tab (search_archive)"
+        },
+        "chat": {
+          "evidence": "search_archive → finding/catalogue buckets",
+          "state": "yes"
+        }
       }
     },
     {
@@ -92,12 +189,34 @@
       "register": "catalogue",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/log/<id> Close in sound" },
-        "api": { "state": "yes", "evidence": "get_similar_findings" },
-        "cli": { "state": "partial", "evidence": "tracks similar", "note": "hidden command group" },
-        "mcp": { "state": "yes", "evidence": "search_archive sounds-like tier" },
-        "feeds": { "state": "n/a" },
-        "mobile": { "state": "yes", "evidence": "Archive search sounds-like" }
+        "web": {
+          "state": "yes",
+          "evidence": "/log/<id> Close in sound"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_similar_findings"
+        },
+        "cli": {
+          "state": "partial",
+          "evidence": "tracks similar",
+          "note": "hidden command group"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "search_archive sounds-like tier"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Archive search sounds-like"
+        },
+        "chat": {
+          "evidence": "search_archive sounds-like (anchor + neighbours)",
+          "state": "yes"
+        }
       }
     },
     {
@@ -106,16 +225,38 @@
       "register": "catalogue",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/<coordinate> → /log/<id>" },
-        "api": { "state": "yes", "evidence": "get_track" },
-        "cli": { "state": "yes", "evidence": "tracks get <coord>" },
-        "mcp": { "state": "yes", "evidence": "get_track + fluncle:// resources" },
-        "ssh": { "state": "yes", "evidence": "ssh rave.fluncle.com <coord>" },
+        "web": {
+          "state": "yes",
+          "evidence": "/<coordinate> → /log/<id>"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_track"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "tracks get <coord>"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_track + fluncle:// resources"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "ssh rave.fluncle.com <coord>"
+        },
         "feeds": {
           "state": "partial",
           "evidence": "oEmbed /embed cards; dig TXT <coord>.dig.fluncle.com"
         },
-        "mobile": { "state": "yes", "evidence": "log/[id]" }
+        "mobile": {
+          "state": "yes",
+          "evidence": "log/[id]"
+        },
+        "chat": {
+          "evidence": "get_track (compact card)",
+          "state": "yes"
+        }
       }
     },
     {
@@ -124,14 +265,30 @@
       "register": "catalogue",
       "entity": "artist",
       "support": {
-        "web": { "state": "yes", "evidence": "/artists (?page, ?q)" },
-        "api": { "state": "yes", "evidence": "list_artists" },
-        "cli": { "state": "yes", "evidence": "artists (--page)" },
-        "mcp": { "state": "yes", "evidence": "list_artists (50/page)" },
+        "web": {
+          "state": "yes",
+          "evidence": "/artists (?page, ?q)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_artists"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "artists (--page)"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "list_artists (50/page)"
+        },
         "ssh": {
           "state": "partial",
           "evidence": "Artist archive screen",
           "note": "calls legacy /api/artists; single page, rows dead-end (no detail)"
+        },
+        "chat": {
+          "evidence": "list_artists",
+          "state": "yes"
         }
       }
     },
@@ -145,10 +302,26 @@
           "state": "yes",
           "evidence": "/artist/<slug> (dossier, socials, similar, catalogue)"
         },
-        "api": { "state": "yes", "evidence": "get_artist" },
-        "cli": { "state": "yes", "evidence": "artists <slug>" },
-        "mcp": { "state": "yes", "evidence": "get_artist + list_artist_catalogue" },
-        "feeds": { "state": "partial", "evidence": "oEmbed card; /artist/<slug>/fresh.xml" }
+        "api": {
+          "state": "yes",
+          "evidence": "get_artist"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "artists <slug>"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_artist + list_artist_catalogue"
+        },
+        "feeds": {
+          "state": "partial",
+          "evidence": "oEmbed card; /artist/<slug>/fresh.xml"
+        },
+        "chat": {
+          "evidence": "get_artist → ArtistCard",
+          "state": "yes"
+        }
       }
     },
     {
@@ -157,13 +330,25 @@
       "register": "catalogue",
       "entity": "artist",
       "support": {
-        "web": { "state": "yes", "evidence": "/artist/<slug> Similar artists rail" },
+        "web": {
+          "state": "yes",
+          "evidence": "/artist/<slug> Similar artists rail"
+        },
         "api": {
           "state": "no",
           "note": "list_similar_artists requires 2–6 slugs; no single-artist op"
         },
-        "mcp": { "state": "yes", "evidence": "get_similar_artists" },
-        "feeds": { "state": "n/a" }
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_similar_artists"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "get_similar_artists → NeighbourList",
+          "state": "yes"
+        }
       }
     },
     {
@@ -172,9 +357,17 @@
       "register": "catalogue",
       "entity": "artist",
       "support": {
-        "web": { "state": "yes", "evidence": "/artists Compare sounds (?like=)" },
-        "api": { "state": "yes", "evidence": "list_similar_artists" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/artists Compare sounds (?like=)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_similar_artists"
+        },
+        "feeds": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -183,13 +376,19 @@
       "register": "catalogue",
       "entity": "artist",
       "support": {
-        "feeds": { "state": "yes", "evidence": "/artist/<slug>/fresh.xml" },
+        "feeds": {
+          "state": "yes",
+          "evidence": "/artist/<slug>/fresh.xml"
+        },
         "web": {
           "state": "partial",
           "evidence": "account watch (save_private_watch)",
           "note": "watch stored; no notification leg yet"
         },
-        "api": { "state": "partial", "evidence": "save_private_watch" }
+        "api": {
+          "state": "partial",
+          "evidence": "save_private_watch"
+        }
       }
     },
     {
@@ -198,10 +397,26 @@
       "register": "catalogue",
       "entity": "album",
       "support": {
-        "web": { "state": "yes", "evidence": "/albums (?page, ?q)" },
-        "api": { "state": "yes", "evidence": "list_albums" },
-        "cli": { "state": "yes", "evidence": "albums (--page)" },
-        "mcp": { "state": "yes", "evidence": "list_albums (50/page)" }
+        "web": {
+          "state": "yes",
+          "evidence": "/albums (?page, ?q)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_albums"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "albums (--page)"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "list_albums (50/page)"
+        },
+        "chat": {
+          "evidence": "list_albums",
+          "state": "yes"
+        }
       }
     },
     {
@@ -210,11 +425,31 @@
       "register": "catalogue",
       "entity": "album",
       "support": {
-        "web": { "state": "yes", "evidence": "/album/<slug>" },
-        "api": { "state": "yes", "evidence": "get_album" },
-        "cli": { "state": "yes", "evidence": "albums <slug>" },
-        "mcp": { "state": "yes", "evidence": "list_album_catalogue" },
-        "feeds": { "state": "partial", "evidence": "oEmbed card" }
+        "web": {
+          "state": "yes",
+          "evidence": "/album/<slug>"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_album"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "albums <slug>"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "list_album_catalogue"
+        },
+        "feeds": {
+          "state": "partial",
+          "evidence": "oEmbed card"
+        },
+        "chat": {
+          "evidence": "list_album_catalogue (tracklist buckets)",
+          "note": "no album card; no get_album tool",
+          "state": "partial"
+        }
       }
     },
     {
@@ -223,10 +458,26 @@
       "register": "catalogue",
       "entity": "label",
       "support": {
-        "web": { "state": "yes", "evidence": "/labels (?page, ?q)" },
-        "api": { "state": "yes", "evidence": "list_labels" },
-        "cli": { "state": "yes", "evidence": "labels (--page)" },
-        "mcp": { "state": "yes", "evidence": "list_labels (50/page)" }
+        "web": {
+          "state": "yes",
+          "evidence": "/labels (?page, ?q)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_labels"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "labels (--page)"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "list_labels (50/page)"
+        },
+        "chat": {
+          "evidence": "list_labels",
+          "state": "yes"
+        }
       }
     },
     {
@@ -235,11 +486,26 @@
       "register": "catalogue",
       "entity": "label",
       "support": {
-        "web": { "state": "yes", "evidence": "/label/<slug>" },
-        "api": { "state": "yes", "evidence": "get_label" },
-        "cli": { "state": "yes", "evidence": "labels <slug>" },
-        "mcp": { "state": "yes", "evidence": "get_label + list_label_catalogue" },
-        "feeds": { "state": "partial", "evidence": "oEmbed card; /label/<slug>/fresh.xml" }
+        "web": {
+          "state": "yes",
+          "evidence": "/label/<slug>"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_label"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "labels <slug>"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_label + list_label_catalogue"
+        },
+        "feeds": {
+          "state": "partial",
+          "evidence": "oEmbed card; /label/<slug>/fresh.xml"
+        }
       }
     },
     {
@@ -248,13 +514,19 @@
       "register": "catalogue",
       "entity": "label",
       "support": {
-        "feeds": { "state": "yes", "evidence": "/label/<slug>/fresh.xml" },
+        "feeds": {
+          "state": "yes",
+          "evidence": "/label/<slug>/fresh.xml"
+        },
         "web": {
           "state": "partial",
           "evidence": "account watch (save_private_watch)",
           "note": "watch stored; no notification leg yet"
         },
-        "api": { "state": "partial", "evidence": "save_private_watch" }
+        "api": {
+          "state": "partial",
+          "evidence": "save_private_watch"
+        }
       }
     },
     {
@@ -272,9 +544,21 @@
           "state": "yes",
           "evidence": "list_mixable_artists, list_mix_openers, list_mixable_tracks"
         },
-        "mcp": { "state": "yes", "evidence": "build_set" },
-        "mobile": { "state": "yes", "evidence": "Decks tab" },
-        "feeds": { "state": "n/a" }
+        "mcp": {
+          "state": "yes",
+          "evidence": "build_set"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Decks tab"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "build_set → ChainCard",
+          "state": "yes"
+        }
       }
     },
     {
@@ -283,12 +567,32 @@
       "register": "catalogue",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/mix ?set= (URL is the set)" },
-        "api": { "state": "yes", "evidence": "list_set_tracks" },
-        "mobile": { "state": "yes", "evidence": "Decks share" },
-        "cli": { "state": "n/a" },
-        "ssh": { "state": "n/a" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/mix ?set= (URL is the set)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_set_tracks"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Decks share"
+        },
+        "cli": {
+          "state": "n/a"
+        },
+        "ssh": {
+          "state": "n/a"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "build_set returns the /mix setUrl",
+          "note": "emits a shareable link; cannot reopen one",
+          "state": "partial"
+        }
       }
     },
     {
@@ -297,13 +601,34 @@
       "register": "catalogue",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/docs/api (Scalar)" },
-        "api": { "state": "yes", "evidence": "/api/v1/openapi.json" },
-        "mcp": { "state": "yes", "evidence": "/.well-known/mcp/server-card.json" },
-        "feeds": { "state": "yes", "evidence": "/.well-known/api-catalog, agent-skills, llms.txt" },
-        "cli": { "state": "n/a" },
-        "ssh": { "state": "n/a" },
-        "mobile": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/docs/api (Scalar)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "/api/v1/openapi.json"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "/.well-known/mcp/server-card.json"
+        },
+        "feeds": {
+          "state": "yes",
+          "evidence": "/.well-known/api-catalog, agent-skills, llms.txt"
+        },
+        "cli": {
+          "state": "n/a"
+        },
+        "ssh": {
+          "state": "n/a"
+        },
+        "mobile": {
+          "state": "n/a"
+        },
+        "chat": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -312,12 +637,33 @@
       "register": "catalogue",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/status" },
-        "api": { "state": "yes", "evidence": "get_health, /api/status" },
-        "cli": { "state": "yes", "evidence": "status" },
-        "mcp": { "state": "yes", "evidence": "get_status" },
-        "ssh": { "state": "yes", "evidence": "status menu" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/status"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_health, /api/status"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "status"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_status"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "status menu"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "get_status → StatusStrip",
+          "state": "yes"
+        }
       }
     },
     {
@@ -326,13 +672,38 @@
       "register": "lore",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/ (home feed)" },
-        "api": { "state": "yes", "evidence": "list_tracks" },
-        "cli": { "state": "yes", "evidence": "recent" },
-        "mcp": { "state": "yes", "evidence": "list_tracks" },
-        "ssh": { "state": "yes", "evidence": "latest menu + deep-link" },
-        "feeds": { "state": "yes", "evidence": "/rss.xml, /atom.xml, /feed.json" },
-        "mobile": { "state": "yes", "evidence": "Feed tab" }
+        "web": {
+          "state": "yes",
+          "evidence": "/ (home feed)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_tracks"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "recent"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "list_tracks"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "latest menu + deep-link"
+        },
+        "feeds": {
+          "state": "yes",
+          "evidence": "/rss.xml, /atom.xml, /feed.json"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Feed tab"
+        },
+        "chat": {
+          "evidence": "list_tracks (findings cards)",
+          "state": "yes"
+        }
       }
     },
     {
@@ -341,17 +712,39 @@
       "register": "lore",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/log/<id>" },
-        "api": { "state": "yes", "evidence": "get_track" },
+        "web": {
+          "state": "yes",
+          "evidence": "/log/<id>"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_track"
+        },
         "cli": {
           "state": "partial",
           "evidence": "tracks get",
           "note": "note text only, no video/audio"
         },
-        "mcp": { "state": "yes", "evidence": "get_track + resources" },
-        "ssh": { "state": "yes", "evidence": "finding detail (note + links)" },
-        "feeds": { "state": "partial", "evidence": "RSS item summary" },
-        "mobile": { "state": "yes", "evidence": "log/[id] + Feed card" }
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_track + resources"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "finding detail (note + links)"
+        },
+        "feeds": {
+          "state": "partial",
+          "evidence": "RSS item summary"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "log/[id] + Feed card"
+        },
+        "chat": {
+          "evidence": "get_track → FindingCard",
+          "state": "yes"
+        }
       }
     },
     {
@@ -360,11 +753,30 @@
       "register": "lore",
       "entity": "track",
       "support": {
-        "api": { "state": "yes", "evidence": "get_random_track" },
-        "cli": { "state": "yes", "evidence": "random" },
-        "mcp": { "state": "yes", "evidence": "get_random_track" },
-        "ssh": { "state": "yes", "evidence": "random menu + deep-link" },
-        "feeds": { "state": "partial", "evidence": "dig TXT random.dig.fluncle.com" }
+        "api": {
+          "state": "yes",
+          "evidence": "get_random_track"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "random"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_random_track"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "random menu + deep-link"
+        },
+        "feeds": {
+          "state": "partial",
+          "evidence": "dig TXT random.dig.fluncle.com"
+        },
+        "chat": {
+          "evidence": "get_random_track",
+          "state": "yes"
+        }
       }
     },
     {
@@ -373,12 +785,30 @@
       "register": "lore",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/?story=<id> viewer" },
-        "api": { "state": "yes", "evidence": "list_stories" },
-        "mobile": { "state": "yes", "evidence": "Feed tab pager" },
-        "cli": { "state": "n/a" },
-        "ssh": { "state": "n/a" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/?story=<id> viewer"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_stories"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Feed tab pager"
+        },
+        "cli": {
+          "state": "n/a"
+        },
+        "ssh": {
+          "state": "n/a"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -387,12 +817,27 @@
       "register": "lore",
       "entity": "track",
       "support": {
-        "web": { "state": "yes", "evidence": "/radio (radio.fluncle.com)" },
-        "api": { "state": "yes", "evidence": "get_radio_now_playing, get_random_radio_track" },
-        "mobile": { "state": "yes", "evidence": "Radio tab (background audio)" },
-        "cli": { "state": "n/a" },
-        "ssh": { "state": "n/a" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/radio (radio.fluncle.com)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_radio_now_playing, get_random_radio_track"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Radio tab (background audio)"
+        },
+        "cli": {
+          "state": "n/a"
+        },
+        "ssh": {
+          "state": "n/a"
+        },
+        "feeds": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -401,8 +846,14 @@
       "register": "catalogue",
       "entity": "account",
       "support": {
-        "web": { "state": "yes", "evidence": "/recommendations + Frontier Spotify playlist" },
-        "api": { "state": "yes", "evidence": "me-recs + me-frontier ops" }
+        "web": {
+          "state": "yes",
+          "evidence": "/recommendations + Frontier Spotify playlist"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "me-recs + me-frontier ops"
+        }
       }
     },
     {
@@ -416,10 +867,21 @@
           "evidence": "/galaxies",
           "note": "launch-gated until the map is fully named"
         },
-        "api": { "state": "yes", "evidence": "list_galaxies, get_galaxy" },
-        "cli": { "state": "yes", "evidence": "galaxies" },
-        "ssh": { "state": "yes", "evidence": "galaxies menu" },
-        "feeds": { "state": "n/a" }
+        "api": {
+          "state": "yes",
+          "evidence": "list_galaxies, get_galaxy"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "galaxies"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "galaxies menu"
+        },
+        "feeds": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -428,12 +890,28 @@
       "register": "lore",
       "entity": "galaxy",
       "support": {
-        "web": { "state": "yes", "evidence": "/galaxy (galaxy.fluncle.com)" },
-        "api": { "state": "n/a" },
-        "cli": { "state": "n/a" },
-        "mcp": { "state": "n/a" },
-        "ssh": { "state": "n/a" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/galaxy (galaxy.fluncle.com)"
+        },
+        "api": {
+          "state": "n/a"
+        },
+        "cli": {
+          "state": "n/a"
+        },
+        "mcp": {
+          "state": "n/a"
+        },
+        "ssh": {
+          "state": "n/a"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -442,12 +920,21 @@
       "register": "lore",
       "entity": "galaxy",
       "support": {
-        "web": { "state": "yes", "evidence": "/account Galaxy tab (me-galaxy ops)" },
-        "api": { "state": "yes", "evidence": "get/merge/collect private galaxy ops" },
+        "web": {
+          "state": "yes",
+          "evidence": "/account Galaxy tab (me-galaxy ops)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get/merge/collect private galaxy ops"
+        },
         "cli": {
           "state": "partial",
           "evidence": "login + me",
           "note": "views progress; play stays on web"
+        },
+        "chat": {
+          "state": "n/a"
         }
       }
     },
@@ -457,13 +944,39 @@
       "register": "lore",
       "entity": "mixtape",
       "support": {
-        "web": { "state": "yes", "evidence": "/mixtapes" },
-        "api": { "state": "yes", "evidence": "list_mixtapes" },
-        "cli": { "state": "yes", "evidence": "mixtapes" },
-        "mcp": { "state": "partial", "evidence": "list_tracks feed + fluncle://mixtape resources" },
-        "ssh": { "state": "yes", "evidence": "mixtapes menu" },
-        "feeds": { "state": "yes", "evidence": "/podcast.xml" },
-        "mobile": { "state": "yes", "evidence": "Mixtapes tab" }
+        "web": {
+          "state": "yes",
+          "evidence": "/mixtapes"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_mixtapes"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "mixtapes"
+        },
+        "mcp": {
+          "state": "partial",
+          "evidence": "list_tracks feed + fluncle://mixtape resources"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "mixtapes menu"
+        },
+        "feeds": {
+          "state": "yes",
+          "evidence": "/podcast.xml"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Mixtapes tab"
+        },
+        "chat": {
+          "evidence": "get_track mixtape arm → MixtapeCard",
+          "note": "chat list_tracks is findings-only; no mixtape list",
+          "state": "partial"
+        }
       }
     },
     {
@@ -472,20 +985,41 @@
       "register": "lore",
       "entity": "mixtape",
       "support": {
-        "web": { "state": "yes", "evidence": "/log/<F-coord> set video + tracklist" },
-        "api": { "state": "yes", "evidence": "get_track (mixtape arm)" },
-        "cli": { "state": "partial", "evidence": "tracks get", "note": "text only" },
-        "mcp": { "state": "yes", "evidence": "get_track" },
+        "web": {
+          "state": "yes",
+          "evidence": "/log/<F-coord> set video + tracklist"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "get_track (mixtape arm)"
+        },
+        "cli": {
+          "state": "partial",
+          "evidence": "tracks get",
+          "note": "text only"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "get_track"
+        },
         "ssh": {
           "state": "partial",
           "evidence": "mixtape detail",
           "note": "external listen links only"
         },
-        "feeds": { "state": "partial", "evidence": "podcast audio" },
+        "feeds": {
+          "state": "partial",
+          "evidence": "podcast audio"
+        },
         "mobile": {
           "state": "partial",
           "evidence": "mixtape/[id]",
           "note": "tracklist + links out; playback on web"
+        },
+        "chat": {
+          "evidence": "MixtapeCard",
+          "note": "links out; no playback",
+          "state": "partial"
         }
       }
     },
@@ -495,7 +1029,10 @@
       "register": "lore",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/logbook, /logbook/<sector>" }
+        "web": {
+          "state": "yes",
+          "evidence": "/logbook, /logbook/<sector>"
+        }
       }
     },
     {
@@ -504,12 +1041,33 @@
       "register": "lore",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/about" },
-        "cli": { "state": "yes", "evidence": "about" },
-        "mcp": { "state": "partial", "evidence": "prompts + initialize instructions" },
-        "ssh": { "state": "yes", "evidence": "about screen" },
-        "feeds": { "state": "yes", "evidence": "llms.txt identity" },
-        "api": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/about"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "about"
+        },
+        "mcp": {
+          "state": "partial",
+          "evidence": "prompts + initialize instructions"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "about screen"
+        },
+        "feeds": {
+          "state": "yes",
+          "evidence": "llms.txt identity"
+        },
+        "api": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "the persona itself (system prompt)",
+          "state": "yes"
+        }
       }
     },
     {
@@ -518,11 +1076,29 @@
       "register": "lore",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/log/<id> coordinate explainer" },
-        "mcp": { "state": "yes", "evidence": "decode_coordinate prompt" },
-        "ssh": { "state": "yes", "evidence": "coordinate deep-link detail" },
-        "feeds": { "state": "partial", "evidence": "dig TXT <coord>.dig.fluncle.com" },
-        "api": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/log/<id> coordinate explainer"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "decode_coordinate prompt"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "coordinate deep-link detail"
+        },
+        "feeds": {
+          "state": "partial",
+          "evidence": "dig TXT <coord>.dig.fluncle.com"
+        },
+        "api": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "prose coordinates linkified + get_track",
+          "state": "yes"
+        }
       }
     },
     {
@@ -531,8 +1107,14 @@
       "register": "lore",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "/reach" },
-        "api": { "state": "yes", "evidence": "list_platform_stats" }
+        "web": {
+          "state": "yes",
+          "evidence": "/reach"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "list_platform_stats"
+        }
       }
     },
     {
@@ -545,6 +1127,10 @@
           "state": "partial",
           "evidence": "/chat",
           "note": "crew-door gated; Discord presence (Hermes) lives outside these surfaces"
+        },
+        "chat": {
+          "evidence": "/chat (api/chat, FLUNCLE_CHAT_SYSTEM_PROMPT)",
+          "state": "yes"
         }
       }
     },
@@ -554,13 +1140,37 @@
       "register": "lore",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "Submit dialog (submit_track)" },
-        "api": { "state": "yes", "evidence": "submit_track" },
-        "cli": { "state": "yes", "evidence": "submit" },
-        "mcp": { "state": "yes", "evidence": "submit_track" },
-        "ssh": { "state": "yes", "evidence": "submit flow" },
-        "feeds": { "state": "n/a" },
-        "mobile": { "state": "yes", "evidence": "Submit screen" }
+        "web": {
+          "state": "yes",
+          "evidence": "Submit dialog (submit_track)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "submit_track"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "submit"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "submit_track"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "submit flow"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Submit screen"
+        },
+        "chat": {
+          "evidence": "submit_track",
+          "state": "yes"
+        }
       }
     },
     {
@@ -569,12 +1179,33 @@
       "register": "lore",
       "entity": "cross",
       "support": {
-        "web": { "state": "yes", "evidence": "Subscribe dialog + /newsletter archive" },
-        "api": { "state": "yes", "evidence": "subscribe_newsletter, list_editions" },
-        "cli": { "state": "yes", "evidence": "subscribe" },
-        "mcp": { "state": "yes", "evidence": "subscribe_newsletter" },
-        "ssh": { "state": "yes", "evidence": "subscribe flow" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "Subscribe dialog + /newsletter archive"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "subscribe_newsletter, list_editions"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "subscribe"
+        },
+        "mcp": {
+          "state": "yes",
+          "evidence": "subscribe_newsletter"
+        },
+        "ssh": {
+          "state": "yes",
+          "evidence": "subscribe flow"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "evidence": "subscribe_newsletter",
+          "state": "yes"
+        }
       }
     },
     {
@@ -583,12 +1214,31 @@
       "register": "catalogue",
       "entity": "account",
       "support": {
-        "web": { "state": "yes", "evidence": "/account (email + Google)" },
-        "api": { "state": "yes", "evidence": "me ops (better-auth)" },
-        "cli": { "state": "yes", "evidence": "login (device flow via /device)" },
-        "mobile": { "state": "yes", "evidence": "Account screen (email)" },
-        "mcp": { "state": "n/a" },
-        "feeds": { "state": "n/a" }
+        "web": {
+          "state": "yes",
+          "evidence": "/account (email + Google)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "me ops (better-auth)"
+        },
+        "cli": {
+          "state": "yes",
+          "evidence": "login (device flow via /device)"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Account screen (email)"
+        },
+        "mcp": {
+          "state": "n/a"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "state": "n/a"
+        }
       }
     },
     {
@@ -597,8 +1247,14 @@
       "register": "catalogue",
       "entity": "account",
       "support": {
-        "web": { "state": "yes", "evidence": "SaveFindingButton (me-saved ops)" },
-        "api": { "state": "yes", "evidence": "save/list private saved findings" },
+        "web": {
+          "state": "yes",
+          "evidence": "SaveFindingButton (me-saved ops)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "save/list private saved findings"
+        },
         "mobile": {
           "state": "yes",
           "evidence": "Saved chips",
@@ -612,9 +1268,18 @@
       "register": "catalogue",
       "entity": "account",
       "support": {
-        "web": { "state": "yes", "evidence": "SaveSetDialog (me-sets ops)" },
-        "api": { "state": "yes", "evidence": "save/list/update/delete private sets" },
-        "mobile": { "state": "yes", "evidence": "Decks save (signed-in)" }
+        "web": {
+          "state": "yes",
+          "evidence": "SaveSetDialog (me-sets ops)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "save/list/update/delete private sets"
+        },
+        "mobile": {
+          "state": "yes",
+          "evidence": "Decks save (signed-in)"
+        }
       }
     },
     {
@@ -623,13 +1288,32 @@
       "register": "catalogue",
       "entity": "account",
       "support": {
-        "mobile": { "state": "yes", "evidence": "Notifications screen (register_device)" },
-        "api": { "state": "yes", "evidence": "register_device" },
-        "web": { "state": "no" },
-        "cli": { "state": "n/a" },
-        "ssh": { "state": "n/a" },
-        "mcp": { "state": "n/a" },
-        "feeds": { "state": "n/a" }
+        "mobile": {
+          "state": "yes",
+          "evidence": "Notifications screen (register_device)"
+        },
+        "api": {
+          "state": "yes",
+          "evidence": "register_device"
+        },
+        "web": {
+          "state": "no"
+        },
+        "cli": {
+          "state": "n/a"
+        },
+        "ssh": {
+          "state": "n/a"
+        },
+        "mcp": {
+          "state": "n/a"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "chat": {
+          "state": "n/a"
+        }
       }
     }
   ]

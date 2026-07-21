@@ -1,43 +1,43 @@
-register,entity,id,story,web,api,cli,mcp,ssh,feeds,mobile
-catalogue,track,browse-every-track,"As a listener, I want to browse every track in the archive, newest release first.",yes,no,no,no,no,no,no
-catalogue,track,filter-tracks,"As a listener, I want to filter tracks by release year, tempo, key, label, and galaxy.",yes,yes,partial,partial,no,no,partial
-catalogue,track,see-new-releases,"As a listener, I want to see what just came out in drum & bass.",yes,yes,yes,yes,yes,yes,no
-catalogue,cross,search-archive,"As a listener, I want to search the whole archive by name, coordinate, or a plain-language query.",yes,yes,yes,yes,no,n/a,yes
-catalogue,track,find-similar-tracks,"As a listener, I want to find tracks that sound like one I already love.",yes,yes,partial,yes,no,n/a,yes
-catalogue,track,open-by-coordinate,"As a listener, I want to open any track or mixtape by its Log ID coordinate.",yes,yes,yes,yes,yes,partial,yes
-catalogue,artist,browse-every-artist,"As a listener, I want to browse every drum & bass artist, A to Z.",yes,yes,yes,yes,partial,no,no
-catalogue,artist,artist-profile,"As a listener, I want an artist's profile: bio, releases, and where to follow them.",yes,yes,yes,yes,no,partial,no
-catalogue,artist,similar-to-one-artist,"As a listener, I want artists similar to one artist I like.",yes,no,no,yes,no,n/a,no
-catalogue,artist,sounds-like-selected-artists,"As a listener, I want to multi-select artists I like and see who sounds like all of them.",yes,yes,no,no,no,n/a,no
-catalogue,artist,follow-artist-releases,"As a fan, I want to follow one artist's new releases.",partial,partial,no,no,no,yes,no
-catalogue,album,browse-every-album,"As a listener, I want to browse every album and EP, A to Z.",yes,yes,yes,yes,no,no,no
-catalogue,album,album-page,"As a listener, I want an album's page: tracklist, artists, label.",yes,yes,yes,yes,no,partial,no
-catalogue,label,browse-every-label,"As a listener, I want to browse every record label, A to Z.",yes,yes,yes,yes,no,no,no
-catalogue,label,label-page,"As a listener, I want a label's page: its releases, artists, and lineage.",yes,yes,yes,yes,no,partial,no
-catalogue,label,follow-label-releases,"As a fan, I want to follow one label's new releases.",partial,partial,no,no,no,yes,no
-catalogue,cross,build-a-set,"As a DJ, I want to chain a set: seed my taste and have the engine rank what mixes in clean next.",partial,yes,no,yes,no,n/a,yes
-catalogue,cross,share-reopen-set,"As a DJ, I want to share a set as a link and have anyone reopen it.",yes,yes,n/a,no,n/a,n/a,yes
-catalogue,cross,integrate-as-developer,"As a developer or agent, I want a documented machine interface to the archive.",yes,yes,n/a,yes,n/a,yes,n/a
-catalogue,cross,check-service-health,"As a user, I want to check whether Fluncle's services are up.",yes,yes,yes,yes,yes,n/a,no
-lore,track,follow-latest-findings,"As a fan, I want to follow Fluncle's latest finds as he logs them.",yes,yes,yes,yes,yes,yes,yes
-lore,track,read-finding-story,"As a fan, I want to read why Fluncle logged a track — the note, the video, the observation.",yes,yes,partial,yes,yes,partial,yes
-lore,track,random-banger,"As a listener, I want the archive to throw me a random banger.",no,yes,yes,yes,yes,partial,no
-lore,track,swipe-stories,"As a fan, I want to swipe findings as full-bleed video stories.",yes,yes,n/a,no,n/a,n/a,yes
-lore,track,listen-radio,"As a fan, I want to lean back and listen to Fluncle's spoken observations on a shared clock.",yes,yes,n/a,no,n/a,n/a,yes
-catalogue,account,personal-recommendations,"As a signed-in fan, I want personal recommendations grown from my own taste.",yes,yes,no,no,no,no,no
-lore,galaxy,browse-by-feel,"As a listener, I want to browse the archive by how it sounds, not what it's called.",partial,yes,yes,no,yes,n/a,no
-lore,galaxy,play-galaxy-game,"As a fan, I want to play the Galaxy — fly to every banger's star.",yes,n/a,n/a,n/a,n/a,n/a,no
-lore,galaxy,galaxy-progress,"As a player, I want my Galaxy progress to follow my account across devices.",yes,yes,partial,no,no,no,no
-lore,mixtape,browse-mixtapes,"As a fan, I want to browse Fluncle's own DJ mixtapes.",yes,yes,yes,partial,yes,yes,yes
-lore,mixtape,experience-a-set,"As a fan, I want to experience a mixtape — the set video, the tracklist, the ride.",yes,yes,partial,yes,partial,partial,partial
-lore,cross,read-logbook,"As a fan, I want to read the voyage — Fluncle's travelogue, one entry per sector-day.",yes,no,no,no,no,no,no
-lore,cross,learn-who-fluncle-is,"As a newcomer, I want to learn who Fluncle is and what this place is.",yes,n/a,yes,partial,yes,yes,no
-lore,cross,decode-a-coordinate,"As a curious visitor, I want a Log ID explained to me.",yes,n/a,no,yes,yes,partial,no
-lore,cross,see-reach,"As a curious fan, I want to see Fluncle's reach across platforms over time.",yes,yes,no,no,no,no,no
-lore,cross,chat-with-fluncle,"As a crew member, I want to talk with Fluncle about drum & bass.",partial,no,no,no,no,no,no
-lore,cross,submit-a-track,"As a crew member, I want to send Fluncle a track I think he'd log.",yes,yes,yes,yes,yes,n/a,yes
-lore,cross,newsletter,"As a fan, I want fresh finds in my inbox every Friday.",yes,yes,yes,yes,yes,n/a,no
-catalogue,account,create-account,"As a fan, I want an account that follows me across surfaces.",yes,yes,yes,n/a,no,n/a,yes
-catalogue,account,save-findings,"As a signed-in fan, I want to save findings for later.",yes,yes,no,no,no,no,yes
-catalogue,account,save-sets,"As a DJ, I want to save the sets I build to my account.",yes,yes,no,no,no,no,yes
-catalogue,account,push-notifications,"As a fan, I want a push when a new finding or mixtape lands.",no,yes,n/a,n/a,n/a,n/a,yes
+register,entity,id,story,web,api,cli,mcp,chat,ssh,feeds,mobile
+catalogue,track,browse-every-track,"As a listener, I want to browse every track in the archive, newest release first.",yes,no,no,no,no,no,no,no
+catalogue,track,filter-tracks,"As a listener, I want to filter tracks by release year, tempo, key, label, and galaxy.",yes,yes,partial,partial,partial,no,no,partial
+catalogue,track,see-new-releases,"As a listener, I want to see what just came out in drum & bass.",yes,yes,yes,yes,yes,yes,yes,no
+catalogue,cross,search-archive,"As a listener, I want to search the whole archive by name, coordinate, or a plain-language query.",yes,yes,yes,yes,yes,no,n/a,yes
+catalogue,track,find-similar-tracks,"As a listener, I want to find tracks that sound like one I already love.",yes,yes,partial,yes,yes,no,n/a,yes
+catalogue,track,open-by-coordinate,"As a listener, I want to open any track or mixtape by its Log ID coordinate.",yes,yes,yes,yes,yes,yes,partial,yes
+catalogue,artist,browse-every-artist,"As a listener, I want to browse every drum & bass artist, A to Z.",yes,yes,yes,yes,yes,partial,no,no
+catalogue,artist,artist-profile,"As a listener, I want an artist's profile: bio, releases, and where to follow them.",yes,yes,yes,yes,yes,no,partial,no
+catalogue,artist,similar-to-one-artist,"As a listener, I want artists similar to one artist I like.",yes,no,no,yes,yes,no,n/a,no
+catalogue,artist,sounds-like-selected-artists,"As a listener, I want to multi-select artists I like and see who sounds like all of them.",yes,yes,no,no,no,no,n/a,no
+catalogue,artist,follow-artist-releases,"As a fan, I want to follow one artist's new releases.",partial,partial,no,no,no,no,yes,no
+catalogue,album,browse-every-album,"As a listener, I want to browse every album and EP, A to Z.",yes,yes,yes,yes,yes,no,no,no
+catalogue,album,album-page,"As a listener, I want an album's page: tracklist, artists, label.",yes,yes,yes,yes,partial,no,partial,no
+catalogue,label,browse-every-label,"As a listener, I want to browse every record label, A to Z.",yes,yes,yes,yes,yes,no,no,no
+catalogue,label,label-page,"As a listener, I want a label's page: its releases, artists, and lineage.",yes,yes,yes,yes,no,no,partial,no
+catalogue,label,follow-label-releases,"As a fan, I want to follow one label's new releases.",partial,partial,no,no,no,no,yes,no
+catalogue,cross,build-a-set,"As a DJ, I want to chain a set: seed my taste and have the engine rank what mixes in clean next.",partial,yes,no,yes,yes,no,n/a,yes
+catalogue,cross,share-reopen-set,"As a DJ, I want to share a set as a link and have anyone reopen it.",yes,yes,n/a,no,partial,n/a,n/a,yes
+catalogue,cross,integrate-as-developer,"As a developer or agent, I want a documented machine interface to the archive.",yes,yes,n/a,yes,n/a,n/a,yes,n/a
+catalogue,cross,check-service-health,"As a user, I want to check whether Fluncle's services are up.",yes,yes,yes,yes,yes,yes,n/a,no
+lore,track,follow-latest-findings,"As a fan, I want to follow Fluncle's latest finds as he logs them.",yes,yes,yes,yes,yes,yes,yes,yes
+lore,track,read-finding-story,"As a fan, I want to read why Fluncle logged a track — the note, the video, the observation.",yes,yes,partial,yes,yes,yes,partial,yes
+lore,track,random-banger,"As a listener, I want the archive to throw me a random banger.",no,yes,yes,yes,yes,yes,partial,no
+lore,track,swipe-stories,"As a fan, I want to swipe findings as full-bleed video stories.",yes,yes,n/a,no,n/a,n/a,n/a,yes
+lore,track,listen-radio,"As a fan, I want to lean back and listen to Fluncle's spoken observations on a shared clock.",yes,yes,n/a,no,no,n/a,n/a,yes
+catalogue,account,personal-recommendations,"As a signed-in fan, I want personal recommendations grown from my own taste.",yes,yes,no,no,no,no,no,no
+lore,galaxy,browse-by-feel,"As a listener, I want to browse the archive by how it sounds, not what it's called.",partial,yes,yes,no,no,yes,n/a,no
+lore,galaxy,play-galaxy-game,"As a fan, I want to play the Galaxy — fly to every banger's star.",yes,n/a,n/a,n/a,n/a,n/a,n/a,no
+lore,galaxy,galaxy-progress,"As a player, I want my Galaxy progress to follow my account across devices.",yes,yes,partial,no,n/a,no,no,no
+lore,mixtape,browse-mixtapes,"As a fan, I want to browse Fluncle's own DJ mixtapes.",yes,yes,yes,partial,partial,yes,yes,yes
+lore,mixtape,experience-a-set,"As a fan, I want to experience a mixtape — the set video, the tracklist, the ride.",yes,yes,partial,yes,partial,partial,partial,partial
+lore,cross,read-logbook,"As a fan, I want to read the voyage — Fluncle's travelogue, one entry per sector-day.",yes,no,no,no,no,no,no,no
+lore,cross,learn-who-fluncle-is,"As a newcomer, I want to learn who Fluncle is and what this place is.",yes,n/a,yes,partial,yes,yes,yes,no
+lore,cross,decode-a-coordinate,"As a curious visitor, I want a Log ID explained to me.",yes,n/a,no,yes,yes,yes,partial,no
+lore,cross,see-reach,"As a curious fan, I want to see Fluncle's reach across platforms over time.",yes,yes,no,no,no,no,no,no
+lore,cross,chat-with-fluncle,"As a crew member, I want to talk with Fluncle about drum & bass.",partial,no,no,no,yes,no,no,no
+lore,cross,submit-a-track,"As a crew member, I want to send Fluncle a track I think he'd log.",yes,yes,yes,yes,yes,yes,n/a,yes
+lore,cross,newsletter,"As a fan, I want fresh finds in my inbox every Friday.",yes,yes,yes,yes,yes,yes,n/a,no
+catalogue,account,create-account,"As a fan, I want an account that follows me across surfaces.",yes,yes,yes,n/a,n/a,no,n/a,yes
+catalogue,account,save-findings,"As a signed-in fan, I want to save findings for later.",yes,yes,no,no,no,no,no,yes
+catalogue,account,save-sets,"As a DJ, I want to save the sets I build to my account.",yes,yes,no,no,no,no,no,yes
+catalogue,account,push-notifications,"As a fan, I want a push when a new finding or mixtape lands.",no,yes,n/a,n/a,n/a,n/a,n/a,yes

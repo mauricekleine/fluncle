@@ -171,6 +171,7 @@
         <option value="api">Gaps on API</option>
         <option value="cli">Gaps on CLI</option>
         <option value="mcp">Gaps on MCP</option>
+        <option value="chat">Gaps on ChatDnB</option>
         <option value="ssh">Gaps on SSH</option>
         <option value="feeds">Gaps on Feeds</option>
         <option value="mobile">Gaps on Mobile</option>
@@ -221,6 +222,7 @@
               },
               mcp: { state: "partial", evidence: "search_archive" },
               mobile: { state: "partial", evidence: "Archive tab search" },
+              chat: { evidence: "search_archive (NL filters)", state: "partial" },
             },
           },
           {
@@ -235,6 +237,7 @@
               mcp: { state: "yes", evidence: "list_fresh" },
               ssh: { state: "yes", evidence: "fresh menu + deep-link" },
               feeds: { state: "yes", evidence: "/fresh.xml, /fresh.json" },
+              chat: { evidence: "list_fresh (register-split)", state: "yes" },
             },
           },
           {
@@ -251,6 +254,7 @@
               ssh: { state: "no", note: "only the Spotify lookup inside Submit" },
               feeds: { state: "n/a" },
               mobile: { state: "yes", evidence: "Archive tab (search_archive)" },
+              chat: { evidence: "search_archive → finding/catalogue buckets", state: "yes" },
             },
           },
           {
@@ -265,6 +269,7 @@
               mcp: { state: "yes", evidence: "search_archive sounds-like tier" },
               feeds: { state: "n/a" },
               mobile: { state: "yes", evidence: "Archive search sounds-like" },
+              chat: { evidence: "search_archive sounds-like (anchor + neighbours)", state: "yes" },
             },
           },
           {
@@ -283,6 +288,7 @@
                 evidence: "oEmbed /embed cards; dig TXT <coord>.dig.fluncle.com",
               },
               mobile: { state: "yes", evidence: "log/[id]" },
+              chat: { evidence: "get_track (compact card)", state: "yes" },
             },
           },
           {
@@ -300,6 +306,7 @@
                 evidence: "Artist archive screen",
                 note: "calls legacy /api/artists; single page, rows dead-end (no detail)",
               },
+              chat: { evidence: "list_artists", state: "yes" },
             },
           },
           {
@@ -317,6 +324,7 @@
               cli: { state: "yes", evidence: "artists <slug>" },
               mcp: { state: "yes", evidence: "get_artist + list_artist_catalogue" },
               feeds: { state: "partial", evidence: "oEmbed card; /artist/<slug>/fresh.xml" },
+              chat: { evidence: "get_artist → ArtistCard", state: "yes" },
             },
           },
           {
@@ -332,6 +340,7 @@
               },
               mcp: { state: "yes", evidence: "get_similar_artists" },
               feeds: { state: "n/a" },
+              chat: { evidence: "get_similar_artists → NeighbourList", state: "yes" },
             },
           },
           {
@@ -371,6 +380,7 @@
               api: { state: "yes", evidence: "list_albums" },
               cli: { state: "yes", evidence: "albums (--page)" },
               mcp: { state: "yes", evidence: "list_albums (50/page)" },
+              chat: { evidence: "list_albums", state: "yes" },
             },
           },
           {
@@ -384,6 +394,11 @@
               cli: { state: "yes", evidence: "albums <slug>" },
               mcp: { state: "yes", evidence: "list_album_catalogue" },
               feeds: { state: "partial", evidence: "oEmbed card" },
+              chat: {
+                evidence: "list_album_catalogue (tracklist buckets)",
+                note: "no album card; no get_album tool",
+                state: "partial",
+              },
             },
           },
           {
@@ -396,6 +411,7 @@
               api: { state: "yes", evidence: "list_labels" },
               cli: { state: "yes", evidence: "labels (--page)" },
               mcp: { state: "yes", evidence: "list_labels (50/page)" },
+              chat: { evidence: "list_labels", state: "yes" },
             },
           },
           {
@@ -445,6 +461,7 @@
               mcp: { state: "yes", evidence: "build_set" },
               mobile: { state: "yes", evidence: "Decks tab" },
               feeds: { state: "n/a" },
+              chat: { evidence: "build_set → ChainCard", state: "yes" },
             },
           },
           {
@@ -459,6 +476,11 @@
               cli: { state: "n/a" },
               ssh: { state: "n/a" },
               feeds: { state: "n/a" },
+              chat: {
+                evidence: "build_set returns the /mix setUrl",
+                note: "emits a shareable link; cannot reopen one",
+                state: "partial",
+              },
             },
           },
           {
@@ -474,6 +496,7 @@
               cli: { state: "n/a" },
               ssh: { state: "n/a" },
               mobile: { state: "n/a" },
+              chat: { state: "n/a" },
             },
           },
           {
@@ -488,6 +511,7 @@
               mcp: { state: "yes", evidence: "get_status" },
               ssh: { state: "yes", evidence: "status menu" },
               feeds: { state: "n/a" },
+              chat: { evidence: "get_status → StatusStrip", state: "yes" },
             },
           },
           {
@@ -503,6 +527,7 @@
               ssh: { state: "yes", evidence: "latest menu + deep-link" },
               feeds: { state: "yes", evidence: "/rss.xml, /atom.xml, /feed.json" },
               mobile: { state: "yes", evidence: "Feed tab" },
+              chat: { evidence: "list_tracks (findings cards)", state: "yes" },
             },
           },
           {
@@ -523,6 +548,7 @@
               ssh: { state: "yes", evidence: "finding detail (note + links)" },
               feeds: { state: "partial", evidence: "RSS item summary" },
               mobile: { state: "yes", evidence: "log/[id] + Feed card" },
+              chat: { evidence: "get_track → FindingCard", state: "yes" },
             },
           },
           {
@@ -536,6 +562,7 @@
               mcp: { state: "yes", evidence: "get_random_track" },
               ssh: { state: "yes", evidence: "random menu + deep-link" },
               feeds: { state: "partial", evidence: "dig TXT random.dig.fluncle.com" },
+              chat: { evidence: "get_random_track", state: "yes" },
             },
           },
           {
@@ -550,6 +577,7 @@
               cli: { state: "n/a" },
               ssh: { state: "n/a" },
               feeds: { state: "n/a" },
+              chat: { state: "n/a" },
             },
           },
           {
@@ -607,6 +635,7 @@
               mcp: { state: "n/a" },
               ssh: { state: "n/a" },
               feeds: { state: "n/a" },
+              chat: { state: "n/a" },
             },
           },
           {
@@ -622,6 +651,7 @@
                 evidence: "login + me",
                 note: "views progress; play stays on web",
               },
+              chat: { state: "n/a" },
             },
           },
           {
@@ -637,6 +667,11 @@
               ssh: { state: "yes", evidence: "mixtapes menu" },
               feeds: { state: "yes", evidence: "/podcast.xml" },
               mobile: { state: "yes", evidence: "Mixtapes tab" },
+              chat: {
+                evidence: "get_track mixtape arm → MixtapeCard",
+                note: "chat list_tracks is findings-only; no mixtape list",
+                state: "partial",
+              },
             },
           },
           {
@@ -661,6 +696,7 @@
                 evidence: "mixtape/[id]",
                 note: "tracklist + links out; playback on web",
               },
+              chat: { evidence: "MixtapeCard", note: "links out; no playback", state: "partial" },
             },
           },
           {
@@ -683,6 +719,7 @@
               ssh: { state: "yes", evidence: "about screen" },
               feeds: { state: "yes", evidence: "llms.txt identity" },
               api: { state: "n/a" },
+              chat: { evidence: "the persona itself (system prompt)", state: "yes" },
             },
           },
           {
@@ -696,6 +733,7 @@
               ssh: { state: "yes", evidence: "coordinate deep-link detail" },
               feeds: { state: "partial", evidence: "dig TXT <coord>.dig.fluncle.com" },
               api: { state: "n/a" },
+              chat: { evidence: "prose coordinates linkified + get_track", state: "yes" },
             },
           },
           {
@@ -719,6 +757,7 @@
                 evidence: "/chat",
                 note: "crew-door gated; Discord presence (Hermes) lives outside these surfaces",
               },
+              chat: { evidence: "/chat (api/chat, FLUNCLE_CHAT_SYSTEM_PROMPT)", state: "yes" },
             },
           },
           {
@@ -734,6 +773,7 @@
               ssh: { state: "yes", evidence: "submit flow" },
               feeds: { state: "n/a" },
               mobile: { state: "yes", evidence: "Submit screen" },
+              chat: { evidence: "submit_track", state: "yes" },
             },
           },
           {
@@ -748,6 +788,7 @@
               mcp: { state: "yes", evidence: "subscribe_newsletter" },
               ssh: { state: "yes", evidence: "subscribe flow" },
               feeds: { state: "n/a" },
+              chat: { evidence: "subscribe_newsletter", state: "yes" },
             },
           },
           {
@@ -762,6 +803,7 @@
               mobile: { state: "yes", evidence: "Account screen (email)" },
               mcp: { state: "n/a" },
               feeds: { state: "n/a" },
+              chat: { state: "n/a" },
             },
           },
           {
@@ -803,6 +845,7 @@
               ssh: { state: "n/a" },
               mcp: { state: "n/a" },
               feeds: { state: "n/a" },
+              chat: { state: "n/a" },
             },
           },
         ],
@@ -811,6 +854,11 @@
           { id: "api", label: "API", note: "public /api/v1 oRPC ops" },
           { id: "cli", label: "CLI", note: "the fluncle CLI, non-admin" },
           { id: "mcp", label: "MCP", note: "MCP tools/resources/prompts" },
+          {
+            id: "chat",
+            label: "ChatDnB",
+            note: "/chat — verified-email crew door; the 18 chat-transport tools, generative-UI cards",
+          },
           { id: "ssh", label: "SSH", note: "ssh rave.fluncle.com" },
           {
             id: "feeds",
