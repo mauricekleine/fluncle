@@ -2,7 +2,7 @@
 
 The rave-02 host trigger for the `--no-agent` **catalogue-funnel snapshot** sweep. `fluncle-funnel-snapshot` fires one `record_catalogue_snapshot` a day: the WORKER computes every stage total (crawled → anchored → captured → analyzed → embedded → rec-eligible → certified) + queue depth (anchor with/without ISRC, anchor re-ask bench, capture, analyze, embed) + crawl-frontier count, all through the SAME predicates the sweeps run (`apps/web/src/lib/server/funnel.ts`, so the funnel can never drift from the real gates), and upserts one idempotent row per UTC day into `catalogue_snapshots` — the append-only history behind the `/admin/funnel` page. Zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 24h.
 
-The full design is [docs/rfcs/catalogue-funnel-rfc.md](../../../rfcs/catalogue-funnel-rfc.md). The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/funnel-snapshot-sweep.sh`](../scripts/funnel-snapshot-sweep.sh) → [`../scripts/funnel-snapshot-sweep.ts`](../scripts/funnel-snapshot-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch.
+The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/funnel-snapshot-sweep.sh`](../scripts/funnel-snapshot-sweep.sh) → [`../scripts/funnel-snapshot-sweep.ts`](../scripts/funnel-snapshot-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch.
 
 ## Why a daily snapshot
 

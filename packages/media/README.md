@@ -14,7 +14,7 @@ It renders to `apps/web/public/galaxy/og.png`, which is a **committed static ass
 
 The **safe-area contract**: platforms crop a banner differently across devices, so each spec's `safe` box is the centered region the platform always shows (YouTube's is just 1235×338 of its 2048×1152). The cosmonaut is sized off that box's height so the hard mobile crop still catches the figure, and the cosmos bleeds to the edges.
 
-`bun run render:socials` writes the claimed accounts (`render: true`) to `docs/socials/banners/` — drop each straight into the platform's profile uploader. The current set: YouTube channel banner (2048×1152 PNG) and Mixcloud cover (2048×512 PNG). SoundCloud (2480×520) and X (1500×500) are wired in with `render: false` — previewable in Studio, written once those accounts exist. The Spotify playlist cover is the founding cover art, **not** generated here. The spec table + the brand asset map live in [docs/socials/README.md](../../docs/socials/README.md).
+`bun run render:socials` writes the claimed accounts (`render: true`) to `docs/socials/banners/` — drop each straight into the platform's profile uploader. The current set: YouTube channel banner (2048×1152 PNG), Mixcloud cover (2048×512 PNG), SoundCloud header (2480×520 PNG), and Twitch banner (1200×480 PNG). X (1500×500) is wired in with `render: false` — previewable in Studio, written once that account exists. The Spotify playlist cover is the founding cover art, **not** generated here. The spec table + the brand asset map live in [docs/socials/README.md](../../docs/socials/README.md).
 
 ## The mobile app icon
 

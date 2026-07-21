@@ -122,9 +122,9 @@ Beyond tools, the server MCP also serves **resources** (the archive as a corpus 
 
 Two naming surfaces: the **deep-link command argument** (`ssh rave.fluncle.com <arg>`) and the **menu items**.
 
-Deep links (`parseBootCommand`): `latest`, `random`, or a bare Log ID coordinate (e.g. `004.7.2I`, `019.F.1A`). Lowercase, single words.
+Deep links (`parseBootCommand`): `latest`, `fresh`, `random`, or a bare Log ID coordinate (e.g. `004.7.2I`, `019.F.1A`). Lowercase, single words.
 
-Menu item labels (`menuItems()`, 11 items): `Latest bangers`, `Artist archive`, `Sonic galaxies`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `System status`, `About`, `Quit`. Title Case, in-fiction nouns. `Sonic galaxies` opens the browse-by-feel galaxies screen (list + open, cloning `Artist archive`); it reads the same public `list_galaxies`/`get_galaxy` ops the CLI's `fluncle galaxies [slug]` does, so the operation reads the same across CLI, API, and SSH.
+Menu item labels (`menuItems()`, 12 items): `Latest bangers`, `Fresh releases`, `Artist archive`, `Sonic galaxies`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `System status`, `About`, `Quit`. Title Case, in-fiction nouns. `Sonic galaxies` opens the browse-by-feel galaxies screen (list + open, cloning `Artist archive`); it reads the same public `list_galaxies`/`get_galaxy` ops the CLI's `fluncle galaxies [slug]` does, so the operation reads the same across CLI, API, and SSH.
 
 Note the deep-link `latest` maps to the CLI's `recent`, the API's `listFindings` (`GET /findings`), and the MCP's `list_findings` — **four names for one read**, all naming the found-order feed after the vocabulary cut.
 
