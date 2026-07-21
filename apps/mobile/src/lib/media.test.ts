@@ -5,8 +5,9 @@
 //
 // resolveCardMedia is the drift-prone mobile twin of apps/web/src/lib/media.ts
 // (the file's own header says "keep in step with"). These pin the per-card media
-// ladder so the rungs (clean square master → video, else → cover) and the known
-// legacy data quirk can't silently regress on this surface. The MT URL shapes
+// ladder so the rungs (clean square master → muted video + preview bed, else → cover)
+// and the known legacy data quirk can't silently regress on this surface, and the
+// App-Store 5.2.3 `hasAudio: false` muted-visual invariant is pinned. The MT URL shapes
 // mirror the web media.test.ts assertions where they overlap.
 
 import { type TrackListItem } from "@fluncle/contracts";
@@ -41,10 +42,16 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
   };
 }
 
-// 1. A finding with a logId + a squared master takes the VIDEO rung.
+// 1. A finding with a logId + a squared master takes the VIDEO rung — a MUTED VISUAL
+//    whose audio is the official preview bed (App Store 5.2.3; the video NEVER sounds
+//    its own baked track).
 {
   const media = resolveCardMedia(
-    finding({ logId: "LOG123", videoSquaredAt: "2026-06-21T10:00:00.000Z" }),
+    finding({
+      logId: "LOG123",
+      previewUrl: "https://p.scdn.co/preview",
+      videoSquaredAt: "2026-06-21T10:00:00.000Z",
+    }),
   );
 
   assertEqual(media.kind, "video", "logId + videoSquaredAt → video rung");
@@ -61,7 +68,16 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
       `${FOUND_BASE}/cdn-cgi/media/mode=frame,time=0s,format=jpg/${FOUND_BASE}/LOG123/footage.mp4?v=${Date.parse("2026-06-21T10:00:00.000Z")}`,
       "poster is the same-zone mode=frame transform, vintage-versioned",
     );
-    assertEqual(media.hasAudio, true, "the video rung carries audio");
+    // THE 5.2.3 INVARIANT: the video is a muted visual — `hasAudio` is the literal
+    // `false`, so any regression that tries to sound the baked commercial track fails to
+    // typecheck. The card's audio is the preview bed, the same path a cover uses, keyed
+    // by logId.
+    assertEqual(media.hasAudio, false, "the video rung is a muted visual (never its own track)");
+    assertEqual(
+      media.previewUrl,
+      `${API_BASE}/api/v1/preview/LOG123`,
+      "the video's audio bed is the preview proxy, keyed by logId",
+    );
     // The raw master is the onError fallback target, never an MT transform.
     assertEqual(
       media.videoUrl.includes("/cdn-cgi/media"),
@@ -74,6 +90,21 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
     // future social fallback can't slip onto this surface unnoticed.
     assertEqual(media.videoUrl.includes("social"), false, "the feed never plays the social cut");
     assertEqual(media.posterUrl.includes("social"), false, "the poster is off the clean master");
+  }
+}
+
+// 1b. A squared-master finding with NO previewUrl is a SILENT visual — the video plays
+//     muted with no audio bed, never a fall back to its own baked track.
+{
+  const media = resolveCardMedia(
+    finding({ logId: "LOG123", videoSquaredAt: "2026-06-21T10:00:00.000Z" }),
+  );
+
+  assertEqual(media.kind, "video", "squared master → video rung even without a preview");
+
+  if (media.kind === "video") {
+    assertEqual(media.hasAudio, false, "still a muted visual");
+    assertEqual(media.previewUrl, undefined, "no previewUrl → no audio bed (silent visual)");
   }
 }
 
@@ -171,5 +202,5 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
 }
 
 console.log(
-  "✓ resolveCardMedia: squared → video (raw master), legacy → cover, preview proxy keyed by logId∕trackId or undefined",
+  "✓ resolveCardMedia: squared → muted video (raw master) + preview bed, legacy → cover, preview proxy keyed by logId∕trackId or undefined",
 );

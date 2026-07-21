@@ -46,11 +46,22 @@ function previewProxy(idOrLogId: string) {
 
 /**
  * The per-card media ladder (RFC §0):
- * - clean square master present → square master, view-cropped to portrait (rung a)
- * - else → the cover card under preview audio                              (rung b)
- * - cover with no preview → a beautiful silent cover                       (rung c)
+ * - clean square master present → square master as a MUTED VISUAL, view-cropped to
+ *   portrait, with the 30s official preview as the card's audio bed             (rung a)
+ * - else → the cover card under the same preview bed                            (rung b)
+ * - either kind with no preview → a beautiful silent card                       (rung c)
  * Legacy findings (videoUrl set but videoSquaredAt absent) deliberately take the
  * cover rung, NOT the baked-text portrait, so the native overlay never double-prints.
+ *
+ * ALL IN-APP AUDIO IS THE OFFICIAL PREVIEW (operator ruling 2026-07-21, App Store
+ * Guideline 5.2.3). The feed video is our own first-party Remotion render, but it bakes
+ * an excerpt of the commercial recording into its own track — so it plays MUTED, as a
+ * visual only, and NEVER contributes audio. The card's sound is the 30s preview relayed
+ * from the official platform preview APIs by `/api/v1/preview` (the same audio path a
+ * cover card already used). The video variant carries `hasAudio: false` so this is an
+ * invariant the compiler sees: a regression that tries to sound the baked track fails to
+ * typecheck. Both kinds carry the same `previewUrl`, so there is ONE audio path — a video
+ * with no preview is a silent visual, never a fallback to its own track.
  *
  * NATIVE PLAYBACK NOTE (verified 2026-06-21): iOS AVPlayer requires HTTP Range
  * (it probes a 2-byte range first). Cloudflare Media Transformations video URLs
@@ -63,23 +74,35 @@ function previewProxy(idOrLogId: string) {
  * rendition; a range-capable portrait rendition is a Phase-1 backend follow-up.)
  */
 export type CardMedia =
-  | { kind: "video"; videoUrl: string; posterUrl: string; hasAudio: true }
+  | {
+      kind: "video";
+      videoUrl: string;
+      posterUrl: string;
+      // The muted-visual invariant: the video NEVER sounds its own baked track. The
+      // card's audio is `previewUrl` (below), the same official-preview bed a cover uses.
+      hasAudio: false;
+      previewUrl: string | undefined;
+    }
   | { kind: "cover"; coverUrl: string | undefined; previewUrl: string | undefined };
 
 export function resolveCardMedia(f: TrackListItem): CardMedia {
   const id = f.logId ?? f.trackId;
+  // The one audio path for BOTH kinds: the 30s official preview, relayed by the proxy
+  // (expiring previewUrl tokens aren't used directly). Keyed by logId when present.
+  const previewUrl = f.previewUrl ? previewProxy(id) : undefined;
   if (f.logId && f.videoSquaredAt) {
     return {
-      hasAudio: true,
+      hasAudio: false,
       kind: "video",
       posterUrl: videoPoster(f.logId, f.videoSquaredAt),
+      previewUrl,
       videoUrl: videoMaster(f.logId),
     };
   }
   return {
     coverUrl: f.albumImageUrl,
     kind: "cover",
-    previewUrl: f.previewUrl ? previewProxy(id) : undefined,
+    previewUrl,
   };
 }
 

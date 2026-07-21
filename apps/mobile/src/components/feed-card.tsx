@@ -160,28 +160,36 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   // finding actually changes.
   const media = useMemo(() => resolveCardMedia(finding), [finding]);
 
+  // The video is a MUTED VISUAL — it never sounds its own baked track (App Store 5.2.3;
+  // see media.ts). Muted + `mixWithOthers` means it never claims/ducks the audio session,
+  // so it can't interrupt the preview bed below (verified against expo-video's iOS
+  // VideoManager: a non-outputting player inserts `.mixWithOthers`). It stays muted for
+  // life — nothing here ever flips `muted`.
   const player = useVideoPlayer(media.kind === "video" ? media.videoUrl : null, (p) => {
     p.loop = true;
     p.muted = true;
+    p.audioMixingMode = "mixWithOthers";
   });
-  const audio = useAudioPlayer(
-    media.kind === "cover" && media.previewUrl ? media.previewUrl : null,
-  );
+  // The card's ONE audio path, for BOTH kinds: the 30s official preview bed. A card with
+  // no preview has no bed (a silent visual) — never a fall back to the video's own track.
+  const audio = useAudioPlayer(media.previewUrl ?? null);
 
   // Stable rail labels + a11y hints (the Chrome Rule); the icon + gold tint carry state.
+  // A card with no preview bed has nothing to toggle — the control disables (visual-only).
+  const hasBed = media.previewUrl !== undefined;
   const soundControl = soundRail(soundOn);
 
-  // Only the visible card plays; sound follows the global toggle.
+  // Only the visible card plays; the muted video rolls whenever active, and the preview
+  // bed (both kinds) follows the global sound toggle. The two start together on focus.
   useEffect(() => {
     if (media.kind === "video") {
-      // eslint-disable-next-line react-hooks/immutability -- expo-video exposes `muted` as the documented imperative player API.
-      player.muted = !soundOn;
       if (active) {
         player.play();
       } else {
         player.pause();
       }
-    } else if (media.previewUrl) {
+    }
+    if (media.previewUrl) {
       if (active && soundOn) {
         audio.play();
       } else {
@@ -190,12 +198,12 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     }
   }, [active, audio, media, player, soundOn]);
 
-  // Hold the wake lock while this card is the one actually making sound (an audible
-  // video) so a long clip never lets the screen sleep mid-listen. A stable per-card tag
+  // Hold the wake lock while this card is the one actually making sound (the preview bed
+  // is playing) so a clip never lets the screen sleep mid-listen. A stable per-card tag
   // keeps the calls idempotent; the cleanup always releases, so locks can't leak on
   // pause/scroll/unmount.
   const keepAwakeTag = useId();
-  const playing = active && media.kind === "video" && soundOn;
+  const playing = active && soundOn && hasBed;
   useEffect(() => {
     if (!playing) {
       return;
@@ -206,13 +214,13 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
     };
   }, [keepAwakeTag, playing]);
 
-  // No background audio (reinforces the session rule; covers calls / route changes).
+  // No background audio (reinforces the session rule; covers calls / route changes, and
+  // the radio taking the floor). Pause the preview bed always and the muted video too.
   const pauseAll = useCallback(() => {
     if (media.kind === "video") {
       player.pause();
-    } else {
-      audio.pause();
     }
+    audio.pause();
   }, [audio, media, player]);
   useBackgroundPause(pauseAll);
 
@@ -300,16 +308,20 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
           onPress={() => Share.share({ url: finding.logPageUrl ?? finding.spotifyUrl })}
         />
         <RailAction
-          accessibilityLabel={soundControl.accessibilityLabel}
+          // A card with no preview bed has nothing to sound: the control dims and goes
+          // inert (visual-only card). Drop the flipping hint then so the reader falls back
+          // to the stable "Sound" label + the disabled state — no promise of audio.
+          accessibilityLabel={hasBed ? soundControl.accessibilityLabel : undefined}
+          disabled={!hasBed}
           icon={
             <Ionicons
-              name={soundControl.active ? "volume-high" : "volume-mute"}
+              name={hasBed && soundControl.active ? "volume-high" : "volume-mute"}
               size={29}
-              color={soundControl.active ? color.eclipseGold : color.starlightCream}
+              color={hasBed && soundControl.active ? color.eclipseGold : color.starlightCream}
               style={styles.icon}
             />
           }
-          active={soundControl.active}
+          active={hasBed && soundControl.active}
           label={soundControl.label}
           onPress={onToggleSound}
         />
@@ -350,6 +362,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
 
 function RailAction({
   accessibilityLabel,
+  disabled,
   icon,
   label,
   onPress,
@@ -357,6 +370,7 @@ function RailAction({
 }: {
   accessibilityLabel?: string;
   active?: boolean;
+  disabled?: boolean;
   icon: ReactNode;
   label: string;
   onPress: () => void;
@@ -365,10 +379,15 @@ function RailAction({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
-      accessibilityState={{ selected: active }}
+      accessibilityState={{ disabled, selected: active }}
+      disabled={disabled}
       hitSlop={6}
       onPress={onPress}
-      style={({ pressed }) => [styles.railItem, pressed ? styles.railPressed : null]}
+      style={({ pressed }) => [
+        styles.railItem,
+        disabled ? styles.railDisabled : null,
+        pressed ? styles.railPressed : null,
+      ]}
     >
       <View style={styles.railIcon}>{icon}</View>
       <Text
@@ -397,6 +416,8 @@ const styles = StyleSheet.create({
   logId: { color: color.eclipseGold, fontSize: 13 },
   // right: 12 keeps the labels a real margin off the device edge (operator flag).
   rail: { alignItems: "center", gap: 16, position: "absolute", right: 12 },
+  // A sound control with no preview bed to govern: dimmed + inert (visual-only card).
+  railDisabled: { opacity: 0.35 },
   railIcon: { alignItems: "center", height: 36, justifyContent: "center", width: 36 },
   // Wide enough for the longest stable label ("Spotify") on one line.
   railItem: { alignItems: "center", gap: 3, width: 80 },
