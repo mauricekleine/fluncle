@@ -542,7 +542,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
     exposedContent: [
-      "every track Fluncle holds as JSON, newest release first, numbered pages (page); certified filters to findings, uncertified to the rest, omitted to both",
+      "every track Fluncle holds as JSON, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest, omitted returns both",
     ],
     kind: "api",
     name: "api.tracks",

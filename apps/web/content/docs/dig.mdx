@@ -52,6 +52,6 @@ dig +short latest.dig.fluncle.com TXT \
 `fluncle-dns` keeps no database. On each query it reads the public [API](/docs/api-overview) and renders the result as TXT, with a short in-memory cache so a hot coordinate or a `dig` retry storm doesn't hammer the API.
 
 - A coordinate or `random` reads the finding from `/api/v1/tracks/<id>`.
-- `latest` reads `/api/v1/tracks?limit=1`; the list is newest-first, so the head is the latest finding.
+- `latest` reads `/api/v1/findings?limit=1`; the list is newest-first, so the head is the latest finding.
 
 Same archive as every other surface, this time spoken in DNS.
