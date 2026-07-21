@@ -160,7 +160,8 @@
       "support": {
         "web": {
           "state": "yes",
-          "evidence": "⌘K search (search_archive)"
+          "evidence": "⌘K search (search_archive)",
+          "note": "entity jumps incl. galaxies + mixtapes (#806)"
         },
         "api": {
           "state": "yes",
@@ -378,6 +379,41 @@
         },
         "mcp": {
           "evidence": "list_similar_artists (1–6 anchors)",
+          "state": "yes"
+        }
+      }
+    },
+    {
+      "entity": "cross",
+      "id": "compound-sound-discovery",
+      "register": "catalogue",
+      "story": "As a listener, I want compound discovery in one query — songs by artists that sound like Koven and Maduk, in A minor, from before 2020.",
+      "support": {
+        "api": {
+          "evidence": "search_archive soundsLikeArtists filter",
+          "state": "yes"
+        },
+        "chat": {
+          "evidence": "search_archive (NL tier emits soundsLikeArtists)",
+          "state": "yes"
+        },
+        "cli": {
+          "evidence": "search <query> (NL tier)",
+          "state": "yes"
+        },
+        "feeds": {
+          "state": "n/a"
+        },
+        "mcp": {
+          "evidence": "search_archive",
+          "state": "yes"
+        },
+        "mobile": {
+          "evidence": "Archive tab search",
+          "state": "yes"
+        },
+        "web": {
+          "evidence": "⌘K search (sounds like: chip)",
           "state": "yes"
         }
       }
