@@ -9,6 +9,7 @@ catalogue,artist,browse-every-artist,"As a listener, I want to browse every drum
 catalogue,artist,artist-profile,"As a listener, I want an artist's profile: bio, releases, and where to follow them.",yes,yes,yes,yes,yes,no,partial,no
 catalogue,artist,similar-to-one-artist,"As a listener, I want artists similar to one artist I like.",yes,yes,no,yes,yes,no,n/a,no
 catalogue,artist,sounds-like-selected-artists,"As a listener, I want to multi-select artists I like and see who sounds like all of them.",yes,yes,no,yes,no,no,n/a,no
+catalogue,cross,compound-sound-discovery,"As a listener, I want compound discovery in one query — songs by artists that sound like Koven and Maduk, in A minor, from before 2020.",yes,yes,yes,yes,yes,no,n/a,yes
 catalogue,artist,follow-artist-releases,"As a fan, I want to follow one artist's new releases.",partial,partial,no,no,no,no,yes,no
 catalogue,album,browse-every-album,"As a listener, I want to browse every album and EP, A to Z.",yes,yes,yes,yes,yes,no,no,no
 catalogue,album,album-page,"As a listener, I want an album's page: tracklist, artists, label.",yes,yes,yes,yes,partial,no,partial,no
