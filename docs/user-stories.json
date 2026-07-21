@@ -66,12 +66,20 @@
           "evidence": "/tracks (?page=N)"
         },
         "api": {
-          "state": "no",
-          "note": "no catalogue-wide track list op; list_tracks is the findings feed"
+          "evidence": "list_tracks (GET /tracks, certified param)",
+          "state": "yes"
         },
         "feeds": {
           "state": "no",
           "note": "feeds carry findings + the 30-day fresh window only"
+        },
+        "mcp": {
+          "evidence": "list_tracks browse tool (50/page)",
+          "state": "yes"
+        },
+        "chat": {
+          "evidence": "list_tracks (flat certified-tagged rows)",
+          "state": "yes"
         }
       }
     },
@@ -195,11 +203,11 @@
         },
         "api": {
           "state": "yes",
-          "evidence": "get_similar_findings"
+          "evidence": "list_similar_tracks"
         },
         "cli": {
           "state": "partial",
-          "evidence": "tracks similar",
+          "evidence": "tracks similar (list_similar_tracks)",
           "note": "hidden command group"
         },
         "mcp": {
@@ -335,12 +343,12 @@
           "evidence": "/artist/<slug> Similar artists rail"
         },
         "api": {
-          "state": "no",
-          "note": "list_similar_artists requires 2–6 slugs; no single-artist op"
+          "evidence": "list_similar_artists (1–6 anchors)",
+          "state": "yes"
         },
         "mcp": {
           "state": "yes",
-          "evidence": "get_similar_artists"
+          "evidence": "list_similar_artists"
         },
         "feeds": {
           "state": "n/a"
@@ -367,6 +375,10 @@
         },
         "feeds": {
           "state": "n/a"
+        },
+        "mcp": {
+          "evidence": "list_similar_artists (1–6 anchors)",
+          "state": "yes"
         }
       }
     },
@@ -678,15 +690,15 @@
         },
         "api": {
           "state": "yes",
-          "evidence": "list_tracks"
+          "evidence": "list_findings"
         },
         "cli": {
           "state": "yes",
-          "evidence": "recent"
+          "evidence": "recent (list_findings)"
         },
         "mcp": {
           "state": "yes",
-          "evidence": "list_tracks"
+          "evidence": "list_findings"
         },
         "ssh": {
           "state": "yes",

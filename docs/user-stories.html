@@ -1,985 +1,117 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fluncle user stories × public surfaces</title>
-    <style>
-      :root {
-        color-scheme: dark;
-      }
-      body {
-        margin: 0;
-        padding: 2rem clamp(1rem, 4vw, 3rem);
-        background: #0b0b0d;
-        color: #d8d4c8;
-        font:
-          15px/1.5 ui-sans-serif,
-          system-ui,
-          sans-serif;
-      }
-      h1 {
-        font-size: 1.4rem;
-        margin: 0 0 0.25rem;
-        color: #f2eee2;
-      }
-      .sub {
-        color: #8f8a7c;
-        max-width: 70ch;
-        margin: 0 0 1.5rem;
-      }
-      .controls {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.75rem;
-        margin-bottom: 1.25rem;
-        align-items: center;
-      }
-      input[type="search"],
-      select {
-        background: #16161a;
-        color: #d8d4c8;
-        border: 1px solid #2b2b31;
-        border-radius: 6px;
-        padding: 0.4rem 0.6rem;
-        font: inherit;
-      }
-      .legend {
-        display: flex;
-        gap: 1rem;
-        flex-wrap: wrap;
-        color: #8f8a7c;
-        font-size: 0.85rem;
-        margin-bottom: 1.5rem;
-      }
-      section {
-        margin-bottom: 2rem;
-      }
-      h2 {
-        font-size: 0.85rem;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: #b3ae9f;
-        border-bottom: 1px solid #232329;
-        padding-bottom: 0.4rem;
-      }
-      h2 .reg {
-        color: #6f6a5e;
-      }
-      .tablewrap {
-        overflow-x: auto;
-      }
-      table {
-        border-collapse: collapse;
-        width: 100%;
-      }
-      th,
-      td {
-        text-align: left;
-        padding: 0.45rem 0.7rem;
-        border-bottom: 1px solid #1c1c21;
-        vertical-align: top;
-      }
-      th {
-        font-size: 0.75rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: #8f8a7c;
-        position: sticky;
-        top: 0;
-        background: #0b0b0d;
-      }
-      td.cell {
-        text-align: center;
-        font-size: 1rem;
-        width: 4.5rem;
-        cursor: default;
-      }
-      .s-yes {
-        color: #f5b800;
-      }
-      .s-partial {
-        color: #c99f2e;
-      }
-      .s-no {
-        color: #4a4a52;
-      }
-      .s-planned {
-        color: #7d8fb3;
-      }
-      .s-na {
-        color: #333338;
-      }
-      tr.gaprow td {
-        background: rgba(245, 184, 0, 0.03);
-      }
-      .story {
-        max-width: 44ch;
-      }
-      .storyid {
-        color: #6f6a5e;
-        font-size: 0.75rem;
-        display: block;
-      }
-      details {
-        margin-top: 0.25rem;
-      }
-      summary {
-        color: #8f8a7c;
-        font-size: 0.78rem;
-        cursor: pointer;
-      }
-      .ev {
-        font-size: 0.78rem;
-        color: #9f9a8b;
-        margin: 0.25rem 0 0;
-        padding-left: 1rem;
-      }
-      .ev b {
-        color: #c9c4b5;
-        font-weight: 600;
-      }
-      .hidden {
-        display: none;
-      }
-      footer {
-        color: #6f6a5e;
-        font-size: 0.8rem;
-        margin-top: 2rem;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>Fluncle user stories × public surfaces</h1>
-    <p class="sub">
-      Every public-facing user story, split by register (lore vs catalogue), grouped by entity, with
-      per-surface support. Cells are FACTS about shipped code, each backed by an evidence pointer
-      (route, op id, tool, or command). 'planned' marks operator-ratified intent only — it is a
-      direction flag, not a spec (docs/planning rules apply). Regenerate the HTML/CSV with `bun run
-      stories:build`. Updated 2026-07-21.
-    </p>
-    <div class="controls">
-      <input type="search" id="q" placeholder="Filter stories…" />
-      <select id="reg">
-        <option value="">Both registers</option>
-        <option value="lore">Lore</option>
-        <option value="catalogue">Catalogue</option>
-      </select>
-      <select id="gap">
-        <option value="">All rows</option>
-        <option value="web">Gaps on Web</option>
-        <option value="api">Gaps on API</option>
-        <option value="cli">Gaps on CLI</option>
-        <option value="mcp">Gaps on MCP</option>
-        <option value="chat">Gaps on ChatDnB</option>
-        <option value="ssh">Gaps on SSH</option>
-        <option value="feeds">Gaps on Feeds</option>
-        <option value="mobile">Gaps on Mobile</option>
-      </select>
-    </div>
-    <div class="legend">
-      <span><span class="s-yes">●</span> yes</span>
-      <span><span class="s-partial">◐</span> partial</span>
-      <span><span class="s-planned">◌</span> planned</span>
-      <span><span class="s-no">·</span> no</span>
-      <span><span class="s-na">—</span> n/a</span>
-    </div>
-    <div id="matrix"></div>
-    <footer>
-      Source of truth: docs/user-stories.json · regenerate with <code>bun run stories:build</code>.
-    </footer>
-    <script>
-      const SPEC = {
-        stories: [
-          {
-            id: "browse-every-track",
-            story:
-              "As a listener, I want to browse every track in the archive, newest release first.",
-            register: "catalogue",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/tracks (?page=N)" },
-              api: {
-                state: "no",
-                note: "no catalogue-wide track list op; list_tracks is the findings feed",
-              },
-              feeds: { state: "no", note: "feeds carry findings + the 30-day fresh window only" },
-            },
-          },
-          {
-            id: "filter-tracks",
-            story:
-              "As a listener, I want to filter tracks by release year, tempo, key, label, and galaxy.",
-            register: "catalogue",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/tracks filter bar (year/BPM/key/label/galaxy)" },
-              api: { state: "yes", evidence: "search_archive filters" },
-              cli: {
-                state: "partial",
-                evidence: "search <query>",
-                note: "via the NL search tier, no dedicated flags",
-              },
-              mcp: { state: "partial", evidence: "search_archive" },
-              mobile: { state: "partial", evidence: "Archive tab search" },
-              chat: { evidence: "search_archive (NL filters)", state: "partial" },
-            },
-          },
-          {
-            id: "see-new-releases",
-            story: "As a listener, I want to see what just came out in drum & bass.",
-            register: "catalogue",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/fresh (?view=)" },
-              api: { state: "yes", evidence: "list_fresh" },
-              cli: { state: "yes", evidence: "fresh" },
-              mcp: { state: "yes", evidence: "list_fresh" },
-              ssh: { state: "yes", evidence: "fresh menu + deep-link" },
-              feeds: { state: "yes", evidence: "/fresh.xml, /fresh.json" },
-              chat: { evidence: "list_fresh (register-split)", state: "yes" },
-            },
-          },
-          {
-            id: "search-archive",
-            story:
-              "As a listener, I want to search the whole archive by name, coordinate, or a plain-language query.",
-            register: "catalogue",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "⌘K search (search_archive)" },
-              api: { state: "yes", evidence: "search_archive" },
-              cli: { state: "yes", evidence: "search <query>" },
-              mcp: { state: "yes", evidence: "search_archive" },
-              ssh: { state: "no", note: "only the Spotify lookup inside Submit" },
-              feeds: { state: "n/a" },
-              mobile: { state: "yes", evidence: "Archive tab (search_archive)" },
-              chat: { evidence: "search_archive → finding/catalogue buckets", state: "yes" },
-            },
-          },
-          {
-            id: "find-similar-tracks",
-            story: "As a listener, I want to find tracks that sound like one I already love.",
-            register: "catalogue",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/log/<id> Close in sound" },
-              api: { state: "yes", evidence: "get_similar_findings" },
-              cli: { state: "partial", evidence: "tracks similar", note: "hidden command group" },
-              mcp: { state: "yes", evidence: "search_archive sounds-like tier" },
-              feeds: { state: "n/a" },
-              mobile: { state: "yes", evidence: "Archive search sounds-like" },
-              chat: { evidence: "search_archive sounds-like (anchor + neighbours)", state: "yes" },
-            },
-          },
-          {
-            id: "open-by-coordinate",
-            story: "As a listener, I want to open any track or mixtape by its Log ID coordinate.",
-            register: "catalogue",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/<coordinate> → /log/<id>" },
-              api: { state: "yes", evidence: "get_track" },
-              cli: { state: "yes", evidence: "tracks get <coord>" },
-              mcp: { state: "yes", evidence: "get_track + fluncle:// resources" },
-              ssh: { state: "yes", evidence: "ssh rave.fluncle.com <coord>" },
-              feeds: {
-                state: "partial",
-                evidence: "oEmbed /embed cards; dig TXT <coord>.dig.fluncle.com",
-              },
-              mobile: { state: "yes", evidence: "log/[id]" },
-              chat: { evidence: "get_track (compact card)", state: "yes" },
-            },
-          },
-          {
-            id: "browse-every-artist",
-            story: "As a listener, I want to browse every drum & bass artist, A to Z.",
-            register: "catalogue",
-            entity: "artist",
-            support: {
-              web: { state: "yes", evidence: "/artists (?page, ?q)" },
-              api: { state: "yes", evidence: "list_artists" },
-              cli: { state: "yes", evidence: "artists (--page)" },
-              mcp: { state: "yes", evidence: "list_artists (50/page)" },
-              ssh: {
-                state: "partial",
-                evidence: "Artist archive screen",
-                note: "calls legacy /api/artists; single page, rows dead-end (no detail)",
-              },
-              chat: { evidence: "list_artists", state: "yes" },
-            },
-          },
-          {
-            id: "artist-profile",
-            story:
-              "As a listener, I want an artist's profile: bio, releases, and where to follow them.",
-            register: "catalogue",
-            entity: "artist",
-            support: {
-              web: {
-                state: "yes",
-                evidence: "/artist/<slug> (dossier, socials, similar, catalogue)",
-              },
-              api: { state: "yes", evidence: "get_artist" },
-              cli: { state: "yes", evidence: "artists <slug>" },
-              mcp: { state: "yes", evidence: "get_artist + list_artist_catalogue" },
-              feeds: { state: "partial", evidence: "oEmbed card; /artist/<slug>/fresh.xml" },
-              chat: { evidence: "get_artist → ArtistCard", state: "yes" },
-            },
-          },
-          {
-            id: "similar-to-one-artist",
-            story: "As a listener, I want artists similar to one artist I like.",
-            register: "catalogue",
-            entity: "artist",
-            support: {
-              web: { state: "yes", evidence: "/artist/<slug> Similar artists rail" },
-              api: {
-                state: "no",
-                note: "list_similar_artists requires 2–6 slugs; no single-artist op",
-              },
-              mcp: { state: "yes", evidence: "get_similar_artists" },
-              feeds: { state: "n/a" },
-              chat: { evidence: "get_similar_artists → NeighbourList", state: "yes" },
-            },
-          },
-          {
-            id: "sounds-like-selected-artists",
-            story:
-              "As a listener, I want to multi-select artists I like and see who sounds like all of them.",
-            register: "catalogue",
-            entity: "artist",
-            support: {
-              web: { state: "yes", evidence: "/artists Compare sounds (?like=)" },
-              api: { state: "yes", evidence: "list_similar_artists" },
-              feeds: { state: "n/a" },
-            },
-          },
-          {
-            id: "follow-artist-releases",
-            story: "As a fan, I want to follow one artist's new releases.",
-            register: "catalogue",
-            entity: "artist",
-            support: {
-              feeds: { state: "yes", evidence: "/artist/<slug>/fresh.xml" },
-              web: {
-                state: "partial",
-                evidence: "account watch (save_private_watch)",
-                note: "watch stored; no notification leg yet",
-              },
-              api: { state: "partial", evidence: "save_private_watch" },
-            },
-          },
-          {
-            id: "browse-every-album",
-            story: "As a listener, I want to browse every album and EP, A to Z.",
-            register: "catalogue",
-            entity: "album",
-            support: {
-              web: { state: "yes", evidence: "/albums (?page, ?q)" },
-              api: { state: "yes", evidence: "list_albums" },
-              cli: { state: "yes", evidence: "albums (--page)" },
-              mcp: { state: "yes", evidence: "list_albums (50/page)" },
-              chat: { evidence: "list_albums", state: "yes" },
-            },
-          },
-          {
-            id: "album-page",
-            story: "As a listener, I want an album's page: tracklist, artists, label.",
-            register: "catalogue",
-            entity: "album",
-            support: {
-              web: { state: "yes", evidence: "/album/<slug>" },
-              api: { state: "yes", evidence: "get_album" },
-              cli: { state: "yes", evidence: "albums <slug>" },
-              mcp: { state: "yes", evidence: "list_album_catalogue" },
-              feeds: { state: "partial", evidence: "oEmbed card" },
-              chat: {
-                evidence: "list_album_catalogue (tracklist buckets)",
-                note: "no album card; no get_album tool",
-                state: "partial",
-              },
-            },
-          },
-          {
-            id: "browse-every-label",
-            story: "As a listener, I want to browse every record label, A to Z.",
-            register: "catalogue",
-            entity: "label",
-            support: {
-              web: { state: "yes", evidence: "/labels (?page, ?q)" },
-              api: { state: "yes", evidence: "list_labels" },
-              cli: { state: "yes", evidence: "labels (--page)" },
-              mcp: { state: "yes", evidence: "list_labels (50/page)" },
-              chat: { evidence: "list_labels", state: "yes" },
-            },
-          },
-          {
-            id: "label-page",
-            story: "As a listener, I want a label's page: its releases, artists, and lineage.",
-            register: "catalogue",
-            entity: "label",
-            support: {
-              web: { state: "yes", evidence: "/label/<slug>" },
-              api: { state: "yes", evidence: "get_label" },
-              cli: { state: "yes", evidence: "labels <slug>" },
-              mcp: { state: "yes", evidence: "get_label + list_label_catalogue" },
-              feeds: { state: "partial", evidence: "oEmbed card; /label/<slug>/fresh.xml" },
-            },
-          },
-          {
-            id: "follow-label-releases",
-            story: "As a fan, I want to follow one label's new releases.",
-            register: "catalogue",
-            entity: "label",
-            support: {
-              feeds: { state: "yes", evidence: "/label/<slug>/fresh.xml" },
-              web: {
-                state: "partial",
-                evidence: "account watch (save_private_watch)",
-                note: "watch stored; no notification leg yet",
-              },
-              api: { state: "partial", evidence: "save_private_watch" },
-            },
-          },
-          {
-            id: "build-a-set",
-            story:
-              "As a DJ, I want to chain a set: seed my taste and have the engine rank what mixes in clean next.",
-            register: "catalogue",
-            entity: "cross",
-            support: {
-              web: {
-                state: "partial",
-                evidence: "/mix",
-                note: "self-lifting archive-depth gate; strangers redirected until it opens",
-              },
-              api: {
-                state: "yes",
-                evidence: "list_mixable_artists, list_mix_openers, list_mixable_tracks",
-              },
-              mcp: { state: "yes", evidence: "build_set" },
-              mobile: { state: "yes", evidence: "Decks tab" },
-              feeds: { state: "n/a" },
-              chat: { evidence: "build_set → ChainCard", state: "yes" },
-            },
-          },
-          {
-            id: "share-reopen-set",
-            story: "As a DJ, I want to share a set as a link and have anyone reopen it.",
-            register: "catalogue",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "/mix ?set= (URL is the set)" },
-              api: { state: "yes", evidence: "list_set_tracks" },
-              mobile: { state: "yes", evidence: "Decks share" },
-              cli: { state: "n/a" },
-              ssh: { state: "n/a" },
-              feeds: { state: "n/a" },
-              chat: {
-                evidence: "build_set returns the /mix setUrl",
-                note: "emits a shareable link; cannot reopen one",
-                state: "partial",
-              },
-            },
-          },
-          {
-            id: "integrate-as-developer",
-            story: "As a developer or agent, I want a documented machine interface to the archive.",
-            register: "catalogue",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "/docs/api (Scalar)" },
-              api: { state: "yes", evidence: "/api/v1/openapi.json" },
-              mcp: { state: "yes", evidence: "/.well-known/mcp/server-card.json" },
-              feeds: { state: "yes", evidence: "/.well-known/api-catalog, agent-skills, llms.txt" },
-              cli: { state: "n/a" },
-              ssh: { state: "n/a" },
-              mobile: { state: "n/a" },
-              chat: { state: "n/a" },
-            },
-          },
-          {
-            id: "check-service-health",
-            story: "As a user, I want to check whether Fluncle's services are up.",
-            register: "catalogue",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "/status" },
-              api: { state: "yes", evidence: "get_health, /api/status" },
-              cli: { state: "yes", evidence: "status" },
-              mcp: { state: "yes", evidence: "get_status" },
-              ssh: { state: "yes", evidence: "status menu" },
-              feeds: { state: "n/a" },
-              chat: { evidence: "get_status → StatusStrip", state: "yes" },
-            },
-          },
-          {
-            id: "follow-latest-findings",
-            story: "As a fan, I want to follow Fluncle's latest finds as he logs them.",
-            register: "lore",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/ (home feed)" },
-              api: { state: "yes", evidence: "list_tracks" },
-              cli: { state: "yes", evidence: "recent" },
-              mcp: { state: "yes", evidence: "list_tracks" },
-              ssh: { state: "yes", evidence: "latest menu + deep-link" },
-              feeds: { state: "yes", evidence: "/rss.xml, /atom.xml, /feed.json" },
-              mobile: { state: "yes", evidence: "Feed tab" },
-              chat: { evidence: "list_tracks (findings cards)", state: "yes" },
-            },
-          },
-          {
-            id: "read-finding-story",
-            story:
-              "As a fan, I want to read why Fluncle logged a track — the note, the video, the observation.",
-            register: "lore",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/log/<id>" },
-              api: { state: "yes", evidence: "get_track" },
-              cli: {
-                state: "partial",
-                evidence: "tracks get",
-                note: "note text only, no video/audio",
-              },
-              mcp: { state: "yes", evidence: "get_track + resources" },
-              ssh: { state: "yes", evidence: "finding detail (note + links)" },
-              feeds: { state: "partial", evidence: "RSS item summary" },
-              mobile: { state: "yes", evidence: "log/[id] + Feed card" },
-              chat: { evidence: "get_track → FindingCard", state: "yes" },
-            },
-          },
-          {
-            id: "random-banger",
-            story: "As a listener, I want the archive to throw me a random banger.",
-            register: "lore",
-            entity: "track",
-            support: {
-              api: { state: "yes", evidence: "get_random_track" },
-              cli: { state: "yes", evidence: "random" },
-              mcp: { state: "yes", evidence: "get_random_track" },
-              ssh: { state: "yes", evidence: "random menu + deep-link" },
-              feeds: { state: "partial", evidence: "dig TXT random.dig.fluncle.com" },
-              chat: { evidence: "get_random_track", state: "yes" },
-            },
-          },
-          {
-            id: "swipe-stories",
-            story: "As a fan, I want to swipe findings as full-bleed video stories.",
-            register: "lore",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/?story=<id> viewer" },
-              api: { state: "yes", evidence: "list_stories" },
-              mobile: { state: "yes", evidence: "Feed tab pager" },
-              cli: { state: "n/a" },
-              ssh: { state: "n/a" },
-              feeds: { state: "n/a" },
-              chat: { state: "n/a" },
-            },
-          },
-          {
-            id: "listen-radio",
-            story:
-              "As a fan, I want to lean back and listen to Fluncle's spoken observations on a shared clock.",
-            register: "lore",
-            entity: "track",
-            support: {
-              web: { state: "yes", evidence: "/radio (radio.fluncle.com)" },
-              api: { state: "yes", evidence: "get_radio_now_playing, get_random_radio_track" },
-              mobile: { state: "yes", evidence: "Radio tab (background audio)" },
-              cli: { state: "n/a" },
-              ssh: { state: "n/a" },
-              feeds: { state: "n/a" },
-            },
-          },
-          {
-            id: "personal-recommendations",
-            story: "As a signed-in fan, I want personal recommendations grown from my own taste.",
-            register: "catalogue",
-            entity: "account",
-            support: {
-              web: { state: "yes", evidence: "/recommendations + Frontier Spotify playlist" },
-              api: { state: "yes", evidence: "me-recs + me-frontier ops" },
-            },
-          },
-          {
-            id: "browse-by-feel",
-            story:
-              "As a listener, I want to browse the archive by how it sounds, not what it's called.",
-            register: "lore",
-            entity: "galaxy",
-            support: {
-              web: {
-                state: "partial",
-                evidence: "/galaxies",
-                note: "launch-gated until the map is fully named",
-              },
-              api: { state: "yes", evidence: "list_galaxies, get_galaxy" },
-              cli: { state: "yes", evidence: "galaxies" },
-              ssh: { state: "yes", evidence: "galaxies menu" },
-              feeds: { state: "n/a" },
-            },
-          },
-          {
-            id: "play-galaxy-game",
-            story: "As a fan, I want to play the Galaxy — fly to every banger's star.",
-            register: "lore",
-            entity: "galaxy",
-            support: {
-              web: { state: "yes", evidence: "/galaxy (galaxy.fluncle.com)" },
-              api: { state: "n/a" },
-              cli: { state: "n/a" },
-              mcp: { state: "n/a" },
-              ssh: { state: "n/a" },
-              feeds: { state: "n/a" },
-              chat: { state: "n/a" },
-            },
-          },
-          {
-            id: "galaxy-progress",
-            story: "As a player, I want my Galaxy progress to follow my account across devices.",
-            register: "lore",
-            entity: "galaxy",
-            support: {
-              web: { state: "yes", evidence: "/account Galaxy tab (me-galaxy ops)" },
-              api: { state: "yes", evidence: "get/merge/collect private galaxy ops" },
-              cli: {
-                state: "partial",
-                evidence: "login + me",
-                note: "views progress; play stays on web",
-              },
-              chat: { state: "n/a" },
-            },
-          },
-          {
-            id: "browse-mixtapes",
-            story: "As a fan, I want to browse Fluncle's own DJ mixtapes.",
-            register: "lore",
-            entity: "mixtape",
-            support: {
-              web: { state: "yes", evidence: "/mixtapes" },
-              api: { state: "yes", evidence: "list_mixtapes" },
-              cli: { state: "yes", evidence: "mixtapes" },
-              mcp: { state: "partial", evidence: "list_tracks feed + fluncle://mixtape resources" },
-              ssh: { state: "yes", evidence: "mixtapes menu" },
-              feeds: { state: "yes", evidence: "/podcast.xml" },
-              mobile: { state: "yes", evidence: "Mixtapes tab" },
-              chat: {
-                evidence: "get_track mixtape arm → MixtapeCard",
-                note: "chat list_tracks is findings-only; no mixtape list",
-                state: "partial",
-              },
-            },
-          },
-          {
-            id: "experience-a-set",
-            story:
-              "As a fan, I want to experience a mixtape — the set video, the tracklist, the ride.",
-            register: "lore",
-            entity: "mixtape",
-            support: {
-              web: { state: "yes", evidence: "/log/<F-coord> set video + tracklist" },
-              api: { state: "yes", evidence: "get_track (mixtape arm)" },
-              cli: { state: "partial", evidence: "tracks get", note: "text only" },
-              mcp: { state: "yes", evidence: "get_track" },
-              ssh: {
-                state: "partial",
-                evidence: "mixtape detail",
-                note: "external listen links only",
-              },
-              feeds: { state: "partial", evidence: "podcast audio" },
-              mobile: {
-                state: "partial",
-                evidence: "mixtape/[id]",
-                note: "tracklist + links out; playback on web",
-              },
-              chat: { evidence: "MixtapeCard", note: "links out; no playback", state: "partial" },
-            },
-          },
-          {
-            id: "read-logbook",
-            story:
-              "As a fan, I want to read the voyage — Fluncle's travelogue, one entry per sector-day.",
-            register: "lore",
-            entity: "cross",
-            support: { web: { state: "yes", evidence: "/logbook, /logbook/<sector>" } },
-          },
-          {
-            id: "learn-who-fluncle-is",
-            story: "As a newcomer, I want to learn who Fluncle is and what this place is.",
-            register: "lore",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "/about" },
-              cli: { state: "yes", evidence: "about" },
-              mcp: { state: "partial", evidence: "prompts + initialize instructions" },
-              ssh: { state: "yes", evidence: "about screen" },
-              feeds: { state: "yes", evidence: "llms.txt identity" },
-              api: { state: "n/a" },
-              chat: { evidence: "the persona itself (system prompt)", state: "yes" },
-            },
-          },
-          {
-            id: "decode-a-coordinate",
-            story: "As a curious visitor, I want a Log ID explained to me.",
-            register: "lore",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "/log/<id> coordinate explainer" },
-              mcp: { state: "yes", evidence: "decode_coordinate prompt" },
-              ssh: { state: "yes", evidence: "coordinate deep-link detail" },
-              feeds: { state: "partial", evidence: "dig TXT <coord>.dig.fluncle.com" },
-              api: { state: "n/a" },
-              chat: { evidence: "prose coordinates linkified + get_track", state: "yes" },
-            },
-          },
-          {
-            id: "see-reach",
-            story: "As a curious fan, I want to see Fluncle's reach across platforms over time.",
-            register: "lore",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "/reach" },
-              api: { state: "yes", evidence: "list_platform_stats" },
-            },
-          },
-          {
-            id: "chat-with-fluncle",
-            story: "As a crew member, I want to talk with Fluncle about drum & bass.",
-            register: "lore",
-            entity: "cross",
-            support: {
-              web: {
-                state: "partial",
-                evidence: "/chat",
-                note: "crew-door gated; Discord presence (Hermes) lives outside these surfaces",
-              },
-              chat: { evidence: "/chat (api/chat, FLUNCLE_CHAT_SYSTEM_PROMPT)", state: "yes" },
-            },
-          },
-          {
-            id: "submit-a-track",
-            story: "As a crew member, I want to send Fluncle a track I think he'd log.",
-            register: "lore",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "Submit dialog (submit_track)" },
-              api: { state: "yes", evidence: "submit_track" },
-              cli: { state: "yes", evidence: "submit" },
-              mcp: { state: "yes", evidence: "submit_track" },
-              ssh: { state: "yes", evidence: "submit flow" },
-              feeds: { state: "n/a" },
-              mobile: { state: "yes", evidence: "Submit screen" },
-              chat: { evidence: "submit_track", state: "yes" },
-            },
-          },
-          {
-            id: "newsletter",
-            story: "As a fan, I want fresh finds in my inbox every Friday.",
-            register: "lore",
-            entity: "cross",
-            support: {
-              web: { state: "yes", evidence: "Subscribe dialog + /newsletter archive" },
-              api: { state: "yes", evidence: "subscribe_newsletter, list_editions" },
-              cli: { state: "yes", evidence: "subscribe" },
-              mcp: { state: "yes", evidence: "subscribe_newsletter" },
-              ssh: { state: "yes", evidence: "subscribe flow" },
-              feeds: { state: "n/a" },
-              chat: { evidence: "subscribe_newsletter", state: "yes" },
-            },
-          },
-          {
-            id: "create-account",
-            story: "As a fan, I want an account that follows me across surfaces.",
-            register: "catalogue",
-            entity: "account",
-            support: {
-              web: { state: "yes", evidence: "/account (email + Google)" },
-              api: { state: "yes", evidence: "me ops (better-auth)" },
-              cli: { state: "yes", evidence: "login (device flow via /device)" },
-              mobile: { state: "yes", evidence: "Account screen (email)" },
-              mcp: { state: "n/a" },
-              feeds: { state: "n/a" },
-              chat: { state: "n/a" },
-            },
-          },
-          {
-            id: "save-findings",
-            story: "As a signed-in fan, I want to save findings for later.",
-            register: "catalogue",
-            entity: "account",
-            support: {
-              web: { state: "yes", evidence: "SaveFindingButton (me-saved ops)" },
-              api: { state: "yes", evidence: "save/list private saved findings" },
-              mobile: {
-                state: "yes",
-                evidence: "Saved chips",
-                note: "device-local until sign-in, then merged",
-              },
-            },
-          },
-          {
-            id: "save-sets",
-            story: "As a DJ, I want to save the sets I build to my account.",
-            register: "catalogue",
-            entity: "account",
-            support: {
-              web: { state: "yes", evidence: "SaveSetDialog (me-sets ops)" },
-              api: { state: "yes", evidence: "save/list/update/delete private sets" },
-              mobile: { state: "yes", evidence: "Decks save (signed-in)" },
-            },
-          },
-          {
-            id: "push-notifications",
-            story: "As a fan, I want a push when a new finding or mixtape lands.",
-            register: "catalogue",
-            entity: "account",
-            support: {
-              mobile: { state: "yes", evidence: "Notifications screen (register_device)" },
-              api: { state: "yes", evidence: "register_device" },
-              web: { state: "no" },
-              cli: { state: "n/a" },
-              ssh: { state: "n/a" },
-              mcp: { state: "n/a" },
-              feeds: { state: "n/a" },
-              chat: { state: "n/a" },
-            },
-          },
-        ],
-        surfaces: [
-          { id: "web", label: "Web", note: "fluncle.com public routes" },
-          { id: "api", label: "API", note: "public /api/v1 oRPC ops" },
-          { id: "cli", label: "CLI", note: "the fluncle CLI, non-admin" },
-          { id: "mcp", label: "MCP", note: "MCP tools/resources/prompts" },
-          {
-            id: "chat",
-            label: "ChatDnB",
-            note: "/chat — verified-email crew door; the 18 chat-transport tools, generative-UI cards",
-          },
-          { id: "ssh", label: "SSH", note: "ssh rave.fluncle.com" },
-          {
-            id: "feeds",
-            label: "Feeds",
-            note: "RSS/Atom/JSON, podcast, llms.txt, oEmbed, sitemap, DNS",
-          },
-          { id: "mobile", label: "Mobile", note: "the Expo app (App Store review)" },
-        ],
-      };
-      const GLYPH = { "n/a": "—", no: "·", partial: "◐", planned: "◌", yes: "●" };
-      const cls = (s) => "s-" + (s === "n/a" ? "na" : s);
-      const ENTITY_ORDER = [
-        "track",
-        "artist",
-        "album",
-        "label",
-        "galaxy",
-        "mixtape",
-        "account",
-        "cross",
-      ];
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fluncle user stories × public surfaces</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 2rem clamp(1rem, 4vw, 3rem); background: #0b0b0d; color: #d8d4c8; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  h1 { font-size: 1.4rem; margin: 0 0 0.25rem; color: #f2eee2; }
+  .sub { color: #8f8a7c; max-width: 70ch; margin: 0 0 1.5rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem; align-items: center; }
+  input[type="search"], select { background: #16161a; color: #d8d4c8; border: 1px solid #2b2b31; border-radius: 6px; padding: 0.4rem 0.6rem; font: inherit; }
+  .legend { display: flex; gap: 1rem; flex-wrap: wrap; color: #8f8a7c; font-size: 0.85rem; margin-bottom: 1.5rem; }
+  section { margin-bottom: 2rem; }
+  h2 { font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; color: #b3ae9f; border-bottom: 1px solid #232329; padding-bottom: 0.4rem; }
+  h2 .reg { color: #6f6a5e; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 0.45rem 0.7rem; border-bottom: 1px solid #1c1c21; vertical-align: top; }
+  th { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: #8f8a7c; position: sticky; top: 0; background: #0b0b0d; }
+  td.cell { text-align: center; font-size: 1rem; width: 4.5rem; cursor: default; }
+  .s-yes { color: #f5b800; }
+  .s-partial { color: #c99f2e; }
+  .s-no { color: #4a4a52; }
+  .s-planned { color: #7d8fb3; }
+  .s-na { color: #333338; }
+  tr.gaprow td { background: rgba(245, 184, 0, 0.03); }
+  .story { max-width: 44ch; }
+  .storyid { color: #6f6a5e; font-size: 0.75rem; display: block; }
+  details { margin-top: 0.25rem; }
+  summary { color: #8f8a7c; font-size: 0.78rem; cursor: pointer; }
+  .ev { font-size: 0.78rem; color: #9f9a8b; margin: 0.25rem 0 0; padding-left: 1rem; }
+  .ev b { color: #c9c4b5; font-weight: 600; }
+  .hidden { display: none; }
+  footer { color: #6f6a5e; font-size: 0.8rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+<h1>Fluncle user stories × public surfaces</h1>
+<p class="sub">Every public-facing user story, split by register (lore vs catalogue), grouped by entity, with per-surface support. Cells are FACTS about shipped code, each backed by an evidence pointer (route, op id, tool, or command). 'planned' marks operator-ratified intent only — it is a direction flag, not a spec (docs/planning rules apply). Regenerate the HTML/CSV with `bun run stories:build`. Updated 2026-07-21.</p>
+<div class="controls">
+  <input type="search" id="q" placeholder="Filter stories…" />
+  <select id="reg"><option value="">Both registers</option><option value="lore">Lore</option><option value="catalogue">Catalogue</option></select>
+  <select id="gap"><option value="">All rows</option><option value="web">Gaps on Web</option><option value="api">Gaps on API</option><option value="cli">Gaps on CLI</option><option value="mcp">Gaps on MCP</option><option value="chat">Gaps on ChatDnB</option><option value="ssh">Gaps on SSH</option><option value="feeds">Gaps on Feeds</option><option value="mobile">Gaps on Mobile</option></select>
+</div>
+<div class="legend">
+  <span><span class="s-yes">●</span> yes</span>
+  <span><span class="s-partial">◐</span> partial</span>
+  <span><span class="s-planned">◌</span> planned</span>
+  <span><span class="s-no">·</span> no</span>
+  <span><span class="s-na">—</span> n/a</span>
+</div>
+<div id="matrix"></div>
+<footer>Source of truth: docs/user-stories.json · regenerate with <code>bun run stories:build</code>.</footer>
+<script>
+const SPEC = {"stories":[{"id":"browse-every-track","story":"As a listener, I want to browse every track in the archive, newest release first.","register":"catalogue","entity":"track","support":{"web":{"state":"yes","evidence":"/tracks (?page=N)"},"api":{"evidence":"list_tracks (GET /tracks, certified param)","state":"yes"},"feeds":{"state":"no","note":"feeds carry findings + the 30-day fresh window only"},"mcp":{"evidence":"list_tracks browse tool (50/page)","state":"yes"},"chat":{"evidence":"list_tracks (flat certified-tagged rows)","state":"yes"}}},{"id":"filter-tracks","story":"As a listener, I want to filter tracks by release year, tempo, key, label, and galaxy.","register":"catalogue","entity":"track","support":{"web":{"state":"yes","evidence":"/tracks filter bar (year/BPM/key/label/galaxy)"},"api":{"state":"yes","evidence":"search_archive filters"},"cli":{"state":"partial","evidence":"search <query>","note":"via the NL search tier, no dedicated flags"},"mcp":{"state":"partial","evidence":"search_archive"},"mobile":{"state":"partial","evidence":"Archive tab search"},"chat":{"evidence":"search_archive (NL filters)","state":"partial"}}},{"id":"see-new-releases","story":"As a listener, I want to see what just came out in drum & bass.","register":"catalogue","entity":"track","support":{"web":{"state":"yes","evidence":"/fresh (?view=)"},"api":{"state":"yes","evidence":"list_fresh"},"cli":{"state":"yes","evidence":"fresh"},"mcp":{"state":"yes","evidence":"list_fresh"},"ssh":{"state":"yes","evidence":"fresh menu + deep-link"},"feeds":{"state":"yes","evidence":"/fresh.xml, /fresh.json"},"chat":{"evidence":"list_fresh (register-split)","state":"yes"}}},{"id":"search-archive","story":"As a listener, I want to search the whole archive by name, coordinate, or a plain-language query.","register":"catalogue","entity":"cross","support":{"web":{"state":"yes","evidence":"⌘K search (search_archive)"},"api":{"state":"yes","evidence":"search_archive"},"cli":{"state":"yes","evidence":"search <query>"},"mcp":{"state":"yes","evidence":"search_archive"},"ssh":{"state":"no","note":"only the Spotify lookup inside Submit"},"feeds":{"state":"n/a"},"mobile":{"state":"yes","evidence":"Archive tab (search_archive)"},"chat":{"evidence":"search_archive → finding/catalogue buckets","state":"yes"}}},{"id":"find-similar-tracks","story":"As a listener, I want to find tracks that sound like one I already love.","register":"catalogue","entity":"track","support":{"web":{"state":"yes","evidence":"/log/<id> Close in sound"},"api":{"state":"yes","evidence":"list_similar_tracks"},"cli":{"state":"partial","evidence":"tracks similar (list_similar_tracks)","note":"hidden command group"},"mcp":{"state":"yes","evidence":"search_archive sounds-like tier"},"feeds":{"state":"n/a"},"mobile":{"state":"yes","evidence":"Archive search sounds-like"},"chat":{"evidence":"search_archive sounds-like (anchor + neighbours)","state":"yes"}}},{"id":"open-by-coordinate","story":"As a listener, I want to open any track or mixtape by its Log ID coordinate.","register":"catalogue","entity":"track","support":{"web":{"state":"yes","evidence":"/<coordinate> → /log/<id>"},"api":{"state":"yes","evidence":"get_track"},"cli":{"state":"yes","evidence":"tracks get <coord>"},"mcp":{"state":"yes","evidence":"get_track + fluncle:// resources"},"ssh":{"state":"yes","evidence":"ssh rave.fluncle.com <coord>"},"feeds":{"state":"partial","evidence":"oEmbed /embed cards; dig TXT <coord>.dig.fluncle.com"},"mobile":{"state":"yes","evidence":"log/[id]"},"chat":{"evidence":"get_track (compact card)","state":"yes"}}},{"id":"browse-every-artist","story":"As a listener, I want to browse every drum & bass artist, A to Z.","register":"catalogue","entity":"artist","support":{"web":{"state":"yes","evidence":"/artists (?page, ?q)"},"api":{"state":"yes","evidence":"list_artists"},"cli":{"state":"yes","evidence":"artists (--page)"},"mcp":{"state":"yes","evidence":"list_artists (50/page)"},"ssh":{"state":"partial","evidence":"Artist archive screen","note":"calls legacy /api/artists; single page, rows dead-end (no detail)"},"chat":{"evidence":"list_artists","state":"yes"}}},{"id":"artist-profile","story":"As a listener, I want an artist's profile: bio, releases, and where to follow them.","register":"catalogue","entity":"artist","support":{"web":{"state":"yes","evidence":"/artist/<slug> (dossier, socials, similar, catalogue)"},"api":{"state":"yes","evidence":"get_artist"},"cli":{"state":"yes","evidence":"artists <slug>"},"mcp":{"state":"yes","evidence":"get_artist + list_artist_catalogue"},"feeds":{"state":"partial","evidence":"oEmbed card; /artist/<slug>/fresh.xml"},"chat":{"evidence":"get_artist → ArtistCard","state":"yes"}}},{"id":"similar-to-one-artist","story":"As a listener, I want artists similar to one artist I like.","register":"catalogue","entity":"artist","support":{"web":{"state":"yes","evidence":"/artist/<slug> Similar artists rail"},"api":{"evidence":"list_similar_artists (1–6 anchors)","state":"yes"},"mcp":{"state":"yes","evidence":"list_similar_artists"},"feeds":{"state":"n/a"},"chat":{"evidence":"get_similar_artists → NeighbourList","state":"yes"}}},{"id":"sounds-like-selected-artists","story":"As a listener, I want to multi-select artists I like and see who sounds like all of them.","register":"catalogue","entity":"artist","support":{"web":{"state":"yes","evidence":"/artists Compare sounds (?like=)"},"api":{"state":"yes","evidence":"list_similar_artists"},"feeds":{"state":"n/a"},"mcp":{"evidence":"list_similar_artists (1–6 anchors)","state":"yes"}}},{"id":"follow-artist-releases","story":"As a fan, I want to follow one artist's new releases.","register":"catalogue","entity":"artist","support":{"feeds":{"state":"yes","evidence":"/artist/<slug>/fresh.xml"},"web":{"state":"partial","evidence":"account watch (save_private_watch)","note":"watch stored; no notification leg yet"},"api":{"state":"partial","evidence":"save_private_watch"}}},{"id":"browse-every-album","story":"As a listener, I want to browse every album and EP, A to Z.","register":"catalogue","entity":"album","support":{"web":{"state":"yes","evidence":"/albums (?page, ?q)"},"api":{"state":"yes","evidence":"list_albums"},"cli":{"state":"yes","evidence":"albums (--page)"},"mcp":{"state":"yes","evidence":"list_albums (50/page)"},"chat":{"evidence":"list_albums","state":"yes"}}},{"id":"album-page","story":"As a listener, I want an album's page: tracklist, artists, label.","register":"catalogue","entity":"album","support":{"web":{"state":"yes","evidence":"/album/<slug>"},"api":{"state":"yes","evidence":"get_album"},"cli":{"state":"yes","evidence":"albums <slug>"},"mcp":{"state":"yes","evidence":"list_album_catalogue"},"feeds":{"state":"partial","evidence":"oEmbed card"},"chat":{"evidence":"list_album_catalogue (tracklist buckets)","note":"no album card; no get_album tool","state":"partial"}}},{"id":"browse-every-label","story":"As a listener, I want to browse every record label, A to Z.","register":"catalogue","entity":"label","support":{"web":{"state":"yes","evidence":"/labels (?page, ?q)"},"api":{"state":"yes","evidence":"list_labels"},"cli":{"state":"yes","evidence":"labels (--page)"},"mcp":{"state":"yes","evidence":"list_labels (50/page)"},"chat":{"evidence":"list_labels","state":"yes"}}},{"id":"label-page","story":"As a listener, I want a label's page: its releases, artists, and lineage.","register":"catalogue","entity":"label","support":{"web":{"state":"yes","evidence":"/label/<slug>"},"api":{"state":"yes","evidence":"get_label"},"cli":{"state":"yes","evidence":"labels <slug>"},"mcp":{"state":"yes","evidence":"get_label + list_label_catalogue"},"feeds":{"state":"partial","evidence":"oEmbed card; /label/<slug>/fresh.xml"}}},{"id":"follow-label-releases","story":"As a fan, I want to follow one label's new releases.","register":"catalogue","entity":"label","support":{"feeds":{"state":"yes","evidence":"/label/<slug>/fresh.xml"},"web":{"state":"partial","evidence":"account watch (save_private_watch)","note":"watch stored; no notification leg yet"},"api":{"state":"partial","evidence":"save_private_watch"}}},{"id":"build-a-set","story":"As a DJ, I want to chain a set: seed my taste and have the engine rank what mixes in clean next.","register":"catalogue","entity":"cross","support":{"web":{"state":"partial","evidence":"/mix","note":"self-lifting archive-depth gate; strangers redirected until it opens"},"api":{"state":"yes","evidence":"list_mixable_artists, list_mix_openers, list_mixable_tracks"},"mcp":{"state":"yes","evidence":"build_set"},"mobile":{"state":"yes","evidence":"Decks tab"},"feeds":{"state":"n/a"},"chat":{"evidence":"build_set → ChainCard","state":"yes"}}},{"id":"share-reopen-set","story":"As a DJ, I want to share a set as a link and have anyone reopen it.","register":"catalogue","entity":"cross","support":{"web":{"state":"yes","evidence":"/mix ?set= (URL is the set)"},"api":{"state":"yes","evidence":"list_set_tracks"},"mobile":{"state":"yes","evidence":"Decks share"},"cli":{"state":"n/a"},"ssh":{"state":"n/a"},"feeds":{"state":"n/a"},"chat":{"evidence":"build_set returns the /mix setUrl","note":"emits a shareable link; cannot reopen one","state":"partial"}}},{"id":"integrate-as-developer","story":"As a developer or agent, I want a documented machine interface to the archive.","register":"catalogue","entity":"cross","support":{"web":{"state":"yes","evidence":"/docs/api (Scalar)"},"api":{"state":"yes","evidence":"/api/v1/openapi.json"},"mcp":{"state":"yes","evidence":"/.well-known/mcp/server-card.json"},"feeds":{"state":"yes","evidence":"/.well-known/api-catalog, agent-skills, llms.txt"},"cli":{"state":"n/a"},"ssh":{"state":"n/a"},"mobile":{"state":"n/a"},"chat":{"state":"n/a"}}},{"id":"check-service-health","story":"As a user, I want to check whether Fluncle's services are up.","register":"catalogue","entity":"cross","support":{"web":{"state":"yes","evidence":"/status"},"api":{"state":"yes","evidence":"get_health, /api/status"},"cli":{"state":"yes","evidence":"status"},"mcp":{"state":"yes","evidence":"get_status"},"ssh":{"state":"yes","evidence":"status menu"},"feeds":{"state":"n/a"},"chat":{"evidence":"get_status → StatusStrip","state":"yes"}}},{"id":"follow-latest-findings","story":"As a fan, I want to follow Fluncle's latest finds as he logs them.","register":"lore","entity":"track","support":{"web":{"state":"yes","evidence":"/ (home feed)"},"api":{"state":"yes","evidence":"list_findings"},"cli":{"state":"yes","evidence":"recent (list_findings)"},"mcp":{"state":"yes","evidence":"list_findings"},"ssh":{"state":"yes","evidence":"latest menu + deep-link"},"feeds":{"state":"yes","evidence":"/rss.xml, /atom.xml, /feed.json"},"mobile":{"state":"yes","evidence":"Feed tab"},"chat":{"evidence":"list_tracks (findings cards)","state":"yes"}}},{"id":"read-finding-story","story":"As a fan, I want to read why Fluncle logged a track — the note, the video, the observation.","register":"lore","entity":"track","support":{"web":{"state":"yes","evidence":"/log/<id>"},"api":{"state":"yes","evidence":"get_track"},"cli":{"state":"partial","evidence":"tracks get","note":"note text only, no video/audio"},"mcp":{"state":"yes","evidence":"get_track + resources"},"ssh":{"state":"yes","evidence":"finding detail (note + links)"},"feeds":{"state":"partial","evidence":"RSS item summary"},"mobile":{"state":"yes","evidence":"log/[id] + Feed card"},"chat":{"evidence":"get_track → FindingCard","state":"yes"}}},{"id":"random-banger","story":"As a listener, I want the archive to throw me a random banger.","register":"lore","entity":"track","support":{"api":{"state":"yes","evidence":"get_random_track"},"cli":{"state":"yes","evidence":"random"},"mcp":{"state":"yes","evidence":"get_random_track"},"ssh":{"state":"yes","evidence":"random menu + deep-link"},"feeds":{"state":"partial","evidence":"dig TXT random.dig.fluncle.com"},"chat":{"evidence":"get_random_track","state":"yes"}}},{"id":"swipe-stories","story":"As a fan, I want to swipe findings as full-bleed video stories.","register":"lore","entity":"track","support":{"web":{"state":"yes","evidence":"/?story=<id> viewer"},"api":{"state":"yes","evidence":"list_stories"},"mobile":{"state":"yes","evidence":"Feed tab pager"},"cli":{"state":"n/a"},"ssh":{"state":"n/a"},"feeds":{"state":"n/a"},"chat":{"state":"n/a"}}},{"id":"listen-radio","story":"As a fan, I want to lean back and listen to Fluncle's spoken observations on a shared clock.","register":"lore","entity":"track","support":{"web":{"state":"yes","evidence":"/radio (radio.fluncle.com)"},"api":{"state":"yes","evidence":"get_radio_now_playing, get_random_radio_track"},"mobile":{"state":"yes","evidence":"Radio tab (background audio)"},"cli":{"state":"n/a"},"ssh":{"state":"n/a"},"feeds":{"state":"n/a"}}},{"id":"personal-recommendations","story":"As a signed-in fan, I want personal recommendations grown from my own taste.","register":"catalogue","entity":"account","support":{"web":{"state":"yes","evidence":"/recommendations + Frontier Spotify playlist"},"api":{"state":"yes","evidence":"me-recs + me-frontier ops"}}},{"id":"browse-by-feel","story":"As a listener, I want to browse the archive by how it sounds, not what it's called.","register":"lore","entity":"galaxy","support":{"web":{"state":"partial","evidence":"/galaxies","note":"launch-gated until the map is fully named"},"api":{"state":"yes","evidence":"list_galaxies, get_galaxy"},"cli":{"state":"yes","evidence":"galaxies"},"ssh":{"state":"yes","evidence":"galaxies menu"},"feeds":{"state":"n/a"}}},{"id":"play-galaxy-game","story":"As a fan, I want to play the Galaxy — fly to every banger's star.","register":"lore","entity":"galaxy","support":{"web":{"state":"yes","evidence":"/galaxy (galaxy.fluncle.com)"},"api":{"state":"n/a"},"cli":{"state":"n/a"},"mcp":{"state":"n/a"},"ssh":{"state":"n/a"},"feeds":{"state":"n/a"},"chat":{"state":"n/a"}}},{"id":"galaxy-progress","story":"As a player, I want my Galaxy progress to follow my account across devices.","register":"lore","entity":"galaxy","support":{"web":{"state":"yes","evidence":"/account Galaxy tab (me-galaxy ops)"},"api":{"state":"yes","evidence":"get/merge/collect private galaxy ops"},"cli":{"state":"partial","evidence":"login + me","note":"views progress; play stays on web"},"chat":{"state":"n/a"}}},{"id":"browse-mixtapes","story":"As a fan, I want to browse Fluncle's own DJ mixtapes.","register":"lore","entity":"mixtape","support":{"web":{"state":"yes","evidence":"/mixtapes"},"api":{"state":"yes","evidence":"list_mixtapes"},"cli":{"state":"yes","evidence":"mixtapes"},"mcp":{"state":"partial","evidence":"list_tracks feed + fluncle://mixtape resources"},"ssh":{"state":"yes","evidence":"mixtapes menu"},"feeds":{"state":"yes","evidence":"/podcast.xml"},"mobile":{"state":"yes","evidence":"Mixtapes tab"},"chat":{"evidence":"get_track mixtape arm → MixtapeCard","note":"chat list_tracks is findings-only; no mixtape list","state":"partial"}}},{"id":"experience-a-set","story":"As a fan, I want to experience a mixtape — the set video, the tracklist, the ride.","register":"lore","entity":"mixtape","support":{"web":{"state":"yes","evidence":"/log/<F-coord> set video + tracklist"},"api":{"state":"yes","evidence":"get_track (mixtape arm)"},"cli":{"state":"partial","evidence":"tracks get","note":"text only"},"mcp":{"state":"yes","evidence":"get_track"},"ssh":{"state":"partial","evidence":"mixtape detail","note":"external listen links only"},"feeds":{"state":"partial","evidence":"podcast audio"},"mobile":{"state":"partial","evidence":"mixtape/[id]","note":"tracklist + links out; playback on web"},"chat":{"evidence":"MixtapeCard","note":"links out; no playback","state":"partial"}}},{"id":"read-logbook","story":"As a fan, I want to read the voyage — Fluncle's travelogue, one entry per sector-day.","register":"lore","entity":"cross","support":{"web":{"state":"yes","evidence":"/logbook, /logbook/<sector>"}}},{"id":"learn-who-fluncle-is","story":"As a newcomer, I want to learn who Fluncle is and what this place is.","register":"lore","entity":"cross","support":{"web":{"state":"yes","evidence":"/about"},"cli":{"state":"yes","evidence":"about"},"mcp":{"state":"partial","evidence":"prompts + initialize instructions"},"ssh":{"state":"yes","evidence":"about screen"},"feeds":{"state":"yes","evidence":"llms.txt identity"},"api":{"state":"n/a"},"chat":{"evidence":"the persona itself (system prompt)","state":"yes"}}},{"id":"decode-a-coordinate","story":"As a curious visitor, I want a Log ID explained to me.","register":"lore","entity":"cross","support":{"web":{"state":"yes","evidence":"/log/<id> coordinate explainer"},"mcp":{"state":"yes","evidence":"decode_coordinate prompt"},"ssh":{"state":"yes","evidence":"coordinate deep-link detail"},"feeds":{"state":"partial","evidence":"dig TXT <coord>.dig.fluncle.com"},"api":{"state":"n/a"},"chat":{"evidence":"prose coordinates linkified + get_track","state":"yes"}}},{"id":"see-reach","story":"As a curious fan, I want to see Fluncle's reach across platforms over time.","register":"lore","entity":"cross","support":{"web":{"state":"yes","evidence":"/reach"},"api":{"state":"yes","evidence":"list_platform_stats"}}},{"id":"chat-with-fluncle","story":"As a crew member, I want to talk with Fluncle about drum & bass.","register":"lore","entity":"cross","support":{"web":{"state":"partial","evidence":"/chat","note":"crew-door gated; Discord presence (Hermes) lives outside these surfaces"},"chat":{"evidence":"/chat (api/chat, FLUNCLE_CHAT_SYSTEM_PROMPT)","state":"yes"}}},{"id":"submit-a-track","story":"As a crew member, I want to send Fluncle a track I think he'd log.","register":"lore","entity":"cross","support":{"web":{"state":"yes","evidence":"Submit dialog (submit_track)"},"api":{"state":"yes","evidence":"submit_track"},"cli":{"state":"yes","evidence":"submit"},"mcp":{"state":"yes","evidence":"submit_track"},"ssh":{"state":"yes","evidence":"submit flow"},"feeds":{"state":"n/a"},"mobile":{"state":"yes","evidence":"Submit screen"},"chat":{"evidence":"submit_track","state":"yes"}}},{"id":"newsletter","story":"As a fan, I want fresh finds in my inbox every Friday.","register":"lore","entity":"cross","support":{"web":{"state":"yes","evidence":"Subscribe dialog + /newsletter archive"},"api":{"state":"yes","evidence":"subscribe_newsletter, list_editions"},"cli":{"state":"yes","evidence":"subscribe"},"mcp":{"state":"yes","evidence":"subscribe_newsletter"},"ssh":{"state":"yes","evidence":"subscribe flow"},"feeds":{"state":"n/a"},"chat":{"evidence":"subscribe_newsletter","state":"yes"}}},{"id":"create-account","story":"As a fan, I want an account that follows me across surfaces.","register":"catalogue","entity":"account","support":{"web":{"state":"yes","evidence":"/account (email + Google)"},"api":{"state":"yes","evidence":"me ops (better-auth)"},"cli":{"state":"yes","evidence":"login (device flow via /device)"},"mobile":{"state":"yes","evidence":"Account screen (email)"},"mcp":{"state":"n/a"},"feeds":{"state":"n/a"},"chat":{"state":"n/a"}}},{"id":"save-findings","story":"As a signed-in fan, I want to save findings for later.","register":"catalogue","entity":"account","support":{"web":{"state":"yes","evidence":"SaveFindingButton (me-saved ops)"},"api":{"state":"yes","evidence":"save/list private saved findings"},"mobile":{"state":"yes","evidence":"Saved chips","note":"device-local until sign-in, then merged"}}},{"id":"save-sets","story":"As a DJ, I want to save the sets I build to my account.","register":"catalogue","entity":"account","support":{"web":{"state":"yes","evidence":"SaveSetDialog (me-sets ops)"},"api":{"state":"yes","evidence":"save/list/update/delete private sets"},"mobile":{"state":"yes","evidence":"Decks save (signed-in)"}}},{"id":"push-notifications","story":"As a fan, I want a push when a new finding or mixtape lands.","register":"catalogue","entity":"account","support":{"mobile":{"state":"yes","evidence":"Notifications screen (register_device)"},"api":{"state":"yes","evidence":"register_device"},"web":{"state":"no"},"cli":{"state":"n/a"},"ssh":{"state":"n/a"},"mcp":{"state":"n/a"},"feeds":{"state":"n/a"},"chat":{"state":"n/a"}}}],"surfaces":[{"id":"web","label":"Web","note":"fluncle.com public routes"},{"id":"api","label":"API","note":"public /api/v1 oRPC ops"},{"id":"cli","label":"CLI","note":"the fluncle CLI, non-admin"},{"id":"mcp","label":"MCP","note":"MCP tools/resources/prompts"},{"id":"chat","label":"ChatDnB","note":"/chat — verified-email crew door; the 18 chat-transport tools, generative-UI cards"},{"id":"ssh","label":"SSH","note":"ssh rave.fluncle.com"},{"id":"feeds","label":"Feeds","note":"RSS/Atom/JSON, podcast, llms.txt, oEmbed, sitemap, DNS"},{"id":"mobile","label":"Mobile","note":"the Expo app (App Store review)"}]};
+const GLYPH = {"n/a":"—","no":"·","partial":"◐","planned":"◌","yes":"●"};
+const cls = (s) => "s-" + (s === "n/a" ? "na" : s);
+const ENTITY_ORDER = ["track","artist","album","label","galaxy","mixtape","account","cross"];
 
-      function cellFor(story, id) {
-        return story.support[id] ?? { state: "no" };
-      }
+function cellFor(story, id) { return story.support[id] ?? { state: "no" }; }
 
-      function render() {
-        const q = document.getElementById("q").value.toLowerCase();
-        const reg = document.getElementById("reg").value;
-        const gap = document.getElementById("gap").value;
-        const groups = new Map();
-        for (const story of SPEC.stories) {
-          if (reg && story.register !== reg) continue;
-          if (q && !(story.story.toLowerCase().includes(q) || story.id.includes(q))) continue;
-          if (gap) {
-            const state = cellFor(story, gap).state;
-            if (state === "yes" || state === "n/a") continue;
-          }
-          const key = story.register + "/" + story.entity;
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key).push(story);
-        }
-        const keys = [...groups.keys()].sort((a, b) => {
-          const [ra, ea] = a.split("/");
-          const [rb, eb] = b.split("/");
-          if (ra !== rb) return ra === "catalogue" ? -1 : 1;
-          return ENTITY_ORDER.indexOf(ea) - ENTITY_ORDER.indexOf(eb);
-        });
-        const out = [];
-        for (const key of keys) {
-          const [register, entity] = key.split("/");
-          const rows = groups
-            .get(key)
-            .map((story) => {
-              const cells = SPEC.surfaces
-                .map((s) => {
-                  const c = cellFor(story, s.id);
-                  const tip = [s.label + ": " + c.state, c.evidence, c.note]
-                    .filter(Boolean)
-                    .join(" — ");
-                  return (
-                    '<td class="cell ' +
-                    cls(c.state) +
-                    '" title="' +
-                    tip.replaceAll('"', "&quot;") +
-                    '">' +
-                    GLYPH[c.state] +
-                    "</td>"
-                  );
-                })
-                .join("");
-              const evidence = SPEC.surfaces
-                .map((s) => ({ c: cellFor(story, s.id), s }))
-                .filter((x) => x.c.evidence || x.c.note)
-                .map(
-                  (x) =>
-                    '<div class="ev"><b>' +
-                    x.s.label +
-                    "</b> (" +
-                    x.c.state +
-                    ") " +
-                    (x.c.evidence ?? "") +
-                    (x.c.note ? " — " + x.c.note : "") +
-                    "</div>",
-                )
-                .join("");
-              const gapRow = gap ? ' class="gaprow"' : "";
-              return (
-                "<tr" +
-                gapRow +
-                '><td class="story">' +
-                story.story +
-                '<span class="storyid">' +
-                story.id +
-                "</span>" +
-                (evidence ? "<details><summary>evidence</summary>" + evidence + "</details>" : "") +
-                "</td>" +
-                cells +
-                "</tr>"
-              );
-            })
-            .join("");
-          out.push(
-            "<section><h2>" +
-              entity +
-              ' <span class="reg">· ' +
-              register +
-              "</span></h2>" +
-              '<div class="tablewrap"><table><thead><tr><th>Story</th>' +
-              SPEC.surfaces.map((s) => '<th title="' + s.note + '">' + s.label + "</th>").join("") +
-              "</tr></thead><tbody>" +
-              rows +
-              "</tbody></table></div></section>",
-          );
-        }
-        document.getElementById("matrix").innerHTML =
-          out.join("") || '<p class="sub">Nothing matches.</p>';
-      }
-      for (const id of ["q", "reg", "gap"])
-        document.getElementById(id).addEventListener("input", render);
-      render();
-    </script>
-  </body>
+function render() {
+  const q = document.getElementById("q").value.toLowerCase();
+  const reg = document.getElementById("reg").value;
+  const gap = document.getElementById("gap").value;
+  const groups = new Map();
+  for (const story of SPEC.stories) {
+    if (reg && story.register !== reg) continue;
+    if (q && !(story.story.toLowerCase().includes(q) || story.id.includes(q))) continue;
+    if (gap) {
+      const state = cellFor(story, gap).state;
+      if (state === "yes" || state === "n/a") continue;
+    }
+    const key = story.register + "/" + story.entity;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(story);
+  }
+  const keys = [...groups.keys()].sort((a, b) => {
+    const [ra, ea] = a.split("/");
+    const [rb, eb] = b.split("/");
+    if (ra !== rb) return ra === "catalogue" ? -1 : 1;
+    return ENTITY_ORDER.indexOf(ea) - ENTITY_ORDER.indexOf(eb);
+  });
+  const out = [];
+  for (const key of keys) {
+    const [register, entity] = key.split("/");
+    const rows = groups.get(key).map((story) => {
+      const cells = SPEC.surfaces.map((s) => {
+        const c = cellFor(story, s.id);
+        const tip = [s.label + ": " + c.state, c.evidence, c.note].filter(Boolean).join(" — ");
+        return '<td class="cell ' + cls(c.state) + '" title="' + tip.replaceAll('"', "&quot;") + '">' + GLYPH[c.state] + "</td>";
+      }).join("");
+      const evidence = SPEC.surfaces
+        .map((s) => ({ c: cellFor(story, s.id), s }))
+        .filter((x) => x.c.evidence || x.c.note)
+        .map((x) => "<div class=\"ev\"><b>" + x.s.label + "</b> (" + x.c.state + ") " + (x.c.evidence ?? "") + (x.c.note ? " — " + x.c.note : "") + "</div>")
+        .join("");
+      const gapRow = gap ? ' class="gaprow"' : "";
+      return "<tr" + gapRow + '><td class="story">' + story.story +
+        '<span class="storyid">' + story.id + "</span>" +
+        (evidence ? "<details><summary>evidence</summary>" + evidence + "</details>" : "") +
+        "</td>" + cells + "</tr>";
+    }).join("");
+    out.push('<section><h2>' + entity + ' <span class="reg">· ' + register + "</span></h2>" +
+      '<div class="tablewrap"><table><thead><tr><th>Story</th>' +
+      SPEC.surfaces.map((s) => '<th title="' + s.note + '">' + s.label + "</th>").join("") +
+      "</tr></thead><tbody>" + rows + "</tbody></table></div></section>");
+  }
+  document.getElementById("matrix").innerHTML = out.join("") || '<p class="sub">Nothing matches.</p>';
+}
+for (const id of ["q", "reg", "gap"]) document.getElementById(id).addEventListener("input", render);
+render();
+</script>
+</body>
 </html>
