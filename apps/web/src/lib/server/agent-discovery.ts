@@ -566,7 +566,7 @@ Rate limit: 5 submissions per connection per hour. Over that returns 429 with co
 
 The archive is a full MCP server (Streamable HTTP, no auth) at \`${siteUrl}/mcp\`, not just tools:
 
-- **Tools** (derived from the live tool set; call \`tools/list\` for each tool's full schema): ${mcpToolNames.map((name) => `\`${name}\``).join(", ")}. Includes the archive reads (\`list_tracks\`, \`get_track\` by Log ID coordinate or Spotify id, \`search_archive\`), the artist/label/album browse (\`list_artists\`, \`list_albums\`, \`list_labels\` walk the whole archive A to Z; \`list_artist_catalogue\`, \`list_label_catalogue\`, \`list_album_catalogue\` list one entity's tracks), and the writes (\`submit_track\`, \`subscribe_newsletter\`).
+- **Tools** (derived from the live tool set; call \`tools/list\` for each tool's full schema): ${mcpToolNames.map((name) => `\`${name}\``).join(", ")}. Includes the archive reads (\`list_findings\` the found-order feed, \`list_tracks\` the whole-archive release-ordered browse, \`get_track\` by Log ID coordinate or Spotify id, \`search_archive\`), the artist/label/album browse (\`list_artists\`, \`list_albums\`, \`list_labels\` walk the whole archive A to Z; \`list_artist_catalogue\`, \`list_label_catalogue\`, \`list_album_catalogue\` list one entity's tracks), and the writes (\`submit_track\`, \`subscribe_newsletter\`).
 - **Resources**: read the archive as a corpus, each finding at \`fluncle://finding/<logId>\` and each mixtape at \`fluncle://mixtape/<logId>\`, returning its public record.
 - **Prompts**: Fluncle-voiced starting points. \`recommend_finding\` (a finding for a mood), \`walk_recent_night\`, \`decode_coordinate\`.
 

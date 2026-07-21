@@ -198,11 +198,21 @@ describe("list_similar_artists — the oRPC op (GET /artists/similar)", () => {
     expect(await getArtistListItemBySlug("a")).toMatchObject({ slug: "a" });
   });
 
-  it("400s fewer than two slugs (invalid_request)", async () => {
-    const response = await handleOrpc(req("/artists/similar?slugs=a", "GET", undefined));
+  it("400s an empty slug list (invalid_request) — the widened floor is one anchor, not zero", async () => {
+    const response = await handleOrpc(req("/artists/similar?slugs=", "GET", undefined));
 
     expect(response?.status).toBe(400);
     expect(await readJson(response)).toMatchObject({ code: "invalid_request", ok: false });
+  });
+
+  it("accepts a SINGLE anchor — the averaged probe of one is itself (the widening)", async () => {
+    const response = await handleOrpc(req("/artists/similar?slugs=a", "GET", undefined));
+
+    expect(response?.status).toBe(200);
+    const body = (await readJson(response)) as { artists: { slug: string }[]; ok: boolean };
+    expect(body.ok).toBe(true);
+    // The single anchor is excluded from its own neighbours.
+    expect(body.artists.map((artist) => artist.slug)).not.toContain("a");
   });
 
   it("400s more than the cap (seven slugs)", async () => {

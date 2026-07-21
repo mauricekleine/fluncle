@@ -23,7 +23,7 @@
 # `{"error": ...}` + a nonzero exit (the tick leaves the map untouched).
 #
 # MuQ vectors are L2-normalized at embed time, so Euclidean k-means on them IS spherical /
-# cosine k-means (the exact metric get_similar_findings ranks with). `n_init="auto"` +
+# cosine k-means (the exact metric list_similar_tracks ranks with). `n_init="auto"` +
 # `random_state=0` + a pinned thread env (OMP_NUM_THREADS=1, set by cluster-sweep.sh) make
 # the fit deterministic across rebuilds. sklearn + scipy are the pinned third pip step in
 # the MuQ venv (the Dockerfile MuQ layer); numpy is the already-baked version.

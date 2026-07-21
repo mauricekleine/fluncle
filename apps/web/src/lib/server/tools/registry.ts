@@ -50,11 +50,13 @@ import {
 import { type FreshRecord, type FreshTrack, listFreshTracks } from "../fresh";
 import {
   type CatalogueBrowsePage,
+  CatalogueHubPageOutOfRangeError,
   getConfirmedAliasNames,
   getLabelBySlug,
   labelSlug,
   listLabelsBrowsePage,
 } from "../labels";
+import { listTracksHubPage, toCatalogueTrackListItem } from "../tracks-hub";
 import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
 import { assertRateLimit } from "../rate-limit";
@@ -80,7 +82,9 @@ import {
   getRandomTrackSpec,
   getStatusSpec,
   getTrackSpec,
+  listFindingsSpec,
   listFreshSpec,
+  listSimilarArtistsSpec,
   listTracksSpec,
   MAX_RECENT_LIMIT,
   SHARED_TOOL_SPECS,
@@ -89,7 +93,6 @@ import {
   buildSetSpec,
   getArtistSpec,
   getLabelSpec,
-  getSimilarArtistsSpec,
   listAlbumCatalogueSpec,
   listAlbumsSpec,
   listArtistCatalogueSpec,
@@ -755,8 +758,8 @@ async function summarizeStatusChat(): Promise<{ headline: string; ok: boolean }>
 
 // ── The five overlapping tools (spec + server execute) ────────────────────────────────
 
-const listTracksTool = {
-  ...listTracksSpec,
+const listFindingsTool = {
+  ...listFindingsSpec,
   execute: async (args, ctx) => {
     const limit = clampRecentLimit((args as { limit?: unknown }).limit);
 
@@ -772,6 +775,39 @@ const listTracksTool = {
 
     // Strip the private capture key before the archive world-serves to the agent.
     return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
+  },
+} satisfies ToolDef;
+
+// The reborn `list_tracks` browse enumerator: the machine twin of the web `/tracks` page, reading the
+// SAME hosted-proven `listTracksHubPage` hub with the tri-state `certified` filter. FLAT for every
+// transport (the `browseTracks` projection) — chat gets the identical certified-tagged rows the MCP
+// does, because a browse list is something the model reads, not a set of lore cards. A page past the
+// end is an honest empty page (like the `list_*_catalogue` reads), never a throw.
+const listTracksTool = {
+  ...listTracksSpec,
+  execute: async (args) => {
+    const certifiedArg = (args as { certified?: unknown }).certified;
+    const certified = typeof certifiedArg === "boolean" ? certifiedArg : undefined;
+    const pageArg = Math.trunc(Number((args as { page?: unknown }).page));
+    const page = Number.isFinite(pageArg) && pageArg >= 1 ? pageArg : 1;
+
+    try {
+      const result = await listTracksHubPage({ certified }, page);
+
+      return {
+        ok: true as const,
+        page: result.page,
+        pageCount: result.pageCount,
+        total: result.total,
+        tracks: result.items.map(toCatalogueTrackListItem),
+      };
+    } catch (error) {
+      if (error instanceof CatalogueHubPageOutOfRangeError) {
+        return { ok: true as const, page, pageCount: page, total: 0, tracks: [] };
+      }
+
+      throw error;
+    }
   },
 } satisfies ToolDef;
 
@@ -1141,8 +1177,8 @@ const buildSetTool = {
   },
 } satisfies ToolDef;
 
-const getSimilarArtistsTool = {
-  ...getSimilarArtistsSpec,
+const listSimilarArtistsTool = {
+  ...listSimilarArtistsSpec,
   execute: async (args) => {
     const source = args as { limit?: unknown; name?: unknown };
     const name = asTrimmedString(source.name);
@@ -1346,6 +1382,7 @@ const subscribeNewsletterTool = {
  * browse reads, then the writes.
  */
 export const SHARED_TOOLS: ToolDef[] = [
+  listFindingsTool,
   listTracksTool,
   listFreshTool,
   getTrackTool,
@@ -1355,7 +1392,7 @@ export const SHARED_TOOLS: ToolDef[] = [
   getArtistTool,
   getLabelTool,
   buildSetTool,
-  getSimilarArtistsTool,
+  listSimilarArtistsTool,
   listAlbumCatalogueTool,
   listArtistCatalogueTool,
   listLabelCatalogueTool,
@@ -1431,16 +1468,17 @@ export function sharedChatTools(request?: Request) {
     get_artist: toAiSdkTool(getArtistTool, request),
     get_label: toAiSdkTool(getLabelTool, request),
     get_random_track: toAiSdkTool(getRandomTrackTool, request),
-    get_similar_artists: toAiSdkTool(getSimilarArtistsTool, request),
     get_status: toAiSdkTool(getStatusTool, request),
     get_track: toAiSdkTool(getTrackTool, request),
     list_album_catalogue: toAiSdkTool(listAlbumCatalogueTool, request),
     list_albums: toAiSdkTool(listAlbumsTool, request),
     list_artist_catalogue: toAiSdkTool(listArtistCatalogueTool, request),
     list_artists: toAiSdkTool(listArtistsTool, request),
+    list_findings: toAiSdkTool(listFindingsTool, request),
     list_fresh: toAiSdkTool(listFreshTool, request),
     list_label_catalogue: toAiSdkTool(listLabelCatalogueTool, request),
     list_labels: toAiSdkTool(listLabelsTool, request),
+    list_similar_artists: toAiSdkTool(listSimilarArtistsTool, request),
     list_tracks: toAiSdkTool(listTracksTool, request),
     search_archive: toAiSdkTool(searchArchiveTool, request),
     submit_track: toAiSdkTool(submitTrackTool, request),

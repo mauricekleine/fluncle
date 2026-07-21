@@ -60,20 +60,34 @@ export function registerWebMcpTools(): void {
 // registry specs (./server/tools/specs); only these hand-written `fetch('/api/…')` bodies are
 // WebMCP's own (the browser has no in-process server functions).
 const httpExecutes: Record<string, WebMcpTool["execute"]> = {
-  get_random_track: async () => jsonResult(await fetchJson("/api/tracks/random")),
+  get_random_track: async () => jsonResult(await fetchJson("/api/v1/tracks/random")),
   get_track: async (input) =>
-    jsonResult(await fetchJson(`/api/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
+    jsonResult(await fetchJson(`/api/v1/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
+  // The found-order FEED (findings + published mixtapes) — the public GET /api/v1/findings twin.
+  list_findings: async (input) => {
+    const limit = typeof input.limit === "number" ? input.limit : 10;
+    const params = new URLSearchParams({ limit: String(limit) });
+
+    return jsonResult(await fetchJson(`/api/v1/findings?${params}`));
+  },
   list_fresh: async (input) => {
     const limit = typeof input.limit === "number" ? input.limit : 50;
     const params = new URLSearchParams({ limit: String(limit) });
 
     return jsonResult(await fetchJson(`/api/v1/tracks/fresh?${params}`));
   },
+  // The whole-archive ENUMERATOR — the public GET /api/v1/tracks twin (release-ordered, numbered
+  // pages, tri-state `certified`). Distinct from the found-order `list_findings` feed above.
   list_tracks: async (input) => {
-    const limit = typeof input.limit === "number" ? input.limit : 10;
-    const params = new URLSearchParams({ limit: String(limit) });
+    const params = new URLSearchParams();
+    if (typeof input.page === "number") {
+      params.set("page", String(input.page));
+    }
+    if (typeof input.certified === "boolean") {
+      params.set("certified", String(input.certified));
+    }
 
-    return jsonResult(await fetchJson(`/api/tracks?${params}`));
+    return jsonResult(await fetchJson(`/api/v1/tracks?${params}`));
   },
   // The archive search — the public GET /api/v1/search/archive twin, whose `q` input matches the
   // tool's `query` 1:1 and whose per-IP limiter is shared with the MCP (orpc/search.ts). Returns
@@ -87,7 +101,9 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
   // subscribe_newsletter boards the email). Public POST routes; the browser has no in-process fns.
   submit_track: async (input) => {
     const spotifyUrl = asString(input.spotifyUrl);
-    const search = (await fetchJson(`/api/search?${new URLSearchParams({ q: spotifyUrl })}`)) as {
+    const search = (await fetchJson(
+      `/api/v1/search?${new URLSearchParams({ q: spotifyUrl })}`,
+    )) as {
       ok?: boolean;
       results?: Array<{
         id: string;
@@ -104,7 +120,7 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
       return jsonResult(search);
     }
 
-    const submission = await fetchJson("/api/submissions", {
+    const submission = await fetchJson("/api/v1/submissions", {
       body: JSON.stringify({
         album: candidate.album,
         artists: candidate.artists,
@@ -124,7 +140,7 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
   },
   subscribe_newsletter: async (input) =>
     jsonResult(
-      await fetchJson("/api/newsletter", {
+      await fetchJson("/api/v1/newsletter", {
         body: JSON.stringify({ email: asString(input.email) }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -141,7 +157,7 @@ const webmcpOnlyTools: WebMcpTool[] = [
     execute: async (input) => {
       const params = new URLSearchParams({ q: asString(input.query) });
 
-      return jsonResult(await fetchJson(`/api/search?${params}`));
+      return jsonResult(await fetchJson(`/api/v1/search?${params}`));
     },
     inputSchema: {
       properties: {
@@ -174,20 +190,9 @@ const tools: WebMcpTool[] = [
   ...webmcpOnlyTools,
 ];
 
-// `get_recent_tracks` deprecation alias of `list_tracks` (Convention B §4), kept in
-// parity with the server MCP surface (lib/server/mcp.ts). Shares the canonical
-// tool's execute + schema so the two never drift.
-const listTracksTool = tools.find((tool) => tool.name === "list_tracks");
-
-if (!listTracksTool) {
-  throw new Error("list_tracks tool missing from the WebMCP tool list");
-}
-
-tools.push({
-  ...listTracksTool,
-  description: `[Deprecated: use list_tracks] ${listTracksTool.description}`,
-  name: "get_recent_tracks",
-});
+// The vocabulary cut retired the last deprecation alias (`get_recent_tracks`) with no
+// replacement shim, so the WebMCP tool set is exactly the shared web tools plus the
+// WebMCP-only verbs — one name per operation, in parity with the server MCP surface.
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

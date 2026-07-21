@@ -1,7 +1,7 @@
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
 import { type KeyNotation } from "@/lib/key-notation";
 
-// A stack of Finding Cards for a multi-result tool output (list_tracks / search_archive). The
+// A stack of Finding Cards for a multi-result tool output (list_findings / search_archive). The
 // tools already clamp (search at 12, list at 48), but a chat turn should not spill a wall of
 // cards — the list renders at most 8 and names the rest as a quiet "+N more in the archive" line,
 // so a broad dig still reads as a conversation.

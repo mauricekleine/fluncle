@@ -27,13 +27,13 @@ export type ToolTier = "lore-canon" | "catalogue" | "system";
  *
  *   - `publicRecord`   — the MCP's full public record (a finding, or a whole `SearchResult` with
  *                        BOTH registers certified-tagged).
- *   - `compactCard`    — ChatDnB's compact finding card (list_tracks/list_fresh, and chat's
+ *   - `compactCard`    — ChatDnB's compact finding card (list_findings/list_fresh, and chat's
  *                        findings-only `search_archive` until PR-4).
  *   - `twoBucket`      — the (findings, catalogue) split (PR-4).
  *   - `identity`       — a status summary.
  *   - `entityCard`     — an artist/label dossier card (its findings + socials/aliases + slug).
  *   - `chainCard`      — a `build_set` mix chain (seed + ordered steps + the `/mix` setUrl).
- *   - `neighbourList`  — a `get_similar_artists` list of nearest artist entities.
+ *   - `neighbourList`  — a `list_similar_artists` list of nearest artist entities.
  *   - `acknowledgement`— a write's `{ ok }` receipt (a submission id, a newsletter board).
  *   - `browseIndex`    — a paginated A–Z index of entity rows (name/slug/certified/trackCount) with
  *                        its page/pageCount/total; the whole-catalogue browse (list_artists/albums/
@@ -42,6 +42,10 @@ export type ToolTier = "lore-canon" | "catalogue" | "system";
 export type Projection =
   | "acknowledgement"
   | "browseIndex"
+  // The reborn `list_tracks` enumerator's shape: a FLAT list of lean certified-tagged track rows
+  // (the `CatalogueTrackListItem` machine twin of the web `/tracks` page), plus its page facts. Same
+  // shape on every transport — a browse list the model reads, never a lore card.
+  | "browseTracks"
   | "chainCard"
   | "compactCard"
   | "entityCard"
@@ -91,8 +95,8 @@ export type ToolSpec<In extends z.ZodType = z.ZodType> = {
 // ── The five overlapping tool specs ──────────────────────────────────────────────────
 //
 // One name/title/description/input, single-sourced. INPUT decisions (resolved by the operator):
-// `get_track`'s canonical arg is `idOrLogId`; `list_fresh` caps at 100 everywhere; `list_tracks`'
-// limit is an integer.
+// `get_track`'s canonical arg is `idOrLogId`; `list_fresh` caps at 100 everywhere; `list_findings`'
+// limit is an integer, and the reborn `list_tracks` browse enumerator pages by `page`.
 
 /** The recent-window list cap (1..48, default 10) — MCP + chat already agreed here. */
 export const MAX_RECENT_LIMIT = 48;
@@ -103,7 +107,7 @@ export const MAX_RECENT_LIMIT = 48;
  */
 export const FRESH_LIMIT_MAX = 100;
 
-export const listTracksSpec = defineSpec({
+export const listFindingsSpec = defineSpec({
   access: "public",
   description:
     "List the most recent findings and mixtapes in Fluncle's drum & bass archive, newest first. Dates mark when each was found or published into the spine.",
@@ -117,10 +121,42 @@ export const listTracksSpec = defineSpec({
       .optional()
       .describe("How many tracks to return (1 to 48, default 10)."),
   }),
-  name: "list_tracks",
+  name: "list_findings",
   project: { chat: "compactCard", mcp: "publicRecord", webmcp: "publicRecord" },
   tier: "lore-canon",
   title: "Recent findings",
+  transports: ["mcp", "chat", "webmcp"],
+});
+
+/**
+ * The reborn `list_tracks` — the whole-archive browse ENUMERATOR (the machine twin of the web
+ * `/tracks` page), distinct from the found-order `list_findings` feed above. Every track Fluncle
+ * holds, newest RELEASE first, one numbered page at a time, with a tri-state `certified` filter. Its
+ * rows are the LEAN certified-tagged shape (title, artists, `certified`, a `logId` coordinate on the
+ * certified ones, `spotifyUrl`, album/label/release info) — flat for every transport, so the model
+ * reads a browse list, never a lore card. `tier: "catalogue"` (it returns the catalogue register).
+ */
+export const listTracksSpec = defineSpec({
+  access: "public",
+  description:
+    "List every track in Fluncle's drum & bass archive, newest RELEASE first, one page at a time. Ordered by when each track came OUT, not by when Fluncle found it, so do not say Fluncle found them. Set certified to true for only the certified findings (which carry a Log ID coordinate), false for only the quieter uncertified rows, or leave it off for both.",
+  effect: "read",
+  input: z.object({
+    certified: z
+      .boolean()
+      .optional()
+      .describe(
+        "Filter by tier: true for only certified findings, false for only uncertified rows, omitted for both.",
+      ),
+    page: z.number().int().min(1).optional().describe("Which page to return (1-based, default 1)."),
+  }),
+  name: "list_tracks",
+  // FLAT certified-tagged rows for every transport (no two-bucket split): a browse enumerator hands
+  // the model a plain list it reads, not a set of lore cards. Both registers ride the same shape,
+  // each row carrying `certified` + (for the lit ones) its `logId` — the Unlit Rule holds in the row.
+  project: { chat: "browseTracks", mcp: "browseTracks", webmcp: "browseTracks" },
+  tier: "catalogue",
+  title: "Browse the whole archive",
   transports: ["mcp", "chat", "webmcp"],
 });
 
@@ -285,11 +321,11 @@ export const buildSetSpec = defineSpec({
   transports: ["mcp", "chat"],
 });
 
-/** How many nearest artists `get_similar_artists` returns by default / at most. */
+/** How many nearest artists `list_similar_artists` returns by default / at most. */
 export const SIMILAR_ARTISTS_DEFAULT = 4;
 export const SIMILAR_ARTISTS_MAX = 12;
 
-export const getSimilarArtistsSpec = defineSpec({
+export const listSimilarArtistsSpec = defineSpec({
   access: "public",
   description:
     "Given an artist Fluncle has logged, BY NAME (e.g. Koven), return the artists whose sound sits nearest to theirs across his findings. Naming an artist is always allowed. Returns nothing when the name resolves to no artist he has logged, and an empty list when he has one but nothing near it yet.",
@@ -304,7 +340,7 @@ export const getSimilarArtistsSpec = defineSpec({
       .describe(`How many nearest artists to return (1 to ${SIMILAR_ARTISTS_MAX}, default 4).`),
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Koven)."),
   }),
-  name: "get_similar_artists",
+  name: "list_similar_artists",
   // MCP + chat only: the neighbour read is not on a public HTTP op yet (only the artist-page
   // loader), and this PR adds none — the same codified asymmetry as get_status.
   project: { chat: "neighbourList", mcp: "neighbourList" },
@@ -491,11 +527,12 @@ export const subscribeNewsletterSpec = defineSpec({
 });
 
 /**
- * Every shared tool spec, single-sourced. Order: `list_tracks` first (the MCP/WebMCP alias clones
- * it). The five overlapping read tools, then the reads PR-2 lifted out of ChatDnB, then the PR-5
- * catalogue browse reads, then the writes.
+ * Every shared tool spec, single-sourced. Order: `list_findings` (the found-order feed) first, then
+ * the reborn `list_tracks` browse enumerator, the rest of the overlapping read tools, the reads PR-2
+ * lifted out of ChatDnB, the PR-5 catalogue browse reads, then the writes.
  */
 export const SHARED_TOOL_SPECS: ToolSpec[] = [
+  listFindingsSpec,
   listTracksSpec,
   listFreshSpec,
   getTrackSpec,
@@ -505,7 +542,7 @@ export const SHARED_TOOL_SPECS: ToolSpec[] = [
   getArtistSpec,
   getLabelSpec,
   buildSetSpec,
-  getSimilarArtistsSpec,
+  listSimilarArtistsSpec,
   listAlbumCatalogueSpec,
   listArtistCatalogueSpec,
   listLabelCatalogueSpec,

@@ -58,23 +58,25 @@ const byName = (name: string): ToolSpec => {
   return spec;
 };
 
-// The full realized registry after PR-5: the five overlapping reads, the four reads + one new
-// (`get_similar_artists`) lifted out of ChatDnB, the three catalogue browse reads, and the two writes.
+// The full realized registry after the vocabulary cut: the found-order `list_findings` feed, the
+// reborn `list_tracks` browse enumerator, the rest of the overlapping reads, the reads lifted out of
+// ChatDnB (`list_similar_artists` among them), the three catalogue browse reads, and the two writes.
 const ALL_TOOL_NAMES = [
   "build_set",
   "get_artist",
   "get_label",
   "get_random_track",
-  "get_similar_artists",
   "get_status",
   "get_track",
   "list_album_catalogue",
   "list_albums",
   "list_artist_catalogue",
   "list_artists",
+  "list_findings",
   "list_fresh",
   "list_label_catalogue",
   "list_labels",
+  "list_similar_artists",
   "list_tracks",
   "search_archive",
   "submit_track",
@@ -167,8 +169,14 @@ describe("tool-set parity — each transport gets exactly its declared projectio
     expect(getStatusSpec.transports).not.toContain("webmcp");
   });
 
-  it("projects the four read tools onto all three transports", () => {
-    for (const name of ["list_tracks", "list_fresh", "get_track", "get_random_track"]) {
+  it("projects the five read tools onto all three transports", () => {
+    for (const name of [
+      "list_findings",
+      "list_tracks",
+      "list_fresh",
+      "get_track",
+      "get_random_track",
+    ]) {
       expect(byName(name).transports.sort()).toEqual(["chat", "mcp", "webmcp"]);
     }
   });
@@ -184,11 +192,12 @@ describe("tool-set parity — each transport gets exactly its declared projectio
     expect(forTransport("chat")).toEqual(ALL_TOOL_NAMES);
     // WebMCP carries only the tools with a matching public /api endpoint: the four original reads,
     // the archive search (its `q` twin), and the two writes. The codified asymmetries stay off it —
-    // get_status, get_artist, get_label, build_set, get_similar_artists (no name-keyed public op,
+    // get_status, get_artist, get_label, build_set, list_similar_artists (no name-keyed public op,
     // and this PR adds none).
     expect(forTransport("webmcp")).toEqual([
       "get_random_track",
       "get_track",
+      "list_findings",
       "list_fresh",
       "list_tracks",
       "search_archive",
@@ -202,7 +211,7 @@ describe("tool-set parity — each transport gets exactly its declared projectio
       "get_artist",
       "get_label",
       "build_set",
-      "get_similar_artists",
+      "list_similar_artists",
       "list_album_catalogue",
       "list_artist_catalogue",
       "list_label_catalogue",
@@ -214,23 +223,23 @@ describe("tool-set parity — each transport gets exactly its declared projectio
     }
   });
 
-  it("get_recent_tracks is a per-transport alias, never a shared tool", () => {
-    // The deprecation alias is minted inside mcp.ts / webmcp.ts (present there, absent on chat);
-    // it is never a registry tool.
+  it("get_recent_tracks is fully retired — never a shared tool, never a per-transport alias", () => {
+    // The vocabulary cut removed the last deprecation alias with no replacement shim, so
+    // `get_recent_tracks` is not a registry tool and not minted on any transport.
     expect(SHARED_TOOL_SPECS.map((spec) => spec.name)).not.toContain("get_recent_tracks");
   });
 });
 
 describe("the transport adapters bridge signatures", () => {
   it("toMcpTool exposes name/title/description/inputSchema + a positional (args, request) execute", () => {
-    const listTracks = SHARED_TOOLS.find((def) => def.name === "list_tracks");
-    if (!listTracks) {
-      throw new Error("list_tracks missing");
+    const listFindings = SHARED_TOOLS.find((def) => def.name === "list_findings");
+    if (!listFindings) {
+      throw new Error("list_findings missing");
     }
 
-    const mcpTool = toMcpTool(listTracks);
+    const mcpTool = toMcpTool(listFindings);
 
-    expect(mcpTool.name).toBe("list_tracks");
+    expect(mcpTool.name).toBe("list_findings");
     expect(mcpTool.title).toBe("Recent findings");
     expect(typeof mcpTool.description).toBe("string");
     expect(mcpTool.inputSchema).toMatchObject({ type: "object" });
@@ -248,8 +257,8 @@ describe("the transport adapters bridge signatures", () => {
 });
 
 describe("schema snapshot — z.toJSONSchema carries required / min / max", () => {
-  it("list_tracks: an optional integer limit clamped 1..48, no required", () => {
-    const schema = toInputJsonSchema(byName("list_tracks")) as {
+  it("list_findings: an optional integer limit clamped 1..48, no required", () => {
+    const schema = toInputJsonSchema(byName("list_findings")) as {
       properties: { limit: { maximum: number; minimum: number; type: string } };
       required?: string[];
       type: string;
@@ -261,6 +270,25 @@ describe("schema snapshot — z.toJSONSchema carries required / min / max", () =
       minimum: 1,
       type: "integer",
     });
+    expect(schema.required).toBeUndefined();
+  });
+
+  it("list_tracks (the reborn enumerator): optional page + tri-state certified, no limit, no required", () => {
+    const schema = toInputJsonSchema(byName("list_tracks")) as {
+      properties: {
+        certified?: { type: string };
+        limit?: unknown;
+        page?: { minimum: number; type: string };
+      };
+      required?: string[];
+      type: string;
+    };
+
+    expect(schema.type).toBe("object");
+    expect(schema.properties.page).toMatchObject({ minimum: 1, type: "integer" });
+    expect(schema.properties.certified?.type).toBe("boolean");
+    // The browse enumerator pages by `page`, never the feed's `limit`.
+    expect(schema.properties.limit).toBeUndefined();
     expect(schema.required).toBeUndefined();
   });
 
@@ -362,16 +390,16 @@ describe("the auth model — transports authored independently of access", () =>
   });
 });
 
-describe("get_similar_artists — the new artist-discovery read", () => {
+describe("list_similar_artists — the new artist-discovery read", () => {
   it("is a lore-canon read on MCP + chat, off WebMCP (a codified asymmetry)", () => {
-    const spec = byName("get_similar_artists");
+    const spec = byName("list_similar_artists");
     expect(spec.tier).toBe("lore-canon");
     expect(spec.effect).toBe("read");
     expect(spec.transports.sort()).toEqual(["chat", "mcp"]);
   });
 
   it("takes a required name and an optional bounded limit", () => {
-    const schema = toInputJsonSchema(byName("get_similar_artists")) as {
+    const schema = toInputJsonSchema(byName("list_similar_artists")) as {
       properties: {
         limit: { maximum: number; minimum: number; type: string };
         name: { type: string };

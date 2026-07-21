@@ -172,16 +172,16 @@ afterEach(() => {
   db.close();
 });
 
-// ── list_tracks ────────────────────────────────────────────────────────────────────────
+// ── list_findings ─────────────────────────────────────────────────────────────────────
 
-describe("list_tracks — the recent findings read", () => {
+describe("list_findings — the recent findings feed read", () => {
   it("returns the certified findings newest-first, as compact cards", async () => {
     await seedTrack(db, { logId: "001.1.1A", title: "First", trackId: "t-1" });
     await seedTrack(db, { logId: "002.1.1A", title: "Second", trackId: "t-2" });
     // A catalogue track (no findings row) must never surface on this findings-only read.
     await seedCatalogueTrack(db, { title: "Uncertified", trackId: "cat-1" });
 
-    const result = (await toolExecute("list_tracks")({ limit: 10 })) as {
+    const result = (await toolExecute("list_findings")({ limit: 10 })) as {
       findings: { coordinate?: string; title: string }[];
       ok: boolean;
     };
@@ -194,9 +194,46 @@ describe("list_tracks — the recent findings read", () => {
   });
 
   it("returns an empty findings list for an empty archive (never a throw)", async () => {
-    const result = (await toolExecute("list_tracks")({})) as { findings: unknown[]; ok: boolean };
+    const result = (await toolExecute("list_findings")({})) as { findings: unknown[]; ok: boolean };
 
     expect(result).toEqual({ findings: [], ok: true });
+  });
+});
+
+// ── list_tracks (the reborn browse enumerator) ──────────────────────────────────────────
+
+describe("list_tracks — the whole-archive browse enumerator", () => {
+  it("returns both registers as flat certified-tagged rows (the Unlit Rule in the row)", async () => {
+    await seedTrack(db, { logId: "001.1.1A", title: "Certified", trackId: "t-1" });
+    await seedCatalogueTrack(db, { title: "Uncertified", trackId: "cat-1" });
+
+    const result = (await toolExecute("list_tracks")({})) as {
+      ok: boolean;
+      page: number;
+      tracks: { certified: boolean; logId?: string; title: string }[];
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.page).toBe(1);
+    expect(result.tracks.map((row) => row.title).sort()).toEqual(["Certified", "Uncertified"]);
+    const certified = result.tracks.find((row) => row.title === "Certified");
+    const uncertified = result.tracks.find((row) => row.title === "Uncertified");
+    expect(certified?.certified).toBe(true);
+    expect(certified?.logId).toBeTruthy();
+    // The Unlit Rule: an uncertified row carries no coordinate.
+    expect(uncertified?.certified).toBe(false);
+    expect(uncertified?.logId).toBeUndefined();
+  });
+
+  it("narrows to the certified register when certified=true", async () => {
+    await seedTrack(db, { logId: "001.1.1A", title: "Certified", trackId: "t-1" });
+    await seedCatalogueTrack(db, { title: "Uncertified", trackId: "cat-1" });
+
+    const result = (await toolExecute("list_tracks")({ certified: true })) as {
+      tracks: { title: string }[];
+    };
+
+    expect(result.tracks.map((row) => row.title)).toEqual(["Certified"]);
   });
 });
 
@@ -540,9 +577,9 @@ describe("build_set — the mix chain, ranked by the real engine", () => {
   });
 });
 
-// ── get_similar_artists ────────────────────────────────────────────────────────────────
+// ── list_similar_artists ────────────────────────────────────────────────────────────────
 
-describe("get_similar_artists — the neighbours read, over the real precompute", () => {
+describe("list_similar_artists — the neighbours read, over the real precompute", () => {
   it("returns the nearest artist after the similarity sweep runs", async () => {
     // Two artists with embedded certified findings; their vectors are close, so each is the other's
     // neighbour once rankArtists precomputes the edges (the real vector path, not a mock).
@@ -560,7 +597,7 @@ describe("get_similar_artists — the neighbours read, over the real precompute"
 
     await rankArtists(100);
 
-    const result = (await toolExecute("get_similar_artists")({ name: "Koven" })) as {
+    const result = (await toolExecute("list_similar_artists")({ name: "Koven" })) as {
       of: { name?: string; slug?: string };
       similar: { slug: string }[];
     };
@@ -570,7 +607,7 @@ describe("get_similar_artists — the neighbours read, over the real precompute"
   });
 
   it("returns found:false for an artist he has not logged", async () => {
-    const result = await toolExecute("get_similar_artists")({ name: "Nobody At All" });
+    const result = await toolExecute("list_similar_artists")({ name: "Nobody At All" });
 
     expect(result).toEqual({ found: false, ok: true });
   });
@@ -578,7 +615,7 @@ describe("get_similar_artists — the neighbours read, over the real precompute"
   it("returns an honest empty list for a resolved artist with no neighbours yet", async () => {
     await seedArtist(db, { id: "sa-solo", name: "Solo Act", slug: "solo-act" });
 
-    const result = (await toolExecute("get_similar_artists")({ name: "Solo Act" })) as {
+    const result = (await toolExecute("list_similar_artists")({ name: "Solo Act" })) as {
       ok: boolean;
       similar: unknown[];
     };
