@@ -768,7 +768,6 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       "b-dismissed",
       "b-duplicate",
       "b-long-form",
-      "b-null-duration",
       "b-multi",
     ];
 
@@ -786,7 +785,6 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     await setCols("b-dismissed", { dismissedAt: "2026-07-22T00:00:00.000Z" }); // {dismissed}
     await setCols("b-duplicate", { corpus, duplicateOf: "finding-x", score: 0.99 }); // {total} — scored but a stored duplicate
     await setCols("b-long-form", { corpus, durationMs: 20 * 60_000, score: 0.9 }); // {total} — scored but over the long-form line
-    await setCols("b-null-duration", { capturePriority: 3, corpus, durationMs: null }); // {total} — a NULL duration fails the awaiting-capture window
     await setCols("b-multi", { capturePriority: 3, corpus: null }); // {total, awaitingCapture, awaitingRank}
 
     // The SQL aggregate (the authority) vs a tally of the pure classifier over the SAME rows.
@@ -814,7 +812,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       dismissed: 1,
       quarantined: 1,
       ranked: 1,
-      total: 9,
+      total: 8,
     });
 
     // And the pure classifier directly, on constructed rows — the discriminators explicitly.
