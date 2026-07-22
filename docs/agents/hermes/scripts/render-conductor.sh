@@ -102,7 +102,7 @@ read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
 # variant of cost-emit.ts, which the box can't import). Mirrors, inline, the two things
 # that live in the workspace: the deterministic id scheme
 # (${step}:${scope}:${vendor}:${unitType}:${occurredAt}, scope = the rendered logId) and
-# the CostEventInput shape POSTed to /api/admin/costs/events with the agent bearer. The
+# the CostEventInput shape POSTed to /api/v1/admin/costs/events with the agent bearer. The
 # render is `video` · `self` · `seconds` · `subsidized` (rave-03 is flat-tier) ·
 # `measured` (the render's own DURATION). Guards every input and NEVER fails the tick —
 # a dropped emit only understates the ledger.
@@ -119,7 +119,7 @@ emit_render_cost() {
   body="$(printf '[{"id":"%s","costBasis":"subsidized","logId":"%s","occurredAt":"%s","quantity":%s,"source":"measured","step":"video","unitType":"seconds","vendor":"self"}]' \
     "$id" "$log_id" "$occurred_at" "$seconds")"
   http="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-    -X POST "${API_URL}/api/admin/costs/events" \
+    -X POST "${API_URL}/api/v1/admin/costs/events" \
     -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "$body" 2>>"$LOG_FILE" || printf '000')"

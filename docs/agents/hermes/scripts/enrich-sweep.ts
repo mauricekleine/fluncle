@@ -36,7 +36,7 @@
 // and must be, or it will never carry the numbers the archive reasons with. So this sweep
 // grows a SECOND, additive arm, disjoint from the first by construction (`scope=catalogue`):
 //
-//   3. GET /api/admin/tracks/work?kind=analyze&scope=catalogue → tracks with captured audio
+//   3. GET /api/v1/admin/tracks/work?kind=analyze&scope=catalogue → tracks with captured audio
 //      whose stored analysis did not come from it. DATA-derived, not status-derived: there is
 //      no `enrichment_status` on a catalogue row to drive a queue with.
 //   4. per track: S3-GET the captured song → analyze → `tracks update <id> --bpm … --key …
@@ -505,7 +505,7 @@ type CatalogueWorkItem = {
  * track is ever worked twice in a tick.
  */
 async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
-  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=analyze&scope=catalogue&limit=${QUEUE_LIMIT}`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=analyze&scope=catalogue&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),

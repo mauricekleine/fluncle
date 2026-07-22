@@ -10,7 +10,7 @@
 # (fluncle-hermes-operator skill). The pair is BAKED into the image at /opt/hermes-scripts/ and
 # auto-updates from main via pin-watch — no docker cp. See ../social-metrics-timer/README.md.
 #
-# WHAT IT DOES: POST /api/admin/social/metrics/record with the box's agent token — a bare trigger.
+# WHAT IT DOES: POST /api/v1/admin/social/metrics/record with the box's agent token — a bare trigger.
 # The WORKER selects ≤25 published posts (the Postiz 30/hour cap), reads each one's Postiz per-post
 # analytics, and APPENDS one social_metrics row per (post, source, UTC day) — append-only (velocity),
 # idempotent per day (a re-fired tick lands inserted:0). It is the per-video performance history

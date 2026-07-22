@@ -132,7 +132,7 @@ type TrackGetResponse = { mixtape?: unknown; track?: Finding };
 // (the openers, closers, and body reactions the new read must route around).
 export type Neighbor = { logId: string; script: string };
 
-// `GET /api/admin/tracks/{id}/observation-neighbours` → the lean neighbourhood read.
+// `GET /api/v1/admin/tracks/{id}/observation-neighbours` → the lean neighbourhood read.
 type NeighboursResponse = { neighbours?: Neighbor[] };
 
 // The `claude -p --output-format json` envelope. We take `.result` as the script;
@@ -580,7 +580,7 @@ async function readNeighbours(id: string): Promise<Neighbor[]> {
   }
 
   try {
-    const url = `${FLUNCLE_API_BASE_URL}/api/admin/tracks/${encodeURIComponent(
+    const url = `${FLUNCLE_API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(
       id,
     )}/observation-neighbours?limit=${NEIGHBOR_LIMIT}`;
     const response = await fetch(url, {

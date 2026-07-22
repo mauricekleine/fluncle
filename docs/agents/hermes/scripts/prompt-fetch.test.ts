@@ -128,7 +128,7 @@ describe("fetchPrompt best-effort contract", () => {
     if (!call) {
       throw new Error("expected exactly one recorded fetch call");
     }
-    expect(call.url).toBe("https://example.test/api/admin/prompts/note_author");
+    expect(call.url).toBe("https://example.test/api/v1/admin/prompts/note_author");
     expect(call.method).toBe("GET");
     expect(call.auth).toBe("Bearer agent-tok");
   });

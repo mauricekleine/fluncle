@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Fluncle user stories × public surfaces",
-    "description": "Every public-facing user story, split by register (lore vs catalogue), grouped by entity, with per-surface support. Cells are FACTS about shipped code, each backed by an evidence pointer (route, op id, tool, or command). 'planned' marks operator-ratified intent only — it is a direction flag, not a spec (docs/planning rules apply). Regenerate the HTML/CSV with `bun run stories:build`.",
+    "title": "Fluncle user stories \u00d7 public surfaces",
+    "description": "Every public-facing user story, split by register (lore vs catalogue), grouped by entity, with per-surface support. Cells are FACTS about shipped code, each backed by an evidence pointer (route, op id, tool, or command). 'planned' marks operator-ratified intent only \u2014 it is a direction flag, not a spec (docs/planning rules apply). Regenerate the HTML/CSV with `bun run stories:build`.",
     "updated": "2026-07-21",
     "states": {
       "yes": "shipped and reachable",
@@ -36,7 +36,7 @@
     {
       "id": "chat",
       "label": "ChatDnB",
-      "note": "/chat — verified-email crew door; the 18 chat-transport tools, generative-UI cards"
+      "note": "/chat \u2014 verified-email crew door; the 18 chat-transport tools, generative-UI cards"
     },
     {
       "id": "ssh",
@@ -160,7 +160,7 @@
       "support": {
         "web": {
           "state": "yes",
-          "evidence": "⌘K search (search_archive)",
+          "evidence": "\u2318K search (search_archive)",
           "note": "entity jumps incl. galaxies + mixtapes (#806)"
         },
         "api": {
@@ -187,7 +187,7 @@
           "evidence": "Archive tab (search_archive)"
         },
         "chat": {
-          "evidence": "search_archive → finding/catalogue buckets",
+          "evidence": "search_archive \u2192 finding/catalogue buckets",
           "state": "yes"
         }
       }
@@ -236,7 +236,7 @@
       "support": {
         "web": {
           "state": "yes",
-          "evidence": "/<coordinate> → /log/<id>"
+          "evidence": "/<coordinate> \u2192 /log/<id>"
         },
         "api": {
           "state": "yes",
@@ -292,8 +292,8 @@
         },
         "ssh": {
           "state": "partial",
-          "evidence": "Artist archive screen",
-          "note": "calls legacy /api/artists; single page, rows dead-end (no detail)"
+          "evidence": "Artist archive screen (/api/v1/artists)",
+          "note": "single page, rows dead-end (no detail)"
         },
         "chat": {
           "evidence": "list_artists",
@@ -328,7 +328,7 @@
           "evidence": "oEmbed card; /artist/<slug>/fresh.xml"
         },
         "chat": {
-          "evidence": "get_artist → ArtistCard",
+          "evidence": "get_artist \u2192 ArtistCard",
           "state": "yes"
         }
       }
@@ -344,7 +344,7 @@
           "evidence": "/artist/<slug> Similar artists rail"
         },
         "api": {
-          "evidence": "list_similar_artists (1–6 anchors)",
+          "evidence": "list_similar_artists (1\u20136 anchors)",
           "state": "yes"
         },
         "mcp": {
@@ -355,7 +355,7 @@
           "state": "n/a"
         },
         "chat": {
-          "evidence": "get_similar_artists → NeighbourList",
+          "evidence": "get_similar_artists \u2192 NeighbourList",
           "state": "yes"
         }
       }
@@ -378,7 +378,7 @@
           "state": "n/a"
         },
         "mcp": {
-          "evidence": "list_similar_artists (1–6 anchors)",
+          "evidence": "list_similar_artists (1\u20136 anchors)",
           "state": "yes"
         }
       }
@@ -387,7 +387,7 @@
       "entity": "cross",
       "id": "compound-sound-discovery",
       "register": "catalogue",
-      "story": "As a listener, I want compound discovery in one query — songs by artists that sound like Koven and Maduk, in A minor, from before 2020.",
+      "story": "As a listener, I want compound discovery in one query \u2014 songs by artists that sound like Koven and Maduk, in A minor, from before 2020.",
       "support": {
         "api": {
           "evidence": "search_archive soundsLikeArtists filter",
@@ -413,7 +413,7 @@
           "state": "yes"
         },
         "web": {
-          "evidence": "⌘K search (sounds like: chip)",
+          "evidence": "\u2318K search (sounds like: chip)",
           "state": "yes"
         }
       }
@@ -604,7 +604,7 @@
           "state": "n/a"
         },
         "chat": {
-          "evidence": "build_set → ChainCard",
+          "evidence": "build_set \u2192 ChainCard",
           "state": "yes"
         }
       }
@@ -691,7 +691,7 @@
         },
         "api": {
           "state": "yes",
-          "evidence": "get_health, /api/status"
+          "evidence": "get_health, /api/v1/status"
         },
         "cli": {
           "state": "yes",
@@ -709,7 +709,7 @@
           "state": "n/a"
         },
         "chat": {
-          "evidence": "get_status → StatusStrip",
+          "evidence": "get_status \u2192 StatusStrip",
           "state": "yes"
         }
       }
@@ -756,7 +756,7 @@
     },
     {
       "id": "read-finding-story",
-      "story": "As a fan, I want to read why Fluncle logged a track — the note, the video, the observation.",
+      "story": "As a fan, I want to read why Fluncle logged a track \u2014 the note, the video, the observation.",
       "register": "lore",
       "entity": "track",
       "support": {
@@ -790,7 +790,7 @@
           "evidence": "log/[id] + Feed card"
         },
         "chat": {
-          "evidence": "get_track → FindingCard",
+          "evidence": "get_track \u2192 FindingCard",
           "state": "yes"
         }
       }
@@ -934,7 +934,7 @@
     },
     {
       "id": "play-galaxy-game",
-      "story": "As a fan, I want to play the Galaxy — fly to every banger's star.",
+      "story": "As a fan, I want to play the Galaxy \u2014 fly to every banger's star.",
       "register": "lore",
       "entity": "galaxy",
       "support": {
@@ -1021,7 +1021,7 @@
           "evidence": "Mixtapes tab"
         },
         "chat": {
-          "evidence": "get_track mixtape arm → MixtapeCard",
+          "evidence": "get_track mixtape arm \u2192 MixtapeCard",
           "note": "chat list_tracks is findings-only; no mixtape list",
           "state": "partial"
         }
@@ -1029,7 +1029,7 @@
     },
     {
       "id": "experience-a-set",
-      "story": "As a fan, I want to experience a mixtape — the set video, the tracklist, the ride.",
+      "story": "As a fan, I want to experience a mixtape \u2014 the set video, the tracklist, the ride.",
       "register": "lore",
       "entity": "mixtape",
       "support": {
@@ -1073,7 +1073,7 @@
     },
     {
       "id": "read-logbook",
-      "story": "As a fan, I want to read the voyage — Fluncle's travelogue, one entry per sector-day.",
+      "story": "As a fan, I want to read the voyage \u2014 Fluncle's travelogue, one entry per sector-day.",
       "register": "lore",
       "entity": "cross",
       "support": {

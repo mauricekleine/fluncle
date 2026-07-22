@@ -67,7 +67,7 @@ export function webUrl(id: string): string {
  * stored casing, so `241.7.3a` would 404 unless normalized first.
  */
 export function apiUrl(id: string): string {
-  return `https://www.fluncle.com/api/tracks/${id.toUpperCase()}`;
+  return `https://www.fluncle.com/api/v1/tracks/${id.toUpperCase()}`;
 }
 
 /**

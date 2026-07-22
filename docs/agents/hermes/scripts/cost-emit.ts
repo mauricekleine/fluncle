@@ -12,7 +12,7 @@
 //
 // THE CONTRACT (mirrors, deliberately, three things that live in the workspace the
 // box CANNOT import — like fluncle-healthcheck.ts mirrors the cron list inline):
-//   1. the agent-tier endpoint `POST ${FLUNCLE_API_BASE_URL}/api/admin/costs/events`
+//   1. the agent-tier endpoint `POST ${FLUNCLE_API_BASE_URL}/api/v1/admin/costs/events`
 //      (packages/contracts/src/orpc/admin-costs.ts), Bearer ${FLUNCLE_API_TOKEN};
 //   2. the `CostEventInput` shape + its closed enums (same file);
 //   3. the deterministic idempotency `id` scheme (apps/web/src/lib/server/costs.ts
@@ -202,7 +202,7 @@ export async function emitCost(
   const payload: CostEventPayload[] = events.map((event) => ({ ...event, id: costEventId(event) }));
 
   try {
-    const response = await doFetch(`${baseUrl}/api/admin/costs/events`, {
+    const response = await doFetch(`${baseUrl}/api/v1/admin/costs/events`, {
       body: JSON.stringify(payload),
       headers: {
         Authorization: `Bearer ${token}`,

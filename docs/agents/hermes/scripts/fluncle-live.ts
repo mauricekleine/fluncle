@@ -14,7 +14,7 @@
 //   2. POLL: GET https://api.twitch.tv/helix/streams?user_login=<login> with the
 //      Client-Id + Bearer headers. A non-empty `data[]` ⇒ live (read `title` +
 //      `started_at`); empty ⇒ offline.
-//   3. POST the raw live state to ${LIVE_WORKER_URL}/api/admin/twitch/live
+//   3. POST the raw live state to ${LIVE_WORKER_URL}/api/v1/admin/twitch/live
 //      (record_live_state, Authorization: Bearer ${FLUNCLE_API_TOKEN}). The Worker
 //      stores it, detects the transition, and owns the crew Telegram callout. This
 //      poller is intentionally dumb: it reports state every minute, idempotently.
@@ -216,7 +216,7 @@ async function postLiveState(at: string, poll: LivePoll): Promise<boolean> {
     title: poll.title,
   });
 
-  const response = await fetchWithTimeout(`${WORKER_URL}/api/admin/twitch/live`, {
+  const response = await fetchWithTimeout(`${WORKER_URL}/api/v1/admin/twitch/live`, {
     body,
     headers: {
       Authorization: `Bearer ${FLUNCLE_API_TOKEN}`,

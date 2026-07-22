@@ -67,7 +67,7 @@
 // bytes got there (the acquisition) is a separate concern with its own metered budget, and it
 // is not this script's business. This one reads, embeds, and writes back — nothing else.
 //
-//   1. GET /api/admin/tracks/work?kind=embed  → the worklist, in the server's drain order
+//   1. GET /api/v1/admin/tracks/work?kind=embed  → the worklist, in the server's drain order
 //      (certified first, then the Ear's capture-priority ladder). Catalogue-aware.
 //   2. S3-GET each track's captured full song from the PRIVATE bucket, CONCURRENTLY.
 //   3. ONE `embed-track.py` call over the page.
@@ -850,7 +850,7 @@ async function fetchEmbedQueue(
     params.set("count", "true");
   }
 
-  const res = await fetch(`${API_BASE_URL}/api/admin/tracks/work?${params.toString()}`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/tracks/work?${params.toString()}`, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
   });
@@ -871,7 +871,7 @@ async function fetchEmbedQueue(
  * The pod holds an agent token and never speaks to the database.
  */
 async function writeEmbedding(trackId: string, embedding: number[]): Promise<void> {
-  const url = `${API_BASE_URL}/api/admin/tracks/${encodeURIComponent(trackId)}`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(trackId)}`;
   const res = await fetch(url, {
     body: JSON.stringify({ embedding }),
     headers: {

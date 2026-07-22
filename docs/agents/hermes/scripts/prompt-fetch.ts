@@ -17,7 +17,7 @@
 //
 // THE CONTRACT (mirrored, deliberately, from the workspace the box CANNOT import —
 // exactly as cost-emit.ts mirrors the cost contract):
-//   the agent-tier endpoint `GET ${FLUNCLE_API_BASE_URL}/api/admin/prompts/<slug>`
+//   the agent-tier endpoint `GET ${FLUNCLE_API_BASE_URL}/api/v1/admin/prompts/<slug>`
 //   (packages/contracts/src/orpc/admin-prompts.ts), Bearer ${FLUNCLE_API_TOKEN},
 //   returning `{ ok, slug, body, version, source }`.
 //
@@ -92,7 +92,7 @@ export async function fetchPrompt(
   const doFetch = options.fetchImpl ?? fetch;
 
   try {
-    const response = await doFetch(`${baseUrl}/api/admin/prompts/${slug}`, {
+    const response = await doFetch(`${baseUrl}/api/v1/admin/prompts/${slug}`, {
       headers: { Authorization: `Bearer ${token}` },
       method: "GET",
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),

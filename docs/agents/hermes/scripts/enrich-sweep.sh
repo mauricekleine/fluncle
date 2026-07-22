@@ -41,7 +41,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 # on the preview (capture must never gate enrichment).
 #
 # The same file supplies FLUNCLE_API_TOKEN, which the CATALOGUE arm now needs: its worklist
-# (`GET /api/admin/tracks/work?kind=analyze&scope=catalogue`) is read over direct HTTP, since
+# (`GET /api/v1/admin/tracks/work?kind=analyze&scope=catalogue`) is read over direct HTTP, since
 # it is a NEW op and the box's `fluncle` CLI is a PINNED release. Absent token → the catalogue
 # arm is skipped and the findings arm runs exactly as before (docs/gpu-batch-embed.md).
 ENRICH_ENV_FILE="${ENRICH_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"

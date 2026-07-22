@@ -14,7 +14,7 @@
 // for the operator runbook.
 //
 // ── THE TICK ───────────────────────────────────────────────────────────────────────────────────
-//   POST /api/admin/funnel/snapshot with the box's AGENT token, a bare trigger (no body). The Worker
+//   POST /api/v1/admin/funnel/snapshot with the box's AGENT token, a bare trigger (no body). The Worker
 //   computes every stage total + queue depth + frontier count through the SAME predicates the sweeps
 //   run and UPSERTS one row for the UTC day (a re-fired tick overwrites, never doubles a bar).
 //
@@ -102,7 +102,7 @@ export async function runFunnelSnapshotTick(
 // ── The real (box-side) effect ─────────────────────────────────────────────────
 
 async function recordSnapshot(): Promise<RecordSnapshotResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/admin/funnel/snapshot`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/funnel/snapshot`, {
     body: JSON.stringify({}),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,

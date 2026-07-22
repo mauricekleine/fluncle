@@ -39,7 +39,7 @@
 // `embedding_json IS NULL` queue; re-running never double-writes), a fast no-op when the
 // queue is empty:
 //
-//   1. GET /api/admin/tracks/work?kind=embed          → the worklist, in drain order.
+//   1. GET /api/v1/admin/tracks/work?kind=embed          → the worklist, in drain order.
 //   2. S3-GET each track's captured full song (`sourceAudioKey`) → a temp file; build a manifest.
 //   3. ONE `python3 embed-track.py` call over the batch → {results, errors}
 //      (the MuQ model load is amortized; embed-track.py WINDOWS the long audio to bound RAM).
@@ -318,7 +318,7 @@ async function r2Get(key: string): Promise<Uint8Array> {
 // means the catalogue can never starve the findings' backlog.
 
 async function fetchEmbedQueue(): Promise<QueueFinding[]> {
-  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),

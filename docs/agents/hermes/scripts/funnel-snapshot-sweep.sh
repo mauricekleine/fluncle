@@ -10,7 +10,7 @@
 # (fluncle-hermes-operator skill). The pair is BAKED into the image at /opt/hermes-scripts/ and
 # auto-updates from main via pin-watch — no docker cp. See ../funnel-snapshot-timer/README.md.
 #
-# WHAT IT DOES (docs/rfcs/catalogue-funnel-rfc.md): POST /api/admin/funnel/snapshot with the box's
+# WHAT IT DOES (docs/rfcs/catalogue-funnel-rfc.md): POST /api/v1/admin/funnel/snapshot with the box's
 # agent token — a bare trigger. The WORKER computes every stage total + queue depth + frontier count
 # and UPSERTS one idempotent row per UTC day (a re-fired tick overwrites, never doubles a bar). It is
 # the daily-snapshot history behind /admin/funnel. Zero LLM tokens.

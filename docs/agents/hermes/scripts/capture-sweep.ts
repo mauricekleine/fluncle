@@ -183,7 +183,7 @@ const log = (message: string) => console.error(`[capture-sweep] ${message}`);
 
 // ── Pure helpers (exported for capture-sweep.test.ts) ─────────────────────────
 
-/** A row as the capture worklist (`GET /api/admin/tracks/work?kind=capture`) returns it. */
+/** A row as the capture worklist (`GET /api/v1/admin/tracks/work?kind=capture`) returns it. */
 export type CaptureFinding = {
   // Which audio class BPM/key were last analyzed from ("full" the captured song | "preview"
   // a 30s preview). Absent = a legacy row analyzed before the provenance column (treated as
@@ -856,7 +856,7 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
   // the budget's brake — consulted server-side BEFORE the worklist is selected — narrows the
   // scope to the findings while it is shut (its default), so a paused brake reads exactly the
   // findings the old queue did. No `order` param: this queue's order is fixed by the budget.
-  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=capture&scope=all&limit=${QUEUE_LIMIT}`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=capture&scope=all&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
@@ -871,7 +871,7 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
 }
 
 async function patchTrack(trackId: string, update: Record<string, unknown>): Promise<void> {
-  const url = `${API_BASE_URL}/api/admin/tracks/${encodeURIComponent(trackId)}`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(trackId)}`;
   const res = await fetch(url, {
     body: JSON.stringify(update),
     headers: {

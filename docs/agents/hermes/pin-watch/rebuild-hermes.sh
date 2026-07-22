@@ -158,7 +158,7 @@ post_health() {
     -H 'Content-Type: application/json' -H "Authorization: Bearer $APITOKEN" \
     -d "$(printf '{"at":"%s","checks":[{"service":"self-deploy","status":"%s","message":"%s","latencyMs":null,"transitioned":false}]}' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$esc")" \
-    "${WORKER_URL%/}/api/admin/health" >/dev/null 2>&1 || true
+    "${WORKER_URL%/}/api/v1/admin/health" >/dev/null 2>&1 || true
 }
 
 # ── 1. sync the build context (public repo, no credential) ────────────────────

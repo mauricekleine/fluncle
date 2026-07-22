@@ -40,7 +40,7 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # The Worker origin (the agent-scoped token is a custom var that passes Hermes'
 # provider-cred blocklist, so it rides the cron env like the other sweeps).
 API_BASE_URL="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
-CAPTURE_PATH="/api/admin/social/posts/capture"
+CAPTURE_PATH="/api/v1/admin/social/posts/capture"
 
 # A JSON body is REQUIRED even when empty: the oRPC handler builds its input from the
 # request body, and a bodyless POST deserializes to `undefined` → a 400

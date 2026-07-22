@@ -47,7 +47,7 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # The Worker origin (the agent-scoped token is a custom var that passes Hermes'
 # provider-cred blocklist, so it rides the cron env like the other sweeps).
 API_BASE_URL="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
-ADVANCE_PATH="/api/admin/social/publish/advance"
+ADVANCE_PATH="/api/v1/admin/social/publish/advance"
 
 # Resolve this wrapper's dir so the shared marker helper is found next to it.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
