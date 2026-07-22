@@ -710,6 +710,41 @@ export async function getTracksByIds(trackIds: string[]): Promise<Record<string,
 }
 
 /**
+ * `getTracksByIds`, but through the lean BOARD projection: the fat `TRACK_SELECT` runs the
+ * three heavy JSON columns + a dozen correlated subqueries per row, and an admin surface
+ * that only shows a finding's identity + cover (a naming AUDITION, not a graph page) reads
+ * none of them. Reuses the same `BOARD_TRACK_SELECT`/`toBoardTrackListItem` the two admin
+ * boards use (single source of truth, drift-proof), so a consumer that reaches for a dropped
+ * graph/discovery field is a COMPILE error, never a silent blank. Keyed by `trackId` like
+ * its fat twin; bound args only.
+ */
+export async function getBoardTracksByIds(
+  trackIds: string[],
+): Promise<Record<string, BoardTrackListItem>> {
+  const unique = [...new Set(trackIds.filter((id) => id.trim()))];
+
+  if (unique.length === 0) {
+    return {};
+  }
+
+  const db = await getDb();
+  const placeholders = unique.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: unique,
+    sql: `select ${BOARD_TRACK_SELECT} from ${FINDINGS_FROM}
+          where tracks.track_id in (${placeholders})`,
+  });
+
+  const byTrackId: Record<string, BoardTrackListItem> = {};
+
+  for (const row of typedRows<TrackRow>(result.rows)) {
+    byTrackId[row.track_id] = toBoardTrackListItem(row);
+  }
+
+  return byTrackId;
+}
+
+/**
  * Every coordinate-bearing finding that features an artist, newest-first — the
  * artist page's cover grid (Unit 3, artist-relationship RFC §3). The canonical
  * source is the `track_artists` join; when it returns nothing (an artist not yet
@@ -2103,6 +2138,63 @@ export async function getFindingsByGalaxyRanked(
   limit: number,
   offset: number,
 ): Promise<TrackListItem[]> {
+  const pageIds = await rankGalaxyMemberIds(galaxyId, centroid, limit, offset);
+
+  if (pageIds.length === 0) {
+    return [];
+  }
+
+  const byId = await getTracksByIds(pageIds);
+
+  return pageIds.flatMap((id) => {
+    const item = byId[id];
+    return item ? [item] : [];
+  });
+}
+
+/**
+ * The `/admin/galaxies` naming AUDITION's member read — the same core-first ranking as
+ * `getFindingsByGalaxyRanked`, but hydrated through the lean BOARD projection instead of the
+ * fat `getTracksByIds`. The audition renders only a cover + title/artists + Log ID (the play
+ * control on the shared preview singleton), so it never reads the graph/discovery subqueries
+ * or the heavy JSON columns the fat read drags in. This is a DELIBERATE admin/public split:
+ * the public `/galaxies/<slug>` lens keeps the fat `getFindingsByGalaxyRanked` (its findings
+ * are graph pages), and the admin audition gets its own lean hydration — the safer split, so
+ * a change here can never quietly drop a field the public lens renders.
+ */
+export async function getGalaxyAuditionMembers(
+  galaxyId: string,
+  centroid: number[],
+  limit: number,
+  offset: number,
+): Promise<BoardTrackListItem[]> {
+  const pageIds = await rankGalaxyMemberIds(galaxyId, centroid, limit, offset);
+
+  if (pageIds.length === 0) {
+    return [];
+  }
+
+  const byId = await getBoardTracksByIds(pageIds);
+
+  return pageIds.flatMap((id) => {
+    const item = byId[id];
+    return item ? [item] : [];
+  });
+}
+
+/**
+ * The shared core-first ranking behind both galaxy member reads: the DATABASE cosine-ranks
+ * every member's MuQ vector against the galaxy's centroid and returns just the requested
+ * page's `track_id`s, in that deterministic order (the hydration is the caller's — fat for
+ * the public lens, lean board for the admin audition). Returns `[]` for an empty galaxy or a
+ * non-positive limit.
+ */
+async function rankGalaxyMemberIds(
+  galaxyId: string,
+  centroid: number[],
+  limit: number,
+  offset: number,
+): Promise<string[]> {
   if (limit <= 0) {
     return [];
   }
@@ -2125,18 +2217,7 @@ export async function getFindingsByGalaxyRanked(
           limit ? offset ?`,
   });
 
-  const pageIds = typedRows<{ track_id: string }>(pageResult.rows).map((row) => row.track_id);
-
-  if (pageIds.length === 0) {
-    return [];
-  }
-
-  const byId = await getTracksByIds(pageIds);
-
-  return pageIds.flatMap((id) => {
-    const item = byId[id];
-    return item ? [item] : [];
-  });
+  return typedRows<{ track_id: string }>(pageResult.rows).map((row) => row.track_id);
 }
 
 /**

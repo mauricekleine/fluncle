@@ -5,11 +5,12 @@ import { listGalaxiesAdminWithMembers } from "./galaxies-map";
 // listGalaxiesAdminWithMembers (the `/admin/galaxies` naming view's read, Slice 3) attaches
 // each galaxy's capped, core-first member sample to the full admin map. Proven by SQL shape:
 // the galaxies select + the derived member-count query (mocked `./db`), and the ranked
-// member read (mocked `./tracks` `getFindingsByGalaxyRanked`) — so the composition is
-// verified without a real libsql instance or embedding math.
+// member read (mocked `./tracks` `getGalaxyAuditionMembers` — the LEAN board-projection
+// hydration the audition uses, distinct from the fat public `getFindingsByGalaxyRanked`) — so
+// the composition is verified without a real libsql instance or embedding math.
 
 const execute = vi.hoisted(() => vi.fn());
-const getFindingsByGalaxyRanked = vi.hoisted(() => vi.fn());
+const getGalaxyAuditionMembers = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
   getDb: async () => ({ execute }),
@@ -18,8 +19,9 @@ vi.mock("./db", () => ({
 }));
 
 vi.mock("./tracks", () => ({
-  getFindingsByGalaxyRanked,
   // Unused by this function but imported by the module under test.
+  getFindingsByGalaxyRanked: vi.fn(),
+  getGalaxyAuditionMembers,
   toPublicTrackListItem: <T extends object>(item: T) => item,
 }));
 
@@ -43,7 +45,7 @@ function galaxyRow(over: Partial<Record<string, unknown>> = {}) {
 
 beforeEach(() => {
   execute.mockReset();
-  getFindingsByGalaxyRanked.mockReset();
+  getGalaxyAuditionMembers.mockReset();
 });
 
 describe("listGalaxiesAdminWithMembers", () => {
@@ -56,7 +58,7 @@ describe("listGalaxiesAdminWithMembers", () => {
     const result = await listGalaxiesAdminWithMembers(24);
 
     expect(result).toEqual([]);
-    expect(getFindingsByGalaxyRanked).not.toHaveBeenCalled();
+    expect(getGalaxyAuditionMembers).not.toHaveBeenCalled();
   });
 
   it("attaches each galaxy's ranked members and passes the cap + centroid through", async () => {
@@ -81,7 +83,7 @@ describe("listGalaxiesAdminWithMembers", () => {
       });
     });
 
-    getFindingsByGalaxyRanked.mockImplementation((galaxyId: string) =>
+    getGalaxyAuditionMembers.mockImplementation((galaxyId: string) =>
       Promise.resolve(galaxyId === "gal_a" ? [member("a1"), member("a2")] : [member("b1")]),
     );
 
@@ -89,8 +91,8 @@ describe("listGalaxiesAdminWithMembers", () => {
 
     expect(result).toHaveLength(2);
     // The cap + the parsed centroid + offset 0 reach the ranked read.
-    expect(getFindingsByGalaxyRanked).toHaveBeenCalledWith("gal_a", [0.1, 0.2], 24, 0);
-    expect(getFindingsByGalaxyRanked).toHaveBeenCalledWith("gal_b", [0.9, 0.8], 24, 0);
+    expect(getGalaxyAuditionMembers).toHaveBeenCalledWith("gal_a", [0.1, 0.2], 24, 0);
+    expect(getGalaxyAuditionMembers).toHaveBeenCalledWith("gal_b", [0.9, 0.8], 24, 0);
 
     const galA = result.find((entry) => entry.id === "gal_a");
     expect(galA?.members.map((entry) => entry.logId)).toEqual(["a1", "a2"]);

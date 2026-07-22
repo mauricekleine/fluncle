@@ -4,7 +4,12 @@ import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } fr
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { parseKey, toCamelot } from "../key-camelot";
 import { isNamedMove, rankMixable, sonicGateOpen, toMixTrack } from "./mixability";
-import { getFindingsByGalaxyRanked, getMixableTracks, getTasteCosines } from "./tracks";
+import {
+  getFindingsByGalaxyRanked,
+  getGalaxyAuditionMembers,
+  getMixableTracks,
+  getTasteCosines,
+} from "./tracks";
 
 // The other two readers that used to pull every vector into the isolate, now ranked IN SQL
 // (lib/server/embedding.ts, docs/local-database.md "Local is not production"): the `/mix` rail
@@ -266,6 +271,44 @@ describe("getFindingsByGalaxyRanked", () => {
     await seed(corpus());
 
     expect(await getFindingsByGalaxyRanked("galaxy-none", pseudoVector(1), 10, 0)).toEqual([]);
+  });
+});
+
+// The `/admin/galaxies` naming audition reads members through the LEAN board projection
+// (`getGalaxyAuditionMembers`) — the same core-first ranking, hydrated without the fat read's
+// graph/discovery subqueries + heavy JSON columns none of the audition cards render. It must
+// still carry the audition-critical identity fields (title, artists, Log ID) in the same
+// order, or a cover shows blank; and it must NOT carry the graph fields the board projection
+// drops (a silent field is what the split guards against).
+describe("getGalaxyAuditionMembers", () => {
+  it("hydrates the same core-first order with the audition fields, minus the graph fields", async () => {
+    const rows = corpus();
+
+    await seed(rows);
+
+    const centroid = pseudoVector(1);
+    const fat = await getFindingsByGalaxyRanked("galaxy-0", centroid, 8, 0);
+    const lean = await getGalaxyAuditionMembers("galaxy-0", centroid, 8, 0);
+
+    // Same ranking, same page — the two share `rankGalaxyMemberIds`.
+    expect(lean.map((item) => item.trackId)).toEqual(fat.map((item) => item.trackId));
+
+    const first = lean[0];
+    expect(first).toBeDefined();
+    // The audition renders these; a dropped one is a blank cover, not a win.
+    expect(first?.title).toBe("Test Track");
+    expect(first?.artists).toEqual(["Test Artist"]);
+    expect(first?.logId).toBeDefined();
+    // The board projection drops the graph/discovery fields the audition never reads.
+    expect(first).not.toHaveProperty("galaxy");
+    expect(first).not.toHaveProperty("albumSlug");
+    expect(first).not.toHaveProperty("labelSlug");
+  });
+
+  it("returns [] for a galaxy with no members", async () => {
+    await seed(corpus());
+
+    expect(await getGalaxyAuditionMembers("galaxy-none", pseudoVector(1), 10, 0)).toEqual([]);
   });
 });
 
