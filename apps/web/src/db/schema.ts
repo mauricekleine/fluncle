@@ -592,6 +592,20 @@ export const tracks = sqliteTable(
     // grow to five figures and beyond. Unindexed, `/mix` is a full archive scan per
     // keystroke of a chain.
     index("tracks_key_idx").on(table.key),
+    // The /admin/catalogue CAPTURE LENS: the pre-audio queue reads `where nearest_finding_score
+    // is null and capture_priority is not null … order by capture_priority desc, track_id asc`
+    // (docs/the-ear.md — "the order IS the metered capture budget"). Unindexed, that is a full
+    // scan of the crawler-swollen tracks table into a temp B-tree sort every page load. A PARTIAL
+    // index over exactly the un-scored, capture-eligible slice: the partial predicate keeps the
+    // index OFF the scored half (the growing certified/ranked body) so it bounds write
+    // amplification on the exploding table, and it stays small. Composite `(capture_priority,
+    // track_id)` so both sort keys ride one index. Plain ASC — SQLite reverse-scans it for the
+    // `desc, asc` order (a `desc()` index would poison the drizzle snapshot, the ratified trap);
+    // a follow-up flips the query's tiebreak to `track_id desc` so one reverse walk serves the
+    // whole ORDER BY.
+    index("tracks_capture_priority_track_id_idx")
+      .on(table.capturePriority, table.trackId)
+      .where(sql`${table.capturePriority} is not null`),
   ],
 );
 
@@ -832,6 +846,22 @@ export const findings = sqliteTable(
     index("findings_video_url_idx").on(table.videoUrl),
     // Enrichment queue filters (listTracks' `status` filter).
     index("findings_enrichment_status_idx").on(table.enrichmentStatus),
+    // The /admin/renders queue: the render conductor pulls the oldest un-rendered finding
+    // (`where video_url is null order by added_at asc, track_id asc`), walking a prefix that
+    // GROWS as the rendered history piles up in front of it. A PARTIAL index over exactly the
+    // un-rendered slice, so the scan is the un-rendered backlog — not the whole findings table —
+    // and it SHRINKS as renders ship. Plain ASC (SQLite reverse-scans when asked).
+    index("findings_render_queue_idx")
+      .on(table.addedAt, table.trackId)
+      .where(sql`${table.videoUrl} is null`),
+    // listRecentlyRenderedFindings sorts the WHOLE rendered history on `video_squared_at`
+    // (`where video_url is not null order by video_squared_at desc, …`), an unindexed column —
+    // a full scan + temp B-tree sort that grows with every ship. A PARTIAL index over exactly
+    // the rendered slice serves the sort as an index walk. Plain ASC (SQLite reverse-scans it);
+    // a `desc()` index would poison the drizzle snapshot (the ratified trap).
+    index("findings_video_squared_at_idx")
+      .on(table.videoSquaredAt)
+      .where(sql`${table.videoUrl} is not null`),
   ],
 );
 
@@ -1991,6 +2021,11 @@ export const mixtapeTracks = sqliteTable(
     uniqueIndex("mixtape_tracks_mixtape_position_idx").on(table.mixtapeId, table.position),
     uniqueIndex("mixtape_tracks_mixtape_track_idx").on(table.mixtapeId, table.trackId),
     index("mixtape_tracks_finding_id_idx").on(table.findingId),
+    // listMixtapeMembershipsForTracks filters `where track_id in (…)` to tell each finding which
+    // mixtapes carry it. The existing composites are all `mixtape_id`-leftmost, so a track_id-only
+    // lookup had no index to seek — this is the missing seek key. NOT unique: one track can appear
+    // on many mixtapes.
+    index("mixtape_tracks_track_id_idx").on(table.trackId),
   ],
 );
 
@@ -2828,6 +2863,21 @@ export const labels = sqliteTable(
     index("labels_label_releases_queue_idx")
       .on(table.labelReleasesCheckedAt)
       .where(sql`${table.seedState} = 'enabled'`),
+    // The /admin dashboard's label-review attention queue: the oldest labels still awaiting the
+    // operator's ruling (`where seed_state = 'undecided' order by created_at asc limit 25`,
+    // listLabelReviewRows). A PARTIAL index over exactly the un-ruled slice — the seed_state=
+    // 'enabled' and lineage_state='pending' worklists above set the precedent — so it never scans
+    // the crawler-swollen labels table and SHRINKS as the operator rules rows out of `undecided`.
+    // Plain ASC (SQLite reverse-scans it); a `desc()` index poisons the snapshot (the ratified trap).
+    index("labels_undecided_queue_idx")
+      .on(table.createdAt)
+      .where(sql`${table.seedState} = 'undecided'`),
+    // The /admin/labels station read (listLabels): `where seed_state = ? order by name collate
+    // nocase`. The `name` column is BINARY-collated, so the sort key is `name collate nocase` —
+    // the index column carries that collation VERBATIM so the composite serves BOTH the equality
+    // filter and the case-insensitive ORDER BY as one index walk (no temp B-tree sort). Plain ASC
+    // (SQLite reverse-scans it).
+    index("labels_seed_state_name_idx").on(table.seedState, sql`${table.name} collate nocase`),
   ],
 );
 
