@@ -1722,12 +1722,27 @@ export type CatalogueSummary = {
 // grows `tracks` by the thousand, so its cost is unbounded (measured ~10 s of pure query time).
 //
 // So the counts move off the request path, the same shape as the ranking itself (docs/the-ear.md
-// § The architecture): the `rank_catalogue` sweep already visits these rows, so it recomputes the
-// counts once at the end of each tick and STORES them on the `settings` KV (the store the kill
-// switches ride); the operator's own count-changing mutations refresh them in their OWN write, so
-// his actions reflect immediately; and `getCatalogueSummary` then does a single cheap KV read. The
-// exact number is near-decorative (docs/the-ear.md § The surface — "No count badge"), so a
-// slightly-stale count is in keeping, and the `computedAt` stamp makes the staleness honest.
+// § The architecture), on TWO write paths that never scan on a read:
+//   · the `rank_catalogue` sweep visits every stale row anyway, so at the end of each tick it does
+//     ONE full recompute (`refreshCatalogueSummary`) and stores the six counts on the `settings` KV
+//     (the store the kill switches ride) — the authoritative value, and the drift-healer;
+//   · each count-changing operator mutation applies a single-row ±1 DELTA (`withSummaryDelta`): it
+//     classifies the ONE affected row into its summary buckets before and after the write (two
+//     PK-indexed reads — NEVER the O(catalogue) scan) and shifts the cached counts by the
+//     difference, so a dismiss/restore/force-capture/clear tap reflects immediately AND stays cheap
+//     (the board is a triage surface — the operator taps dozens per session, and a full recompute
+//     per tap would re-create on the write side exactly the jank this cache removes on the read side).
+//
+// `getCatalogueSummary` then does a single cheap KV read. The exact number is near-decorative
+// (docs/the-ear.md § The surface — "No count badge"), so a slightly-stale count is in keeping, and
+// the `computedAt` stamp makes the staleness honest.
+//
+// DRIFT & RACES. The delta's read-modify-write on the KV is not transactional, but /admin is
+// single-operator, so concurrent count mutations are negligible; and the sweep's full recompute
+// re-derives the truth every tick, healing any accumulated drift. The per-row classifier
+// (`bucketsForRow`) is a PURE mirror of `computeCatalogueCounts`'s SQL CASE arms, and a drift-guard
+// test (catalogue.integration.test.ts) seeds rows in every bucket and asserts the two agree
+// bucket-for-bucket — so the delta and the recompute can never silently diverge in shape.
 
 /** The settings-KV key the six counts cache under, as a JSON `CatalogueSummary`. */
 const CATALOGUE_SUMMARY_KEY = "catalogue_summary_cache";
@@ -1738,14 +1753,28 @@ const CATALOGUE_AFFINITY_KEY = "catalogue_affinity_cache";
 /** The six counts on their own, without the freshness stamp (the shape the scan produces). */
 type CatalogueCounts = Omit<CatalogueSummary, "computedAt">;
 
+/** The six summary buckets — the keys of `CatalogueCounts`, and what `bucketsForRow` classifies into. */
+export type SummaryBucket = keyof CatalogueCounts;
+
+/** Every summary bucket, for iterating a delta over the cached counts. */
+const SUMMARY_BUCKETS: readonly SummaryBucket[] = [
+  "awaitingCapture",
+  "awaitingRank",
+  "dismissed",
+  "quarantined",
+  "ranked",
+  "total",
+];
+
 /**
  * Compute the six counts with ONE scoped aggregate — THE expensive read (O(all catalogue)), and
  * the whole reason for the cache. Every count but `dismissed` describes the LIVE working set
  * (`dismissed_at is null`) so the headline numbers and the lens rows agree; `dismissed` is the
- * restore pile, counted on its own. Called only by the sweep and the operator's mutations (via
- * `refreshCatalogueSummary`), and once on a cold read — never on a warm page load.
+ * restore pile, counted on its own. Called only by the sweep and the cold/corrupt-cache read (via
+ * `refreshCatalogueSummary`) — NEVER a warm page load, and NEVER a mutation (those apply a ±1 delta).
+ * Exported for the drift-guard test that pins `bucketsForRow` to this SQL bucket-for-bucket.
  */
-async function computeCatalogueCounts(): Promise<CatalogueCounts> {
+export async function computeCatalogueCounts(): Promise<CatalogueCounts> {
   const db = await getDb();
   const result = await db.execute({
     args: [WRONG_AUDIO_STATUS, WRONG_AUDIO_STATUS],
@@ -1790,10 +1819,11 @@ async function computeCatalogueCounts(): Promise<CatalogueCounts> {
 }
 
 /**
- * Recompute the six counts and PERSIST them with a fresh stamp. The rank sweep calls this at the
- * end of every tick, and each count-changing operator mutation (dismiss/restore, force-capture,
- * wrong-audio clear, a catalogue quarantine) calls it in its own write — so the cached row the
- * page reads stays honest without the page ever running the scan. Returns the persisted summary.
+ * Recompute the six counts (the O(catalogue) scan) and PERSIST them with a fresh stamp. This is the
+ * AUTHORITATIVE write and the drift-healer, called on EXACTLY two paths: the rank-sweep tick (which
+ * visits every stale row anyway) and the cold/corrupt-cache read. A count-changing MUTATION never
+ * calls this — it applies a single-row ±1 delta (`withSummaryDelta`) instead, so an operator tap
+ * never pays the scan. Returns the persisted summary.
  */
 export async function refreshCatalogueSummary(): Promise<CatalogueSummary> {
   const counts = await computeCatalogueCounts();
@@ -1802,6 +1832,169 @@ export async function refreshCatalogueSummary(): Promise<CatalogueSummary> {
   await setSetting(CATALOGUE_SUMMARY_KEY, JSON.stringify(summary));
 
   return summary;
+}
+
+/** The columns a summary-bucket classification reads off one catalogue row (`bucketsForRow`'s input). */
+export type BucketRow = {
+  capturePriority: null | number;
+  captureStatus: null | string;
+  catalogueRankCorpus: null | string;
+  dismissedAt: null | string;
+  duplicateOfTrackId: null | string;
+  durationMs: null | number;
+  nearestFindingScore: null | number;
+};
+
+/**
+ * Which summary buckets a catalogue row contributes to — a PURE mirror of the SQL CASE arms in
+ * `computeCatalogueCounts`, one boolean per arm. A row can be in SEVERAL (the six counts are
+ * independent accumulators, not a partition), so this returns a set, and a delta shifts each bucket
+ * the row entered or left. It structurally mirrors the SQL, THREE-VALUED LOGIC AND ALL: a NULL
+ * `duration_ms` fails `< LONG_FORM`/`>= MIN` (a NULL comparison is not true), and a NULL
+ * `capture_status` fails `<> 'wrong-audio'` — so both are written as explicit `!== null` guards, not
+ * as JS truthiness. The drift-guard test pins this to `computeCatalogueCounts` bucket-for-bucket.
+ */
+export function bucketsForRow(row: BucketRow): Set<SummaryBucket> {
+  const buckets = new Set<SummaryBucket>();
+  const live = row.dismissedAt === null;
+
+  if (!live) {
+    buckets.add("dismissed");
+
+    return buckets;
+  }
+
+  // `total`: every live catalogue row.
+  buckets.add("total");
+
+  const withinLongForm = row.durationMs !== null && row.durationMs < LONG_FORM_MS;
+
+  // `ranked`: scored, not a stored duplicate, under the long-form line.
+  if (row.nearestFindingScore !== null && row.duplicateOfTrackId === null && withinLongForm) {
+    buckets.add("ranked");
+  }
+
+  // `awaitingCapture`: no score, a pre-audio tier, not quarantined, inside the duration window. The
+  // `capture_status <> 'wrong-audio'` arm is false for a NULL status too (a NULL comparison is not
+  // true), so a never-attempted row without a stored status is NOT counted — mirroring the SQL and
+  // the capture lens's own predicate exactly.
+  if (
+    row.nearestFindingScore === null &&
+    row.capturePriority !== null &&
+    row.captureStatus !== null &&
+    row.captureStatus !== WRONG_AUDIO_STATUS &&
+    row.durationMs !== null &&
+    row.durationMs >= MIN_TRACK_MS &&
+    withinLongForm
+  ) {
+    buckets.add("awaitingCapture");
+  }
+
+  // `quarantined`: the wrong-audio holding pen.
+  if (row.captureStatus === WRONG_AUDIO_STATUS) {
+    buckets.add("quarantined");
+  }
+
+  // `awaitingRank`: the sweep has not stamped a corpus fingerprint yet.
+  if (row.catalogueRankCorpus === null) {
+    buckets.add("awaitingRank");
+  }
+
+  return buckets;
+}
+
+/**
+ * Classify ONE catalogue row into its summary buckets — a single PK-indexed read, then the pure
+ * `bucketsForRow`. Returns an empty set when the row is not a catalogue row (a finding, or gone), so
+ * a stray/absent id contributes no delta. Exported for the drift-guard test.
+ */
+export async function readRowBuckets(trackId: string): Promise<Set<SummaryBucket>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select ct.capture_priority, ct.capture_status, ct.catalogue_rank_corpus, ct.dismissed_at,
+                 ct.duplicate_of_track_id, ct.duration_ms, ct.nearest_finding_score
+          from tracks ct
+          left join findings cf on cf.track_id = ct.track_id
+          where ct.track_id = ? and cf.track_id is null
+          limit 1`,
+  });
+  const row = typedRow<{
+    capture_priority: null | number;
+    capture_status: null | string;
+    catalogue_rank_corpus: null | string;
+    dismissed_at: null | string;
+    duplicate_of_track_id: null | string;
+    duration_ms: null | number;
+    nearest_finding_score: null | number;
+  }>(result.rows);
+
+  if (!row) {
+    return new Set<SummaryBucket>();
+  }
+
+  return bucketsForRow({
+    capturePriority: row.capture_priority,
+    captureStatus: row.capture_status,
+    catalogueRankCorpus: row.catalogue_rank_corpus,
+    dismissedAt: row.dismissed_at,
+    duplicateOfTrackId: row.duplicate_of_track_id,
+    durationMs: row.duration_ms,
+    nearestFindingScore: row.nearest_finding_score,
+  });
+}
+
+/**
+ * Apply a single row's bucket transition (`before` → `after`) to the cached summary — a
+ * read-modify-write of ±1 per bucket the row entered or left, with a fresh stamp. Clamped at 0 so a
+ * transient race can never render a negative count; the sweep's full recompute heals any drift.
+ *
+ * A cold/corrupt cache is a NO-OP here: there is nothing to delta, and forcing a full recompute on
+ * the write is exactly what this path avoids — the next `getCatalogueSummary` read cold-fills it
+ * live (the one sanctioned scan), and the row it reads already reflects this mutation.
+ */
+async function applyCatalogueSummaryDelta(
+  before: Set<SummaryBucket>,
+  after: Set<SummaryBucket>,
+): Promise<void> {
+  const cached = await getSetting(CATALOGUE_SUMMARY_KEY);
+  const parsed = cached ? parseSummaryCache(cached) : null;
+
+  if (!parsed) {
+    return;
+  }
+
+  const next: CatalogueSummary = { ...parsed, computedAt: new Date().toISOString() };
+
+  for (const bucket of SUMMARY_BUCKETS) {
+    const delta = (after.has(bucket) ? 1 : 0) - (before.has(bucket) ? 1 : 0);
+
+    if (delta !== 0) {
+      next[bucket] = Math.max(0, next[bucket] + delta);
+    }
+  }
+
+  await setSetting(CATALOGUE_SUMMARY_KEY, JSON.stringify(next));
+}
+
+/**
+ * Run a single-row catalogue mutation and keep the cached summary honest with a ±1 DELTA — never the
+ * O(catalogue) recompute. Classifies the affected row before and after the write (two PK-indexed
+ * reads) and shifts the cached counts by the difference; a write that changed nothing (an idempotent
+ * no-op, `changed === false`) skips the delta entirely. `write` performs the mutation and returns
+ * whether a row changed. See the module header for the drift/races contract.
+ */
+async function withSummaryDelta(trackId: string, write: () => Promise<boolean>): Promise<boolean> {
+  const before = await readRowBuckets(trackId);
+  const changed = await write();
+
+  if (changed) {
+    const after = await readRowBuckets(trackId);
+
+    await applyCatalogueSummaryDelta(before, after);
+  }
+
+  return changed;
 }
 
 /** Parse a cached `CatalogueSummary`, or null when the row is absent/corrupt (→ a live recompute). */
@@ -2348,24 +2541,22 @@ async function hydrateMatches(findingIds: (string | null)[]): Promise<Map<string
  * has no quarantine state. Returns whether a row was flipped, so the caller can report honestly.
  */
 export async function clearWrongAudio(trackId: string): Promise<boolean> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [QUARANTINE_CLEARED, trackId, WRONG_AUDIO_STATUS],
-    sql: `update tracks
+  // A cleared row leaves `quarantined` (and may enter `awaitingCapture`) — `withSummaryDelta` shifts
+  // the cached counts by the row's own before/after buckets, so the operator's tap reflects
+  // immediately without the O(catalogue) recompute (docs/the-ear.md § the surface).
+  return withSummaryDelta(trackId, async () => {
+    const db = await getDb();
+    const result = await db.execute({
+      args: [QUARANTINE_CLEARED, trackId, WRONG_AUDIO_STATUS],
+      sql: `update tracks
           set capture_status = ?
           where track_id = ?
             and capture_status = ?
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+    });
+
+    return result.rowsAffected > 0;
   });
-  const changed = result.rowsAffected > 0;
-
-  // A cleared row leaves the `quarantined` count — refresh the cached summary in the same write so
-  // the operator's own act reflects immediately, off the read path (docs/the-ear.md § the surface).
-  if (changed) {
-    await refreshCatalogueSummary();
-  }
-
-  return changed;
 }
 
 /**
@@ -2438,10 +2629,14 @@ export async function requeueUnmatchedCaptures(): Promise<{
  * Returns whether the veto was lifted.
  */
 export async function forceCapture(trackId: string): Promise<boolean> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [DUPLICATE_CLEARED, trackId],
-    sql: `update tracks
+  // Force-capture nulls the tier + the corpus, so the row moves between the capture/awaiting-rank
+  // (and ranked) buckets — `withSummaryDelta` shifts the cached counts by its before/after buckets,
+  // no full recompute.
+  return withSummaryDelta(trackId, async () => {
+    const db = await getDb();
+    const result = await db.execute({
+      args: [DUPLICATE_CLEARED, trackId],
+      sql: `update tracks
           set capture_status = ?,
               duplicate_of_track_id = null,
               capture_priority = null,
@@ -2449,16 +2644,10 @@ export async function forceCapture(trackId: string): Promise<boolean> {
           where track_id = ?
             and duplicate_of_track_id is not null
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+    });
+
+    return result.rowsAffected > 0;
   });
-  const changed = result.rowsAffected > 0;
-
-  // Force-capture nulls the tier + the corpus, so the row moves between the capture/awaiting-rank
-  // buckets — refresh the cached summary in the same write so his action reflects immediately.
-  if (changed) {
-    await refreshCatalogueSummary();
-  }
-
-  return changed;
 }
 
 /**
@@ -2547,35 +2736,32 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
  * dismiss / restore is an idempotent no-op success).
  */
 export async function setTrackDismissed(trackId: string, dismissed: boolean): Promise<boolean> {
-  const db = await getDb();
-  const result = dismissed
-    ? await db.execute({
-        args: [new Date().toISOString(), trackId],
-        sql: `update tracks
+  // Dismissing/restoring moves a row between the live buckets ({total, …}) and the restore pile
+  // ({dismissed}) — `withSummaryDelta` shifts the cached counts by the row's own before/after
+  // buckets, so the thumbs-down (and its Undo) reflect immediately without the page ever scanning.
+  // This is the mutation the "counts stay consistent with the lenses" test exercises after a tick.
+  return withSummaryDelta(trackId, async () => {
+    const db = await getDb();
+    const result = dismissed
+      ? await db.execute({
+          args: [new Date().toISOString(), trackId],
+          sql: `update tracks
               set dismissed_at = ?
               where track_id = ?
                 and dismissed_at is null
                 and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-      })
-    : await db.execute({
-        args: [trackId],
-        sql: `update tracks
+        })
+      : await db.execute({
+          args: [trackId],
+          sql: `update tracks
               set dismissed_at = null
               where track_id = ?
                 and dismissed_at is not null
                 and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-      });
-  const changed = result.rowsAffected > 0;
+        });
 
-  // Dismissing/restoring moves a row between the live buckets and the restore pile — refresh the
-  // cached summary in the same write so the thumbs-down (and its Undo) reflect immediately, without
-  // the page ever scanning. This is the mutation the "counts stay consistent with the lenses" test
-  // (catalogue.integration.test.ts) exercises after a rank tick.
-  if (changed) {
-    await refreshCatalogueSummary();
-  }
-
-  return changed;
+    return result.rowsAffected > 0;
+  });
 }
 
 // ── CAPTURE VERIFICATION (docs/the-ear.md § Wrong audio) ──────────────────────────────
@@ -2755,6 +2941,14 @@ export async function verifyCapture(
   // WHY (a preview-mismatch quarantine, not a cross-title archive collision), and it can never
   // reach the finding attention read (that read joins `findings`, and this row has none). The
   // fresh capture's ingest gate overwrites it with a new verdict when the re-download lands.
+  //
+  // A backfill quarantine adds to `quarantined` and nulls the corpus/score (→ awaiting-rank, out of
+  // ranked), so the cached summary is kept honest with the SAME single-row ±1 delta the operator
+  // mutations use — classify before, write, classify after. Only this catalogue-mismatch branch
+  // moves a bucket (the match/no-preview stamps and the finding-mismatch branch touch none, so they
+  // never refresh), and the per-row delta means it does not multiply the backfill's scans at all.
+  const before = await readRowBuckets(trackId);
+
   await db.execute({
     args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
     sql: `update tracks
@@ -2770,11 +2964,7 @@ export async function verifyCapture(
           where track_id = ?`,
   });
 
-  // A backfill quarantine adds to the `quarantined` count and nulls the corpus (→ awaiting-rank),
-  // so refresh the cached summary. Only this catalogue-mismatch branch changes counts — the
-  // match/no-preview stamps and the finding-mismatch branch touch no summary bucket, so they do
-  // not refresh (and this is the rare branch, so it does not multiply the backfill's per-row scans).
-  await refreshCatalogueSummary();
+  await applyCatalogueSummaryDelta(before, await readRowBuckets(trackId));
 
   return "quarantined-catalogue";
 }

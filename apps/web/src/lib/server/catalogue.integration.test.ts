@@ -713,6 +713,130 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     // The third row never made it into the batch of 2 — it has no fingerprint at all.
     expect(summary.awaitingRank).toBe(1);
   });
+
+  it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {
+    // THE DRIFT GUARD. The operator mutations keep the cached summary honest with a single-row ±1
+    // DELTA, driven by the pure `bucketsForRow` classifier — never the full recompute. That is only
+    // safe if the classifier agrees, arm for arm, with `computeCatalogueCounts`'s SQL CASE arms. So
+    // seed rows in every bucket (and every NULL edge case), then assert a TALLY of the classifier
+    // over those rows equals the SQL aggregate exactly. If either side drifts, this trips.
+    const { WRONG_AUDIO_STATUS, bucketsForRow, computeCatalogueCounts, readRowBuckets } =
+      await import("./catalogue");
+
+    // Set a catalogue row's summary-relevant columns directly, so each fixture lands in a KNOWN set
+    // of buckets. `undefined` leaves the seeded default (duration 270_000, everything else null).
+    const setCols = async (
+      trackId: string,
+      cols: {
+        capturePriority?: null | number;
+        captureStatus?: null | string;
+        corpus?: null | string;
+        dismissedAt?: null | string;
+        duplicateOf?: null | string;
+        durationMs?: null | number;
+        score?: null | number;
+      },
+    ): Promise<void> => {
+      await db.execute({
+        args: [
+          cols.capturePriority ?? null,
+          cols.captureStatus ?? null,
+          cols.corpus ?? null,
+          cols.dismissedAt ?? null,
+          cols.duplicateOf ?? null,
+          cols.durationMs === undefined ? 270_000 : cols.durationMs,
+          cols.score ?? null,
+          trackId,
+        ],
+        sql: `update tracks
+              set capture_priority = ?, capture_status = ?, catalogue_rank_corpus = ?,
+                  dismissed_at = ?, duplicate_of_track_id = ?, duration_ms = ?,
+                  nearest_finding_score = ?
+              where track_id = ?`,
+      });
+    };
+
+    const corpus = "v4:1:1:0:0:0";
+    const ids = [
+      "b-awaiting-rank",
+      "b-ranked",
+      "b-awaiting-capture",
+      "b-quarantined",
+      "b-dismissed",
+      "b-duplicate",
+      "b-long-form",
+      "b-null-duration",
+      "b-null-status",
+      "b-multi",
+    ];
+
+    for (const id of ids) {
+      await seedCatalogue(id);
+    }
+
+    await setCols("b-awaiting-rank", { corpus: null }); // {total, awaitingRank}
+    await setCols("b-ranked", { corpus, score: 0.9 }); // {total, ranked}
+    await setCols("b-awaiting-capture", { capturePriority: 3, captureStatus: "pending", corpus }); // {total, awaitingCapture}
+    await setCols("b-quarantined", { captureStatus: WRONG_AUDIO_STATUS, corpus }); // {total, quarantined}
+    await setCols("b-dismissed", { dismissedAt: "2026-07-22T00:00:00.000Z" }); // {dismissed}
+    await setCols("b-duplicate", { corpus, duplicateOf: "finding-x", score: 0.99 }); // {total} — scored but a stored duplicate
+    await setCols("b-long-form", { corpus, durationMs: 20 * 60_000, score: 0.9 }); // {total} — scored but over the long-form line
+    await setCols("b-null-duration", {
+      capturePriority: 3,
+      captureStatus: "pending",
+      corpus,
+      durationMs: null,
+    }); // {total} — a NULL duration fails the awaiting-capture window
+    await setCols("b-null-status", { capturePriority: 3, captureStatus: null, corpus }); // {total} — a NULL status fails `<> wrong-audio`
+    await setCols("b-multi", { capturePriority: 3, captureStatus: "pending", corpus: null }); // {total, awaitingCapture, awaitingRank}
+
+    // The SQL aggregate (the authority) vs a tally of the pure classifier over the SAME rows.
+    const sql = await computeCatalogueCounts();
+    const tally = {
+      awaitingCapture: 0,
+      awaitingRank: 0,
+      dismissed: 0,
+      quarantined: 0,
+      ranked: 0,
+      total: 0,
+    };
+
+    for (const id of ids) {
+      for (const bucket of await readRowBuckets(id)) {
+        tally[bucket] += 1;
+      }
+    }
+
+    expect(tally).toEqual(sql);
+    // Pin the expected shape too, so a change that drifts BOTH sides in lockstep still trips.
+    expect(sql).toEqual({
+      awaitingCapture: 2,
+      awaitingRank: 2,
+      dismissed: 1,
+      quarantined: 1,
+      ranked: 1,
+      total: 9,
+    });
+
+    // And the pure classifier directly, on constructed rows — the two NULL edge cases explicitly.
+    const base = {
+      capturePriority: 3,
+      catalogueRankCorpus: corpus,
+      dismissedAt: null,
+      duplicateOfTrackId: null,
+      durationMs: 270_000,
+      nearestFindingScore: null,
+    } as const;
+    expect([...bucketsForRow({ ...base, captureStatus: null })]).toEqual(["total"]); // NULL status ⇒ not awaiting-capture
+    expect([...bucketsForRow({ ...base, captureStatus: "pending", durationMs: null })]).toEqual([
+      "total",
+    ]); // NULL duration ⇒ not awaiting-capture
+    expect([...(await readRowBuckets("b-multi"))].sort()).toEqual([
+      "awaitingCapture",
+      "awaitingRank",
+      "total",
+    ]);
+  });
 });
 
 describe("duplicates — a crawled copy of a finding is flagged, never bought", () => {
@@ -1284,7 +1408,7 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
     expect(ear).toContain("cat-real");
   });
 
-  it("keeps the summary consistent with the lenses (dupes + dismissed out of `ranked`)", async () => {
+  it("keeps the summary consistent with the lenses via the mutation DELTA (dismiss, then restore)", async () => {
     const { getCatalogueSummary, rankCatalogue, setTrackDismissed } = await import("./catalogue");
 
     await seedFinding("finding-owned", { artists: ["Dupe"], title: "Infinity", vector: axis(0) });
@@ -1292,14 +1416,29 @@ describe("the operator's actions — dismiss/restore, and the deterministic-dupl
     await seedCatalogue("cat-real", { vector: blend(axis(0), axis(1), 0.2) });
     await seedCatalogue("cat-dismissed", { vector: blend(axis(0), axis(1), 0.3) });
     await rankCatalogue();
-    await setTrackDismissed("cat-dismissed", true);
 
-    const summary = await getCatalogueSummary();
-    // `ranked` is exactly the ear lens: cat-real only (the dupe and the dismissed are excluded).
-    expect(summary.ranked).toBe(1);
-    expect(summary.dismissed).toBe(1);
-    // `total` is the live working set — the dismissed row is not counted among the 3 live rows.
-    expect(summary.total).toBe(2);
+    // After the rank tick, the cache is: 3 live, 2 ranked (cat-real + cat-dismissed; the dupe is
+    // excluded), 0 dismissed.
+    const afterRank = await getCatalogueSummary();
+    expect(afterRank.total).toBe(3);
+    expect(afterRank.ranked).toBe(2);
+    expect(afterRank.dismissed).toBe(0);
+
+    // The dismiss applies a single-row ±1 delta — NOT a full recompute — moving cat-dismissed out of
+    // {total, ranked} into {dismissed}. The summary reflects it immediately from the cache.
+    await setTrackDismissed("cat-dismissed", true);
+    const afterDismiss = await getCatalogueSummary();
+    expect(afterDismiss.ranked).toBe(1); // exactly the ear lens now: cat-real only
+    expect(afterDismiss.dismissed).toBe(1);
+    expect(afterDismiss.total).toBe(2); // the dismissed row is out of the live working set
+
+    // The restore delta is the exact inverse — the cache returns to the post-rank shape without a
+    // sweep in between, so the delta is honest in both directions.
+    await setTrackDismissed("cat-dismissed", false);
+    const afterRestore = await getCatalogueSummary();
+    expect(afterRestore.ranked).toBe(2);
+    expect(afterRestore.dismissed).toBe(0);
+    expect(afterRestore.total).toBe(3);
   });
 
   it("never touches a finding — setTrackDismissed on a certified track is a no-op", async () => {
