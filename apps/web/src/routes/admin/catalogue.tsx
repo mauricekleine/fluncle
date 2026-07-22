@@ -149,6 +149,10 @@ function AdminCataloguePage() {
     queryFn: () => fetchCatalogue({ data: lens }),
     queryKey: [...CATALOGUE_KEY, lens],
     refetchOnWindowFocus: true,
+    // The summary read is now a cheap KV read (the counts are cached, not scanned), so focus
+    // refetch stays on. `staleTime` is burst protection: a flurry of row mutations each invalidates
+    // this query, and 20s coalesces those into one refetch instead of one per click.
+    staleTime: 20_000,
   });
 
   // The sweep, by hand. It is a periodic job, but the operator must be able to poke it after
@@ -419,7 +423,44 @@ function LogItConfirm({
   );
 }
 
-/** The quiet line under the title: what the catalogue holds, and how much of it is ranked. */
+/**
+ * A compact "how long ago" for the counts stamp. The six counts are cached (computed by the rank
+ * sweep, not scanned on load), so this is the honest freshness marker for them. Admin-only, so
+ * plain wording is fine. Null when there is no stamp (a cold cache) or an unparseable value.
+ */
+function countsAgo(iso: string | null): string | null {
+  if (!iso) {
+    return null;
+  }
+
+  const then = Date.parse(iso);
+
+  if (Number.isNaN(then)) {
+    return null;
+  }
+
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+
+  if (seconds < 45) {
+    return "just now";
+  }
+
+  const minutes = Math.round(seconds / 60);
+
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+
+  const hours = Math.round(minutes / 60);
+
+  if (hours < 24) {
+    return `${hours} h ago`;
+  }
+
+  return `${Math.round(hours / 24)} d ago`;
+}
+
+/** The quiet line under the title: what the catalogue holds, how much is ranked, and how fresh the counts are. */
 function summaryLine(summary: CatalogueSummary): string {
   if (summary.total === 0) {
     return "Nothing out there yet";
@@ -437,6 +478,13 @@ function summaryLine(summary: CatalogueSummary): string {
 
   if (summary.awaitingRank > 0) {
     parts.push(`${summary.awaitingRank} unranked`);
+  }
+
+  // The freshness stamp — subtle, last: these counts are cached, so say how fresh they are.
+  const ago = countsAgo(summary.computedAt);
+
+  if (ago) {
+    parts.push(`counts ${ago}`);
   }
 
   return parts.join(" · ");

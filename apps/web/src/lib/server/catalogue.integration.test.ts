@@ -685,6 +685,9 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(await getCatalogueSummary()).toEqual({
       awaitingCapture: 0,
       awaitingRank: 0,
+      // The counts are now cached with a freshness stamp (the rank sweep wrote them); the six
+      // numbers are still exact, and `computedAt` is the ISO stamp of when the sweep computed them.
+      computedAt: expect.any(String),
       dismissed: 0,
       quarantined: 0,
       ranked: 0,

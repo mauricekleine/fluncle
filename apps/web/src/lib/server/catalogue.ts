@@ -51,6 +51,7 @@ import { type InStatement } from "@libsql/client/web";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { labelSlug } from "./labels";
+import { getSetting, setSetting } from "./settings";
 import { matchKey } from "./track-match";
 
 // ── The pre-audio capture ladder ─────────────────────────────────────────────────────
@@ -1155,6 +1156,11 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   const candidates = typedRows<CandidateRow>(candidateResult.rows);
 
   if (candidates.length === 0) {
+    // Refresh the cached counts + affinity even on an idle tick: nothing changed this tick, but
+    // this is the read `getCatalogueSummary` serves off the hot path, so keeping it warm here means
+    // a fresh deploy's very first (empty) rank tick already populates the cache.
+    await persistCatalogueCaches();
+
     // `remaining` is COUNTED, never assumed to be zero. An empty batch normally does mean a
     // drained catalogue — but not if `limit` was 0, and a cron that trusts an assumed 0 would
     // stop calling while rows were still stale. The count is one cheap scoped COUNT, paid only
@@ -1549,6 +1555,11 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // after a partial failure converges on the same rows.
   await db.batch(writes, "write");
 
+  // The tick's writes have landed — recompute the cached counts + capture-lens affinity so the
+  // page reads the fresh shape without ever scanning. This is where the summary comes off the hot
+  // path: the sweep pays the scan once per tick, not the page once per load.
+  await persistCatalogueCaches();
+
   return {
     catalogueDuplicates,
     corpus,
@@ -1677,6 +1688,14 @@ export type CatalogueSummary = {
   awaitingCapture: number;
   /** Catalogue rows the sweep has not reached yet (or that went stale). */
   awaitingRank: number;
+  /**
+   * When the six counts were last computed (the rank sweep's last tick, or the operator's last
+   * count-changing act) — the freshness stamp the page reads. The counts are CACHED, not scanned
+   * live (see `getCatalogueSummary`), so this says how fresh they are. Null only on the one-time
+   * cold fill of an empty/wiped cache. docs/the-ear.md is explicit that the exact number is
+   * near-decorative, so a slightly-stale count is in keeping — this stamp makes the staleness honest.
+   */
+  computedAt: string | null;
   /** Catalogue rows the operator dismissed ("not for me") — the restore pile's depth. */
   dismissed: number;
   /**
@@ -1695,11 +1714,39 @@ export type CatalogueSummary = {
   total: number;
 };
 
-/** The catalogue's whole shape in one read — four scoped counts, no scan of the rows. */
-export async function getCatalogueSummary(): Promise<CatalogueSummary> {
+// ── The cached summary — the six counts come OFF the hot path ─────────────────────────────────
+//
+// The six counts describe the WHOLE catalogue, so computing them live is O(all catalogue): a
+// six-way conditional aggregate over every `tracks` row with no `findings` row. That scan used to
+// run on EVERY page load, every focus refetch, and every mutation invalidation — and the crawler
+// grows `tracks` by the thousand, so its cost is unbounded (measured ~10 s of pure query time).
+//
+// So the counts move off the request path, the same shape as the ranking itself (docs/the-ear.md
+// § The architecture): the `rank_catalogue` sweep already visits these rows, so it recomputes the
+// counts once at the end of each tick and STORES them on the `settings` KV (the store the kill
+// switches ride); the operator's own count-changing mutations refresh them in their OWN write, so
+// his actions reflect immediately; and `getCatalogueSummary` then does a single cheap KV read. The
+// exact number is near-decorative (docs/the-ear.md § The surface — "No count badge"), so a
+// slightly-stale count is in keeping, and the `computedAt` stamp makes the staleness honest.
+
+/** The settings-KV key the six counts cache under, as a JSON `CatalogueSummary`. */
+const CATALOGUE_SUMMARY_KEY = "catalogue_summary_cache";
+
+/** The settings-KV key the capture lens's archive affinity caches under (display-only — see below). */
+const CATALOGUE_AFFINITY_KEY = "catalogue_affinity_cache";
+
+/** The six counts on their own, without the freshness stamp (the shape the scan produces). */
+type CatalogueCounts = Omit<CatalogueSummary, "computedAt">;
+
+/**
+ * Compute the six counts with ONE scoped aggregate — THE expensive read (O(all catalogue)), and
+ * the whole reason for the cache. Every count but `dismissed` describes the LIVE working set
+ * (`dismissed_at is null`) so the headline numbers and the lens rows agree; `dismissed` is the
+ * restore pile, counted on its own. Called only by the sweep and the operator's mutations (via
+ * `refreshCatalogueSummary`), and once on a cold read — never on a warm page load.
+ */
+async function computeCatalogueCounts(): Promise<CatalogueCounts> {
   const db = await getDb();
-  // Every count but `dismissed` describes the LIVE working set (`dismissed_at is null`), so the
-  // headline numbers and the lens rows agree; `dismissed` is the restore pile, counted on its own.
   const result = await db.execute({
     args: [WRONG_AUDIO_STATUS, WRONG_AUDIO_STATUS],
     sql: `select
@@ -1740,6 +1787,184 @@ export async function getCatalogueSummary(): Promise<CatalogueSummary> {
     ranked: Number(row?.ranked ?? 0),
     total: Number(row?.total ?? 0),
   };
+}
+
+/**
+ * Recompute the six counts and PERSIST them with a fresh stamp. The rank sweep calls this at the
+ * end of every tick, and each count-changing operator mutation (dismiss/restore, force-capture,
+ * wrong-audio clear, a catalogue quarantine) calls it in its own write — so the cached row the
+ * page reads stays honest without the page ever running the scan. Returns the persisted summary.
+ */
+export async function refreshCatalogueSummary(): Promise<CatalogueSummary> {
+  const counts = await computeCatalogueCounts();
+  const summary: CatalogueSummary = { ...counts, computedAt: new Date().toISOString() };
+
+  await setSetting(CATALOGUE_SUMMARY_KEY, JSON.stringify(summary));
+
+  return summary;
+}
+
+/** Parse a cached `CatalogueSummary`, or null when the row is absent/corrupt (→ a live recompute). */
+function parseSummaryCache(value: string): CatalogueSummary | null {
+  let raw: unknown;
+
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return null;
+  }
+
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+
+  const record = raw as Record<string, unknown>;
+
+  for (const field of [
+    "awaitingCapture",
+    "awaitingRank",
+    "dismissed",
+    "quarantined",
+    "ranked",
+    "total",
+  ] as const) {
+    if (typeof record[field] !== "number") {
+      return null;
+    }
+  }
+
+  return {
+    awaitingCapture: Number(record.awaitingCapture),
+    awaitingRank: Number(record.awaitingRank),
+    computedAt: typeof record.computedAt === "string" ? record.computedAt : null,
+    dismissed: Number(record.dismissed),
+    quarantined: Number(record.quarantined),
+    ranked: Number(record.ranked),
+    total: Number(record.total),
+  };
+}
+
+/**
+ * The catalogue's whole shape in one CHEAP read — the cached counts the rank sweep precomputed,
+ * NOT a live scan of the rows (docs/the-ear.md § The surface). This is the read the `/admin/catalogue`
+ * loader, its focus refetches, and every mutation invalidation land on, so it must not scan.
+ *
+ * Fallback: a missing or corrupt cached row (a fresh deploy, a wiped KV, a preview branch) computes
+ * the counts ONCE and persists them, then every subsequent read hits the cache and the sweep keeps
+ * it fresh. The scan never runs on a warm read.
+ */
+export async function getCatalogueSummary(): Promise<CatalogueSummary> {
+  const cached = await getSetting(CATALOGUE_SUMMARY_KEY);
+
+  if (cached) {
+    const parsed = parseSummaryCache(cached);
+
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return refreshCatalogueSummary();
+}
+
+/** The archive affinity, serialized for the KV (Sets → arrays; reconstructed by `parseAffinityCache`). */
+type CachedAffinity = {
+  disabledLabels: string[];
+  findingArtists: string[];
+  findingLabels: string[];
+  qualifiedArtists: string[];
+  seedLabels: string[];
+};
+
+/**
+ * Recompute the capture lens's archive affinity and persist it (serialized). Called by the rank
+ * sweep, because the affinity's inputs — the findings, the label rulings, and the `track_artists`
+ * graph — are EXACTLY the ones the corpus fingerprint tracks (docs/the-ear.md § Self-healing), so a
+ * rank tick is the natural moment to refresh it. The cache is DISPLAY-ONLY (it reconstructs the WHY
+ * chip on the capture lens; the stored `capture_priority` the queue obeys is authoritative), and its
+ * staleness is bounded by the rank cadence — the same tick that re-derives a row's stored tier also
+ * re-derives this set, so the chip and the tier never disagree by more than one tick.
+ */
+async function refreshArchiveAffinityCache(): Promise<void> {
+  const affinity = await readArchiveAffinity();
+  const cached: CachedAffinity = {
+    disabledLabels: [...affinity.disabledLabels],
+    findingArtists: [...affinity.findingArtists],
+    findingLabels: [...affinity.findingLabels],
+    qualifiedArtists: [...affinity.qualifiedArtists],
+    seedLabels: [...affinity.seedLabels],
+  };
+
+  await setSetting(CATALOGUE_AFFINITY_KEY, JSON.stringify(cached));
+}
+
+/** A JSON array of strings back into a `Set`, or null when the value is not a clean string array. */
+function toStringSet(value: unknown): null | Set<string> {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    return null;
+  }
+
+  return new Set(value as string[]);
+}
+
+/** Parse a cached `ArchiveAffinity`, or null when the row is absent/corrupt (→ a live read). */
+function parseAffinityCache(value: string): ArchiveAffinity | null {
+  let raw: unknown;
+
+  try {
+    raw = JSON.parse(value);
+  } catch {
+    return null;
+  }
+
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const disabledLabels = toStringSet(record.disabledLabels);
+  const findingArtists = toStringSet(record.findingArtists);
+  const findingLabels = toStringSet(record.findingLabels);
+  const qualifiedArtists = toStringSet(record.qualifiedArtists);
+  const seedLabels = toStringSet(record.seedLabels);
+
+  if (!disabledLabels || !findingArtists || !findingLabels || !qualifiedArtists || !seedLabels) {
+    return null;
+  }
+
+  return { disabledLabels, findingArtists, findingLabels, qualifiedArtists, seedLabels };
+}
+
+/**
+ * The archive affinity for the capture lens's WHY chips — the CACHED set the rank sweep wrote,
+ * NOT a live read. This is the one affinity read that grows with the crawl on a hot path: the
+ * weighted qualified-artist GROUP BY (`readArchiveAffinity`) walks every track on an `enabled`
+ * label, and the capture lens ran it on every load. It is DISPLAY-ONLY here (it only reconstructs
+ * the reason chip a stored tier already earned), so serving it from cache is safe; a cold or
+ * corrupt cache falls back to a live read. Every AUTHORIZATION-critical caller — the sweep, the
+ * verification quarantine — still reads `readArchiveAffinity` LIVE, never this.
+ */
+async function readCaptureLensAffinity(): Promise<ArchiveAffinity> {
+  const cached = await getSetting(CATALOGUE_AFFINITY_KEY);
+
+  if (cached) {
+    const parsed = parseAffinityCache(cached);
+
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return readArchiveAffinity();
+}
+
+/**
+ * Persist both catalogue caches after a sweep tick — the six counts and the capture-lens affinity.
+ * The sweep is the one writer that keeps both fresh off the request path; a mutation refreshes only
+ * the counts (it cannot change the affinity's finding/label/graph inputs).
+ */
+async function persistCatalogueCaches(): Promise<void> {
+  await Promise.all([refreshCatalogueSummary(), refreshArchiveAffinityCache()]);
 }
 
 type CatalogueRow = {
@@ -1873,6 +2098,14 @@ export async function listCatalogueTracks(
                 // The capture queue EXCLUDES the quarantined rows — they are a re-capture, held in
                 // their own lens, not part of the cold pre-audio queue — and the LONG-FORM rows
                 // (the veto's money half: a mix is the fattest thing the metered budget can buy).
+                //
+                // The tiebreak is `track_id DESC` (not ASC) so the WHOLE `order by … DESC, … DESC`
+                // is ONE reverse walk of the ASC `(capture_priority, track_id)` partial index, which
+                // stops at LIMIT — a mixed `DESC, ASC` cannot ride the composite index and forces a
+                // temp-B-tree sort over the entire uncaptured set (which IS the crawler's output). The
+                // tiebreak exists only for a deterministic order among equal-priority rows; its
+                // direction is arbitrary, so nothing depends on it (there is no keyset pagination on
+                // this lens — just LIMIT).
                 args: [WRONG_AUDIO_STATUS, page],
                 sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
@@ -1884,7 +2117,7 @@ export async function listCatalogueTracks(
                       and ct.capture_status <> ?
                       and ct.duration_ms >= ${MIN_TRACK_MS}
                       and ct.duration_ms < ${LONG_FORM_MS}
-                    order by ct.capture_priority desc, ct.track_id asc
+                    order by ct.capture_priority desc, ct.track_id desc
                     limit ?`,
               };
   const result = await db.execute(query);
@@ -1903,7 +2136,11 @@ export async function listCatalogueTracks(
       lens === "capture" ? row.duplicate_of_track_id : row.nearest_finding_track_id,
     ),
   );
-  const archive = lens === "capture" ? await readArchiveAffinity() : undefined;
+  // The capture lens's WHY chips read the CACHED affinity (the rank sweep wrote it), never the live
+  // weighted qualified-artist GROUP BY that grows with the crawl — this is display-only, so a cold
+  // cache falls back to a live read (`readCaptureLensAffinity`). Authorization-critical callers (the
+  // sweep, the quarantine) still read `readArchiveAffinity` live.
+  const archive = lens === "capture" ? await readCaptureLensAffinity() : undefined;
   // The capture lens re-derives each row's WHY through the SAME pure ladder the sweep wrote it
   // with, so the two cannot drift — and that now needs the row's graph edges for the artist-driven
   // authorization gate (RFC artist-primary-capture, slice 1). ONE batched read for the page.
@@ -2120,8 +2357,15 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
             and capture_status = ?
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
   });
+  const changed = result.rowsAffected > 0;
 
-  return result.rowsAffected > 0;
+  // A cleared row leaves the `quarantined` count — refresh the cached summary in the same write so
+  // the operator's own act reflects immediately, off the read path (docs/the-ear.md § the surface).
+  if (changed) {
+    await refreshCatalogueSummary();
+  }
+
+  return changed;
 }
 
 /**
@@ -2206,8 +2450,15 @@ export async function forceCapture(trackId: string): Promise<boolean> {
             and duplicate_of_track_id is not null
             and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
   });
+  const changed = result.rowsAffected > 0;
 
-  return result.rowsAffected > 0;
+  // Force-capture nulls the tier + the corpus, so the row moves between the capture/awaiting-rank
+  // buckets — refresh the cached summary in the same write so his action reflects immediately.
+  if (changed) {
+    await refreshCatalogueSummary();
+  }
+
+  return changed;
 }
 
 /**
@@ -2314,8 +2565,17 @@ export async function setTrackDismissed(trackId: string, dismissed: boolean): Pr
                 and dismissed_at is not null
                 and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
       });
+  const changed = result.rowsAffected > 0;
 
-  return result.rowsAffected > 0;
+  // Dismissing/restoring moves a row between the live buckets and the restore pile — refresh the
+  // cached summary in the same write so the thumbs-down (and its Undo) reflect immediately, without
+  // the page ever scanning. This is the mutation the "counts stay consistent with the lenses" test
+  // (catalogue.integration.test.ts) exercises after a rank tick.
+  if (changed) {
+    await refreshCatalogueSummary();
+  }
+
+  return changed;
 }
 
 // ── CAPTURE VERIFICATION (docs/the-ear.md § Wrong audio) ──────────────────────────────
@@ -2509,6 +2769,12 @@ export async function verifyCapture(
               catalogue_rank_corpus = null
           where track_id = ?`,
   });
+
+  // A backfill quarantine adds to the `quarantined` count and nulls the corpus (→ awaiting-rank),
+  // so refresh the cached summary. Only this catalogue-mismatch branch changes counts — the
+  // match/no-preview stamps and the finding-mismatch branch touch no summary bucket, so they do
+  // not refresh (and this is the rare branch, so it does not multiply the backfill's per-row scans).
+  await refreshCatalogueSummary();
 
   return "quarantined-catalogue";
 }
