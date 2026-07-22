@@ -724,12 +724,14 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       await import("./catalogue");
 
     // Set a catalogue row's summary-relevant columns directly, so each fixture lands in a KNOWN set
-    // of buckets. `undefined` leaves the seeded default (duration 270_000, everything else null).
+    // of buckets. `undefined` leaves the seeded default (duration 270_000, everything else null) —
+    // and `capture_status` defaults to 'pending', because the column is NOT NULL (schema.ts) and can
+    // never hold NULL: a fresh crawled row is always 'pending'.
     const setCols = async (
       trackId: string,
       cols: {
         capturePriority?: null | number;
-        captureStatus?: null | string;
+        captureStatus?: string;
         corpus?: null | string;
         dismissedAt?: null | string;
         duplicateOf?: null | string;
@@ -740,7 +742,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       await db.execute({
         args: [
           cols.capturePriority ?? null,
-          cols.captureStatus ?? null,
+          cols.captureStatus ?? "pending",
           cols.corpus ?? null,
           cols.dismissedAt ?? null,
           cols.duplicateOf ?? null,
@@ -761,12 +763,12 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       "b-awaiting-rank",
       "b-ranked",
       "b-awaiting-capture",
+      "b-fresh-pending",
       "b-quarantined",
       "b-dismissed",
       "b-duplicate",
       "b-long-form",
       "b-null-duration",
-      "b-null-status",
       "b-multi",
     ];
 
@@ -776,19 +778,16 @@ describe("the read — the ranked page, and the WHY on every row", () => {
 
     await setCols("b-awaiting-rank", { corpus: null }); // {total, awaitingRank}
     await setCols("b-ranked", { corpus, score: 0.9 }); // {total, ranked}
-    await setCols("b-awaiting-capture", { capturePriority: 3, captureStatus: "pending", corpus }); // {total, awaitingCapture}
+    await setCols("b-awaiting-capture", { capturePriority: 3, corpus }); // {total, awaitingCapture}
+    // The REAL fresh-crawled-row state: capture_status defaults to 'pending' (never NULL), a
+    // pre-audio tier assigned, no score, in the duration window → awaiting-capture, agreeing with SQL.
+    await setCols("b-fresh-pending", { capturePriority: 2, corpus }); // {total, awaitingCapture}
     await setCols("b-quarantined", { captureStatus: WRONG_AUDIO_STATUS, corpus }); // {total, quarantined}
     await setCols("b-dismissed", { dismissedAt: "2026-07-22T00:00:00.000Z" }); // {dismissed}
     await setCols("b-duplicate", { corpus, duplicateOf: "finding-x", score: 0.99 }); // {total} — scored but a stored duplicate
     await setCols("b-long-form", { corpus, durationMs: 20 * 60_000, score: 0.9 }); // {total} — scored but over the long-form line
-    await setCols("b-null-duration", {
-      capturePriority: 3,
-      captureStatus: "pending",
-      corpus,
-      durationMs: null,
-    }); // {total} — a NULL duration fails the awaiting-capture window
-    await setCols("b-null-status", { capturePriority: 3, captureStatus: null, corpus }); // {total} — a NULL status fails `<> wrong-audio`
-    await setCols("b-multi", { capturePriority: 3, captureStatus: "pending", corpus: null }); // {total, awaitingCapture, awaitingRank}
+    await setCols("b-null-duration", { capturePriority: 3, corpus, durationMs: null }); // {total} — a NULL duration fails the awaiting-capture window
+    await setCols("b-multi", { capturePriority: 3, corpus: null }); // {total, awaitingCapture, awaitingRank}
 
     // The SQL aggregate (the authority) vs a tally of the pure classifier over the SAME rows.
     const sql = await computeCatalogueCounts();
@@ -810,7 +809,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(tally).toEqual(sql);
     // Pin the expected shape too, so a change that drifts BOTH sides in lockstep still trips.
     expect(sql).toEqual({
-      awaitingCapture: 2,
+      awaitingCapture: 3,
       awaitingRank: 2,
       dismissed: 1,
       quarantined: 1,
@@ -818,19 +817,22 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       total: 9,
     });
 
-    // And the pure classifier directly, on constructed rows — the two NULL edge cases explicitly.
+    // And the pure classifier directly, on constructed rows — the discriminators explicitly.
     const base = {
       capturePriority: 3,
+      captureStatus: "pending",
       catalogueRankCorpus: corpus,
       dismissedAt: null,
       duplicateOfTrackId: null,
       durationMs: 270_000,
       nearestFindingScore: null,
     } as const;
-    expect([...bucketsForRow({ ...base, captureStatus: null })]).toEqual(["total"]); // NULL status ⇒ not awaiting-capture
-    expect([...bucketsForRow({ ...base, captureStatus: "pending", durationMs: null })]).toEqual([
+    expect([...bucketsForRow(base)].sort()).toEqual(["awaitingCapture", "total"]); // fresh 'pending' ⇒ awaiting-capture
+    expect([...bucketsForRow({ ...base, captureStatus: WRONG_AUDIO_STATUS })].sort()).toEqual([
+      "quarantined",
       "total",
-    ]); // NULL duration ⇒ not awaiting-capture
+    ]); // 'wrong-audio' ⇒ quarantined, not awaiting-capture
+    expect([...bucketsForRow({ ...base, durationMs: null })]).toEqual(["total"]); // NULL duration ⇒ not awaiting-capture
     expect([...(await readRowBuckets("b-multi"))].sort()).toEqual([
       "awaitingCapture",
       "awaitingRank",

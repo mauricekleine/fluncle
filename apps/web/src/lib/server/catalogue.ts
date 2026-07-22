@@ -1834,10 +1834,14 @@ export async function refreshCatalogueSummary(): Promise<CatalogueSummary> {
   return summary;
 }
 
-/** The columns a summary-bucket classification reads off one catalogue row (`bucketsForRow`'s input). */
+/**
+ * The columns a summary-bucket classification reads off one catalogue row (`bucketsForRow`'s input).
+ * `captureStatus` is NON-null: `tracks.capture_status` is `NOT NULL DEFAULT 'pending'` (schema.ts),
+ * so a fresh crawled row is `'pending'`, never NULL — the discriminator is purely `!== 'wrong-audio'`.
+ */
 export type BucketRow = {
   capturePriority: null | number;
-  captureStatus: null | string;
+  captureStatus: string;
   catalogueRankCorpus: null | string;
   dismissedAt: null | string;
   duplicateOfTrackId: null | string;
@@ -1849,10 +1853,10 @@ export type BucketRow = {
  * Which summary buckets a catalogue row contributes to — a PURE mirror of the SQL CASE arms in
  * `computeCatalogueCounts`, one boolean per arm. A row can be in SEVERAL (the six counts are
  * independent accumulators, not a partition), so this returns a set, and a delta shifts each bucket
- * the row entered or left. It structurally mirrors the SQL, THREE-VALUED LOGIC AND ALL: a NULL
- * `duration_ms` fails `< LONG_FORM`/`>= MIN` (a NULL comparison is not true), and a NULL
- * `capture_status` fails `<> 'wrong-audio'` — so both are written as explicit `!== null` guards, not
- * as JS truthiness. The drift-guard test pins this to `computeCatalogueCounts` bucket-for-bucket.
+ * the row entered or left. It mirrors the SQL's three-valued logic where the column is NULLABLE: a
+ * NULL `duration_ms` fails `< LONG_FORM`/`>= MIN` (a NULL comparison is not true), written as an
+ * explicit `!== null` guard. `capture_status` is NOT NULL (default `'pending'`), so its arm needs no
+ * such guard. The drift-guard test pins this to `computeCatalogueCounts` bucket-for-bucket.
  */
 export function bucketsForRow(row: BucketRow): Set<SummaryBucket> {
   const buckets = new Set<SummaryBucket>();
@@ -1874,14 +1878,12 @@ export function bucketsForRow(row: BucketRow): Set<SummaryBucket> {
     buckets.add("ranked");
   }
 
-  // `awaitingCapture`: no score, a pre-audio tier, not quarantined, inside the duration window. The
-  // `capture_status <> 'wrong-audio'` arm is false for a NULL status too (a NULL comparison is not
-  // true), so a never-attempted row without a stored status is NOT counted — mirroring the SQL and
-  // the capture lens's own predicate exactly.
+  // `awaitingCapture`: no score, a pre-audio tier, not quarantined (`capture_status` is NOT NULL, so
+  // the arm is a clean `<> 'wrong-audio'`), inside the duration window — the capture lens's own
+  // predicate, mirrored exactly.
   if (
     row.nearestFindingScore === null &&
     row.capturePriority !== null &&
-    row.captureStatus !== null &&
     row.captureStatus !== WRONG_AUDIO_STATUS &&
     row.durationMs !== null &&
     row.durationMs >= MIN_TRACK_MS &&
@@ -1921,6 +1923,7 @@ export async function readRowBuckets(trackId: string): Promise<Set<SummaryBucket
   });
   const row = typedRow<{
     capture_priority: null | number;
+    // NOT NULL (default 'pending'); coalesced only to satisfy the driver's nullable row type.
     capture_status: null | string;
     catalogue_rank_corpus: null | string;
     dismissed_at: null | string;
@@ -1935,7 +1938,7 @@ export async function readRowBuckets(trackId: string): Promise<Set<SummaryBucket
 
   return bucketsForRow({
     capturePriority: row.capture_priority,
-    captureStatus: row.capture_status,
+    captureStatus: row.capture_status ?? "pending",
     catalogueRankCorpus: row.catalogue_rank_corpus,
     dismissedAt: row.dismissed_at,
     duplicateOfTrackId: row.duplicate_of_track_id,
