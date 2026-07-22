@@ -148,6 +148,62 @@ describe("anchorTrack — the verified-search rung", () => {
     expect(text(row.rows[0]?.spotify_uri)).toBe("spotify:track:spotDribble");
   });
 
+  it("recovers the candidate's ISRC into an ISRC-LESS row (the MusicBrainz-gap backfill)", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    // A no-ISRC row (MusicBrainz never carried one) anchored via the search rung — the candidate
+    // carries the real ISRC Spotify knows, so it fills the empty column.
+    await seedUnanchored({
+      artists: ["Recover Me"],
+      durationMs: 200_000,
+      isrc: null,
+      title: "Found It",
+      trackId: "mb_recover",
+    });
+
+    const result = await anchorTrack("mb_recover", [
+      {
+        artists: [{ name: "Recover Me" }],
+        durationMs: 200_500,
+        isrc: "GB1234567890",
+        spotifyTrackId: "spotFound",
+        title: "Found It",
+      },
+    ]);
+
+    expect(result).toEqual({ anchored: true, verifiedBy: "search" });
+    const row = await db.execute("select isrc from tracks where track_id = 'mb_recover'");
+    expect(text(row.rows[0]?.isrc)).toBe("GB1234567890");
+  });
+
+  it("NEVER overwrites a row's existing ISRC with the candidate's (fill-empty-only)", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    // The row already carries its own ISRC; a search-verified candidate with a DIFFERENT ISRC (a
+    // re-press) must anchor without clobbering the row's authoritative value.
+    await seedUnanchored({
+      artists: ["Keep Mine"],
+      durationMs: 200_000,
+      isrc: "ORIGINAL0001",
+      title: "Mine",
+      trackId: "mb_keep",
+    });
+
+    const result = await anchorTrack("mb_keep", [
+      {
+        artists: [{ name: "Keep Mine" }],
+        durationMs: 200_400,
+        isrc: "REPRESS00002",
+        spotifyTrackId: "spotMine",
+        title: "Mine",
+      },
+    ]);
+
+    expect(result).toEqual({ anchored: true, verifiedBy: "search" });
+    const row = await db.execute("select isrc from tracks where track_id = 'mb_keep'");
+    expect(text(row.rows[0]?.isrc)).toBe("ORIGINAL0001");
+  });
+
   it("falls through to the search rung when the row HAS an ISRC but no candidate carries it", async () => {
     const { anchorTrack } = await import("./anchor");
 
