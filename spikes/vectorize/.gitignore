@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+# Generated corpora + real-embedding exports — large, never committed.
+data/
+*.ndjson
+# Bench / recall result dumps.
+out/

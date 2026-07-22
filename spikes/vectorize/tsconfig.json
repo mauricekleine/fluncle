@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "moduleResolution": "Bundler",
+    "skipLibCheck": true,
+    "strict": true,
+    "types": ["@cloudflare/workers-types", "bun"]
+  },
+  "include": ["lib/**/*.ts", "src/**/*.ts", "tests/**/*.ts", "*.ts", "worker-env.d.ts"]
+}

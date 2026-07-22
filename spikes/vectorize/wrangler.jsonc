@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fluncle-spike-vectorize",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-06-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Two Vectorize bindings, both REMOTE — Vectorize has NO local emulation, so a
+  // `wrangler dev` still talks to the real remote index. `index_name` must match
+  // the indexes created in SPIKE.md (`wrangler vectorize create …`).
+  "vectorize": [
+    {
+      "binding": "SPIKE_TRACKS",
+      "index_name": "fluncle-spike-tracks",
+      "remote": true,
+    },
+    {
+      "binding": "SPIKE_CENTROIDS",
+      "index_name": "fluncle-spike-centroids",
+      "remote": true,
+    },
+  ],
+  // SPIKE_TOKEN is an OPTIONAL shared secret gating /admin/* + /bench/*. Set it
+  // with `wrangler secret put SPIKE_TOKEN` after deploy; leave unset to run open
+  // (the index is ephemeral and torn down after the run).
+}
