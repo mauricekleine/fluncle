@@ -1,3 +1,4 @@
+/// <reference types="@cloudflare/workers-types" />
 // Ambient binding types for the spike Worker. `@cloudflare/workers-types`
 // declares the global `Cloudflare.Env` INTERFACE and the `Vectorize` class; we
 // declaration-MERGE our two bindings + the optional token into it, so `env` (from
