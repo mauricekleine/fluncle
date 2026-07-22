@@ -337,6 +337,15 @@ export async function anchorTrack(
       `spotify:track:${spotifyId}`,
       `https://open.spotify.com/track/${spotifyId}`,
       verified.albumImageUrl ?? null,
+      // The verified candidate's ISRC recovers the recording's real ISRC when our own row lacks
+      // one — the crawler's ISRC comes from MusicBrainz, whose ISRC coverage of underground DnB is
+      // sparse (an editor-contributed field), so ~60% of catalogue rows arrive ISRC-less even
+      // though the track genuinely has one. Spotify carries it, and we already fetched it here to
+      // VERIFY the match, so storing it is free. FILL-EMPTY-ONLY via `coalesce`: a real ISRC (an
+      // exact-ISRC anchor, or one already present) is never overwritten — the recovered value only
+      // fills a NULL. This strengthens dedup (ISRC-equality is the strongest identity signal) and
+      // lets a related pressing resolve via the exact ISRC rung instead of fuzzy search.
+      verified.isrc?.trim() ? verified.isrc.trim() : null,
       now,
       trackId,
     ],
@@ -344,6 +353,7 @@ export async function anchorTrack(
           set spotify_uri = ?,
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
+              isrc = coalesce(isrc, ?),
               spotify_anchor_attempted_at = ?
           where track_id = ?`,
   });
