@@ -1,33 +1,80 @@
 import { getDb, typedRows } from "./db";
 
-// Admin-board reads for the two audio-observation columns (Context · Observation).
+// Admin-board batch reads for the per-finding STATUS FLAGS the pipeline board renders —
+// the two audio-observation columns (Context · Observation) plus the Discogs / Last.fm /
+// Note backfill workflow trackers.
 //
-// `context_note` is INTERNAL creative fuel: it
-// never rides the public `TrackListItem` contract, JSON-LD, RSS, or llms.txt. So
-// the board pulls it through this admin-only path instead — a batch presence query
-// for the column status, and a single-track text read for the view dialog. Both
-// sit behind the same gated admin server functions the rest of the board uses.
+// `context_note` is INTERNAL creative fuel and the backfill stamps are internal curation
+// state: none ride the public `TrackListItem` contract, JSON-LD, RSS, or llms.txt. So the
+// board pulls them through this admin-only path instead — ONE batch flags query for the
+// whole page (folded from what used to be five same-id round-trips), plus the single-track
+// text reads for the view dialogs. All sit behind the same gated admin server functions the
+// rest of the board uses.
+
+/** The per-finding board status flags — one row's worth, all five booleans. */
+export type FindingBoardFlags = {
+  /** A non-empty internal `context_note` is on file (the Context cell → done). */
+  hasContextNote: boolean;
+  /** The Discogs backfill has RUN (`backfill_discogs_attempted_at`) — workflow tracker. */
+  discogsRan: boolean;
+  /** The finding is loved on Last.fm (`backfill_lastfm_done_at`) — refines the Last.fm label. */
+  lastfmLoved: boolean;
+  /** The Last.fm backfill has RUN (`backfill_lastfm_attempted_at`) — workflow tracker. */
+  lastfmRan: boolean;
+  /** The auto-note authoring has RUN (`backfill_note_attempted_at`) — workflow tracker. */
+  noteRan: boolean;
+};
 
 /**
- * Which of the given tracks already carry a (non-empty) `context_note`. Returns the
- * trackIds that have one as a Set — the board turns it into the Context cell status.
- * One batch query for the whole page, no N+1.
+ * Every board status flag for a page of findings, in ONE query keyed by `track_id`. Folds
+ * the five reads the board used to fan out over the same 50 ids — the `context_note`
+ * presence and the Discogs/Last.fm/Note ran-stamps + the Last.fm loved-stamp — into a single
+ * pass over `findings` (each is a bare column predicate on that one row; `track_id` is unique
+ * there, so no aggregation). A finding absent from the map (or predating a column) reads all
+ * `false`. Bound params only; the ids are never interpolated.
  */
-export async function listContextNotePresenceForTracks(trackIds: string[]): Promise<Set<string>> {
+export async function listFindingBoardFlagsForTracks(
+  trackIds: string[],
+): Promise<Map<string, FindingBoardFlags>> {
   if (trackIds.length === 0) {
-    return new Set();
+    return new Map();
   }
 
   const db = await getDb();
   const placeholders = trackIds.map(() => "?").join(", ");
   const result = await db.execute({
     args: trackIds,
-    sql: `select track_id from findings
-          where track_id in (${placeholders})
-            and context_note is not null and trim(context_note) <> ''`,
+    sql: `select track_id,
+            (context_note is not null and trim(context_note) <> '') as has_context_note,
+            (backfill_discogs_attempted_at is not null) as discogs_ran,
+            (backfill_lastfm_attempted_at is not null) as lastfm_ran,
+            (backfill_note_attempted_at is not null) as note_ran,
+            (backfill_lastfm_done_at is not null) as lastfm_loved
+          from findings
+          where track_id in (${placeholders})`,
   });
 
-  return new Set(typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id));
+  const rows = typedRows<{
+    track_id: string;
+    has_context_note: number;
+    discogs_ran: number;
+    lastfm_ran: number;
+    note_ran: number;
+    lastfm_loved: number;
+  }>(result.rows);
+
+  return new Map(
+    rows.map((row) => [
+      row.track_id,
+      {
+        discogsRan: Boolean(row.discogs_ran),
+        hasContextNote: Boolean(row.has_context_note),
+        lastfmLoved: Boolean(row.lastfm_loved),
+        lastfmRan: Boolean(row.lastfm_ran),
+        noteRan: Boolean(row.note_ran),
+      },
+    ]),
+  );
 }
 
 /**

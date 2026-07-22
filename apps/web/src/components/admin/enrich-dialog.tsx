@@ -23,6 +23,12 @@ import { formatKey, useKeyNotation } from "@/lib/key-notation";
 
 type EnrichDialogProps = {
   error?: string;
+  /**
+   * Whether the finding carries stored spectral features — lazily read for the OPEN row
+   * (the board projection no longer ships `features` on every row). Only refines the
+   * "features captured" vs "analysis complete" line under a `done` status.
+   */
+  hasFeatures?: boolean;
   onOpenChange: (open: boolean) => void;
   onTrigger: () => Promise<void> | void;
   row: BoardRow | null;
@@ -32,6 +38,7 @@ type EnrichDialogProps = {
 
 export function EnrichDialog({
   error,
+  hasFeatures = false,
   onOpenChange,
   onTrigger,
   row,
@@ -70,7 +77,7 @@ export function EnrichDialog({
               <dd className="font-mono">{row?.key ? formatKey(row.key, notation) : "—"}</dd>
             </div>
             <p className="col-span-2 text-xs text-muted-foreground">
-              {row?.features ? "Spectral features captured." : "Analysis complete."}
+              {hasFeatures ? "Spectral features captured." : "Analysis complete."}
             </p>
           </dl>
         ) : running ? (

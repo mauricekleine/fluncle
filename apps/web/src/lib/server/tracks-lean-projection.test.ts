@@ -139,3 +139,79 @@ describe("listTracks lean list projection (Finding B4)", () => {
     expect(tracks[0]?.bpm).toBe(174);
   });
 });
+
+// The graph/discovery correlated subqueries the BOARD projection drops on top of the lean
+// three — each named by the `as <alias>` output the derivation filters on.
+const BOARD_DROPPED_SUBQUERY_ALIASES = [
+  "as galaxy_name",
+  "as galaxy_slug",
+  "as album_slug",
+  "as album_artwork_url_template",
+  "as album_artwork_width",
+  "as album_artwork_height",
+  "as label_slug",
+  "as youtube_url",
+];
+
+describe("listTracks board list projection (renders + findings efficiency batch)", () => {
+  beforeEach(() => {
+    execute.mockReset();
+    stubDb();
+  });
+
+  it("the BOARD read drops the heavy columns AND the graph/discovery subqueries, keeps the cover master + tiktok (derived SQL well-formed)", async () => {
+    await listTracks({ board: true, limit: 10 });
+
+    const sql = lastSelectSql();
+    // Everything the lean read drops, plus the graph/discovery correlated subqueries.
+    for (const column of HEAVY_COLUMNS) {
+      expect(sql).not.toContain(column);
+    }
+    for (const alias of BOARD_DROPPED_SUBQUERY_ALIASES) {
+      expect(sql).not.toContain(alias);
+    }
+    // The two subquery families the boards DO render survive: the album cover master (the
+    // row cover) and the tiktok url (the clip preview's "Watch on TikTok").
+    expect(sql).toContain("as album_image_key");
+    expect(sql).toContain("as album_image_state");
+    expect(sql).toContain("as tiktok_url");
+    // Direct columns are untouched.
+    expect(sql).toContain("tracks.track_id");
+    expect(sql).toContain("findings.observation_audio_url");
+    // The comma-split derivation left no double / trailing comma.
+    expect(sql).not.toMatch(/,\s*,/);
+    expect(sql).not.toMatch(/,\s*from findings/);
+  });
+
+  it("countTotal:false skips the count(*) companion query", async () => {
+    await listTracks({ board: true, countTotal: false, limit: 10 });
+
+    const ranCount = execute.mock.calls
+      .map(([arg]) => arg as { sql: string })
+      .some((arg) => arg.sql.includes("count(*)"));
+    expect(ranCount).toBe(false);
+  });
+
+  it("the BOARD read's mapped item omits the heavy + graph/discovery fields, keeps the core DTO", async () => {
+    const { tracks } = await listTracks({ board: true, limit: 10 });
+    const item = tracks[0] ?? {};
+
+    for (const field of [
+      "features",
+      "observationAlignment",
+      "videoModelReasoning",
+      "galaxy",
+      "albumSlug",
+      "artworkMaxUrl",
+      "labelSlug",
+      "youtubeUrl",
+    ]) {
+      expect(field in item).toBe(false);
+    }
+    // A board item is still a finding — the identity + ledger fields the boards render survive.
+    expect(tracks[0]?.trackId).toBe("track-calibre");
+    expect(tracks[0]?.title).toBe("Mr Majestic");
+    expect(tracks[0]?.enrichmentStatus).toBe("done");
+    expect(tracks[0]?.tiktokUrl).toBeUndefined();
+  });
+});

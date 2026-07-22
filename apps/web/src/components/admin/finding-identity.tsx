@@ -130,6 +130,8 @@ function Cover({
       <img
         alt=""
         className={cn("shrink-0 rounded-sm border border-border object-cover", COVER_SIZE[size])}
+        decoding="async"
+        loading="lazy"
         src={albumCoverAtSize(cover, "small")}
       />
     ) : (
@@ -156,7 +158,13 @@ function Cover({
         title="Preview clip"
         type="button"
       >
-        <img alt="" className="size-full rounded-md object-cover" src={src} />
+        <img
+          alt=""
+          className="size-full rounded-md object-cover"
+          decoding="async"
+          loading="lazy"
+          src={src}
+        />
         <span
           aria-hidden="true"
           className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
@@ -168,7 +176,13 @@ function Cover({
   }
 
   return (
-    <img alt="" className={cn("shrink-0 rounded-md object-cover", COVER_SIZE[size])} src={src} />
+    <img
+      alt=""
+      className={cn("shrink-0 rounded-md object-cover", COVER_SIZE[size])}
+      decoding="async"
+      loading="lazy"
+      src={src}
+    />
   );
 }
 
