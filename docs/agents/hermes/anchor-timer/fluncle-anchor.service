@@ -15,11 +15,14 @@ Type=oneshot
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). Secrets (the agent token + APIFY_API_TOKEN) come from the shared op-injected
 # ${HOME}/.fluncle-secrets.env the wrapper sources.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/anchor-sweep.sh
-# One tick is a bounded batch (default 15 rows) → one Apify run-sync call + up to 15 anchor POSTs.
-# run-sync waits for the actor to finish, so the ceiling has headroom for a slow run; it sits well
-# under the 1h cadence, so an over-long tick just skips the next trigger and self-heals.
-TimeoutStartSec=600
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 hermes bash /opt/hermes-scripts/anchor-sweep.sh
+# One tick drains 250 rows (`FLUNCLE_ANCHOR_BATCH`, the `list_track_work?limit` cap) — raised from the
+# code default of 15, safe now that the FREE rungs (Deezer ISRC-recovery + ListenBrainz + Spotify
+# search) resolve most rows at zero Apify cost, the reason the batch was pinned small. At ~3.7s/row
+# (Spotify ≥2s search pacing) a full tick is ~15 min, so the timeout is 30 min; it still sits under the
+# 1h cadence, so an over-long tick just skips the next trigger and self-heals. Once the crawl backlog is
+# dry the sweep no-ops on an empty queue — lower the batch back toward 15 for steady-state if desired.
+TimeoutStartSec=1800
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
