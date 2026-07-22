@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "moduleResolution": "Bundler",
+    "skipLibCheck": true,
+    "strict": true,
+    // `bun` resolves from the repo-root @types/bun (a workspace dep) even in CI,
+    // where the spike's own node_modules is NOT installed — so this tsconfig stays
+    // VALID for the repo-wide oxlint. `@cloudflare/workers-types` is a spike-local
+    // devDep, so it is pulled in via a triple-slash reference in worker-env.d.ts
+    // (an unresolved reference degrades gracefully; an unresolved `types` entry
+    // would make the whole tsconfig invalid and fail lint).
+    "types": ["bun"]
+  },
+  "include": ["lib/**/*.ts", "src/**/*.ts", "tests/**/*.ts", "*.ts", "worker-env.d.ts"]
+}
