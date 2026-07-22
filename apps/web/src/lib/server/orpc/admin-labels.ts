@@ -36,10 +36,19 @@ import { apiFault, type Implementer, parseLimit, toFault } from "./_shared";
 /** Build the `admin-labels` domain's handlers. */
 export function adminLabelsHandlers(os: Implementer) {
   // GET /admin/labels — `adminAuth` (operator OR agent): every label, optionally scoped
-  // to one seed state (the crawler's `?seedState=enabled` read).
+  // to one seed state (the crawler's `?seedState=enabled` read). This is the SEED-SET read:
+  // it is deliberately COUNTLESS — `listLabels` no longer pays the whole-corpus finding
+  // aggregate the crawler never used. `findingCount` rides out as 0 here; the counts a human
+  // sees live on the `/admin/labels` station, computed per-page over the indexed `label_id`
+  // edge (`listLabelsPage`), never on this hot seed read.
   const listLabelsAdminHandler = os.list_labels_admin.use(adminAuth).handler(async ({ input }) => {
     try {
-      return { labels: await listLabels(input.seedState), ok: true } as const;
+      const labels = (await listLabels(input.seedState)).map((label) => ({
+        ...label,
+        findingCount: 0,
+      }));
+
+      return { labels, ok: true } as const;
     } catch (error) {
       throw apiFault(error);
     }

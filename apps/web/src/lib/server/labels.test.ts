@@ -16,7 +16,7 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => holder.db };
 });
 
-import { backfillLabels } from "../../../scripts/backfill-labels";
+import { backfillLabels, linkTracksToLabels } from "../../../scripts/backfill-labels";
 import { createIntegrationDb } from "./integration-db";
 import {
   confirmLabelAlias,
@@ -33,6 +33,7 @@ import {
   listLabelAliasCandidates,
   listLabelReviewRows,
   listLabels,
+  listLabelsPage,
   mergeLabel,
   reconcileLabels,
   rejectLabelAlias,
@@ -224,12 +225,18 @@ describe("reconcileLabels (the deterministic backstop)", () => {
 
     expect(await reconcileLabels()).toBe(2);
 
-    const labels = await listLabels();
+    // The count is DERIVED (never stored) and lives on the paged station read, over the indexed
+    // `label_id` edge. Reconcile mints; the deploy backfill's link step stamps the edge (the same
+    // split proven below in the merge re-mint trap), so run it before reading the count.
+    await linkTracksToLabels(db);
 
-    expect(labels.map((label) => label.slug).sort()).toEqual(["hospital-records", "pilot"]);
-    // Both spellings count toward the one label — the count is DERIVED, never stored.
-    expect(labels.find((label) => label.slug === "pilot")?.findingCount).toBe(2);
-    expect(labels.find((label) => label.slug === "hospital-records")?.findingCount).toBe(1);
+    // Both minted labels enter `undecided`.
+    const page = await listLabelsPage("undecided", 1);
+
+    expect(page.items.map((label) => label.slug).sort()).toEqual(["hospital-records", "pilot"]);
+    // Both spellings link to the one label, so both findings count toward it.
+    expect(page.items.find((label) => label.slug === "pilot")?.findingCount).toBe(2);
+    expect(page.items.find((label) => label.slug === "hospital-records")?.findingCount).toBe(1);
   });
 
   it("is idempotent — a second run mints nothing and changes nothing", async () => {
@@ -278,6 +285,9 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
   it("touches nothing already stored — the finding on a disabled label is untouched", async () => {
     await seedFinding("t1", "Anjunabeats");
     await reconcileLabels();
+    // Stamp the `label_id` edge the way a deploy does, BEFORE the byte-identical snapshot — so the
+    // count below reads the indexed edge and the ruling is still proven to touch nothing after it.
+    await linkTracksToLabels(db);
     const [label] = await listLabels();
     expect(label).toBeDefined();
     if (!label) {
@@ -291,8 +301,9 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
     const after = await db.execute(`select * from tracks order by track_id`);
 
     expect(after.rows).toEqual(before.rows);
-    // And the finding still counts toward its label: disabling hides nothing.
-    expect((await listLabels())[0]?.findingCount).toBe(1);
+    // And the finding still counts toward its label: disabling hides nothing. The label is now in
+    // the "not seeding" section, so its count comes from that section's paged read.
+    expect((await listLabelsPage("disabled", 1)).items[0]?.findingCount).toBe(1);
   });
 });
 
