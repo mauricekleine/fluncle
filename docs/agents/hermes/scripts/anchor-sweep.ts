@@ -114,6 +114,8 @@ export type AnchorCandidatePayload = {
 
 export type AnchorVerdict = {
   anchored: boolean;
+  /** True iff `resolve_anchor` recovered a verified ISRC from Deezer into an ISRC-less row this call. */
+  isrcRecoveredByDeezer?: boolean;
   /** Which free rung anchored (`resolve_anchor` only) — drives the per-rung tally. Null on the Apify path. */
   source?: "listenbrainz" | "spotify-isrc" | "spotify-search" | null;
   /** True iff `resolve_anchor` issued a Spotify SEARCH this call — the box's pacer signal (slice 2). */
@@ -134,6 +136,8 @@ export type AnchorSummary = {
   /** Rows anchored by the DARK Spotify fuzzy-search rung (slice 2 — free of Apify, flag-gated). */
   anchoredBySpotifySearch: number;
   error: null | string;
+  /** Rows whose ISRC was recovered from Deezer's free oracle before anchoring (the recovery rate). */
+  isrcRecoveredByDeezer: number;
   /** Rows that verified nothing on ANY rung (a clean full miss — stamped, backed off). */
   missed: number;
   ok: boolean;
@@ -272,6 +276,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     error: null,
+    isrcRecoveredByDeezer: 0,
     missed: 0,
     ok: true,
     skipped: 0,
@@ -326,6 +331,12 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
       if (verdict.spotifySearchDone) {
         lastSearchStartMs = startMs;
+      }
+
+      // Recovery is orthogonal to anchoring — count it whether or not this row then anchored (a
+      // recovered ISRC that still missed every rung this tick is persisted and helps the next one).
+      if (verdict.isrcRecoveredByDeezer) {
+        summary.isrcRecoveredByDeezer += 1;
       }
 
       if (verdict.anchored) {
@@ -472,7 +483,8 @@ async function reportAnchor(
  * (slice 2), verifies each against the same gate, and on a hit writes the anchor. The box supplies no
  * candidates; it just hands over the trackId. Only when ALL of these miss does the caller spend the
  * metered Apify search. `source` tells which rung anchored (for the tally); `spotifySearchDone` tells
- * whether a Spotify search was issued (for the pacer).
+ * whether a Spotify search was issued (for the pacer); `isrcRecoveredByDeezer` tells whether the
+ * Worker recovered a verified ISRC from Deezer into this ISRC-less row before anchoring (for the tally).
  */
 async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
   const res = await fetch(`${API_BASE_URL}/api/admin/catalogue/anchor/resolve`, {
@@ -495,6 +507,7 @@ async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
 
   return {
     anchored: Boolean(body.anchored),
+    isrcRecoveredByDeezer: Boolean(body.isrcRecoveredByDeezer),
     source: body.source ?? null,
     spotifySearchDone: Boolean(body.spotifySearchDone),
     verifiedBy: body.verifiedBy ?? null,
