@@ -1,6 +1,6 @@
 {
   "name": "@fluncle/extension",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Fluncle Lens — surface the findings hidden across the web.",
   "license": "Apache-2.0",
