@@ -97,7 +97,19 @@ function AdminGalaxiesPage() {
     initialData: initial,
     queryFn: () => fetchGalaxies(),
     queryKey: GALAXIES_KEY,
-    refetchOnWindowFocus: true,
+    // A DELIBERATE deviation from the admin-route default (`refetchOnWindowFocus: true`,
+    // AGENTS.md). This read is the single most expensive board on the admin: fetching it
+    // runs k (~9) `vector_distance_cos` scans — one core-first ranking per galaxy — plus k
+    // member hydrations. But the galaxy map is a NIGHTLY artifact: it only changes when the
+    // `fluncle-cluster` cron re-fits (once a night) or when the operator mutates it here
+    // (name / rename / request-split), and every one of those mutations already calls
+    // `invalidateQueries(GALAXIES_KEY)` in its `onSuccess` — so an operator edit still
+    // refreshes the board immediately. A window-focus refetch therefore buys nothing: it
+    // re-runs the whole k-vector-scan storm on every alt-tab for data that is byte-identical
+    // to what SSR already loaded. Off, with a `staleTime` floor as belt-and-suspenders
+    // against any other incidental refetch trigger.
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60 * 1000,
   });
 
   const board = useMemo(() => partitionGalaxyBoard(galaxies), [galaxies]);
