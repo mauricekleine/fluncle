@@ -16,11 +16,11 @@
 # so observe-sweep.sh reads the token from a 0600 file instead — see
 # docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
 #
-# DURABILITY (RFC Unit B): the base is DIGEST-PINNED (not the mutable :v2026.7.7.2 tag) so a
+# DURABILITY (RFC Unit B): the base is DIGEST-PINNED (not the mutable :v2026.7.20 tag) so a
 # cached venv layer can never sit on a silently-drifted base — the flake that once shipped a
 # broken embed engine. To bump the base deliberately, re-resolve the digest + update this line:
-#   docker inspect nousresearch/hermes-agent:v2026.7.7.2 --format '{{index .RepoDigests 0}}'
-FROM nousresearch/hermes-agent@sha256:9c841866021c54c4596849f6135717e8a4d52ba510b7f52c50aef1de1a283973
+#   docker inspect nousresearch/hermes-agent:v2026.7.20 --format '{{index .RepoDigests 0}}'
+FROM nousresearch/hermes-agent@sha256:f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
@@ -186,7 +186,7 @@ RUN arch="$(uname -m)" \
        x86_64|amd64)  cpu="x64" ;; \
        *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
      esac \
-  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.190.0/fluncle-linux-${cpu}" \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.189.0/fluncle-linux-${cpu}" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
@@ -242,7 +242,7 @@ RUN chmod -R a+rX /opt/fonts
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
 # on). Bump lever: this version line.
-RUN npm install -g @anthropic-ai/claude-code@2.1.217
+RUN npm install -g @anthropic-ai/claude-code@2.1.216
 
 # ALL local Fluncle skills, baked for Claude Code so every box `claude -p` discovers
 # them without a per-run `skills:install`: the voice crons load `copywriting-fluncle`
