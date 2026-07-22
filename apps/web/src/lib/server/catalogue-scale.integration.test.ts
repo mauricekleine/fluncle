@@ -58,11 +58,16 @@ const CERTIFIED = "hospital00certified001";
 const CROWDED_LABEL = 900;
 const DISCOVERED_LABEL = 400;
 
-async function seedLabel(name: string, slug: string, seedState: string): Promise<string> {
+async function seedLabel(
+  name: string,
+  slug: string,
+  seedState: string,
+  createdAt = "2026-07-01T00:00:00.000Z",
+): Promise<string> {
   const id = `lbl_${slug}`;
 
   await db.execute({
-    args: [id, name, slug, seedState, "2026-07-01T00:00:00.000Z", "2026-07-01T00:00:00.000Z"],
+    args: [id, name, slug, seedState, createdAt, createdAt],
     sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?)`,
   });
@@ -364,10 +369,16 @@ describe("the attention queue does not drown in discovered labels", () => {
     const { LABEL_REVIEW_QUEUE_LIMIT, listLabelReviewRows } = await import("./labels");
 
     // Every imprint the walk finds mints an `undecided` row. Seed more than the queue's
-    // working set and it must still hand back a working set.
+    // working set and it must still hand back a working set. These land AFTER Metalheadz
+    // (a day later), so oldest-first is expressed in the data — not left to tie order.
     await Promise.all(
       Array.from({ length: LABEL_REVIEW_QUEUE_LIMIT + 10 }, (_unused, index) =>
-        seedLabel(`Found Imprint ${index}`, `found-imprint-${index}`, "undecided"),
+        seedLabel(
+          `Found Imprint ${index}`,
+          `found-imprint-${index}`,
+          "undecided",
+          "2026-07-02T00:00:00.000Z",
+        ),
       ),
     );
 
