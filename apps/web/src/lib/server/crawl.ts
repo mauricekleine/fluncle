@@ -1329,15 +1329,48 @@ export async function crawlCatalogue({
   return pass;
 }
 
+/** The frontier's group-by counts alone — the two small `crawl_frontier` aggregates. */
+export type FrontierCounts = {
+  frontier: { done: number; failed: number; pending: number; skipped: number };
+  frontierByKind: { artist: number; label: number; release: number };
+};
+
+/**
+ * The frontier node counts — ONLY the two small `crawl_frontier` group-bys (by state, by kind),
+ * nothing that scans a growing table. This is the lean read the daily funnel snapshot needs: it
+ * consumes `frontier.done/pending` and never touches the catalogue anti-join, the anchor gauge, or
+ * `listLabels` that `getCrawlStatus` also runs. `getCrawlStatus` builds on this for its full shape.
+ */
+export async function getFrontierCounts(): Promise<FrontierCounts> {
+  const db = await getDb();
+  const [states, kinds] = await Promise.all([
+    db.execute("select state, count(*) as n from crawl_frontier group by state"),
+    db.execute("select kind, count(*) as n from crawl_frontier group by kind"),
+  ]);
+
+  const frontier = { done: 0, failed: 0, pending: 0, skipped: 0 };
+  const frontierByKind = { artist: 0, label: 0, release: 0 };
+
+  for (const row of typedRows<{ n: number; state: CrawlNodeState }>(states.rows)) {
+    frontier[row.state] = Number(row.n);
+  }
+
+  for (const row of typedRows<{ kind: CrawlNodeKind; n: number }>(kinds.rows)) {
+    frontierByKind[row.kind] = Number(row.n);
+  }
+
+  return { frontier, frontierByKind };
+}
+
 /**
  * The frontier at rest — what the walk holds, what it has drained, and what the operator
  * still has to rule on. The `/status`-shaped read behind `fluncle admin catalogue status`.
  */
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
-  const [states, kinds, catalogue, anchors, labels] = await Promise.all([
-    db.execute("select state, count(*) as n from crawl_frontier group by state"),
-    db.execute("select kind, count(*) as n from crawl_frontier group by kind"),
+  const [frontierCounts, catalogue, anchors, labels] = await Promise.all([
+    // The two small frontier group-bys, shared with the funnel snapshot's lean read.
+    getFrontierCounts(),
     // A CATALOGUE track is a `tracks` row with no `findings` row. That anti-join IS the
     // definition — counted in SQL, never by pulling the table into the isolate.
     db.execute(`select count(*) as n from tracks
@@ -1354,22 +1387,11 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     listLabels(),
   ]);
 
-  const frontier = { done: 0, failed: 0, pending: 0, skipped: 0 };
-  const frontierByKind = { artist: 0, label: 0, release: 0 };
-
-  for (const row of typedRows<{ n: number; state: CrawlNodeState }>(states.rows)) {
-    frontier[row.state] = Number(row.n);
-  }
-
-  for (const row of typedRows<{ kind: CrawlNodeKind; n: number }>(kinds.rows)) {
-    frontierByKind[row.kind] = Number(row.n);
-  }
-
   return {
     anchorsPending: Number(typedRows<{ n: number }>(anchors.rows)[0]?.n ?? 0),
     catalogueTracks: Number(typedRows<{ n: number }>(catalogue.rows)[0]?.n ?? 0),
-    frontier,
-    frontierByKind,
+    frontier: frontierCounts.frontier,
+    frontierByKind: frontierCounts.frontierByKind,
     labelsUndecided: labels.filter((label) => label.seedState === "undecided").length,
     seedLabels: labels
       .filter((label) => label.seedState === "enabled")

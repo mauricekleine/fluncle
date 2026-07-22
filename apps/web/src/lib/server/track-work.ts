@@ -74,7 +74,7 @@
 // and the archive is never starved by the speculative half.
 
 import { anchorSearchQuery } from "./anchor";
-import { isCatalogueCaptureOpen } from "./capture-budget";
+import { type CatalogueCaptureState, isCatalogueCaptureOpen } from "./capture-budget";
 import { LONG_FORM_MS, MIN_TRACK_MS } from "./catalogue";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
@@ -526,14 +526,23 @@ export async function listTrackWork(options: {
  * scan, which is why nothing on a hot path asks for one.
  */
 export async function countTrackWork(options: {
+  /**
+   * An ALREADY-computed capture budget state, threaded in so the caller that also needs the state
+   * (the funnel snapshot: it reads `getCatalogueCaptureState` once for its meters) does not force a
+   * SECOND identical read here. Omitted, the capture count reads the brake itself, as before.
+   */
+  captureState?: CatalogueCaptureState;
   kind: TrackWorkKind;
   scope?: TrackWorkScope;
 }): Promise<number> {
-  const { kind, scope = "all" } = options;
+  const { captureState, kind, scope = "all" } = options;
 
   // The same brake, in the same order as the page read — a shut budget must not be able to
-  // report a backlog the queue would refuse to hand out.
-  const catalogueShut = kind === "capture" ? !(await isCatalogueCaptureOpen()) : false;
+  // report a backlog the queue would refuse to hand out. Reuse a passed-in state; else read it.
+  const catalogueShut =
+    kind === "capture"
+      ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
+      : false;
 
   if (catalogueShut && scope === "catalogue") {
     return 0;
