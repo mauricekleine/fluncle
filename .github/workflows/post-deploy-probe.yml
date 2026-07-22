@@ -58,7 +58,7 @@ jobs:
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          HEALTH_URL="https://www.fluncle.com/api/health"
+          HEALTH_URL="https://www.fluncle.com/api/v1/health"
           DEADLINE=$(( $(date +%s) + 20 * 60 ))  # ~20 min
           echo "Waiting for $HEALTH_URL to report sha=$TARGET_SHA (or a descendant of it)…"
 
@@ -84,7 +84,7 @@ jobs:
 
               echo "  prod serves $SERVED, still waiting for $TARGET_SHA (or a descendant)…"
             else
-              echo "  /api/health has no sha yet, waiting…"
+              echo "  /api/v1/health has no sha yet, waiting…"
             fi
 
             if [ "$(date +%s)" -ge "$DEADLINE" ]; then

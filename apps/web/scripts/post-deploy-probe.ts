@@ -3,7 +3,7 @@
  * The post-deploy production probe — the RESOLUTION half of Fluncle's monitoring,
  * fired automatically once a push to `main` has deployed (the
  * `.github/workflows/post-deploy-probe.yml` wait loop calls this after prod's
- * /api/health reports the pushed SHA). It is the automated form of the
+ * /api/v1/health reports the pushed SHA). It is the automated form of the
  * `fluncle-smoke` skill: sweep every public surface and go red the instant one
  * stops resolving — the class a service-health probe (/status, up/down) sails past,
  * where a moved/deleted route quietly returns 404 while the box still reads "up".
