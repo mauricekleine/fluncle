@@ -29,7 +29,7 @@ The dividing line: _could a stranger see the result, or could it not be taken ba
 | All public reads + admin reads (`queue`, `enrich --queue`, `vehicles`, `mixtapes list/get`, `submissions review`, `track social`) | agent    | No effect                                                              |
 | `track update` — analysis only (`--status/--bpm/--key/--features`)                                                                | agent    | Machine-measured, internal, overwritable; the enrich cron's write-back |
 | `track draft` — TikTok/default                                                                                                    | agent    | `SELF_ONLY` inbox draft; a human still posts it                        |
-| `add` (Spotify playlist + Telegram)                                                                                               | operator | Public, irreversible                                                   |
+| `tracks publish` (Spotify playlist + Telegram)                                                                                    | operator | Public, irreversible                                                   |
 | `track draft --platform youtube`                                                                                                  | operator | Direct public upload                                                   |
 | `track update` — `--note/--video-url` (+ identity `isrc/logId`)                                                                   | operator | Editorial voice + identity — Fluncle's judgment                        |
 | `track video` / `preview` / `observe`                                                                                             | operator | Durable artifacts                                                      |
@@ -145,7 +145,7 @@ docker run --rm --env-file <secret-env-file> --entrypoint fluncle \
 # the server boundary: a publish-class command with the agent token is refused
 # (expect a 403 "forbidden" — the operator role is required, not an execution)
 docker run --rm --env-file <secret-env-file> --entrypoint fluncle \
-  fluncle-hermes:v2026.7.7.2 admin add <url>
+  fluncle-hermes:v2026.7.7.2 admin tracks publish <url>
 ```
 
 When the gateway is live, repeat the boundary check **through the agent** ("run `fluncle admin tracks publish …`" must come back as an in-voice refusal off the server 403, not an execution).
