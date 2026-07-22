@@ -310,8 +310,8 @@
               mcp: { state: "yes", evidence: "list_artists (50/page)" },
               ssh: {
                 state: "partial",
-                evidence: "Artist archive screen",
-                note: "calls legacy /api/artists; single page, rows dead-end (no detail)",
+                evidence: "Artist archive screen (/api/v1/artists)",
+                note: "single page, rows dead-end (no detail)",
               },
               chat: { evidence: "list_artists", state: "yes" },
             },
@@ -527,7 +527,7 @@
             entity: "cross",
             support: {
               web: { state: "yes", evidence: "/status" },
-              api: { state: "yes", evidence: "get_health, /api/status" },
+              api: { state: "yes", evidence: "get_health, /api/v1/status" },
               cli: { state: "yes", evidence: "status" },
               mcp: { state: "yes", evidence: "get_status" },
               ssh: { state: "yes", evidence: "status menu" },

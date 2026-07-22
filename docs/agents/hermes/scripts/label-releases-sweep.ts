@@ -238,7 +238,7 @@ export async function runLabelReleasesTick(
 // ── The real (box-side) effects ───────────────────────────────────────────────
 
 async function runPass(limit: number): Promise<PassResult> {
-  const res = await fetch(`${API_BASE_URL}/api/admin/backfill/label-releases`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/backfill/label-releases`, {
     body: JSON.stringify({ dryRun: false, limit }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,

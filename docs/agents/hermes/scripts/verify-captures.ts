@@ -402,7 +402,7 @@ function encodeKey(key: string): string {
 const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 async function fetchVerifyQueue(limit: number): Promise<VerifyWorkItem[]> {
-  const url = `${API_BASE_URL}/api/admin/catalogue/captures/unverified?limit=${limit}`;
+  const url = `${API_BASE_URL}/api/v1/admin/catalogue/captures/unverified?limit=${limit}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
@@ -444,7 +444,7 @@ async function fetchCaptureFile(key: string, dir: string): Promise<null | string
 }
 
 async function reportVerdict(trackId: string, verdict: Verdict): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/api/admin/catalogue/captures/verify`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/captures/verify`, {
     body: JSON.stringify({ trackId, verdict }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,

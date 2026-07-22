@@ -15,7 +15,7 @@
 // for the operator runbook.
 //
 // ── THE TICK ───────────────────────────────────────────────────────────────────────────────────
-//   POST /api/admin/social/metrics/record with the box's AGENT token, a bare trigger (no body). The
+//   POST /api/v1/admin/social/metrics/record with the box's AGENT token, a bare trigger (no body). The
 //   Worker selects ≤25 published posts (the Postiz 30/hour cap), reads each one's per-post analytics,
 //   and APPENDS today's numbers (a re-fired tick the same day lands `inserted: 0` — idempotent).
 //
@@ -120,7 +120,7 @@ export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<Soc
 // ── The real (box-side) effect ─────────────────────────────────────────────────
 
 async function recordSocialMetrics(): Promise<RecordSocialMetricsResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/admin/social/metrics/record`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/social/metrics/record`, {
     body: JSON.stringify({}),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,

@@ -8,7 +8,7 @@
 #
 # WHAT IT DOES: every ~1m it asks Twitch Helix whether `flunclelive` is streaming
 # (a client-credentials app token, public read, no app review), then POSTs the raw
-# live state to the agent-tier `POST /api/admin/twitch/live` (oRPC
+# live state to the agent-tier `POST /api/v1/admin/twitch/live` (oRPC
 # `record_live_state`). The Worker stores it, owns the off→on / on→off transition
 # (the crew Telegram callout), and every surface reads it. Auto-clear is read-side
 # (a stale flag is treated offline), so a dead poller can't strand a "LIVE" banner.

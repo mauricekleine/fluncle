@@ -1515,7 +1515,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.social-capture",
     operatorNotes:
-      "every 10m. Pure HTTP trigger, zero LLM tokens. Agent tier (fills the public URL only — publishes nothing). The box's baked CLI predates the `--capture` verb, so the cron curls POST /api/admin/social/posts/capture directly; the Worker polls Postiz and writes back. Source: docs/agents/hermes/scripts/social-capture-sweep.sh. Probed on /status as cron.social-capture.",
+      "every 10m. Pure HTTP trigger, zero LLM tokens. Agent tier (fills the public URL only — publishes nothing). The box's baked CLI predates the `--capture` verb, so the cron curls POST /api/v1/admin/social/posts/capture directly; the Worker polls Postiz and writes back. Source: docs/agents/hermes/scripts/social-capture-sweep.sh. Probed on /status as cron.social-capture.",
     probeConfig: { cadenceMs: 10 * MINUTE_MS, cronName: "fluncle-social-capture", kind: "cron" },
     statusDescription: "the live YouTube and TikTok URLs for each posted video",
     title: "Social links",

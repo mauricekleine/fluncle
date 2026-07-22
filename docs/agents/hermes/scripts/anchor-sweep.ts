@@ -25,7 +25,7 @@
 //
 // ── THE LOOP, per tick ───────────────────────────────────────────────────────────────────────
 //   (a) FETCH the anchor worklist from the Worker with the box's AGENT token
-//       (`GET /api/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery`
+//       (`GET /api/v1/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery`
 //       (the row's artists + title) so this driver stays dumb and never builds the query.
 //   (b) FREE RUNG first: POST each row's trackId to `resolve_anchor`. The WORKER resolves a
 //       ListenBrainz candidate (recording MBID → Spotify ids, no auth) + one by-id Spotify metadata
@@ -409,7 +409,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 // ── The real (box-side) effects ───────────────────────────────────────────────
 
 async function fetchAnchorQueue(limit: number): Promise<AnchorWorkItem[]> {
-  const url = `${API_BASE_URL}/api/admin/tracks/work?kind=anchor&limit=${limit}`;
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
@@ -456,7 +456,7 @@ async function reportAnchor(
   trackId: string,
   candidates: AnchorCandidatePayload[],
 ): Promise<AnchorVerdict> {
-  const res = await fetch(`${API_BASE_URL}/api/admin/catalogue/anchor`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor`, {
     body: JSON.stringify({ candidates, trackId }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,
@@ -487,7 +487,7 @@ async function reportAnchor(
  * Worker recovered a verified ISRC from Deezer into this ISRC-less row before anchoring (for the tally).
  */
 async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
-  const res = await fetch(`${API_BASE_URL}/api/admin/catalogue/anchor/resolve`, {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor/resolve`, {
     body: JSON.stringify({ trackId }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,

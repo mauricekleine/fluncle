@@ -179,7 +179,7 @@ describe("emitCost best-effort contract", () => {
     if (!call) {
       throw new Error("expected exactly one recorded fetch call");
     }
-    expect(call.url).toBe("https://example.test/api/admin/costs/events");
+    expect(call.url).toBe("https://example.test/api/v1/admin/costs/events");
     expect(call.method).toBe("POST");
     expect(call.auth).toBe("Bearer agent-tok");
 
