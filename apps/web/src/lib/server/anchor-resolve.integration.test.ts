@@ -14,6 +14,7 @@ let db: Client;
 
 const lookupSpotifyIdsByMbid = vi.fn();
 const fetchTrackMetadata = vi.fn();
+const searchDeezerCandidates = vi.fn();
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -29,6 +30,15 @@ vi.mock("./spotify", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./spotify")>();
 
   return { ...actual, fetchTrackMetadata: (...args: unknown[]) => fetchTrackMetadata(...args) };
+});
+
+vi.mock("./deezer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./deezer")>();
+
+  return {
+    ...actual,
+    searchDeezerCandidates: (...args: unknown[]) => searchDeezerCandidates(...args),
+  };
 });
 
 /** A libSQL cell → string. */
@@ -58,13 +68,19 @@ async function seedCatalogue(row: {
 }
 
 /** The anchor + attempt-stamp state of a row, for the assertions. */
-async function anchorState(trackId: string): Promise<{ attempted: unknown; uri: unknown }> {
+async function anchorState(
+  trackId: string,
+): Promise<{ attempted: unknown; isrc: unknown; uri: unknown }> {
   const row = await db.execute({
     args: [trackId],
-    sql: "select spotify_uri, spotify_anchor_attempted_at from tracks where track_id = ?",
+    sql: "select spotify_uri, spotify_anchor_attempted_at, isrc from tracks where track_id = ?",
   });
 
-  return { attempted: row.rows[0]?.spotify_anchor_attempted_at, uri: row.rows[0]?.spotify_uri };
+  return {
+    attempted: row.rows[0]?.spotify_anchor_attempted_at,
+    isrc: row.rows[0]?.isrc,
+    uri: row.rows[0]?.spotify_uri,
+  };
 }
 
 /** A full TrackMetadata for the mocked single by-id Spotify read. */
@@ -87,6 +103,10 @@ beforeEach(async () => {
   db = await createIntegrationDb();
   lookupSpotifyIdsByMbid.mockReset();
   fetchTrackMetadata.mockReset();
+  // Deezer misses by default (the client never throws — an outage IS an empty list), so the
+  // pre-anchor recovery rung is a no-op and the pre-Deezer waterfall behaviour is what's asserted.
+  searchDeezerCandidates.mockReset();
+  searchDeezerCandidates.mockResolvedValue([]);
 });
 
 describe("resolveAnchorFree — a ListenBrainz hit through the verification gate", () => {
@@ -106,10 +126,13 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     expect(result).toEqual({
       anchored: true,
+      isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "isrc",
     });
+    // The row already carried an ISRC, so the Deezer recovery rung is skipped entirely.
+    expect(searchDeezerCandidates).not.toHaveBeenCalled();
     const state = await anchorState("mb_rec-1");
     expect(text(state.uri)).toBe("spotify:track:lbAnchor001");
     expect(state.attempted).not.toBeNull();
@@ -151,6 +174,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     expect(result).toEqual({
       anchored: true,
+      isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "search",
@@ -193,6 +217,7 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
 
     expect(result).toEqual({
       anchored: false,
+      isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -214,6 +239,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -233,6 +259,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -257,10 +284,157 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
     });
     expect((await anchorState("mb_sperr")).attempted).toBeNull();
+  });
+});
+
+describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () => {
+  it("recovers a verified ISRC into an empty row, then anchors via the exact-ISRC rung", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    // An ISRC-LESS crawler row. Deezer holds the real ISRC; its search hit matches the row's folded
+    // identity + duration (±2s), so it is trusted. The recovered ISRC then equals the ListenBrainz
+    // candidate's own metadata ISRC, so the row anchors through the EXACT-ISRC rung (not fuzzy).
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: "mbid-dz",
+      title: "Dribble",
+      trackId: "mb_dz",
+    });
+    searchDeezerCandidates.mockResolvedValue([
+      { artistName: "Muffler", durationMs: 201_000, isrc: "GBTESTDZ0001", title: "Dribble" },
+    ]);
+    lookupSpotifyIdsByMbid.mockResolvedValue({
+      artistName: "Muffler",
+      recordingMbid: "mbid-dz",
+      spotifyTrackIds: ["lbDz"],
+      trackName: "Dribble",
+    });
+    fetchTrackMetadata.mockResolvedValue(
+      metadata({
+        artists: ["Muffler"],
+        durationMs: 201_000,
+        isrc: "GBTESTDZ0001",
+        title: "Dribble",
+        trackId: "lbDz",
+      }),
+    );
+
+    const result = await resolveAnchorFree("mb_dz");
+
+    expect(result).toEqual({
+      anchored: true,
+      isrcRecoveredByDeezer: true,
+      source: "listenbrainz",
+      spotifySearchDone: false,
+      verifiedBy: "isrc",
+    });
+    const state = await anchorState("mb_dz");
+    // The recovered ISRC was persisted, and it drove the anchor.
+    expect(text(state.isrc)).toBe("GBTESTDZ0001");
+    expect(text(state.uri)).toBe("spotify:track:lbDz");
+  });
+
+  it("does NOT recover when the Deezer hit fails the fold+duration verification (stays ISRC-less → fuzzy)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: "mbid-dzbad",
+      title: "Dribble",
+      trackId: "mb_dzbad",
+    });
+    // A hit whose duration is 3s off the row (> the ±2s bar) — a wrong recording. It must be refused,
+    // so its ISRC is never trusted and the row stays ISRC-less.
+    searchDeezerCandidates.mockResolvedValue([
+      { artistName: "Muffler", durationMs: 203_500, isrc: "GBWRONGDZ001", title: "Dribble" },
+    ]);
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    const result = await resolveAnchorFree("mb_dzbad");
+
+    expect(result).toEqual({
+      anchored: false,
+      isrcRecoveredByDeezer: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
+    const state = await anchorState("mb_dzbad");
+    expect(state.isrc).toBeNull();
+    expect(state.attempted).toBeNull();
+  });
+
+  it("never overwrites a row that already carries an ISRC (recovery is skipped)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: "EXISTINGISRC",
+      mbid: "mbid-dzhas",
+      title: "Dribble",
+      trackId: "mb_dzhas",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    const result = await resolveAnchorFree("mb_dzhas");
+
+    expect(result.isrcRecoveredByDeezer).toBe(false);
+    // The recovery rung is gated on an EMPTY ISRC, so Deezer is never even asked.
+    expect(searchDeezerCandidates).not.toHaveBeenCalled();
+    expect(text((await anchorState("mb_dzhas")).isrc)).toBe("EXISTINGISRC");
+  });
+
+  it("degrades cleanly to the normal waterfall on a Deezer outage (empty result)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: "mbid-dzout",
+      title: "Dribble",
+      trackId: "mb_dzout",
+    });
+    // The Deezer client swallows an outage into an empty list (it never throws), so recovery is a
+    // no-op and the row anchors exactly as it would have without this rung — via the search triple.
+    searchDeezerCandidates.mockResolvedValue([]);
+    lookupSpotifyIdsByMbid.mockResolvedValue({
+      artistName: "Muffler",
+      recordingMbid: "mbid-dzout",
+      spotifyTrackIds: ["lbDzOut"],
+      trackName: "Dribble",
+    });
+    fetchTrackMetadata.mockResolvedValue(
+      metadata({
+        artists: ["Muffler"],
+        durationMs: 201_000,
+        isrc: null,
+        title: "Dribble",
+        trackId: "lbDzOut",
+      }),
+    );
+
+    const result = await resolveAnchorFree("mb_dzout");
+
+    expect(result).toEqual({
+      anchored: true,
+      isrcRecoveredByDeezer: false,
+      source: "listenbrainz",
+      spotifySearchDone: false,
+      verifiedBy: "search",
+    });
+    expect(searchDeezerCandidates).toHaveBeenCalledTimes(1);
+    expect(text((await anchorState("mb_dzout")).isrc)).toBeFalsy();
   });
 });

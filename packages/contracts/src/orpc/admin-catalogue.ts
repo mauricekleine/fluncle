@@ -782,6 +782,14 @@ export const anchorTrack = oc
  * identity columns and never certifies, so the box's agent token drives it. 404 when the track does
  * not exist; 409 when it is certified or already anchored.
  *
+ * RUNG 0 — DEEZER ISRC-RECOVERY. Before any anchor rung, and ONLY for an ISRC-less row, the Worker
+ * recovers the recording's real ISRC from Deezer's free, no-auth oracle (~60% of catalogue rows arrive
+ * ISRC-less because our ISRC comes from MusicBrainz, whose underground-DnB ISRC coverage is sparse).
+ * Every Deezer hit is re-verified against the row to the SAME fold + ±2s bar the anchor gate uses, then
+ * persisted fill-empty-only — so anchoring runs through the high-precision exact-ISRC rungs instead of
+ * fuzzy. `isrcRecoveredByDeezer` reports whether it fired (orthogonal to `anchored` — the recovered
+ * ISRC is persisted even on a full miss). A Deezer outage degrades cleanly to no recovery.
+ *
  * SLICE 2 — the DARK Spotify SEARCH rungs (`anchor_spotify_search_enabled`, default OFF). When the
  * ListenBrainz rung misses AND the flag is on AND we are outside the Friday-refresh window, this also
  * resolves the row against the shared official Spotify app's SEARCH (exact ISRC, then fuzzy) before it
@@ -804,6 +812,8 @@ export const resolveAnchor = oc
     z.object({
       /** True when a free rung verified a candidate and the anchor was written. */
       anchored: z.boolean(),
+      /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
+      isrcRecoveredByDeezer: z.boolean(),
       ok: z.literal(true),
       /** Which rung anchored, or null on a miss. `spotify-*` only ever when the dark flag is on. */
       source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),

@@ -231,6 +231,33 @@ describe("runAnchorTick", () => {
     expect(reported).toEqual(["mb_none"]);
   });
 
+  test("tallies Deezer ISRC recoveries regardless of whether the row then anchored", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        // mb_hold recovered its ISRC AND anchored (ListenBrainz); mb_fau recovered but still missed
+        // every free rung (it falls to Apify); mb_none recovered nothing. The recovery count is
+        // orthogonal to anchoring, so it must be 2.
+        resolveFree: (trackId) =>
+          Promise.resolve(
+            trackId === "mb_hold"
+              ? {
+                  anchored: true,
+                  isrcRecoveredByDeezer: true,
+                  source: "listenbrainz",
+                  verifiedBy: "isrc",
+                }
+              : trackId === "mb_fau"
+                ? { anchored: false, isrcRecoveredByDeezer: true, verifiedBy: null }
+                : { anchored: false, isrcRecoveredByDeezer: false, verifiedBy: null },
+          ),
+      }),
+    );
+
+    expect(summary.isrcRecoveredByDeezer).toBe(2);
+    expect(summary.anchoredByListenbrainz).toBe(1);
+  });
+
   test("slice 2: the pacer spaces consecutive Spotify-search calls by ≥ the ceiling interval", async () => {
     const sleeps: number[] = [];
     let clock = 0;

@@ -41,6 +41,17 @@ vi.mock("./spotify", async (importOriginal) => {
   };
 });
 
+const searchDeezerCandidates = vi.fn();
+
+vi.mock("./deezer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./deezer")>();
+
+  return {
+    ...actual,
+    searchDeezerCandidates: (...args: unknown[]) => searchDeezerCandidates(...args),
+  };
+});
+
 /** A Wednesday noon — well outside the Friday-morning Frontier-refresh window. */
 const NON_FRIDAY = new Date("2026-07-22T12:00:00Z");
 /** Friday 07:00 Amsterdam (05:00 UTC in CEST) — inside the refresh window. */
@@ -120,6 +131,10 @@ beforeEach(async () => {
   // ListenBrainz misses in every slice-2 test unless a test overrides it — the Spotify rungs are what
   // we are exercising, and they only run AFTER the free ListenBrainz rung misses.
   lookupSpotifyIdsByMbid.mockResolvedValue(null);
+  // The pre-anchor Deezer recovery rung misses by default (a no-op for these Spotify-rung tests); an
+  // ISRC-less row keeps whatever ISRC state the test seeds.
+  searchDeezerCandidates.mockReset();
+  searchDeezerCandidates.mockResolvedValue([]);
 });
 
 describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
@@ -133,6 +148,7 @@ describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
 
     expect(result).toEqual({
       anchored: false,
+      isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -189,6 +205,7 @@ describe("resolveAnchorFree — the Spotify ISRC rung (flag on, outside the wind
 
     expect(result).toEqual({
       anchored: true,
+      isrcRecoveredByDeezer: false,
       source: "spotify-isrc",
       spotifySearchDone: true,
       verifiedBy: "isrc",
@@ -235,6 +252,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
 
     expect(result).toEqual({
       anchored: true,
+      isrcRecoveredByDeezer: false,
       source: "spotify-search",
       spotifySearchDone: true,
       verifiedBy: "search",
@@ -288,6 +306,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
 
     expect(result).toEqual({
       anchored: false,
+      isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: true,
       verifiedBy: null,
@@ -320,6 +339,7 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
 
     expect(result).toEqual({
       anchored: true,
+      isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "isrc",

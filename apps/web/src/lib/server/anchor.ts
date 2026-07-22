@@ -56,6 +56,7 @@
 import { anchorSpotifySearchAllowed } from "./anchor-spotify-search";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
+import { searchDeezerCandidates } from "./deezer";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 import { logEvent } from "./log";
 import {
@@ -379,13 +380,23 @@ export type AnchorResolveSource = "listenbrainz" | "spotify-isrc" | "spotify-sea
  * SEARCH request against the shared official app — the signal the box's pacer uses to throttle the
  * next call (see anchor-spotify-search.ts). When the dark flag is OFF it is always FALSE (and no
  * `findSpotifyTrackByIsrc` / `searchTrackCandidates` ran) — the load-bearing safety property.
+ *
+ * `isrcRecoveredByDeezer` is TRUE iff this call recovered a verified ISRC from Deezer into a
+ * previously ISRC-less row (the pre-anchor recovery rung, below). It is orthogonal to `anchored`: a
+ * recovery can happen and the row still miss every anchor rung this tick — the recovered ISRC is
+ * persisted regardless, so the next tick's exact-ISRC rung and dedup both benefit. The box sweep
+ * tallies it to measure the recovery rate.
  */
 export type AnchorResolveResult = {
   anchored: boolean;
+  isrcRecoveredByDeezer: boolean;
   source: AnchorResolveSource | null;
   spotifySearchDone: boolean;
   verifiedBy: AnchorVerification;
 };
+
+/** The free-rung outcome BEFORE the Deezer-recovery flag is folded in (the Spotify-search rungs never learn of Deezer). */
+type FreeResolveOutcome = Omit<AnchorResolveResult, "isrcRecoveredByDeezer">;
 
 /** Fetch a Spotify track's metadata and shape it into a verifiable candidate — best-effort. */
 async function metadataCandidate(spotifyTrackId: string): Promise<AnchorCandidate | undefined> {
@@ -486,7 +497,7 @@ async function resolveViaSpotifySearch(
   isrc: null | string,
   artists: string[],
   title: string,
-): Promise<AnchorResolveResult> {
+): Promise<FreeResolveOutcome> {
   // RUNG 2 — the exact ISRC search, only for a row that carries one.
   if (isrc?.trim()) {
     const lookup = await findSpotifyTrackByIsrc(isrc);
@@ -539,22 +550,96 @@ async function resolveViaSpotifySearch(
 }
 
 /**
+ * THE PRE-ANCHOR DEEZER ISRC-RECOVERY RUNG. Runs FIRST, and ONLY for an ISRC-less row: the crawler's
+ * ISRC comes from MusicBrainz, whose ISRC coverage of underground DnB is sparse, so ~60% of catalogue
+ * rows arrive with no ISRC even though the track genuinely HAS one — which forces anchoring down the
+ * low-precision FUZZY rung. Deezer is a free, no-auth ISRC oracle: a title+artist search returns hits
+ * already carrying the real ISRC + duration. We recover it BEFORE anchoring so the high-precision
+ * EXACT-ISRC rungs (ListenBrainz maps + Spotify ISRC search) do the work instead of fuzzy.
+ *
+ * PRECISION IS PARAMOUNT: the recovered ISRC feeds ISRC-EQUALITY anchoring downstream, so a wrong
+ * Deezer match would seed a wrong (and permanent) anchor. Every hit is re-verified against the row to
+ * the SAME bar the anchor gate uses — the folded artist-set + base-title identity AND a duration within
+ * `ANCHOR_DURATION_TOLERANCE_MS` — via the shared `pickVerifiedCandidate` gate (Deezer's billed
+ * `artistName` folds into an artist set through `matchKey`). On any doubt, no recovery: the row simply
+ * stays ISRC-less and falls to fuzzy, exactly as before this rung existed.
+ *
+ * A verified hit's ISRC is written FILL-EMPTY-ONLY (`coalesce(isrc, ?)`, mirroring the anchor-hit
+ * write) — a real ISRC is never overwritten (defensive; we only reach here for an ISRC-less row) — and
+ * returned so the SAME resolve call carries it forward in memory to the exact-ISRC rungs. Returns
+ * `undefined` on a miss (no artist/title/duration to verify against, a Deezer miss, or no hit clears
+ * the gate). Best-effort: the Deezer client never throws, so a Deezer outage degrades cleanly to no
+ * recovery — anchoring is never broken, only unhelped, on that row.
+ */
+async function recoverIsrcViaDeezer(
+  trackId: string,
+  db: Awaited<ReturnType<typeof getDb>>,
+  rowArtists: string[],
+  rowTitle: string,
+  rowDurationMs: number,
+): Promise<string | undefined> {
+  // No stable duration or identity to verify against ⇒ we cannot trust a match, so we do not recover.
+  if (!rowTitle.trim() || rowArtists.length === 0 || !(rowDurationMs > 0)) {
+    return undefined;
+  }
+
+  const candidates = await searchDeezerCandidates({ artists: rowArtists, title: rowTitle });
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  // The SAME gate an anchor candidate clears: folded artist-set + base-title identity AND a duration
+  // within ±ANCHOR_DURATION_TOLERANCE_MS. Deezer's fuzzy search may lead with a remix — the fold keeps
+  // its version descriptor distinct, so the original never recovers a remix's ISRC (and vice-versa).
+  const verified = pickVerifiedCandidate(
+    rowArtists,
+    rowTitle,
+    rowDurationMs,
+    candidates.map((candidate) => ({
+      artists: [candidate.artistName],
+      durationMs: candidate.durationMs,
+      isrc: candidate.isrc,
+      title: candidate.title,
+    })),
+  );
+
+  const recovered = verified?.isrc.trim();
+
+  if (!recovered) {
+    return undefined;
+  }
+
+  // FILL-EMPTY-ONLY, exactly like the anchor-hit write (PR #813): a NULL is filled, a real ISRC is
+  // never clobbered. Persisted whether or not a rung then anchors, so the next tick's exact-ISRC rung
+  // and the ISRC-equality dedup both benefit even on a full miss this tick.
+  await db.execute({
+    args: [recovered, trackId],
+    sql: `update tracks set isrc = coalesce(isrc, ?) where track_id = ?`,
+  });
+
+  return recovered;
+}
+
+/**
  * THE FREE (non-Apify) RESOLVER RUNGS of the waterfall — try to anchor a catalogue row without any
  * Apify money (docs/catalogue-crawler.md § the anchor). The box's sweep calls this FIRST per row and
  * spends the metered Apify search only when it MISSES.
  *
- * Order: (1) the FREE ListenBrainz rung (recording MBID → Spotify ids → one by-id metadata read →
- * gate); then, ONLY when the dark flag `anchor_spotify_search_enabled` is on and we are outside the
- * Friday-refresh window (`anchorSpotifySearchAllowed`), (2) the exact Spotify ISRC search and (3) the
- * fuzzy Spotify search. When the flag is off (or during the Friday window) the Spotify rungs are
- * SKIPPED ENTIRELY: not one `findSpotifyTrackByIsrc` / `searchTrackCandidates` call is issued — the
- * load-bearing safety property that lets slice 2 ship dark.
+ * Order: (0) the pre-anchor DEEZER ISRC-recovery rung — ONLY for an ISRC-less row, recover the real
+ * ISRC from Deezer's free oracle (verified to the anchor gate's bar) so the exact-ISRC rungs run
+ * instead of fuzzy; then (1) the FREE ListenBrainz rung (recording MBID → Spotify ids → one by-id
+ * metadata read → gate); then, ONLY when the dark flag `anchor_spotify_search_enabled` is on and we
+ * are outside the Friday-refresh window (`anchorSpotifySearchAllowed`), (2) the exact Spotify ISRC
+ * search and (3) the fuzzy Spotify search. When the flag is off (or during the Friday window) the
+ * Spotify rungs are SKIPPED ENTIRELY: not one `findSpotifyTrackByIsrc` / `searchTrackCandidates` call
+ * is issued — the load-bearing safety property that lets slice 2 ship dark.
  *
  * Every rung anchors with `stampOnMiss: false`, so a full miss leaves the row UNSTAMPED and the Apify
- * fallback (or the next tick) still gets its turn. Best-effort throughout — a missing MBID, a
- * ListenBrainz miss, a throttle, or a Spotify read that throws all resolve to a clean miss. The
- * `AnchorTrackError` rails (not_found / certified / already_anchored) still propagate, so the op maps
- * them to the same honest status the Apify path does. `now` is injected for deterministic tests.
+ * fallback (or the next tick) still gets its turn. Best-effort throughout — a missing MBID, a Deezer
+ * outage, a ListenBrainz miss, a throttle, or a Spotify read that throws all resolve to a clean miss.
+ * The `AnchorTrackError` rails (not_found / certified / already_anchored) still propagate, so the op
+ * maps them to the same honest status the Apify path does. `now` is injected for deterministic tests.
  */
 export async function resolveAnchorFree(
   trackId: string,
@@ -564,10 +649,11 @@ export async function resolveAnchorFree(
 
   const found = await db.execute({
     args: [trackId],
-    sql: `select mb_recording_id, isrc, artists_json, title from tracks where track_id = ? limit 1`,
+    sql: `select mb_recording_id, isrc, artists_json, title, duration_ms from tracks where track_id = ? limit 1`,
   });
   const row = typedRows<{
     artists_json: null | string;
+    duration_ms: null | number;
     isrc: null | string;
     mb_recording_id: null | string;
     title: null | string;
@@ -575,7 +661,37 @@ export async function resolveAnchorFree(
 
   // An unknown track has nothing to resolve — a clean miss, zero vendor calls (slice-1 behaviour).
   if (!row) {
-    return { anchored: false, source: null, spotifySearchDone: false, verifiedBy: null };
+    return {
+      anchored: false,
+      isrcRecoveredByDeezer: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    };
+  }
+
+  const rowArtists = parseArtistsJson(row.artists_json ?? "[]");
+
+  // RUNG 0 — the pre-anchor DEEZER ISRC-recovery rung. ONLY for an ISRC-less row; on a verified hit it
+  // persists the ISRC (fill-empty-only) AND carries it forward in memory so the exact-ISRC rungs below
+  // run on it this same call (ListenBrainz's `anchorTrack` re-reads the row and sees the persisted
+  // value; the Spotify rungs read `isrc` from the in-memory variable).
+  let isrc = row.isrc;
+  let isrcRecoveredByDeezer = false;
+
+  if (!isrc?.trim()) {
+    const recovered = await recoverIsrcViaDeezer(
+      trackId,
+      db,
+      rowArtists,
+      row.title ?? "",
+      Number(row.duration_ms ?? 0),
+    );
+
+    if (recovered) {
+      isrc = recovered;
+      isrcRecoveredByDeezer = true;
+    }
   }
 
   // RUNG 1 — the FREE ListenBrainz rung.
@@ -584,6 +700,7 @@ export async function resolveAnchorFree(
   if (listenbrainz?.anchored) {
     return {
       anchored: true,
+      isrcRecoveredByDeezer,
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: listenbrainz.verifiedBy,
@@ -592,14 +709,17 @@ export async function resolveAnchorFree(
 
   // THE DARK GATE — off ⇒ zero Spotify search calls. Checked BEFORE either Spotify rung runs.
   if (!(await anchorSpotifySearchAllowed(now))) {
-    return { anchored: false, source: null, spotifySearchDone: false, verifiedBy: null };
+    return {
+      anchored: false,
+      isrcRecoveredByDeezer,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    };
   }
 
-  // RUNGS 2/3 — the dark Spotify search rungs.
-  return resolveViaSpotifySearch(
-    trackId,
-    row.isrc,
-    parseArtistsJson(row.artists_json ?? "[]"),
-    row.title ?? "",
-  );
+  // RUNGS 2/3 — the dark Spotify search rungs, fed the (possibly Deezer-recovered) ISRC.
+  const searchOutcome = await resolveViaSpotifySearch(trackId, isrc, rowArtists, row.title ?? "");
+
+  return { ...searchOutcome, isrcRecoveredByDeezer };
 }
