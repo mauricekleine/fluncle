@@ -14,15 +14,16 @@ import {
   type SocialStatus,
   type SubmissionInput,
 } from "../attention";
+import { bestAlbumCoverUrl } from "../media";
 import { listArtistReviewRows, parseArtistsJson } from "./artists";
 import { listClipPosts } from "./clip-social";
-import { getDb, typedRows } from "./db";
+import { getDb, typedRow, typedRows } from "./db";
 import { listLabelReviewRows } from "./labels";
 import { listMixtapes } from "./mixtapes";
 import { listNoteRejectionReviewRows } from "./note-rejections";
 import { listObservationRejectionReviewRows } from "./observation-rejections";
 import { listRecordings } from "./recordings";
-import { listTracks } from "./tracks";
+import { FINDINGS_FROM, listTracks } from "./tracks";
 
 export type AttentionSnapshot = {
   items: AttentionItem[];
@@ -44,15 +45,35 @@ type ClipRow = {
   youtube_status: SocialStatus | null;
 };
 
+/**
+ * The most clip-distribution rows the attention queue will ever carry.
+ *
+ * The queue used to take EVERY dressed finding with a pending distribution leg — right when the
+ * only clips in flight were the handful the operator was actively distributing, but a growing
+ * catalogue of rendered-but-not-fully-distributed findings turns that into an unbounded list
+ * serialized into the `/admin` SSR payload, the react-query cache, and one-per-line by
+ * `fluncle admin queue` + the Raycast menu bar, even though the pure model only ever RENDERS the
+ * focus clip's two legs plus the (TikTok-capped, ≤5/24h) inbox drafts.
+ *
+ * So the read takes a WORKING SET, oldest-first, matching {@link LABEL_REVIEW_QUEUE_LIMIT}'s
+ * discipline. The cap sits comfortably above the working set: the pure model surfaces distribution
+ * legs one focus clip at a time, so the rest of the array is only the `waiting` datum's fuel, and
+ * 50 is far above any live in-flight distribution count. Capping never hides a clip from the
+ * operator — the focus (oldest pending) is always in-set — it stops one source from drowning the
+ * other twelve.
+ */
+export const CLIP_QUEUE_LIMIT = 50;
+
 // Every dressed finding with a still-pending distribution leg, joined to its per-platform
 // post state — one `social_posts` row per (track, platform) (the unique index), so the LEFT
 // JOINs stay 1:1. A leg is settled once published/scheduled; a clip with BOTH legs settled
 // drops out of this read. Oldest first — the pure model picks the focus clip and derives the
-// per-platform todos. Log ID required: the caption/cover actions key off it.
+// per-platform todos. Log ID required: the caption/cover actions key off it. Capped at
+// {@link CLIP_QUEUE_LIMIT} (oldest-first), so a distribution backlog can't drown the queue.
 async function listClipRows(): Promise<ClipInput[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [],
+    args: [CLIP_QUEUE_LIMIT],
     sql: `select t.track_id, t.title, t.artists_json, t.album_image_url, t.log_id, t.added_at,
                  tk.status as tiktok_status, tk.updated_at as tiktok_updated_at,
                  yt.status as youtube_status
@@ -65,7 +86,8 @@ async function listClipRows(): Promise<ClipInput[]> {
               coalesce(tk.status, 'none') not in ('published', 'scheduled')
               or coalesce(yt.status, 'none') not in ('published', 'scheduled')
             )
-          order by t.added_at asc`,
+          order by t.added_at asc
+          limit ?`,
   });
 
   return typedRows<ClipRow>(result.rows).map((row) => ({
@@ -179,6 +201,48 @@ async function listDraftEditionRows(): Promise<NewsletterInput[]> {
   }));
 }
 
+type LatestCoverRow = {
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
+  album_image_url: string | null;
+};
+
+/**
+ * The zero state's fresh-load fallback: the single newest finding's display cover, and NOTHING
+ * else. It rides `findings(added_at, track_id)` for exactly one row — no `count(*)` over the whole
+ * findings⋈tracks join and no fat track projection (both of which the previous
+ * `listTracks({ limit: 1, order: "desc" })` paid for to consume one image URL). It resolves the
+ * SAME best-cover chain the track DTO does (`bestAlbumCoverUrl`: the album's owned Cloudflare-Images
+ * master once the sweep resolved one, else the Spotify chain), so the zero-state cover matches every
+ * other surface — only the three album subqueries `bestAlbumCoverUrl` needs, evaluated for the one row.
+ */
+async function readLatestCoverUrl(): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select tracks.album_image_url,
+                 (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
+                 (select image_state from albums where albums.id = tracks.album_id) as album_image_state,
+                 (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at
+          from ${FINDINGS_FROM}
+          order by findings.added_at desc, tracks.track_id desc
+          limit 1`,
+  });
+
+  const row = typedRow<LatestCoverRow>(result.rows);
+  if (!row) {
+    return undefined;
+  }
+
+  return bestAlbumCoverUrl({
+    imageKey: row.album_image_key,
+    imageState: row.album_image_state,
+    imageUpdatedAt: row.album_image_updated_at,
+    spotifyUrl: row.album_image_url,
+  });
+}
+
 /** One pass over the sources + the pulse datum + the zero-state fallback. */
 export async function readAttentionSnapshot(now: number = Date.now()): Promise<AttentionSnapshot> {
   const [
@@ -194,7 +258,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     noteRejections,
     observationRejections,
     renders,
-    newest,
+    latestCoverUrl,
   ] = await Promise.all([
     listClipRows(),
     listRecordings(),
@@ -220,7 +284,9 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     // The render queue's canonical read (`fluncle admin tracks queue`): findings
     // with context gathered but no video yet.
     listTracks({ hasContext: true, hasVideo: false, limit: 1 }),
-    listTracks({ limit: 1, order: "desc" }),
+    // The zero state's fresh-load cover — a dedicated one-row read (the newest finding's display
+    // cover), not a full `listTracks` scan whose count(*) + fat projection this consumed one field of.
+    readLatestCoverUrl(),
   ]);
 
   const items = deriveAttentionItems(
@@ -261,8 +327,6 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     },
     now,
   );
-
-  const latestCoverUrl = newest.tracks[0]?.albumImageUrl;
 
   return {
     items,
