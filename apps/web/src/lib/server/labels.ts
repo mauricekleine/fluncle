@@ -64,7 +64,7 @@ type LabelRow = {
   updated_at: string;
 };
 
-/** One `(label, count)` pair from the bounded distinct-label read over `tracks`. */
+/** One `(label, count)` pair from the distinct-label read over `tracks` (the reconcile backstop). */
 type LabelCountRow = { label: string; n: number };
 
 /**
@@ -98,34 +98,8 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
 
 const LABEL_COLUMNS = "id, name, slug, seed_state, ruled_at, created_at, updated_at, image_key";
 
-/**
- * Every distinct `tracks.label`, folded to its slug, with how many findings carry
- * it. Bounded by construction: the `GROUP BY` returns one row per DISTINCT label
- * (tens of rows), never a row per track, so this stays a cheap read as the archive
- * grows. Two raw spellings that fold to the same slug (`Pilot.` / `Pilot`) sum.
- */
-async function findingCountsBySlug(): Promise<Map<string, number>> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `select tracks.label as label, count(*) as n
-          from findings join tracks on tracks.track_id = findings.track_id
-          where tracks.label is not null and trim(tracks.label) <> ''
-          group by tracks.label`,
-  });
-
-  const counts = new Map<string, number>();
-
-  for (const row of typedRows<LabelCountRow>(result.rows)) {
-    const slug = labelSlug(row.label);
-
-    if (slug) {
-      counts.set(slug, (counts.get(slug) ?? 0) + Number(row.n));
-    }
-  }
-
-  return counts;
-}
+/** The `/admin/labels` section page size — each of the three seed-state sections pages this many. */
+export const LABELS_ADMIN_PAGE_SIZE = 50;
 
 /**
  * The CONFIRMED-ALIAS choke point: does a slug resolve to an existing label through a spelling
@@ -1316,13 +1290,16 @@ export async function getLabelDetail(slug: string): Promise<LabelDetail | undefi
  * a label earns a row — and a slot in the operator's `label-review` attention queue —
  * because Fluncle FOUND something on it. Minting off the raw catalogue would flood that
  * queue with the label of every track Fluncle has merely heard of, the moment the
- * catalogue epic lands. Same predicate as `findingCountsBySlug`, so the mint and the
- * count can never disagree.
+ * catalogue epic lands. Same finding-scoped predicate as the deploy backfill's reconcile,
+ * so the two mint identically.
+ *
+ * It is MINT-ONLY: it ensures a `labels` row EXISTS, and leaves the `tracks.label_id` graph
+ * edge to the deploy backfill's link step (`scripts/backfill-labels.ts` → `linkTracksToLabels`).
  *
  * ── ALIAS-AWARE (RFC musickit-second-authority, U2a) ────────────────────────────
  * A confirmed alias's slug is NEVER re-minted: it already resolves to another label, and
  * `tracks.label` is immutable, so minting it here would re-open a fold the operator closed —
- * every deploy. The confirmed-alias slug set is preloaded once (the `findingCountsBySlug`
+ * every deploy. The confirmed-alias slug set is preloaded once (the bounded distinct-read
  * pattern) and any slug in it is skipped. NOTE: the deploy path is `scripts/backfill-labels.ts`
  * (which carries the same guard); this runtime twin is proven by the re-mint regression test.
  */
@@ -1370,12 +1347,41 @@ export async function reconcileLabels(): Promise<number> {
 }
 
 /**
- * Every label with its finding count — the `/admin/labels` read and the CLI/agent
- * read. Optionally scoped to one seed state, which is how the crawler asks for
- * its seed set (`listLabels("enabled")`): the ONE sanctioned consumer of
- * `seed_state`. Name-sorted (the operator scans it alphabetically).
+ * A label WITHOUT its finding count — the shape the seed-set read returns. The finding count is
+ * DERIVED and only the `/admin/labels` station shows it, so the count is computed there (bounded to
+ * a page), never on this read: the crawler asks for its seed set every tick and never uses a count.
  */
-export async function listLabels(seedState?: LabelSeedState): Promise<LabelAdminItem[]> {
+export type LabelSeedItem = Omit<LabelAdminItem, "findingCount">;
+
+/** One paged section of the `/admin/labels` station — one seed state, bounded, name-sorted. */
+export type LabelsAdminPage = {
+  items: LabelAdminItem[];
+  page: number;
+  pageCount: number;
+  total: number;
+};
+
+function toLabelSeedItem(row: LabelRow): LabelSeedItem {
+  return {
+    createdAt: row.created_at,
+    id: row.id,
+    logoImageUrl: labelLogoUrl(row.image_key),
+    name: row.name,
+    ruledAt: row.ruled_at,
+    seedState: row.seed_state,
+    slug: row.slug,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * The seed-set read — every label, or the labels in one seed state, name-sorted, WITHOUT counts.
+ * `listLabels("enabled")` is the catalogue crawler's seed set (`crawl.ts`): the ONE sanctioned
+ * consumer of `seed_state`. It is deliberately COUNTLESS — the whole-corpus finding aggregate this
+ * read used to pay on every crawl tick was for a count the crawler never reads. The `/admin/labels`
+ * station's finding counts come from {@link listLabelsPage} instead, bounded to the visible page.
+ */
+export async function listLabels(seedState?: LabelSeedState): Promise<LabelSeedItem[]> {
   const db = await getDb();
   const result = seedState
     ? await db.execute({
@@ -1387,9 +1393,78 @@ export async function listLabels(seedState?: LabelSeedState): Promise<LabelAdmin
         sql: `select ${LABEL_COLUMNS} from labels order by name collate nocase`,
       });
 
-  const counts = await findingCountsBySlug();
+  return typedRows<LabelRow>(result.rows).map(toLabelSeedItem);
+}
 
-  return typedRows<LabelRow>(result.rows).map((row) => toLabelItem(row, counts.get(row.slug) ?? 0));
+/**
+ * The certified-finding count for a BOUNDED set of label ids, grouped over the INDEXED
+ * `tracks.label_id` edge (`where tracks.label_id in (…)`, on `tracks_label_id_idx`) — never a
+ * whole-corpus `GROUP BY` over the raw `tracks.label` string. `HUB_CERTIFIED` (a group's
+ * `log_id is not null` count), the same aggregate `hubFindingCountsBySlug` computes for the public
+ * hub, so an admin row's count agrees with the public `/labels` row by construction. A label with
+ * no findings is simply absent from the map.
+ */
+async function labelFindingCountsByIds(labelIds: string[]): Promise<Map<string, number>> {
+  if (labelIds.length === 0) {
+    return new Map();
+  }
+
+  const db = await getDb();
+  const placeholders = labelIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: labelIds,
+    sql: `select tracks.label_id as label_id, ${HUB_CERTIFIED} as finding_count
+          from tracks
+          left join findings on findings.track_id = tracks.track_id
+          where tracks.label_id in (${placeholders})
+          group by tracks.label_id`,
+  });
+
+  const counts = new Map<string, number>();
+
+  for (const row of typedRows<{ finding_count: number; label_id: string }>(result.rows)) {
+    counts.set(row.label_id, Number(row.finding_count));
+  }
+
+  return counts;
+}
+
+/**
+ * One numbered page of the `/admin/labels` station's section for a single seed state — the read the
+ * station hydrates each of its three sections from. Bounded: `where seed_state = ?` rides the
+ * `(seed_state, name)` index, `order by name` reads it in order, and `count(*) over ()` returns the
+ * section total for the pager without a second query. Only the page's ≤{@link LABELS_ADMIN_PAGE_SIZE}
+ * labels get their finding count, via {@link labelFindingCountsByIds} over the indexed `label_id`
+ * edge — so the whole-corpus aggregate the old read paid on every load/focus is gone.
+ */
+export async function listLabelsPage(
+  seedState: LabelSeedState,
+  page: number,
+): Promise<LabelsAdminPage> {
+  const db = await getDb();
+  const limit = LABELS_ADMIN_PAGE_SIZE;
+  const safePage = Math.max(1, Math.floor(page));
+  const offset = (safePage - 1) * limit;
+
+  const result = await db.execute({
+    args: [seedState, limit, offset],
+    sql: `select ${LABEL_COLUMNS}, count(*) over () as total_count
+          from labels
+          where seed_state = ?
+          order by name collate nocase
+          limit ? offset ?`,
+  });
+
+  const rows = typedRows<LabelRow & { total_count: number }>(result.rows);
+  const total = Number(rows[0]?.total_count ?? 0);
+  const counts = await labelFindingCountsByIds(rows.map((row) => row.id));
+
+  return {
+    items: rows.map((row) => toLabelItem(row, counts.get(row.id) ?? 0)),
+    page: safePage,
+    pageCount: Math.max(Math.ceil(total / limit), 1),
+    total,
+  };
 }
 
 /** Thrown when an operator write targets a label id that isn't there. */
@@ -1426,9 +1501,10 @@ export async function updateLabelSeedState(
     throw new LabelNotFoundError(`No label with id ${id}.`);
   }
 
-  const counts = await findingCountsBySlug();
+  // Just this one label's count, bounded by its own `label_id` — never the whole-corpus aggregate.
+  const counts = await labelFindingCountsByIds([row.id]);
 
-  return toLabelItem(row, counts.get(row.slug) ?? 0);
+  return toLabelItem(row, counts.get(row.id) ?? 0);
 }
 
 // ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────
@@ -1568,7 +1644,7 @@ export async function listLabelReviewRows(): Promise<LabelReviewRow[]> {
 
 /**
  * Every slug the operator has folded into another label via a CONFIRMED alias — preloaded once
- * for the reconcile's re-mint guard (the `findingCountsBySlug` pattern). Bounded: `label_aliases`
+ * for the reconcile's re-mint guard (the bounded distinct-read pattern). Bounded: `label_aliases`
  * holds a handful of rows per label, never one per track.
  */
 async function confirmedAliasSlugSet(): Promise<Set<string>> {

@@ -5,10 +5,10 @@ import {
   ProhibitIcon,
   TagIcon,
 } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   type LabelAdminItem,
   type LabelAliasCandidate,
@@ -25,7 +25,11 @@ import {
 } from "@fluncle/ui/components/dropdown-menu";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { listLabelAliasCandidates, listLabels } from "@/lib/server/labels";
+import {
+  type LabelsAdminPage,
+  listLabelAliasCandidates,
+  listLabelsPage,
+} from "@/lib/server/labels";
 
 // The `/admin/labels` station — the record-label entity and the operator's CRAWL-SEED
 // control (the-archive RFC, D7). Every label a finding has ever carried is a row here.
@@ -46,11 +50,50 @@ import { listLabelAliasCandidates, listLabels } from "@/lib/server/labels";
 //
 // The ruling is publish-class in authority terms (it steers what Fluncle crawls next), so
 // it rides the OPERATOR-tier `update_label` op — an agent token 403s.
+//
+// ── WHY THIS PAGES PER SECTION ──────────────────────────────────────────────────
+// The crawler mints labels endlessly, so this station is a catalogue-scale surface now.
+// Each of the three seed-state sections (undecided / enabled / not seeding) reads its OWN
+// bounded page (`listLabelsPage`, name-sorted, ~50/page) off the `(seed_state, name)` index,
+// and its finding counts come from the indexed `tracks.label_id` edge for just that page —
+// never a whole-corpus fold over `tracks.label`. The undecided section leads with its TOTAL
+// (the backlog size stays honest even though the rows page in). A ruling invalidates the
+// whole board, so a label that moves sections refreshes both the one it left and the one it
+// joined, and every section's count re-settles.
 
 const LABELS_KEY = ["admin", "labels"] as const;
+const ALIASES_KEY = [...LABELS_KEY, "aliases"] as const;
 
-/** The board the page hydrates from: the labels to rule on + the alias spellings to confirm. */
-type LabelsBoard = { aliases: LabelAliasCandidate[]; labels: LabelAdminItem[] };
+/** The infinite-query key for one seed-state section, so a ruling can invalidate the whole board. */
+const sectionKey = (seedState: LabelSeedState) => [...LABELS_KEY, "section", seedState] as const;
+
+/** The seed-state sections, in the order the work arrives: the queue, then the two settled sets. */
+const SECTIONS: {
+  intro: string;
+  seedState: LabelSeedState;
+  title: string;
+}[] = [
+  {
+    intro:
+      "A finding landed on these and nobody has ruled on them yet. Say whether the next crawl can dig from them.",
+    seedState: "undecided",
+    title: "Waiting on a ruling",
+  },
+  { intro: "The next crawl digs from these.", seedState: "enabled", title: "Seeding from" },
+  {
+    intro: "The next crawl skips these. Their findings are untouched.",
+    seedState: "disabled",
+    title: "Not seeding",
+  },
+];
+
+/** The board the page hydrates from: page 1 of each section + the alias spellings to confirm. */
+type LabelsBoard = {
+  aliases: LabelAliasCandidate[];
+  disabled: LabelsAdminPage;
+  enabled: LabelsAdminPage;
+  undecided: LabelsAdminPage;
+};
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
@@ -58,15 +101,46 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
+// The loader's ONE round-trip: page 1 of each of the three sections plus the (already bounded)
+// alias candidates, in parallel. Each section then hydrates its own infinite query from its slice.
 const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<LabelsBoard> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
   }
 
-  const [labels, aliases] = await Promise.all([listLabels(), listLabelAliasCandidates()]);
+  const [undecided, enabled, disabled, aliases] = await Promise.all([
+    listLabelsPage("undecided", 1),
+    listLabelsPage("enabled", 1),
+    listLabelsPage("disabled", 1),
+    listLabelAliasCandidates(),
+  ]);
 
-  return { aliases, labels };
+  return { aliases, disabled, enabled, undecided };
 });
+
+// One numbered page of a single section — the queryFn behind each section's infinite scroll and
+// the refetch a ruling invalidation fires. Re-checks the admin grant (the page guard only protects
+// the render, never the server function behind it).
+const fetchSection = createServerFn({ method: "GET" })
+  .validator((data: { page: number; seedState: LabelSeedState }) => data)
+  .handler(async ({ data }): Promise<LabelsAdminPage> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return listLabelsPage(data.seedState, data.page);
+  });
+
+// The alias candidates — bounded already (a handful per crawl), so one read, focus-refetched.
+const fetchAliases = createServerFn({ method: "GET" }).handler(
+  async (): Promise<LabelAliasCandidate[]> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return listLabelAliasCandidates();
+  },
+);
 
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/labels")({
@@ -76,30 +150,20 @@ export const Route = createFileRoute("/admin/labels")({
 });
 
 function AdminLabelsPage() {
-  const initial = Route.useLoaderData();
-  const { data } = useQuery({
-    initialData: initial,
-    queryFn: () => fetchBoard(),
-    queryKey: LABELS_KEY,
-    refetchOnWindowFocus: true,
-  });
-  const { aliases, labels } = data;
+  const board = Route.useLoaderData();
 
-  const board = useMemo(
-    () => ({
-      disabled: labels.filter((label) => label.seedState === "disabled"),
-      enabled: labels.filter((label) => label.seedState === "enabled"),
-      undecided: labels.filter((label) => label.seedState === "undecided"),
-    }),
-    [labels],
-  );
+  // The backlog size the operator steers by — the undecided TOTAL (the whole waiting set), not
+  // the count of rows loaded so far. Read off the seed page's `count(*) over ()`.
+  const waiting = board.undecided.total;
+  const hasAnyLabels =
+    board.undecided.total + board.enabled.total + board.disabled.total > 0 ||
+    board.aliases.length > 0;
 
-  const subtitle =
-    labels.length === 0
-      ? "No labels yet"
-      : board.undecided.length === 0
-        ? "Every label ruled"
-        : `${board.undecided.length} waiting on a ruling`;
+  const subtitle = !hasAnyLabels
+    ? "No labels yet"
+    : waiting === 0
+      ? "Every label ruled"
+      : `${waiting} waiting on a ruling`;
 
   return (
     <AdminShell subtitle={subtitle} title="Labels">
@@ -111,57 +175,114 @@ function AdminLabelsPage() {
           findings on a label stay exactly where they are, whichever way you rule.
         </p>
 
-        {labels.length === 0 ? (
+        {!hasAnyLabels ? (
           <EmptyLabels />
         ) : (
           <>
-            {board.undecided.length > 0 ? (
-              <Section
-                intro="A finding landed on these and nobody has ruled on them yet. Say whether the next crawl can dig from them."
-                title={`Waiting on a ruling · ${board.undecided.length}`}
-              >
-                {board.undecided.map((label) => (
-                  <LabelRow key={label.id} label={label} />
-                ))}
-              </Section>
-            ) : null}
+            {SECTIONS.map((section) => (
+              <LabelSection
+                initialPage={board[section.seedState]}
+                intro={section.intro}
+                key={section.seedState}
+                seedState={section.seedState}
+                title={section.title}
+              />
+            ))}
 
-            {board.enabled.length > 0 ? (
-              <Section
-                intro="The next crawl digs from these."
-                title={`Seeding from · ${board.enabled.length}`}
-              >
-                {board.enabled.map((label) => (
-                  <LabelRow key={label.id} label={label} />
-                ))}
-              </Section>
-            ) : null}
-
-            {board.disabled.length > 0 ? (
-              <Section
-                intro="The next crawl skips these. Their findings are untouched."
-                title={`Not seeding · ${board.disabled.length}`}
-              >
-                {board.disabled.map((label) => (
-                  <LabelRow key={label.id} label={label} />
-                ))}
-              </Section>
-            ) : null}
-
-            {aliases.length > 0 ? (
-              <Section
-                intro="Apple spells a label differently than the archive does. Where MusicBrainz agrees it's the same one, fold the spelling in so both point at one label."
-                title={`Spellings to confirm · ${aliases.length}`}
-              >
-                {aliases.map((alias) => (
-                  <AliasRow alias={alias} key={alias.id} />
-                ))}
-              </Section>
-            ) : null}
+            <AliasSection initialAliases={board.aliases} />
           </>
         )}
       </div>
     </AdminShell>
+  );
+}
+
+// One seed-state section, hydrating its own infinite query from the loader's page 1 and paging the
+// rest in on demand. Empty sections render nothing (no heading over zero rows). The title leads with
+// the section TOTAL so the backlog reads true even before the operator scrolls the rows in.
+function LabelSection({
+  initialPage,
+  intro,
+  seedState,
+  title,
+}: {
+  initialPage: LabelsAdminPage;
+  intro: string;
+  seedState: LabelSeedState;
+  title: string;
+}) {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    getNextPageParam: (lastPage) =>
+      lastPage.page < lastPage.pageCount ? lastPage.page + 1 : undefined,
+    initialData: { pageParams: [1], pages: [initialPage] },
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) => fetchSection({ data: { page: pageParam, seedState } }),
+    queryKey: sectionKey(seedState),
+    refetchOnWindowFocus: true,
+    // A short-lived seed matches the pace a crawl mints labels; without it every focus
+    // re-fetched every loaded page of every section on tab-back.
+    staleTime: 20_000,
+  });
+
+  const labels = data.pages.flatMap((page) => page.items);
+  const total = data.pages.at(-1)?.total ?? initialPage.total;
+
+  if (total === 0) {
+    return null;
+  }
+
+  return (
+    <Section intro={intro} title={`${title} · ${total}`}>
+      <ObjectList>
+        {labels.map((label) => (
+          <LabelRow key={label.id} label={label} />
+        ))}
+      </ObjectList>
+      {hasNextPage ? (
+        <div className="pt-1 text-center">
+          <Button
+            disabled={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            size="sm"
+            variant="outline"
+          >
+            {isFetchingNextPage ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </Button>
+        </div>
+      ) : undefined}
+    </Section>
+  );
+}
+
+// The alias-review section — bounded (a handful of open candidates), so a plain focus-refetched
+// query, seeded from the loader. Renders nothing when there is nothing to confirm.
+function AliasSection({ initialAliases }: { initialAliases: LabelAliasCandidate[] }) {
+  const { data: aliases } = useQuery({
+    initialData: initialAliases,
+    queryFn: () => fetchAliases(),
+    queryKey: ALIASES_KEY,
+    refetchOnWindowFocus: true,
+    staleTime: 20_000,
+  });
+
+  if (aliases.length === 0) {
+    return null;
+  }
+
+  return (
+    <Section
+      intro="Apple spells a label differently than the archive does. Where MusicBrainz agrees it's the same one, fold the spelling in so both point at one label."
+      title={`Spellings to confirm · ${aliases.length}`}
+    >
+      <ObjectList>
+        {aliases.map((alias) => (
+          <AliasRow alias={alias} key={alias.id} />
+        ))}
+      </ObjectList>
+    </Section>
   );
 }
 
@@ -198,7 +319,7 @@ function Section({
         <h2 className="text-sm font-bold">{title}</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">{intro}</p>
       </div>
-      <ObjectList>{children}</ObjectList>
+      {children}
     </section>
   );
 }
@@ -213,6 +334,8 @@ function LabelRow({ label }: { label: LabelAdminItem }) {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: () => {
       setError(undefined);
+      // A ruling can move a label between sections, so invalidate the WHOLE board (the section
+      // it left and the one it joined both refresh, and every count re-settles).
       void queryClient.invalidateQueries({ queryKey: LABELS_KEY });
     },
   });
@@ -362,6 +485,8 @@ function AliasRow({ alias }: { alias: LabelAliasCandidate }) {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: () => {
       setError(undefined);
+      // A confirmed alias folds a spelling into its label, which can change that label's counts,
+      // so refresh the whole board alongside the alias list.
       void queryClient.invalidateQueries({ queryKey: LABELS_KEY });
     },
   });

@@ -176,19 +176,24 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
   });
 
   it("does not inflate a label's finding count", async () => {
-    const { listLabels } = await import("./labels");
+    const { listLabelsPage } = await import("./labels");
 
-    // Both tracks carry the SAME label — only the certified one may count.
+    // Both tracks carry the SAME label — only the certified one may count. In production every
+    // finding's track carries the indexed `label_id` edge the admin count reads by (stamped by
+    // the publish link + the deploy backfill); stamp it here so the count reads that edge, not the
+    // raw string. The uncertified catalogue track is linked too — HUB_CERTIFIED still excludes it
+    // (no `log_id`), which is exactly the guarantee under test.
     await db.execute("update tracks set label = 'Hospital Records'");
     await db.execute({
       args: [NOW, NOW],
       sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
             values ('l1', 'Hospital Records', 'hospital-records', 'undecided', ?, ?)`,
     });
+    await db.execute("update tracks set label_id = 'l1'");
 
-    const labels = await listLabels();
+    const page = await listLabelsPage("undecided", 1);
 
-    expect(labels.find((label) => label.slug === "hospital-records")?.findingCount).toBe(1);
+    expect(page.items.find((label) => label.slug === "hospital-records")?.findingCount).toBe(1);
   });
 
   it("a certification can be REVOKED by deleting its findings row — the track survives", async () => {

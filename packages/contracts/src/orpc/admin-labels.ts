@@ -3,11 +3,12 @@
 // pattern (an agent-allowed full read + an operator-tier editorial write):
 //
 //   - `list_labels_admin` — admin tier (agent-allowed read): every label with its
-//     seed state and finding count, optionally scoped to one state. `?seedState=enabled`
-//     IS the crawler's seed-set read: this is where the catalogue crawler asks what
-//     it may seed from, with its agent token. Named `_admin` (the
-//     `list_galaxies_admin` precedent) so the public `list_labels` / `get_label` names
-//     stay free for the public `/label/<slug>` surface.
+//     seed state, optionally scoped to one state. `?seedState=enabled` IS the crawler's
+//     seed-set read: this is where the catalogue crawler asks what it may seed from, with
+//     its agent token. It is COUNTLESS — `findingCount` rides out as 0 (the crawler never
+//     reads it); the operator's per-page counts live on the `/admin/labels` station. Named
+//     `_admin` (the `list_galaxies_admin` precedent) so the public `list_labels` /
+//     `get_label` names stay free for the public `/label/<slug>` surface.
 //   - `update_label` — OPERATOR tier: the ruling. Ruling on a label is an editorial act
 //     that steers what Fluncle crawls next, so an agent token 403s at `operatorGuard`
 //     (the `update_galaxy` precedent).
@@ -37,10 +38,12 @@ export const LabelSeedStateSchema = z
 
 /**
  * One label in the admin shape. `slug` is the identity + the join key back to the raw
- * `tracks.label` string (`slugify(tracks.label) = labels.slug`); `findingCount` is
- * DERIVED, never stored. `ruledAt` is the operator's stamp — null means no human has
- * ruled this label yet (a machine default or the one-time bootstrap). `logoImageUrl` is the
- * label's OWN logo (its resolved Discogs/Wikidata image on R2), absent when it has none yet.
+ * `tracks.label` string (`slugify(tracks.label) = labels.slug`); `findingCount` is DERIVED,
+ * never stored — computed per-page over the indexed `tracks.label_id` edge by the
+ * `/admin/labels` station's read, and 0 on the countless `list_labels_admin` seed read.
+ * `ruledAt` is the operator's stamp — null means no human has ruled this label yet (a machine
+ * default or the one-time bootstrap). `logoImageUrl` is the label's OWN logo (its resolved
+ * Discogs/Wikidata image on R2), absent when it has none yet.
  */
 export const LabelAdminItemSchema = z
   .object({
@@ -60,17 +63,18 @@ export const LabelAdminItemSchema = z
  * `list_labels_admin` → `GET /admin/labels` (operationId `listLabelsAdmin`).
  *
  * Admin tier (agent-allowed read, the `list_galaxies_admin` precedent). Every label
- * Fluncle's archive knows, with its crawl-seed state and its finding count. The optional
- * `seedState` filter is the clean exposure of the seed set: the catalogue crawler
- * reads `?seedState=enabled` with its agent token and gets exactly the labels it may seed
- * from. `{ ok, labels }`.
+ * Fluncle's archive knows, with its crawl-seed state. The optional `seedState` filter is the
+ * clean exposure of the seed set: the catalogue crawler reads `?seedState=enabled` with its
+ * agent token and gets exactly the labels it may seed from. COUNTLESS by design — `findingCount`
+ * is 0 here (the seed read never needs it); the `/admin/labels` station computes counts per
+ * page over the indexed `label_id` edge. `{ ok, labels }`.
  */
 export const listLabelsAdmin = oc
   .route({
     method: "GET",
     operationId: "listLabelsAdmin",
     path: "/admin/labels",
-    summary: "Every label with its crawl-seed state and finding count (the seed-set read)",
+    summary: "Every label with its crawl-seed state (the countless seed-set read)",
     tags: ["Admin"],
   })
   .input(z.object({ seedState: LabelSeedStateSchema.optional() }))
