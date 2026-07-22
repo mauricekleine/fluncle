@@ -52,7 +52,12 @@ Plus `PYTHON_BIN` → the muq venv's `python3` (its exact path is in the private
 
 **The R2 trap that costs ~40 minutes if you miss it:** the source-audio creds live in the source-audio R2 item's **custom section fields** (`account_id` / `access_key_id` / `secret_access_key`) — the item's template fields (`username` / `credential`) are **empty decoys**, and `op item get | head` truncates the list right before the real ones. And the generic `R2_ACCESS_KEY_ID` from `.dev.vars` is the **public** bucket — it 403s the private source-audio bucket, which shows up as `downloadFailed` = the whole batch and a `queue_blocked` stop. Use the source-audio-specific creds, from the custom fields.
 
-`op` is biometric on the operator's machine, so **only the operator can source these** — an agent cannot unlock them. That makes the launch itself an operator step on both targets.
+**An AI agent CAN run this end-to-end — this is the whole point of the skill.** `op` authenticates through the 1Password desktop-app integration, so an agent just runs the real `op read '<ref>'` **directly** (with the sandbox OFF, so `op` reaches the app socket) — the command surfaces the biometric prompt on the operator's machine, they approve **once**, and it proceeds (the session is cached for a few minutes, so the follow-up reads don't re-prompt). Two hard rules that waste turns every time they're forgotten:
+
+- **NEVER run `op signin` or `op whoami` first.** In a non-TTY agent shell they _always_ report "account is not signed in" — they do NOT reflect whether `op read` will work, and it will. Skip the check; run the real read.
+- **Source the token env file with `set -a`** (`set -a; source ~/l/.env.production; set +a`) — a plain `source` sets `FLUNCLE_API_TOKEN` as a shell var but does NOT export it, so the `bun` child process can't see it and the run aborts `missing_api_token`. (The R2 vars are `export`ed explicitly below, so they're fine either way.)
+
+The one thing genuinely reserved for the operator is the single fingerprint approval on that first `op read`. Everything else — sizing, the reads, the dry-run gate, the launch, the verification, the re-rank — the agent does.
 
 ---
 
@@ -60,26 +65,27 @@ Plus `PYTHON_BIN` → the muq venv's `python3` (its exact path is in the private
 
 Free, unmetered, ~900 tracks a night on the M5's CPU. The right default for a backlog of a couple thousand or less. Because it's not billed, over-provision `--minutes` — the run stops on its own when the queue is dry.
 
-Paste into a **Terminal** (op will prompt a fingerprint on the `op read`s), from the repo root:
+Run this directly (agent or operator, **sandbox OFF** so `op` reaches the app socket), from the repo root. The three `op read`s trigger one biometric prompt the operator approves:
 
 ```bash
-source ~/l/.env.production                                     # FLUNCLE_API_TOKEN + FLUNCLE_API_BASE_URL
+set -a; source ~/l/.env.production; set +a                    # EXPORTS FLUNCLE_API_TOKEN + FLUNCLE_API_BASE_URL
 export PYTHON_BIN=<muq venv python — see the private runbook>
 export R2_ACCOUNT_ID="$(op read 'op://<vault>/<source-audio R2 item>/account_id')"
 export FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID="$(op read 'op://<vault>/<source-audio R2 item>/access_key_id')"
 export FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY="$(op read 'op://<vault>/<source-audio R2 item>/secret_access_key')"
 
-# 1) dry-run — confirms the creds resolved. Prints queued ~N, NOT {"reason":"missing_r2_credentials"}:
+# 1) dry-run GATE — confirms creds resolved (queued ~N, NOT missing_r2_credentials / missing_api_token):
 bun docs/agents/hermes/scripts/embed-batch.ts --minutes 600 --dry-run
 
-# 2) launch — caffeinate keeps the Mac awake, nohup survives closing the Terminal:
-caffeinate -is nohup bun docs/agents/hermes/scripts/embed-batch.ts --minutes 600 > ~/embed-overnight.log 2>&1 &
-echo "launched PID $! — tail -f ~/embed-overnight.log"
+# 2) launch DETACHED so it outlives this shell / the agent session and runs all night:
+nohup bun docs/agents/hermes/scripts/embed-batch.ts --minutes 600 </dev/null >~/embed-overnight.log 2>&1 &
+disown; echo "$!" > ~/embed-overnight.pid
+echo "launched PID $(cat ~/embed-overnight.pid)"
 ```
 
-**Confirm it's really working** (within ~2 min): `tail -f ~/embed-overnight.log` should show `[embed-track] …: embedded` lines. If you see `missing_r2_credentials` an `op read` came back empty; if `downloadFailed` climbs you hit the wrong (public) bucket.
+**Confirm it's really working** (within ~1–2 min, after the model loads): `grep -c ': embedded' ~/embed-overnight.log` should climb past 0. `missing_r2_credentials` = an `op read` came back empty; `downloadFailed` climbing = the wrong (public) bucket; `missing_api_token` = you dropped the `set -a`.
 
-Keep it **plugged in with the lid open** — `caffeinate -is` blocks idle + system sleep on AC, but a closed lid can still clamshell-sleep. It's fully resumable, so a sleep or reboot mid-run just picks up where it left off next launch.
+The **Mac must stay awake** for the night — make sure a `caffeinate` is running (the operator may already have one; if not, prepend `caffeinate -is` to the launch). Plugged in, lid open. Fully resumable, so a sleep or reboot mid-run just picks up where it left off next launch. To drive the re-rank automatically when the run finishes (below), chain a detached watcher that polls `~/embed-overnight.pid` and, on exit, loops `rank_catalogue` — so the whole night is hands-off.
 
 ---
 
