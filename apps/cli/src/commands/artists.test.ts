@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
+import * as realApi from "../api";
+
 // The `artists` command is a thin HTTP client over `list_artists` / `get_artist`.
 // The mock keys off the request path: the by-slug detail path returns one artist,
 // the list path returns the paginated envelope. Assertions ride on how each cut
@@ -9,6 +11,7 @@ let apiResponse: unknown = {};
 let lastPath = "";
 
 await mock.module("../api", () => ({
+  ...realApi,
   publicApiGet: async (path: string) => {
     lastPath = path;
     return apiResponse;

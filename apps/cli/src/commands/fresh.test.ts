@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
+import * as realApi from "../api";
+
 // The `fresh` command is a thin HTTP client: it GETs the flat `/tracks/fresh` payload
 // (already carrying both `tracks` and `albums`) and CUTS it by `--view`. So the mock
 // serves one fixed payload and the assertions ride on how each view shapes the output —
@@ -7,6 +9,7 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 let apiResponse: unknown = { albums: [], tracks: [], windowDays: 30 };
 
 await mock.module("../api", () => ({
+  ...realApi,
   publicApiGet: async () => apiResponse,
 }));
 

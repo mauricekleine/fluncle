@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
+import * as realApi from "../api";
+
 // The `search` command is a thin HTTP client over `search_archive`. The mock
 // serves one envelope; assertions ride on how the output shapes it — a jump
 // line, entity links, and the coordinate-led / `—`-fallback track table (the
@@ -8,6 +10,7 @@ let apiResponse: unknown = { entities: [], ok: true, results: [] };
 let lastPath = "";
 
 await mock.module("../api", () => ({
+  ...realApi,
   publicApiGet: async (path: string) => {
     lastPath = path;
     return apiResponse;
