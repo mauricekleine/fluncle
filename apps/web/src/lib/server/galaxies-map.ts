@@ -20,7 +20,12 @@ import {
 import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRow, typedRows } from "./db";
 import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
-import { getFindingsByGalaxyRanked, toPublicTrackListItem } from "./tracks";
+import {
+  type BoardTrackListItem,
+  getFindingsByGalaxyRanked,
+  getGalaxyAuditionMembers,
+  toPublicTrackListItem,
+} from "./tracks";
 
 // A row from the `galaxies` table (snake_case columns).
 type GalaxyRow = {
@@ -44,9 +49,11 @@ export class GalaxyNotFoundError extends Error {}
  * AUDITION them (via `/api/preview`) before naming the cluster. `members` are ranked
  * by centroid-distance ascending (the core of the galaxy first), the same order the
  * public `get_galaxy` uses; `memberCount` on the admin row stays the true (uncapped)
- * total.
+ * total. `members` ride the LEAN board projection (`getGalaxyAuditionMembers`): the
+ * naming audition renders only a cover + title/artists + Log ID, so a member never
+ * carries the graph/discovery fields (compile-enforced by `BoardTrackListItem`).
  */
-export type GalaxyAdminWithMembers = GalaxyAdminItem & { members: TrackListItem[] };
+export type GalaxyAdminWithMembers = GalaxyAdminItem & { members: BoardTrackListItem[] };
 
 const GALAXY_COLUMNS =
   "id, handle, name, slug, centroid_json, retired_at, split_requested_at, created_at, updated_at";
@@ -132,12 +139,13 @@ export async function listGalaxiesAdminWithMembers(
   const galaxies = await listGalaxiesAdmin();
 
   // One ranked read per galaxy (k is ~9, so a bounded fan-out, not an N+1 concern):
-  // core-first, capped, from the offset-0 head. A retired galaxy has no members, so
+  // core-first, capped, from the offset-0 head, hydrated LEAN (the audition shows a cover +
+  // identity, never the fat read's graph/JSON columns). A retired galaxy has no members, so
   // its ranked read is a cheap empty.
   return Promise.all(
     galaxies.map(async (galaxy) => ({
       ...galaxy,
-      members: await getFindingsByGalaxyRanked(galaxy.id, galaxy.centroid, memberCap, 0),
+      members: await getGalaxyAuditionMembers(galaxy.id, galaxy.centroid, memberCap, 0),
     })),
   );
 }
