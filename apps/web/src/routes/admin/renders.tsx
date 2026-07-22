@@ -5,7 +5,6 @@ import {
   DotsThreeVerticalIcon,
   FilmReelIcon,
 } from "@phosphor-icons/react";
-import { type TrackListItem } from "@fluncle/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -35,7 +34,11 @@ import {
 import { Empty } from "@fluncle/ui/components/empty";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type ServiceHealthStatus, getServiceStatuses } from "@/lib/server/status";
-import { listRecentlyRenderedFindings, listTracks } from "@/lib/server/tracks";
+import {
+  type BoardTrackListItem,
+  listRecentlyRenderedFindings,
+  listTracks,
+} from "@/lib/server/tracks";
 
 // The admin Renders view (docs/admin-shell.md) — the web control plane for the
 // video render pipeline that was otherwise CLI/box-only. Three surfaces, top to
@@ -58,6 +61,9 @@ const QUEUE_LIMIT = 60;
 const SHIPPED_LIMIT = 24;
 
 const RENDERS_KEY = ["admin", "renders"] as const;
+// Treat the renders board as fresh for this long, so rapid tab-switching doesn't re-run
+// the whole board read (queue + shipped + box status) on every focus — only once it ages.
+const RENDERS_STALE_MS = 20_000;
 // The sidebar's render-backlog badge reads this key; invalidate it after a requeue so
 // the count re-reads honest without a reload.
 const NAV_COUNTS_KEY = ["admin", "nav", "counts"] as const;
@@ -77,9 +83,12 @@ type RendersData = {
   // The loader's fixed reference instant, so a server-rendered "waiting 3h" matches
   // hydration exactly (no client clock drift) and re-reads live on every refetch.
   now: string;
-  queue: TrackListItem[];
-  queueTotal: number;
-  shipped: TrackListItem[];
+  queue: BoardTrackListItem[];
+  // Whether the queue runs past what we fetched (`QUEUE_LIMIT`) — drives the "N+" count.
+  // We skip the exact `count(*)` (a second full scan of the join) and read the overflow off
+  // the list query's own limit+1 over-fetch instead; the head-of-queue is what matters here.
+  queueMore: boolean;
+  shipped: BoardTrackListItem[];
 };
 
 const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
@@ -95,8 +104,17 @@ const fetchRenders = createServerFn({ method: "GET" }).handler(async (): Promise
 
   const [queuePage, shipped, services] = await Promise.all([
     // The box's canonical render queue read (fluncle admin tracks queue): context'd
-    // findings still needing a video, oldest-first — the next to film is the head.
-    listTracks({ hasContext: true, hasVideo: false, limit: QUEUE_LIMIT, order: "asc" }),
+    // findings still needing a video, oldest-first — the next to film is the head. BOARD
+    // projection (no graph subqueries) and no count(*) — the queue rows show identity only,
+    // and the header count reads the overflow off `nextCursor`, not a full count.
+    listTracks({
+      board: true,
+      countTotal: false,
+      hasContext: true,
+      hasVideo: false,
+      limit: QUEUE_LIMIT,
+      order: "asc",
+    }),
     listRecentlyRenderedFindings(SHIPPED_LIMIT),
     getServiceStatuses(),
   ]);
@@ -113,7 +131,7 @@ const fetchRenders = createServerFn({ method: "GET" }).handler(async (): Promise
     box: { conductor: pick("cron.render"), renderBox: pick("render-box") },
     now: new Date().toISOString(),
     queue: queuePage.tracks,
-    queueTotal: queuePage.totalCount,
+    queueMore: Boolean(queuePage.nextCursor),
     shipped,
   };
 });
@@ -124,7 +142,7 @@ export const Route = createFileRoute("/admin/renders")({
   loader: async () => ({ renders: await fetchRenders() }),
 });
 
-type ConfirmTarget = { kind: "purge" | "requeue"; track: TrackListItem };
+type ConfirmTarget = { kind: "purge" | "requeue"; track: BoardTrackListItem };
 
 function RendersPage() {
   const { renders: initial } = Route.useLoaderData();
@@ -135,9 +153,10 @@ function RendersPage() {
     queryFn: () => fetchRenders(),
     queryKey: RENDERS_KEY,
     refetchOnWindowFocus: true,
+    staleTime: RENDERS_STALE_MS,
   });
 
-  const [watch, setWatch] = useState<TrackListItem | undefined>();
+  const [watch, setWatch] = useState<BoardTrackListItem | undefined>();
   const [confirm, setConfirm] = useState<ConfirmTarget | undefined>();
   const [notice, setNotice] = useAutoNotice();
   const [error, setError] = useAutoNotice();
@@ -150,7 +169,7 @@ function RendersPage() {
   };
 
   const requeue = useMutation({
-    mutationFn: (track: TrackListItem) => postVideoAction(track.trackId, "requeue"),
+    mutationFn: (track: BoardTrackListItem) => postVideoAction(track.trackId, "requeue"),
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSettled: () => setConfirm(undefined),
     onSuccess: async () => {
@@ -160,7 +179,7 @@ function RendersPage() {
   });
 
   const purge = useMutation({
-    mutationFn: (track: TrackListItem) => postVideoAction(track.trackId, "purge"),
+    mutationFn: (track: BoardTrackListItem) => postVideoAction(track.trackId, "purge"),
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSettled: () => setConfirm(undefined),
     onSuccess: async () => {
@@ -183,7 +202,7 @@ function RendersPage() {
     }
   };
 
-  const subtitle = `${data.queueTotal} awaiting · ${data.shipped.length} recent`;
+  const subtitle = `${data.queue.length}${data.queueMore ? "+" : ""} awaiting · ${data.shipped.length} recent`;
 
   return (
     <AdminShell subtitle={subtitle} title="Renders">
@@ -201,7 +220,7 @@ function RendersPage() {
           </p>
         ) : null}
 
-        <QueueSection now={data.now} queue={data.queue} total={data.queueTotal} />
+        <QueueSection more={data.queueMore} now={data.now} queue={data.queue} />
 
         <ShippedSection
           now={data.now}
@@ -352,17 +371,17 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus | null }) {
 // to act on yet); the head-of-queue is marked "Next up" (the one gold accent). The
 // context gate that admitted every row is shown as an honest chip.
 function QueueSection({
+  more,
   now,
   queue,
-  total,
 }: {
+  more: boolean;
   now: string;
-  queue: TrackListItem[];
-  total: number;
+  queue: BoardTrackListItem[];
 }) {
   return (
     <section aria-label="Render queue">
-      <SectionHeading count={total} label="Awaiting a video" />
+      <SectionHeading count={queue.length} label="Awaiting a video" more={more} />
       {queue.length === 0 ? (
         <EmptyRow>Queue’s clear. Nothing’s waiting on the box.</EmptyRow>
       ) : (
@@ -410,10 +429,10 @@ function ShippedSection({
   shipped,
 }: {
   now: string;
-  onPurge: (track: TrackListItem) => void;
-  onRequeue: (track: TrackListItem) => void;
-  onWatch: (track: TrackListItem) => void;
-  shipped: TrackListItem[];
+  onPurge: (track: BoardTrackListItem) => void;
+  onRequeue: (track: BoardTrackListItem) => void;
+  onWatch: (track: BoardTrackListItem) => void;
+  shipped: BoardTrackListItem[];
 }) {
   return (
     <section aria-label="Recently shipped renders">
@@ -456,7 +475,7 @@ function ShippedSection({
 
 // The diversity ledger the next video agent reads to diversify away from — vehicle,
 // grain, register — as a quiet middle-dot line (absent parts drop out).
-function Ledger({ track }: { track: TrackListItem }) {
+function Ledger({ track }: { track: BoardTrackListItem }) {
   const parts = [track.videoVehicle, track.videoGrain, track.videoRegister].filter(
     (part): part is string => Boolean(part?.trim()),
   );
@@ -477,8 +496,8 @@ function RenderRow({
   track,
   trailing,
 }: {
-  onWatch?: (track: TrackListItem) => void;
-  track: TrackListItem;
+  onWatch?: (track: BoardTrackListItem) => void;
+  track: BoardTrackListItem;
   trailing?: ReactNode;
 }) {
   return (
@@ -606,12 +625,24 @@ function ConfirmDialog({
   );
 }
 
-function SectionHeading({ count, label }: { count: number; label: string }) {
+function SectionHeading({
+  count,
+  label,
+  more = false,
+}: {
+  count: number;
+  label: string;
+  /** The count is a floor (there are more past what we fetched) — render it as "N+". */
+  more?: boolean;
+}) {
   return (
     <div className="mb-2.5 flex items-center gap-2">
       <FilmReelIcon aria-hidden="true" className="size-4 text-muted-foreground" />
       <h2 className="text-sm font-semibold">{label}</h2>
-      <span className="text-xs text-muted-foreground tabular-nums">({count})</span>
+      <span className="text-xs text-muted-foreground tabular-nums">
+        ({count}
+        {more ? "+" : ""})
+      </span>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { useCallback, useState } from "react";
 import { type MixtapeMembership } from "@/lib/server/mixtapes";
 import { type PlanMembership } from "@/lib/server/recordings";
 import { type SocialPostItem } from "@/lib/server/social";
-import { type TrackListItem } from "@/lib/server/tracks";
+import { type BoardTrackListItem } from "@/lib/server/tracks";
 
 // The publish engine for the admin board (`/admin`). It reads the
 // `social_posts`-joined infinite query and pushes/records posts through the same
@@ -11,8 +11,10 @@ import { type TrackListItem } from "@/lib/server/tracks";
 // here. The board passes its react-query key; the hook patches that cache in place
 // after each mutation and the next window-focus refetch reconciles with the server.
 
-/** A page row: a finding plus its per-platform posts and mixtape memberships. */
-export type BoardRow = TrackListItem & {
+/** A page row: a finding (in the lean BOARD projection — the graph/discovery subquery
+ * fields the board never renders are dropped, so reaching for one is a compile error)
+ * plus its per-platform posts and mixtape memberships. */
+export type BoardRow = BoardTrackListItem & {
   // Whether the Discogs backfill has RUN for this finding — the presence of
   // `backfill_discogs_attempted_at`, stamped on every real attempt (a resolve OR a
   // clean no-match). The board's Discogs cell is a WORKFLOW tracker: `done` once it

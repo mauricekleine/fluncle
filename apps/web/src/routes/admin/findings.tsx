@@ -38,14 +38,13 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@fluncle/ui/co
 import { Label } from "@fluncle/ui/components/label";
 import { Switch } from "@fluncle/ui/components/switch";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { listBackfillRanForTracks, listLastfmLovedForTracks } from "@/lib/server/backfill";
 import { readCaptions } from "@/lib/server/captions";
 import { captionForPlatform } from "@/lib/server/mentions";
 import { listMixtapeMembershipsForTracks } from "@/lib/server/mixtapes";
 import {
   getContextNote,
   getObservationScript,
-  listContextNotePresenceForTracks,
+  listFindingBoardFlagsForTracks,
 } from "@/lib/server/observation-board";
 import {
   getRecordingCues,
@@ -60,6 +59,7 @@ import { type BlockedOn, trackStage } from "@/lib/server/track-stage";
 import {
   decodeTrackCursor,
   getTrackByIdOrLogId,
+  hasTrackFeatures,
   listEmbeddingPresenceForTracks,
   listTracks,
 } from "@/lib/server/tracks";
@@ -85,6 +85,17 @@ import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
 
+// Cap the infinite query's retained pages. On window focus react-query REFETCHES every
+// retained page (one request per page); without a cap a deep scroll accumulates unbounded
+// refetch cost on each tab-back. Five pages (250 findings) is a generous working window —
+// older pages drop from the cache and re-fetch on scroll-back. The board's pill counts +
+// staged derivations already read only the LOADED rows, so a bounded window doesn't change
+// their meaning (it was always "loaded rows", just now bounded).
+const BOARD_MAX_PAGES = 5;
+// Treat the board data as fresh for this long, so rapid tab-switching doesn't re-fire the
+// focus refetch every time — it only re-reads once the data has aged past this.
+const BOARD_STALE_MS = 20_000;
+
 // The board's react-query cache key. Optimistic publish patches + window-focus
 // refetch land on this one entry.
 const BOARD_KEY = ["admin", "posts", "board"] as const;
@@ -100,6 +111,8 @@ const PLAN_TARGETS_KEY = ["admin", "plans", "targets"] as const;
 const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
 // The lazily-read observation script (transcript) for the Observation dialog, keyed by trackId.
 const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
+// The lazily-read spectral-features presence for the Enrich dialog, keyed by trackId.
+const ENRICH_FEATURES_KEY = ["admin", "enrich-features"] as const;
 
 // The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
 // terminal bucket. The active one lives in `?stage` so it's deep-linkable and
@@ -165,60 +178,53 @@ const fetchBoard = createServerFn({ method: "GET" })
     }
 
     const page = await listTracks({
+      // The BOARD projection (no graph/discovery subqueries) + no count(*) companion —
+      // the board renders neither a total (its pills count loaded rows) nor a finding's
+      // graph edges, so both are pure waste on this hot read.
+      board: true,
+      countTotal: false,
       cursor: decodeTrackCursor(data.cursor ?? null),
       limit: PAGE_SIZE,
       order: "desc",
     });
     const trackIds = page.tracks.map((track) => track.trackId);
-    // Batch fetches — one query each for the whole page, no N+1: the per-platform
-    // posts, the mixtape + plan memberships (which tapes each finding is already
-    // on, and which plans it's pencilled into), which
-    // findings carry an internal context_note (the Context column status — pulled
-    // admin-only since context_note never rides the public track contract), which
-    // carry a MuQ audio embedding (the Embeddings column status — `embedding_blob`
-    // presence, admin-only for the same reason), and the Discogs/Last.fm backfill
-    // RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp (`backfill_lastfm_done_at`).
-    // The board's Discogs/Last.fm cells are workflow trackers: `done` once the backfill
-    // ran (whether or not it found data), grey only while it's never run — the
-    // ran-stamp drives the cell, the data-stamp (release url / loved) only refines the
-    // label.
-    const [
-      posts,
-      mixtapes,
-      plans,
-      contextNotes,
-      embeddings,
-      discogsRan,
-      lastfmRan,
-      lastfmLoved,
-      noteRan,
-    ] = await Promise.all([
+    // Batch fetches — one query each for the whole page, no N+1: the per-platform posts,
+    // the mixtape + plan memberships (which tapes each finding is already on, and which
+    // plans it's pencilled into), which carry a MuQ audio embedding (the Embeddings column
+    // — `embedding_blob` presence), and — folded into ONE `findings` pass — every board
+    // STATUS FLAG: the internal `context_note` presence (Context cell) plus the Discogs /
+    // Last.fm / Note backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
+    // (`backfill_lastfm_done_at`). All pulled admin-only (none ride the public track
+    // contract). The Discogs/Last.fm/Note cells are workflow trackers: `done` once the
+    // backfill ran, grey only while it's never run — the ran-stamp drives the cell, the
+    // data-stamp (release url / loved) only refines the label.
+    const [posts, mixtapes, plans, embeddings, flags] = await Promise.all([
       listSocialPostsForTracks(trackIds),
       listMixtapeMembershipsForTracks(trackIds),
       listPlanMembershipsForTracks(trackIds),
-      listContextNotePresenceForTracks(trackIds),
       listEmbeddingPresenceForTracks(trackIds),
-      listBackfillRanForTracks(trackIds, "discogs"),
-      listBackfillRanForTracks(trackIds, "lastfm"),
-      listLastfmLovedForTracks(trackIds),
-      listBackfillRanForTracks(trackIds, "note"),
+      listFindingBoardFlagsForTracks(trackIds),
     ]);
 
     return {
       nextCursor: page.nextCursor,
       totalCount: page.totalCount,
-      tracks: page.tracks.map((track) => ({
-        ...track,
-        discogsRan: discogsRan.has(track.trackId),
-        hasContextNote: contextNotes.has(track.trackId),
-        hasEmbedding: embeddings.has(track.trackId),
-        lastfmLoved: lastfmLoved.has(track.trackId),
-        lastfmRan: lastfmRan.has(track.trackId),
-        mixtapes: mixtapes[track.trackId] ?? [],
-        noteRan: noteRan.has(track.trackId),
-        plans: plans[track.trackId] ?? [],
-        posts: posts[track.trackId] ?? [],
-      })),
+      tracks: page.tracks.map((track) => {
+        const trackFlags = flags.get(track.trackId);
+
+        return {
+          ...track,
+          discogsRan: trackFlags?.discogsRan ?? false,
+          hasContextNote: trackFlags?.hasContextNote ?? false,
+          hasEmbedding: embeddings.has(track.trackId),
+          lastfmLoved: trackFlags?.lastfmLoved ?? false,
+          lastfmRan: trackFlags?.lastfmRan ?? false,
+          mixtapes: mixtapes[track.trackId] ?? [],
+          noteRan: trackFlags?.noteRan ?? false,
+          plans: plans[track.trackId] ?? [],
+          posts: posts[track.trackId] ?? [],
+        };
+      }),
     };
   });
 
@@ -244,37 +250,24 @@ const fetchBoardRow = createServerFn({ method: "GET" })
     }
 
     const ids = [track.trackId];
-    const [
-      posts,
-      mixtapes,
-      plans,
-      contextNotes,
-      embeddings,
-      discogsRan,
-      lastfmRan,
-      lastfmLoved,
-      noteRan,
-    ] = await Promise.all([
+    const [posts, mixtapes, plans, embeddings, flags] = await Promise.all([
       listSocialPostsForTracks(ids),
       listMixtapeMembershipsForTracks(ids),
       listPlanMembershipsForTracks(ids),
-      listContextNotePresenceForTracks(ids),
       listEmbeddingPresenceForTracks(ids),
-      listBackfillRanForTracks(ids, "discogs"),
-      listBackfillRanForTracks(ids, "lastfm"),
-      listLastfmLovedForTracks(ids),
-      listBackfillRanForTracks(ids, "note"),
+      listFindingBoardFlagsForTracks(ids),
     ]);
+    const trackFlags = flags.get(track.trackId);
 
     return {
       ...track,
-      discogsRan: discogsRan.has(track.trackId),
-      hasContextNote: contextNotes.has(track.trackId),
+      discogsRan: trackFlags?.discogsRan ?? false,
+      hasContextNote: trackFlags?.hasContextNote ?? false,
       hasEmbedding: embeddings.has(track.trackId),
-      lastfmLoved: lastfmLoved.has(track.trackId),
-      lastfmRan: lastfmRan.has(track.trackId),
+      lastfmLoved: trackFlags?.lastfmLoved ?? false,
+      lastfmRan: trackFlags?.lastfmRan ?? false,
       mixtapes: mixtapes[track.trackId] ?? [],
-      noteRan: noteRan.has(track.trackId),
+      noteRan: trackFlags?.noteRan ?? false,
       plans: plans[track.trackId] ?? [],
       posts: posts[track.trackId] ?? [],
     };
@@ -356,6 +349,21 @@ const fetchObservationScript = createServerFn({ method: "GET" })
     }
 
     return { script: await getObservationScript(data.trackId) };
+  });
+
+// Lazy spectral-features PRESENCE read — only when the operator opens a finding's Enrich
+// dialog, to show "Spectral features captured" vs "Analysis complete". The board projection
+// drops `features` from every row (this dialog is its only reader), so the single OPEN row
+// probes for it here, mirroring the context-note / observation-script lazy reads. Presence
+// only — the feature blob itself never leaves the server.
+const fetchEnrichFeatures = createServerFn({ method: "GET" })
+  .validator((data: { trackId: string }) => data)
+  .handler(async ({ data }): Promise<{ hasFeatures: boolean }> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return { hasFeatures: await hasTrackFeatures(data.trackId) };
   });
 
 // The Spotify connection light. Read-only (no token refresh) and focus-refetched,
@@ -444,8 +452,9 @@ export const Route = createFileRoute("/admin/findings")({
     await ensureAdmin();
   },
   loader: async () => {
-    const board = await fetchBoard({ data: {} });
-    const advance = await fetchPublishAdvance();
+    // Two independent reads — fetch them in parallel so the SSR loader waits on the
+    // slower of the two, not their sum.
+    const [board, advance] = await Promise.all([fetchBoard({ data: {} }), fetchPublishAdvance()]);
     return { advance, board };
   },
   component: AdminBoardPage,
@@ -477,9 +486,11 @@ function AdminBoardPage() {
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     initialData: { pageParams: [undefined], pages: [initial] },
     initialPageParam: undefined as string | undefined,
+    maxPages: BOARD_MAX_PAGES,
     queryFn: ({ pageParam }) => fetchBoard({ data: { cursor: pageParam } }),
     queryKey: BOARD_KEY,
     refetchOnWindowFocus: true,
+    staleTime: BOARD_STALE_MS,
   });
 
   const rows = useMemo(() => data?.pages.flatMap((page) => page.tracks) ?? [], [data]);
@@ -888,6 +899,15 @@ function AdminBoardPage() {
     staleTime: Number.POSITIVE_INFINITY,
   });
 
+  // The Enrich dialog's spectral-features presence — lazily read the first time an Enrich
+  // cell is opened (the board projection no longer carries it), keyed per finding.
+  const { data: enrichFeaturesData } = useQuery({
+    enabled: enrichId !== undefined,
+    queryFn: () => fetchEnrichFeatures({ data: { trackId: enrichId as string } }),
+    queryKey: [...ENRICH_FEATURES_KEY, enrichId],
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
   // The next finding in the current worklist — powers "Save & next" in the Tag and
   // Note dialogs so a batch is one sitting. Undefined at the end of the list, which
   // closes the dialog.
@@ -1157,6 +1177,7 @@ function AdminBoardPage() {
 
       <EnrichDialog
         error={enrichError}
+        hasFeatures={enrichFeaturesData?.hasFeatures ?? false}
         onOpenChange={(open) => !open && setEnrichId(undefined)}
         onTrigger={runEnrichment}
         row={enrichRow ?? null}

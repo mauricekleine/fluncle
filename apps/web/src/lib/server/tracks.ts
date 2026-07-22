@@ -228,6 +228,51 @@ const LEAN_TRACK_SELECT = TRACK_SELECT.split(",")
   .filter((fragment) => !LEAN_LIST_OMITTED_COLUMNS.has(fragment.trim()))
   .join(",");
 
+// ── The BOARD list projection (renders + findings efficiency batch) ──
+//
+// The two admin BOARDS (`/admin/renders`, `/admin/findings`) render a finding's
+// identity + its video/publish ledger, but NEVER its graph edges or discovery
+// placement. So on top of the lean drop (the three heavy columns) the board
+// projection also drops the CORRELATED SUBQUERIES those pages never read — the
+// biggest per-row cost in `TRACK_SELECT` (each fires once per row):
+//   - galaxy (name/slug)      — the browse-by-feel cluster; no board cell shows it.
+//   - albumSlug / labelSlug   — the `/album` + `/label` graph links; boards don't link out.
+//   - artworkMax (template/w/h) — a render-time-only ≥1920 source for the video pipeline.
+//   - youtubeUrl              — the published-YouTube post url; the board reads its posts
+//                               through `listSocialPostsForTracks`, and the clip preview
+//                               (StoriesPlayer→StoryView) links only TikTok, never YouTube.
+// What the boards DO render stays: the album COVER master (`album_image_*` → `albumImageUrl`,
+// the cover on every row) and `tiktokUrl` (the preview's "Watch on TikTok"). Verified against
+// the row components (finding-identity, pipeline board-model, story-view) — a dropped field is
+// a compile error via `BoardTrackListItem`, never a silent blank.
+//
+// Derived from `TRACK_SELECT` (single source of truth): omit the lean columns, then any
+// fragment whose `as <alias>` output is in the board-drop set. No subquery fragment contains
+// a comma, so the `,`-split trims each to one column/subquery cleanly.
+const BOARD_OMITTED_SUBQUERY_ALIASES = new Set([
+  "album_artwork_height",
+  "album_artwork_url_template",
+  "album_artwork_width",
+  "album_slug",
+  "galaxy_name",
+  "galaxy_slug",
+  "label_slug",
+  "youtube_url",
+]);
+const BOARD_TRACK_SELECT = TRACK_SELECT.split(",")
+  .filter((fragment) => {
+    const trimmed = fragment.trim();
+
+    if (LEAN_LIST_OMITTED_COLUMNS.has(trimmed)) {
+      return false;
+    }
+
+    const alias = /\bas\s+([a-z_]+)\s*$/i.exec(trimmed)?.[1];
+
+    return alias === undefined || !BOARD_OMITTED_SUBQUERY_ALIASES.has(alias);
+  })
+  .join(",");
+
 /** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -463,6 +508,45 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
     videoModelReasoning: row.video_model_reasoning ?? undefined,
   };
 }
+
+// The BOARD list DTO (renders + findings efficiency batch): the lean base MINUS the five
+// graph/discovery fields `BOARD_TRACK_SELECT` stops selecting. The two admin boards read
+// through this shape (`BoardRow` extends it), so a board cell that reaches for a dropped
+// field is a COMPILE error rather than a runtime blank. Assignable to `TrackListItem` (all
+// five are optional there), so a board item still flows into `StoriesPlayer`/`TrackListItem[]`.
+export type BoardTrackListItem = Omit<
+  LeanTrackListItem,
+  "albumSlug" | "artworkMaxUrl" | "galaxy" | "labelSlug" | "youtubeUrl"
+>;
+
+/**
+ * The board list DTO mapper. Delegates to the lean mapper — ONE field-mapping source, no
+ * duplication — and narrows the RESULT to the board shape. Under the board projection the
+ * five dropped columns arrive absent (their subqueries were never run), so the lean mapper
+ * fills them `undefined`; the narrower return type then forbids any board consumer from
+ * reading them. Its input is the lean row (a superset of the board row at the type level),
+ * which the list pipeline already types as `TrackRow`.
+ */
+export function toBoardTrackListItem(row: LeanTrackRow): BoardTrackListItem {
+  // Delegate to the lean mapper (ONE field-mapping source), then strip the five
+  // graph/discovery fields so a board item never carries them — even if a future SELECT
+  // change reintroduced a source column. The rest-spread drops them; the destructured
+  // names are the discards.
+  const {
+    albumSlug: _albumSlug,
+    artworkMaxUrl: _artworkMaxUrl,
+    galaxy: _galaxy,
+    labelSlug: _labelSlug,
+    youtubeUrl: _youtubeUrl,
+    ...board
+  } = toLeanTrackListItem(row);
+
+  return board;
+}
+
+// The board-projection page shape — `TrackListPage` with its rows narrowed to the board
+// DTO, so a `board: true` caller gets the compile-time guarantee at the return boundary.
+export type BoardTrackListPage = Omit<TrackListPage, "tracks"> & { tracks: BoardTrackListItem[] };
 
 // Internal admin/agent-only fields stripped from every item bound for a PUBLIC surface.
 //   - `sourceAudioKey` — the R2 key of the CAPTURED copyrighted full song (a content hash)
@@ -951,17 +1035,38 @@ export async function searchTracks(options: {
  * NULLs last under DESC — then by found-order, so the freshest two-master renders
  * always lead.
  */
-export async function listRecentlyRenderedFindings(limit: number): Promise<TrackListItem[]> {
+export async function listRecentlyRenderedFindings(limit: number): Promise<BoardTrackListItem[]> {
   const db = await getDb();
+  // The renders board reads this through the BOARD projection (no graph/discovery
+  // subqueries): each row shows its identity + video ledger, and the "Watch" preview
+  // (StoriesPlayer→StoryView) needs only the cover master + `tiktokUrl`, both kept.
   const result = await db.execute({
     args: [limit],
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+    sql: `select ${BOARD_TRACK_SELECT} from ${FINDINGS_FROM}
           where findings.video_url is not null
           order by findings.video_squared_at desc, findings.added_at desc, tracks.track_id desc
           limit ?`,
   });
 
-  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
+  return typedRows<TrackRow>(result.rows).map(toBoardTrackListItem);
+}
+
+/**
+ * Whether one finding carries stored spectral `features_json` — the Enrich dialog's lazy
+ * presence read. The board projection drops `features` from every row (only this dialog
+ * ever showed its presence), so the single OPEN row fetches it on demand, mirroring the
+ * context-note / observation-script lazy reads. A tiny presence probe, never the blob.
+ */
+export async function hasTrackFeatures(trackId: string): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select 1 as present from tracks
+          where track_id = ? and features_json is not null and trim(features_json) <> ''
+          limit 1`,
+  });
+
+  return result.rows.length > 0;
 }
 
 export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMember[]> {
@@ -2102,6 +2207,15 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
 
 type ListTracksOptions = {
   /**
+   * Read the BOARD list projection (renders + findings efficiency batch) — the lean drop
+   * PLUS the graph/discovery correlated subqueries the two admin boards never render
+   * (`galaxy`, `albumSlug`, `labelSlug`, `artworkMax`, the published-YouTube url). The
+   * album cover master + `tiktokUrl` stay (both boards render them). Set by the two board
+   * fetches; omitted (fat) everywhere else. Additive at the type level: a board item is
+   * still a `TrackListItem` (the five are optional). Wins over `lean` when both are set.
+   */
+  board?: boolean;
+  /**
    * The full-song CAPTURE queue's filter (admin only) — the `fluncle-capture`
    * cron's worklist. `true` = findings still NEEDING a capture: `pending`/NULL always
    * eligible (the NULL arm is defensive — the column is notNull-default, but a pre-column
@@ -2114,6 +2228,14 @@ type ListTracksOptions = {
    * for public reads.
    */
   captureQueue?: boolean;
+  /**
+   * Whether to run the `count(*)` companion query for `totalCount`. Default `true`.
+   * `false` skips it entirely (one fewer full scan of the filtered join per call) for
+   * callers that don't render a total — the findings board (counts derive from loaded
+   * rows) and the renders queue (a `hasMore` "N+" sentinel off the list read's own
+   * over-fetch). When skipped, `totalCount` falls back to the returned row count.
+   */
+  countTotal?: boolean;
   cursor?: TrackCursor;
   /**
    * Context-fetch state (admin only) — the `context_track` queue's filter.
@@ -2283,9 +2405,14 @@ async function attachArtistYoutubeChannelIds(
 export function listTracks(
   options: ListTracksOptions & { includeMixtapes: true },
 ): Promise<FeedListPage>;
+export function listTracks(
+  options: ListTracksOptions & { board: true },
+): Promise<BoardTrackListPage>;
 export function listTracks(options: ListTracksOptions): Promise<TrackListPage>;
 export async function listTracks({
+  board = false,
   captureQueue,
+  countTotal = true,
   cursor,
   hasContext,
   hasEmbedding,
@@ -2301,14 +2428,20 @@ export async function listTracks({
   since,
   status,
   until,
-}: ListTracksOptions): Promise<FeedListPage | TrackListPage> {
+}: ListTracksOptions): Promise<FeedListPage | TrackListPage | BoardTrackListPage> {
   const db = await getDb();
 
-  // The lean list projection (Finding B4): the public list surfaces read a narrower
-  // SELECT (no heavy caption/feature/reasoning columns) and map with the lean mapper.
-  // A lean item is assignable to `TrackListItem`, so the merge/return types are unchanged.
-  const trackSelect = lean ? LEAN_TRACK_SELECT : TRACK_SELECT;
-  const mapRow: (row: TrackRow) => TrackListItem = lean ? toLeanTrackListItem : toTrackListItem;
+  // The list projection grade. LEAN (Finding B4) drops the three heavy caption/feature/
+  // reasoning columns the public surfaces never read; BOARD goes further, also dropping the
+  // graph/discovery correlated subqueries the admin boards never render. Both mappers return
+  // items assignable to `TrackListItem`, so the merge/return types are unchanged; `board`
+  // wins over `lean` when both are set.
+  const trackSelect = board ? BOARD_TRACK_SELECT : lean ? LEAN_TRACK_SELECT : TRACK_SELECT;
+  const mapRow: (row: TrackRow) => TrackListItem = board
+    ? toBoardTrackListItem
+    : lean
+      ? toLeanTrackListItem
+      : toTrackListItem;
 
   // Discovery-window and video filters; totalCount is scoped to the same
   // filters so a windowed caller (the newsletter agent) or the Stories feed
@@ -2444,6 +2577,8 @@ export async function listTracks({
   const cursorArgs = cursor ? [cursor.addedAt, cursor.addedAt, cursor.trackId] : [];
   const args: Array<string | number> = [...filterArgs, ...cursorArgs, limit + 1];
 
+  // The `count(*)` companion is a second full scan of the filtered join; a caller that
+  // never renders a total (the boards) passes `countTotal: false` to skip it entirely.
   const [result, countResult] = await Promise.all([
     db.execute({
       args,
@@ -2453,10 +2588,12 @@ export async function listTracks({
             order by findings.added_at ${dir}, tracks.track_id ${dir}
             limit ?`,
     }),
-    db.execute({
-      args: filterArgs,
-      sql: `select count(*) as total_count from ${FINDINGS_FROM} ${countWhere}`,
-    }),
+    countTotal
+      ? db.execute({
+          args: filterArgs,
+          sql: `select count(*) as total_count from ${FINDINGS_FROM} ${countWhere}`,
+        })
+      : undefined,
   ]);
   const rows = typedRows<TrackRow>(result.rows);
   const feedRows =
@@ -2470,8 +2607,11 @@ export async function listTracks({
           limit,
         )
       : undefined;
-  const countRows = typedRows<TrackCountRow>(countResult.rows);
-  const totalCount = feedFindingsCount(countRows[0]?.total_count, rows.length);
+  // When the count query was skipped (`countTotal: false`), fall back to the returned
+  // row count — the boards don't render the total, and the renders queue reads its "N+"
+  // overflow off `nextCursor` (the list read's own limit+1 over-fetch), not this number.
+  const countRows = countResult ? typedRows<TrackCountRow>(countResult.rows) : undefined;
+  const totalCount = feedFindingsCount(countRows?.[0]?.total_count, rows.length);
 
   if (feedRows) {
     const {
