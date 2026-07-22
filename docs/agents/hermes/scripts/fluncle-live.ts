@@ -261,8 +261,16 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((error) => {
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.log(JSON.stringify({ ok: false, reason: "poller_error" }));
-  process.exit(1);
+// ONE bounded retry before exiting 1: the every-minute poll sees a transient upstream
+// blip a handful of times a day; each used to fire a Discord alert the very next tick
+// self-healed — pure noise. A PERSISTENT failure still exits 1 (and alerts) after the
+// in-tick retry misses too.
+main().catch(async (error) => {
+  log(`poll failed, retrying once: ${error instanceof Error ? error.message : String(error)}`);
+  await new Promise((resolve) => setTimeout(resolve, 5_000));
+  await main().catch((second) => {
+    log(`fatal: ${second instanceof Error ? (second.stack ?? second.message) : String(second)}`);
+    console.log(JSON.stringify({ ok: false, reason: "poller_error" }));
+    process.exit(1);
+  });
 });

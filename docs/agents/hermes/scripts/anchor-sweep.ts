@@ -409,11 +409,21 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 // ── The real (box-side) effects ───────────────────────────────────────────────
 
 async function fetchAnchorQueue(limit: number): Promise<AnchorWorkItem[]> {
-  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${API_TOKEN}` },
-    signal: AbortSignal.timeout(30_000),
-  });
+  // ONE bounded retry: the queue read sees a transient non-OK (a rolling Worker deploy
+  // window) every few hours; without the retry a lone blip exits the tick 1 and fires a
+  // Discord alert the on-failure restart then self-heals — pure noise. A PERSISTENT
+  // failure still throws (and alerts) on the second miss.
+  const attempt = () =>
+    fetch(`${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}`, {
+      headers: { Authorization: `Bearer ${API_TOKEN}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+  let res = await attempt().catch(() => undefined);
+
+  if (!res?.ok) {
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    res = await attempt();
+  }
 
   if (!res.ok) {
     throw new Error(
