@@ -705,7 +705,7 @@ export const TrackWorkItemSchema = z
  * worklist outright: a veto that only sorts last is not a veto, because the queue drains.
  *
  * `count=true` adds `queued` — the size of the WHOLE backlog for this kind+scope, not the page.
- * The page is capped at 200, so `tracks.length` can never answer "how much is left", and at
+ * The page is capped at 250, so `tracks.length` can never answer "how much is left", and at
  * catalogue scale that is the only number the operator actually wants: it is what tells the GPU
  * batch whether to rent another hour. Tolerant string ("true"; anything else is false), and
  * OPT-IN because the 5-minute box sweeps do not need it and should not pay for the count.
@@ -722,7 +722,7 @@ export const listTrackWork = oc
     z.object({
       count: z.string().optional(),
       kind: TrackWorkKindSchema,
-      limit: z.coerce.number().int().min(1).max(200).default(50),
+      limit: z.coerce.number().int().min(1).max(250).default(50),
       scope: TrackWorkScopeSchema.default("all"),
     }),
   )

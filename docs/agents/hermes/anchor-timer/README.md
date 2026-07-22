@@ -24,14 +24,14 @@ Every attempt stamps `spotify_anchor_attempted_at`, a **14-day re-ask backoff** 
 
 **It calls the oRPC HTTP endpoints directly** (the `verify-captures.ts` precedent), never a `fluncle admin …` subcommand — the box's baked CLI is a PINNED release and must not gain a new dependency.
 
-- `FLUNCLE_ANCHOR_BATCH` (default `15`) — rows per tick.
-- `--limit N` — an attended backlog burn (overrides the batch for one run); rows are still chunked into Apify runs of `FLUNCLE_ANCHOR_APIFY_CHUNK` (default 15).
+- `FLUNCLE_ANCHOR_BATCH` (code default `15`; this unit ships **`250`** — the `list_track_work?limit` cap — via `ExecStart`, safe because the free rungs make most rows cost nothing) — rows per tick. `250` is the hard ceiling: the contract validates `limit` at `.max(250)`, so a larger value returns `400 invalid_request`.
+- `--limit N` — an attended backlog burn (overrides the batch for one run, still ≤250); rows are still chunked into Apify runs of `FLUNCLE_ANCHOR_APIFY_CHUNK` (default 15).
 
 ## The cost, and how to control it
 
 Each result item is ~**$0.005**, and at `searchKeywordLimit: 3` a row is ~3 items → ~**$0.015/row**.
 
-- **Default pace:** 15 rows/hour ≈ **360 rows/day** ≈ **$5-6/day** while the backlog drains. Once the backlog is anchored, most ticks are cheap no-ops (a drained worklist) plus the trickle of newly-crawled rows crossing the re-ask window.
+- **Shipped pace:** `250` rows/hour ≈ **6,000 rows/day** while the backlog drains — but the per-row Apify cost only applies to rows the FREE rungs miss, so with slice 2 ON the spend is a fraction of the code-default-15 math below. Once the backlog is anchored, most ticks are cheap no-ops (a drained worklist) plus the trickle of newly-crawled rows crossing the re-ask window; drop the batch back toward 15 for steady-state if you want. (Code-default reference: 15 rows/hour ≈ **360 rows/day** ≈ **$5-6/day** on the Apify-only path.)
 - **The dark Spotify search rungs (slice 2) are the ~75-85% cost cut** — but only when flipped on. With the flag OFF (default) the free rung is ListenBrainz alone and Apify carries every LB miss (the numbers above). With it ON, most LB misses resolve on the free Spotify ISRC/fuzzy search instead, so Apify shrinks to the rows even Spotify search can't place. Read the split off the summary line's `anchoredByListenbrainz` / `anchoredBySpotifyIsrc` / `anchoredBySpotifySearch` / `anchoredByIsrc` / `anchoredBySearch` counters.
 - **Burn the backlog faster (attended):** `--limit N` in one run.
 - **Pause the spend entirely:** stop the timer (`sudo systemctl stop fluncle-anchor.timer`). No spend flows while it is stopped; the worklist is derived, so resuming picks up exactly where it left off.
