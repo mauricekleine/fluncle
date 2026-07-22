@@ -3,6 +3,7 @@ import {
   CaretDownIcon,
   CaretRightIcon,
   CheckCircleIcon,
+  CircleNotchIcon,
   GlobeIcon,
   MagnifyingGlassIcon,
   PencilSimpleIcon,
@@ -11,7 +12,7 @@ import {
   ThumbsUpIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -60,9 +61,12 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import {
   artistNeedsLook,
   type ArtistOverviewItem,
+  type ArtistsPage,
   type ArtistSocial,
   type FreshLinkEntry,
-  listAllArtistsWithSocials,
+  type FreshLinksData,
+  listArtistsPage,
+  listFreshLinks,
   partitionFreshLinks,
 } from "@/lib/server/artists";
 import { cn } from "@/lib/utils";
@@ -84,7 +88,11 @@ import { cn } from "@/lib/utils";
 // links" dialog. The WORK surfaces as an /admin attention row (source "artist-review") that
 // deep-links here with ?artist=<id>, auto-expanding that artist.
 
-const ARTIST_OVERVIEW_KEY = ["admin", "artists", "overview"] as const;
+// The board's PAGE query key — the search term is the last segment, so an invalidate on the
+// bare prefix clears every search's cache at once (a mutation must refresh whatever page the
+// operator is looking at, filtered or not). The FRESH-LINKS work queue is its own key.
+const ARTISTS_PAGE_KEY = ["admin", "artists", "page"] as const;
+const ARTISTS_FRESH_KEY = ["admin", "artists", "fresh"] as const;
 // The /admin attention queue's key — a confirm/add here changes an artist-review row, so
 // invalidate it too and the dashboard's count stays honest without waiting on a refetch.
 const ATTENTION_KEY = ["admin", "attention"] as const;
@@ -95,13 +103,31 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-const fetchAllArtists = createServerFn({ method: "GET" }).handler(
-  async (): Promise<ArtistOverviewItem[]> => {
+// One page of the name-sorted artist board — a keyset slice, optionally name-filtered. The
+// loader calls it with no cursor for page 1; the infinite query pages by the returned cursor.
+const fetchArtistsPage = createServerFn({ method: "GET" })
+  .validator((data: { cursor?: string; search?: string }) => data)
+  .handler(async ({ data }): Promise<ArtistsPage> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
-    return listAllArtistsWithSocials();
+    return listArtistsPage({
+      ...(data.cursor ? { cursor: data.cursor } : {}),
+      ...(data.search ? { search: data.search } : {}),
+    });
+  });
+
+// The fresh-links work queue — every artist with an unreviewed link (capped, oldest-first),
+// with the true total so overflow past the cap stays visible. Its own seeded query so approving
+// a link and a focus-refetch keep it live independent of which page the board is scrolled to.
+const fetchFreshLinks = createServerFn({ method: "GET" }).handler(
+  async (): Promise<FreshLinksData> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return listFreshLinks();
   },
 );
 
@@ -199,25 +225,72 @@ export const Route = createFileRoute("/admin/artists")({
   validateSearch: (search: Record<string, unknown>): { artist?: string } =>
     typeof search["artist"] === "string" ? { artist: search["artist"] } : {},
   beforeLoad: () => ensureAdmin(),
-  loader: () => fetchAllArtists(),
+  loader: async () => {
+    // Seed BOTH the board's first page and the fresh-links work queue in one round-trip, so the
+    // page renders server-side and neither query fetches on mount.
+    const [firstPage, fresh] = await Promise.all([
+      fetchArtistsPage({ data: {} }),
+      fetchFreshLinks(),
+    ]);
+    return { firstPage, fresh };
+  },
   component: AdminArtistsPage,
 });
 
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 function AdminArtistsPage() {
-  // Seed the query from the SSR loader (the same pattern every other admin route uses) so the
-  // list renders server-side.
-  const initial = Route.useLoaderData();
+  const { firstPage, fresh: initialFresh } = Route.useLoaderData();
   const { artist: focusId } = Route.useSearch();
   const queryClient = useQueryClient();
-  const { data: artists, isLoading } = useQuery({
-    initialData: initial,
-    queryFn: () => fetchAllArtists(),
-    queryKey: ARTIST_OVERVIEW_KEY,
-    refetchOnWindowFocus: true,
-  });
+
   const [error, setError] = useState<string | undefined>();
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+
+  // Server-side name search: the typed value debounces into the page query key. An empty search
+  // reads the loader-seeded first page; a real search is an on-demand, unseeded fetch (the loader
+  // never carried it) — the AGENTS.md secondary-query carve-out.
+  const search = useDebounced(query.trim(), 250);
+
+  // The board pages through react-query so "Load more" pages stay cached and a focus-refetch
+  // brings each loaded page back fresh. Seeded with the SSR loader's first page — but ONLY for the
+  // unfiltered key, since that is the page the loader actually returned.
+  const {
+    data,
+    error: pageError,
+    fetchNextPage,
+    hasNextPage,
+    isFetching,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    ...(search === "" ? { initialData: { pageParams: [undefined], pages: [firstPage] } } : {}),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      fetchArtistsPage({
+        data: { ...(pageParam ? { cursor: pageParam } : {}), ...(search ? { search } : {}) },
+      }),
+    queryKey: [...ARTISTS_PAGE_KEY, search],
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: fresh } = useQuery({
+    initialData: initialFresh,
+    queryFn: () => fetchFreshLinks(),
+    queryKey: ARTISTS_FRESH_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  const artists = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data]);
+  const totalCount = data?.pages.at(-1)?.totalCount ?? firstPage.totalCount;
 
   const toggleExpanded = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -232,7 +305,8 @@ function AdminArtistsPage() {
   }, []);
 
   const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ARTIST_OVERVIEW_KEY });
+    void queryClient.invalidateQueries({ queryKey: ARTISTS_PAGE_KEY });
+    void queryClient.invalidateQueries({ queryKey: ARTISTS_FRESH_KEY });
     void queryClient.invalidateQueries({ queryKey: ATTENTION_KEY });
   };
 
@@ -281,14 +355,17 @@ function AdminArtistsPage() {
     addSocial.isPending ||
     reviewSocial.isPending;
 
-  const needle = query.trim().toLowerCase();
-  const visible = useMemo(
-    () => (needle ? artists.filter((a) => a.name.toLowerCase().includes(needle)) : artists),
-    [artists, needle],
-  );
+  const pageErrorMessage = pageError
+    ? pageError instanceof Error
+      ? pageError.message
+      : String(pageError)
+    : undefined;
 
-  // Deep-linked from the /admin attention row (?artist=<id>): auto-expand it, scroll it into
-  // view, and ring it so the operator lands on the artist that needs a look, ready to review.
+  // Deep-linked from the /admin attention row (?artist=<id>): auto-expand it and scroll it into
+  // view so the operator lands ready to review. A needs-review artist is always in the fresh-links
+  // section at the top (both are oldest-first and the attention queue caps tighter), so the review
+  // controls are on screen immediately; the accordion focus fires too when that artist's page is
+  // loaded below.
   const focusRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (focusId) {
@@ -299,15 +376,32 @@ function AdminArtistsPage() {
     if (focusId && focusRef.current) {
       focusRef.current.scrollIntoView({ block: "center" });
     }
-  }, [focusId]);
+  }, [focusId, artists]);
+
+  // Auto-fetch the next page when the load-more row drifts near the viewport bottom; the button
+  // stays clickable as the keyboard-reachable fallback. Paused while a fetch is in flight so a
+  // slow page isn't requested twice.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!sentinel || !hasNextPage || isFetchingNextPage) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void fetchNextPage();
+        }
+      },
+      { rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   return (
     <AdminShell
-      subtitle={
-        isLoading
-          ? "Loading artists…"
-          : `${artists.length} ${artists.length === 1 ? "artist" : "artists"}`
-      }
+      subtitle={`${totalCount} ${totalCount === 1 ? "artist" : "artists"}`}
       title="Artists"
     >
       <div className="p-4 sm:p-5">
@@ -318,86 +412,113 @@ function AdminArtistsPage() {
         ) : undefined}
 
         <FreshLinksSection
-          artists={artists}
           busy={busy}
+          data={fresh}
           onApprove={(socialId) => reviewSocial.mutate(socialId)}
           onRemove={(socialId) => removeSocial.mutate(socialId)}
           onSaved={invalidate}
         />
 
-        {!isLoading && artists.length === 0 ? (
+        <div className="relative mb-4 max-w-xs">
+          <MagnifyingGlassIcon
+            aria-hidden="true"
+            className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            aria-label="Search artists by name"
+            className="h-8 pl-8"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search artists…"
+            value={query}
+          />
+        </div>
+
+        {pageErrorMessage && artists.length === 0 ? (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-8 text-center text-sm text-foreground">
+            {pageErrorMessage}
+          </p>
+        ) : artists.length === 0 && isFetching ? (
           <p className="rounded-md border border-border bg-card/60 px-4 py-8 text-center text-sm text-muted-foreground">
-            No artists yet.
+            Searching…
+          </p>
+        ) : artists.length === 0 ? (
+          <p className="rounded-md border border-border bg-card/60 px-4 py-8 text-center text-sm text-muted-foreground">
+            {search ? `No artist matches “${search}”.` : "No artists yet."}
           </p>
         ) : (
-          <>
-            <div className="relative mb-4 max-w-xs">
-              <MagnifyingGlassIcon
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+          <div className="overflow-hidden rounded-lg border border-border">
+            {artists.map((artist) => (
+              <ArtistAccordion
+                artist={artist}
+                busy={busy}
+                expanded={expanded.has(artist.id)}
+                focused={artist.id === focusId}
+                key={artist.id}
+                onAdd={(platform, url) => addSocial.mutate({ artistId: artist.id, platform, url })}
+                onRemove={(socialId) => removeSocial.mutate(socialId)}
+                onReview={() => reviewArtist.mutate(artist.id)}
+                onToggle={() => toggleExpanded(artist.id)}
+                ref={artist.id === focusId ? focusRef : undefined}
               />
-              <Input
-                aria-label="Filter artists by name"
-                className="h-8 pl-8"
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Filter artists…"
-                value={query}
-              />
-            </div>
-
-            {visible.length === 0 ? (
-              <p className="px-1 py-8 text-center text-sm text-muted-foreground">
-                No artist matches “{query.trim()}”.
-              </p>
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-border">
-                {visible.map((artist) => (
-                  <ArtistAccordion
-                    artist={artist}
-                    busy={busy}
-                    expanded={expanded.has(artist.id)}
-                    focused={artist.id === focusId}
-                    key={artist.id}
-                    onAdd={(platform, url) =>
-                      addSocial.mutate({ artistId: artist.id, platform, url })
-                    }
-                    onRemove={(socialId) => removeSocial.mutate(socialId)}
-                    onReview={() => reviewArtist.mutate(artist.id)}
-                    onToggle={() => toggleExpanded(artist.id)}
-                    ref={artist.id === focusId ? focusRef : undefined}
-                  />
-                ))}
+            ))}
+            {hasNextPage ? (
+              <div className="border-t border-border" ref={loadMoreRef}>
+                <button
+                  className="flex min-h-12 w-full cursor-pointer items-center justify-center gap-2 text-sm font-medium text-muted-foreground hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default"
+                  disabled={isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}
+                  type="button"
+                >
+                  {isFetchingNextPage ? (
+                    <CircleNotchIcon
+                      aria-hidden="true"
+                      className="size-4 motion-safe:animate-spin"
+                      weight="bold"
+                    />
+                  ) : undefined}
+                  {isFetchingNextPage ? "Loading more artists" : "Load more"}
+                </button>
               </div>
-            )}
-          </>
+            ) : undefined}
+          </div>
         )}
+
+        {pageErrorMessage && artists.length > 0 ? (
+          <p className="mt-4 text-sm text-destructive">{pageErrorMessage}</p>
+        ) : undefined}
       </div>
     </AdminShell>
   );
 }
 
-// The FRESH LINKS section — every unreviewed link (`reviewedAt === null`) across the archive, so the
-// operator reviews exactly what's new since he last looked instead of re-reviewing whole artists.
-// SPLIT by mention-loop impact (partitionFreshLinks): "High priority" holds the links whose artist
-// has a finding — once approved, a tiktok/youtube handle there feeds the caption mention loop the
-// moment that finding's video posts (lib/server/mentions.ts) — and leads; "Everything else" holds
-// the catalogue-only artists below, in the queue's prior order. Each row keeps its identical UI
-// (Approve / edit / Remove). Hidden entirely when nothing is fresh (the resting state). Reads the
-// full list, not the search-filtered one — fresh work is global, not scoped to a name filter.
+// The FRESH LINKS section — every unreviewed link (`reviewedAt === null`), so the operator reviews
+// exactly what's new since he last looked instead of re-reviewing whole artists. Read server-side
+// from its OWN bounded query (`listFreshLinks`, capped at FRESH_LINKS_LIMIT), independent of which
+// board page is scrolled to — fresh work is global, not scoped to a name filter. SPLIT by
+// mention-loop impact (partitionFreshLinks): "High priority" holds the links whose artist has a
+// finding — once approved, a tiktok/youtube handle there feeds the caption mention loop the moment
+// that finding's video posts (lib/server/mentions.ts) — and leads; "Everything else" holds the
+// catalogue-only artists below. Each row keeps its identical UI (Approve / edit / Remove). Hidden
+// entirely when nothing is fresh (the resting state). When more artists carry fresh links than the
+// cap serializes, a quiet overflow note says so — the work is drained, not hidden.
 function FreshLinksSection({
-  artists,
   busy,
+  data,
   onApprove,
   onRemove,
   onSaved,
 }: {
-  artists: ArtistOverviewItem[];
   busy: boolean;
+  data: FreshLinksData;
   onApprove: (socialId: string) => void;
   onRemove: (socialId: string) => void;
   onSaved: () => void;
 }) {
-  const { everythingElse, highPriority } = useMemo(() => partitionFreshLinks(artists), [artists]);
+  const { everythingElse, highPriority } = useMemo(
+    () => partitionFreshLinks(data.artists),
+    [data.artists],
+  );
+  const overflow = Math.max(0, data.total - data.artists.length);
 
   if (highPriority.length === 0 && everythingElse.length === 0) {
     return null;
@@ -434,6 +555,13 @@ function FreshLinksSection({
           onRemove={onRemove}
           onSaved={onSaved}
         />
+      ) : null}
+
+      {overflow > 0 ? (
+        <p className="border-t border-primary/10 px-4 py-2.5 text-xs text-muted-foreground">
+          {overflow} more {overflow === 1 ? "artist has" : "artists have"} fresh links. Review these
+          to bring the next ones up.
+        </p>
       ) : null}
     </section>
   );

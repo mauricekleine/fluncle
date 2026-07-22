@@ -1373,54 +1373,259 @@ export function partitionFreshLinks(artists: readonly ArtistOverviewItem[]): Fre
   return { everythingElse, highPriority };
 }
 
-// The `/admin/artists` overview — EVERY artist Fluncle features, name-sorted, each with its
-// full socials list (confirmed, auto, and candidate) and its finding count. Unlike the review
-// QUEUE above (which narrows to the not-yet-confirmed backlog that feeds the /admin attention
-// row), this is the stable MANAGEMENT surface: an artist never drops off it for being resolved,
-// so the operator can edit, add, or remove a link any time — when a profile moves, is deleted,
-// or a missing one turns up. A socialless artist still lists (LEFT JOIN) so a link can be added.
-export async function listAllArtistsWithSocials(): Promise<ArtistOverviewItem[]> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `select a.id as artist_id, a.name, a.slug, a.spotify_url,
-                 (select count(*) from (findings join tracks on tracks.track_id = findings.track_id) t
-                    join track_artists ta on ta.track_id = t.track_id
-                    where ta.artist_id = a.id and t.log_id is not null) as finding_count,
-                 s.id, s.platform, s.url, s.source, s.status, s.created_at, s.reviewed_at
-          from artists a
-          left join artist_socials s on s.artist_id = a.id
-          order by a.name asc, s.platform asc`,
-  });
+// ── The `/admin/artists` board reads (paginated) ────────────────────────────────────────────
+// The board used to be ONE unbounded query — every artist × every social row, a correlated
+// 3-table finding-count scalar subquery re-run PER OUTPUT ROW, ordered so the whole result had to
+// materialise and sort, serialized whole into the SSR document and refetched whole on every focus.
+// The crawler mints artists without end, so that read grew without bound (measured: a 24.8 MB SSR
+// document). It is replaced by three bounded shapes: a keyset PAGE read (`listArtistsPage`), the
+// server-side FRESH-LINKS work queue (`listFreshLinks`), and a shared HYDRATE step that attaches
+// socials + a GROUPED (once-per-page, never per-row) finding count. A socialless artist still
+// lists so a link can be added; the finding count survives as a per-artist number.
 
-  const byArtist = new Map<string, ArtistOverviewItem>();
+/** One page of the board — a bounded slice of the name-sorted artist list. */
+export type ArtistsPage = {
+  items: ArtistOverviewItem[];
+  /** Opaque keyset cursor for the next page, or null at the end. */
+  nextCursor: string | null;
+  /** Total artists matching the (optional) search — the board's honest header count. */
+  totalCount: number;
+};
 
-  for (const raw of result.rows) {
-    const row = raw as Record<string, unknown>;
-    const artistId = textOf(row["artist_id"]);
-    let artist = byArtist.get(artistId);
+/** The board's page read query: a keyset slice by (name, id), optionally name-filtered. */
+export type ArtistsPageQuery = { cursor?: string; limit?: number; search?: string };
 
-    if (!artist) {
-      const spotifyUrl = row["spotify_url"];
-      const findingCount = row["finding_count"];
-      artist = {
-        findingCount: Number(findingCount) || 0,
-        id: artistId,
-        name: textOf(row["name"]),
-        slug: textOf(row["slug"]),
-        socials: [],
-        spotifyUrl: typeof spotifyUrl === "string" ? spotifyUrl : null,
-      };
-      byArtist.set(artistId, artist);
-    }
+const ARTISTS_PAGE_SIZE = 50;
+const ARTISTS_PAGE_MAX = 100;
 
-    // LEFT JOIN: an artist with no socials yields one row with null social columns — skip it.
-    if (row["id"] !== null && row["id"] !== undefined) {
-      artist.socials.push(toArtistSocial({ ...row, artist_id: artistId }));
-    }
+// The (name, id) keyset cursor. It never rides a URL — it lives in the react-query key + the
+// serverFn body — so a plain separator-joined string is enough; the id is a UUID (no separator),
+// so `lastIndexOf` recovers the split even if a name somehow carried the separator character.
+const ARTIST_CURSOR_SEP = "\u0000";
+function encodeArtistCursor(name: string, id: string): string {
+  return `${name}${ARTIST_CURSOR_SEP}${id}`;
+}
+function decodeArtistCursor(cursor: string | undefined): { id: string; name: string } | null {
+  if (!cursor) {
+    return null;
+  }
+  const at = cursor.lastIndexOf(ARTIST_CURSOR_SEP);
+  if (at === -1) {
+    return null;
+  }
+  return { id: cursor.slice(at + 1), name: cursor.slice(0, at) };
+}
+
+// Escape LIKE metacharacters so a typed name matches as a literal substring (the old client
+// `includes`), not as a pattern — used with `like ? escape '\'`.
+function likeContains(term: string): string {
+  return `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+}
+
+/** The base artist columns the board hydrates from — one row per artist, before socials/counts. */
+type ArtistOverviewBase = { id: string; name: string; slug: string; spotifyUrl: string | null };
+
+function toOverviewBase(row: {
+  id: string;
+  name: string;
+  slug: string;
+  spotify_url: string | null;
+}): ArtistOverviewBase {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    spotifyUrl: typeof row.spotify_url === "string" ? row.spotify_url : null,
+  };
+}
+
+// Attach each artist's socials (sorted by platform IN THE ISOLATE — the SQL no longer sorts them)
+// and its coordinate-bearing finding count. Two bounded batch reads over the ≤N page ids: the
+// socials by `artist_socials_artist_id_idx`, the counts GROUPED ONCE over `track_artists ⋈ findings`
+// (log_id not null) via `track_artists_artist_id_idx` — never the old per-output-row correlated
+// scalar. So the cost is per PAGE, not per artist × social.
+async function hydrateArtistOverview(
+  base: readonly ArtistOverviewBase[],
+): Promise<ArtistOverviewItem[]> {
+  if (base.length === 0) {
+    return [];
   }
 
-  return [...byArtist.values()];
+  const db = await getDb();
+  const ids = base.map((artist) => artist.id);
+  const placeholders = ids.map(() => "?").join(", ");
+
+  const [socialsResult, countsResult] = await Promise.all([
+    db.execute({
+      args: ids,
+      sql: `select artist_id, id, platform, url, source, status, created_at, reviewed_at
+            from artist_socials
+            where artist_id in (${placeholders})`,
+    }),
+    db.execute({
+      args: ids,
+      sql: `select ta.artist_id as artist_id, count(*) as finding_count
+            from track_artists ta
+            join findings f on f.track_id = ta.track_id
+            where ta.artist_id in (${placeholders}) and f.log_id is not null
+            group by ta.artist_id`,
+    }),
+  ]);
+
+  const socialsByArtist = new Map<string, ArtistSocial[]>();
+  for (const raw of socialsResult.rows) {
+    const row = raw as Record<string, unknown>;
+    const artistId = textOf(row["artist_id"]);
+    const list = socialsByArtist.get(artistId) ?? [];
+    list.push(toArtistSocial(row));
+    socialsByArtist.set(artistId, list);
+  }
+
+  const countByArtist = new Map<string, number>();
+  for (const raw of countsResult.rows) {
+    const row = raw as Record<string, unknown>;
+    countByArtist.set(textOf(row["artist_id"]), Number(row["finding_count"]) || 0);
+  }
+
+  return base.map((artist) => ({
+    findingCount: countByArtist.get(artist.id) ?? 0,
+    id: artist.id,
+    name: artist.name,
+    slug: artist.slug,
+    socials: (socialsByArtist.get(artist.id) ?? []).sort((left, right) =>
+      left.platform.localeCompare(right.platform),
+    ),
+    spotifyUrl: artist.spotifyUrl,
+  }));
+}
+
+/**
+ * The board's PAGE read — a keyset slice of every artist Fluncle features, name-sorted, each with
+ * its full socials list (confirmed, auto, candidate) and finding count. The stable MANAGEMENT
+ * surface: an artist never drops off for being resolved, so the operator can edit/add/remove a link
+ * any time. Bounded by construction (≤{@link ARTISTS_PAGE_SIZE} artists, keyset on `(name, id)` over
+ * `artists_name_idx`) and searched server-side, so the crawler minting artists without end never
+ * grows this read. A socialless artist still lists (the hydrate left-joins its socials).
+ */
+export async function listArtistsPage(query: ArtistsPageQuery = {}): Promise<ArtistsPage> {
+  const db = await getDb();
+  const limit = Math.max(1, Math.min(query.limit ?? ARTISTS_PAGE_SIZE, ARTISTS_PAGE_MAX));
+  const after = decodeArtistCursor(query.cursor);
+  const search = query.search?.trim();
+
+  const where: string[] = [];
+  const args: (number | string)[] = [];
+  if (search) {
+    where.push(`a.name like ? escape '\\'`);
+    args.push(likeContains(search));
+  }
+  if (after) {
+    where.push(`(a.name > ? or (a.name = ? and a.id > ?))`);
+    args.push(after.name, after.name, after.id);
+  }
+  const whereSql = where.length > 0 ? `where ${where.join(" and ")}` : "";
+
+  // Peek one past the page so we learn whether a next page exists (and its cursor) in one read.
+  const pageResult = await db.execute({
+    args: [...args, limit + 1],
+    sql: `select a.id, a.name, a.slug, a.spotify_url
+          from artists a
+          ${whereSql}
+          order by a.name asc, a.id asc
+          limit ?`,
+  });
+
+  const rows = typedRows<{ id: string; name: string; slug: string; spotify_url: string | null }>(
+    pageResult.rows,
+  );
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const base = pageRows.map(toOverviewBase);
+
+  const [items, countResult] = await Promise.all([
+    hydrateArtistOverview(base),
+    db.execute({
+      args: search ? [likeContains(search)] : [],
+      sql: `select count(*) as total from artists a ${
+        search ? `where a.name like ? escape '\\'` : ""
+      }`,
+    }),
+  ]);
+
+  const last = pageRows.at(-1);
+  const nextCursor = hasMore && last ? encodeArtistCursor(last.name, last.id) : null;
+  const totalCount = Number((countResult.rows[0] as Record<string, unknown>)?.["total"]) || 0;
+
+  return { items, nextCursor, totalCount };
+}
+
+/** The board's Fresh-links WORK QUEUE, read server-side: the artists carrying an unreviewed link
+ *  (with their full socials + finding count so the mention-loop split can run), plus the true
+ *  total so any overflow past the cap stays visible. */
+export type FreshLinksData = {
+  /** The capped set of artists with unreviewed links, name-sorted (the priority split re-orders). */
+  artists: ArtistOverviewItem[];
+  /** Every artist with at least one unreviewed link — so the board can flag work beyond the cap. */
+  total: number;
+};
+
+/**
+ * The most fresh-link artists the board renders at once. Generous — the fresh set is the operator's
+ * live work, not the whole archive — but bounded on the same principle as
+ * {@link LABEL_REVIEW_QUEUE_LIMIT}: a crawl minting links faster than they are reviewed must never
+ * serialize an unbounded work list into the SSR document (the 24.8 MB failure this rework fixes).
+ * The full list drains as he reviews; {@link FreshLinksData.total} surfaces anything past the cap so
+ * nothing hides.
+ */
+export const FRESH_LINKS_LIMIT = 100;
+
+/**
+ * Read the fresh-links work queue: every artist with an unreviewed (`reviewed_at IS NULL`) link,
+ * oldest-first by its oldest fresh link (the queue's anchor), capped at {@link FRESH_LINKS_LIMIT},
+ * then hydrated with full socials + finding count so {@link partitionFreshLinks} can split it by
+ * mention-loop impact. The fresh scan rides `artist_socials_unreviewed_idx`; the cap bounds the
+ * payload. Returned name-sorted so the "Everything else" group reads A–Z as it did before.
+ */
+export async function listFreshLinks(): Promise<FreshLinksData> {
+  const db = await getDb();
+
+  const [freshResult, totalResult] = await Promise.all([
+    db.execute({
+      args: [FRESH_LINKS_LIMIT],
+      sql: `select artist_id, min(created_at) as anchor_at
+            from artist_socials
+            where reviewed_at is null
+            group by artist_id
+            order by anchor_at asc
+            limit ?`,
+    }),
+    db.execute(
+      `select count(distinct artist_id) as total from artist_socials where reviewed_at is null`,
+    ),
+  ]);
+
+  const freshIds = typedRows<{ anchor_at: string; artist_id: string }>(freshResult.rows).map(
+    (row) => row.artist_id,
+  );
+  const total = Number((totalResult.rows[0] as Record<string, unknown>)?.["total"]) || 0;
+
+  if (freshIds.length === 0) {
+    return { artists: [], total };
+  }
+
+  const placeholders = freshIds.map(() => "?").join(", ");
+  const baseResult = await db.execute({
+    args: freshIds,
+    sql: `select id, name, slug, spotify_url
+          from artists
+          where id in (${placeholders})
+          order by name asc, id asc`,
+  });
+  const base = typedRows<{ id: string; name: string; slug: string; spotify_url: string | null }>(
+    baseResult.rows,
+  ).map(toOverviewBase);
+
+  return { artists: await hydrateArtistOverview(base), total };
 }
 
 export type ArtistReviewRow = {
@@ -1432,24 +1637,37 @@ export type ArtistReviewRow = {
   pending: number;
 };
 
+/**
+ * The most artists with unreviewed links the /admin attention queue will ever carry — the exact
+ * twin of {@link LABEL_REVIEW_QUEUE_LIMIT}, and for the exact same reason. The crawler mints
+ * `artist_socials` links continuously (a resolver pass fills a fresh handle per platform per
+ * artist), so an uncapped one-row-per-artist read is hundreds of `AttentionItem`s in the /admin
+ * SSR payload, the react-query cache, and `fluncle admin queue` — a cockpit you cannot read. So the
+ * queue takes a WORKING SET, oldest-first, and `/admin/artists` (the fresh-links section) stays the
+ * station where the full list is reviewed. Capping the queue hides no work; it stops one source
+ * from drowning the other five.
+ */
+export const ARTIST_REVIEW_QUEUE_LIMIT = 25;
+
 // The /admin attention row's honest read: one row per artist that has UNREVIEWED links
 // (`reviewed_at IS NULL`) — a fresh link the operator hasn't looked at yet — with the count of
-// those links and the oldest one's stamp (the queue's oldest-first anchor). Mirrors
-// artistNeedsLook; the pure model turns each into a "Review →" deep-link onto /admin/artists (the
-// manage surface, where the fresh-links section lives), so the queue surfaces the work and the
-// page does it. Review lands on the LINK, so a single fresh Twitch link surfaces without
-// re-flagging the whole already-reviewed artist.
+// those links and the oldest one's stamp (the queue's oldest-first anchor), capped at
+// {@link ARTIST_REVIEW_QUEUE_LIMIT} oldest-first. Mirrors artistNeedsLook; the pure model turns each
+// into a "Review →" deep-link onto /admin/artists (the manage surface, where the fresh-links section
+// lives), so the queue surfaces the work and the page does it. Review lands on the LINK, so a single
+// fresh Twitch link surfaces without re-flagging the whole already-reviewed artist.
 export async function listArtistReviewRows(): Promise<ArtistReviewRow[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [],
+    args: [ARTIST_REVIEW_QUEUE_LIMIT],
     sql: `select a.id as artist_id, a.name,
                  count(*) as pending, min(s.created_at) as anchor_at
           from artists a
           join artist_socials s on s.artist_id = a.id
           where s.reviewed_at is null
           group by a.id, a.name
-          order by anchor_at asc`,
+          order by anchor_at asc
+          limit ?`,
   });
 
   return result.rows.map((raw) => {
