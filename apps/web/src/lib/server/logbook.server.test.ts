@@ -53,6 +53,32 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("listLogbookIndexEntries — the lean index read (no body)", () => {
+  it("selects only sector + title, never the long-form body", async () => {
+    setRoutes([
+      {
+        match: /select sector, title from logbook_entries order by sector desc/,
+        rows: () => [
+          { sector: 42, title: "Sector 042" },
+          { sector: 40, title: "Sector 040" },
+        ],
+      },
+    ]);
+    const { listLogbookIndexEntries } = await import("./logbook");
+    const entries = await listLogbookIndexEntries();
+
+    expect(entries).toEqual([
+      { sector: 42, title: "Sector 042" },
+      { sector: 40, title: "Sector 040" },
+    ]);
+    // The read never loads `body` — the biggest per-row column (up to 12k chars, over up to
+    // 500 rows) — because the index renders only sector + title.
+    const sql = executeCalls[0]?.sql ?? "";
+    expect(sql).not.toContain("body");
+    expect(sql).toContain("select sector, title");
+  });
+});
+
 describe("createLogbookEntry — the fill-empty-only guarantee", () => {
   it("no-ops on a sector that already has an entry (never clobbers, never gates)", async () => {
     setRoutes([{ match: /from logbook_entries where sector/, rows: () => [EXISTING_ROW] }]);

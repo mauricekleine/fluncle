@@ -4,7 +4,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { formatDate } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { artistTitleLine } from "@/lib/log-prose";
-import { listTracks, type TrackListPage } from "@/lib/server/tracks";
+import { listLogIndexEntries, type LogIndexEntry } from "@/lib/server/tracks";
 
 // The log index: every finding in the Galaxy as a crawlable link to its
 // coordinate page — the internal-link surface that keeps /log/<id> pages from
@@ -14,32 +14,29 @@ import { listTracks, type TrackListPage } from "@/lib/server/tracks";
 // Keep the log single-page while it fits in one readable plate.
 const logIndexLimit = 500;
 
+// The page is a TEXT list, so it reads the leanest projection — logId, the artist·title
+// line, and the found date, no cover — through `listLogIndexEntries` rather than the fat
+// feed read it once used (the cover master + graph/discovery subqueries it never rendered).
 const fetchLog = createServerFn({ method: "GET" }).handler(() =>
-  listTracks({ lean: true, limit: logIndexLimit }),
+  listLogIndexEntries(logIndexLimit),
 );
 
 const title = "The drum & bass log, every finding by coordinate · Fluncle";
 const description =
   "Every finding in Fluncle's log: one Log ID per track, the date it was found, and the coordinate page that decodes it.";
 
-function logIndexHead(loaderData: TrackListPage | undefined) {
+function logIndexHead(loaderData: LogIndexEntry[] | undefined) {
   const itemList = {
     "@context": "https://schema.org",
     "@type": "ItemList",
-    itemListElement: loaderData?.tracks.reduce<
-      Array<{ "@type": "ListItem"; name: string; position: number; url: string }>
-    >((items, track) => {
-      if (track.logId) {
-        items.push({
-          "@type": "ListItem",
-          name: `${track.logId} · ${artistTitleLine(track)}`,
-          position: items.length + 1,
-          url: `${siteUrl}/log/${encodeURIComponent(track.logId)}`,
-        });
-      }
-
-      return items;
-    }, []),
+    // Every entry carries a coordinate (the read gates `log_id is not null`), so each maps
+    // straight to a `ListItem` — no runtime filter, the position is the entry's own index.
+    itemListElement: (loaderData ?? []).map((entry, index) => ({
+      "@type": "ListItem" as const,
+      name: `${entry.logId} · ${artistTitleLine(entry)}`,
+      position: index + 1,
+      url: `${siteUrl}/log/${encodeURIComponent(entry.logId)}`,
+    })),
     name: "Fluncle's log",
     url: `${siteUrl}/log`,
   };
@@ -68,13 +65,12 @@ function logIndexHead(loaderData: TrackListPage | undefined) {
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/log/")({
   loader: () => fetchLog(),
-  head: ({ loaderData }: { loaderData?: TrackListPage }) => logIndexHead(loaderData),
+  head: ({ loaderData }: { loaderData?: LogIndexEntry[] }) => logIndexHead(loaderData),
   component: LogIndexPage,
 });
 
 function LogIndexPage() {
-  const page = Route.useLoaderData();
-  const entries = page.tracks.filter((track) => track.logId);
+  const entries = Route.useLoaderData();
 
   return (
     <main className="log-plate-stage">
@@ -95,18 +91,10 @@ function LogIndexPage() {
           <ol className="log-index-list">
             {entries.map((track) => (
               <li className="log-index-row log-index-row--entry" key={track.trackId}>
-                <Link
-                  className="log-index-id"
-                  params={{ logId: track.logId as string }}
-                  to="/log/$logId"
-                >
+                <Link className="log-index-id" params={{ logId: track.logId }} to="/log/$logId">
                   {track.logId}
                 </Link>
-                <Link
-                  className="log-index-line"
-                  params={{ logId: track.logId as string }}
-                  to="/log/$logId"
-                >
+                <Link className="log-index-line" params={{ logId: track.logId }} to="/log/$logId">
                   {artistTitleLine(track)}
                 </Link>
                 <time className="log-index-date" dateTime={track.addedAt}>

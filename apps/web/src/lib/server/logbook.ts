@@ -1,5 +1,5 @@
 // Fluncle's Logbook — the Worker-side store + voice gate + the nightly sweep's
-// gap/gather query. The public /logbook pages read `listLogbookEntries` /
+// gap/gather query. The public /logbook pages read `listLogbookIndexEntries` /
 // `getLogbookEntry`; the admin ops (../orpc/admin-logbook) call `createLogbookEntry`
 // (agent, fill-empty-only) / `updateLogbookEntry` (operator, overwrite) /
 // `listLogbookGaps` (the sweep's self-healing window + material). See
@@ -153,17 +153,29 @@ function gateVoice(prose: string, field: "body" | "title"): void {
 
 // ── Reads (public + neighbor nav) ─────────────────────────────────────────────
 
-/** The public index: every entry, newest sector first. */
-export async function listLogbookEntries({ limit = 500 }: { limit?: number } = {}): Promise<
-  LogbookEntryDTO[]
+// The index projection: the two columns the /logbook index renders — sector + title — never the
+// long-form `body` (up to BODY_MAX_CHARS each, over up to 500 rows). The article page reads the
+// full body through `getLogbookEntry` (unchanged); the index never rendered it, so it stops
+// loading it at the source.
+const INDEX_SELECT = `select sector, title from logbook_entries`;
+
+/** The public index row — sector + title only (the /logbook list renders nothing more). */
+export type LogbookIndexEntry = Pick<LogbookEntryDTO, "sector" | "title">;
+
+/** The public index: every entry as its lean `{ sector, title }`, newest sector first. */
+export async function listLogbookIndexEntries({ limit = 500 }: { limit?: number } = {}): Promise<
+  LogbookIndexEntry[]
 > {
   const db = await getDb();
   const result = await db.execute({
     args: [Math.min(Math.max(limit, 1), 1000)],
-    sql: `${ENTRY_SELECT} order by sector desc limit ?`,
+    sql: `${INDEX_SELECT} order by sector desc limit ?`,
   });
 
-  return typedRows<LogbookRow>(result.rows).map(rowToEntry);
+  return typedRows<{ sector: number; title: string }>(result.rows).map((row) => ({
+    sector: row.sector,
+    title: row.title,
+  }));
 }
 
 /** One entry by its sector, or undefined. */

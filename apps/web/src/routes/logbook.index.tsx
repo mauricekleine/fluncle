@@ -5,23 +5,25 @@ import { formatDate } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { formatSector, sectorDateISO } from "@/lib/log-id-shared";
 import { logbookPath } from "@/lib/logbook";
-import { listLogbookEntries } from "@/lib/server/logbook";
-import { type LogbookEntryDTO } from "@fluncle/contracts";
+import { listLogbookIndexEntries, type LogbookIndexEntry } from "@/lib/server/logbook";
 
 // The Logbook index: every sector-day Fluncle has written up, newest first — the
 // crawlable internal-link surface that keeps the /logbook/<sector> travelogues from
 // being orphans. Text-first, the quiet archival plate; the cover-led archive stays
 // the homepage.
 
+// The index renders only each entry's sector + title (the date derives from the sector),
+// so it reads the lean `{ sector, title }` projection — never the long-form `body` the
+// article page (`/logbook/<sector>`) loads.
 const fetchLogbook = createServerFn({ method: "GET" }).handler(() =>
-  listLogbookEntries({ limit: 500 }),
+  listLogbookIndexEntries({ limit: 500 }),
 );
 
 const title = "Fluncle's Logbook";
 const description =
   "Fluncle's Logbook: one first-person entry per sector-day of the voyage. What the day was like, where the trip went, and how each banger landed, with the findings inlined as photos.";
 
-function logbookIndexHead(entries: LogbookEntryDTO[] | undefined) {
+function logbookIndexHead(entries: LogbookIndexEntry[] | undefined) {
   // A Blog whose blogPost list is the entries — honest structured data mirroring the
   // visible index (each item a real /logbook/<sector> Article).
   const blog = {
@@ -59,7 +61,7 @@ function logbookIndexHead(entries: LogbookEntryDTO[] | undefined) {
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/logbook/")({
   loader: () => fetchLogbook(),
-  head: ({ loaderData }: { loaderData?: LogbookEntryDTO[] }) => logbookIndexHead(loaderData),
+  head: ({ loaderData }: { loaderData?: LogbookIndexEntry[] }) => logbookIndexHead(loaderData),
   component: LogbookIndexPage,
 });
 
