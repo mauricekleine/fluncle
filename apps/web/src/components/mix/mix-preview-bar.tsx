@@ -75,7 +75,7 @@ export function MixPreviewBar({
     <div className="fixed inset-x-0 bottom-0 z-50 px-4 pb-4 sm:px-6 lg:px-8">
       <div
         aria-label="Preview"
-        className="relative mx-auto flex max-w-2xl items-center gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5 shadow-lg"
+        className="relative mx-auto flex max-w-2xl items-center gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
         role="region"
       >
         {/* A thin gold hairline for progress — gold placed like light (One Sun),
