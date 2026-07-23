@@ -228,18 +228,51 @@ describe("server.ts shared-cache isolation", () => {
     expect(entries.size).toBe(0);
   });
 
-  it("NEVER shared-caches a query variant (which would collide onto the canonical entry)", async () => {
-    // The cache key drops the query string, so a cached `?page=2` would be served back as
-    // page 1. Both hub and entity variants must flow through uncached.
-    await dispatchAndSettle("https://www.fluncle.com/artists?page=2", { accept: "text/html" });
+  it("NEVER shared-caches a query variant that would collide onto the canonical entry", async () => {
+    // The cache key drops every query EXCEPT a lone `?page=N` on a paginated hub (proven
+    // below). So these must all flow through uncached, or a cached body would be served back
+    // for the wrong URL:
+    //  - a non-`page` param on a hub (`?galaxy=`);
+    //  - `?page=2` on an ENTITY DETAIL page — not a paginated hub, so it must still be refused;
+    //  - a NON-LONE page (`?page=2&q=x`) and a NON-NUMERIC page (`?page=abc`) on a paginated
+    //    hub — the guard only accepts a lone positive integer.
     await dispatchAndSettle("https://www.fluncle.com/tracks?galaxy=drift", {
       accept: "text/html",
     });
     await dispatchAndSettle("https://www.fluncle.com/artist/sub-focus?page=2", {
       accept: "text/html",
     });
+    await dispatchAndSettle("https://www.fluncle.com/artists?page=2&q=x", {
+      accept: "text/html",
+    });
+    await dispatchAndSettle("https://www.fluncle.com/artists?page=abc", {
+      accept: "text/html",
+    });
 
     expect(entries.size).toBe(0);
+  });
+
+  it("shared-caches a paginated hub's ?page=N under its OWN distinct key (never colliding onto page 1)", async () => {
+    // The positive half of the contract, at the dispatch layer where the old blanket refusal
+    // lived: a lone `?page=N` on a paginated catalogue hub IS cacheable, folded into the key as
+    // the parsed page, so page 2 and page 3 are distinct entries and neither can serve page 1's
+    // body back (the collision-safety property).
+    await dispatchAndSettle("https://www.fluncle.com/artists?page=2", { accept: "text/html" });
+    await dispatchAndSettle("https://www.fluncle.com/artists?page=3", { accept: "text/html" });
+
+    expect(new Set(entries.keys())).toEqual(
+      new Set(["https://www.fluncle.com/artists?page=2", "https://www.fluncle.com/artists?page=3"]),
+    );
+
+    // A repeat hit on page 2 serves ITS stored body — never page 3's, never page 1's.
+    const page2Key = new Request("https://www.fluncle.com/artists?page=2");
+    const stored = await entries.get(page2Key.url)?.clone()?.text();
+    const refetched = await dispatch("https://www.fluncle.com/artists?page=2", {
+      accept: "text/html",
+    });
+
+    expect(refetched.headers.get("x-edge-cache")).toBe("fresh");
+    expect(await refetched.text()).toBe(stored);
   });
 
   it("NEVER shared-caches a non-HTML request or a non-GET", async () => {
