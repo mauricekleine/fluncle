@@ -18,7 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { DotsSixVerticalIcon, PauseIcon, PlayIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { type CSSProperties, useCallback, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import { type MixCandidate, type MixTrack } from "@fluncle/contracts";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
@@ -672,15 +672,30 @@ function MixOpeners({
   );
 }
 
+// Hold a value still for `delayMs` after it stops changing — the input updates every keystroke,
+// but the debounced copy only settles once typing pauses. Mirrors the admin/artists search hook.
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 // The un-seeded cold start: search the archive for something to open with. The placeholder
 // and the empty state say "track", the superset noun — the list mixes findings with rows
 // Fluncle has never been to, and naming either tier over it would be a false claim.
 function MixSearchPicker({ onPick }: { onPick: (track: MixTrack) => void }) {
   const [q, setQ] = useState("");
+  // A keystroke is not a query. The input stays immediate (value={q}); only the SETTLED term
+  // drives the fetch, so typing "amen" fires one archive search instead of four — and archive
+  // search cost climbs with the catalogue.
+  const term = useDebounced(q.trim(), 250);
   const { data: results = [], isFetching } = useQuery({
-    enabled: q.trim().length > 1,
-    queryFn: () => searchMixTracks(q),
-    queryKey: ["mix-search", q],
+    enabled: term.length > 1,
+    queryFn: () => searchMixTracks(term),
+    queryKey: ["mix-search", term],
     staleTime: 30_000,
   });
 
@@ -694,7 +709,7 @@ function MixSearchPicker({ onPick }: { onPick: (track: MixTrack) => void }) {
         <CommandList>
           {/* Only a SETTLED empty result reads as "nothing" — while a query is in flight the
               line is withheld, so a keystroke mid-fetch never flashes a false empty. */}
-          {q.trim().length > 1 && !isFetching ? (
+          {term.length > 1 && !isFetching ? (
             <CommandEmpty>Nothing by that name out here.</CommandEmpty>
           ) : null}
           <CommandGroup>
