@@ -122,26 +122,58 @@ describe("Cache-Control on the edge-cached HTML surfaces", () => {
     expect(edgeCachePolicyFor("/artist/sub-focus", "")).toBe(PAGE_CACHE_POLICY);
   });
 
-  it("the hub pages carry the minute-fresh directive", async () => {
+  it("the hub, index, static, legal and docs pages carry the minute-fresh directive", async () => {
     const { HUB_CACHE_POLICY, edgeCachePolicyFor } = await import("../lib/server/edge-cache");
 
     expect(HUB_CACHE_POLICY.cacheControl).toBe(
       "public, max-age=0, s-maxage=60, stale-while-revalidate=600",
     );
 
-    for (const path of ["/", "/artists", "/albums", "/labels", "/tracks", "/fresh"]) {
+    for (const path of [
+      // The paginated catalogue hubs.
+      "/",
+      "/artists",
+      "/albums",
+      "/labels",
+      "/tracks",
+      "/fresh",
+      // The stable public pages enrolled at the hub policy (previously emitted no directive).
+      "/galaxies",
+      "/galaxies/drift",
+      "/mixtapes",
+      "/logbook",
+      "/logbook/2026-07-20",
+      "/newsletter",
+      "/newsletter/3",
+      "/reach",
+      "/about",
+      "/privacy",
+      "/terms",
+      "/docs",
+      "/docs/api",
+    ]) {
       expect(edgeCachePolicyFor(path, "")).toBe(HUB_CACHE_POLICY);
     }
+
+    // A lone ?page=N on a paginated hub is the same policy (its key folds the page).
+    expect(edgeCachePolicyFor("/artists", "?page=3")).toBe(HUB_CACHE_POLICY);
   });
 
   it("no directive is minted for a query variant or a private surface", async () => {
     const { edgeCachePolicyFor } = await import("../lib/server/edge-cache");
 
-    // The cache key drops the query, so a variant must never be shared-cached.
-    expect(edgeCachePolicyFor("/artists", "?page=2")).toBeUndefined();
+    // The cache key drops the query, so a non-lone-page variant must never be shared-cached.
+    expect(edgeCachePolicyFor("/artists", "?page=2&sort=old")).toBeUndefined();
+    expect(edgeCachePolicyFor("/artists", "?page=0")).toBeUndefined();
     expect(edgeCachePolicyFor("/tracks", "?galaxy=drift")).toBeUndefined();
-    // Nor an account/admin surface.
+    // Any query on a bare-URL-only page (a `?platform=` on /reach, a `?page=` on a galaxy).
+    expect(edgeCachePolicyFor("/reach", "?platform=tiktok")).toBeUndefined();
+    expect(edgeCachePolicyFor("/galaxies/drift", "?page=2")).toBeUndefined();
+    // Nor an account/admin/interactive/live surface.
     expect(edgeCachePolicyFor("/account", "")).toBeUndefined();
     expect(edgeCachePolicyFor("/admin/tracks", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/status", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/galaxy", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/mix", "")).toBeUndefined();
   });
 });

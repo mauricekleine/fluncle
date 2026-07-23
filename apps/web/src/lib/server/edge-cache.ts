@@ -123,28 +123,17 @@ export function isCacheableEntityRequest(pathname: string, search: string): bool
   return search === "" && ENTITY_DETAIL_PATH.test(pathname);
 }
 
-// The public HUB/index pages: the archive front door, the four editorial indexes, and the
+// The PAGINATED catalogue hubs: the archive front door, the four editorial indexes, and the
 // fresh-releases board. These are the SLOW pages — each is a multi-row aggregate query, and
 // `/artists` measured ~1s of server think — and they are the ones crawlers hammer, so they are
-// where an edge hit is worth the most. `/log` is deliberately absent: it is on the page policy
-// because the finding write paths already purge it explicitly.
+// where an edge hit is worth the most. They accept a lone `?page=<n>` (the DOCUMENTED crawler
+// pager into the catalogue long tail — see albums.index.tsx / labels.index.tsx) folded into the
+// cache key; every richer query variant is refused. `/log` is deliberately absent: it is on the
+// page policy because the finding write paths already purge it explicitly.
 const HUB_PATHS_BELOW_ROOT = new Set(["/albums", "/artists", "/fresh", "/labels", "/tracks"]);
 
-/**
- * True for a cacheable hub/index page — AND ONLY when it carries no query string, for exactly
- * the reason `isCacheableEntityRequest` demands it: the cache key drops the query
- * (cacheKeyForPath), so a paginated/filtered/sorted variant (`?page=2`, `?galaxy=…`,
- * `?view=…`, `?story=…`) would collide onto the canonical page-1 entry. Only the bare
- * canonical URL — what a crawler and a first-time visitor hit — is cached; every variant flows
- * through uncached and correct. A single trailing slash is tolerated (`/artists/`), and note
- * that it keys as its own entry rather than folding onto the unslashed one, so no variant can
- * ever be served for another URL.
- */
-export function isCacheableHubRequest(pathname: string, search: string): boolean {
-  if (search !== "") {
-    return false;
-  }
-
+/** True for one of the paginated catalogue hubs (root + the five plural indexes/boards). */
+function isPaginatedHubPath(pathname: string): boolean {
   if (pathname === "/") {
     return true;
   }
@@ -152,6 +141,107 @@ export function isCacheableHubRequest(pathname: string, search: string): boolean
   const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 
   return HUB_PATHS_BELOW_ROOT.has(trimmed);
+}
+
+// The additional stable public pages enrolled at the HUB policy but cached BARE-URL-ONLY (no
+// cacheable page param): the index pages that invalidate on any member change (the 60s window
+// IS their invalidation, exactly like the catalogue hubs), the deploy-scoped static/legal/docs
+// pages (they change only on deploy, which rotates the build-scoped asset hashes the SWR tail is
+// bounded by), and the stable-but-writable detail pages (a galaxy, a logbook sector, a
+// newsletter edition). The detail pages ride the 60s window rather than an explicit purge — the
+// write is rare and the window self-heals — so no write path has to learn to purge them.
+const STATIC_HUB_EXACT = new Set([
+  "/about",
+  "/docs",
+  "/galaxies",
+  "/logbook",
+  "/mixtapes",
+  "/newsletter",
+  "/privacy",
+  "/reach",
+  "/terms",
+]);
+
+// A single detail segment under the three writable-but-stable parents: `/galaxies/<slug>`,
+// `/logbook/<sector>`, `/newsletter/<n>`. One segment only (a nested path is not a detail page),
+// and a 404 for a bad segment is simply never stored (isStorable is 200-only). A pagination
+// variant on these (`/galaxies/<slug>?page=2`, `/logbook/<sector>?page=2`) is refused by the
+// query-less guard in isCacheableHubRequest, so only the bare canonical URL is cached.
+const STATIC_HUB_DETAIL = /^\/(?:galaxies|logbook|newsletter)\/[^/]+$/;
+
+/**
+ * True for a bare-URL-only HUB-policy page (the stable enrolments above). The caller
+ * (`isCacheableHubRequest`) has already rejected any query string; this only classifies the
+ * path. A single trailing slash is tolerated.
+ */
+function isStaticHubPath(pathname: string): boolean {
+  const trimmed = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+
+  if (STATIC_HUB_EXACT.has(trimmed)) {
+    return true;
+  }
+
+  // The `/docs` doc tree (`/docs`, `/docs/api`, `/docs/<slug>`). Anchored on `/docs/` so the
+  // sibling markdown emitter `/docs.md/<slug>` (its own Cache-Control, non-HTML) is NOT caught.
+  if (trimmed.startsWith("/docs/")) {
+    return true;
+  }
+
+  return STATIC_HUB_DETAIL.test(trimmed);
+}
+
+/**
+ * A lone `?page=<positive integer>` and nothing else → that integer; every other search →
+ * `null`. This is the ONE query shape a paginated hub may cache: it folds into the cache key
+ * (cacheKeyRequest) as the PARSED integer, so `?page=007` and `?page=7` key identically and can
+ * never collide onto page 1 or each other. Anything else — `?page=0`, `?page=-1`, `?page=1.5`,
+ * `?page=`, a second param, a repeated `page`, or any non-`page` param — is refused, because the
+ * key would drop the difference and serve the wrong body.
+ */
+function loneNumericPage(search: string): number | null {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const keys = [...params.keys()];
+
+  if (keys.length !== 1 || keys[0] !== "page") {
+    return null;
+  }
+
+  const raw = params.get("page");
+
+  // A bare run of digits only — no sign, decimal, or whitespace — and at least 1.
+  if (raw === null || !/^\d+$/.test(raw)) {
+    return null;
+  }
+
+  const page = Number(raw);
+
+  return page >= 1 ? page : null;
+}
+
+/**
+ * True for a cacheable hub/index page. Two tiers:
+ *  - a PAGINATED catalogue hub (`/`, `/artists`, `/albums`, `/labels`, `/tracks`, `/fresh`): its
+ *    bare canonical URL, OR a lone `?page=<n>` (folded into the key so page N never collides onto
+ *    page 1). Every richer variant (`?galaxy=…`, `?sort=…`, `?view=…`, `?story=…`, `?page=2&…`)
+ *    is refused;
+ *  - a STATIC/index/detail page enrolled at the hub policy (galaxies, mixtapes, logbook,
+ *    newsletter, reach, about, privacy, terms, the docs tree, and the galaxy/sector/edition
+ *    detail pages): its bare canonical URL ONLY — any query string is refused, because the key
+ *    drops it and a `?page=`/`?platform=` variant would otherwise serve the wrong body.
+ * The cache key drops (paginated) or refuses (static) every uncacheable query for exactly the
+ * reason `isCacheableEntityRequest` demands it. A single trailing slash is tolerated and keys as
+ * its own entry, so no variant is ever served for another URL.
+ */
+export function isCacheableHubRequest(pathname: string, search: string): boolean {
+  if (isPaginatedHubPath(pathname)) {
+    return search === "" || loneNumericPage(search) !== null;
+  }
+
+  if (search !== "") {
+    return false;
+  }
+
+  return isStaticHubPath(pathname);
 }
 
 /**
@@ -177,11 +267,24 @@ export function edgeCachePolicyFor(pathname: string, search: string): EdgeCacheP
 // URL would miss an entry stored under a different incoming origin.
 const CANONICAL_ORIGIN = "https://www.fluncle.com";
 
-// The stable `caches.default` key for a log path: canonical origin + that path,
+// The stable `caches.default` key for a canonical path: canonical origin + that path,
 // dropping any query string so `?utm=…`/share params can't fragment or poison the
-// cache (the log surfaces render purely from the path).
+// cache. Used by the PURGE paths, which key off query-less canonical paths.
 function cacheKeyForPath(pathname: string): Request {
   return new Request(`${CANONICAL_ORIGIN}${pathname}`, { method: "GET" });
+}
+
+// The stable `caches.default` key for an incoming READ request: canonical origin + pathname,
+// plus — for a paginated hub carrying a lone `?page=<n>` — that PARSED page (`/artists?page=3`).
+// Every other query is dropped, so share/utm params can't fragment the cache, while a legitimate
+// `?page=3` keys as its own entry and can never collide onto page 1. The page is the parsed
+// integer, so the key is canonical (`?page=007` and `?page=7` are one entry). Static/legal/docs
+// and entity/log paths never reach the page branch (not paginated hubs), so they key query-less.
+function cacheKeyRequest(pathname: string, search: string): Request {
+  const page = isPaginatedHubPath(pathname) ? loneNumericPage(search) : null;
+  const keyPath = page === null ? pathname : `${pathname}?page=${page}`;
+
+  return new Request(`${CANONICAL_ORIGIN}${keyPath}`, { method: "GET" });
 }
 
 /**
@@ -201,7 +304,8 @@ export async function withEdgeCache(
     return render();
   }
 
-  const cacheKey = cacheKeyForPath(new URL(request.url).pathname);
+  const url = new URL(request.url);
+  const cacheKey = cacheKeyRequest(url.pathname, url.search);
   const hit = await cache.match(cacheKey);
 
   if (hit) {

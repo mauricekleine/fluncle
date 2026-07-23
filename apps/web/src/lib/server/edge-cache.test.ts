@@ -104,7 +104,7 @@ describe("the hub policy", () => {
 });
 
 describe("isCacheableHubRequest", () => {
-  it("matches the six public hub/index pages on their canonical query-less URL", () => {
+  it("matches the six paginated hub/index pages on their canonical query-less URL", () => {
     for (const path of ["/", "/artists", "/albums", "/labels", "/tracks", "/fresh"]) {
       expect(isCacheableHubRequest(path, "")).toBe(true);
     }
@@ -113,19 +113,70 @@ describe("isCacheableHubRequest", () => {
     expect(isCacheableHubRequest("/artists/", "")).toBe(true);
   });
 
-  it("does NOT cache a paginated/filtered/sorted variant (the cache key drops the query)", () => {
-    // THE safety property for the hubs: the cache key strips the query string, so caching
-    // `?page=2` would serve page 2's body back for page 1. Every hub takes search params
-    // that change what it renders (`page` on the three indexes, `galaxy`/`sort` on
-    // /tracks, `view` on /fresh, `story` on home), so a query-bearing request must flow
-    // through UNCACHED.
-    expect(isCacheableHubRequest("/artists", "?page=2")).toBe(false);
-    expect(isCacheableHubRequest("/albums", "?page=3")).toBe(false);
-    expect(isCacheableHubRequest("/labels", "?page=2")).toBe(false);
+  it("matches the stable public pages enrolled at the hub policy on their bare URL", () => {
+    // FIX 2: the index/static/legal/docs pages that previously emitted no Cache-Control.
+    for (const path of [
+      "/galaxies",
+      "/mixtapes",
+      "/logbook",
+      "/newsletter",
+      "/reach",
+      "/about",
+      "/privacy",
+      "/terms",
+      "/docs",
+      "/docs/api",
+      "/docs/getting-started",
+      // Stable-but-writable detail pages ride the hub window (no purge coupling).
+      "/galaxies/drift",
+      "/logbook/2026-07-20",
+      "/newsletter/3",
+    ]) {
+      expect(isCacheableHubRequest(path, "")).toBe(true);
+    }
+
+    // A single trailing slash is the same canonical page.
+    expect(isCacheableHubRequest("/mixtapes/", "")).toBe(true);
+    expect(isCacheableHubRequest("/docs/", "")).toBe(true);
+  });
+
+  it("caches a LONE numeric ?page=N on a paginated hub (folded into the key)", () => {
+    // FIX 1: the documented crawler pager into the catalogue long tail. A lone positive
+    // integer is cacheable; the key folds the parsed page so N never collides onto page 1.
+    expect(isCacheableHubRequest("/artists", "?page=2")).toBe(true);
+    expect(isCacheableHubRequest("/albums", "?page=3")).toBe(true);
+    expect(isCacheableHubRequest("/labels", "?page=42")).toBe(true);
+    expect(isCacheableHubRequest("/artists/", "?page=2")).toBe(true);
+    // A parsed positive integer with leading zeros is still one page.
+    expect(isCacheableHubRequest("/artists", "?page=007")).toBe(true);
+  });
+
+  it("REFUSES a non-lone-numeric page or any other query on the paginated hubs", () => {
+    // THE safety property: only a lone positive integer folds into the key. Anything else
+    // must flow UNCACHED, or the query-dropping key would serve the wrong body.
+    expect(isCacheableHubRequest("/artists", "?page=0")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?page=-1")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?page=1.5")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?page=abc")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?page=")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?page=2&page=3")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?page=2&sort=old")).toBe(false);
+    expect(isCacheableHubRequest("/artists", "?q=drift")).toBe(false);
     expect(isCacheableHubRequest("/tracks", "?galaxy=drift")).toBe(false);
     expect(isCacheableHubRequest("/tracks", "?sort=oldest")).toBe(false);
     expect(isCacheableHubRequest("/fresh", "?view=labels")).toBe(false);
     expect(isCacheableHubRequest("/", "?story=2026.A.7Q")).toBe(false);
+  });
+
+  it("REFUSES ANY query on a bare-URL-only static/detail page — even ?page=N", () => {
+    // The FIX-2 pages are NOT paginated hubs: a `?page=` on a galaxy/sector, a `?platform=`
+    // on /reach, or any other param must flow uncached (the key drops it).
+    expect(isCacheableHubRequest("/galaxies/drift", "?page=2")).toBe(false);
+    expect(isCacheableHubRequest("/logbook/2026-07-20", "?page=2")).toBe(false);
+    expect(isCacheableHubRequest("/reach", "?platform=tiktok")).toBe(false);
+    expect(isCacheableHubRequest("/galaxies", "?page=2")).toBe(false);
+    expect(isCacheableHubRequest("/docs/api", "?v=2")).toBe(false);
+    expect(isCacheableHubRequest("/newsletter", "?utm=x")).toBe(false);
   });
 
   it("does NOT match a neighbouring or malformed path", () => {
@@ -137,6 +188,16 @@ describe("isCacheableHubRequest", () => {
     expect(isCacheableHubRequest("/account", "")).toBe(false);
     expect(isCacheableHubRequest("/recommendations", "")).toBe(false);
     expect(isCacheableHubRequest("/chat", "")).toBe(false);
+    // Interactive/personalized siblings that share a prefix must NOT be caught.
+    expect(isCacheableHubRequest("/galaxy", "")).toBe(false);
+    expect(isCacheableHubRequest("/mix", "")).toBe(false);
+    expect(isCacheableHubRequest("/pipeline", "")).toBe(false);
+    expect(isCacheableHubRequest("/device", "")).toBe(false);
+    expect(isCacheableHubRequest("/status", "")).toBe(false);
+    // The markdown emitter shares the `docs` stem but is a non-HTML surface: must NOT match.
+    expect(isCacheableHubRequest("/docs.md/getting-started", "")).toBe(false);
+    // A nested path under a detail parent is not a detail page.
+    expect(isCacheableHubRequest("/galaxies/drift/tracks", "")).toBe(false);
     // A doubled root is not the root: it must not fold onto the `/` entry.
     expect(isCacheableHubRequest("//", "")).toBe(false);
   });
@@ -150,29 +211,60 @@ describe("edgeCachePolicyFor", () => {
     expect(edgeCachePolicyFor("/", "")).toBe(HUB_CACHE_POLICY);
     expect(edgeCachePolicyFor("/artists", "")).toBe(HUB_CACHE_POLICY);
     expect(edgeCachePolicyFor("/fresh", "")).toBe(HUB_CACHE_POLICY);
+    // A lone page on a paginated hub rides the hub policy (its key folds the page).
+    expect(edgeCachePolicyFor("/artists", "?page=3")).toBe(HUB_CACHE_POLICY);
+  });
+
+  it("routes the newly-enrolled stable public pages to the hub policy", () => {
+    for (const path of [
+      "/galaxies",
+      "/galaxies/drift",
+      "/mixtapes",
+      "/logbook",
+      "/logbook/2026-07-20",
+      "/newsletter",
+      "/newsletter/3",
+      "/reach",
+      "/about",
+      "/privacy",
+      "/terms",
+      "/docs",
+      "/docs/api",
+    ]) {
+      expect(edgeCachePolicyFor(path, "")).toBe(HUB_CACHE_POLICY);
+    }
   });
 
   it("returns undefined — never a policy — for anything not on the cacheable list", () => {
     // `undefined` is what tells server.ts to bypass the shared cache entirely. Every
-    // account/admin/personalized surface must land here, as must an unknown path.
+    // account/admin/personalized/interactive surface must land here, as must an unknown path.
     for (const path of [
       "/admin",
       "/admin/tracks",
       "/account",
       "/recommendations",
       "/chat",
+      "/device",
+      "/status",
+      "/galaxy",
+      "/mix",
+      "/pipeline",
       "/api/v1/tracks",
-      "/logbook",
-      "/galaxies",
       "/nope",
     ]) {
       expect(edgeCachePolicyFor(path, "")).toBeUndefined();
     }
   });
 
-  it("returns undefined for a query-bearing entity or hub URL", () => {
-    expect(edgeCachePolicyFor("/artists", "?page=2")).toBeUndefined();
+  it("returns undefined for a query-bearing entity URL or a non-lone-page hub URL", () => {
     expect(edgeCachePolicyFor("/artist/sub-focus", "?page=2")).toBeUndefined();
+    // A non-lone-numeric page or a second param is refused even on a paginated hub.
+    expect(edgeCachePolicyFor("/artists", "?page=0")).toBeUndefined();
+    expect(edgeCachePolicyFor("/artists", "?page=2&sort=old")).toBeUndefined();
+    expect(edgeCachePolicyFor("/tracks", "?galaxy=drift")).toBeUndefined();
+    // Any query on a bare-URL-only static/detail page is refused.
+    expect(edgeCachePolicyFor("/reach", "?platform=tiktok")).toBeUndefined();
+    expect(edgeCachePolicyFor("/galaxies/drift", "?page=2")).toBeUndefined();
   });
 });
 
@@ -226,6 +318,88 @@ describe("withEdgeCache", () => {
       await Promise.resolve();
 
       expect([...fake.entries.keys()]).toEqual(["https://www.fluncle.com/artists"]);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("keys a paginated hub's ?page=N under its OWN entry — never colliding onto page 1", async () => {
+    // THE sacred collision-safety property (FIX 1): page 1 (`/artists`), page 2, and page 3 each
+    // get a distinct `caches.default` key, and a repeat hit on any of them serves ITS body — so
+    // the query-dropping key can never serve page 2's body back for page 1.
+    const fake = installFakeCache();
+
+    try {
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        async () => html("page-1"),
+        HUB_CACHE_POLICY,
+      );
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/artists?page=2"),
+        async () => html("page-2"),
+        HUB_CACHE_POLICY,
+      );
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/artists?page=3"),
+        async () => html("page-3"),
+        HUB_CACHE_POLICY,
+      );
+      await Promise.resolve();
+
+      // Three distinct keys, the page folded verbatim into the key path.
+      expect(new Set(fake.entries.keys())).toEqual(
+        new Set([
+          "https://www.fluncle.com/artists",
+          "https://www.fluncle.com/artists?page=2",
+          "https://www.fluncle.com/artists?page=3",
+        ]),
+      );
+
+      // Each key serves its OWN body back on a hit — no cross-page bleed.
+      const p1 = await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        async () => html("MISS-1"),
+        HUB_CACHE_POLICY,
+      );
+      const p2 = await withEdgeCache(
+        new Request("https://www.fluncle.com/artists?page=2"),
+        async () => html("MISS-2"),
+        HUB_CACHE_POLICY,
+      );
+
+      expect(p1.headers.get("x-edge-cache")).toBe("fresh");
+      expect(await p1.text()).toBe("page-1");
+      expect(p2.headers.get("x-edge-cache")).toBe("fresh");
+      expect(await p2.text()).toBe("page-2");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("normalizes ?page=007 and ?page=7 onto ONE canonical entry", async () => {
+    // The key folds the PARSED integer, so equivalent spellings share one entry rather than
+    // splintering the cache (and a share/utm param on a paginated hub never fragments it).
+    const fake = installFakeCache();
+
+    try {
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/albums?page=007"),
+        async () => html("page-7"),
+        HUB_CACHE_POLICY,
+      );
+      await Promise.resolve();
+
+      expect([...fake.entries.keys()]).toEqual(["https://www.fluncle.com/albums?page=7"]);
+
+      const hit = await withEdgeCache(
+        new Request("https://www.fluncle.com/albums?page=7"),
+        async () => html("MISS"),
+        HUB_CACHE_POLICY,
+      );
+
+      expect(hit.headers.get("x-edge-cache")).toBe("fresh");
+      expect(await hit.text()).toBe("page-7");
     } finally {
       fake.restore();
     }
