@@ -251,6 +251,9 @@ async function measureShape(
   let newFailed = 0;
   let recallHits = 0;
   let recallTrials = 0;
+  // Stop hammering a path that has failed twice with zero successes — a capped scan can take
+  // the full server timeout to error, so 40 × that would be hours. Two strikes = "exceeded cap".
+  const dead = (ms: number[], failed: number): boolean => ms.length === 0 && failed >= 2;
 
   for (let t = 0; t < args.trials; t += 1) {
     const chosen = Array.from(
@@ -262,22 +265,26 @@ async function measureShape(
 
     // OLD baseline — may exceed the query cap at scale; that IS the point, so catch it.
     let oldTop: number[] | null = null;
-    const t0 = performance.now();
-    try {
-      oldTop = await oldPath(db, exactProbes, where, whereArgs, args.k);
-      oldMs.push(performance.now() - t0);
-    } catch {
-      oldFailed += 1;
+    if (!dead(oldMs, oldFailed)) {
+      const t0 = performance.now();
+      try {
+        oldTop = await oldPath(db, exactProbes, where, whereArgs, args.k);
+        oldMs.push(performance.now() - t0);
+      } catch {
+        oldFailed += 1;
+      }
     }
 
     // NEW coarse+rescore — a slow coarse scan here is itself a finding, so catch it too.
     let newTop: number[] | null = null;
-    const t1 = performance.now();
-    try {
-      newTop = await newPath(db, coarseProbes, exactProbes, where, whereArgs, args.k);
-      newMs.push(performance.now() - t1);
-    } catch {
-      newFailed += 1;
+    if (!dead(newMs, newFailed)) {
+      const t1 = performance.now();
+      try {
+        newTop = await newPath(db, coarseProbes, exactProbes, where, whereArgs, args.k);
+        newMs.push(performance.now() - t1);
+      } catch {
+        newFailed += 1;
+      }
     }
 
     // Recall only where BOTH completed (the exact baseline is the ground truth).
