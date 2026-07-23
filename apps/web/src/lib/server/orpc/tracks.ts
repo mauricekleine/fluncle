@@ -91,6 +91,12 @@ export function tracksHandlers(os: Implementer) {
       const until = parseTimestamp(input.until);
 
       const page = await listTracks({
+        // Skip the redundant `count(*)` companion on cursor pages: the archive total is
+        // invariant across a scroll, so only page 1 (no cursor) pays for it. Page 2+
+        // falls back to its own row count, which no consumer reads — the home feed and
+        // the CLI `recent` pager both take the total off page 1 now (stable across the
+        // scroll). That drops a growing findings⋈tracks scan from every "load more".
+        countTotal: cursor === undefined,
         cursor,
         includeMixtapes: since === undefined && until === undefined,
         // The public feed reads the lean list projection (Finding B4): no list surface

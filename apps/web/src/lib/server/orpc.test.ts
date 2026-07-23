@@ -210,6 +210,7 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
     await handleOrpc(get("https://www.fluncle.com/api/v1/findings"));
 
     expect(listTracks).toHaveBeenCalledWith({
+      countTotal: true,
       cursor: undefined,
       includeMixtapes: true,
       lean: true,
@@ -229,6 +230,8 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
     await handleOrpc(get(`https://www.fluncle.com/api/v1/findings?limit=100&cursor=${cursor}`));
 
     expect(listTracks).toHaveBeenCalledWith({
+      // A cursor is present (page 2+) → skip the redundant archive count(*).
+      countTotal: false,
       cursor: { addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" },
       includeMixtapes: true,
       lean: true,
@@ -247,6 +250,7 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
     );
 
     expect(listTracks).toHaveBeenCalledWith({
+      countTotal: true,
       cursor: undefined,
       includeMixtapes: false,
       lean: true,
@@ -263,6 +267,7 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
     await handleOrpc(get("https://www.fluncle.com/api/v1/findings?limit=abc&since=not-a-date"));
 
     expect(listTracks).toHaveBeenCalledWith({
+      countTotal: true,
       cursor: undefined,
       includeMixtapes: true,
       lean: true,
@@ -270,6 +275,25 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
       since: undefined,
       until: undefined,
     });
+  });
+
+  it("skips the archive count on cursor pages, keeps it on page 1 (the redundant-scan fix)", async () => {
+    // The total is invariant across a scroll, so only page 1 (no cursor) pays for the
+    // `count(*)`. A cursor request — every "load more" — passes `countTotal: false`, so
+    // the growing findings⋈tracks scan runs once per feed load, not once per page. The
+    // home feed and the CLI `recent` pager both read the total off page 1, so no consumer
+    // reads the skipped cursor-page total.
+    const { encodeTrackCursor } = await import("./tracks");
+    const cursor = encodeTrackCursor({ addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" });
+    const { handleOrpc } = await import("./orpc");
+
+    listTracks.mockResolvedValueOnce(PAGE);
+    await handleOrpc(get("https://www.fluncle.com/api/v1/findings"));
+    expect(listTracks).toHaveBeenLastCalledWith(expect.objectContaining({ countTotal: true }));
+
+    listTracks.mockResolvedValueOnce(PAGE);
+    await handleOrpc(get(`https://www.fluncle.com/api/v1/findings?cursor=${cursor}`));
+    expect(listTracks).toHaveBeenLastCalledWith(expect.objectContaining({ countTotal: false }));
   });
 
   it("STRIPS the private sourceAudioKey from a captured finding before it world-serves", async () => {
