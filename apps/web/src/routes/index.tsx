@@ -186,7 +186,12 @@ function HomePage() {
   });
 
   const tracks = data.pages.flatMap((page) => page.tracks);
-  const totalCount = data.pages.at(-1)?.totalCount ?? initialPage.totalCount;
+  // Read the archive total off PAGE 1 (`pages[0]`, the always-cursor-less first page),
+  // never the newest fetched page. Only page 1 runs the `count(*)`; cursor pages skip it
+  // (see `list_findings`) and report their own row count, which would collapse the
+  // descending track-number base below. Page 1 is stable across the whole scroll — the
+  // total is invariant — so the numbering base stays anchored to the real total.
+  const totalCount = data.pages[0]?.totalCount ?? initialPage.totalCount;
   // The last consumed cursor, for the sr-only progress note below.
   const cursor = data.pageParams.at(-1) as string | undefined;
   const error = loadError
