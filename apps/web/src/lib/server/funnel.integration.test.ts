@@ -220,9 +220,7 @@ describe("computeCatalogueSnapshotCounts queues (real SQL)", () => {
   });
 
   it("splits the anchor queue by embedding (ready vs awaiting audio), summing to the whole queue", async () => {
-    // The embedding split is the LIVE-only refinement (an expensive full anchor-worklist scan), so it
-    // rides `getFunnelLive` — the operator's "refresh live" recompute — not the snapshot-backed default.
-    const { getFunnelLive } = await import("./funnel");
+    const { getFunnel } = await import("./funnel");
     const { countTrackWork } = await import("./track-work");
 
     // Two un-anchored, otherwise-anchorable rows on opposite sides of the embedded line, plus one
@@ -236,19 +234,17 @@ describe("computeCatalogueSnapshotCounts queues (real SQL)", () => {
 
     await seedCatalogueTrack(db, { trackId: "already-anchored" }); // keeps its spotify_uri
 
-    const { live } = await getFunnelLive();
+    const { live } = await getFunnel();
 
     // The fixtures land one on each side of the embedded line.
-    const ready = live.queues.anchorQueueReady ?? 0;
-    const awaitingAudio = live.queues.anchorQueueAwaitingAudio ?? 0;
-    expect(ready).toBe(1);
-    expect(awaitingAudio).toBe(1);
+    expect(live.queues.anchorQueueReady).toBe(1);
+    expect(live.queues.anchorQueueAwaitingAudio).toBe(1);
 
     // THE PIN: the embedding split is a PARTITION of the exact same anchor worklist as the ISRC
     // split — both ride `kindClause("anchor")` — so it sums to the whole queue, which is itself the
     // sweep's own count. The two can never disagree.
     const whole = live.queues.anchorQueueIsrc + live.queues.anchorQueueNoIsrc;
-    expect(ready + awaitingAudio).toBe(whole);
+    expect(live.queues.anchorQueueReady + live.queues.anchorQueueAwaitingAudio).toBe(whole);
     expect(whole).toBe(await countTrackWork({ kind: "anchor", scope: "catalogue" }));
   });
 
@@ -372,5 +368,28 @@ describe("getFunnel (real SQL)", () => {
 
     // Only the in-window (recent) snapshot is returned.
     expect(view.series.map((row) => row.day)).toEqual([day(0)]);
+  });
+
+  it("computes the live block on EVERY call — a count change shows without a new snapshot", async () => {
+    const { getFunnel, recordCatalogueSnapshot } = await import("./funnel");
+
+    // One catalogue row, and ONE snapshot recording the count at that moment (crawled = 1).
+    await seedCatalogueTrack(db, { trackId: "cat-1" });
+    await recordCatalogueSnapshot({ day: "2026-07-18" });
+
+    const first = await getFunnel();
+    expect(first.live.stages.crawled).toBe(1);
+
+    // A second catalogue row lands, but NO new snapshot is written. A snapshot-backed read would
+    // still report 1; a live read sees 2.
+    await seedCatalogueTrack(db, { trackId: "cat-2" });
+
+    const second = await getFunnel();
+    expect(second.live.stages.crawled).toBe(2);
+
+    // The SERIES still comes from the `catalogue_snapshots` ledger — it holds only the one recorded
+    // day, and its stored count is the snapshot's (1), untouched by the live block moving to 2.
+    expect(second.series.map((row) => row.day)).toEqual(["2026-07-18"]);
+    expect(second.series[0]?.crawled).toBe(1);
   });
 });

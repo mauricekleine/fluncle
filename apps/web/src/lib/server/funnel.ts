@@ -15,28 +15,23 @@
 //   - the capture-budget meter comes from `getCatalogueCaptureState` (capture-budget.ts) —
 //     the same readout `/admin/catalogue` renders and the brake obeys.
 //
-// ── THE HOT PATH READS THE SNAPSHOT, NEVER THE SCAN ────────────────────────────────────
-// The expensive block (stages, queues, frontier — every field `CatalogueSnapshotCounts` persists)
-// is a full scan of the growing `tracks` table. It runs ONCE A DAY, in the snapshot write — NOT on
-// every page load. `getFunnel` DEFAULTS the live block from the latest `catalogue_snapshots` row
-// (already in hand from the series read) and states its age; plain navigation and the admin
-// focus-refetch pay only the cheap capture-budget read + the bounded series walk, never the scan
-// storm. The operator's "refresh live" (`getFunnelLive`) is the ONE path that recomputes the scan
-// on demand. Fresh env (no snapshot yet): compute the live block once so the page is never blank.
-//
+// ── TWO OPS ────────────────────────────────────────────────────────────────────────────
 //   - `recordCatalogueSnapshot` (AGENT tier) — compute the live counts and UPSERT one row per
 //     UTC day (`on conflict(day) do update`), so a re-fired daily tick overwrites rather than
-//     doubles a bar. The on-box `fluncle-funnel-snapshot` timer fires it once a day.
-//   - `getFunnel` (admin tier) — the SNAPSHOT-BACKED live block (+ live capture budget) + the
-//     bounded day-by-day series read back from the ledger (cut in SQL, plain ASC walk on `day`).
-//   - `getFunnelLive` (admin tier) — the full recompute behind the "refresh live" action.
+//     doubles a bar. The on-box `fluncle-funnel-snapshot` timer fires it once a day; the row it
+//     writes is the day-point the growth SERIES reads back — nothing on the read path depends on it.
+//   - `getFunnel` (admin tier) — the live stages + queues + meters computed NOW (one
+//     `gatherLiveFunnel` pass, every read run exactly once), plus the bounded day-by-day series
+//     read back from the ledger (cut in SQL, plain ASC index walk on `day`).
 //
 // ── SCALE NOTE ────────────────────────────────────────────────────────────────────────
-// The stage scan + anchor-worklist split are single-pass conditional-aggregates over
-// `tracks left join findings` (never `union all` over a CTE — trap #4, docs/local-database.md). No
-// vector or feature blob crosses the wire — an `embedding_blob is not null` test reads the cell's
-// null flag, not its bytes. Both are full scans of a growing table, so they run only in the daily
-// snapshot write and the explicit refresh — never on the hot path.
+// The stage scan + anchor split are single-pass conditional-aggregates over `tracks left join
+// findings` (never `union all` over a CTE — trap #4, docs/local-database.md). No vector or feature
+// blob crosses the wire — an `embedding_blob is not null` test reads the cell's null flag, not its
+// bytes. They ARE full scans of a growing table, computed live on every load: sub-second COUNT
+// scans this admin page (a single operator, low QPS) pays honestly rather than serving a snapshot
+// up to a day stale. Every other read here is either bounded (the queue counts ride their partial
+// indexes) or on the small `crawl_frontier` / `catalogue_snapshots` tables.
 
 import { type CatalogueCaptureState, getCatalogueCaptureState } from "./capture-budget";
 import { getFrontierCounts } from "./crawl";
@@ -87,14 +82,10 @@ export type FunnelQueues = {
  * crawler metadata still waiting on capture/embed (it costs nothing until the audio pipeline reaches
  * it). Both derive from the SAME anchor worklist predicate, so they sum to `anchorQueueIsrc +
  * anchorQueueNoIsrc`.
- *
- * OPTIONAL because the split is an expensive full anchor-worklist scan that never rides the hot
- * path: the SNAPSHOT-BACKED default omits it (the page shows the folded queue total instead), and
- * the operator's "refresh live" recompute fills it in.
  */
 export type FunnelLiveQueues = FunnelQueues & {
-  anchorQueueAwaitingAudio?: number;
-  anchorQueueReady?: number;
+  anchorQueueAwaitingAudio: number;
+  anchorQueueReady: number;
 };
 
 /** Every integer the daily snapshot persists — the stages, the queues, and the frontier. */
@@ -125,20 +116,8 @@ export type FunnelMeters = {
   frontierPending: number;
 };
 
-/**
- * How fresh the live block is. `live` is true only after an explicit "refresh live" recompute (or
- * the fresh-env fallback); on the snapshot-backed default it is false and `day` is the UTC day of
- * the snapshot the block was read from (null when no snapshot exists yet). The UI states this.
- */
-export type FunnelFreshness = {
-  day: string | null;
-  live: boolean;
-};
-
-/** The one-call read behind `/admin/funnel`: the live block (snapshot-backed or recomputed), its
- *  freshness, plus the history. */
+/** The one-call read behind `/admin/funnel`: everything live now, plus the history. */
 export type FunnelView = {
-  freshness: FunnelFreshness;
   live: {
     meters: FunnelMeters;
     queues: FunnelLiveQueues;
@@ -224,13 +203,13 @@ type LiveFunnelData = {
 };
 
 /**
- * ONE full live computation — the scan storm, every read run exactly once: the stage scan, the
- * anchor split (one pass, both partitions), the re-ask bench, the three audio-queue counts, and the
- * frontier group-bys. The capture budget state is read once up front and threaded into the capture
- * count (so `getCatalogueCaptureState` is never read twice per request) and returned for the meters.
+ * ONE full live computation — every read run exactly once: the stage scan, the anchor split (one
+ * pass, both partitions), the re-ask bench, the three audio-queue counts, and the frontier group-bys.
+ * The capture budget state is read once up front and threaded into the capture count (so
+ * `getCatalogueCaptureState` is never read twice per request) and returned for the meters.
  *
- * This is off the hot path by design: only the daily snapshot write and the operator's "refresh
- * live" call it. `computeCatalogueSnapshotCounts` returns its persisted subset for the cron.
+ * Both `getFunnel` (the page read, live on every load) and `recordCatalogueSnapshot` (the daily cron)
+ * call it; `computeCatalogueSnapshotCounts` returns its persisted subset for the cron's row.
  */
 async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<LiveFunnelData> {
   const db = await getDb();
@@ -464,23 +443,7 @@ async function readSnapshotSeries(windowDays: number): Promise<CatalogueSnapshot
   return typedRows<SnapshotDbRow>(result.rows).map(mapSnapshotRow);
 }
 
-/**
- * The single most recent snapshot row, or undefined when the ledger is empty. `order by day desc
- * limit 1` on the `day` PK — a backward btree walk to the first row, not a `desc()` INDEX (which is
- * the ratified snapshot trap), so it stays a one-row seek as the ledger grows. Used only as the
- * fallback when the windowed series has no in-window row (a long-dead cron); the common hot path
- * reads the latest off the series it already has.
- */
-async function readLatestSnapshot(): Promise<CatalogueSnapshotRow | undefined> {
-  const db = await getDb();
-  const result = await db.execute(
-    `select ${SNAPSHOT_COLUMNS} from catalogue_snapshots order by day desc limit 1`,
-  );
-
-  return typedRows<SnapshotDbRow>(result.rows).map(mapSnapshotRow)[0];
-}
-
-/** The capture-budget meter — the live readout, shared by both the snapshot-backed and live blocks. */
+/** The capture-budget meter — the live readout the meters band renders. */
 function captureBudgetMeter(state: CatalogueCaptureState): FunnelMeters["captureBudget"] {
   return {
     dailyBytes: state.budget.dailyBytes,
@@ -506,7 +469,7 @@ function stagesFrom(source: FunnelStages): FunnelStages {
   };
 }
 
-/** The FULLY-live block — recomputed counts, plus the live-only anchor embedding split. */
+/** The live block — the freshly-computed counts, plus the live-only anchor embedding split. */
 function buildLiveBlock(data: LiveFunnelData): FunnelView["live"] {
   const { counts } = data;
 
@@ -531,76 +494,17 @@ function buildLiveBlock(data: LiveFunnelData): FunnelView["live"] {
 }
 
 /**
- * The SNAPSHOT-BACKED block — stages + queues + frontier read from the persisted row (the scan the
- * daily cron already paid), with only the cheap capture budget read live. The anchor embedding split
- * (`anchorQueueReady`/`anchorQueueAwaitingAudio`) is omitted: it is an expensive full anchor-worklist
- * scan the snapshot does not persist, so it is left for the operator's "refresh live" to fill in (the
- * page shows the folded anchor total until then).
- */
-function buildSnapshotBlock(
-  row: CatalogueSnapshotRow,
-  state: CatalogueCaptureState,
-): FunnelView["live"] {
-  return {
-    meters: {
-      anchorBackoff: row.anchorBackoff,
-      captureBudget: captureBudgetMeter(state),
-      frontierPending: row.frontierPending,
-    },
-    queues: {
-      analyzeQueue: row.analyzeQueue,
-      anchorBackoff: row.anchorBackoff,
-      anchorQueueIsrc: row.anchorQueueIsrc,
-      anchorQueueNoIsrc: row.anchorQueueNoIsrc,
-      captureQueue: row.captureQueue,
-      embedQueue: row.embedQueue,
-    },
-    stages: stagesFrom(row),
-  };
-}
-
-/**
- * The one-call read behind `/admin/funnel` — the SNAPSHOT-BACKED default. The live block is read
- * from the latest `catalogue_snapshots` row (the scan the daily cron already paid), so plain
- * navigation and the admin focus-refetch pay only the cheap capture-budget read + the bounded series
- * walk — never the stage/anchor scan storm. The freshness (the snapshot's day) is surfaced so the
- * UI can state its age. Fresh env (no snapshot yet): compute the live block once so the page is never
- * blank. The operator's "refresh live" (`getFunnelLive`) is the one path that recomputes on demand.
+ * The one-call read behind `/admin/funnel`: the live stages + queues + meters computed NOW (one
+ * `gatherLiveFunnel` pass — every scan run exactly once), plus the bounded day-by-day series read
+ * back from the ledger. The live block is always fresh: this is a single-operator admin page at low
+ * QPS, and the block is a handful of sub-second COUNT scans, so it is computed on every load rather
+ * than served from a stale daily snapshot. The series still comes from `catalogue_snapshots` (the
+ * daily cron's row per UTC day) — that is the only thing the snapshot ledger backs. `get_funnel`
+ * handler body.
  */
 export async function getFunnel(windowDays?: number): Promise<FunnelView> {
   const window = clampSnapshotWindow(windowDays);
-  const [captureState, series] = await Promise.all([
-    getCatalogueCaptureState(),
-    readSnapshotSeries(window),
-  ]);
-
-  // The latest snapshot is the last (newest) in-window row; fall back to a dedicated one-row read
-  // only when the window holds none (a cron that has been dead longer than the window).
-  const latest = series[series.length - 1] ?? (await readLatestSnapshot());
-
-  if (!latest) {
-    // Fresh env: no snapshot has ever been written. Compute the live block ONCE (reusing the
-    // capture state already read) so the first load is honest rather than empty.
-    const data = await gatherLiveFunnel(captureState);
-
-    return { freshness: { day: null, live: true }, live: buildLiveBlock(data), series };
-  }
-
-  return {
-    freshness: { day: latest.day, live: false },
-    live: buildSnapshotBlock(latest, captureState),
-    series,
-  };
-}
-
-/**
- * The FULL recompute behind the operator's "refresh live" action — the scan storm, on demand. Runs
- * the whole live gather (stages, both anchor partitions, queues, frontier) plus the bounded series,
- * and marks the view live so the UI drops the "as of <day>" age. Deliberately NOT the default read.
- */
-export async function getFunnelLive(windowDays?: number): Promise<FunnelView> {
-  const window = clampSnapshotWindow(windowDays);
   const [data, series] = await Promise.all([gatherLiveFunnel(), readSnapshotSeries(window)]);
 
-  return { freshness: { day: null, live: true }, live: buildLiveBlock(data), series };
+  return { live: buildLiveBlock(data), series };
 }

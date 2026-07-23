@@ -48,13 +48,11 @@ const FunnelQueuesSchema = z
  * waiting on capture/embed (it costs nothing until the audio pipeline reaches it). Both derive from
  * the SAME anchor worklist predicate, so they sum to `anchorQueueIsrc + anchorQueueNoIsrc`. This
  * split is a live-read refinement only — it is never persisted, so it rides `live.queues`, not the
- * snapshot row. Both are OPTIONAL: the split is an expensive full anchor-worklist scan that the
- * snapshot-backed default read omits (the page shows the folded queue total instead), and the
- * operator's "refresh live" recompute fills them in.
+ * snapshot row.
  */
 const FunnelLiveQueuesSchema = FunnelQueuesSchema.extend({
-  anchorQueueAwaitingAudio: z.number().int().optional(),
-  anchorQueueReady: z.number().int().optional(),
+  anchorQueueAwaitingAudio: z.number().int(),
+  anchorQueueReady: z.number().int(),
 }).meta({ id: "FunnelLiveQueues" });
 
 /** The operator's spend levers, surfaced as gauges. */
@@ -119,10 +117,10 @@ export const recordCatalogueSnapshot = oc
 /**
  * `get_funnel` → `GET /admin/funnel` (operationId `getFunnel`).
  *
- * Admin tier. Returns the live pipeline (stages + queues + meters) plus the bounded snapshot series
- * (oldest-first, cut in SQL). The live block is SNAPSHOT-BACKED — read from the latest persisted row
- * so the hot path never pays the growing-table scan — and `freshness` states its age (`live:false`
- * with the snapshot's `day`); an explicit refresh recomputes it (`live:true`, `day:null`). `windowDays`
+ * Admin tier. Returns the live pipeline (stages + queues + meters) computed on every load, plus the
+ * bounded snapshot series (oldest-first, cut in SQL). The live block is a handful of sub-second COUNT
+ * scans, so this single-operator admin surface computes it fresh rather than serving a stale daily
+ * snapshot; only the growth `series` is read back from the `catalogue_snapshots` ledger. `windowDays`
  * is a tolerant optional STRING (the query-param convention — parsed + clamped in-handler, default 90,
  * max 365).
  */
@@ -137,7 +135,6 @@ export const getFunnel = oc
   .input(z.object({ windowDays: z.string().optional() }))
   .output(
     z.object({
-      freshness: z.object({ day: z.string().nullable(), live: z.boolean() }),
       live: z.object({
         meters: FunnelMetersSchema,
         queues: FunnelLiveQueuesSchema,

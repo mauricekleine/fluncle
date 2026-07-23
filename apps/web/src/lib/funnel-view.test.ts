@@ -104,10 +104,8 @@ describe("stageBars", () => {
     expect(byKey.crawled?.queued).toBeUndefined();
     expect(byKey.recEligible?.queued).toBeUndefined();
     expect(byKey.certified?.queued).toBeUndefined();
-    // Anchor carries the folded queue total (isrc + no-isrc) as the fallback the page shows when the
-    // live-only ready/awaiting split is absent (the snapshot-backed read); when the split IS present
-    // the page renders it instead (below).
-    expect(byKey.anchored?.queued).toBe(50);
+    // Anchor carries no folded `queued` — it shows the split instead (below).
+    expect(byKey.anchored?.queued).toBeUndefined();
   });
 
   it("splits the anchor stage's queued-behind into ready vs awaiting audio, summing to the whole queue", () => {
@@ -123,24 +121,6 @@ describe("stageBars", () => {
     expect((split?.ready ?? 0) + (split?.awaitingAudio ?? 0)).toBe(
       QUEUES.anchorQueueIsrc + QUEUES.anchorQueueNoIsrc,
     );
-  });
-
-  it("falls back to the folded anchor total when the live-only split is absent (snapshot-backed)", () => {
-    // The snapshot-backed read omits the expensive live-only embedding split; the anchor row then
-    // shows the folded queue total (isrc + no-isrc) and no split.
-    const snapshotQueues: FunnelLiveQueues = {
-      analyzeQueue: 30,
-      anchorBackoff: 7,
-      anchorQueueIsrc: 40,
-      anchorQueueNoIsrc: 10,
-      captureQueue: 90,
-      embedQueue: 20,
-    };
-    const bars = stageBars(STAGES, snapshotQueues);
-    const anchored = bars.find((bar) => bar.key === "anchored");
-
-    expect(anchored?.queuedSplit).toBeUndefined();
-    expect(anchored?.queued).toBe(50);
   });
 
   it("guards divide-by-zero: an all-empty pipeline is every width 0, never NaN", () => {

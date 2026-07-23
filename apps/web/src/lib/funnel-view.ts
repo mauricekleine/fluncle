@@ -47,11 +47,9 @@ type StageDef = {
   /**
    * A two-population split of the queued-behind, for a stage where the single figure hides two
    * things that mean different things (the anchor worklist: embedded-and-ready vs awaiting audio).
-   * When it returns a split the page renders it in place of the plain `queued` figure; when it
-   * returns undefined (the snapshot-backed read, which does not carry the live-only split) the page
-   * falls back to `queued`.
+   * When present the page renders this in place of the plain `queued` figure.
    */
-  queuedSplit?: (queues: FunnelLiveQueues) => StageQueueSplit | undefined;
+  queuedSplit?: (queues: FunnelLiveQueues) => StageQueueSplit;
 };
 
 // The flow order and each stage's operating surface. The crawled rows and every mid-flight
@@ -64,18 +62,10 @@ const STAGE_DEFS: StageDef[] = [
     key: "anchored",
     label: "Anchored",
     link: { lens: "ear", to: "/admin/catalogue" },
-    // The folded anchor queue total (the two verification paths) — always available, snapshot or
-    // live. It is the fallback the page shows when the live-only ready/awaiting split is absent.
-    queued: (q) => q.anchorQueueIsrc + q.anchorQueueNoIsrc,
     // The anchor queue splits into the embedded head the sweep works now (ready) and the crawler
-    // metadata still awaiting audio — two populations that mean different things, so when the split
-    // is present the page shows both rather than the folded figure. It is a live-only refinement (an
-    // expensive full anchor-worklist scan), so the SNAPSHOT-BACKED read omits it and this returns
-    // undefined — the page then shows `queued` above. When present it sums to that same total.
-    queuedSplit: (q) =>
-      q.anchorQueueReady !== undefined && q.anchorQueueAwaitingAudio !== undefined
-        ? { awaitingAudio: q.anchorQueueAwaitingAudio, ready: q.anchorQueueReady }
-        : undefined,
+    // metadata still awaiting audio — two populations that mean different things, so the page shows
+    // both rather than one folded figure. The split sums to `anchorQueueIsrc + anchorQueueNoIsrc`.
+    queuedSplit: (q) => ({ awaitingAudio: q.anchorQueueAwaitingAudio, ready: q.anchorQueueReady }),
   },
   {
     key: "captured",

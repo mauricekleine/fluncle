@@ -1,15 +1,12 @@
-import { Button } from "@fluncle/ui/components/button";
 import {
-  ArrowClockwiseIcon,
   ArrowDownIcon,
   ArrowRightIcon,
   ArrowUpIcon,
-  CircleNotchIcon,
   DownloadSimpleIcon,
   GaugeIcon,
   StackIcon,
 } from "@phosphor-icons/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
@@ -26,7 +23,7 @@ import {
   stageBars,
 } from "@/lib/funnel-view";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-import { type FunnelView, getFunnel, getFunnelLive } from "@/lib/server/funnel";
+import { type FunnelView, getFunnel } from "@/lib/server/funnel";
 
 // The `/admin/funnel` station — the catalogue pipeline (crawl → anchor → capture →
 // analyze/embed → rec-eligible → certified) on one page (docs/rfcs/catalogue-funnel-rfc.md,
@@ -39,15 +36,14 @@ import { type FunnelView, getFunnel, getFunnelLive } from "@/lib/server/funnel";
 // The admin loader-seeded react-query hybrid (AGENTS.md): a GET server fn reads `getFunnel`
 // SERVER-SIDE in-process (the browser-admin pattern — no oRPC client, no CORS, exactly as
 // `/admin/usage` reads `getCostInsights`), the loader seeds it, and a focus-refetching
-// `useQuery` keeps it honest on tab-back. All arranging happens in the pure `funnel-view.ts`
-// helpers, so the page itself only draws.
+// `useQuery` keeps the live counts honest on tab-back. All arranging happens in the pure
+// `funnel-view.ts` helpers, so the page itself only draws.
 //
-// ── SNAPSHOT-BACKED, REFRESH ON DEMAND ──────────────────────────────────────────
-// `getFunnel` serves the live block from the latest nightly snapshot (funnel.ts), so plain
-// navigation and the focus-refetch never trigger the growing-table scan storm — they pay only a
-// cheap capture-budget read. The header states the block's age ("as of <day>"); a "Refresh live"
-// action calls `getFunnelLive` (the full recompute) and writes the fresh view into the query cache.
-// A short `staleTime` keeps a burst of focus-refetches from re-hitting even the cheap read.
+// ── LIVE ON EVERY LOAD ──────────────────────────────────────────────────────────
+// `getFunnel` computes the whole live block on every read (funnel.ts) — a handful of sub-second
+// COUNT scans, cheap enough for a single-operator admin page that a stale daily snapshot would only
+// buy staleness. A short `staleTime` coalesces a burst of focus-refetches so rapid tab-backs do not
+// each re-run the scans; it is a light touch, not a cache.
 //
 // ── NO BACKFILL ───────────────────────────────────────────────────────────────
 // The snapshot series starts at the first real daily tick and grows honestly (the RFC's
@@ -90,24 +86,14 @@ const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
   }
 });
 
-// The one-call read, server-side + in-process (no HTTP, no CORS), re-checking the grant. The DEFAULT
-// (snapshot-backed) read behind the loader + focus-refetch — never the scan storm.
+// The one-call read, server-side + in-process (no HTTP, no CORS), re-checking the grant. Computes
+// the live block fresh on every call — the loader and the focus-refetch both land here.
 const fetchFunnel = createServerFn({ method: "GET" }).handler(async (): Promise<FunnelView> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
   }
 
   return getFunnel();
-});
-
-// The operator's "refresh live" recompute — the full scan, on demand only. Same in-process grant
-// re-check; the button below writes its result into the query cache.
-const refreshFunnel = createServerFn({ method: "GET" }).handler(async (): Promise<FunnelView> => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-
-  return getFunnelLive();
 });
 
 // oxlint-disable-next-line sort-keys
@@ -119,78 +105,28 @@ export const Route = createFileRoute("/admin/funnel")({
 
 function FunnelPage() {
   const initial = Route.useLoaderData();
-  const queryClient = useQueryClient();
   const { data } = useQuery({
     initialData: initial,
     queryFn: () => fetchFunnel(),
     queryKey: FUNNEL_KEY,
     refetchOnWindowFocus: true,
-    // A burst of tab-backs should not re-hit even the cheap snapshot read on every focus.
-    staleTime: 20_000,
+    // Live on every load, but a burst of tab-backs should not each re-run the stage/anchor scans;
+    // this coalesces them without caching (a fresh scan is a handful of sub-second COUNTs).
+    staleTime: 30_000,
   });
 
-  // "Refresh live" runs the full recompute and writes it straight into the cache — no invalidation
-  // (which would re-run the cheap snapshot read and drop the fresh live block back to snapshot-backed).
-  const refresh = useMutation({
-    mutationFn: () => refreshFunnel(),
-    onSuccess: (fresh) => queryClient.setQueryData(FUNNEL_KEY, fresh),
-  });
-
-  const { freshness, live, series } = data;
+  const { live, series } = data;
   const bars = stageBars(live.stages, live.queues);
   const subtitle = `${formatCount(live.stages.crawled)} crawled · ${formatCount(live.stages.certified)} certified`;
 
   return (
-    <AdminShell
-      headerActions={<RefreshControl freshness={freshness} refresh={refresh} />}
-      subtitle={subtitle}
-      title="Funnel"
-    >
+    <AdminShell subtitle={subtitle} title="Funnel">
       <div className="space-y-8 p-4 sm:p-5">
         <FunnelBand bars={bars} />
         <MetersBand meters={live.meters} />
         <ChartsBand series={series} />
       </div>
     </AdminShell>
-  );
-}
-
-// The freshness readout + the "refresh live" trigger. The label states how old the live block is
-// (the snapshot's day), or "Live" right after a recompute; the button runs the full scan on demand.
-function RefreshControl({
-  freshness,
-  refresh,
-}: {
-  freshness: FunnelView["freshness"];
-  refresh: { isPending: boolean; mutate: () => void };
-}) {
-  const label = freshness.live
-    ? "Live"
-    : freshness.day
-      ? `as of ${formatDay(freshness.day)}`
-      : "no snapshot yet";
-
-  return (
-    <>
-      <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">{label}</span>
-      <Button
-        disabled={refresh.isPending}
-        onClick={() => refresh.mutate()}
-        size="sm"
-        variant="outline"
-      >
-        {refresh.isPending ? (
-          <CircleNotchIcon
-            aria-hidden="true"
-            className="size-4 motion-safe:animate-spin"
-            weight="bold"
-          />
-        ) : (
-          <ArrowClockwiseIcon aria-hidden="true" className="size-4" />
-        )}
-        Refresh live
-      </Button>
-    </>
   );
 }
 
