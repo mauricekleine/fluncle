@@ -14,20 +14,24 @@ The archive is ~60 findings — every one heard, judged, and coordinate-stamped 
 
 The crawler's job is to make it dense **without ever letting an uncertified track pass for a finding.**
 
-## The boundary gate: seed labels + graph distance
+## The boundary gate: enabled-label storage + graph-distance discovery
 
 There is **no genre inference**. No MusicBrainz tag, no Discogs style, no BPM band, no classifier. That is ratified, and it is not an omission — it is the design.
 
-The operator already drew the boundary when he ruled on the labels. Every label in the archive carries a `seed_state` (`enabled` / `disabled` / `undecided` — [label-entity.md](./label-entity.md)), and that column answers exactly one question: **may the next crawl seed from this label?** The crawler's only job is to not leave the neighbourhood:
+The operator already drew the boundary when he ruled on the labels. Every label in the archive carries a `seed_state` (`enabled` / `disabled` / `undecided` — [label-entity.md](./label-entity.md)), and that column now answers two questions: **may the next crawl seed from this label, and may a release on this label be STORED?** Those are distinct, and the split is the whole of this section: **storage is enabled-label-only; the graph walk is a discovery mechanism** that ranges further out to find the next labels to rule on.
 
-| hop   | what it is                                                    |
-| ----- | ------------------------------------------------------------- |
-| **0** | a release on a label whose `seed_state` is `enabled`          |
-| **1** | an artist who appears on such a release                       |
-| **2** | a release that artist **also** appears on                     |
-| —     | **STOP.** `maxHop` (default 2, ceiling 3) ends the walk here. |
+**Storage.** A release's tracks are written into `tracks` only when the label that pressed it is one the operator has `enabled`. The check is a single fold-match at the write chokepoint in `expandRelease` (`isEnabledLabel`, the same aggressive `labelFold` the rest of the crawler uses, against the archive spelling already resolved). A release on a non-enabled label stores **nothing** — no tracks, no album row, no `label_id`/`album_id`/artist edges — even when the walk reached it.
 
-A node past the limit is never enqueued, so the walk **terminates by construction** rather than by a watchdog. Set `--max-hop 0` and the crawl never leaves the seed labels' own releases at all.
+**Discovery.** The walk still ranges outward by graph distance, because that is how the crawler finds the next labels worth ruling on:
+
+| hop   | what it is                                                    | stored?                                |
+| ----- | ------------------------------------------------------------- | -------------------------------------- |
+| **0** | a release on a label whose `seed_state` is `enabled`          | **yes** — the label is enabled         |
+| **1** | an artist who appears on such a release                       | (a hop, not a release)                 |
+| **2** | a release that artist **also** appears on                     | **only if its label is `enabled`** too |
+| —     | **STOP.** `maxHop` (default 2, ceiling 3) ends the walk here. |                                        |
+
+Hop distance bounds the **discovery**, never the **storage**. A hop-2 release on an enabled label **is** stored; a hop-0 seed release is stored because its seed label is enabled, not because it sits at hop 0. A hop-2 release on a reggae, jazz, or major label is walked for the labels it reveals and then its tracks are dropped on the floor. A node past the limit is never enqueued, so the walk **terminates by construction** rather than by a watchdog. Set `--max-hop 0` and the crawl never leaves the seed labels' own releases at all.
 
 The one hard-coded exclusion is an identity, not a judgement: MusicBrainz's **"Various Artists"** placeholder is credited on every compilation ever pressed, so following it as a hop-1 artist would walk the crawler out of drum & bass and into the whole of recorded music in a single step.
 
@@ -35,7 +39,7 @@ The one hard-coded exclusion is an identity, not a judgement: MusicBrainz's **"V
 
 A label the walk **discovers** that nobody has ruled on enters as `undecided` (the `labels` DDL default) and surfaces as a row in the `/admin` attention queue. It is **not crawled.** The next crawl seeds from it only once the operator enables it.
 
-That is how the boundary widens without ever leaving his hands: the crawl reaches an artist's other label, says "here is one I found," and stops. One keystroke at `/admin/labels` decides whether the next crawl goes there. Ruling on a label is OPERATOR tier (`update_label`); the crawl itself is agent tier. **Disabling a label is crawl SCOPE, never storage** — it removes the label from the next crawl's seed set and touches nothing already stored.
+That is how the boundary widens without ever leaving his hands: the crawl reaches an artist's other label, says "here is one I found," and stops. One keystroke at `/admin/labels` decides whether the next crawl stores it. Ruling on a label is OPERATOR tier (`update_label`); the crawl itself is agent tier. Enabling a label is what turns its releases from discovered-only into **stored**: an unruled or disabled label surfaces in the queue and its releases are walked for discovery, but nothing they carry is written until the operator enables it. Disabling a label touches nothing **already** stored — a ruling changes what the crawl stores going forward, never what it has kept.
 
 A label the crawler discovers under a different spelling from one he has already ruled on does **not** re-enter the queue, **and the crawled track is written with the archive's spelling, not the vendor's.** The archive spells it `Medschool`; MusicBrainz spells it `Med School`. The fold collapses both to `medschool`, and the row is written as `Medschool`.
 
