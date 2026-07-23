@@ -2,7 +2,15 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type PublicUser } from "./public-auth";
-import { createIntegrationDb, rowCount, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  rowCount,
+  seedAlbum,
+  seedArtist,
+  seedCatalogueTrack,
+  seedLabel,
+  seedTrack,
+} from "./integration-db";
 
 // THE CATALOGUE FUNNEL, PROVEN — against the REAL schema, on a real libSQL engine built from the
 // generated migrations. Four claims are on trial:
@@ -76,6 +84,14 @@ async function patchTrack(
   await db.execute({
     args: [...args, trackId],
     sql: `update tracks set ${set} where track_id = ?`,
+  });
+}
+
+/** Credit a seeded track to an artist — one `track_artists` edge (the artist-hub join reads it). */
+async function linkArtist(trackId: string, artistId: string, position: number): Promise<void> {
+  await db.execute({
+    args: [artistId, position, trackId],
+    sql: `insert into track_artists (artist_id, position, track_id) values (?, ?, ?)`,
   });
 }
 
@@ -391,5 +407,84 @@ describe("getFunnel (real SQL)", () => {
     // day, and its stored count is the snapshot's (1), untouched by the live block moving to 2.
     expect(second.series.map((row) => row.day)).toEqual(["2026-07-18"]);
     expect(second.series[0]?.crawled).toBe(1);
+  });
+});
+
+// ── The public-surfaces card — live on the public web, through the surface's own predicate ────
+// The load-bearing claim: each figure is read through the SAME predicate its public surface obeys,
+// so the card can never disagree with what a visitor or a crawler actually sees. `tracks` is the
+// `/tracks` hub's own count; the three entity figures are the sitemap's INDEXABLE sets.
+
+describe("getFunnel publicSurfaces (real SQL)", () => {
+  it("publicSurfaces.tracks equals the /tracks hub's own count (findings + catalogue)", async () => {
+    const { getFunnel } = await import("./funnel");
+    const { tracksHubCountQuery } = await import("./tracks-hub");
+
+    await seedTrack(db, { logId: "001.1.1A", trackId: "find-1" });
+    await seedTrack(db, { logId: "002.1.1A", trackId: "find-2" });
+    await seedCatalogueTrack(db, { trackId: "cat-1" });
+    await seedCatalogueTrack(db, { trackId: "cat-2" });
+    await seedCatalogueTrack(db, { trackId: "cat-3" });
+
+    const { live } = await getFunnel();
+
+    // Every publicly-rendered row: two findings + three catalogue rows.
+    expect(live.publicSurfaces.tracks).toBe(5);
+
+    // And it IS the hub's own count query (`{}` = no filter, the exact SQL the /tracks masthead
+    // pages by) — the two can never disagree.
+    const hubCount = await db.execute(tracksHubCountQuery({}));
+    expect(live.publicSurfaces.tracks).toBe(
+      Number((hubCount.rows[0] as unknown as { total: number }).total),
+    );
+  });
+
+  it("counts the INDEXABLE artists/albums/labels (renderable ≥ 3) and agrees with the sitemap rows", async () => {
+    const { getFunnel } = await import("./funnel");
+    const { ARTIST_INDEX_MIN_FINDINGS, listArtistSitemapRows } = await import("./artists");
+    const { ALBUM_INDEX_MIN_TRACKS, listAlbumSitemapRows } = await import("./albums");
+    const { LABEL_INDEX_MIN_TRACKS, listLabelSitemapRows } = await import("./labels");
+
+    // One entity of each kind that CLEARS the thin-content floor (3 renderable catalogue tracks),
+    // and one that falls short (2) — so the indexable count is exactly 1 per kind.
+    await seedArtist(db, { id: "art-in", slug: "art-in" });
+    await seedArtist(db, { id: "art-out", slug: "art-out" });
+    await seedAlbum(db, { id: "alb-in", slug: "alb-in" });
+    await seedAlbum(db, { id: "alb-out", slug: "alb-out" });
+    await seedLabel(db, { id: "lab-in", slug: "lab-in" });
+    await seedLabel(db, { id: "lab-out", slug: "lab-out" });
+
+    // Three tracks on the IN entities…
+    for (let index = 0; index < 3; index += 1) {
+      const id = `t-in-${index}`;
+      await seedCatalogueTrack(db, { trackId: id });
+      await linkArtist(id, "art-in", index);
+      await patchTrack(id, "album_id = 'alb-in', label_id = 'lab-in'");
+    }
+    // …and only two on the OUT entities (below the floor of 3).
+    for (let index = 0; index < 2; index += 1) {
+      const id = `t-out-${index}`;
+      await seedCatalogueTrack(db, { trackId: id });
+      await linkArtist(id, "art-out", index);
+      await patchTrack(id, "album_id = 'alb-out', label_id = 'lab-out'");
+    }
+
+    const { live } = await getFunnel();
+
+    expect(live.publicSurfaces.artists).toBe(1);
+    expect(live.publicSurfaces.albums).toBe(1);
+    expect(live.publicSurfaces.labels).toBe(1);
+
+    // THE PIN: each count IS the exact set of rows its sitemap enumerates (`renderable >= floor`) —
+    // same scan, same floor — so the card can never drift from what search engines can index.
+    expect(live.publicSurfaces.artists).toBe(
+      (await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS)).length,
+    );
+    expect(live.publicSurfaces.albums).toBe(
+      (await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS)).length,
+    );
+    expect(live.publicSurfaces.labels).toBe(
+      (await listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS)).length,
+    );
   });
 });

@@ -31,6 +31,7 @@ import {
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
   type CatalogueListPage,
+  countIndexableHubEntities,
   type EntitySitemapRow,
   hubCountsBySlug,
   hubFindingCountsBySlug,
@@ -436,6 +437,12 @@ const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
               limit 1) as cover_url`,
   slugExpr: "albums.slug",
 };
+
+/** The count of INDEXABLE `/album/<slug>` pages — the floor-clearing set `listAlbumSitemapRows`
+    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `ALBUMS_HUB_QUERY` (scan + floor). */
+export function countIndexableAlbums(): Promise<number> {
+  return countIndexableHubEntities(ALBUMS_HUB_QUERY);
+}
 
 /**
  * One numbered page of the unified `/albums` index (the `?page=N` view) — every record Fluncle

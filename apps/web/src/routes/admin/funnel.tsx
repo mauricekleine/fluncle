@@ -2,9 +2,13 @@ import {
   ArrowDownIcon,
   ArrowRightIcon,
   ArrowUpIcon,
+  DiscIcon,
   DownloadSimpleIcon,
   GaugeIcon,
+  MusicNotesIcon,
   StackIcon,
+  TagIcon,
+  UsersThreeIcon,
 } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
@@ -123,6 +127,7 @@ function FunnelPage() {
     <AdminShell subtitle={subtitle} title="Funnel">
       <div className="space-y-8 p-4 sm:p-5">
         <FunnelBand bars={bars} />
+        <PublicSurfacesBand surfaces={live.publicSurfaces} />
         <MetersBand meters={live.meters} />
         <ChartsBand series={series} />
       </div>
@@ -217,6 +222,48 @@ function StageBarBody({ bar }: { bar: FunnelStageBar }) {
         className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
       />
     </>
+  );
+}
+
+// ── The public-surfaces band ─────────────────────────────────────────────────────
+// How much of the archive is live on the public web now, as stat tiles (the shared meters
+// vocabulary). Tracks is the headline — the whole `/tracks` hub, findings + catalogue — so it
+// takes the accent; the three entity figures are the INDEXABLE sets (pages that clear the
+// thin-content floor and enter the sitemap). Each number is read through the same predicate its
+// public surface obeys, so the card can never disagree with what a visitor or crawler sees.
+
+function PublicSurfacesBand({ surfaces }: { surfaces: FunnelView["live"]["publicSurfaces"] }) {
+  return (
+    <section aria-label="Public surfaces" className="space-y-3">
+      <BandHeading>Live on the public web</BandHeading>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile
+          accent
+          hint="every track on /tracks — findings and catalogue rows alike"
+          icon={<MusicNotesIcon aria-hidden="true" className="size-4" weight="fill" />}
+          label="Tracks"
+          value={formatCount(surfaces.tracks)}
+        />
+        <StatTile
+          hint="artists with a live, indexable /artist page"
+          icon={<UsersThreeIcon aria-hidden="true" className="size-4" />}
+          label="Artists"
+          value={formatCount(surfaces.artists)}
+        />
+        <StatTile
+          hint="albums with a live, indexable /album page"
+          icon={<DiscIcon aria-hidden="true" className="size-4" />}
+          label="Albums"
+          value={formatCount(surfaces.albums)}
+        />
+        <StatTile
+          hint="labels with a live, indexable /label page"
+          icon={<TagIcon aria-hidden="true" className="size-4" />}
+          label="Labels"
+          value={formatCount(surfaces.labels)}
+        />
+      </div>
+    </section>
   );
 }
 

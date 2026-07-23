@@ -723,6 +723,38 @@ export type CatalogueHubQuery<Entry> = {
 };
 
 /**
+ * The count of INDEXABLE pages for one hub — every entity whose page clears the thin-content floor
+ * (`HUB_RENDERABLE >= floor`). That is exactly the set the entity's `list…SitemapRows` enumerates
+ * and the sitemap exposes as live, indexable public pages; `/admin/funnel`'s public-surfaces card
+ * reads it so the card can never disagree with what search engines can reach.
+ *
+ * A grouped `count(*)` WRAPPER over the SAME `entity ⋈ tracks left join findings` scan the hub +
+ * sitemap walk — the query's own `from`/`groupBy`/`floor` and the shared `HUB_RENDERABLE` predicate
+ * reused verbatim, never redefined. Note the gate here is `renderable >= floor` ALONE (the sitemap's
+ * indexable set), NOT the wider `HUB_INCLUSION_HAVING` (which also admits sub-floor CERTIFIED
+ * entities into the browsable index). One pass, grouped on the indexed join key
+ * (`tracks.album_id`/`tracks.label_id`/`track_artists.artist_id`) — no per-row subquery, no blob
+ * crosses the wire.
+ */
+export async function countIndexableHubEntities(
+  query: Pick<CatalogueHubQuery<unknown>, "floor" | "from" | "groupBy">,
+): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [query.floor],
+    sql: `select count(*) as n from (
+            select 1
+            from ${query.from}
+            left join findings on findings.track_id = tracks.track_id
+            group by ${query.groupBy}
+            having ${HUB_RENDERABLE} >= ?
+          )`,
+  });
+
+  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
+}
+
+/**
  * Escape the LIKE metacharacters in a reader's search term so a literal `%`, `_`, or `\` matches
  * itself rather than acting as a wildcard. The pattern is bound as `%<escaped>%` with an explicit
  * `escape '\'` clause (see `listHubPage`), so a search for "50%" finds "50%" and not everything.
@@ -1052,6 +1084,12 @@ const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
            ${LABEL_CATALOGUE_COVER_JSON} as cover_json`,
   slugExpr: "labels.slug",
 };
+
+/** The count of INDEXABLE `/label/<slug>` pages — the floor-clearing set `listLabelSitemapRows`
+    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `LABELS_HUB_QUERY` (scan + floor). */
+export function countIndexableLabels(): Promise<number> {
+  return countIndexableHubEntities(LABELS_HUB_QUERY);
+}
 
 /**
  * One numbered page of the unified `/labels` index (the crawlable `?page=N` view) — every label
