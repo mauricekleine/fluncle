@@ -16,7 +16,7 @@ The script touches **nothing** in the app schema: it creates its own `vector_sca
    turso db tokens create vector-scale-proof       # → TURSO_AUTH_TOKEN
    ```
 
-2. Run the harness from `apps/web` (seeds 150k rows, then measures the sonic + recommendations shapes):
+2. Run the harness from `apps/web` (seeds 150k rows carrying the `key`/`anchored`/`certified` pre-filter columns, then measures three shapes under their REAL filters):
 
    ```sh
    cd apps/web
@@ -48,12 +48,23 @@ The script touches **nothing** in the app schema: it creates its own `vector_sca
 
 ## What it prints
 
-Per shape (SONIC = 1 probe, RECOMMENDATIONS = `--probes` folded by `min`):
+Three shapes, each under the surface's REAL pre-filter:
 
-- **OLD (exact f32)** p50/p95 — a single exact float32 scan (today's path).
-- **NEW (coarse+resc)** p50/p95 — coarse int8 scan → exact float32 rescore of the top-N.
-- **top-K recall (NEW vs exact baseline)** — the overlap of the NEW top-K with the OLD (exact) top-K. Expect ~100% (the rescore is exact; N over-fetches K by 8×).
+- **SONIC broad** (1 probe, `anchored = 1`) — a bare "sounds like X" with no key filter, so it scans ~70% of the corpus. This is the HEAVY, realistic case and the decisive one.
+- **SONIC narrow** (1 probe, `anchored = 1 and key = ?`) — a keyed "sounds like X" scanning ~3%, showing whether a tighter btree pre-filter rescues the scan when broad is too slow.
+- **RECOMMENDATIONS** (`--probes` folded by `min`, `anchored = 1 and certified = 0`) — the per-user engine over ~70% of the corpus.
+
+Per shape:
+
+- **OLD (exact f32)** p50/p95 — a single exact float32 scan (today's path). At 150k the broad scan is expected to blow Turso's query cap — the harness reports `exceeded query cap` rather than crashing; that is the motivation, not a bug.
+- **NEW (coarse+resc)** p50/p95 — coarse int8 scan → exact float32 rescore of the top-N. If this _also_ reports `exceeded cap` or is multi-second on the broad shape, that is a real finding (a full SQL scan is slow at scale regardless of vector width) — see the gate below.
+- **top-K recall (NEW vs exact baseline)** — overlap of the NEW top-K with the exact top-K, over the trials where the baseline completed (the narrow shape almost always completes, so its recall is the trustworthy quantization number). Expect ~100% (the rescore is exact; N over-fetches K by 8×).
 
 ## Reading the result (the merge gate)
 
-The PR is **HELD** on this: merge only once, at 150k and at 1M, the NEW path is comfortably sub-100ms on p95 **and** top-K recall is ~100% (a couple of ties aside). The primitive keeps `binding probes as raw blobs` and `ranking in SQL` (the ratified rules), so what this measures is purely the ~4× smaller scan payload (`4096 B → 1035 B` per 1024-d row) translating into the expected latency cut.
+The PR is **HELD** on this. Two possible outcomes:
+
+- **GREEN** — the NEW path is comfortably sub-100ms p95 on **SONIC broad** and **RECOMMENDATIONS** (the broad shapes), and recall is ~100%. Then Slice A delivers: merge it.
+- **CAPPED/SLOW on broad** — if NEW is multi-second or `exceeded cap` on SONIC broad even though SONIC narrow is fast, that means the int8 coarse scan is still a full SQL scan and the SQL-scan approach has a real ceiling at 150k. Slice A then only helps the _pre-filtered_ (narrow) surfaces, and the in-memory sidecar (RFC Phase 2) matters sooner than the phasing assumed. Report the numbers before merging — do NOT merge a broad-slow result as if it were the win.
+
+Note: seeds are **synthetic random vectors**, so the recall number is directional (random vectors are less clustered than real MuQ embeddings). For a definitive recall verdict, validate against a real-embedding export separately.
