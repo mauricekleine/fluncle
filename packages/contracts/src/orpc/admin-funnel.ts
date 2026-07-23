@@ -55,6 +55,20 @@ const FunnelLiveQueuesSchema = FunnelQueuesSchema.extend({
   anchorQueueReady: z.number().int(),
 }).meta({ id: "FunnelLiveQueues" });
 
+/**
+ * How much of the archive is LIVE ON THE PUBLIC WEB now — `tracks` is the `/tracks` hub's own total
+ * (findings + catalogue), the three entity counts are the INDEXABLE sitemap sets (renderable ≥ the
+ * thin-content floor). Live-only, computed on every load, never persisted to the snapshot series.
+ */
+const PublicSurfaceCountsSchema = z
+  .object({
+    albums: z.number().int(),
+    artists: z.number().int(),
+    labels: z.number().int(),
+    tracks: z.number().int(),
+  })
+  .meta({ id: "PublicSurfaceCounts" });
+
 /** The operator's spend levers, surfaced as gauges. */
 const FunnelMetersSchema = z
   .object({
@@ -137,6 +151,7 @@ export const getFunnel = oc
     z.object({
       live: z.object({
         meters: FunnelMetersSchema,
+        publicSurfaces: PublicSurfaceCountsSchema,
         queues: FunnelLiveQueuesSchema,
         stages: FunnelStagesSchema,
       }),

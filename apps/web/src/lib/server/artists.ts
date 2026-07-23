@@ -10,6 +10,7 @@ import {
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
   type CatalogueListPage,
+  countIndexableHubEntities,
   type EntitySitemapRow,
   hubCountsBySlug,
   hubCountsBySlugs,
@@ -407,6 +408,12 @@ const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
            a.image_state as image_state, a.image_updated_at as image_updated_at`,
   slugExpr: "a.slug",
 };
+
+/** The count of INDEXABLE `/artist/<slug>` pages — the floor-clearing set `listArtistSitemapRows`
+    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `ARTISTS_HUB_QUERY` (scan + floor). */
+export function countIndexableArtists(): Promise<number> {
+  return countIndexableHubEntities(ARTISTS_HUB_QUERY);
+}
 
 /**
  * One numbered page of the unified `/artists` index (the crawlable `?page=N` view) — every artist

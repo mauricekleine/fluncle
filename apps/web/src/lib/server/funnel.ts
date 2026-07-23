@@ -33,12 +33,16 @@
 // up to a day stale. Every other read here is either bounded (the queue counts ride their partial
 // indexes) or on the small `crawl_frontier` / `catalogue_snapshots` tables.
 
+import { countIndexableAlbums } from "./albums";
+import { countIndexableArtists } from "./artists";
 import { type CatalogueCaptureState, getCatalogueCaptureState } from "./capture-budget";
 import { getFrontierCounts } from "./crawl";
 import { getDb, typedRow, typedRows } from "./db";
+import { countIndexableLabels } from "./labels";
 import { REC_ELIGIBLE_WHERE } from "./recommendations";
 import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause } from "./track-work";
+import { tracksHubCountQuery } from "./tracks-hub";
 
 /** The funnel's stage totals — cumulative counts of rows that have reached each stage. */
 export type FunnelStages = {
@@ -98,6 +102,24 @@ export type CatalogueSnapshotRow = CatalogueSnapshotCounts & {
   day: string;
 };
 
+/**
+ * How much of the archive is LIVE ON THE PUBLIC WEB right now — each number read through the SAME
+ * predicate its public surface already obeys, so the card can never disagree with what a visitor or
+ * a crawler actually sees:
+ *   - `tracks` is the `/tracks` hub's own total (`countTracksHub({})` — every publicly-rendered row,
+ *     findings + catalogue), so it matches the hub's masthead by construction.
+ *   - `artists`/`albums`/`labels` are the INDEXABLE sets — entities whose page clears the
+ *     thin-content floor (`HUB_RENDERABLE >= ARTIST/ALBUM/LABEL_INDEX_MIN…`), the exact rows the
+ *     sitemap exposes (`countIndexableHubEntities`, reusing each hub's own scan + floor).
+ * Live-only, like the stages/queues: computed on every load, never persisted to the snapshot series.
+ */
+export type PublicSurfaceCounts = {
+  albums: number;
+  artists: number;
+  labels: number;
+  tracks: number;
+};
+
 /** The operator's spend levers, surfaced as gauges (docs/rfcs/catalogue-funnel-rfc.md § meters). */
 export type FunnelMeters = {
   /** The anchor re-ask bench size (mirrors `queues.anchorBackoff` — a lever, called out here). */
@@ -120,6 +142,7 @@ export type FunnelMeters = {
 export type FunnelView = {
   live: {
     meters: FunnelMeters;
+    publicSurfaces: PublicSurfaceCounts;
     queues: FunnelLiveQueues;
     stages: FunnelStages;
   };
@@ -192,6 +215,20 @@ async function countAnchorQueueSplit(): Promise<AnchorSplit> {
   };
 }
 
+/**
+ * The count of every publicly-rendered `/tracks` row — findings + catalogue — computed LIVE through
+ * the `/tracks` hub's OWN count SQL (`tracksHubCountQuery({})`, no filter). Reusing the hub's exact
+ * query builder means the card reports the same set the hub's masthead pages by, and — like the rest
+ * of the funnel's live block — it is recomputed on every load rather than served from the hub's TTL
+ * memo, so it never lags. `{}` compiles to a bare `select count(*) from tracks` (no join, no blob).
+ */
+async function countPublicTracks(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(tracksHubCountQuery({}));
+
+  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+}
+
 /** The full live computation, and the two live-only extras the persisted `counts` cannot carry. */
 type LiveFunnelData = {
   /** The anchor worklist's embedding split (live-only; never persisted on the snapshot row). */
@@ -200,6 +237,8 @@ type LiveFunnelData = {
   /** The capture budget state, read ONCE here and threaded into the capture count + the meters. */
   captureState: CatalogueCaptureState;
   counts: CatalogueSnapshotCounts;
+  /** How much is live on the public web now — live-only, never persisted to the snapshot series. */
+  publicSurfaces: PublicSurfaceCounts;
 };
 
 /**
@@ -215,12 +254,23 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
   const db = await getDb();
   const state = captureState ?? (await getCatalogueCaptureState());
 
-  const [stages, anchorSplit, anchorBackoff, captureQueue, analyzeQueue, embedQueue, frontier] =
-    await Promise.all([
-      // THE STAGE SCAN — one single-pass conditional aggregate over the supertype/subtype join.
-      // `rec_eligible` folds in the SHARED `REC_ELIGIBLE_WHERE` (recommendations.ts): the funnel's
-      // eligibility count is, by construction, the same gate `listRecommendations` scans by.
-      db.execute(`select
+  const [
+    stages,
+    anchorSplit,
+    anchorBackoff,
+    captureQueue,
+    analyzeQueue,
+    embedQueue,
+    frontier,
+    publicTracks,
+    publicArtists,
+    publicAlbums,
+    publicLabels,
+  ] = await Promise.all([
+    // THE STAGE SCAN — one single-pass conditional aggregate over the supertype/subtype join.
+    // `rec_eligible` folds in the SHARED `REC_ELIGIBLE_WHERE` (recommendations.ts): the funnel's
+    // eligibility count is, by construction, the same gate `listRecommendations` scans by.
+    db.execute(`select
             sum(case when f.track_id is null then 1 else 0 end) as crawled,
             sum(case when f.track_id is null and t.spotify_uri is not null then 1 else 0 end) as anchored,
             sum(case when f.track_id is null and t.source_audio_key is not null then 1 else 0 end) as captured,
@@ -230,22 +280,31 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
             sum(case when f.track_id is not null then 1 else 0 end) as certified
           from tracks t
           left join findings f on f.track_id = t.track_id`),
-      // THE ANCHOR QUEUE — the sweep's OWN worklist predicate (`kindClause("anchor")`), partitioned
-      // ISRC × embedding in one pass; the ISRC split persists, the embedding split rides live only.
-      countAnchorQueueSplit(),
-      // THE ANCHOR BENCH — rows benched by the 14-day re-ask window: the COMPLEMENT of the
-      // `kindClause("anchor")` window guard (attempted, and inside the window). Its base guards
-      // mirror that worklist; the window itself is the SHARED `ANCHOR_REASK_AFTER_DAYS` constant,
-      // so the two can only ever disagree on the ISRC/duration edges, never on the window.
-      countAnchorBackoff(),
-      // The audio worklist backlogs — the product's OWN count function, brake and all. The capture
-      // count reuses the state already read above so the brake is not read a second time (fix #4).
-      countTrackWork({ captureState: state, kind: "capture", scope: "catalogue" }),
-      countTrackWork({ kind: "analyze", scope: "catalogue" }),
-      countTrackWork({ kind: "embed", scope: "catalogue" }),
-      // The crawler's own frontier read — the lean two-group-by variant (no growing-table scans).
-      getFrontierCounts(),
-    ]);
+    // THE ANCHOR QUEUE — the sweep's OWN worklist predicate (`kindClause("anchor")`), partitioned
+    // ISRC × embedding in one pass; the ISRC split persists, the embedding split rides live only.
+    countAnchorQueueSplit(),
+    // THE ANCHOR BENCH — rows benched by the 14-day re-ask window: the COMPLEMENT of the
+    // `kindClause("anchor")` window guard (attempted, and inside the window). Its base guards
+    // mirror that worklist; the window itself is the SHARED `ANCHOR_REASK_AFTER_DAYS` constant,
+    // so the two can only ever disagree on the ISRC/duration edges, never on the window.
+    countAnchorBackoff(),
+    // The audio worklist backlogs — the product's OWN count function, brake and all. The capture
+    // count reuses the state already read above so the brake is not read a second time (fix #4).
+    countTrackWork({ captureState: state, kind: "capture", scope: "catalogue" }),
+    countTrackWork({ kind: "analyze", scope: "catalogue" }),
+    countTrackWork({ kind: "embed", scope: "catalogue" }),
+    // The crawler's own frontier read — the lean two-group-by variant (no growing-table scans).
+    getFrontierCounts(),
+    // PUBLIC SURFACES — how much of the archive is live on the public web now, each through the
+    // SAME predicate its surface already obeys. `tracks` is the `/tracks` hub's own count (`{}` =
+    // no filter = every publicly-rendered row); the three entity counts are the sitemap's INDEXABLE
+    // sets (`renderable >= floor`, reusing each hub's scan + floor). Cheap grouped COUNT scans over
+    // the indexed join keys — same cost class as the stage/queue counts, no vector, no blob.
+    countPublicTracks(),
+    countIndexableArtists(),
+    countIndexableAlbums(),
+    countIndexableLabels(),
+  ]);
 
   const stageRow = typedRow<StageRow>(stages.rows);
 
@@ -269,6 +328,12 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
       frontierDone: frontier.frontier.done,
       frontierPending: frontier.frontier.pending,
       recEligible: Number(stageRow?.rec_eligible ?? 0),
+    },
+    publicSurfaces: {
+      albums: publicAlbums,
+      artists: publicArtists,
+      labels: publicLabels,
+      tracks: publicTracks,
     },
   };
 }
@@ -479,6 +544,7 @@ function buildLiveBlock(data: LiveFunnelData): FunnelView["live"] {
       captureBudget: captureBudgetMeter(data.captureState),
       frontierPending: counts.frontierPending,
     },
+    publicSurfaces: data.publicSurfaces,
     queues: {
       analyzeQueue: counts.analyzeQueue,
       anchorBackoff: counts.anchorBackoff,
