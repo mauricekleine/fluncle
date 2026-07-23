@@ -115,12 +115,20 @@ describe("listTracks lean list projection (Finding B4)", () => {
     for (const column of HEAVY_COLUMNS) {
       expect(sql).not.toContain(column);
     }
-    // The kept columns and the correlated subqueries survive — a sanity sample that the
-    // comma-split derivation didn't mangle the SELECT.
+    // The render-only artworkMax subqueries drop from the feed too (Finding 4b): no web/feed
+    // surface renders `artworkMaxUrl` — the video pipeline reads it off the FAT single-track
+    // read, never the feed — so the lean SELECT stops running them.
+    expect(sql).not.toContain("as album_artwork_url_template");
+    expect(sql).not.toContain("as album_artwork_width");
+    expect(sql).not.toContain("as album_artwork_height");
+    // The kept columns and the surviving correlated subqueries — a sanity sample that the
+    // comma-split derivation didn't mangle the SELECT (galaxy + the youtube post stay on lean;
+    // only the board/graph reads drop those).
     expect(sql).toContain("tracks.track_id");
     expect(sql).toContain("findings.observation_audio_url");
     expect(sql).toContain("as galaxy_name");
     expect(sql).toContain("as youtube_url");
+    expect(sql).toContain("as album_image_key");
     // No double comma / trailing comma from removing an interior column.
     expect(sql).not.toMatch(/,\s*,/);
     expect(sql).not.toMatch(/,\s*from findings/);
@@ -213,5 +221,127 @@ describe("listTracks board list projection (renders + findings efficiency batch)
     expect(tracks[0]?.title).toBe("Mr Majestic");
     expect(tracks[0]?.enrichmentStatus).toBe("done");
     expect(tracks[0]?.tiktokUrl).toBeUndefined();
+  });
+});
+
+// The graph reads (`getFindingsBy*`, backing the /artist · /label · /album pages + oembed + the
+// hover card + the MCP get_artist/get_label tools + the admin bio-describe) take the GRAPH
+// projection: the lean drops PLUS the album/label graph-link slugs + the youtube/tiktok post
+// subqueries, but KEEPING galaxy (the MCP tools report it) and the album cover master.
+const GRAPH_DROPPED_SUBQUERY_ALIASES = [
+  "as album_slug",
+  "as label_slug",
+  "as youtube_url",
+  "as tiktok_url",
+  // The render-only artworkMax subqueries drop here too (already gone from the lean base).
+  "as album_artwork_url_template",
+  "as album_artwork_width",
+  "as album_artwork_height",
+];
+
+describe("getFindingsByArtist graph list projection", () => {
+  beforeEach(() => {
+    execute.mockReset();
+    stubDb();
+  });
+
+  it("drops the heavy + graph-link + post subqueries, KEEPS galaxy + the cover master", async () => {
+    const { getFindingsByArtist } = await import("./tracks");
+    await getFindingsByArtist("artist-1", "Calibre");
+
+    const sql = lastSelectSql();
+    for (const column of HEAVY_COLUMNS) {
+      expect(sql).not.toContain(column);
+    }
+    for (const alias of GRAPH_DROPPED_SUBQUERY_ALIASES) {
+      expect(sql).not.toContain(alias);
+    }
+    // Galaxy survives (the MCP get_artist/get_label tools read it), and so does the cover master
+    // (the grid cover) — the two subquery families the graph reads genuinely render.
+    expect(sql).toContain("as galaxy_name");
+    expect(sql).toContain("as galaxy_slug");
+    expect(sql).toContain("as album_image_key");
+    // The direct columns the grid + its JSON-LD render survive.
+    expect(sql).toContain("findings.log_id");
+    expect(sql).toContain("tracks.title");
+    expect(sql).toContain("tracks.release_date");
+    expect(sql).not.toMatch(/,\s*,/);
+    expect(sql).not.toMatch(/,\s*from findings/);
+  });
+
+  it("the mapped graph item keeps galaxy, drops the graph-link + post fields", async () => {
+    execute.mockImplementation(({ sql }: { sql: string }) =>
+      sql.includes("count(*)")
+        ? Promise.resolve({ rows: [{ total_count: 1 }] })
+        : Promise.resolve({
+            rows: [{ ...FAT_ROW, galaxy_name: "Hospital Sound", galaxy_slug: "hospital-sound" }],
+          }),
+    );
+
+    const { getFindingsByArtist } = await import("./tracks");
+    const [item] = await getFindingsByArtist("artist-1", "Calibre");
+
+    // Galaxy is kept (the MCP tools' `compactFinding` reads `galaxy?.name`).
+    expect(item?.galaxy).toEqual({ name: "Hospital Sound", slug: "hospital-sound" });
+    for (const field of ["albumSlug", "labelSlug", "tiktokUrl", "youtubeUrl", "features"]) {
+      expect(field in (item ?? {})).toBe(false);
+    }
+    // A graph item is still a finding — the grid + JSON-LD fields survive.
+    expect(item?.trackId).toBe("track-calibre");
+    expect(item?.title).toBe("Mr Majestic");
+    expect(item?.logId).toBe("001.1.1A");
+  });
+});
+
+describe("listLogIndexEntries (the /log text index read)", () => {
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
+  it("selects only the five text-row columns — no cover master, no correlated subqueries", async () => {
+    execute.mockResolvedValue({ rows: [] });
+
+    const { listLogIndexEntries } = await import("./tracks");
+    await listLogIndexEntries(500);
+
+    const sql = (execute.mock.calls[0]?.[0] as { sql: string } | undefined)?.sql ?? "";
+    for (const column of [
+      "findings.log_id",
+      "tracks.track_id",
+      "tracks.title",
+      "tracks.artists_json",
+      "findings.added_at",
+    ]) {
+      expect(sql).toContain(column);
+    }
+    // No cover master, and no correlated subquery of any kind — the text list renders none.
+    expect(sql).not.toContain("album_image_key");
+    expect(sql).not.toContain("(select");
+    expect(sql).toContain("where findings.log_id is not null");
+  });
+
+  it("maps a row to the lean text entry", async () => {
+    execute.mockResolvedValue({
+      rows: [
+        {
+          added_at: "2026-06-01T00:00:00.000Z",
+          artists_json: JSON.stringify(["Calibre"]),
+          log_id: "001.1.1A",
+          title: "Mr Majestic",
+          track_id: "track-calibre",
+        },
+      ],
+    });
+
+    const { listLogIndexEntries } = await import("./tracks");
+    const [entry] = await listLogIndexEntries();
+
+    expect(entry).toEqual({
+      addedAt: "2026-06-01T00:00:00.000Z",
+      artists: ["Calibre"],
+      logId: "001.1.1A",
+      title: "Mr Majestic",
+      trackId: "track-calibre",
+    });
   });
 });

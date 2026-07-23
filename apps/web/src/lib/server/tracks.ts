@@ -224,20 +224,56 @@ const LEAN_LIST_OMITTED_COLUMNS = new Set([
   "findings.observation_alignment_json",
   "findings.video_model_reasoning",
 ]);
-const LEAN_TRACK_SELECT = TRACK_SELECT.split(",")
-  .filter((fragment) => !LEAN_LIST_OMITTED_COLUMNS.has(fragment.trim()))
-  .join(",");
+// The render-only artworkMax subqueries (a ≥1920 Apple source composed at the DTO boundary).
+// NO web/feed surface renders `artworkMaxUrl` — the ONLY consumer is the video pipeline, and
+// it reads it off the FAT single-track read (`get_track` → `/api/tracks/{id}` →
+// `getTrackByIdOrLogId`/`TRACK_SELECT`), never the feed (`packages/video/pipeline/fetch-track.ts`,
+// verified). So the LEAN feed projection drops these three subqueries: the DTO still DECLARES
+// `artworkMaxUrl` (the fat `toTrackListItem` composes it from `TRACK_SELECT`'s columns for the
+// single-track read), but a lean feed row never runs them and carries it undefined. This is the
+// same conditional-column shape the rest of the lean projection uses — one mapper, two SELECTs.
+const LEAN_OMITTED_SUBQUERY_ALIASES = new Set([
+  "album_artwork_height",
+  "album_artwork_url_template",
+  "album_artwork_width",
+]);
+
+// Shared projection derivation: `TRACK_SELECT` minus the given base COLUMNS, minus any
+// correlated-subquery fragment whose `as <alias>` output is dropped. The `,`-split is safe —
+// no fragment (a bare `<table>.<column>` or a `(select …) as <alias>`) contains a comma — so
+// each trims to exactly one column/subquery. Single source of truth: a column added to
+// `TRACK_SELECT` flows to every derived projection automatically.
+function deriveTrackSelect(omittedColumns: Set<string>, omittedAliases: Set<string>): string {
+  return TRACK_SELECT.split(",")
+    .filter((fragment) => {
+      const trimmed = fragment.trim();
+
+      if (omittedColumns.has(trimmed)) {
+        return false;
+      }
+
+      const alias = /\bas\s+([a-z_]+)\s*$/i.exec(trimmed)?.[1];
+
+      return alias === undefined || !omittedAliases.has(alias);
+    })
+    .join(",");
+}
+
+const LEAN_TRACK_SELECT = deriveTrackSelect(
+  LEAN_LIST_OMITTED_COLUMNS,
+  LEAN_OMITTED_SUBQUERY_ALIASES,
+);
 
 // ── The BOARD list projection (renders + findings efficiency batch) ──
 //
 // The two admin BOARDS (`/admin/renders`, `/admin/findings`) render a finding's
 // identity + its video/publish ledger, but NEVER its graph edges or discovery
-// placement. So on top of the lean drop (the three heavy columns) the board
-// projection also drops the CORRELATED SUBQUERIES those pages never read — the
-// biggest per-row cost in `TRACK_SELECT` (each fires once per row):
+// placement. So on top of the lean drop (the three heavy columns + the render-only
+// artworkMax subqueries) the board projection also drops the CORRELATED SUBQUERIES
+// those pages never read — the biggest per-row cost in `TRACK_SELECT` (each fires
+// once per row):
 //   - galaxy (name/slug)      — the browse-by-feel cluster; no board cell shows it.
 //   - albumSlug / labelSlug   — the `/album` + `/label` graph links; boards don't link out.
-//   - artworkMax (template/w/h) — a render-time-only ≥1920 source for the video pipeline.
 //   - youtubeUrl              — the published-YouTube post url; the board reads its posts
 //                               through `listSocialPostsForTracks`, and the clip preview
 //                               (StoriesPlayer→StoryView) links only TikTok, never YouTube.
@@ -245,33 +281,46 @@ const LEAN_TRACK_SELECT = TRACK_SELECT.split(",")
 // the cover on every row) and `tiktokUrl` (the preview's "Watch on TikTok"). Verified against
 // the row components (finding-identity, pipeline board-model, story-view) — a dropped field is
 // a compile error via `BoardTrackListItem`, never a silent blank.
-//
-// Derived from `TRACK_SELECT` (single source of truth): omit the lean columns, then any
-// fragment whose `as <alias>` output is in the board-drop set. No subquery fragment contains
-// a comma, so the `,`-split trims each to one column/subquery cleanly.
 const BOARD_OMITTED_SUBQUERY_ALIASES = new Set([
-  "album_artwork_height",
-  "album_artwork_url_template",
-  "album_artwork_width",
   "album_slug",
   "galaxy_name",
   "galaxy_slug",
   "label_slug",
   "youtube_url",
 ]);
-const BOARD_TRACK_SELECT = TRACK_SELECT.split(",")
-  .filter((fragment) => {
-    const trimmed = fragment.trim();
+const BOARD_TRACK_SELECT = deriveTrackSelect(
+  LEAN_LIST_OMITTED_COLUMNS,
+  new Set([...LEAN_OMITTED_SUBQUERY_ALIASES, ...BOARD_OMITTED_SUBQUERY_ALIASES]),
+);
 
-    if (LEAN_LIST_OMITTED_COLUMNS.has(trimmed)) {
-      return false;
-    }
-
-    const alias = /\bas\s+([a-z_]+)\s*$/i.exec(trimmed)?.[1];
-
-    return alias === undefined || !BOARD_OMITTED_SUBQUERY_ALIASES.has(alias);
-  })
-  .join(",");
+// ── The GRAPH list projection (the /artist · /label · /album graph pages) ──
+//
+// The findings grid that LEADS each graph page renders a cover → `/log` link and nothing more,
+// and its JSON-LD carries only per-track facts. It reads SEVEN fields: `logId`, `albumImageUrl`,
+// `artists`, `title` (the grid + its `artistTitleLine`) and `durationMs`, `isrc`, `releaseDate`
+// (the JSON-LD `MusicRecording`s). The graph reads are `getFindingsByArtist`/`getFindingsByLabel`/
+// `getFindingsByAlbum`, which ALSO back four bounded co-callers — oembed (cover + artists), the
+// graph hover card (cover + `addedAt`), the MCP `get_artist`/`get_label` tools (`compactFinding`:
+// + galaxy/bpm/key/note/album/preview/label/spotify/found), and the admin bio-describe (title).
+//
+// The UNION across all of them omits: the three heavy JSON columns + the render-only artworkMax
+// (both already dropped by LEAN), plus the album/label graph-link slugs and the youtube/tiktok
+// post subqueries — none of which any caller reads. It KEEPS galaxy (the MCP tool reports it)
+// and the cover-master columns (every caller's cover). So this projection is LEAN, minus the
+// graph-link slugs + youtube + tiktok, keeping galaxy. Every consumer types the result as
+// `TrackListItem` (a `GraphFindingItem` is assignable — the four dropped fields are optional
+// there), so no call site changes; a graph component that reaches for a dropped field is a
+// compile error via `GraphFindingItem`.
+const GRAPH_OMITTED_SUBQUERY_ALIASES = new Set([
+  "album_slug",
+  "label_slug",
+  "tiktok_url",
+  "youtube_url",
+]);
+const GRAPH_TRACK_SELECT = deriveTrackSelect(
+  LEAN_LIST_OMITTED_COLUMNS,
+  new Set([...LEAN_OMITTED_SUBQUERY_ALIASES, ...GRAPH_OMITTED_SUBQUERY_ALIASES]),
+);
 
 /** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
@@ -548,6 +597,36 @@ export function toBoardTrackListItem(row: LeanTrackRow): BoardTrackListItem {
 // DTO, so a `board: true` caller gets the compile-time guarantee at the return boundary.
 export type BoardTrackListPage = Omit<TrackListPage, "tracks"> & { tracks: BoardTrackListItem[] };
 
+// The GRAPH list DTO (the /artist · /label · /album graph reads): the lean base MINUS the four
+// graph-link/post fields `GRAPH_TRACK_SELECT` stops selecting (the album/label slugs + the
+// youtube/tiktok post subqueries). It KEEPS `galaxy` (the MCP `get_artist`/`get_label` tools
+// report it) and the cover master (every consumer's cover). Assignable to `TrackListItem` (the
+// four are optional there), so every `getFindingsBy*` consumer — the graph pages, oembed, the
+// hover card, the MCP tools, the admin bio-describe — takes it unchanged; a consumer that reaches
+// for a dropped field is a COMPILE error, never a silent blank.
+export type GraphFindingItem = Omit<
+  LeanTrackListItem,
+  "albumSlug" | "labelSlug" | "tiktokUrl" | "youtubeUrl"
+>;
+
+/**
+ * The graph list DTO mapper. Delegates to the lean mapper (ONE field-mapping source), then
+ * strips the four graph-link/post fields so a graph finding never carries them. Under the graph
+ * projection those columns arrive absent (their subqueries were never run), so the lean mapper
+ * fills them `undefined`; the narrower return type then forbids any consumer from reading them.
+ */
+export function toGraphFindingItem(row: LeanTrackRow): GraphFindingItem {
+  const {
+    albumSlug: _albumSlug,
+    labelSlug: _labelSlug,
+    tiktokUrl: _tiktokUrl,
+    youtubeUrl: _youtubeUrl,
+    ...graph
+  } = toLeanTrackListItem(row);
+
+  return graph;
+}
+
 // Internal admin/agent-only fields stripped from every item bound for a PUBLIC surface.
 //   - `sourceAudioKey` — the R2 key of the CAPTURED copyrighted full song (a content hash)
 //     in the PRIVATE `fluncle-source-audio` bucket; it must NEVER world-serve
@@ -756,11 +835,11 @@ export async function getBoardTracksByIds(
 export async function getFindingsByArtist(
   artistId: string,
   artistName: string,
-): Promise<TrackListItem[]> {
+): Promise<GraphFindingItem[]> {
   const db = await getDb();
   const viaJoin = await db.execute({
     args: [artistId],
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           join track_artists on track_artists.track_id = tracks.track_id
           where track_artists.artist_id = ? and findings.log_id is not null
           order by findings.added_at desc, tracks.track_id desc`,
@@ -769,7 +848,7 @@ export async function getFindingsByArtist(
   const joined = typedRows<TrackRow>(viaJoin.rows);
 
   if (joined.length > 0) {
-    return joined.map(toTrackListItem);
+    return joined.map(toGraphFindingItem);
   }
 
   // Fallback: the artist has no track_artists rows yet (pre-backfill). Match the
@@ -777,14 +856,14 @@ export async function getFindingsByArtist(
   const needle = artistName.toLowerCase();
   const viaJson = await db.execute({
     args: [needle],
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           where findings.log_id is not null
             and lower(tracks.artists_json) like '%' || ? || '%'
           order by findings.added_at desc, tracks.track_id desc`,
   });
 
   return typedRows<TrackRow>(viaJson.rows)
-    .map(toTrackListItem)
+    .map(toGraphFindingItem)
     .filter((finding) => finding.artists.some((name) => name.toLowerCase() === needle));
 }
 
@@ -794,11 +873,11 @@ export async function getFindingsByArtist(
  * pointer (an indexed seek, never a fold over the catalogue; see schema.ts) and drives
  * from `FINDINGS_FROM`, so it can only ever return findings.
  */
-export async function getFindingsByLabel(labelId: string): Promise<TrackListItem[]> {
+export async function getFindingsByLabel(labelId: string): Promise<GraphFindingItem[]> {
   return findingsByEntity("tracks.label_id", labelId);
 }
 
-export async function getFindingsByAlbum(albumId: string): Promise<TrackListItem[]> {
+export async function getFindingsByAlbum(albumId: string): Promise<GraphFindingItem[]> {
   return findingsByEntity("tracks.album_id", albumId);
 }
 
@@ -807,16 +886,59 @@ export async function getFindingsByAlbum(albumId: string): Promise<TrackListItem
 async function findingsByEntity(
   column: "tracks.album_id" | "tracks.label_id",
   entityId: string,
-): Promise<TrackListItem[]> {
+): Promise<GraphFindingItem[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [entityId],
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
+    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           where ${column} = ? and findings.log_id is not null
           order by findings.added_at desc, tracks.track_id desc`,
   });
 
-  return typedRows<TrackRow>(result.rows).map(toTrackListItem);
+  return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
+}
+
+// ── The /log index text read ──────────────────────────────────────────────────
+//
+// The `/log` page is a TEXT list — one row per finding: its Log ID, the `Artist · Title`
+// line, and the found date. No cover, no graph edge, no video, no observation. So it takes the
+// LEANEST read of all: the five columns it renders, and nothing else — not even the cover master
+// the feed and graph reads carry. A dedicated projection rather than a `listTracks` grade, because
+// the page needs none of the feed machinery (cursor, mixtapes, filters) and none of the fat DTO —
+// just coordinate-bearing findings newest-FOUND first, capped for one readable plate. The
+// `log_id is not null` gate does the page's own filter in SQL (it renders only coordinate rows).
+export type LogIndexEntry = {
+  addedAt: string;
+  artists: string[];
+  logId: string;
+  title: string;
+  trackId: string;
+};
+
+export async function listLogIndexEntries(limit = 500): Promise<LogIndexEntry[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [Math.min(Math.max(limit, 1), 1000)],
+    sql: `select findings.log_id, tracks.track_id, tracks.title, tracks.artists_json, findings.added_at
+          from ${FINDINGS_FROM}
+          where findings.log_id is not null
+          order by findings.added_at desc, tracks.track_id desc
+          limit ?`,
+  });
+
+  return typedRows<{
+    added_at: string;
+    artists_json: string;
+    log_id: string;
+    title: string;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    addedAt: row.added_at,
+    artists: parseArtistsJson(row.artists_json),
+    logId: row.log_id,
+    title: row.title,
+    trackId: row.track_id,
+  }));
 }
 
 /**
