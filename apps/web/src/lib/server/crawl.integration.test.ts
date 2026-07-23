@@ -178,17 +178,21 @@ beforeEach(async () => {
 });
 
 describe("the catalogue crawler", () => {
-  it("walks label → release → artist → release and writes catalogue tracks, never findings", async () => {
+  it("walks label → release → artist → release and stores the ENABLED-label tracks, never findings", async () => {
     const totals = await drain();
 
-    expect(totals.tracksWritten).toBe(3); // 2 on the seed release + 1 at hop 2
+    // The seed release is on Med School (enabled) → its two tracks are stored. The hop-2 release
+    // is on Hospital Records (unruled) → the walk still REACHES it (that is discovery), but the
+    // STORAGE GATE drops its track: storage is enabled-label-only, hop distance bounds discovery.
+    expect(totals.tracksWritten).toBe(2);
 
     const tracks = await db.execute("select track_id, title, label, isrc from tracks");
     expect(tracks.rows.map((row) => text(row.title)).sort(compare)).toEqual([
-      "A Hop-2 Track",
       "Begin by Letting Go",
       "Weightless",
     ]);
+    // The hop-2 Hospital track was walked but never stored.
+    expect(tracks.rows.map((row) => text(row.title))).not.toContain("A Hop-2 Track");
 
     // THE FIREWALL. The crawler cannot certify: not one `findings` row exists.
     const findings = await db.execute("select count(*) as n from findings");
@@ -199,7 +203,6 @@ describe("the catalogue crawler", () => {
     expect(tracks.rows.map((row) => text(row.track_id)).sort(compare)).toEqual([
       "mb_rec-1",
       "mb_rec-2",
-      "mb_rec-3",
     ]);
 
     // MINT-TIME MBID (the MusicBrainz identity layer, path b): every crawled row carries its
@@ -210,7 +213,7 @@ describe("the catalogue crawler", () => {
     );
     expect(
       mbids.rows.map((row) => `${text(row.track_id)}=${text(row.mb_recording_id)}`).sort(compare),
-    ).toEqual(["mb_rec-1=rec-1", "mb_rec-2=rec-2", "mb_rec-3=rec-3"]);
+    ).toEqual(["mb_rec-1=rec-1", "mb_rec-2=rec-2"]);
   });
 
   it("leaves every agent queue's state at its DDL default — a crawled row is nobody's work item", async () => {
@@ -231,7 +234,7 @@ describe("the catalogue crawler", () => {
 
   it("is IDEMPOTENT — a second crawl of the same graph writes zero new rows", async () => {
     const first = await drain();
-    expect(first.tracksWritten).toBe(3);
+    expect(first.tracksWritten).toBe(2); // both Med School tracks; the Hospital hop-2 track is gated out
 
     // Re-open the frontier: the same graph, walked again from scratch.
     await db.execute("update crawl_frontier set state = 'pending', cursor = 0");
@@ -239,10 +242,11 @@ describe("the catalogue crawler", () => {
     const second = await drain();
 
     expect(second.tracksWritten).toBe(0);
+    // 2 Med School tracks fold to a dedupe skip + the 1 Hospital hop-2 track the storage gate skips.
     expect(second.tracksSkipped).toBe(3);
 
     const count = await db.execute("select count(*) as n from tracks");
-    expect(Number(count.rows[0]?.n)).toBe(3);
+    expect(Number(count.rows[0]?.n)).toBe(2);
   });
 
   it("never mints a second row for a track Fluncle already CERTIFIED (the ISRC dedupe)", async () => {
@@ -333,8 +337,8 @@ describe("the catalogue crawler", () => {
     expect(labels).not.toContain("Med School");
 
     // The invariant the whole label graph assumes: every crawled row's label slugifies onto
-    // a real `labels` row. (`Hospital Records` is the DISCOVERED one — minted from MB's
-    // spelling, so it agrees with its own slug by construction.)
+    // a real `labels` row. (Only Med School rows are stored now — Hospital Records is DISCOVERED
+    // but gated out of storage, so it never appears as a `tracks.label`.)
     const { labelSlug } = await import("./labels");
     const known = await db.execute("select slug from labels");
     const slugs = new Set(known.rows.map((row) => text(row.slug)));
@@ -369,7 +373,7 @@ describe("the catalogue crawler", () => {
     await drain();
     const end = await getCrawlStatus();
 
-    expect(end.catalogueTracks).toBe(3);
+    expect(end.catalogueTracks).toBe(2); // both Med School tracks; the Hospital hop-2 track is gated out
     expect(end.frontier.pending).toBe(0);
   });
 
@@ -418,40 +422,36 @@ describe("the catalogue crawler", () => {
       where tracks.track_id like 'mb_%'
     `);
 
-    // All three crawled tracks are linked, and to the RIGHT label — which only works because
-    // the row carries the archive's spelling (`Medschool`), not MusicBrainz's (`Med School`).
-    expect(rows.rows.length).toBe(3);
-    expect(new Set(rows.rows.map((row) => text(row.slug)))).toEqual(
-      new Set(["medschool", "hospital-records"]),
-    );
+    // Both stored tracks are linked, and to the RIGHT label — which only works because the row
+    // carries the archive's spelling (`Medschool`), not MusicBrainz's (`Med School`). The Hospital
+    // hop-2 track is gated out of storage, so `hospital-records` has no linked track here.
+    expect(rows.rows.length).toBe(2);
+    expect(new Set(rows.rows.map((row) => text(row.slug)))).toEqual(new Set(["medschool"]));
   });
 
   it("mints + links the ALBUM inline, folded on the release-group MBID", async () => {
     // The album edge is now written INLINE at crawl time (no deferred deploy backfill),
-    // folded on MusicBrainz's release-group MBID (`inc=release-groups`). Two releases here
-    // sit in two DISTINCT release groups, so the walk mints two album rows and stamps every
-    // crawled track's `album_id` at the right one.
+    // folded on MusicBrainz's release-group MBID (`inc=release-groups`). Only the ENABLED-label
+    // release is stored, so exactly ONE album row is minted (the Hospital hop-2 release is gated
+    // out of storage — no childless `hospital-records-sampler` album is left behind).
     await drain();
 
     const albums = await db.execute("select slug, release_group_mbid from albums order by slug");
-    expect(albums.rows.map((row) => text(row.slug))).toEqual([
-      "hospital-records-sampler",
-      "med-school-sampler",
-    ]);
-    // Every album carries its fold key — the identity a re-crawl or a second pressing folds on.
+    expect(albums.rows.map((row) => text(row.slug))).toEqual(["med-school-sampler"]);
+    // The album carries its fold key — the identity a re-crawl or a second pressing folds on.
     expect(new Set(albums.rows.map((row) => text(row.release_group_mbid)))).toEqual(
-      new Set([SEED_RELEASE_GROUP, HOP2_RELEASE_GROUP]),
+      new Set([SEED_RELEASE_GROUP]),
     );
 
-    // All three crawled tracks are linked to an album (the indexed edge the /album page reads by).
+    // Both stored tracks are linked to an album (the indexed edge the /album page reads by).
     const linked = await db.execute(`
       select tracks.track_id, albums.slug
       from tracks join albums on albums.id = tracks.album_id
       where tracks.track_id like 'mb_%'
     `);
-    expect(linked.rows.length).toBe(3);
+    expect(linked.rows.length).toBe(2);
     expect(new Set(linked.rows.map((row) => text(row.slug)))).toEqual(
-      new Set(["hospital-records-sampler", "med-school-sampler"]),
+      new Set(["med-school-sampler"]),
     );
 
     // The raw `tracks.album` string is preserved alongside the pointer (audit trail).
@@ -516,12 +516,59 @@ describe("the catalogue crawler", () => {
     expect(Number(tracks.rows[0]?.n)).toBe(0);
   });
 });
+
+describe("the STORAGE GATE — a track is stored only when its release's label is ENABLED", () => {
+  // The whitelist (`labels.seed_state = 'enabled'`) gates STORAGE, not only seeding. The 2-hop walk
+  // is a label-DISCOVERY mechanism; storage is enabled-label-only. Hop distance bounds discovery,
+  // never storage — the gate keys on the LABEL, not the hop.
+
+  it("stores ZERO tracks for a release on a non-enabled label, but STILL surfaces that label for ruling", async () => {
+    await drain();
+
+    // The hop-2 release is on Hospital Records — a label nobody has ruled on. Its track is NOT
+    // stored (the storage gate), so no `mb_rec-3` row exists.
+    const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
+    expect(hop2.rows).toHaveLength(0);
+
+    // …yet the walk still DISCOVERED the label: `ensureLabel` ran, so Hospital Records is minted
+    // `undecided` and lands in the operator's ruling queue. The widening loop keeps working.
+    const label = await db.execute(
+      "select seed_state, ruled_at from labels where slug = 'hospital-records'",
+    );
+    expect(label.rows[0]?.seed_state).toBe("undecided");
+    expect(label.rows[0]?.ruled_at).toBeNull();
+
+    // Storage-gated means storage-gated all the way down: no album row, no label_id edge for it.
+    const album = await db.execute(
+      "select slug from albums where slug = 'hospital-records-sampler'",
+    );
+    expect(album.rows).toHaveLength(0);
+  });
+
+  it("stores a release's tracks once its label is ENABLED — the gate keys on the LABEL, not the hop", async () => {
+    // Rule Hospital Records IN. Now the SAME hop-2 release stores its track — proving storage
+    // follows the label ruling, not graph distance (this release is still reached at hop 2).
+    await seedLabel("Hospital Records", "hospital-records", "enabled");
+
+    await drain();
+
+    const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
+    expect(hop2.rows.map((row) => text(row.track_id))).toEqual(["mb_rec-3"]);
+
+    // And the enabled seed release stores its tracks exactly as before — three in all now.
+    const all = await db.execute("select count(*) as n from tracks");
+    expect(Number(all.rows[0]?.n)).toBe(3);
+  });
+});
+
 describe("the frontier drain — releases never starve behind a discovery wave", () => {
   it("guarantees release nodes half the batch even when older, lower-hop artist nodes crowd the head", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // No seed label: the walk itself enqueues nothing; the frontier below is the whole queue.
-    await db.execute("update labels set seed_state = 'disabled'");
+    // Only Med School is enabled: its seed adds one quiet hop-0 node, and — since the STORAGE
+    // GATE — the planted release must be on an enabled label for its tracks to land, which the
+    // "Med School" release is. Every other label is disabled so the frontier stays the shape below.
+    await db.execute("update labels set seed_state = 'disabled' where slug != 'medschool'");
 
     // THE LIVE STARVATION SHAPE (2026-07-16): a wave of hop-1 artist nodes, all OLDER
     // than the hop-2 release, so a pure `hop asc, created_at asc` drain would spend the
@@ -795,9 +842,9 @@ describe("the crawl converges onto a tap-first row instead of minting a twin", (
       "select track_id from tracks where title = 'Weightless' order by track_id",
     );
     expect(weightless.rows.map((row) => text(row.track_id))).toEqual(["sp_weightless"]);
-    // The other seed track + the hop-2 track still mint as normal.
+    // The other seed track still mints as normal; the Hospital hop-2 track is gated out of storage.
     const all = await db.execute("select count(*) as n from tracks");
-    expect(Number(all.rows[0]?.n)).toBe(3); // sp_weightless + mb_rec-2 + mb_rec-3
+    expect(Number(all.rows[0]?.n)).toBe(2); // sp_weightless + mb_rec-2
   });
 
   it("folds a later MB walk to a skip via same-album title fold when the ISRC is missing/divergent", async () => {
@@ -825,9 +872,10 @@ describe("the crawl converges onto a tap-first row instead of minting a twin", (
       "select track_id from tracks where track_id like 'mb\\_rec-1' escape '\\' or track_id like 'mb\\_rec-2' escape '\\'",
     );
     expect(twins.rows).toHaveLength(0);
-    // The hop-2 track (a DIFFERENT album, different title) is unaffected and still minted.
+    // The hop-2 track is on Hospital Records (unruled), so the STORAGE GATE drops it — it is
+    // never stored regardless of the fold, which the convergence above is entirely separate from.
     const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
-    expect(hop2.rows.map((row) => text(row.track_id))).toEqual(["mb_rec-3"]);
+    expect(hop2.rows).toHaveLength(0);
   });
 
   it("does NOT merge a same-titled track on a DIFFERENT album (the fold is album-scoped)", async () => {

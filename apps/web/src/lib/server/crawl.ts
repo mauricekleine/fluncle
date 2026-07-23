@@ -10,21 +10,29 @@
 // simply lands with `capture_status` at its DDL default, and a separate, operator-gated
 // pipeline decides whether the bytes are ever fetched.
 //
-// ── THE BOUNDARY GATE: seed-label allowlist + graph distance ────────────────────
+// ── THE BOUNDARY GATE: enabled-label STORAGE + graph-distance DISCOVERY ──────────
 // There is NO genre inference here — no MusicBrainz tag, no Discogs style, no BPM band.
 // The operator already drew the boundary when he ruled on the labels (`labels.seed_state`,
-// docs/label-entity.md). The crawler's only job is to not leave the neighbourhood:
+// docs/label-entity.md). Two things follow from it, and they are DISTINCT:
 //
-//   hop 0 — a release on a label whose `seed_state` is `enabled`
-//   hop 1 — an artist who appears on such a release
-//   hop 2 — a release that artist ALSO appears on
-//   …and STOP at `maxHop` (default 2). A node past the limit is never enqueued, so
-//   the walk terminates by construction rather than by a watchdog.
+//   STORAGE — a release's tracks are written ONLY when the label that pressed it is one the
+//     operator ENABLED (`isEnabledLabel`, checked at the write chokepoint in `expandRelease`).
+//     A release on a non-enabled label is walked but stores nothing — no tracks, no album, no edges.
+//
+//   DISCOVERY — the walk still runs to graph distance so it can FIND the next labels to rule on:
+//       hop 0 — a release on a label whose `seed_state` is `enabled`
+//       hop 1 — an artist who appears on such a release
+//       hop 2 — a release that artist ALSO appears on
+//     …and STOP at `maxHop` (default 2). A node past the limit is never enqueued, so the walk
+//     terminates by construction rather than by a watchdog. Hop distance bounds the DISCOVERY,
+//     never the STORAGE: a hop-2 release on an enabled label IS stored; a hop-0 seed release is
+//     stored because its seed label is enabled, not because it sits at hop 0.
 //
 // A label the walk DISCOVERS that nobody has ruled on enters as `undecided` (the
 // `labels` DDL default) and surfaces in the operator's attention queue. It is NOT
-// crawled — a subsequent crawl seeds from it only once the operator enables it. That is
-// the self-widening-but-operator-ratified loop: the crawler proposes, the operator rules.
+// crawled — and, until enabled, its releases store nothing. A subsequent crawl seeds from it
+// (and stores it) only once the operator enables it. That is the self-widening-but-operator-
+// ratified loop: the crawler proposes, the operator rules.
 //
 // ── WHY MUSICBRAINZ CARRIES THE WALK ───────────────────────────────────────────
 // MusicBrainz is the only one of the three sources that is RECORDING-centric, which is
@@ -1043,6 +1051,35 @@ async function expandRearmedBrowse(
   };
 }
 
+// ── THE STORAGE GATE: enabled-label-only ───────────────────────────────────────
+// The whitelist (`labels.seed_state = 'enabled'`) now gates STORAGE, not only seeding. A
+// release's tracks are WRITTEN only when the label that pressed it is one the operator
+// ENABLED; the 2-hop walk is a label-DISCOVERY mechanism (it surfaces unruled labels into
+// the ruling queue), never a licence to store. So a hop-2 release on a reggae/jazz/major
+// label is still walked for the labels it reveals, then its tracks are dropped on the floor.
+//
+// Read ONCE per crawl tick (tens of labels), never per-release in the hot loop: memoized in
+// `enabledLabelFolds`, which `crawlCatalogue` clears at the top of every pass — so a mid-crawl
+// ruling is honoured on the NEXT tick. Matched by the same aggressive `fold` the rest of the
+// file uses ("Medschool" ⇄ "Med School"), against the ARCHIVE spelling already resolved into
+// `labelName`, so the gate agrees with `linkTracksToLabel` and the seed walk by construction.
+let enabledLabelFolds: null | Set<string> = null;
+
+async function isEnabledLabel(labelName: null | string | undefined): Promise<boolean> {
+  const key = labelName ? fold(labelName) : "";
+
+  if (!key) {
+    return false;
+  }
+
+  if (!enabledLabelFolds) {
+    const enabled = await listLabels("enabled");
+    enabledLabelFolds = new Set(enabled.map((label) => fold(label.name)).filter(Boolean));
+  }
+
+  return enabledLabelFolds.has(key);
+}
+
 /**
  * A release node → THE WRITE. One request brings the whole release: its tracks, their
  * recordings (with MBIDs and ISRCs), the artist credits, the label, and — for free, in
@@ -1051,9 +1088,10 @@ async function expandRearmedBrowse(
  *
  * It also mints a `labels` row for the release's label. THAT is the widening loop: a
  * label nobody has ruled on enters `undecided` and lands in the operator's attention
- * queue. It does not get crawled until he enables it. And it mints + links the `albums`
- * row for the release, folded on the release-group MBID (`inc=release-groups`) — the album
- * edge is written inline here, not deferred.
+ * queue. It does not get crawled until he enables it — and, since the STORAGE GATE, its
+ * tracks are not stored until then either; the walk only ever DISCOVERS it. When the label
+ * IS enabled it mints + links the `albums` row for the release, folded on the release-group
+ * MBID (`inc=release-groups`) — the album edge is written inline here, not deferred.
  */
 async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansion> {
   const release = await mb<MbReleaseDetail>(
@@ -1155,42 +1193,59 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     }
   }
 
-  // The album row, resolved ONCE up front (folded on the release-group MBID, slug fallback). It is
-  // the same-album title-fold dedupe key `writeCatalogueTracks` reads (the Apple-twin guard) AND
-  // the `album_id` edge stamped below — one resolve, so the two can never disagree.
-  const albumId =
-    (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null)) ?? null;
+  // ── THE STORAGE GATE ──────────────────────────────────────────────────────────
+  // Store this release's tracks ONLY when its label is one the operator ENABLED. A hop-2
+  // release on a non-enabled label was still walked above (its label was DISCOVERED into the
+  // ruling queue via `ensureLabel`), but nothing is stored for it — no tracks, no album, no
+  // edges. The artist-hop walk BELOW still runs regardless, because the walk is how the crawler
+  // reaches the next labels to rule on; it is naturally hop-bounded and terminates by construction.
+  let skipped = candidates.length;
+  let written = 0;
 
-  const { skipped, written, writtenIds } = await writeCatalogueTracks(candidates, albumId);
+  if (await isEnabledLabel(labelName)) {
+    // The album row, resolved ONCE up front (folded on the release-group MBID, slug fallback). It is
+    // the same-album title-fold dedupe key `writeCatalogueTracks` reads (the Apple-twin guard) AND
+    // the `album_id` edge stamped below — one resolve, so the two can never disagree. Resolved inside
+    // the gate: a non-enabled release stores no album either, so no childless `albums` row is minted.
+    const albumId =
+      (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null)) ?? null;
 
-  if (labelName) {
-    await linkTracksToLabel(writtenIds, labelName, mbLabelId);
+    const result = await writeCatalogueTracks(candidates, albumId);
+    skipped = result.skipped;
+    written = result.written;
+    const { writtenIds } = result;
+
+    if (labelName) {
+      await linkTracksToLabel(writtenIds, labelName, mbLabelId);
+    }
+
+    // The album edge, stamped INLINE — every pressing of a record resolves to one album row.
+    // Purely additive; a crawled album is minted here now, no deploy backfill.
+    await linkTracksToAlbumId(writtenIds, albumId);
+
+    // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
+    // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
+    // find these rows by an indexed seek on `track_artists`. This is the NAME-FOLD half — the
+    // FALLBACK for a track with no Spotify presence: it links a crawled track to an artist Fluncle
+    // has ALREADY certified (by name), mints nothing, and makes nothing here countable as a finding
+    // (lib/server/artists.ts). The stable-id half runs later, at the Spotify-anchor step
+    // (`connectAnchorArtists` in anchor.ts, driven by the box's anchor sweep), which MINTS the entity
+    // by `spotify_artist_id` for a track that gains a Spotify presence. A track credited to nobody he
+    // has found stays unlinked until its
+    // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
+    await linkTracksToArtistEntities(writtenIds);
+
+    // Stamp any remixer credit these titles name (RFC label-lineage-remixer, U2), now the
+    // `track_artists` edges exist. A crawled remix by an ALREADY-CERTIFIED remixer (the only kind
+    // `linkTracksToArtistEntities` links) gets its `role='remixer'` stamp; an uncertified remixer
+    // has no linked row, so nothing is stamped — the same exact-match-only rail.
+    await stampRemixerRoles(writtenIds);
   }
 
-  // The album edge, stamped INLINE — every pressing of a record resolves to one album row.
-  // Purely additive; a crawled album is minted here now, no deploy backfill.
-  await linkTracksToAlbumId(writtenIds, albumId);
-
-  // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
-  // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
-  // find these rows by an indexed seek on `track_artists`. This is the NAME-FOLD half — the
-  // FALLBACK for a track with no Spotify presence: it links a crawled track to an artist Fluncle
-  // has ALREADY certified (by name), mints nothing, and makes nothing here countable as a finding
-  // (lib/server/artists.ts). The stable-id half runs later, at the Spotify-anchor step
-  // (`connectAnchorArtists` in anchor.ts, driven by the box's anchor sweep), which MINTS the entity
-  // by `spotify_artist_id` for a track that gains a Spotify presence. A track credited to nobody he
-  // has found stays unlinked until its
-  // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
-  await linkTracksToArtistEntities(writtenIds);
-
-  // Stamp any remixer credit these titles name (RFC label-lineage-remixer, U2), now the
-  // `track_artists` edges exist. A crawled remix by an ALREADY-CERTIFIED remixer (the only kind
-  // `linkTracksToArtistEntities` links) gets its `role='remixer'` stamp; an uncertified remixer
-  // has no linked row, so nothing is stamped — the same exact-match-only rail.
-  await stampRemixerRoles(writtenIds);
-
   // The outward edge: the artists on this release, one hop further out. Past the limit
-  // nothing is enqueued, which is what makes the walk terminate.
+  // nothing is enqueued, which is what makes the walk terminate. This is the DISCOVERY leg —
+  // it runs whether or not the release was stored, so a non-enabled release still leads the
+  // walk on to the labels it can reveal.
   let enqueued = 0;
   const artistHop = node.hop + 1;
 
@@ -1237,6 +1292,10 @@ export async function crawlCatalogue({
   limit?: number;
   maxHop?: number;
 } = {}): Promise<CrawlPass> {
+  // Reset the storage gate's memo so this tick reads the enabled-label set fresh — a ruling the
+  // operator made since the last tick takes effect now, and stale enablement never leaks across ticks.
+  enabledLabelFolds = null;
+
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
   const pass: CrawlPass = {
     dryRun,
