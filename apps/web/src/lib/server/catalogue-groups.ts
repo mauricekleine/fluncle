@@ -444,11 +444,33 @@ export async function listLabelCatalogue(
   //     stays its own uncorrelated count — SQLite evaluates it once — so the thin-content gate
   //     keeps the honest number without costing a second trip to Ireland.
   const result = await db.execute({
-    args: [labelId, labelId, GRAPH_GROUP_TRACK_LIMIT, offset, offset + GRAPH_GROUP_PAGE_SIZE],
-    sql: `with artist_slugs as (
-            select a.name as name, min(a.slug) as slug
-            from artists a
-            group by a.name collate nocase
+    args: [
+      labelId,
+      labelId,
+      labelId,
+      GRAPH_GROUP_TRACK_LIMIT,
+      offset,
+      offset + GRAPH_GROUP_PAGE_SIZE,
+    ],
+    // `artist_slugs` folds each artist NAME to one canonical slug (`min(a.slug)`, the same pick as
+    // before), but scoped to the label's OWN credited names via `label_credits` rather than a
+    // GROUP BY over the ENTIRE `artists` table — which grows to catalogue scale and was re-scanned
+    // in full on every `/label/<slug>` render. `label_credits` is the label's `json_each` credit
+    // set, bounded by the indexed `tracks.label_id` seek; `artist_slugs` then folds only the
+    // artists carrying one of those names. The fold picks the identical slug for every name `base`
+    // resolves (all artist entities with that name still join), so the duplicate-name semantics the
+    // comment below defends are unchanged — only the scan's WIDTH is.
+    sql: `with label_credits as (
+            select distinct credit.value as name
+            from tracks
+            join json_each(tracks.artists_json) credit
+            where tracks.label_id = ?
+          ),
+          artist_slugs as (
+            select lc.name as name, min(a.slug) as slug
+            from label_credits lc
+            join artists a on a.name = lc.name collate nocase
+            group by lc.name collate nocase
           ),
           base as (
             select tracks.track_id as track_id, tracks.title as title,

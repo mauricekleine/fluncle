@@ -297,11 +297,16 @@ export async function getGalaxyLensPage(
   findings: TrackListItem[];
   galaxy: GalaxyListItem;
 } | null> {
-  if (!(await isGalaxyMapFullyNamed())) {
+  // ONE read carries both the launch gate and the named rows (they interrogate the same table),
+  // so the page is two hops — load-rows-with-gate, then the ranked member scan — not three. A
+  // partial map comes back `fullyNamed: false` and the page stays dark, exactly as the separate
+  // leading `isGalaxyMapFullyNamed` gate did.
+  const named = await loadNamedGalaxyRows();
+
+  if (!named.fullyNamed) {
     return null;
   }
 
-  const named = await loadNamedGalaxyRows();
   const target = named.rows.find((row) => row.slug === slug);
 
   if (!target || !target.name || !target.slug) {
@@ -334,11 +339,14 @@ export type GalaxyPane = GalaxyListItem & { covers: string[] };
  * name (the `listNamedGalaxies` order).
  */
 export async function listGalaxyPanes(coverCap: number): Promise<GalaxyPane[]> {
-  if (!(await isGalaxyMapFullyNamed())) {
+  // The gate rides the same read as the rows (see `loadNamedGalaxyRows`), so a partial map
+  // returns an empty index in one hop instead of a separate leading gate query.
+  const named = await loadNamedGalaxyRows();
+
+  if (!named.fullyNamed) {
     return [];
   }
 
-  const named = await loadNamedGalaxyRows();
   const panes = await Promise.all(
     named.rows.map(async (row) => {
       // Named rows are guaranteed name+slug here (loadNamedGalaxyRows filters), but the
@@ -371,17 +379,39 @@ export async function listGalaxyPanes(coverCap: number): Promise<GalaxyPane[]> {
     .sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
 }
 
-/** The named, non-retired galaxy rows + the shared derived-count map (one read each). */
-async function loadNamedGalaxyRows(): Promise<{ counts: Map<string, number>; rows: GalaxyRow[] }> {
+/**
+ * The named, non-retired galaxy rows, the shared derived-count map, AND the launch gate —
+ * all in ONE parallel read. The gate (is the WHOLE non-retired map named?) is near-redundant
+ * with the named-row read: both interrogate the `galaxies` table's named/unnamed state. Folding
+ * the `isGalaxyMapFullyNamed` count into this same round trip lets the public lens loaders
+ * (`getGalaxyLensPage`, `listGalaxyPanes`) drop their separate leading gate query — the gate
+ * comes back alongside the rows they were going to load anyway, collapsing a 3-hop chain to 2.
+ * `fullyNamed` is computed exactly as `isGalaxyMapFullyNamed` does (total > 0 and no unnamed
+ * non-retired galaxy), so the two agree by construction.
+ */
+async function loadNamedGalaxyRows(): Promise<{
+  counts: Map<string, number>;
+  fullyNamed: boolean;
+  rows: GalaxyRow[];
+}> {
   const db = await getDb();
-  const [result, counts] = await Promise.all([
+  const [result, counts, gate] = await Promise.all([
     db.execute(
       `select ${GALAXY_COLUMNS} from galaxies where name is not null and slug is not null and retired_at is null`,
     ),
     memberCounts(db),
+    db.execute(
+      `select
+         count(*) as total,
+         sum(case when name is null or slug is null then 1 else 0 end) as unnamed
+       from galaxies where retired_at is null`,
+    ),
   ]);
+  const gateRow = typedRow<{ total: number; unnamed: number | null }>(gate.rows);
+  const fullyNamed =
+    gateRow !== undefined && Number(gateRow.total) > 0 && Number(gateRow.unnamed ?? 0) === 0;
 
-  return { counts, rows: typedRows<GalaxyRow>(result.rows) };
+  return { counts, fullyNamed, rows: typedRows<GalaxyRow>(result.rows) };
 }
 
 /** The four nearest OTHER named galaxies by centroid cosine — the adjacency strip. */
