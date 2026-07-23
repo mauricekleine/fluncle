@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   type ArchiveAffinity,
   capturePriorityFor,
+  diversifyRanked,
+  type DiversitySignals,
   DUPLICATE_CAPTURE_TIER,
   rankCorpus,
 } from "./catalogue";
@@ -226,5 +228,95 @@ describe("rankCorpus — the staleness fingerprint", () => {
 
   it("is a no-op fingerprint on an unchanged archive", () => {
     expect(rankCorpus(60, 60, 100, 5, 8)).toBe(rankCorpus(60, 60, 100, 5, 8));
+  });
+});
+
+// The ear lens's page diversity (docs/the-ear.md): a greedy pick that repeatedly takes the
+// highest-scoring remaining row after decaying each candidate by how many of its artist / year
+// / key have already been chosen (EAR_DIVERSITY_DECAY = artist 0.97, year 0.985, key 0.99). It
+// is pure — the sweep and the surface must agree on the page — so its ordering is pinned here.
+describe("diversifyRanked — the greedy decay page", () => {
+  type Row = DiversitySignals & { id: string };
+
+  const signalsOf = (r: Row): DiversitySignals => ({
+    artist: r.artist,
+    key: r.key,
+    score: r.score,
+    year: r.year,
+  });
+
+  const bare = (id: string, score: number): Row => ({
+    artist: null,
+    id,
+    key: null,
+    score,
+    year: null,
+  });
+
+  it("with no shared signals, holds pure score-descending order", () => {
+    const pool = [bare("a", 0.8), bare("b", 1), bare("c", 0.9)];
+
+    expect(diversifyRanked(pool, 3, signalsOf).map((r) => r.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("lets a lower-scoring DIFFERENT artist leapfrog a same-artist runner-up", () => {
+    // A and B share an artist; C is a different artist scoring just under B. Once A is taken,
+    // B decays by 0.97 (0.99 -> 0.9603) and C (0.98, undecayed) jumps ahead of it.
+    const pool: Row[] = [
+      { artist: "x", id: "A", key: null, score: 1, year: null },
+      { artist: "x", id: "B", key: null, score: 0.99, year: null },
+      { artist: "y", id: "C", key: null, score: 0.98, year: null },
+    ];
+
+    expect(diversifyRanked(pool, 3, signalsOf).map((r) => r.id)).toEqual(["A", "C", "B"]);
+  });
+
+  it("does NOT reorder that same pool when every row reads as a distinct artist", () => {
+    // The guard that the leapfrog above is decay, not scoring: reporting a unique artist per row
+    // means the decay exponent is always 0, so raw score order survives.
+    const pool: Row[] = [
+      { artist: "x", id: "A", key: null, score: 1, year: null },
+      { artist: "x", id: "B", key: null, score: 0.99, year: null },
+      { artist: "y", id: "C", key: null, score: 0.98, year: null },
+    ];
+    const distinct = (r: Row): DiversitySignals => ({
+      artist: r.id,
+      key: r.key,
+      score: r.score,
+      year: r.year,
+    });
+
+    expect(diversifyRanked(pool, 3, distinct).map((r) => r.id)).toEqual(["A", "B", "C"]);
+  });
+
+  it("decays on year too (the milder 0.985 knob)", () => {
+    const pool: Row[] = [
+      { artist: null, id: "A", key: null, score: 1, year: "2020" },
+      { artist: null, id: "B", key: null, score: 0.99, year: "2020" },
+      { artist: null, id: "C", key: null, score: 0.98, year: "2021" },
+    ];
+
+    // After A, B decays 0.99 -> 0.97515, below C's undecayed 0.98.
+    expect(diversifyRanked(pool, 3, signalsOf).map((r) => r.id)).toEqual(["A", "C", "B"]);
+  });
+
+  it("stacks decay across repeats — a third same-artist row sinks below a fresh one", () => {
+    const pool: Row[] = [
+      { artist: "x", id: "A", key: null, score: 1, year: null },
+      { artist: "x", id: "B", key: null, score: 0.99, year: null },
+      { artist: "x", id: "C", key: null, score: 0.985, year: null },
+      { artist: "y", id: "D", key: null, score: 0.96, year: null },
+    ];
+
+    // A, then B (0.9603 > D's 0.96); now x is seen twice, so C decays 0.985 -> 0.9268 and D wins.
+    expect(diversifyRanked(pool, 4, signalsOf).map((r) => r.id)).toEqual(["A", "B", "D", "C"]);
+  });
+
+  it("returns at most `page` items, and never more than the pool holds", () => {
+    const pool = [bare("a", 1), bare("b", 0.9), bare("c", 0.8)];
+
+    expect(diversifyRanked(pool, 2, signalsOf).map((r) => r.id)).toEqual(["a", "b"]);
+    expect(diversifyRanked(pool, 10, signalsOf)).toHaveLength(3);
+    expect(diversifyRanked([], 5, signalsOf)).toEqual([]);
   });
 });

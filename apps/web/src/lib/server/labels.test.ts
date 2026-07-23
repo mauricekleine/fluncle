@@ -18,8 +18,10 @@ vi.mock("./db", async (importOriginal) => {
 
 import { backfillLabels, linkTracksToLabels } from "../../../scripts/backfill-labels";
 import { createIntegrationDb } from "./integration-db";
+import { bestAlbumCoverUrl } from "../media";
 import {
   confirmLabelAlias,
+  coverFromJson,
   ensureLabel,
   getConfirmedAliasNames,
   getLabelBySlug,
@@ -703,6 +705,49 @@ describe("letterPages (the A–Z lane's page math)", () => {
 
   it("is empty for an empty hub", () => {
     expect(letterPages([], 48)).toEqual([]);
+  });
+});
+
+describe("coverFromJson (the borrowed-cover column shaper)", () => {
+  it("returns undefined for a non-string, an empty string, or malformed JSON", () => {
+    expect(coverFromJson(null)).toBeUndefined();
+    expect(coverFromJson(undefined)).toBeUndefined();
+    expect(coverFromJson(42)).toBeUndefined();
+    expect(coverFromJson("")).toBeUndefined();
+    expect(coverFromJson("{not json")).toBeUndefined();
+  });
+
+  it("maps its abbreviated keys to the cover resolver (k→key, s→state, v→updatedAt, u→spotify)", () => {
+    // The shape the `coverJsonSelect` column emits for a RESOLVED owned master. Comparing to
+    // bestAlbumCoverUrl of the expanded object pins the key mapping — a transposition (say
+    // imageKey ← u) would diverge from this, and every borrowed cover would break.
+    const raw = JSON.stringify({ k: "albums/hospital.jpg", s: "resolved", u: null, v: "42" });
+
+    expect(coverFromJson(raw)).toBe(
+      bestAlbumCoverUrl({
+        imageKey: "albums/hospital.jpg",
+        imageState: "resolved",
+        imageUpdatedAt: "42",
+        spotifyUrl: null,
+      }),
+    );
+  });
+
+  it("falls back to the Spotify url when the master is unresolved", () => {
+    const raw = JSON.stringify({ s: null, u: "https://i.scdn.co/image/abc" });
+
+    expect(coverFromJson(raw)).toBe(
+      bestAlbumCoverUrl({
+        imageKey: null,
+        imageState: null,
+        imageUpdatedAt: null,
+        spotifyUrl: "https://i.scdn.co/image/abc",
+      }),
+    );
+  });
+
+  it("returns undefined when the JSON carries no usable cover fields", () => {
+    expect(coverFromJson(JSON.stringify({}))).toBeUndefined();
   });
 });
 
