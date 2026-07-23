@@ -337,20 +337,24 @@ async function getLabelLineageEdges(
 ): Promise<{ parentLabel?: LabelLineageEdge; subLabels: LabelLineageEdge[] }> {
   const db = await getDb();
 
-  const parentResult = parentLabelId
-    ? await db.execute({
-        args: [parentLabelId],
-        sql: `select name, slug from labels where id = ? limit 1`,
-      })
-    : undefined;
+  // The parent seek (labels PK) and the children seek (labels_parent_label_id_idx) are mutually
+  // independent once `labelId` / `parentLabelId` are known, so they run in ONE round trip rather
+  // than two serial ones — a full trip to Ireland saved on every label page load.
+  const [parentResult, childrenResult] = await Promise.all([
+    parentLabelId
+      ? db.execute({
+          args: [parentLabelId],
+          sql: `select name, slug from labels where id = ? limit 1`,
+        })
+      : undefined,
+    db.execute({
+      args: [labelId, LABEL_SUBLABELS_LIMIT],
+      sql: `select name, slug from labels where parent_label_id = ? order by name collate nocase asc limit ?`,
+    }),
+  ]);
   const parentRow = parentResult
     ? typedRows<{ name: string; slug: string }>(parentResult.rows)[0]
     : undefined;
-
-  const childrenResult = await db.execute({
-    args: [labelId, LABEL_SUBLABELS_LIMIT],
-    sql: `select name, slug from labels where parent_label_id = ? order by name collate nocase asc limit ?`,
-  });
 
   return {
     parentLabel: parentRow ? { name: parentRow.name, slug: parentRow.slug } : undefined,
