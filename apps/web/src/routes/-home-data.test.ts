@@ -38,6 +38,22 @@ async function seedFinding(
   });
 }
 
+/**
+ * Stamp the internal admin/agent-only columns onto a seeded finding's `tracks` row — the
+ * `PRIVATE_TRACK_FIELDS` set (`source_audio_key` the R2 key of the CAPTURED full song, plus the
+ * `analyzed_*` and `*_source` provenance). A captured finding carries these on the ADMIN read; the
+ * public feed must strip them, and this fixture is what makes the leak reproducible.
+ */
+async function markCaptured(trackId: string): Promise<void> {
+  await db.execute({
+    args: [`sources/${trackId}/deadbeef.m4a`, "full", "dsp", "dsp", day(1), trackId],
+    sql: `update tracks
+          set source_audio_key = ?, analyzed_from = ?, bpm_source = ?, key_source = ?,
+              analyzed_at = ?, bpm = 174, key = '2A'
+          where track_id = ?`,
+  });
+}
+
 /** Mark a finding as carrying footage (a `video_url`) — the stories-entry signal. */
 async function giveFooting(trackId: string): Promise<void> {
   await db.execute({
@@ -198,6 +214,32 @@ describe("loadHomeData — page one and the stories entry point", () => {
     const data = await loadHomeData();
 
     expect(data.newestStoryLogId).toBe("032.1.1A");
+  });
+});
+
+describe("loadHomeData — the public strip (no private capture fields leak)", () => {
+  it("strips PRIVATE_TRACK_FIELDS from every feed row (regression: the SSR feed once shipped sourceAudioKey)", async () => {
+    await seedFinding("t-cap", "040.1.1A", day(2));
+    // A CAPTURED finding — its `tracks` row carries the R2 key of the copyrighted full song plus the
+    // analysis provenance. The home loader (edge-cached SSR HTML + the react-query seed) once returned
+    // these straight to the world; it is the one public read that skipped `toPublicTrackListItem`.
+    await markCaptured("t-cap");
+
+    const data = await loadHomeData();
+
+    expect(data.tracks).toHaveLength(1);
+    const item = data.tracks[0];
+    // None of the five internal fields may carry a VALUE to a public surface — `toPublicTrackListItem`
+    // blanks each to `undefined`. Without the strip these held the R2 key + the analysis provenance.
+    const fields = item as Record<string, unknown>;
+    expect(fields.sourceAudioKey).toBeUndefined();
+    expect(fields.bpmSource).toBeUndefined();
+    expect(fields.keySource).toBeUndefined();
+    expect(fields.analyzedAt).toBeUndefined();
+    expect(fields.analyzedFrom).toBeUndefined();
+    // The public VALUES survive the strip — the feed still renders bpm/key (not their `*_source`).
+    expect(item?.type === "mixtape" ? undefined : item?.bpm).toBe(174);
+    expect(item?.type === "mixtape" ? undefined : item?.key).toBe("2A");
   });
 });
 

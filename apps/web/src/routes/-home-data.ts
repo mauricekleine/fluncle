@@ -11,7 +11,7 @@
 
 import { type FeedListPage } from "@fluncle/contracts";
 import { getLiveState, type LiveState } from "@/lib/server/live";
-import { listTracks } from "@/lib/server/tracks";
+import { listTracks, toPublicTrackListItem } from "@/lib/server/tracks";
 
 /** How many feed rows the home loader server-renders — page one of the infinite feed. */
 export const HOME_PAGE_SIZE = 10;
@@ -44,5 +44,16 @@ export async function loadHomeData(): Promise<HomeData> {
     getLiveState(),
   ]);
 
-  return { ...page, live, newestStoryLogId: latestStory.tracks[0]?.logId };
+  // Strip the internal admin/agent-only fields (`PRIVATE_TRACK_FIELDS` — most importantly
+  // `sourceAudioKey`, the R2 key of the CAPTURED full song) from every feed row before it leaves the
+  // server. `lean: true` carries those fields for the on-box sweeps; every OTHER public read runs its
+  // items through `toPublicTrackListItem`, and this loader is the one that skipped it — so the
+  // edge-cached SSR HTML and the react-query `initialData` seed were shipping them to the world. This
+  // also makes the seed byte-identical to what the client refetch (`list_findings`) returns.
+  return {
+    ...page,
+    live,
+    newestStoryLogId: latestStory.tracks[0]?.logId,
+    tracks: page.tracks.map(toPublicTrackListItem),
+  };
 }
