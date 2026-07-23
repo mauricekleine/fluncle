@@ -111,6 +111,10 @@ export const Route = createFileRoute("/account")({
 
     return { door, identity };
   },
+  // The loader carries this user's identity + door data. Override the router's 60s
+  // default to 0 so a client nav never reuses one user's account view for another; the
+  // component reads through react-query (below) for its own liveness posture.
+  staleTime: 0,
   head: () => ({
     links: [{ href: `${siteUrl}/account`, rel: "canonical" }],
     meta: [
@@ -152,11 +156,15 @@ function AccountPage() {
 
   // Identity is seeded from the loader (SSR) and never refetches on focus — the
   // session rarely changes under the user's feet. Mutations invalidate it explicitly.
+  // Long `staleTime` so the seeded value isn't re-fetched on mount (the QueryClient has
+  // no client-wide defaultOptions); the explicit mutation invalidation is what refreshes
+  // it, not a mount refetch.
   const identityQuery = useQuery({
     initialData: loaderData.identity,
     queryFn: () => getAccountIdentity(),
     queryKey: ["account", "identity"],
     refetchOnWindowFocus: false,
+    staleTime: 10 * 60_000,
   });
   const { csrfToken, me } = identityQuery.data;
   const signedIn = !!me.user;
@@ -165,12 +173,16 @@ function AccountPage() {
   // its own cache entry; focus-refetch keeps the live doors fresh (off for settings,
   // which rides on `me`). On a client-side switch the initial data is absent, so the
   // per-door skeleton shows until the fetch lands.
+  // A short `staleTime` suppresses the redundant mount refetch of the door the loader
+  // already SSR'd, while still letting focus-refetch deliver liveness (the operator tabs
+  // back) and a client-side door switch fetch its fresh data.
   const doorQuery = useQuery({
     enabled: signedIn,
     initialData: loaderData.door,
     queryFn: () => getAccountDoorData({ data: { tab: activeTab } }),
     queryKey: ["account", activeTab],
     refetchOnWindowFocus: activeTab !== "settings",
+    staleTime: 30_000,
   });
 
   // The doors' mutations call refresh() after a write; repointed onto react-query so a

@@ -48,6 +48,11 @@ const getChatGate = createServerFn({ method: "GET" }).handler(async (): Promise<
 // oxlint-disable-next-line sort-keys -- TanStack's canonical option order (loader feeds head/component).
 export const Route = createFileRoute("/chat")({
   loader: () => getChatGate(),
+  // The gate + the minted CSRF token are per-session. Override the router's 60s default
+  // to 0 so a client nav never reuses one caller's gate/token for another, or a stale
+  // one after sign-in/verification changes state. The server re-checks the session on
+  // every turn; this keeps the CLIENT cache from outliving it.
+  staleTime: 0,
   head: () => ({
     links: [{ href: `${siteUrl}/chat`, rel: "canonical" }],
     meta: [

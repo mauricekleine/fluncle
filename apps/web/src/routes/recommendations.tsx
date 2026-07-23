@@ -164,6 +164,11 @@ const getRecommendations = createServerFn({ method: "GET" }).handler(
 // oxlint-disable-next-line sort-keys -- TanStack's canonical option order (loader feeds head/component).
 export const Route = createFileRoute("/recommendations")({
   loader: () => getRecsGate(),
+  // Per-listener, per-session data (the gate + this user's seeds/editions/draft scan).
+  // Override the router's 60s default to 0 so a client nav never reuses one listener's
+  // frontier for another, or a stale one after a seed write. The server re-checks the
+  // session on every op; this keeps the CLIENT cache from outliving it.
+  staleTime: 0,
   head: () => ({
     links: [{ href: `${siteUrl}/recommendations`, rel: "canonical" }],
     meta: [
