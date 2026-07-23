@@ -1,10 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
+import { useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
+import { type MeResponse, meResponse } from "@/lib/server/account-data";
 
 // The device-authorization verification surface (RFC 8628). The CLI sends the
 // user here (it prints the URL and opens the browser at `/device?user_code=…`).
@@ -12,21 +15,21 @@ import { siteUrl } from "@/lib/fluncle-links";
 // minting a USER session token the CLI polls for. This token is for the user's
 // own Galaxy sync; it is never the admin grant.
 
-type Me = {
-  ok: true;
-  user: null | {
-    createdAt: string;
-    displayUsername?: string;
-    id: string;
-    username?: string;
-  };
-};
-
 type DeviceSearch = {
   user_code?: string;
 };
 
 type Phase = "approved" | "denied" | "error" | "idle" | "working";
+
+/**
+ * The identity read: the `/me` session shape, resolved from the caller's own session
+ * (via `getRequest`). Called by the loader so the signed-in/out gate is decided on the
+ * SERVER and painted on first render — no post-mount `/me` round trip, no "Checking the
+ * manifest…" flash. The approve/deny actions still post through `authClient` on the client.
+ */
+const getDeviceIdentity = createServerFn({ method: "GET" }).handler(
+  (): Promise<MeResponse> => meResponse(getRequest()),
+);
 
 // TanStack's canonical option order (validateSearch feeds the next step's
 // inference), which isn't alphabetical — so sort-keys is off here. See AGENTS.md.
@@ -35,6 +38,7 @@ export const Route = createFileRoute("/device")({
   validateSearch: (search: Record<string, unknown>): DeviceSearch => ({
     user_code: typeof search.user_code === "string" ? search.user_code : undefined,
   }),
+  loader: async (): Promise<{ me: MeResponse }> => ({ me: await getDeviceIdentity() }),
   head: () => ({
     links: [{ href: `${siteUrl}/device`, rel: "canonical" }],
     meta: [
@@ -52,20 +56,13 @@ export const Route = createFileRoute("/device")({
 
 function DevicePage() {
   const { user_code: initialCode } = Route.useSearch();
-  const [me, setMe] = useState<Me | undefined>(undefined);
+  const { me } = Route.useLoaderData();
   const [code, setCode] = useState(initialCode ?? "");
   const [phase, setPhase] = useState<Phase>("idle");
   const [message, setMessage] = useState("");
 
-  useEffect(() => {
-    void fetch("/api/v1/me")
-      .then((res) => res.json() as Promise<Me>)
-      .then(setMe)
-      .catch(() => setMe({ ok: true, user: null }));
-  }, []);
-
-  const signedIn = !!me?.user;
-  const name = me?.user?.displayUsername ?? me?.user?.username ?? "cosmonaut";
+  const signedIn = !!me.user;
+  const name = me.user?.displayUsername ?? me.user?.username ?? "cosmonaut";
 
   async function decide(decision: "approve" | "deny") {
     const userCode = code.trim().toUpperCase();
@@ -128,9 +125,7 @@ function DevicePage() {
           </Link>
         </header>
 
-        {me === undefined ? (
-          <p className="account-muted">Checking the manifest…</p>
-        ) : !signedIn ? (
+        {!signedIn ? (
           <div className="account-stack">
             <p className="account-muted">
               Sign in first, then come back and approve the code your terminal is showing.
