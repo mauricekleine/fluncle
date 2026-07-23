@@ -38,6 +38,11 @@ const fetchGalaxiesLive = createServerFn({ method: "GET" }).handler(() => isGala
 export const Route = createRootRoute({
   component: RootLayout,
   loader: async () => ({ galaxiesLive: await fetchGalaxiesLive() }),
+  // The root loader is a `count(*)` over the tiny `galaxies` table whose answer is
+  // effectively static — it flips once, when the whole map is finally named. Under the
+  // router's 60s default it would be re-counted on every client navigation (the root
+  // match is shared by every page). Pin it long so a nav reuses the answer.
+  staleTime: 10 * 60_000,
   head: () => ({
     links: [
       // The body face. Preloaded ahead of the display face because it now sets nearly
