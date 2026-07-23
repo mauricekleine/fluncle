@@ -37,7 +37,8 @@ import { bestAlbumCoverUrl } from "../media";
 import { parseArtistsJson } from "./artists";
 import { DUPLICATE_SIMILARITY, diversifyRanked, LONG_FORM_MS } from "./catalogue";
 import { getDb, typedRow, typedRows } from "./db";
-import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
+import { cosineFromDistance, readEmbeddingBlob, readRawBlob, toVectorProbe } from "./embedding";
+import { coarseRescoreRank } from "./vector-search";
 import { jsonError } from "./env";
 import { type PublicUser } from "./public-auth";
 
@@ -131,11 +132,7 @@ type SeedListRow = {
 
 type SeedVectorRow = {
   embedding_blob: unknown;
-  track_id: string;
-};
-
-type ScanRow = {
-  dist: number | null;
+  embedding_f8: unknown;
   track_id: string;
 };
 
@@ -413,7 +410,17 @@ export async function listRecommendations(
   const [seedResult, recentResult] = await Promise.all([
     db.execute({
       args: [user.id],
-      sql: `select s.track_id, t.embedding_blob
+      // The seed vectors in BOTH forms: the exact `embedding_blob` (rescore probe) and its int8
+      // `embedding_f8` code (coarse probe). The code is re-encoded on the fly for an un-backfilled
+      // seed (RFC vector-search-scale, slice A) — but ONLY when the row HAS a blob: `vector_extract`
+      // throws on NULL, so a VECTORLESS seed must fall to NULL here (it is honestly skipped, never
+      // erroring the whole read). Bounded (≤ MAX_REC_SEEDS blobs) — the blessed read.
+      sql: `select s.track_id, t.embedding_blob,
+          case
+            when t.embedding_f8 is not null then t.embedding_f8
+            when t.embedding_blob is not null then vector8(vector_extract(t.embedding_blob))
+            else null
+          end as embedding_f8
         from user_rec_seeds s
         join tracks t on t.track_id = s.track_id
         where s.user_id = ?
@@ -432,23 +439,29 @@ export async function listRecommendations(
       : null,
   ]);
   const seedRows = typedRows<SeedVectorRow>(seedResult.rows);
-  const probes: Uint8Array[] = [];
+  // Each seed yields TWO probes: the exact float32 (`toVectorProbe`, the rescore) and the raw int8
+  // code (`readRawBlob`, the coarse pass). The coalesced read means a seed carrying `embedding_blob`
+  // always carries a code too, so the skip set stays exactly "seeds with no embedding yet".
+  const coarseProbes: Uint8Array[] = [];
+  const exactProbes: Uint8Array[] = [];
   const seedIds: string[] = [];
   const seedsSkipped: string[] = [];
 
   for (const row of seedRows) {
     const vector = readEmbeddingBlob(row.embedding_blob);
+    const code = readRawBlob(row.embedding_f8);
 
     seedIds.push(row.track_id);
 
-    if (vector) {
-      probes.push(toVectorProbe(vector));
+    if (vector && code) {
+      exactProbes.push(toVectorProbe(vector));
+      coarseProbes.push(code);
     } else {
       seedsSkipped.push(row.track_id);
     }
   }
 
-  if (probes.length === 0) {
+  if (coarseProbes.length === 0) {
     return { catalogue: [], findings: [], ok: true, seedsSkipped, seedsUsed: 0 };
   }
 
@@ -468,85 +481,61 @@ export async function listRecommendations(
     }
   }
 
-  // The recent-editions membership prune — placed IMMEDIATELY AFTER `${seedExclusion}` in
-  // both scans, with `...excludedIds` appended IMMEDIATELY AFTER `...seedIds` in both args
-  // arrays, so the bind order stays `[...probes, ...seedIds, ...excludedIds, LIMIT]`. Like
-  // the seed exclusion, it is a membership check the single-pass fold already visits — no
-  // second scan, no per-probe fan-out.
+  // The recent-editions membership prune — placed IMMEDIATELY AFTER `${seedExclusion}` in both
+  // scans' `where`, with `...excludedIds` appended IMMEDIATELY AFTER `...seedIds` in `scanWhereArgs`,
+  // so the coarse pass binds `[...coarseProbes, ...seedIds, ...excludedIds, N]`. Like the seed
+  // exclusion, it is a membership check the single-pass fold already visits — no second scan.
   const recentExclusion =
     excludeRecent && excludedIds.length > 0
       ? `and t.track_id not in (${excludedIds.map(() => "?").join(", ")})`
       : "";
 
-  // ONE PASS, one distance term per probe, folded to the row's best in the
-  // select list (max-similarity = min distance). NEVER a `union all` branch per
-  // probe over a CTE: the planner does not materialize the CTE — it FLATTENS it
-  // and re-executes the candidate scan once per branch, so 12 seeds meant 12
-  // full passes over `tracks` dragging the 4 KB vector each time (63 s measured
-  // hosted, 2026-07-18; docs/local-database.md "Local is not production").
+  // THE CATALOGUE SCAN and THE FINDINGS SLOTS — each a COARSE int8 pass over the corpus + an EXACT
+  // float32 rescore of the winners (lib/server/vector-search.ts), max-similarity folded over the
+  // seed probes (`min(vector_distance_cos(…), …)`) at BOTH stages so the never-a-centroid doctrine
+  // (docs/the-ear.md) is preserved. The coarse pass drags the ~4×-smaller `embedding_f8` codes — the
+  // lever for the SCALE TRIPWIRE the candidate count (grows with capture + anchoring) once tripped;
+  // the exact rescore keeps 100% top-K recall. The two are mutually independent, so they run
+  // CONCURRENTLY. Bind order per pass: probes (select-list fold) → the seed + novelty exclusions →
+  // the limit — `whereArgs` carries `[...seedIds, ...excludedIds]` after the coarse probes.
   //
-  // The one-probe case binds the bare distance: single-argument `min()` is
-  // SQLite's AGGREGATE min and would collapse the scan to one row.
-  const distanceTerms = probes.map(() => "vector_distance_cos(t.embedding_blob, ?)");
-  const bestDistance =
-    distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
-
-  // THE CATALOGUE SCAN and THE FINDINGS SLOTS — two mutually independent one-pass folds
-  // over the SAME binds, so they run CONCURRENTLY (two server-side scans in parallel, one
-  // scan of wall-clock instead of two stacked). Each ranks IN SQL (getSimilarFindings) —
-  // only (track_id, dist) pairs come back, never a vector. SQL-TEXT order decides the bind
-  // order: one probe per distance term in the select list, then the seed + novelty
-  // exclusions, then the limit.
-  //
-  //   - CATALOGUE candidates are the ear lens's WHERE + the display-band duplicate cut + the
-  //     Spotify anchor. SCALE TRIPWIRE: the probe count is capped (MAX_REC_SEEDS) but the
-  //     candidate count is not — it grows with capture + Spotify anchoring (~360 rows,
-  //     2026-07-18). When it crosses ~5–10k this scan is seconds again and the engine moves
-  //     OFF the hot path: cache per user keyed by (seed set, corpus fingerprint) — the
-  //     `rank_catalogue` self-healing shape. (Concurrency does not move THAT wall; it only
-  //     stops the findings scan from stacking on top of it.)
-  //   - FINDINGS SLOTS (option B): the certified findings nearest the seed set, same fold.
-  //     `cross join` pins the join order so the tiny findings table DRIVES and `tracks` is
-  //     reached by primary key — left to itself the planner scanned all of `tracks` as the
-  //     outer loop (the 63 s plan). These are the labeled slots Fluncle's full voice rides —
-  //     hydrated with the note + Log ID below.
-  const [catalogueScan, findingsScan] = await Promise.all([
-    db.execute({
-      args: [...probes, ...seedIds, ...excludedIds, RECOMMENDATIONS_POOL],
-      sql: `select track_id, dist from (
-          select t.track_id, ${bestDistance} as dist
-          from tracks t
-          left join findings f on f.track_id = t.track_id
-          where ${REC_ELIGIBLE_WHERE}
-            ${seedExclusion}
-            ${recentExclusion}
-        )
-        where dist is not null
-        order by dist asc, track_id asc
-        limit ?`,
+  //   - CATALOGUE candidates are the ear lens's WHERE (`REC_ELIGIBLE_WHERE`) + the exclusions.
+  //   - FINDINGS SLOTS (option B): the certified findings nearest the seed set, same fold. The
+  //     `cross join` pins the join order so the tiny findings table DRIVES and `tracks` is reached
+  //     by primary key (left to itself the planner scanned all of `tracks` — the old 63 s plan).
+  const scanWhereArgs = [...seedIds, ...excludedIds];
+  const [cataloguePool, findingSlots] = await Promise.all([
+    coarseRescoreRank(db, {
+      coarseFrom: `tracks t left join findings f on f.track_id = t.track_id`,
+      coarseProbes,
+      exactProbes,
+      f32Column: "t.embedding_blob",
+      f8Column: "t.embedding_f8",
+      idColumn: "t.track_id",
+      k: RECOMMENDATIONS_POOL,
+      rescoreFrom: "tracks t",
+      where: `${REC_ELIGIBLE_WHERE} ${seedExclusion} ${recentExclusion}`,
+      whereArgs: scanWhereArgs,
     }),
-    db.execute({
-      args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
-      sql: `select track_id, dist from (
-          select t.track_id, ${bestDistance} as dist
-          from findings f cross join tracks t
-          where t.track_id = f.track_id
-            and f.log_id is not null
-            and t.embedding_blob is not null
-            ${seedExclusion}
-            ${recentExclusion}
-        )
-        where dist is not null
-        order by dist asc, track_id asc
-        limit ?`,
+    coarseRescoreRank(db, {
+      coarseFrom: `findings f cross join tracks t`,
+      coarseProbes,
+      exactProbes,
+      f32Column: "t.embedding_blob",
+      f8Column: "t.embedding_f8",
+      idColumn: "t.track_id",
+      k: FINDINGS_SLOT_COUNT,
+      // The rescore is a plain PK read over the coarse winners (already the finding tracks) — NOT
+      // the cross join, which would fan `tracks` against every finding.
+      rescoreFrom: `tracks t`,
+      where: `t.track_id = f.track_id and f.log_id is not null and t.embedding_blob is not null ${seedExclusion} ${recentExclusion}`,
+      whereArgs: scanWhereArgs,
     }),
   ]);
 
-  const cataloguePool = typedRows<ScanRow>(catalogueScan.rows);
-  const findingSlots = typedRows<ScanRow>(findingsScan.rows);
   const hydrated = await hydrateTracks([
-    ...cataloguePool.map((row) => row.track_id),
-    ...findingSlots.map((row) => row.track_id),
+    ...cataloguePool.map((row) => row.id),
+    ...findingSlots.map((row) => row.id),
   ]);
 
   // The catalogue pool → the diversity decay (the ear's EAR_DIVERSITY_DECAY
@@ -555,8 +544,8 @@ export async function listRecommendations(
   type PoolEntry = { row: HydrateRow; similarity: number };
 
   const pool: PoolEntry[] = cataloguePool.flatMap((scan) => {
-    const row = hydrated.get(scan.track_id);
-    const similarity = cosineFromDistance(scan.dist);
+    const row = hydrated.get(scan.id);
+    const similarity = cosineFromDistance(scan.distance);
 
     return row && similarity !== null ? [{ row, similarity }] : [];
   });
@@ -582,8 +571,8 @@ export async function listRecommendations(
   }));
 
   const findings = findingSlots.flatMap((scan) => {
-    const row = hydrated.get(scan.track_id);
-    const similarity = cosineFromDistance(scan.dist);
+    const row = hydrated.get(scan.id);
+    const similarity = cosineFromDistance(scan.distance);
 
     if (!row || row.log_id === null || similarity === null) {
       return [];
@@ -605,7 +594,7 @@ export async function listRecommendations(
     ];
   });
 
-  return { catalogue, findings, ok: true, seedsSkipped, seedsUsed: probes.length };
+  return { catalogue, findings, ok: true, seedsSkipped, seedsUsed: coarseProbes.length };
 }
 
 /** Hydrate the recommended rows in ONE batched read (never N+1), keyed by track id. */

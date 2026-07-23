@@ -20,6 +20,7 @@ import {
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
+import { backfillVectorCodes } from "../backfill-vector-codes";
 import { probeLabelReleases } from "../label-releases";
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
@@ -410,6 +411,21 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/backfill/vector-codes — agent tier (`adminAuth`): the one-time int8 coarse-code
+  // drain (RFC vector-search-scale, slice A). A pure in-SQL DB transform (no vendor call, no
+  // publish, no certification), so the box's agent-token cron drives it, the `rank_catalogue` class.
+  const backfillVectorCodesHandler = os.backfill_vector_codes
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const summary = await backfillVectorCodes(input.limit);
+
+        return { ok: true as const, summary };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   return {
     backfill_apple_catalogue: backfillAppleCatalogueHandler,
     backfill_apple_music: backfillAppleMusicHandler,
@@ -422,5 +438,6 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_label_releases: backfillLabelReleasesHandler,
     backfill_lastfm: backfillLastfmHandler,
     backfill_recording_mbids: backfillRecordingMbidsHandler,
+    backfill_vector_codes: backfillVectorCodesHandler,
   };
 }

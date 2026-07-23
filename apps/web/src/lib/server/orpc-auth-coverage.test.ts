@@ -256,6 +256,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // layer. It writes catalogue identity only (an MBID on `tracks`), never a certification, so the
   // box's agent-token cron drives it, the `backfill_label_images` precedent.
   backfill_recording_mbids: "admin",
+  // The int8 coarse-code drain — agent tier (adminAuth only): a pure in-SQL DB transform that fills
+  // a DERIVED column (`embedding_f8` / `centroid_f8`), never a certification, so the box's
+  // agent-token cron drives it, the `rank_catalogue` class (RFC vector-search-scale, slice A).
+  backfill_vector_codes: "admin",
   // The capture sweep is agent-allowed (admin tier): it only fills the public URL
   // Postiz withheld on create + links the analytics release-id — it publishes nothing.
   capture_post_urls: "admin",

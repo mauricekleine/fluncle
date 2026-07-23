@@ -305,6 +305,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-recording-mbids` sweep
   // drives it with the agent token, the `backfill_label_images` precedent.
   "POST /admin/backfill/recording-mbids": "backfill_recording_mbids",
+  // The int8 coarse-code drain (RFC vector-search-scale, slice A) — contract-only oRPC (no TanStack
+  // route file). ADMIN tier (agent-allowed): a pure in-SQL DB transform filling a DERIVED column,
+  // driven by the box's agent token, the `rank_catalogue` class.
+  "POST /admin/backfill/vector-codes": "backfill_vector_codes",
   // The catalogue crawler's bounded pass — contract-only oRPC (no TanStack route file).
   // ADMIN tier (agent-allowed): the on-box `fluncle-crawl` sweep drives it with the agent
   // token. It certifies nothing (no `findings` row) and captures no audio, so it needs no

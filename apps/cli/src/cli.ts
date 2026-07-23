@@ -2537,6 +2537,21 @@ function addAdminCommands(program: Command): void {
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
 
+  // `backfill_vector_codes` → `admin backfills vector-codes`. Fill the int8 coarse-scan codes
+  // (embedding_f8 / centroid_f8) for rows embedded before those columns existed. One tick per call;
+  // `remaining > 0` means run it again (a self-draining anti-set — cron-safe, resume-safe).
+  backfill
+    .command("vector-codes")
+    .description(
+      "Fill int8 coarse-scan vector codes (embedding_f8 / centroid_f8); loop until 0 remain",
+    )
+    .option("--limit <limit>", "Max rows per table per tick (default 500)")
+    .option("--json", "Print JSON", false)
+    .action(async (options: CatalogueRankOptions) => {
+      const { backfillVectorCodesCommand } = await import("./commands/admin-tracks");
+      await runBackfillVectorCodes(options, backfillVectorCodesCommand);
+    });
+
   // `backfill_apple_music` → `admin backfills apple-music`. Resolves each finding's
   // Apple Music URL EXACTLY by ISRC and stores it. A no-op until the Worker's MusicKit
   // secrets are provisioned.
@@ -6017,6 +6032,25 @@ async function runArtistsRank(
 
   console.log(
     `Ranked ${summary.centroidsComputed} artist(s); wrote ${summary.edgesWritten} edges.${removed} ${summary.remaining} still stale.`,
+  );
+}
+
+async function runBackfillVectorCodes(
+  options: CatalogueRankOptions,
+  backfillVectorCodesCommand: typeof import("./commands/admin-tracks").backfillVectorCodesCommand,
+): Promise<void> {
+  const parsed = options.limit ? Number.parseInt(options.limit, 10) : undefined;
+  const limit = typeof parsed === "number" && Number.isFinite(parsed) ? parsed : undefined;
+  const summary = await backfillVectorCodesCommand(limit);
+
+  if (options.json) {
+    printJson({ ok: true, summary });
+    return;
+  }
+
+  console.log(
+    `Encoded ${summary.tracksEncoded} track code(s) and ${summary.centroidsEncoded} centroid code(s). ` +
+      `${summary.tracksRemaining} track(s) and ${summary.centroidsRemaining} centroid(s) still need one.`,
   );
 }
 

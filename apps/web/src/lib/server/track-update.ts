@@ -536,11 +536,21 @@ export async function updateTrack(
     // treats a cleared row as un-embedded (re-embed on the next tick). `vector32(NULL)`
     // throws, hence the two arms rather than one expression. The handler has already
     // validated the 1024-d shape (`coerceEmbedding`), so `vector32()` cannot see garbage.
+    //
+    // The int8 COARSE-SCAN sibling (`embedding_f8`) is written in LOCKSTEP from the same validated
+    // JSON: `vector8(?)` quantizes the very vector `vector32(?)` stores, so the two never diverge
+    // (RFC vector-search-scale, slice A — lib/server/vector-search.ts). A clear nulls both; a write
+    // fills both, so a fresh embedding is immediately coarse-scannable without waiting on the
+    // `backfill_vector_codes` sweep (which exists only for rows embedded before this column).
     if (update.embedding === "") {
       sets.push("embedding_blob = ?");
       args.push(null);
+      sets.push("embedding_f8 = ?");
+      args.push(null);
     } else {
       sets.push("embedding_blob = vector32(?)");
+      args.push(update.embedding);
+      sets.push("embedding_f8 = vector8(?)");
       args.push(update.embedding);
     }
   }

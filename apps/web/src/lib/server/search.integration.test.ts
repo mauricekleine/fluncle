@@ -830,26 +830,39 @@ describe("the compound sonic tier — sound like several artists", () => {
       "uncertified-netsky",
     ]);
 
-    // Pin the ratified SQL SHAPE: one exact vector pass, the btree pre-filter in the SAME statement,
-    // ordered by distance — never a union-all fan-out (the CTE-flattening trap), never an ANN index.
-    const scan = spy.mock.calls
+    // Pin the ratified SQL SHAPE (RFC vector-search-scale, slice A): the two-pass coarse+rescore.
+    // The COARSE pass ranks the compact int8 code (`embedding_f8`, coalesced to cover a mid-backfill
+    // NULL) with the btree pre-filter in the SAME statement, ordered by distance — one pass, never a
+    // union-all fan-out (the CTE-flattening trap), never an ANN index. The RESCORE pass then re-ranks
+    // the coarse winners against the EXACT float32 `embedding_blob`.
+    const scans = spy.mock.calls
       .map((call) => call[0])
-      .find(
+      .filter(
         (arg) =>
           typeof arg === "object" &&
           arg !== null &&
           typeof (arg as { sql?: unknown }).sql === "string" &&
           (arg as { sql: string }).sql.includes("vector_distance_cos"),
-      ) as { sql: string } | undefined;
+      )
+      .map((arg) => arg as { sql: string });
 
-    expect(scan).toBeDefined();
-    const sql = scan?.sql ?? "";
+    const coarse = scans.find((scan) => scan.sql.includes("embedding_f8"));
+    const rescore = scans.find((scan) =>
+      scan.sql.includes("vector_distance_cos(tracks.embedding_blob, ?)"),
+    );
 
-    expect(sql).toContain("vector_distance_cos(tracks.embedding_blob, ?)");
-    expect(sql).toContain("lower(tracks.key) in"); // the btree pre-filter, in the same statement
-    expect(sql).toContain("order by dist asc");
-    expect(sql).not.toContain("union all"); // one pass, no fan-out
-    expect((sql.match(/vector_distance_cos/g) ?? []).length).toBe(1);
+    expect(coarse).toBeDefined();
+    const coarseSql = coarse?.sql ?? "";
+
+    expect(coarseSql).toContain("embedding_f8"); // the compact coarse code
+    expect(coarseSql).toContain("lower(tracks.key) in"); // the btree pre-filter, in the same statement
+    expect(coarseSql).toContain("order by dist asc");
+    expect(coarseSql).not.toContain("union all"); // one pass, no fan-out
+    expect((coarseSql.match(/vector_distance_cos/g) ?? []).length).toBe(1); // one probe, one term
+
+    // The exact float32 rescore of the coarse winners exists (the second pass).
+    expect(rescore).toBeDefined();
+    expect(rescore?.sql ?? "").toContain("tracks.track_id in");
 
     spy.mockRestore();
   });

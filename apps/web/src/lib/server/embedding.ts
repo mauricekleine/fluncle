@@ -180,3 +180,80 @@ export function readEmbeddingBlob(cell: unknown): number[] | null {
 export function cosineFromDistance(distance: unknown): number | null {
   return typeof distance === "number" && Number.isFinite(distance) ? 1 - distance : null;
 }
+
+/**
+ * Read a blob cell back as its RAW bytes (a `Uint8Array`), or `null` when absent — the
+ * bridge for RE-BINDING a stored vector blob as a probe WITHOUT decoding it. The int8
+ * COARSE scan (lib/server/vector-search.ts) binds a stored `embedding_f8`/`centroid_f8`
+ * blob straight back as the `vector_distance_cos` probe (rule 2 — a raw blob, parsed once,
+ * never a re-parsed text vector). Unlike {@link readEmbeddingBlob} it does NOT decode to
+ * floats or assume a width (an f8 blob is 1 byte/dim + 8 param bytes, not a whole number of
+ * float32s), so it works for any vector type. The driver hands a blob back as an
+ * `ArrayBuffer` (not a `Uint8Array`) — both are normalized here (the same quirk
+ * `readEmbeddingBlob` guards).
+ */
+export function readRawBlob(cell: unknown): Uint8Array | null {
+  if (cell instanceof ArrayBuffer) {
+    return new Uint8Array(cell);
+  }
+
+  if (ArrayBuffer.isView(cell)) {
+    return new Uint8Array(cell.buffer.slice(cell.byteOffset, cell.byteOffset + cell.byteLength));
+  }
+
+  return null;
+}
+
+// ── The int8 quantization reference (a pure model of libSQL's `vector8`) ──────────────
+
+/**
+ * The int8 code libSQL's `vector8()` produces for one component ladder: a PURE, no-DB model of
+ * the linear per-vector quantization the DATABASE does server-side. libSQL maps each vector's own
+ * `[min, max]` range linearly onto the 0..255 int8 grid (its documented "linearly quantized to the
+ * 0-255 range", 1 byte/dim + 8 param bytes), so the code is `round((x − min) / (max − min) · 255)`.
+ *
+ * This is NOT on any write path — `vector8()` is the single source of truth for the STORED
+ * `embedding_f8`/`centroid_f8` bytes (track-update.ts / artist-dossier.ts), and the wide scan binds
+ * a probe libSQL itself encoded. The model exists so the COARSE-vs-EXACT recall contract can be
+ * unit-tested on fixtures WITHOUT a database (embedding.test.ts): quantize a fixture with this,
+ * cosine-rank the dequantized codes, and assert the coarse top-N still contains the exact top-K —
+ * the property the two-pass scan (lib/server/vector-search.ts) leans on. A degenerate vector (all
+ * one value, so `max === min`) maps every component to 0 — the same collapse libSQL's grid makes.
+ */
+export function quantizeToInt8(vector: number[]): number[] {
+  if (vector.length === 0) {
+    return [];
+  }
+
+  let min = vector[0] ?? 0;
+  let max = min;
+
+  for (const value of vector) {
+    if (value < min) {
+      min = value;
+    }
+
+    if (value > max) {
+      max = value;
+    }
+  }
+
+  const span = max - min;
+
+  if (span === 0) {
+    return vector.map(() => 0);
+  }
+
+  return vector.map((value) => Math.round(((value - min) / span) * 255));
+}
+
+/**
+ * Dequantize an int8 code ladder ({@link quantizeToInt8}) back toward its float range, given the
+ * `[min, max]` the code was built from — the inverse the model's recall test uses to score coarse
+ * candidates on the SAME approximate vectors the database ranks. `code / 255 · (max − min) + min`.
+ */
+export function dequantizeInt8(codes: number[], min: number, max: number): number[] {
+  const span = max - min;
+
+  return codes.map((code) => (code / 255) * span + min);
+}

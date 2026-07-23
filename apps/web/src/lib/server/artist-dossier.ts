@@ -36,6 +36,7 @@ import {
   toVectorProbe,
 } from "./embedding";
 import { bestArtistAvatarUrl } from "../media";
+import { coarseRescoreRank, encodeF8Probe } from "./vector-search";
 
 /** How many "same sector" neighbours the artist page shows (top-N, self excluded). */
 export const ARTIST_NEIGHBOURS_LIMIT = 4;
@@ -529,14 +530,25 @@ export async function rankArtists(
       // Stamp the fingerprint from the DB ROW COUNT so a lone malformed blob never loops the artist.
       const fingerprint = artistCentroidFingerprint(entry.count);
 
-      // Store the mean the SOLE write form — `vector32()` converts the validated float array
-      // server-side (embedding.ts / track-update.ts precedent; the Worker never encodes a vector).
+      // Store the mean via `vector32()` (server-side, the Worker never encodes a vector), AND its
+      // int8 COARSE-SCAN sibling via `vector8()` in LOCKSTEP off the same JSON — the `centroid_f8`
+      // twin of `embedding_f8` (RFC vector-search-scale, slice A). The `/artists?like=` scan
+      // coarse-ranks `centroid_f8` and rescores against `centroid_blob`, so the two must never
+      // diverge; writing both here keeps a freshly-ranked centroid coarse-scannable at once.
       centroidWrites.push({
-        args: [artistId, JSON.stringify(mean), entry.count, fingerprint, stamp],
-        sql: `insert into artist_centroids (artist_id, centroid_blob, vector_count, rank_corpus, computed_at)
-              values (?, vector32(?), ?, ?, ?)
+        args: [
+          artistId,
+          JSON.stringify(mean),
+          JSON.stringify(mean),
+          entry.count,
+          fingerprint,
+          stamp,
+        ],
+        sql: `insert into artist_centroids (artist_id, centroid_blob, centroid_f8, vector_count, rank_corpus, computed_at)
+              values (?, vector32(?), vector8(?), ?, ?, ?)
               on conflict(artist_id) do update set
                 centroid_blob = excluded.centroid_blob,
+                centroid_f8 = excluded.centroid_f8,
                 vector_count = excluded.vector_count,
                 rank_corpus = excluded.rank_corpus,
                 computed_at = excluded.computed_at`,
@@ -729,30 +741,90 @@ export async function listSimilarArtistNeighbours(
 
   const selectedIds = selected.map((row) => row.artist_id);
   const idPlaceholders = selectedIds.map(() => "?").join(", ");
-  // Bind order follows the `?` order in the SQL: the probe BLOB (in the select list) leads, then the
-  // excluded ids, then the limit.
-  const result = await db.execute({
-    args: [toVectorProbe(probe), ...selectedIds, Math.max(0, limit)],
+  const where = `ac.artist_id not in (${idPlaceholders})`;
+
+  // The two-pass scan (lib/server/vector-search.ts): coarse-rank the compact `centroid_f8` codes,
+  // then rescore the winners against the exact `centroid_blob`. The averaged probe is a LIVE vector
+  // (the mean of the selected centroids), so its int8 coarse form is encoded once (`SELECT vector8`)
+  // — a stored code cannot serve here. A defensive encode miss falls back to the exact centroid scan.
+  const coarseProbe = await encodeF8Probe(db, probe);
+  const ranked = coarseProbe
+    ? await coarseRescoreRank(db, {
+        coarseFrom: "artist_centroids ac",
+        coarseProbes: [coarseProbe],
+        exactProbes: [toVectorProbe(probe)],
+        f32Column: "ac.centroid_blob",
+        f8Column: "ac.centroid_f8",
+        idColumn: "ac.artist_id",
+        k: Math.max(0, limit),
+        rescoreFrom: "artist_centroids ac",
+        where,
+        whereArgs: selectedIds,
+      })
+    : await exactCentroidScan(db, probe, where, selectedIds, Math.max(0, limit));
+
+  if (ranked.length === 0) {
+    return [];
+  }
+
+  // Hydrate the ranked artist ids into their public identity, preserving the exact rank order.
+  const ids = ranked.map((row) => row.id);
+  const hydratePlaceholders = ids.map(() => "?").join(", ");
+  const hydrated = await db.execute({
+    args: ids,
     sql: `select a.id as artist_id, a.slug as slug, a.name as name, a.image_url as image_url,
-                 a.image_key as image_key, a.image_state as image_state,
-                 a.image_updated_at as image_updated_at,
-                 vector_distance_cos(ac.centroid_blob, ?) as dist
+                 a.image_key as image_key, a.image_state as image_state, a.image_updated_at as image_updated_at
+          from artists a
+          where a.id in (${hydratePlaceholders})`,
+  });
+  const byId = new Map(
+    typedRows<SimilarArtistRow>(hydrated.rows).map((row) => [row.artist_id, row]),
+  );
+
+  return ids.flatMap((id) => {
+    const row = byId.get(id);
+
+    return row
+      ? [
+          {
+            artistId: row.artist_id,
+            imageUrl: bestArtistAvatarUrl({
+              imageKey: row.image_key,
+              imageState: row.image_state,
+              imageUpdatedAt: row.image_updated_at,
+              imageUrl: row.image_url,
+            }),
+            name: row.name,
+            slug: row.slug,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
+ * The exact single-pass float32 centroid scan — the DEGRADATION path for
+ * {@link listSimilarArtistNeighbours} if the int8 coarse probe cannot be encoded (a libSQL
+ * `vector8` failure; effectively never). Returns `(id, distance)` in the `coarseRescoreRank` shape.
+ */
+async function exactCentroidScan(
+  db: Awaited<ReturnType<typeof getDb>>,
+  probe: number[],
+  where: string,
+  selectedIds: string[],
+  limit: number,
+): Promise<{ distance: number; id: string }[]> {
+  const result = await db.execute({
+    args: [toVectorProbe(probe), ...selectedIds, limit],
+    sql: `select ac.artist_id as id, vector_distance_cos(ac.centroid_blob, ?) as dist
           from artist_centroids ac
-          join artists a on a.id = ac.artist_id
-          where ac.artist_id not in (${idPlaceholders})
+          where ${where}
           order by dist asc, ac.artist_id asc
           limit ?`,
   });
 
-  return typedRows<SimilarArtistRow>(result.rows).map((row) => ({
-    artistId: row.artist_id,
-    imageUrl: bestArtistAvatarUrl({
-      imageKey: row.image_key,
-      imageState: row.image_state,
-      imageUpdatedAt: row.image_updated_at,
-      imageUrl: row.image_url,
-    }),
-    name: row.name,
-    slug: row.slug,
+  return typedRows<{ dist: number; id: string }>(result.rows).map((row) => ({
+    distance: row.dist,
+    id: row.id,
   }));
 }

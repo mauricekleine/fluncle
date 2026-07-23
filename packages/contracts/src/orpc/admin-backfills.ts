@@ -737,6 +737,45 @@ export const backfillArtistCredits = oc
     }),
   );
 
+/**
+ * `backfill_vector_codes` → `POST /admin/backfill/vector-codes` (operationId
+ * `backfillVectorCodes`).
+ *
+ * Agent tier (`adminAuth`) — the one-time drain that fills the compact int8 COARSE-SCAN codes
+ * (`tracks.embedding_f8` / `artist_centroids.centroid_f8`, RFC vector-search-scale slice A) for rows
+ * embedded before those columns existed. A pure DB transform — no vendor call, no cursor: the
+ * worklist is the `<f32> not null and <f8> null` anti-set, so it self-drains and a re-run on a
+ * settled archive is a no-op. The encode happens ENTIRELY IN SQL (`vector8(vector_extract(<blob>))`),
+ * so no vector crosses the isolate. It writes only a DERIVED column and never certifies, so the box's
+ * agent-token cron drives it, the `rank_catalogue` class. Returns `{ ok, summary }`; `summary`
+ * carries this tick's encoded counts and the `remaining` gauges (loop the CLI until both are 0).
+ */
+export const backfillVectorCodes = oc
+  .route({
+    method: "POST",
+    operationId: "backfillVectorCodes",
+    path: "/admin/backfill/vector-codes",
+    summary:
+      "Back-fill int8 coarse-scan vector codes (embedding_f8 / centroid_f8) in SQL (batched)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ limit: z.coerce.number().int().min(1).max(5000).default(500) }))
+  .output(
+    z.object({
+      ok: z.literal(true),
+      summary: z.object({
+        // `centroid_f8` codes written this tick.
+        centroidsEncoded: z.number(),
+        // `artist_centroids` rows still missing a code — 0 means the centroids are drained.
+        centroidsRemaining: z.number(),
+        // `embedding_f8` codes written this tick.
+        tracksEncoded: z.number(),
+        // Embedded `tracks` rows still missing a code — 0 means the catalogue is drained.
+        tracksRemaining: z.number(),
+      }),
+    }),
+  );
+
 /** The `admin-backfills` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminBackfillsContract = {
   backfill_apple_catalogue: backfillAppleCatalogue,
@@ -750,4 +789,5 @@ export const adminBackfillsContract = {
   backfill_label_releases: backfillLabelReleases,
   backfill_lastfm: backfillLastfm,
   backfill_recording_mbids: backfillRecordingMbids,
+  backfill_vector_codes: backfillVectorCodes,
 };

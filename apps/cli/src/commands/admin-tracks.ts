@@ -444,6 +444,31 @@ export async function backfillDiscogsCommand(
   return adminApiPost<DiscogsBackfillResult>(`/api/v1/admin/backfill/discogs?${params.toString()}`);
 }
 
+/** One `backfill_vector_codes` tick's summary — the JSON line a cron reads (loop until 0 remain). */
+export type VectorCodesBackfillSummary = {
+  centroidsEncoded: number;
+  centroidsRemaining: number;
+  tracksEncoded: number;
+  tracksRemaining: number;
+};
+
+/**
+ * One tick of the int8 coarse-code drain (`backfill_vector_codes`). `fluncle admin backfills
+ * vector-codes [--limit <n>]`. Encodes up to `limit` un-coded rows in EACH of `tracks` and
+ * `artist_centroids` (`embedding_f8` / `centroid_f8`) entirely in SQL; `tracksRemaining` /
+ * `centroidsRemaining` > 0 means run it again. Idempotent + resume-safe (a self-draining anti-set).
+ */
+export async function backfillVectorCodesCommand(
+  limit?: number,
+): Promise<VectorCodesBackfillSummary> {
+  const response = await adminApiPost<{ ok: true; summary: VectorCodesBackfillSummary }>(
+    "/api/v1/admin/backfill/vector-codes",
+    typeof limit === "number" ? { limit } : {},
+  );
+
+  return response.summary;
+}
+
 export type AppleMusicBackfillResult = {
   // Album-fact rows written once this pass (recordLabel/upc/artwork/palette) off the
   // single-ISRC oracle's canonical album — the second half of the Apple read (RFC U1).

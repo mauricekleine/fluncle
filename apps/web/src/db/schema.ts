@@ -29,6 +29,24 @@ const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
 });
 
 /**
+ * libSQL's int8-QUANTIZED vector column — `F8_BLOB(1024)`, the compact COARSE-SCAN sibling of
+ * the exact `F32_BLOB(1024)` above (lib/server/vector-search.ts). One byte per dimension + 8
+ * bytes of per-vector quantization parameters ≈ 1,035 B/row against the float32's 4,096 B — the
+ * ~4× smaller payload the wide `vector_distance_cos` scan drags per row (measured on hosted; the
+ * float32 blob is the dominant scan cost). It is a DERIVED artifact: `vector8()` quantizes the
+ * SAME validated vector the float32 write stores (`track-update.ts`), and the exact float32
+ * rescore of the coarse winners recovers int8's small precision loss to 100% top-K recall.
+ *
+ * NULLABLE and back-fillable: it lands beside the float32 blob and the `backfill_vector_codes`
+ * sweep fills existing rows (`vector8(vector_extract(embedding_blob))`, entirely in SQL). Ranked
+ * with `vector_distance_cos` against a probe bound as a RAW f8 BLOB — the same never-a-text-probe
+ * rule the float32 path lives by (lib/server/embedding.ts, rule 2). `1024` tracks `EMBEDDING_DIMS`.
+ */
+const float8Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => "F8_BLOB(1024)",
+});
+
+/**
  * THE UNIVERSAL MUSIC OBJECT — every track Fluncle knows about, certified or not.
  *
  * `tracks` is the SUPERTYPE half of the supertype/subtype pair it forms with `findings`
@@ -295,6 +313,16 @@ export const tracks = sqliteTable(
     // lib/server/embedding.ts for the read contract (`readEmbeddingBlob`) and the
     // raw-blob probe binding.
     embeddingBlob: float32Vector("embedding_blob"),
+    // The int8-quantized COARSE-SCAN sibling of `embedding_blob` (RFC vector-search-scale, slice
+    // A). Every similarity read runs a two-pass scan: rank the compact `embedding_f8` codes with
+    // `vector_distance_cos` (~4× fewer bytes dragged per row), take the top-N, then rescore just
+    // those N against the exact `embedding_blob` for the final order (lib/server/vector-search.ts).
+    // Written beside `embedding_blob` by the SAME `update_track` path (`vector8(?)`); NULL on rows
+    // embedded before this column, which the `backfill_vector_codes` sweep drains. A mid-backfill
+    // NULL is transparently covered — the scan ranks `coalesce(embedding_f8, vector8(vector_extract(
+    // embedding_blob)))`, so a not-yet-encoded row still ranks (just without the payload saving),
+    // never silently vanishing from results. Internal, like `embedding_blob`; no public lastmod.
+    embeddingF8: float8Vector("embedding_f8"),
     featuresJson: text("features_json"),
     // The Discogs release the finding resolves to (read-only enrichment, best-effort,
     // matched by artist + title since Discogs has no ISRC search). inMasterId is the
@@ -2598,6 +2626,14 @@ export const trackArtists = sqliteTable(
 export const artistCentroids = sqliteTable("artist_centroids", {
   artistId: text("artist_id").primaryKey(),
   centroidBlob: float32Vector("centroid_blob").notNull(),
+  // The int8-quantized COARSE-SCAN sibling of `centroid_blob` (RFC vector-search-scale, slice A) —
+  // the `embedding_f8` twin for the `/artists?like=` multi-artist "sounds like these" scan
+  // (lib/server/artist-dossier.ts `listSimilarArtistNeighbours`), which now coarse-scans these
+  // codes and rescores the winners against `centroid_blob`. Written beside `centroid_blob` by the
+  // `rank_artists` sweep; NULLABLE (not `.notNull()`, unlike its exact twin) so it can land beside
+  // the populated float32 column and the `backfill_vector_codes` sweep fill existing rows. A NULL
+  // is covered by the same `coalesce(centroid_f8, vector8(vector_extract(centroid_blob)))` scan.
+  centroidF8: float8Vector("centroid_f8"),
   computedAt: text("computed_at").notNull(),
   rankCorpus: text("rank_corpus").notNull(),
   vectorCount: integer("vector_count").notNull(),

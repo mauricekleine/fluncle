@@ -68,6 +68,7 @@ import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
 import { getDb, typedRow, typedRows } from "./db";
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { HUB_INCLUSION_HAVING, LABEL_INDEX_MIN_TRACKS } from "./labels";
+import { coarseRescoreRank, encodeF8Probe } from "./vector-search";
 import { translateQuery } from "./search-llm";
 
 /** How many rows a search returns when the caller does not say. */
@@ -836,6 +837,13 @@ async function rankTracksByVector(
   limit: number,
 ): Promise<SearchHit[]> {
   const clauses = compileFilters(columnFilters);
+  // The metadata pre-filter is the ratified btree lever — it narrows the candidate set BEFORE the
+  // vector work ("like X on Hospital Records"). It gates on `embedding_blob is not null` (the real
+  // presence signal — the coarse column's `coalesce` re-encodes an un-backfilled row's f32 anyway).
+  const whereArgs = [
+    ...clauses.flatMap((clause) => clause.args),
+    ...(excludeTrackId ? [excludeTrackId] : []),
+  ];
   const where = [
     ...clauses.map((clause) => clause.sql),
     ...(excludeTrackId ? ["tracks.track_id != ?"] : []),
@@ -843,17 +851,67 @@ async function rankTracksByVector(
   ].join(" and ");
 
   const db = await getDb();
+
+  // The int8 COARSE probe — the f32 probe encoded once (`SELECT vector8`); the wide scan drags the
+  // ~4×-smaller `embedding_f8` code, then rescores the winners against the exact float32 vectors
+  // (lib/server/vector-search.ts). A defensive encode miss falls back to the exact float32 scan.
+  const coarseProbe = await encodeF8Probe(db, probe);
+  const ranked = coarseProbe
+    ? await raceWithTimeout(
+        coarseRescoreRank(db, {
+          coarseFrom: SEARCH_FROM,
+          coarseProbes: [coarseProbe],
+          exactProbes: [toVectorProbe(probe)],
+          f32Column: "tracks.embedding_blob",
+          f8Column: "tracks.embedding_f8",
+          idColumn: "tracks.track_id",
+          k: limit,
+          rescoreFrom: "tracks",
+          where,
+          whereArgs,
+        }),
+        SONIC_SCAN_TIMEOUT_MS,
+        "sonic vector scan",
+      )
+    : await exactVectorScan(db, probe, where, whereArgs, limit);
+
+  if (ranked.length === 0) {
+    return [];
+  }
+
+  // Hydrate the winner ids into full search rows (SEARCH_SELECT), preserving the exact rank order.
+  const ids = ranked.map((row) => row.id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const hydrated = await db.execute({
+    args: ids,
+    sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.track_id in (${placeholders})`,
+  });
+  const byId = new Map(typedRows<SearchRow>(hydrated.rows).map((row) => [row.track_id, row]));
+
+  return ids.flatMap((id) => {
+    const row = byId.get(id);
+
+    return row ? [toHit(row)] : [];
+  });
+}
+
+/**
+ * The exact single-pass float32 scan — the DEGRADATION path if the int8 coarse probe cannot be
+ * encoded (a libSQL `vector8` failure; effectively never). Returns `(id, distance)` in the
+ * `coarseRescoreRank` shape so the caller hydrates identically. Same ratified model as the coarse
+ * path minus the compact first pass: rank `embedding_blob` in SQL, probe bound as a raw blob.
+ */
+async function exactVectorScan(
+  db: Awaited<ReturnType<typeof getDb>>,
+  probe: number[],
+  where: string,
+  whereArgs: (number | string)[],
+  limit: number,
+): Promise<{ distance: number; id: string }[]> {
   const result = await raceWithTimeout(
     db.execute({
-      // SQL-TEXT ORDER: the probe's `?` (in the select list) binds first, then the pre-filter
-      // clauses, then the exclusion, then the limit.
-      args: [
-        toVectorProbe(probe),
-        ...clauses.flatMap((clause) => clause.args),
-        ...(excludeTrackId ? [excludeTrackId] : []),
-        limit,
-      ],
-      sql: `select ${SEARCH_SELECT}, vector_distance_cos(tracks.embedding_blob, ?) as dist
+      args: [toVectorProbe(probe), ...whereArgs, limit],
+      sql: `select tracks.track_id as id, vector_distance_cos(tracks.embedding_blob, ?) as dist
           from ${SEARCH_FROM}
           where ${where}
           order by dist asc, tracks.track_id asc
@@ -863,7 +921,10 @@ async function rankTracksByVector(
     "sonic vector scan",
   );
 
-  return typedRows<SearchRow>(result.rows).map(toHit);
+  return typedRows<{ dist: number; id: string }>(result.rows).map((row) => ({
+    distance: row.dist,
+    id: row.id,
+  }));
 }
 
 /**
