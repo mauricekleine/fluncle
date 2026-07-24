@@ -52,6 +52,16 @@ vi.mock("./spotify", async (importOriginal) => {
   };
 });
 
+// The pre-mint ISRC recovery (a verified Deezer-by-name lookup, tested for real in anchor's own
+// suite). Mocked OFF by default so every existing certify case stays hermetic (no Deezer network)
+// and behaves exactly as before; one case below flips it on to prove certify wires it in.
+let recoveredIsrc: string | undefined;
+vi.mock("./anchor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./anchor")>();
+
+  return { ...actual, recoverIsrcViaDeezer: vi.fn(async () => recoveredIsrc) };
+});
+
 vi.mock("./telegram", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./telegram")>();
 
@@ -94,6 +104,7 @@ beforeEach(async () => {
   telegramPosts.length = 0;
   blueskyPosts.length = 0;
   isrcLookup = { rateLimited: false };
+  recoveredIsrc = undefined;
 });
 
 describe("the tracks/findings split — an uncertified catalogue track is not a finding", () => {
@@ -609,6 +620,39 @@ describe("certify in place — logging an existing catalogue track without creat
       sql: "select spotify_uri from tracks where track_id = ?",
     });
     expect(track.rows[0]?.spotify_uri).toBe("spotify:track:resolved42");
+  });
+
+  it("recovers a missing ISRC before minting — an ISRC-less catalogue row is never born silent", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+
+    // The exact shape that used to mint SILENT: ISRC-less (the crawler's MusicBrainz ISRC is sparse
+    // for underground DnB) AND un-anchored. Once certified it left the anchor sweep's reach, so its
+    // ISRC was never recovered and the app had no preview to resolve.
+    await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "update tracks set isrc = null, spotify_uri = null, spotify_url = null where track_id = ?",
+    });
+    // The pre-mint rung recovers the real ISRC, which then drives the Spotify anchor pre-flight —
+    // so the row CERTIFIES (instead of the 409 below) and is born with a resolvable preview.
+    recoveredIsrc = "GBTEST9900001";
+    isrcLookup = {
+      match: {
+        spotifyUri: "spotify:track:recovered1",
+        spotifyUrl: "https://open.spotify.com/track/recovered1",
+        trackId: "recovered1",
+      },
+      rateLimited: false,
+    };
+
+    const { logId } = await certifyExistingTrack(CATALOGUE_ID);
+
+    // It MINTED (without the recovery this same row 409s below) and anchored via the recovered ISRC.
+    expect(logId).toMatch(/\d{3}\.\d+\.\d+[A-Z]/);
+    const track = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select spotify_uri from tracks where track_id = ?",
+    });
+    expect(track.rows[0]?.spotify_uri).toBe("spotify:track:recovered1");
   });
 
   it("REFUSES to certify without a Spotify anchor — 409, mints nothing, announces nothing", async () => {

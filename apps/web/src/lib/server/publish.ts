@@ -5,6 +5,7 @@ export type { PublishTrackResult };
 
 import { logPageUrl } from "../fluncle-links";
 import { formatDuration } from "../format";
+import { recoverIsrcViaDeezer } from "./anchor";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { postToBluesky } from "./bluesky";
 import { getDb, typedRow } from "./db";
@@ -496,6 +497,20 @@ export async function certifyExistingTrack(
     throw new ApiError("already_certified", `Already logged: ${line}`, 409);
   }
 
+  // ── THE ISRC PRE-FLIGHT (recover BEFORE minting) ───────────────────────────────────────
+  // A crawler-born row's ISRC comes from MusicBrainz, whose underground-DnB ISRC coverage is
+  // sparse — ~60% arrive ISRC-less even though the track genuinely HAS one (the same gap the
+  // anchor sweep's Deezer rung fixes). Minting the finding as-is leaves it ISRC-less FOREVER:
+  // the anchor sweep only touches catalogue rows, so once certified it is never revisited, and
+  // an ISRC-less finding plays SILENT in the app (the public preview waterfall resolves the
+  // official 30s clip by ISRC). So recover it here, with the SAME verified Deezer-by-name rung
+  // the sweep uses (fill-empty-only; a wrong match is gated out; a Deezer miss changes nothing).
+  // Recovering before the Spotify pre-flight also lets an un-anchored row resolve its identity.
+  const isrc =
+    row.isrc ??
+    (await recoverIsrcViaDeezer(trackId, db, artists, row.title, row.duration_ms)) ??
+    null;
+
   // ── THE ANCHOR PRE-FLIGHT (resolve BEFORE minting) ─────────────────────────────────────
   // RULED 2026-07-15: a finding must anchor to Spotify — the public playlist carries every
   // banger, the feed contract requires `spotifyUrl`, and the log page's open action links it.
@@ -507,8 +522,8 @@ export async function certifyExistingTrack(
   let spotifyUri = row.spotify_uri;
   let spotifyUrl = row.spotify_url;
 
-  if (!spotifyUri && row.isrc) {
-    const lookup = await findSpotifyTrackByIsrc(row.isrc);
+  if (!spotifyUri && isrc) {
+    const lookup = await findSpotifyTrackByIsrc(isrc);
 
     if (lookup.match) {
       spotifyUri = lookup.match.spotifyUri;
@@ -536,7 +551,7 @@ export async function certifyExistingTrack(
     // certify from before the fan-out. Run only what is missing; mint nothing.
     logId = row.finding_log_id;
   } else {
-    logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc: row.isrc, trackId });
+    logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc, trackId });
     await db.execute(findingInsertStatement({ logId, note: options.note, nowIso, trackId }));
 
     // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
@@ -569,7 +584,7 @@ export async function certifyExistingTrack(
     albumImageUrl: row.album_image_url ?? undefined,
     artists,
     durationMs: row.duration_ms,
-    isrc: row.isrc ?? undefined,
+    isrc: isrc ?? undefined,
     spotifyArtistIds: [],
     spotifyUri,
     spotifyUrl,

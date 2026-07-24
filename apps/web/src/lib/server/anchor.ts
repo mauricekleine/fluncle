@@ -571,7 +571,7 @@ async function resolveViaSpotifySearch(
  * the gate). Best-effort: the Deezer client never throws, so a Deezer outage degrades cleanly to no
  * recovery — anchoring is never broken, only unhelped, on that row.
  */
-async function recoverIsrcViaDeezer(
+export async function recoverIsrcViaDeezer(
   trackId: string,
   db: Awaited<ReturnType<typeof getDb>>,
   rowArtists: string[],
