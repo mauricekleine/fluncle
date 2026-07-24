@@ -59,15 +59,6 @@ type StageDef = {
 const STAGE_DEFS: StageDef[] = [
   { key: "crawled", label: "Crawled", link: { lens: "ear", to: "/admin/catalogue" } },
   {
-    key: "anchored",
-    label: "Anchored",
-    link: { lens: "ear", to: "/admin/catalogue" },
-    // The anchor queue splits into the embedded head the sweep works now (ready) and the crawler
-    // metadata still awaiting audio — two populations that mean different things, so the page shows
-    // both rather than one folded figure. The split sums to `anchorQueueIsrc + anchorQueueNoIsrc`.
-    queuedSplit: (q) => ({ awaitingAudio: q.anchorQueueAwaitingAudio, ready: q.anchorQueueReady }),
-  },
-  {
     key: "captured",
     label: "Captured",
     link: { lens: "capture", to: "/admin/catalogue" },
@@ -84,6 +75,19 @@ const STAGE_DEFS: StageDef[] = [
     label: "Embedded",
     link: { lens: "ear", to: "/admin/catalogue" },
     queued: (q) => q.embedQueue,
+  },
+  {
+    // Anchoring sits HERE, after embed, because it is the LAGGING step: capture → analyze → embed
+    // run off crawled metadata and race ahead, while anchoring (the metered Spotify-identity resolve)
+    // trails — and it is the binding constraint on rec-eligibility (a rec needs `spotify_uri`), so it
+    // reads as the true bottleneck right before the pool it gates.
+    key: "anchored",
+    label: "Anchored",
+    link: { lens: "ear", to: "/admin/catalogue" },
+    // The anchor queue splits into the embedded head the sweep works now (ready) and the crawler
+    // metadata still awaiting audio — two populations that mean different things, so the page shows
+    // both rather than one folded figure. The split sums to `anchorQueueIsrc + anchorQueueNoIsrc`.
+    queuedSplit: (q) => ({ awaitingAudio: q.anchorQueueAwaitingAudio, ready: q.anchorQueueReady }),
   },
   { key: "recEligible", label: "Rec-eligible", link: { lens: "ear", to: "/admin/catalogue" } },
   { key: "certified", label: "Certified", link: { to: "/admin/findings" } },

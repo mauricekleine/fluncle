@@ -68,10 +68,10 @@ describe("stageBars", () => {
 
     expect(bars.map((bar) => bar.key)).toEqual([
       "crawled",
-      "anchored",
       "captured",
       "analyzed",
       "embedded",
+      "anchored",
       "recEligible",
       "certified",
     ]);
