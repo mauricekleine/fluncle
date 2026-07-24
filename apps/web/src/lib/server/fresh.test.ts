@@ -87,6 +87,13 @@ async function seedFinding(options: {
     sql: `insert into findings (track_id, log_id, added_at)
           values (?, ?, '2020-01-01T00:00:00.000Z')`,
   });
+  // A certified track carries a findings row, so the maintained catalogue flag is 0 (mirror the
+  // write sites). listFreshReleases' catalogue half now reads `is_catalogue = 1`, so a finding whose
+  // flag stayed at the default 1 would wrongly leak into the unlit half.
+  await db.execute({
+    args: [options.trackId],
+    sql: `update tracks set is_catalogue = 0 where track_id = ?`,
+  });
 }
 
 beforeEach(async () => {

@@ -116,6 +116,23 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
     expect(Number(findings.rows[0]?.n)).toBe(1);
   });
 
+  it("maintains is_catalogue as the materialized discriminator: catalogue=1, finding=0", async () => {
+    // The keystone invariant (docs/db-scale-backlog Wave 2 #1): `is_catalogue = 1` iff a track has
+    // NO findings row. The catalogue track is born 1 (the DDL default); the certified track carries
+    // a findings row, so seedTrack flipped it to 0 — exactly as publishTrack/certifyExistingTrack do.
+    const catalogue = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select is_catalogue from tracks where track_id = ?",
+    });
+    const finding = await db.execute({
+      args: [FINDING_ID],
+      sql: "select is_catalogue from tracks where track_id = ?",
+    });
+
+    expect(Number(catalogue.rows[0]?.is_catalogue)).toBe(1);
+    expect(Number(finding.rows[0]?.is_catalogue)).toBe(0);
+  });
+
   it("keeps the feed blind to it — listTracks returns the finding only, and counts one", async () => {
     const { listTracks } = await import("./tracks");
     const page = await listTracks({ limit: 50 });
@@ -558,6 +575,14 @@ describe("certify in place — logging an existing catalogue track without creat
     });
     expect(finding.rows[0]?.log_id).toBe(logId);
     expect(finding.rows[0]?.note).toBe("logged from the telescope");
+
+    // The catalogue discriminator flipped 1 → 0 in the SAME atomic write that minted the finding:
+    // the row is now certified, so every consumer that reads `is_catalogue` treats it as such.
+    const flag = await db.execute({
+      args: [CATALOGUE_ID],
+      sql: "select is_catalogue from tracks where track_id = ?",
+    });
+    expect(Number(flag.rows[0]?.is_catalogue)).toBe(0);
   });
 
   it("REFUSES a row that is certified AND fully announced (409) — never a second finding", async () => {
