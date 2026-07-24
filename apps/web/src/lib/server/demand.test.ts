@@ -266,7 +266,14 @@ describe("recordDemand — the rewrite", () => {
       kind: "release",
       labelSlug: "label-l",
     });
-    await seedFrontier({ externalId: "mb_artist_a", hop: 1, id: "n_artist", kind: "artist" });
+    // A real artist node's id is the deterministic `<source>:<kind>:<externalId>` (crawl.ts
+    // `frontierId`) — the invariant the PK-keyed demand promotion seeks on.
+    await seedFrontier({
+      externalId: "mb_artist_a",
+      hop: 1,
+      id: "musicbrainz:artist:mb_artist_a",
+      kind: "artist",
+    });
     await seedFrontier({
       externalId: "rel2",
       hop: 1,
@@ -293,7 +300,7 @@ describe("recordDemand — the rewrite", () => {
     });
 
     expect(await demandRank("n_label")).toBe(0); // demanded label subtree
-    expect(await demandRank("n_artist")).toBe(0); // demanded artist by MBID
+    expect(await demandRank("musicbrainz:artist:mb_artist_a")).toBe(0); // demanded artist by MBID
     expect(await demandRank("n_other")).toBe(1); // undemanded sibling
     expect(await demandRank("n_done")).toBe(1); // not pending — untouched
     expect(summary.frontierPromoted).toBe(2);

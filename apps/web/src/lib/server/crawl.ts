@@ -1466,10 +1466,11 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     // Wave 1 #3), never on the recurring crawl pass.
     getFrontierCounts(),
     getFrontierByKind(),
-    // A CATALOGUE track is a `tracks` row with no `findings` row. That anti-join IS the
-    // definition — counted in SQL, never by pulling the table into the isolate.
-    db.execute(`select count(*) as n from tracks
-                where not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
+    // A CATALOGUE track is a `tracks` row with no `findings` row. `findings` is a strict 1:1 subtype
+    // of `tracks` on the shared PK, so that anti-join count IS `count(tracks) − count(findings)` — two
+    // plain covering-index counts instead of a per-row anti-join probe (docs/db-scale-backlog Wave 1
+    // #9), still computed in SQL, never by pulling the table into the isolate.
+    db.execute(`select (select count(*) from tracks) - (select count(*) from findings) as n`),
     // The anchor gauge — the ISRC-bearing slice of the un-anchored catalogue, kept on the
     // `tracks_anchor_queue_idx` PARTIAL index so it stays cheap as the table grows. NOTE: the
     // anchor sweep drains a WIDER worklist (`spotify_uri is null`, ISRC or not — track-work.ts

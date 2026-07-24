@@ -333,8 +333,11 @@ export async function recordDemand(
   for (const mbid of demandedArtistMbids) {
     writes.push({
       args: [mbid],
+      // PK point lookup, not an `external_id` scan: the frontier id is deterministic
+      // `<source>:<kind>:<externalId>` = `musicbrainz:artist:<mbid>` (crawl.ts `frontierId`), so an
+      // artist node is one O(1) seek on the primary key (docs/db-scale-backlog Wave 1 #6).
       sql: `update crawl_frontier set demand_rank = 0
-            where state = 'pending' and kind = 'artist' and external_id = ?`,
+            where id = 'musicbrainz:artist:' || ? and state = 'pending'`,
     });
   }
 
