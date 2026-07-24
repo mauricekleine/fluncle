@@ -233,7 +233,19 @@ export const rankCatalogue = oc
     summary: "One tick of the catalogue ranking sweep (nearest finding + capture priority)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(1000).default(250) }))
+  .input(
+    z.object({
+      /**
+       * Whether to return `remaining` as a real live COUNT of the still-stale backlog, or the fast
+       * fullness SENTINEL (docs/db-scale-backlog Wave 1 #1). DEFAULT false = the sentinel: a full
+       * batch reports "> 0, run me again" without the ~19s anti-join COUNT — the box sweep's 8×/tick
+       * win. The human-facing CLI readout opts IN (`true`) so a deliberate manual `catalogue rank`
+       * still shows the true backlog size; the `--json`/automation path keeps the sentinel.
+       */
+      countRemaining: z.coerce.boolean().default(false),
+      limit: z.coerce.number().int().min(1).max(1000).default(250),
+    }),
+  )
   .output(
     z.object({
       ok: z.literal(true),

@@ -417,6 +417,35 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect(summary.remaining).toBe(1);
   });
 
+  it("returns the fullness SENTINEL by default and the real COUNT under countRemaining", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+
+    for (let index = 0; index < 6; index += 1) {
+      await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
+    }
+
+    // OPT-IN (`countRemaining = true`): a FULL batch of 2 reports the REAL live count of what is
+    // still stale — 6 seeded − 2 just ranked = 4. This is the human-facing CLI readout's behaviour.
+    const counted = await rankCatalogue(2, true);
+    expect(counted.scored).toBe(2);
+    expect(counted.remaining).toBe(4);
+
+    // DEFAULT (`countRemaining = false`): the SAME full-batch shape reports the SENTINEL — a constant
+    // "> 0, run me again" flag (`RANK_MORE_REMAIN` = 1), NOT the true backlog. The box sweep's win.
+    const sentinel = await rankCatalogue(2);
+    expect(sentinel.scored).toBe(2);
+    expect(sentinel.remaining).toBe(1);
+
+    // …and the sentinel really did understate it: a scan-only tick (limit 0 → the `limit <= 0`
+    // guard's real COUNT, ranking nothing) shows 2 genuinely still stale — exactly what the opt-in
+    // count restores for the operator's manual readout.
+    const trueLeft = await rankCatalogue(0);
+    expect(trueLeft.scored).toBe(0);
+    expect(trueLeft.remaining).toBe(2);
+  });
+
   it("re-scores a row whose OWN vector arrived after it was ranked (capture → embed)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 

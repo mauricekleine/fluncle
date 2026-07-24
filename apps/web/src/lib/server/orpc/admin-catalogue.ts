@@ -131,7 +131,7 @@ export function adminCatalogueHandlers(os: Implementer) {
   // POST /admin/catalogue/rank — one tick of the sweep. `remaining > 0` means run it again.
   const rankCatalogueHandler = os.rank_catalogue.use(adminAuth).handler(async ({ input }) => {
     try {
-      const summary = await rankCatalogue(input.limit);
+      const summary = await rankCatalogue(input.limit, input.countRemaining);
 
       // The Telescope mirror rides the sweep: rankings changed, so the private playlist
       // re-syncs. Best-effort by construction — the sync never throws — and its outcome

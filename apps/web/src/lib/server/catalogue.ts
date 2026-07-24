@@ -620,12 +620,14 @@ export type RankCatalogueSummary = {
    */
   quarantined: number;
   /**
-   * The drain signal — "> 0 means run me again", never a live count. It is INFERRED from batch
-   * fullness, not scanned (the ~19s anti-join COUNT is off the hot path, docs/db-scale-backlog Wave
-   * 1 #1): a FULL batch (`candidates.length >= limit`) means more rows are stale by construction, so
-   * it returns the `>0` sentinel; a SHORT batch means the stale set was fully consumed this tick, so
-   * it returns 0. The real COUNT survives ONLY for the `limit <= 0` guard, where no batch was
-   * observed and an assumed 0 would wrongly stop a cron mid-backlog.
+   * The drain signal — "> 0 means run me again". By DEFAULT it is INFERRED from batch fullness, not
+   * scanned (the ~19s anti-join COUNT is off the hot path, docs/db-scale-backlog Wave 1 #1): a FULL
+   * batch (`candidates.length >= limit`) means more rows are stale by construction, so it returns the
+   * `>0` sentinel; a SHORT batch means the stale set was fully consumed this tick, so it returns 0.
+   * Pass `countRemaining` for the real live COUNT instead — the human-facing CLI readout does, so a
+   * deliberate manual run still shows the true backlog, while the box sweep keeps the fast sentinel.
+   * The COUNT also survives the `limit <= 0` guard, where no batch was observed and an assumed 0
+   * would wrongly stop a cron mid-backlog.
    */
   remaining: number;
   /** Catalogue rows given a `nearest_finding_score` (they have a vector). */
@@ -1100,7 +1102,10 @@ function catalogueDuplicateOf(
  * computations per tick; a full re-rank of a 10k catalogue is 40 ticks and 600k — done once,
  * off the request path, instead of once per page load.
  */
-export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalogueSummary> {
+export async function rankCatalogue(
+  limit = RANK_BATCH_SIZE,
+  countRemaining = false,
+): Promise<RankCatalogueSummary> {
   const db = await getDb();
   const countResult = await db.execute({
     args: [],
@@ -1592,6 +1597,19 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
   // live — the same every-tick refresh cadence the display-only chip had before.
   await refreshArchiveAffinityCache(archive);
 
+  // The drain signal. By DEFAULT it is inferred from batch fullness with no scan — a FULL batch
+  // consumed exactly `limit` stale rows, so more are stale by construction (the sentinel); a SHORT
+  // batch exhausted the stale set (0). `countRemaining` opts into the real live COUNT for the
+  // human-facing CLI readout — one ~19s scan on a deliberate manual run, never on the box sweep,
+  // which keeps the default sentinel (docs/db-scale-backlog Wave 1 #1).
+  let remaining = 0;
+
+  if (countRemaining) {
+    remaining = await countStale(corpus);
+  } else if (candidates.length >= limit) {
+    remaining = RANK_MORE_REMAIN;
+  }
+
   return {
     catalogueDuplicates,
     corpus,
@@ -1599,9 +1617,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     findings,
     prioritized: unvectored.length,
     quarantined,
-    // The drain signal without the scan: a FULL batch consumed exactly `limit` stale rows, so more
-    // are stale by construction (the sentinel); a SHORT batch exhausted the stale set (0).
-    remaining: candidates.length >= limit ? RANK_MORE_REMAIN : 0,
+    remaining,
     // A quarantined row was scored, then vetoed — it is no longer a `scored` find. A catalogue
     // duplicate KEEPS its score (it reads "already in the archive"), so it stays a `scored` row.
     scored: vectored.length - quarantined,

@@ -6027,7 +6027,13 @@ async function runCatalogueRank(
   options: CatalogueRankOptions,
   catalogueRankCommand: typeof import("./commands/admin-catalogue").catalogueRankCommand,
 ): Promise<void> {
-  const { summary, telescope } = await catalogueRankCommand({ limit: options.limit });
+  // The human readout shows the true "N still stale" backlog, so it opts into the real COUNT; the
+  // `--json` path (the box sweep, other automation) keeps the fast fullness sentinel — its `remaining`
+  // is only ever tested `> 0` / `=== 0`, so it never needs (or pays for) the ~19s count.
+  const { summary, telescope } = await catalogueRankCommand({
+    countRemaining: !options.json,
+    limit: options.limit,
+  });
 
   if (options.json) {
     printJson({ ok: true, summary, telescope });

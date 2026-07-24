@@ -42,16 +42,24 @@ export type RankCatalogueSummary = {
  * SQL — storing each one's nearest finding + the similarity to it, or (for a row with no audio
  * yet) its capture-priority tier. Idempotent, resume-safe, and a no-op on an unchanged archive.
  */
-export async function catalogueRankCommand(options: { limit?: string }): Promise<{
+export async function catalogueRankCommand(options: {
+  countRemaining?: boolean;
+  limit?: string;
+}): Promise<{
   summary: RankCatalogueSummary;
   telescope?: TelescopeSyncOutcome;
 }> {
   const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
+  // `countRemaining` opts into the real backlog COUNT for `remaining` (the human-readable readout);
+  // the default sentinel keeps the box sweep's `--json` path off the ~19s scan (server contract).
   const response = await adminApiPost<{
     ok: true;
     summary: RankCatalogueSummary;
     telescope?: TelescopeSyncOutcome;
-  }>("/api/v1/admin/catalogue/rank", limit ? { limit } : {});
+  }>("/api/v1/admin/catalogue/rank", {
+    ...(limit ? { limit } : {}),
+    ...(options.countRemaining ? { countRemaining: true } : {}),
+  });
 
   return { summary: response.summary, telescope: response.telescope };
 }
