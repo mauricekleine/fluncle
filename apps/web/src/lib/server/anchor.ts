@@ -53,7 +53,8 @@
 // worklist can back a missed row off (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of re-asking
 // it every tick (each re-ask is a billed Apify search). See docs/catalogue-crawler.md § the anchor.
 
-import { anchorSpotifySearchAllowed } from "./anchor-spotify-search";
+import { isAnchorApifyEnabled } from "./anchor-apify";
+import { anchorSpotifySearchAllowed, isAnchorSpotifySearchEnabled } from "./anchor-spotify-search";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
 import { searchDeezerCandidates } from "./deezer";
@@ -386,17 +387,26 @@ export type AnchorResolveSource = "listenbrainz" | "spotify-isrc" | "spotify-sea
  * recovery can happen and the row still miss every anchor rung this tick — the recovered ISRC is
  * persisted regardless, so the next tick's exact-ISRC rung and dedup both benefit. The box sweep
  * tallies it to measure the recovery rate.
+ *
+ * `apifyEnabled` reflects the `anchor_apify_enabled` operator kill-flag (default ON, ./anchor-apify.ts)
+ * as read for this call — a GLOBAL flag, so every verdict in a tick agrees. When FALSE (out of Apify
+ * budget), the box skips the whole Apify actor loop for this tick, and this call has already
+ * stamped-and-backed-off the row if it was a genuinely-exhausted full miss (see below).
  */
 export type AnchorResolveResult = {
   anchored: boolean;
+  apifyEnabled: boolean;
   isrcRecoveredByDeezer: boolean;
   source: AnchorResolveSource | null;
   spotifySearchDone: boolean;
   verifiedBy: AnchorVerification;
 };
 
-/** The free-rung outcome BEFORE the Deezer-recovery flag is folded in (the Spotify-search rungs never learn of Deezer). */
-type FreeResolveOutcome = Omit<AnchorResolveResult, "isrcRecoveredByDeezer">;
+/**
+ * The free-rung outcome BEFORE the Deezer-recovery + Apify-flag fields are folded in by
+ * `resolveAnchorFree` (the Spotify-search rungs never learn of Deezer or the Apify flag).
+ */
+type FreeResolveOutcome = Omit<AnchorResolveResult, "apifyEnabled" | "isrcRecoveredByDeezer">;
 
 /** Fetch a Spotify track's metadata and shape it into a verifiable candidate — best-effort. */
 async function metadataCandidate(spotifyTrackId: string): Promise<AnchorCandidate | undefined> {
@@ -622,6 +632,23 @@ export async function recoverIsrcViaDeezer(
 }
 
 /**
+ * Stamp a catalogue row's re-ask backoff (`spotify_anchor_attempted_at`) — the SAME write `anchorTrack`
+ * makes on a stamped miss. `resolveAnchorFree` calls this ONLY when the Apify kill-flag is OFF and the
+ * row is a genuinely-exhausted full miss: with no Apify rung coming to stamp it, the row must back
+ * itself off (14 days, track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of recirculating every tick.
+ */
+async function stampAnchorAttempt(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackId: string,
+  now: Date,
+): Promise<void> {
+  await db.execute({
+    args: [now.toISOString(), trackId],
+    sql: `update tracks set spotify_anchor_attempted_at = ? where track_id = ?`,
+  });
+}
+
+/**
  * THE FREE (non-Apify) RESOLVER RUNGS of the waterfall — try to anchor a catalogue row without any
  * Apify money (docs/catalogue-crawler.md § the anchor). The box's sweep calls this FIRST per row and
  * spends the metered Apify search only when it MISSES.
@@ -635,17 +662,29 @@ export async function recoverIsrcViaDeezer(
  * Spotify rungs are SKIPPED ENTIRELY: not one `findSpotifyTrackByIsrc` / `searchTrackCandidates` call
  * is issued — the load-bearing safety property that lets slice 2 ship dark.
  *
- * Every rung anchors with `stampOnMiss: false`, so a full miss leaves the row UNSTAMPED and the Apify
- * fallback (or the next tick) still gets its turn. Best-effort throughout — a missing MBID, a Deezer
- * outage, a ListenBrainz miss, a throttle, or a Spotify read that throws all resolve to a clean miss.
- * The `AnchorTrackError` rails (not_found / certified / already_anchored) still propagate, so the op
- * maps them to the same honest status the Apify path does. `now` is injected for deterministic tests.
+ * Every rung anchors with `stampOnMiss: false`, so a full miss normally leaves the row UNSTAMPED and
+ * the Apify fallback (or the next tick) still gets its turn. THE EXCEPTION is the Apify kill-flag
+ * (`anchor_apify_enabled`, default ON, ./anchor-apify.ts): when it is OFF (out of budget) NO Apify rung
+ * is coming, so a genuinely-exhausted full miss is stamped-and-backed-off HERE (via `stampAnchorAttempt`)
+ * — never a HIT, and never a row whose Spotify search is merely deferred by the Friday window (still
+ * pending on a later tick). With the flag ON, behaviour is UNCHANGED (a free-rung miss never stamps).
+ * The read is reported as `apifyEnabled` so the box can skip the whole Apify actor loop for the tick.
+ *
+ * Best-effort throughout — a missing MBID, a Deezer outage, a ListenBrainz miss, a throttle, or a
+ * Spotify read that throws all resolve to a clean miss. The `AnchorTrackError` rails (not_found /
+ * certified / already_anchored) still propagate, so the op maps them to the same honest status the
+ * Apify path does. `now` is injected for deterministic tests.
  */
 export async function resolveAnchorFree(
   trackId: string,
   now: Date = new Date(),
 ): Promise<AnchorResolveResult> {
   const db = await getDb();
+
+  // The Apify-fallback kill-flag (default ON). Read ONCE up front, so every return path reports the
+  // same GLOBAL value and the terminal-miss stamping below can consult it. When OFF, the free rungs
+  // must back off their own full misses (no Apify rung will).
+  const apifyEnabled = await isAnchorApifyEnabled();
 
   const found = await db.execute({
     args: [trackId],
@@ -663,6 +702,7 @@ export async function resolveAnchorFree(
   if (!row) {
     return {
       anchored: false,
+      apifyEnabled,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
@@ -698,8 +738,10 @@ export async function resolveAnchorFree(
   const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id);
 
   if (listenbrainz?.anchored) {
+    // A HIT already wrote the anchor + stamped the attempt — never re-stamp, regardless of the flag.
     return {
       anchored: true,
+      apifyEnabled,
       isrcRecoveredByDeezer,
       source: "listenbrainz",
       spotifySearchDone: false,
@@ -709,8 +751,17 @@ export async function resolveAnchorFree(
 
   // THE DARK GATE — off ⇒ zero Spotify search calls. Checked BEFORE either Spotify rung runs.
   if (!(await anchorSpotifySearchAllowed(now))) {
+    // The Spotify search rungs will not run this call. With Apify also OFF, this ListenBrainz miss is
+    // terminal for the row — but ONLY when the Spotify search flag is genuinely OFF (nothing pending).
+    // If that flag is ON we are merely inside the Friday-refresh window and a later tick WILL search,
+    // so the row is NOT exhausted and must keep its turn — do NOT stamp it.
+    if (!apifyEnabled && !(await isAnchorSpotifySearchEnabled())) {
+      await stampAnchorAttempt(db, trackId, now);
+    }
+
     return {
       anchored: false,
+      apifyEnabled,
       isrcRecoveredByDeezer,
       source: null,
       spotifySearchDone: false,
@@ -721,5 +772,12 @@ export async function resolveAnchorFree(
   // RUNGS 2/3 — the dark Spotify search rungs, fed the (possibly Deezer-recovered) ISRC.
   const searchOutcome = await resolveViaSpotifySearch(trackId, isrc, rowArtists, row.title ?? "");
 
-  return { ...searchOutcome, isrcRecoveredByDeezer };
+  // With Apify OFF, a FULL MISS after the Spotify search rungs is terminal — every rung available to
+  // the row this call has now been spent — so back it off. (Apify ON ⇒ UNCHANGED: the miss stays
+  // un-stamped for the Apify fallback's turn.)
+  if (!apifyEnabled && !searchOutcome.anchored) {
+    await stampAnchorAttempt(db, trackId, now);
+  }
+
+  return { ...searchOutcome, apifyEnabled, isrcRecoveredByDeezer };
 }

@@ -664,6 +664,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // precedent. Watching only saves the entity to the caller's account.
   save_private_watch: "private-session",
   send_edition: "operator",
+  // The Apify anchor-fallback KILL-FLAG (slice 3, default ON) — operator tier: it arms/disarms the
+  // catalogue's paid last-resort spend rail. A machine does not get to disable (or re-enable) its own
+  // spend rail — the `set_capture_budget` / `set_anchor_search` rule.
+  set_anchor_apify: "operator",
   // The dark flag for slice 2's Spotify anchor-search rungs — operator tier: it arms the shared
   // official Spotify app (mints/publish) against the catalogue, which starved under 429s. A machine
   // does not get to point that token at the catalogue — the `set_capture_budget` rule.

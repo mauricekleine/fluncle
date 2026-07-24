@@ -35,6 +35,7 @@
 
 import { ORPCError } from "@orpc/server";
 import { type AnchorCandidate, anchorTrack, AnchorTrackError, resolveAnchorFree } from "../anchor";
+import { isAnchorApifyEnabled, setAnchorApifyEnabled } from "../anchor-apify";
 import {
   isAnchorSpotifySearchEnabled,
   setAnchorSpotifySearchEnabled,
@@ -403,6 +404,24 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
     });
 
+  // PUT /admin/catalogue/anchor/apify — OPERATOR tier. Flip the APIFY KILL-FLAG (anchor-apify.ts): when
+  // Apify is out of budget, OFF turns the recirculating stall into a clean state — the free rungs
+  // stamp-and-back-off their full misses and the box skips the Apify actor loop. Operator-only, the
+  // `set_capture_budget` rule: a machine does not arm/disarm its own spend rail. Returns the flag as
+  // stored so the operator reads back the real state, not an echo.
+  const setAnchorApifyHandler = os.set_anchor_apify
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setAnchorApifyEnabled(input.enabled);
+
+        return { enabled: await isAnchorApifyEnabled(), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // GET /admin/catalogue/capture-budget — the spend readout. Admin tier (agent-allowed READ,
   // the `get_crawl_status` precedent): reading what a budget has left publishes nothing and
   // spends nothing, and the box's sweeps are entitled to know why the queue went quiet.
@@ -475,6 +494,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     resolve_anchor: resolveAnchorHandler,
+    set_anchor_apify: setAnchorApifyHandler,
     set_anchor_search: setAnchorSearchHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,

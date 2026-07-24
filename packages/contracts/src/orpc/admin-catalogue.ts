@@ -809,6 +809,12 @@ export const anchorTrack = oc
  * `spotify-isrc` | `spotify-search`), so the sweep can tally per rung. `spotifySearchDone` is true iff
  * this call issued a Spotify SEARCH — the signal the box's pacer throttles on to hold the 60/min
  * ceiling; when the flag is OFF it is always false and NO Spotify search ran (the load-bearing gate).
+ *
+ * SLICE 3 — the APIFY KILL-FLAG (`anchor_apify_enabled`, default ON, `set_anchor_apify`). `apifyEnabled`
+ * reflects it for this call — a GLOBAL flag, so every verdict in a tick agrees. When FALSE (out of Apify
+ * budget) the box SKIPS the whole Apify actor loop, and this call has already stamped-and-backed-off the
+ * row if it was a genuinely-exhausted full miss (so it leaves the recirculating-stall behind for a clean
+ * self-managing state). When TRUE (the default) a free-rung miss is NEVER stamped here — unchanged.
  */
 export const resolveAnchor = oc
   .route({
@@ -824,6 +830,11 @@ export const resolveAnchor = oc
     z.object({
       /** True when a free rung verified a candidate and the anchor was written. */
       anchored: z.boolean(),
+      /**
+       * The `anchor_apify_enabled` kill-flag (default ON) as read this call. FALSE ⇒ the box skips the
+       * Apify actor loop this tick, and a genuinely-exhausted full miss was already stamped-and-backed-off.
+       */
+      apifyEnabled: z.boolean(),
       /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
       isrcRecoveredByDeezer: z.boolean(),
       ok: z.literal(true),
@@ -853,6 +864,34 @@ export const setAnchorSearch = oc
     operationId: "setAnchorSearch",
     path: "/admin/catalogue/anchor/search",
     summary: "Flip the dark flag for the Spotify anchor-search rungs (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ enabled: z.boolean() }))
+  .output(z.object({ enabled: z.boolean(), ok: z.literal(true) }));
+
+/**
+ * `set_anchor_apify` → `PUT /admin/catalogue/anchor/apify` (operationId `setAnchorApify`).
+ *
+ * OPERATOR tier — the APIFY KILL-FLAG (`anchor_apify_enabled` on the shared `settings` KV, the
+ * `set_capture_budget` / `set_anchor_search` shape). It turns "out of Apify budget" from a STALL into a
+ * clean, self-managing state. The anchor waterfall's PAID last resort is the Apify search; when Apify
+ * hits its account cap it 403s, the box catches the failed run as a skipped chunk, and those rows are
+ * never stamped — so they recirculate at the head of the worklist forever and the drain stalls. Flip
+ * this OFF (out of budget) and the free rungs stamp-and-back-off their full misses while the box skips
+ * the Apify actor loop entirely (docs/catalogue-crawler.md § the anchor).
+ *
+ * Unlike the DEFAULT-OFF dark flags, this is DEFAULT ON: the steady state is "Apify runs". `enabled:
+ * false` writes `"false"` (the only value that disables it); anything else re-enables. Returns the flag
+ * as stored, so one call both writes and reads back. The flip takes effect on the next `resolve_anchor`
+ * tick, with no deploy — the kill-switch discipline. Operator tier: a machine does not get to arm/disarm
+ * its own spend rail — the `set_capture_budget` rule.
+ */
+export const setAnchorApify = oc
+  .route({
+    method: "PUT",
+    operationId: "setAnchorApify",
+    path: "/admin/catalogue/anchor/apify",
+    summary: "Flip the Apify anchor-fallback kill-flag — off = no-budget graceful state (operator)",
     tags: ["Admin"],
   })
   .input(z.object({ enabled: z.boolean() }))
@@ -1000,6 +1039,7 @@ export const adminCatalogueContract = {
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
   resolve_anchor: resolveAnchor,
+  set_anchor_apify: setAnchorApify,
   set_anchor_search: setAnchorSearch,
   set_capture_budget: setCaptureBudget,
   set_track_dismissed: setTrackDismissed,

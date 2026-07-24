@@ -374,6 +374,62 @@ describe("runAnchorTick", () => {
     expect(summary.missed).toBe(1);
   });
 
+  test("slice 3: Apify OFF ⇒ SKIP the actor loop entirely; full misses counted `missed`, not skipped", async () => {
+    let actorCalls = 0;
+
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        // Out of Apify budget. Every free-rung call reports the global kill-flag OFF and misses — the
+        // server has already stamped-and-backed-off each row (slice 3), so they are terminal.
+        resolveFree: () =>
+          Promise.resolve({ anchored: false, apifyEnabled: false, verifiedBy: null }),
+        runActor: (queries) => {
+          actorCalls += 1;
+
+          return Promise.resolve(
+            APIFY_SAMPLE.filter((item) => queries.includes(item.target ?? "")),
+          );
+        },
+      }),
+    );
+
+    expect(summary.ok).toBe(true);
+    // ZERO wasted 403-ing actor calls while out of budget.
+    expect(actorCalls).toBe(0);
+    // All three full misses are counted honestly as missed (terminal, backed off), never skipped-for-retry.
+    expect(summary.missed).toBe(3);
+    expect(summary.skipped).toBe(0);
+    expect(summary.anchoredByIsrc + summary.anchoredBySearch).toBe(0);
+  });
+
+  test("slice 3: Apify OFF ⇒ a free-rung THROW is counted `skipped` (no stamp), the misses `missed`", async () => {
+    let actorCalls = 0;
+
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        // mb_hold/mb_fau report the flag OFF and miss (stamped by the server); mb_none THREW (no verdict,
+        // so the server stamped nothing) — it is honestly skipped-for-retry, not a terminal miss.
+        resolveFree: (trackId) =>
+          trackId === "mb_none"
+            ? Promise.reject(new Error("resolve_anchor 500"))
+            : Promise.resolve({ anchored: false, apifyEnabled: false, verifiedBy: null }),
+        runActor: () => {
+          actorCalls += 1;
+
+          return Promise.resolve(APIFY_SAMPLE);
+        },
+      }),
+    );
+
+    expect(summary.ok).toBe(true);
+    expect(actorCalls).toBe(0);
+    // The two stamped full misses → missed; the un-stamped throw → skipped.
+    expect(summary.missed).toBe(2);
+    expect(summary.skipped).toBe(1);
+  });
+
   test("skips a worklist row missing a trackId or query", async () => {
     const summary = await runAnchorTick(
       50,
