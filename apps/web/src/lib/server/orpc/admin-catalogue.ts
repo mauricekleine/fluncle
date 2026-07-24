@@ -406,17 +406,20 @@ export function adminCatalogueHandlers(os: Implementer) {
 
   // PUT /admin/catalogue/anchor/apify — OPERATOR tier. Flip the APIFY KILL-FLAG (anchor-apify.ts): when
   // Apify is out of budget, OFF turns the recirculating stall into a clean state — the free rungs
-  // stamp-and-back-off their full misses and the box skips the Apify actor loop. Operator-only, the
-  // `set_capture_budget` rule: a machine does not arm/disarm its own spend rail. Returns the flag as
-  // stored so the operator reads back the real state, not an echo.
+  // stamp-and-back-off their full misses and the box skips the Apify actor loop. Flipping back ON
+  // re-queues the off-window deferrals (nulling their re-ask stamp so the higher-priority rows skipped
+  // during the outage re-enter the worklist immediately, instead of sitting out the 14-day backoff) and
+  // returns how many rows that touched as `requeued`. Operator-only, the `set_capture_budget` rule: a
+  // machine does not arm/disarm its own spend rail. Returns the flag as stored so the operator reads
+  // back the real state, not an echo.
   const setAnchorApifyHandler = os.set_anchor_apify
     .use(adminAuth)
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        await setAnchorApifyEnabled(input.enabled);
+        const requeued = await setAnchorApifyEnabled(input.enabled);
 
-        return { enabled: await isAnchorApifyEnabled(), ok: true as const };
+        return { enabled: await isAnchorApifyEnabled(), ok: true as const, requeued };
       } catch (error) {
         throw apiFault(error);
       }

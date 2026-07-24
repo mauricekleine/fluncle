@@ -881,10 +881,19 @@ export const setAnchorSearch = oc
  * the Apify actor loop entirely (docs/catalogue-crawler.md § the anchor).
  *
  * Unlike the DEFAULT-OFF dark flags, this is DEFAULT ON: the steady state is "Apify runs". `enabled:
- * false` writes `"false"` (the only value that disables it); anything else re-enables. Returns the flag
- * as stored, so one call both writes and reads back. The flip takes effect on the next `resolve_anchor`
- * tick, with no deploy — the kill-switch discipline. Operator tier: a machine does not get to arm/disarm
- * its own spend rail — the `set_capture_budget` rule.
+ * false` writes `"false"` (the only value that disables it) AND records the off-window start; anything
+ * else re-enables AND re-queues the off-window deferrals (see below). Returns the flag as stored, so one
+ * call both writes and reads back. The flip takes effect on the next `resolve_anchor` tick, with no deploy
+ * — the kill-switch discipline. Operator tier: a machine does not get to arm/disarm its own spend rail —
+ * the `set_capture_budget` rule.
+ *
+ * `requeued` is how many catalogue rows the flip-ON re-queued. While the flag is OFF the free rungs
+ * stamp-and-back-off their full misses, so the HIGHER-priority rows skipped during the outage would
+ * otherwise wait out the full 14-day re-ask backoff while Apify works lower-priority rows first — a
+ * priority inversion. Flipping back ON nulls the `spotify_anchor_attempted_at` stamp on exactly those
+ * off-window deferrals (every stamp written while the box made ZERO Apify attempts), so they re-enter the
+ * priority-ordered worklist immediately; genuine prior backoffs, which all predate the off-window, are
+ * untouched. `requeued` is `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
  */
 export const setAnchorApify = oc
   .route({
@@ -895,7 +904,7 @@ export const setAnchorApify = oc
     tags: ["Admin"],
   })
   .input(z.object({ enabled: z.boolean() }))
-  .output(z.object({ enabled: z.boolean(), ok: z.literal(true) }));
+  .output(z.object({ enabled: z.boolean(), ok: z.literal(true), requeued: z.number() }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE CAPTURE BUDGET — the brake on what the two above cost. docs/the-ear.md.
