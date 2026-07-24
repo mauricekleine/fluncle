@@ -32,7 +32,7 @@ import { getDb, typedRows } from "./db";
 import {
   type CatalogueTrackItem,
   FINDINGS_FROM,
-  TRACK_SELECT,
+  LEAN_TRACK_SELECT,
   type TrackListItem,
   toPublicTrackListItem,
   toTrackListItem,
@@ -195,11 +195,15 @@ export async function listFreshReleases(
 
   const [findingsResult, catalogueResult, recordsResult] = await Promise.all([
     // The lit half: findings whose track was RELEASED in the window. Drives through the finding
-    // inner join, so it can only ever return findings — the full `TRACK_SELECT` the Track Row reads,
-    // plus the lead artist's avatar columns.
+    // inner join, so it can only ever return findings. Uses the LEAN projection (Finding B4):
+    // the fresh cards render a cover + artist/title + coordinate and NONE of the three heavy JSON
+    // columns (`observation_alignment_json`, `features_json`, `video_model_reasoning`) or the
+    // render-only artworkMax subqueries, so the lean read drops exactly the over-fetch. The mapper
+    // stays `toTrackListItem` — it simply carries those undefined for a lean row. Plus the lead
+    // artist's avatar columns.
     db.execute({
       args: [windowStart, today, FRESH_FINDINGS_LIMIT],
-      sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT} from ${FINDINGS_FROM}
+      sql: `select ${LEAN_TRACK_SELECT}, ${LEAD_ARTIST_SELECT} from ${FINDINGS_FROM}
             ${LEAD_ARTIST_JOIN}
             where tracks.release_date >= ? and tracks.release_date <= ?
             order by tracks.release_date desc, tracks.track_id desc

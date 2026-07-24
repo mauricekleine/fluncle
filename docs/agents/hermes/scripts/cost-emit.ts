@@ -23,10 +23,13 @@
 //
 // THE GUARANTEE (RFC §3): capture is best-effort and rides AFTER the real work is
 // already durable. `emitCost` cannot throw, cannot reject, and cannot block past a
-// hard 2.5s timeout — a dropped POST is a permanently-missing ledger row, which for
-// a spend ledger only ever UNDERSTATES and never corrupts the pipeline. Zero
-// retries: the sweeps run at BATCH_CAP≈1 against a 120s cron kill, so re-POSTing
-// would spend the budget the real work needs; emit once and move on.
+// hard 15s timeout — a dropped POST is a permanently-missing ledger row, which for
+// a spend ledger only ever UNDERSTATES and never corrupts the pipeline. The budget is
+// generous because the target `insert into settings` upsert runs ~8.9s p95 under load,
+// so a tight 2.5s guaranteed a timeout (a dropped row) on exactly the busy ticks; 15s
+// still sits well inside the 120s cron kill. Zero retries: the sweeps run at BATCH_CAP≈1
+// against that kill, so re-POSTing would spend the budget the real work needs; emit once
+// and move on.
 
 // The closed enums, mirrored from the `cost_events` typed columns / the
 // `CostEventInput` contract (packages/contracts/src/orpc/admin-costs.ts). Kept as
@@ -86,7 +89,9 @@ export type EmitCostOptions = {
   baseUrl?: string;
   /** Injected fetch for tests; defaults to the global. */
   fetchImpl?: typeof fetch;
-  /** Hard per-POST budget. Default 2500ms (RFC §3 — well inside the 120s cron kill). */
+  /** Hard per-POST budget. Default 15000ms — long enough to outlast the ~8.9s p95 settings
+      upsert under load (a tight 2.5s guaranteed a dropped row on busy ticks), still well
+      inside the 120s cron kill. */
   timeoutMs?: number;
   /** Override the agent token (default: FLUNCLE_API_TOKEN env). */
   token?: string;
@@ -94,7 +99,7 @@ export type EmitCostOptions = {
 
 export type EmitCostResult = { inserted: number; posted: true } | { posted: false; reason: string };
 
-const DEFAULT_TIMEOUT_MS = 2500;
+const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_BASE_URL = "https://www.fluncle.com";
 
 const log = (message: string) => console.error(`[cost-emit] ${message}`);

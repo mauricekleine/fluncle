@@ -508,7 +508,10 @@ async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=analyze&scope=catalogue&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
-    signal: AbortSignal.timeout(30_000),
+    // `list_track_work` is ~10s p95 with a tail past 30s, so a 30s budget tripped a false
+    // failure alert on the slow-but-completing read; 60s clears the tail (the cron's own kill
+    // is the real backstop). This is the Worker API worklist read, never a media download.
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!res.ok) {
