@@ -93,18 +93,41 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
   }
 }
 
-// 1b. A squared-master finding with NO previewUrl is a SILENT visual — the video plays
-//     muted with no audio bed, never a fall back to its own baked track.
+// 1b. A squared-master finding with NO stored previewUrl STILL gets the bed: the proxy is a
+//     re-resolving waterfall (ISRC/iTunes rungs) that sounds the finding whether or not the
+//     ephemeral stored token is present, so the app gates on the finding's identity (title +
+//     artist), not the stored URL. The video stays a muted visual either way (5.2.3).
 {
   const media = resolveCardMedia(
     finding({ logId: "LOG123", videoSquaredAt: "2026-06-21T10:00:00.000Z" }),
   );
 
-  assertEqual(media.kind, "video", "squared master → video rung even without a preview");
+  assertEqual(media.kind, "video", "squared master → video rung even without a stored preview");
 
   if (media.kind === "video") {
-    assertEqual(media.hasAudio, false, "still a muted visual");
-    assertEqual(media.previewUrl, undefined, "no previewUrl → no audio bed (silent visual)");
+    assertEqual(media.hasAudio, false, "still a muted visual (never its own track)");
+    assertEqual(
+      media.previewUrl,
+      `${API_BASE}/api/v1/preview/LOG123`,
+      "no stored previewUrl still gets the proxy bed — the waterfall re-resolves it",
+    );
+  }
+}
+
+// 1c. THE genuine-miss floor: a finding with no title/artist to fuzzy-resolve by has no bed
+//     (a true silent visual). This is the only shape the proxy cannot sound.
+{
+  const media = resolveCardMedia(
+    finding({
+      artists: [],
+      logId: "LOG123",
+      title: "",
+      videoSquaredAt: "2026-06-21T10:00:00.000Z",
+    }),
+  );
+
+  if (media.kind === "video") {
+    assertEqual(media.previewUrl, undefined, "no resolvable metadata → no bed (silent visual)");
   }
 }
 
@@ -176,7 +199,8 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
   }
 }
 
-// 6. A cover finding with NO previewUrl gets an undefined preview (silent cover).
+// 6. A cover finding with NO stored previewUrl STILL gets the proxy bed — the waterfall
+//    re-resolves a catalogue/cover row's clip the same as a finding's (the Ear audition).
 {
   const media = resolveCardMedia(
     finding({ albumImageUrl: "https://i.scdn.co/image/cover", logId: "LOG123" }),
@@ -185,7 +209,11 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
   assertEqual(media.kind, "cover");
 
   if (media.kind === "cover") {
-    assertEqual(media.previewUrl, undefined, "no previewUrl → silent cover (undefined preview)");
+    assertEqual(
+      media.previewUrl,
+      `${API_BASE}/api/v1/preview/LOG123`,
+      "no stored previewUrl still gets the proxy bed",
+    );
     assertEqual(media.coverUrl, "https://i.scdn.co/image/cover");
   }
 }

@@ -87,9 +87,20 @@ export type CardMedia =
 
 export function resolveCardMedia(f: TrackListItem): CardMedia {
   const id = f.logId ?? f.trackId;
-  // The one audio path for BOTH kinds: the 30s official preview, relayed by the proxy
-  // (expiring previewUrl tokens aren't used directly). Keyed by logId when present.
-  const previewUrl = f.previewUrl ? previewProxy(id) : undefined;
+  // The one audio path for BOTH kinds: the 30s official preview, relayed by the proxy.
+  //
+  // GATE ON IDENTITY, NOT THE STORED URL (fixed 2026-07-24). `/api/v1/preview/<id>` is a
+  // re-resolving WATERFALL — stored Deezer token → fresh Deezer by ISRC → exact Apple by
+  // ISRC → fuzzy iTunes by artist+title (apps/web/src/lib/server/preview-live.ts) — so it
+  // sounds essentially any finding whether or not `f.previewUrl` is set. That stored field
+  // holds an EPHEMERAL Deezer token that is null for a large fraction of findings the proxy
+  // still serves (verified: 047.4.5O carried previewUrl:null yet the proxy returned 480 KB).
+  // Gating the bed on it silenced every such card. So the bed is present whenever the
+  // finding has the metadata the fuzzy rung needs (an id + a title + an artist); a genuine
+  // miss — the rare finding with no resolvable preview — 404s at the proxy and simply plays
+  // nothing (the visual stays; feed-card holds the sound control until the bed loads).
+  const previewUrl =
+    f.title.trim().length > 0 && f.artists.length > 0 ? previewProxy(id) : undefined;
   if (f.logId && f.videoSquaredAt) {
     return {
       hasAudio: false,

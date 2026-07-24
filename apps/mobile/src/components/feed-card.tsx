@@ -1,7 +1,7 @@
 // One finding, full-screen (RFC Unit 2). Per-cell player, the media ladder, the
 // native overlay (a right action rail + bottom caption), the cover-card eclipse
 // drift, and the background-pause rule. The de-risk spike target.
-import { memo, type ReactNode, useCallback, useEffect, useId, useMemo } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
   Linking,
   Pressable,
@@ -21,9 +21,10 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { useEvent } from "expo";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
-import { useAudioPlayer } from "expo-audio";
+import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { LinearGradient } from "expo-linear-gradient";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
@@ -42,6 +43,15 @@ import { color, font } from "@/theme/tokens";
 // Documented constant, not a measured API — the operator verifies the exact clearance
 // in the simulator after merge.
 export const NATIVE_TAB_BAR_HEIGHT = 49;
+
+// The bounded wait the visual gives the audio bed before starting anyway (Bug B, 5.2.3
+// split). The muted visual (a raw CDN master) and the bed (a live-resolving proxy that
+// round-trips Deezer/iTunes) load at DIFFERENT rates, so starting each the instant it is
+// ready made the audio arrive after the visual, or the reverse — the "not synced" report.
+// The card now starts BOTH together once both are ready; this caps how long the visual
+// waits on a slow/absent bed, so a laggy preview degrades to a brief silent visual (the
+// bed joins when it lands) instead of freezing the card on its poster.
+const START_SYNC_WINDOW_MS = 2500;
 
 // OPERATOR RULING 2026-07-12: the scrim returns (third iteration). The previous fix
 // removed the gradient entirely because iteration two had a visible ONSET LINE — its
@@ -179,31 +189,62 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   const hasBed = media.previewUrl !== undefined;
   const soundControl = soundRail(soundOn);
 
-  // Only the visible card plays; the muted video rolls whenever active, and the preview
-  // bed (both kinds) follows the global sound toggle. The two start together on focus.
+  // READINESS (Bug B). Each player has its own load clock; we couple their START on these.
+  // The visual is ready at `readyToPlay` — and an `error` (a cold-failing master) is treated
+  // as "ready" too, so a broken visual never strands the bed: the poster stays up and the
+  // audio plays over it rather than the card hanging silent. The bed is ready at `isLoaded`.
+  const { status: videoStatus } = useEvent(player, "statusChange", { status: player.status });
+  const audioStatus = useAudioPlayerStatus(audio);
+  const videoReady =
+    media.kind !== "video" || videoStatus === "readyToPlay" || videoStatus === "error";
+  const bedReady = audioStatus.isLoaded;
+
+  // The bounded wait: while this card wants a bed that has not loaded, arm a timer; if it
+  // fires first, the visual starts without the bed (which joins on load). Reset whenever the
+  // finding, focus, sound toggle, or bed-readiness changes.
+  const wantsBed = active && soundOn && hasBed;
+  const [bedWaitElapsed, setBedWaitElapsed] = useState(false);
+  useEffect(() => {
+    setBedWaitElapsed(false);
+
+    if (!wantsBed || bedReady) {
+      return;
+    }
+
+    const timer = setTimeout(() => setBedWaitElapsed(true), START_SYNC_WINDOW_MS);
+
+    return () => clearTimeout(timer);
+  }, [wantsBed, bedReady, media]);
+
+  // Only the visible card plays, and the muted visual + the preview bed START TOGETHER: the
+  // visual holds on its poster until the bed is ready (bounded by the wait above), the bed
+  // waits for the visual to be ready, then both go on the same commit — no lonely gap. With
+  // sound off (or no bed) the muted visual just plays as soon as it is ready.
+  const startVisual = active && videoReady && (!wantsBed || bedReady || bedWaitElapsed);
+  const startBed = active && soundOn && hasBed && bedReady && videoReady;
   useEffect(() => {
     if (media.kind === "video") {
-      if (active) {
+      if (startVisual) {
         player.play();
       } else {
         player.pause();
       }
     }
     if (media.previewUrl) {
-      if (active && soundOn) {
+      if (startBed) {
         audio.play();
       } else {
         audio.pause();
       }
     }
-  }, [active, audio, media, player, soundOn]);
+  }, [audio, media, player, startBed, startVisual]);
 
   // Hold the wake lock while this card is the one actually making sound (the preview bed
   // is playing) so a clip never lets the screen sleep mid-listen. A stable per-card tag
   // keeps the calls idempotent; the cleanup always releases, so locks can't leak on
   // pause/scroll/unmount.
   const keepAwakeTag = useId();
-  const playing = active && soundOn && hasBed;
+  const playing = startBed;
   useEffect(() => {
     if (!playing) {
       return;
@@ -247,13 +288,29 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
   return (
     <View style={{ height, overflow: "hidden" }} className="bg-deep-field">
       {media.kind === "video" ? (
-        <VideoView
-          player={player}
-          style={{ flex: 1 }}
-          contentFit="cover"
-          nativeControls={false}
-          pointerEvents="none"
-        />
+        <View style={{ flex: 1 }}>
+          <VideoView
+            player={player}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            nativeControls={false}
+            pointerEvents="none"
+          />
+          {/* The opening frame, edge-cached and vintage-versioned, sits OVER the video until
+              it has buffered enough to paint (`readyToPlay`). Without it the card was a blank
+              deep-field while the raw master loaded — and since the bed now waits on the
+              visual, that blank is exactly when audio must not sound. The poster IS the
+              video's first frame, so the handoff is seamless. */}
+          {videoStatus !== "readyToPlay" ? (
+            <Image
+              source={media.posterUrl}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              transition={150}
+              pointerEvents="none"
+            />
+          ) : null}
+        </View>
       ) : (
         <Animated.View style={[{ flex: 1 }, coverStyle]}>
           <Image source={media.coverUrl} style={{ flex: 1 }} contentFit="cover" transition={250} />
