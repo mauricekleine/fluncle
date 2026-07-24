@@ -2517,7 +2517,17 @@ export const artists = sqliteTable(
     updatedAt: text("updated_at").notNull(),
     wikidataQid: text("wikidata_qid"),
   },
-  (table) => [index("artists_name_idx").on(table.name)],
+  (table) => [
+    index("artists_name_idx").on(table.name),
+    // The `/artists` hub read + the name lookups sort/seek by `name collate nocase`. The
+    // `name` column is BINARY-collated, so the sort key carries `collate nocase` VERBATIM
+    // (the `labels_seed_state_name_idx` precedent). `slug` is a COVERING trailer, not
+    // decoration: a bare nocase index did NOT flip the plan — the planner still scanned every
+    // artist — but with `slug` in the index the read is served entirely from it (name + slug),
+    // so the planner SEEKS via this index instead. Plain ASC (SQLite reverse-scans it). Keeps
+    // the binary `artists_name_idx` above for exact-case seeks.
+    index("artists_name_nocase_idx").on(sql`${table.name} collate nocase`, table.slug),
+  ],
 );
 
 // The sonic galaxy — a stable-ID, operator-named cluster over the MuQ embedding
@@ -2677,6 +2687,14 @@ export const artistSocials = sqliteTable(
     index("artist_socials_unreviewed_idx").on(table.reviewedAt),
     index("artist_socials_artist_id_idx").on(table.artistId),
     index("artist_socials_platform_idx").on(table.platform),
+    // The candidate-links read per artist (`where artist_id = ? and status = 'candidate'`).
+    // A PARTIAL index over just the rare `candidate` slice — most links are `auto`/`confirmed`,
+    // so the index scans only the handful awaiting a ruling instead of every link on the
+    // artist (proven: it scans only the candidate slice on the 150k scratch DB). The
+    // `artist_socials_unreviewed_idx` shrinking-partial precedent.
+    index("artist_socials_candidate_idx")
+      .on(table.artistId)
+      .where(sql`${table.status} = 'candidate'`),
   ],
 );
 
@@ -3210,6 +3228,25 @@ export const crawlFrontier = sqliteTable(
     ),
     // The per-seed status read (and the subtree prune, when one is needed).
     index("crawl_frontier_label_idx").on(table.labelSlug),
+    // The demand CLEAR (`record_demand`): before each additive rewrite, every prior
+    // demand-0 node is reset (`update crawl_frontier set demand_rank = 1 where demand_rank
+    // = 0`). `demand_rank` is only ever {0,1}, so the predicate exactly matches this PARTIAL
+    // index over the demanded slice — a handful of rows, never the whole crawler-swollen
+    // frontier. It SHRINKS to nothing between rewrites (the `tracks_mb_recording_id_queue_idx`
+    // shrinking-partial discipline); `state` is the indexed column so the reset seeks the
+    // demanded rows directly instead of scanning the frontier for `demand_rank <> 1`.
+    index("crawl_frontier_demand_rank0_idx")
+      .on(table.state)
+      .where(sql`${table.demandRank} = 0`),
+    // The MusicBrainz label-node walk (`where kind = 'label' and source = 'musicbrainz'
+    // order by state, done_at`) — the label-expansion worklist. A PARTIAL index over exactly
+    // the label/MB slice, so it never touches the artist/release nodes; the composite serves
+    // both the equality filters and the ordered walk as one index pass (proven 5.8× on the
+    // 150k scratch DB). Plain ASC (SQLite reverse-scans it); a `desc()` index poisons the
+    // snapshot (the ratified drizzle-kit trap).
+    index("crawl_frontier_label_node_idx")
+      .on(table.state, table.doneAt)
+      .where(sql`${table.kind} = 'label' and ${table.source} = 'musicbrainz'`),
   ],
 );
 

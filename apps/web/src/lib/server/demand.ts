@@ -307,7 +307,7 @@ export async function recordDemand(
   //    the promotion off already-expanded nodes.
   const writes: { args: (null | number | string)[]; sql: string }[] = [
     { args: [], sql: `update tracks set demand_score = null where demand_score is not null` },
-    { args: [], sql: `update crawl_frontier set demand_rank = 1 where demand_rank <> 1` },
+    { args: [], sql: `update crawl_frontier set demand_rank = 1 where demand_rank = 0` },
   ];
 
   for (const [artistId, demand] of artistDemandById) {
