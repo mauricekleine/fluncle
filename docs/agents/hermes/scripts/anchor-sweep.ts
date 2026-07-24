@@ -34,9 +34,14 @@
 //   (c) APIFY FALLBACK, over the free-rung MISSES only: RUN the Apify actor once per chunk of
 //       queries (`run-sync-get-dataset-items`), GROUP its flat result array by `target` (the query),
 //       map each to a candidate, and POST each row's candidates to `anchor_track`.
+//       BUT the operator kill-flag `anchor_apify_enabled` (default ON) gates this whole step: when it
+//       is OFF (out of Apify budget), `resolve_anchor` reports `apifyEnabled:false` on every verdict AND
+//       has already stamped-and-backed-off each genuinely-exhausted full miss, so the sweep SKIPS the
+//       actor loop entirely (zero wasted 403s) and counts those stamped misses honestly as `missed`.
 //   The WORKER re-runs the full verification on BOTH rungs (no source's match is EVER trusted) and,
 //   on a hit, writes the anchor. Every FULL attempt stamps the row's re-ask backoff (a free-rung
-//   miss does NOT — it leaves the Apify rung its turn), so a missed row is not re-billed for weeks.
+//   miss does NOT — it leaves the Apify rung its turn — UNLESS Apify is disabled, when the free rung
+//   backs the row off itself), so a missed row is not re-billed for weeks.
 //
 // THE BOX DEPENDS ON NO NEW CLI COMMAND. The baked `fluncle` CLI is a PINNED release, so this
 // sweep calls the oRPC HTTP endpoints DIRECTLY with the agent token (the verify-captures.ts
@@ -114,6 +119,13 @@ export type AnchorCandidatePayload = {
 
 export type AnchorVerdict = {
   anchored: boolean;
+  /**
+   * The `anchor_apify_enabled` operator kill-flag (default ON) as `resolve_anchor` read it — a GLOBAL
+   * flag, so every verdict in a tick agrees. FALSE ⇒ Apify is out of budget: the sweep skips the whole
+   * Apify actor loop, and the server already stamped-and-backed-off each full-miss row (slice 3).
+   * Optional / defaults true on the box (a pre-slice-3 server omits it ⇒ current Apify-runs behaviour).
+   */
+  apifyEnabled?: boolean;
   /** True iff `resolve_anchor` recovered a verified ISRC from Deezer into an ISRC-less row this call. */
   isrcRecoveredByDeezer?: boolean;
   /** Which free rung anchored (`resolve_anchor` only) — drives the per-rung tally. Null on the Apify path. */
@@ -316,6 +328,12 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
   // (see `spotifySearchPaceMs`). A flag-OFF sweep never searches, so it never waits.
   const apifyRows: { anchorQuery: string; trackId: string }[] = [];
   let lastSearchStartMs: null | number = null;
+  // The GLOBAL Apify kill-flag, learned from any verdict (all agree). Default true ⇒ a pre-slice-3
+  // server that omits it keeps the current Apify-runs behaviour. When false, the Apify loop is skipped.
+  let apifyEnabled = true;
+  // Free-rung calls that THREW (no verdict, so the server stamped nothing). When Apify is disabled they
+  // are honestly `skipped` (they retry next tick), NOT `missed` (which implies stamped-and-backed-off).
+  let freeRungThrew = 0;
 
   for (const row of rows) {
     const waitMs = spotifySearchPaceMs(lastSearchStartMs, deps.now());
@@ -331,6 +349,11 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
       if (verdict.spotifySearchDone) {
         lastSearchStartMs = startMs;
+      }
+
+      // The kill-flag is global, so any verdict tells the whole tick's answer.
+      if (typeof verdict.apifyEnabled === "boolean") {
+        apifyEnabled = verdict.apifyEnabled;
       }
 
       // Recovery is orthogonal to anchoring — count it whether or not this row then anchored (a
@@ -355,6 +378,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
       deps.log(
         `free rung ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
       );
+      freeRungThrew += 1;
     }
 
     apifyRows.push(row);
@@ -362,6 +386,18 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
   // Every row the free rung anchored is done; only the misses cost Apify money.
   if (apifyRows.length === 0) {
+    return summary;
+  }
+
+  // ── THE APIFY KILL-FLAG (slice 3). When Apify is out of budget the operator flips `anchor_apify_enabled`
+  // OFF; `resolve_anchor` reports it on every verdict AND has already stamped-and-backed-off each
+  // genuinely-exhausted full miss. So we skip the whole actor loop — ZERO wasted 403s — and count those
+  // stamped misses HONESTLY as `missed` (terminal, backed off), not skipped-for-retry. Rows whose free
+  // rung THREW got no verdict and no stamp, so they stay `skipped` (they retry next tick).
+  if (!apifyEnabled) {
+    summary.missed += apifyRows.length - freeRungThrew;
+    summary.skipped += freeRungThrew;
+
     return summary;
   }
 
@@ -517,6 +553,8 @@ async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
 
   return {
     anchored: Boolean(body.anchored),
+    // Default true when a pre-slice-3 server omits it — the current Apify-runs behaviour.
+    apifyEnabled: body.apifyEnabled === undefined ? true : Boolean(body.apifyEnabled),
     isrcRecoveredByDeezer: Boolean(body.isrcRecoveredByDeezer),
     source: body.source ?? null,
     spotifySearchDone: Boolean(body.spotifySearchDone),

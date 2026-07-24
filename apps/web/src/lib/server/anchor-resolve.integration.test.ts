@@ -126,6 +126,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,
@@ -174,6 +175,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,
@@ -217,6 +219,7 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
@@ -239,6 +242,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
@@ -259,6 +263,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
@@ -284,12 +289,98 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
     });
     expect((await anchorState("mb_sperr")).attempted).toBeNull();
+  });
+});
+
+describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → graceful state)", () => {
+  /** A Wednesday noon — well outside the Friday-refresh window, so only the flags decide. */
+  const NON_FRIDAY = new Date("2026-07-22T12:00:00Z");
+
+  it("flag OFF ⇒ a FULL free-rung miss is STAMPED (backs off) and reports apifyEnabled:false", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+
+    // Out of Apify budget. A row with no MBID (ListenBrainz never runs) that carries an ISRC (Deezer
+    // recovery skipped) is a clean full miss with no anchor — and no Apify rung is coming to stamp it.
+    await setAnchorApifyEnabled(false);
+    await seedCatalogue({ isrc: "ROWISRC00001", mbid: null, trackId: "mb_apify_off" });
+
+    const result = await resolveAnchorFree("mb_apify_off", NON_FRIDAY);
+
+    expect(result).toEqual({
+      anchored: false,
+      apifyEnabled: false,
+      isrcRecoveredByDeezer: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
+    const state = await anchorState("mb_apify_off");
+    expect(state.uri).toBeNull();
+    // THE SLICE-3 GUARANTEE: with Apify off, the free rung backs the exhausted row off itself, so it
+    // enters the 14-day re-ask backoff instead of recirculating at the head of the worklist forever.
+    expect(state.attempted).not.toBeNull();
+  });
+
+  it("flag ON (default) ⇒ the SAME full miss is NOT stamped and reports apifyEnabled:true (unchanged)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+
+    // Apify has budget (the steady state). The identical full miss must behave EXACTLY as before slice 3:
+    // it leaves the row un-stamped so the metered Apify fallback keeps its turn on it.
+    await setAnchorApifyEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC00001", mbid: null, trackId: "mb_apify_on" });
+
+    const result = await resolveAnchorFree("mb_apify_on", NON_FRIDAY);
+
+    expect(result).toEqual({
+      anchored: false,
+      apifyEnabled: true,
+      isrcRecoveredByDeezer: false,
+      source: null,
+      spotifySearchDone: false,
+      verifiedBy: null,
+    });
+    // Byte-for-byte the pre-slice-3 behaviour: a free-rung miss does NOT stamp the re-ask backoff.
+    expect((await anchorState("mb_apify_on")).attempted).toBeNull();
+  });
+
+  it("flag OFF but a ListenBrainz HIT is never re-stamped (a hit already wrote the anchor + attempt)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorApifyEnabled } = await import("./anchor-apify");
+
+    // Apify off, but this row ANCHORS via ListenBrainz — the stamp comes from the hit's own write, not
+    // the slice-3 back-off. The flag must not double-stamp or otherwise disturb the hit path.
+    await setAnchorApifyEnabled(false);
+    await seedCatalogue({ isrc: "gbcjy1300173", mbid: "mbid-hit", trackId: "mb_apify_off_hit" });
+    lookupSpotifyIdsByMbid.mockResolvedValue({
+      artistName: "Etherwood",
+      recordingMbid: "mbid-hit",
+      spotifyTrackIds: ["lbAnchor001"],
+      trackName: "Weightless",
+    });
+    fetchTrackMetadata.mockResolvedValue(metadata());
+
+    const result = await resolveAnchorFree("mb_apify_off_hit", NON_FRIDAY);
+
+    expect(result).toEqual({
+      anchored: true,
+      apifyEnabled: false,
+      isrcRecoveredByDeezer: false,
+      source: "listenbrainz",
+      spotifySearchDone: false,
+      verifiedBy: "isrc",
+    });
+    const state = await anchorState("mb_apify_off_hit");
+    expect(text(state.uri)).toBe("spotify:track:lbAnchor001");
+    expect(state.attempted).not.toBeNull();
   });
 });
 
@@ -331,6 +422,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: true,
       source: "listenbrainz",
       spotifySearchDone: false,
@@ -364,6 +456,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
@@ -429,6 +522,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,

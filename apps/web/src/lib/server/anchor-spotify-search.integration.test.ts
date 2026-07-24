@@ -148,6 +148,7 @@ describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: false,
@@ -205,6 +206,7 @@ describe("resolveAnchorFree — the Spotify ISRC rung (flag on, outside the wind
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: "spotify-isrc",
       spotifySearchDone: true,
@@ -252,6 +254,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: "spotify-search",
       spotifySearchDone: true,
@@ -306,6 +309,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
 
     expect(result).toEqual({
       anchored: false,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: null,
       spotifySearchDone: true,
@@ -339,6 +343,7 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
 
     expect(result).toEqual({
       anchored: true,
+      apifyEnabled: true,
       isrcRecoveredByDeezer: false,
       source: "listenbrainz",
       spotifySearchDone: false,
