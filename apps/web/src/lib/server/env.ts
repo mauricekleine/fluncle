@@ -209,6 +209,15 @@ const envKeys = [
   // (the shared key above); without it the route answers 503, since a chat has no cheaper
   // degraded fallback the way search degrades to full text.
   "OPENROUTER_CHAT_MODEL",
+  // The `sonar` vector sidecar (apps/sonar, lib/server/sonar.ts) — the in-memory exact
+  // nearest-neighbour engine the vector surfaces (sonic search, sounds-like-these-artists,
+  // /log neighbours) route to behind their dark flags. SONAR_BASE_URL is the sidecar's
+  // origin (non-secret host, e.g. `https://<host>`); SONAR_SECRET is the shared secret sent
+  // as the `x-sonar-secret` header (a secret). BOTH read via readOptionalEnv, so the whole
+  // client is a clean NO-OP until they are set: an unset key ⇒ searchSonar returns null ⇒
+  // every surface falls back to its existing Turso vector scan, exactly like today.
+  "SONAR_BASE_URL",
+  "SONAR_SECRET",
 ] as const;
 
 export type EnvKey = (typeof envKeys)[number];

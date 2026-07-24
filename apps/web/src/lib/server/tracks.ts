@@ -19,6 +19,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { logEvent } from "./log";
+import { isSonarLogEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { isLogId } from "../log-id";
 import { dedupeByRecordingIdentity } from "./track-match";
 import {
@@ -1504,6 +1505,24 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
     return [];
   }
 
+  // THE SONAR ROUTE (dark, DEFAULT OFF). "More like this" is a GLOBAL nearest-neighbour question over
+  // certified findings, so sonar scans its `tracks` index with `certified: true` (certified == a
+  // findings row exists == `findings.log_id is not null`, the exact set the Turso inner join below
+  // ranks) and the target excluded. Falls through to the exact Turso scan when off/unprovisioned/down.
+  if (await isSonarLogEnabled()) {
+    const matches = await searchSonar({
+      excludeIds: [targetRow.track_id],
+      filter: { certified: true },
+      index: "tracks",
+      probes: [target],
+      topK: limit,
+    });
+
+    if (matches && matches.length > 0) {
+      return hydrateSimilarFindings(matches);
+    }
+  }
+
   // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that
   // does not reproduce locally (embedding.ts, `toVectorProbe`).
   const probe = toVectorProbe(target);
@@ -1527,6 +1546,28 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   });
 
   return typedRows<TrackRow>(rankedResult.rows).map((row) => toTrackListItem(row));
+}
+
+/**
+ * Hydrate sonar's ranked finding ids into full {@link TrackListItem}s IN SONAR'S ORDER — one flat
+ * `where track_id in (…)` read over `FINDINGS_FROM` (no vector math), reusing the shared
+ * `TRACK_SELECT`/{@link toTrackListItem} so the DTO matches the Turso path exactly. `FINDINGS_FROM`
+ * is an INNER join, so it returns only certified rows — the same set sonar's `certified: true`
+ * pre-filter selects. An id that no longer hydrates (a delete since sonar's last refresh) is dropped.
+ */
+async function hydrateSimilarFindings(matches: SonarMatch[]): Promise<TrackListItem[]> {
+  const ids = matches.map((match) => match.id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const db = await getDb();
+  const result = await db.execute({
+    args: ids,
+    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM} where tracks.track_id in (${placeholders})`,
+  });
+  const byId = new Map(
+    typedRows<TrackRow>(result.rows).map((row) => [row.track_id, toTrackListItem(row)]),
+  );
+
+  return ids.map((id) => byId.get(id)).filter((item): item is TrackListItem => item !== undefined);
 }
 
 // ── `/mix`: the catalogue-aware rail ─────────────────────────────────────────
