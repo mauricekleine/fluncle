@@ -1,0 +1,67 @@
+# `sonar` is a standalone Rust crate (its own `[workspace]` so cargo never walks
+# up into the Bun/Turborepo root, which has no Cargo.toml). Same "non-TS app in
+# apps/" pattern as apps/ssh and apps/dns (each carries its own go.mod).
+[workspace]
+
+[package]
+name = "sonar"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "In-memory exact vector-similarity engine for Fluncle's live discovery surfaces"
+license = "MIT"
+
+[lib]
+name = "sonar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sonar"
+path = "src/main.rs"
+
+# Off the default `cargo test` run (a bin's main is not executed by the test
+# harness). Run it explicitly: `cargo run --release --bin bench`.
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[dependencies]
+# HTTP server. axum 0.8 + axum-server for the optional rustls TLS terminator.
+# `tls-rustls-no-provider` deliberately does NOT pull aws-lc-rs (a C dep that
+# would complicate the musl static build) — we bring the pure-Rust `ring`
+# provider ourselves (see rustls dep below + install_default in main.rs).
+axum = "0.8"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+  "logging",
+] }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Remote (read-only) Turso reads over HTTP. `tls` pulls hyper-rustls backed by
+# `ring` — no OpenSSL, no aws-lc-rs. (The lone `openssl-probe` crate in the tree
+# is a pure-Rust cert-path finder from rustls-native-certs; it links no OpenSSL
+# and does not affect the musl static build — see README "No OpenSSL / no C".)
+libsql = { version = "0.9", default-features = false, features = ["remote", "tls"] }
+
+rayon = "1" # data-parallel single-pass scan kernel
+arc-swap = "1" # lock-free atomic hot-swap of the in-memory index snapshot
+subtle = "2" # constant-time secret compare
+
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] } # ServiceExt::oneshot for the in-process API test
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
