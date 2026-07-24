@@ -41,3 +41,12 @@ export async function setSetting(key: string, value: string): Promise<void> {
           on conflict(key) do update set value = ?`,
   });
 }
+
+/** Remove a global flag from the `settings` KV — a no-op when the key is already unset. */
+export async function deleteSetting(key: string): Promise<void> {
+  const db = await getDb();
+  await db.execute({
+    args: [key],
+    sql: `delete from settings where key = ?`,
+  });
+}
