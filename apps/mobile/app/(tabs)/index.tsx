@@ -14,6 +14,7 @@ import { type TrackListItem } from "@fluncle/contracts";
 import { flattenFeed, useFindingsFeed } from "@/api/hooks";
 import { FeedCard, NATIVE_TAB_BAR_HEIGHT } from "@/components/feed-card";
 import { feedCopy, resolveFeedState } from "@/lib/feed-state";
+import { hasRender } from "@/lib/media";
 import { color, font, radius } from "@/theme/tokens";
 
 const idOf = (f: TrackListItem) => f.logId ?? f.trackId;
@@ -32,7 +33,14 @@ type FeedList = {
 export default function FeedScreen() {
   const { data, fetchNextPage, hasNextPage, isError, isFetchingNextPage, isPending, refetch } =
     useFindingsFeed();
-  const findings = flattenFeed(data?.pages);
+  // FEED-ONLY, by operator ruling (2026-07-24): the full-screen Feed shows only findings
+  // with a Fluncle-rendered (first-party) video. An un-rendered finding would fall to the
+  // album-art cover placeholder, which is off-brand and raises third-party-artwork /
+  // copyright questions in this surface. The Archive tab (archive.tsx) reads the SAME
+  // `flattenFeed` and stays the COMPLETE browse list — the filter lives here, at the Feed
+  // consumer, not in `flattenFeed`. Filter rate is ~1% (nearly every finding is rendered),
+  // so the pager's next-page fetch keys off `hasNextPage` (below), never the filtered count.
+  const findings = flattenFeed(data?.pages).filter(hasRender);
   const state = resolveFeedState({ count: findings.length, isError, isPending });
 
   if (state === "loading") {

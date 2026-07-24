@@ -13,7 +13,7 @@
 import { type TrackListItem } from "@fluncle/contracts";
 
 import { API_BASE, FOUND_BASE } from "@/config";
-import { resolveCardMedia } from "@/lib/media";
+import { hasRender, resolveCardMedia } from "@/lib/media";
 
 // A tiny strict-equality assertion. The mobile package is an Expo (no-node) tsconfig
 // without `@types/node`, so `node:assert` doesn't typecheck here; this keeps the
@@ -229,6 +229,63 @@ function finding(overrides: Partial<TrackListItem>): TrackListItem {
   }
 }
 
+// 8. `hasRender` is EXACTLY the video-rung predicate, and it agrees with
+//    `resolveCardMedia().kind === "video"` on every shape. This is the guard the Feed
+//    filters on (app/(tabs)/index.tsx), so it must never diverge from the ladder.
+{
+  const rendered = finding({ logId: "LOG123", videoSquaredAt: "2026-06-21T10:00:00.000Z" });
+  const legacy = finding({ logId: "LOG123", videoUrl: `${FOUND_BASE}/LOG123/footage.mp4` });
+  const squaredNoLog = finding({ videoSquaredAt: "2026-06-21T10:00:00.000Z" });
+  const bare = finding({ albumImageUrl: "https://i.scdn.co/image/cover" });
+
+  assertEqual(hasRender(rendered), true, "logId + videoSquaredAt → hasRender");
+  assertEqual(hasRender(legacy), false, "legacy videoUrl without squared master → not rendered");
+  assertEqual(hasRender(squaredNoLog), false, "no logId → not rendered even when squared");
+  assertEqual(hasRender(bare), false, "no render fields → not rendered");
+
+  // hasRender ⇔ the video rung, on each shape.
+  for (const f of [rendered, legacy, squaredNoLog, bare]) {
+    assertEqual(
+      hasRender(f),
+      resolveCardMedia(f).kind === "video",
+      "hasRender agrees with the video rung",
+    );
+  }
+}
+
+// 9. THE FEED FILTER (operator ruling): filtering a mixed batch by `hasRender` — exactly
+//    what app/(tabs)/index.tsx does over the flattened feed — keeps only the first-party
+//    renders and drops every cover-placeholder (un-rendered) finding.
+{
+  const rendered = finding({ logId: "LOGA", videoSquaredAt: "2026-06-21T10:00:00.000Z" });
+  const alsoRendered = finding({
+    logId: "LOGB",
+    trackId: "TRACKB",
+    videoSquaredAt: "2026-06-22T10:00:00.000Z",
+  });
+  const coverOnly = finding({
+    albumImageUrl: "https://i.scdn.co/image/cover",
+    logId: "LOGC",
+    trackId: "TRACKC",
+  });
+  const legacyCover = finding({
+    logId: "LOGD",
+    trackId: "TRACKD",
+    videoUrl: `${FOUND_BASE}/LOGD/footage.mp4`,
+  });
+
+  const feed = [rendered, coverOnly, alsoRendered, legacyCover].filter(hasRender);
+
+  assertEqual(feed.length, 2, "only the two rendered findings survive the Feed filter");
+  assertEqual(feed[0]?.logId, "LOGA", "first survivor is the first render, order preserved");
+  assertEqual(feed[1]?.logId, "LOGB", "second survivor is the second render");
+  assertEqual(
+    feed.every((f) => resolveCardMedia(f).kind === "video"),
+    true,
+    "every Feed card is a first-party video, never a cover placeholder",
+  );
+}
+
 console.log(
-  "✓ resolveCardMedia: squared → muted video (raw master) + preview bed, legacy → cover, preview proxy keyed by logId∕trackId or undefined",
+  "✓ resolveCardMedia: squared → muted video (raw master) + preview bed, legacy → cover, preview proxy keyed by logId∕trackId or undefined; hasRender gates the Feed to first-party renders",
 );
