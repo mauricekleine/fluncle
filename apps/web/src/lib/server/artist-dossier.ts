@@ -36,6 +36,7 @@ import {
   toVectorProbe,
 } from "./embedding";
 import { bestArtistAvatarUrl } from "../media";
+import { isSonarArtistsEnabled, searchSonar, type SonarMatch } from "./sonar";
 
 /** How many "same sector" neighbours the artist page shows (top-N, self excluded). */
 export const ARTIST_NEIGHBOURS_LIMIT = 4;
@@ -728,6 +729,24 @@ export async function listSimilarArtistNeighbours(
   }
 
   const selectedIds = selected.map((row) => row.artist_id);
+
+  // THE SONAR ROUTE (dark, DEFAULT OFF). PRESERVES THE AVERAGED-PROBE SEMANTIC: the SAME single mean
+  // probe is sent to sonar's `centroids` index (not multi-probe — that would be a ranking change, a
+  // separate operator-decided slice), so the flag flip is a pure latency win. Falls through to the
+  // exact Turso scan below when the flag is off, sonar is unprovisioned, or it does not answer.
+  if (await isSonarArtistsEnabled()) {
+    const matches = await searchSonar({
+      excludeIds: selectedIds,
+      index: "centroids",
+      probes: [probe],
+      topK: Math.max(0, limit),
+    });
+
+    if (matches && matches.length > 0) {
+      return hydrateArtistNeighbours(matches);
+    }
+  }
+
   const idPlaceholders = selectedIds.map(() => "?").join(", ");
   // Bind order follows the `?` order in the SQL: the probe BLOB (in the select list) leads, then the
   // excluded ids, then the limit.
@@ -744,7 +763,13 @@ export async function listSimilarArtistNeighbours(
           limit ?`,
   });
 
-  return typedRows<SimilarArtistRow>(result.rows).map((row) => ({
+  return typedRows<SimilarArtistRow>(result.rows).map(toSimilarArtistNeighbour);
+}
+
+/** Map an artist row to the neighbour DTO — the one projection both the Turso scan and the sonar
+ *  hydrator use, so the two paths return byte-identical shapes. */
+function toSimilarArtistNeighbour(row: SimilarArtistRow): SimilarArtistNeighbour {
+  return {
     artistId: row.artist_id,
     imageUrl: bestArtistAvatarUrl({
       imageKey: row.image_key,
@@ -754,5 +779,31 @@ export async function listSimilarArtistNeighbours(
     }),
     name: row.name,
     slug: row.slug,
-  }));
+  };
+}
+
+/**
+ * Hydrate sonar's ranked artist ids into full {@link SimilarArtistNeighbour}s IN SONAR'S ORDER — one
+ * flat `where id in (…)` read of `artists` (no vector math), reusing {@link toSimilarArtistNeighbour}.
+ * sonar only ever returns ids that are IN the centroids index, so every one has a centroid by
+ * construction; an id that no longer hydrates (a delete since sonar's last refresh) is dropped.
+ */
+async function hydrateArtistNeighbours(matches: SonarMatch[]): Promise<SimilarArtistNeighbour[]> {
+  const ids = matches.map((match) => match.id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const db = await getDb();
+  const result = await db.execute({
+    args: ids,
+    sql: `select a.id as artist_id, a.slug as slug, a.name as name, a.image_url as image_url,
+                 a.image_key as image_key, a.image_state as image_state,
+                 a.image_updated_at as image_updated_at
+          from artists a
+          where a.id in (${placeholders})`,
+  });
+  const byId = new Map(typedRows<SimilarArtistRow>(result.rows).map((row) => [row.artist_id, row]));
+
+  return ids
+    .map((id) => byId.get(id))
+    .filter((row): row is SimilarArtistRow => row !== undefined)
+    .map(toSimilarArtistNeighbour);
 }

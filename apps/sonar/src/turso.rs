@@ -12,10 +12,17 @@ use crate::decode::decode_le_f32;
 use crate::index::{Entry, Index, TrackMeta};
 
 /// One row per embedded track. `anchored = spotify_uri IS NOT NULL`,
-/// `certified = findings row exists`.
+/// `certified = a findings row with a Log ID exists`.
+///
+/// The findings join REQUIRES `f.log_id IS NOT NULL`, not merely a findings row.
+/// `findings.log_id` is nullable (a straggler awaiting its one-time coordinate
+/// backfill), and the app-wide meaning of "certified" — the certification rail,
+/// "Fluncle speaks about it" — is the Log ID, not the row. The `/log` neighbours
+/// surface filters `findings.log_id IS NOT NULL`, so `certified` here must match
+/// that exactly or the flag flip could surface an un-coordinated finding on `/log`.
 const TRACKS_SQL: &str =
     "select t.track_id, t.embedding_blob, t.key, t.bpm, t.spotify_uri, f.track_id as finding_id \
-     from tracks t left join findings f on f.track_id = t.track_id \
+     from tracks t left join findings f on f.track_id = t.track_id and f.log_id is not null \
      where t.embedding_blob is not null";
 
 /// One row per artist centroid (no metadata for the pilot).

@@ -69,6 +69,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { HUB_INCLUSION_HAVING, LABEL_INDEX_MIN_TRACKS } from "./labels";
 import { translateQuery } from "./search-llm";
+import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 
 /** How many rows a search returns when the caller does not say. */
 const DEFAULT_LIMIT = 12;
@@ -829,12 +830,33 @@ async function resolveAnchor(
  * — no certified-first break, because a cosine distance is a property of two vectors and is honest
  * across both registers (unlike corpus-relative bm25); the Unlit Rule keeps them readable apart.
  */
-async function rankTracksByVector(
+export async function rankTracksByVector(
   probe: number[],
   columnFilters: SearchFilters,
   excludeTrackId: string | undefined,
   limit: number,
 ): Promise<SearchHit[]> {
+  // THE SONAR ROUTE (dark, DEFAULT OFF). When the sonic flag is on AND the column filters are ones
+  // sonar can express faithfully AND sonar answers, take the in-memory scan and hydrate its ids;
+  // otherwise fall through to the exact Turso scan below, byte-for-byte today's behaviour.
+  if (await isSonarSonicEnabled()) {
+    const filter = sonarTrackFilter(columnFilters);
+
+    if (filter) {
+      const matches = await searchSonar({
+        excludeIds: excludeTrackId ? [excludeTrackId] : [],
+        filter,
+        index: "tracks",
+        probes: [probe],
+        topK: limit,
+      });
+
+      if (matches && matches.length > 0) {
+        return hydrateTrackHits(matches);
+      }
+    }
+  }
+
   const clauses = compileFilters(columnFilters);
   const where = [
     ...clauses.map((clause) => clause.sql),
@@ -864,6 +886,63 @@ async function rankTracksByVector(
   );
 
   return typedRows<SearchRow>(result.rows).map(toHit);
+}
+
+/**
+ * Map the sonic tier's `columnFilters` to sonar's metadata pre-filter, or `null` when they are NOT
+ * faithfully expressible — the signal to skip sonar and fall back to the exact Turso scan, so the
+ * flag flip stays a pure latency win and never a ranking change.
+ *
+ * sonar can express ONLY inclusive BPM bounds with identical semantics. `key` is deliberately NOT
+ * mapped: the Turso path matches `lower(tracks.key)` against a spread of lower-case spellings
+ * ({@link keySpellings}), while sonar compares the raw `tracks.key` string EXACTLY (case-sensitive),
+ * so the two disagree — a key filter must fall back. `artist`/`album`/`label`/`year`/`text` have no
+ * sonar-filter equivalent at all, so any of them present also falls back (hydration cannot re-apply
+ * them without breaking sonar's top-k, so routing to sonar would silently drop the filter).
+ */
+function sonarTrackFilter(columnFilters: SearchFilters): SonarFilter | null {
+  if (
+    columnFilters.artist !== undefined ||
+    columnFilters.album !== undefined ||
+    columnFilters.label !== undefined ||
+    columnFilters.key !== undefined ||
+    columnFilters.yearMin !== undefined ||
+    columnFilters.yearMax !== undefined ||
+    columnFilters.text !== undefined
+  ) {
+    return null;
+  }
+
+  const filter: SonarFilter = {};
+
+  if (typeof columnFilters.bpmMin === "number") {
+    filter.bpm_min = columnFilters.bpmMin;
+  }
+
+  if (typeof columnFilters.bpmMax === "number") {
+    filter.bpm_max = columnFilters.bpmMax;
+  }
+
+  return filter;
+}
+
+/**
+ * Hydrate sonar's ranked ids into full {@link SearchHit}s IN SONAR'S ORDER — one flat `where
+ * track_id in (…)` read (no vector math), reusing the shared `SEARCH_SELECT`/{@link toHit} so the
+ * DTO is identical to the Turso path. An id sonar returned but that no longer hydrates (a delete
+ * between sonar's last refresh and now) is dropped, never faked.
+ */
+async function hydrateTrackHits(matches: SonarMatch[]): Promise<SearchHit[]> {
+  const ids = matches.map((match) => match.id);
+  const placeholders = ids.map(() => "?").join(", ");
+  const db = await getDb();
+  const result = await db.execute({
+    args: ids,
+    sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.track_id in (${placeholders})`,
+  });
+  const byId = new Map(typedRows<SearchRow>(result.rows).map((row) => [row.track_id, toHit(row)]));
+
+  return ids.map((id) => byId.get(id)).filter((hit): hit is SearchHit => hit !== undefined);
 }
 
 /**
