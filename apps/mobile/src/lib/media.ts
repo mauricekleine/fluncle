@@ -85,6 +85,20 @@ export type CardMedia =
     }
   | { kind: "cover"; coverUrl: string | undefined; previewUrl: string | undefined };
 
+/**
+ * Does this finding carry a Fluncle-rendered (first-party) video? EXACTLY the condition
+ * that makes {@link resolveCardMedia} return the `"video"` rung — a `logId` plus a squared
+ * master — expressed once so the Feed's render-required filter (app/(tabs)/index.tsx) and
+ * this module's own ladder can't drift apart. A finding without both resolves to the
+ * album-art `"cover"` rung, which the full-screen Feed must not show (operator ruling:
+ * off-brand + third-party artwork). A type guard, so a caller narrows both fields.
+ */
+export function hasRender(
+  f: TrackListItem,
+): f is TrackListItem & { logId: string; videoSquaredAt: string } {
+  return Boolean(f.logId && f.videoSquaredAt);
+}
+
 export function resolveCardMedia(f: TrackListItem): CardMedia {
   const id = f.logId ?? f.trackId;
   // The one audio path for BOTH kinds: the 30s official preview, relayed by the proxy.
@@ -101,7 +115,7 @@ export function resolveCardMedia(f: TrackListItem): CardMedia {
   // nothing (the visual stays; feed-card holds the sound control until the bed loads).
   const previewUrl =
     f.title.trim().length > 0 && f.artists.length > 0 ? previewProxy(id) : undefined;
-  if (f.logId && f.videoSquaredAt) {
+  if (hasRender(f)) {
     return {
       hasAudio: false,
       kind: "video",
