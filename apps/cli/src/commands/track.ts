@@ -56,6 +56,7 @@ export type TrackUpdateOptions = {
   embedding?: number[];
   features?: string;
   galaxyId?: string;
+  isrc?: string;
   key?: string;
   keyConfidence?: number;
   keySource?: string;
@@ -74,6 +75,7 @@ type TrackUpdateBody = {
   enrichmentStatus?: string;
   features?: string;
   galaxyId?: string;
+  isrc?: string;
   key?: string;
   keyConfidence?: number;
   keySource?: string;
@@ -538,6 +540,12 @@ export async function trackUpdateCommand(
   }
   if (options.galaxyId !== undefined) {
     body.galaxyId = options.galaxyId;
+  }
+  // The recording's ISRC — an operator identity correction (OPERATOR_ONLY on the server).
+  // Recovering a missing ISRC lets the public preview waterfall resolve the finding's official
+  // 30s clip (Deezer/Apple by ISRC), so an ISRC-less finding stops playing silent in the app.
+  if (options.isrc !== undefined) {
+    body.isrc = options.isrc;
   }
   if (options.note !== undefined) {
     body.note = options.note;

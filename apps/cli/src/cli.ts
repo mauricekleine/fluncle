@@ -129,6 +129,7 @@ type TrackUpdateOptions = {
   embeddingFile?: string;
   features?: string;
   galaxyId?: string;
+  isrc?: string;
   json: boolean;
   key?: string;
   keyConfidence?: string;
@@ -932,6 +933,7 @@ function addAdminCommands(program: Command): void {
     .option("--embedding-file <file>", "Read the MuQ embedding JSON array from a file")
     .option("--features <json>", "Audio feature JSON")
     .option("--galaxy-id <id>", "Sonic galaxy assignment (empty string clears it)")
+    .option("--isrc <isrc>", "The recording's ISRC (operator identity correction)")
     .option("--json", "Print JSON", false)
     .option("--key <key>", "Musical key")
     .option("--key-confidence <number>", "Analyzer confidence in the key (0..1)")
@@ -5036,6 +5038,7 @@ async function runTrackUpdate(
     embedding,
     features: options.features,
     galaxyId: options.galaxyId,
+    isrc: options.isrc,
     key: options.key,
     keyConfidence,
     keySource: options.keySource,
@@ -7179,6 +7182,7 @@ const stringOptions = new Set([
   "--gb",
   "--has-key",
   "--intent",
+  "--isrc",
   "--key",
   "--key-confidence",
   "--key-source",
