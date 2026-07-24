@@ -991,8 +991,7 @@ async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
                  ct.isrc as isrc,
                  (ct.embedding_blob is not null) as has_vector
           from tracks ct
-          left join findings cf on cf.track_id = ct.track_id
-          where cf.track_id is null
+          where ct.is_catalogue = 1
             and ct.source_audio_key is not null
             and ct.dismissed_at is null
             and (ct.capture_status is null
@@ -1162,8 +1161,7 @@ export async function rankCatalogue(
                  ct.source_audio_rejected as source_audio_rejected,
                  (ct.embedding_blob is not null) as has_vector
           from tracks ct
-          left join findings cf on cf.track_id = ct.track_id
-          where cf.track_id is null
+          where ct.is_catalogue = 1
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
@@ -1631,8 +1629,7 @@ async function countStale(corpus: string): Promise<number> {
     args: [corpus],
     sql: `select count(*) as n
           from tracks ct
-          left join findings cf on cf.track_id = ct.track_id
-          where cf.track_id is null
+          where ct.is_catalogue = 1
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
@@ -1846,8 +1843,7 @@ export async function computeCatalogueCounts(): Promise<CatalogueCounts> {
                       and ct.catalogue_rank_corpus is null then 1 else 0 end) as awaiting_rank,
             sum(case when ct.dismissed_at is not null then 1 else 0 end) as dismissed
           from tracks ct
-          left join findings cf on cf.track_id = ct.track_id
-          where cf.track_id is null`,
+          where ct.is_catalogue = 1`,
   });
   const row = typedRows<{
     awaiting_capture: number | null;

@@ -224,6 +224,10 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           deezer.previewUrl ?? null,
           discogs.releaseId ?? null,
           discogs.masterId ?? null,
+          // is_catalogue = 0: born CERTIFIED. The certification half is minted in the SAME batch
+          // (findingInsertStatement below), so the maintained invariant (a track with a findings
+          // row is is_catalogue = 0) holds from the very first write, never a moment as `1`.
+          0,
         ],
         // The RECORDING half — everything true of the track itself.
         sql: `insert into tracks (
@@ -241,8 +245,9 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             popularity,
             preview_url,
             in_release_id,
-            in_master_id
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            in_master_id,
+            is_catalogue
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       },
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.
@@ -552,7 +557,17 @@ export async function certifyExistingTrack(
     logId = row.finding_log_id;
   } else {
     logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc, trackId });
-    await db.execute(findingInsertStatement({ logId, note: options.note, nowIso, trackId }));
+    // Mint the certification half AND flip the catalogue discriminator in ONE atomic write: the
+    // track now HAS a findings row, so `is_catalogue` must be 0. Batched so the pair can never
+    // half-apply — the invariant is never briefly violated. This is the ONLY 1 → 0 transition on an
+    // EXISTING row; `publishTrack` instead inserts the track already certified (is_catalogue = 0).
+    await db.batch(
+      [
+        findingInsertStatement({ logId, note: options.note, nowIso, trackId }),
+        { args: [trackId], sql: `update tracks set is_catalogue = 0 where track_id = ?` },
+      ],
+      "write",
+    );
 
     // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
     // hangs off (its label + album) and stamp its pointers. Purely additive; the label backfill

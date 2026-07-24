@@ -209,8 +209,9 @@ export async function listFreshReleases(
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,
     }),
-    // The unlit half: the anti-join's exact complement (a `tracks` row with no `findings` row),
-    // released in the window. No album COVER and no coordinate — nothing that would let it read as a
+    // The unlit half: the catalogue rows (a `tracks` row with no `findings` row — the maintained
+    // `is_catalogue = 1`, materializing the anti-join off `tracks_is_catalogue_idx`) released in the
+    // window. No album COVER and no coordinate — nothing that would let it read as a
     // finding (DESIGN.md's Unlit Rule). The lead artist's avatar rides along, but the UI dims it into
     // the unlit register (the `hub-grid` precedent), so it identifies WHO without lighting up.
     db.execute({
@@ -218,9 +219,8 @@ export async function listFreshReleases(
       sql: `select tracks.track_id, tracks.title, tracks.artists_json,
                    tracks.spotify_url, tracks.release_date, ${LEAD_ARTIST_SELECT}
             from tracks
-            left join findings on findings.track_id = tracks.track_id
             ${LEAD_ARTIST_JOIN}
-            where findings.track_id is null
+            where tracks.is_catalogue = 1
               and tracks.release_date >= ? and tracks.release_date <= ?
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,

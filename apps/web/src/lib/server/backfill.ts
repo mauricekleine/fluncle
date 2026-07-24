@@ -1007,8 +1007,7 @@ async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCand
                  t.backfill_apple_music_attempted_at as attempted_at,
                  t.backfill_apple_music_failures as failures
           from tracks t
-          left join findings f on f.track_id = t.track_id
-          where f.track_id is null
+          where t.is_catalogue = 1
             and t.apple_music_url is null
             and t.isrc is not null and trim(t.isrc) <> ''
             and t.backfill_apple_music_done_at is null

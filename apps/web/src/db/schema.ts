@@ -304,6 +304,24 @@ export const tracks = sqliteTable(
     // Both null until a confident match writes them on add.
     inMasterId: integer("in_master_id"),
     inReleaseId: integer("in_release_id"),
+    // THE CATALOGUE DISCRIMINATOR, MATERIALIZED (docs/db-scale-backlog Wave 2 keystone 1). A
+    // maintained mirror of the tracks/findings split: `is_catalogue = 1` iff this track has NO
+    // `findings` row (a raw catalogue track), `0` iff it HAS one (a certified finding). It carries
+    // the single most-repeated read shape in the app — `tracks LEFT JOIN findings WHERE
+    // findings.track_id IS NULL` — as a stored, indexable column, so the catalogue anti-join stops
+    // being a full left-join scan of the growing `tracks` table and becomes a `where is_catalogue = 1`
+    // seek on `tracks_is_catalogue_idx` (proven 5.7× the anti-join at 150k hosted).
+    //
+    // THE INVARIANT, AND WHY IT CANNOT DRIFT. A track is BORN catalogue — `notNull().default(true)`,
+    // so every crawler/label mint that never names this column lands `1` from the DDL default (and
+    // the migration backfills every pre-existing row to `1` for free). It flips `1 → 0` exactly when
+    // a `findings` row is inserted for it: `publishTrack` inserts the track already certified (`0` in
+    // its batch), and `certifyExistingTrack` flips it in the same write that mints the finding. The
+    // boundary is INSERT-only server-side — there is NO `delete from findings` anywhere in
+    // `apps/web/src/lib/server/**` — so the flag only ever moves one way (1 → 0), never back, which is
+    // what makes a maintained mirror safe. INTERNAL bookkeeping: never in a public DTO, never a
+    // lastmod bump (a `tracks` write moves no finding).
+    isCatalogue: integer("is_catalogue", { mode: "boolean" }).notNull().default(true),
     isrc: text("isrc"),
     key: text("key"),
     // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
@@ -444,6 +462,20 @@ export const tracks = sqliteTable(
   (table) => [
     index("tracks_album_id_idx").on(table.albumId),
     index("tracks_label_id_idx").on(table.labelId),
+    // THE CATALOGUE ANTI-JOIN, MATERIALIZED (docs/db-scale-backlog Wave 2 keystone 1). The single
+    // most-repeated read shape in the app — `tracks LEFT JOIN findings WHERE findings.track_id IS
+    // NULL` — used to force a full left-join scan of the growing `tracks` table with a per-row
+    // findings probe. With `is_catalogue` maintained (see the column comment), that anti-join becomes
+    // `where is_catalogue = 1`, and this PARTIAL index over exactly the catalogue slice turns it into
+    // an index seek (proven 5.7× the anti-join at 150k hosted). PARTIAL `where is_catalogue = 1` — not
+    // a full two-value index — because every consumer asks the catalogue question (`= 1`), never the
+    // certified one; the certified rows are the minority and stay out of the index. Plain ASC (a
+    // `desc()` index would poison the drizzle snapshot into rebuilding every index on the next
+    // migration — the ratified trap), and a plain btree, never the vector `libsql_vector_idx` that
+    // wedges hosted Turso, so it builds like `tracks_isrc_idx` beside it.
+    index("tracks_is_catalogue_idx")
+      .on(table.isCatalogue)
+      .where(sql`${table.isCatalogue} = 1`),
     // The `/fresh` window read ("what just came out"): `release_date BETWEEN <30d ago> AND
     // <today>` ordered `release_date DESC`. Over a table built to grow to five figures, an
     // unindexed range scan is exactly the full scan of a growing table AGENTS.md forbids, so

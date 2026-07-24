@@ -113,6 +113,14 @@ export async function seedTrack(client: Client, track: SeedTrack): Promise<void>
       (track_id, log_id, added_at, added_to_spotify, posted_to_telegram)
       values (?, ?, ?, ?, ?)`,
   });
+  // A certified track HAS a findings row, so the maintained catalogue flag is 0 — mirror the write
+  // sites (publishTrack / certifyExistingTrack) so every read that filters on `is_catalogue` sees a
+  // finding as NON-catalogue, exactly as production does. seedCatalogueTrack leaves it at the DDL
+  // default (1); this is the certified-track flip.
+  await client.execute({
+    args: [track.trackId],
+    sql: `update tracks set is_catalogue = 0 where track_id = ?`,
+  });
 }
 
 /**
