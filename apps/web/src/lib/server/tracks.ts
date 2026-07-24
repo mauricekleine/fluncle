@@ -259,7 +259,7 @@ function deriveTrackSelect(omittedColumns: Set<string>, omittedAliases: Set<stri
     .join(",");
 }
 
-const LEAN_TRACK_SELECT = deriveTrackSelect(
+export const LEAN_TRACK_SELECT = deriveTrackSelect(
   LEAN_LIST_OMITTED_COLUMNS,
   LEAN_OMITTED_SUBQUERY_ALIASES,
 );

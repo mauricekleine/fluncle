@@ -859,7 +859,10 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=capture&scope=all&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
-    signal: AbortSignal.timeout(30_000),
+    // The Worker API worklist read (`list_track_work`), NOT a media download: ~10s p95 with a
+    // tail past 30s, so a 30s budget tripped a false failure alert on the slow-but-completing
+    // read. 60s clears the tail; the yt-dlp download/socket timeouts below are left untouched.
+    signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
     throw new Error(
@@ -879,7 +882,10 @@ async function patchTrack(trackId: string, update: Record<string, unknown>): Pro
       "Content-Type": "application/json",
     },
     method: "PATCH",
-    signal: AbortSignal.timeout(30_000),
+    // The Worker API record write (`update_track`), NOT a media download: the mutation can run
+    // slow-but-completing under load, so a 30s budget tripped a false failure alert. 60s clears
+    // the tail; the yt-dlp download/socket timeouts elsewhere in this file are left untouched.
+    signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
     throw new Error(
