@@ -675,17 +675,22 @@ export function compileFilters(filters: SearchFilters): Clause[] {
     clauses.push({ args: [filters.bpmMax], sql: `tracks.bpm <= ?` });
   }
 
+  // Sargable lexicographic range instead of `substr(tracks.release_date, 1, 4)` — wrapping the
+  // column defeats `tracks_release_date_idx`, a bare range rides it (docs/db-scale-backlog Wave 1
+  // #10). Correct for `YYYY`, `YYYY-MM`, and `YYYY-MM-DD` because zero-padded ISO dates sort
+  // lexicographically in chronological order. The max bound is HALF-OPEN (`< 'YYYY+1'`) so it
+  // includes every day of the max year regardless of the value's precision.
   if (typeof filters.yearMin === "number") {
     clauses.push({
       args: [String(filters.yearMin)],
-      sql: `substr(tracks.release_date, 1, 4) >= ?`,
+      sql: `tracks.release_date >= ?`,
     });
   }
 
   if (typeof filters.yearMax === "number") {
     clauses.push({
-      args: [String(filters.yearMax)],
-      sql: `substr(tracks.release_date, 1, 4) <= ?`,
+      args: [String(filters.yearMax + 1)],
+      sql: `tracks.release_date < ?`,
     });
   }
 

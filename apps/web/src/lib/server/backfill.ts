@@ -1014,7 +1014,10 @@ async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCand
             and t.backfill_apple_music_done_at is null
             and (t.backfill_apple_music_attempted_at is null
                  or t.backfill_apple_music_attempted_at < ?)
-          order by coalesce(t.capture_priority, 0) desc, t.track_id
+          -- Plain desc (no coalesce wrapper) rides tracks_capture_priority_idx and sorts NULLs last:
+          -- functionally equivalent to coalesce-as-0 for a priority worklist (NULL/0 rows are lowest
+          -- and taken last, top-priority rows unaffected). docs/db-scale-backlog Wave 1 #13.
+          order by t.capture_priority desc, t.track_id
           limit ?`,
   });
 
