@@ -178,16 +178,113 @@ type AnchorSplit = {
   withoutIsrc: number;
 };
 
+/** The seven stage counters — the funnel's stage totals in the shape the scans produce. */
+type StageScanCounts = {
+  analyzed: number;
+  anchored: number;
+  captured: number;
+  certified: number;
+  crawled: number;
+  embedded: number;
+  recEligible: number;
+};
+
+/** All three `tracks left join findings` scans folded into one row (docs/db-scale-backlog Wave 1 #5). */
+type FoldedFunnelScan = {
+  anchorBackoff: number;
+  anchorSplit: AnchorSplit;
+  stages: StageScanCounts;
+};
+
 /**
- * The drainable anchor worklist, partitioned ISRC × embedding in ONE pass. Reuses
- * `kindClause("anchor")` verbatim so the counts ARE the sweep's own worklist
- * (docs/catalogue-crawler.md § the anchor) — never a `union all` over a CTE (trap #4); four
- * conditional sums over one scan. `isrc is not null` gives the two verification paths (the persisted
- * `anchorQueueIsrc/NoIsrc`); `embedding_blob is not null` gives the ready/awaiting split (the live-only
- * refinement). Both partitions total the same whole queue by construction. `embedding_blob is not
- * null` reads the cell's null flag, not its bytes — no vector crosses the wire.
+ * The SEVEN stage `SUM(CASE)` columns — the shared select fragment so the standalone reference scan
+ * (`runStageScan`) and the folded pass (`runFoldedFunnelScan`) can only ever agree. `rec_eligible`
+ * folds in the SHARED `REC_ELIGIBLE_WHERE` (recommendations.ts): the funnel's eligibility count is,
+ * by construction, the same gate `listRecommendations` scans by. Aliased `t` = `tracks`, `f` = the
+ * LEFT-joined `findings`. Carries NO bind params (the fragments it interpolates carry none).
  */
-async function countAnchorQueueSplit(): Promise<AnchorSplit> {
+const STAGE_SCAN_SELECT = `sum(case when f.track_id is null then 1 else 0 end) as crawled,
+            sum(case when f.track_id is null and t.spotify_uri is not null then 1 else 0 end) as anchored,
+            sum(case when f.track_id is null and t.source_audio_key is not null then 1 else 0 end) as captured,
+            sum(case when f.track_id is null and t.analyzed_from = 'full' then 1 else 0 end) as analyzed,
+            sum(case when f.track_id is null and t.embedding_blob is not null then 1 else 0 end) as embedded,
+            sum(case when ${REC_ELIGIBLE_WHERE} then 1 else 0 end) as rec_eligible,
+            sum(case when f.track_id is not null then 1 else 0 end) as certified`;
+
+/**
+ * The anchor RE-ASK BENCH predicate — the exact COMPLEMENT of `kindClause("anchor")`'s window guard:
+ * the same base guards (un-anchored, measurable length, not dismissed, not a known duplicate), and
+ * attempted INSIDE the re-ask window rather than before it. A shared fragment (a `?` for the window
+ * cutoff) so the standalone bench count (`countAnchorBackoff`) and the folded scan's backoff column
+ * can only ever agree. Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`.
+ */
+const ANCHOR_BACKOFF_WHERE = `f.track_id is null
+            and t.spotify_uri is null
+            and t.duration_ms > 0
+            and t.dismissed_at is null
+            and t.duplicate_of_track_id is null
+            and t.spotify_anchor_attempted_at is not null
+            and t.spotify_anchor_attempted_at >= ?`;
+
+/** The re-ask window cutoff (the shared `ANCHOR_REASK_AFTER_DAYS` clock), bound by the bench + fold. */
+function anchorBackoffCutoff(): string {
+  return new Date(Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** Map the seven stage columns of a scan row onto `StageScanCounts`. */
+function mapStageRow(row: StageRow | undefined): StageScanCounts {
+  return {
+    analyzed: Number(row?.analyzed ?? 0),
+    anchored: Number(row?.anchored ?? 0),
+    captured: Number(row?.captured ?? 0),
+    certified: Number(row?.certified ?? 0),
+    crawled: Number(row?.crawled ?? 0),
+    embedded: Number(row?.embedded ?? 0),
+    recEligible: Number(row?.rec_eligible ?? 0),
+  };
+}
+
+/** The four raw anchor-split columns → the derived `AnchorSplit` (both partitions total the queue). */
+function anchorSplitFromRow(row: AnchorSplitRow | undefined): AnchorSplit {
+  const isrcReady = Number(row?.isrc_ready ?? 0);
+  const isrcAwaiting = Number(row?.isrc_awaiting ?? 0);
+  const noIsrcReady = Number(row?.no_isrc_ready ?? 0);
+  const noIsrcAwaiting = Number(row?.no_isrc_awaiting ?? 0);
+
+  return {
+    awaitingAudio: isrcAwaiting + noIsrcAwaiting,
+    ready: isrcReady + noIsrcReady,
+    withIsrc: isrcReady + isrcAwaiting,
+    withoutIsrc: noIsrcReady + noIsrcAwaiting,
+  };
+}
+
+/**
+ * THE STAGE SCAN, standalone — one conditional aggregate over `tracks left join findings`, no where.
+ * Kept as the pinned REFERENCE the fold-equivalence test compares against (the pattern
+ * `computeCatalogueCounts` uses for its drift guard); `gatherLiveFunnel` reads the folded pass, not
+ * this. Shares `STAGE_SCAN_SELECT` with the fold, so the two produce identical numbers by construction.
+ */
+export async function runStageScan(): Promise<StageScanCounts> {
+  const db = await getDb();
+  const result = await db.execute(`select ${STAGE_SCAN_SELECT}
+          from tracks t
+          left join findings f on f.track_id = t.track_id`);
+
+  return mapStageRow(typedRow<StageRow>(result.rows));
+}
+
+/**
+ * The drainable anchor worklist, partitioned ISRC × embedding in ONE pass — the pinned REFERENCE the
+ * fold-equivalence test compares against (`gatherLiveFunnel` reads the folded pass). Reuses
+ * `kindClause("anchor")` verbatim so the counts ARE the sweep's own worklist (docs/catalogue-crawler.md
+ * § the anchor) — never a `union all` over a CTE (trap #4); four conditional sums over one scan.
+ * `isrc is not null` gives the two verification paths (the persisted `anchorQueueIsrc/NoIsrc`);
+ * `embedding_blob is not null` gives the ready/awaiting split (the live-only refinement). Both
+ * partitions total the same whole queue by construction. `embedding_blob is not null` reads the cell's
+ * null flag, not its bytes — no vector crosses the wire.
+ */
+export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
   const anchor = kindClause("anchor");
   const db = await getDb();
   const result = await db.execute({
@@ -201,17 +298,43 @@ async function countAnchorQueueSplit(): Promise<AnchorSplit> {
           left join findings f on f.track_id = t.track_id
           where ${anchor.sql}`,
   });
-  const row = typedRow<AnchorSplitRow>(result.rows);
-  const isrcReady = Number(row?.isrc_ready ?? 0);
-  const isrcAwaiting = Number(row?.isrc_awaiting ?? 0);
-  const noIsrcReady = Number(row?.no_isrc_ready ?? 0);
-  const noIsrcAwaiting = Number(row?.no_isrc_awaiting ?? 0);
+
+  return anchorSplitFromRow(typedRow<AnchorSplitRow>(result.rows));
+}
+
+/**
+ * THE ONE PASS — the stage 7-col aggregate, the anchor-split 4-col, and the anchor-backoff count
+ * folded into a SINGLE conditional-aggregate scan of `tracks left join findings` (docs/db-scale-backlog
+ * Wave 1 #5). Each formerly-separate query's WHERE moves into its own `SUM(CASE WHEN …)` over the
+ * unfiltered superset — a conditional sum over the whole table equals `COUNT(*) … WHERE P` for any
+ * predicate P, so the numbers are identical BY CONSTRUCTION, in one scan instead of three (the fold
+ * lands on every `/admin/funnel` load AND the daily snapshot). The `?` order is: the four anchor
+ * columns (each embeds `kindClause("anchor")`'s single window bind) then the backoff cutoff.
+ * `embedding_blob is not null` reads the cell's null flag, not its bytes — no vector crosses the wire.
+ * Exported for the fold-equivalence test, which pins it to the three standalone reference queries.
+ */
+export async function runFoldedFunnelScan(): Promise<FoldedFunnelScan> {
+  const anchor = kindClause("anchor");
+  const backoffCutoff = anchorBackoffCutoff();
+  const db = await getDb();
+  const result = await db.execute({
+    args: [...anchor.args, ...anchor.args, ...anchor.args, ...anchor.args, backoffCutoff],
+    sql: `select
+            ${STAGE_SCAN_SELECT},
+            sum(case when (${anchor.sql}) and t.isrc is not null and t.embedding_blob is not null then 1 else 0 end) as isrc_ready,
+            sum(case when (${anchor.sql}) and t.isrc is not null and t.embedding_blob is null then 1 else 0 end) as isrc_awaiting,
+            sum(case when (${anchor.sql}) and t.isrc is null and t.embedding_blob is not null then 1 else 0 end) as no_isrc_ready,
+            sum(case when (${anchor.sql}) and t.isrc is null and t.embedding_blob is null then 1 else 0 end) as no_isrc_awaiting,
+            sum(case when (${ANCHOR_BACKOFF_WHERE}) then 1 else 0 end) as anchor_backoff
+          from tracks t
+          left join findings f on f.track_id = t.track_id`,
+  });
+  const row = typedRow<AnchorSplitRow & StageRow & { anchor_backoff: number | null }>(result.rows);
 
   return {
-    awaitingAudio: isrcAwaiting + noIsrcAwaiting,
-    ready: isrcReady + noIsrcReady,
-    withIsrc: isrcReady + isrcAwaiting,
-    withoutIsrc: noIsrcReady + noIsrcAwaiting,
+    anchorBackoff: Number(row?.anchor_backoff ?? 0),
+    anchorSplit: anchorSplitFromRow(row),
+    stages: mapStageRow(row),
   };
 }
 
@@ -251,13 +374,10 @@ type LiveFunnelData = {
  * call it; `computeCatalogueSnapshotCounts` returns its persisted subset for the cron's row.
  */
 async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<LiveFunnelData> {
-  const db = await getDb();
   const state = captureState ?? (await getCatalogueCaptureState());
 
   const [
-    stages,
-    anchorSplit,
-    anchorBackoff,
+    scan,
     captureQueue,
     analyzeQueue,
     embedQueue,
@@ -267,33 +387,17 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
     publicAlbums,
     publicLabels,
   ] = await Promise.all([
-    // THE STAGE SCAN — one single-pass conditional aggregate over the supertype/subtype join.
-    // `rec_eligible` folds in the SHARED `REC_ELIGIBLE_WHERE` (recommendations.ts): the funnel's
-    // eligibility count is, by construction, the same gate `listRecommendations` scans by.
-    db.execute(`select
-            sum(case when f.track_id is null then 1 else 0 end) as crawled,
-            sum(case when f.track_id is null and t.spotify_uri is not null then 1 else 0 end) as anchored,
-            sum(case when f.track_id is null and t.source_audio_key is not null then 1 else 0 end) as captured,
-            sum(case when f.track_id is null and t.analyzed_from = 'full' then 1 else 0 end) as analyzed,
-            sum(case when f.track_id is null and t.embedding_blob is not null then 1 else 0 end) as embedded,
-            sum(case when ${REC_ELIGIBLE_WHERE} then 1 else 0 end) as rec_eligible,
-            sum(case when f.track_id is not null then 1 else 0 end) as certified
-          from tracks t
-          left join findings f on f.track_id = t.track_id`),
-    // THE ANCHOR QUEUE — the sweep's OWN worklist predicate (`kindClause("anchor")`), partitioned
-    // ISRC × embedding in one pass; the ISRC split persists, the embedding split rides live only.
-    countAnchorQueueSplit(),
-    // THE ANCHOR BENCH — rows benched by the 14-day re-ask window: the COMPLEMENT of the
-    // `kindClause("anchor")` window guard (attempted, and inside the window). Its base guards
-    // mirror that worklist; the window itself is the SHARED `ANCHOR_REASK_AFTER_DAYS` constant,
-    // so the two can only ever disagree on the ISRC/duration edges, never on the window.
-    countAnchorBackoff(),
+    // THE ONE PASS — the stage 7-col aggregate, the anchor-split 4-col, and the anchor-backoff count
+    // folded into a SINGLE conditional-aggregate scan of `tracks left join findings` (was three
+    // independent full scans fired in parallel — docs/db-scale-backlog Wave 1 #5). Same numbers by
+    // construction (each query's WHERE becomes its own CASE arm over the superset), one scan not three.
+    runFoldedFunnelScan(),
     // The audio worklist backlogs — the product's OWN count function, brake and all. The capture
     // count reuses the state already read above so the brake is not read a second time (fix #4).
     countTrackWork({ captureState: state, kind: "capture", scope: "catalogue" }),
     countTrackWork({ kind: "analyze", scope: "catalogue" }),
     countTrackWork({ kind: "embed", scope: "catalogue" }),
-    // The crawler's own frontier read — the lean two-group-by variant (no growing-table scans).
+    // The crawler's own frontier read — the lean by-state group-by variant (no growing-table scans).
     getFrontierCounts(),
     // PUBLIC SURFACES — how much of the archive is live on the public web now, each through the
     // SAME predicate its surface already obeys. `tracks` is the `/tracks` hub's own count (`{}` =
@@ -306,7 +410,7 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
     countIndexableLabels(),
   ]);
 
-  const stageRow = typedRow<StageRow>(stages.rows);
+  const { anchorSplit, stages } = scan;
 
   return {
     anchorAwaitingAudio: anchorSplit.awaitingAudio,
@@ -314,20 +418,20 @@ async function gatherLiveFunnel(captureState?: CatalogueCaptureState): Promise<L
     captureState: state,
     counts: {
       analyzeQueue,
-      analyzed: Number(stageRow?.analyzed ?? 0),
-      anchorBackoff,
+      analyzed: stages.analyzed,
+      anchorBackoff: scan.anchorBackoff,
       anchorQueueIsrc: anchorSplit.withIsrc,
       anchorQueueNoIsrc: anchorSplit.withoutIsrc,
-      anchored: Number(stageRow?.anchored ?? 0),
+      anchored: stages.anchored,
       captureQueue,
-      captured: Number(stageRow?.captured ?? 0),
-      certified: Number(stageRow?.certified ?? 0),
-      crawled: Number(stageRow?.crawled ?? 0),
+      captured: stages.captured,
+      certified: stages.certified,
+      crawled: stages.crawled,
       embedQueue,
-      embedded: Number(stageRow?.embedded ?? 0),
+      embedded: stages.embedded,
       frontierDone: frontier.frontier.done,
       frontierPending: frontier.frontier.pending,
-      recEligible: Number(stageRow?.rec_eligible ?? 0),
+      recEligible: stages.recEligible,
     },
     publicSurfaces: {
       albums: publicAlbums,
@@ -348,27 +452,20 @@ export async function computeCatalogueSnapshotCounts(): Promise<CatalogueSnapsho
 
 /**
  * The anchor RE-ASK BENCH — rows that WOULD be anchorable but were attempted inside the re-ask
- * window, so the sweep is sitting them out (not re-billing them) for now. This is the exact
- * COMPLEMENT of `kindClause("anchor")`'s window guard: same base guards (un-anchored, measurable
- * length, not dismissed, not a known duplicate), and attempted INSIDE the window rather than
- * before it. The window is the SHARED `ANCHOR_REASK_AFTER_DAYS`, so the bench and the queue move
- * on the same clock.
+ * window, so the sweep is sitting them out (not re-billing them) for now. The pinned REFERENCE the
+ * fold-equivalence test compares against (`gatherLiveFunnel` reads the folded pass). It counts the
+ * shared `ANCHOR_BACKOFF_WHERE` fragment — the exact COMPLEMENT of `kindClause("anchor")`'s window
+ * guard — on the same `ANCHOR_REASK_AFTER_DAYS` clock as the queue, so bench and queue can only ever
+ * agree.
  */
-async function countAnchorBackoff(): Promise<number> {
-  const cutoff = new Date(Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+export async function countAnchorBackoff(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
-    args: [cutoff],
+    args: [anchorBackoffCutoff()],
     sql: `select count(*) as n
           from tracks t
           left join findings f on f.track_id = t.track_id
-          where f.track_id is null
-            and t.spotify_uri is null
-            and t.duration_ms > 0
-            and t.dismissed_at is null
-            and t.duplicate_of_track_id is null
-            and t.spotify_anchor_attempted_at is not null
-            and t.spotify_anchor_attempted_at >= ?`,
+          where ${ANCHOR_BACKOFF_WHERE}`,
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);

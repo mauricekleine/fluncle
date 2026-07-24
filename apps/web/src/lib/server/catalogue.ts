@@ -619,7 +619,16 @@ export type RankCatalogueSummary = {
    * vetoed from the ear lens, re-queued for capture, and never counted as a `scored` find.
    */
   quarantined: number;
-  /** Catalogue rows still carrying a stale/absent fingerprint after this tick. */
+  /**
+   * The drain signal — "> 0 means run me again". By DEFAULT it is INFERRED from batch fullness, not
+   * scanned (the ~19s anti-join COUNT is off the hot path, docs/db-scale-backlog Wave 1 #1): a FULL
+   * batch (`candidates.length >= limit`) means more rows are stale by construction, so it returns the
+   * `>0` sentinel; a SHORT batch means the stale set was fully consumed this tick, so it returns 0.
+   * Pass `countRemaining` for the real live COUNT instead — the human-facing CLI readout does, so a
+   * deliberate manual run still shows the true backlog, while the box sweep keeps the fast sentinel.
+   * The COUNT also survives the `limit <= 0` guard, where no batch was observed and an assumed 0
+   * would wrongly stop a cron mid-backlog.
+   */
   remaining: number;
   /** Catalogue rows given a `nearest_finding_score` (they have a vector). */
   scored: number;
@@ -627,6 +636,14 @@ export type RankCatalogueSummary = {
 
 /** The default candidates per tick. `batch × findings` bounds the tick's cosine work. */
 export const RANK_BATCH_SIZE = 250;
+
+/**
+ * The `remaining` "run me again" sentinel returned on a FULL batch (docs/db-scale-backlog Wave 1 #1).
+ * A full batch consumed exactly `limit` stale rows, so more are stale by construction — but counting
+ * how many is the ~19s anti-join scan this hoist removes. The sweep only reads `remaining` for its
+ * `=== 0` stop test (rank-sweep.ts), so any positive value carries the whole signal; it is NOT a count.
+ */
+const RANK_MORE_REMAIN = 1;
 
 type CandidateRow = {
   artists_json: string;
@@ -1085,7 +1102,10 @@ function catalogueDuplicateOf(
  * computations per tick; a full re-rank of a 10k catalogue is 40 ticks and 600k — done once,
  * off the request path, instead of once per page load.
  */
-export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalogueSummary> {
+export async function rankCatalogue(
+  limit = RANK_BATCH_SIZE,
+  countRemaining = false,
+): Promise<RankCatalogueSummary> {
   const db = await getDb();
   const countResult = await db.execute({
     args: [],
@@ -1161,10 +1181,11 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     // a fresh deploy's very first (empty) rank tick already populates the cache.
     await persistCatalogueCaches();
 
-    // `remaining` is COUNTED, never assumed to be zero. An empty batch normally does mean a
-    // drained catalogue — but not if `limit` was 0, and a cron that trusts an assumed 0 would
-    // stop calling while rows were still stale. The count is one cheap scoped COUNT, paid only
-    // on an already-idle tick.
+    // `remaining` on an empty batch: with a POSITIVE `limit` the stale set is genuinely drained (an
+    // empty page over `order by track_id asc limit N` means no stale row exists), so the drain
+    // signal is 0 with no scan. The real COUNT survives ONLY for the `limit <= 0` guard — there no
+    // batch was observed, so an assumed 0 would stop a cron while rows were still stale, and the one
+    // cheap scoped COUNT is paid only on that already-idle, can't-have-looked tick.
     return {
       catalogueDuplicates: 0,
       corpus,
@@ -1172,7 +1193,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
       findings,
       prioritized: 0,
       quarantined: 0,
-      remaining: await countStale(corpus),
+      remaining: limit <= 0 ? await countStale(corpus) : 0,
       scored: 0,
     };
   }
@@ -1551,14 +1572,43 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     }
   }
 
+  // The rows this tick moves — exactly the candidates (every candidate produced one PK-keyed write).
+  // Their summary buckets BEFORE the write, read in one PK-indexed `in (…)` pass bounded by the
+  // batch, pair with the AFTER read below into a batch delta.
+  const movedIds = candidates.map((candidate) => candidate.track_id);
+  const before = await readBatchRowBuckets(movedIds);
+
   // One implicit write transaction. Every statement is PK-keyed and idempotent, so a retry
   // after a partial failure converges on the same rows.
   await db.batch(writes, "write");
 
-  // The tick's writes have landed — recompute the cached counts + capture-lens affinity so the
-  // page reads the fresh shape without ever scanning. This is where the summary comes off the hot
-  // path: the sweep pays the scan once per tick, not the page once per load.
-  await persistCatalogueCaches();
+  // The tick's writes have landed. The cached six counts move by a BATCH DELTA — the moved rows'
+  // (after − before) buckets, the batched twin of `withSummaryDelta` — NOT the O(catalogue) full
+  // recompute (docs/db-scale-backlog Wave 1 #2). During a drain of up to `MAX_CALLS` active ticks
+  // that turns ~8 full anti-join scans into one bounded PK read per tick; the idle/drain-end tick
+  // (the empty-batch branch above) still does the authoritative `persistCatalogueCaches` recompute
+  // that heals any accumulated delta drift. The persisted counts are numerically identical to a full
+  // recompute (proved by the batch-delta equivalence test).
+  await applyCatalogueSummaryBatchDelta(before, await readBatchRowBuckets(movedIds));
+
+  // The capture-lens affinity cache: refresh it reusing THIS tick's already-read affinity when the
+  // pre-audio ladder computed one (`archive`), so the weighted qualified-artist GROUP BY runs once
+  // per call, not twice (docs/db-scale-backlog Wave 1 #4). A tick with no pre-audio row reads it
+  // live — the same every-tick refresh cadence the display-only chip had before.
+  await refreshArchiveAffinityCache(archive);
+
+  // The drain signal. By DEFAULT it is inferred from batch fullness with no scan — a FULL batch
+  // consumed exactly `limit` stale rows, so more are stale by construction (the sentinel); a SHORT
+  // batch exhausted the stale set (0). `countRemaining` opts into the real live COUNT for the
+  // human-facing CLI readout — one ~19s scan on a deliberate manual run, never on the box sweep,
+  // which keeps the default sentinel (docs/db-scale-backlog Wave 1 #1).
+  let remaining = 0;
+
+  if (countRemaining) {
+    remaining = await countStale(corpus);
+  } else if (candidates.length >= limit) {
+    remaining = RANK_MORE_REMAIN;
+  }
 
   return {
     catalogueDuplicates,
@@ -1567,7 +1617,7 @@ export async function rankCatalogue(limit = RANK_BATCH_SIZE): Promise<RankCatalo
     findings,
     prioritized: unvectored.length,
     quarantined,
-    remaining: await countStale(corpus),
+    remaining,
     // A quarantined row was scored, then vetoed — it is no longer a `scored` find. A catalogue
     // duplicate KEEPS its score (it reads "already in the archive"), so it stays a `scored` row.
     scored: vectored.length - quarantined,
@@ -1948,6 +1998,58 @@ export async function readRowBuckets(trackId: string): Promise<Set<SummaryBucket
 }
 
 /**
+ * The summary buckets for a BATCH of catalogue rows — the batched twin of `readRowBuckets`: one
+ * PK-indexed `in (…)` read bounded by the batch (never the growing catalogue), then the pure
+ * `bucketsForRow` per row. A track absent from the result (a finding, or gone) contributes no
+ * buckets, exactly as the single-row read returns an empty set. Powers the rank sweep's per-tick
+ * batch delta, so the cached counts move without the O(catalogue) recompute.
+ */
+async function readBatchRowBuckets(trackIds: string[]): Promise<Map<string, Set<SummaryBucket>>> {
+  const byTrack = new Map<string, Set<SummaryBucket>>();
+
+  if (trackIds.length === 0) {
+    return byTrack;
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select ct.track_id, ct.capture_priority, ct.capture_status, ct.catalogue_rank_corpus,
+                 ct.dismissed_at, ct.duplicate_of_track_id, ct.duration_ms, ct.nearest_finding_score
+          from tracks ct
+          left join findings cf on cf.track_id = ct.track_id
+          where ct.track_id in (${trackIds.map(() => "?").join(", ")}) and cf.track_id is null`,
+  });
+
+  for (const row of typedRows<{
+    capture_priority: null | number;
+    // NOT NULL (default 'pending'); coalesced only to satisfy the driver's nullable row type.
+    capture_status: null | string;
+    catalogue_rank_corpus: null | string;
+    dismissed_at: null | string;
+    duplicate_of_track_id: null | string;
+    duration_ms: null | number;
+    nearest_finding_score: null | number;
+    track_id: string;
+  }>(result.rows)) {
+    byTrack.set(
+      row.track_id,
+      bucketsForRow({
+        capturePriority: row.capture_priority,
+        captureStatus: row.capture_status ?? "pending",
+        catalogueRankCorpus: row.catalogue_rank_corpus,
+        dismissedAt: row.dismissed_at,
+        duplicateOfTrackId: row.duplicate_of_track_id,
+        durationMs: row.duration_ms,
+        nearestFindingScore: row.nearest_finding_score,
+      }),
+    );
+  }
+
+  return byTrack;
+}
+
+/**
  * Apply a single row's bucket transition (`before` → `after`) to the cached summary — a
  * read-modify-write of ±1 per bucket the row entered or left, with a fresh stamp. Clamped at 0 so a
  * transient race can never render a negative count; the sweep's full recompute heals any drift.
@@ -1971,6 +2073,46 @@ async function applyCatalogueSummaryDelta(
 
   for (const bucket of SUMMARY_BUCKETS) {
     const delta = (after.has(bucket) ? 1 : 0) - (before.has(bucket) ? 1 : 0);
+
+    if (delta !== 0) {
+      next[bucket] = Math.max(0, next[bucket] + delta);
+    }
+  }
+
+  await setSetting(CATALOGUE_SUMMARY_KEY, JSON.stringify(next));
+}
+
+/**
+ * Apply a BATCH of row bucket transitions to the cached summary in ONE read-modify-write — the
+ * batched twin of `applyCatalogueSummaryDelta`, for the rank sweep's per-tick delta. It sums each
+ * moved row's (after − before) per bucket and shifts the cached counts once, clamped at 0 per bucket
+ * (a transient race can never render a negative count). The contract is the single-row delta's,
+ * exactly: a cold/corrupt cache is a NO-OP (the next `getCatalogueSummary` read cold-fills the truth,
+ * and the rows it reads already reflect the tick), and the sweep's idle/drain-end full recompute
+ * re-derives the authoritative counts and heals any accumulated drift. The persisted result is
+ * numerically identical to a full `computeCatalogueCounts` recompute (the batch-delta equivalence
+ * test proves delta-application == full-recompute after a batch).
+ */
+async function applyCatalogueSummaryBatchDelta(
+  before: Map<string, Set<SummaryBucket>>,
+  after: Map<string, Set<SummaryBucket>>,
+): Promise<void> {
+  const cached = await getSetting(CATALOGUE_SUMMARY_KEY);
+  const parsed = cached ? parseSummaryCache(cached) : null;
+
+  if (!parsed) {
+    return;
+  }
+
+  const next: CatalogueSummary = { ...parsed, computedAt: new Date().toISOString() };
+  const ids = new Set<string>([...before.keys(), ...after.keys()]);
+
+  for (const bucket of SUMMARY_BUCKETS) {
+    let delta = 0;
+
+    for (const id of ids) {
+      delta += (after.get(id)?.has(bucket) ? 1 : 0) - (before.get(id)?.has(bucket) ? 1 : 0);
+    }
 
     if (delta !== 0) {
       next[bucket] = Math.max(0, next[bucket] + delta);
@@ -2080,15 +2222,21 @@ type CachedAffinity = {
  * chip on the capture lens; the stored `capture_priority` the queue obeys is authoritative), and its
  * staleness is bounded by the rank cadence — the same tick that re-derives a row's stored tier also
  * re-derives this set, so the chip and the tier never disagree by more than one tick.
+ *
+ * Pass an ALREADY-READ `affinity` to reuse it instead of re-reading (docs/db-scale-backlog Wave 1
+ * #4): the rank tick's pre-audio ladder already ran `readArchiveAffinity` for any unvectored /
+ * quarantined row, so threading it here collapses the weighted qualified-artist GROUP BY from twice
+ * per call to once. Called with no argument (the idle-tick `persistCatalogueCaches`, where no
+ * pre-audio affinity exists) it reads live — the same value, one read.
  */
-async function refreshArchiveAffinityCache(): Promise<void> {
-  const affinity = await readArchiveAffinity();
+async function refreshArchiveAffinityCache(affinity?: ArchiveAffinity): Promise<void> {
+  const resolved = affinity ?? (await readArchiveAffinity());
   const cached: CachedAffinity = {
-    disabledLabels: [...affinity.disabledLabels],
-    findingArtists: [...affinity.findingArtists],
-    findingLabels: [...affinity.findingLabels],
-    qualifiedArtists: [...affinity.qualifiedArtists],
-    seedLabels: [...affinity.seedLabels],
+    disabledLabels: [...resolved.disabledLabels],
+    findingArtists: [...resolved.findingArtists],
+    findingLabels: [...resolved.findingLabels],
+    qualifiedArtists: [...resolved.qualifiedArtists],
+    seedLabels: [...resolved.seedLabels],
   };
 
   await setSetting(CATALOGUE_AFFINITY_KEY, JSON.stringify(cached));

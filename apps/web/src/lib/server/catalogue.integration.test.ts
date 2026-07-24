@@ -336,7 +336,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     expect((await rankingOf("cat-a")).nearest_finding_score ?? 0).toBeGreaterThan(0.95);
   });
 
-  it("drains a backlog in batches, reporting what is left", async () => {
+  it("drains a backlog in batches via the fullness SENTINEL (no per-tick COUNT)", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
     await seedFinding("finding-a", { vector: axis(0) });
@@ -345,17 +345,62 @@ describe("the sweep — batching, staleness, and self-healing", () => {
       await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
     }
 
+    // A FULL batch (`candidates.length >= limit`) reports the "> 0, run me again" SENTINEL without
+    // the ~19s anti-join COUNT — more rows are stale by construction (docs/db-scale-backlog Wave 1
+    // #1). It is a signal, not a live count (the sweep only reads it for its `=== 0` stop test).
     const first = await rankCatalogue(2);
     expect(first.scored).toBe(2);
-    expect(first.remaining).toBe(3);
+    expect(first.remaining).toBeGreaterThan(0);
 
     const second = await rankCatalogue(2);
     expect(second.scored).toBe(2);
-    expect(second.remaining).toBe(1);
+    expect(second.remaining).toBeGreaterThan(0);
 
+    // A SHORT batch (fewer than `limit` candidates) exhausted the stale set → remaining 0, loop stops.
     const third = await rankCatalogue(2);
     expect(third.scored).toBe(1);
     expect(third.remaining).toBe(0);
+
+    // The sentinel drove the WHOLE backlog through — every row is ranked, none left stale.
+    for (let index = 0; index < 5; index += 1) {
+      expect((await rankingOf(`cat-${index}`)).nearest_finding_track_id).toBe("finding-a");
+    }
+  });
+
+  it("the sweep's `remaining > 0` drain loop TERMINATES and fully ranks the backlog", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+
+    // FOUR rows with BATCH 2 is the subtle case: two full batches drain everything, then the sentinel
+    // forces ONE more (empty) tick that reports 0 — so the loop must still terminate on an exact
+    // multiple of the batch size, never spin to the tick budget on a finite backlog.
+    for (let index = 0; index < 4; index += 1) {
+      await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
+    }
+
+    // The EXACT loop rank-sweep.ts runs: call while `remaining > 0`, bounded by a hard tick budget.
+    const MAX_CALLS = 8;
+    let calls = 0;
+    let scored = 0;
+    let remaining = 1;
+
+    while (remaining > 0 && calls < MAX_CALLS) {
+      const tick = await rankCatalogue(2);
+      calls += 1;
+      scored += tick.scored;
+      remaining = tick.remaining;
+    }
+
+    // It STOPPED because the backlog drained (remaining 0), NOT because it hit the budget.
+    expect(remaining).toBe(0);
+    expect(calls).toBeLessThan(MAX_CALLS);
+    // Two full batches (4 rows) + one confirming empty tick.
+    expect(calls).toBe(3);
+    expect(scored).toBe(4);
+    for (let index = 0; index < 4; index += 1) {
+      expect((await rankingOf(`cat-${index}`)).nearest_finding_track_id).toBe("finding-a");
+    }
   });
 
   it("COUNTS what is left rather than assuming zero — a limit of 0 must not report 'drained'", async () => {
@@ -370,6 +415,35 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     expect(summary.scored).toBe(0);
     expect(summary.remaining).toBe(1);
+  });
+
+  it("returns the fullness SENTINEL by default and the real COUNT under countRemaining", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+
+    for (let index = 0; index < 6; index += 1) {
+      await seedCatalogue(`cat-${index}`, { vector: blend(axis(0), axis(index + 1), 0.2) });
+    }
+
+    // OPT-IN (`countRemaining = true`): a FULL batch of 2 reports the REAL live count of what is
+    // still stale — 6 seeded − 2 just ranked = 4. This is the human-facing CLI readout's behaviour.
+    const counted = await rankCatalogue(2, true);
+    expect(counted.scored).toBe(2);
+    expect(counted.remaining).toBe(4);
+
+    // DEFAULT (`countRemaining = false`): the SAME full-batch shape reports the SENTINEL — a constant
+    // "> 0, run me again" flag (`RANK_MORE_REMAIN` = 1), NOT the true backlog. The box sweep's win.
+    const sentinel = await rankCatalogue(2);
+    expect(sentinel.scored).toBe(2);
+    expect(sentinel.remaining).toBe(1);
+
+    // …and the sentinel really did understate it: a scan-only tick (limit 0 → the `limit <= 0`
+    // guard's real COUNT, ranking nothing) shows 2 genuinely still stale — exactly what the opt-in
+    // count restores for the operator's manual readout.
+    const trueLeft = await rankCatalogue(0);
+    expect(trueLeft.scored).toBe(0);
+    expect(trueLeft.remaining).toBe(2);
   });
 
   it("re-scores a row whose OWN vector arrived after it was ranked (capture → embed)", async () => {
@@ -712,6 +786,79 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     expect(summary.awaitingCapture).toBe(1);
     // The third row never made it into the batch of 2 — it has no fingerprint at all.
     expect(summary.awaitingRank).toBe(1);
+  });
+
+  it("keeps the cached summary IDENTICAL to a full recompute via the per-tick batch DELTA", async () => {
+    // Item 2 (docs/db-scale-backlog Wave 1 #2): an ACTIVE rank tick shifts the cached six counts by a
+    // BATCH delta (the moved rows' after − before buckets), NOT the O(catalogue) full recompute (that
+    // is gated to the idle/drain-end tick). This pins delta-application == full-recompute across a
+    // whole multi-batch drain, so the hoist can never silently corrupt a catalogue count.
+    const { computeCatalogueCounts, getCatalogueSummary, rankCatalogue, refreshCatalogueSummary } =
+      await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    // A spread across buckets: rows that will SCORE (vectored) and rows that stay PRE-AUDIO (a capture
+    // tier, unvectored) — so the delta moves several buckets at once, every batch.
+    await seedCatalogue("cat-score-0", { vector: blend(axis(0), axis(1), 0.2) });
+    await seedCatalogue("cat-score-1", { vector: blend(axis(0), axis(2), 0.2) });
+    await seedCatalogue("cat-score-2", { vector: blend(axis(0), axis(3), 0.2) });
+    await seedCatalogue("cat-pre-0");
+    await seedCatalogue("cat-pre-1");
+
+    // Warm the cache with the authoritative PRE-rank truth, so each tick applies a delta to a real
+    // cache (a cold cache is a documented no-op the next read cold-fills — proven elsewhere).
+    await refreshCatalogueSummary();
+
+    // Drain in small batches; after EVERY tick the delta-updated cache must equal a fresh full
+    // recompute of the post-tick DB — the cache read is a KV hit (no recompute), so this compares the
+    // delta's arithmetic against the SQL aggregate directly.
+    for (let tick = 0; tick < 6; tick += 1) {
+      const summary = await rankCatalogue(2);
+      const cached = await getCatalogueSummary();
+      const truth = await computeCatalogueCounts();
+
+      expect({
+        awaitingCapture: cached.awaitingCapture,
+        awaitingRank: cached.awaitingRank,
+        dismissed: cached.dismissed,
+        quarantined: cached.quarantined,
+        ranked: cached.ranked,
+        total: cached.total,
+      }).toEqual(truth);
+
+      if (summary.remaining === 0) {
+        break;
+      }
+    }
+  });
+
+  it("reads the archive affinity ONCE per tick — the pre-audio ladder feeds the display cache", async () => {
+    // Item 4 (docs/db-scale-backlog Wave 1 #4): the pre-audio ladder and the display-affinity cache
+    // both need `readArchiveAffinity`; the tick now computes it once and threads it into the cache
+    // refresh, so the weighted qualified-artist GROUP BY runs once per call, not twice.
+    const { rankCatalogue } = await import("./catalogue");
+
+    await seedFinding("finding-a", { vector: axis(0) });
+    // An UNVECTORED row makes the tick run the pre-audio ladder (needsPreAudio) AND refresh the
+    // display-affinity cache — the two reads item 4 collapses into one.
+    await seedCatalogue("cat-unvectored");
+
+    const executeSpy = vi.spyOn(db, "execute");
+    await rankCatalogue();
+
+    // The weighted qualified-artist query (`having sum(case when ta.role = 'remixer' …)`) is unique
+    // to `readArchiveAffinity`, so counting it counts the affinity reads this tick made.
+    const affinityReads = executeSpy.mock.calls.filter((call) => {
+      // `Client.execute` is overloaded (string form + object form), so the mock-call arg is typed to
+      // the string overload; the affinity reads all use the object form (`{ sql, args }`).
+      const arg = call[0] as string | { sql: string };
+      const sql = typeof arg === "string" ? arg : arg.sql;
+
+      return sql.includes("having sum(case when ta.role = 'remixer'");
+    }).length;
+    executeSpy.mockRestore();
+
+    expect(affinityReads).toBe(1);
   });
 
   it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {
