@@ -488,3 +488,66 @@ describe("getFunnel publicSurfaces (real SQL)", () => {
     );
   });
 });
+
+// ── The folded scan is numerically the three it replaced ─────────────────────
+
+describe("the folded funnel scan == its three standalone reference scans (real SQL)", () => {
+  it("stages, anchor split, and backoff match the three separate queries on a mixed seed", async () => {
+    const { countAnchorBackoff, countAnchorQueueSplit, runFoldedFunnelScan, runStageScan } =
+      await import("./funnel");
+
+    const now = Date.now();
+    const recent = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(); // inside the 14d re-ask window
+    const lapsed = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString(); // past it → back in the queue
+
+    // A certified finding (`certified`), and a plain crawled-only catalogue row (`crawled`/`anchored`).
+    await seedTrack(db, { logId: "001.1.1A", trackId: "certified-0" });
+    await embed("certified-0", axis(0));
+    await seedCatalogueTrack(db, { trackId: "crawled-0" });
+
+    // The captured / analyzed / embedded stage arms.
+    await seedCatalogueTrack(db, { trackId: "captured-0" });
+    await patchTrack("captured-0", "source_audio_key = 'k/c.webm'");
+    await seedCatalogueTrack(db, { trackId: "analyzed-0" });
+    await patchTrack("analyzed-0", "source_audio_key = 'k/a.webm', analyzed_from = 'full'");
+
+    // A rec-eligible row (embedded, anchored, short, clean).
+    await seedCatalogueTrack(db, { artists: ["Elig Artist"], trackId: "elig-0" });
+    await embed("elig-0", axis(1));
+
+    // The anchor worklist spanning ISRC × embedding, plus a benched row and a lapsed (re-askable) one.
+    await seedCatalogueTrack(db, { trackId: "anc-isrc-ready" });
+    await patchTrack("anc-isrc-ready", "spotify_uri = null, isrc = 'GB0000000001'");
+    await embed("anc-isrc-ready", axis(2));
+    await seedCatalogueTrack(db, { trackId: "anc-isrc-awaiting" });
+    await patchTrack("anc-isrc-awaiting", "spotify_uri = null, isrc = 'GB0000000002'");
+    await seedCatalogueTrack(db, { trackId: "anc-noisrc-awaiting" });
+    await patchTrack("anc-noisrc-awaiting", "spotify_uri = null");
+    await seedCatalogueTrack(db, { trackId: "anc-benched" });
+    await patchTrack("anc-benched", "spotify_uri = null, spotify_anchor_attempted_at = ?", [
+      recent,
+    ]);
+    await seedCatalogueTrack(db, { trackId: "anc-lapsed" });
+    await patchTrack("anc-lapsed", "spotify_uri = null, spotify_anchor_attempted_at = ?", [lapsed]);
+
+    // THE PIN (docs/db-scale-backlog Wave 1 #5): the ONE folded pass produces the SAME numbers as the
+    // three separate scans it replaced — the stage 7-col aggregate, the anchor-split 4-col, and the
+    // anchor-backoff count — each formerly-independent query's WHERE folded into its own CASE arm over
+    // the superset. Identical by construction; this proves it on a real engine, on a real seed.
+    const folded = await runFoldedFunnelScan();
+
+    expect(folded.stages).toEqual(await runStageScan());
+    expect(folded.anchorSplit).toEqual(await countAnchorQueueSplit());
+    expect(folded.anchorBackoff).toBe(await countAnchorBackoff());
+
+    // And the arms are genuinely exercised (non-trivial), so the equality is a real proof, not two
+    // zeros agreeing.
+    expect(folded.stages.certified).toBe(1);
+    expect(folded.stages.crawled).toBeGreaterThan(0);
+    expect(folded.anchorSplit.withIsrc).toBe(2);
+    expect(folded.anchorSplit.withoutIsrc).toBeGreaterThan(0);
+    expect(folded.anchorSplit.ready).toBeGreaterThan(0);
+    expect(folded.anchorSplit.awaitingAudio).toBeGreaterThan(0);
+    expect(folded.anchorBackoff).toBe(1);
+  });
+});

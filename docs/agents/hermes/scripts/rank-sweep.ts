@@ -22,16 +22,19 @@
 // ── THE `remaining` CONTRACT, AND WHY THIS ONE LOOPS ──────────────────────────
 // Unlike the crawl (whose pace is a VENDOR'S rate limit, so one pass per tick is the
 // whole point), ranking is pure local SQL with no external budget to respect — the only
-// cost is the box's own CPU. And it has a natural finish line: `remaining` is the count
-// of rows whose stored corpus fingerprint disagrees with the live one. So this sweep
-// DRAINS: it loops while `remaining > 0`, up to a hard tick budget, and stops. A crawl
-// that just landed 700 rows is fully ranked by the next tick rather than in 70 minutes.
+// cost is the box's own CPU. And it has a natural finish line: `remaining` is the server's
+// "> 0, run me again" signal, INFERRED from batch fullness rather than scanned — a FULL
+// batch means more rows are stale by construction, a SHORT (or empty) one means the stale
+// set drained (docs/db-scale-backlog Wave 1 #1, which took the ~19s per-tick COUNT off the
+// hot path). So this sweep DRAINS: it loops while `remaining > 0`, up to a hard tick budget,
+// and stops. A crawl that just landed 700 rows is fully ranked by the next tick rather than
+// in 70 minutes.
 //
 // SELF-HEALING, so the tick is honest either way. Staleness is a fingerprint of the
 // finding corpus (`"<findings>:<embedded>"`), so logging or embedding a finding makes
 // every catalogue row disagree with it and re-rank on later ticks — no invalidation call
-// from the publish path, and a no-op on an unchanged archive. An idle tick is one cheap
-// scoped COUNT.
+// from the publish path, and a no-op on an unchanged archive. An idle tick fetches an empty
+// batch and reports `remaining: 0` with no scan.
 //
 // It certifies nothing: `rank_catalogue` writes DERIVED columns on CATALOGUE rows only
 // (`tracks` with no `findings` row), so it cannot mint a coordinate, write a note, or
@@ -65,9 +68,9 @@ type RankSummary = {
   findings?: number;
   ok?: boolean;
   prioritized?: number;
-  // Rows whose stored corpus fingerprint still disagrees with the live one. THE
-  // "run me again" signal — and it is COUNTED, never inferred from an empty batch (an
-  // empty batch is not an empty backlog).
+  // The server's "> 0, run me again" signal — INFERRED from batch fullness, not a live
+  // count (a full batch ⇒ more stale by construction; a short/empty batch ⇒ drained). The
+  // sweep reads it only for the `=== 0` stop test below (docs/db-scale-backlog Wave 1 #1).
   remaining?: number;
   scored?: number;
 };
