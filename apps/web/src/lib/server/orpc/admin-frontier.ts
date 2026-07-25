@@ -7,14 +7,12 @@
 
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import {
+  FRONTIER_REFRESH_BATCH,
   isFrontierMintingOpen,
   refreshAllFrontierPlaylists,
   setFrontierMintingOpen,
 } from "../frontier-playlist";
 import { type Implementer, toFault } from "./_shared";
-
-/** How many minted playlists a single refresh tick walks when the caller names no limit. */
-const DEFAULT_REFRESH_LIMIT = 500;
 
 /** How many owing covers a single backfill tick renders when the caller names no limit. */
 const DEFAULT_COVER_LIMIT = 50;
@@ -31,7 +29,13 @@ const DEFAULT_COVER_LIMIT = 50;
 export function adminFrontierHandlers(os: Implementer) {
   const refresh = os.refresh_frontier_playlists.use(adminAuth).handler(async ({ input }) => {
     try {
-      return await refreshAllFrontierPlaylists(input.limit ?? DEFAULT_REFRESH_LIMIT);
+      // The PACED-DRAIN batch, not a burst: an unlimited caller (the every-~15-min
+      // `fluncle-frontier-refresh` cron, which passes no `--limit`) gets one small batch of
+      // DUE users. `FRONTIER_REFRESH_BATCH` is the single source of that number — the
+      // paced-drain reshape defined it but left this default on the pre-drain burst value,
+      // so each tick still pulled up to 500 users and re-collided with Spotify's shared
+      // per-app budget. `--limit` still overrides for an attended burn.
+      return await refreshAllFrontierPlaylists(input.limit ?? FRONTIER_REFRESH_BATCH);
     } catch (error) {
       throw toFault(error);
     }

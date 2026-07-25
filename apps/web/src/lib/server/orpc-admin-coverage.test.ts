@@ -68,6 +68,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the paths directly). `list` is admin tier; create/update/
   // delete are operator tier (the operator's private spend data — a valid agent token 403s).
   "DELETE /admin/subscriptions/{id}": "delete_subscription",
+  // The three entity bio WORKLISTS — contract-only oRPC (no TanStack route file). Admin tier
+  // (agent-allowed reads): the box's bio sweeps drain them with the agent token. All three match
+  // the public `list_` prefix, so the "holds exactly" check skips them; they live here for
+  // completeness (like `list_labels_admin`) so the admin map stays a true index of the surface.
+  "GET /admin/albums/bio-queue": "list_albums_missing_bio",
   // The album bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
   // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
   // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
@@ -78,6 +83,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
   // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
   "GET /admin/artists": "list_unresolved_artists",
+  "GET /admin/artists/bio-queue": "list_artists_missing_bio",
   // The artist review queue read (Unit 5) — contract-only oRPC (no TanStack route file).
   // Admin tier (agent-allowed); the operator's review-queue station reads it.
   // `list_artist_socials` matches the public `list_` prefix so the "holds exactly" check
@@ -140,6 +146,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Admin tier (agent-allowed read); `list_label_aliases` matches the public `list_` prefix so
   // the "holds exactly" check skips it, but the entry keeps this map honest.
   "GET /admin/labels/aliases": "list_label_aliases",
+  "GET /admin/labels/bio-queue": "list_labels_missing_bio",
   // The label bio-draft — contract-only oRPC (no TanStack route file). Agent tier: the box's
   // bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding titles → a
   // ready-to-author prompt) with its agent token; the describe_label sibling. It does not
@@ -194,6 +201,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // `get_mixable_order` matches the public `get_` prefix so the "holds exactly" check
   // skips it; it lives here for completeness (like `get_track_admin`).
   "GET /admin/tracks/mixable-order": "get_mixable_order",
+  // The audio pipeline's WORKLIST (capture/analyse/embed), in the order the metered capture
+  // budget should be spent (docs/gpu-batch-embed.md) — contract-only oRPC (no TanStack route
+  // file). Admin tier (agent-allowed read); the box's sweeps drain it. `list_track_work`
+  // matches the public `list_` prefix so the "holds exactly" check skips it; it lives here
+  // for completeness.
+  "GET /admin/tracks/work": "list_track_work",
   // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
   // owns the path directly, like context_track). Admin tier (agent-allowed read).
   // `get_track_admin` matches the public `get_` prefix so the "holds exactly" check
@@ -404,6 +417,13 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly). Agent tier: the box's future bio sweep drives
   // the fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/labels/{slug}/bio": "describe_label",
+  // The label MERGE — fold a losing label into the canonical one (re-point every FK, reconcile
+  // identity + facts). Contract-only oRPC (no TanStack route file). OPERATOR tier (the
+  // `update_label` precedent): collapsing two public entities into one is an editorial act, so
+  // the agent token 403s. `merge_label` matches the `merge_` public prefix (allow-listed for the
+  // `/me` galaxy-progress merge), so the "holds exactly" check skips it — which is exactly why it
+  // must be listed here.
+  "POST /admin/labels/{slug}/merge": "merge_label",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   // The logbook nightly author — contract-only oRPC (no TanStack route file; oRPC owns
   // the path directly, like note_track). Admin tier (agent-allowed): the on-box
