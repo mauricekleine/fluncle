@@ -245,7 +245,7 @@ Call list_findings with limit ${count} to pull them, then read each one with get
 
       return `Read the Fluncle finding at coordinate ${coordinate} and explain it to someone new.
 
-Fetch it with get_track (or the fluncle://finding/<coordinate> resource). Then, in a few plain sentences in Fluncle's voice: what the tune is (artist, title), when he found it, why it's certified (use the note), and how to read the Log ID itself: the sector counts the days since the 2026-05-30 epoch, the tail is a stable signature of the recording, minted once and never changed. Keep it warm and short.`;
+Fetch it with get_track (or the fluncle://finding/<coordinate> resource). Then, in a few plain sentences in Fluncle's voice: what the tune is (artist, title), when he found it, why it's certified (use the note), and how to read the Log ID itself: the sector counts the days since the 2026-05-30 epoch, the tail is a stable signature of the recording, stamped once and never changed. Keep it warm and short.`;
     },
     description: "Read the finding at a Log ID coordinate and explain the coordinate.",
     name: "decode_coordinate",

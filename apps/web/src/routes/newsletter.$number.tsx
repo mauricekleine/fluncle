@@ -100,8 +100,11 @@ function EditionPage() {
           <h1 className="log-coordinate log-index-title">
             {edition.subject ?? `Edition #${edition.number}`}
           </h1>
+          {/* An edition's date is the day it WENT OUT, not a Found date (VOICE.md's Found
+              Rule reserves "Found" for the day Fluncle first heard a tune). The mothership
+              departs every Friday, so its back issue is dated by that departure. */}
           {edition.sentAt ? (
-            <p className="log-coordinate-uri">Found {formatDateLong(edition.sentAt)}</p>
+            <p className="log-coordinate-uri">Departed {formatDateLong(edition.sentAt)}</p>
           ) : null}
         </header>
 

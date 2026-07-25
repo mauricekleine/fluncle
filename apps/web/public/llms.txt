@@ -12,7 +12,7 @@ Fluncle also logs his own DJ mixtapes. A mixtape is a checkpoint: one long set m
 
 ## Reading a Log ID
 
-Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark — for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at https://www.fluncle.com/log/004.7.2I. So a code like 004.7.2I is a single finding in Fluncle's Findings.
+Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is stamped once, never reassigned, and resolves to a log page at https://www.fluncle.com/log/004.7.2I. So a code like 004.7.2I is a single finding in Fluncle's Findings.
 
 ## Listen
 
@@ -57,7 +57,7 @@ Each page leads with the findings Fluncle has logged there. An artist, label, or
 ## For agents
 
 - [OpenAPI spec](https://www.fluncle.com/api/v1/openapi.json): the public API as an OpenAPI 3.1 document
-- [MCP server](https://www.fluncle.com/mcp): the same archive as Model Context Protocol tools (Streamable HTTP, no auth) — list, browse by artist/label/album, search, look up an artist or label, random, submit, subscribe
+- [MCP server](https://www.fluncle.com/mcp): the same archive as Model Context Protocol tools, Streamable HTTP and no auth (list, browse by artist/label/album, search, look up an artist or label, random, submit, subscribe)
 - [MCP server card](https://www.fluncle.com/.well-known/mcp/server-card.json): SEP-2127 discovery card for the MCP endpoint
 - [Agent card](https://www.fluncle.com/.well-known/agent-card.json): A2A agent card listing Fluncle's actionable skills (search, list, read, submit, subscribe)
 - [API catalog](https://www.fluncle.com/.well-known/api-catalog): RFC 9727 linkset

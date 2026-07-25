@@ -1,8 +1,10 @@
 // The Stories feed's honest view states + their copy, kept pure so the branch logic
 // and the literal control strings are pinned by a test. Copy follows the voice canon:
 // prose (the empty/error ledes) carries the Fluncle voice; the control ("Try again")
-// stays a plain literal (the Chrome Rule). No exclamation marks (the Dry Rule) and no
-// em-dashes in the prose. index.tsx renders whichever branch this resolves.
+// stays a plain literal (the Chrome Rule). No exclamation marks (the Dry Rule), no
+// em-dashes in the prose, and no retired identity words (VOICE.md's banned list —
+// the error lede reuses the web error boundary's ratified "Rough re-entry" heading
+// rather than a radio metaphor). index.tsx renders whichever branch this resolves.
 
 export type FeedState = "loading" | "error" | "empty" | "ready";
 
@@ -36,7 +38,7 @@ export const feedCopy = {
   error: {
     body: "The findings didn't come through. Give it another go.",
     retry: "Try again",
-    title: "Lost the signal",
+    title: "Rough re-entry",
   },
   footer: "Finding more",
   loading: "Tuning in",

@@ -22,7 +22,7 @@ const ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd";
 // end. Machine-facing channel copy stays honestly plain; the warmth rides the
 // per-episode notes.
 const SHOW_DESCRIPTION =
-  "Fluncle's own DJ mixtapes — long drum & bass recordings where he settles a stretch of findings into one continuous dream. Each episode is a checkpoint from the archive, recorded across the Galaxy. fluncle.com is home base.";
+  "Fluncle's own DJ mixtapes: long drum & bass recordings where he settles a stretch of findings into one continuous dream. Each episode is a checkpoint from the archive, recorded across the Galaxy. fluncle.com is home base.";
 
 /**
  * The enclosure byte length in bytes, read from the R2 object's Content-Length
