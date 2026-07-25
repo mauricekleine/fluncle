@@ -60,6 +60,9 @@ assertEqual(feedCopy.error.retry, "Try again", "retry control label");
 // 6. The prose obeys the Dry Rule (no exclamation marks), carries no em-dashes, and
 // names none of VOICE.md's retired identity words (the radio metaphor especially —
 // "Lost the signal" shipped here once).
+// Substrings, so "stream" covers "streaming" and "mint" covers "minted" — the
+// Engine-Room Rule's word, the one that drifted onto three surfaces before it was
+// caught, so it is pinned here too.
 const BANNED_IDENTITY_WORDS = [
   "transmission",
   "signal",
@@ -67,7 +70,8 @@ const BANNED_IDENTITY_WORDS = [
   "curated",
   "curation",
   "content",
-  "streaming",
+  "stream",
+  "mint",
 ];
 
 const prose = [
