@@ -57,7 +57,19 @@ assertEqual(
 // 5. The retry control is the ratified literal, not a voiced variant (Chrome Rule).
 assertEqual(feedCopy.error.retry, "Try again", "retry control label");
 
-// 6. The prose obeys the Dry Rule (no exclamation marks) and carries no em-dashes.
+// 6. The prose obeys the Dry Rule (no exclamation marks), carries no em-dashes, and
+// names none of VOICE.md's retired identity words (the radio metaphor especially —
+// "Lost the signal" shipped here once).
+const BANNED_IDENTITY_WORDS = [
+  "transmission",
+  "signal",
+  "anomaly",
+  "curated",
+  "curation",
+  "content",
+  "streaming",
+];
+
 const prose = [
   feedCopy.empty.title,
   feedCopy.empty.body,
@@ -69,4 +81,11 @@ const prose = [
 for (const line of prose) {
   assertTrue(!line.includes("!"), `no exclamation marks in prose: "${line}"`);
   assertTrue(!line.includes("—"), `no em-dashes in prose: "${line}"`);
+
+  for (const word of BANNED_IDENTITY_WORDS) {
+    assertTrue(
+      !line.toLowerCase().includes(word),
+      `no retired identity word "${word}" in prose: "${line}"`,
+    );
+  }
 }

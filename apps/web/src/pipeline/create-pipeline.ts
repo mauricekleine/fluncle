@@ -554,7 +554,7 @@ const CHROME = `
 </header>
 <div class="stage"><div class="world"><svg class="wires"></svg></div></div>
 <div class="dock">
-  <div class="hw" tabindex="0" aria-label="Hardware legend — the machines the factory runs on">
+  <div class="hw" tabindex="0" aria-label="Hardware legend: the machines the factory runs on">
     <span class="hw-lbl">hardware</span>
     <div class="legend"></div>
   </div>

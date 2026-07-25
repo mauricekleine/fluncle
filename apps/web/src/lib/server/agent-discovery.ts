@@ -339,10 +339,10 @@ ${tracks.join("\n")}
 ## Data
 
 - [RSS feed](${siteUrl}/rss.xml): the 25 most recent tracks
-- [Fresh releases feed](${siteUrl}/fresh.xml): the newest drum & bass RELEASES over the last 30 days, as RSS (also ${siteUrl}/fresh.json as a JSON Feed) — release-dated (when a tune came out), not found-dated
+- [Fresh releases feed](${siteUrl}/fresh.xml): the newest drum & bass releases over the last 30 days, as RSS (also ${siteUrl}/fresh.json as a JSON Feed). Release-dated (when a tune came out), not found-dated
 - [Findings API](${siteUrl}/api/v1/findings): the feed as JSON, newest found first, cursor-paginated; accepts limit (max 48) and cursor query params
 - [Tracks API](${siteUrl}/api/v1/tracks): every track, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest
-- [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out — the newest releases over a 30-day window, as JSON; accepts limit (max 100)
+- [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out, the newest releases over a 30-day window, as JSON; accepts limit (max 100)
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
 - [Artists API](${siteUrl}/api/v1/artists): every artist Fluncle holds, A to Z, paginated, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Mixtapes API](${siteUrl}/api/v1/mixtapes): Fluncle's own DJ mixtapes as JSON, each a checkpoint set with an F-marked Log ID and its tracklist; browse them at ${siteUrl}/mixtapes${galaxiesLine}
@@ -406,7 +406,7 @@ Fluncle is a single drum & bass selector, not a team: drum & bass end to end, ro
 
 ## How to read a Log ID
 
-Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is minted once, never reassigned, and resolves to a log page at ${siteUrl}/log/<id>.
+Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, for example 004.7.2I, full form fluncle://004.7.2I. The sector counts the days from the epoch (2026-05-30) to the day Fluncle found the tune; the tail is a stable signature derived from the recording itself. Each one is stamped once, never reassigned, and resolves to a log page at ${siteUrl}/log/<id>.
 
 ## The findings (${totalCount})
 
