@@ -6,6 +6,7 @@ import {
   diversifyRanked,
   type DiversitySignals,
   DUPLICATE_CAPTURE_TIER,
+  qualifiedArtistsDigest,
   rankCorpus,
 } from "./catalogue";
 
@@ -203,35 +204,46 @@ describe("capturePriorityFor — the negative band is distinct and ordered", () 
 });
 
 describe("rankCorpus — the staleness fingerprint", () => {
+  const digest = qualifiedArtistsDigest(["a", "b"]);
+
   it("moves when a finding is logged, and when one is embedded", () => {
-    expect(rankCorpus(60, 60, 0)).toBe("v5:60:60:0");
+    expect(rankCorpus(60, 60, 0, "d")).toBe("v5:60:60:0:d");
     // A new finding lands (unembedded): the affinity corpus changed, so every ranked row is stale.
-    expect(rankCorpus(61, 60, 0)).not.toBe(rankCorpus(60, 60, 0));
+    expect(rankCorpus(61, 60, 0, "d")).not.toBe(rankCorpus(60, 60, 0, "d"));
     // Then it embeds: a new vector to be near, so every scored row is stale too.
-    expect(rankCorpus(61, 61, 0)).not.toBe(rankCorpus(61, 60, 0));
+    expect(rankCorpus(61, 61, 0, "d")).not.toBe(rankCorpus(61, 60, 0, "d"));
   });
 
   it("moves when the QUALIFIED-ARTIST SET changes — the second-order authorization signal (v5)", () => {
     // Authorization depends on which artists are qualified, which the two finding counts do not see.
-    // v5 folds the qualified-set SIZE, not the raw edge count: an artist crossing the qualification
-    // line flips every catalogue track that credits them, so the fingerprint must move.
-    expect(rankCorpus(60, 60, 42)).not.toBe(rankCorpus(60, 60, 41));
+    // v5 folds the qualified set: an artist crossing the qualification line flips every catalogue
+    // track that credits them (size grows), so the fingerprint must move.
+    expect(rankCorpus(60, 60, 42, "d")).not.toBe(rankCorpus(60, 60, 41, "d"));
   });
 
-  it("does NOT move on a graph write that leaves the qualified set unchanged (v5's whole point)", () => {
-    // The daily-churn bug v5 kills: v4 folded the total `track_artists` edge count, so every one of
-    // the thousands of daily crawler edge writes re-ranked all ~55k rows even when no artist's
-    // qualification changed. v5's fingerprint is blind to an edge write that tips no one — that
-    // first-order case is re-staled per-track at the write path instead (catalogue-rank-restale.ts).
-    expect(rankCorpus(60, 60, 42)).toBe(rankCorpus(60, 60, 42));
+  it("moves on a same-size MEMBERSHIP SWAP — the batch-ruling money-bug hole the size alone left open", () => {
+    // The digest arm's whole reason to exist: one artist qualifies as another de-qualifies in a
+    // batch ruling, so the SIZE is identical but the membership differs — and a de-qualified artist's
+    // other-label tracks must re-stale (a wrong capture is otherwise bought). Same count, different
+    // digest → different fingerprint.
+    const swapped = qualifiedArtistsDigest(["a", "c"]);
+    expect(swapped).not.toBe(digest);
+    expect(rankCorpus(60, 60, 2, swapped)).not.toBe(rankCorpus(60, 60, 2, digest));
+  });
+
+  it("the digest is order-independent (ids arrive sorted from SQL) and stable across calls", () => {
+    // The tick reads `... order by artist_id`, so the input is always sorted; the digest of the same
+    // membership is identical every tick (no spurious re-rank), and does not depend on insertion order.
+    expect(qualifiedArtistsDigest(["a", "b"])).toBe(qualifiedArtistsDigest(["a", "b"]));
+    expect(rankCorpus(60, 60, 2, digest)).toBe(rankCorpus(60, 60, 2, digest));
   });
 
   it("catches a DELETED finding, because it is compared for INEQUALITY and not order", () => {
-    expect(rankCorpus(59, 59, 0)).not.toBe(rankCorpus(60, 60, 0));
+    expect(rankCorpus(59, 59, 0, "d")).not.toBe(rankCorpus(60, 60, 0, "d"));
   });
 
   it("is a no-op fingerprint on an unchanged archive", () => {
-    expect(rankCorpus(60, 60, 42)).toBe(rankCorpus(60, 60, 42));
+    expect(rankCorpus(60, 60, 42, digest)).toBe(rankCorpus(60, 60, 42, digest));
   });
 });
 

@@ -1,7 +1,11 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { qualifiedArtistsDigest } from "./catalogue";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+
+/** The digest segment of the fingerprint when no artist is qualified — the state of most fixtures here. */
+const EMPTY_DIGEST = qualifiedArtistsDigest([]);
 
 // THE EAR'S RANKING, PROVEN — against the REAL schema, with vectors we control.
 //
@@ -312,7 +316,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     const first = await rankCatalogue();
     expect(first.scored).toBe(1);
-    expect(first.corpus).toBe("v5:1:1:0");
+    expect(first.corpus).toBe(`v5:1:1:0:${EMPTY_DIGEST}`);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
     // Nothing changed: the fingerprint matches, so there is no candidate at all.
@@ -328,7 +332,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
-    expect(third.corpus).toBe("v5:2:2:0");
+    expect(third.corpus).toBe(`v5:2:2:0:${EMPTY_DIGEST}`);
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
@@ -497,7 +501,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Stamped, with an honest null score — not left stale to be re-picked every tick.
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
-    expect(ranking.catalogue_rank_corpus).toBe("v5:1:0:0");
+    expect(ranking.catalogue_rank_corpus).toBe(`v5:1:0:0:${EMPTY_DIGEST}`);
     expect(summary.remaining).toBe(0);
   });
 });
@@ -862,9 +866,9 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     await rankCatalogue();
 
     // The weighted qualified-artist fragment (`having sum(case when ta.role = 'remixer' …)`) is now
-    // shared (`WEIGHTED_QUALIFIED_ARTISTS_SQL`): `readArchiveAffinity` runs it BARE, while v5's
-    // staleness count phase wraps it inside `count(*) … as qualified_artists`. The affinity read is
-    // the bare one — so exclude the fingerprint count to prove `readArchiveAffinity` still runs ONCE.
+    // shared (`WEIGHTED_QUALIFIED_ARTISTS_SQL`): `readArchiveAffinity` runs it BARE (one arm of the
+    // set), while v5's staleness fingerprint reads the whole set — both arms UNION'd — to hash it. So
+    // the affinity read is the one WITHOUT a `union`, and the fingerprint read is the one WITH it.
     const calls = executeSpy.mock.calls.map((call) => {
       // `Client.execute` is overloaded (string form + object form), so the mock-call arg is typed to
       // the string overload; the affinity reads all use the object form (`{ sql, args }`).
@@ -875,16 +879,14 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     const weightedFragment = calls.filter((sql) =>
       sql.includes("having sum(case when ta.role = 'remixer'"),
     );
-    const affinityReads = weightedFragment.filter((sql) => !sql.includes("as qualified_artists"));
-    const fingerprintCounts = weightedFragment.filter((sql) =>
-      sql.includes("as qualified_artists"),
-    );
+    const affinityReads = weightedFragment.filter((sql) => !sql.includes("union"));
+    const fingerprintReads = weightedFragment.filter((sql) => sql.includes("union"));
     executeSpy.mockRestore();
 
     expect(affinityReads).toHaveLength(1);
-    // And the fingerprint's qualified-set size is read exactly once per tick — the cheap replacement
+    // And the fingerprint's qualified-set digest is read exactly once per tick — the cheap replacement
     // for v4's full `count(*) from track_artists`, not an extra affinity recompute.
-    expect(fingerprintCounts).toHaveLength(1);
+    expect(fingerprintReads).toHaveLength(1);
   });
 
   it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {

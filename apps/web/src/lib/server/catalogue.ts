@@ -47,6 +47,7 @@
 // It is the capture queue's sort key, and it is deliberately a small, explainable ladder
 // rather than a model: the operator has to be able to see why a track is next.
 
+import { createHash } from "node:crypto";
 import { type InStatement } from "@libsql/client/web";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
@@ -572,19 +573,34 @@ function ladderTierForRow(
  * authorization had actually changed. The two ruling counts had the same disease at coarser grain
  * (one label flip re-ranked all 55k, not that label's rows).
  *
- * `v5` folds instead the ONE derived quantity a raw-input change is a proxy FOR: the size of the
- * QUALIFIED-ARTIST SET (`qualifiedArtists`). An `artists.id` is qualified iff it has ≥1 certified
- * finding OR its weighted release count on `enabled` labels is ≥ 3 — exactly the set
- * `capturePriorityFor` authorizes against (`readArchiveAffinity`, the SAME two SQL fragments,
- * `QUALIFIED_ARTIST_SQL`). This set moves ONLY when an artist genuinely crosses the qualification
- * line: a finding lands (already caught by the findings count), a crawled in-lane artist reaches
- * their 3rd enabled-label release, a role flips a weighted count across the threshold, or a label
- * ruling adds/removes releases from an artist's weighted count. It does NOT move on the thousands
- * of daily edge writes to already-qualified / nowhere-near-qualified artists, or on a label ruling
- * that tips no one — so steady-state churn collapses from "every day" to "only when qualification
- * actually changes", which is precisely when a global re-rank is WARRANTED.
+ * `v5` folds instead the ONE derived quantity a raw-input change is a proxy FOR: the QUALIFIED-ARTIST
+ * SET itself, as `"<size>:<digest>"`. An `artists.id` is qualified iff it has ≥1 certified finding OR
+ * its weighted release count on `enabled` labels is ≥ 3 — exactly the set `capturePriorityFor`
+ * authorizes against (`readArchiveAffinity`, the SAME two SQL fragments, `QUALIFIED_ARTISTS_SQL`).
+ * This set moves ONLY when an artist genuinely crosses the qualification line: a finding lands
+ * (already caught by the findings count), a crawled in-lane artist reaches their 3rd enabled-label
+ * release, a role flips a weighted count across the threshold, or a label ruling adds/removes
+ * releases from an artist's weighted count. It does NOT move on the thousands of daily edge writes to
+ * already-qualified / nowhere-near-qualified artists, or on a label ruling that tips no one — so
+ * steady-state churn collapses from "every day" to "only when qualification actually changes", which
+ * is precisely when a global re-rank is WARRANTED.
  *
- * WHY THE SET-SIZE, AND WHY IT IS SUFFICIENT WITH TWO TARGETED WRITE-PATH ARMS. The qualified-set
+ * ── WHY A DIGEST OF THE SET, NOT ITS SIZE — THE SWAP HOLE (2026-07-26) ──────────────────
+ * The first cut of `v5` folded only the set SIZE (`<count>`). That has a real, reachable hole: a
+ * MEMBERSHIP SWAP that leaves the size unchanged. The operator rules labels in BATCHES on
+ * `/admin/labels` — several enable/disable flips in one sitting is his normal workflow. Between two
+ * rank ticks, disabling label L (artist B drops below the weighted threshold, DE-qualifies) while
+ * enabling label M (artist A crosses it, qualifies) leaves the count identical — and B's tracks on
+ * OTHER labels keep their now-wrong authorization forever, the exact money direction (a wrong capture
+ * is bought). So the fingerprint folds the set's SIZE **and** an order-independent DIGEST of its
+ * member ids: the tick reads the qualified ids sorted (`order by artist_id`, ~3.5k rows today, a
+ * bounded read) and hashes the joined string in JS (`sha256`, truncated). Order-stable by the SQL
+ * sort, collision-safe in practice (a swap must both preserve the count AND collide a 64-bit digest),
+ * and — the rule the money bug lives under — it does the collision reasoning in a real hash, NEVER in
+ * SQL length/`unicode` arithmetic where it goes hand-wavy. The size is kept alongside the digest only
+ * to keep the fingerprint human-readable.
+ *
+ * WHY THE SET DIGEST, AND WHY IT IS SUFFICIENT WITH TWO TARGETED WRITE-PATH ARMS. The qualified-set
  * signal covers the SECOND-ORDER authorization change — one artist crossing the line flips the
  * answer for EVERY catalogue track that credits them, including tracks the tipping edge did not
  * touch (the RFC's headline "an artist who moved to a major arrives by himself; his major-label
@@ -593,19 +609,13 @@ function ladderTierForRow(
  * unbounded, un-enumerable fan-out is exactly what a fingerprint (a global re-stale) is the right
  * tool for. The FIRST-ORDER change — a row's OWN edge set changing (an edge-less catalogue row
  * connecting to an ALREADY-qualified artist, the qualified set unmoved) — is NOT caught by the set
- * size, so it is handled at the write path: every `track_artists` edge write nulls its track's
+ * digest, so it is handled at the write path: every `track_artists` edge write nulls its track's
  * `catalogue_rank_corpus` (`linkTracksToArtistEntities`, `upsertTrackArtists`, the two artist
  * backfills, `backfillArtistLinks`). And a label ruling's DIRECT effect on its own tracks
  * (`enabled` authorizes them, `disabled` vetoes them) is likewise nulled per-label at the ruling
- * write (`updateLabelSeedState`), bounded by `tracks_label_id_idx`. Together — set-size fingerprint
+ * write (`updateLabelSeedState`), bounded by `tracks_label_id_idx`. Together — set-digest fingerprint
  * (second-order) + per-track edge nulling (first-order) + per-label ruling nulling (direct) —
  * reproduce every re-stale `v4`'s three raw counts produced, without the daily full-catalogue churn.
- *
- * The one residual: the set SIZE misses a same-tick membership SWAP (one artist qualifies as another
- * de-qualifies, net size 0). It needs two independent threshold crossings inside one sweep-tick
- * interval; an operator ruling (the money-bug trigger) only ever de-qualifies, moving the size down,
- * so the money direction is covered — and the up-crossing artist's tipping edge nulled its own track.
- * Accepted as astronomically rare; a subsequent finding/edge/ruling re-stales the swapped rows.
  *
  * A leading RANKING-LOGIC VERSION is folded in so a change to the sweep's ALGORITHM (not just
  * the corpus) invalidates every stored fingerprint and forces one self-healing full re-rank —
@@ -617,9 +627,10 @@ function ladderTierForRow(
  * of a logged finding whose corpus counts never moved would otherwise keep its stale ear slot;
  * `v4` moved capture authorization from labels to the artist graph (RFC artist-primary-capture,
  * slice 1), so every already-ranked pre-audio row must re-derive its tier under the new gate;
- * `v5` replaced `v4`'s raw graph/ruling counts with the qualified-artist SET size + targeted
+ * `v5` replaced `v4`'s raw graph/ruling counts with the qualified-artist SET size + digest + targeted
  * write-path re-staling (this change) — the version bump forces one final deliberate full re-rank,
- * after which steady state is cheap.
+ * after which steady state is cheap. (The digest arm — closing the batch-ruling membership-swap hole
+ * the size alone left open — was folded in the same `v5` before it ever shipped, so no bump was owed.)
  */
 const RANK_LOGIC_VERSION = "v5";
 
@@ -627,8 +638,18 @@ export function rankCorpus(
   findings: number,
   embeddedFindings: number,
   qualifiedArtists: number,
+  qualifiedDigest: string,
 ): string {
-  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}:${qualifiedArtists}`;
+  return `${RANK_LOGIC_VERSION}:${findings}:${embeddedFindings}:${qualifiedArtists}:${qualifiedDigest}`;
+}
+
+/**
+ * The order-independent DIGEST of the qualified-artist id set (see `rankCorpus` § the swap hole). The
+ * ids arrive already sorted from SQL (`order by artist_id`), so the join is deterministic; a truncated
+ * `sha256` gives a 64-bit collision-safe fingerprint of the exact membership without SQL-side hashing.
+ */
+export function qualifiedArtistsDigest(sortedArtistIds: readonly string[]): string {
+  return createHash("sha256").update(sortedArtistIds.join("\n")).digest("hex").slice(0, 16);
 }
 
 // ── The sweep ────────────────────────────────────────────────────────────────────────
@@ -1157,30 +1178,39 @@ export async function rankCatalogue(
   const db = await getDb();
   const countResult = await db.execute({
     args: [],
-    // The corpus fingerprint's inputs, in ONE cheap read (`rankCorpus`). The two finding counts are
-    // the corpus half; `qualified_artists` is the AUTHORIZATION half — the SIZE of the qualified set
-    // `capturePriorityFor` gates on (RFC artist-primary-capture, slice 1), the precise replacement
-    // for `v4`'s raw edge/ruling counts. It moves only when an artist actually crosses the
-    // qualification line, not on the thousands of daily edge writes; the first-order "this row's own
-    // edges changed" case is nulled at the edge write path, and a label ruling's direct effect at the
-    // ruling write. `QUALIFIED_ARTISTS_SQL` is the SAME fragment `readArchiveAffinity` builds the set
-    // from, so the size counted here and the set authorized against can never drift. Bounded by
-    // findings + the enabled-label subset — never the growing catalogue (unlike `v4`'s full
-    // `count(*) from track_artists`, which this also retires).
+    // The two finding counts — the corpus half of the fingerprint (`rankCorpus`).
     sql: `select
             (select count(*) from findings) as findings,
             (select count(*) from findings join tracks ft on ft.track_id = findings.track_id
-             where ft.embedding_blob is not null) as embedded,
-            (select count(*) from (${QUALIFIED_ARTISTS_SQL})) as qualified_artists`,
+             where ft.embedding_blob is not null) as embedded`,
   });
   const counts = typedRows<{
     embedded: number;
     findings: number;
-    qualified_artists: number;
   }>(countResult.rows)[0];
   const findings = Number(counts?.findings ?? 0);
   const embeddedFindings = Number(counts?.embedded ?? 0);
-  const corpus = rankCorpus(findings, embeddedFindings, Number(counts?.qualified_artists ?? 0));
+
+  // The AUTHORIZATION half — the qualified-artist SET, read as its SORTED member ids so the tick can
+  // fold both its size and an order-independent DIGEST into the fingerprint (see `rankCorpus` § the
+  // swap hole: the size alone misses a batch-ruling membership swap, the money direction). One bounded
+  // read (~3.5k ids today) over the SAME `QUALIFIED_ARTISTS_SQL` fragment `readArchiveAffinity` builds
+  // the membership set from, so the set counted here and the set authorized against can never drift.
+  // Bounded by findings + the enabled-label subset — never the growing catalogue (unlike `v4`'s full
+  // `count(*) from track_artists`, which this also retires).
+  const qualifiedResult = await db.execute({
+    args: [],
+    sql: `select artist_id from (${QUALIFIED_ARTISTS_SQL}) order by artist_id`,
+  });
+  const qualifiedArtistIds = typedRows<{ artist_id: string }>(qualifiedResult.rows).map(
+    (row) => row.artist_id,
+  );
+  const corpus = rankCorpus(
+    findings,
+    embeddedFindings,
+    qualifiedArtistIds.length,
+    qualifiedArtistsDigest(qualifiedArtistIds),
+  );
 
   // The stale catalogue rows: fingerprint drift (the corpus moved) OR a vector that arrived
   // after the row was last ranked (it still carries a NON-NEGATIVE pre-audio tier the scoring
