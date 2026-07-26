@@ -224,29 +224,31 @@ const PROOFS: Proof[] = [
   {
     // catalogue-groups.ts:463-474 listLabelCatalogue artist_slugs — the NOCASE name fold. With only a
     // BINARY artists.name index, SQLite builds a per-request AUTOMATIC COVERING INDEX over ALL artists.
+    // PROVEN hosted at 150k: the bare `(name collate nocase)` index did NOT flip the plan (the join still
+    // scans all artists to fetch slug); the COVERING form `(name collate nocase, slug)` did — the slug
+    // rides the index so the join becomes a seek. The +slug is essential; ship the covering index.
     after: [{ args: [MEGA_LABEL_ID], sql: labelCatalogueFoldSql() }],
     baseline: [{ args: [MEGA_LABEL_ID], sql: labelCatalogueFoldSql() }],
     index: {
-      ddl: `create index if not exists artists_name_nocase_idx on artists (name collate nocase)`,
+      ddl: `create index if not exists artists_name_nocase_idx on artists (name collate nocase, slug)`,
       name: "artists_name_nocase_idx",
     },
     item: 11,
     rewrite: false,
-    title: "label render: automatic NOCASE index → artists_name_nocase_idx",
+    title: "label render: automatic NOCASE index → artists_name_nocase_idx (covering, +slug)",
   },
   {
     // track-work.ts:385-392 analyze kindClause (scope=all page read). No covering index today → scans
     // captured rows every enrich tick. tracks_analyze_queue_idx mirrors tracks_embed_queue_idx.
-    // CAVEAT the hosted run will confirm: the query WHERE carries an EXTRA `analyzed_at is null`
-    // disjunct the index predicate does NOT, so the query is BROADER than the partial index and
-    // SQLite cannot use it (a local EXPLAIN shows a bare `SCAN t`). Expect idx=N unless the fix ALSO
-    // drops `analyzed_at is null` from the query (redundant when analysis always writes both) or adds
-    // it to the index predicate — a real proof-engine finding, not a bench defect.
+    // The index predicate is WIDENED to match the query's `analyzed_at is null` disjunct exactly (adding
+    // it here, not dropping it from the query). PROVEN hosted at 150k even so: the planner STILL won't
+    // pick it — the WORK_ORDER `ORDER BY` forces a table read (the sort columns aren't in the index), so
+    // the partial index buys nothing without an explicit `INDEXED BY` hint. DEFERRED — a design call.
     after: [{ args: [50], sql: analyzeWorklistSql() }],
     baseline: [{ args: [50], sql: analyzeWorklistSql() }],
     index: {
       ddl: `create index if not exists tracks_analyze_queue_idx on tracks(track_id)
-            where source_audio_key is not null and (analyzed_from is null or analyzed_from <> 'full')`,
+            where source_audio_key is not null and (analyzed_at is null or analyzed_from is null or analyzed_from <> 'full')`,
       name: "tracks_analyze_queue_idx",
     },
     item: 12,
