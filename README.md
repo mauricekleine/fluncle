@@ -26,22 +26,24 @@ Crawler and discovery surfaces (all under <https://www.fluncle.com>): `/robots.t
 ## Monorepo Layout
 
 ```text
-apps/cli            Bun/TypeScript CLI. Thin client for public reads and admin API calls.
-apps/dns            Go DNS server behind dig.fluncle.com — findings answered over DNS TXT (docs/dig.md).
-apps/extension      Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
-apps/mobile         Expo React Native app (feed-first Stories + push). Thin client of the public API.
-apps/raycast        Raycast extension. Thin client that shells out to the CLI.
-apps/ssh            Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
-apps/web            TanStack Start public web app and server-side Fluncle API.
-packages/contracts  oRPC contracts for the public + admin HTTP API (the contract-first surface).
-packages/live       The live runtime: the glass (WebGL renderer) + the bridge (plan + fingerprint identity + supervisor + phone remote).
-packages/media      Remotion kit for static image assets (link-preview cards, covers).
-packages/registry   The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
-packages/skills     Agent skills: operator runbooks + creative doctrine. Installed via bun run skills:install.
-packages/sprites    Fluncle's pixel-sprite family — the Galaxy game's sprites. Owns the PNGs; the web build mirrors them into public/.
-packages/tokens     Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
-packages/ui         Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web.
-packages/video      Remotion kit for per-track social videos (the Nostalgic Cosmos).
+apps/cli              Bun/TypeScript CLI. Thin client for public reads and admin API calls.
+apps/dns              Go DNS server behind dig.fluncle.com — findings answered over DNS TXT (docs/dig.md).
+apps/extension        Fluncle Lens, an MV3 Chrome extension. Linkifies fluncle:// coordinates on any page.
+apps/mobile           Expo React Native app (feed-first Stories + push). Thin client of the public API.
+apps/raycast          Raycast extension. Thin client that shells out to the CLI.
+apps/sonar            Rust in-memory exact-SIMD vector search engine — the whole MuQ corpus in RAM (docs/vector-serving.md).
+apps/ssh              Go Wish/Bubble Tea SSH terminal behind ssh rave.fluncle.com. Thin client of the public API.
+apps/web              TanStack Start public web app and server-side Fluncle API.
+packages/contracts    oRPC contracts for the public + admin HTTP API (the contract-first surface).
+packages/live         The live runtime: the glass (WebGL renderer) + the bridge (plan + fingerprint identity + supervisor + phone remote).
+packages/media        Remotion kit for static image assets (link-preview cards, covers).
+packages/registry     The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
+packages/skills       Agent skills: operator runbooks + creative doctrine. Installed via bun run skills:install.
+packages/sprites      Fluncle's pixel-sprite family — the Galaxy game's sprites. Owns the PNGs; the web build mirrors them into public/.
+packages/test-support Shared test helpers — the no-network rail and the test preload.
+packages/tokens       Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
+packages/ui           Shared @fluncle/ui design system: the Shadcn base + the Nostalgic Cosmos tokens, consumed by apps/web.
+packages/video        Remotion kit for per-track social videos (the Nostalgic Cosmos).
 ```
 
 The deployed web app owns the Spotify, Telegram, Turso, and Resend secrets. Every API route is served canonically under `/api/v1/*`, with the bare `/api/*` path kept as a permanent back-compat alias (a shared handler mounted at both paths, not a redirect, so POST bodies survive). Public reads are served by `/api/v1/tracks` (with `since`/`until` discovery windows), `/api/v1/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/v1/newsletter`, which the web app relays to Resend. The mobile app registers for push via `/api/v1/devices` (`register_device` / `deregister_device`); the web app then relays a notification to the Expo Push Service when a finding or mixtape publishes — best-effort and a no-op until `EXPO_ACCESS_TOKEN` is set, like the Telegram/Last.fm side-channels. Admin mutations are served by authenticated `/api/v1/admin/*` routes. Raycast must keep calling `fluncle`.
@@ -216,28 +218,20 @@ Private account endpoints are intentionally separate from anonymous archive DTOs
 
 ### Deploy Web To Cloudflare
 
-The web app deploys as a Cloudflare Worker through Wrangler. Keep secrets out of `wrangler.jsonc`; set them as Worker secrets:
+The web app deploys as a Cloudflare Worker through Wrangler. Keep secrets out of `wrangler.jsonc`; set them as Worker secrets.
+
+The authoritative env inventory is the committed `apps/web/.dev.vars.tpl` — field for field, that template is the Worker secret set. Every var it carries must exist as a Worker secret for its feature to light up in production (the optional side-channels no-op cleanly when absent, so an unset one costs only that leg). The core five:
 
 ```bash
 bun run --cwd apps/web wrangler login
-bun run --cwd apps/web wrangler secret put FLUNCLE_API_TOKEN
-bun run --cwd apps/web wrangler secret put BETTER_AUTH_SECRET
-bun run --cwd apps/web wrangler secret put BETTER_AUTH_URL
 bun run --cwd apps/web wrangler secret put TURSO_DATABASE_URL
 bun run --cwd apps/web wrangler secret put TURSO_AUTH_TOKEN
-bun run --cwd apps/web wrangler secret put SPOTIFY_CLIENT_ID
-bun run --cwd apps/web wrangler secret put SPOTIFY_CLIENT_SECRET
-bun run --cwd apps/web wrangler secret put SPOTIFY_REDIRECT_URI
-bun run --cwd apps/web wrangler secret put SPOTIFY_PLAYLIST_ID
-bun run --cwd apps/web wrangler secret put TELEGRAM_BOT_TOKEN
-bun run --cwd apps/web wrangler secret put TELEGRAM_CHANNEL_ID
-bun run --cwd apps/web wrangler secret put DISCORD_WEBHOOK_URL
-bun run --cwd apps/web wrangler secret put RESEND_API_KEY
-bun run --cwd apps/web wrangler secret put RESEND_SEGMENT_ID
-bun run --cwd apps/web wrangler secret put RESEND_FROM
+bun run --cwd apps/web wrangler secret put BETTER_AUTH_SECRET
+bun run --cwd apps/web wrangler secret put BETTER_AUTH_URL
+bun run --cwd apps/web wrangler secret put ADMIN_SESSION_SECRET
 ```
 
-For local Worker previews and local migration commands, render `apps/web/.dev.vars` from the committed `apps/web/.dev.vars.tpl` template. Local web secrets live in a Fluncle 1Password item with fields named exactly like the env vars; the item path is supplied by `FLUNCLE_1PASSWORD_ENV_ITEM` so the public template does not expose vault names. Set `FLUNCLE_1PASSWORD_ACCOUNT` and `FLUNCLE_1PASSWORD_ENV_ITEM` in your shell, keep the 1Password desktop app unlocked, then run `db:secrets`. Leave the `TURSO_DATABASE_URL` pair to `db:refresh-dev` — it seeds a local libSQL database from a production snapshot and points that pair at the local server. The snapshot is pulled by `db:pull-prod`, which reads production credentials from the `Turso Production Credentials` item in the Fluncle 1Password vault (so `op` must be unlocked); see [docs/local-database.md](./docs/local-database.md):
+For local Worker previews and local migration commands, render `apps/web/.dev.vars` from the committed `apps/web/.dev.vars.tpl` template. Local web secrets live in a Fluncle 1Password item with fields named exactly like the env vars; the item path is supplied by `FLUNCLE_1PASSWORD_ENV_ITEM` so the public template does not expose vault names. Set `FLUNCLE_1PASSWORD_ACCOUNT` and `FLUNCLE_1PASSWORD_ENV_ITEM` in your shell, keep the 1Password desktop app unlocked, then run `db:secrets`. Leave the `TURSO_DATABASE_URL` pair to `db:refresh-dev` — it seeds a local libSQL database from a production snapshot and points that pair at the local server. The snapshot is pulled by `db:pull-prod`, which reads production credentials at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (so `op` must be unlocked; the concrete item lives in the private ops runbook); see [docs/local-database.md](./docs/local-database.md):
 
 ```bash
 bun run --cwd apps/web db:secrets
@@ -245,7 +239,7 @@ bun run --cwd apps/web db:refresh-dev
 bun run --cwd apps/web preview
 ```
 
-Production keeps using the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which is the committed script `db:migrate && db:backfill && wrangler deploy`. Prod Turso credentials come from the Cloudflare build/deploy environment, so `db:migrate` runs against `fluncle`. To run a production migration by hand instead, use the `Turso - Production` item in the Fluncle 1Password vault through the `op` CLI, then run `db:migrate` deliberately.
+Production keeps using the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which is the committed script `db:migrate && db:backfill && wrangler deploy`. Prod Turso credentials come from the Cloudflare build/deploy environment, so `db:migrate` runs against `fluncle`. To run a production migration by hand instead, load the production credentials through the `op` CLI from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (the concrete item lives in the private ops runbook), then run `db:migrate` deliberately.
 
 To deploy manually from a checkout (builds locally, no migrate):
 
@@ -287,7 +281,7 @@ bun run social:preview <track-id>
 
 This fetches the track, resolves and analyzes a preview clip, extracts the artwork palette, and renders to `packages/video/out/<track-id>.mp4` (props land alongside as `out/<track-id>.props.json`). Add `--skip-render` to stop after the props JSON, `--composition <Id>` to render a registered composition other than the exemplar, or run `bun run --cwd packages/video studio` to scrub the composition live.
 
-Rendering is local-only; publishing the resulting clips to any platform is out of scope. See [packages/video/README.md](./packages/video/README.md) for the machinery, the archive contract, and the pipeline; the creative doctrine lives in the [fluncle-video skill](./packages/skills/fluncle-video).
+`social:preview` is the local dev loop. Production renders run unattended on the box render conductor, which wakes a scale-to-zero GPU box, renders one queued finding, and ships the bundle to R2 — see [docs/agents/render-conductor.md](./docs/agents/render-conductor.md). Publishing the finished clip is a separate leg: the server pushes to TikTok and YouTube through its Postiz integration, driven by the `fluncle-publish-advance` box cron, with the [fluncle-publish skill](./packages/skills/fluncle-publish) as the doctrine. See [packages/video/README.md](./packages/video/README.md) for the machinery, the output contract, and the pipeline; the creative doctrine lives in the [fluncle-video skill](./packages/skills/fluncle-video).
 
 ## Deploy CLI To A VPS
 

@@ -31,7 +31,7 @@ ${response.sessionKey}
 
   bun run --cwd apps/web wrangler secret put LASTFM_SESSION_KEY
 
-Also store it in 1Password (Fluncle vault) alongside the API key + shared secret.`);
+Also store it in your password manager alongside the API key + shared secret.`);
 
     return;
   }
