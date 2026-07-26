@@ -159,6 +159,9 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
       signal: AbortSignal.timeout(SONAR_TIMEOUT_MS),
     });
 
+    // TEMP sonar-log-debug — remove after diagnosis.
+    console.log("[sonar-dbg] fetch-done", { index: request.index, status: response.status });
+
     if (!response.ok) {
       return null;
     }
@@ -166,7 +169,9 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
     const payload = (await response.json()) as unknown;
 
     return parseMatches(payload);
-  } catch {
+  } catch (error) {
+    // TEMP sonar-log-debug — remove after diagnosis.
+    console.log("[sonar-dbg] fetch-threw", { err: String(error), index: request.index });
     // A timeout, a DNS failure, a 5xx that threw, a malformed base URL — every one of them means
     // the same thing to the caller, and none of them may take a page down with them.
     return null;
