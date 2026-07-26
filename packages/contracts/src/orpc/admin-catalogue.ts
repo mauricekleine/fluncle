@@ -742,8 +742,9 @@ export const AnchorCandidateSchema = z
  * trusted) and, on a hit, writes the `spotify_uri`/`spotify_url` anchor + links the candidate's
  * artists by their stable id. Two rungs, precision over recall: exact ISRC first (the actor returns
  * each candidate's ISRC), else the verified search triple (folded artist set + base title + version
- * descriptor + duration within ±2s). EVERY attempt stamps `spotify_anchor_attempted_at` — a hit AND
- * a miss — so the worklist's re-ask backoff can fire.
+ * descriptor + duration within ±2s). EVERY attempt stamps `spotify_anchor_attempted_at` and bumps
+ * `spotify_anchor_attempts` — a hit AND a miss — so the worklist's re-ask backoff can fire and its
+ * retry cap (`ANCHOR_MAX_ATTEMPTS`) can eventually retire a row that is simply not on Spotify.
  *
  * It writes only catalogue-identity columns and never certifies (the `rank_catalogue`/`verify_capture`
  * class), so the box's agent token drives it. 404 when the track does not exist; 409 when it is
@@ -891,9 +892,9 @@ export const setAnchorSearch = oc
  * stamp-and-back-off their full misses, so the HIGHER-priority rows skipped during the outage would
  * otherwise wait out the full 14-day re-ask backoff while Apify works lower-priority rows first — a
  * priority inversion. Flipping back ON nulls the `spotify_anchor_attempted_at` stamp on exactly those
- * off-window deferrals (every stamp written while the box made ZERO Apify attempts), so they re-enter the
- * priority-ordered worklist immediately; genuine prior backoffs, which all predate the off-window, are
- * untouched. `requeued` is `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
+ * off-window deferrals (every stamp written while the box made ZERO Apify attempts) and gives their
+ * retry-cap attempt back with it, so they re-enter the priority-ordered worklist immediately with their
+ * full budget of tries; genuine prior backoffs, which all predate the off-window, are untouched. `requeued` is `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
  */
 export const setAnchorApify = oc
   .route({

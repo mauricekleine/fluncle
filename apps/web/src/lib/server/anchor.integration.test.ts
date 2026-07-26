@@ -73,12 +73,14 @@ describe("anchorTrack — the exact-ISRC rung", () => {
     expect(result).toEqual({ anchored: true, verifiedBy: "isrc" });
 
     const row = await db.execute(
-      "select spotify_uri, spotify_url, album_image_url, spotify_anchor_attempted_at from tracks where track_id = 'mb_rec-1'",
+      "select spotify_uri, spotify_url, album_image_url, spotify_anchor_attempted_at, spotify_anchor_attempts from tracks where track_id = 'mb_rec-1'",
     );
     expect(text(row.rows[0]?.spotify_uri)).toBe("spotify:track:spotAnchor001");
     expect(text(row.rows[0]?.spotify_url)).toBe("https://open.spotify.com/track/spotAnchor001");
     expect(text(row.rows[0]?.album_image_url)).toBe("https://i.scdn.co/image/cover");
     expect(row.rows[0]?.spotify_anchor_attempted_at).not.toBeNull();
+    // The retry counter moves with the stamp on a HIT too — one attempt, one bump, from a NULL start.
+    expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(1);
 
     // The artist was minted (folded on the stable id) and the edge stamped — and NO finding.
     const artist = await db.execute(
@@ -255,10 +257,38 @@ describe("anchorTrack — a miss stamps the attempt but writes no anchor", () =>
 
     expect(result).toEqual({ anchored: false, verifiedBy: null });
     const row = await db.execute(
-      "select spotify_uri, spotify_anchor_attempted_at from tracks where track_id = 'mb_miss'",
+      "select spotify_uri, spotify_anchor_attempted_at, spotify_anchor_attempts from tracks where track_id = 'mb_miss'",
     );
     expect(row.rows[0]?.spotify_uri).toBeNull();
     expect(row.rows[0]?.spotify_anchor_attempted_at).not.toBeNull();
+    // A NULL counter reads as zero, so the first miss lands on 1 (no `.default()` on the column).
+    expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(1);
+  });
+
+  it("ACCUMULATES the retry counter across attempts, so the cap can be reached", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      title: "Dribble",
+      trackId: "mb_again",
+    });
+    await db.execute("update tracks set spotify_anchor_attempts = 4 where track_id = 'mb_again'");
+
+    await anchorTrack("mb_again", [
+      {
+        artists: [{ name: "Muffler" }],
+        durationMs: 203_500,
+        spotifyTrackId: "spotFar",
+        title: "Dribble",
+      },
+    ]);
+
+    const row = await db.execute(
+      "select spotify_anchor_attempts from tracks where track_id = 'mb_again'",
+    );
+    expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(5);
   });
 });
 
@@ -369,5 +399,51 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     const work = await listTrackWork({ kind: "anchor", limit: 50 });
 
     expect(work.map((item) => item.trackId)).toContain("mb_stale");
+  });
+
+  it("RETIRES a row at the retry cap and still offers the one below it", async () => {
+    const { ANCHOR_MAX_ATTEMPTS, listTrackWork } = await import("./track-work");
+
+    // At the cap — out of the queue for good, however long ago it was last attempted.
+    await seedUnanchored({ title: "Spent", trackId: "mb_capped" });
+    await db.execute("update tracks set spotify_anchor_attempts = ? where track_id = 'mb_capped'", [
+      ANCHOR_MAX_ATTEMPTS,
+    ]);
+    // One below the cap — still has a try left.
+    await seedUnanchored({ title: "One Left", trackId: "mb_nearly" });
+    await db.execute("update tracks set spotify_anchor_attempts = ? where track_id = 'mb_nearly'", [
+      ANCHOR_MAX_ATTEMPTS - 1,
+    ]);
+    // Never attempted — a NULL counter must read as zero, not drop the row.
+    await seedUnanchored({ title: "Fresh", trackId: "mb_null_attempts" });
+
+    const work = await listTrackWork({ kind: "anchor", limit: 50 });
+    const ids = work.map((item) => item.trackId);
+
+    expect(ids).not.toContain("mb_capped");
+    expect(ids).toContain("mb_nearly");
+    expect(ids).toContain("mb_null_attempts");
+  });
+
+  it("excludes an UNANCHORABLE sole credit, and keeps a multi-artist credit that carries a real name", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedUnanchored({ artists: ["Unknown Artist"], trackId: "mb_unknown" });
+    await seedUnanchored({ artists: ["Various Artists"], trackId: "mb_various" });
+    await seedUnanchored({ artists: ["VA"], trackId: "mb_va" });
+    await seedUnanchored({ artists: ["Unknown"], trackId: "mb_bare_unknown" });
+    await seedUnanchored({ artists: ["[unknown]"], trackId: "mb_bracket_unknown" });
+    await seedUnanchored({ artists: ["traditional"], trackId: "mb_traditional" });
+    // Case is not identity — the match folds it.
+    await seedUnanchored({ artists: ["UNKNOWN ARTIST"], trackId: "mb_shouty_unknown" });
+    // A real name rides along, so the row is anchorable and stays.
+    await seedUnanchored({ artists: ["Unknown Artist", "Calibre"], trackId: "mb_with_calibre" });
+    // A name that merely CONTAINS a placeholder word is a real artist.
+    await seedUnanchored({ artists: ["Unknown Error"], trackId: "mb_real_name" });
+
+    const work = await listTrackWork({ kind: "anchor", limit: 50 });
+    const ids = work.map((item) => item.trackId);
+
+    expect(ids.sort()).toEqual(["mb_real_name", "mb_with_calibre"]);
   });
 });

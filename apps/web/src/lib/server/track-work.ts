@@ -104,6 +104,55 @@ export type TrackWorkKind = "analyze" | "anchor" | "capture" | "embed";
 export const ANCHOR_REASK_AFTER_DAYS = 14;
 
 /**
+ * THE ANCHOR RETRY CAP — how many FULL attempts a catalogue row gets before the worklist stops
+ * offering it (`tracks.spotify_anchor_attempts`, incremented in the same UPDATE as the stamp).
+ *
+ * The backoff window above bounds the RATE of the spend; this bounds its TOTAL. Without a cap the
+ * window is a treadmill: a recording genuinely absent from Spotify — a white label, a dubplate, a
+ * digital-only release the DSPs never got — is re-asked every fortnight forever, so its lifetime cost
+ * is unbounded while its odds of ever anchoring only fall. Six attempts at the 14-day cadence is
+ * ~3 months of looking, which is long enough for the case the window exists for (a small-label
+ * recording lands on Spotify weeks after its MusicBrainz release), and after that the row is left to
+ * REST — never deleted, never marked failed, just no longer bought. A row that does appear later is
+ * still recoverable: the counter is a queue gate, not a verdict, and the operator can zero it.
+ */
+export const ANCHOR_MAX_ATTEMPTS = 6;
+
+/**
+ * THE UNANCHORABLE ARTIST CREDITS — names that are not an identity, so no search can ever anchor a
+ * row billed to them. A crawled release with no artist credit arrives as `Unknown Artist` /
+ * `Various Artists` / a `[unknown]` placeholder, and the anchor gate's verified triple needs a real
+ * artist to match on: such a row misses every rung, gets stamped, and comes back a fortnight later to
+ * miss again. It is unanchorable BY CONSTRUCTION, so it never belongs in the queue at all — the cap
+ * would eventually retire it, but only after six billed searches that could not have succeeded.
+ *
+ * Matched against the WHOLE `artists_json` string, which is why this is a set of exact JSON literals
+ * rather than a name list: `artists_json` is always `JSON.stringify(string[])`, so the SOLE-credit
+ * case is one canonical string per name and a plain `lower(artists_json) not in (…)` answers it with
+ * bound params and no per-row work. A MULTI-artist credit that merely CONTAINS one of these names
+ * ( `["Unknown Artist","Calibre"]` ) carries a real name too and stays IN the queue — deliberately,
+ * and the reason this is not a `like`/`json_each` test: `json_each` executes per row on hosted Turso
+ * (the ratified trap), and the hot worklist read cannot afford it.
+ */
+const UNANCHORABLE_ARTIST_CREDITS = [
+  "Unknown Artist",
+  "Various Artists",
+  "VA",
+  "Unknown",
+  "[unknown]",
+  "traditional",
+];
+
+/**
+ * The `artists_json` literals for {@link UNANCHORABLE_ARTIST_CREDITS}, lower-cased for the SQL
+ * `lower(artists_json) not in (…)` compare and built with the same `JSON.stringify` the write paths
+ * use, so the strings match byte-for-byte by construction rather than by hand-transcription.
+ */
+const UNANCHORABLE_ARTISTS_JSON = UNANCHORABLE_ARTIST_CREDITS.map((name) =>
+  JSON.stringify([name]).toLowerCase(),
+);
+
+/**
  * Which half of the archive a worklist covers.
  *
  *   - `findings`  — certified tracks only (a `findings` row exists).
@@ -310,18 +359,33 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //                                     row is out of the telescope, so an anchor buys nothing.
     //   · `duplicate_of_track_id is null` — a known duplicate of a finding is already in the archive.
     //   · the RE-ASK BACKOFF            — never attempted, OR attempted longer ago than the window.
+    //   · the RETRY CAP                 — under `ANCHOR_MAX_ATTEMPTS` full attempts, so the window is
+    //                                     a bounded run of tries and not a treadmill. NULL attempts
+    //                                     coalesce to 0 (the column carries no `.default()` on
+    //                                     purpose — see schema.ts).
+    //   · ANCHORABLE AT ALL             — the sole credit is a real artist, not an `Unknown Artist` /
+    //                                     `Various Artists` placeholder no search could ever match
+    //                                     (`UNANCHORABLE_ARTISTS_JSON`).
+    // The last two are residual filters on the page `tracks_anchor_fill_queue_idx` hands back — the
+    // same class as `duration_ms > 0` / `dismissed_at is null` beside them, evaluated on rows the walk
+    // has already read, so the query PLAN is unchanged (no new index, no widened index predicate).
     const cutoff = new Date(
       Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
+    // The cap is a trusted module int (interpolated, exactly as `CAPTURE_MAX_FAILURES` is in the
+    // capture arm below); the cutoff and the unanchorable literals are BOUND.
+    const unanchorable = UNANCHORABLE_ARTISTS_JSON.map(() => "?").join(", ");
 
     return {
-      args: [cutoff],
+      args: [cutoff, ...UNANCHORABLE_ARTISTS_JSON],
       sql: `f.track_id is null
             and t.spotify_uri is null
             and t.duration_ms > 0
             and t.dismissed_at is null
             and t.duplicate_of_track_id is null
-            and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)`,
+            and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)
+            and coalesce(t.spotify_anchor_attempts, 0) < ${ANCHOR_MAX_ATTEMPTS}
+            and lower(t.artists_json) not in (${unanchorable})`,
     };
   }
 

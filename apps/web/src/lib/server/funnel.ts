@@ -218,6 +218,12 @@ const STAGE_SCAN_SELECT = `sum(case when f.track_id is null then 1 else 0 end) a
  * attempted INSIDE the re-ask window rather than before it. A shared fragment (a `?` for the window
  * cutoff) so the standalone bench count (`countAnchorBackoff`) and the folded scan's backoff column
  * can only ever agree. Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`.
+ *
+ * It complements the WINDOW guard specifically, not the whole worklist: a row RETIRED by the retry cap
+ * or the unanchorable-credit filter (track-work.ts) still counts here for as long as its last stamp
+ * sits inside the window, then ages out of the bench without ever re-entering the queue. That is the
+ * intended reading — a retired row is RESTING, neither queued nor benched — and it is why the bench is
+ * a "not re-billed yet" gauge rather than a promise that every benched row comes back.
  */
 const ANCHOR_BACKOFF_WHERE = `f.track_id is null
             and t.spotify_uri is null
@@ -310,7 +316,9 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
  * unfiltered superset — a conditional sum over the whole table equals `COUNT(*) … WHERE P` for any
  * predicate P, so the numbers are identical BY CONSTRUCTION, in one scan instead of three (the fold
  * lands on every `/admin/funnel` load AND the daily snapshot). The `?` order is: the four anchor
- * columns (each embeds `kindClause("anchor")`'s single window bind) then the backoff cutoff.
+ * columns (each embeds `kindClause("anchor")`'s own binds — the window cutoff plus the unanchorable
+ * credits — spread verbatim, so the count and the order follow the clause without a hand-kept list)
+ * then the backoff cutoff.
  * `embedding_blob is not null` reads the cell's null flag, not its bytes — no vector crosses the wire.
  * Exported for the fold-equivalence test, which pins it to the three standalone reference queries.
  */

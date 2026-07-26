@@ -52,6 +52,11 @@
 // EVERY ATTEMPTED ROW is stamped `spotify_anchor_attempted_at` — a hit AND a miss — so the anchor
 // worklist can back a missed row off (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of re-asking
 // it every tick (each re-ask is a billed Apify search). See docs/catalogue-crawler.md § the anchor.
+//
+// The same UPDATE also bumps `spotify_anchor_attempts` (`coalesce(…, 0) + 1`) — the RETRY CAP's
+// counter, which is what makes the backoff terminate rather than re-ask forever: at
+// `ANCHOR_MAX_ATTEMPTS` full attempts the worklist stops offering the row (track-work.ts). The stamp
+// and the counter are written together, always — one attempt, one bump — so neither can drift.
 
 import { isAnchorApifyEnabled } from "./anchor-apify";
 import { anchorSpotifySearchAllowed, isAnchorSpotifySearchEnabled } from "./anchor-spotify-search";
@@ -325,7 +330,10 @@ export async function anchorTrack(
     if (stampOnMiss) {
       await db.execute({
         args: [now, trackId],
-        sql: `update tracks set spotify_anchor_attempted_at = ? where track_id = ?`,
+        sql: `update tracks
+              set spotify_anchor_attempted_at = ?,
+                  spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+              where track_id = ?`,
       });
     }
 
@@ -356,7 +364,8 @@ export async function anchorTrack(
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
               isrc = coalesce(isrc, ?),
-              spotify_anchor_attempted_at = ?
+              spotify_anchor_attempted_at = ?,
+              spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
           where track_id = ?`,
   });
 
@@ -632,10 +641,15 @@ export async function recoverIsrcViaDeezer(
 }
 
 /**
- * Stamp a catalogue row's re-ask backoff (`spotify_anchor_attempted_at`) — the SAME write `anchorTrack`
- * makes on a stamped miss. `resolveAnchorFree` calls this ONLY when the Apify kill-flag is OFF and the
- * row is a genuinely-exhausted full miss: with no Apify rung coming to stamp it, the row must back
- * itself off (14 days, track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of recirculating every tick.
+ * Stamp a catalogue row's re-ask backoff (`spotify_anchor_attempted_at`, plus the retry-cap counter
+ * `spotify_anchor_attempts`) — the SAME write `anchorTrack` makes on a stamped miss.
+ * `resolveAnchorFree` calls this ONLY when the Apify kill-flag is OFF and the row is a
+ * genuinely-exhausted full miss: with no Apify rung coming to stamp it, the row must back itself off
+ * (14 days, track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of recirculating every tick.
+ *
+ * A stamp written while the kill-flag is OFF is a DEFERRAL rather than a real attempt, and the
+ * flip-ON requeue undoes both halves of this write together (anchor-apify.ts) — so the counter never
+ * accumulates cap budget against rows Apify never actually got its turn on.
  */
 async function stampAnchorAttempt(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -644,7 +658,10 @@ async function stampAnchorAttempt(
 ): Promise<void> {
   await db.execute({
     args: [now.toISOString(), trackId],
-    sql: `update tracks set spotify_anchor_attempted_at = ? where track_id = ?`,
+    sql: `update tracks
+          set spotify_anchor_attempted_at = ?,
+              spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+          where track_id = ?`,
   });
 }
 

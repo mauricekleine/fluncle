@@ -38,7 +38,9 @@
 // ~14 days while Apify works lower-priority rows first. That is a priority inversion, so flipping the flag
 // back ON re-queues exactly the off-window deferrals: it nulls the `spotify_anchor_attempted_at` stamp on
 // every un-anchored row stamped at-or-after the moment the flag went OFF (recorded in `ANCHOR_APIFY_DISABLED_AT_KEY`),
-// so those rows re-enter the worklist and re-sort by `ANCHOR_ORDER` at their real priority immediately.
+// so those rows re-enter the worklist and re-sort by `ANCHOR_ORDER` at their real priority immediately. It
+// gives the row's RETRY-CAP attempt back at the same time (`spotify_anchor_attempts`, track-work.ts
+// `ANCHOR_MAX_ATTEMPTS`) — a deferral was never a real try, so it must not spend one of the row's finite tries.
 //
 // WHY THAT IS PROVABLY SAFE: while the flag is OFF the box makes ZERO Apify attempts, so EVERY stamp
 // written during the off-window is a "deferred, never actually tried" stamp — never a real miss-backoff.
@@ -87,6 +89,12 @@ export async function isAnchorApifyEnabled(): Promise<boolean> {
  * (`spotify_uri is null`) whose stamp is `>= disabled_at`: every such stamp was written while the box made
  * ZERO Apify attempts, so it is a deferral, never a genuine miss-backoff — and genuine backoffs, which all
  * predate the off-window (`attempted_at < disabled_at`), are left untouched.
+ *
+ * It gives back the RETRY-CAP attempt too (`spotify_anchor_attempts`, track-work.ts
+ * `ANCHOR_MAX_ATTEMPTS`): the counter is incremented in the same UPDATE as every stamp, so undoing a
+ * deferral's stamp without undoing its bump would spend a row's finite tries on attempts Apify never
+ * made — the cap would retire rows the paid rung had never once looked at. `max(… - 1, 0)` floors it,
+ * so the arithmetic can never go negative even if a row is somehow re-queued twice.
  */
 async function requeueOffWindowDeferrals(): Promise<number> {
   const disabledAt = await getSetting(ANCHOR_APIFY_DISABLED_AT_KEY);
@@ -99,7 +107,8 @@ async function requeueOffWindowDeferrals(): Promise<number> {
   const result = await db.execute({
     args: [disabledAt],
     sql: `update tracks
-          set spotify_anchor_attempted_at = null
+          set spotify_anchor_attempted_at = null,
+              spotify_anchor_attempts = max(coalesce(spotify_anchor_attempts, 0) - 1, 0)
           where spotify_uri is null
             and spotify_anchor_attempted_at >= ?`,
   });

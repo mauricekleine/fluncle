@@ -22,16 +22,35 @@ vi.mock("./db", async (importOriginal) => {
 
 /** Insert ONE `tracks` row with a chosen anchor state — the columns the flip-ON requeue reads. */
 async function seedRow(row: {
+  attempts?: null | number;
   attemptedAt: null | string;
   spotifyUri: null | string;
   trackId: string;
 }): Promise<void> {
   await db.execute({
-    args: [row.trackId, JSON.stringify(["Test Artist"]), row.spotifyUri, row.attemptedAt],
+    args: [
+      row.trackId,
+      JSON.stringify(["Test Artist"]),
+      row.spotifyUri,
+      row.attemptedAt,
+      row.attempts ?? null,
+    ],
     sql: `insert into tracks
-            (track_id, title, artists_json, duration_ms, spotify_uri, spotify_anchor_attempted_at)
-          values (?, 'Test Track', ?, 270000, ?, ?)`,
+            (track_id, title, artists_json, duration_ms, spotify_uri, spotify_anchor_attempted_at,
+             spotify_anchor_attempts)
+          values (?, 'Test Track', ?, 270000, ?, ?, ?)`,
   });
+}
+
+/** Read a row's `spotify_anchor_attempts` (the retry-cap counter the requeue gives back). */
+async function attempts(trackId: string): Promise<null | number> {
+  const result = await db.execute({
+    args: [trackId],
+    sql: "select spotify_anchor_attempts from tracks where track_id = ?",
+  });
+  const value = result.rows[0]?.spotify_anchor_attempts;
+
+  return value === null || value === undefined ? null : Number(value);
 }
 
 /** Read a row's `spotify_anchor_attempted_at` (the re-ask backoff stamp the requeue clears). */
@@ -167,5 +186,31 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
 
     expect(requeued).toBe(0);
     expect(await attemptedAt("genuine")).toBe("2026-05-01T00:00:00.000Z");
+  });
+
+  it("(e) flip ON gives the RETRY-CAP attempt back with the stamp — a deferral was never a real try", async () => {
+    const { ANCHOR_APIFY_DISABLED_AT_KEY, setAnchorApifyEnabled } = await import("./anchor-apify");
+    const { getSetting } = await import("./settings");
+
+    await setAnchorApifyEnabled(false);
+    const during = (await getSetting(ANCHOR_APIFY_DISABLED_AT_KEY)) ?? "";
+
+    // Deferred during the outage, having really been attempted 3 times before it.
+    await seedRow({ attemptedAt: during, attempts: 3, spotifyUri: null, trackId: "deferred" });
+    // A never-attempted row deferred during the outage — its NULL counter must FLOOR at 0, never -1.
+    await seedRow({ attemptedAt: during, attempts: null, spotifyUri: null, trackId: "unstamped" });
+    // A genuine pre-off backoff keeps every one of its counted attempts.
+    await seedRow({
+      attemptedAt: "2026-01-01T00:00:00.000Z",
+      attempts: 2,
+      spotifyUri: null,
+      trackId: "genuine-count",
+    });
+
+    await setAnchorApifyEnabled(true);
+
+    expect(await attempts("deferred")).toBe(2);
+    expect(await attempts("unstamped")).toBe(0);
+    expect(await attempts("genuine-count")).toBe(2);
   });
 });

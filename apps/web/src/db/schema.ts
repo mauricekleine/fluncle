@@ -412,6 +412,23 @@ export const tracks = sqliteTable(
     // re-ask costs real Apify money. NULL until the row has ever been attempted. Internal,
     // like the rest of the catalogue side-channel — no public surface, no lastmod bump.
     spotifyAnchorAttemptedAt: text("spotify_anchor_attempted_at"),
+    // THE ANCHOR RETRY COUNTER — the companion to the stamp above, and the thing that makes the
+    // re-ask backoff TERMINATE. The stamp alone is a window, not a budget: an un-anchored row was
+    // offered again every `ANCHOR_REASK_AFTER_DAYS` forever, so a recording genuinely absent from
+    // Spotify billed a fresh Apify search a fortnight at a time, indefinitely. This column is the
+    // count of FULL attempts, incremented in the SAME UPDATE that writes the stamp (anchor.ts — the
+    // hit + miss stamps in `anchorTrack`, and `stampAnchorAttempt`), and the anchor worklist stops
+    // offering a row at `ANCHOR_MAX_ATTEMPTS` (track-work.ts): ~3 months of tries, then the row is
+    // left to rest. The kill-flag's flip-ON requeue DECREMENTS it alongside the stamp it clears
+    // (anchor-apify.ts), because an off-window deferral was never actually tried — the counter moves
+    // with the stamp, always.
+    //
+    // NULLABLE with NO `.default()`, deliberately: a `.default()` on a `tracks` column makes drizzle
+    // regenerate the whole table and drop+recreate all ~125 indexes in the migration — a production
+    // stall. Every reader coalesces (`coalesce(spotify_anchor_attempts, 0)`), so NULL simply means
+    // "never attempted", exactly as the null stamp beside it does. Internal reliability state, like
+    // the rest of the catalogue side-channel — no public surface, no lastmod bump.
+    spotifyAnchorAttempts: integer("spotify_anchor_attempts"),
     // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
     // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
     // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track
