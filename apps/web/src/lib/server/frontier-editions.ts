@@ -1,5 +1,5 @@
 // FRONTIER EDITIONS — the read store + the reusable INSERT builder for a user's
-// frozen weekly-refresh snapshots (docs/rfcs/frontier-editions-rfc.md, Unit A1).
+// frozen weekly-refresh snapshots (the frontier-editions RFC is pruned; see git history).
 //
 // ONE LEDGER, READ TWO WAYS. Each real Frontier refresh writes one `frontier_editions`
 // parent row + its `frontier_edition_tracks` children (the de-duped PUT order the

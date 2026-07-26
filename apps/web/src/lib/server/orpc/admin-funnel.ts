@@ -1,5 +1,5 @@
 // The `admin-funnel` domain router module — the catalogue pipeline on one admin page
-// (docs/rfcs/catalogue-funnel-rfc.md).
+// (docs/admin-shell.md).
 //
 //   - `record_catalogue_snapshot` — POST /admin/funnel/snapshot on `adminAuth` ONLY (no
 //     `operatorGuard`): agent tier, like `record_platform_stats`/`record_health`. The box's

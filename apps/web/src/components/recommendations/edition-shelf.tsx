@@ -3,7 +3,7 @@
 // the chips row with the Fluncle seal on a certified slot, the instrument readout, the Add
 // pill), the register split riding the LIGHT not the layout (the Unlit Rule). It reads the
 // STORED snapshot — no engine, no vector math — so a page view stays milliseconds at any pool
-// size (frontier-shelf-from-editions-rfc.md D3).
+// size (the invariant `lib/server/recs-gate.ts` codifies).
 //
 // Frozen rows carry no label/year (Slice A froze similarity + the seed meta, not the imprint),
 // so the Stardust imprint line is absent here — the honest-absence default (the Readout Rule);

@@ -30,8 +30,8 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type FunnelView, getFunnel } from "@/lib/server/funnel";
 
 // The `/admin/funnel` station — the catalogue pipeline (crawl → anchor → capture →
-// analyze/embed → rec-eligible → certified) on one page (docs/rfcs/catalogue-funnel-rfc.md,
-// U2). Three bands: the funnel (proportional stage bars, each a link to its operating
+// analyze/embed → rec-eligible → certified) on one page (docs/admin-shell.md).
+// Three bands: the funnel (proportional stage bars, each a link to its operating
 // surface), the meters (the operator's spend levers — capture budget, anchor bench, frontier
 // depth), and the charts (catalogue growth, eligible-pool growth, and per-stage daily
 // throughput from the snapshot series).

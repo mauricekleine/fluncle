@@ -5,8 +5,8 @@ import { createIntegrationDb, rowCount, seedUser } from "./integration-db";
 import { type PublicUser } from "./public-auth";
 
 // FLUNCLE'S FRONTIER — the per-user machinery, PROVEN against the REAL generated schema
-// (the editions integration discipline). This covers the RFC's draft-then-checkpoint model
-// (docs/rfcs/frontier-shelf-from-editions-rfc.md):
+// (the editions integration discipline). This covers the draft-then-checkpoint model
+// (the shelf-from-editions RFC is pruned; see git history):
 //
 //   - D1 DECOUPLE: the edition (the internal cache, the shelf's source of truth) is written
 //     ALWAYS; the Spotify mirror is the only thing the kill switch gates.

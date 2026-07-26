@@ -1,5 +1,5 @@
 // THE FUNNEL — the client-side data shaping behind `/admin/funnel`
-// (docs/rfcs/catalogue-funnel-rfc.md, U2). Pure functions only: they take the typed
+// (docs/admin-shell.md). Pure functions only: they take the typed
 // payload `get_funnel` returns and turn it into what the page draws — the proportional
 // stage bars, the per-stage daily throughput, and the SVG chart geometry. Kept OUT of the
 // route so the shaping is unit-testable in the node environment without React, and so the

@@ -1274,7 +1274,7 @@ export const platformStats = sqliteTable(
 );
 
 // THE CATALOGUE FUNNEL LEDGER — one row per UTC day, the growth history behind the
-// /admin/funnel page (docs/rfcs/catalogue-funnel-rfc.md, U1). Live counts are cheap; the
+// /admin/funnel page (docs/admin-shell.md). Live counts are cheap; the
 // growth-per-day charts need history nobody records (there is no `anchored_at`, no per-day
 // ledger), so this is the `platform_stats` daily-snapshot pattern applied to the catalogue
 // pipeline: a daily on-box trigger fires the agent-tier `record_catalogue_snapshot` op, the

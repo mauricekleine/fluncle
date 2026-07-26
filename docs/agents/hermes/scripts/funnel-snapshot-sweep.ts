@@ -6,7 +6,7 @@
 // → certified) is operated blind: live counts are cheap, but the growth-per-day charts need history
 // nobody records (there is no `anchored_at`, no per-day ledger). So a daily tick fires the AGENT-tier
 // `record_catalogue_snapshot` op and the Worker persists one idempotent row per UTC day. The page
-// (/admin/funnel) reads it back. See docs/rfcs/catalogue-funnel-rfc.md.
+// (/admin/funnel) reads it back. See docs/admin-shell.md.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (funnel-snapshot-sweep.sh) the host

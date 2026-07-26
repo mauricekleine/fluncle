@@ -613,7 +613,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   // other cron's fluncle-<token> dir header (and vice versa), so claimCronDirs' longest-match-first
   // pass claims fluncle-demand cleanly.
   { cadenceMs: 24 * 60 * 60_000, match: "demand", service: "cron.demand" },
-  // The daily catalogue-funnel snapshot (docs/rfcs/catalogue-funnel-rfc.md). `funnel-snapshot`
+  // The daily catalogue-funnel snapshot (docs/admin-shell.md). `funnel-snapshot`
   // is a substring of no other cron's fluncle-<token> dir header (and vice versa), so
   // claimCronDirs' longest-match-first pass claims fluncle-funnel-snapshot cleanly.
   { cadenceMs: 24 * 60 * 60_000, match: "funnel-snapshot", service: "cron.funnel-snapshot" },

@@ -1,6 +1,6 @@
 ---
 name: fluncle-operator
-description: Use when working in the Fluncle repository on the Bun/Turborepo monorepo, CLI, Turso-backed publishing flow, Spotify/Telegram integration, Raycast extension, TanStack Start web app, local standalone binary setup, or VPS deployment. Triggers include changes to `apps/cli/src/`, `apps/raycast/`, `apps/web/`, CLI JSON output, `fluncle recent`, Raycast command behavior, `.env.local` handling, or standalone binary deployment.
+description: Use when working in the Fluncle repository on the Bun/Turborepo monorepo, CLI, Turso-backed publishing flow, Spotify/Telegram integration, Raycast extension, TanStack Start web app, local standalone binary setup, or VPS deployment. Triggers include changes to `apps/cli/src/`, `apps/raycast/`, `apps/web/`, CLI JSON output, `fluncle recent`, Raycast command behavior, local config and CLI env profiles, or standalone binary deployment.
 ---
 
 # Fluncle Operator
@@ -23,7 +23,7 @@ rg --files -g '!node_modules' -g '!dist'
 - Public web app or fluncle.com changes: put public/admin HTTP surfaces on oRPC contract ops (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router) with server modules under `apps/web/src/lib/server`; `apps/web/src/routes/api` file routes are only the documented carve-outs (auth redirects, uploads/streaming, non-JSON emitters, `/status`+`/health`) — see `AGENTS.md` Architecture.
 - VPS install or standalone binary deployment: read `references/vps-deploy.md`.
 
-3. Keep `.env.local`, `.dev.vars`, `node_modules`, `dist`, and generated temporary assets out of commits.
+3. Know where local config lives, and keep all of it out of commits: `apps/web/.dev.vars` is the web app's local env (template at `apps/web/.dev.vars.tpl`), `apps/web/.dev/` holds the per-worktree libSQL database (see [docs/local-database.md](../../../docs/local-database.md)), and the CLI reads its own operator profiles from `~/.config/fluncle/.env.<profile>` outside the repo (`--env local` / `--env production`). Also keep `node_modules`, `dist`, and generated temporary assets out of commits.
 
 ## Validation Checklist
 

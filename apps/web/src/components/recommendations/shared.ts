@@ -42,7 +42,7 @@ export type FrontierEditionDetail = {
  * token, the seed set, the past editions, and — depending on the PHASE — either the live
  * DRAFT recommendations (no edition yet) or the LATEST frozen edition (committed).
  *
- * The shelf reads the ledger, not the engine (frontier-shelf-from-editions-rfc.md): once a
+ * The shelf reads the ledger, not the engine (`lib/server/recs-gate.ts`): once a
  * user has an edition, page views render `latest` (a stored snapshot, milliseconds at any
  * pool size) and NEVER run the vector scan. `recommendations` stays present so the draft
  * phase seeds react-query off it; in the committed phase it is `EMPTY_RECS`. `stale` is the
@@ -217,7 +217,7 @@ export function skippedSeedsLine(count: number): string {
 
 /**
  * Has the user's seed set MOVED since the latest edition froze? The shelf is a checkpoint,
- * not a live view (frontier-shelf-from-editions-rfc.md D2): a seed change never rewrites the
+ * not a live view (the shelf-from-editions RFC is pruned, see git history): a seed change never rewrites the
  * frozen edition, so the shelf shows a quiet, INFORMATIONAL nudge when the picks and the
  * edition have drifted apart — the next set (the Friday sweep) will line them up.
  *

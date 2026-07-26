@@ -40,7 +40,7 @@ import { buildRecsGate } from "@/lib/server/recs-gate";
 
 /**
  * The DRAFT engine read, rate-limited and degrading — the one place the live vector scan sits
- * on the read path (the draft cohort; frontier-shelf-from-editions-rfc.md D2). The
+ * on the read path (the draft cohort; the shelf-from-editions RFC is pruned, see git history). The
  * `account.recs.read` hourly budget is enforced here (the web door reads through serverFns, not
  * the oRPC op, so this is where the guard has to land for the door path), then the scan runs;
  * a limit or a `Response` fault both degrade to empty rather than blocking the door. The

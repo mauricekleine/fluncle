@@ -106,7 +106,7 @@ export const RECOMMENDATIONS_RATE_WINDOW_MS = 60 * 60 * 1000;
  * embedded, Spotify-anchored, non-dismissed, non-duplicate uncertified track under the
  * long-form veto and outside the near-1.0 display-duplicate band.
  *
- * Extracted to a shared constant on purpose (docs/rfcs/catalogue-funnel-rfc.md, U1): the
+ * Extracted to a shared constant on purpose (docs/admin-shell.md, the `/admin/funnel` station): the
  * catalogue FUNNEL's `rec_eligible` count MUST be the same gate this scan uses, and the only
  * way two counters cannot drift is to share the ONE predicate. The funnel count
  * (lib/server/funnel.ts) folds this exact fragment into its stage scan, and the

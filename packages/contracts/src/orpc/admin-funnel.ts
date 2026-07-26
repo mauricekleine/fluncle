@@ -1,5 +1,5 @@
 // The `admin-funnel` domain contract module — the catalogue pipeline on one admin page
-// (docs/rfcs/catalogue-funnel-rfc.md). Two ops, both under `/admin/funnel`, both admin tier:
+// (docs/admin-shell.md). Two ops, both under `/admin/funnel`, both admin tier:
 //
 //   - `record_catalogue_snapshot` — AGENT tier (`adminAuth`, NOT `operatorGuard`): the box's
 //     `fluncle-funnel-snapshot` daily timer POSTs a bare trigger; the Worker computes every

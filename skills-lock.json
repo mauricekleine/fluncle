@@ -56,17 +56,17 @@
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "9f083125c28d97728e1fbbc64aefe899dd9856580ab9bee0570b4154a1616a74"
+      "computedHash": "749c65d427493525f2759dd5b9e99bd4a6af01f91b430b6389add8e171b7a31c"
     },
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "e40e044c90d27c1cd5917c10d01ce86cd9275ac07c37e305d14e8f4f8d786205"
+      "computedHash": "e241d9191d407d5602149311848a3d6b11c44926d85cb87eafc4e1714b7d3750"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "49e5fcc839cc1c3d5fe034682a5253aeeb270aa7e97f966c5a24aac73a1f0e03"
+      "computedHash": "9ca08f4bf5240635688436d098f4b48d5e8cf16fdf931e77b137d9ed5a96f762"
     },
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",

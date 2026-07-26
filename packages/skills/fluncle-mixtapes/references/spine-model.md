@@ -114,18 +114,18 @@ Two stores, one frozen and one live: the take's **`recording_cues`** stay mutabl
 
 Where a mixtape lands and what each surface renders (all built):
 
-| Surface                | A finding does     | A mixtape does                                                                                           |
-| ---------------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| Web feed               | a finding row      | a quiet **checkpoint row** (own cover/title, member count + run time instead of the chip row; DESIGN.md) |
-| Web index              | the archive        | a dedicated **`/mixtapes`** overview                                                                     |
-| `/log/<id>`            | observation page   | **compilation page**: member tracklist (each linked), embedded Mixcloud/YouTube, the dream note          |
-| CLI                    | `fluncle log <id>` | resolves to the mixtape; quiet in `recent`; listed by `fluncle mixtapes`                                 |
-| API                    | `/api/tracks/<id>` | mixtape-typed payload (members, external URLs, duration); `/api/mixtapes` index                          |
-| RSS                    | observation entry  | a flagged **mixtape** entry in the feed                                                                  |
-| MCP                    | list/random/search | the mixtape reachable as the same typed object                                                           |
-| SSH                    | the rave terminal  | a checkpoint + a mixtapes view (`screenMixtapes` / `screenMixtapeDetail`)                                |
-| Machines               | `MusicRecording`   | `MusicAlbum` / `DJMixAlbum` schema, RSS category, llms.txt Mixtapes section                              |
-| MusicBrainz / Wikidata | artist anchors     | the DJ-mix release → the Wikidata fact                                                                   |
+| Surface                | A finding does                   | A mixtape does                                                                                           |
+| ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Web feed               | a finding row                    | a quiet **checkpoint row** (own cover/title, member count + run time instead of the chip row; DESIGN.md) |
+| Web index              | the archive                      | a dedicated **`/mixtapes`** overview                                                                     |
+| `/log/<id>`            | observation page                 | **compilation page**: member tracklist (each linked), embedded Mixcloud/YouTube, the dream note          |
+| CLI                    | `fluncle tracks get <idOrLogId>` | resolves to the mixtape; quiet in `recent`; listed by `fluncle mixtapes`                                 |
+| API                    | `/api/tracks/<id>`               | mixtape-typed payload (members, external URLs, duration); `/api/mixtapes` index                          |
+| RSS                    | observation entry                | a flagged **mixtape** entry in the feed                                                                  |
+| MCP                    | list/random/search               | the mixtape reachable as the same typed object                                                           |
+| SSH                    | the rave terminal                | a checkpoint + a mixtapes view (`screenMixtapes` / `screenMixtapeDetail`)                                |
+| Machines               | `MusicRecording`                 | `MusicAlbum` / `DJMixAlbum` schema, RSS category, llms.txt Mixtapes section                              |
+| MusicBrainz / Wikidata | artist anchors                   | the DJ-mix release → the Wikidata fact                                                                   |
 
 ## Galaxy tie-in (future, not now)
 

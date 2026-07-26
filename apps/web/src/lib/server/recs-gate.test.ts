@@ -9,7 +9,7 @@ import { type PublicUser } from "./public-auth";
 import { buildRecsGate, type RecsGateDeps } from "./recs-gate";
 
 // The gate's ONE invariant: a COMMITTED page view reads a stored edition and NEVER runs the
-// engine (frontier-shelf-from-editions-rfc.md D3). Pinned off the DI seam — the engine, the
+// engine (the shelf-from-editions RFC is pruned, see git history). Pinned off the DI seam — the engine, the
 // reads, and the token mint are injected, so these are plain units with no database.
 
 const USER: PublicUser = {

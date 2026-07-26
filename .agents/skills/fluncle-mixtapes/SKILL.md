@@ -148,7 +148,7 @@ The older `rekordbox-tracklist.py` (prints a plain `Artist — Title` list for m
 
 **Planning a NEW set? The dream-weaver proposes an order.** Before the Rekordbox session, `fluncle admin tracks mixable-order <logId…> [--seed <logId>]` (RFC mixability-engine) orders a candidate pool of findings into a _smoothness-optimized_ proposed chain — Held-Karp exact for ≤16, greedy + 2-opt to 64 — and prints an `Artist — Title` tracklist to paste into Rekordbox as advisory input. It's a smooth chain, **not** an energy-shaped set (open → build → peak → comedown), and it **proposes only**: `recordings promote` stays the sole way a mixtape is minted. The operator's board twin is `/admin/mixable-order` (the "Dream-weaver" station).
 
-**After the cue write, attach each unmatched track as a finding** (`fluncle add <spotifyUrl>` or the `/admin` add flow) and re-run with `--apply` to fill in the remaining `findingId=null` slots. A finding that isn't in the catalogue yet is never auto-created — stay honest, add it first. Each linked finding gets its own `/log/<id>` breadcrumb in the published mixtape tracklist (the AEO/SEO play; see the spine model).
+**After the cue write, attach each unmatched track as a finding** (`fluncle admin tracks publish "<spotifyUrl>"` or the `/admin` add flow) and re-run with `--apply` to fill in the remaining `findingId=null` slots. A finding that isn't in the catalogue yet is never auto-created — stay honest, add it first. Each linked finding gets its own `/log/<id>` breadcrumb in the published mixtape tracklist (the AEO/SEO play; see the spine model).
 
 ### B2. Export a plan to tools (Rekordbox playlist + Beatport + m3u8) 🎛️
 

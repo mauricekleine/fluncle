@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 /**
- * THROWAWAY HOSTED-SCALE BENCH — the ship gate for Frontier novelty (Unit A1,
- * docs/rfcs/frontier-editions-rfc.md §A1.3). NOT a test, NOT wired into CI.
+ * THROWAWAY HOSTED-SCALE BENCH — the ship gate for Frontier novelty (the frontier-editions
+ * RFC is pruned; see git history. The shipped novelty path is `FRONTIER_NOVELTY_WINDOW` +
+ * `excludeRecent` in src/lib/server/recommendations.ts). NOT a test, NOT wired into CI.
  *
  * ── WHO RUNS THIS, AND WHEN ───────────────────────────────────────────────────
  * THE OPERATOR runs it ONCE, by hand, against a SCRATCH hosted Turso Cloud DB, as the

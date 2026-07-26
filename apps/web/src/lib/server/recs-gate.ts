@@ -1,7 +1,7 @@
 // THE /recommendations READ GATE — resolves the door's SSR payload from the requester's own
 // session, and encodes the ONE invariant the shelf-from-editions move exists for: a COMMITTED
 // user's page view reads a stored edition and NEVER runs the vector engine
-// (frontier-shelf-from-editions-rfc.md D3). Only the DRAFT phase (no edition yet) runs the
+// (the shelf-from-editions RFC is pruned; see git history). Only the DRAFT phase (no edition yet) runs the
 // live scan, and that is the single bounded cohort where a live per-seed recompute is the
 // desired behaviour.
 //

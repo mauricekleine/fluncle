@@ -1276,7 +1276,7 @@ body::before {
   }
 }
 
-/* Fluncle Studio — the clip editor (docs/fluncle-studio-rfc.md Unit E). Warm-neutral
+/* Fluncle Studio — the clip editor (docs/fluncle-studio.md). Warm-neutral
    ink ramp throughout (Stardust → Starlight Cream); Eclipse Gold is reserved for the
    Create-clip action only (the One Sun). Pointer/clock-tracked values (the playhead,
    the crop window, the regions) are CONTENT, so they carry no transition and nothing

@@ -3,7 +3,7 @@
 // panel on the left (the header — collage, name, the CTA — over the numbered tracklist
 // being assembled, with the search between them) and the shelf on the right.
 //
-// TWO PHASES, off the editions ledger (frontier-shelf-from-editions-rfc.md D2/D3). The
+// TWO PHASES, off the editions ledger (the phase gate is `lib/server/recs-gate.ts`). The
 // `["rec-editions"]` query is the phase signal — the SAME key the masthead dropdown reads,
 // so a mint that writes the first edition flips the door draft → committed via one
 // invalidation:

@@ -2,7 +2,9 @@
 /**
  * THE APPLE CATALOG PILOT — go/no-go, operator-run, DRY (no writes, ever).
  *
- * The RFC `docs/musickit-second-authority-rfc.md` U0 gate: before ANY unit fans out
+ * The MusicKit second-authority RFC's U0 gate (that RFC is pruned; see git history — the
+ * shipped Apple rungs are docs/album-artwork.md and the `backfill_apple_music_*`
+ * bookkeeping in docs/track-lifecycle.md): before ANY unit fans out
  * an Apple sweep, this pilot samples ~50 CATALOGUE ISRCs (crawled `tracks` rows with
  * no `findings` row) and measures whether Apple actually covers Fluncle's underground
  * DnB — the one load-bearing unknown that "is outside our control, measured by the

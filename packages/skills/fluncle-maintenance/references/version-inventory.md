@@ -39,7 +39,7 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 - **Files + markers:**
   - `docs/agents/hermes/Dockerfile` (~line 41): the installer pin — marker `curl -fsSL https://bun.sh/install | bash -s "bun-v` and the comment `# Bun — pinned to the repo's toolchain (packageManager bun@…)`.
   - `package.json` (root): `"packageManager": "bun@<version>"`.
-  - `.github/workflows/quality-checks.yml` and `.github/workflows/cli-release.yml`: each `oven-sh/setup-bun` step has a `bun-version: <version>`.
+  - **Every workflow carrying `bun-version:`** — each `oven-sh/setup-bun` step pins one. Do not work from a remembered list; the `grep -rn 'bun-version:' .github/workflows/` below is the authority, since a new workflow adds a place to bump (today it matches five: `quality-checks`, `cli-release`, `skills-sync`, `e2e`, `post-deploy-probe`).
 - **Current pins:** read them all at once —
 
   ```bash
@@ -115,42 +115,35 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 
 ---
 
-## 6. GitHub Actions mutable tags — SHA-PIN (the `.deepsec` finding)
+## 6. GitHub Actions pins — AXIS COMPLETE, Renovate owns it
 
-The `.deepsec` scan (`.deepsec/data/fluncle/reports/`) flags every workflow action as pinned to a **mutable major-version tag** rather than a commit SHA — a supply-chain risk: a force-moved tag or a compromised upstream could run arbitrary code in CI. The highest-concern one is `oven-sh/setup-bun` in `cli-release.yml`, which runs in the OIDC-publishing job that mints the npm token + holds the Homebrew tap token.
+**This axis is done.** Every action in every workflow is SHA-pinned with a trailing version comment, so the `.deepsec` finding that opened it (mutable major-version tags in CI, worst case `oven-sh/setup-bun` in the OIDC-publishing `cli-release.yml` job) is closed. There is no manual sweep left to run here — do not hand-resolve tags to digests.
 
-- **Files + the flagged actions:**
-  - `.github/workflows/quality-checks.yml`: `actions/checkout@v6`, `oven-sh/setup-bun@v2`, `actions/setup-go@v6`, `actions/cache@v5`.
-  - `.github/workflows/cli-release.yml`: `actions/checkout@v6`, `oven-sh/setup-bun@v2`, `actions/setup-node@v5`.
-- **List current refs:**
+`renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset: it SHA-pins any newly-added action and refreshes each digest (same-major) as the action ships updates, while a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo.
 
-  ```bash
-  grep -rnE 'uses: [^ ]+@' .github/workflows/
-  ```
-
-- **Resolve the commit SHA for the tag you already use** (so you pin the _same_ behaviour, not a new version):
+- **Verify the axis still holds** — every `uses:` should carry a 40-char SHA plus a `# vN` comment. A bare `@vN` is an action someone added by hand, and pinning that one at its current major is the only fix this item still asks for.
 
   ```bash
-  # Example for the tag in use; repeat per action+tag.
-  gh api repos/actions/checkout/git/refs/tags/v6 --jq '.object.sha'
-  gh api repos/oven-sh/setup-bun/git/refs/tags/v2 --jq '.object.sha'
+  grep -rn 'uses: ' .github/workflows/
   ```
 
-  If the tag points at an annotated-tag object, dereference it: `gh api repos/<owner>/<repo>/git/tags/<sha> --jq '.object.sha'`.
+- **Verify Renovate is actually flowing** — an installed-but-silent app looks exactly like an up-to-date repo, so check for its PRs rather than assuming:
 
-- **How to apply (the SHA-pin):** replace `uses: actions/checkout@v6` with `uses: actions/checkout@<40-char-sha> # v6` (keep the version in a trailing comment so humans and bots can read it). Do this for each flagged action **at its current major** — you are hardening the reference, not upgrading the action.
-- **Renovate owns this axis now.** `renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset — it SHA-pins each action and refreshes the digest (same-major) as the action ships updates; a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo. A manual sweep no longer hand-SHA-pins the actions — instead, verify Renovate is installed and its PRs are flowing.
-- **Safety:** **SHA-pinning at the current major is SAFE to auto-apply** — it changes no behaviour (same commit the tag resolves to today), and the CI deploy-gate/PR run proves the workflow still parses and runs. Bumping an action to a **new major** = brake (report it). Adding a Renovate config is safe but should be named explicitly in the PR.
+  ```bash
+  gh pr list --author 'app/renovate' --state all --limit 10
+  ```
+
+- **Safety:** pinning a stray action at its current major is SAFE to ship — it changes no behaviour (the same commit the tag resolves to today), and the CI run proves the workflow still parses. Bumping an action to a **new major** = brake (report it). Adding a Renovate config is safe but should be named explicitly in the PR.
 
 ---
 
 ## Quick reference table
 
-| #   | Item                | File (marker)                                                                     | Current pin (read)             | Check latest                                 | Ship end-to-end?                  |
-| --- | ------------------- | --------------------------------------------------------------------------------- | ------------------------------ | -------------------------------------------- | --------------------------------- |
-| 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'`    | Docker Hub tags API                          | **Never** (pre-1.0)               |
-| 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above          | bun GH `releases/latest`                     | patch/minor yes, major brake      |
-| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                   | patch/minor yes, major brake      |
-| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version` | patch/minor yes, major/auth brake |
-| 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                       | N/A                                          | **Never** (re-verify only)        |
-| 6   | GitHub Actions tags | `.github/workflows/*.yml` `uses: …@vN`                                            | `grep 'uses:.*@'`              | `gh api …/git/refs/tags/<tag>`               | **Renovate (auto-pins + tracks)** |
+| #   | Item                | File (marker)                                                                     | Current pin (read)             | Check latest                                      | Ship end-to-end?                  |
+| --- | ------------------- | --------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------- | --------------------------------- |
+| 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'`    | Docker Hub tags API                               | **Never** (pre-1.0)               |
+| 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above          | bun GH `releases/latest`                          | patch/minor yes, major brake      |
+| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                        | patch/minor yes, major brake      |
+| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version`      | patch/minor yes, major/auth brake |
+| 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                       | N/A                                               | **Never** (re-verify only)        |
+| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                    | `grep 'uses:.*@'`              | Renovate PRs (`gh pr list --author app/renovate`) | **Renovate (auto-pins + tracks)** |

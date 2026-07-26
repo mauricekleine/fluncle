@@ -31,7 +31,7 @@ import { apiFault, type Implementer, responseFault } from "./_shared";
  *     here (`account.recs.read`/RECOMMENDATIONS_RATE_LIMIT), because a scan that runs
  *     costs the database ≤12 probes × the embedded catalogue. The web `/recommendations`
  *     shelf no longer reads through this op on the hot path — it reads a stored edition
- *     (frontier-shelf-from-editions-rfc.md), so a committed page view runs NO scan. The
+ *     (the gate is `lib/server/recs-gate.ts`), so a committed page view runs NO scan. The
  *     scan survives here for the DRAFT phase and for non-web clients (mobile/MCP/CLI)
  *     that read recommendations directly; the same `account.recs.read` budget also guards
  *     the web draft path (the route's `readDraftRecommendations`), so both entrances share
