@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // reach-sweep.ts — the bun orchestrator behind the `--no-agent` reach cron (`fluncle-reach`).
-// The daily snapshot of how far Fluncle's tentacles stretch across the web (docs/planning/
-// stats-page-spike.md → the public /reach page).
+// The daily snapshot of how far Fluncle's tentacles stretch across the web — the series behind
+// the public /reach page (per-platform activation + tiers: docs/reach-tier2-activation.md).
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (reach-sweep.sh) the host

@@ -6,6 +6,8 @@ Non-canonical planning doc (a brainstorm, not a spec — the codebase and canon 
 
 The maximal latency solve. Placement Hints co-locate compute and data in the same _region_ (still an intra-region hop); a box co-locates them in the same _process_ — the DB is `localhost`, reads are microseconds, the compounding of sequential SSR queries disappears entirely, and the exact `vector_distance_cos` scan runs on real RAM with the full corpus in-process (the whole "will it OOM the 128 MB Worker / hit the 10 MiB response cap" class of worry evaporates). For Fluncle's multi-query SSR pages, a distant cold render even _wins_ vs Workers: one reader↔box ocean crossing instead of N×Dublin.
 
+**The vector half already went this way — that part of the decision is made (2026-07).** Every "sounds like" question now runs as an exact in-memory SIMD scan in `apps/sonar`, a Rust engine on a box, instead of a `vector_distance_cos` scan in Turso ([docs/vector-serving.md](../vector-serving.md)). So "put the corpus in RAM on a box" is no longer speculative here: it shipped, behind a per-surface dark flag with the Turso scan as the fallback. What is still open below is the WHOLE-APP port (SSR + oRPC + the database as `localhost`) — do not re-litigate the vector question as if it were still a fork.
+
 The trade: the serverless zero-ops posture and the global per-PoP compute become a single origin we own. Cloudflare's cache in front is what buys back global reach — the **same Phase 0 cache**, now load-bearing rather than an optimization.
 
 ## Target architecture

@@ -1,6 +1,6 @@
 # The account redesign brief — "you're on the manifest"
 
-Status: RATIFIED by the operator (2026-07-16), build in flight. Non-canonical planning per AGENTS.md; canon wins on conflict. Produced by three ideation passes — four persona walks, an IA/frequency architecture, and a visual-system kit — synthesized here into one buildable brief. The build standard is boil-the-ocean: every unit ships whole, with tests and docs, no deferral bucket.
+Status: RATIFIED by the operator (2026-07-16) and **BUILT** — the doors ship as `apps/web/src/components/account/{galaxy-door,saves-door,settings-door,kit}.tsx`. Kept as the record of _why_ the area is shaped this way; the code is the spec now, so read this for intent and the components for behaviour. Non-canonical planning per AGENTS.md; canon wins on conflict. Produced by three ideation passes — four persona walks, an IA/frequency architecture, and a visual-system kit — synthesized here into one buildable brief. The build standard is boil-the-ocean: every unit ships whole, with tests and docs, no deferral bucket.
 
 ## The diagnosis in one line
 
