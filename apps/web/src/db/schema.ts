@@ -1867,6 +1867,12 @@ export const socialPosts = sqliteTable(
 export const socialMetrics = sqliteTable(
   "social_metrics",
   {
+    // Average length of a single playback, in whole seconds — YouTube Analytics' `averageViewDuration`
+    // (the retention twin of `averageViewPercentage`: how LONG, not just what %). Its own column
+    // because `watch_time_seconds` is TOTAL watch time (a cumulative), whereas this is a per-view
+    // AVERAGE — folding them into one column would make a cross-source series lie. Null when the
+    // source doesn't report it (Postiz/TikTok don't; the `youtube_analytics` source does).
+    averageViewDurationSeconds: integer("average_view_duration_seconds"),
     // Average % of the video watched (0–100), a real — the only fractional metric. Null when unreported.
     averageViewPercentage: real("average_view_percentage"),
     // The ISO instant this snapshot was taken. The series' fine-grained x-axis.

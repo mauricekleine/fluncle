@@ -249,8 +249,10 @@ export const setPublishAdvance = oc
  * social→site referrer arrivals (best-effort, one non-Postiz request), returned for observability.
  * When @fluncle's TikTok account is connected it additionally reads `POST /v2/video/list/` and
  * appends each video's OWN metrics under the `tiktok_display` source (independent of Postiz; a clean
- * no-op when TikTok is unconfigured/unconnected). Internal write only (no public lastmod moves).
- * Returns the per-run outcome.
+ * no-op when TikTok is unconfigured/unconnected). When @fluncle's YouTube is connected it likewise
+ * reads the Data API counters + Analytics per-video retention and appends under the
+ * `youtube_analytics` source (independent, same no-op contract). Internal write only (no public
+ * lastmod moves). Returns the per-run outcome.
  */
 export const recordSocialMetrics = oc
   .route({
@@ -298,6 +300,21 @@ export const recordSocialMetrics = oc
         /** Fetched videos matched to a published tiktok post by native video id. */
         matched: z.number().int(),
         /** Fetched videos with no matching post row (may predate the archive) — skipped. */
+        skipped: z.number().int(),
+      }),
+      /** The YouTube Analytics half — @fluncle's own per-video metrics (public counters + retention)
+       *  into the `youtube_analytics` source. All zero + `configured: false` when YouTube is
+       *  unconfigured/unconnected (no-op). */
+      youtube: z.object({
+        /** YouTube is configured (creds set) AND connected (a `youtube_auth` row exists). */
+        configured: z.boolean(),
+        /** Videos the Data API returned metrics for this run. */
+        fetched: z.number().int(),
+        /** Snapshot rows appended (0 on a same-day re-run — idempotent by day). */
+        inserted: z.number().int(),
+        /** Published youtube posts with a parseable native video id — the pool queried (≤ budget). */
+        matched: z.number().int(),
+        /** Published youtube posts whose url carried no parseable video id — skipped. */
         skipped: z.number().int(),
       }),
     }),

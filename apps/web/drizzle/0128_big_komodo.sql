@@ -1,0 +1,1 @@
+ALTER TABLE `social_metrics` ADD `average_view_duration_seconds` integer;

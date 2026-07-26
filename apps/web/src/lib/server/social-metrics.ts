@@ -29,6 +29,18 @@
 // TikTok video id (the source's own namespace), so it never collides with the Postiz row for the same
 // post (source differs). This half is fully independent of Postiz: it runs even with no Postiz key,
 // and it is a clean no-op (never a throw) when TikTok is unconfigured or unconnected.
+//
+// ── THE YOUTUBE ANALYTICS HALF (Wave 2) ────────────────────────────────────────────────────────────
+// The YouTube sibling of the TikTok half. When @fluncle's YouTube is connected (a `youtube_auth` row
+// exists), a THIRD source runs: for the newest ≤`YOUTUBE_VIDEO_BUDGET` published youtube posts we read
+// each video's OWN numbers — the Data API's public counters (views/likes/comments) merged with the
+// Analytics API's per-video retention (`averageViewPercentage` + `averageViewDuration`, the real
+// short-form signal, plus total watch time). Each match appends a snapshot under `source:
+// 'youtube_analytics'` keyed on the NATIVE youtube video id, so it never collides with the Postiz row
+// for the same post. YouTube Analytics data lags ~2–3 days, so a just-posted video's retention lands
+// null and backfills on a later day's snapshot (append-only → self-healing). Like the TikTok half it
+// runs even with no Postiz key, and is a clean no-op (never a throw) when YouTube is unconfigured or
+// unconnected.
 
 import { getDb, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
@@ -36,8 +48,19 @@ import { readSocialReferrers, type SocialReferralsResult } from "./demand";
 import { logEvent } from "./log";
 import { getPostizPostAnalytics, type PostAnalyticsResult, type SocialPostMetrics } from "./postiz";
 import { collectOwnTikTokVideos, extractTiktokVideoId, type TikTokVideoMetrics } from "./tiktok";
+import {
+  collectYouTubeVideoMetrics,
+  extractYoutubeVideoId,
+  type YouTubeVideoMetrics,
+} from "./youtube";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The per-run YouTube video cap — the newest N published YouTube posts (by `published_at`) are
+ *  measured each run. The Data API batches ≤50 ids/call and the Analytics API groups ≤500 ids in one
+ *  call, so 200 costs ≤4 Data-API calls + 1 Analytics call — cheap. Newest-first, mirroring the
+ *  TikTok half's newest-window read; older posts cycle in as the archive shifts. */
+export const YOUTUBE_VIDEO_BUDGET = 200;
 
 /** The per-run Postiz request cap. One request per snapshotted post; Postiz caps at 30/hour, so 25
  *  leaves headroom for the reach cron + a manual call. */
@@ -78,6 +101,21 @@ export type TikTokSnapshotSummary = {
   skipped: number;
 };
 
+/** The YouTube Analytics half's per-run counts. All zero + `configured: false` when YouTube is
+ *  unconfigured or unconnected (the clean no-op). Same shape as `TikTokSnapshotSummary`. */
+export type YouTubeSnapshotSummary = {
+  /** True when YouTube is configured (creds set) AND connected (a `youtube_auth` row exists). */
+  configured: boolean;
+  /** Videos the Data API returned metrics for this run. */
+  fetched: number;
+  /** Snapshot rows actually appended (0 on a same-day re-run — idempotent by day). */
+  inserted: number;
+  /** Published youtube posts with a parseable native video id — the pool we queried (≤ budget). */
+  matched: number;
+  /** Published youtube posts whose url carried no parseable video id — counted, skipped. */
+  skipped: number;
+};
+
 /** The per-run summary — the JSON line the box sweep echoes and the /status marker carries. */
 export type RecordSocialMetricsSummary = {
   /** The per-run Postiz request budget this run honoured. */
@@ -100,6 +138,8 @@ export type RecordSocialMetricsSummary = {
   referrals: SocialReferralsResult;
   /** The TikTok Display-API half — @fluncle's own per-video metrics into the `tiktok_display` source. */
   tiktok: TikTokSnapshotSummary;
+  /** The YouTube Analytics half — @fluncle's own per-video metrics into the `youtube_analytics` source. */
+  youtube: YouTubeSnapshotSummary;
 };
 
 /** The tunable + injectable effects — so the whole run is unit-testable with zero real network. */
@@ -109,6 +149,10 @@ export type RecordSocialMetricsOptions = {
   collectTikTokVideos?: () => Promise<null | TikTokVideoMetrics[]>;
   /** The per-post analytics reader; defaults to the real Postiz call. */
   fetchAnalytics?: (postId: string) => Promise<PostAnalyticsResult>;
+  /** @fluncle's own YouTube video metrics for the given native video ids (`null` = YouTube
+   *  unconfigured/unconnected → no-op). Defaults to the real Data + Analytics read. Injected for
+   *  tests. */
+  collectYouTubeVideos?: (videoIds: string[]) => Promise<null | YouTubeVideoMetrics[]>;
   /** Anchors the clock (the day key + the recent window); defaults to `new Date()`. */
   now?: Date;
   /** The SA referrers reader; defaults to the real Simple-Analytics call. Injected for tests. */
@@ -335,6 +379,126 @@ async function snapshotTikTokVideos(
   return summary;
 }
 
+/** Every published youtube post with a captured url, newest first — the pool the YouTube half reads
+ *  native video ids from. Bounded (the archive of youtube posts), not a scan of the growing ledger. */
+async function listYouTubePosts(): Promise<Array<{ trackId: string; url: string }>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select track_id, url from social_posts
+          where platform = 'youtube' and status = 'published' and url is not null
+          order by published_at desc`,
+  });
+
+  return typedRows<{ track_id: string; url: string }>(result.rows).map((row) => ({
+    trackId: row.track_id,
+    url: row.url,
+  }));
+}
+
+/** Append one YouTube video's snapshot under the `youtube_analytics` source. `external_id` is the
+ *  NATIVE youtube video id (the source's own namespace), so it never collides with the Postiz row for
+ *  the same post. INSERT … ON CONFLICT DO NOTHING on the per-day key → a same-day re-run is a no-op. */
+async function appendYouTubeSnapshot(
+  trackId: string,
+  video: YouTubeVideoMetrics,
+  now: Date,
+): Promise<boolean> {
+  const db = await getDb();
+  const iso = now.toISOString();
+  const result = await db.execute({
+    args: [
+      crypto.randomUUID(),
+      trackId,
+      video.id,
+      "youtube",
+      iso,
+      utcDay(now),
+      video.views,
+      video.likes,
+      video.comments,
+      video.averageViewPercentage,
+      video.averageViewDurationSeconds,
+      video.watchTimeSeconds,
+      iso,
+    ],
+    sql: `insert into social_metrics
+            (id, track_id, external_id, platform, source, captured_at, captured_day,
+             views, likes, comments, average_view_percentage, average_view_duration_seconds,
+             watch_time_seconds, created_at)
+          values (?, ?, ?, ?, 'youtube_analytics', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(external_id, source, captured_day) do nothing`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/**
+ * The YouTube Analytics half: take the newest ≤`YOUTUBE_VIDEO_BUDGET` published youtube posts, parse
+ * each one's native video id off its url, read the batch's metrics (Data API counters + Analytics
+ * retention), and append a `youtube_analytics` snapshot per video. A `null` collect result (YouTube
+ * unconfigured/unconnected) is a clean no-op — `configured: false`, all zero. Independent of Postiz.
+ */
+async function snapshotYouTubeVideos(
+  collect: (videoIds: string[]) => Promise<null | YouTubeVideoMetrics[]>,
+  now: Date,
+): Promise<YouTubeSnapshotSummary> {
+  const summary: YouTubeSnapshotSummary = {
+    configured: false,
+    fetched: 0,
+    inserted: 0,
+    matched: 0,
+    skipped: 0,
+  };
+
+  // Build the newest-first, de-duplicated id list (a post whose url doesn't parse is counted skipped),
+  // then cap it to the per-run budget.
+  const trackByVideoId = new Map<string, string>();
+  const orderedIds: string[] = [];
+
+  for (const post of await listYouTubePosts()) {
+    const videoId = extractYoutubeVideoId(post.url);
+
+    if (!videoId) {
+      summary.skipped += 1;
+
+      continue;
+    }
+
+    if (trackByVideoId.has(videoId)) {
+      continue;
+    }
+
+    trackByVideoId.set(videoId, post.trackId);
+    orderedIds.push(videoId);
+  }
+
+  const videoIds = orderedIds.slice(0, YOUTUBE_VIDEO_BUDGET);
+  const videos = await collect(videoIds);
+
+  if (videos === null) {
+    return summary;
+  }
+
+  summary.configured = true;
+  summary.matched = videoIds.length;
+  summary.fetched = videos.length;
+
+  for (const video of videos) {
+    const trackId = trackByVideoId.get(video.id);
+
+    if (!trackId) {
+      continue;
+    }
+
+    if (await appendYouTubeSnapshot(trackId, video, now)) {
+      summary.inserted += 1;
+    }
+  }
+
+  return summary;
+}
+
 /**
  * One snapshot tick. Reads the SA referrers block (best-effort), then — if Postiz is configured —
  * selects up to `SNAPSHOT_BUDGET` posts and appends each one's current metrics. Per-post reads are
@@ -343,7 +507,8 @@ async function snapshotTikTokVideos(
  * is a clean no-op (`configured: false`) — the referrers block still runs. Finally the TikTok
  * Display-API half runs INDEPENDENTLY (even with no Postiz key): when @fluncle's TikTok is connected
  * it appends each of our videos' own metrics under the `tiktok_display` source; a fetch error is
- * logged and skipped, never failing the run.
+ * logged and skipped, never failing the run. The YouTube Analytics half runs the same way under the
+ * `youtube_analytics` source.
  */
 export async function recordSocialMetrics(
   options: RecordSocialMetricsOptions = {},
@@ -354,6 +519,9 @@ export async function recordSocialMetrics(
     ((postId: string) => getPostizPostAnalytics(postId, POSTIZ_ANALYTICS_DAYS));
   const readReferrers = options.readReferrers ?? (() => readSocialReferrers({ now }));
   const collectTikTokVideos = options.collectTikTokVideos ?? (() => collectOwnTikTokVideos());
+  const collectYouTubeVideos =
+    options.collectYouTubeVideos ??
+    ((videoIds: string[]) => collectYouTubeVideoMetrics(videoIds, { now }));
 
   // The site-side reach block — best-effort, never fails the run. Its own configured flag reports
   // whether the SA key was present.
@@ -382,6 +550,7 @@ export async function recordSocialMetrics(
     polled: 0,
     referrals,
     tiktok: { configured: false, fetched: 0, inserted: 0, matched: 0, skipped: 0 },
+    youtube: { configured: false, fetched: 0, inserted: 0, matched: 0, skipped: 0 },
   };
 
   // The Postiz half — a clean no-op with no key (the TikTok half below still runs).
@@ -432,6 +601,13 @@ export async function recordSocialMetrics(
     summary.tiktok = await snapshotTikTokVideos(collectTikTokVideos, now);
   } catch (error) {
     logEvent("warn", "social-metrics.tiktok-failed", { error });
+  }
+
+  // The YouTube Analytics half — independent of Postiz + TikTok, same isolation.
+  try {
+    summary.youtube = await snapshotYouTubeVideos(collectYouTubeVideos, now);
+  } catch (error) {
+    logEvent("warn", "social-metrics.youtube-failed", { error });
   }
 
   return summary;

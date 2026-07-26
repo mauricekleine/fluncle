@@ -29,6 +29,7 @@ import {
   type SnapshotCandidate,
   SNAPSHOT_BUDGET,
 } from "./social-metrics";
+import { type YouTubeVideoMetrics } from "./youtube";
 
 const NOW = new Date("2026-07-20T22:15:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -315,6 +316,14 @@ describe("recordSocialMetrics", () => {
       matched: 0,
       skipped: 0,
     });
+    // The YouTube half is likewise a clean no-op with no injected collector + no creds.
+    expect(summary.youtube).toEqual({
+      configured: false,
+      fetched: 0,
+      inserted: 0,
+      matched: 0,
+      skipped: 0,
+    });
   });
 });
 
@@ -491,6 +500,249 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
 
     // The default no-op summary survives; the run itself did not throw.
     expect(summary.tiktok).toEqual({
+      configured: false,
+      fetched: 0,
+      inserted: 0,
+      matched: 0,
+      skipped: 0,
+    });
+  });
+});
+
+// A published youtube post carrying its canonical Shorts permalink — the row the YouTube half lifts
+// a native video id from. `publishedAt` orders the newest-first budget.
+async function seedYouTubePost(input: {
+  publishedAt?: string;
+  trackId: string;
+  url?: string;
+  videoId: string;
+}): Promise<void> {
+  await db.execute({
+    args: [
+      crypto.randomUUID(),
+      input.trackId,
+      "youtube",
+      "published",
+      input.url ?? `https://www.youtube.com/shorts/${input.videoId}`,
+      input.publishedAt ?? NOW.toISOString(),
+      "2026-07-01T00:00:00.000Z",
+      "2026-07-01T00:00:00.000Z",
+    ],
+    sql: `insert into social_posts (id, track_id, platform, status, url, published_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+async function youtubeRowCount(externalId: string): Promise<number> {
+  const result = await db.execute({
+    args: [externalId],
+    sql: `select count(*) as n from social_metrics where external_id = ? and source = 'youtube_analytics'`,
+  });
+
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+const youtubeMetric = (
+  id: string,
+  over: Partial<YouTubeVideoMetrics> = {},
+): YouTubeVideoMetrics => ({
+  averageViewDurationSeconds: null,
+  averageViewPercentage: null,
+  comments: null,
+  id,
+  likes: null,
+  views: null,
+  watchTimeSeconds: null,
+  ...over,
+});
+
+describe("recordSocialMetrics — the YouTube Analytics half", () => {
+  it("lifts each post's native id, appends a youtube_analytics snapshot; a same-day re-run appends nothing", async () => {
+    await seedYouTubePost({ trackId: "track-1", videoId: "abc123DEF45" });
+
+    const collectYouTubeVideos = (videoIds: string[]) =>
+      Promise.resolve(
+        videoIds.map((id) =>
+          youtubeMetric(id, {
+            averageViewDurationSeconds: 31,
+            averageViewPercentage: 62.5,
+            comments: 4,
+            likes: 30,
+            views: 900,
+            watchTimeSeconds: 2700,
+          }),
+        ),
+      );
+
+    const first = await recordSocialMetrics({
+      collectYouTubeVideos,
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(first.youtube).toEqual({
+      configured: true,
+      fetched: 1,
+      inserted: 1,
+      matched: 1,
+      skipped: 0,
+    });
+    expect(await youtubeRowCount("abc123DEF45")).toBe(1);
+
+    const row = (
+      await db.execute({
+        args: ["abc123DEF45"],
+        sql: `select * from social_metrics where external_id = ? and source = 'youtube_analytics'`,
+      })
+    ).rows[0] as Record<string, unknown>;
+    expect(row.source).toBe("youtube_analytics");
+    expect(row.platform).toBe("youtube");
+    expect(row.track_id).toBe("track-1");
+    expect(Number(row.views)).toBe(900);
+    expect(Number(row.likes)).toBe(30);
+    expect(Number(row.average_view_percentage)).toBe(62.5);
+    expect(Number(row.average_view_duration_seconds)).toBe(31);
+    expect(Number(row.watch_time_seconds)).toBe(2700);
+
+    // Same UTC day again → idempotent (the (external_id, source, captured_day) key).
+    const second = await recordSocialMetrics({
+      collectYouTubeVideos,
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(second.youtube.inserted).toBe(0);
+    expect(await youtubeRowCount("abc123DEF45")).toBe(1);
+  });
+
+  it("stores null retention (the ~2–3 day Analytics lag) while the public counters still land", async () => {
+    await seedYouTubePost({ trackId: "track-1", videoId: "freshVIDEO1" });
+
+    const summary = await recordSocialMetrics({
+      // The reader returns Data-API counters but null retention (Analytics hasn't caught up).
+      collectYouTubeVideos: (ids) =>
+        Promise.resolve(ids.map((id) => youtubeMetric(id, { likes: 2, views: 40 }))),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.youtube.inserted).toBe(1);
+
+    const row = (
+      await db.execute({
+        args: ["freshVIDEO1"],
+        sql: `select * from social_metrics where external_id = ? and source = 'youtube_analytics'`,
+      })
+    ).rows[0] as Record<string, unknown>;
+    expect(Number(row.views)).toBe(40);
+    expect(row.average_view_percentage).toBeNull();
+    expect(row.average_view_duration_seconds).toBeNull();
+    expect(row.watch_time_seconds).toBeNull();
+  });
+
+  it("coexists with the Postiz snapshot of the SAME youtube post (source disambiguates the key)", async () => {
+    // One youtube post carrying BOTH its Postiz id AND its Shorts permalink: Postiz snapshots it by
+    // the POSTIZ id, YouTube by the NATIVE video id. Both land — source is part of the key.
+    await db.execute({
+      args: [
+        crypto.randomUUID(),
+        "track-x",
+        "youtube",
+        "published",
+        "postiz-id",
+        "https://www.youtube.com/shorts/nativeVID01",
+        NOW.toISOString(),
+        "2026-07-01T00:00:00.000Z",
+        "2026-07-01T00:00:00.000Z",
+      ],
+      sql: `insert into social_posts (id, track_id, platform, status, external_id, url, published_at, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
+
+    const summary = await recordSocialMetrics({
+      collectYouTubeVideos: (ids) =>
+        Promise.resolve(ids.map((id) => youtubeMetric(id, { likes: 9, views: 80 }))),
+      fetchAnalytics: () =>
+        Promise.resolve({ kind: "metrics", metrics: metrics({ likes: 7, views: 70 }) }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.inserted).toBe(1); // the Postiz row
+    expect(summary.youtube.inserted).toBe(1); // the youtube_analytics row
+    expect(await metricsRowCount("postiz-id")).toBe(1);
+    expect(await youtubeRowCount("nativeVID01")).toBe(1);
+  });
+
+  it("counts a post whose url has no parseable video id as skipped (never inserts)", async () => {
+    await seedYouTubePost({
+      trackId: "track-1",
+      url: "https://www.youtube.com/@fluncle",
+      videoId: "unused",
+    });
+
+    const summary = await recordSocialMetrics({
+      collectYouTubeVideos: (ids) => Promise.resolve(ids.map((id) => youtubeMetric(id))),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.youtube).toEqual({
+      configured: true,
+      fetched: 0,
+      inserted: 0,
+      matched: 0,
+      skipped: 1,
+    });
+  });
+
+  it("is a clean no-op when YouTube is unconnected (collector returns null)", async () => {
+    await seedYouTubePost({ trackId: "track-1", videoId: "abc123DEF45" });
+
+    const summary = await recordSocialMetrics({
+      collectYouTubeVideos: () => Promise.resolve(null),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.youtube.configured).toBe(false);
+    expect(summary.youtube.fetched).toBe(0);
+    expect(await youtubeRowCount("abc123DEF45")).toBe(0);
+  });
+
+  it("runs the YouTube half even with no Postiz key (independent source)", async () => {
+    delete process.env.POSTIZ_API_KEY;
+    await seedYouTubePost({ trackId: "track-1", videoId: "indep00VID1" });
+
+    const summary = await recordSocialMetrics({
+      collectYouTubeVideos: (ids) =>
+        Promise.resolve(ids.map((id) => youtubeMetric(id, { views: 5 }))),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.configured).toBe(false); // Postiz half no-op
+    expect(summary.youtube.inserted).toBe(1); // YouTube half still ran
+    expect(await youtubeRowCount("indep00VID1")).toBe(1);
+  });
+
+  it("never fails the run when the YouTube collector throws (logged + skipped)", async () => {
+    await seedYouTubePost({ trackId: "track-1", videoId: "abc123DEF45" });
+
+    const summary = await recordSocialMetrics({
+      collectYouTubeVideos: () => Promise.reject(new Error("youtube 500")),
+      fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    // The default no-op summary survives; the run itself did not throw.
+    expect(summary.youtube).toEqual({
       configured: false,
       fetched: 0,
       inserted: 0,

@@ -431,6 +431,13 @@ export function adminSocialHandlers(os: Implementer) {
           matched: result.tiktok.matched,
           skipped: result.tiktok.skipped,
         },
+        youtube: {
+          configured: result.youtube.configured,
+          fetched: result.youtube.fetched,
+          inserted: result.youtube.inserted,
+          matched: result.youtube.matched,
+          skipped: result.youtube.skipped,
+        },
       };
     } catch (error) {
       throw toFault(error);
