@@ -1,0 +1,5 @@
+# The preflight reaches the backup bucket and 1Password with the operator's live credentials.
+# Its tests must never do the same. `[test] preload` runs ONLY under `bun test`, so a real
+# preflight run is untouched. See packages/test-support.
+[test]
+preload = ["@fluncle/test-support/preload"]
