@@ -15,7 +15,11 @@ import { createClient, type Client } from "@libsql/client/web";
 export async function getDb(): Promise<Client> {
   let url = process.env.TURSO_DATABASE_URL;
   let authToken = process.env.TURSO_AUTH_TOKEN;
-  const item = process.env.FLUNCLE_TURSO_OP_ITEM;
+  // Accept the item with or without the `op://` scheme — shells often export the bare path.
+  let item = process.env.FLUNCLE_TURSO_OP_ITEM;
+  if (item && !item.startsWith("op://")) {
+    item = `op://${item}`;
+  }
   if ((!url || !authToken) && item) {
     url = (await $`op read ${`${item}/TURSO_DATABASE_URL`}`.text()).trim();
     authToken = (await $`op read ${`${item}/TURSO_AUTH_TOKEN`}`.text()).trim();
