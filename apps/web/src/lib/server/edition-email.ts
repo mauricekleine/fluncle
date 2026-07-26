@@ -7,6 +7,23 @@ import { getTracksByLogIds } from "./tracks";
 // real physical mailing address here once the audience grows past F&F.
 const POSTAL_ADDRESS = "With love, from somewhere deep in the galaxy, Fluncle";
 
+// The per-listener Frontier shelf, on the site. The teaser links every recipient
+// here (one HTML for all — no per-recipient personalization).
+export const FRONTIER_TEASER_URL = `${siteUrl}/recommendations`;
+
+// The Frontier teaser: EMAIL-ONLY chrome, the compliance footer's class of thing —
+// always rendered in the email, never part of the stored `content`, never on the
+// /newsletter archive page. One quiet block for every recipient, pointing the crew
+// at their shelf on the site. The copy is honest across every reader state: signed
+// out lands on a door that asks you to join the crew, unverified on the verify
+// pointer, verified on the working shelf — so it INVITES you to point Fluncle at
+// your taste (the door's own pitch), it never promises a shelf already dug.
+const FRONTIER_TEASER_HTML =
+  `<p style="border-top:1px solid #ddd;margin-top:24px;padding-top:16px;font-size:14px;color:#555">` +
+  `<strong>The frontier</strong><br />` +
+  `Point me at the tracks you love and I'll dig the far side of the archive for bangers that sit close to them.<br />` +
+  `<a href="${FRONTIER_TEASER_URL}">Open the frontier</a></p>`;
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -132,6 +149,11 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
   }
 
   parts.push("<p>Happy raving,<br />Fluncle</p>");
+
+  // The Frontier teaser (email-only chrome, see FRONTIER_TEASER_HTML): a standing
+  // pointer to the per-listener shelf, sitting after the letter and before the
+  // compliance footer. Independent of the authored content — always rendered.
+  parts.push(FRONTIER_TEASER_HTML);
 
   // The compliance footer: the managed unsubscribe token (Resend substitutes it
   // per-recipient and adds the one-click List-Unsubscribe headers) + the postal

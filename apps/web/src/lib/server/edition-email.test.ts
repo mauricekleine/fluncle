@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type EditionDTO, type TrackListItem } from "@fluncle/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -97,5 +100,57 @@ describe("renderEditionEmailHtml — finding hydration", () => {
 
     expect(html).toContain("Fluncle — Mixtape #3");
     expect(html).toContain('href="https://www.fluncle.com/log/019.F.1A"');
+  });
+});
+
+describe("renderEditionEmailHtml — Frontier teaser (email-only chrome)", () => {
+  beforeEach(() => {
+    getTracksByLogIds.mockReset();
+    getTracksByLogIds.mockResolvedValue({});
+  });
+
+  it("renders the teaser block, with the exact shelf URL", async () => {
+    const html = await renderEditionEmailHtml(
+      edition({ galaxies: [{ findings: [{ logId: "021.7.1A" }], galaxy: "Astral" }] }),
+    );
+
+    expect(html).toContain("The frontier");
+    expect(html).toContain(
+      "Point me at the tracks you love and I'll dig the far side of the archive for bangers that sit close to them.",
+    );
+    expect(html).toContain('href="https://www.fluncle.com/recommendations"');
+    expect(html).toContain("Open the frontier");
+  });
+
+  it("sits after the sign-off and before the compliance footer", async () => {
+    const html = await renderEditionEmailHtml(edition({}));
+
+    const signOff = html.indexOf("Happy raving");
+    const teaser = html.indexOf("The frontier");
+    const unsubscribe = html.indexOf("{{{RESEND_UNSUBSCRIBE_URL}}}");
+
+    expect(signOff).toBeGreaterThanOrEqual(0);
+    expect(teaser).toBeGreaterThan(signOff);
+    expect(unsubscribe).toBeGreaterThan(teaser);
+  });
+
+  it("renders even for an edition with no authored content (it is chrome, not content)", async () => {
+    const html = await renderEditionEmailHtml(edition({}));
+
+    expect(html).toContain('href="https://www.fluncle.com/recommendations"');
+  });
+
+  // The /newsletter archive page renders the SAME stored `content` from its own React
+  // component (newsletter.$number.tsx), never `renderEditionEmailHtml`. The teaser is
+  // email-only chrome, so it must not appear in that render path.
+  it("stays out of the archive-page render path", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const archiveSource = readFileSync(
+      resolve(here, "../../routes/newsletter.$number.tsx"),
+      "utf8",
+    );
+
+    expect(archiveSource).not.toContain("/recommendations");
+    expect(archiveSource).not.toContain("The frontier");
   });
 });
