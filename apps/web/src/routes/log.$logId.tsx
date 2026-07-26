@@ -24,6 +24,7 @@ import { formatAlbumDuration, formatDateLong, formatDuration } from "@/lib/forma
 import { jsonLdScript } from "@/lib/json-ld";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { isLogPageParam } from "@/lib/log-page-param";
+import { useSocialArrival } from "@/lib/social-referrer";
 import { GraphLink } from "@/components/graph-link";
 import {
   artistTitleLine,
@@ -331,6 +332,11 @@ function LogPage() {
   // in). SSR + first paint render the default "scales" verbatim; the stored/profile
   // choice is adopted post-mount, so there is no hydration mismatch.
   const { notation } = useKeyNotation();
+  // Referrer-aware arrival: null on the server + first paint (so SSR and hydration
+  // agree — the edge-cached response never varies on the referrer), then the social
+  // platform this reader arrived from once `document.referrer` is readable. A social
+  // arrival quietly emphasises the follow-along door below (progressive enhancement).
+  const arrivedFrom = useSocialArrival();
 
   if (data.status !== "found") {
     if (data.status === "found-mixtape") {
@@ -597,7 +603,17 @@ function LogPage() {
           a quiet line in the plate flow, the buttons carrying the literal actions per the
           Chrome Rule.
         */}
-        <section aria-label="Follow along" className="log-trail">
+        <section
+          aria-label="Follow along"
+          className={arrivedFrom ? "log-trail log-trail--arrived" : "log-trail"}
+        >
+          {/*
+            The referrer-aware arrival line (progressive enhancement, client-only): a
+            reader who clicked over from a social post gets one plain acknowledgement
+            before the intro. ENTRY-POINT register — plain human, zero cosmos vocabulary,
+            same as the lede below (operator ruling 2026-07-20). Absent for a direct hit.
+          */}
+          {arrivedFrom ? <p className="log-trail-arrival">Glad you made it over.</p> : null}
           <p className="log-trail-lede">
             Hi, I&rsquo;m Fluncle. I collect drum &amp; bass bangers. Follow the playlist, or join
             the newsletter and I&rsquo;ll send you fresh ones every Friday.

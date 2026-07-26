@@ -1671,6 +1671,54 @@ body::before {
   line-height: 1.55;
 }
 
+/* The arrival acknowledgement (referrer-aware, client-only): one plain line above
+   the intro for a reader who clicked over from a social post. Cream, so it reads a
+   touch warmer than the stardust lede below it, but still quiet plate prose. */
+.log-trail-arrival {
+  color: var(--starlight-cream);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/* Social arrival, emphasised: a soft rounded gold panel painted BEHIND the
+   follow-along block so the door the reader came for is the lit thing on the plate.
+   It's a ::before at negative inset (never in flow), so adding the class post-hydration
+   costs zero layout shift and never nudges the block's alignment. `isolation: isolate`
+   keeps the z-index:-1 panel above the plate's background but below this block's text. */
+.log-trail--arrived {
+  isolation: isolate;
+  position: relative;
+}
+
+.log-trail--arrived::before {
+  background: color-mix(in oklch, var(--eclipse-gold) 7%, transparent);
+  border: 1px solid color-mix(in oklch, var(--eclipse-gold) 20%, transparent);
+  border-radius: 14px;
+  content: "";
+  inset: -0.9rem -1.1rem;
+  pointer-events: none;
+  position: absolute;
+  z-index: -1;
+}
+
+/* The one-time highlight: the panel gently fades in once on arrival. Reduced motion
+   gets the settled panel with no fade (the door is still emphasised, just still). */
+@media (prefers-reduced-motion: no-preference) {
+  .log-trail--arrived::before {
+    animation: log-trail-arrive 700ms ease-out both;
+  }
+}
+
+@keyframes log-trail-arrive {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 .log-decode {
   color: var(--stardust);
   display: grid;
