@@ -23,8 +23,8 @@ POSTIZ_API_URL=
 # these two lines to a local http://127.0.0.1:<port> URL with a dummy token.
 # Leave them blank here; they are filled in locally. Real Turso credentials are
 # never stored here -- production creds live in 1Password and are read by
-# `bun run db:pull-prod` (the `Turso Production Credentials` item, Fluncle vault).
-# See docs/local-database.md.
+# `bun run db:pull-prod` from the item that `FLUNCLE_TURSO_OP_ITEM` points at (the
+# concrete item lives in the private ops runbook). See docs/local-database.md.
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
 

@@ -96,7 +96,7 @@
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "5b6179a475661cf7d54502ec53cbad7cb825cc5109a5785dddef5128301bff16"
+      "computedHash": "c995bd70e26f38464718e9ab11cc0f72529a266980cd779d1fa8542e177766ff"
     },
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",

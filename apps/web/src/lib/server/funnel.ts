@@ -1,5 +1,5 @@
 // THE CATALOGUE FUNNEL — the catalogue pipeline (crawl → anchor → capture → analyze/embed →
-// rec-eligible → certified) as numbers on one page (docs/rfcs/catalogue-funnel-rfc.md, U1).
+// rec-eligible → certified) as numbers on one page (docs/admin-shell.md).
 //
 // ── ONE SOURCE OF TRUTH FOR THE COUNTS ───────────────────────────────────────────────
 // This module records nothing new. Every number it computes is READ THROUGH THE SAME
@@ -135,7 +135,7 @@ export type PublicSurfaceCounts = {
   tracks: number;
 };
 
-/** The operator's spend levers, surfaced as gauges (docs/rfcs/catalogue-funnel-rfc.md § meters). */
+/** The operator's spend levers, surfaced as gauges (docs/admin-shell.md, the `/admin/funnel` station). */
 export type FunnelMeters = {
   /** The anchor re-ask bench size (mirrors `queues.anchorBackoff` — a lever, called out here). */
   anchorBackoff: number;

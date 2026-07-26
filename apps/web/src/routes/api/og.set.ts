@@ -4,7 +4,6 @@ import { albumCoverAtSize } from "@/lib/media";
 import { parseSetParam } from "@/lib/mix-set";
 import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
 import { getTracksByLogIds } from "@/lib/server/tracks";
-import { type ApiHandlers, aliasHandlers } from "./-alias";
 
 // The set-level Open Graph card (1200×630) for a shared `/mix` link (RFC
 // mixability-engine §3.2) — a `/mix` link that unfurls as a naked URL on
@@ -45,8 +44,16 @@ async function fetchImageDataUri(url: string): Promise<string | undefined> {
   }
 }
 
-export const serverHandlers: ApiHandlers = {
-  GET: async ({ request }) => {
+// BARE-ONLY MOUNT, SO NO `aliasHandlers`: that helper's `as never` exists only to unbind
+// the phantom path coupling when ONE handler object is mounted at both /api/x and
+// /api/v1/x (see ./-alias.ts). This card has no /api/v1 twin — `/api/og/set` is the single
+// mount (and the documented bare-only carve-out in orpc-coverage.test.ts) — so there is
+// nothing to share, and routing the object through the cast erased TanStack's type-check
+// at the mount for no benefit: a handler with the wrong shape would have compiled. The
+// handlers are declared directly and mounted inline below, so the compiler checks them
+// against this route's own literal path.
+export const serverHandlers = {
+  GET: async ({ request }: { request: Request }) => {
     const url = new URL(request.url);
     const logIds = parseSetParam(url.searchParams.get("set"));
     const byLogId = logIds.length > 0 ? await getTracksByLogIds(logIds) : {};
@@ -99,5 +106,5 @@ export const serverHandlers: ApiHandlers = {
 };
 
 export const Route = createFileRoute("/api/og/set")({
-  server: { handlers: aliasHandlers(serverHandlers) },
+  server: { handlers: serverHandlers },
 });

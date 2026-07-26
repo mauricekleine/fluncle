@@ -6,7 +6,11 @@
 // string in the structured data - a Spotify-sourced track title / artist / album,
 // or the operator `note` woven into the log description - could carry a literal
 // `</script><script>...` that breaks out of the inline <script> and executes on
-// the public, server-rendered page (stored XSS; there is no CSP to contain it).
+// the public, server-rendered page (stored XSS). The CSP does not contain this: the
+// only ENFORCED directive is `frame-ancestors 'self'`, and the full policy ships
+// report-only with `script-src 'unsafe-inline'` — inline script is allowed because a
+// nonce cannot survive the shared edge cache (lib/server/security-headers.ts). So
+// this serializer is still the only defense.
 //
 // `jsonLdScript` is the one place we serialize JSON-LD: it stringifies, then
 // HTML-escapes the bytes that matter in a <script> context before they reach

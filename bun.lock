@@ -250,6 +250,9 @@
     "packages/sprites": {
       "name": "@fluncle/sprites",
       "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "catalog:",
+      },
     },
     "packages/test-support": {
       "name": "@fluncle/test-support",
