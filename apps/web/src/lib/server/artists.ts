@@ -3,6 +3,7 @@ import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
+import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
 import {
   hubCountArtistEdgeStatements,
@@ -844,6 +845,7 @@ export async function linkTracksToArtistEntities(trackIds: string[]): Promise<nu
               select track_id, artist_id, position from (${linkSelect}) candidate`,
       },
       ...hubCountArtistEdgeStatements(newEdges),
+      ...restaleCatalogueRankStatements(newEdges.map((edge) => edge.trackId)),
     ],
     "write",
   );
@@ -999,6 +1001,9 @@ export async function upsertTrackArtists(
     catalogueFlag === undefined
       ? undefined
       : { certified: Number(catalogueFlag.is_catalogue) === 0 ? 1 : 0, renderable: 1 };
+  // Whether this call GENUINELY creates a `track_artists` edge — the trigger for the first-order rank
+  // re-stale a catalogue row owes The Ear (RFC artist-primary-capture; catalogue-rank-restale.ts).
+  let anyNewEdge = false;
 
   for (let i = 0; i < artistNames.length; i++) {
     const name = artistNames[i];
@@ -1093,6 +1098,7 @@ export async function upsertTrackArtists(
       // Guard against a track that credits the same artist twice — the composite PK stores one
       // row, so only the first occurrence may move the counters.
       held.add(artistId);
+      anyNewEdge = true;
     }
 
     await db.batch(
@@ -1108,6 +1114,17 @@ export async function upsertTrackArtists(
       ],
       "write",
     );
+  }
+
+  // A genuinely-new edge on a CATALOGUE row changes what artist it credits, so its authorization
+  // answer may have moved — re-stale it for the next `rank_catalogue` tick (the fingerprint's
+  // qualified-set size stays put here, since this connects to an already-resolved artist). The
+  // helper's SQL is `is_catalogue = 1`-guarded, and the flag check skips the write for a certified
+  // (finding) track, which carries no rank corpus.
+  if (anyNewEdge && catalogueFlag !== undefined && Number(catalogueFlag.is_catalogue) === 1) {
+    for (const statement of restaleCatalogueRankStatements([trackId])) {
+      await db.execute(statement);
+    }
   }
 
   // Fill the canonical Spotify avatar for any of this track's artists that lacks one

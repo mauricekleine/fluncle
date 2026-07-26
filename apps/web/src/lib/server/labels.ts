@@ -30,6 +30,7 @@ import {
 } from "@fluncle/contracts";
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl, labelLogoUrl } from "../media";
+import { restaleCatalogueRankByLabelStatement } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
 import {
   type HubCountCensusRow,
@@ -1556,6 +1557,17 @@ export class LabelNotFoundError extends Error {}
  * It changes what the NEXT crawl seeds from. It touches nothing already stored — no
  * finding, no track, no crawled row is read, hidden, or deleted here, and none ever
  * should be.
+ *
+ * ── THE ONE EXCEPTION, AND WHY IT IS NOT A STORAGE MOVE ────────────────────────────────
+ * A ruling DOES change one derived thing: the CAPTURE authorization of this label's own catalogue
+ * tracks (`enabled` authorizes them, `disabled` vetoes them — `capturePriorityFor`). So this write
+ * ALSO nulls their `catalogue_rank_corpus` — the "stale" sentinel — so the next `rank_catalogue`
+ * tick re-derives their tier under the new ruling (RFC artist-primary-capture; catalogue-rank-restale.ts).
+ * A bounded, indexed UPDATE on `tracks_label_id_idx`, run atomically with the ruling. This is a
+ * RE-RANK trigger, not a storage move: no row is hidden, deleted, or shown differently — it stamps a
+ * staleness marker the sweep already understands. (The SECOND-ORDER effect — a ruling that re-crosses
+ * an artist's weighted qualification, flipping their OTHER-label tracks — is caught by the fingerprint's
+ * qualified-set size, `rankCorpus`, not here.)
  */
 export async function updateLabelSeedState(
   id: string,
@@ -1564,10 +1576,16 @@ export async function updateLabelSeedState(
   const db = await getDb();
   const now = new Date().toISOString();
 
-  await db.execute({
-    args: [seedState, now, now, id],
-    sql: `update labels set seed_state = ?, ruled_at = ?, updated_at = ? where id = ?`,
-  });
+  await db.batch(
+    [
+      {
+        args: [seedState, now, now, id],
+        sql: `update labels set seed_state = ?, ruled_at = ?, updated_at = ? where id = ?`,
+      },
+      restaleCatalogueRankByLabelStatement(id),
+    ],
+    "write",
+  );
 
   const result = await db.execute({
     args: [id],
