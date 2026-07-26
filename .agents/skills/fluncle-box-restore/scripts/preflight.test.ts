@@ -7,6 +7,7 @@ import {
   ageInDays,
   exitCodeFor,
   latestDatedFolder,
+  redactTopology,
   resolveLabsDir,
   resolveRepoRoot,
   scanSecretTemplate,
@@ -195,6 +196,39 @@ describe("scanSecretTemplate", () => {
 
   test("ignores comments and blank lines", () => {
     expect(scanSecretTemplate("# nothing\n\n   \n").refKeys).toEqual([]);
+  });
+});
+
+describe("redactTopology", () => {
+  // Both children whose stderr this report repeats name the map in their failure text, and the
+  // report is agent-facing — one paste from a public issue. Diagnostics survive, topology does not.
+  test("strips the op:// reference `op` quotes when a ref will not resolve", () => {
+    const redacted = redactTopology(
+      '[ERROR] "Private Vault" isn\'t a vault: op://<private vault>/<item>/credential',
+    );
+    expect(redacted).not.toContain("/<item>/credential");
+    expect(redacted).toContain("op://<redacted>");
+    expect(redacted).toContain("isn't a vault");
+  });
+
+  test("a vault name with spaces does not leave the rest of the path behind", () => {
+    expect(redactTopology("op://<some long vault name>/<item>/credential")).toBe("op://<redacted>");
+  });
+
+  test("strips the bucket endpoint the restore drill quotes on a failed read", () => {
+    const redacted = redactTopology(
+      "GET https://abc123.r2.cloudflarestorage.com/secret-bucket/box-state failed (403)",
+    );
+    expect(redacted).not.toContain("r2.cloudflarestorage.com");
+    expect(redacted).not.toContain("secret-bucket");
+    expect(redacted).toContain("<redacted-url>");
+    expect(redacted).toContain("failed (403)");
+  });
+
+  test("leaves topology-free diagnostics alone", () => {
+    expect(redactTopology("could not authenticate; sign in and retry")).toBe(
+      "could not authenticate; sign in and retry",
+    );
   });
 });
 

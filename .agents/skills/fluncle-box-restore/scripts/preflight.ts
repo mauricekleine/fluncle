@@ -267,6 +267,29 @@ export function scanSecretTemplate(text: string): TemplateScan {
   return { literalKeys, refKeys };
 }
 
+/**
+ * Scrub the TOPOLOGY out of a child process's diagnostics before this report repeats it.
+ *
+ * The two children whose stderr is surfaced both name the map in their failure text: `op` quotes
+ * the reference that would not resolve, and the restore drill quotes the bucket URL it could not
+ * read. Both cases fire exactly when something is wrong — which is exactly when the output gets
+ * pasted into a PR, an issue, or a chat. This report is agent-facing, so it must stay safe to
+ * paste. What is diagnostically useful (which template, which verb, what the error said) all
+ * survives; only the vault path and the endpoint go.
+ */
+export function redactTopology(text: string): string {
+  return (
+    text
+      // A vault or item name may contain SPACES, so a `\S+` here leaves the tail of the path
+      // behind — the very part that identifies the item. `op` puts the reference at the end of
+      // its message, so redacting to end-of-line loses nothing that matters and cannot under-cut.
+      .replace(/op:\/\/.*/g, "op://<redacted>")
+      // A URL cannot contain a space, so `\S+` is exact here. The negative lookahead keeps this
+      // from re-redacting the `op://<redacted>` marker the previous pass just wrote.
+      .replace(/\b(?!op:)[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<redacted-url>")
+  );
+}
+
 /** 0 clean · 1 something failed · 2 nothing failed but something could not be verified. */
 export function exitCodeFor(results: readonly CheckResult[]): number {
   if (results.some((result) => result.status === "fail")) {
@@ -740,7 +763,9 @@ function checkOpRefs(templatePaths: readonly string[]): CheckResult {
       stdio: ["ignore", "ignore", "pipe"],
     });
     if (run.status !== 0) {
-      const reason = (run.stderr ?? "").trim().split("\n").at(-1) ?? "unknown error";
+      const reason = redactTopology(
+        (run.stderr ?? "").trim().split("\n").at(-1) ?? "unknown error",
+      );
       unresolved.push(`${path.split("/").at(-1) ?? path}: ${reason.slice(0, 160)}`);
     }
   }
@@ -773,11 +798,9 @@ function runRestoreDrill(repoRoot: string): CheckResult {
   const run = spawnSync("bun", [script], { encoding: "utf8" });
   if (run.status !== 0) {
     return {
-      detail:
-        `drill exited ${String(run.status)}: ${(run.stderr ?? "").trim().split("\n").at(-1) ?? ""}`.slice(
-          0,
-          400,
-        ),
+      detail: redactTopology(
+        `drill exited ${String(run.status)}: ${(run.stderr ?? "").trim().split("\n").at(-1) ?? ""}`,
+      ).slice(0, 400),
       id,
       remedy:
         "The drill is the acceptance test: fetch, verify, decrypt, prove tamper-detection bites, unpack, and confirm the load-bearing set came back. A red drill means the backup is not a backup yet — read its output and fix the leg before anything else here matters.",

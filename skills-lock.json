@@ -31,7 +31,7 @@
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",
       "sourceType": "local",
-      "computedHash": "292262e920e406afccb5fbb7cdd756c1ddab8cc2306476a0551ddeb7a0eb07b9"
+      "computedHash": "dc7f0b32debe72b540eb4586e4dc90a419098201f7ddae0238b3a42ce21d19a2"
     },
     "fluncle-catalogue-prune": {
       "source": "packages/skills/fluncle-catalogue-prune",
