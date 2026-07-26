@@ -171,6 +171,15 @@ cargo build --release       # build
 cargo test                  # unit + in-process API tests
 ```
 
+## Deploy
+
+The runtime systemd unit and the self-deploy loop live in [`deploy/`](./deploy):
+CI builds a static musl binary on every merge that touches `apps/sonar/**` and
+publishes it to a rolling release; a host timer on the box verifies its checksum,
+pre-smokes it in isolation, swaps it in, and auto-rolls-back on any failure. See
+[`deploy/README.md`](./deploy/README.md) — including why this app's build happens
+in CI while `apps/ssh` builds on the box.
+
 ## Bench
 
 A synthetic scan bench (off the default test run) sanity-checks the latency

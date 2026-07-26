@@ -1,0 +1,126 @@
+# sonar's deploy — the runtime unit + the self-deploy loop
+
+Everything rave-01 needs to run and keep running [`apps/sonar`](../), the in-memory vector-similarity engine behind sonic search, "sounds like these artists", and the log page's more-like-this. Two things live here, and they close two separate gaps.
+
+**Gap 1 — the runtime unit was committed nowhere.** [`sonar.service`](./sonar.service) is what the box actually runs: `User=sonar`, the binary at `/opt/sonar/sonar`, `EnvironmentFile=/etc/sonar.env` (Turso read creds, `SONAR_SECRET`, port, TLS paths — installed `0600 root:root`, never in this repo), `CAP_NET_BIND_SERVICE` so a non-root user can bind 443 for Cloudflare's origin, a strict-ish sandbox, and `MemoryMax=2G` so a runaway index can never squeeze the SSH terminal off the same box. It was living only on the box; now it lives here, where a change to it is reviewable.
+
+**Gap 2 — no self-deploy.** sonar was deployed **by hand**: cross-build the musl binary on a Mac, `scp` it up, restart. So a merge to `main` did not reach the live engine until someone remembered. [`fluncle-sonar-freshen.sh`](./fluncle-sonar-freshen.sh) + its [`.service`](./fluncle-sonar-freshen.service) / [`.timer`](./fluncle-sonar-freshen.timer) close that: a host systemd timer that watches a rolling GitHub Release, verifies the published artifact, pre-smokes it in isolation, swaps it in, and auto-rolls-back on any failure.
+
+This is the **pull model** — the repo is canonical, the box is the deploy target, and the box deploys _itself_ — the sonar sibling of [`apps/ssh/deploy`](../../ssh/deploy) on the same box and of [`docs/agents/hermes/pin-watch`](../../../docs/agents/hermes/pin-watch) on rave-02.
+
+## Why a host timer (not a container / not the app itself)
+
+The `sonar` service can't cleanly replace _its own_ running binary. The swap has to run as a separate host process — a `Type=oneshot` systemd timer on the rave-01 host — exactly like [`fluncle-ssh-freshen`](../../ssh/deploy) beside it and [`pin-watch`](../../../docs/agents/hermes/pin-watch) on rave-02.
+
+## Build model: CI-built artifact (the deliberate divergence from `apps/ssh`)
+
+The SSH terminal's [deploy README](../../ssh/deploy/README.md#build-model-on-box-go-build-and-why-vs-a-ci-built-artifact) argues the opposite of what this one does, and it is right to: it builds **on the box** because a CI-built artifact "would add a whole second moving part … for the sole benefit of keeping the Go toolchain off the edge box", and the Go toolchain is a lone static compiler with no daemon, dormant except for the **~10 seconds** of an actual build.
+
+None of that transfers to Rust. Concretely:
+
+|                                     | `apps/ssh` (Go)                 | `apps/sonar` (Rust)                                                                      |
+| ----------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
+| Toolchain on the box                | tens of MB, one static compiler | **~1.5GB** (rustc + cargo + std + the registry cache)                                    |
+| Release build                       | **~10s**                        | **~42s on an M5** → **~7–14 min on rave-01's 2 shared vCPUs** (LTO, `codegen-units = 1`) |
+| What else is on the box during that | the SSH terminal, DNS, sonar    | the SSH terminal, DNS, **sonar itself**                                                  |
+
+Seven-to-fourteen minutes of both vCPUs pinned at 100%, on the box that is _at that moment_ serving the live SSH terminal, the DNS server, and sonar's own latency-critical scans, in exchange for a build that CI does for free in a cached ninety seconds. So this loop takes the second moving part on purpose: **GitHub Actions builds the static musl binary and publishes it; the box downloads, verifies, and swaps.**
+
+This is a divergence in the build step only. Everything the ssh doctrine is actually about — pull model, credential-free, pre-smoke in isolation before the swap, atomic swap, post-smoke, auto-rollback, Discord alert + `/status` post — is identical, deliberately, line for line.
+
+### The trust boundary
+
+On-box building has one property this loses for free: the box knows the binary is the source, because it compiled it. Pulling an artifact means trusting something it did not build, so that trust is made explicit and mechanical:
+
+- CI publishes three assets to the rolling `sonar-latest` pre-release: **`sonar`** (the binary), **`sonar.sha256`** (its checksum), **`sonar.commit`** (the full commit SHA it was built from).
+- The box verifies `sonar.sha256` against the downloaded binary with `sha256sum -c` **before the binary is executed at all**, even in `--dry-run`. A mismatch is a loud, alerting failure and the live service is never touched. No verifier available on the box is _also_ a hard failure — never a silent skip.
+- The repo is public, so all three are fetched by plain unauthenticated `curl`. **No GitHub token goes on the box** — the same credential-free posture as the ssh sibling, reached a different way.
+- `sonar.commit` — not the git tag, not the asset's timestamp — is the artifact's identity and the only input to "is there anything to do".
+
+The second, independent net is the **pre-smoke**: the box boots the downloaded binary in isolation and refuses to swap unless it actually serves. A corrupt, mis-targeted, or wrong-CPU artifact dies there, with the live engine untouched.
+
+## What a run does (`fluncle-sonar-freshen.sh`)
+
+Default `--if-changed` (the timer); `--force` redeploys unconditionally (the operator pilot); `--dry-run` downloads + verifies + pre-smokes then stops (never swaps).
+
+1. **Single-flight** (flock) — never two runs at once.
+2. **Ask what is published.** `GET` the release's `sonar.commit` asset and compare it to the recorded deployed SHA (`/opt/sonar-freshen/deployed-sha`). Equal → no-op, `/status` gets an `ok`, done. (`--dry-run` skips this short-circuit on purpose — it never touches the live service, so previewing the current release stays useful on an up-to-date box.) An unreachable or malformed release feed (CI hasn't published yet, GitHub is having a moment, an HTML error page came back instead of a SHA) is logged, posted as `degraded`, and **exits cleanly** — a broken release feed never becomes a broken box.
+3. **Download + VERIFY.** Fetch `sonar` + `sonar.sha256` into a throwaway dir and check the digest (see the trust boundary above). Abort loudly on any mismatch.
+4. **Pre-smoke the NEW binary in ISOLATION — before the live service is touched.** Boot it on a free high loopback port with **TLS disabled** (no cert/key in its env ⇒ sonar serves plain HTTP; see [`src/config.rs`](../src/config.rs)) and the live env's `TURSO_*` + `SONAR_SECRET`, read out of `/etc/sonar.env` without sourcing it. Then poll `http://127.0.0.1:<port>/health` until it answers `"ok":true`. That one response proves the whole chain: the binary **runs on this CPU** (a bad `-C target-cpu` would `SIGILL` right here), reaches Turso, decodes the vector blobs, builds both in-memory indexes, and serves HTTP. Generous timeout — the index load is ~30s today and grows with the corpus, so the wait is 180s by default (`SONARFRESHEN_BOOT_TIMEOUT_SECS`). Any failure → alert, `degraded`, **abort with the live service untouched**. The throwaway process is always reaped (trap), because it holds a second full copy of the index in RAM.
+5. **Swap** (the only moment the live service changes): snapshot the current binary to `sonar.prev` (the rollback target), atomically rename the new one into place, `systemctl restart sonar`. Replacing the on-disk file under the running process is safe on Linux (the old process holds its inode until the restart). The systemd unit and `/etc/sonar.env` are **left untouched** — same contract as the ssh sibling: reuse the env already on the box, read nothing from `op`.
+6. **Post-swap smoke:** the service is `active` **and** the live port answers `/health` with `"ok":true`, polled for the same 180s (a restart re-reads the whole corpus before it serves). The live service normally terminates TLS on 443 with a Cloudflare **Origin Certificate**, whose SAN is the public hostname — so a loopback request legitimately mismatches the certificate name and the smoke uses `curl -k` on purpose. That is not a shortcut to tighten; validating Cloudflare's PKI from `127.0.0.1` is not the thing being proven. (Whether it smokes over `https` or `http` follows whatever `/etc/sonar.env` says about the TLS pair.)
+7. **On any post-swap failure → ROLLBACK:** restore `sonar.prev`, restart, confirm healthy, alert loudly. If the rollback itself fails, fire the loudest alert, post `down`, and stop for a human. **The box is never left broken.**
+
+Discord alerts (deploy / rollback / failure) use `DISCORD_ALERT_WEBHOOK` from the optional env file. Every run also reports a **`self-deploy-sonar`** health check to the public [`/status`](https://www.fluncle.com/status) board (POST `/api/v1/admin/health`, agent tier) — beside `self-deploy-ssh` from the same box: `ok` when current or freshly deployed, `degraded` when a download/verify/pre-smoke failed or a swap was rolled back (the engine is healthy on the prior binary, a human should look), `down` if a rollback itself failed. Both the alert and the status post are best-effort and public-safe (no host, no raw error); if the timer ever stops, the `/status` row simply goes stale — itself the signal that the engine may be silently drifting.
+
+## Memory: the pre-smoke holds a SECOND index
+
+sonar's whole point is that the corpus lives in RAM, and for the length of the pre-smoke there are **two** of them: the live service's and the throwaway one. **Box headroom must exceed 2× the index.** Today (~15k embedded tracks × 1024-dim f32 ≈ 4KB/vector ⇒ roughly 60MB of vectors per copy) that is comfortable. As the corpus grows toward catalogue scale (~150k tracks ⇒ ~600MB per copy, ~1.2GB for the pair before process overhead) it stops being free — re-check it then, and note that the unit's `MemoryMax=2G` caps the **live** service only, not the freshen's throwaway child, so the box's own free RAM is the real ceiling. When the pair no longer fits, the fix is to move the pre-smoke off the hot path (smoke on a scratch host, or accept a stop-then-start window), not to drop it.
+
+The timer is deliberately off-beat from the box's other schedules for the same reason: `fluncle-ssh-freshen` starts at `OnBootSec=5min` with 90s of jitter and the watchdog runs every ~10min, so this one uses `OnBootSec=11min` with a 7-minute randomised window. Two self-deploys smoking a service simultaneously would fight for the box's two vCPUs.
+
+## Install (on rave-01, one time)
+
+No pre-req beyond what the box already has: `curl`, `flock`, `sha256sum`, `systemctl`. **No Rust toolchain** — that is the whole point of the CI-built model.
+
+```bash
+# 1. The runtime unit (if the box is still on a hand-installed copy, this makes the
+#    committed one canonical; it is byte-identical to what is deployed today).
+sudo install -m 0644 apps/sonar/deploy/sonar.service /etc/systemd/system/
+
+# 2. The self-deploy script at its deployed path.
+sudo install -D -m 0755 apps/sonar/deploy/fluncle-sonar-freshen.sh \
+  /opt/sonar-freshen/fluncle-sonar-freshen.sh
+
+# 3. (Optional) The 0600 operator env file for the Discord alert + /status post.
+#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN (values in the ops runbook note —
+#    the same pair the ssh freshen and the watchdog use). Skip this and the self-deploy
+#    still runs, just without Discord/status visibility.
+sudo install -d -m 0755 /etc/fluncle
+sudo install -m 0600 /dev/null /etc/fluncle/sonar-freshen.env
+sudo "$EDITOR" /etc/fluncle/sonar-freshen.env
+
+# 4. Rehearse it first — downloads, verifies, pre-smokes, and STOPS. The live engine
+#    is not touched. Watch for "checksum verified" then "pre-smoke passed".
+sudo /opt/sonar-freshen/fluncle-sonar-freshen.sh --dry-run
+
+# 5. The real pilot: deploy the published build and prove the swap + post-smoke.
+sudo /opt/sonar-freshen/fluncle-sonar-freshen.sh --force
+
+# 6. Install the units, reload, enable + start the timer.
+sudo install -m 0644 apps/sonar/deploy/fluncle-sonar-freshen.service /etc/systemd/system/
+sudo install -m 0644 apps/sonar/deploy/fluncle-sonar-freshen.timer   /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fluncle-sonar-freshen.timer
+
+# Verify.
+sudo systemctl start fluncle-sonar-freshen.service   # one --if-changed run now
+journalctl -u fluncle-sonar-freshen.service -n 60 --no-pager
+systemctl list-timers fluncle-sonar-freshen.timer
+```
+
+Re-run `--dry-run` any time to preview without touching the live service. The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
+
+## Knobs
+
+Everything is overridable via the environment; the defaults are the canonical deploy paths.
+
+| Env var                          | Default                    | Meaning                                                                    |
+| -------------------------------- | -------------------------- | -------------------------------------------------------------------------- |
+| `SONARFRESHEN_RELEASE_REPO`      | `mauricekleine/fluncle`    | The public repo carrying the release.                                      |
+| `SONARFRESHEN_RELEASE_TAG`       | `sonar-latest`             | The rolling pre-release tag CI publishes to.                               |
+| `SONARFRESHEN_ASSET_BASE`        | derived from the two above | Full asset download base (point this at a mirror if ever needed).          |
+| `SONARFRESHEN_STATE_DIR`         | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                      |
+| `SONARFRESHEN_SERVICE`           | `sonar`                    | The systemd unit to restart.                                               |
+| `SONARFRESHEN_APP_BIN`           | `/opt/sonar/sonar`         | The binary to swap.                                                        |
+| `SONARFRESHEN_SERVICE_ENV`       | `/etc/sonar.env`           | Read-only source of the pre-smoke's Turso creds + the live port/TLS shape. |
+| `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.            |
+| `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                      |
+
+Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
+
+## The CI half
+
+[`.github/workflows/sonar-release.yml`](../../../.github/workflows/sonar-release.yml). Triggers on a push to `main` touching `apps/sonar/**`, plus `workflow_dispatch` for a manual re-publish. Builds `x86_64-unknown-linux-musl` (native-arch, different-libc on the ubuntu runner, so `rustup target add` + `musl-tools` is the whole story — no cross container) with `RUSTFLAGS: -C target-cpu=x86-64-v3`, which unlocks AVX2 + FMA in the scan kernel. That is not a micro-optimisation here: sonar is a brute-force dot-product scan over the entire corpus, so SIMD width **is** the latency, and rave-01 is AMD EPYC-Rome (Zen 2) with AVX2 + FMA confirmed. If that assumption ever broke — a box migration to older silicon — the binary would `SIGILL` on first execution, and the box-side pre-smoke catches exactly that before any swap.
+
+Then it moves the rolling `sonar-latest` tag to the built commit and uploads the three assets with `--clobber`.

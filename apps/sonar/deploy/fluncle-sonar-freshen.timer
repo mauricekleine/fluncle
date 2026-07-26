@@ -1,0 +1,21 @@
+[Unit]
+Description=fluncle-sonar-freshen timer — periodic check for a newer published sonar build to verify + swap
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/apps/sonar/deploy/README.md
+
+[Timer]
+# First check ~11 minutes after boot, then hourly. The check is one small HTTP GET of
+# the release's `sonar.commit` asset and a string compare, so hourly is nearly free; an
+# actual download + smoke + swap only runs when CI published a newer build.
+#
+# DELIBERATELY OFF-BEAT from the other rave-01 timers: fluncle-ssh-freshen starts at
+# OnBootSec=5min with 90s of jitter and the watchdog runs every ~10min, so this one
+# takes a different boot offset and a much wider randomised window. Two self-deploys
+# smoking a service at the same moment would fight for the box's two vCPUs — and the
+# sonar pre-smoke holds a second full copy of the index in RAM while it runs.
+OnBootSec=11min
+OnUnitActiveSec=1h
+RandomizedDelaySec=420
+Persistent=true
+
+[Install]
+WantedBy=timers.target
