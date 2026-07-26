@@ -150,8 +150,6 @@ export type ShowCommand =
 
 /** The number of log-mel bins in a `mel` frame (the glass <-> matcher contract). */
 export const MEL_BINS = 40;
-/** The mel frame cadence the glass emits at (Hz). */
-export const MEL_RATE_HZ = 10;
 /** The mel band span (Hz). Both the glass and the server-side preview fingerprints use it. */
 export const MEL_FMIN = 0;
 export const MEL_FMAX = 8000;

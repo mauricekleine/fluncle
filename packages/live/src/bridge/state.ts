@@ -51,8 +51,6 @@ function toMelFrame(frame: unknown): Float32Array | null {
   return out;
 }
 
-export type ShowStateMachine = ReturnType<typeof createShowState>;
-
 export function createShowState(
   plan: PlanEntry[],
   fingerprints: Fingerprint[],

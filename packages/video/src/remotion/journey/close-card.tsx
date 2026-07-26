@@ -34,10 +34,10 @@ import { closeCardProgress, closeCardReveal } from "./close-card-timing";
 // THE ARC TRAP (fixed): the reveal used to fall back to `arc ?? progress`, and
 // callers reach for the journey's GLOBAL `arc` (useJourney().arc) — already
 // non-zero through most of the clip — so the sign-off printed mid-clip. The reveal
-// is now driven ONLY by `progress` (the "arrive" phase's phaseProgress, ~0 until
-// the close begins); `arc` is accepted for runtime-compat with archived
-// compositions but IGNORED (see close-card-timing.ts). The timing math lives in
-// that pure module with a regression test.
+// is driven ONLY by `progress` (the "arrive" phase's phaseProgress, ~0 until the
+// close begins), and the legacy `arc` prop has been removed — never reintroduce it
+// (see close-card-timing.ts). The timing math lives in that pure module with a
+// regression test.
 //
 // Determinism: the reveal is a pure function of the `progress` value the caller
 // passes (itself frame-derived upstream). No random, no wall clock.
@@ -50,13 +50,6 @@ export type CloseCardProps = {
    * card reveals exactly as the journey arrives.
    */
   progress?: number;
-  /**
-   * @deprecated Legacy alias — accepted for runtime-compat with archived
-   * compositions but IGNORED. Passing the journey's global `arc` here used to
-   * reveal the sign-off mid-clip (the arc trap); drive the card from `progress`
-   * instead (the "arrive" phase's phaseProgress). See close-card-timing.ts.
-   */
-  arc?: number;
   /**
    * Scene-matched palette. `ink` colours the tagline (default Starlight Cream);
    * `accent` colours the signature — its emphasis highlight, drawn from the
@@ -111,7 +104,6 @@ const CONTAINER_STYLE: React.CSSProperties = {
 };
 
 export const CloseCard: React.FC<CloseCardProps> = ({
-  arc,
   progress,
   palette,
   floatBoost = 1,
@@ -120,8 +112,8 @@ export const CloseCard: React.FC<CloseCardProps> = ({
   align = "left",
   style,
 }) => {
-  // Drive from `progress` only; `arc` is accepted but ignored (the arc trap).
-  const p = closeCardProgress(progress, arc);
+  // Drive from `progress` only — the arc trap.
+  const p = closeCardProgress(progress);
 
   if (p <= 0.001) {
     return null;

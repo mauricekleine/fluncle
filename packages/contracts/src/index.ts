@@ -179,9 +179,6 @@ export type GalaxyAdminItem = z.infer<typeof GalaxyAdminItemSchema>;
 /** `GET /api/v1/admin/galaxies` response — the full map (named + unnamed + retired). */
 export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
-/** `PATCH /api/v1/admin/galaxies/:id` response — the one updated galaxy. */
-export type GalaxyUpdateResponse = Ok<{ galaxy: GalaxyAdminItem }>;
-
 /** `PUT /api/v1/admin/galaxies/map` response — the full resulting map (with minted ids). */
 export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
@@ -202,21 +199,12 @@ export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
  */
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
 
-/** `GET /api/v1/admin/labels` response — every label (optionally one seed state). */
-export type LabelsAdminResponse = Ok<{ labels: LabelAdminItem[] }>;
-
-/** `PATCH /api/v1/admin/labels/:id` response — the one ruled label. */
-export type LabelUpdateResponse = Ok<{ label: LabelAdminItem }>;
-
 /**
  * The label-merge summary (`POST /api/v1/admin/labels/:slug/merge`, RFC musickit-second-authority U2b).
  * Inferred from `MergeLabelResultSchema` (./orpc/admin-labels.ts): what re-pointed, the canonical
  * fields filled from the loser, the alias written, and the resolved crawl-seed state.
  */
 export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
-
-/** `POST /api/v1/admin/labels/:slug/merge` response — the merge summary. */
-export type MergeLabelResponse = Ok<{ result: MergeLabelResult }>;
 
 // ── Users (the account roster — the operator's read-only rollout window) ───────
 
@@ -230,9 +218,6 @@ export type UserStatus = z.infer<typeof UserStatusSchema>;
  * every count DERIVED, never stored.
  */
 export type UserAdminItem = z.infer<typeof UserAdminItemSchema>;
-
-/** `GET /api/v1/admin/users` response — every account, newest-first. */
-export type UsersAdminResponse = Ok<{ users: UserAdminItem[] }>;
 
 /** Where a label-alias spelling came from (RFC musickit-second-authority, U2a). */
 export type LabelAliasSource = z.infer<typeof LabelAliasSourceSchema>;
@@ -330,9 +315,6 @@ export type TrackWorkScope = z.infer<typeof TrackWorkScopeSchema>;
 
 /** One row of pipeline work. `certified` is the rail's flag: false = never write a note. */
 export type TrackWorkItem = z.infer<typeof TrackWorkItemSchema>;
-
-/** `GET /api/v1/admin/tracks/work` response — one stage's worklist, in drain order. */
-export type TrackWorkResponse = Ok<{ tracks: TrackWorkItem[] }>;
 
 /** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
 export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;
@@ -580,21 +562,6 @@ export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
 /** The `{ recording }` envelope create/get/update/promote return. */
 export type RecordingResponse = Ok<{ recording: RecordingDTO }>;
 
-/**
- * `POST /api/v1/admin/recordings/:recordingId/set-video/presign` response: the opened
- * multipart upload's id + owned key plus every presigned URL the CLI needs to drive it
- * (one PUT URL per part, the completion POST URL, the abort DELETE URL). The clone of
- * the mixtape set-video presign targeting `recordings/<recordingId>/set.mp4`.
- */
-export type RecordingSetVideoPresignResponse = Ok<{
-  abortUrl: string;
-  completeUrl: string;
-  key: string;
-  parts: { partNumber: number; url: string }[];
-  recordingId: string;
-  uploadId: string;
-}>;
-
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
 
 // ── Attention (the /admin queue digest) ──────────────────────────────────────
@@ -682,7 +649,6 @@ export type LogbookSpentEntry = {
   title: string;
 };
 
-export type LogbookEntriesResponse = Ok<{ entries: LogbookEntryDTO[] }>;
 export type LogbookEntryResponse = Ok<{ entry: LogbookEntryDTO; skipped?: boolean }>;
 export type LogbookGapsResponse = Ok<{ gaps: LogbookGap[]; spent: LogbookSpentEntry[] }>;
 
@@ -694,9 +660,6 @@ export type LogbookGapsResponse = Ok<{ gaps: LogbookGap[]; spent: LogbookSpentEn
  * `SubscriptionDTOSchema` (./orpc/_shared.ts), so this DTO cannot drift from the wire.
  */
 export type SubscriptionDTO = z.infer<typeof SubscriptionDTOSchema>;
-
-export type SubscriptionsResponse = Ok<{ subscriptions: SubscriptionDTO[] }>;
-export type SubscriptionResponse = Ok<{ subscription: SubscriptionDTO }>;
 
 // ── Mixtape distribution (audio→Mixcloud, video→YouTube) ─────────────────────
 // One CLI command mints a mixtape into `distributing`, moves the local bytes to
@@ -763,22 +726,6 @@ export type MixtapeYouTubeResyncResponse = Ok<{ url: string; videoId: string }>;
  */
 export type MixtapeMixcloudResyncResponse = Ok<{ url: string }>;
 
-/**
- * `/api/v1/admin/mixtapes/:id/set-video/presign` response (Fluncle Studio Unit A): the
- * opened multipart upload's id + key plus every presigned URL the CLI needs to drive
- * it — one PUT URL per part, the completion POST URL, and the abort DELETE URL. The
- * ~1.5GB rendition streams straight to R2; the Worker never proxies the bytes.
- */
-export type MixtapeSetVideoPresignResponse = Ok<{
-  abortUrl: string;
-  completeUrl: string;
-  key: string;
-  logId: string;
-  mixtapeId: string;
-  parts: { partNumber: number; url: string }[];
-  uploadId: string;
-}>;
-
 // ── Submission ───────────────────────────────────────────────────────────────
 
 export type SubmissionSource = "web" | "cli" | "ssh";
@@ -839,14 +786,6 @@ export type TrackSocialShowResponse = Ok<{ posts: SocialPostItem[]; trackId: str
 
 /** `/api/v1/admin/tracks/:id/social/:platform` PATCH response. */
 export type TrackSocialUpdateResponse = Ok<{ platform: string; status: string; trackId: string }>;
-
-/** `/api/v1/admin/tracks/:id/social/:platform/draft` POST response. */
-export type TrackDraftResponse = Ok<{
-  externalId: string;
-  platform: string;
-  status: string;
-  trackId: string;
-}>;
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
@@ -917,12 +856,6 @@ export type TrackUpdateResponse = Ok<TrackUpdateResult>;
 
 // ── Request DTOs (typed bodies the CLI sends; the web validates `unknown` separately) ──
 
-export type PublishTrackRequest = {
-  dryRun?: boolean;
-  note?: string;
-  spotifyUrl: string;
-};
-
 export type NewsletterRequest = {
   email: string;
   honeypot?: string;
@@ -939,12 +872,6 @@ export type SubmissionRequest = {
   spotifyTrackId: string;
   spotifyUrl: string;
   title: string;
-};
-
-export type TrackSocialUpdateRequest = {
-  scheduledFor?: string;
-  status: string;
-  url?: string;
 };
 
 export type MixtapeRequestBody = {

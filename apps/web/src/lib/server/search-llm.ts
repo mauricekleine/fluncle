@@ -29,7 +29,7 @@ import { type SearchFilters, SearchFiltersSchema } from "@fluncle/contracts/orpc
 import { priceOpenRouterTokens } from "./cost-rates";
 import { captureCostEvents, costEventId } from "./costs";
 import { readOptionalEnv } from "./env";
-import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
+import { resolvePrompt } from "./prompts";
 
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -43,23 +43,22 @@ const DEFAULT_SEARCH_MODEL = "anthropic/claude-haiku-4.5";
  */
 const SEARCH_LLM_TIMEOUT_MS = 3_000;
 
-/**
- * The prompt. It is a PARSER's prompt, and every line of it is a rail:
- *
- *   - Emit JSON matching the schema, and nothing else.
- *   - Copy names through VERBATIM (`artist`, `label`, `album`) — do not correct spelling,
- *     do not expand an abbreviation, do not guess a "real" name. SQL matches what is stored;
- *     a helpful correction is a silent wrong answer.
- *   - Never invent a track. `soundsLike` is a REFERENCE the server will resolve, so it
- *     carries the words the user used, not a track the model happens to know.
- *   - Leave a field out when the query does not say it. An unasked-for filter is a lie about
- *     what was asked.
- *   - `text` is the leftover: the words that are neither a name nor a number.
- *
- * Drum & bass lives at 165–180 BPM, so "fast"/"slow" are not absolute words here; the prompt
- * refuses to guess a number the user did not give.
- */
-export const SEARCH_FILTER_SYSTEM_PROMPT = PROMPT_REGISTRY.search_filter.defaultBody;
+// The prompt itself lives in the registry (`search_filter` in ./prompts, resolved below), so
+// the operator can edit it from /admin/prompts with no deploy. It is a PARSER's prompt, and
+// every line of it is a rail:
+//
+//   - Emit JSON matching the schema, and nothing else.
+//   - Copy names through VERBATIM (`artist`, `label`, `album`) — do not correct spelling,
+//     do not expand an abbreviation, do not guess a "real" name. SQL matches what is stored;
+//     a helpful correction is a silent wrong answer.
+//   - Never invent a track. `soundsLike` is a REFERENCE the server will resolve, so it
+//     carries the words the user used, not a track the model happens to know.
+//   - Leave a field out when the query does not say it. An unasked-for filter is a lie about
+//     what was asked.
+//   - `text` is the leftover: the words that are neither a name nor a number.
+//
+// Drum & bass lives at 165–180 BPM, so "fast"/"slow" are not absolute words here; the prompt
+// refuses to guess a number the user did not give.
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: string } }[];

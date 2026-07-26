@@ -66,10 +66,6 @@ export function formatReleaseDate(releaseDate: string): string {
   return releaseDate.slice(0, 4) || "—";
 }
 
-export function formatDurationField(durationMs?: number | null): string {
-  return durationMs ? formatDuration(durationMs) : "";
-}
-
 /**
  * "1 finding" / "12 findings" — the ONE place the noun is pluralized.
  *

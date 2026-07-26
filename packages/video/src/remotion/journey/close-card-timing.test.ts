@@ -1,5 +1,5 @@
 // Regression tests for the CloseCard reveal timing — pins the "arc trap" fix:
-// the reveal is driven ONLY by `progress`; a legacy `arc` is accepted but ignored.
+// the reveal is driven ONLY by `progress`, and there is no second driver.
 
 import { expect, test } from "bun:test";
 
@@ -11,15 +11,6 @@ test("closeCardProgress honours progress and clamps to 0..1", () => {
   expect(closeCardProgress(1)).toBe(1);
   expect(closeCardProgress(-1)).toBe(0);
   expect(closeCardProgress(2)).toBe(1);
-});
-
-test("closeCardProgress IGNORES the legacy arc (the trap)", () => {
-  // A caller passing the journey's global arc (already ~0.8 mid-clip) must NOT
-  // reveal the card when progress says the close hasn't begun.
-  expect(closeCardProgress(0, 0.8)).toBe(0);
-  expect(closeCardProgress(undefined, 0.8)).toBe(0);
-  // When progress IS given, arc never overrides it.
-  expect(closeCardProgress(0.2, 0.9)).toBe(0.2);
 });
 
 test("closeCardProgress treats undefined/NaN as hidden (0)", () => {

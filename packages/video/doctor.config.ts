@@ -21,8 +21,6 @@ export default {
       "src/remotion/journey/index.ts",
       "src/remotion/journey/use-journey.ts",
       "src/remotion/primitives/index.ts",
-      "src/remotion/primitives/grain.tsx",
-      "src/remotion/primitives/starfield.tsx",
       "src/remotion/primitives/track-audio.tsx",
     ],
     overrides: [

@@ -28,9 +28,6 @@ export const colors = {
   tapeBlack: "#171611",
 } as const;
 
-export type ColorToken = keyof typeof colors;
-export type ColorValue = (typeof colors)[ColorToken];
-
 /**
  * Type roles from DESIGN.md. Oxanium speaks for the brand (display, numeric);
  * Space Grotesk does the reading (title, body, label); mono is the machine.
@@ -74,8 +71,6 @@ export const typography = {
   },
 } as const;
 
-export type TypographyRole = keyof typeof typography;
-
 /**
  * Border radii from DESIGN.md's `rounded` frontmatter. `artwork` is the
  * 6px album-art radius; sm/md/lg ascend the standard scale.
@@ -86,8 +81,6 @@ export const radii = {
   md: "0.5rem",
   sm: "0.375rem",
 } as const;
-
-export type RadiusToken = keyof typeof radii;
 
 /**
  * Motion from DESIGN.md prose: state changes are 150ms ease-out; floats
@@ -104,5 +97,3 @@ export const motion = {
     easing: "ease-out",
   },
 } as const;
-
-export type MotionRole = keyof typeof motion;

@@ -10,8 +10,6 @@
       "cache": false,
       "persistent": true
     },
-    "format": {},
-    "lint": {},
     "test": {
       "dependsOn": ["^build"]
     },

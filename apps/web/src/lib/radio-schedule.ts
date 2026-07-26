@@ -195,9 +195,6 @@ export function nextBoundaryEpochMs(
 export const BREATHER_FADE_OUT_MS = 900;
 export const BREATHER_FADE_IN_MS = 900;
 
-/** The whole visible darkening window around one seam (fade-out + fade-in). */
-export const BREATHER_TOTAL_MS = BREATHER_FADE_OUT_MS + BREATHER_FADE_IN_MS;
-
 /**
  * The 0→1 dim level of the breather overlay at a given offset into the on-screen
  * observation, derived ONLY from the shared segment-start anchor — so it is

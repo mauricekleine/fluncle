@@ -34,29 +34,6 @@ export default {
         rules: ["react-doctor/no-aria-hidden-on-focusable", "react-doctor/media-has-caption"],
       },
 
-      // Canonical Shadcn-generated primitives — their export surface and ARIA
-      // shape are part of the design system; diverging would break the contract.
-      {
-        files: [
-          "src/components/ui/badge.tsx",
-          "src/components/ui/button.tsx",
-          "src/components/ui/tabs.tsx",
-        ],
-        rules: ["react-doctor/only-export-components"],
-      },
-      {
-        files: ["src/components/ui/input-group.tsx"],
-        rules: [
-          "react-doctor/no-multi-comp",
-          "react-doctor/prefer-tag-over-role",
-          "react-doctor/click-events-have-key-events",
-        ],
-      },
-      {
-        files: ["src/components/ui/label.tsx"],
-        rules: ["react-doctor/label-has-associated-control"],
-      },
-
       // TanStack route files: a single `Route` export plus tightly-coupled
       // private helper components is the rule's own documented exemption.
       {

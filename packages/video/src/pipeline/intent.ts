@@ -245,19 +245,6 @@ export const SUBJECT_CLOCKS: readonly IntentSubjectClock[] = ["constant", "biolo
 // smoothed bands are the only legitimate translation drivers.
 export const SMOOTHED_BANDS: readonly IntentBand[] = ["energy", "swell", "drop"];
 
-export function axisGroup(axis: IntentAxis): "structural" | "light" | "texture" | "motion" {
-  if (STRUCTURAL_AXES.includes(axis)) {
-    return "structural";
-  }
-  if (LIGHT_AXES.includes(axis)) {
-    return "light";
-  }
-  if (TEXTURE_AXES.includes(axis)) {
-    return "texture";
-  }
-  return "motion";
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

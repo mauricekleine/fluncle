@@ -5,19 +5,17 @@
 // THE ARC TRAP (fixed here): the card used to drive its reveal from `arc ??
 // progress`. Callers reach for the journey's GLOBAL `arc` (useJourney().arc) — an
 // eased 0..1 that is already NON-ZERO through most of the clip — so the sign-off
-// printed mid-clip instead of at the arrival. The reveal is now driven ONLY by
-// `progress` (the "arrive" phase's phaseProgress, ~0 until the close begins). The
-// legacy `arc` prop is accepted for runtime-compat with archived compositions but
-// intentionally IGNORED, so an archived comp that passed both now gets the correct
-// (late) timing instead of the early one.
+// printed mid-clip instead of at the arrival. The reveal is driven ONLY by
+// `progress` (the "arrive" phase's phaseProgress, ~0 until the close begins), and
+// the legacy `arc` prop is gone — never reintroduce it as a fallback driver.
 
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 
 /**
- * The single reveal driver, 0..1. Honours `progress` only; `arc` is accepted but
- * ignored (see the trap note above). Undefined/NaN collapses to 0 (card hidden).
+ * The single reveal driver, 0..1. Honours `progress` only (see the trap note
+ * above). Undefined/NaN collapses to 0 (card hidden).
  */
-export const closeCardProgress = (progress?: number, _arc?: number): number =>
+export const closeCardProgress = (progress?: number): number =>
   clamp01(Number.isFinite(progress) ? (progress as number) : 0);
 
 /**

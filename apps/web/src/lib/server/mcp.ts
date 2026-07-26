@@ -62,10 +62,6 @@ type ToolResult = {
 };
 
 type McpTool = {
-  // Reserved for a deprecated alias kept in tools/list (filtered out of `mcpToolNames`).
-  // None today — the vocabulary cut retired the last one (`get_recent_tracks`) with no
-  // replacement shim.
-  deprecated?: boolean;
   description: string;
   execute: (args: Record<string, unknown>, request: Request) => Promise<unknown>;
   inputSchema: Record<string, unknown>;
@@ -119,9 +115,7 @@ const tools: McpTool[] = [
 // The realized MCP tool names, in tools/list order — the ONE source the discovery docs derive
 // their tool list from (agent-discovery.ts's SKILL.md) so it can never go stale as tools are
 // added or renamed.
-export const mcpToolNames: string[] = tools
-  .filter((tool) => !tool.deprecated)
-  .map((tool) => tool.name);
+export const mcpToolNames: string[] = tools.map((tool) => tool.name);
 
 // ── Resources: the archive as a readable corpus ────────────────────────────
 //
