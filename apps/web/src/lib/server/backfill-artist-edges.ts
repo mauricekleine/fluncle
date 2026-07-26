@@ -39,6 +39,7 @@
 
 import { getDb, typedRows } from "./db";
 import { parseArtistsJson } from "./artists";
+import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { hubCountArtistEdgeStatements } from "./hub-counts";
 import { fold } from "./track-match";
 
@@ -282,6 +283,10 @@ async function insertEdges(
             trackId,
           })),
         ),
+        // Every tuple is a NEW edge (the worklist selects edge-less tracks), so each catalogue row
+        // in the chunk just gained the artist graph the capture gate reads — re-stale it for the
+        // next `rank_catalogue` tick, atomically with the edge write (catalogue-rank-restale.ts).
+        ...restaleCatalogueRankStatements(chunk.map(([trackId]) => trackId)),
       ],
       "write",
     );

@@ -204,30 +204,34 @@ describe("capturePriorityFor — the negative band is distinct and ordered", () 
 
 describe("rankCorpus — the staleness fingerprint", () => {
   it("moves when a finding is logged, and when one is embedded", () => {
-    expect(rankCorpus(60, 60, 0, 0, 0)).toBe("v4:60:60:0:0:0");
+    expect(rankCorpus(60, 60, 0)).toBe("v5:60:60:0");
     // A new finding lands (unembedded): the affinity corpus changed, so every ranked row is stale.
-    expect(rankCorpus(61, 60, 0, 0, 0)).not.toBe(rankCorpus(60, 60, 0, 0, 0));
+    expect(rankCorpus(61, 60, 0)).not.toBe(rankCorpus(60, 60, 0));
     // Then it embeds: a new vector to be near, so every scored row is stale too.
-    expect(rankCorpus(61, 61, 0, 0, 0)).not.toBe(rankCorpus(61, 60, 0, 0, 0));
+    expect(rankCorpus(61, 61, 0)).not.toBe(rankCorpus(61, 60, 0));
   });
 
-  it("moves when the ARTIST GRAPH grows — so slice 0's backfill re-ranks old rows", () => {
-    // Authorization depends on the graph, which the two finding counts do not see. A new
-    // `track_artists` edge must re-stale the catalogue or the new gate never reaches old rows.
-    expect(rankCorpus(60, 60, 100, 5, 8)).not.toBe(rankCorpus(60, 60, 99, 5, 8));
+  it("moves when the QUALIFIED-ARTIST SET changes — the second-order authorization signal (v5)", () => {
+    // Authorization depends on which artists are qualified, which the two finding counts do not see.
+    // v5 folds the qualified-set SIZE, not the raw edge count: an artist crossing the qualification
+    // line flips every catalogue track that credits them, so the fingerprint must move.
+    expect(rankCorpus(60, 60, 42)).not.toBe(rankCorpus(60, 60, 41));
   });
 
-  it("moves when a label ruling changes — an enable or a disable re-ranks the catalogue", () => {
-    expect(rankCorpus(60, 60, 100, 6, 8)).not.toBe(rankCorpus(60, 60, 100, 5, 8));
-    expect(rankCorpus(60, 60, 100, 5, 9)).not.toBe(rankCorpus(60, 60, 100, 5, 8));
+  it("does NOT move on a graph write that leaves the qualified set unchanged (v5's whole point)", () => {
+    // The daily-churn bug v5 kills: v4 folded the total `track_artists` edge count, so every one of
+    // the thousands of daily crawler edge writes re-ranked all ~55k rows even when no artist's
+    // qualification changed. v5's fingerprint is blind to an edge write that tips no one — that
+    // first-order case is re-staled per-track at the write path instead (catalogue-rank-restale.ts).
+    expect(rankCorpus(60, 60, 42)).toBe(rankCorpus(60, 60, 42));
   });
 
   it("catches a DELETED finding, because it is compared for INEQUALITY and not order", () => {
-    expect(rankCorpus(59, 59, 0, 0, 0)).not.toBe(rankCorpus(60, 60, 0, 0, 0));
+    expect(rankCorpus(59, 59, 0)).not.toBe(rankCorpus(60, 60, 0));
   });
 
   it("is a no-op fingerprint on an unchanged archive", () => {
-    expect(rankCorpus(60, 60, 100, 5, 8)).toBe(rankCorpus(60, 60, 100, 5, 8));
+    expect(rankCorpus(60, 60, 42)).toBe(rankCorpus(60, 60, 42));
   });
 });
 

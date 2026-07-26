@@ -53,6 +53,7 @@
 import { getDb, typedRows } from "./db";
 import { adoptArtistMbid, mintArtistByMbid } from "./artists";
 import { buildArtistFoldMap } from "./backfill-artist-edges";
+import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { hubCountArtistEdgeStatements } from "./hub-counts";
 import { fold } from "./track-match";
 import { logEvent } from "./log";
@@ -340,6 +341,9 @@ async function insertEdges(
       ...hubCountArtistEdgeStatements(
         edges.map((edge) => ({ artistId: edge.artistId, certified, trackId })),
       ),
+      // The worklist selects edge-less tracks, so this track just gained its artist graph — re-stale
+      // the catalogue row for the next `rank_catalogue` tick, atomically (catalogue-rank-restale.ts).
+      ...restaleCatalogueRankStatements([trackId]),
     ],
     "write",
   );

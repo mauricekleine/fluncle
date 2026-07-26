@@ -312,7 +312,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
 
     const first = await rankCatalogue();
     expect(first.scored).toBe(1);
-    expect(first.corpus).toBe("v4:1:1:0:0:0");
+    expect(first.corpus).toBe("v5:1:1:0");
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-a");
 
     // Nothing changed: the fingerprint matches, so there is no candidate at all.
@@ -328,7 +328,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     await seedFinding("finding-b", { vector: blend(axis(0), axis(1), 0.4) });
 
     const third = await rankCatalogue();
-    expect(third.corpus).toBe("v4:2:2:0:0:0");
+    expect(third.corpus).toBe("v5:2:2:0");
     expect(third.scored).toBe(1);
     expect(third.quarantined).toBe(0);
     expect((await rankingOf("cat-a")).nearest_finding_track_id).toBe("finding-b");
@@ -497,7 +497,7 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     // Stamped, with an honest null score — not left stale to be re-picked every tick.
     const ranking = await rankingOf("cat-a");
     expect(ranking.nearest_finding_score).toBeNull();
-    expect(ranking.catalogue_rank_corpus).toBe("v4:1:0:0:0:0");
+    expect(ranking.catalogue_rank_corpus).toBe("v5:1:0:0");
     expect(summary.remaining).toBe(0);
   });
 });
@@ -634,27 +634,42 @@ describe("the capture queue — authorization, then the priority ladder", () => 
     expect((await rankingOf("cat-light")).capture_priority).toBe(-3);
   });
 
-  it("re-ranks an old row when the ARTIST GRAPH grows — the gate reaches rows ranked before it", async () => {
+  it("re-ranks an old row when its OWN edge lands — the write path nulls JUST that row (v5 first-order)", async () => {
     const { rankCatalogue } = await import("./catalogue");
+    const { linkTracksToArtistEntities } = await import("./artists");
 
-    // The load-bearing self-healing property (RFC slice 1): slice 0's backfill adds edges, and the
-    // corpus fingerprint must MOVE so a row ranked before its edge existed re-derives its tier.
+    // The load-bearing self-healing property (RFC slice 1), now via v5's TARGETED mechanism: slice 0's
+    // backfill (`linkTracksToArtistEntities`) adds an edge to an ALREADY-qualified artist, so the
+    // qualified-set fingerprint does NOT move — the re-stale comes from the write path nulling THIS
+    // row's `catalogue_rank_corpus`, and only this row's.
     await seedArtistRow("art-late", "Late Edge", "late-edge");
     await seedFinding("finding-late", { artists: ["Late Edge"], label: "Some Label" });
-    await edge("finding-late", "art-late"); // Late Edge is qualified
+    await edge("finding-late", "art-late"); // Late Edge is qualified (by finding)
     // A catalogue row that credits Late Edge but has NO edge yet (pre-backfill) on an undecided label.
     await seedCatalogue("cat-late", { artists: ["Late Edge"], label: "Undecided Imprint" });
+    // A sibling catalogue row that gains NO edge this time — the "exactly that row" control.
+    await seedCatalogue("cat-bystander", {
+      artists: ["Nobody At All"],
+      label: "Undecided Imprint",
+    });
 
     await rankCatalogue();
     // Edge-less + undecided label → unauthorized, exactly as the strict identity rule requires.
     expect((await rankingOf("cat-late")).capture_priority).toBe(-3);
+    const bystanderCorpusBefore = (await rankingOf("cat-bystander")).catalogue_rank_corpus;
+    expect(bystanderCorpusBefore).not.toBeNull();
 
-    // Slice 0 folds the name onto the real artist row: the edge lands.
-    await edge("cat-late", "art-late");
+    // Slice 0 folds the name onto the real artist row: the edge lands via the REAL write path.
+    await linkTracksToArtistEntities(["cat-late"]);
 
-    // The fingerprint moved (the track_artists count grew), so the row re-ranks and authorizes.
+    // Exactly the edged row was re-staled; the bystander's fingerprint is untouched.
+    expect((await rankingOf("cat-late")).catalogue_rank_corpus).toBeNull();
+    expect((await rankingOf("cat-bystander")).catalogue_rank_corpus).toBe(bystanderCorpusBefore);
+
+    // The next tick re-derives the edged row's tier under the new graph; the bystander stays put.
     await rankCatalogue();
     expect((await rankingOf("cat-late")).capture_priority).toBe(3);
+    expect((await rankingOf("cat-bystander")).capture_priority).toBe(-3);
   });
 
   it("keeps the two lenses disjoint — a track with audio leaves the capture queue", async () => {
@@ -846,19 +861,30 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     const executeSpy = vi.spyOn(db, "execute");
     await rankCatalogue();
 
-    // The weighted qualified-artist query (`having sum(case when ta.role = 'remixer' …)`) is unique
-    // to `readArchiveAffinity`, so counting it counts the affinity reads this tick made.
-    const affinityReads = executeSpy.mock.calls.filter((call) => {
+    // The weighted qualified-artist fragment (`having sum(case when ta.role = 'remixer' …)`) is now
+    // shared (`WEIGHTED_QUALIFIED_ARTISTS_SQL`): `readArchiveAffinity` runs it BARE, while v5's
+    // staleness count phase wraps it inside `count(*) … as qualified_artists`. The affinity read is
+    // the bare one — so exclude the fingerprint count to prove `readArchiveAffinity` still runs ONCE.
+    const calls = executeSpy.mock.calls.map((call) => {
       // `Client.execute` is overloaded (string form + object form), so the mock-call arg is typed to
       // the string overload; the affinity reads all use the object form (`{ sql, args }`).
       const arg = call[0] as string | { sql: string };
-      const sql = typeof arg === "string" ? arg : arg.sql;
 
-      return sql.includes("having sum(case when ta.role = 'remixer'");
-    }).length;
+      return typeof arg === "string" ? arg : arg.sql;
+    });
+    const weightedFragment = calls.filter((sql) =>
+      sql.includes("having sum(case when ta.role = 'remixer'"),
+    );
+    const affinityReads = weightedFragment.filter((sql) => !sql.includes("as qualified_artists"));
+    const fingerprintCounts = weightedFragment.filter((sql) =>
+      sql.includes("as qualified_artists"),
+    );
     executeSpy.mockRestore();
 
-    expect(affinityReads).toBe(1);
+    expect(affinityReads).toHaveLength(1);
+    // And the fingerprint's qualified-set size is read exactly once per tick — the cheap replacement
+    // for v4's full `count(*) from track_artists`, not an extra affinity recompute.
+    expect(fingerprintCounts).toHaveLength(1);
   });
 
   it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {
@@ -905,7 +931,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
       });
     };
 
-    const corpus = "v4:1:1:0:0:0";
+    const corpus = "v5:1:1:0";
     const ids = [
       "b-awaiting-rank",
       "b-ranked",
@@ -2268,5 +2294,111 @@ describe("the diversity decay — the ear page spreads artists, years, and keys"
     // The DISPLAYED score stays the raw similarity — the decay re-orders, never rewrites.
     const fresh = page.find((track) => track.trackId === "cat-fresh");
     expect(fresh?.nearestFindingScore ?? 0).toBeGreaterThan(0.9);
+  });
+});
+
+// TARGETED RE-STALING (v5) — the churn fix, proven against the real sweep. v4 folded the raw
+// `track_artists` edge count + the two ruling counts into the fingerprint, so every daily crawler
+// edge write re-ranked all ~55k catalogue rows. v5 folds only the QUALIFIED-ARTIST SET SIZE (the
+// second-order authorization signal) and re-stales the FIRST-ORDER cases at their write paths. These
+// cases prove both halves: a label ruling touches exactly its own rows, a same-size graph write
+// touches nothing globally, and a genuine qualification crossing still re-ranks the artist's OTHER
+// tracks through the fingerprint.
+describe("the staleness fingerprint — v5 targeted re-staling", () => {
+  it("a label ruling flip re-stales EXACTLY that label's rows, not the whole catalogue", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+    const { updateLabelSeedState } = await import("./labels");
+
+    // An undecided label with two catalogue tracks, and an UNRELATED label with one — the control.
+    await ruleLabel("lbl-x", "Label X", "label-x", "undecided");
+    await ruleLabel("lbl-y", "Label Y", "label-y", "undecided");
+    await seedCatalogue("cat-x1", { artists: ["Nobody"], label: "Label X" });
+    await linkLabel("cat-x1", "lbl-x");
+    await seedCatalogue("cat-x2", { artists: ["Nobody"], label: "Label X" });
+    await linkLabel("cat-x2", "lbl-x");
+    await seedCatalogue("cat-y1", { artists: ["Nobody"], label: "Label Y" });
+    await linkLabel("cat-y1", "lbl-y");
+
+    await rankCatalogue();
+    // All three unauthorized on undecided labels (no qualified artist), all stamped.
+    for (const id of ["cat-x1", "cat-x2", "cat-y1"]) {
+      expect((await rankingOf(id)).capture_priority).toBe(-3);
+      expect((await rankingOf(id)).catalogue_rank_corpus).not.toBeNull();
+    }
+    const yCorpusBefore = (await rankingOf("cat-y1")).catalogue_rank_corpus;
+
+    // Enable Label X. No artist here has ≥3 enabled releases, so the qualified set — and the
+    // fingerprint — does NOT move; only the per-label write nulls Label X's rows.
+    await updateLabelSeedState("lbl-x", "enabled");
+
+    expect((await rankingOf("cat-x1")).catalogue_rank_corpus).toBeNull();
+    expect((await rankingOf("cat-x2")).catalogue_rank_corpus).toBeNull();
+    expect((await rankingOf("cat-y1")).catalogue_rank_corpus).toBe(yCorpusBefore);
+
+    // The next tick authorizes Label X's rows (enabled = seed-label tier 1); Label Y stays sunk.
+    await rankCatalogue();
+    expect((await rankingOf("cat-x1")).capture_priority).toBe(1);
+    expect((await rankingOf("cat-x2")).capture_priority).toBe(1);
+    expect((await rankingOf("cat-y1")).capture_priority).toBe(-3);
+  });
+
+  it("a disable ruling re-stales its own rows to the VETO (the money-bug direction)", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+    const { updateLabelSeedState } = await import("./labels");
+
+    // A row authorized via its enabled label — then the operator rules the label out.
+    await ruleLabel("lbl-z", "Label Z", "label-z", "enabled");
+    await seedCatalogue("cat-z1", { artists: ["Nobody"], label: "Label Z" });
+    await linkLabel("cat-z1", "lbl-z");
+
+    await rankCatalogue();
+    expect((await rankingOf("cat-z1")).capture_priority).toBe(1); // enabled seed-label
+
+    await updateLabelSeedState("lbl-z", "disabled");
+    expect((await rankingOf("cat-z1")).catalogue_rank_corpus).toBeNull();
+
+    await rankCatalogue();
+    // Vetoed — never bought. Exactly the withdrawal a ruling must produce, or a wrong capture ships.
+    expect((await rankingOf("cat-z1")).capture_priority).toBe(-1);
+  });
+
+  it("a qualification CROSSING re-ranks the artist's OTHER-label rows the tipping edge never touched", async () => {
+    // The second-order money/opportunity case the fingerprint's SET SIZE covers, and per-track nulling
+    // alone could not: an artist reaching their 3rd enabled-label release flips a track of theirs on a
+    // DIFFERENT (unenabled) label — a row the qualifying edge did not touch. This is the RFC's headline
+    // "an artist who moved to a major arrives by himself; his major-label tunes deserve the spend".
+    const { rankCatalogue } = await import("./catalogue");
+
+    await ruleLabel("lbl-enabled", "Enabled Imprint", "enabled-imprint", "enabled");
+    await seedArtistRow("art-rise", "On The Rise", "on-the-rise");
+
+    // TWO enabled-label releases so far — weighted 2.0, NOT yet qualified.
+    for (const index of [0, 1]) {
+      await seedCatalogue(`rise-${index}`, { artists: ["On The Rise"], label: "Enabled Imprint" });
+      await linkLabel(`rise-${index}`, "lbl-enabled");
+      await edge(`rise-${index}`, "art-rise");
+    }
+    // The artist's track on a DIFFERENT, unenabled (undecided) label — edge already present.
+    await seedCatalogue("cat-major", { artists: ["On The Rise"], label: "Major Label" });
+    await edge("cat-major", "art-rise");
+
+    await rankCatalogue();
+    // Not yet qualified (2.0 < 3), major label not enabled → withheld.
+    expect((await rankingOf("cat-major")).capture_priority).toBe(-3);
+    const majorCorpusBefore = (await rankingOf("cat-major")).catalogue_rank_corpus;
+
+    // The THIRD enabled-label release lands (a brand-new catalogue row, born stale) with its edge —
+    // the artist crosses the weighted threshold. cat-major is NOT touched by this write.
+    await seedCatalogue("rise-2", { artists: ["On The Rise"], label: "Enabled Imprint" });
+    await linkLabel("rise-2", "lbl-enabled");
+    await edge("rise-2", "art-rise");
+
+    // cat-major's stored fingerprint is unchanged by the raw edge write above — its re-stale can only
+    // come from the qualified-set SIZE moving. Under v5 it does; under a per-track-only design it would
+    // not, and cat-major would stay silently withheld.
+    await rankCatalogue();
+    expect((await rankingOf("cat-major")).capture_priority).toBe(3);
+    // Sanity: the fingerprint genuinely moved (a global re-stale was warranted here).
+    expect((await rankingOf("cat-major")).catalogue_rank_corpus).not.toBe(majorCorpusBefore);
   });
 });

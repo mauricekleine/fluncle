@@ -41,6 +41,7 @@ import { type Client, createClient } from "@libsql/client";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { restaleCatalogueRankStatements } from "../src/lib/server/catalogue-rank-restale";
 
 export type ArtistLinksBackfillResult = {
   /** `track_artists` rows this run stamped. Zero on a steady-state deploy. */
@@ -55,15 +56,42 @@ export type ArtistLinksBackfillResult = {
  * — the 0-based array index, which is exactly the 1-based `position` the column wants. The
  * composite PK `(track_id, artist_id)` absorbs a re-run, so `insert or ignore` makes the whole
  * thing a no-op the second time.
+ *
+ * A catalogue row that gains an edge here just gained the artist graph the capture gate reads, so
+ * it is re-staled for The Ear (RFC artist-primary-capture; catalogue-rank-restale.ts). The
+ * new-edge catalogue tracks are read FIRST (the same anti-join `linkTracksToArtistEntities` uses),
+ * then nulled — so a steady-state re-run that inserts nothing re-stales nothing.
  */
 export async function backfillArtistLinks(client: Client): Promise<ArtistLinksBackfillResult> {
+  const linkSelect = `select tracks.track_id, a.id as artist_id, credit.key + 1 as position
+                      from tracks
+                      join json_each(tracks.artists_json) credit
+                      join artists a on a.name = credit.value collate nocase`;
+
+  // The CATALOGUE tracks that WILL gain an edge — read before the insert, so a re-run over the same
+  // corpus finds none and re-stales nothing.
+  const pending = await client.execute({
+    sql: `select distinct candidate.track_id as track_id
+          from (${linkSelect}) candidate
+          join tracks t on t.track_id = candidate.track_id
+          where t.is_catalogue = 1
+            and not exists (
+              select 1 from track_artists ta
+              where ta.track_id = candidate.track_id and ta.artist_id = candidate.artist_id
+            )`,
+  });
+  const restaleTrackIds = pending.rows
+    .map((row) => row["track_id"])
+    .filter((id): id is string => typeof id === "string");
+
   const result = await client.execute({
     sql: `insert or ignore into track_artists (track_id, artist_id, position)
-          select tracks.track_id, a.id, credit.key + 1
-          from tracks
-          join json_each(tracks.artists_json) credit
-          join artists a on a.name = credit.value collate nocase`,
+          select track_id, artist_id, position from (${linkSelect}) candidate`,
   });
+
+  for (const statement of restaleCatalogueRankStatements(restaleTrackIds)) {
+    await client.execute(statement);
+  }
 
   return { linked: result.rowsAffected };
 }
