@@ -2,47 +2,35 @@
 
 Proactive audit (2026-07-24, 8-family multi-agent workflow: 47 findings verified → 35 survived adversarial refutation → 29 deduped items). Target: 150k tracks. Non-canonical planning; supersedes the reactive triage.
 
-STATUS (2026-07-25): the Wave-1 pure hoists (#847/#848) and the cheap #858 index/rewrite batch have SHIPPED live; the proven cheap indexes and Keystone 1 are held in PRs awaiting an operator go (#857, #859); five Wave-1 index items are DEFERRED — proven on hosted 150k NOT to help as-specified; Keystone 2 is proven and recommended but not built. Shipped items are collapsed into "Shipped (live)" below (their full pre-fix loc/shape analysis is preserved in git history); everything still outstanding keeps its detail. Prune items as they ship.
+STATUS (2026-07-26): everything proven has SHIPPED LIVE — the Wave-1 pure hoists (#847/#848), the cheap #858 index/rewrite batch, the four proven indexes (#857), and Keystone 1's maintained `is_catalogue` flag (#859, prod-verified: the `is_catalogue = 0` count matches the `findings` count exactly). Five Wave-1 index items are DEFERRED — proven on hosted 150k NOT to help as-specified. Keystone 2 is proven and recommended but not built; its write-side maintenance cost is the one unmeasured axis. Shipped items are collapsed into "Shipped (live)" below (their full pre-fix loc/shape analysis is preserved in git history); everything still outstanding keeps its detail. Prune items as they ship.
 
 ## Root verdict
 
-CONFIRMED — the root is recompute-by-full-scan on grown tables, and it collapses to two shapes, both consequences of the tracks/findings subtype split: (A) the catalogue anti-join `tracks LEFT JOIN findings WHERE findings.track_id IS NULL` (equivalently `NOT EXISTS (SELECT 1 FROM findings …)`) with NO materialized "is-catalogue" discriminator, which forces a full left-join scan of the growing tracks table — this is the most-repeated shape in the audit and it drives the largest measured costs (the ~31s/19s/14s rank-sweep walls, up to 8×/tick, plus crawl status, the funnel scans, the search entity gate, and the Apple/fresh feeds); and (B) the O(tracks)/O(track_artists) grouped `having` scan behind the catalogue-scale entity hubs (labels/albums/artists), reused verbatim by the web hub, the public API list ops, the MCP browse, and the sitemap. The SINGLE denormalization that kills the largest share is a maintained per-track `is_catalogue`/`certified` flag with a partial index: it converts every `findings.track_id IS NULL` from a full scan into a seek, retiring shape (A) everywhere at once — the biggest recurring cost in the app (now Wave-2 Keystone 1, held in #859). The per-entity `renderable_track_count`/`certified_finding_count` columns are the close-second keystone, retiring all of shape (B) in one stroke (web hub + API + MCP + sitemap + bio worklists + the search entity gate) — now Wave-2 Keystone 2, proven and recommended. Important nuance for sequencing, borne out by the ship data: the rank-sweep walls were ALSO substantially retired by the Wave-1 pure hoists alone (short-circuit countStale off batch-fullness, gate computeCatalogueCounts to the drain-end branch with a per-tick bucket delta, compute readArchiveAffinity once per call) — those removed 7-of-8 full scans per tick with zero schema change and zero dependence on Turso's (absent) planner stats, so Wave 1 bought the biggest immediate relief (SHIPPED via #847/#848) while the Wave-2 is_catalogue flag makes the residual scan and every on-demand consumer seek-fast and future-proof.
+CONFIRMED — the root is recompute-by-full-scan on grown tables, and it collapses to two shapes, both consequences of the tracks/findings subtype split: (A) the catalogue anti-join `tracks LEFT JOIN findings WHERE findings.track_id IS NULL` (equivalently `NOT EXISTS (SELECT 1 FROM findings …)`) with NO materialized "is-catalogue" discriminator, which forces a full left-join scan of the growing tracks table — this is the most-repeated shape in the audit and it drives the largest measured costs (the ~31s/19s/14s rank-sweep walls, up to 8×/tick, plus crawl status, the funnel scans, the search entity gate, and the Apple/fresh feeds); and (B) the O(tracks)/O(track_artists) grouped `having` scan behind the catalogue-scale entity hubs (labels/albums/artists), reused verbatim by the web hub, the public API list ops, the MCP browse, and the sitemap. The SINGLE denormalization that kills the largest share is a maintained per-track `is_catalogue`/`certified` flag with a partial index: it converts every `findings.track_id IS NULL` from a full scan into a seek, retiring shape (A) everywhere at once — the biggest recurring cost in the app (now Wave-2 Keystone 1, SHIPPED via #859). The per-entity `renderable_track_count`/`certified_finding_count` columns are the close-second keystone, retiring all of shape (B) in one stroke (web hub + API + MCP + sitemap + bio worklists + the search entity gate) — now Wave-2 Keystone 2, proven and recommended. Important nuance for sequencing, borne out by the ship data: the rank-sweep walls were ALSO substantially retired by the Wave-1 pure hoists alone (short-circuit countStale off batch-fullness, gate computeCatalogueCounts to the drain-end branch with a per-tick bucket delta, compute readArchiveAffinity once per call) — those removed 7-of-8 full scans per tick with zero schema change and zero dependence on Turso's (absent) planner stats, so Wave 1 bought the biggest immediate relief (SHIPPED via #847/#848) while the Wave-2 is_catalogue flag makes the residual scan and every on-demand consumer seek-fast and future-proof.
 
 ## Shipped (live)
 
-The Wave-1 pure hoists (#847/#848) + the cheap #858 index/rewrite batch. Done, no longer outstanding; the full pre-fix loc/shape/impact/fix analysis is in git history.
+The Wave-1 pure hoists (#847/#848), the cheap #858 index/rewrite batch, the four proven indexes (#857), and Keystone 1 (#859). Done, no longer outstanding; the full pre-fix loc/shape/impact/fix analysis is in git history.
 
 - **1 — Rank sweep: short-circuit countStale off batch-fullness** — #847/#848.
 - **2 — Rank sweep: gate computeCatalogueCounts to the idle branch + per-tick bucket delta** — #847/#848.
 - **3 — Crawl tick: stop calling getCrawlStatus + split frontierByKind out** — #847/#848.
 - **4 — Rank sweep: compute readArchiveAffinity once per call** — #847/#848.
 - **5 — Funnel: fold gatherLiveFunnel's three full scans into one conditional-aggregate pass** — #847/#848.
-- **6 (promotion half) — Demand nightly batch: PK point-lookup promotions** — #858. (The `<>1`→`=0` partial-index CLEAR half is proven and held in #857 — see Wave 1 item 6.)
+- **6 — Demand nightly batch: PK point-lookup promotion (#858) + the `<>1`→`=0` partial-index CLEAR with `crawl_frontier(state) where demand_rank = 0` (#857)** — both halves shipped; the nightly clear now seeks the promoted rows instead of touching all ~90k.
 - **7 — Fresh feed: swap the fat TRACK_SELECT for LEAN_TRACK_SELECT** — #847/#848.
 - **8 — findSeedTrack: split the cross-table OR into two indexed seeks** — #858.
 - **9 — Crawl status count via count(tracks) − count(findings)** — #858.
 - **10 — compileFilters: sargable year-range rewrite (substr → range)** — #858.
 - **13 — Catalogue Apple-URL worklist: drop coalesce() from ORDER BY** — #858. Only the ORDER BY rewrite shipped: with coalesce dropped, `order by capture_priority desc, track_id` rides the EXISTING `tracks_capture_priority_track_id_idx`. The proposed NEW partial index (`tracks_catalogue_apple_queue_idx`) was NOT picked by the planner and was dropped.
+- **11 — artists.name NOCASE COVERING index** — #857. `artists_name_nocase_idx on artists (name collate nocase, slug)`. The `+slug` COVERING trailer is what flipped the plan: a bare `(name collate nocase)` index did NOT (the join still scanned all artists to fetch slug). Decouples every `/label/<slug>` render from total artist count.
+- **16 — rearmSeedLabels: label-node partial index** — #857. `crawl_frontier(state, done_at) where kind = 'label' and source = 'musicbrainz'`; measured 5.8× — the every-tick pick seeks the tens of label nodes instead of residual-scanning the ~90k done partition.
+- **18 — artist_socials candidate queue: partial index** — #857. `artist_socials(artist_id) where status = 'candidate'`; the distinct-artist read seeks the rare candidate slice instead of scanning most of the table.
+- **Keystone 1 — maintained `is_catalogue` flag + partial index** — #859. Materializes the catalogue anti-join (`findings.track_id IS NULL` → `is_catalogue = 1`); 5.7× on the catalogue count at 150k. Written at the certify/publish sites atomically with the `findings` insert (so the invariant is never briefly violated), backfilled certified-only via the findings-driven `where track_id in (select track_id from findings)` shape (660ms — NOT the 97s full-table `EXISTS` form), and consumed by the rank sweeps, the `/fresh` catalogue half, the Apple worklist, and the `/tracks` hub certification filter. Prod-verified after deploy: the `is_catalogue = 0` count equals the `findings` count exactly.
 
-## Wave 1 — outstanding (indexes; proven, held or deferred)
+## Wave 1 — outstanding (all DEFERRED: proven on hosted 150k NOT to help as-specified)
 
-**6. Demand nightly batch: `=0` partial-index clear (the CLEAR half — promotion shipped)**
-`tier=cheap · crawl_frontier · T1, T5, T9`
-**STATUS: HOLD — PR #857, proven, awaiting operator go.** The PK point-lookup PROMOTION half shipped in #858; only the partial-index clear remains.
-
-- loc: apps/web/src/lib/server/demand.ts:310 (CLEAR)
-- shape: Inside the write-locked nightly batch: a full ~90k-row UPDATE (`demand_rank<>1`) touches every row to clear the flag.
-- impact: HIGH — relieves the nightly write lock (the `database is locked` failure class).
-- fix: Rewrite the clear `<>1` to `=0` (demand_rank is only {0,1}) and add partial index `crawl_frontier(state) where demand_rank=0` so the predicate matches and seeks exactly the promoted rows. The clearer `<>1`→`=0` is what makes the predicate index-eligible.
-
-**11. artists.name NOCASE COVERING index (kill the per-/label-render automatic-index build)**
-`tier=cheap · artists · T9, T1, T2`
-**STATUS: HOLD — PR #857, proven, awaiting operator go.**
-
-- loc: apps/web/src/lib/server/catalogue-groups.ts:469-474 (artist_slugs CTE join :472)
-- shape: listLabelCatalogue folds credited names via `join artists a on a.name = lc.name collate nocase`; the only artists.name index is BINARY, so SQLite builds a per-request AUTOMATIC COVERING INDEX over ALL of artists on EVERY /label/<slug> render — cost O(artists), independent of label size.
-- impact: HIGH — every label page currently scales with total artist count, not label size.
-- fix: Add `artists_name_nocase_idx on artists (name collate nocase, slug)` via db:generate; keep the BINARY index for other callers; keep the nocase fold. Proven at 150k: the +slug COVERING form is ESSENTIAL — a bare `(name collate nocase)` index did NOT flip the plan (the join still scans all artists to fetch slug); adding slug lets the join seek (scan-all-artists → seek).
+Every Wave-1 item that proved out has shipped (see "Shipped (live)" above). What remains here is the five the hosted proof gate REJECTED — kept with their analysis so nobody re-proposes them blind. Do not ship any of these as-specified.
 
 **12. Analyze worklist: partial index mirroring tracks_embed_queue_idx**
 `tier=cheap · tracks · T1, T9, T2`
@@ -71,15 +59,6 @@ The Wave-1 pure hoists (#847/#848) + the cheap #858 index/rewrite batch. Done, n
 - impact: MEDIUM — but the proposed composite doesn't serve the cover's ORDER BY.
 - fix (deferred): the proposed `tracks(label_id, release_date [, track_id])` composite is unused because the ORDER BY leads with `release_date is null asc`; and it is a 24s build at 150k. Drop it. If the cover/per-label-feed cost bites, revisit with an ORDER BY that the index can serve.
 
-**16. rearmSeedLabels: partial index over the label-node slice**
-`tier=cheap · crawl_frontier · T1, T6, T9`
-**STATUS: HOLD — PR #857, proven, awaiting operator go.**
-
-- loc: apps/web/src/lib/server/crawl.ts:547-562 (rearmSeedLabels)
-- shape: pick_idx seeks state='done' but residual-scans EVERY done row (the dominant ~90k partition once the graph drains) for kind/source/done_at to find tens of label nodes, then temp-sorts by done_at — every 10-min tick.
-- impact: MEDIUM — recurring (every crawl tick).
-- fix: Partial index `crawl_frontier(state, done_at) where kind='label' and source='musicbrainz'` → the pick becomes a seek over the tens of label nodes, done_at already ordered (no sort). `label_slug in (enabled)` stays a cheap residual. Plain-ASC.
-
 **17. Artist review queue: (reviewed_at, created_at) index + bounded head walk**
 `tier=cheap · artist_socials · T2, T6`
 **STATUS: DEFERRED — the index alone can't help the GROUP-BY; needs the bounded-head-walk rewrite (a design call).**
@@ -88,15 +67,6 @@ The Wave-1 pure hoists (#847/#848) + the cheap #858 index/rewrite batch. Done, n
 - shape: GROUP BY artist + min(created_at) + ORDER BY the aggregate over ALL unreviewed socials before LIMIT 25 — every resolver-minted link is born reviewed_at NULL and stays, so the unreviewed set grows with every crawl-resolved artist.
 - impact: MEDIUM — attention-queue read.
 - fix (deferred): the `(reviewed_at, created_at)` index does not bound the aggregation on its own; the real fix selects the oldest-N DISTINCT artist_ids from the null-reviewed group via a bounded index walk, then aggregates only those ≤25 artists — a query rewrite (design). Wave-2 fallback: a maintained unreviewed-artists worklist the resolver writes into.
-
-**18. artist_socials candidate queue: partial index on status='candidate'**
-`tier=cheap · artist_socials · T9`
-**STATUS: HOLD — PR #857, proven, awaiting operator go.**
-
-- loc: apps/web/src/lib/server/artists.ts:1235 (listArtistSocialsQueue default path)
-- shape: `select distinct artist_id from artist_socials where status='candidate' limit ?` — status is unindexed; candidates are rare, so it scans most of the growing table to accumulate `limit` distinct ids. (The `fresh` path is fine — reviewed_at is indexed.)
-- impact: MEDIUM.
-- fix: Partial index `on artist_socials(artist_id) where status='candidate'` (a small, shrinking slice) so the distinct-artist read is a seek.
 
 **19. Ear lens: partial index skipping the near-1.0 duplicate prefix**
 `tier=cheap · tracks · T4, T1`
@@ -109,14 +79,7 @@ The Wave-1 pure hoists (#847/#848) + the cheap #858 index/rewrite batch. Done, n
 
 ## Wave 2 — denormalizations (stored/maintained columns; ranked by blast radius × certainty)
 
-**1. KEYSTONE — per-track `is_catalogue`/`certified` flag + partial index (materialize the catalogue anti-join)**
-`tier=denormalize · tracks · T3, T1`
-**STATUS: HOLD — PR #859, proven, awaiting operator go.**
-
-- loc: apps/web/src/lib/server/catalogue.ts:967/1133/1578/1777 (rank-sweep anti-joins), apps/web/src/lib/server/crawl.ts:1376 (status count), apps/web/src/lib/server/funnel.ts (catalogue counts), apps/web/src/lib/server/search.ts:402 (entity gate join)
-- shape: The single most-repeated shape: `tracks LEFT JOIN findings WHERE findings.track_id IS NULL` (≡ `not exists (select 1 from findings …)`) has NO materialized discriminator, so every consumer full-scans the growing tracks table with a per-row findings probe.
-- impact: KEYSTONE — kills the largest share of the systemic root; ~15 findings touch this shape.
-- fix: Add a maintained `is_catalogue` (or `certified`) boolean on tracks, written at certify/publish/dismiss/duplicate-mark time, with a partial index. `WHERE findings.track_id IS NULL` becomes `WHERE is_catalogue` — an index seek instead of a full left-join scan — retiring the residual rank-sweep scan (after the Wave-1 hoists), the crawl status count, the funnel catalogue anti-joins, the search entity gate, and the Apple/fresh feed anti-joins in one column. The ratified escape from the anti-join; do NOT add a vector index (owned/forbidden).
+**1. KEYSTONE — per-track `is_catalogue` flag — SHIPPED (#859).** See "Shipped (live)" above. Two consumers were deliberately left on the anti-join: `funnel.ts` (its findings join is pinned by the `certified` arm and the shared `kindClause`, so converting buys nothing) and `search.ts`'s entity gate (its `findings.track_id is null` lives inside the shared `HUB_RENDERABLE` group-by — Keystone 2's territory).
 
 **2. KEYSTONE — per-entity renderable_track_count + certified_finding_count on labels/albums/artists (kill the hub group-by)**
 `tier=denormalize · tracks (labels/albums hubs); track_artists (artists hub, ~2× tracks) · T2, T1, T3, T6`
@@ -210,6 +173,6 @@ The Wave-1 pure hoists (#847/#848) + the cheap #858 index/rewrite batch. Done, n
 
 ## Guardrail (so this can't re-accrue)
 
-**STATUS: PENDING — builds LAST, once the keystones' final state is settled.** The forbidden-shape allowlist and the audit domain both key off the keystone columns (`is_catalogue`, the per-entity counts), so this lands after Keystone 1 (#859) and Keystone 2 merge and their column names are final.
+**STATUS: PENDING — builds LAST, once the keystones' final state is settled.** The forbidden-shape allowlist and the audit domain both key off the keystone columns, so this lands once Keystone 2's columns are final. Keystone 1's `is_catalogue` has shipped (#859), so the allowlist can already treat an unguarded catalogue anti-join as a violation — with the two deliberate survivors (`funnel.ts`, and `search.ts`'s gate until Keystone 2 lands) as explicit, shrinking allowlist entries.
 
 Two concrete, complementary mechanisms so this debt can't silently re-accrue. (A) A BUILD-FAIL vitest, new file `apps/web/src/lib/server/db-query-shape.test.ts`, modeled 1:1 on the existing `apps/web/src/lib/server/orpc-coverage.test.ts` and already executed by `bun run test` inside `deploy:gate` (package.json:54 → `format:check && lint && typecheck && test && test:scripts`), so a violation aborts the Cloudflare deploy build the same way an uncovered oRPC route does. It statically scans the server SQL surface (`apps/web/src/lib/server/**`, `apps/web/src/db/**`) for the forbidden shapes on the four growing tables (tracks, crawl_frontier, track_artists, findings-as-anti-join) and fails on any NEW occurrence not on an explicit, SHRINKING allowlist — exactly the PENDING-list enforcement the oRPC coverage tests use (an entry must map to a real occurrence; the list must shrink as Wave 1/2/3 land). Flagged shapes: the unmaterialized catalogue anti-join (`findings.track_id IS NULL` or `not exists (select 1 from findings …)` without an accompanying `is_catalogue`/`certified` predicate), function-wrapped filter columns that defeat btrees (`lower(tracks.`, `substr(tracks.release_date`, `like '%' ||` over tracks/track_artists), an `OFFSET` bind on the tracks-hub pager, `select *` / the fat TRACK_SELECT on a public list read, `create index … libsql_vector_idx` against a populated table, and a query vector bound as text rather than blob (the docs/local-database.md traps). Couple it to a hosted-proof gate: any allowlisted `needsHostedProof` index must be validated against a scratch hosted-Turso DB via the existing `apps/web/scripts/bench-db-scale.ts` pattern (never local-green) before the allowlist entry is removed. (B) Add a `db-query-shape` domain to the nightly self-audit rotation: append `"db-query-shape"` to the `DOMAINS` array in `docs/agents/hermes/scripts/audit/rotation.ts` (7→8; the file documents the exact three-step add — key + `prompts/<key>.md` + `DOMAIN_META` entry), author `docs/agents/hermes/scripts/audit/prompts/db-query-shape.md` from this spec's T1–T9 taxonomy + the four growing tables + the hosted-Turso reality rails + the vector-rfc/artist-session ownership boundaries, and reflect the new domain in `packages/skills/fluncle-audit-operator/SKILL.md` and `docs/agents/hermes/audit-timer/README.md`. The audit catches the SEMANTIC recompute-by-scan a grep can't (a new O(tracks) group-by reached through a helper, an anti-join via a view, a per-row correlated subquery in a loop) and either fixes it on green CI or files it to `docs/audit-backlog.md`. Together: the test is the hard gate (a new unguarded growing-table scan fails the deploy), the audit domain is the recurring deep sweep (judgment shapes + hosted-proof follow-through).
