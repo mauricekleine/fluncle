@@ -80,6 +80,7 @@ export type ArtistSocialPlatform =
   | "soundcloud"
   | "instagram"
   | "tiktok"
+  | "bluesky"
   | "bandcamp"
   | "beatport"
   | "twitter"
@@ -240,6 +241,9 @@ export function classifyMbUrl(
   if (host === "tiktok.com") {
     return "tiktok";
   }
+  if (host === "bsky.app") {
+    return "bluesky";
+  }
   if (host === "bandcamp.com" || resource.includes(".bandcamp.com")) {
     return "bandcamp";
   }
@@ -323,6 +327,21 @@ function extractTikTokHandle(rawUrl: string): string | null {
     const pathname = new URL(rawUrl).pathname;
     const match = pathname.match(/^\/@?([^/]+)/);
     return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the Bluesky identifier from a `bsky.app/profile/<handle-or-did>` URL — the handle
+ * (`fluncle.com`, `name.bsky.social`) OR the `did:plc:…` a DID-form profile URL carries. Both
+ * are the identity slot after `/profile/`; a URL with no profile segment returns null.
+ */
+function extractBlueskyHandle(rawUrl: string): string | null {
+  try {
+    const segments = new URL(rawUrl).pathname.split("/").filter(Boolean);
+
+    return segments[0]?.toLowerCase() === "profile" ? (segments[1] ?? null) : null;
   } catch {
     return null;
   }
@@ -459,6 +478,13 @@ export async function normalizeProfileUrl(
       return handle ? `https://www.instagram.com/${handle}` : null;
     }
 
+    case "bluesky": {
+      // The identity is the handle/DID after /profile/; a deep link (a post, a feed)
+      // collapses to the profile root, an unparseable one is dropped.
+      const handle = extractBlueskyHandle(rawUrl);
+      return handle ? `https://bsky.app/profile/${handle}` : null;
+    }
+
     case "youtube":
       return normalizeYouTubeUrl(rawUrl);
 
@@ -537,6 +563,7 @@ export async function normalizeProfileUrl(
 const SOCIAL_DISPLAY_NAMES: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
   beatport: "Beatport",
+  bluesky: "Bluesky",
   facebook: "Facebook",
   homepage: "homepage",
   instagram: "Instagram",
@@ -968,6 +995,7 @@ export async function resolveArtistViaMb(
 const FIRECRAWL_TARGETS: ArtistSocialPlatform[] = [
   "instagram",
   "tiktok",
+  "bluesky",
   "youtube",
   "soundcloud",
   "bandcamp",
@@ -1110,8 +1138,9 @@ function bucketSearchUrl(url: string): ArtistSocialPlatform | null {
 // Platforms whose profile handle IS the first path segment — so a search result's handle
 // can be name-checked to reject a namesake/label (a TikTok search for an act with none
 // returns the label's account). The rest are exempt: YouTube resolves to an opaque
-// /channel/<id>, Bandcamp's identity is the subdomain, Beatport's is /artist/<slug>/<id> —
-// name-checking the first segment there would wrongly drop correct hits.
+// /channel/<id>, Bandcamp's identity is the subdomain, Beatport's is /artist/<slug>/<id>,
+// Bluesky's handle is the SECOND segment (/profile/<handle>) — name-checking the first
+// segment there would wrongly drop correct hits.
 const HANDLE_IN_FIRST_SEGMENT = new Set<ArtistSocialPlatform>([
   "instagram",
   "tiktok",

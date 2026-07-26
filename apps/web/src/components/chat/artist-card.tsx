@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import {
   siBandcamp,
   siBeatport,
+  siBluesky,
   siFacebook,
   siInstagram,
   siMixcloud,
@@ -59,6 +60,7 @@ const SOCIAL_META: Record<
 > = {
   bandcamp: siBandcamp,
   beatport: siBeatport,
+  bluesky: siBluesky,
   facebook: siFacebook,
   instagram: siInstagram,
   mixcloud: siMixcloud,
@@ -73,6 +75,7 @@ const SOCIAL_META: Record<
 const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
   beatport: "Beatport",
+  bluesky: "Bluesky",
   facebook: "Facebook",
   homepage: "Website",
   instagram: "Instagram",

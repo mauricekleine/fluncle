@@ -24,6 +24,10 @@ import { type TrackMetadata } from "./spotify";
 // the session + the repo writes.
 const XRPC_BASE = "https://bsky.social/xrpc";
 
+// The public AppView — unauthenticated identity + graph reads. resolveHandle needs
+// no session (unlike the createSession / repo writes above, which go to bsky.social).
+const PUBLIC_APPVIEW_BASE = "https://public.api.bsky.app/xrpc";
+
 // The default card description when the operator hasn't authored a finding note —
 // the entity tagline (docs/socials/), so the link preview never reads empty.
 const DEFAULT_CARD_DESCRIPTION = "Drum & bass bangers from another dimension.";
@@ -137,6 +141,46 @@ export function normalizeIdentifier(identifier: string): string {
   const trimmed = identifier.trim();
 
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+}
+
+// Resolve a Bluesky handle to its DID via the PUBLIC identity API — the AT-Protocol
+// verification probe (no auth). A handle that resolves to a DID is a live, verifiable
+// identity; a handle the API can't resolve (a 400) is a dead link — the honest-404 sibling
+// of the SoundCloud/Mixcloud/YouTube oracles in scripts/probe-artist-socials-liveness.ts.
+//
+// A `did:…` identifier is ALREADY a resolved identity (resolveHandle only takes handles), so
+// it's returned as-is rather than looked up. Best-effort throughout: any non-2xx / malformed
+// body / network error returns null (never throws), so a probe caller reads a null as "could
+// not verify" and an operator/MB link is never removed on a transient miss.
+export async function resolveBlueskyHandle(handle: string): Promise<string | null> {
+  const identifier = normalizeIdentifier(handle);
+
+  if (!identifier) {
+    return null;
+  }
+
+  // A DID is a stable identity of its own — nothing to resolve.
+  if (identifier.startsWith("did:")) {
+    return identifier;
+  }
+
+  try {
+    const response = await fetch(
+      `${PUBLIC_APPVIEW_BASE}/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(
+        identifier,
+      )}`,
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = (await response.json()) as { did?: unknown };
+
+    return typeof payload.did === "string" && payload.did ? payload.did : null;
+  } catch {
+    return null;
+  }
 }
 
 // Post a finding to @fluncle.com as an external link card. No-op when the
