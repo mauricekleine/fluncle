@@ -43,6 +43,12 @@
 // (`openssl rand -hex 32`), stores it in 1Password, and adds it to the box's `op inject`
 // template — see ../backup-timer/README.md § Leg 2. This file NEVER invents a default.
 //
+// THE ACCEPTANCE TEST: box-state-restore-drill.ts, the sibling of the database dump's
+// apps/web/scripts/restore-drill.ts. It fetches a stored artifact, verifies it against the
+// manifest, decrypts it, proves the GCM tamper-detection actually bites, unpacks it into a
+// throwaway dir, and checks the load-bearing set came back — reading `BOX_STATE_INCLUDES`
+// below, so its expectation cannot drift from what this file archives.
+//
 // Memory: bounded by `FLUNCLE_BOXSTATE_MAX_BYTES` (default 64 MiB). The selected paths are
 // measured BEFORE `tar` runs and the archive is re-checked after, so an accidental fat
 // include fails loudly instead of OOM-killing the sweep — the exact failure this whole
@@ -87,6 +93,62 @@ export const BOX_STATE_EXCLUDED_SEGMENTS: readonly string[] = [
 /** One archived entry as the manifest records it: its path relative to the archive root. */
 export type BoxStateEntry = { bytes: number; path: string };
 
+/**
+ * One line of the include list.
+ *
+ * The list is DATA rather than a literal inside `boxStateCandidates` because two callers need
+ * it: the producer (which turns it into absolute candidate paths) and the restore drill (which
+ * asks "did the load-bearing set actually come back?"). A drill carrying its own copy of that
+ * expectation drifts the first time this list is edited, so it reads this one instead.
+ */
+export type BoxStateInclude = {
+  /** Which anchor `path` hangs off: the data root, or the cron user's home inside it. */
+  base: "dataRoot" | "home";
+  /** Paths inside this entry a RESTORE must find — the `box-id` case. Relative to the entry. */
+  contains?: readonly string[];
+  /** The path, relative to `base`. */
+  path: string;
+  /**
+   * True when a restore that lacks this entry is not a restore. False for the entries that are
+   * transient (the SQLite sidecars exist only while the db is open) or re-derivable from the
+   * repo/image (`config.yaml` is deployed, `.healthcheck` re-baselines itself).
+   */
+  required: boolean;
+  /** What it is, in words, so a drill's failure names the thing rather than the path. */
+  what: string;
+};
+
+/** Every archived path, declared once. `boxStateCandidates` and the restore drill both read it. */
+export const BOX_STATE_INCLUDES: readonly BoxStateInclude[] = [
+  { base: "dataRoot", path: "state.db", required: true, what: "the gateway state db" },
+  { base: "dataRoot", path: "state.db-wal", required: false, what: "the state db's WAL" },
+  { base: "dataRoot", path: "state.db-shm", required: false, what: "the state db's shared memory" },
+  { base: "dataRoot", path: "config.yaml", required: false, what: "the gateway's expanded config" },
+  { base: "dataRoot", path: ".env", required: false, what: "the data root's env file" },
+  { base: "dataRoot", path: "memories", required: true, what: "the agent's memories" },
+  { base: "dataRoot", path: join("cron", "output"), required: true, what: "the cron run markers" },
+  {
+    base: "home",
+    contains: ["box-id"],
+    path: ".render-conductor",
+    required: true,
+    what: "the render conductor's box-id + poison ledger",
+  },
+  {
+    base: "home",
+    path: ".healthcheck",
+    required: false,
+    what: "the prober's transition memory",
+  },
+];
+
+/**
+ * The suffix that makes a file one of the hand-placed `0600` env files. Those are DISCOVERED
+ * rather than named (so a new one is covered the night it appears), which means the restore
+ * expectation is a shape — "at least one" — rather than a path.
+ */
+export const BOX_STATE_ENV_SUFFIX = ".env";
+
 export type BoxStateManifest = {
   /** Size of the PLAINTEXT tar.gz — what a restore expects after decrypting. */
   archiveBytes: number;
@@ -116,31 +178,77 @@ export function boxStateCandidates(env: NodeJS.ProcessEnv = process.env): string
   const home = boxStateHome(env);
   const dataRoot = dirname(home);
 
-  const fromDataRoot = [
-    "state.db",
-    "state.db-wal",
-    "state.db-shm",
-    "config.yaml",
-    ".env",
-    "memories",
-    join("cron", "output"),
-  ].map((entry) => join(dataRoot, entry));
-
-  const fromHome = [".render-conductor", ".healthcheck"].map((entry) => join(home, entry));
+  const declared = BOX_STATE_INCLUDES.map((include) =>
+    join(include.base === "home" ? home : dataRoot, include.path),
+  );
 
   // The hand-placed 0600 env files (`.fluncle-secrets.env` and any sibling) — discovered
   // rather than named, so a new one is covered the night it appears.
   const envFiles = [dataRoot, home].flatMap((dir) => {
     try {
       return readdirSync(dir)
-        .filter((entry) => entry.endsWith(".env"))
+        .filter((entry) => entry.endsWith(BOX_STATE_ENV_SUFFIX))
         .map((entry) => join(dir, entry));
     } catch {
       return [];
     }
   });
 
-  return [...new Set([...fromDataRoot, ...fromHome, ...envFiles])];
+  return [...new Set([...declared, ...envFiles])];
+}
+
+/** One load-bearing thing a restore did not bring back. */
+export type BoxStateShortfall = { detail: string; what: string };
+
+/**
+ * Judge a RESTORED tree against the include list: is everything a rebuild needs actually here?
+ *
+ * `entries` are archive-relative paths (the manifest's, or a real unpacked tree's) and `exists`
+ * probes that tree for a nested path. Both are injected so the drill can run this against an
+ * unpacked archive and the tests against a fixture, with no filesystem assumption in here.
+ *
+ * The archive is rooted at the DATA ROOT, so a `home`-based include reads as `<home>/<path>` —
+ * and the cron user's home directory NAME is deployment detail this file does not hardcode.
+ * Hence the tail match: the entry either IS the path or ends with it.
+ */
+export function checkBoxStateCoverage(options: {
+  entries: readonly string[];
+  exists: (relativePath: string) => boolean;
+}): BoxStateShortfall[] {
+  const normalise = (path: string) => path.split(sep).join("/").replace(/^\.\//, "");
+  const entries = options.entries.map(normalise);
+  const shortfalls: BoxStateShortfall[] = [];
+
+  for (const include of BOX_STATE_INCLUDES) {
+    if (!include.required) {
+      continue;
+    }
+
+    const wanted = normalise(include.path);
+    const matched = entries.find((entry) => entry === wanted || entry.endsWith(`/${wanted}`));
+
+    if (matched === undefined) {
+      shortfalls.push({ detail: `no archived entry for ${wanted}`, what: include.what });
+      continue;
+    }
+
+    for (const nested of include.contains ?? []) {
+      if (!options.exists(`${matched}/${nested}`)) {
+        shortfalls.push({ detail: `${matched} is missing ${nested}`, what: include.what });
+      }
+    }
+  }
+
+  // The env files are discovered, not declared — so the requirement is that at least one came
+  // back. Zero means the credential-bearing half of the snapshot silently went missing.
+  if (!entries.some((entry) => entry.endsWith(BOX_STATE_ENV_SUFFIX))) {
+    shortfalls.push({
+      detail: `no archived entry ending in ${BOX_STATE_ENV_SUFFIX}`,
+      what: "the hand-placed 0600 env files",
+    });
+  }
+
+  return shortfalls;
 }
 
 /** The archive root every entry is stored relative to: the data root. */
@@ -172,8 +280,14 @@ export function selectBoxStatePaths(
   return candidates.filter((path) => !isBoxStateExcluded(path, root) && exists(path));
 }
 
-/** Recursive byte size of a file or directory. Bounded — these are the SMALL paths. */
-function sizeOf(path: string): number {
+/**
+ * Recursive byte size of a file or directory. Bounded — these are the SMALL paths.
+ *
+ * Exported because the restore drill re-measures a RESTORED entry and compares it with the
+ * manifest: two different size definitions (does a directory's own inode count?) would make
+ * every directory look corrupt, so both sides call this one.
+ */
+export function boxStateEntryBytes(path: string): number {
   let stat;
 
   try {
@@ -190,7 +304,7 @@ function sizeOf(path: string): number {
 
   try {
     for (const entry of readdirSync(path)) {
-      total += sizeOf(join(path, entry));
+      total += boxStateEntryBytes(join(path, entry));
     }
   } catch {
     /* unreadable subtree — counted as 0, tar will report it too */
@@ -309,7 +423,7 @@ export async function buildBoxStateArchive(options: {
   }
 
   const entries: BoxStateEntry[] = options.paths.map((path) => ({
-    bytes: sizeOf(path),
+    bytes: boxStateEntryBytes(path),
     path: relative(root, path),
   }));
   const selectedBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);

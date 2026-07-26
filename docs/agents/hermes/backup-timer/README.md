@@ -86,9 +86,43 @@ The manifest beside the artifact is deliberately NOT encrypted — it lists rela
 
 The existing R2 token already covers leg 2 (same bucket, Object Read & Write) — no new bucket, no new credential beyond the key.
 
-### Restoring from leg 2
+### The restore drill (leg 2's acceptance test)
 
-Decrypt with the key, verify the manifest's `sha256`, then untar into the data root:
+A backup that has never restored is a hope, not a backup — so leg 2 has the same kind of acceptance test leg 1 has, in [`../scripts/box-state-restore-drill.ts`](../scripts/box-state-restore-drill.ts). It fetches a stored artifact, verifies it, decrypts it, PROVES the tamper-detection bites, unpacks it into a throwaway dir, and checks that the load-bearing set actually came back:
+
+```bash
+# Latest daily. Needs FLUNCLE_BOXSTATE_KEY + the backup-bucket reads in the env.
+bun docs/agents/hermes/scripts/box-state-restore-drill.ts
+
+bun docs/agents/hermes/scripts/box-state-restore-drill.ts --date 2026-07-26          # one day
+bun docs/agents/hermes/scripts/box-state-restore-drill.ts --date 2026-07 --monthly   # one month
+bun docs/agents/hermes/scripts/box-state-restore-drill.ts --key box-state/daily/<date>/<name>
+bun docs/agents/hermes/scripts/box-state-restore-drill.ts --keep ./box-state-tree     # keep the unpacked tree
+```
+
+Env: `FLUNCLE_BOXSTATE_KEY` always, plus `R2_ACCOUNT_ID`, `FLUNCLE_BACKUP_R2_ACCESS_KEY_ID`, `FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY` (and `FLUNCLE_BACKUP_R2_BUCKET` if it is not the default) — the SAME names the sweep reads, through the same `backupR2Config`, so a rotated credential moves both at once.
+
+`--file <artifact>` drills a LOCAL artifact instead and needs no bucket credentials at all — pair it with the `--box-state-out` dry run above to drill the whole path on the box, or on a laptop, before trusting the nightly:
+
+```bash
+bun docs/agents/hermes/scripts/backup-sweep.ts --box-state-out /tmp/box-state-check
+FLUNCLE_BOXSTATE_KEY=<key> bun docs/agents/hermes/scripts/box-state-restore-drill.ts \
+  --file /tmp/box-state-check/box-state.tar.gz.enc
+```
+
+What it proves, in order, exiting non-zero (loudly) on any of them:
+
+1. the stored cipher length matches the manifest, and the `FLNCBOX1` magic is there;
+2. the artifact opens with the key, and the decrypted archive's size + SHA-256 match what the producer recorded;
+3. **tamper-detection is real** — a byte is flipped in a COPY of the ciphertext and the open MUST fail. GCM's whole job here is that a corrupted artifact refuses to open instead of unpacking garbage over live state, so a decrypt that succeeded anyway is a drill failure;
+4. every manifest entry is present after unpacking, at its recorded size, in the recorded count;
+5. the LOAD-BEARING set is there — the gateway state db, `memories/`, the cron markers, the render conductor's directory **including its `box-id`**, and at least one `0600` env file. That expectation is read from `BOX_STATE_INCLUDES` in [`../scripts/box-state-snapshot.ts`](../scripts/box-state-snapshot.ts), the same declaration the sweep archives from, so the drill cannot drift from the producer.
+
+The drill is **read-only against storage**: LIST and GET only, no PUT and no DELETE anywhere in the file, so it can never overwrite or prune a backup object. It never restores over the live data dir either — it unpacks only into a temp dir it creates and removes. Its output is paths, sizes and counts; never a key, never a decrypted byte. The one exception is the one you ask for: `--keep <dir>` copies the unpacked tree out for inspection, **credentials included**, into a fresh `0700` directory (it refuses a non-empty target) — delete it when you are done.
+
+### Restoring from leg 2 (for real)
+
+The drill proves the artifact restores; this puts it back. Decrypt with the key, verify the manifest's `sha256`, then untar into the data root:
 
 ```bash
 # <key> = the same hex string as FLUNCLE_BOXSTATE_KEY

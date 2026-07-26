@@ -97,12 +97,38 @@ const DRY_RUN = OUT_DIR !== undefined || BOX_STATE_OUT_DIR !== undefined;
 const TURSO_URL = process.env.TURSO_DATABASE_URL ?? "";
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN ?? "";
 
-// A dedicated, least-privilege R2 token: Object Read & Write on the PRIVATE backup
-// bucket ONLY (never fluncle-videos, which is world-served at found.fluncle.com).
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID ?? "";
-const R2_ACCESS_KEY_ID = process.env.FLUNCLE_BACKUP_R2_ACCESS_KEY_ID ?? "";
-const R2_SECRET_ACCESS_KEY = process.env.FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY ?? "";
-const R2_BUCKET = process.env.FLUNCLE_BACKUP_R2_BUCKET ?? "fluncle-backups";
+/** The backup bucket's connection, from the env. */
+export type BackupR2Config = {
+  accessKeyId: string;
+  accountId: string;
+  bucket: string;
+  /** The bucket's S3 base URL — `<endpoint>/<bucket>`, with no trailing slash. */
+  bucketUrl: string;
+  secretAccessKey: string;
+};
+
+/**
+ * Read the backup bucket's connection from the env — the ONE config path. The restore drill
+ * (box-state-restore-drill.ts) reads it through here too, so there is no second set of names
+ * to keep in step, and a rotated credential moves both at once.
+ *
+ * A dedicated, least-privilege R2 token: Object Read & Write on the PRIVATE backup bucket ONLY
+ * (never fluncle-videos, which is world-served at found.fluncle.com).
+ */
+export function backupR2Config(env: NodeJS.ProcessEnv = process.env): BackupR2Config {
+  const accountId = env.R2_ACCOUNT_ID ?? "";
+  const bucket = env.FLUNCLE_BACKUP_R2_BUCKET ?? "fluncle-backups";
+
+  return {
+    accessKeyId: env.FLUNCLE_BACKUP_R2_ACCESS_KEY_ID ?? "",
+    accountId,
+    bucket,
+    bucketUrl: `https://${accountId}.r2.cloudflarestorage.com/${bucket}`,
+    secretAccessKey: env.FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY ?? "",
+  };
+}
+
+const R2 = backupR2Config();
 
 const KEEP_DAILY = Number(process.env.FLUNCLE_BACKUP_KEEP_DAILY ?? "30");
 const KEEP_MONTHLY = Number(process.env.FLUNCLE_BACKUP_KEEP_MONTHLY ?? "12");
@@ -128,10 +154,17 @@ const PREFIX = "db-backups/";
 const DAILY_PREFIX = `${PREFIX}daily/`;
 const MONTHLY_PREFIX = `${PREFIX}monthly/`;
 
-// Leg 2's own keyspace, beside the database's and pruned on its own retention.
-const BOXSTATE_PREFIX = "box-state/";
-const BOXSTATE_DAILY_PREFIX = `${BOXSTATE_PREFIX}daily/`;
-const BOXSTATE_MONTHLY_PREFIX = `${BOXSTATE_PREFIX}monthly/`;
+// Leg 2's own keyspace, beside the database's and pruned on its own retention. Exported
+// because the restore drill reads the same objects — one declaration of where they live.
+export const BOXSTATE_PREFIX = "box-state/";
+export const BOXSTATE_DAILY_PREFIX = `${BOXSTATE_PREFIX}daily/`;
+export const BOXSTATE_MONTHLY_PREFIX = `${BOXSTATE_PREFIX}monthly/`;
+
+/** The sealed artifact's object name inside a daily/monthly folder. */
+export const BOXSTATE_ARTIFACT_NAME = "box-state.tar.gz.enc";
+
+/** The plaintext manifest that sits beside every artifact, in both legs. */
+export const MANIFEST_NAME = "manifest.json";
 
 const log = (message: string) => console.error(`[backup-sweep] ${message}`);
 
@@ -398,9 +431,8 @@ async function pipeline(sqls: string[]): Promise<HranaResult[]> {
 
 // ── R2 (S3 API) helpers ──────────────────────────────────────────────────────
 
-const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-
-function encodeKey(key: string): string {
+/** Percent-encode an object key for a URL without eating its `/` separators. */
+export function encodeKey(key: string): string {
   return key.split("/").map(encodeURIComponent).join("/");
 }
 
@@ -454,31 +486,31 @@ export async function signedPut(
 }
 
 async function r2PutBytes(key: string, body: Uint8Array, contentType: string): Promise<void> {
-  await signedPut(`${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`, {
-    accessKeyId: R2_ACCESS_KEY_ID,
+  await signedPut(`${R2.bucketUrl}/${encodeKey(key)}`, {
+    accessKeyId: R2.accessKeyId,
     body,
     contentType,
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
+    secretAccessKey: R2.secretAccessKey,
   });
 }
 
 async function r2PutFile(key: string, file: ArtifactFile, contentType: string): Promise<void> {
-  await signedPut(`${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`, {
-    accessKeyId: R2_ACCESS_KEY_ID,
+  await signedPut(`${R2.bucketUrl}/${encodeKey(key)}`, {
+    accessKeyId: R2.accessKeyId,
     body: { bytes: file.bytes, path: file.path, sha256: file.sha256 },
     contentType,
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
+    secretAccessKey: R2.secretAccessKey,
   });
 }
 
 async function r2Delete(key: string): Promise<void> {
-  const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
+  const url = `${R2.bucketUrl}/${encodeKey(key)}`;
   const headers = await signS3Request({
-    accessKeyId: R2_ACCESS_KEY_ID,
+    accessKeyId: R2.accessKeyId,
     method: "DELETE",
     now: new Date(),
     region: "auto",
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
+    secretAccessKey: R2.secretAccessKey,
     service: "s3",
     url,
   });
@@ -488,22 +520,32 @@ async function r2Delete(key: string): Promise<void> {
   }
 }
 
-async function r2List(prefix: string): Promise<string[]> {
+/**
+ * Every key under `prefix`, following the continuation tokens. Credentials + bucket URL are
+ * arguments rather than module state so the READ-ONLY restore drill can reuse the exact
+ * listing this sweep prunes by, without importing the sweep's write path.
+ */
+export async function signedList(options: {
+  accessKeyId: string;
+  bucketUrl: string;
+  prefix: string;
+  secretAccessKey: string;
+}): Promise<string[]> {
   const keys: string[] = [];
   let token: string | undefined;
   do {
-    const url = new URL(`${R2_ENDPOINT}/${R2_BUCKET}`);
+    const url = new URL(options.bucketUrl);
     url.searchParams.set("list-type", "2");
-    url.searchParams.set("prefix", prefix);
+    url.searchParams.set("prefix", options.prefix);
     if (token) {
       url.searchParams.set("continuation-token", token);
     }
     const headers = await signS3Request({
-      accessKeyId: R2_ACCESS_KEY_ID,
+      accessKeyId: options.accessKeyId,
       method: "GET",
       now: new Date(),
       region: "auto",
-      secretAccessKey: R2_SECRET_ACCESS_KEY,
+      secretAccessKey: options.secretAccessKey,
       service: "s3",
       url: url.toString(),
     });
@@ -523,6 +565,15 @@ async function r2List(prefix: string): Promise<string[]> {
       : undefined;
   } while (token);
   return keys;
+}
+
+async function r2List(prefix: string): Promise<string[]> {
+  return signedList({
+    accessKeyId: R2.accessKeyId,
+    bucketUrl: R2.bucketUrl,
+    prefix,
+    secretAccessKey: R2.secretAccessKey,
+  });
 }
 
 // ── LEG 1: the streaming dump ────────────────────────────────────────────────
@@ -851,9 +902,9 @@ async function uploadTier(options: {
   monthlyPrefix: string;
 }): Promise<{ dailyKey: string; monthlyWritten: boolean; pruned: number }> {
   const dailyArtifact = `${options.dailyPrefix}${options.date}/${options.artifactName}`;
-  const dailyManifest = `${options.dailyPrefix}${options.date}/manifest.json`;
+  const dailyManifest = `${options.dailyPrefix}${options.date}/${MANIFEST_NAME}`;
   const monthlyArtifact = `${options.monthlyPrefix}${options.month}/${options.artifactName}`;
-  const monthlyManifest = `${options.monthlyPrefix}${options.month}/manifest.json`;
+  const monthlyManifest = `${options.monthlyPrefix}${options.month}/${MANIFEST_NAME}`;
   const manifestBytes = Buffer.from(options.manifestJson, "utf8");
 
   await r2PutFile(dailyArtifact, options.artifact, options.contentType);
@@ -906,7 +957,7 @@ async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutco
   }
 
   const paths = selectBoxStatePaths(boxStateCandidates());
-  const archivePath = join(tempDir, "box-state.tar.gz.enc");
+  const archivePath = join(tempDir, BOXSTATE_ARTIFACT_NAME);
 
   try {
     const { file, manifest } = await buildBoxStateArchive({
@@ -924,7 +975,7 @@ async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutco
 
     const tier = await uploadTier({
       artifact,
-      artifactName: "box-state.tar.gz.enc",
+      artifactName: BOXSTATE_ARTIFACT_NAME,
       contentType: "application/octet-stream",
       dailyPrefix: BOXSTATE_DAILY_PREFIX,
       date,
@@ -972,15 +1023,12 @@ async function main(): Promise<void> {
     const { file, manifest } = await buildBoxStateArchive({
       generatedAt: now,
       key,
-      outPath: join(BOX_STATE_OUT_DIR, "box-state.tar.gz.enc"),
+      outPath: join(BOX_STATE_OUT_DIR, BOXSTATE_ARTIFACT_NAME),
       paths: selectBoxStatePaths(boxStateCandidates()),
       tempDir: BOX_STATE_OUT_DIR,
     });
 
-    writeFileSync(
-      join(BOX_STATE_OUT_DIR, "manifest.json"),
-      `${JSON.stringify(manifest, null, 2)}\n`,
-    );
+    writeFileSync(join(BOX_STATE_OUT_DIR, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
     console.log(
       JSON.stringify({
         cipherBytes: file.bytes,
@@ -1015,7 +1063,7 @@ async function main(): Promise<void> {
       dumpOptions,
     );
 
-    writeFileSync(join(OUT_DIR, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(join(OUT_DIR, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
     console.log(
       JSON.stringify({
         dryRun: true,
@@ -1030,7 +1078,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+  if (!R2.accountId || !R2.accessKeyId || !R2.secretAccessKey) {
     console.log(JSON.stringify({ ok: false, reason: "missing_r2_credentials" }));
     process.exit(1);
   }
