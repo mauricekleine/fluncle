@@ -128,15 +128,6 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
   const baseUrl = await readOptionalEnv("SONAR_BASE_URL");
   const secret = await readOptionalEnv("SONAR_SECRET");
 
-  // TEMP sonar-log-debug — remove after diagnosis.
-  console.log("[sonar-dbg] searchSonar-entry", {
-    ex: request.excludeIds?.[0] ?? null,
-    hasBaseUrl: Boolean(baseUrl),
-    hasSecret: Boolean(secret),
-    index: request.index,
-    probeLen: request.probes[0]?.length ?? 0,
-  });
-
   // Triple-gate step 2: both env present, or there is no sonar to call — fall back.
   if (!baseUrl || !secret) {
     return null;
@@ -160,13 +151,6 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
       signal: AbortSignal.timeout(SONAR_TIMEOUT_MS),
     });
 
-    // TEMP sonar-log-debug — remove after diagnosis.
-    console.log("[sonar-dbg] fetch-done", {
-      ex: request.excludeIds?.[0] ?? null,
-      index: request.index,
-      status: response.status,
-    });
-
     if (!response.ok) {
       return null;
     }
@@ -174,13 +158,7 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
     const payload = (await response.json()) as unknown;
 
     return parseMatches(payload);
-  } catch (error) {
-    // TEMP sonar-log-debug — remove after diagnosis.
-    console.log("[sonar-dbg] fetch-threw", {
-      err: String(error),
-      ex: request.excludeIds?.[0] ?? null,
-      index: request.index,
-    });
+  } catch {
     // A timeout, a DNS failure, a 5xx that threw, a malformed base URL — every one of them means
     // the same thing to the caller, and none of them may take a page down with them.
     return null;
