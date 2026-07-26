@@ -709,24 +709,44 @@ async function runCli(
   };
 }
 
+// Every non-test source file under apps/cli/src, as [repo-relative-ish path, source].
+// The option scans below read the WHOLE tree, not just cli.ts: a future god-module split
+// that moves a command's `.option()` out of cli.ts must not silently escape the net.
+async function readSourceFiles(): Promise<Array<[string, string]>> {
+  const srcDir = new URL("./", import.meta.url).pathname;
+  const glob = new Bun.Glob("**/*.ts");
+  const files: Array<[string, string]> = [];
+
+  for await (const relativePath of glob.scan({ cwd: srcDir })) {
+    if (relativePath.endsWith(".test.ts")) {
+      continue;
+    }
+    files.push([relativePath, await Bun.file(`${srcDir}${relativePath}`).text()]);
+  }
+
+  return files.sort(([a], [b]) => a.localeCompare(b));
+}
+
 describe("the stringOptions invariant", () => {
   // positionalArgs() derives raw positionals by skipping every option in the
   // `stringOptions` set together with its value. A value-taking option declared
   // on a command but absent from that set leaks its VALUE into the positionals
   // and trips the argument validators (`--verdict-file <path>` broke the
-  // fluncle-triage sweep exactly this way). This test scans the CLI source for
+  // fluncle-triage sweep exactly this way). This test scans EVERY source file for
   // every declared value-taking option and fails when one is missing from the
   // set, so the two can never drift again.
   test("every declared value-taking option is in stringOptions", async () => {
     const source = await Bun.file(cliPath).text();
 
     const declared = new Set<string>();
-    for (const match of source.matchAll(
-      /\.(?:option|requiredOption)\(\s*\n?\s*"(--[a-z][a-z-]*) [<[]/g,
-    )) {
-      const flag = match[1];
-      if (flag !== undefined && flag !== "--env") {
-        declared.add(flag); // --env is special-cased inline in positionalArgs()
+    for (const [, fileSource] of await readSourceFiles()) {
+      for (const match of fileSource.matchAll(
+        /\.(?:option|requiredOption)\(\s*\n?\s*"(--[a-z][a-z-]*) [<[]/g,
+      )) {
+        const flag = match[1];
+        if (flag !== undefined && flag !== "--env") {
+          declared.add(flag); // --env is special-cased inline in positionalArgs()
+        }
       }
     }
 
@@ -742,6 +762,21 @@ describe("the stringOptions invariant", () => {
 
     const missing = [...declared].filter((flag) => !allowed.has(flag)).sort();
     expect(missing).toEqual([]);
+  });
+
+  // The scan above now reads the whole tree, but `stringOptions` itself lives in cli.ts,
+  // so the net only holds while the DECLARATIONS live there too. This is the intended
+  // rule stated out loud: cli.ts owns every Commander option. Move options elsewhere in a
+  // module split and this fails — the fix is to keep the invariant scan and the set
+  // together with whatever declares the flags, not to delete this test.
+  test("no Commander option is declared outside cli.ts", async () => {
+    const offenders = (await readSourceFiles())
+      .filter(([relativePath, source]) => {
+        return relativePath !== "cli.ts" && /\.(?:option|requiredOption)\(/.test(source);
+      })
+      .map(([relativePath]) => relativePath);
+
+    expect(offenders).toEqual([]);
   });
 
   test("a value option's value never leaks into the positionals (the triage shape)", async () => {

@@ -2,15 +2,13 @@
 // "exact" to every future render — the worst blast radius for a wrong recording.
 // Its fuzzy Deezer/iTunes fallbacks are now gated by these helpers: a REMIX finding
 // must never archive the ORIGINAL's preview (and vice-versa).
+//
+// The helpers live in this package, so the gate lives here too — it used to sit in
+// apps/cli, one consumer away from the code it pins.
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  baseTitleMatches,
-  isRemix,
-  stripVersionSuffix,
-  versionMatches,
-} from "@fluncle/contracts/util";
+import { baseTitleMatches, isRemix, stripVersionSuffix, versionMatches } from "./util";
 
 const REMIX = "In And Out Of Phase - Calyx & TeeBee Remix";
 

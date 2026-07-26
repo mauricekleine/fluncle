@@ -202,6 +202,7 @@
       },
       "devDependencies": {
         "@fluncle/test-support": "workspace:*",
+        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "typescript": "catalog:",
       },

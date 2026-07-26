@@ -1,10 +1,20 @@
 name: CLI Release
 
+# Every run of this workflow MINTS A PUBLIC VERSION — an npm publish, a git tag, a GitHub
+# release, and a Homebrew formula bump. So the trigger is the shipped surface only: the CLI
+# source, its manifest, and this workflow. A README tweak, a test-only change, or a docs
+# edit under apps/cli no longer burns a version number as a build counter. `paths` is
+# ordered positives-then-negations (a later pattern wins), so the test files sitting inside
+# `src/` are carved back out. Anything else that should ship a version: add it here, or run
+# the workflow by hand via workflow_dispatch.
 on:
   push:
     branches: [main]
     paths:
-      - apps/cli/**
+      - .github/workflows/cli-release.yml
+      - apps/cli/package.json
+      - apps/cli/src/**
+      - "!apps/cli/src/**/*.test.ts"
   workflow_dispatch:
 
 concurrency:

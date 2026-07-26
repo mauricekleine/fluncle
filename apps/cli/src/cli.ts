@@ -64,6 +64,12 @@ type AdminQueueViewOptions = AdminListOptions & {
   queue?: boolean;
 };
 
+// One row of any `--queue` worklist view. Written as a `typeof import(...)` lookup so it
+// stays in type space — cli.ts imports its command modules lazily to keep startup fast.
+type QueueViewTrack = Awaited<
+  ReturnType<typeof import("./commands/admin-tracks").enrichQueueCommand>
+>[number];
+
 // The Fluncle Studio clip-library list filter (`admin clips list`).
 type ClipListOptions = {
   json: boolean;
@@ -6546,15 +6552,23 @@ async function runAdminQueue(
   console.log(trackRows(tracks).join("\n"));
 }
 
-async function runAdminContextQueue(
-  options: AdminListOptions & { retryEmpty?: boolean },
-  contextQueueCommand: typeof import("./commands/admin-tracks").contextQueueCommand,
-): Promise<void> {
+// Every `--queue` worklist view prints the same three shapes — a JSON envelope, one
+// empty-state line, or a count heading over `trackRows` — and differs ONLY in its copy
+// and which queue command it reads. So the plumbing lives here once and each caller
+// brings its own three strings: the fetch, the empty line, and the heading.
+async function runQueueView({
+  emptyMessage,
+  fetch,
+  heading,
+  options,
+}: {
+  emptyMessage: string;
+  fetch: (limit: number) => Promise<QueueViewTrack[]>;
+  heading: (count: number, noun: string) => string;
+  options: AdminListOptions;
+}): Promise<void> {
   const limit = parseListLimit(options.limit);
-  // `--retry-empty` widens the worklist to also re-pick CONFIRMED-EMPTY finds (the
-  // occasional widen-the-net pass); off by default keeps the routine sweep narrow.
-  const retryEmpty = options.retryEmpty === true;
-  const tracks = await contextQueueCommand(limit, retryEmpty);
+  const tracks = await fetch(limit);
 
   if (options.json) {
     printJson({
@@ -6565,145 +6579,91 @@ async function runAdminContextQueue(
   }
 
   if (tracks.length === 0) {
-    console.log("Every finding has its field notes. Nothing waiting on context.");
+    console.log(emptyMessage);
     return;
   }
 
   const { trackRows } = await import("./format");
   const noun = tracks.length === 1 ? "finding" : "findings";
-  const scope = retryEmpty ? " (incl. empty retries)" : "";
-  console.log(`${tracks.length} ${noun} missing field notes${scope}, oldest first:`);
+  console.log(heading(tracks.length, noun));
   console.log(trackRows(tracks).join("\n"));
+}
+
+async function runAdminContextQueue(
+  options: AdminListOptions & { retryEmpty?: boolean },
+  contextQueueCommand: typeof import("./commands/admin-tracks").contextQueueCommand,
+): Promise<void> {
+  // `--retry-empty` widens the worklist to also re-pick CONFIRMED-EMPTY finds (the
+  // occasional widen-the-net pass); off by default keeps the routine sweep narrow.
+  const retryEmpty = options.retryEmpty === true;
+  const scope = retryEmpty ? " (incl. empty retries)" : "";
+
+  await runQueueView({
+    emptyMessage: "Every finding has its field notes. Nothing waiting on context.",
+    fetch: (limit) => contextQueueCommand(limit, retryEmpty),
+    heading: (count, noun) => `${count} ${noun} missing field notes${scope}, oldest first:`,
+    options,
+  });
 }
 
 async function runAdminObserveQueue(
   options: AdminListOptions,
   observeQueueCommand: typeof import("./commands/admin-tracks").observeQueueCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
-  const tracks = await observeQueueCommand(limit);
-
-  if (options.json) {
-    printJson({
-      ok: true,
-      tracks,
-    });
-    return;
-  }
-
-  if (tracks.length === 0) {
-    console.log("Every finding with notes has its observation. Nothing waiting on a voice.");
-    return;
-  }
-
-  const { trackRows } = await import("./format");
-  const noun = tracks.length === 1 ? "finding" : "findings";
-  console.log(`${tracks.length} ${noun} awaiting an observation, oldest first:`);
-  console.log(trackRows(tracks).join("\n"));
+  await runQueueView({
+    emptyMessage: "Every finding with notes has its observation. Nothing waiting on a voice.",
+    fetch: observeQueueCommand,
+    heading: (count, noun) => `${count} ${noun} awaiting an observation, oldest first:`,
+    options,
+  });
 }
 
 async function runAdminNoteQueue(
   options: AdminListOptions,
   noteQueueCommand: typeof import("./commands/admin-tracks").noteQueueCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
-  const tracks = await noteQueueCommand(limit);
-
-  if (options.json) {
-    printJson({
-      ok: true,
-      tracks,
-    });
-    return;
-  }
-
-  if (tracks.length === 0) {
-    console.log("Every context'd finding has a note. Nothing waiting on the uncle's words.");
-    return;
-  }
-
-  const { trackRows } = await import("./format");
-  const noun = tracks.length === 1 ? "finding" : "findings";
-  console.log(`${tracks.length} ${noun} awaiting a note, oldest first:`);
-  console.log(trackRows(tracks).join("\n"));
+  await runQueueView({
+    emptyMessage: "Every context'd finding has a note. Nothing waiting on the uncle's words.",
+    fetch: noteQueueCommand,
+    heading: (count, noun) => `${count} ${noun} awaiting a note, oldest first:`,
+    options,
+  });
 }
 
 async function runAdminEnrichQueue(
   options: AdminListOptions,
   enrichQueueCommand: typeof import("./commands/admin-tracks").enrichQueueCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
-  const tracks = await enrichQueueCommand(limit);
-
-  if (options.json) {
-    printJson({
-      ok: true,
-      tracks,
-    });
-    return;
-  }
-
-  if (tracks.length === 0) {
-    console.log("Nothing awaiting enrichment. Every finding is enriched.");
-    return;
-  }
-
-  const { trackRows } = await import("./format");
-  const noun = tracks.length === 1 ? "finding" : "findings";
-  console.log(`${tracks.length} ${noun} needing (re-)enrichment, oldest first:`);
-  console.log(trackRows(tracks).join("\n"));
+  await runQueueView({
+    emptyMessage: "Nothing awaiting enrichment. Every finding is enriched.",
+    fetch: enrichQueueCommand,
+    heading: (count, noun) => `${count} ${noun} needing (re-)enrichment, oldest first:`,
+    options,
+  });
 }
 
 async function runAdminEmbedQueue(
   options: AdminListOptions,
   embedQueueCommand: typeof import("./commands/admin-tracks").embedQueueCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
-  const tracks = await embedQueueCommand(limit);
-
-  if (options.json) {
-    printJson({
-      ok: true,
-      tracks,
-    });
-    return;
-  }
-
-  if (tracks.length === 0) {
-    console.log("Nothing awaiting an embedding. Every finding is embedded.");
-    return;
-  }
-
-  const { trackRows } = await import("./format");
-  const noun = tracks.length === 1 ? "finding" : "findings";
-  console.log(`${tracks.length} ${noun} needing an audio embedding, oldest first:`);
-  console.log(trackRows(tracks).join("\n"));
+  await runQueueView({
+    emptyMessage: "Nothing awaiting an embedding. Every finding is embedded.",
+    fetch: embedQueueCommand,
+    heading: (count, noun) => `${count} ${noun} needing an audio embedding, oldest first:`,
+    options,
+  });
 }
 
 async function runAdminCaptureQueue(
   options: AdminListOptions,
   captureQueueCommand: typeof import("./commands/admin-tracks").captureQueueCommand,
 ): Promise<void> {
-  const limit = parseListLimit(options.limit);
-  const tracks = await captureQueueCommand(limit);
-
-  if (options.json) {
-    printJson({
-      ok: true,
-      tracks,
-    });
-    return;
-  }
-
-  if (tracks.length === 0) {
-    console.log("Nothing awaiting a capture. Every finding has its full song.");
-    return;
-  }
-
-  const { trackRows } = await import("./format");
-  const noun = tracks.length === 1 ? "finding" : "findings";
-  console.log(`${tracks.length} ${noun} needing a full-song capture, newest first:`);
-  console.log(trackRows(tracks).join("\n"));
+  await runQueueView({
+    emptyMessage: "Nothing awaiting a capture. Every finding has its full song.",
+    fetch: captureQueueCommand,
+    heading: (count, noun) => `${count} ${noun} needing a full-song capture, newest first:`,
+    options,
+  });
 }
 
 const TRACK_WORK_KINDS = new Set(["analyze", "capture", "embed"]);
