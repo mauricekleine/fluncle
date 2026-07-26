@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8cbb4468-5284-4a41-909a-f993e6222ed2",
-  "prevId": "5d2a0c91-2c4d-46d8-bee9-d8f0b912cfce",
+  "id": "381acab6-fd7b-4c1d-bbe9-db862275583f",
+  "prevId": "8cbb4468-5284-4a41-909a-f993e6222ed2",
   "tables": {
     "account": {
       "name": "account",
@@ -4907,6 +4907,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "anchor_review_json": {
+          "name": "anchor_review_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "apple_music_url": {
           "name": "apple_music_url",
           "type": "text",
@@ -5412,6 +5419,12 @@
           "columns": ["nearest_finding_score"],
           "isUnique": false,
           "where": "\"tracks\".\"spotify_uri\" is null"
+        },
+        "tracks_anchor_review_idx": {
+          "name": "tracks_anchor_review_idx",
+          "columns": ["track_id"],
+          "isUnique": false,
+          "where": "\"tracks\".\"anchor_review_json\" is not null"
         },
         "tracks_dismissed_idx": {
           "name": "tracks_dismissed_idx",
