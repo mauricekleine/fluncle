@@ -117,16 +117,149 @@ export type FluncleUIMessage = UIMessage<
 // non-empty turn history of user/assistant messages that each carry a `parts` array. The
 // grounding system prompt never rides in `messages` (it goes through `instructions`), so a
 // `system` role from the wire is rejected outright.
-const ChatRequestSchema = z.object({
-  messages: z
-    .array(
-      z.looseObject({
-        parts: z.array(z.looseObject({ type: z.string() })),
-        role: z.enum(["assistant", "user"]),
-      }),
-    )
-    .min(1),
-});
+// ── The size caps ─────────────────────────────────────────────────────────────────────
+//
+// THE RATE LIMITER CAPS FREQUENCY, NOT SIZE. This is a POST body — not a GET query bounded
+// by Cloudflare's ~16KB URL limit — so without a size bound one request can carry megabytes
+// of turn history straight into `convertToModelMessages` and out to a PAID model, in a 128MB
+// isolate. The tier (private session + verified email + same-origin/CSRF + 30/hr) still lets
+// one account spend 30 × max-context per hour, and a Spotify login is open to anyone. So the
+// ceilings below are the per-request budget.
+//
+// OVERFLOW IS A REJECT, NEVER A TRUNCATION: silently dropping the oldest messages or the tail
+// of a text part would hand the model a conversation the crew did not have — a grounding
+// failure wearing a working answer's face. A 400 tells the client the truth.
+//
+// SIZING (generous by design — no real conversation reaches these):
+//   - messages: a `useChat` history grows by 2 per exchange, so 100 is ~50 exchanges in one
+//     unbroken session. Well past any workbench sitting; nowhere near a multi-MB body.
+//   - parts per message: a model turn is text plus its tool calls, and `MAX_STEPS` caps a turn
+//     at 8 tool→think steps ⇒ ~17 parts worst case. 20 leaves headroom without inviting a
+//     thousand-part message.
+//   - characters per text part: 16,000 chars ≈ 4k tokens for ONE typed message. The longest
+//     thing a raver plausibly pastes is a tracklist; this is far above it.
+//   - characters across the WHOLE request: the three caps above multiply (100 × 20 × 16,000 is
+//     still 32MB), so the total is what actually bounds the bill. It counts EVERY string in
+//     EVERY part, not only `type: "text"` — the client posts the assistant's tool parts back
+//     with the history, so a caller can forge a huge `tool-*` output just as easily as a huge
+//     message. 200,000 chars ≈ 50k tokens: more context than the longest real session, and a
+//     hard ceiling on what one request can cost no matter how it is shaped.
+export const MAX_CHAT_MESSAGES = 100;
+export const MAX_PARTS_PER_MESSAGE = 20;
+export const MAX_TEXT_PART_CHARS = 16_000;
+export const MAX_CHAT_TOTAL_CHARS = 200_000;
+
+/**
+ * One message part. `looseObject` keeps every field the AI SDK's own part types carry (the
+ * schema is a structural guard, not a re-implementation of `UIMessage`), so the size bound has
+ * to be a refinement rather than a field: a `type: "text"` part's `text` may not exceed
+ * {@link MAX_TEXT_PART_CHARS}. A part of another type (a `tool-*` result the client posted back)
+ * is not bounded HERE — it is bounded by the aggregate {@link MAX_CHAT_TOTAL_CHARS}, which counts
+ * every string in every part, so no part type escapes a ceiling.
+ */
+const ChatPartSchema = z.looseObject({ type: z.string() }).refine(
+  (part) => {
+    if (part.type !== "text") {
+      return true;
+    }
+
+    const text = (part as { text?: unknown }).text;
+
+    return typeof text !== "string" || text.length <= MAX_TEXT_PART_CHARS;
+  },
+  { message: `A text part may not exceed ${MAX_TEXT_PART_CHARS} characters` },
+);
+
+const ChatRequestSchema = z
+  .object({
+    messages: z
+      .array(
+        z.looseObject({
+          parts: z.array(ChatPartSchema).max(MAX_PARTS_PER_MESSAGE),
+          role: z.enum(["assistant", "user"]),
+        }),
+      )
+      .min(1)
+      .max(MAX_CHAT_MESSAGES),
+  })
+  // The aggregate ceiling, applied after the per-item ones so a body that satisfies all three
+  // still cannot multiply its way to a multi-MB turn.
+  .refine((body) => withinTotalChars(body.messages), {
+    message: `The conversation may not exceed ${MAX_CHAT_TOTAL_CHARS} characters`,
+  });
+
+/**
+ * How deep into a part's value tree the character walk descends before refusing the body.
+ *
+ * SIZING: the deepest real part is a tool result — `part.output.hits[i].artists[j]` is 5 levels
+ * from the part — so 12 is roughly double the deepest shape the archive tools return. Kept
+ * generous on purpose: this bound rejects, so a too-tight value would 400 a real conversation.
+ */
+const PART_WALK_MAX_DEPTH = 12;
+
+/**
+ * Is the turn history within {@link MAX_CHAT_TOTAL_CHARS} of total string content?
+ *
+ * Walks every string inside every part rather than only `type: "text"` — the client posts the
+ * assistant's `tool-*` parts back with the history, so any field is caller-controlled. It
+ * SHORT-CIRCUITS the moment the running total passes the cap and never serializes anything, so
+ * a hostile 32MB body is rejected without a second copy of it in the isolate.
+ *
+ * A value tree deeper than {@link PART_WALK_MAX_DEPTH} is REJECTED rather than left uncounted:
+ * bailing out of the walk would be a hole (nest the payload one level deeper than the walk goes
+ * and it stops counting), and no real part nests that far. The bound also keeps the recursion
+ * shallow whatever the body does.
+ */
+function withinTotalChars(
+  messages: ReadonlyArray<{ parts: ReadonlyArray<Record<string, unknown>> }>,
+): boolean {
+  let total = 0;
+  let tooDeep = false;
+
+  const walk = (value: unknown, depth: number): void => {
+    if (tooDeep || total > MAX_CHAT_TOTAL_CHARS) {
+      return;
+    }
+
+    if (typeof value === "string") {
+      total += value.length;
+
+      return;
+    }
+
+    if (typeof value !== "object" || value === null) {
+      return;
+    }
+
+    if (depth >= PART_WALK_MAX_DEPTH) {
+      tooDeep = true;
+
+      return;
+    }
+
+    for (const entry of Array.isArray(value) ? value : Object.values(value)) {
+      walk(entry, depth + 1);
+    }
+  };
+
+  for (const message of messages) {
+    for (const part of message.parts) {
+      // `type` is the part's discriminator, not payload — skipping it keeps the cap a statement
+      // about content (and keeps the ceiling exact rather than "minus a few chars per part").
+      for (const [key, value] of Object.entries(part)) {
+        if (key !== "type") {
+          walk(value, 1);
+        }
+      }
+
+      if (tooDeep || total > MAX_CHAT_TOTAL_CHARS) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
 
 /**
  * Parse the request body into the turn history, or `null` if it is malformed. A model turn is

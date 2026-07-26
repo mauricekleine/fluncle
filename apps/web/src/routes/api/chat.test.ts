@@ -41,6 +41,7 @@ vi.mock("../../lib/server/chat", async (importOriginal) => {
 // the same HMAC the production rail recomputes.
 const { serverHandlers } = await import("./chat");
 const { createCsrfToken } = await import("../../lib/server/public-auth");
+const { MAX_CHAT_MESSAGES } = await import("../../lib/server/chat");
 
 type TestUser = Parameters<typeof createCsrfToken>[0];
 
@@ -224,6 +225,28 @@ describe("POST /api/chat", () => {
 
     const res = await callPost(
       request({ body: JSON.stringify({ messages: [] }), csrf: createCsrfToken(user) }),
+    );
+    const body = (await res.json()) as { code: string };
+
+    expect(res.status).toBe(400);
+    expect(body.code).toBe("invalid_messages");
+    expect(streamChatMock).not.toHaveBeenCalled();
+  });
+
+  it("400s an over-cap turn history without ever reaching the paid model", async () => {
+    // The size caps are the per-request budget the rate limiter cannot express (it caps how
+    // OFTEN, not how MUCH). This proves the reject happens on the route, before `streamChat`.
+    const user = verifiedUser();
+
+    requirePublicUserMock.mockResolvedValue(user);
+
+    const messages = Array.from({ length: MAX_CHAT_MESSAGES + 1 }, (_, index) => ({
+      id: `msg-${index}`,
+      parts: [{ text: "hi", type: "text" }],
+      role: "user",
+    }));
+    const res = await callPost(
+      request({ body: JSON.stringify({ messages }), csrf: createCsrfToken(user) }),
     );
     const body = (await res.json()) as { code: string };
 

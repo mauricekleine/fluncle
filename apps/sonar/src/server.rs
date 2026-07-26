@@ -18,7 +18,7 @@ use serde::Serialize;
 use subtle::ConstantTimeEq;
 
 use crate::index::Index;
-use crate::search::{search, IndexName, SearchRequest, SearchResponse};
+use crate::search::{cap_violation, search, IndexName, SearchRequest, SearchResponse};
 
 /// Shared, atomically-swappable server state.
 pub struct AppState {
@@ -114,6 +114,15 @@ fn authorized(headers: &HeaderMap, secret: &str) -> bool {
 /// `POST /search`. Auth is checked before the body is parsed, so a bad secret is
 /// always 401. A malformed/invalid body (bad JSON, empty or wrong-dim probes)
 /// returns `{ "matches": [] }` — never a panic.
+///
+/// AN OVER-CAP BODY IS A 400, not an empty result (`search::cap_violation`:
+/// `top_k` > `MAX_TOP_K`, or more than `MAX_PROBES` probes). The two failure modes are
+/// deliberately different: an empty result is the quiet "I could not understand this,
+/// degrade to Turso" signal for a Worker/box version skew, whereas an over-cap request
+/// is a caller bug or an abuse attempt and should be visible as a 4xx. It costs nothing
+/// on the client side — `searchSonar` maps every non-2xx to `null`, which is the same
+/// documented fallback, so the surface still answers off the Turso scan. The refusal
+/// happens BEFORE the scan, so no heap is allocated for the over-cap `top_k`.
 async fn search_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -127,6 +136,10 @@ async fn search_handler(
         Ok(r) => r,
         Err(_) => return Json(SearchResponse::empty()).into_response(),
     };
+
+    if let Some(reason) = cap_violation(&req) {
+        return (StatusCode::BAD_REQUEST, reason).into_response();
+    }
 
     let guard = match req.index {
         IndexName::Tracks => state.tracks.load(),

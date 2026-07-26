@@ -236,6 +236,101 @@ async fn search_honors_the_catalogue_eligibility_filter() {
     assert_eq!(matches[0]["id"], "eligible");
 }
 
+/// THE INPUT CAPS OVER THE WIRE. `top_k` and the probe count are the two levers a caller
+/// can pull to make one request cost the whole box (a `top_k`-sized heap per rayon worker
+/// under `MemoryMax=2G`; one extra full-corpus dot-product pass per probe). At the cap the
+/// request is served normally; one past it the handler answers 400 BEFORE scanning, and the
+/// Worker's `searchSonar` maps every non-2xx to `null` — its documented Turso fallback.
+#[tokio::test]
+async fn top_k_at_the_cap_is_served_and_one_over_is_a_400() {
+    let at_cap = json!({
+        "index": "tracks",
+        "probes": [padded(&[1.0, 0.0])],
+        "top_k": sonar::search::MAX_TOP_K
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::from(at_cap.to_string()))
+        .unwrap();
+    let resp = router(test_state()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(resp).await["matches"].as_array().unwrap().len(),
+        2
+    );
+
+    let over = json!({
+        "index": "tracks",
+        "probes": [padded(&[1.0, 0.0])],
+        "top_k": sonar::search::MAX_TOP_K + 1
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::from(over.to_string()))
+        .unwrap();
+    let resp = router(test_state()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn probe_count_at_the_cap_is_served_and_one_over_is_a_400() {
+    let probe = padded(&[1.0, 0.0]);
+
+    let at_cap = json!({
+        "index": "tracks",
+        "probes": vec![probe.clone(); sonar::search::MAX_PROBES],
+        "top_k": 5
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::from(at_cap.to_string()))
+        .unwrap();
+    let resp = router(test_state()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(resp).await["matches"].as_array().unwrap().len(),
+        2
+    );
+
+    let over = json!({
+        "index": "tracks",
+        "probes": vec![probe; sonar::search::MAX_PROBES + 1],
+        "top_k": 5
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::from(over.to_string()))
+        .unwrap();
+    let resp = router(test_state()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+/// An over-cap body still requires the secret: auth is checked before the caps, so an
+/// unauthenticated over-cap probe learns nothing about them.
+#[tokio::test]
+async fn an_over_cap_body_without_the_secret_is_still_401() {
+    let body = json!({
+        "index": "tracks",
+        "probes": [padded(&[1.0, 0.0])],
+        "top_k": sonar::search::MAX_TOP_K + 1
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = router(test_state()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// FAIL CLOSED over the wire. A filter field this binary does not know makes the whole body
 /// fail to parse, and the handler answers the same empty result it gives any malformed body —
 /// which the Worker treats as "fall back to the Turso scan". The alternative (serde's default,

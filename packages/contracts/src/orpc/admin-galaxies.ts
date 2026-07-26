@@ -92,6 +92,25 @@ export const updateGalaxy = oc
   .output(z.object({ galaxy: GalaxyAdminItemSchema, ok: z.literal(true) }));
 
 /**
+ * The cap on how many clusters one map write may carry. WHY: the handler mints ids and writes
+ * every row in one transactional batch, so the array is a direct multiplier on the write.
+ *
+ * SIZING: the map is k-means over the MuQ space (docs/agents/cluster-engine.md — the galaxies ARE
+ * the clusters); the box's own fit clamps k to 24 (`cluster-sweep.ts` `readK`, default 4), and an
+ * operator split adds one child at a time. 64 is ~2.7× the widest fit the sweep can even ask for,
+ * so a runaway or tampered batch cannot write thousands of rows, and the honest case never trips.
+ */
+const MAX_GALAXY_CLUSTERS = 64;
+
+/**
+ * The cap on a centroid's length. A centroid lives in the MuQ audio-embedding space, which is
+ * FIXED at 1024 dimensions (`apps/sonar/src/decode.rs` `DIM`, and the 1024-float vectors the
+ * embed sweep writes). 2048 is double that — headroom for a future model with a wider space,
+ * while keeping one request from carrying megabytes of float per row.
+ */
+const MAX_CENTROID_DIMENSIONS = 2048;
+
+/**
  * `update_galaxy_map` → `PUT /admin/galaxies/map` (operationId `updateGalaxyMap`).
  *
  * Admin tier — the cron's transactional map write (one `db.batch(_, "write")`). Each
@@ -102,6 +121,9 @@ export const updateGalaxy = oc
  * real ids. `retire: true` sets `retired_at` (the row is kept, the id never recycled).
  * The box never mints identity — `galaxy-slug.ts` is a workspace package the standalone
  * baked sweep scripts can't import. `{ ok, galaxies }` (the full resulting map).
+ *
+ * Bounded by {@link MAX_GALAXY_CLUSTERS} rows, each centroid by {@link MAX_CENTROID_DIMENSIONS}
+ * floats — an over-cap batch is refused at the edge rather than written in part.
  */
 export const updateGalaxyMap = oc
   .route({
@@ -113,18 +135,20 @@ export const updateGalaxyMap = oc
   })
   .input(
     z.object({
-      clusters: z.array(
-        z.object({
-          centroid: z.array(z.number()),
-          // Clear the parent's `split_requested_at` in the SAME batch that upserts its
-          // centroid — the agent-tier way the nightly tick CONSUMES a split it just ran
-          // (the operator sets the flag via the OPERATOR-tier `update_galaxy`, which the
-          // box's agent token cannot call; consuming it rides this admin-tier map write).
-          clearSplitRequest: z.boolean().optional(),
-          id: z.string().nullable(),
-          retire: z.boolean().optional(),
-        }),
-      ),
+      clusters: z
+        .array(
+          z.object({
+            centroid: z.array(z.number()).max(MAX_CENTROID_DIMENSIONS),
+            // Clear the parent's `split_requested_at` in the SAME batch that upserts its
+            // centroid — the agent-tier way the nightly tick CONSUMES a split it just ran
+            // (the operator sets the flag via the OPERATOR-tier `update_galaxy`, which the
+            // box's agent token cannot call; consuming it rides this admin-tier map write).
+            clearSplitRequest: z.boolean().optional(),
+            id: z.string().nullable(),
+            retire: z.boolean().optional(),
+          }),
+        )
+        .max(MAX_GALAXY_CLUSTERS),
     }),
   )
   .output(z.object({ galaxies: z.array(GalaxyAdminItemSchema), ok: z.literal(true) }));

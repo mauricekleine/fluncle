@@ -141,6 +141,26 @@ export async function setSonarMixEnabled(enabled: boolean): Promise<void> {
  */
 export const SONAR_TIMEOUT_MS = 800;
 
+/**
+ * THE REQUEST CAPS, mirrored from the engine (`apps/sonar/src/search.rs`: `MAX_TOP_K`,
+ * `MAX_PROBES`). sonar answers an over-cap body with a 400 — a `top_k`-sized top-K heap per
+ * rayon worker under `MemoryMax=2G`, and one full dot-product pass per probe, are the two
+ * levers one request can pull to cost the whole engine.
+ *
+ * They are duplicated HERE so the Worker never sends a request it knows the engine will
+ * refuse: {@link searchSonar} returns `null` (the ordinary fallback signal) without a fetch,
+ * which is exactly what a 400 would have produced, minus a round trip. Every real call site is
+ * far inside them — `TASTE_SHORTLIST` = 300 is the largest `topK`, `MAX_REC_SEEDS` = 12 the
+ * widest probe set — so this is a guard against a future caller's arithmetic, not a live clamp.
+ *
+ * NEVER clamp instead of falling back: silently shrinking a caller's `topK` would hand back a
+ * short page that looks correct, the one failure mode this whole client refuses.
+ */
+export const SONAR_MAX_TOP_K = 1000;
+
+/** @see SONAR_MAX_TOP_K */
+export const SONAR_MAX_PROBES = 32;
+
 /** Which in-memory index to scan — `tracks` (per-track vectors) or `centroids` (per-artist). */
 export type SonarIndex = "centroids" | "tracks";
 
@@ -206,7 +226,8 @@ export type SonarMatch = {
  * caller must fall back to the Turso scan.
  *
  * NULL IS A SUPPORTED ANSWER, not an error path — it is the fallback signal. It happens on: an
- * unprovisioned Worker (no `SONAR_BASE_URL`/`SONAR_SECRET`, the local-dev steady state), a non-2xx
+ * unprovisioned Worker (no `SONAR_BASE_URL`/`SONAR_SECRET`, the local-dev steady state), a request
+ * past {@link SONAR_MAX_TOP_K}/{@link SONAR_MAX_PROBES} (which the engine would 400), a non-2xx
  * status, a timeout past {@link SONAR_TIMEOUT_MS}, a DNS/transport failure, or a body that does not
  * parse to `{ matches: [{id, score}] }`. Every one of them means the same thing to the caller: use
  * the existing path. A well-formed EMPTY result is returned as `[]` (a real "no matches"), distinct
@@ -215,6 +236,13 @@ export type SonarMatch = {
  * neighbourhood — and falling back can only restore today's behaviour, never worsen it.
  */
 export async function searchSonar(request: SonarSearchRequest): Promise<SonarMatch[] | null> {
+  // The caps, checked before anything else: an over-cap request is one the engine answers with a
+  // 400 (search.rs `cap_violation`), so sending it would only buy a wasted round trip. `null` here
+  // is the same fallback the 400 produces — never a clamp (see SONAR_MAX_TOP_K).
+  if (request.topK > SONAR_MAX_TOP_K || request.probes.length > SONAR_MAX_PROBES) {
+    return null;
+  }
+
   const baseUrl = await readOptionalEnv("SONAR_BASE_URL");
   const secret = await readOptionalEnv("SONAR_SECRET");
 

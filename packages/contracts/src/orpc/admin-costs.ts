@@ -88,11 +88,24 @@ export const CostEventInputSchema = z
 export type CostEventInput = z.infer<typeof CostEventInputSchema>;
 
 /**
+ * The per-request row cap. WHY: the handler prices and inserts every row in the batch, so an
+ * unbounded array is unbounded DB work behind one agent token — and the token lives on a box, so
+ * a compromised or buggy sweep is the realistic threat, not a stranger.
+ *
+ * SIZING: a tick posts one row per item it processed, and the widest sweep queue is
+ * `QUEUE_LIMIT = 50` (docs/agents/hermes/scripts/embed-sweep.ts); every other sweep's batch is a
+ * handful. 500 is 10× the largest real batch, so no sweep can grow into it by accident, and an
+ * over-cap batch is rejected rather than trimmed (a silently dropped cost row is a wrong ledger).
+ */
+const MAX_COST_EVENTS_PER_BATCH = 500;
+
+/**
  * `record_cost` → `POST /admin/costs/events` (operationId `recordCost`).
  *
  * AGENT tier (`adminAuth`, no `operatorGuard`): the box's agent-token sweeps POST
  * their tick's rows, the `record_health`/`context_track` precedent. Idempotent
- * insert (ON CONFLICT(id) DO NOTHING). Returns `{ ok, inserted }`.
+ * insert (ON CONFLICT(id) DO NOTHING). Returns `{ ok, inserted }`. Capped at
+ * {@link MAX_COST_EVENTS_PER_BATCH} rows per request.
  */
 export const recordCost = oc
   .route({
@@ -102,7 +115,7 @@ export const recordCost = oc
     summary: "Record a batch of cost-ledger events (idempotent by event id)",
     tags: ["Admin"],
   })
-  .input(z.array(CostEventInputSchema))
+  .input(z.array(CostEventInputSchema).max(MAX_COST_EVENTS_PER_BATCH))
   .output(z.object({ inserted: z.number(), ok: z.literal(true) }));
 
 /** The `admin-costs` domain's ops, merged into the root contract by `./index.ts`. */

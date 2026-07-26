@@ -982,3 +982,103 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
     expect(result.export.watches.map((w) => w.name)).toEqual(["Netsky"]);
   });
 });
+
+// ── mergeGalaxyProgress: the SIZE cap + the bounded write path ────────────────────────────────
+//
+// The merge takes a client's local save, so `collectedLogIds` is untrusted and was uncapped: a
+// signed-in caller (a Spotify login is open to anyone) could PUT 100k coordinates and the old
+// `for (…) await collectLogId(…)` loop would spend three serialized queries on each. The cap
+// bounds the size; the bulk path bounds the round trips. Both are asserted against real SQL, and
+// the collect semantics are pinned so the batching cannot quietly change what gets collected.
+describe("mergeGalaxyProgress (real SQL — the capped, batched local-save merge)", () => {
+  const user = publicUser("merger");
+
+  beforeEach(async () => {
+    await seedUser(db, { email: "merger@x.test", id: user.id, username: user.id });
+    await seedTrack(db, { logId: "log-m1", title: "One", trackId: "track-merge-1-000000" });
+    await seedTrack(db, { logId: "log-m2", title: "Two", trackId: "track-merge-2-000000" });
+    // A catalogue row: it has NO findings row, so it is not a collectible.
+    await seedCatalogueTrack(db, { title: "Uncertified", trackId: "track-merge-3-000000" });
+  });
+
+  it("collects every resolvable coordinate and counts the deltas", async () => {
+    const { mergeGalaxyProgress } = await import("./account-data");
+    const result = await mergeGalaxyProgress(user, {
+      collectedLogIds: ["log-m1", "log-m2"],
+      deaths: 2,
+      wins: 1,
+    });
+
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as { collectedLogIds: string[] }).collectedLogIds.sort()).toEqual([
+      "log-m1",
+      "log-m2",
+    ]);
+    expect((result as { deaths: number }).deaths).toBe(2);
+    expect((result as { wins: number }).wins).toBe(1);
+    expect(await rowCount(db, "user_galaxy_collections")).toBe(2);
+  });
+
+  it("resolves a raw track id too, and dedupes it against the same track's Log ID", async () => {
+    const { mergeGalaxyProgress } = await import("./account-data");
+
+    await mergeGalaxyProgress(user, {
+      collectedLogIds: ["log-m1", "track-merge-1-000000", " log-m1 ", "log-m1"],
+    });
+
+    expect(await rowCount(db, "user_galaxy_collections")).toBe(1);
+  });
+
+  it("silently skips an unknown coordinate and an uncertified catalogue track", async () => {
+    const { mergeGalaxyProgress } = await import("./account-data");
+    const result = await mergeGalaxyProgress(user, {
+      collectedLogIds: ["log-m1", "log-nope", "track-merge-3-000000"],
+    });
+
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as { collectedLogIds: string[] }).collectedLogIds).toEqual(["log-m1"]);
+  });
+
+  it("re-merging the same save is idempotent — one row per track", async () => {
+    const { mergeGalaxyProgress } = await import("./account-data");
+
+    await mergeGalaxyProgress(user, { collectedLogIds: ["log-m1", "log-m2"] });
+    await mergeGalaxyProgress(user, { collectedLogIds: ["log-m1", "log-m2"] });
+
+    expect(await rowCount(db, "user_galaxy_collections")).toBe(2);
+  });
+
+  it("accepts a save AT the cap and 400s one coordinate more, writing nothing", async () => {
+    const { MAX_GALAXY_MERGE_LOG_IDS, mergeGalaxyProgress } = await import("./account-data");
+
+    // At the cap: every id past the two real ones is unresolvable, so it is accepted and only the
+    // real finding lands — the point is that the SIZE is allowed, not that the ids exist.
+    const filler = (count: number) =>
+      Array.from({ length: count }, (_, index) => `log-filler-${index}`);
+    const atCap = await mergeGalaxyProgress(user, {
+      collectedLogIds: ["log-m1", ...filler(MAX_GALAXY_MERGE_LOG_IDS - 1)],
+    });
+
+    expect(atCap).not.toBeInstanceOf(Response);
+    expect((atCap as { collectedLogIds: string[] }).collectedLogIds).toEqual(["log-m1"]);
+
+    const over = await mergeGalaxyProgress(user, {
+      collectedLogIds: ["log-m2", ...filler(MAX_GALAXY_MERGE_LOG_IDS)],
+    });
+
+    expect(over).toBeInstanceOf(Response);
+    expect((over as Response).status).toBe(400);
+    expect(await (over as Response).clone().json()).toMatchObject({ code: "too_many_log_ids" });
+    // The reject is total: log-m2 was NOT collected, and the counters did not move.
+    expect(await rowCount(db, "user_galaxy_collections")).toBe(1);
+  });
+
+  it("counts the cap on the DEDUPED set — a repetitive save is not punished", async () => {
+    const { MAX_GALAXY_MERGE_LOG_IDS, mergeGalaxyProgress } = await import("./account-data");
+    const repeated = Array.from({ length: MAX_GALAXY_MERGE_LOG_IDS + 50 }, () => "log-m1");
+    const result = await mergeGalaxyProgress(user, { collectedLogIds: repeated });
+
+    expect(result).not.toBeInstanceOf(Response);
+    expect((result as { collectedLogIds: string[] }).collectedLogIds).toEqual(["log-m1"]);
+  });
+});
