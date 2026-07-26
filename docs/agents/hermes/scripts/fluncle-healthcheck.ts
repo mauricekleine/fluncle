@@ -14,6 +14,9 @@
 //      target can't blow the runner's ~120s budget:
 //        web         — GET ${HEALTHCHECK_WORKER_URL}/api/v1/health, timed.
 //        r2          — HEAD ${HEALTHCHECK_R2_PROBE_URL}.
+//        sonar       — GET ${HEALTHCHECK_SONAR_URL}/health; ok ONLY when the body
+//                      parses and says `ok: true` (the similarity engine holds its
+//                      corpus in memory and answers nothing until it is built).
 //        dns         — dig +short ${HEALTHCHECK_DNS_QUERY} (non-empty answer = ok).
 //        ssh         — TCP-connect ${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}.
 //        disk        — `df` the box's root fs (via the /opt/data mount); degraded
@@ -57,6 +60,9 @@ const HOME = process.env.HOME ?? homedir() ?? "/opt/data/home";
 
 const WORKER_URL = (process.env.HEALTHCHECK_WORKER_URL ?? "").replace(/\/+$/, "");
 const R2_PROBE_URL = process.env.HEALTHCHECK_R2_PROBE_URL ?? "";
+// The sonic-similarity engine's health origin — deliberately its PUBLIC URL, not the
+// origin behind it (see probeSonar). Unset ⇒ the row reports "not configured".
+const SONAR_URL = (process.env.HEALTHCHECK_SONAR_URL ?? "").replace(/\/+$/, "");
 const DNS_QUERY = process.env.HEALTHCHECK_DNS_QUERY ?? "";
 const SSH_HOST = process.env.HEALTHCHECK_SSH_HOST ?? "";
 const SSH_PORT = Number.parseInt(process.env.HEALTHCHECK_SSH_PORT ?? "", 10);
@@ -304,6 +310,69 @@ async function probeR2(): Promise<Check> {
       service,
       status: "down",
     };
+  } catch (error) {
+    const latencyMs = Date.now() - started;
+    const reason =
+      error instanceof Error && error.name === "AbortError" ? "timeout" : "unreachable";
+
+    return { latencyMs, message: msg(`${reason} after ${latencyMs}ms`), service, status: "down" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PROBE: sonar — GET ${SONAR_URL}/health. The similarity engine holds its whole
+// corpus in memory and only starts answering once both indexes are built, so a
+// reachable-but-unbuilt engine is exactly the state worth catching: ok ONLY when the
+// response is 2xx AND the body parses AND `ok` is true. A non-2xx, an unreadable
+// body, or a timeout is an honest down.
+//
+// SONAR_URL is deliberately the engine's PUBLIC URL rather than its origin: the
+// origin's firewall admits only the CDN, so the origin isn't reachable from here
+// anyway — and probing the path a visitor's search actually travels catches a
+// CDN-side misconfiguration too, not just a dead engine.
+//
+// The message reports the code + elapsed ms, never a host.
+// ---------------------------------------------------------------------------
+
+async function probeSonar(): Promise<Check> {
+  const service = "sonar";
+
+  if (!SONAR_URL) {
+    return { latencyMs: null, message: msg("not configured"), service, status: "down" };
+  }
+
+  const started = Date.now();
+
+  try {
+    const response = await fetchWithTimeout(`${SONAR_URL}/health`, { method: "GET" });
+    const latencyMs = Date.now() - started;
+
+    if (response.status < 200 || response.status >= 300) {
+      return {
+        latencyMs,
+        message: msg(`HTTP ${response.status} in ${latencyMs}ms`),
+        service,
+        status: "down",
+      };
+    }
+
+    // The body parse is its own try so a 200 carrying junk reads as "unreadable",
+    // not as the outer catch's misleading "unreachable".
+    let ready = false;
+
+    try {
+      const body = (await response.json()) as { ok?: unknown };
+
+      ready = body.ok === true;
+    } catch {
+      return { latencyMs, message: msg("unreadable health body"), service, status: "down" };
+    }
+
+    if (!ready) {
+      return { latencyMs, message: msg("engine reports not ready"), service, status: "down" };
+    }
+
+    return { latencyMs, message: msg(`200 in ${latencyMs}ms`), service, status: "ok" };
   } catch (error) {
     const latencyMs = Date.now() - started;
     const reason =
@@ -1098,7 +1167,13 @@ async function main(): Promise<void> {
   // Network probes run concurrently; the file/state probes are synchronous and
   // cheap. All probes are individually timeout-bounded, so the whole tick stays
   // well under the runner's ~120s kill.
-  const [web, db, r2, ssh] = await Promise.all([probeWeb(), probeDb(), probeR2(), probeSsh()]);
+  const [web, db, r2, sonar, ssh] = await Promise.all([
+    probeWeb(),
+    probeDb(),
+    probeR2(),
+    probeSonar(),
+    probeSsh(),
+  ]);
   const dns = probeDns();
   const disk = probeDisk();
   const crons = probeCrons();
@@ -1113,7 +1188,19 @@ async function main(): Promise<void> {
   // (the state map is keyed by service id), so a single cron going down/recovering
   // pings on its own. cron.healthcheck rides alongside the gateway crons even though
   // it's emitted self-evidently.
-  const checks: Check[] = [web, db, r2, dns, ssh, disk, ...crons, healthcheck, renderBox, hermes];
+  const checks: Check[] = [
+    web,
+    db,
+    r2,
+    sonar,
+    dns,
+    ssh,
+    disk,
+    ...crons,
+    healthcheck,
+    renderBox,
+    hermes,
+  ];
 
   // Transitions against the prior state map.
   const prev = loadState();

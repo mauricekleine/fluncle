@@ -99,6 +99,8 @@ empty input (bad JSON, empty probes, wrong-dim probe, `top_k: 0`) returns
 
 Unauthenticated so Cloudflare health checks can hit it.
 
+It is also what the box healthcheck prober reads every ~10m for the engine's **`Sonar`** row on the public [`/status`](https://www.fluncle.com/status) board (beside the `Self-deploy (sonar)` row the freshen timer posts). The prober GETs `${HEALTHCHECK_SONAR_URL}/health` and counts the engine up only when the body parses and `ok` is `true` — a reachable-but-unbuilt engine reads as down, which is the state worth catching. The operator sets `HEALTHCHECK_SONAR_URL` to the engine's PUBLIC base URL in the prober's `0600` env file; unset, the row simply reports "not configured".
+
 ### `GET /` (open)
 
 A one-line info string.

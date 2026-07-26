@@ -76,13 +76,14 @@ for (const surface of CRON_SURFACES) {
 }
 
 // Self-posted automations that belong under the automation headings but are NOT registry
-// crons: `self-deploy` (rave-02's pin-watch, the Hermes image) and `self-deploy-ssh`
-// (rave-01's fluncle-ssh-freshen, the public SSH terminal) are host systemd timers
-// reporting their own health via record_health, not healthcheck-probed Hermes crons — so
-// they never enter the registry cron catalog, yet they are humming scheduled systems like
-// the rest. Both are OPS automations and LEAD that group (foundational), ahead of the ops
-// crons.
-export const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy", "self-deploy-ssh"];
+// crons: `self-deploy` (rave-02's pin-watch, the Hermes image), `self-deploy-ssh`
+// (rave-01's fluncle-ssh-freshen, the public SSH terminal) and `self-deploy-sonar` (the
+// similarity engine's freshen timer, which pulls a new build when apps/sonar changes) are
+// host systemd timers reporting their own health via record_health, not healthcheck-probed
+// Hermes crons — so they never enter the registry cron catalog, yet they are humming
+// scheduled systems like the rest. All three are OPS automations and LEAD that group
+// (foundational), ahead of the ops crons.
+export const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy", "self-deploy-ssh", "self-deploy-sonar"];
 const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
 const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 
@@ -90,7 +91,9 @@ const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 // maintaining ITSELF — self-deploy (pin-watch), the off-site backup, the nightly audit +
 // reviewer, and the healthcheck prober. Everything else is TRACK automation: the findings
 // pipeline (analysis, enrichment, videos, notes). Track leads the section (it's the point of
-// the machine), ops follows. A new cron defaults to track unless it is named here.
+// the machine), ops follows. A new cron defaults to track unless it is named here. Note the
+// split around sonar: its freshen TIMER is ops automation, while the engine itself is a
+// running service and stays in SERVICE_ORDER below.
 const OPS_AUTOMATION_IDS = new Set([
   "cron.audit",
   "cron.audit-review",
@@ -99,6 +102,7 @@ const OPS_AUTOMATION_IDS = new Set([
   "cron.reach",
   "cron.sentry-triage",
   "self-deploy",
+  "self-deploy-sonar",
   "self-deploy-ssh",
 ]);
 
@@ -111,6 +115,7 @@ export const SERVICE_ORDER = [
   "web",
   "db",
   "r2",
+  "sonar",
   "dns",
   "ssh",
   "onion",
@@ -144,7 +149,8 @@ const REGISTRY_STATUS_DESCRIPTIONS = new Map<string, string>(
 // /status service id is a short infra alias like `web`/`db`/`r2`, not a registry
 // `name`). Every registry surface (every `cron.*`) reads its title from the registry
 // above instead. `render-box` is the scale-to-zero box's reachability, distinct from
-// the `cron.render` conductor row.
+// the `cron.render` conductor row; `sonar` is the similarity engine's own liveness,
+// distinct from the `self-deploy-sonar` freshen timer that keeps its build current.
 export const INFRA_SERVICE_LABELS: Record<string, string> = {
   db: "Database",
   disk: "Disk headroom",
@@ -154,7 +160,9 @@ export const INFRA_SERVICE_LABELS: Record<string, string> = {
   r2: "Media storage",
   "render-box": "Render box",
   "self-deploy": "Self-deploy",
+  "self-deploy-sonar": "Self-deploy (sonar)",
   "self-deploy-ssh": "Self-deploy (SSH)",
+  sonar: "Sonar",
   ssh: "SSH terminal",
   web: "Web",
 };
@@ -172,7 +180,9 @@ export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   r2: "found.fluncle.com",
   "render-box": "the scale-to-zero box's reachability",
   "self-deploy": "the agent box rebuilds itself when its tools update",
+  "self-deploy-sonar": "the engine pulls a new build when apps/sonar changes",
   "self-deploy-ssh": "the rave terminal rebuilds itself when apps/ssh changes",
+  sonar: "the sonic-similarity engine",
   ssh: "rave.fluncle.com",
   web: "www.fluncle.com",
 };

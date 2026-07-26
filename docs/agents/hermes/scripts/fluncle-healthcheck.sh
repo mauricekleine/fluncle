@@ -32,6 +32,12 @@
 #                              (the web probe GETs ${HEALTHCHECK_WORKER_URL}/api/v1/health;
 #                              also the POST target for the health snapshot).
 #   HEALTHCHECK_R2_PROBE_URL — a known public R2 object URL (HEAD probe).
+#   HEALTHCHECK_SONAR_URL    — the sonic-similarity engine's PUBLIC base URL (the
+#                              sonar probe GETs ${HEALTHCHECK_SONAR_URL}/health). The
+#                              public URL on purpose: the engine's origin admits only
+#                              the CDN, and probing the public path also catches a
+#                              CDN-side misconfiguration. Unset ⇒ the /status row
+#                              reports "not configured".
 #   HEALTHCHECK_DNS_QUERY    — a name to `dig +short` (DNS probe).
 #   HEALTHCHECK_SSH_HOST     — the SSH app host (TCP-connect probe).
 #   HEALTHCHECK_SSH_PORT     — the SSH app port.

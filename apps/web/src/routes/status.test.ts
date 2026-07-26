@@ -43,6 +43,26 @@ describe("/status label coverage", () => {
     }
   });
 
+  // Sonar arrives as TWO rows from two different posters, and which group each lands in
+  // is the easy thing to get wrong: the healthcheck prober posts `sonar` (the engine's
+  // own liveness — a running service), while the engine's freshen timer posts
+  // `self-deploy-sonar` (a scheduled system — ops automation, beside `self-deploy-ssh`).
+  it("sonar files as a service and its freshen timer as an ops automation", () => {
+    expect(SERVICE_ORDER).toContain("sonar");
+    expect(SELF_POSTED_AUTOMATION_ORDER).not.toContain("sonar");
+    expect(CRON_ORDER).not.toContain("sonar");
+
+    expect(SELF_POSTED_AUTOMATION_ORDER).toContain("self-deploy-sonar");
+    expect(SERVICE_ORDER).not.toContain("self-deploy-sonar");
+
+    expect(serviceLabel("sonar")).toBe("Sonar");
+    expect(serviceSubtitle("sonar")).toBe("the sonic-similarity engine");
+    expect(serviceLabel("self-deploy-sonar")).toBe("Self-deploy (sonar)");
+    expect(serviceSubtitle("self-deploy-sonar")).toBe(
+      "the engine pulls a new build when apps/sonar changes",
+    );
+  });
+
   it("the infra maps hold ONLY non-registry ids (no cron leaked in)", () => {
     const cronNames = new Set(cronSurfaces().map((surface) => surface.name));
     for (const id of Object.keys(INFRA_SERVICE_LABELS)) {
