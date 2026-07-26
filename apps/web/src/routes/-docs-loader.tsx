@@ -6,6 +6,7 @@ import {
 } from "fumadocs-ui/layouts/docs/page";
 import { getDocsMdxComponents } from "@/components/docs-mdx";
 import { DocsPageActions } from "@/components/docs-page-actions";
+import { DocsPageContainer } from "@/components/docs-page-container";
 // The generated browser collection: lazy MDX modules keyed by content path.
 import browserCollections from "../../.source/browser";
 
@@ -17,7 +18,10 @@ import browserCollections from "../../.source/browser";
 export const clientLoader = browserCollections.docs.createClientLoader({
   component({ frontmatter, toc, default: MDX }) {
     return (
-      <FumaDocsPage toc={toc}>
+      // The container slot is swapped for one that renders `<main>` — Fumadocs' stock
+      // `<article id="nd-page">` is not a landmark, so /docs had no main landmark and its
+      // content sat outside every landmark. See @/components/docs-page-container.
+      <FumaDocsPage slots={{ container: DocsPageContainer }} toc={toc}>
         <DocsTitle>{frontmatter.title}</DocsTitle>
         {frontmatter.description ? (
           <DocsDescription>{frontmatter.description}</DocsDescription>

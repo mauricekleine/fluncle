@@ -368,6 +368,26 @@ describe("the year fast lane", () => {
       { page: 2, year: "2022" }, // rank 60 → floor(60/48)+1
     ]);
   });
+
+  it("yearPages drops a bucket that is not a four-digit year but still counts its rows", () => {
+    // An empty-string `release_date` passes the read's `is not null` gate and folds to an empty
+    // `substr(…, 1, 4)`, which used to render a lane chip with no text (a nameless link). It is
+    // dropped from the lane; its rows still advance the rank so the years after it keep their pages.
+    expect(
+      yearPages(
+        [
+          { n: 50, year: "2024" },
+          { n: 10, year: "" },
+          { n: 5, year: "199" },
+          { n: 5, year: "2022" },
+        ],
+        48,
+      ),
+    ).toEqual([
+      { page: 1, year: "2024" }, // rank 0
+      { page: 2, year: "2022" }, // rank 65 → the skipped buckets' 15 rows still counted
+    ]);
+  });
 });
 
 describe("countAllTracks", () => {
