@@ -14,12 +14,13 @@
 # hour of idle-wait). Creds come from /dev/shm/fluncle.env, injected by the conductor
 # on each wake (tmpfs does not survive a stop/resume snapshot).
 #
-# The render is PINNED to `--model opus` — never the CLI default. The default is
-# whatever the box token resolves to (currently Fable), and video authoring is held
-# to the Opus bar everywhere (AGENTS.md): the shaders-and-aliveness quality the finding
-# asks for (`videoModel: claude-opus-4-8`), and Fable's per-token cost is not worth it
-# for an ~85-min render. Pin the model here so a shifting CLI default never silently
-# re-tiers the render.
+# The render is PINNED to `--model opus` — never the CLI default. A bare `claude -p`
+# on this box measures as `claude-sonnet-5`, and video authoring is held to the Opus
+# bar everywhere (AGENTS.md): the shaders-and-aliveness quality the finding asks for
+# (`videoModel: anthropic/claude-opus-5`) is not something Sonnet has delivered. Pin
+# the model here so a shifting CLI default never silently re-tiers the render. `opus`
+# stays a FLOATING alias — it resolves to the current Opus tier (today Opus 5), and
+# pinning it to a version id would defeat the point.
 cd "$HOME/fluncle" || exit 1
 rm -f "$HOME/conductor-run.done" "$HOME/conductor-run.log"
 PROMPT="packages/skills/fluncle-video/automation/render-queue.prompt.md"

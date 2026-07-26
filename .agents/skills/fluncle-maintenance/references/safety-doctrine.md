@@ -1,6 +1,6 @@
 # Safety doctrine — Opus is the gate
 
-This routine runs **hands-off**, on Opus 4.8, with **no human in the loop on a tick**. There is no approval prompt before a bump **ships** — merged to `main`, and for a baked pin the box self-deploys it. So the model's judgment is the only safety mechanism on the repo side — and the doctrine is built around one asymmetry:
+This routine runs **hands-off**, on Opus 5, with **no human in the loop on a tick**. There is no approval prompt before a bump **ships** — merged to `main`, and for a baked pin the box self-deploys it. So the model's judgment is the only safety mechanism on the repo side — and the doctrine is built around one asymmetry:
 
 > **A missed bump is a non-event. A bad shipped bump that takes the gateway down — with nobody watching — is a real incident.**
 
