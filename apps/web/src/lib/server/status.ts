@@ -82,7 +82,16 @@ const SERVICE_CHECK_SAMPLES_KEEP = 90;
 // (2026-07-19): it registered, reported once, and shipped renamed as `cron.label-releases`
 // before any timer existed — leaving the classic orphaned row (bare-slug title, permanent
 // "never run") on /status.
-const RETIRED_SERVICE_IDS = new Set(["automation", "cron.apple-releases", "cron.artist-follow"]);
+// `cron.clip-drip` is the case the NO_RUNS_GRACE_MS note below was written about: the
+// clip→Instagram drip-feed was registered but never deployed (stripped from the image bake,
+// no timer), so it posted "no runs yet" forever. Its registry surface + prober row are gone;
+// this keeps the already-written `service_status` row off the board.
+const RETIRED_SERVICE_IDS = new Set([
+  "automation",
+  "cron.apple-releases",
+  "cron.artist-follow",
+  "cron.clip-drip",
+]);
 
 /**
  * How long a cron may report "no runs yet" before that stops meaning "freshly rebuilt box"

@@ -572,11 +572,11 @@ const AUTOMATION_CRONS: CronDef[] = [
   // `verify-captures` (a longer match) claims the fluncle-verify-captures dir before the bare
   // `capture` token can (claimCronDirs is longest-match-first), exactly like social-capture.
   { cadenceMs: 30 * 60_000, match: "verify-captures", service: "cron.verify-captures" },
-  // `studio-clip` (11 chars) is checked before `clip-drip` (9) by longest-match-first,
-  // and neither token is a substring of the other's `fluncle-…` header — so each claims
-  // its own dir cleanly.
   { cadenceMs: 15 * 60_000, match: "studio-clip", service: "cron.studio-clip" },
-  { cadenceMs: 20 * 60_000, match: "clip-drip", service: "cron.clip-drip" },
+  // The Twitch live-set poller — every 1m. `live` is not a substring of any other cron's
+  // `fluncle-…` header, so it claims fluncle-live cleanly. It ran unregistered for months
+  // (no registry surface, no row here), which is why a dead poller was invisible on /status.
+  { cadenceMs: 60_000, match: "live", service: "cron.live" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
   // The render → publish auto-advance — every 30m. It is the LAST link of the chain, so a
   // silent stop is exactly the failure worth seeing: a stalled tick lands here as `lagging`
@@ -622,7 +622,7 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 24 * 60 * 60_000, match: "social-metrics", service: "cron.social-metrics" },
   // The two nightly-audit crons: `audit-review` (12 chars) is claimed before `audit` (5) by
   // longest-match-first, and neither is a substring of the other's `fluncle-…` dir header, so
-  // each claims its own dir cleanly (same pattern as studio-clip/clip-drip). Both daily.
+  // each claims its own dir cleanly (same pattern as social-capture/capture). Both daily.
   { cadenceMs: 24 * 60 * 60_000, match: "audit-review", service: "cron.audit-review" },
   { cadenceMs: 24 * 60 * 60_000, match: "audit", service: "cron.audit" },
   // Nightly Sentry triage. `sentry-triage` (13 chars) is claimed before the submission-triage

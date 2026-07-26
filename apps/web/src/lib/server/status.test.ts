@@ -96,8 +96,10 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
   });
 
   it("degrades a no-runs-yet that has persisted past the grace window (never deployed)", async () => {
-    // 4 days of "no runs yet" is not a fresh box — the cron was never installed.
-    execute.mockResolvedValue({ rows: [noRuns("cron.clip-drip", "2026-07-07T00:00:00.000Z")] });
+    // 4 days of "no runs yet" is not a fresh box — the cron was never installed. (The
+    // original fixture was `cron.clip-drip`, the real case this guard was written for; it
+    // has since been retired outright, so the row is filtered before it reaches here.)
+    execute.mockResolvedValue({ rows: [noRuns("cron.enrich", "2026-07-07T00:00:00.000Z")] });
 
     const [service] = await getServiceStatuses(NOW);
 

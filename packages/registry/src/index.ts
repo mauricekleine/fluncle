@@ -1523,6 +1523,19 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
+      "poll Twitch for the live set → POST the live state that lights the cross-surface callout (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.live",
+    operatorNotes:
+      "every 1m, run by a rave-02 host systemd timer (docs/agents/hermes/live-timer/). Pure polling, zero LLM tokens. Mints/reuses a cached Twitch client-credentials app token, asks Helix whether the channel is streaming, and POSTs the raw state to the agent-tier record_live_state op — the Worker owns the transition detection and the crew callout. The poller is deliberately dumb and idempotent; auto-clear is READ-side (every surface treats a flag older than ~5m as offline), so a dead poller can never strand a permanent LIVE banner. Source: docs/agents/hermes/scripts/fluncle-live.sh. Probed on /status as cron.live.",
+    probeConfig: { cadenceMs: MINUTE_MS, cronName: "fluncle-live", kind: "cron" },
+    statusDescription: "watches for the live set",
+    title: "Live poller",
+    weights: { status: "hidden" },
+  },
+  {
+    exposedContent: [
       "cut each pending operator-framed 9:16 clip out of its set video → ship to R2 (--no-agent, ffmpeg)",
     ],
     kind: "cron",
@@ -1534,20 +1547,13 @@ export const SURFACES: readonly Surface[] = [
     title: "Studio clips",
     weights: { status: "hidden" },
   },
-  {
-    command: "fluncle admin clips drip-pause",
-    exposedContent: [
-      "post the due, cut clips to Instagram on a jittered ~daily cadence via Postiz (--no-agent, Worker HTTP)",
-    ],
-    kind: "cron",
-    name: "cron.clip-drip",
-    operatorNotes:
-      "every 20m. Pure HTTP trigger, zero LLM tokens. Admin tier (needs the Worker's Postiz key, which the box never sees — the box only triggers; the `finalize_clip_cut` / `record_health` precedent). The Worker checks the global kill switch FIRST (paused → no-op), then posts due clips bounded by a per-tick cap AND a rolling-24h IG cap. Every clip auto-enters the schedule at a jittered ~23-25h after the queue tail. The operator pauses/resumes with `fluncle admin clips drip-pause` / `drip-resume`. Source: docs/agents/hermes/scripts/clip-drip-sweep.sh. Probed on /status as cron.clip-drip.",
-    probeConfig: { cadenceMs: 20 * MINUTE_MS, cronName: "fluncle-clip-drip", kind: "cron" },
-    statusDescription: "drip-feeds set clips to Instagram",
-    title: "Clip drip-feed",
-    weights: { status: "hidden" },
-  },
+  // NB: there is deliberately NO `cron.clip-drip` surface. The clip→Instagram drip-feed
+  // (docs/agents/hermes/scripts/clip-drip-sweep.sh) is UN-DEPLOYED: the Dockerfile strips it
+  // from the bake, no `<job>-timer/` dir exists, and no timer runs on rave-02. It was
+  // registered anyway, so /status carried a row that could never report — and because the
+  // box prober emits "no runs yet" as ok, that row sat permanently GREEN for a job that does
+  // not exist (the failure that motivated status.ts's NO_RUNS_GRACE_MS). Registering a cron
+  // is a claim that it RUNS; register this one when it gets a timer, not before.
   {
     command: "fluncle admin publish pause",
     exposedContent: [
