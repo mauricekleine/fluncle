@@ -375,9 +375,12 @@ async function fetchYouTubeRetention(
  */
 export async function collectYouTubeVideoMetrics(
   videoIds: string[],
-  options: { fetchImpl?: FetchImpl; now?: Date } = {},
+  options: { fetchImpl?: FetchImpl; getAccessToken?: () => Promise<string>; now?: Date } = {},
 ): Promise<null | YouTubeVideoMetrics[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
+  // The token getter is injectable (defaulting to the real refresh path) so a test never touches the
+  // network token step — the `RecordSocialMetricsOptions` collaborator-injection pattern.
+  const getAccessToken = options.getAccessToken ?? getYouTubeAccessToken;
   const clientId = await readOptionalEnv("YOUTUBE_CLIENT_ID");
   const clientSecret = await readOptionalEnv("YOUTUBE_CLIENT_SECRET");
 
@@ -390,7 +393,7 @@ export async function collectYouTubeVideoMetrics(
     return [];
   }
 
-  const accessToken = await getYouTubeAccessToken();
+  const accessToken = await getAccessToken();
 
   // The Data-API stats — the required base (chunked ≤50/call).
   const stats = new Map<string, YouTubeStatistics>();

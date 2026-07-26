@@ -120,6 +120,11 @@ let db: Client;
 
 const NOW = new Date("2026-07-26T12:00:00.000Z");
 
+// An injected token getter, so a test never touches the real refresh path (its expiry-vs-clock check
+// made the pass environmental). The `seedAuth` row below still exists — it satisfies the DB-read
+// connection gate (`hasYouTubeAuth`) — but this stub, not the network, supplies the access token.
+const getAccessToken = () => Promise.resolve("test-token");
+
 async function seedAuth(): Promise<void> {
   const iso = NOW.toISOString();
   await db.execute({
@@ -234,7 +239,11 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
         }),
     });
 
-    const videos = await collectYouTubeVideoMetrics(["v1", "v2"], { fetchImpl, now: NOW });
+    const videos = await collectYouTubeVideoMetrics(["v1", "v2"], {
+      fetchImpl,
+      getAccessToken,
+      now: NOW,
+    });
 
     expect(videos).toEqual([
       {
@@ -278,7 +287,7 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
       },
     });
 
-    await collectYouTubeVideoMetrics(["v1", "v2"], { fetchImpl, now: NOW });
+    await collectYouTubeVideoMetrics(["v1", "v2"], { fetchImpl, getAccessToken, now: NOW });
 
     expect(dataUrl?.searchParams.get("part")).toBe("statistics");
     expect(dataUrl?.searchParams.get("id")).toBe("v1,v2");
@@ -297,7 +306,11 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
       data: () => json({ items: [{ id: "v1", statistics: { likeCount: "9", viewCount: "800" } }] }),
     });
 
-    const videos = await collectYouTubeVideoMetrics(["v1"], { fetchImpl, now: NOW });
+    const videos = await collectYouTubeVideoMetrics(["v1"], {
+      fetchImpl,
+      getAccessToken,
+      now: NOW,
+    });
 
     expect(videos).toEqual([
       {
@@ -320,7 +333,11 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
       data: () => json({ items: [{ id: "v1", statistics: { viewCount: "10" } }] }),
     });
 
-    const videos = await collectYouTubeVideoMetrics(["v1", "gone"], { fetchImpl, now: NOW });
+    const videos = await collectYouTubeVideoMetrics(["v1", "gone"], {
+      fetchImpl,
+      getAccessToken,
+      now: NOW,
+    });
 
     expect(videos?.map((video) => video.id)).toEqual(["v1"]);
   });
@@ -332,8 +349,8 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
       data: () => new Response("boom", { status: 500 }),
     });
 
-    await expect(collectYouTubeVideoMetrics(["v1"], { fetchImpl, now: NOW })).rejects.toThrow(
-      /videos\.list failed/,
-    );
+    await expect(
+      collectYouTubeVideoMetrics(["v1"], { fetchImpl, getAccessToken, now: NOW }),
+    ).rejects.toThrow(/videos\.list failed/);
   });
 });
