@@ -1996,8 +1996,20 @@ export async function getMixableTracks(
  *
  * WHAT SONAR CANNOT SEE: its index holds only embedded tracks, so an un-embedded key-match —
  * which the Turso scan still ranks on key+BPM alone — is absent from the sonar rail. That is the
- * one accepted divergence, and it is the shape of the trade: routing a vector question to a
+ * first accepted divergence, and it is the shape of the trade: routing a vector question to a
  * vector index means the answer is drawn from the tracks that have vectors.
+ *
+ * THE SECOND DIVERGENCE — the shortlist is a TRUNCATION, and it is live, not theoretical. The
+ * Turso scan carries NO `limit`: it ranks every key-compatible row in the archive. This asks for
+ * the nearest `TASTE_SHORTLIST` by adjacency, so once the key-filtered pool exceeds that (it
+ * already does — the key pre-filter admits several Camelot neighbours out of an archive in the
+ * tens of thousands), a candidate with middling adjacency but an excellent BPM fit can place in
+ * the Turso rail's top `limit` and be absent from sonar's shortlist entirely. So the flip is a
+ * latency swap in SHAPE (same engine, same weighting, same tiebreak) but not a guarantee of an
+ * identical rail at the tail. The cap is exactly what makes the query flat as the catalogue
+ * grows — the unbounded scan is the thing being replaced — so widening it to chase parity would
+ * trade the win away. Raise `TASTE_SHORTLIST` if the rail ever visibly loses a good mix; do not
+ * remove the cap.
  */
 async function mixRailFromSonar(params: {
   excludedLogIds: string[];
