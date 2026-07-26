@@ -14,7 +14,8 @@
 //
 // HAND-HONOURED — this catalog states the intent, a human still wires the consumer:
 // the surfaces-doctrine doc's tables (guarded by a parity test over this catalog),
-// the rave terminal menu (a hand-written Go slice in apps/ssh/main.go), the CLI help
+// the rave terminal menu (a hand-written Go slice in apps/ssh/main.go, now guarded by
+// ssh-menu.test.ts — an `ssh` weight with no screen behind it build-fails), the CLI help
 // surface (apps/cli/src/cli.ts), the homepage nav + dev-row (its own nav-model.ts),
 // llms.txt (agent-discovery.ts), and the sitemap (sitemap-data.ts). The
 // `surfacesForContext` / `surfacesByWeight` / `surfacesByKind` selectors exist for
@@ -34,13 +35,15 @@
  * - `subdomain`  a sibling host on the same Worker (galaxy., radio., found., dig.)
  * - `api`        a JSON HTTP endpoint (the public /api/v1 surface)
  * - `feed`       a subscribable syndication document (RSS/Atom/JSON Feed/podcast/ICS)
- * - `discovery`  a machine-/crawler-facing map (sitemap, robots, llms.txt, well-known)
+ * - `discovery`  a machine-fetched map or script, never a browsable page (sitemap,
+ *                robots, llms.txt, well-known, the CLI installer)
  * - `dns`        the delegated authoritative DNS zone (dig.fluncle.com)
  * - `ssh`        the rave terminal (ssh rave.fluncle.com)
  * - `mcp`        the Model Context Protocol server (/mcp)
  * - `cli`        a `fluncle` CLI command (the thin HTTP client)
  * - `cron`       an on-box Hermes scheduled job (enrichment + the newsletter)
  * - `extension`  a browser extension on a vendor store (Fluncle Lens, Chrome Web Store)
+ * - `app`        a native mobile app on a vendor store (Fluncle for iOS, the App Store)
  */
 export type SurfaceKind =
   | "web_route"
@@ -53,7 +56,8 @@ export type SurfaceKind =
   | "mcp"
   | "cli"
   | "cron"
-  | "extension";
+  | "extension"
+  | "app";
 
 /**
  * How loudly a surface is presented IN A GIVEN CONTEXT. `primary` surfaces lead
@@ -247,10 +251,16 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "web_route",
     name: "web.logbook",
+    // No `ssh` weight: the rave terminal has NO Logbook screen. It carried `ssh: "tertiary"`
+    // from the day the Logbook shipped, but `menuItems()` in apps/ssh/main.go never gained an
+    // entry for it — a weight is a claim that a context DISPLAYS the surface, and that one was
+    // false for a year of commits. Dropped to match the terminal; the ssh-menu parity test
+    // (./ssh-menu.test.ts) now build-fails the next surface that claims an ssh weight with
+    // nowhere in the TUI to land. Building the screen is the other, larger fix.
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/logbook",
     url: `${SITE}/logbook`,
-    weights: { ssh: "tertiary", web: "primary" },
+    weights: { web: "primary" },
   },
   {
     exposedContent: ["Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID"],
@@ -449,6 +459,87 @@ export const SURFACES: readonly Surface[] = [
     route: "/galaxies",
     url: `${SITE}/galaxies`,
     weights: { ssh: "secondary", web: "secondary" },
+  },
+  {
+    exposedContent: [
+      "the signed-in account door: a listener's Galaxy progress, the findings and sets they saved, the tracks they submitted, and their account settings",
+    ],
+    kind: "web_route",
+    name: "web.account",
+    operatorNotes:
+      "A WORKSTATION, not a lore page (VOICE.md §5 The Three Areas): chrome register throughout. PUBLIC and always 200 — signed out it serves the sign-in / join door, so it is honestly HTTP-probeable; every door's data is session-scoped and read on the server. `noindex` (a private per-user surface, self-canonical), so it stays out of the sitemap and llms.txt while remaining a registered, advertised surface: the nav's `Your account` CTA points here. Source: apps/web/src/routes/account.tsx + components/account.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/account",
+    url: `${SITE}/account`,
+    weights: { web: "secondary" },
+  },
+  {
+    exposedContent: [
+      "ChatDnB — a chat with Fluncle over his own archive; he answers from his certified findings",
+    ],
+    kind: "web_route",
+    name: "web.chat",
+    // DARK while the ChatDnB rollout is gated to the VERIFIED crew (the learning cohort). The
+    // door is live and answers 200 to anyone, but signed-out and unverified callers get a
+    // pointer rather than the chat, and the page is deliberately unannounced + `noindex` — so
+    // registering it LIVE would advertise a surface most readers cannot use yet. Pre-staged
+    // instead (the extension.lens / web.mix flow) so opening the rollout is one field-flip:
+    //   1. drop `pending: true`,
+    //   2. drop the route's `noindex` meta,
+    //   3. add the §2/§3 doctrine rows.
+    // The web weight + probeConfig are pre-set, so the flip needs no other registry change.
+    // Source: apps/web/src/routes/chat.tsx + components/chat.
+    operatorNotes:
+      "The public face of ChatDnB. Gated to verified-email accounts (the rollout cohort); the server route re-checks the session, the verification, the origin/CSRF, and the rate dials on every turn. PENDING = registered but dark until the rollout opens to everyone.",
+    pending: true,
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/chat",
+    url: `${SITE}/chat`,
+    weights: { web: "secondary" },
+  },
+  {
+    exposedContent: [
+      "the per-listener recommendations door: a signed-in listener names the tracks they love, the Ear lines the catalogue up against those seeds, and the result lands as a playlist on Fluncle's own Spotify, refreshed weekly",
+    ],
+    kind: "web_route",
+    name: "web.recommendations",
+    // DARK for the same reason as web.chat: the door is live and 200s for anyone, but it is
+    // gated to the verified crew, unannounced, and `noindex` while the recommendation machine
+    // is in its rollout. Same one-field flip when it opens (drop `pending`, drop the route's
+    // `noindex`, add the §2/§3 rows). Source: apps/web/src/routes/recommendations.tsx +
+    // components/recommendations + src/lib/server/{recommendations,recs-gate}.ts.
+    operatorNotes:
+      "E1/E2, the recommendation machine's public door. Three states off the session (anonymous pitch, unverified pointer, verified surface); the DRAFT read is the one place the live vector scan sits on a read path, rate-limited per user and degrading to empty rather than blocking the door. PENDING = registered but dark until the rollout opens.",
+    pending: true,
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/recommendations",
+    url: `${SITE}/recommendations`,
+    weights: { web: "secondary" },
+  },
+  // NB: there is deliberately NO `web.device` surface. `/device` (apps/web/src/routes/device.tsx)
+  // is a LEG of the `fluncle login` device-authorization flow (RFC 8628), not a destination: it
+  // is meaningless without the one-time `?user_code=…` the terminal prints, and it is `noindex`
+  // for exactly that reason. The registry catalogs the flow at its front door (`cli.login`), the
+  // same carve-out the oRPC coverage tests make for auth/OAuth redirect legs. A probe against it
+  // would only prove that a confirmation screen renders with no code to confirm.
+  //
+  // NB: there is deliberately NO `web.embed` surface either. `/embed/<logId>` is the oEmbed
+  // provider's `rich` payload — the card `discovery.oembed` frames — and it is catalogued THERE,
+  // in that surface's exposedContent + operatorNotes. It is also slug-parameterized, so there is
+  // no fixed address to GET-probe (the web.artist precedent), and registering it separately
+  // would double-count one surface under two names.
+  {
+    exposedContent: [
+      "the galaxy factory — a draggable map of a finding's whole life, from the first CMD+F through the enrichment sweeps to the launch into the Galaxy",
+    ],
+    kind: "web_route",
+    name: "web.pipeline",
+    operatorNotes:
+      "A public console page (VOICE.md §5 The Three Areas), written in the builder's-tour register. Client-only DOM/SVG/canvas — the whole map is a chunk loaded in useEffect, so it costs the archive's bundle nothing — over an SSR shell that answers 200, so it is HTTP-probeable. `noindex` (a for-the-nerds machinery view, not a search surface), so it stays out of the sitemap; the nav's Crew section links it. Source: apps/web/src/routes/pipeline.tsx + src/pipeline.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/pipeline",
+    url: `${SITE}/pipeline`,
+    weights: { web: "tertiary" },
   },
   {
     exposedContent: ["the privacy policy"],
@@ -958,6 +1049,22 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "tertiary" },
   },
 
+  {
+    apiFormat: "text/x-shellscript",
+    discoveryUrl: `${SITE}/llms.txt`,
+    exposedContent: [
+      "the one-line CLI installer: picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place",
+    ],
+    kind: "discovery",
+    name: "discovery.cli-installer",
+    operatorNotes:
+      "`curl -fsSL https://www.fluncle.com/cli/latest.sh | sh`, the install path the /docs/cli page, the rave terminal's Install CLI screen, the CLI's own update hint, and llms.txt (§Tools) all point at. A machine-FETCHED document rather than a page, which is why it is catalogued as `discovery` next to robots.txt and llms.txt: nothing about it is browsable, and its only reader is a shell. Always 200 (it is generated in the route, no upstream call), so the post-deploy probe asserts a non-empty body on it. Source: apps/web/src/routes/cli/latest[.]sh.ts.",
+    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
+    route: "/cli/latest.sh",
+    url: `${SITE}/cli/latest.sh`,
+    weights: { web: "tertiary" },
+  },
+
   // ── MCP server ────────────────────────────────────────────────────────────
   {
     apiFormat: "application/json",
@@ -1051,6 +1158,15 @@ export const SURFACES: readonly Surface[] = [
     weights: { cli: "secondary" },
   },
   {
+    command: "fluncle galaxies",
+    exposedContent: [
+      "wander Fluncle's sonic galaxies, the browse-by-feel lens (bare `slug` opens one)",
+    ],
+    kind: "cli",
+    name: "cli.galaxies",
+    weights: { cli: "secondary" },
+  },
+  {
     command: "fluncle search",
     exposedContent: ["search the archive by coordinate, track, artist, label, or album"],
     kind: "cli",
@@ -1085,6 +1201,31 @@ export const SURFACES: readonly Surface[] = [
     name: "cli.submit",
     weights: { cli: "secondary" },
   },
+  // The ACCOUNT tier: a listener links this device to their OWN Fluncle account (the RFC 8628
+  // device-authorization flow through /device) so their Galaxy progress and saves sync. The
+  // minted user token is stored HARD-SEPARATE from the admin FLUNCLE_API_TOKEN (apps/cli/src/
+  // user-token.ts); these three verbs never read or write the admin grant.
+  {
+    command: "fluncle login",
+    exposedContent: ["link this device to your Fluncle account, so your Galaxy progress syncs"],
+    kind: "cli",
+    name: "cli.login",
+    weights: { cli: "secondary" },
+  },
+  {
+    command: "fluncle me",
+    exposedContent: ["your account and Galaxy progress (sign in with `fluncle login`)"],
+    kind: "cli",
+    name: "cli.me",
+    weights: { cli: "secondary" },
+  },
+  {
+    command: "fluncle logout",
+    exposedContent: ["unlink this device from your account"],
+    kind: "cli",
+    name: "cli.logout",
+    weights: { cli: "tertiary" },
+  },
   {
     command: "fluncle tracks get",
     exposedContent: ["look up one finding by id or Log ID (group alias `track`)"],
@@ -1113,6 +1254,15 @@ export const SURFACES: readonly Surface[] = [
     exposedContent: ["print or check the version (--check hits the latest GitHub release)"],
     kind: "cli",
     name: "cli.version",
+    weights: { cli: "tertiary" },
+  },
+  {
+    command: "fluncle status",
+    exposedContent: ["how Fluncle's services are holding up (the /status board, in the terminal)"],
+    kind: "cli",
+    name: "cli.status",
+    operatorNotes:
+      "Reads the public status snapshot and labels each service off `liveSurfaces()` — a registry CONSUMER as well as a registry entry. Source: apps/cli/src/commands/status.ts.",
     weights: { cli: "tertiary" },
   },
   {
@@ -1145,6 +1295,38 @@ export const SURFACES: readonly Surface[] = [
     url: "https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk",
     weights: { web: "secondary" },
   },
+
+  // ── Native apps (vendor-store surfaces) ────────────────────────────────────
+  {
+    exposedContent: [
+      "Fluncle for iOS — the archive as a native app: the Feed, the Archive, the Decks, the Radio, and the Mixtapes, each finding opening its own /log screen, plus a submit door and push when a new banger lands",
+    ],
+    kind: "app",
+    name: "app.ios",
+    // DARK until App Store review clears (the extension.lens pre-stage flow, one kind over).
+    // Submitted, rejected on Guideline 5.2.3 (access to third-party audio/video), and
+    // RESUBMITTED 2026-07-21 with the feed videos muted + the review note in
+    // apps/mobile/docs/app-review-note.md. PRE-STAGED so the post-approval fan-out is one
+    // field-flip:
+    //   1. drop `pending: true` (or set it false),
+    //   2. swap `url` for the assigned listing URL (https://apps.apple.com/app/id<assigned-id>),
+    //   3. add the §2/§3 doctrine rows (it is now a live web surface).
+    // No other consumer needs touching — the menus, the MCP + CLI status labels, and the
+    // doctrine all read the catalog. The placeholder `url` is the App Store search for the
+    // listing. Source: apps/mobile (Expo / expo-router, bundle id com.fluncle.app).
+    operatorNotes:
+      "Fluncle for iOS (apps/mobile). PENDING App Store review — DARK until approval, then flip `pending` + set the assigned listing URL. No probeConfig: a vendor store listing is not one of our own health-probeable endpoints (the box prober walks web/r2/dns/ssh + the crons, never an external GET), and Apple would bot-block or redirect a bare GET and read back as a false 'down' — the extension.lens ruling, which dropped its probeConfig on going live for the same reason.",
+    pending: true,
+    url: "https://apps.apple.com/search?term=fluncle",
+    weights: { web: "secondary" },
+  },
+  // NB: there is deliberately NO surface for the Raycast extension (apps/raycast). Unlike
+  // Fluncle Lens it is not published on a vendor store and it is not crew-facing: it is the
+  // OPERATOR's launcher — Quick Add, Add Track, Recent Bangers, and the /admin attention queue,
+  // four commands that shell out to the admin `fluncle` CLI — installed locally on his own two
+  // machines and pointed at a binary by absolute path. There is no address the registry could
+  // point a reader at, and the authority behind it is already catalogued as `cli.admin`
+  // (`weights: { cli: "hidden" }`). Register it the day it is published to the Raycast Store.
 
   // ── Crons (the on-box Hermes scheduled jobs) ───────────────────────────────
   {

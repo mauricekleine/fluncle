@@ -45,6 +45,8 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 | `web.fresh`      | `/fresh`      | what just came out — every drum & bass track released in the trailing 30-day window, freshest first; findings in full voice, the rest in the unlit register (release-dated, never found-dated) | secondary |
 | `web.tracks`     | `/tracks`     | the whole list — every track (findings + catalogue), newest release first, filterable by year, tempo, key, label, galaxy; bare hub indexable, any filter `noindex`                             | secondary |
 | `web.galaxies`   | `/galaxies`   | the browse-by-feel lens — the archive grouped into operator-named sonic galaxies + `/galaxies/:slug`; dark until the operator names the whole map                                              | secondary |
+| `web.account`    | `/account`    | the signed-in account door — a listener's Galaxy progress, saved findings and sets, submissions, and settings (a workstation; `noindex`, so it is not in the sitemap)                          | secondary |
+| `web.pipeline`   | `/pipeline`   | the galaxy factory — a draggable map of a finding's whole life, from the first CMD+F through the enrichment sweeps to the launch into the Galaxy (`noindex`)                                   | tertiary  |
 | `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                                                             | tertiary  |
 | `web.terms`      | `/terms`      | the terms of use                                                                                                                                                                               | tertiary  |
 
@@ -99,18 +101,19 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 ### Discovery — machine-/crawler-facing maps
 
-| Surface                     | Route                                  | Format                     | Exposes                                                                                                                      | Weight    |
-| --------------------------- | -------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `discovery.llms`            | `/llms.txt`                            | `text/markdown`            | the plain-language map of the Galaxy for LLMs                                                                                | primary   |
-| `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap index of every public page                                                                                   | secondary |
-| `discovery.sitemap-shard`   | `/sitemap/$shard`                      | `application/xml`          | one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook URLs, auto-paged   | —         |
-| `discovery.llms-full`       | `/llms-full.txt`                       | `text/markdown`            | the entire archive in one ingestible markdown document, every finding                                                        | secondary |
-| `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                                                             | secondary |
-| `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                          | tertiary  |
-| `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                                                             | tertiary  |
-| `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                               | tertiary  |
-| `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                                                                 | tertiary  |
-| `discovery.oembed`          | `/oembed`                              | `application/json+oembed`  | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`) | tertiary  |
+| Surface                     | Route                                  | Format                     | Exposes                                                                                                                           | Weight    |
+| --------------------------- | -------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `discovery.llms`            | `/llms.txt`                            | `text/markdown`            | the plain-language map of the Galaxy for LLMs                                                                                     | primary   |
+| `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap index of every public page                                                                                        | secondary |
+| `discovery.sitemap-shard`   | `/sitemap/$shard`                      | `application/xml`          | one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook URLs, auto-paged        | —         |
+| `discovery.llms-full`       | `/llms-full.txt`                       | `text/markdown`            | the entire archive in one ingestible markdown document, every finding                                                             | secondary |
+| `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                                                                  | secondary |
+| `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                               | tertiary  |
+| `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                                                                  | tertiary  |
+| `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                                    | tertiary  |
+| `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                                                                      | tertiary  |
+| `discovery.oembed`          | `/oembed`                              | `application/json+oembed`  | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`)      | tertiary  |
+| `discovery.cli-installer`   | `/cli/latest.sh`                       | `text/x-shellscript`       | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary  |
 
 ### MCP — the Model Context Protocol server
 
@@ -132,6 +135,8 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Latest bangers, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit), plus the deep-register one-shots `ssh rave.fluncle.com latest\|fresh\|random` | primary |
 
+A `weights.ssh` value on any surface is a **claim that this TUI displays it**, and the claim is now enforced: [`packages/registry/src/ssh-menu.test.ts`](../packages/registry/src/ssh-menu.test.ts) parses `menuItems()` (and the About screen's link map) out of `apps/ssh/main.go` and build-fails an ssh-weighted surface with nowhere in the terminal to land. It was written because `web.logbook` claimed `ssh: "tertiary"` for a year with no Logbook screen behind it — that weight is dropped rather than faked; building the screen is the larger fix and an overhaul candidate.
+
 ### CLI — the `fluncle` thin client
 
 | Surface              | Command                  | Exposes                                                                                                           | Weight    |
@@ -142,15 +147,20 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | `cli.artists`        | `fluncle artists`        | every artist Fluncle holds, A to Z (a bare `slug` looks one up)                                                   | secondary |
 | `cli.albums`         | `fluncle albums`         | every album Fluncle holds, A to Z (a bare `slug` looks one up)                                                    | secondary |
 | `cli.labels`         | `fluncle labels`         | every label Fluncle holds, A to Z (a bare `slug` looks one up)                                                    | secondary |
+| `cli.galaxies`       | `fluncle galaxies`       | wander the sonic galaxies, the browse-by-feel lens (a bare `slug` opens one)                                      | secondary |
 | `cli.search`         | `fluncle search`         | search the archive by coordinate, track, artist, label, or album (four-tier resolver)                             | secondary |
 | `cli.open`           | `fluncle open`           | pick a track, open it in Spotify                                                                                  | secondary |
 | `cli.random`         | `fluncle random`         | the archive throws one back                                                                                       | secondary |
 | `cli.subscribe`      | `fluncle subscribe`      | subscribe to the Friday newsletter                                                                                | secondary |
 | `cli.submit`         | `fluncle submit`         | send a track for review                                                                                           | secondary |
+| `cli.login`          | `fluncle login`          | link this device to your Fluncle account, so your Galaxy progress syncs (the RFC 8628 flow via `/device`)         | secondary |
+| `cli.me`             | `fluncle me`             | your account and Galaxy progress (sign in with `fluncle login`)                                                   | secondary |
+| `cli.logout`         | `fluncle logout`         | unlink this device from your account                                                                              | tertiary  |
 | `cli.tracks-get`     | `fluncle tracks get`     | look up one finding by id or Log ID (group alias `track`)                                                         | tertiary  |
 | `cli.tracks-similar` | `fluncle tracks similar` | the findings that sound nearest to one (the sonic neighbourhood, off the MuQ audio embedding), each with its note | tertiary  |
 | `cli.about`          | `fluncle about`          | Fluncle, and where to find him                                                                                    | tertiary  |
 | `cli.version`        | `fluncle version`        | print or check the version (`--check` hits the latest GitHub release)                                             | tertiary  |
+| `cli.status`         | `fluncle status`         | how Fluncle's services are holding up (the `/status` board, in the terminal)                                      | tertiary  |
 | `cli.admin`          | `fluncle admin`          | the operator/agent command group (hidden): `tracks`, `mixtapes`, `newsletter`, `backfills`, `auth`                | hidden    |
 
 ### Browser extensions — vendor-store surfaces
@@ -229,7 +239,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | --------------------------- | --------- | --------- | --------- | --------- |
 | `web.home`                  | primary   |           |           |           |
 | `web.log`                   | primary   | secondary |           |           |
-| `web.logbook`               | primary   | tertiary  |           |           |
+| `web.logbook`               | primary   |           |           |           |
 | `web.mixtapes`              | primary   | secondary |           |           |
 | `web.galaxy`                | primary   | secondary |           |           |
 | `web.stories`               | secondary |           |           |           |
@@ -245,6 +255,8 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.fresh`                 | secondary |           |           |           |
 | `web.tracks`                | secondary |           |           |           |
 | `web.galaxies`              | secondary | secondary |           |           |
+| `web.account`               | secondary |           |           |           |
+| `web.pipeline`              | tertiary  |           |           |           |
 | `web.privacy`               | tertiary  |           |           |           |
 | `web.terms`                 | tertiary  |           |           |           |
 | `subdomain.galaxy`          | primary   | secondary |           |           |
@@ -289,6 +301,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `discovery.api-catalog`     | tertiary  |           |           |           |
 | `discovery.agent-skills`    | tertiary  |           |           |           |
 | `discovery.oembed`          | tertiary  |           |           |           |
+| `discovery.cli-installer`   | tertiary  |           |           |           |
 | `mcp.server`                | primary   |           |           |           |
 | `dns.zone`                  | tertiary  |           |           | tertiary  |
 | `ssh.rave`                  | primary   | primary   |           | secondary |
@@ -298,15 +311,20 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cli.artists`               |           |           | secondary |           |
 | `cli.albums`                |           |           | secondary |           |
 | `cli.labels`                |           |           | secondary |           |
+| `cli.galaxies`              |           |           | secondary |           |
 | `cli.search`                |           |           | secondary |           |
 | `cli.open`                  |           |           | secondary |           |
 | `cli.random`                |           |           | secondary |           |
 | `cli.subscribe`             |           |           | secondary |           |
 | `cli.submit`                |           |           | secondary |           |
+| `cli.login`                 |           |           | secondary |           |
+| `cli.me`                    |           |           | secondary |           |
+| `cli.logout`                |           |           | tertiary  |           |
 | `cli.tracks-get`            |           |           | tertiary  |           |
 | `cli.tracks-similar`        |           |           | tertiary  |           |
 | `cli.about`                 |           |           | tertiary  |           |
 | `cli.version`               |           |           | tertiary  |           |
+| `cli.status`                |           |           | tertiary  |           |
 | `cli.admin`                 |           |           | hidden    |           |
 | `extension.lens`            | secondary |           |           |           |
 | `cron.newsletter`           |           |           |           | secondary |
@@ -357,6 +375,8 @@ A surface is operator/agent-only where its only display weight is `hidden` (`cli
 ## 3.5. Pre-staging a surface — the `pending` (dark) gate
 
 `hidden` and `pending` are different shapes of "not loud." A `hidden` weight is a **live** surface that one context deliberately doesn't headline (it still probes, still serves, still answers). A surface marked **`pending: true`** is **not live at all yet**: registered (so it is reviewed and one field-flip away) but **DARK everywhere** — `liveSurfaces()` drops it, so every selector (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`) and every raw-catalog consumer that reads `liveSurfaces()` (the MCP `get_status` labels, the CLI status labels) skips it. It carries no `/status` probe and no service label, and it stays out of the §2/§3 tables (the parity test skips a `pending` surface) and off the hand-wired menus and crawler maps until it goes live.
+
+Four surfaces sit `pending` today, each naming its own flip in an inline comment: **`web.mix`** (the mixability engine's door, dark until the archive's own depth measurement opens it to the world), **`web.chat`** and **`web.recommendations`** (the two crew doors — both live and 200 for anyone, but gated to the verified crew while their rollouts run as learning cohorts, so advertising them would point most readers at a door they cannot open yet), and **`app.ios`** — Fluncle for iOS (`apps/mobile`), the first entry of the `app` kind, resubmitted to App Store review on 2026-07-21 after the Guideline 5.2.3 remediation and dark until it clears. Adding the §2/§3 rows is part of each flip, never before it.
 
 Use it to land a surface **ahead of an external gate** so the post-approval fan-out is a single, reviewed, no-other-edits flip. **Fluncle Lens** (`extension.lens`, the `apps/extension` Chrome extension) was the first such entry: it sat `pending: true` through Chrome Web Store review, then went **live on 2026-06-29** by exactly this flip — drop `pending`, swap the placeholder `url` for the store's assigned listing URL (`chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk`), and add its §2/§3 rows — and the menus, the dev-row, and the MCP + CLI status labels lit up at once. (A vendor store listing is not one of our own health-probeable endpoints, so it carries no `probeConfig`.)
 

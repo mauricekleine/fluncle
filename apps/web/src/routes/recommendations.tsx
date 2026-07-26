@@ -178,7 +178,10 @@ export const Route = createFileRoute("/recommendations")({
         name: "description",
       },
       // Unlisted while the door is gated (ROADMAP § the recommendation machine): it exists for
-      // the crew who sign in, but it is not announced, not in the registry, and not indexed.
+      // the crew who sign in, but it is not announced and not indexed. It IS catalogued in
+      // @fluncle/registry as `web.recommendations` with `pending: true` — the pre-staged, DARK
+      // gate (no menu, no /status probe, no sitemap) — so opening the door is that one flip
+      // plus deleting this tag.
       { content: "noindex", name: "robots" },
     ],
   }),

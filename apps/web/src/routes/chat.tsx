@@ -62,8 +62,10 @@ export const Route = createFileRoute("/chat")({
         name: "description",
       },
       // Unlisted while the rollout is gated (ROADMAP §ChatDnB): the door exists for the
-      // crew who sign in, but it is not announced, not in the registry, and not indexed.
-      // Delete this tag when ChatDnB graduates to a public surface.
+      // crew who sign in, but it is not announced and not indexed. It IS catalogued in
+      // @fluncle/registry as `web.chat` with `pending: true` — the pre-staged, DARK gate,
+      // which reaches no menu, no /status probe, and no sitemap — so graduating ChatDnB is
+      // that one field-flip plus deleting this tag.
       { content: "noindex", name: "robots" },
     ],
   }),
