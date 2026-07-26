@@ -1,14 +1,14 @@
 // THE SONAR CLIENT — the Worker's thin HTTP door to the `sonar` vector sidecar (apps/sonar),
-// plus the three DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
+// plus the four DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
 // stays on the existing Turso `vector_distance_cos` scan.
 //
-// WHY SONAR EXISTS. The live discovery surfaces (sonic search, "sounds like these artists",
-// "more like this") rank by cosine similarity against the whole MuQ corpus. On Turso that is a
-// linear `vector_distance_cos` scan that GROWS with the catalogue — seconds at scale. `sonar`
-// holds the same corpus in RAM and answers the nearest-neighbour part with a flat, SIMD-parallel,
-// exact scan (100% recall, tens of ms). It returns only `{id, score}`; the Worker then HYDRATES
-// the full row by primary key (a fast, flat lookup), so the expensive scan is gone while every
-// output DTO stays byte-identical to the Turso path.
+// WHY SONAR EXISTS. The live discovery surfaces (sonic search, "sounds like these artists", "more
+// like this", the /recommendations draft engine) rank by cosine similarity against the whole MuQ
+// corpus. On Turso that is a linear `vector_distance_cos` scan that GROWS with the catalogue —
+// seconds at scale. `sonar` holds the same corpus in RAM and answers the nearest-neighbour part
+// with a flat, SIMD-parallel, exact scan (100% recall, tens of ms). It returns only `{id, score}`;
+// the Worker then HYDRATES the full row by primary key (a fast, flat lookup), so the expensive
+// scan is gone while every output DTO stays byte-identical to the Turso path.
 //
 // THE SAFETY CONTRACT (the whole point of this slice). A surface routes to sonar ONLY when ALL of:
 //   1. its dark flag is the exact string "true" in the `settings` KV (DEFAULT OFF — unset ⇒ OFF),
@@ -36,6 +36,17 @@ export const SONAR_SONIC_ENABLED_KEY = "sonar_sonic_enabled";
 export const SONAR_ARTISTS_ENABLED_KEY = "sonar_artists_enabled";
 /** `/log` "more like this" neighbours → sonar `tracks` index (certified-only). */
 export const SONAR_LOG_ENABLED_KEY = "sonar_log_enabled";
+/**
+ * The `/recommendations` DRAFT-phase engine's FINDINGS SLOTS → sonar `tracks` index
+ * (certified-only, multi-probe over the listener's seed vectors).
+ *
+ * SCOPE, deliberately narrow: this flag routes the findings slots ONLY. The engine's OTHER scan —
+ * the catalogue pool — stays on Turso unconditionally, because its eligibility predicate
+ * (`REC_ELIGIBLE_WHERE`: dismissals, dedupe markers, the display-duplicate band, the long-form
+ * veto) has NO faithful sonar filter, and re-applying it during hydration would silently break
+ * top-k. The reasoning lives at the callsite (./recommendations.ts).
+ */
+export const SONAR_RECS_ENABLED_KEY = "sonar_recs_enabled";
 
 /** Whether sonic search routes to sonar — THE DARK FLAG. DEFAULT FALSE; only "true" enables it. */
 export async function isSonarSonicEnabled(): Promise<boolean> {
@@ -52,6 +63,14 @@ export async function isSonarLogEnabled(): Promise<boolean> {
   return (await getSetting(SONAR_LOG_ENABLED_KEY)) === "true";
 }
 
+/**
+ * Whether the `/recommendations` draft engine's findings slots route to sonar — THE DARK FLAG.
+ * DEFAULT FALSE; only "true" enables it.
+ */
+export async function isSonarRecsEnabled(): Promise<boolean> {
+  return (await getSetting(SONAR_RECS_ENABLED_KEY)) === "true";
+}
+
 /** Flip the sonic-search dark flag (operator). Writing anything but `true` leaves it OFF. */
 export async function setSonarSonicEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_SONIC_ENABLED_KEY, enabled ? "true" : "false");
@@ -65,6 +84,11 @@ export async function setSonarArtistsEnabled(enabled: boolean): Promise<void> {
 /** Flip the `/log`-neighbours dark flag (operator). Writing anything but `true` leaves it OFF. */
 export async function setSonarLogEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_LOG_ENABLED_KEY, enabled ? "true" : "false");
+}
+
+/** Flip the `/recommendations` dark flag (operator). Writing anything but `true` leaves it OFF. */
+export async function setSonarRecsEnabled(enabled: boolean): Promise<void> {
+  await setSetting(SONAR_RECS_ENABLED_KEY, enabled ? "true" : "false");
 }
 
 // ── The client ────────────────────────────────────────────────────────────────────────────────

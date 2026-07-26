@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isSonarArtistsEnabled,
   isSonarLogEnabled,
+  isSonarRecsEnabled,
   isSonarSonicEnabled,
   searchSonar,
 } from "./sonar";
@@ -155,6 +156,7 @@ describe("the dark flags — default OFF, only 'true' enables", () => {
     ["sonic", isSonarSonicEnabled, "sonar_sonic_enabled"],
     ["artists", isSonarArtistsEnabled, "sonar_artists_enabled"],
     ["log", isSonarLogEnabled, "sonar_log_enabled"],
+    ["recs", isSonarRecsEnabled, "sonar_recs_enabled"],
   ];
 
   for (const [label, read, key] of cases) {
