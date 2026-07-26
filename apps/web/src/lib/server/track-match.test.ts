@@ -82,6 +82,35 @@ describe("splitTitle", () => {
   it("drops a non-version subtitle but keeps it non-distinguishing", () => {
     expect(splitTitle("Song (Part Two)")).toEqual({ base: "song", descriptor: "" });
   });
+
+  it("folds a BARE trailing strong version word into the descriptor (the anchor false-miss)", () => {
+    // Measured 2026-07-26: our catalogue row "Paint It Black VIP" vs Spotify's
+    // "Paint It Black (Vip)" — same recording, permanently un-anchorable without this.
+    expect(splitTitle("Paint It Black VIP")).toEqual({ base: "paint it black", descriptor: "vip" });
+    expect(splitTitle("Song Remix")).toEqual({ base: "song", descriptor: "remix" });
+    expect(matchKey(["Sigma"], "Paint It Black VIP")).toBe(
+      matchKey(["Sigma"], "Paint It Black (Vip)"),
+    );
+  });
+
+  it("keeps the WEAK version words as title words when bare (a '… Dub' is a title, not a version)", () => {
+    expect(splitTitle("Champion Dub")).toEqual({ base: "champion dub", descriptor: "" });
+    expect(splitTitle("In the Mix")).toEqual({ base: "in the mix", descriptor: "" });
+    expect(splitTitle("Final Edit")).toEqual({ base: "final edit", descriptor: "" });
+  });
+
+  it("a title that IS a version word stays a title", () => {
+    expect(splitTitle("VIP")).toEqual({ base: "vip", descriptor: "" });
+    expect(splitTitle("Remix")).toEqual({ base: "remix", descriptor: "" });
+  });
+
+  it("a found descriptor wins over a bare trailing word", () => {
+    // The paren descriptor is already the identity; the base keeps its remaining words.
+    expect(splitTitle("Song VIP (Calibre Remix)")).toEqual({
+      base: "song vip",
+      descriptor: "calibre remix",
+    });
+  });
 });
 
 describe("matchKey", () => {

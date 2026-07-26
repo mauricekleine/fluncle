@@ -184,6 +184,16 @@ _VERSION_WORDS = {
 # Suffixes that name a version but are NOT distinguishing - they are the original.
 _NEUTRAL_DESCRIPTORS = {"original mix", "original", "extended mix"}
 
+# The subset of _VERSION_WORDS strong enough to mark a version even BARE at the end of a
+# title - no parens, no dash ("Paint It Black VIP" vs "Paint It Black (Vip)"; a measured
+# anchor false-miss, 2026-07-26). Deliberately narrow: dub/mix/version/edit/flip/extended
+# are genuine title-final words in jungle/DnB, and folding one off a real title would let
+# two different recordings match. Mirrors BARE_TRAILING_VERSION_WORDS in the TS port
+# (apps/web/src/lib/server/track-match.ts) - keep the two in lockstep.
+_BARE_TRAILING_VERSION_WORDS = {
+    "bootleg", "instrumental", "refix", "remaster", "remix", "rework", "rmx", "vip",
+}
+
 _ARTIST_SPLIT = re.compile(r"\s*(?:,|&|/|\band\b|\bx\b|\bvs\b|\bversus\b|\bwith\b)\s*")
 _FEAT_INLINE = re.compile(r"\b(?:feat|ft|featuring)\b\.?.*$", re.IGNORECASE)
 _PUNCT = re.compile(r"[^a-z0-9 ]+")
@@ -264,7 +274,20 @@ def _split_title(title: str) -> tuple[str, str]:
 
     # Drop an inline feat. from the base too.
     working = _FEAT_INLINE.sub("", working)
-    return _fold(working), descriptor
+    base = _fold(working)
+
+    # A BARE trailing strong version word ("Paint It Black VIP") is the same version the
+    # parenthesized spelling names - fold it into the descriptor so the two forms share a
+    # key. Only when no descriptor was found yet, and only when a non-empty base remains
+    # (a title that IS just "VIP" stays a title).
+    if not descriptor:
+        tokens = base.split(" ")
+
+        if len(tokens) > 1 and tokens[-1] in _BARE_TRAILING_VERSION_WORDS:
+            descriptor = tokens[-1]
+            base = " ".join(tokens[:-1])
+
+    return base, descriptor
 
 
 def match_key(artists: object, title: str) -> tuple[frozenset[str], str, str]:
