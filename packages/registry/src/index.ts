@@ -952,7 +952,7 @@ export const SURFACES: readonly Surface[] = [
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/.well-known/mcp/server-card.json`,
     exposedContent: [
-      "the archive as MCP tools (Streamable HTTP, no auth): list_findings, list_tracks, list_fresh, get_track, get_random_track, get_status, search_archive, get_artist, get_label, build_set, list_similar_artists, list_album_catalogue, list_artist_catalogue, list_label_catalogue, search_tracks, submit_track, subscribe_newsletter",
+      "the archive as MCP tools (Streamable HTTP, no auth): list_findings, list_tracks, list_fresh, get_track, get_random_track, get_status, search_archive, get_artist, get_label, build_set, list_similar_artists, list_album_catalogue, list_artist_catalogue, list_label_catalogue, list_artists, list_albums, list_labels, submit_track, subscribe_newsletter, plus the MCP-only search_tracks (Spotify candidate search, not an archive read)",
       "the archive as MCP resources: each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId> (its public record)",
       "Fluncle-voiced MCP prompts: recommend_finding, walk_recent_night, decode_coordinate",
     ],
@@ -1107,7 +1107,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin",
     exposedContent: [
-      "the operator/agent command group (hidden): tracks publish|update|enrich|video|draft|social|preview|observe|context|note, recordings create|promote, mixtapes update|distribute|resync, newsletter draft|update|send|list, backfills, auth",
+      "the operator/agent command group (hidden): a bare `queue` read plus ~22 plural groups — tracks (publish|update|enrich|embed|capture|video|draft|social|preview|observe|context|note|work|get|list|queue|mixable-order|requeue-analysis|vehicles), catalogue (the crawler + The Ear), frontier, labels, artists, albums, galaxies, notes, observations, clips, recordings, publish, capture, mixtapes, newsletter, logbook, prompts, submissions, reach, backfills, migrations, auth",
     ],
     kind: "cli",
     name: "cli.admin",
