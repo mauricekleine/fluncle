@@ -77,6 +77,14 @@ async function certify(options: {
     sql: `insert into findings (track_id, log_id, added_at, galaxy_id)
           values (?, ?, '2020-01-01T00:00:00.000Z', ?)`,
   });
+  // A certified track HAS a findings row, so the maintained catalogue flag is 0 — mirror the write
+  // sites (publishTrack / certifyExistingTrack) so the hub's certification filter, which reads
+  // `is_catalogue`, sees a finding as NON-catalogue exactly as production does. seedTrack alone leaves
+  // the flag at the DDL default (1); this is the certified-track flip.
+  await db.execute({
+    args: [options.trackId],
+    sql: `update tracks set is_catalogue = 0 where track_id = ?`,
+  });
 }
 
 async function seedArtist(id: string, name: string, slug: string): Promise<void> {
@@ -275,6 +283,27 @@ describe("listTracksHubPage — the filters compose with the page", () => {
     expect(ids(items)).toEqual(["hosp"]);
   });
 
+  it("filters by certification (the API tri-state), reading the maintained is_catalogue flag", async () => {
+    await seedTrack({ releaseDate: "2022-01-01", trackId: "finding" });
+    await certify({ logId: "200.7.1A", trackId: "finding" });
+    await seedTrack({ releaseDate: "2021-01-01", trackId: "catalogue_row" });
+
+    // certified: true → is_catalogue = 0 → the finding only.
+    const certified = await listTracksHubPage({ certified: true }, 1);
+    expect(ids(certified.items)).toEqual(["finding"]);
+    expect(certified.total).toBe(1);
+
+    // certified: false → is_catalogue = 1 → the uncertified catalogue row only.
+    const uncertified = await listTracksHubPage({ certified: false }, 1);
+    expect(ids(uncertified.items)).toEqual(["catalogue_row"]);
+    expect(uncertified.total).toBe(1);
+
+    // Absent → both registers.
+    const both = await listTracksHubPage({}, 1);
+    expect(ids(both.items)).toEqual(["finding", "catalogue_row"]);
+    expect(both.total).toBe(2);
+  });
+
   it("filters by galaxy, narrowing the list to certified findings only", async () => {
     await seedGalaxy({ id: "gal_named", name: "Green Sector", slug: "green-sector" });
     await seedTrack({ releaseDate: "2022-01-01", trackId: "in_galaxy" });
@@ -359,11 +388,15 @@ describe("countAllTracks", () => {
 // SHAPE (what SQL is emitted); the hosted timings are the bench's job, never this suite's.
 describe("the findings join is paid only when a predicate reads it", () => {
   it("drops the join from the id page, the count, and the year lane under tracks-only filters", () => {
+    // The certification filter reads the maintained `is_catalogue` flag on `tracks`, not a `findings`
+    // column, so it too keeps the join dropped (its whole point — the Keystone-1 quick-win).
     for (const filters of [
       {},
       { bpmMin: 170 },
       { key: "F minor" },
       { label: "Hospital Records" },
+      { certified: true },
+      { certified: false },
     ]) {
       expect(tracksHubIdPageQuery(filters, 48, 0).sql).not.toContain("findings");
       expect(tracksHubCountQuery(filters).sql).not.toContain("findings");

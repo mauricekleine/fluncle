@@ -95,8 +95,8 @@ export type TracksHubFilters = {
   bpmMin?: number;
   // The `list_tracks` API enumerator's tri-state certification filter (the machine twin's ONE filter):
   // `true` narrows to certified findings, `false` to the uncertified rows, `undefined` returns both.
-  // Folded into the SAME compiled clause set as every other filter (one gate, no forked query); because
-  // it reads a `findings` column, `findingsJoinFor` turns the LEFT JOIN on for it by itself. The web
+  // Folded into the SAME compiled clause set as every other filter (one gate, no forked query); it reads
+  // the maintained `is_catalogue` flag (Keystone 1), so it needs no `findings` join at all. The web
   // `/tracks` page never sets it (its register split is visual, not a filter) — this is API-only.
   certified?: boolean;
   galaxy?: string;
@@ -186,14 +186,16 @@ export function tracksHubClauses(filters: TracksHubFilters): Clause[] {
     clauses.push(galaxyClause(filters.galaxy));
   }
 
-  // The API enumerator's tri-state certification filter. `findings.track_id` is the presence key, so
-  // `is not null` selects the certified findings and `is null` the uncertified rows; either reads a
-  // `findings` column, so `findingsJoinFor` includes the LEFT JOIN for it automatically. Absent, no
-  // clause is added and both registers appear (the web page's default).
+  // The API enumerator's tri-state certification filter, expressed on the maintained `is_catalogue`
+  // flag (Keystone 1) rather than a `findings` anti-join: `is_catalogue = 1` is the uncertified
+  // catalogue slice (and rides the partial `tracks_is_catalogue_idx`), `= 0` the certified findings.
+  // Because neither reads a `findings` column, `findingsJoinFor` DROPS the LEFT JOIN for this filter —
+  // no per-row findings probe over the growing table. Absent, no clause is added and both registers
+  // appear (the web page's default).
   if (filters.certified === true) {
-    clauses.push({ args: [], sql: `findings.track_id is not null` });
+    clauses.push({ args: [], sql: `tracks.is_catalogue = 0` });
   } else if (filters.certified === false) {
-    clauses.push({ args: [], sql: `findings.track_id is null` });
+    clauses.push({ args: [], sql: `tracks.is_catalogue = 1` });
   }
 
   return clauses;
