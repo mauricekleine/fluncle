@@ -344,6 +344,48 @@ export async function getGalaxyProgress(user: PublicUser): Promise<GalaxyProgres
   };
 }
 
+/**
+ * The ceiling on ONE `merge_private_galaxy_progress` PUT's `collectedLogIds`.
+ *
+ * WHY A CEILING: the payload is a local save a signed-in caller hands us, and a Spotify login is
+ * open to anyone. Uncapped, one PUT can carry 100k ids; the shared limiter caps how OFTEN a
+ * caller may merge (`account.galaxy.merge`/30 an hour), never how MUCH one merge carries.
+ *
+ * SIZING: a Galaxy collectible is a CERTIFIED FINDING — `collectLogId` refuses anything without a
+ * `findings.log_id`, so the honest ceiling is "every finding in the archive", which is in the
+ * hundreds and grows by a handful a week. 10,000 is more than an order of magnitude above that:
+ * no real save can reach it for years, and a save that somehow did would be a bug worth a 400.
+ *
+ * OVERFLOW IS A REJECT: silently dropping the tail would tell the player their progress synced
+ * when part of it did not.
+ */
+export const MAX_GALAXY_MERGE_LOG_IDS = 10_000;
+
+/**
+ * How many ids ride in one SQL statement — both the `in (…)` resolve and the insert batch. Keeps
+ * placeholder counts and batch sizes well inside libSQL's limits while holding the whole merge to
+ * a handful of round trips (a Worker gets ~1,000 subrequests, and every query is one).
+ */
+const GALAXY_MERGE_CHUNK = 250;
+
+/** The one collection upsert, shared by the single-id and bulk paths so they cannot drift. */
+const COLLECT_LOG_SQL = `insert into user_galaxy_collections
+      (id, user_id, track_id, log_id, first_collected_at, last_collected_at, source_surface)
+      values (?, ?, ?, ?, ?, ?, ?)
+      on conflict(user_id, track_id) do update set
+        last_collected_at = excluded.last_collected_at,
+        log_id = excluded.log_id`;
+
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size));
+  }
+
+  return out;
+}
+
 export async function mergeGalaxyProgress(
   user: PublicUser,
   body: unknown,
@@ -353,18 +395,93 @@ export async function mergeGalaxyProgress(
   }
 
   const logIds = Array.isArray(body.collectedLogIds)
-    ? body.collectedLogIds.filter((value): value is string => typeof value === "string")
+    ? [
+        ...new Set(
+          body.collectedLogIds
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean),
+        ),
+      ]
     : [];
   const deaths = numberDelta(body.deaths);
   const wins = numberDelta(body.wins);
 
-  for (const logId of new Set(logIds)) {
-    await collectLogId(user, logId, "web");
+  // The cap is on the DEDUPED set, so a save that repeats a coordinate is never punished for it.
+  if (logIds.length > MAX_GALAXY_MERGE_LOG_IDS) {
+    return jsonError(
+      400,
+      "too_many_log_ids",
+      `A merge carries at most ${MAX_GALAXY_MERGE_LOG_IDS} coordinates.`,
+    );
   }
 
+  await collectLogIds(user, logIds, "web");
   await incrementGalaxyCounters(user.id, { deaths, wins });
 
   return getGalaxyProgress(user);
+}
+
+/**
+ * Collect a whole set of coordinates in a BOUNDED number of round trips: resolve the tokens in
+ * `in (…)` chunks, then upsert the resolved ones as chunked write batches, ensuring/touching the
+ * galaxy state once for the merge instead of once per id.
+ *
+ * It replaces a `for (…) await collectLogId(…)` loop that spent THREE serialized queries per id —
+ * a 300-coordinate save alone was ~900 queries, past the Worker's subrequest budget. Semantics are
+ * unchanged: only a track that resolves WITH a `findings.log_id` is collected (an unknown or
+ * uncertified token is skipped silently, exactly as the loop's ignored 404 did), and nothing is
+ * ensured or touched when nothing resolves.
+ */
+async function collectLogIds(
+  user: PublicUser,
+  tokens: readonly string[],
+  sourceSurface: "cli" | "mcp" | "ssh" | "web",
+): Promise<void> {
+  if (tokens.length === 0) {
+    return;
+  }
+
+  const db = await getDb();
+  // track_id → log_id, so two tokens naming the same track (its raw id and its Log ID) collect once.
+  const resolved = new Map<string, string>();
+
+  for (const chunk of chunked(tokens, GALAXY_MERGE_CHUNK)) {
+    const placeholders = chunk.map(() => "?").join(", ");
+    const result = await db.execute({
+      args: [...chunk, ...chunk],
+      // The set form of `findTrackByTrackOrLog`: same LEFT JOIN, same "either a raw track id or a
+      // Log ID" resolution, one statement for the chunk.
+      sql: `select tracks.track_id, findings.log_id from tracks
+        left join findings on findings.track_id = tracks.track_id
+        where tracks.track_id in (${placeholders}) or findings.log_id in (${placeholders})`,
+    });
+
+    for (const row of typedRows<TrackRefRow>(result.rows)) {
+      // No Log ID ⇒ not a finding ⇒ not collectible (the single path's 404).
+      if (row.log_id) {
+        resolved.set(row.track_id, row.log_id);
+      }
+    }
+  }
+
+  if (resolved.size === 0) {
+    return;
+  }
+
+  await ensureGalaxyState(user.id);
+
+  const now = new Date().toISOString();
+  const statements = [...resolved].map(([trackId, logId]) => ({
+    args: [randomUUID(), user.id, trackId, logId, now, now, sourceSurface],
+    sql: COLLECT_LOG_SQL,
+  }));
+
+  for (const chunk of chunked(statements, GALAXY_MERGE_CHUNK)) {
+    await db.batch(chunk, "write");
+  }
+
+  await touchGalaxyState(user.id, now);
 }
 
 export async function collectLogId(
@@ -384,12 +501,7 @@ export async function collectLogId(
 
   await db.execute({
     args: [randomUUID(), user.id, track.track_id, track.log_id, now, now, sourceSurface],
-    sql: `insert into user_galaxy_collections
-      (id, user_id, track_id, log_id, first_collected_at, last_collected_at, source_surface)
-      values (?, ?, ?, ?, ?, ?, ?)
-      on conflict(user_id, track_id) do update set
-        last_collected_at = excluded.last_collected_at,
-        log_id = excluded.log_id`,
+    sql: COLLECT_LOG_SQL,
   });
   await touchGalaxyState(user.id, now);
 

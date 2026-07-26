@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -78,8 +78,26 @@ export function readUserToken(): StoredUserToken | undefined {
 /** Persist the user token for the active profile with `0600` permissions. */
 export function writeUserToken(value: StoredUserToken): void {
   const path = userTokenPath();
-  mkdirSync(dirname(path), { recursive: true });
+
+  // `writeFileSync`'s `mode` only applies when it CREATES the file, and
+  // `mkdirSync` would take the default 0755 — so a pre-existing world-readable
+  // file (or config dir) would silently keep its looser mode across a re-login.
+  // Create the dir private and chmod the file on every write instead: the token
+  // is a live session bearer token, and on a shared machine `0644` hands it to
+  // any local account.
+  const dir = dirname(path);
+  mkdirSync(dir, { mode: 0o700, recursive: true });
+
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    // Defence in depth only — a loose DIRECTORY mode exposes the file's name,
+    // never its contents, and the config dir may legitimately be one we cannot
+    // chmod (created by another account). The file mode below is the guarantee.
+  }
+
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 /** Remove the stored user token for the active profile. Idempotent. */

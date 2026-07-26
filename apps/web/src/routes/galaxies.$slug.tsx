@@ -10,7 +10,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { galaxyBreadcrumbsJsonLd, musicPlaylistJsonLd } from "@/lib/log-schema";
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
-import { GALAXY_INDEX_MIN_FINDINGS, getGalaxyLensPage } from "@/lib/server/galaxies-map";
+import { GALAXY_INDEX_MIN_FINDINGS } from "@/lib/galaxies";
 import { type GalaxyListItem, type TrackListItem } from "@fluncle/contracts";
 
 // One sonic galaxy's lens page (browse-by-feel RFC, Slice 4): the galaxy as a place you
@@ -31,12 +31,17 @@ type GalaxyPageData = {
   galaxy: GalaxyListItem;
 };
 
+// The lens read arrives by a DYNAMIC import inside the handler — a body the client build removes
+// wholesale, so `galaxies-map.ts` and the `getDb` → `@libsql/client` chain behind it stay off the
+// browser. The thin-content floor above comes from the client-safe `lib/galaxies.ts` because the
+// `head` below (unlike a handler) IS eagerly bundled.
 const fetchGalaxy = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
-  .handler(
-    ({ data: { slug } }): Promise<GalaxyPageData | null> =>
-      getGalaxyLensPage(slug, GALAXY_PAGE_LIMIT, 0),
-  );
+  .handler(async ({ data: { slug } }): Promise<GalaxyPageData | null> => {
+    const { getGalaxyLensPage } = await import("@/lib/server/galaxies-map");
+
+    return getGalaxyLensPage(slug, GALAXY_PAGE_LIMIT, 0);
+  });
 
 function galaxyHead(loaderData: GalaxyPageData | null | undefined) {
   if (!loaderData) {

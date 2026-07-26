@@ -60,7 +60,7 @@ import {
   type CatalogueRecord,
   type CatalogueSort,
   pageNumbers,
-} from "@/lib/server/catalogue-groups";
+} from "@/lib/catalogue";
 
 /** The record's year — the one number in this band, so it takes the Tabular Rule's numerals. */
 function ReleaseYear({ date }: { date: string | undefined }) {

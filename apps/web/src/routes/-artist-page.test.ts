@@ -64,8 +64,10 @@ vi.mock("@/lib/server/artist-dossier", async (importOriginal) => ({
   getArtistNeighbours,
 }));
 
-const { ARTIST_CATALOGUE_SORT_DEFAULT, Route, resolveArtistPageData } =
-  await import("./artist.$slug");
+const { ARTIST_CATALOGUE_SORT_DEFAULT, Route } = await import("./artist.$slug");
+// The resolver lives beside the route rather than in it, so the route module carries no static
+// `lib/server/**` import into the browser bundle (see `-artist-page-data.ts`).
+const { resolveArtistPageData } = await import("./-artist-page-data");
 
 const ARTIST = {
   id: "artist-drift",
@@ -378,5 +380,40 @@ describe("FindingsGrid render contract (the band the artist page now delegates t
     expect(html).toContain("Recommended by Fluncle");
     expect(html).toMatch(/<h2[^>]*id="findings-grid-heading"/);
     expect(html).toContain('aria-labelledby="findings-grid-heading"');
+  });
+
+  // The band's FIRST cover is the LCP candidate on every graph page (artist/album/label): it is
+  // above the fold on every viewport and it is the widest paint. A lazy image that happens to be in
+  // the viewport still loads, but Chrome holds it at Low priority and defers it until layout — which
+  // is exactly the wait an entity page's LCP was sitting in. Tile 1 is eager + high; tiles 2..n stay
+  // lazy, because the priority signal only buys anything while it is scarce.
+  it("fetches the FIRST cover eagerly at high priority and leaves the rest lazy", async () => {
+    const html = await renderFindingsGrid([
+      {
+        albumImageUrl: "https://i.scdn.co/image/ab67616d00001e02aaaa",
+        artists: ["Drift"],
+        logId: "001.1.1A",
+        title: "First",
+        trackId: "t-1",
+      },
+      {
+        albumImageUrl: "https://i.scdn.co/image/ab67616d00001e02bbbb",
+        artists: ["Drift"],
+        logId: "001.1.2A",
+        title: "Second",
+        trackId: "t-2",
+      },
+    ]);
+
+    const covers = html.match(/<img[^>]*class="track-artwork artist-grid-cover"[^>]*>/g) ?? [];
+    expect(covers).toHaveLength(2);
+
+    // React serialises the prop as `fetchPriority`; HTML attribute names are case-insensitive, so
+    // match without caring which casing the renderer emits.
+    const [lead = "", follower = ""] = covers;
+    expect(lead).toContain('loading="eager"');
+    expect(lead.toLowerCase()).toContain('fetchpriority="high"');
+    expect(follower).toContain('loading="lazy"');
+    expect(follower.toLowerCase()).not.toContain("fetchpriority");
   });
 });

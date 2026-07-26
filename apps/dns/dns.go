@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"log"
+	"net"
 	"strings"
 	"time"
 
@@ -38,9 +39,19 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Authoritative = true
 
+	// EDNS0 first: it decides how big a UDP answer may be, and every reply below
+	// is written through h.reply, which truncates to that ceiling.
+	udpSize, ok := h.applyEdns0(m, r)
+	if !ok {
+		// Unsupported EDNS version: BADVERS, per RFC 6891 §6.1.3.
+		m.SetRcode(r, dns.RcodeBadVers)
+		h.reply(w, m, udpSize)
+		return
+	}
+
 	if len(r.Question) != 1 || r.Question[0].Qclass != dns.ClassINET {
 		m.SetRcode(r, dns.RcodeRefused)
-		_ = w.WriteMsg(m)
+		h.reply(w, m, udpSize)
 		return
 	}
 
@@ -51,14 +62,14 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// Outside our zone: we are not recursive.
 	if name != zone && !strings.HasSuffix(name, "."+zone) {
 		m.SetRcode(r, dns.RcodeRefused)
-		_ = w.WriteMsg(m)
+		h.reply(w, m, udpSize)
 		return
 	}
 
 	// Zone apex: SOA / NS / (ANY) answered authoritatively.
 	if name == zone {
 		h.answerApex(m, q)
-		_ = w.WriteMsg(m)
+		h.reply(w, m, udpSize)
 		return
 	}
 
@@ -71,7 +82,7 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// finding lookup. It always exists (NODATA, never NXDOMAIN, for non-TXT types).
 	if label == liveLabel {
 		h.answerLive(m, q)
-		_ = w.WriteMsg(m)
+		h.reply(w, m, udpSize)
 		return
 	}
 
@@ -82,30 +93,88 @@ func (h *handler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		// A child name with no record of this type: NODATA (empty + SOA),
 		// only if the finding actually exists, else NXDOMAIN.
 		if _, err := h.api.lookup(label); err != nil {
-			if errors.Is(err, errNotFound) {
-				h.nxdomain(m)
-			} else {
-				log.Printf("lookup %q: %v", label, err)
-				m.Rcode = dns.RcodeServerFailure
-			}
+			h.answerLookupError(m, err)
 		} else {
 			h.nodata(m)
 		}
 	default:
 		h.nodata(m)
 	}
+	h.reply(w, m, udpSize)
+}
+
+// applyEdns0 reads the request's OPT record, echoes one on the reply, and
+// returns the ceiling a UDP answer must fit inside. `ok` is false when the
+// client speaks an EDNS version we do not (caller answers BADVERS).
+//
+// A client with no OPT record gets the plain-DNS 512-byte ceiling; a client that
+// advertises more gets what it asked for, clamped to cfg.MaxUDPSize so we never
+// emit a fragmenting jumbo packet (nor a fat reflection payload).
+func (h *handler) applyEdns0(m, r *dns.Msg) (int, bool) {
+	ceiling := int(h.cfg.MaxUDPSize)
+	if ceiling < dns.MinMsgSize {
+		ceiling = dns.MinMsgSize
+	}
+
+	opt := r.IsEdns0()
+	if opt == nil {
+		return dns.MinMsgSize, true
+	}
+
+	// Advertise our own ceiling back, and mirror DO so a DNSSEC-aware resolver
+	// sees a well-formed OPT (the zone is unsigned, so there is nothing to add).
+	m.SetEdns0(uint16(ceiling), opt.Do())
+
+	if opt.Version() != 0 {
+		return ceiling, false
+	}
+
+	size := int(opt.UDPSize())
+	if size < dns.MinMsgSize {
+		// RFC 6891 §6.2.3: an advertised size below 512 is treated as 512.
+		size = dns.MinMsgSize
+	}
+	if size > ceiling {
+		size = ceiling
+	}
+	return size, true
+}
+
+// reply writes the answer, setting TC and shedding records when a UDP answer
+// does not fit the client's buffer so the client retries over TCP. miekg/dns
+// does not do this for us: without it an oversized TXT is written as an
+// over-long UDP datagram that the client silently fails to read.
+func (h *handler) reply(w dns.ResponseWriter, m *dns.Msg, udpSize int) {
+	if isUDP(w) {
+		m.Truncate(udpSize)
+	}
 	_ = w.WriteMsg(m)
+}
+
+// isUDP reports whether this query arrived over UDP (the TCP listener shares the
+// same handler, and a TCP answer needs no truncation).
+func isUDP(w dns.ResponseWriter) bool {
+	_, ok := w.RemoteAddr().(*net.UDPAddr)
+	return ok
+}
+
+// answerLookupError maps a failed lookup onto an rcode: a confirmed absence is
+// NXDOMAIN, anything else (an upstream failure, or our own spent outbound
+// budget) is SERVFAIL. Nothing is logged here on purpose — a cached failure
+// answers from memory, and logging per ANSWER would let a query flood amplify
+// into the journal. The api client logs once per real upstream failure instead.
+func (h *handler) answerLookupError(m *dns.Msg, err error) {
+	if errors.Is(err, errNotFound) {
+		h.nxdomain(m)
+		return
+	}
+	m.Rcode = dns.RcodeServerFailure
 }
 
 func (h *handler) answerTXT(m *dns.Msg, q dns.Question, label string) {
 	t, err := h.api.lookup(label)
 	if err != nil {
-		if errors.Is(err, errNotFound) {
-			h.nxdomain(m)
-			return
-		}
-		log.Printf("lookup %q: %v", label, err)
-		m.Rcode = dns.RcodeServerFailure
+		h.answerLookupError(m, err)
 		return
 	}
 	m.Answer = append(m.Answer, &dns.TXT{
@@ -126,7 +195,7 @@ func (h *handler) answerLive(m *dns.Msg, q dns.Question) {
 	case dns.TypeTXT, dns.TypeANY:
 		info, err := h.api.liveStatus()
 		if err != nil {
-			log.Printf("live lookup: %v", err)
+			// Logged once per real failure by the api client, not per answer.
 			m.Rcode = dns.RcodeServerFailure
 			return
 		}
@@ -204,7 +273,7 @@ func (h *handler) nodata(m *dns.Msg) {
 
 // run starts the UDP and TCP listeners and blocks until one errors.
 func run(cfg config) error {
-	api := newAPIClient(cfg.APIBase, cfg.APITimeout, cfg.CacheTTL)
+	api := newAPIClient(cfg)
 	h := newHandler(cfg, api)
 
 	mux := dns.NewServeMux()

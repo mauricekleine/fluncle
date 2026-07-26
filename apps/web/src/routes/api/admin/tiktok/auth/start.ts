@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { requireOperator, signState } from "../../../../../lib/server/env";
+import { hasBearerHeader, requireOperator } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
+import { mintOauthState } from "../../../../../lib/server/oauth-state";
 import { buildTikTokAuthUrl } from "../../../../../lib/server/tiktok";
 
 // Admin-gated start of our own TikTok OAuth (Display API per-video metrics). Mirrors the
@@ -15,17 +16,20 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
-      const state = await signState({
-        iat: Date.now(),
-        nonce: crypto.randomUUID(),
-        purpose: "tiktok-auth",
+      // Browser start ⇒ the state is pinned to this browser by a nonce cookie; CLI
+      // start (Bearer) ⇒ unbound (oauth-state.ts).
+      const { setCookie, state } = await mintOauthState("tiktok-auth", {
+        bindToBrowser: !hasBearerHeader(request),
       });
       const authUrl = await buildTikTokAuthUrl(state);
 
-      return Response.json({
-        authUrl,
-        ok: true,
-      });
+      return Response.json(
+        {
+          authUrl,
+          ok: true,
+        },
+        setCookie ? { headers: { "Set-Cookie": setCookie } } : undefined,
+      );
     } catch (error) {
       return apiErrorResponse(error);
     }

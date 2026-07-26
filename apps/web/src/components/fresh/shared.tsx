@@ -23,7 +23,8 @@ import { type FreshCover, type FreshStreamEntry } from "./data";
  * A lead-artist avatar sized for the slot it lands in, rather than for the DTO's og:image rung.
  * Every avatar on this page is a small round tile — 2.25–3rem — so the 300 rung covers even a 3rem
  * marquee avatar on a 2× screen with headroom, where the 640 the DTO hands out was up to 13× the
- * pixels the tile can show. An avatar that is not an owned cover master passes through untouched.
+ * pixels the tile can show. An avatar with no owned cover master lands on Spotify's own 320 rung —
+ * the nearest thing the portrait ladder publishes to this one.
  */
 export function freshAvatarSrc(src: string | undefined): string | undefined {
   return albumCoverAtSize(src, "medium");

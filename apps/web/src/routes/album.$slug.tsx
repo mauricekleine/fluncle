@@ -13,15 +13,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { albumBreadcrumbsJsonLd, musicAlbumJsonLd } from "@/lib/log-schema";
 import { albumCoverAtSize } from "@/lib/media";
 import { bioMetaDescription } from "@/lib/meta-description";
-import { ALBUM_INDEX_MIN_TRACKS, getAlbumBySlug } from "@/lib/server/albums";
-import { type ArtistChip, listArtistsByAlbum } from "@/lib/server/artists";
-import { getLabelForAlbum, type LabelRecord } from "@/lib/server/labels";
-import {
-  type CatalogueTrackItem,
-  getFindingsByAlbum,
-  listCatalogueTracksByAlbum,
-  type TrackListItem,
-} from "@/lib/server/tracks";
+import { type AlbumPageData } from "./-album-page-data";
 
 // The album page — one record's place in the archive, and the fourth node of the graph
 // (log ↔ artist ↔ label ↔ album). The twin of `/label/<slug>`, plus one edge the label page
@@ -29,88 +21,17 @@ import {
 // `albumRelease.recordLabel` pointing at that label page's Organization `@id`. That edge is
 // where the graph closes. See docs/album-entity.md.
 
-type AlbumPageData =
-  | {
-      artists: ArtistChip[];
-      /**
-       * The album's voiced factual bio — a short paragraph beneath the masthead, undefined until
-       * one is authored (lib/server/bio.ts). The page renders it only when present.
-       */
-      bio: string | undefined;
-      /** Uncertified tracks on this album. Empty until the catalogue lands. */
-      catalogue: CatalogueTrackItem[];
-      coverImageUrl: string | undefined;
-      findings: TrackListItem[];
-      indexable: boolean;
-      label: LabelRecord | undefined;
-      name: string;
-      /** The record's earliest track release date → the MusicAlbum's `datePublished`. */
-      releaseDate: string | undefined;
-      /** The MusicBrainz release-group MBID → the MusicAlbum's `sameAs`. */
-      releaseGroupMbid: string | undefined;
-      slug: string;
-      status: "found";
-      /** The album's barcode → the MusicAlbum's `gtin13`. */
-      upc: string | undefined;
-    }
-  | { status: "missing" };
-
-/**
- * Resolve the album page's data. Extracted from the server fn so the indexability decision
- * is unit-testable (see -graph-pages.test.ts), the `resolveArtistPageData` precedent.
- *
- * A record earns a page on its CONTENT, exactly as a label does (`/label/<slug>` carries the
- * long version of this note): a tracklist is a real page, and what keeps a stub out of the index
- * is the thin-content gate below, counting TOTAL renderable tracks. A crawl-minted, findings-free
- * record has an `albums` row (minted inline at crawl time) and renders on its tracklist, indexing
- * once it clears the floor — exactly as a discovered label does on its releases.
- *
- * A slug with no `albums` row at all is still MISSING, and still 404s.
- */
-export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData> {
-  const album = await getAlbumBySlug(slug);
-
-  if (!album) {
-    return { status: "missing" };
-  }
-
-  const [findings, catalogue, artists, label] = await Promise.all([
-    getFindingsByAlbum(album.id),
-    listCatalogueTracksByAlbum(album.id),
-    listArtistsByAlbum(album.id),
-    getLabelForAlbum(album.id),
-  ]);
-
-  return {
-    artists,
-    bio: album.bio,
-    catalogue: catalogue.tracks,
-    // The record's cover is its freshest finding's album art — never invented, never
-    // re-hosted (the `i.scdn.co` attribution-by-link precedent). A record with no finding
-    // has no cover of its own to show, and shows none.
-    coverImageUrl: findings[0]?.albumImageUrl,
-    findings,
-    // Thin-content gate: index only past ALBUM_INDEX_MIN_TRACKS RENDERABLE tracks — the
-    // findings PLUS the quieter rows, because both are real content on the page. The
-    // sitemap keys off the same sum (the entity's TRUE catalogue total, never the
-    // rendered slice), so an indexable page is never orphaned from it.
-    indexable: findings.length + catalogue.total >= ALBUM_INDEX_MIN_TRACKS,
-    label,
-    name: album.name,
-    // The album's identity anchors + its earliest release date, read in the same `getAlbumBySlug`
-    // pass (the `datePublished`/`sameAs`/`gtin13` the JSON-LD emits). Undefined when the record
-    // carries none.
-    releaseDate: album.releaseDate,
-    releaseGroupMbid: album.releaseGroupMbid,
-    slug: album.slug,
-    status: "found",
-    upc: album.upc,
-  };
-}
-
+// The resolver is reached by a DYNAMIC import inside the handler, and the type by `import
+// type` — so nothing in this route module statically references `lib/server/**`. The client
+// build removes a handler body wholesale, which takes the import (and the whole database chain
+// behind it) out of the browser bundle; see `-album-page-data.ts` for the measurement.
 const fetchAlbum = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
-  .handler(({ data: { slug } }): Promise<AlbumPageData> => resolveAlbumPageData(slug));
+  .handler(async ({ data: { slug } }): Promise<AlbumPageData> => {
+    const { resolveAlbumPageData } = await import("./-album-page-data");
+
+    return resolveAlbumPageData(slug);
+  });
 
 function albumHead(loaderData: AlbumPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -161,9 +82,22 @@ function albumHead(loaderData: AlbumPageData | undefined) {
           ? `The tracks on ${name}, ${factClause}, with the artists behind them.`
           : `The tracks on ${name}, with the artists behind them.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
+  // THE LEAD IMAGE — the findings band's first cover, which is this page's LCP candidate and is
+  // already above the fold on every viewport. Preloaded at the `medium` rung, byte-identical to what
+  // FindingsGrid asks for, so it is a cache hit rather than a second fetch. Same one-preload shape
+  // as /artist/<slug> and the homepage cover; FindingsGrid marks the matching tile non-lazy.
+  const leadImageUrl = albumCoverAtSize(
+    findings.find((finding) => finding.logId)?.albumImageUrl,
+    "medium",
+  );
 
   return {
-    links: [{ href: pageUrl, rel: "canonical" }],
+    links: [
+      { href: pageUrl, rel: "canonical" },
+      ...(leadImageUrl
+        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
+        : []),
+    ],
     meta: [
       { title },
       { content: description, name: "description" },

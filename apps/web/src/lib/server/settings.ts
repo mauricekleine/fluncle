@@ -11,9 +11,10 @@
 // default; a budget or a dial that fails to parse falls back to the calibrated constant
 // (smaller budget, never "unlimited"); a JSON cache that will not parse is a MISS that falls
 // through to the live read. No reader may make a `settings` row load-bearing for
-// correctness, because nothing guarantees the row is there or well-formed.
+// correctness, because nothing guarantees the row is there or well-formed. Shape (7) below is
+// the ONE argued exception, and it states its own reason.
 //
-// WHAT RIDES IT TODAY — 31 keys across 14 modules, in six shapes (grep `getSetting(` for the
+// WHAT RIDES IT TODAY — 32 keys across 15 modules, in seven shapes (grep `getSetting(` for the
 // live list; each module owns its own exported key constant and its own default):
 //
 //   1. OPERATOR FLIPS — `"true"`/`"false"`, and the unset state is the deliberate default
@@ -50,6 +51,21 @@
 //      cold/corrupt row falls back to the live `readArchiveAffinity`. Every
 //      authorization-critical caller reads live, never the cache. A future cache belongs here
 //      only on the same terms: parse-or-recompute, and never the source of truth.
+//
+//   7. THE ONE SECURITY COUNTER, and the ONE documented exception to the invariant above:
+//      `admin_grant_epoch` (./env.ts, `ADMIN_GRANT_EPOCH_KEY`) — the revocation handle for
+//      the stateless admin grant cookie. Every grant bakes the epoch it was minted under;
+//      bumping this integer (`fluncle admin auth revoke-grants`) makes every outstanding
+//      browser session stop verifying at once, with no deploy and no secret rotation. It
+//      belongs here for exactly the store's reason: cutting a leaked session must be a flip.
+//      Its ABSENT state degrades as the invariant demands (unset ⇒ epoch 0 ⇒ the pre-epoch
+//      behaviour). But a read that FAILS or a value that will not parse **refuses the
+//      cookie** rather than falling back — a revocation that fails open is not a revocation,
+//      so this one reader is deliberately load-bearing on the unhappy path. The cost is
+//      bounded and recoverable: a DB blip 401s the browser board (a reload fixes it once the
+//      DB is back — the cookie is not cleared), the Bearer carriers are never epoch-scoped,
+//      and a malformed value is repaired by the revoke op itself. A NEW key does not inherit
+//      this exception; it needs the same explicit argument.
 //
 // Reuse these three functions for the next one; never invent a second flag store.
 

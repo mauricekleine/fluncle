@@ -2,6 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
 import { logEvent } from "../../../../../lib/server/log";
+import {
+  clearedStateCookie,
+  stateIsBoundToThisBrowser,
+} from "../../../../../lib/server/oauth-state";
 import { exchangeCodeForTikTokToken } from "../../../../../lib/server/tiktok";
 
 // TikTok redirects here after the consent screen. We verify the signed state (purpose
@@ -31,10 +35,18 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(400, "invalid_state", "Invalid state");
       }
 
+      // The browser binding, checked BEFORE the code is spent (oauth-state.ts).
+      if (!stateIsBoundToThisBrowser(request, statePayload)) {
+        return jsonError(400, "invalid_state", "Invalid state");
+      }
+
       await exchangeCodeForTikTokToken(code);
 
       return new Response(null, {
-        headers: { Location: "/admin?tiktok=connected" },
+        headers: {
+          Location: "/admin?tiktok=connected",
+          "Set-Cookie": clearedStateCookie("tiktok-auth"),
+        },
         status: 302,
       });
     } catch (authError) {

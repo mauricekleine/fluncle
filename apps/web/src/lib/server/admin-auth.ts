@@ -1,11 +1,13 @@
 // Web admin auth — the browser carrier for the single admin identity. The
 // operator proves who they are with "Login with
 // Spotify" (the existing Spotify app, allow-listed to one account), and we hand
-// the browser a SIGNED GRANT COOKIE: `{ role: "admin", iat }` HMAC'd with
-// ADMIN_SESSION_SECRET (signState in env.ts). The secret is the signing KEY,
-// never the cookie's value, so it never reaches the client. requireAdmin
-// (env.ts) accepts this cookie OR the CLI's Bearer token — one identity, two
-// carriers.
+// the browser a SIGNED GRANT COOKIE: `{ epoch, iat, role: "admin" }` HMAC'd with a
+// subkey DERIVED from ADMIN_SESSION_SECRET (`signAdminGrant` in env.ts — the OAuth
+// state rides a different subkey, so neither can be replayed as the other). The
+// secret is the signing KEY, never the cookie's value, so it never reaches the
+// client. `epoch` is the revocation handle: bumping it (`revoke_admin_grants`)
+// invalidates every outstanding cookie at once. requireAdmin (env.ts) accepts this
+// cookie OR the CLI's Bearer token — one identity, two carriers.
 
 import { getCookie } from "@tanstack/react-start/server";
 import {
@@ -13,8 +15,8 @@ import {
   ADMIN_GRANT_MAX_AGE_MS,
   readEnv,
   readOptionalEnv,
-  signState,
-  verifySignedState,
+  signAdminGrant,
+  verifyAdminGrant,
 } from "./env";
 import { type SpotifyProfile } from "./spotify";
 
@@ -44,21 +46,11 @@ export async function isAllowedSpotifyUser(profile: SpotifyProfile): Promise<boo
 }
 
 export async function signGrant(): Promise<string> {
-  return signState({ iat: Date.now(), role: "admin" });
+  return signAdminGrant();
 }
 
 export async function verifyGrant(value: string | null | undefined): Promise<boolean> {
-  if (!value) {
-    return false;
-  }
-
-  try {
-    const payload = await verifySignedState(value, ADMIN_GRANT_MAX_AGE_MS);
-
-    return payload.role === "admin";
-  } catch {
-    return false;
-  }
+  return verifyAdminGrant(value);
 }
 
 /**

@@ -16,6 +16,8 @@
 //   - `exchange_lastfm_session` — step 3: trade the approved token for the durable
 //     session key (LOOSE body — the live route validates `token` itself,
 //     `invalid_request`).
+//   - `revoke_admin_grants` — the admin session KILL SWITCH: bump the grant epoch so
+//     every outstanding browser grant cookie stops verifying at once.
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
@@ -92,10 +94,33 @@ export const exchangeLastfmSession = oc
   .input(z.looseObject({ token: z.unknown().optional() }))
   .output(z.object({ name: z.string(), ok: z.literal(true), sessionKey: z.string() }));
 
+/**
+ * `revoke_admin_grants` → `POST /admin/auth/revoke-grants` (operationId
+ * `revokeAdminGrants`).
+ *
+ * Operator tier. The admin session kill switch: bump the grant epoch stored in the
+ * `settings` KV so every outstanding browser grant cookie stops verifying
+ * immediately. The operator signs back in with Login with Spotify; the CLI/agent
+ * Bearer carriers are untouched (they are not epoch-scoped), so this can be fired
+ * from the CLI even when the browser session is the thing being cut.
+ *
+ * Bodyless. Returns the new `epoch` so the operator can see the bump landed.
+ */
+export const revokeAdminGrants = oc
+  .route({
+    method: "POST",
+    operationId: "revokeAdminGrants",
+    path: "/admin/auth/revoke-grants",
+    summary: "Revoke every admin browser session (bump the grant epoch)",
+    tags: ["Admin"],
+  })
+  .output(z.object({ epoch: z.number().int().nonnegative(), ok: z.literal(true) }));
+
 /** The `admin-tokens` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTokensContract = {
   exchange_lastfm_session: exchangeLastfmSession,
   mint_mixcloud_token: mintMixcloudToken,
   mint_youtube_token: mintYoutubeToken,
+  revoke_admin_grants: revokeAdminGrants,
   start_lastfm_auth: startLastfmAuth,
 };

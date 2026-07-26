@@ -557,12 +557,24 @@ export async function countAllTracks(): Promise<number> {
   });
 }
 
+/** A lane chip is only ever a four-digit year. The lane read's `release_date is not null` gate lets
+    an EMPTY-STRING release date through, and `substr('', 1, 4)` is `''` — which rendered a chip with
+    no text at all (a link with no accessible name, axe `link-name`, /tracks 2026-07-26). A partial
+    date short of four characters lands the same way. Both are undated rows the null check missed. */
+function isYearBucket(year: string): boolean {
+  return /^\d{4}$/.test(year);
+}
+
 /**
  * Fold per-year counts (newest year first) into one page number per year — the year fast lane. Pure,
  * so it is unit-pinned. Because the list orders `release_date desc`, every release of a later year
  * sorts before any release of an earlier one, so a year's first row lands at the running rank of all
  * later years' rows; its page is `floor(rank / pageSize) + 1`. Undated rows sort last and never move
  * a year, so the lane read excludes them.
+ *
+ * A bucket that is not a real year is dropped from the LANE but still advances `rank` — it holds real
+ * rows on real pages, so skipping its count would misplace every year after it. Order-independent by
+ * construction, so it holds whichever end of the sort the empty bucket lands on.
  */
 export function yearPages(
   counts: { n: number; year: string }[],
@@ -572,7 +584,10 @@ export function yearPages(
   let rank = 0;
 
   for (const { n, year } of counts) {
-    lane.push({ page: Math.floor(rank / pageSize) + 1, year });
+    if (isYearBucket(year)) {
+      lane.push({ page: Math.floor(rank / pageSize) + 1, year });
+    }
+
     rank += Number(n);
   }
 

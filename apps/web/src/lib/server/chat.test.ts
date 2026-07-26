@@ -86,6 +86,10 @@ import {
   buildChatTools,
   FLUNCLE_CHAT_SYSTEM_PROMPT,
   type FluncleUIMessage,
+  MAX_CHAT_MESSAGES,
+  MAX_CHAT_TOTAL_CHARS,
+  MAX_PARTS_PER_MESSAGE,
+  MAX_TEXT_PART_CHARS,
   parseChatRequest,
   resolveChatModel,
   streamChat,
@@ -210,6 +214,101 @@ describe("parseChatRequest", () => {
     expect(parseChatRequest({ messages: "nope" })).toBeNull();
     expect(parseChatRequest({})).toBeNull();
     expect(parseChatRequest("nope")).toBeNull();
+  });
+
+  // ── The size caps, at the boundary ─────────────────────────────────────────────────────
+  //
+  // A POST body feeding a PAID model in a 128MB isolate: the rate limiter caps how OFTEN a
+  // caller may ask, these cap how MUCH one ask may carry. Each is asserted at the cap (still
+  // accepted, so no legitimate conversation is refused) and one past it (rejected, never
+  // truncated — a silently shortened history is a grounding failure that looks like an answer).
+
+  function textMessage(text: string, index = 0) {
+    return { id: `msg-${index}`, parts: [{ text, type: "text" }], role: "user" as const };
+  }
+
+  it("accepts a history AT the message cap and rejects one message more", () => {
+    const atCap = Array.from({ length: MAX_CHAT_MESSAGES }, (_, i) => textMessage("hi", i));
+
+    expect(parseChatRequest({ messages: atCap })).toHaveLength(MAX_CHAT_MESSAGES);
+    expect(
+      parseChatRequest({ messages: [...atCap, textMessage("hi", MAX_CHAT_MESSAGES)] }),
+    ).toBeNull();
+  });
+
+  it("accepts a message AT the parts cap and rejects one part more", () => {
+    const parts = Array.from({ length: MAX_PARTS_PER_MESSAGE }, () => ({
+      text: "hi",
+      type: "text",
+    }));
+
+    expect(parseChatRequest({ messages: [{ id: "m", parts, role: "user" }] })).not.toBeNull();
+    expect(
+      parseChatRequest({
+        messages: [{ id: "m", parts: [...parts, { text: "hi", type: "text" }], role: "user" }],
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts a text part AT the character cap and rejects one character more", () => {
+    expect(
+      parseChatRequest({ messages: [textMessage("x".repeat(MAX_TEXT_PART_CHARS))] }),
+    ).not.toBeNull();
+    expect(
+      parseChatRequest({ messages: [textMessage("x".repeat(MAX_TEXT_PART_CHARS + 1))] }),
+    ).toBeNull();
+  });
+
+  it("rejects a body that multiplies its way past the total-character cap", () => {
+    // Every per-item cap satisfied — messages, parts, and each part's length — yet the whole
+    // turn history is over the aggregate ceiling. This is the cap that actually bounds the bill.
+    const perMessage = MAX_TEXT_PART_CHARS;
+    const count = Math.floor(MAX_CHAT_TOTAL_CHARS / perMessage) + 1;
+    const messages = Array.from({ length: count }, (_, i) =>
+      textMessage("x".repeat(perMessage), i),
+    );
+
+    expect(count).toBeLessThanOrEqual(MAX_CHAT_MESSAGES);
+    expect(parseChatRequest({ messages })).toBeNull();
+
+    // Exactly at the total is still served.
+    const atTotal = [
+      ...Array.from({ length: count - 1 }, (_, i) => textMessage("x".repeat(perMessage), i)),
+      textMessage("x".repeat(MAX_CHAT_TOTAL_CHARS - (count - 1) * perMessage), count),
+    ];
+
+    expect(parseChatRequest({ messages: atTotal })).not.toBeNull();
+  });
+
+  it("counts a forged tool part toward the total — no part type escapes the ceiling", () => {
+    // The client posts the assistant's tool parts back with the history, so `output` is
+    // caller-controlled too. A per-text-part cap alone would leave this wide open.
+    const forged = (index: number) => ({
+      id: `msg-${index}`,
+      parts: [{ output: { hits: ["x".repeat(MAX_TEXT_PART_CHARS)] }, type: "tool-get_track" }],
+      role: "assistant" as const,
+    });
+    const count = Math.floor(MAX_CHAT_TOTAL_CHARS / MAX_TEXT_PART_CHARS) + 1;
+
+    expect(
+      parseChatRequest({ messages: Array.from({ length: count }, (_, i) => forged(i)) }),
+    ).toBeNull();
+
+    // One such part is well under the total, so an ordinary tool result still rides.
+    expect(parseChatRequest({ messages: [forged(0)] })).not.toBeNull();
+  });
+
+  it("rejects a part nested deeper than the walk follows", () => {
+    // Fail closed: nesting the payload past the walk's depth must not buy an uncounted body.
+    let deep: unknown = "x";
+
+    for (let i = 0; i < 20; i += 1) {
+      deep = { deep };
+    }
+
+    expect(
+      parseChatRequest({ messages: [{ id: "m", parts: [{ deep, type: "text" }], role: "user" }] }),
+    ).toBeNull();
   });
 });
 

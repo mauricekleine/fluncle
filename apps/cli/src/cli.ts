@@ -1929,6 +1929,15 @@ function addAdminCommands(program: Command): void {
     });
 
   auth
+    .command("revoke-grants")
+    .description("Sign every admin browser session out (bump the grant epoch)")
+    .option("--json", "Output raw JSON")
+    .action(async (options: { json?: boolean }) => {
+      const { authRevokeGrantsCommand } = await import("./commands/auth-revoke-grants");
+      await authRevokeGrantsCommand(options);
+    });
+
+  auth
     .command("lastfm")
     .description(
       "Authorize Last.fm access (love-on-add). Run once for the URL, then again with --token",

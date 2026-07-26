@@ -14,11 +14,17 @@ const envKeys = [
   // is optional. Both are comma-separated (see admin-auth.ts).
   "ADMIN_ALLOWED_EMAILS",
   "ADMIN_ALLOWED_SPOTIFY_IDS",
-  // HMAC signing key for admin-session cookies AND OAuth state (signState /
-  // verifySignedState). DELIBERATELY SEPARATE from FLUNCLE_API_TOKEN (the API
-  // Bearer carrier): the agent box holds the API token, so sharing one secret
-  // would let a token leak forge {role:"admin"} session cookies. Splitting them
-  // means a leaked Bearer token cannot mint web sessions.
+  // The ROOT HMAC secret behind the admin-session cookie AND the OAuth state. It
+  // is never used to sign anything directly: two labeled SUBKEYS are derived from
+  // it (`signingSubkey` below), one per purpose, so the grant cookie and the OAuth
+  // state no longer share a key — a signature minted for one purpose can never
+  // verify as the other, and the two windows/payload shapes stay independent even
+  // though one env var provisions both.
+  //
+  // DELIBERATELY SEPARATE from FLUNCLE_API_TOKEN (the API Bearer carrier): the
+  // agent box holds the API token, so sharing one secret would let a token leak
+  // forge {role:"admin"} session cookies. Splitting them means a leaked Bearer
+  // token cannot mint web sessions.
   "ADMIN_SESSION_SECRET",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
@@ -295,9 +301,80 @@ export async function readEnvs<const T extends readonly EnvKey[]>(
 // from the browser tagging UI without forking per-carrier logic.
 export const ADMIN_COOKIE_NAME = "fluncle_admin";
 // The browser session window. Deliberately NOT the OAuth state window: a 10-min
-// cookie would log the single operator out mid-session.
+// cookie would log the single operator out mid-session. It stays 30 days because
+// the window is no longer the ONLY brake — `revoke_admin_grants` bumps the grant
+// epoch below and kills every outstanding cookie in one flip. Shortening it is a
+// one-line operator choice, not a prerequisite.
 export const ADMIN_GRANT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
+// ── The grant epoch: revocation for a stateless cookie ────────────────────────
+// A signed grant cookie is self-contained, so before this there was NO way to
+// invalidate one short of rotating ADMIN_SESSION_SECRET (which also breaks every
+// in-flight OAuth state). The epoch fixes that with one integer in the `settings`
+// KV: `signAdminGrant` BAKES the current epoch into the signed payload, and
+// `verifyAdminGrant` rejects any grant whose epoch predates the current value. So
+// `revoke_admin_grants` (a single `setSetting`) logs every browser out at once,
+// with no deploy and no secret rotation.
+//
+// UNSET ⇒ epoch 0, which every freshly minted grant also carries: on a deploy that
+// has never revoked, behaviour is exactly as before. From the first bump onward the
+// check bites. A read that FAILS (or a malformed value) is treated as unknown and
+// REJECTS — a revocation that fails open is not a revocation. The recovery from a
+// malformed value is `fluncle admin auth revoke-grants` (Bearer-carried, so it is
+// unaffected by a rejected cookie), which writes a well-formed epoch again.
+export const ADMIN_GRANT_EPOCH_KEY = "admin_grant_epoch";
+
+// The `settings` KV read, behind a LAZY import: `./settings` → `./db` → this
+// module, so a static import here would close a cycle. Same pattern as
+// `orpc-auth.ts`'s `liftResponseToFault`.
+async function readGrantEpoch(): Promise<number> {
+  const { getSetting } = await import("./settings");
+  const raw = await getSetting(ADMIN_GRANT_EPOCH_KEY);
+
+  if (raw === undefined) {
+    return 0;
+  }
+
+  const trimmed = raw.trim();
+  const parsed = Number(trimmed);
+
+  // An empty stored value is malformed, not zero: `Number("")` is 0, which would
+  // silently reset the epoch and resurrect every revoked cookie.
+  if (!trimmed || !Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Malformed ${ADMIN_GRANT_EPOCH_KEY}`);
+  }
+
+  return parsed;
+}
+
+/** The epoch a freshly minted grant is stamped with. Throws if it cannot be read. */
+export async function currentGrantEpoch(): Promise<number> {
+  return readGrantEpoch();
+}
+
+/**
+ * Bump the grant epoch, invalidating every outstanding admin grant cookie. Returns
+ * the new epoch. Operator-tier by construction (the only caller is the
+ * `revoke_admin_grants` op).
+ *
+ * When the stored value is unreadable/malformed the previous epoch is unknown, so
+ * incrementing it is not safe (a grant stamped with a higher number would survive).
+ * It instead jumps to a whole-seconds timestamp — monotonic and far above any bump
+ * count — so the revoke is effective and also REPAIRS the malformed value that was
+ * locking browser logins out.
+ */
+export async function revokeAdminGrants(): Promise<number> {
+  const { setSetting } = await import("./settings");
+  const next = await readGrantEpoch().then(
+    (epoch) => epoch + 1,
+    () => Math.floor(Date.now() / 1000),
+  );
+
+  await setSetting(ADMIN_GRANT_EPOCH_KEY, String(next));
+
+  return next;
+}
 
 // Two admin ROLES, not one admin with carriers:
 //   - "operator" — the human. Carried by the browser grant cookie OR the full
@@ -345,6 +422,67 @@ export async function adminRole(request: Request): Promise<AdminRole | null> {
   return null;
 }
 
+// ── The admin mutation origin guard (the cheap half of the /me CSRF stack) ─────
+// An admin request arrives on one of two carriers. A BEARER request is a program
+// (the CLI, the agent box, a script): it is not a browser, cannot be tricked into
+// sending a credential it does not hold, and legitimately sends no Origin — so it
+// is exempt, and stays byte-for-byte unaffected.
+//
+// A COOKIE request is a browser, and browsers attach the grant automatically. Until
+// now the only thing standing between an attacker's page and an admin mutation was
+// `SameSite=Lax`, which is SITE-scoped (eTLD+1): a request from any
+// `*.fluncle.com` host counts as same-site and DOES carry the grant, and Chrome's
+// "Lax-allowing-unsafe" intervention additionally lets a top-level cross-site POST
+// through for two minutes after the cookie is set. Requiring the Origin (or, when a
+// client omits it, the Referer) to match the request's own origin closes both: a
+// state-changing cookie-carried request must come from a page Fluncle itself served.
+//
+// Deliberately NOT the full `/me` stack: no per-user CSRF token (the admin identity
+// is a single operator with no token-mint surface) and no content-type gate (admin
+// routes legitimately take multipart). Same 403 `invalid_origin` shape as `/me`, so
+// the wire vocabulary stays one thing.
+const STATE_CHANGING_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
+
+/** Whether the request presents an `Authorization: Bearer …` header at all. */
+export function hasBearerHeader(request: Request): boolean {
+  return request.headers.get("Authorization")?.startsWith("Bearer ") ?? false;
+}
+
+/**
+ * Guard a state-changing COOKIE-carried admin request against a cross-origin
+ * caller. Returns a 403 `invalid_origin` Response when it must be refused, or
+ * `undefined` when the request may proceed (a safe method, a Bearer client, or a
+ * matching origin). Call AFTER the principal resolves, so an unauthenticated
+ * request still reads as 401.
+ */
+export function requireAdminMutationOrigin(request: Request): Response | undefined {
+  if (!STATE_CHANGING_METHODS.has(request.method.toUpperCase()) || hasBearerHeader(request)) {
+    return undefined;
+  }
+
+  const origin = request.headers.get("origin");
+  const referer = request.headers.get("referer");
+  const requestOrigin = new URL(request.url).origin;
+
+  if (origin) {
+    return origin === requestOrigin
+      ? undefined
+      : jsonError(403, "invalid_origin", "Invalid request origin");
+  }
+
+  if (!referer) {
+    return jsonError(403, "invalid_origin", "Missing request origin");
+  }
+
+  try {
+    return new URL(referer).origin === requestOrigin
+      ? undefined
+      : jsonError(403, "invalid_origin", "Invalid request origin");
+  } catch {
+    return jsonError(403, "invalid_origin", "Invalid request origin");
+  }
+}
+
 // Any admin principal (operator OR agent). Use at the top of agent-allowed routes:
 // reads, enrich-sweep, and the conditional routes that then branch on adminRole.
 export async function requireAdmin(request: Request): Promise<Response | undefined> {
@@ -366,22 +504,10 @@ export async function requireOperator(request: Request): Promise<Response | unde
 }
 
 async function hasValidAdminCookie(request: Request): Promise<boolean> {
-  const value = readCookie(request.headers.get("cookie"), ADMIN_COOKIE_NAME);
-
-  if (!value) {
-    return false;
-  }
-
-  try {
-    const payload = await verifySignedState(value, ADMIN_GRANT_MAX_AGE_MS);
-
-    return payload.role === "admin";
-  } catch {
-    return false;
-  }
+  return verifyAdminGrant(readCookie(request.headers.get("cookie"), ADMIN_COOKIE_NAME));
 }
 
-function readCookie(header: string | null, name: string): string | undefined {
+export function readCookie(header: string | null, name: string): string | undefined {
   if (!header) {
     return undefined;
   }
@@ -409,30 +535,44 @@ export function jsonError(status: number, code: string, message: string): Respon
   );
 }
 
-export async function signState(payload: Record<string, string | number>): Promise<string> {
-  const secret = await readEnv("ADMIN_SESSION_SECRET");
+// ── Key separation: two labeled subkeys, one root secret ──────────────────────
+// ADMIN_SESSION_SECRET signs NOTHING directly. Each purpose gets its own
+// HMAC-derived subkey, so the grant cookie and the OAuth state are cryptographically
+// independent: a signature minted for one purpose cannot verify as the other even
+// though the payload wire format is identical, and adding a third purpose later
+// costs a label rather than an env var.
+//
+// The derivation is HKDF-extract in spirit: subkey = HMAC(root, label). The labels
+// are versioned so a future format change can rotate one carrier without touching
+// the other. CHANGING A LABEL invalidates every credential signed under it.
+const GRANT_KEY_LABEL = "fluncle/admin-grant-cookie/v1";
+const OAUTH_STATE_KEY_LABEL = "fluncle/oauth-state/v1";
+
+async function signingSubkey(label: string): Promise<Buffer> {
+  const root = await readEnv("ADMIN_SESSION_SECRET");
+
+  return createHmac("sha256", root).update(label).digest();
+}
+
+function signWithKey(key: Buffer, payload: Record<string, string | number>): string {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = createHmac("sha256", secret).update(body).digest("base64url");
+  const signature = createHmac("sha256", key).update(body).digest("base64url");
 
   return `${body}.${signature}`;
 }
 
-// The HMAC verify primitive, shared by the OAuth state path and the admin
-// session cookie. The two carriers differ ONLY in their freshness window, so it
-// is a parameter — the OAuth path keeps its tight 10-min window while the admin
-// session gets a 30-day one, off one signing implementation.
-export async function verifySignedState(
-  state: string,
-  maxAgeMs: number,
-): Promise<Record<string, unknown>> {
-  const secret = await readEnv("ADMIN_SESSION_SECRET");
+// The HMAC verify primitive, shared by the OAuth state path and the admin session
+// cookie. The two carriers differ in their signing subkey AND their freshness
+// window, so both are parameters — the OAuth path keeps its tight 10-min window
+// while the admin session gets a 30-day one, off one implementation.
+function verifyWithKey(key: Buffer, state: string, maxAgeMs: number): Record<string, unknown> {
   const [body, signature] = state.split(".");
 
   if (!body || !signature) {
     throw new Error("Invalid state");
   }
 
-  const expected = createHmac("sha256", secret).update(body).digest("base64url");
+  const expected = createHmac("sha256", key).update(body).digest("base64url");
 
   if (!constantTimeEqual(signature, expected)) {
     throw new Error("Invalid state");
@@ -451,8 +591,67 @@ export async function verifySignedState(
   return parsed;
 }
 
+/**
+ * Sign an OAuth state under the oauth-state subkey. The 10-minute window is
+ * enforced on the way back in by `verifyState`.
+ */
+export async function signOauthState(payload: Record<string, string | number>): Promise<string> {
+  return signWithKey(await signingSubkey(OAUTH_STATE_KEY_LABEL), payload);
+}
+
 export async function verifyState(state: string): Promise<Record<string, unknown>> {
-  return verifySignedState(state, OAUTH_STATE_MAX_AGE_MS);
+  return verifyWithKey(await signingSubkey(OAUTH_STATE_KEY_LABEL), state, OAUTH_STATE_MAX_AGE_MS);
+}
+
+/**
+ * Mint the browser's admin grant, stamped with the CURRENT grant epoch (see
+ * ADMIN_GRANT_EPOCH_KEY). Signed under the grant-cookie subkey, so it can never be
+ * replayed as an OAuth state and vice versa. Throws when the epoch is unreadable —
+ * an un-epoched grant would be unrevocable, so minting fails loudly instead.
+ */
+export async function signAdminGrant(): Promise<string> {
+  const [key, epoch] = await Promise.all([signingSubkey(GRANT_KEY_LABEL), currentGrantEpoch()]);
+
+  return signWithKey(key, { epoch, iat: Date.now(), role: "admin" });
+}
+
+/**
+ * Whether a grant cookie value is a live admin grant: valid signature under the
+ * grant subkey, inside the 30-day window, `role: "admin"`, AND an epoch at or above
+ * the current one. Any failure — tampering, expiry, a revoked epoch, an unreadable
+ * epoch — is a plain `false`, never a throw.
+ *
+ * The epoch read is LAST, behind the signature and window checks, so a garbage cookie
+ * can never spend a DB round-trip: only a credential Fluncle actually minted reaches
+ * the `settings` lookup.
+ */
+export async function verifyAdminGrant(value: string | null | undefined): Promise<boolean> {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const payload = verifyWithKey(
+      await signingSubkey(GRANT_KEY_LABEL),
+      value,
+      ADMIN_GRANT_MAX_AGE_MS,
+    );
+
+    if (payload.role !== "admin") {
+      return false;
+    }
+
+    // A grant minted before the epoch existed carries no `epoch` at all; treat that
+    // as unrevocable and refuse it (those cookies die on this deploy anyway, since
+    // the signing key moved to a derived subkey).
+    if (typeof payload.epoch !== "number" || !Number.isInteger(payload.epoch)) {
+      return false;
+    }
+
+    return payload.epoch >= (await currentGrantEpoch());
+  } catch {
+    return false;
+  }
 }
 
 function unauthorized(): Response {

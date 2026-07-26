@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { requireOperator, signState } from "../../../../../lib/server/env";
+import { hasBearerHeader, requireOperator } from "../../../../../lib/server/env";
 import { apiErrorResponse } from "../../../../../lib/server/http-errors";
+import { mintOauthState } from "../../../../../lib/server/oauth-state";
 import { buildSpotifyAuthUrl } from "../../../../../lib/server/spotify";
 
 export const serverHandlers: ApiHandlers = {
@@ -13,17 +14,20 @@ export const serverHandlers: ApiHandlers = {
     }
 
     try {
-      const state = await signState({
-        iat: Date.now(),
-        nonce: crypto.randomUUID(),
-        purpose: "spotify-auth",
+      // Browser start (grant cookie, no Bearer) ⇒ the state is pinned to this
+      // browser via the nonce cookie; CLI start (Bearer) ⇒ unbound (oauth-state.ts).
+      const { setCookie, state } = await mintOauthState("spotify-auth", {
+        bindToBrowser: !hasBearerHeader(request),
       });
       const authUrl = await buildSpotifyAuthUrl(state);
 
-      return Response.json({
-        authUrl,
-        ok: true,
-      });
+      return Response.json(
+        {
+          authUrl,
+          ok: true,
+        },
+        setCookie ? { headers: { "Set-Cookie": setCookie } } : undefined,
+      );
     } catch (error) {
       return apiErrorResponse(error);
     }

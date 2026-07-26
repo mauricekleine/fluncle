@@ -128,7 +128,7 @@ export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
         {FINDINGS_HEADING}
       </h2>
       <ul aria-labelledby="findings-grid-heading" className="artist-grid">
-        {grid.map((finding) =>
+        {grid.map((finding, index) =>
           finding.logId ? (
             <li key={finding.trackId}>
               <Link params={{ logId: finding.logId }} to="/log/$logId">
@@ -138,10 +138,16 @@ export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
                   the 640 one this used to ask for was ~8× the pixels a tile can show, on a page
                   whose whole HTML is 11 KB (43 KB → 10 KB per cover, measured on /album/addicted).
                   The `large` rung still rides og:image + the JSON-LD, where the consumer is a
-                  crawler's full-size card rather than a tile. */}
+                  crawler's full-size card rather than a tile.
+
+                  The FIRST tile is also the band's lead cover, above the fold on every graph page
+                  and so the page's LCP candidate — it fetches eagerly at high priority, and the
+                  route preloads this exact URL from its head(). Tiles 2..n stay lazy: the whole
+                  point of the signal is that one image carries it. */}
                 <TrackArtwork
                   alt=""
                   className="artist-grid-cover"
+                  priority={index === 0}
                   src={albumCoverAtSize(finding.albumImageUrl, "medium")}
                 />
                 <span className="artist-grid-line">{artistTitleLine(finding)}</span>
@@ -181,7 +187,8 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
             >
               {/* A chip avatar is 1.5rem — 24 CSS px, 48 on a 2× screen — so it takes the 64 rung,
                   not the 640 the DTO hands out (a 26× over-fetch on a tile this size). An avatar
-                  that is not an owned master passes through `albumCoverAtSize` untouched. */}
+                  with no owned master takes Spotify's own portrait floor (160) instead — the
+                  smallest rendition that family publishes. */}
               <ArtistAvatar
                 className="artist-similar-avatar"
                 name={artist.name}

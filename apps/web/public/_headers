@@ -5,28 +5,51 @@
 # long (mutable) cache, so repeat visits and same-session navigations skip the
 # revalidation round-trip. The HTML documents are served by the Worker, not as
 # static assets, so they are unaffected and stay fresh.
+#
+# `X-Content-Type-Options: nosniff` is repeated on EVERY rule, plus a catch-all `/*`
+# at the bottom for the files no other rule names (robots.txt, humans.txt,
+# manifest.webmanifest, the platform verification file). Static assets are served by
+# Cloudflare's asset server and never reach the Worker — /llms.txt is the one
+# worker-first exception (wrangler.jsonc) — so the Worker's security-header layer
+# (src/lib/server/security-headers.ts) cannot stamp them, and this file is the only
+# place that can. It is spelled out per rule rather than relying on a single `/*`
+# because Cloudflare does not document whether several matching rules MERGE or whether
+# the first match wins; written this way the caching above is untouched and the header
+# lands under either reading.
 
 # Content-hashed build output (e.g. /assets/index-CkMwHc4n.css): the hash in the
 # filename changes whenever the bytes change, so these are safe to freeze.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
 
 # Self-hosted fonts are named per-face and only change when the face changes.
 /fonts/*
   Cache-Control: public, max-age=31536000
+  X-Content-Type-Options: nosniff
 
 # Galaxy game sprite/audio assets.
 /galaxy/*
   Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
 
 # Brand/cover imagery and icons (unhashed names): cache for a week so they stop
 # revalidating on every load, while still rolling over within a reasonable window.
 # Paths must begin with `/`; the leading `*` splat matches any directory depth.
 /*.webp
   Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
 /*.png
   Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
 /*.jpg
   Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
 /*.ico
   Cache-Control: public, max-age=604800
+  X-Content-Type-Options: nosniff
+
+# Everything else in the asset dir: nosniff only, no caching opinion. Last so that
+# under a first-match-wins reading it can never shadow a Cache-Control rule above.
+/*
+  X-Content-Type-Options: nosniff

@@ -67,6 +67,51 @@ pub struct SearchRequest {
     pub top_k: usize,
 }
 
+/// The `top_k` ceiling. WHY A CEILING AT ALL: `kernel::scan` allocates a
+/// `BoundedTopK` heap of `top_k` per rayon fold task (`BinaryHeap::with_capacity`),
+/// so `top_k` multiplies by the worker count — an unbounded value is an allocation
+/// lever on a service the unit caps at `MemoryMax=2G` (apps/sonar/deploy/sonar.service),
+/// and an OOM there is not a slow page, it is a dead engine.
+///
+/// SIZING: the largest `top_k` any caller sends today is `TASTE_SHORTLIST` = 300
+/// (mixability.ts, `RAIL_DEPTH * 25`) via `/mix`; next is `RECOMMENDATIONS_POOL` = 115,
+/// then per-page limits in the low tens. 1000 is 3.3× the real ceiling — room for the
+/// rail to deepen without a redeploy — while keeping the worst-case heap trivial
+/// (1000 × 16 bytes × workers).
+pub const MAX_TOP_K: usize = 1000;
+
+/// The probe-count ceiling. WHY: every probe is another full pass of dot products over
+/// the whole candidate set inside `max_over_probes`, so probe count is a direct
+/// multiplier on CPU for one request (the same amplification the `union all` CTE trap
+/// caused on the Turso side).
+///
+/// SIZING: the widest legitimate call is the `/recommendations` multi-probe scan at
+/// `MAX_REC_SEEDS` = 12 probes (recommendations.ts; docs/vector-serving.md's 12-probe
+/// shape); every other surface sends exactly 1. 32 is ~2.7× the real ceiling.
+pub const MAX_PROBES: usize = 32;
+
+/// Why the request is refused, or `None` when it is within the caps. A refusal is a
+/// 400 at the HTTP edge (server.rs) — DISTINCT from the empty-response signal used for
+/// a malformed body, because an over-cap request is a caller bug or an abuse attempt
+/// rather than a version skew, and it should be loud in the logs. Either way the Worker
+/// client treats it as "sonar did not answer" and runs the Turso scan (sonar.ts:
+/// `if (!response.ok) return null`), so the surface degrades instead of breaking.
+pub fn cap_violation(req: &SearchRequest) -> Option<String> {
+    if req.top_k > MAX_TOP_K {
+        return Some(format!(
+            "top_k {} exceeds the cap of {MAX_TOP_K}",
+            req.top_k
+        ));
+    }
+    if req.probes.len() > MAX_PROBES {
+        return Some(format!(
+            "probes {} exceeds the cap of {MAX_PROBES}",
+            req.probes.len()
+        ));
+    }
+    None
+}
+
 /// A single scored result. `score` is cosine similarity (higher == nearer).
 #[derive(Debug, Clone, Serialize)]
 pub struct Match {
@@ -160,8 +205,12 @@ fn passes_filter(meta: Option<&TrackMeta>, filter: &Filter) -> bool {
 
 /// Run a search over `index`. Invalid input (empty probes, wrong-dim probe,
 /// `top_k == 0`) yields an empty response rather than an error — never panics.
+///
+/// The [`cap_violation`] check is repeated here as defense in depth: the HTTP handler
+/// answers an over-cap body with a 400 before reaching this function, so this branch
+/// only fires for an in-process caller, and it fails CLOSED (no scan, no allocation).
 pub fn search(index: &Index, req: &SearchRequest) -> SearchResponse {
-    if req.top_k == 0 || req.probes.is_empty() {
+    if req.top_k == 0 || req.probes.is_empty() || cap_violation(req).is_some() {
         return SearchResponse::empty();
     }
 
@@ -724,5 +773,63 @@ mod tests {
         assert!(search(&index, &req(vec![vec![1.0, 0.0]], 5))
             .matches
             .is_empty());
+    }
+
+    // ── The input caps, at the boundary ──────────────────────────────────────────
+    //
+    // Each cap is asserted at exactly the cap (allowed) and one past it (refused), so a
+    // future edit to the constants cannot silently loosen the guard.
+
+    #[test]
+    fn top_k_at_the_cap_is_allowed_and_one_over_is_refused() {
+        let at_cap = req(vec![padded(&[1.0, 0.0])], MAX_TOP_K);
+        assert!(cap_violation(&at_cap).is_none());
+
+        let over = req(vec![padded(&[1.0, 0.0])], MAX_TOP_K + 1);
+        let reason = cap_violation(&over).expect("over-cap top_k must be refused");
+        assert!(reason.contains("top_k"), "reason names the field: {reason}");
+    }
+
+    #[test]
+    fn probe_count_at_the_cap_is_allowed_and_one_over_is_refused() {
+        let probe = padded(&[1.0, 0.0]);
+
+        let at_cap = req(vec![probe.clone(); MAX_PROBES], 5);
+        assert!(cap_violation(&at_cap).is_none());
+
+        let over = req(vec![probe; MAX_PROBES + 1], 5);
+        let reason = cap_violation(&over).expect("over-cap probe count must be refused");
+        assert!(
+            reason.contains("probes"),
+            "reason names the field: {reason}"
+        );
+    }
+
+    #[test]
+    fn the_real_call_shapes_stay_inside_the_caps() {
+        // The widest legitimate calls: /mix's TASTE_SHORTLIST (300) single-probe, and
+        // /recommendations' MAX_REC_SEEDS (12) multi-probe pool of RECOMMENDATIONS_POOL (115).
+        let probe = padded(&[1.0, 0.0]);
+        assert!(cap_violation(&req(vec![probe.clone()], 300)).is_none());
+        assert!(cap_violation(&req(vec![probe; 12], 115)).is_none());
+    }
+
+    #[test]
+    fn an_over_cap_request_scans_nothing() {
+        // Defense in depth: even called in-process, an over-cap request must not scan
+        // (and must not allocate a top_k-sized heap per worker).
+        let index =
+            Index::from_entries(vec![track("a", padded(&[1.0, 0.0]), TrackMeta::default())]);
+
+        assert!(
+            search(&index, &req(vec![padded(&[1.0, 0.0])], MAX_TOP_K + 1))
+                .matches
+                .is_empty()
+        );
+        assert!(
+            search(&index, &req(vec![padded(&[1.0, 0.0]); MAX_PROBES + 1], 5))
+                .matches
+                .is_empty()
+        );
     }
 }

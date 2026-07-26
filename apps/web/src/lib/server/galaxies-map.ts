@@ -58,12 +58,10 @@ export type GalaxyAdminWithMembers = GalaxyAdminItem & { members: BoardTrackList
 const GALAXY_COLUMNS =
   "id, handle, name, slug, centroid_json, retired_at, split_requested_at, created_at, updated_at";
 
-/**
- * The galaxy thin-content floor (browse-by-feel RFC, mirroring the `/artist` gate): a
- * named galaxy below this many members renders `noindex, follow` and stays out of the
- * sitemap. It still resolves (200) and is reachable — just not indexed while thin.
- */
-export const GALAXY_INDEX_MIN_FINDINGS = 4;
+// The thin-content floor lives in the client-safe `lib/galaxies.ts` (the galaxy lens page's
+// `head` reads it, and a `head` is eagerly bundled) and is re-exported here so every server
+// caller keeps reading it from this module.
+export { GALAXY_INDEX_MIN_FINDINGS } from "../galaxies";
 
 /** Parse a stored centroid (JSON float array); a malformed value degrades to `[]`. */
 function parseCentroid(json: string): number[] {

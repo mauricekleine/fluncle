@@ -187,6 +187,29 @@ export const COVER_TILE_SIZE: CoverSize = "medium";
 // The Spotify album-art id is the 16-char size code + a 24-char (hex) cover hash.
 const SPOTIFY_ALBUM_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab67616d[0-9a-f]{8}([0-9a-f]+)$/;
 
+// ── Spotify ARTIST-portrait renditions ───────────────────────────────────────
+//
+// `artists.image_url` stores Spotify's PROFILE image, a different family from album art with its
+// own size ladder under the `ab676161` id prefix: `ab6761610000e5eb` = 640², `ab67616100005174` =
+// 320², `ab6761610000f178` = 160². (Measured off i.scdn.co on one artist: 118 KB / 34 KB / 11 KB.)
+//
+// The album-art regex above does NOT match this family, so every artist without an owned avatar
+// master used to leave `albumCoverAtSize` untouched and ship the stored 640² portrait into a
+// 1.5rem chip — measured 372 KB across the four similar-artist chips on /artist/1991, ~99% of it
+// pixels the tile cannot show. Recognising the family costs one prefix swap, the same trick the
+// album ladder already uses.
+//
+// Spotify publishes no 64 rung for a portrait, so `small` clamps to 160 — still an order of
+// magnitude off the 640, and the owned-master ladder (which does have a 64) is preferred whenever
+// the artist has one.
+const SPOTIFY_ARTIST_IMAGE_SIZE_CODE = {
+  large: "ab6761610000e5eb", // 640²
+  medium: "ab67616100005174", // 320²
+  small: "ab6761610000f178", // 160² — the floor Spotify offers for a portrait
+} as const;
+
+const SPOTIFY_ARTIST_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab676161[0-9a-f]{8}([0-9a-f]+)$/;
+
 // ── Cloudflare Images (owned cover masters) ──────────────────────────────────
 //
 // The owned-master resolve sweep (cover-masters.ts) stores a ≤1200² cover
@@ -246,7 +269,9 @@ export function ownedCoverUrl(
  *   - an OWNED-master Cloudflare Images URL → rewrite its `width=` to the ladder rung;
  *   - a stored Spotify album-art URL → swap the size-code prefix (Spotify has no >640, so `xl`
  *     clamps to `large`);
- *   - anything else (a raw artist avatar, a future source) → untouched.
+ *   - a stored Spotify ARTIST-portrait URL → swap its own size-code prefix (its ladder is
+ *     640/320/160, so `small` clamps UP to 160 and `xl` clamps down to `large`);
+ *   - anything else (a raw label logo, a future source) → untouched.
  * `small` for the feed/index rows, `large` for the full-bleed /log poster. The generalisation of
  * the old `albumCoverAtSize` so the U3b owned masters resize at every existing call site.
  */
@@ -259,15 +284,25 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
     return url.replace(OWNED_COVER_WIDTH_RE, `$1${OWNED_COVER_WIDTH[size]}$2`);
   }
 
-  const match = SPOTIFY_ALBUM_IMAGE_RE.exec(url);
+  const album = SPOTIFY_ALBUM_IMAGE_RE.exec(url);
 
-  if (!match) {
-    return url;
+  if (album) {
+    const code = SPOTIFY_IMAGE_SIZE_CODE[size === "xl" ? "large" : size];
+
+    return `${album[1]}${code}${album[2]}`;
   }
 
-  const code = SPOTIFY_IMAGE_SIZE_CODE[size === "xl" ? "large" : size];
+  // The portrait family. Checked AFTER album art because the two prefixes are disjoint at their
+  // 8th hex digit (`ab67616d` vs `ab676161`), so the order is documentation, not a dependency.
+  const artist = SPOTIFY_ARTIST_IMAGE_RE.exec(url);
 
-  return `${match[1]}${code}${match[2]}`;
+  if (artist) {
+    const code = SPOTIFY_ARTIST_IMAGE_SIZE_CODE[size === "xl" ? "large" : size];
+
+    return `${artist[1]}${code}${artist[2]}`;
+  }
+
+  return url;
 }
 
 /**
@@ -296,9 +331,13 @@ export function bestAlbumCoverUrl(cover: {
 
 /**
  * THE BEST ARTIST AVATAR (RFC U3b): the owned master through Cloudflare Images when the artist has
- * resolved one, else the raw stored `image_url` (Spotify's profile image) — the label
- * `logoKey ?? image_url` precedent, applied to artists. The raw avatar is NOT a Spotify ALBUM-art
- * URL, so it is served as-is when unowned (a monogram tile still covers a null).
+ * resolved one, else the stored `image_url` (Spotify's profile image) — the label
+ * `logoKey ?? image_url` precedent, applied to artists. A monogram tile still covers a null.
+ *
+ * Both branches come out at the `large` rung, so the DTO's contract is one size whichever provider
+ * answered and a consumer that never re-sizes (mobile, search) still gets a right-sized portrait;
+ * `albumCoverAtSize` — which now knows the PORTRAIT ladder too, not only album art — takes it down
+ * to the 160/320 rung at the chip and tile call sites.
  */
 export function bestArtistAvatarUrl(avatar: {
   imageKey: string | null | undefined;
@@ -314,7 +353,7 @@ export function bestArtistAvatarUrl(avatar: {
     }
   }
 
-  return avatar.imageUrl ?? undefined;
+  return albumCoverAtSize(avatar.imageUrl ?? undefined, "large");
 }
 
 // ── The account portrait master (Settings → Profile avatar) ──────────────────

@@ -3,6 +3,10 @@ import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { grantCookie, isAllowedSpotifyUser, signGrant } from "../../../../../lib/server/admin-auth";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
 import { logEvent } from "../../../../../lib/server/log";
+import {
+  clearedStateCookie,
+  stateIsBoundToThisBrowser,
+} from "../../../../../lib/server/oauth-state";
 import { exchangeCodeForToken, fetchSpotifyProfile } from "../../../../../lib/server/spotify";
 
 export const serverHandlers: ApiHandlers = {
@@ -23,6 +27,13 @@ export const serverHandlers: ApiHandlers = {
     try {
       const statePayload = await verifyState(state);
 
+      // The browser binding, checked BEFORE the code is spent: a browser-started
+      // flow must present back the nonce cookie the start leg set (oauth-state.ts).
+      // A lifted state replayed from anywhere else stops here.
+      if (!stateIsBoundToThisBrowser(request, statePayload)) {
+        return jsonError(400, "invalid_state", "Invalid state");
+      }
+
       // Admin web login: read the caller's Spotify identity, discard the
       // tokens (never touch the publish refresh token), and — if it's the
       // allow-listed operator — hand the browser the signed grant cookie.
@@ -36,10 +47,12 @@ export const serverHandlers: ApiHandlers = {
           });
         }
 
-        return new Response(null, {
-          headers: { Location: "/admin", "Set-Cookie": grantCookie(await signGrant()) },
-          status: 302,
-        });
+        // Two Set-Cookie headers: the grant in, the consumed state nonce out.
+        const headers = new Headers({ Location: "/admin" });
+        headers.append("Set-Cookie", grantCookie(await signGrant()));
+        headers.append("Set-Cookie", clearedStateCookie("admin-login"));
+
+        return new Response(null, { headers, status: 302 });
       }
 
       if (statePayload.purpose !== "spotify-auth") {
@@ -51,7 +64,10 @@ export const serverHandlers: ApiHandlers = {
       // Close the loop back to the board's reconnect banner rather than a dead
       // text page — the board re-reads the connection status on focus.
       return new Response(null, {
-        headers: { Location: "/admin?spotify=connected" },
+        headers: {
+          Location: "/admin?spotify=connected",
+          "Set-Cookie": clearedStateCookie("spotify-auth"),
+        },
         status: 302,
       });
     } catch (authError) {

@@ -70,6 +70,9 @@ type PublicUserRow = {
 
 let publicAuthPromise: Promise<PublicAuth> | undefined;
 const devAuthSecret = "fluncle-dev-auth-secret-change-before-production";
+// The local-only `baseURL` fallback. Pinned to :3000 because that is where the Vite dev
+// server (and the Spotify redirect) live; see docs/local-database.md.
+const devAuthBaseUrl = "http://localhost:3000";
 const csrfHeaderName = "x-fluncle-csrf";
 const csrfWindowMs = 24 * 60 * 60 * 1000;
 
@@ -131,6 +134,36 @@ export function resolvePublicAuthSecret(secret: string | undefined, isDev: boole
 
 function publicAuthSecret(): string {
   return resolvePublicAuthSecret(process.env.BETTER_AUTH_SECRET, import.meta.env.DEV);
+}
+
+/**
+ * The Better Auth `baseURL`, with the SAME hard-fail shape as the secret above.
+ *
+ * This used to be `process.env.BETTER_AUTH_URL || "http://localhost:3000"` — a silent
+ * fallback, and the wrong kind of silent. Better Auth derives `useSecureCookies` from
+ * this URL's scheme, so an unset variable in a deployed Worker would quietly mint
+ * session cookies WITHOUT `Secure`, and would put `http://localhost:3000` into every
+ * password-reset and email-verification link. Both are silent degradations that look
+ * fine until they are exploited or reported. Outside dev/test the variable is now
+ * REQUIRED: a missing one throws at auth construction instead of degrading.
+ *
+ * Safe to demand — `BETTER_AUTH_URL` is provisioned as a production Worker secret
+ * (verified against `wrangler secret list`), and the dev/test path keeps the same
+ * localhost default it always had. A whitespace-only value counts as absent, so a
+ * blank secret cannot sneak past as a valid base URL the way `||` let it.
+ */
+export function resolvePublicAuthBaseUrl(url: string | undefined, isDev: boolean): string {
+  const trimmed = url?.trim();
+
+  if (trimmed) {
+    return trimmed;
+  }
+
+  if (isDev) {
+    return devAuthBaseUrl;
+  }
+
+  throw new Error("BETTER_AUTH_URL is required outside local development");
 }
 
 type DbClient = Awaited<ReturnType<typeof getDb>>;
@@ -261,7 +294,7 @@ export function createPublicAuthOptions(
       cookiePrefix: "fluncle_user",
     },
     basePath: "/api/auth",
-    baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
+    baseURL: resolvePublicAuthBaseUrl(process.env.BETTER_AUTH_URL, import.meta.env.DEV),
     database: drizzleAdapter(db, {
       provider: "sqlite",
       schema,
@@ -398,9 +431,18 @@ export function createPublicAuthOptions(
     ...(googleProvider ? { socialProviders: { google: googleProvider } } : {}),
     // The app scheme (`fluncle://`) is trusted so the Expo plugin accepts the native
     // client's deep-link origin; the web origins are unchanged.
+    //
+    // The APEX (`https://fluncle.com`) is listed alongside `www` on purpose. Better Auth
+    // refuses a request whose Origin is not trusted, so an auth call that arrives on the
+    // apex — a hand-typed address, a shared link that skipped the redirect, a client that
+    // kept the apex Origin through it — would fail as an AUTH error ("invalid origin")
+    // rather than as the availability problem it actually is. Trusting the apex we own
+    // makes that case fail closed on availability instead: it is the same site, same
+    // scheme, same registrable domain. This widens nothing to a third party.
     trustedOrigins: [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
+      "https://fluncle.com",
       "https://www.fluncle.com",
       "fluncle://",
     ],

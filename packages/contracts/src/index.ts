@@ -681,6 +681,14 @@ export type MixtapeDistributeFinalizeResponse = Ok<{ mixtape: MixtapeDTO; platfo
 /** `/api/v1/admin/youtube/auth/start` response (mirrors the Spotify shape). */
 export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
 
+/**
+ * `/api/v1/admin/auth/revoke-grants` response: the grant epoch AFTER the bump. Every
+ * admin browser grant cookie minted under a lower epoch stops verifying immediately;
+ * the Bearer carriers (the operator's CLI, the agent box) are not epoch-scoped and are
+ * untouched.
+ */
+export type RevokeAdminGrantsResponse = Ok<{ epoch: number }>;
+
 /** `/api/v1/admin/mixcloud/auth/start` response. */
 export type MixcloudAuthStartResponse = Ok<{ authUrl: string }>;
 

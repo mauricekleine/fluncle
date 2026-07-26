@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { type ApiHandlers, aliasHandlers } from "../-alias";
 import { parseChatRequest, streamChat } from "../../../lib/server/chat";
-import { jsonError, requireAdmin } from "../../../lib/server/env";
+import { jsonError, requireAdmin, requireAdminMutationOrigin } from "../../../lib/server/env";
 
 // POST /api/admin/chat (ChatDnB, the admin-gated SPIKE) — one turn of Fluncle answering
 // over his own archive tools, streamed back as an AI SDK UIMessage stream (the protocol
@@ -21,6 +21,15 @@ export const serverHandlers: ApiHandlers = {
 
     if (unauthorized) {
       return unauthorized;
+    }
+
+    // The same origin guard the oRPC admin middleware applies (env.ts): this is a
+    // cookie-carried browser POST, so it gets the check the RPC ops get. A Bearer
+    // caller is exempt, so nothing scripted changes.
+    const crossOrigin = requireAdminMutationOrigin(request);
+
+    if (crossOrigin) {
+      return crossOrigin;
     }
 
     let body: unknown;

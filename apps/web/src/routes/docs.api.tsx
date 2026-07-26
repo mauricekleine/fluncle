@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ApiReferenceReact } from "@scalar/api-reference-react";
-import "@scalar/api-reference-react/style.css";
+import scalarCssUrl from "@scalar/api-reference-react/style.css?url";
 
 // The embedded Scalar API reference, at /docs/api inside the docs hub. It reads
 // the already-served OpenAPI 3.1 document at /api/v1/openapi.json (the same
@@ -8,9 +8,26 @@ import "@scalar/api-reference-react/style.css";
 // Nostalgic Cosmos: warm near-blacks, Starlight Cream ink, Eclipse Gold as the
 // one accent, Re-entry Red for errors (DESIGN.md). theme:"none" hands the full
 // palette to scalarCss below so no preset hue leaks in.
+//
+// Scalar's sheet is linked from THIS route's `head`, via `?url`, exactly as
+// /docs links docs.css — NEVER as a bare `import "…/style.css"`. A side-effect
+// CSS import lands in the client entry's CSS bundle, and the entry's bundle is
+// attached to the __root route, so Scalar's 288 KB sheet became a
+// render-blocking <link> on EVERY page (measured: a 249 KB minified
+// `assets/index-*.css` in `__root__.css`, on the homepage as much as here).
+// `?url` keeps it an asset only this route asks for. Cascade order is unchanged:
+// route `head` links render root-first and BEFORE manifest CSS
+// (@tanstack/react-router's headContentUtils), so Scalar still lands after
+// styles.css and docs.css, as it did when it came through the manifest.
 export const Route = createFileRoute("/docs/api")({
   component: ApiReference,
   head: () => ({
+    links: [
+      {
+        href: scalarCssUrl,
+        rel: "stylesheet",
+      },
+    ],
     meta: [
       {
         title: "Fluncle API reference",

@@ -3080,12 +3080,26 @@ a.catalogue-letter:focus-visible {
   flex: none;
 }
 
-/* The Spotify listen mark on a catalogue row (its one honest destination — no detail page). */
+/* The Spotify listen mark on a catalogue row (its one honest destination — no detail page).
+   The BOX carries the touch-target floor, not the ink — the same ruling .catalogue-letter states
+   above: the mark keeps its 0.9rem size, its quiet Stardust look and its exact position, and only
+   the hit area grows to meet WCAG 2.5.8 (AA). It was a 14.4px target sitting a couple of px off its
+   neighbours (axe target-size, 12 rows on /tracks at 390px, 2026-07-26).
+
+   `align-self: stretch` — not a bare 24px min — because it takes the row's full content height as a
+   tappable strip at the row's end. A plain `min-height: 1.5rem` measured 24×24 and STILL failed:
+   axe reads ~9.8px of the box as obscured by the row's neighbouring content, so the usable space
+   came to 24×14.2. Stretched, the box is 24×52 and every one of the 12 rows passes (measured against
+   prod's DOM at 390px). `min-height` stays as a floor for a row that ever renders shorter than 24px. */
 .tracks-hub-row-listen {
   align-items: center;
+  align-self: stretch;
   color: var(--stardust);
   display: flex;
   flex: none;
+  justify-content: center;
+  min-height: 1.5rem;
+  min-width: 1.5rem;
 }
 
 .tracks-hub-row-mark {
@@ -3102,7 +3116,15 @@ a.catalogue-letter:focus-visible {
   opacity: 0.85;
 }
 
+/* The Eclipse ring rides the MARK, not the stretched box. The hit area is now the row's full height
+   (see above), and ringing that would draw a tall bar where a snug 18px ring used to sit. On the mark
+   with the same 2px offset and the same radius the focus state paints exactly as it did before the
+   target-size fix — the hit area grew, the ring did not. */
 .tracks-hub-row-listen:focus-visible {
+  outline: none;
+}
+
+.tracks-hub-row-listen:focus-visible .tracks-hub-row-mark {
   border-radius: var(--rounded-sm);
   outline: 2px solid var(--eclipse-glow);
   outline-offset: 2px;

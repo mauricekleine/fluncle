@@ -73,7 +73,10 @@ export const getPrivateGalaxyProgress = oc
  * Merge a client's local Galaxy progress into the server save (collect each Log
  * ID, increment counters), then return the merged progress — the same
  * `getGalaxyProgress` body. CSRF-guarded (the mutation token); reuses
- * `mergeGalaxyProgress` so the filtering/clamping and its codes stay exact.
+ * `mergeGalaxyProgress` so the filtering/clamping and its codes stay exact — including
+ * its SIZE cap: a `collectedLogIds` set past `MAX_GALAXY_MERGE_LOG_IDS` (account-data.ts)
+ * is the server's 400 `too_many_log_ids`, rejected rather than truncated, since a merge is
+ * bounded by the number of findings that exist and the limiter only caps frequency.
  */
 export const mergePrivateGalaxyProgress = oc
   .route({

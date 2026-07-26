@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { TASTE_SHORTLIST } from "./mixability";
+import { MAX_REC_SEEDS, RECOMMENDATIONS_POOL } from "./recommendations";
 import {
   isSonarArtistsEnabled,
   isSonarLogEnabled,
@@ -7,6 +9,8 @@ import {
   isSonarRecsCatalogueEnabled,
   isSonarRecsEnabled,
   isSonarSonicEnabled,
+  SONAR_MAX_PROBES,
+  SONAR_MAX_TOP_K,
   searchSonar,
 } from "./sonar";
 
@@ -150,6 +154,49 @@ describe("searchSonar — the triple-gated fallback client", () => {
     });
 
     expect(await searchSonar(REQUEST)).toBeNull();
+  });
+
+  // ── The request caps, at the boundary ──────────────────────────────────────────────────────
+  //
+  // The engine 400s an over-cap body (search.rs `cap_violation`); the client refuses to send one
+  // at all. Both sides of each boundary are asserted so a raised constant cannot slip past.
+
+  it("sends a topK AT the cap", async () => {
+    fetchMock.mockResolvedValue(reply([{ id: "t1", score: 0.9 }]));
+
+    expect(await searchSonar({ ...REQUEST, topK: SONAR_MAX_TOP_K })).toEqual([
+      { id: "t1", score: 0.9 },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back WITHOUT fetching when topK is one over the cap", async () => {
+    expect(await searchSonar({ ...REQUEST, topK: SONAR_MAX_TOP_K + 1 })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends a probe set AT the cap", async () => {
+    fetchMock.mockResolvedValue(reply([{ id: "t1", score: 0.9 }]));
+
+    const probes = Array.from({ length: SONAR_MAX_PROBES }, () => [0.1, 0.2]);
+
+    expect(await searchSonar({ ...REQUEST, probes })).toEqual([{ id: "t1", score: 0.9 }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back WITHOUT fetching when the probe set is one over the cap", async () => {
+    const probes = Array.from({ length: SONAR_MAX_PROBES + 1 }, () => [0.1, 0.2]);
+
+    expect(await searchSonar({ ...REQUEST, probes })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves every live call shape inside the caps", () => {
+    // The widest legitimate calls in the tree: /mix's TASTE_SHORTLIST topK and
+    // /recommendations' MAX_REC_SEEDS-wide probe set.
+    expect(TASTE_SHORTLIST).toBeLessThanOrEqual(SONAR_MAX_TOP_K);
+    expect(RECOMMENDATIONS_POOL).toBeLessThanOrEqual(SONAR_MAX_TOP_K);
+    expect(MAX_REC_SEEDS).toBeLessThanOrEqual(SONAR_MAX_PROBES);
   });
 });
 

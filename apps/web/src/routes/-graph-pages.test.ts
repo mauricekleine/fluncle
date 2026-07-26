@@ -65,8 +65,11 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   listCatalogueTracksByAlbum,
 }));
 
-const { Route: LabelRoute, resolveLabelPageData } = await import("./label.$slug");
-const { resolveAlbumPageData } = await import("./album.$slug");
+const { Route: LabelRoute } = await import("./label.$slug");
+// Both resolvers live beside their routes rather than in them, so neither route module carries a
+// static `lib/server/**` import into the browser bundle (see `-album-page-data.ts`).
+const { resolveLabelPageData } = await import("./-label-page-data");
+const { resolveAlbumPageData } = await import("./-album-page-data");
 
 /** The label route's `<meta name="description">` — the same string og:/twitter: description carry. */
 function labelMetaDescription(data: unknown): string | undefined {

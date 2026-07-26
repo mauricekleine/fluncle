@@ -4,11 +4,17 @@
 // the local dev secret, and drive past hydration.
 //
 // The grant is minted by the production signing path itself — `signGrant()`
-// (admin-auth.ts → signState, HMAC-SHA256 with ADMIN_SESSION_SECRET) — never a
-// reimplementation, so the fixture can't drift from what `isAdminRequest`
-// verifies. The secret comes from `apps/web/.dev.vars` (per docs/local-database.md
-// a worktree copies main's file), loaded into process.env exactly like the dev
-// server's own dotenv load.
+// (admin-auth.ts → `signAdminGrant`, HMAC-SHA256 under a subkey derived from
+// ADMIN_SESSION_SECRET) — never a reimplementation, so the fixture can't drift from
+// what `isAdminRequest` verifies. The secret comes from `apps/web/.dev.vars` (per
+// docs/local-database.md a worktree copies main's file), loaded into process.env
+// exactly like the dev server's own dotenv load.
+//
+// A grant now also carries the GRANT EPOCH, read from the `settings` KV, so minting
+// one needs the local libSQL server to be UP (the same `.dev.vars`
+// TURSO_DATABASE_URL the dev stack uses — `smoke:routine` boots it and rewrites that
+// line before any smoke runs). A "Missing TURSO_DATABASE_URL" or a connection error
+// out of `mintAdminGrant` means the local DB, not the auth path.
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";

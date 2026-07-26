@@ -33,75 +33,8 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { albumCoverAtSize } from "@/lib/media";
-import {
-  type ArtistNeighbour,
-  type ArtistSignature,
-  getArtistNeighbours,
-  summarizeArtistSignature,
-} from "@/lib/server/artist-dossier";
-import {
-  ARTIST_INDEX_MIN_FINDINGS,
-  type ArtistSocialLink,
-  countArtistFindings,
-  getArtistBySlug,
-  getPublicArtistAliasNames,
-  getPublicArtistSocials,
-} from "@/lib/server/artists";
-import {
-  CataloguePageOutOfRangeError,
-  type CatalogueGroupPage,
-  type CatalogueRecord,
-  type CatalogueSort,
-  listArtistCatalogue,
-} from "@/lib/server/catalogue-groups";
-import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
-
-// The dossier bundled onto the page data: the pure signature (first-found, tempo,
-// keys) plus the "same sector" neighbours. Assembled in the loader so the whole
-// page arrives in one SSR payload (no client round-trip), matching the route's
-// existing loader-only shape.
-type ArtistDossier = ArtistSignature & {
-  findingCount: number;
-  neighbours: ArtistNeighbour[];
-};
-
-// The artist page: a dark, cover-led Instagram-style grid of Fluncle's findings
-// for one artist, under a plate masthead (name + a Fluncle-voice frame + the
-// confirmed socials row). Held to DESIGN.md — a Fluncle cover grid, not a bright
-// streaming clone. The @id graph + MusicGroup/sameAs JSON-LD make it the entity's
-// home for crawlers + AI answer-engines (Unit 3, artist-relationship RFC §3).
-
-type ArtistPageData =
-  | {
-      // The artist's PUBLIC alternate names (the MusicBrainz identity layer) — the trusted MB/operator
-      // aliases, fed to the MusicGroup JSON-LD's `alternateName`. Empty when the artist has none.
-      alternateNames: string[];
-      // The artist's voiced bio — a short paragraph beneath the dateline, undefined until one
-      // is authored (lib/server/bio.ts). The masthead renders it only when present.
-      bio: string | undefined;
-      // The rest of this artist's catalogue — their crawled tracks grouped into records, one
-      // page of it (`catalogue-groups.ts` owns the bound). Empty until the catalogue lands.
-      catalogue: CatalogueGroupPage<CatalogueRecord>;
-      dossier: ArtistDossier;
-      findings: TrackListItem[];
-      // The artist's OWN portrait (owned avatar master, else Spotify image), or undefined. Preferred
-      // for og:image + the MusicGroup's `image`, and rendered in the masthead. Falls back to the
-      // freshest finding's album cover only when the artist carries no avatar of their own.
-      // The artist entity's id — the key a signed-in user's watch files against (D2a).
-      id: string;
-      imageUrl: string | undefined;
-      indexable: boolean;
-      name: string;
-      slug: string;
-      socials: ArtistSocialLink[];
-      sort: CatalogueSort;
-      status: "found";
-      // The identity graph the JSON-LD's sameAs draws on (KG anchors).
-      mbid: string | undefined;
-      spotifyUrl: string | undefined;
-      wikidataQid: string | undefined;
-    }
-  | { status: "missing" };
+import { type CatalogueSort } from "@/lib/catalogue";
+import { type ArtistPageData, type ArtistSocialLink } from "./-artist-page-data";
 
 // A confirmed/auto social — the brand mark + a plain label, from simple-icons
 // (never a Phosphor glyph for a brand). `homepage` is not a brand, so it takes the
@@ -140,100 +73,21 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   youtube: "YouTube",
 };
 
-// Resolve the artist page's data. Extracted from the server fn so the indexability decision is
-// unit-testable (see -artist-page.test.ts). An artist earns a page on its CONTENT, exactly as a
-// label/album does: a `getArtistBySlug` row renders, and the thin-content gate below (not a
-// certified-finding gate) decides whether it indexes. The grid's `findings` come from
-// `getFindingsByArtist` (which has an `artists_json` fallback so a pre-backfill artist still shows
-// its covers), but the `indexable` gate keys off `countArtistFindings` + the catalogue's
-// `totalTracks` — the SAME canonical `track_artists` join the sitemap uses — so an indexable page
-// is never orphaned from the sitemap.
-export async function resolveArtistPageData(
-  slug: string,
-  sort: CatalogueSort,
-  page: number,
-): Promise<ArtistPageData> {
-  const artist = await getArtistBySlug(slug);
+// The artist page: a dark, cover-led Instagram-style grid of Fluncle's findings
+// for one artist, under a plate masthead (name + a Fluncle-voice frame + the
+// confirmed socials row). Held to DESIGN.md — a Fluncle cover grid, not a bright
+// streaming clone. The @id graph + MusicGroup/sameAs JSON-LD make it the entity's
+// home for crawlers + AI answer-engines (Unit 3, artist-relationship RFC §3).
 
-  if (!artist) {
-    return { status: "missing" };
-  }
-
-  // Ride the catalogue read in the SAME parallel wave as the four finding/social/neighbour
-  // reads — all five key only off `artist.id` and are mutually independent. A page past the
-  // end of the pager throws `CataloguePageOutOfRangeError`; map ONLY that to null here so it
-  // no longer blocks the batch, and 404 once the wave settles. Any other error still throws.
-  const cataloguePromise = listArtistCatalogue(artist.id, sort, page).catch(
-    (error: unknown): CatalogueGroupPage<CatalogueRecord> | null => {
-      if (error instanceof CataloguePageOutOfRangeError) {
-        return null;
-      }
-
-      throw error;
-    },
-  );
-
-  const [catalogue, findings, socials, canonicalFindingCount, neighbours, alternateNames] =
-    await Promise.all([
-      cataloguePromise,
-      getFindingsByArtist(artist.id, artist.name),
-      getPublicArtistSocials(artist.id),
-      countArtistFindings(artist.id),
-      getArtistNeighbours(artist.id),
-      // The trusted MB/operator aliases — keyed off `artist.id`, mutually independent, so it rides
-      // the same parallel wave as the four finding/social/neighbour reads (the MusicBrainz identity layer).
-      getPublicArtistAliasNames(artist.id),
-    ]);
-
-  if (catalogue === null) {
-    // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
-    // hand-typed `?page=99` on a 3-page artist gets an honest 404, never an empty page that
-    // duplicates page 1's content under a new URL.
-    return { status: "missing" };
-  }
-
-  // The signature is pure over the findings already loaded for the grid (no extra
-  // query); the neighbours came from the corpus-wide embedding pass above.
-  const gridFindings = findings.filter((finding) => finding.logId);
-  const signature = summarizeArtistSignature(
-    gridFindings.map((finding) => ({ addedAt: finding.addedAt })),
-  );
-
-  return {
-    alternateNames,
-    bio: artist.bio,
-    catalogue,
-    dossier: { ...signature, findingCount: gridFindings.length, neighbours },
-    findings,
-    id: artist.id,
-    imageUrl: artist.imageUrl,
-    // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS RENDERABLE tracks — the
-    // certified findings PLUS the quieter catalogue rows, because both are real content on the
-    // page and a page is thin or not thin on what it RENDERS, never on who wrote it. Both counts
-    // read through the canonical `track_artists` join (`countArtistFindings` + the catalogue's
-    // SQL-counted `totalTracks`), the same source the sitemap keys off, so an indexable page is
-    // never orphaned from it. Below the floor the page still serves 200 (deep links, link equity)
-    // but is noindex + out of the sitemap. A crawl-minted, findings-free artist with enough
-    // catalogue tracks is a real page and indexes; a 1–2-track one renders noindex
-    // (docs/artist-relationship.md).
-    indexable: canonicalFindingCount + catalogue.totalTracks >= ARTIST_INDEX_MIN_FINDINGS,
-    mbid: artist.mbid,
-    name: artist.name,
-    slug: artist.slug,
-    socials,
-    sort,
-    spotifyUrl: artist.spotifyUrl,
-    status: "found",
-    wikidataQid: artist.wikidataQid,
-  };
-}
-
+// The resolver arrives by a DYNAMIC import inside the handler, and its types by `import type`,
+// so this route module never statically references `lib/server/**` — see `-artist-page-data.ts`.
 const fetchArtist = createServerFn({ method: "GET" })
   .validator((data: { page: number; slug: string; sort: CatalogueSort }) => data)
-  .handler(
-    ({ data: { page, slug, sort } }): Promise<ArtistPageData> =>
-      resolveArtistPageData(slug, sort, page),
-  );
+  .handler(async ({ data: { page, slug, sort } }): Promise<ArtistPageData> => {
+    const { resolveArtistPageData } = await import("./-artist-page-data");
+
+    return resolveArtistPageData(slug, sort, page);
+  });
 
 function artistHead(loaderData: ArtistPageData | undefined) {
   if (loaderData?.status !== "found") {
@@ -282,6 +136,16 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     artistImageUrl ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
+  // THE LEAD IMAGE — the one this page's LCP waits on, preloaded below because the loader already
+  // holds its exact URL. It is the findings band's first cover when the band renders (the widest
+  // paint on the page: a ~114 CSS px tile against the masthead portrait's 80), else the masthead
+  // portrait itself, which leads a catalogue-only artist with no certified findings. Both come out
+  // at the `medium` rung — byte-identical to what the components ask for, so the preload is a hit
+  // and never a second fetch. Exactly one is spent: a preload only buys priority while it is
+  // scarce (the homepage cover is the same one-preload shape).
+  const leadGridCover = findings.find((finding) => finding.logId)?.albumImageUrl;
+  const leadImageUrl =
+    albumCoverAtSize(leadGridCover, "medium") ?? albumCoverAtSize(imageUrl, "medium");
 
   const musicGroup = musicGroupJsonLd(
     {
@@ -305,6 +169,12 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
+      // Preload the lead image (see `leadImageUrl`). Without it the browser discovers the cover
+      // mid-body-parse, behind the render-blocking CSS, and fetches it at Low priority; the
+      // preload starts it alongside the document's own subresources instead.
+      ...(leadImageUrl
+        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
+        : []),
       // RSS discovery: this artist's new-releases feed (the 30-day window, this artist only).
       // The bare `/artist/<slug>/fresh.xml`, never the paged catalogue URL.
       {
@@ -438,6 +308,10 @@ function ArtistPage() {
           <ArtistAvatar
             className="artist-masthead-avatar"
             name={name}
+            // The page's lead image, above the fold on every viewport and preloaded from the route
+            // head (the loader already knows this exact URL), so it must not be lazy — a lazy hero
+            // wastes the preload by re-discovering the image at Low priority after layout.
+            priority
             src={albumCoverAtSize(imageUrl, "medium")}
           />
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
@@ -498,7 +372,9 @@ function ArtistPage() {
                       }
                       name={neighbour.name}
                       // A 1.5rem chip avatar — 48 device px at 2× — takes the 64 rung, never the
-                      // 640 master the DTO hands out (26× the pixels this tile can show).
+                      // 640 master the DTO hands out (26× the pixels this tile can show). A kin
+                      // artist with no owned master lands on Spotify's portrait floor (160), the
+                      // smallest rendition that family publishes.
                       src={albumCoverAtSize(neighbour.imageUrl, "small")}
                     />
                     <span>{neighbour.name}</span>

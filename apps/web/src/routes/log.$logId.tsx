@@ -12,7 +12,7 @@ import {
 } from "simple-icons";
 import { VideoBehindTheScenes } from "@/components/behind-the-scenes";
 import { BrandIcon } from "@/components/brand-icon";
-import { LogFootage } from "@/components/log/log-footage";
+import { firstPaintFootagePoster, LogFootage } from "@/components/log/log-footage";
 import { LogObservation } from "@/components/log/log-observation";
 import { MixtapeVideoPlayer } from "@/components/mixtape-video-player";
 import { SaveFindingButton } from "@/components/save-finding-button";
@@ -245,9 +245,19 @@ function logHead(loaderData: LogPageData | undefined) {
       )
     : undefined;
 
+  // The pane's poster frame — this page's LCP element. The loader already holds everything the URL
+  // is built from, so preload it: otherwise the browser only finds it on the `<video poster>`
+  // attribute in the body, behind the render-blocking CSS (measured on /log/052.9.5E — `</head>` at
+  // byte 8,363, the poster attribute at byte 13,038, for a 23.5 KB image). Undefined for a finding with no
+  // footage (see `firstPaintFootagePoster`), where the pane's own <img> carries the signal instead.
+  const footagePoster = firstPaintFootagePoster(track);
+
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
+      ...(footagePoster
+        ? [{ as: "image", fetchPriority: "high" as const, href: footagePoster, rel: "preload" }]
+        : []),
       // oEmbed discovery: a consumer that pastes this finding's link fetches the
       // provider (a `rich` card iframing /embed/<logId>). See routes/oembed.ts.
       {
