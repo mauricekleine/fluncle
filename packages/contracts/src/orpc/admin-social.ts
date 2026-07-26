@@ -320,11 +320,96 @@ export const recordSocialMetrics = oc
     }),
   );
 
+/** One day-point in a post's view series — the sparkline's raw data. */
+const ReachSeriesPointSchema = z
+  .object({ day: z.string(), views: z.number().int() })
+  .meta({ id: "ReachSeriesPoint" });
+
+/** One board row: a post's LATEST snapshot for one source, its velocity, and its creative axes. */
+const ReachPostRowSchema = z
+  .object({
+    artists: z.array(z.string()),
+    averageViewDurationSeconds: z.number().int().nullable(),
+    averageViewPercentage: z.number().nullable(),
+    capturedDay: z.string(),
+    comments: z.number().int().nullable(),
+    dailyViewVelocity: z.number().nullable(),
+    externalId: z.string(),
+    likes: z.number().int().nullable(),
+    logId: z.string().nullable(),
+    plateSubject: z.string().nullable(),
+    platform: z.enum(["tiktok", "youtube"]),
+    publishedAt: z.string().nullable(),
+    series: z.array(ReachSeriesPointSchema),
+    shares: z.number().int().nullable(),
+    snapshotCount: z.number().int(),
+    source: z.enum(["csv", "postiz", "tiktok_display", "youtube_analytics"]),
+    structure: z.string().nullable(),
+    title: z.string().nullable(),
+    trackId: z.string(),
+    url: z.string().nullable(),
+    velocityDaySpan: z.number().nullable(),
+    velocityViewsDelta: z.number().int().nullable(),
+    views: z.number().int().nullable(),
+    watchTimeSeconds: z.number().int().nullable(),
+  })
+  .meta({ id: "ReachPostRow" });
+
+/** One pivot cell — the (platform, axis value) group's summary. */
+const ReachPivotCellSchema = z
+  .object({
+    count: z.number().int(),
+    meanRetention: z.number().nullable(),
+    meanViews: z.number(),
+    medianViews: z.number(),
+    platform: z.enum(["tiktok", "youtube"]),
+    retentionCount: z.number().int(),
+    value: z.string(),
+  })
+  .meta({ id: "ReachPivotCell" });
+
+/** One pivot — an axis and its cells. */
+const ReachPivotSchema = z
+  .object({
+    axis: z.enum(["plateSubject", "structure"]),
+    cells: z.array(ReachPivotCellSchema),
+  })
+  .meta({ id: "ReachPivot" });
+
+/**
+ * `get_social_metrics` → `GET /admin/social/metrics` (operationId `getSocialMetrics`).
+ *
+ * Admin tier (`adminAuth`): the /admin/reach board — the READ sibling of `record_social_metrics`.
+ * Reduces the append-only `social_metrics` ledger to one row per (post, source) with its latest
+ * snapshot + day-over-day view velocity (ranked in SQL), joined to platform / published_at /
+ * track / the two creative axes (video structure + plate subject), plus the platform × axis
+ * pivots and each post's bounded view series for the sparkline. A pure read. `windowDays` is a
+ * tolerant optional query string (parsed + clamped in-handler, default 90, max 365).
+ */
+export const getSocialMetrics = oc
+  .route({
+    method: "GET",
+    operationId: "getSocialMetrics",
+    path: "/admin/social/metrics",
+    summary: "The reach board — per-post velocity + platform × creative-axis pivots",
+    tags: ["Admin"],
+  })
+  .input(z.object({ windowDays: z.string().optional() }))
+  .output(
+    z.object({
+      pivots: z.object({ plateSubject: ReachPivotSchema, structure: ReachPivotSchema }),
+      posts: z.array(ReachPostRowSchema),
+      totalPosts: z.number().int(),
+      windowDays: z.number().int(),
+    }),
+  );
+
 /** The `admin-social` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminSocialContract = {
   advance_publish_queue: advancePublishQueue,
   capture_post_urls: capturePostUrls,
   draft_track_social: draftTrackSocial,
+  get_social_metrics: getSocialMetrics,
   list_track_social: listTrackSocial,
   record_social_metrics: recordSocialMetrics,
   set_publish_advance: setPublishAdvance,

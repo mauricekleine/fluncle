@@ -410,6 +410,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // un-overridden slug resolves to the repo's baked default.
   get_prompt: "admin",
   get_recording: "admin",
+  // The /admin/reach board read (the social-metrics pivot board) — admin tier: a PURE read of
+  // the append-only social_metrics ledger (per-post velocity + platform × axis pivots). Its
+  // append WRITE sibling is `record_social_metrics`. Agent-allowed like `get_funnel`.
+  get_social_metrics: "admin",
   get_submission: "admin",
   // The single-finding admin lookup — admin tier (agent-allowed read), the
   // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read

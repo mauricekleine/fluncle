@@ -1,5 +1,6 @@
 import {
   CassetteTapeIcon,
+  ChartLineUpIcon,
   ChatCircleDotsIcon,
   ChatTeardropTextIcon,
   CurrencyDollarIcon,
@@ -85,6 +86,7 @@ export type AdminNavCurrent =
   | "newsletter"
   | "plans"
   | "prompts"
+  | "reach"
   | "recordings"
   | "renders"
   | "system"
@@ -110,6 +112,7 @@ type AdminNavPath =
   | "/admin/newsletter"
   | "/admin/plans"
   | "/admin/prompts"
+  | "/admin/reach"
   | "/admin/recordings"
   | "/admin/renders"
   | "/admin/usage"
@@ -223,6 +226,9 @@ const OBJECT_SECTIONS: NavSection[] = [
         label: "Newsletter",
         to: "/admin/newsletter",
       },
+      // Reach: how each posted video is actually performing — day-over-day velocity and which
+      // creative axes land — read back from the social-metrics ledger.
+      { icon: ChartLineUpIcon, key: "reach", label: "Reach", to: "/admin/reach" },
     ],
     key: "publish",
   },

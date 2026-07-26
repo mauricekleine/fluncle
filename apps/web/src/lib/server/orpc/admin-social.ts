@@ -36,6 +36,7 @@ import { logEvent } from "../log";
 import { captionForPlatform } from "../mentions";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { postizSetReleaseId, pushTikTokDraft, pushYouTubeShort, resolveSocialUrl } from "../postiz";
+import { getSocialMetricsBoard } from "../reach-board";
 import { recordSocialMetrics } from "../social-metrics";
 import {
   ADVANCE_DAILY_PUSH_CAP,
@@ -612,10 +613,26 @@ export function adminSocialHandlers(os: Implementer) {
       }
     });
 
+  // GET /admin/social/metrics — admin tier (`adminAuth`). The /admin/reach board: per-post
+  // velocity + platform × creative-axis pivots, reduced + ranked in SQL. A pure read.
+  const getSocialMetricsHandler = os.get_social_metrics
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const parsed = input.windowDays ? Number.parseInt(input.windowDays, 10) : undefined;
+        const windowDays = parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined;
+
+        return await getSocialMetricsBoard(windowDays);
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
   return {
     advance_publish_queue: advancePublishQueueHandler,
     capture_post_urls: capturePostUrlsHandler,
     draft_track_social: draftTrackSocialHandler,
+    get_social_metrics: getSocialMetricsHandler,
     list_track_social: listTrackSocialHandler,
     record_social_metrics: recordSocialMetricsHandler,
     set_publish_advance: setPublishAdvanceHandler,

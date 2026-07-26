@@ -183,6 +183,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/prompts/{slug}": "get_prompt",
   "GET /admin/recordings": "list_recordings",
   "GET /admin/recordings/{recordingId}": "get_recording",
+  // The /admin/reach board — contract-only oRPC (no TanStack API route file; the UI page at
+  // /admin/reach reads it in-process, the get_funnel precedent). Admin tier: a pure read of the
+  // social_metrics ledger (per-post velocity + platform × creative-axis pivots).
+  "GET /admin/social/metrics": "get_social_metrics",
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
   // The cost-ledger read (COST-02) — contract-only oRPC (no TanStack route file).

@@ -69,6 +69,7 @@ import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
 import { Route as AdminRendersRouteImport } from './routes/admin/renders'
 import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
+import { Route as AdminReachRouteImport } from './routes/admin/reach'
 import { Route as AdminPromptsRouteImport } from './routes/admin/prompts'
 import { Route as AdminPlansRouteImport } from './routes/admin/plans'
 import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
@@ -434,6 +435,11 @@ const AdminRendersRoute = AdminRendersRouteImport.update({
 const AdminRecordingsRoute = AdminRecordingsRouteImport.update({
   id: '/recordings',
   path: '/recordings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminReachRoute = AdminReachRouteImport.update({
+  id: '/reach',
+  path: '/reach',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminPromptsRoute = AdminPromptsRouteImport.update({
@@ -836,6 +842,7 @@ export interface FileRoutesByFullPath {
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
   '/admin/prompts': typeof AdminPromptsRoute
+  '/admin/reach': typeof AdminReachRoute
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
@@ -961,6 +968,7 @@ export interface FileRoutesByTo {
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
   '/admin/prompts': typeof AdminPromptsRoute
+  '/admin/reach': typeof AdminReachRoute
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
@@ -1089,6 +1097,7 @@ export interface FileRoutesById {
   '/admin/newsletter': typeof AdminNewsletterRoute
   '/admin/plans': typeof AdminPlansRoute
   '/admin/prompts': typeof AdminPromptsRoute
+  '/admin/reach': typeof AdminReachRoute
   '/admin/recordings': typeof AdminRecordingsRoute
   '/admin/renders': typeof AdminRendersRoute
   '/admin/usage': typeof AdminUsageRoute
@@ -1218,6 +1227,7 @@ export interface FileRouteTypes {
     | '/admin/newsletter'
     | '/admin/plans'
     | '/admin/prompts'
+    | '/admin/reach'
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
@@ -1343,6 +1353,7 @@ export interface FileRouteTypes {
     | '/admin/newsletter'
     | '/admin/plans'
     | '/admin/prompts'
+    | '/admin/reach'
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
@@ -1470,6 +1481,7 @@ export interface FileRouteTypes {
     | '/admin/newsletter'
     | '/admin/plans'
     | '/admin/prompts'
+    | '/admin/reach'
     | '/admin/recordings'
     | '/admin/renders'
     | '/admin/usage'
@@ -2076,6 +2088,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRecordingsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/admin/reach': {
+      id: '/admin/reach'
+      path: '/reach'
+      fullPath: '/admin/reach'
+      preLoaderRoute: typeof AdminReachRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
     '/admin/prompts': {
       id: '/admin/prompts'
       path: '/prompts'
@@ -2550,6 +2569,7 @@ interface AdminRouteRouteChildren {
   AdminNewsletterRoute: typeof AdminNewsletterRoute
   AdminPlansRoute: typeof AdminPlansRoute
   AdminPromptsRoute: typeof AdminPromptsRoute
+  AdminReachRoute: typeof AdminReachRoute
   AdminRecordingsRoute: typeof AdminRecordingsRoute
   AdminRendersRoute: typeof AdminRendersRoute
   AdminUsageRoute: typeof AdminUsageRoute
@@ -2574,6 +2594,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminNewsletterRoute: AdminNewsletterRoute,
   AdminPlansRoute: AdminPlansRoute,
   AdminPromptsRoute: AdminPromptsRoute,
+  AdminReachRoute: AdminReachRoute,
   AdminRecordingsRoute: AdminRecordingsRoute,
   AdminRendersRoute: AdminRendersRoute,
   AdminUsageRoute: AdminUsageRoute,
