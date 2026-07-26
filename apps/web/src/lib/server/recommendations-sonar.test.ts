@@ -19,6 +19,7 @@ import { type PublicUser } from "./public-auth";
 
 const isSonarArtistsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarLogEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
+const isSonarRecsCatalogueEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarRecsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarSonicEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const searchSonar = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ const searchSonar = vi.hoisted(() => vi.fn());
 vi.mock("./sonar", () => ({
   isSonarArtistsEnabled,
   isSonarLogEnabled,
+  isSonarRecsCatalogueEnabled,
   isSonarRecsEnabled,
   isSonarSonicEnabled,
   searchSonar,
@@ -115,6 +117,10 @@ beforeEach(async () => {
   searchSonar.mockReset();
   isSonarRecsEnabled.mockReset();
   isSonarRecsEnabled.mockResolvedValue(false);
+  // The CATALOGUE scan rides its OWN flag (sonar_recs_catalogue_enabled) and is off throughout
+  // this suite — everything here is about the findings slots.
+  isSonarRecsCatalogueEnabled.mockReset();
+  isSonarRecsCatalogueEnabled.mockResolvedValue(false);
 });
 
 describe("listRecommendations — the sonar route (dark, default OFF)", () => {

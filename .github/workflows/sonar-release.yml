@@ -76,8 +76,15 @@ jobs:
       # silicon): the binary would SIGILL the moment it runs, and the box-side
       # PRE-SMOKE boots it in isolation before any swap — so a bad-ISA artifact fails
       # validation with the live service untouched and gets alerted, never deployed.
+      # `GIT_SHA` is baked into the binary (`option_env!`, apps/sonar/src/server.rs) and
+      # reported on `GET /health`. It is what lets an operator confirm the box actually
+      # carries a given commit BEFORE flipping a dark flag that depends on it — the box
+      # self-deploys on an hourly timer, so "merged" and "running" are different moments.
+      # rustc records `option_env!` reads in its dep-info, so Cargo's cache invalidates
+      # when this value changes and a stale SHA cannot be baked from the restored cache.
       - name: Build the static musl release binary
         env:
+          GIT_SHA: ${{ github.sha }}
           RUSTFLAGS: -C target-cpu=x86-64-v3 -C strip=symbols
         run: cargo build --release --locked --manifest-path apps/sonar/Cargo.toml --target "$TARGET"
 

@@ -2,7 +2,7 @@
 
 Every surface that asks _what sounds like this_ — sonic search, `/artists?like=`, the log page's more-like-this, the `/recommendations` draft engine, the `/mix` rail — ranks by cosine similarity over the whole MuQ embedding corpus. That question used to be answered inside the database, as a linear `vector_distance_cos` scan whose cost grows with the catalogue: seconds at scale, and on the broad sonic shape 7–19s with intermittent 500s before it moved. It is now answered by [`apps/sonar`](../apps/sonar/README.md), a Rust service that holds the corpus in RAM and does the scan there.
 
-This doc is the architecture of that stack: the shape and why it is that shape, the contract, the safety contract, the flag map, **what deliberately does not route and why**, the freshness/deploy loop, and the two candidates that were built and rejected on measured evidence.
+This doc is the architecture of that stack: the shape and why it is that shape, the contract, the safety contract, the flag map, **what routes with a caveat and what does not**, the freshness/deploy loop, and the two candidates that were built and rejected on measured evidence.
 
 The ranking rule itself is not here — it belongs to [the-ear.md](./the-ear.md) (max-similarity to the single **nearest** probe, never a centroid) and the surface behaviour to [search.md](./search.md). This doc is only about where that math runs.
 
@@ -32,7 +32,12 @@ Measured on real hardware: single-probe **~36ms p50 at 150k** on the box, and **
     "bpm_min": 168,
     "bpm_max": 176,
     "anchored": true,
-    "certified": true
+    "certified": true,
+    "has_finding": false,
+    "dismissed": false,
+    "is_duplicate": false,
+    "nearest_finding_score_max": 0.995,
+    "duration_ms_max": 900000
   },
   "exclude_ids": ["track_abc"],
   "top_k": 20
@@ -41,11 +46,14 @@ Measured on real hardware: single-probe **~36ms p50 at 150k** on the box, and **
 
 → `{ "matches": [{ "id": "track_xyz", "score": 0.83 }, …] }`, sorted by descending cosine similarity.
 
-- **Two indexes.** `tracks` — one entry per embedded track, keyed by `track_id`, carrying metadata `{ key, bpm, anchored, certified }`. `centroids` — one entry per artist centroid, keyed by `artist_id`, carrying no metadata.
-- **The filter is exactly five fields** (`key_in`, `bpm_min`, `bpm_max`, `anchored`, `certified`), all optional, BPM bounds inclusive. A set constraint requires the entry to carry that metadata, so any metadata filter naturally excludes centroids. That list is short on purpose and it is the hinge of [what does not route](#what-does-not-route-and-why) — a predicate sonar cannot express is a surface that stays on the database scan.
-- **`anchored` = `spotify_uri is not null`.** **`certified` = the track has a `findings` row _with a Log ID_** — sonar's loader joins `findings` on `f.log_id is not null`, not merely on the row existing. `findings.log_id` is nullable (a straggler awaiting its coordinate backfill), and every public surface filters on the Log ID, so the engine's `certified` had to mean the same thing or a coordinate-less finding could reach a page through sonar that the database path would never have shown. The hydrators re-assert `log_id is not null` anyway as defence-in-depth against a stale index.
+- **Two indexes.** `tracks` — one entry per embedded track, keyed by `track_id`, carrying metadata `{ key, bpm, anchored, certified, has_finding, dismissed, is_duplicate, nearest_finding_score, duration_ms }`. `centroids` — one entry per artist centroid, keyed by `artist_id`, carrying no metadata.
+- **The filter is ten fields** (`key_in`, `bpm_min`, `bpm_max`, `anchored`, `certified`, `has_finding`, `dismissed`, `is_duplicate`, `nearest_finding_score_max`, `duration_ms_max`), all optional. A set constraint requires the entry to carry that metadata, so any metadata filter naturally excludes centroids. The list grows only when a surface's predicate needs it: **a predicate sonar cannot express is a surface that stays on the database scan**, which is why [the `/recommendations` catalogue scan](#the-recommendations-catalogue-scan-routes-behind-its-own-flag) could not route until the last five arrived.
+- **`anchored` = `spotify_uri is not null`.** **`certified` = the track has a `findings` row _with a Log ID_**; **`has_finding` = the track has _any_ `findings` row.** Two different facts, and the difference matters: `findings.log_id` is nullable (a straggler awaiting its coordinate backfill), so that straggler is `has_finding: true, certified: false`. Every public surface filters on the Log ID, so `certified` had to mean the Log ID or a coordinate-less finding could reach a page through sonar that the database path would never have shown; and a predicate meaning "no findings row at all" (`f.track_id is null`) must send `has_finding: false`, because `certified: false` would let that straggler in. The hydrators re-assert `log_id is not null` anyway as defence-in-depth against a stale index.
+- **The two range bounds carry OPPOSITE null rules, and both are exclusive** (unlike the inclusive BPM pair), because each mirrors the SQL it replaces. `nearest_finding_score_max` ⇔ `(score is null or score < x)` — **a NULL score PASSES**. `duration_ms_max` ⇔ `duration_ms < x`, and SQL's `NULL < x` is NULL — **a NULL duration FAILS**. Getting either backwards silently changes which rows a page shows, so both are pinned by a test named for the asymmetry.
+- **The thresholds are the Worker's, never the engine's.** sonar stores `nearest_finding_score` and `duration_ms` RAW and takes the bound as a value, so `DUPLICATE_SIMILARITY` and `LONG_FORM_MS` stay in `catalogue.ts` where they already live. Tuning one moves the filter and the database predicate together, with no sonar redeploy and no way for the two to drift.
+- **An unknown `filter` field is REJECTED** (`deny_unknown_fields`) rather than ignored, and that is a safety property. serde's default is to drop an unknown key, so a Worker sending a constraint an older binary does not know would get back a **wider** candidate set with no error — dismissed, duplicate, or long-form rows on a listener's page, indistinguishable from a correct answer. Failing the parse instead yields the empty result, which every call site treats as the fallback signal, so a Worker/box version skew degrades to the Turso scan: correct, just slower.
 - **Bad input is an empty result, never a panic.** Bad JSON, empty probes, a wrong-dimension probe, `top_k: 0` — all return `{"matches": []}`.
-- **`GET /health` is open** (`{tracks, centroids, last_refresh_unix, ok}`), so the box's healthcheck prober can read it without a secret; `POST /search` requires the `x-sonar-secret` header, compared in constant time. Missing or wrong → `401`.
+- **`GET /health` is open** (`{tracks, centroids, last_refresh_unix, commit, ok}`), so the box's healthcheck prober can read it without a secret; `POST /search` requires the `x-sonar-secret` header, compared in constant time. Missing or wrong → `401`. **`commit` is the git SHA the running binary was built from** — baked at compile time by the release workflow, `"unknown"` for a local build. It is the pre-flight check for a flag flip: the box self-deploys on an hourly timer, so a merge and a running binary are different moments, and a flag whose route depends on a new filter field must not be flipped until this field reports the commit that added it.
 
 ## The safety contract
 
@@ -65,33 +73,55 @@ Because a surface must fall back rather than approximate, each call site also re
 
 One `settings` key per surface, all read default-deny, all in [`sonar.ts`](../apps/web/src/lib/server/sonar.ts).
 
-| Key                     | Surface                                                                                    | Index       | State                |
-| ----------------------- | ------------------------------------------------------------------------------------------ | ----------- | -------------------- |
-| `sonar_sonic_enabled`   | Sonic search — `sounds like <track>` ([search.md](./search.md) tier 3½)                    | `tracks`    | **ON in production** |
-| `sonar_artists_enabled` | `/artists?like=` — sounds-like-these-artists                                               | `centroids` | **ON in production** |
-| `sonar_log_enabled`     | `/log` more-like-this neighbours (certified-only)                                          | `tracks`    | **ON in production** |
-| `sonar_recs_enabled`    | The `/recommendations` draft engine's **findings slots only** (multi-probe over the seeds) | `tracks`    | Merged, **OFF**      |
-| `sonar_mix_enabled`     | The `/mix` rail's candidate scan (key-pre-filtered, both registers)                        | `tracks`    | Merged, **OFF**      |
+| Key                            | Surface                                                                                                         | Index       | State                |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------- | ----------- | -------------------- |
+| `sonar_sonic_enabled`          | Sonic search — `sounds like <track>` ([search.md](./search.md) tier 3½)                                         | `tracks`    | **ON in production** |
+| `sonar_artists_enabled`        | `/artists?like=` — sounds-like-these-artists                                                                    | `centroids` | **ON in production** |
+| `sonar_log_enabled`            | `/log` more-like-this neighbours (certified-only)                                                               | `tracks`    | **ON in production** |
+| `sonar_recs_enabled`           | The `/recommendations` draft engine's **findings slots only** (multi-probe over the seeds)                      | `tracks`    | **ON in production** |
+| `sonar_recs_catalogue_enabled` | The `/recommendations` draft engine's **catalogue scan** (the whole `REC_ELIGIBLE_WHERE` predicate as a filter) | `tracks`    | Merged, **OFF**      |
+| `sonar_mix_enabled`            | The `/mix` rail's candidate scan (key-pre-filtered, both registers)                                             | `tracks`    | Merged, **OFF**      |
 
-**Flipping one is a `settings` row.** `setSonarSonicEnabled` and its four siblings write `"true"`/`"false"` through the same one flag store (`settings.ts`) every other kill switch in the app uses — never a second flag mechanism, and never a deploy. **There is deliberately no `/admin` UI for these yet:** they are commissioning switches, flipped a handful of times each as a surface is proven in production, not an operating control. Add the board when the flipping becomes routine, not before.
+**The two `/recommendations` flags are separate on purpose.** The draft engine runs two scans, and they must be commissionable independently: the findings flag is already on in production, so reusing it would have routed the catalogue scan the instant the filter fields merged — before the box's hourly self-deploy had shipped a binary that carries them. (Even that skew is safe, because an older binary rejects the unknown fields rather than dropping them and the surface falls back — but a flag whose pre-condition is "the box has redeployed" has to be flippable on its own.)
+
+**Flipping one is a `settings` row.** `setSonarSonicEnabled` and its five siblings write `"true"`/`"false"` through the same one flag store (`settings.ts`) every other kill switch in the app uses — never a second flag mechanism, and never a deploy. **There is deliberately no `/admin` UI for these yet:** they are commissioning switches, flipped a handful of times each as a surface is proven in production, not an operating control. Add the board when the flipping becomes routine, not before.
+
+**The go-live order for `sonar_recs_catalogue_enabled`** — and for any future flag that depends on a new filter field, because merging the Worker half and running the engine half are different moments:
+
+1. **Merge.** The Worker ships with the flag OFF, so nothing changes: the catalogue scan runs the same exact Turso fold it runs today.
+2. **Wait for the self-deploy.** The hourly box timer picks up the CI-built binary, verifies its checksum, pre-smokes it, and swaps it in.
+3. **Verify the box carries this commit.** `GET /health` on the engine reports `commit`. It must be the merge commit (or later) — the one that added `has_finding`, `dismissed`, `is_duplicate`, `nearest_finding_score_max`, `duration_ms_max`. Do not infer this from the merge time; read it.
+4. **Only then flip the flag.** Flipped early, the engine 401s nothing and errors nothing — it simply rejects the unknown filter fields, returns empty, and every request falls back to Turso. Correct, but you would learn nothing and see no win.
 
 The `/artists?like=` route is worth one note on fidelity: it sends the **same single mean probe** to the `centroids` index that the database path builds, rather than multi-probing over the selected artists. Multi-probe there would be a better answer but a **different** one, and a flag flip must be a pure latency swap. Changing that ranking is a separate, operator-decided slice.
 
-## What does not route, and why
+## What routes with a caveat, and what does not
 
-### The `/recommendations` catalogue scan stays on Turso unconditionally
+### The `/recommendations` catalogue scan routes behind its own flag
 
-The draft engine runs two scans. The **findings slots** route behind `sonar_recs_enabled`. The **catalogue scan** does not route at all, under any flag, and this is the most consequential line in the whole stack.
+The draft engine runs two scans. The **findings slots** route behind `sonar_recs_enabled`; the **catalogue scan** routes behind `sonar_recs_catalogue_enabled` (merged, OFF — see the go-live order above). This was the last unbounded vector scan in the app, and for a long time it was the one that could not move.
 
-Its eligibility predicate is `REC_ELIGIBLE_WHERE` ([`recommendations.ts`](../apps/web/src/lib/server/recommendations.ts)), shared verbatim with the `/admin/funnel` counter so the two can never drift. It requires: no findings row, an embedding, a Spotify anchor, **not dismissed**, **no duplicate marker**, **under the display-duplicate similarity band**, and **under the long-form veto**. Of that list sonar's five-field filter can express exactly one — `anchored`. It has no field for `dismissed_at`, `duplicate_of_track_id`, the `nearest_finding_score` band, or `duration_ms`. Worse, its `certified` is a strictly weaker negation than `f.track_id is null`: a coordinate-less straggler passes sonar's "not certified" and fails Turso's "no findings row at all".
+Its eligibility predicate is `REC_ELIGIBLE_WHERE` ([`recommendations.ts`](../apps/web/src/lib/server/recommendations.ts)), shared verbatim with the `/admin/funnel` counter so the two can never drift. It requires: no findings row, an embedding, a Spotify anchor, **not dismissed**, **no duplicate marker**, **under the display-duplicate similarity band**, and **under the long-form veto**. Against the original five-field filter sonar could express exactly one of those — `anchored`. The other four exclusions are **unbounded sets**, so they could not ride along as `exclude_ids` either, and re-applying them at hydration would prune rows sonar had already counted against `top_k`, silently handing back a shorter, differently-ranked page. No faithful routing, therefore no routing.
 
-Those four exclusions are **unbounded sets** — they cannot ride along as `exclude_ids` — and re-applying them at hydration would prune rows sonar had already counted against `top_k`, silently handing back a shorter, differently-ranked page. There is no faithful routing, so there is no routing.
+**All seven clauses now map, one to one**, which is the entire reason the route exists:
 
-**Say it plainly: this is the scan carrying the scale tripwire, and that wall has not been moved — the archive has already reached it.** The probe count is capped (`MAX_REC_SEEDS` = 12) but the candidate count is not: it grows with every capture and every Spotify anchoring. Measured against production on 2026-07-26: **9,859 eligible rows, and the scan takes ~1.84s** (a single probe costs ~1.63s, so the folded `min()` shape adds only ~13% for twelve — the cost is dragging 4 KB blobs off disk, not the cosine math, which is why it tracks ROW COUNT almost linearly). That sits inside the file's own tripwire band — **"when it crosses ~5–10k this scan is seconds again"** — and it got there fast: the same figure was ~360 rows on 2026-07-18, before the embed backlog drained. With ~10.7k catalogue rows already Spotify-anchored and ~52k catalogue rows in total, eligibility keeps climbing as embedding coverage completes.
+| `REC_ELIGIBLE_WHERE`                                        | sonar                                             |
+| ----------------------------------------------------------- | ------------------------------------------------- |
+| `f.track_id is null`                                        | `has_finding: false`                              |
+| `t.embedding_blob is not null`                              | membership in the `tracks` index at all           |
+| `t.spotify_uri is not null`                                 | `anchored: true`                                  |
+| `t.dismissed_at is null`                                    | `dismissed: false`                                |
+| `t.duplicate_of_track_id is null`                           | `is_duplicate: false`                             |
+| `(nearest_finding_score is null or < DUPLICATE_SIMILARITY)` | `nearest_finding_score_max: DUPLICATE_SIMILARITY` |
+| `t.duration_ms < LONG_FORM_MS`                              | `duration_ms_max: LONG_FORM_MS`                   |
 
-Because the draft engine runs its two scans **concurrently**, the page can never be faster than this half — so `sonar_recs_enabled` improves the findings slots while the catalogue scan sets the floor. Two ways out, not mutually exclusive: route it (the unlock below), or take the engine off the hot path with a per-user cache keyed by (seed set, corpus fingerprint), the self-healing `rank_catalogue` shape from [the-ear.md](./the-ear.md).
+The first row is the trap worth naming: it is **`has_finding`, never `certified: false`**. `certified` means a findings row _with a Log ID_, so a coordinate-less straggler passes "not certified" and fails "no findings row at all" — routing on the weaker negation would have recommended a finding as a catalogue row. The last two rows carry the opposite null rules described under [the contract](#the-contract), and the two thresholds cross the wire as values so they stay owned by the Worker.
 
-**The unlock is named and small:** add `dismissed_at`, `duplicate_of_track_id`, `nearest_finding_score`, and `duration_ms` (or their derived booleans) to sonar's Rust `TrackMeta` and the matching constraints to its `Filter`, so the predicate can be reproduced exactly rather than approximated. Until then the catalogue's answer is the cache, not the engine.
+**The bar for this route was equivalence, not "it runs."** A fixture world holding one row of every excluded class — dismissed, duplicate-marked, display-duplicate, long-form, on-the-boundary long-form, un-anchored, NULL-score, and the coordinate-less straggler — is scanned both ways, and the routed page must equal the database page row for row, similarity included. (One class cannot be seeded: `tracks.duration_ms` is `NOT NULL`, so a NULL duration is unreachable from the schema; the engine's rule for it is pinned in sonar's own unit tests.)
+
+**The number this exists to move.** The probe count is capped (`MAX_REC_SEEDS` = 12) but the candidate count is not: it grows with every capture and every Spotify anchoring. Measured against production on 2026-07-26, before the route: **9,859 eligible rows, and the scan takes ~1.84s** (a single probe costs ~1.63s, so the folded `min()` shape adds only ~13% for twelve — the cost is dragging 4 KB blobs off disk, not the cosine math, which is why it tracks ROW COUNT almost linearly). That sits inside the file's own tripwire band — **"when it crosses ~5–10k this scan is seconds again"** — and it got there fast: the same figure was ~360 rows on 2026-07-18, before the embed backlog drained. With ~10.7k catalogue rows already Spotify-anchored and ~52k catalogue rows in total, eligibility keeps climbing as embedding coverage completes. **Keep that 9,859 / ~1.84s as the "before"**: the flip is checkable against it.
+
+Because the draft engine runs its two scans **concurrently**, the page could never be faster than this half — so `sonar_recs_enabled` alone improved the findings slots while the catalogue scan set the floor. The other way out remains available and is not mutually exclusive: take the engine off the hot path with a per-user cache keyed by (seed set, corpus fingerprint), the self-healing `rank_catalogue` shape from [the-ear.md](./the-ear.md).
 
 ### `/mix` routes with two accepted divergences
 
@@ -146,4 +176,4 @@ The presumed near-term win: make the existing exact scan cheap enough that no in
 ## What is still unbuilt
 
 - **Regional replication is demand-gated and untriggered.** One region today. The index is small enough that adding a region is cheap — spin a box, pull the binary, register it — but a second one is only correct once far-region **dynamic** (uncached search/recs) traffic is a measured, meaningful share; you cannot place a replica without knowing where the audience is. The Worker calls the engine directly at one region; a geo-steered load balancer is the recommended mechanism if a second is ever added. Note the constraint that makes the split worth anything: the Worker→engine hop must be **same-continent** — a cross-ocean hop would eat the entire win.
-- **The catalogue-filter extension**, per [the `/recommendations` section above](#the-recommendations-catalogue-scan-stays-on-turso-unconditionally): the four missing exclusion fields on sonar's `TrackMeta` + `Filter`. That is what would let the last unbounded vector scan leave the database, and until it exists the per-user cache is the catalogue's scale answer.
+- **The `/recommendations` catalogue route is merged but not yet commissioned.** The filter fields exist and the equivalence is proven; what remains is operator work, in order: let the box self-deploy, read `commit` off `GET /health`, then flip `sonar_recs_catalogue_enabled` and check the page against the 9,859-rows / ~1.84s baseline. Until that flip the last unbounded vector scan is still running in the database.

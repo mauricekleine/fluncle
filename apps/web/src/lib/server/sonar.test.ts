@@ -4,6 +4,7 @@ import {
   isSonarArtistsEnabled,
   isSonarLogEnabled,
   isSonarMixEnabled,
+  isSonarRecsCatalogueEnabled,
   isSonarRecsEnabled,
   isSonarSonicEnabled,
   searchSonar,
@@ -158,6 +159,7 @@ describe("the dark flags — default OFF, only 'true' enables", () => {
     ["artists", isSonarArtistsEnabled, "sonar_artists_enabled"],
     ["log", isSonarLogEnabled, "sonar_log_enabled"],
     ["recs", isSonarRecsEnabled, "sonar_recs_enabled"],
+    ["recs-catalogue", isSonarRecsCatalogueEnabled, "sonar_recs_catalogue_enabled"],
     ["mix", isSonarMixEnabled, "sonar_mix_enabled"],
   ];
 

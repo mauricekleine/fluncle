@@ -62,11 +62,27 @@ async fn root() -> &'static str {
     "sonar — Fluncle's in-memory exact vector-similarity engine. POST /search (auth), GET /health.\n"
 }
 
+/// The commit this binary was built from, baked at COMPILE TIME by the release
+/// workflow (`GIT_SHA`); `"unknown"` when unset, so a plain local `cargo run` still
+/// builds and still answers `/health`.
+///
+/// WHY IT IS ON THE HEALTH RESPONSE. The box self-deploys on an hourly timer, so
+/// "merged" and "running on the box" are different moments. A dark flag must only be
+/// flipped once the engine actually carries the code the flag depends on, and this is
+/// how an operator checks that in one unauthenticated GET rather than by inference.
+/// Public-safe: a commit SHA of a public repo identifies a commit anyone can already
+/// read, and nothing else is added here.
+pub const BUILD_COMMIT: &str = match option_env!("GIT_SHA") {
+    Some(sha) => sha,
+    None => "unknown",
+};
+
 #[derive(Serialize)]
 struct Health {
     tracks: usize,
     centroids: usize,
     last_refresh_unix: i64,
+    commit: &'static str,
     ok: bool,
 }
 
@@ -75,6 +91,7 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<Health> {
         tracks: state.tracks.load().len(),
         centroids: state.centroids.load().len(),
         last_refresh_unix: state.last_refresh.load(Ordering::Relaxed),
+        commit: BUILD_COMMIT,
         ok: true,
     })
 }

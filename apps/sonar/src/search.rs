@@ -21,13 +21,36 @@ pub enum IndexName {
 /// Optional metadata filter. A `None` field is unconstrained. A constraint that
 /// is `Some` requires the entry to carry the field and satisfy it — so any
 /// metadata constraint excludes centroid entries (which have no metadata).
+///
+/// `deny_unknown_fields` IS A SAFETY PROPERTY, NOT STRICTNESS. serde ignores unknown
+/// fields by default, so a Worker that sends a constraint this binary does not know
+/// would have it SILENTLY DROPPED and get back a wider candidate set with no error —
+/// dismissed, duplicate, or long-form tracks on a listener's page, indistinguishable
+/// from a correct answer. Refusing the body instead makes the request fail to parse,
+/// which the handler answers as an EMPTY result, which every call site treats as the
+/// documented fallback signal: the surface degrades to the Turso exact scan. Correct,
+/// just slower. That is the only acceptable failure mode for a version skew between
+/// the Worker and a box that has not yet self-deployed this binary.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Filter {
     pub key_in: Option<Vec<String>>,
     pub bpm_min: Option<f32>,
     pub bpm_max: Option<f32>,
     pub anchored: Option<bool>,
     pub certified: Option<bool>,
+    /// Require/forbid ANY findings row. NOT `certified` — see [`TrackMeta::has_finding`].
+    pub has_finding: Option<bool>,
+    pub dismissed: Option<bool>,
+    pub is_duplicate: Option<bool>,
+    /// EXCLUSIVE upper bound on `nearest_finding_score`, and **a NULL score PASSES** —
+    /// the SQL being mirrored is `(score is null or score < x)`. Unlike `bpm_max`
+    /// (inclusive, and a missing bpm fails), this pair is deliberately asymmetric.
+    pub nearest_finding_score_max: Option<f32>,
+    /// EXCLUSIVE upper bound on `duration_ms`, and **a NULL duration FAILS** — the SQL
+    /// being mirrored is `duration_ms < x`, and `NULL < x` is NULL, so the row is
+    /// excluded. The opposite null rule to `nearest_finding_score_max`, on purpose.
+    pub duration_ms_max: Option<u32>,
 }
 
 /// A `POST /search` request body.
@@ -95,6 +118,40 @@ fn passes_filter(meta: Option<&TrackMeta>, filter: &Filter) -> bool {
     if let Some(want) = filter.certified {
         match meta.map(|m| m.certified) {
             Some(v) if v == want => {}
+            _ => return false,
+        }
+    }
+    if let Some(want) = filter.has_finding {
+        match meta.map(|m| m.has_finding) {
+            Some(v) if v == want => {}
+            _ => return false,
+        }
+    }
+    if let Some(want) = filter.dismissed {
+        match meta.map(|m| m.dismissed) {
+            Some(v) if v == want => {}
+            _ => return false,
+        }
+    }
+    if let Some(want) = filter.is_duplicate {
+        match meta.map(|m| m.is_duplicate) {
+            Some(v) if v == want => {}
+            _ => return false,
+        }
+    }
+    if let Some(max) = filter.nearest_finding_score_max {
+        // NULL PASSES: `(score is null or score < max)`. An entry with no metadata at
+        // all (a centroid) still fails, like every other constraint.
+        match meta.map(|m| m.nearest_finding_score) {
+            Some(None) => {}
+            Some(Some(score)) if score < max => {}
+            _ => return false,
+        }
+    }
+    if let Some(max) = filter.duration_ms_max {
+        // NULL FAILS: `duration_ms < max`, and SQL's `NULL < max` is NULL ⇒ excluded.
+        match meta.and_then(|m| m.duration_ms) {
+            Some(duration) if duration < max => {}
             _ => return false,
         }
     }
@@ -249,6 +306,7 @@ mod tests {
                     bpm: Some(174.0),
                     anchored: true,
                     certified: true,
+                    ..TrackMeta::default()
                 },
             ),
             track(
@@ -259,6 +317,7 @@ mod tests {
                     bpm: Some(140.0),
                     anchored: false,
                     certified: false,
+                    ..TrackMeta::default()
                 },
             ),
         ]);
@@ -308,6 +367,347 @@ mod tests {
             ..Default::default()
         });
         assert!(search(&index, &r).matches.is_empty());
+    }
+
+    /// `certified` and `has_finding` are DIFFERENT facts, and the difference is the whole
+    /// reason the catalogue predicate can route: the coordinate-less straggler (a findings
+    /// row whose `log_id` is still NULL) passes `certified: false` and must NOT pass
+    /// `has_finding: false`. `/recommendations` negates the LATTER (`f.track_id is null`).
+    #[test]
+    fn has_finding_is_not_certified() {
+        let straggler = TrackMeta {
+            certified: false,
+            has_finding: true,
+            ..Default::default()
+        };
+        let catalogue = TrackMeta {
+            certified: false,
+            has_finding: false,
+            ..Default::default()
+        };
+        let index = Index::from_entries(vec![
+            track("straggler", padded(&[1.0, 0.0]), straggler),
+            track("catalogue", padded(&[1.0, 0.0]), catalogue),
+        ]);
+
+        // The weaker negation admits both — the trap this test exists to pin.
+        let mut r = req(vec![padded(&[1.0, 0.0])], 5);
+        r.filter = Some(Filter {
+            certified: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(search(&index, &r).matches.len(), 2);
+
+        // The catalogue's actual predicate admits only the row with no findings row at all.
+        r.filter = Some(Filter {
+            has_finding: Some(false),
+            ..Default::default()
+        });
+        let resp = search(&index, &r);
+        assert_eq!(resp.matches.len(), 1);
+        assert_eq!(resp.matches[0].id, "catalogue");
+    }
+
+    #[test]
+    fn dismissed_and_duplicate_constraints() {
+        let index = Index::from_entries(vec![
+            track(
+                "clean",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    ..Default::default()
+                },
+            ),
+            track(
+                "dismissed",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    dismissed: true,
+                    ..Default::default()
+                },
+            ),
+            track(
+                "duplicate",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    is_duplicate: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let mut r = req(vec![padded(&[1.0, 0.0])], 5);
+        r.filter = Some(Filter {
+            dismissed: Some(false),
+            is_duplicate: Some(false),
+            ..Default::default()
+        });
+        let resp = search(&index, &r);
+        assert_eq!(resp.matches.len(), 1);
+        assert_eq!(resp.matches[0].id, "clean");
+    }
+
+    /// NULL SEMANTICS, HALF ONE. `nearest_finding_score_max` mirrors
+    /// `(score is null or score < x)` — a row with NO score PASSES, and the bound is
+    /// EXCLUSIVE (a row sitting exactly on the threshold is out).
+    #[test]
+    fn nearest_finding_score_max_lets_a_null_score_through() {
+        let index = Index::from_entries(vec![
+            track(
+                "null_score",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    nearest_finding_score: None,
+                    ..Default::default()
+                },
+            ),
+            track(
+                "under_band",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    nearest_finding_score: Some(0.8),
+                    ..Default::default()
+                },
+            ),
+            track(
+                "on_band",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    nearest_finding_score: Some(0.995),
+                    ..Default::default()
+                },
+            ),
+            track(
+                "over_band",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    nearest_finding_score: Some(0.999),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let mut r = req(vec![padded(&[1.0, 0.0])], 5);
+        r.filter = Some(Filter {
+            nearest_finding_score_max: Some(0.995),
+            ..Default::default()
+        });
+        let mut ids: Vec<String> = search(&index, &r)
+            .matches
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["null_score".to_string(), "under_band".to_string()]
+        );
+    }
+
+    /// NULL SEMANTICS, HALF TWO — the OPPOSITE rule, and the asymmetry is the point.
+    /// `duration_ms_max` mirrors a bare `duration_ms < x`, and SQL's `NULL < x` is NULL, so
+    /// a row with NO duration is EXCLUDED. Asserted against the null-score case above.
+    #[test]
+    fn duration_ms_max_excludes_a_null_duration() {
+        let index = Index::from_entries(vec![
+            track(
+                "null_duration",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    duration_ms: None,
+                    ..Default::default()
+                },
+            ),
+            track(
+                "short",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    duration_ms: Some(270_000),
+                    ..Default::default()
+                },
+            ),
+            track(
+                "exactly_long_form",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    duration_ms: Some(900_000),
+                    ..Default::default()
+                },
+            ),
+            track(
+                "long_form",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    duration_ms: Some(1_800_000),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let mut r = req(vec![padded(&[1.0, 0.0])], 5);
+        r.filter = Some(Filter {
+            duration_ms_max: Some(900_000),
+            ..Default::default()
+        });
+        let resp = search(&index, &r);
+        assert_eq!(resp.matches.len(), 1);
+        assert_eq!(resp.matches[0].id, "short");
+    }
+
+    /// The two null rules, side by side on ONE entry, so the asymmetry cannot drift apart:
+    /// the same row passes the score bound (null ⇒ in) and fails the duration bound
+    /// (null ⇒ out).
+    #[test]
+    fn the_two_null_rules_are_deliberately_opposite() {
+        let both_null = TrackMeta {
+            duration_ms: None,
+            nearest_finding_score: None,
+            ..Default::default()
+        };
+        let index = Index::from_entries(vec![track("row", padded(&[1.0, 0.0]), both_null)]);
+        let mut r = req(vec![padded(&[1.0, 0.0])], 5);
+
+        r.filter = Some(Filter {
+            nearest_finding_score_max: Some(0.995),
+            ..Default::default()
+        });
+        assert_eq!(search(&index, &r).matches.len(), 1, "a null score PASSES");
+
+        r.filter = Some(Filter {
+            duration_ms_max: Some(900_000),
+            ..Default::default()
+        });
+        assert!(
+            search(&index, &r).matches.is_empty(),
+            "a null duration FAILS"
+        );
+    }
+
+    /// The FULL `/recommendations` catalogue predicate, expressed as one filter, over a
+    /// fixture world holding one row of each excluded class. Only the eligible row survives.
+    #[test]
+    fn the_catalogue_eligibility_predicate_composes() {
+        fn eligible() -> TrackMeta {
+            TrackMeta {
+                anchored: true,
+                duration_ms: Some(270_000),
+                ..Default::default()
+            }
+        }
+        let index = Index::from_entries(vec![
+            track("eligible", padded(&[1.0, 0.0]), eligible()),
+            track(
+                "unanchored",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    anchored: false,
+                    ..eligible()
+                },
+            ),
+            track(
+                "certified",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    certified: true,
+                    has_finding: true,
+                    ..eligible()
+                },
+            ),
+            track(
+                "coordinate_less_straggler",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    certified: false,
+                    has_finding: true,
+                    ..eligible()
+                },
+            ),
+            track(
+                "dismissed",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    dismissed: true,
+                    ..eligible()
+                },
+            ),
+            track(
+                "duplicate",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    is_duplicate: true,
+                    ..eligible()
+                },
+            ),
+            track(
+                "display_duplicate",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    nearest_finding_score: Some(0.999),
+                    ..eligible()
+                },
+            ),
+            track(
+                "long_form",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    duration_ms: Some(1_800_000),
+                    ..eligible()
+                },
+            ),
+            track(
+                "null_duration",
+                padded(&[1.0, 0.0]),
+                TrackMeta {
+                    duration_ms: None,
+                    ..eligible()
+                },
+            ),
+        ]);
+        let mut r = req(vec![padded(&[1.0, 0.0])], 20);
+        r.filter = Some(Filter {
+            anchored: Some(true),
+            dismissed: Some(false),
+            duration_ms_max: Some(900_000),
+            has_finding: Some(false),
+            is_duplicate: Some(false),
+            nearest_finding_score_max: Some(0.995),
+            ..Default::default()
+        });
+        let resp = search(&index, &r);
+        assert_eq!(resp.matches.len(), 1);
+        assert_eq!(resp.matches[0].id, "eligible");
+    }
+
+    /// FAIL CLOSED on a field this binary does not know. serde's DEFAULT is to ignore an
+    /// unknown key, which would let a NEWER Worker's constraint be silently dropped by an
+    /// OLDER binary — a wider candidate set with no error. `deny_unknown_fields` turns that
+    /// into a parse failure, which the handler answers as an empty result, which every call
+    /// site reads as "fall back to Turso".
+    #[test]
+    fn an_unknown_filter_field_is_rejected() {
+        let body = r#"{"certified":true,"not_a_real_field":true}"#;
+        assert!(serde_json::from_str::<Filter>(body).is_err());
+    }
+
+    /// …and the FOUR already-live surfaces are unaffected: each sends a SUBSET of the known
+    /// fields, and a missing field deserializes to `None` (unconstrained), exactly as before.
+    #[test]
+    fn the_live_surfaces_filters_still_deserialize() {
+        // Sonic search + /log neighbours + the /recommendations findings slots.
+        let certified_only: Filter = serde_json::from_str(r#"{"certified":true}"#).unwrap();
+        assert_eq!(certified_only.certified, Some(true));
+        assert_eq!(certified_only.has_finding, None);
+        assert_eq!(certified_only.duration_ms_max, None);
+
+        // Sonic search, broad: anchored-only.
+        let anchored_only: Filter = serde_json::from_str(r#"{"anchored":true}"#).unwrap();
+        assert_eq!(anchored_only.anchored, Some(true));
+
+        // The /mix rail: a key set with no other constraint.
+        let mix: Filter = serde_json::from_str(r#"{"key_in":["Amin","Cmaj"]}"#).unwrap();
+        assert_eq!(mix.key_in.as_deref().map(<[String]>::len), Some(2));
+        assert_eq!(mix.bpm_min, None);
+
+        // /artists?like= sends no filter at all — the `None` filter, still valid.
+        let empty: Filter = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.key_in, None);
     }
 
     #[test]

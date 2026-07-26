@@ -6,12 +6,35 @@
 use crate::decode::DIM;
 
 /// Per-track filterable metadata. Centroid entries carry `None` (no metadata).
+///
+/// RAW VALUES, NOT VERDICTS. `nearest_finding_score` and `duration_ms` are stored
+/// exactly as the row carries them (NULL preserved as `None`) rather than as
+/// precomputed booleans, mirroring `bpm`: the THRESHOLDS live in the Worker
+/// (`DUPLICATE_SIMILARITY`, `LONG_FORM_MS` in `apps/web/src/lib/server/catalogue.ts`),
+/// so tuning one is a Worker change and never a sonar redeploy.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackMeta {
     pub key: Option<String>,
     pub bpm: Option<f32>,
     pub anchored: bool,
+    /// A `findings` row WITH a Log ID exists — the app-wide "Fluncle speaks about it".
     pub certified: bool,
+    /// ANY `findings` row exists, Log ID or not. DISTINCT from [`TrackMeta::certified`]
+    /// and deliberately weaker: a coordinate-less straggler (a findings row awaiting its
+    /// one-time Log ID backfill) is `has_finding: true` while `certified: false`. The
+    /// `/recommendations` catalogue predicate negates THIS one (`f.track_id is null`), so
+    /// `certified: false` is not a substitute — it would admit that straggler.
+    pub has_finding: bool,
+    /// `dismissed_at is not null` — the operator has waved this row off.
+    pub dismissed: bool,
+    /// `duplicate_of_track_id is not null` — the dedupe sweep marked it a duplicate.
+    pub is_duplicate: bool,
+    /// The Ear's rank (cosine to the nearest finding), raw. `None` = the column is NULL.
+    pub nearest_finding_score: Option<f32>,
+    /// Track length in ms, raw. `None` = NULL (or a value outside `u32`, which no real
+    /// row carries) — and a `None` here FAILS a `duration_ms_max` constraint, matching
+    /// SQL's `NULL < x` ⇒ NULL ⇒ row excluded.
+    pub duration_ms: Option<u32>,
 }
 
 /// One entry to be loaded into an [`Index`]. `vector` is the raw (un-normalized)

@@ -1,5 +1,5 @@
 // THE SONAR CLIENT — the Worker's thin HTTP door to the `sonar` vector sidecar (apps/sonar),
-// plus the five DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
+// plus the six DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
 // stays on the existing Turso `vector_distance_cos` scan. The architecture doc is
 // docs/vector-serving.md.
 //
@@ -42,12 +42,23 @@ export const SONAR_LOG_ENABLED_KEY = "sonar_log_enabled";
  * (certified-only, multi-probe over the listener's seed vectors).
  *
  * SCOPE, deliberately narrow: this flag routes the findings slots ONLY. The engine's OTHER scan —
- * the catalogue pool — stays on Turso unconditionally, because its eligibility predicate
- * (`REC_ELIGIBLE_WHERE`: dismissals, dedupe markers, the display-duplicate band, the long-form
- * veto) has NO faithful sonar filter, and re-applying it during hydration would silently break
- * top-k. The reasoning lives at the callsite (./recommendations.ts).
+ * the catalogue pool — rides its own flag, {@link SONAR_RECS_CATALOGUE_ENABLED_KEY}.
  */
 export const SONAR_RECS_ENABLED_KEY = "sonar_recs_enabled";
+/**
+ * The `/recommendations` DRAFT-phase engine's CATALOGUE SCAN → sonar `tracks` index
+ * (the full `REC_ELIGIBLE_WHERE` predicate as a sonar filter, multi-probe over the seeds).
+ *
+ * A SEPARATE FLAG FROM {@link SONAR_RECS_ENABLED_KEY}, and the separation is the safety.
+ * That one is already ON in production; reusing it would route the catalogue scan the instant
+ * this merges — before the box's hourly self-deploy has shipped a binary that CARRIES the
+ * `has_finding`/`dismissed`/`is_duplicate`/`nearest_finding_score_max`/`duration_ms_max`
+ * filter fields. (An older binary rejects the unknown fields rather than dropping them, so
+ * even that skew degrades to the Turso scan rather than a wrong page — but a flag whose
+ * pre-condition is "the box has redeployed" must be flippable on its own.) Default OFF; the
+ * go-live order is merge → self-deploy → verify `GET /health` reports the commit → flip.
+ */
+export const SONAR_RECS_CATALOGUE_ENABLED_KEY = "sonar_recs_catalogue_enabled";
 /** The `/mix` rail's candidate scan → sonar `tracks` index (key-pre-filtered, both registers). */
 export const SONAR_MIX_ENABLED_KEY = "sonar_mix_enabled";
 
@@ -74,6 +85,14 @@ export async function isSonarRecsEnabled(): Promise<boolean> {
   return (await getSetting(SONAR_RECS_ENABLED_KEY)) === "true";
 }
 
+/**
+ * Whether the `/recommendations` draft engine's CATALOGUE scan routes to sonar — THE DARK FLAG.
+ * DEFAULT FALSE; only "true" enables it. Separate from {@link isSonarRecsEnabled} on purpose.
+ */
+export async function isSonarRecsCatalogueEnabled(): Promise<boolean> {
+  return (await getSetting(SONAR_RECS_CATALOGUE_ENABLED_KEY)) === "true";
+}
+
 /** Whether the `/mix` rail routes to sonar — THE DARK FLAG. DEFAULT FALSE; only "true" enables it. */
 export async function isSonarMixEnabled(): Promise<boolean> {
   return (await getSetting(SONAR_MIX_ENABLED_KEY)) === "true";
@@ -97,6 +116,15 @@ export async function setSonarLogEnabled(enabled: boolean): Promise<void> {
 /** Flip the `/recommendations` dark flag (operator). Writing anything but `true` leaves it OFF. */
 export async function setSonarRecsEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_RECS_ENABLED_KEY, enabled ? "true" : "false");
+}
+
+/**
+ * Flip the `/recommendations` CATALOGUE dark flag (operator). Writing anything but `true` leaves
+ * it OFF. Flip it only after `GET /health` on the engine reports a commit that carries the
+ * catalogue filter fields — before that the box rejects them and the surface just falls back.
+ */
+export async function setSonarRecsCatalogueEnabled(enabled: boolean): Promise<void> {
+  await setSetting(SONAR_RECS_CATALOGUE_ENABLED_KEY, enabled ? "true" : "false");
 }
 
 /** Flip the `/mix`-rail dark flag (operator). Writing anything but `true` leaves it OFF. */
@@ -125,8 +153,33 @@ export type SonarFilter = {
   anchored?: boolean;
   bpm_max?: number;
   bpm_min?: number;
+  /** A findings row WITH a Log ID. NOT the negation of {@link SonarFilter.has_finding}. */
   certified?: boolean;
+  /** `dismissed_at is not null` — set `false` to require a non-dismissed row. */
+  dismissed?: boolean;
+  /**
+   * EXCLUSIVE upper bound on `duration_ms`, mirroring `t.duration_ms < x`. A row whose
+   * duration is NULL **FAILS** it — SQL's `NULL < x` is NULL, so the row is excluded. The
+   * OPPOSITE null rule to {@link SonarFilter.nearest_finding_score_max}, deliberately.
+   */
+  duration_ms_max?: number;
+  /**
+   * Whether ANY findings row exists — the weaker fact `certified` is not. A coordinate-less
+   * straggler (a findings row awaiting its Log ID backfill) is `has_finding: true,
+   * certified: false`, so a predicate meaning "no findings row at all"
+   * (`f.track_id is null`) MUST send `has_finding: false`; `certified: false` would admit it.
+   */
+  has_finding?: boolean;
+  /** `duplicate_of_track_id is not null` — set `false` to require a non-duplicate row. */
+  is_duplicate?: boolean;
   key_in?: string[];
+  /**
+   * EXCLUSIVE upper bound on `nearest_finding_score`, mirroring
+   * `(t.nearest_finding_score is null or t.nearest_finding_score < x)`. A row whose score is
+   * NULL **PASSES** it. The threshold itself stays here in the Worker
+   * (`DUPLICATE_SIMILARITY`), so tuning it never needs a sonar redeploy.
+   */
+  nearest_finding_score_max?: number;
 };
 
 /** A `POST /search` request in the Worker's shape; {@link searchSonar} maps it to sonar's wire body. */

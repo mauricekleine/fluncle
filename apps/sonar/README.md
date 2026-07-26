@@ -23,9 +23,17 @@ Two in-memory indexes, both refreshed periodically from Turso and hot-swapped
 atomically (in-flight queries always see a consistent snapshot):
 
 - **`tracks`** — one entry per embedded track. id = `track_id`, a 1024-dim f32
-  vector, plus metadata `{ key, bpm, anchored, certified }`.
-  `anchored = spotify_uri IS NOT NULL`; `certified` = the track has a `findings`
-  row.
+  vector, plus metadata
+  `{ key, bpm, anchored, certified, has_finding, dismissed, is_duplicate, nearest_finding_score, duration_ms }`.
+  `anchored = spotify_uri IS NOT NULL`. **`certified` and `has_finding` are two
+  different facts**: `certified` = a `findings` row **with a Log ID**, the
+  app-wide "Fluncle speaks about it"; `has_finding` = **any** `findings` row,
+  Log ID or not. A coordinate-less straggler (a finding awaiting its one-time Log
+  ID backfill) is `has_finding: true, certified: false`, so a surface negating
+  "no findings row at all" — the `/recommendations` catalogue predicate — must use
+  `has_finding`, never `certified: false`. `nearest_finding_score` and
+  `duration_ms` are stored RAW (NULL preserved), because the thresholds that read
+  them belong to the Worker.
 - **`centroids`** — one entry per artist centroid. id = `artist_id`, a 1024-dim
   f32 vector, no metadata.
 
@@ -59,7 +67,12 @@ Request body:
     "bpm_min": 168.0,
     "bpm_max": 176.0,
     "anchored": true,
-    "certified": true
+    "certified": true,
+    "has_finding": false,
+    "dismissed": false,
+    "is_duplicate": false,
+    "nearest_finding_score_max": 0.995,
+    "duration_ms_max": 900000
   },
   "exclude_ids": ["track_abc"],
   "top_k": 20
@@ -75,6 +88,21 @@ Request body:
   filter naturally excludes centroids). `bpm_min`/`bpm_max` are inclusive.
 - `exclude_ids` — optional ids to omit from candidates.
 - `top_k` — number of results to return.
+
+**The two range bounds carry OPPOSITE null rules, mirroring the SQL they replace,
+and both are EXCLUSIVE (`<`, unlike the inclusive BPM pair):**
+
+- `nearest_finding_score_max` — a row whose score is **NULL PASSES**
+  (`score is null or score < x`).
+- `duration_ms_max` — a row whose duration is **NULL FAILS** (`duration_ms < x`,
+  and SQL's `NULL < x` is NULL, so the row is excluded).
+
+**An unknown `filter` field is REJECTED** (`deny_unknown_fields`), which returns
+the same empty result any malformed body does. That is a safety property, not
+strictness: serde's default is to ignore an unknown key, so a Worker sending a
+constraint an older binary does not know would have it silently dropped and get
+back a wider candidate set with no error. Failing instead makes the caller fall
+back to its Turso scan — correct, just slower — until the box self-deploys.
 
 Response body:
 
@@ -94,10 +122,24 @@ empty input (bad JSON, empty probes, wrong-dim probe, `top_k: 0`) returns
 ### `GET /health` (open)
 
 ```json
-{ "tracks": 148231, "centroids": 5120, "last_refresh_unix": 1753200000, "ok": true }
+{
+  "tracks": 148231,
+  "centroids": 5120,
+  "last_refresh_unix": 1753200000,
+  "commit": "e18ede22…",
+  "ok": true
+}
 ```
 
 Unauthenticated so Cloudflare health checks can hit it.
+
+`commit` is the git SHA this binary was built from, baked at compile time by
+[`sonar-release.yml`](../../.github/workflows/sonar-release.yml) (`GIT_SHA`);
+a local `cargo run` reports `"unknown"`. **It is the pre-flight check for a dark
+flag**: the box self-deploys on an hourly timer, so a merge and a running binary
+are different moments — confirm this field reports the commit that added a filter
+field before flipping the flag that sends it. A commit SHA of a public repo is
+public-safe; nothing else belongs on this response.
 
 It is also what the box healthcheck prober reads every ~10m for the engine's **`Sonar`** row on the public [`/status`](https://www.fluncle.com/status) board (beside the `Self-deploy (sonar)` row the freshen timer posts). The prober GETs `${HEALTHCHECK_SONAR_URL}/health` and counts the engine up only when the body parses and `ok` is `true` — a reachable-but-unbuilt engine reads as down, which is the state worth catching. The operator sets `HEALTHCHECK_SONAR_URL` to the engine's PUBLIC base URL in the prober's `0600` env file; unset, the row simply reports "not configured".
 

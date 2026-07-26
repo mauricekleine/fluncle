@@ -29,6 +29,7 @@ fn test_state() -> Arc<AppState> {
                 bpm: Some(174.0),
                 anchored: true,
                 certified: true,
+                ..TrackMeta::default()
             }),
         },
         Entry {
@@ -39,6 +40,7 @@ fn test_state() -> Arc<AppState> {
                 bpm: Some(140.0),
                 anchored: false,
                 certified: false,
+                ..TrackMeta::default()
             }),
         },
     ]);
@@ -164,4 +166,98 @@ async fn health_is_open_and_reports_counts() {
     assert_eq!(v["centroids"], 1);
     assert_eq!(v["ok"], true);
     assert!(v["last_refresh_unix"].as_i64().unwrap() > 0);
+    // The build commit — how an operator confirms the box carries a given change BEFORE
+    // flipping a flag that depends on it. `"unknown"` here, since a local `cargo test`
+    // does not set GIT_SHA; the release workflow bakes the real one.
+    assert!(!v["commit"].as_str().unwrap().is_empty());
+}
+
+/// The catalogue-eligibility filter over the wire: the whole predicate in one body, with the
+/// coordinate-less straggler proving `has_finding` is not `certified`.
+#[tokio::test]
+async fn search_honors_the_catalogue_eligibility_filter() {
+    let tracks = Index::from_entries(vec![
+        Entry {
+            id: "eligible".into(),
+            vector: padded(&[1.0, 0.0]),
+            meta: Some(TrackMeta {
+                anchored: true,
+                duration_ms: Some(270_000),
+                ..TrackMeta::default()
+            }),
+        },
+        Entry {
+            id: "straggler".into(),
+            vector: padded(&[1.0, 0.0]),
+            meta: Some(TrackMeta {
+                anchored: true,
+                duration_ms: Some(270_000),
+                // A findings row with NO Log ID: not certified, but it HAS a findings row.
+                has_finding: true,
+                ..TrackMeta::default()
+            }),
+        },
+        Entry {
+            id: "long_form".into(),
+            vector: padded(&[1.0, 0.0]),
+            meta: Some(TrackMeta {
+                anchored: true,
+                duration_ms: Some(1_800_000),
+                ..TrackMeta::default()
+            }),
+        },
+    ]);
+    let state = Arc::new(AppState::new(tracks, Index::empty(), SECRET.into()));
+    let app = router(state);
+    let body = json!({
+        "index": "tracks",
+        "probes": [padded(&[1.0, 0.0])],
+        "filter": {
+            "anchored": true,
+            "dismissed": false,
+            "duration_ms_max": 900_000,
+            "has_finding": false,
+            "is_duplicate": false,
+            "nearest_finding_score_max": 0.995
+        },
+        "top_k": 10
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let matches = v["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["id"], "eligible");
+}
+
+/// FAIL CLOSED over the wire. A filter field this binary does not know makes the whole body
+/// fail to parse, and the handler answers the same empty result it gives any malformed body —
+/// which the Worker treats as "fall back to the Turso scan". The alternative (serde's default,
+/// silently ignoring the field) would return dismissed/duplicate/long-form tracks and look
+/// exactly like a correct answer.
+#[tokio::test]
+async fn an_unknown_filter_field_degrades_to_empty_rather_than_a_wider_answer() {
+    let app = router(test_state());
+    let body = json!({
+        "index": "tracks",
+        "probes": [padded(&[1.0, 0.0])],
+        "filter": { "certified": true, "field_from_a_newer_worker": false },
+        "top_k": 5
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/search")
+        .header("x-sonar-secret", SECRET)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert!(v["matches"].as_array().unwrap().is_empty());
 }
