@@ -31,6 +31,13 @@ import {
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl, labelLogoUrl } from "../media";
 import { getDb, typedRows } from "./db";
+import {
+  type HubCountCensusRow,
+  type HubCountDelta,
+  hubCountDeltaStatement,
+  relinkTracksToEntity,
+  toHubCountMoveGroups,
+} from "./hub-counts";
 
 // Re-exported so the label module is the one home for label string identity: the crawler
 // (`crawl.ts`) folds MB label names with it, and the alias derivation folds Apple recordLabels
@@ -246,6 +253,12 @@ async function adoptLabelMbLabelId(labelId: string, mbid: null | string): Promis
  *
  * This writes a POINTER, never a ruling: it can mint an `undecided` label, and it can
  * never move a `seed_state`.
+ *
+ * THE POINTER IS AN UNCONDITIONAL OVERWRITE, so this is also the RE-POINT path: a track already
+ * pointed at label A can land on label B (a re-certify whose Deezer label resolved differently, an
+ * adopted alias). `relinkTracksToEntity` is what makes that safe for the maintained hub counts — it
+ * censuses the CURRENT pointer first, then debits the old label and credits the new one in the same
+ * batch as the UPDATE (keystone 2, lib/server/hub-counts.ts). A no-move re-link counts nothing.
  */
 export async function linkTrackToLabel(
   trackId: string,
@@ -257,12 +270,7 @@ export async function linkTrackToLabel(
     return;
   }
 
-  const db = await getDb();
-
-  await db.execute({
-    args: [labelId, trackId],
-    sql: `update tracks set label_id = ? where track_id = ?`,
-  });
+  await relinkTracksToEntity("labels", labelId, [trackId]);
 }
 
 /** A parent or sublabel edge — the name + slug the graph JSON-LD + the visible line read. */
@@ -1975,6 +1983,29 @@ export async function mergeLabel(
 
   const now = new Date().toISOString();
 
+  // ── the maintained hub counts (keystone 2): census the loser's tracks BEFORE the re-point ──
+  // Every track pointed at the loser lands on the canonical, so the canonical's two counters gain
+  // exactly what the loser held. The loser's own counters die with its row (statement 0 deletes it),
+  // so there is nothing to debit. This is measured DELTA arithmetic — one grouped count over the
+  // loser's own indexed slice, then `+=` — and NEVER a recompute of the canonical from truth (that
+  // shape measured 27,400 ms at 150k hosted against ~200 ms for this one).
+  const [loserCounts] = toHubCountMoveGroups(
+    typedRows<HubCountCensusRow>(
+      (
+        await db.execute({
+          args: [loser.id],
+          sql: `select null as from_id, count(*) as renderable,
+                       sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+                from tracks where label_id = ?`,
+        })
+      ).rows,
+    ),
+  );
+  const canonicalCredit: HubCountDelta = {
+    certified: loserCounts?.certified ?? 0,
+    renderable: loserCounts?.renderable ?? 0,
+  };
+
   const statements: Array<{ args: Array<null | number | string>; sql: string }> = [
     // 0: DELETE the loser FIRST — frees its slug + UNIQUE mb_label_id before the canonical update
     //    can adopt them. The FK re-points below match the loser's id VALUE (a plain string column,
@@ -2027,6 +2058,9 @@ export async function mergeLabel(
             values (?, ?, ?, ?, 'operator', 'name', 'confirmed', ?)
             on conflict (label_id, alias_slug, source) do nothing`,
     },
+    // 7: the canonical ADOPTS the loser's maintained hub counts, censused above — the same batch,
+    //    so the re-point (statement 1) and the counts it implies can never half-apply.
+    hubCountDeltaStatement("labels", canonical.id, canonicalCredit),
   ];
 
   const results = await db.batch(statements, "write");

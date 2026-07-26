@@ -74,6 +74,7 @@ import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
+import { relinkTracksToEntity } from "./hub-counts";
 import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
@@ -770,11 +771,11 @@ async function linkTracksToLabel(
     return;
   }
 
-  await db.execute({
-    args: [labelId, ...trackIds],
-    sql: `update tracks set label_id = ?
-          where track_id in (${trackIds.map(() => "?").join(", ")})`,
-  });
+  // The stamp is an UNCONDITIONAL bulk overwrite, so `relinkTracksToEntity` runs the bounded
+  // pre-move census (one grouped row per current `label_id`) and rides the debit/credit deltas for
+  // the maintained hub counts in the same batch as the UPDATE — the ratified DELTA arithmetic, never
+  // a recompute (keystone 2, lib/server/hub-counts.ts).
+  await relinkTracksToEntity("labels", labelId, trackIds);
 }
 
 /**
@@ -795,13 +796,8 @@ async function linkTracksToAlbumId(trackIds: string[], albumId: null | string): 
     return;
   }
 
-  const db = await getDb();
-
-  await db.execute({
-    args: [albumId, ...trackIds],
-    sql: `update tracks set album_id = ?
-          where track_id in (${trackIds.map(() => "?").join(", ")})`,
-  });
+  // Same census-then-delta contract as the label twin above (keystone 2).
+  await relinkTracksToEntity("albums", albumId, trackIds);
 }
 
 // ── Node expansion ───────────────────────────────────────────────────────────

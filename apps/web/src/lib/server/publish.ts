@@ -12,6 +12,11 @@ import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
 import { purgeLogCache } from "./edge-cache";
+import {
+  type HubCountDelta,
+  hubCountDeltaForTrackArtistsStatement,
+  hubCountDeltaStatement,
+} from "./hub-counts";
 import { submitFindingToIndexNow } from "./indexnow";
 import { linkTrackToAlbum } from "./albums";
 import { linkTrackToLabel } from "./labels";
@@ -44,6 +49,13 @@ type TrackRow = {
   added_to_spotify: number;
   posted_to_telegram: number;
 };
+
+/**
+ * What a certify-in-place does to an already-linked entity's maintained hub counts (keystone 2):
+ * the certified half gains one, the renderable half stands still — a certify moves no edges, only
+ * the certified-ness of edges that already exist. See lib/server/hub-counts.ts.
+ */
+const CERTIFY_DELTA: HubCountDelta = { certified: 1, renderable: 0 };
 
 /**
  * THE CERTIFICATION MINT, single-sourced. Resolve a unique Log ID for a track from the found
@@ -457,6 +469,7 @@ export async function certifyExistingTrack(
   const row = typedRow<{
     added_to_spotify: number | null;
     album: null | string;
+    album_id: null | string;
     album_image_url: null | string;
     artists_json: string;
     duration_ms: number;
@@ -465,6 +478,7 @@ export async function certifyExistingTrack(
     finding_note: null | string;
     isrc: null | string;
     label: null | string;
+    label_id: null | string;
     posted_to_telegram: number | null;
     spotify_uri: null | string;
     spotify_url: null | string;
@@ -477,6 +491,7 @@ export async function certifyExistingTrack(
         sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.isrc,
                      tracks.label, tracks.album, tracks.album_image_url, tracks.duration_ms,
                      tracks.spotify_uri, tracks.spotify_url,
+                     tracks.label_id, tracks.album_id,
                      findings.track_id as finding_id, findings.log_id as finding_log_id,
                      findings.note as finding_note,
                      findings.added_to_spotify as added_to_spotify,
@@ -561,10 +576,21 @@ export async function certifyExistingTrack(
     // track now HAS a findings row, so `is_catalogue` must be 0. Batched so the pair can never
     // half-apply — the invariant is never briefly violated. This is the ONLY 1 → 0 transition on an
     // EXISTING row; `publishTrack` instead inserts the track already certified (is_catalogue = 0).
+    //
+    // The SAME batch carries the maintained hub counts' CERTIFIED half (keystone 2): a certify
+    // moves no EDGES — the track keeps whatever label / album / artists the crawl gave it — but it
+    // changes their certified-ness, so each already-linked entity's `certified_finding_count` gains
+    // one while `renderable_track_count` stands still. The link helpers below then see a track that
+    // is already `is_catalogue = 0`, so a link that genuinely MOVES (a null pointer filled, a
+    // re-point) carries its own certified delta and no double-count is possible: the entity credited
+    // here is the one the pointer held BEFORE the links ran, and a re-point debits it again.
     await db.batch(
       [
         findingInsertStatement({ logId, note: options.note, nowIso, trackId }),
         { args: [trackId], sql: `update tracks set is_catalogue = 0 where track_id = ?` },
+        ...(row.label_id ? [hubCountDeltaStatement("labels", row.label_id, CERTIFY_DELTA)] : []),
+        ...(row.album_id ? [hubCountDeltaStatement("albums", row.album_id, CERTIFY_DELTA)] : []),
+        hubCountDeltaForTrackArtistsStatement(trackId, CERTIFY_DELTA),
       ],
       "write",
     );

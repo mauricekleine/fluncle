@@ -2508,6 +2508,48 @@ export const artists = sqliteTable(
     // hopeless entity. States: pending (never attempted) · resolved (a bio is stored) ·
     // empty (no usable facts) · failed (the fetch threw). Internal reliability state.
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    // ── THE MAINTAINED HUB COUNTS (docs/db-scale-backlog Wave 2 keystone 2) ─────────────
+    // THE CANONICAL DEFINITION for all three entity tables (`artists` here, `labels` and
+    // `albums` carry the same pair and point back at this block).
+    //
+    // WHAT THEY ARE. Two stored mirrors of the catalogue-scale hub group-by — the second-most
+    // repeated read shape in the app after the catalogue anti-join:
+    //   `entity ⋈ tracks left join findings group by entity having (certified > 0 or renderable >= floor)`
+    // an O(tracks) / O(track_artists) grouped scan re-run on every hub `?page=N`, every API/MCP
+    // list read, every sitemap request, the search entity gate and the bio worklists. Stored, the
+    // gate filters and orders the SMALL entity table by two indexed integers — no tracks join, no
+    // group-by. Measured 5.8× (labels hub) / 46× (artists hub, over ~225k `track_artists` edges)
+    // at 150k hosted.
+    //
+    //   - `renderable_track_count`  — the TOTAL tracks linked to this entity: certified findings
+    //     PLUS raw catalogue rows, everything the edge points at. It mirrors `HUB_RENDERABLE`
+    //     exactly, which means NO dismissed/duplicate exclusion — "renderable" is the count of
+    //     linked tracks, nothing subtler. That is what makes a maintained counter tractable: the
+    //     number reacts ONLY to an edge move, never to a per-track flag.
+    //   - `certified_finding_count` — the subset of those that HAVE a `findings` row, mirroring
+    //     `HUB_CERTIFIED`. Keystone 1 gives the cheap discriminator: `tracks.is_catalogue = 0` ⇔
+    //     certified, so this half is read off the flag, never a `findings` join.
+    //
+    // The edge is `track_artists` for artists, `tracks.label_id` / `tracks.album_id` for labels
+    // and albums.
+    //
+    // HOW THEY STAY TRUE. Written as DELTAS — never recomputed — in the SAME `db.batch` as the
+    // edge write they mirror, so a crash can never half-apply the pair. Every path that moves an
+    // edge carries one (lib/server/hub-counts.ts holds the statement builders): the publish +
+    // certify sites, the per-track and bulk link helpers (which read the OLD pointer first, so a
+    // re-point debits the old entity and credits the new), the artist-edge upserts (which diff
+    // against the existing edge set, because `on conflict do update` counts conflict rows in
+    // `rowsAffected` and so cannot drive a delta), and `mergeLabel` (which adds the loser's
+    // measured counts to the canonical — the loser's own die with its row).
+    //
+    // DELTA ARITHMETIC IS THE LAW ON A BULK PATH. Recompute-from-truth measured 27,400 ms at 150k
+    // hosted versus ~200 ms for count-the-moved-set-once-then-`+=`/`-=` — 137× worse. A bulk
+    // re-point counts the moved set ONCE and moves the two totals; it never re-derives them.
+    //
+    // INTERNAL bookkeeping, exactly like `tracks.is_catalogue`: never in a public DTO, never a
+    // lastmod bump (a count move is not a public fact about the entity). Born 0 via the DDL
+    // default, seeded onto history by `scripts/backfill-hub-counts.ts` at deploy time.
+    certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
     // ── THE OWNED AVATAR MASTER (RFC musickit-second-authority, U3b) ─────────────────
@@ -2536,6 +2578,8 @@ export const artists = sqliteTable(
     imageUrl: text("image_url"),
     mbid: text("mbid"),
     name: text("name").notNull(),
+    /** Total linked tracks (certified + catalogue) — see `certified_finding_count` above. */
+    renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     resolvedAt: text("resolved_at"),
     // LEGACY per-artist review stamp — superseded by `artist_socials.reviewed_at` (review
     // moved down to the link). It is no longer written or read for needs-a-look; it survives
@@ -2559,6 +2603,11 @@ export const artists = sqliteTable(
     // so the planner SEEKS via this index instead. Plain ASC (SQLite reverse-scans it). Keeps
     // the binary `artists_name_idx` above for exact-case seeks.
     index("artists_name_nocase_idx").on(sql`${table.name} collate nocase`, table.slug),
+    // The maintained hub gate's ordering/filtering column (keystone 2): the hub read becomes a
+    // walk of THIS index over the small artists table instead of a grouped scan of the ~225k-edge
+    // `track_artists`. Plain ASC — SQLite reverse-scans it, and a drizzle `desc()` index poisons
+    // the snapshot (the ratified trap).
+    index("artists_renderable_count_idx").on(table.renderableTrackCount),
   ],
 );
 
@@ -2801,6 +2850,13 @@ export const labels = sqliteTable(
     // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
     // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    /**
+     * Linked tracks that HAVE a `findings` row (`tracks.is_catalogue = 0`) — the maintained
+     * mirror of `HUB_CERTIFIED` over `tracks.label_id`. The canonical explanation of the pair
+     * (semantics, the delta contract, why recompute is banned on a bulk path) is on
+     * `artists.certified_finding_count` above.
+     */
+    certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
     // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
     // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
@@ -2884,6 +2940,12 @@ export const labels = sqliteTable(
     // is counted in the sweep summary, never created). Emitted as the Organization's
     // `parentOrganization` / `subOrganization` `@id` edges. See label-lineage.ts.
     parentLabelId: text("parent_label_id"),
+    /**
+     * Total tracks pointing at this label (certified + catalogue) — the maintained mirror of
+     * `HUB_RENDERABLE` over `tracks.label_id`, with NO dismissed/duplicate exclusion. See
+     * `artists.certified_finding_count` for the full contract.
+     */
+    renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     ruledAt: text("ruled_at"),
     seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
       .notNull()
@@ -2928,6 +2990,10 @@ export const labels = sqliteTable(
     // filter and the case-insensitive ORDER BY as one index walk (no temp B-tree sort). Plain ASC
     // (SQLite reverse-scans it).
     index("labels_seed_state_name_idx").on(table.seedState, sql`${table.name} collate nocase`),
+    // The maintained hub gate's ordering/filtering column (keystone 2) — the `/labels` hub, the
+    // API/MCP list, the sitemap rows and the bio worklist all filter on it instead of grouping
+    // `tracks`. Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
+    index("labels_renderable_count_idx").on(table.renderableTrackCount),
   ],
 );
 
@@ -3112,6 +3178,12 @@ export const albums = sqliteTable(
     // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
     // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    /**
+     * Linked tracks that HAVE a `findings` row (`tracks.is_catalogue = 0`) — the maintained
+     * mirror of `HUB_CERTIFIED` over `tracks.album_id`. The canonical explanation of the pair
+     * lives on `artists.certified_finding_count`.
+     */
+    certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
     id: text("id").primaryKey(),
     // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────
@@ -3157,6 +3229,11 @@ export const albums = sqliteTable(
     // stays a stored FACT (the album barcode), never the fold key. UNIQUE index below — SQLite
     // treats NULLs as distinct, so the many NULL rows never collide. See docs/album-entity.md.
     releaseGroupMbid: text("release_group_mbid"),
+    /**
+     * Total tracks pointing at this album (certified + catalogue) — the maintained mirror of
+     * `HUB_RENDERABLE` over `tracks.album_id`. See `artists.certified_finding_count`.
+     */
+    renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     slug: text("slug").notNull().unique(),
     upc: text("upc"),
     updatedAt: text("updated_at").notNull(),
@@ -3165,6 +3242,10 @@ export const albums = sqliteTable(
     // The catalogue crawler's connect-or-create fold: `where release_group_mbid = ?` resolves an
     // existing album before the slug path, so one release group is one row across every pressing.
     uniqueIndex("albums_release_group_mbid_idx").on(table.releaseGroupMbid),
+    // The maintained hub gate's ordering/filtering column (keystone 2) — the `/albums` hub, the
+    // API/MCP list, the sitemap rows and the bio worklist read it instead of grouping `tracks`.
+    // Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
+    index("albums_renderable_count_idx").on(table.renderableTrackCount),
   ],
 );
 

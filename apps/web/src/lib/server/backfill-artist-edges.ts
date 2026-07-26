@@ -39,6 +39,7 @@
 
 import { getDb, typedRows } from "./db";
 import { parseArtistsJson } from "./artists";
+import { hubCountArtistEdgeStatements } from "./hub-counts";
 import { fold } from "./track-match";
 
 // One bounded pass visits at most this many un-backfilled tracks. Pure DB matching (no vendor call),
@@ -187,7 +188,12 @@ export function matchTrackNames(names: string[], foldMap: Map<string, string>): 
 
 // ── DB layer ─────────────────────────────────────────────────────────────────────────────────────
 
-type WorkRow = { artists_json: string; track_id: string };
+type WorkRow = {
+  artists_json: string;
+  /** Keystone 1's catalogue discriminator — `0` means the track HAS a findings row (certified). */
+  is_catalogue?: bigint | number;
+  track_id: string;
+};
 
 /** One bounded page of the worklist: tracks with NO `track_artists` edge, not yet backfill-stamped,
  *  track-id cursored. Rides `tracks_artist_edges_backfill_queue_idx` for the ordered candidate walk;
@@ -200,7 +206,7 @@ async function listWork(
   const result = await db.execute({
     args: cursor ? [cursor, limit] : [limit],
     sql: cursor
-      ? `select t.track_id, t.artists_json
+      ? `select t.track_id, t.artists_json, t.is_catalogue
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -208,7 +214,7 @@ async function listWork(
            and t.track_id > ?
          order by t.track_id asc
          limit ?`
-      : `select t.track_id, t.artists_json
+      : `select t.track_id, t.artists_json, t.is_catalogue
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -243,22 +249,44 @@ async function loadAliases(
   return typedRows<{ alias: string; artist_id: string }>(result.rows);
 }
 
-/** Write the batch's edges `insert or ignore`, chunked. Returns the summed rows actually inserted. */
+/**
+ * Write the batch's edges `insert or ignore`, chunked. Returns the summed rows actually inserted.
+ *
+ * Each chunk carries the maintained artists hub-count deltas (keystone 2) in its own batch, so a new
+ * edge and the count that mirrors it can never half-apply. The per-artist attribution needs no
+ * pre-read here — this sweep's worklist selects ONLY edge-less tracks (`ta.track_id is null`, see
+ * `listWork`), and `matchTrackNames` already folds a doubly-credited artist to one edge, so every
+ * tuple IS a new edge. `certifiedTracks` carries keystone 1's flag off the worklist row, so the
+ * certified half costs nothing either. See lib/server/hub-counts.ts.
+ */
 async function insertEdges(
   db: Awaited<ReturnType<typeof getDb>>,
   tuples: ReadonlyArray<[string, string, number]>,
+  certifiedTracks: ReadonlySet<string>,
 ): Promise<number> {
   let affected = 0;
 
   for (let i = 0; i < tuples.length; i += INSERT_CHUNK) {
     const chunk = tuples.slice(i, i + INSERT_CHUNK);
     const values = chunk.map(() => "(?, ?, ?)").join(", ");
-    const result = await db.execute({
-      args: chunk.flat(),
-      sql: `insert or ignore into track_artists (track_id, artist_id, position) values ${values}`,
-    });
+    const results = await db.batch(
+      [
+        {
+          args: chunk.flat(),
+          sql: `insert or ignore into track_artists (track_id, artist_id, position) values ${values}`,
+        },
+        ...hubCountArtistEdgeStatements(
+          chunk.map(([trackId, artistId]) => ({
+            artistId,
+            certified: certifiedTracks.has(trackId),
+            trackId,
+          })),
+        ),
+      ],
+      "write",
+    );
 
-    affected += result.rowsAffected;
+    affected += results[0]?.rowsAffected ?? 0;
   }
 
   return affected;
@@ -330,9 +358,16 @@ export async function resolveArtistEdges(
 
   const tuples: Array<[string, string, number]> = [];
   const visited: string[] = [];
+  // Which of the batch's tracks are CERTIFIED — read straight off the worklist row (keystone 1's
+  // `is_catalogue`), so the hub-count deltas the insert carries need no extra query.
+  const certifiedTracks = new Set<string>();
 
   for (const row of rows) {
     visited.push(row.track_id);
+
+    if (row.is_catalogue !== undefined && Number(row.is_catalogue) === 0) {
+      certifiedTracks.add(row.track_id);
+    }
 
     const match = matchTrackNames(parseArtistsJson(row.artists_json), foldMap);
     unmatchedNames += match.totalNames - match.matchedNames;
@@ -356,7 +391,7 @@ export async function resolveArtistEdges(
   let edgesWritten = tuples.length;
 
   if (!dryRun) {
-    edgesWritten = await insertEdges(db, tuples);
+    edgesWritten = await insertEdges(db, tuples, certifiedTracks);
     await stampVisited(db, visited);
   }
 

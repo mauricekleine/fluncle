@@ -106,6 +106,7 @@ import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
+import { relinkTracksToEntity } from "./hub-counts";
 import { labelFold } from "./labels";
 import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
 import { readSpotifyCallCount, recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } from "./spotify-budget";
@@ -541,21 +542,18 @@ async function writeLabelReleaseTracks(
   }
 
   if (writtenIds.length > 0) {
-    const placeholders = writtenIds.map(() => "?").join(", ");
+    // Both edges go through `relinkTracksToEntity` (keystone 2, lib/server/hub-counts.ts): it
+    // censuses the tracks' CURRENT pointer once — bounded by this release page — then rides the
+    // maintained hub-count deltas in the same batch as the bulk UPDATE. Delta arithmetic, never a
+    // recompute (the banned 27s shape at 150k).
 
     // The label edge, stamped directly at the KNOWN seed label — no re-resolve of Spotify's string.
-    await db.execute({
-      args: [ctx.labelId, ...writtenIds],
-      sql: `update tracks set label_id = ? where track_id in (${placeholders})`,
-    });
+    await relinkTracksToEntity("labels", ctx.labelId, writtenIds);
 
     // The album edge (fold on the album-title slug — Spotify carries no release-group MBID, so
     // `ensureAlbum`'s slug fallback is what converges a tap-minted album with an MB-crawled one).
     if (ctx.albumId) {
-      await db.execute({
-        args: [ctx.albumId, ...writtenIds],
-        sql: `update tracks set album_id = ? where track_id in (${placeholders})`,
-      });
+      await relinkTracksToEntity("albums", ctx.albumId, writtenIds);
     }
 
     // The artist edge — the NAME-FOLD link to ALREADY-CERTIFIED artists only (artists.ts). It mints

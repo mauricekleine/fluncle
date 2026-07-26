@@ -5,6 +5,11 @@ import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dos
 import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { getDb, typedRows } from "./db";
 import {
+  hubCountArtistEdgeStatements,
+  type HubCountDelta,
+  hubCountDeltaStatement,
+} from "./hub-counts";
+import {
   type CatalogueBrowsePage,
   type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
@@ -789,30 +794,74 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
  * Idempotent (the composite PK absorbs a re-run), and bounded per call. `trackIds` scopes it to
  * a just-written batch — how the crawler calls it, per release, so the edge is live within the
  * tick rather than only after the next deploy's reconcile.
+ *
+ * ── SCOPED, AND NOW REQUIRED ─────────────────────────────────────────────────────────────────
+ * `trackIds` used to be optional, with the unscoped form linking the WHOLE corpus in one
+ * statement. Nothing called it that way (the crawler and the freshness tap both pass their
+ * just-written batch), and the maintained artists hub counts (keystone 2) cannot be moved off an
+ * unbounded write without dragging every new edge through the isolate — the shape AGENTS.md
+ * forbids. So the argument is now required and the whole-corpus reconcile lives where it always
+ * belonged: `scripts/backfill-artist-links.ts`, an operator one-off.
+ *
+ * ── THE COUNT DELTA ──────────────────────────────────────────────────────────────────────────
+ * `insert or ignore` DOES report only actually-inserted rows in `rowsAffected` (verified), but one
+ * statement inserts edges for many artists, so that total carries no per-artist attribution. The
+ * NEW-edge set is therefore read first — the same join, anti-joined against the edges that already
+ * exist and carrying each track's `is_catalogue` — and the per-artist deltas ride the insert's
+ * batch. Bounded by `trackIds`, exactly like the insert it mirrors.
  */
-export async function linkTracksToArtistEntities(trackIds?: string[]): Promise<number> {
-  const db = await getDb();
-  const scoped = trackIds && trackIds.length > 0;
-
-  if (trackIds && trackIds.length === 0) {
+export async function linkTracksToArtistEntities(trackIds: string[]): Promise<number> {
+  if (trackIds.length === 0) {
     return 0;
   }
 
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
   // `json_each` explodes `artists_json` into one row per credited name; `credit.key` is the
   // 0-based array index, which is exactly the 1-based `position` the column wants. The name
   // match is the same case-insensitive fold every other entity uses to relate a raw captured
   // string to its normalized twin.
-  const result = await db.execute({
-    args: scoped ? trackIds : [],
-    sql: `insert or ignore into track_artists (track_id, artist_id, position)
-          select tracks.track_id, a.id, credit.key + 1
-          from tracks
-          join json_each(tracks.artists_json) credit
-          join artists a on a.name = credit.value collate nocase
-          ${scoped ? `where tracks.track_id in (${trackIds.map(() => "?").join(", ")})` : ""}`,
+  const linkSelect = `select tracks.track_id, a.id as artist_id, credit.key + 1 as position,
+                             tracks.is_catalogue as is_catalogue
+                      from tracks
+                      join json_each(tracks.artists_json) credit
+                      join artists a on a.name = credit.value collate nocase
+                      where tracks.track_id in (${placeholders})`;
+  // The edges this insert will really CREATE — the same join, minus the ones already held.
+  // `group by` folds a track that credits one artist twice (the PK stores a single row).
+  const pending = await db.execute({
+    args: trackIds,
+    sql: `select track_id, artist_id, is_catalogue
+          from (${linkSelect}) candidate
+          where not exists (
+            select 1 from track_artists ta
+            where ta.track_id = candidate.track_id and ta.artist_id = candidate.artist_id
+          )
+          group by track_id, artist_id`,
   });
+  const newEdges = typedRows<{
+    artist_id: string;
+    is_catalogue: bigint | number;
+    track_id: string;
+  }>(pending.rows).map((row) => ({
+    artistId: row.artist_id,
+    certified: Number(row.is_catalogue) === 0,
+    trackId: row.track_id,
+  }));
 
-  return result.rowsAffected;
+  const results = await db.batch(
+    [
+      {
+        args: trackIds,
+        sql: `insert or ignore into track_artists (track_id, artist_id, position)
+              select track_id, artist_id, position from (${linkSelect}) candidate`,
+      },
+      ...hubCountArtistEdgeStatements(newEdges),
+    ],
+    "write",
+  );
+
+  return results[0]?.rowsAffected ?? 0;
 }
 
 /**
@@ -922,6 +971,15 @@ export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
 // `fluncle-artist-sweep` cron) fill its avatar in one call per 50 ids — per-track avatar calls at
 // crawl time would be uncounted Spotify load (outside the anchor breaker) for one image, spent on
 // the hot path. The graph edge is written either way; only the avatar fetch defers to the sweep.
+//
+// ── THE MAINTAINED ARTISTS HUB COUNTS (keystone 2) ───────────────────────────────────────────
+// A NEW `track_artists` row moves the credited artist's counters; a re-upsert of an edge that
+// already exists must move nothing. The upsert itself CANNOT tell those apart: `on conflict … do
+// update set position` reports `rowsAffected = 1` for the conflict case too (verified against the
+// libSQL client). So this reads the edges the track already holds — bounded, one to a handful of
+// rows — and the track's certification once, then diffs. `connectAnchorArtists` (anchor.ts) calls
+// this on tracks that are ALREADY certified, which is exactly the case the certified half has to
+// catch. See lib/server/hub-counts.ts.
 export async function upsertTrackArtists(
   trackId: string,
   artistNames: string[],
@@ -934,6 +992,26 @@ export async function upsertTrackArtists(
 
   const db = await getDb();
   const nowIso = new Date().toISOString();
+  const [heldEdges, trackRow] = await Promise.all([
+    db.execute({
+      args: [trackId],
+      sql: `select artist_id from track_artists where track_id = ?`,
+    }),
+    db.execute({
+      args: [trackId],
+      sql: `select is_catalogue from tracks where track_id = ? limit 1`,
+    }),
+  ]);
+  const held = new Set(
+    typedRows<{ artist_id: string }>(heldEdges.rows).map((row) => row.artist_id),
+  );
+  const catalogueFlag = typedRows<{ is_catalogue: bigint | number }>(trackRow.rows)[0];
+  // No `tracks` row means no edge worth counting — the upsert still runs (it always has), the
+  // counters simply do not move.
+  const edgeDelta: HubCountDelta | undefined =
+    catalogueFlag === undefined
+      ? undefined
+      : { certified: Number(catalogueFlag.is_catalogue) === 0 ? 1 : 0, renderable: 1 };
 
   for (let i = 0; i < artistNames.length; i++) {
     const name = artistNames[i];
@@ -1021,14 +1099,28 @@ export async function upsertTrackArtists(
       artistId = typeof freshId === "string" ? freshId : newId;
     }
 
-    // --- Upsert track_artists ---
-    await db.execute({
-      args: [trackId, artistId, position],
-      sql: `insert into track_artists (track_id, artist_id, position)
-            values (?, ?, ?)
-            on conflict(track_id, artist_id) do update set
-              position = excluded.position`,
-    });
+    // --- Upsert track_artists (+ the hub-count delta, when the edge is genuinely new) ---
+    const isNewEdge = !held.has(artistId);
+
+    if (isNewEdge) {
+      // Guard against a track that credits the same artist twice — the composite PK stores one
+      // row, so only the first occurrence may move the counters.
+      held.add(artistId);
+    }
+
+    await db.batch(
+      [
+        {
+          args: [trackId, artistId, position],
+          sql: `insert into track_artists (track_id, artist_id, position)
+                values (?, ?, ?)
+                on conflict(track_id, artist_id) do update set
+                  position = excluded.position`,
+        },
+        ...(isNewEdge && edgeDelta ? [hubCountDeltaStatement("artists", artistId, edgeDelta)] : []),
+      ],
+      "write",
+    );
   }
 
   // Fill the canonical Spotify avatar for any of this track's artists that lacks one

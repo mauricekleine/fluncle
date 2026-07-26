@@ -16,7 +16,18 @@ const adoptArtistMbid = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
 
-  return { ...actual, getDb: async () => ({ execute }) };
+  return {
+    ...actual,
+    getDb: async () => ({
+      // `batch` delegates statement-by-statement to the same `execute` mock, so the ordered result
+      // queue, the per-statement assertions and the arity guard below all see a batched write exactly
+      // as they see a lone one. The edge insert rides a batch now because it carries the maintained
+      // hub-count deltas (keystone 2, lib/server/hub-counts.ts).
+      batch: async (statements: Array<{ args?: unknown[]; sql: string }>) =>
+        Promise.all(statements.map((statement) => execute(statement))),
+      execute,
+    }),
+  };
 });
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));

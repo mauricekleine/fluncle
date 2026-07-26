@@ -604,6 +604,64 @@ describe("certify in place — logging an existing catalogue track without creat
     await expect(certifyExistingTrack("cccccccccccccccccccccc")).rejects.toThrow(/no track/i);
   });
 
+  // ── THE MAINTAINED HUB COUNTS' CERTIFY FAN-OUT (keystone 2, lib/server/hub-counts.ts) ────────
+  // A certify moves no EDGES — the crawled row keeps its label, album and artists — but it changes
+  // their certified-ness. So each already-linked entity's `certified_finding_count` gains one while
+  // `renderable_track_count` stands still, in the SAME atomic batch that mints the finding.
+  it("credits the label, the album AND every credited artist's certified count, leaving renderable alone", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+    const now = "2026-07-26T00:00:00.000Z";
+
+    // The graph a crawled row arrives with: one label, one album, one credited artist — each
+    // already counting this track as renderable-but-uncertified.
+    await db.batch(
+      [
+        {
+          args: [now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at, renderable_track_count, certified_finding_count)
+                values ('lab-1', 'Hospital Records', 'hospital-records', ?, ?, 1, 0)`,
+        },
+        {
+          args: [now, now],
+          sql: `insert into albums (id, name, slug, created_at, updated_at, renderable_track_count, certified_finding_count)
+                values ('alb-1', 'Sight To Behold', 'sight-to-behold', ?, ?, 1, 0)`,
+        },
+        {
+          args: [now, now],
+          sql: `insert into artists (id, name, slug, created_at, updated_at, renderable_track_count, certified_finding_count)
+                values ('art-1', 'Logistics', 'logistics', ?, ?, 1, 0)`,
+        },
+        {
+          args: [CATALOGUE_ID],
+          sql: `update tracks set label_id = 'lab-1', album_id = 'alb-1' where track_id = ?`,
+        },
+        {
+          args: [CATALOGUE_ID],
+          sql: `insert into track_artists (track_id, artist_id, position) values (?, 'art-1', 1)`,
+        },
+      ],
+      "write",
+    );
+
+    await certifyExistingTrack(CATALOGUE_ID);
+
+    const counted = await db.execute(
+      `select 'labels' as kind, renderable_track_count as r, certified_finding_count as c from labels where id = 'lab-1'
+       union all
+       select 'albums', renderable_track_count, certified_finding_count from albums where id = 'alb-1'
+       union all
+       select 'artists', renderable_track_count, certified_finding_count from artists where id = 'art-1'`,
+    );
+
+    for (const row of counted.rows) {
+      expect({ c: Number(row.c), kind: row.kind, r: Number(row.r) }).toEqual({
+        c: 1,
+        kind: row.kind,
+        r: 1,
+      });
+    }
+  });
+
   // ── The announce fan-out (operator ruling, 2026-07-13: a finding is a finding however it
   // arrives, so certify rides the same legs as the Spotify add — presence resolved, never
   // assumed; a leg failure recorded, never unwinding the mint; missing legs resumable). ──

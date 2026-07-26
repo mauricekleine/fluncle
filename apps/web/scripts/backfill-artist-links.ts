@@ -28,6 +28,14 @@
  *
  * It cannot make a catalogue track countable as a finding: every read that means "finding"
  * inner-joins `findings … log_id is not null`. See `artists.ts` and the rail test beside it.
+ *
+ * ── AFTER A RUN, RESEED THE HUB COUNTS ───────────────────────────────────────────────────────
+ * This is the one artist-edge writer that is deliberately UNBOUNDED (the whole corpus in one
+ * statement), so it cannot carry the maintained hub-count deltas the inline paths do — attributing
+ * them per artist would mean dragging every new edge through the isolate. So when a run reports a
+ * non-zero `linked`, follow it with the guarded recompute:
+ *   `bun run --cwd apps/web scripts/backfill-hub-counts.ts --force`
+ * (docs/db-scale-backlog Wave 2 keystone 2; lib/server/hub-counts.ts holds the delta contract.)
  */
 import { type Client, createClient } from "@libsql/client";
 import { config } from "dotenv";

@@ -153,6 +153,16 @@ export async function seedE2eData(client: Client): Promise<void> {
     args: ["e2e-track-1", ARTIST.id],
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
   });
+  // The maintained hub counts the real write paths would have moved (keystone 2,
+  // lib/server/hub-counts.ts): one certified finding on each of the three entities. Seeded here
+  // rather than left at the DDL default so the fixture matches what production holds — the entity
+  // hubs read these columns.
+  for (const table of ["albums", "artists", "labels"]) {
+    await client.execute({
+      args: [table === "albums" ? ALBUM.id : table === "artists" ? ARTIST.id : LABEL.id],
+      sql: `update ${table} set renderable_track_count = 1, certified_finding_count = 1 where id = ?`,
+    });
+  }
 
   // The radio-eligible finding (see RADIO_FINDING above). Seeded like any other,
   // then given the four eligibility columns the base factory does not carry.

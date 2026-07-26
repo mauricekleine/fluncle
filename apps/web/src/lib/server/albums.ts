@@ -25,6 +25,7 @@ import { type AlbumDetail, type AlbumListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl } from "../media";
 import { getDb, typedRows } from "./db";
+import { relinkTracksToEntity } from "./hub-counts";
 import {
   type CatalogueBrowsePage,
   type CatalogueBrowseQuery,
@@ -195,6 +196,10 @@ export async function ensureAlbum(
 /**
  * The publish path's one call: mint the album entity for the album this track carries, and
  * stamp the track's `album_id` pointer at it. Best-effort and purely additive.
+ *
+ * The label twin's re-point note applies verbatim (`linkTrackToLabel`, labels.ts): the pointer is
+ * an unconditional overwrite, so `relinkTracksToEntity` censuses the current `album_id` first and
+ * moves the maintained hub counts off the old album onto the new one in the same batch.
  */
 export async function linkTrackToAlbum(
   trackId: string,
@@ -206,12 +211,7 @@ export async function linkTrackToAlbum(
     return;
   }
 
-  const db = await getDb();
-
-  await db.execute({
-    args: [albumId, trackId],
-    sql: `update tracks set album_id = ? where track_id = ?`,
-  });
+  await relinkTracksToEntity("albums", albumId, [trackId]);
 }
 
 /** Resolve one album by its public slug (undefined = no such album). */

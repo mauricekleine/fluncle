@@ -53,6 +53,7 @@
 import { getDb, typedRows } from "./db";
 import { adoptArtistMbid, mintArtistByMbid } from "./artists";
 import { buildArtistFoldMap } from "./backfill-artist-edges";
+import { hubCountArtistEdgeStatements } from "./hub-counts";
 import { fold } from "./track-match";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
@@ -237,7 +238,12 @@ async function resolveRecordingCredits(
 
 // ── DB layer ─────────────────────────────────────────────────────────────────────────────────────
 
-type WorkRow = { mb_recording_id: string | null; track_id: string };
+type WorkRow = {
+  /** Keystone 1's catalogue discriminator — `0` means the track HAS a findings row (certified). */
+  is_catalogue?: bigint | number;
+  mb_recording_id: string | null;
+  track_id: string;
+};
 
 /** Load the whole `artists` corpus (id + canonical name + mbid) for the per-pass resolver — one
  *  bounded read, the slice-0 `loadArtists` shape plus the `mbid` the ADOPT/exact-mbid rungs need. */
@@ -280,7 +286,7 @@ async function listWork(
   const result = await db.execute({
     args: cursor ? [cursor, limit] : [limit],
     sql: cursor
-      ? `select t.track_id, t.mb_recording_id
+      ? `select t.track_id, t.mb_recording_id, t.is_catalogue
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -289,7 +295,7 @@ async function listWork(
            and t.track_id > ?
          order by t.track_id asc
          limit ?`
-      : `select t.track_id, t.mb_recording_id
+      : `select t.track_id, t.mb_recording_id, t.is_catalogue
          from tracks t
          left join track_artists ta on ta.track_id = t.track_id
          where ta.track_id is null
@@ -302,11 +308,21 @@ async function listWork(
   return typedRows<WorkRow>(result.rows);
 }
 
-/** Write one track's edges `insert or ignore` on the natural key `(track_id, artist_id)`. */
+/**
+ * Write one track's edges `insert or ignore` on the natural key `(track_id, artist_id)`, together
+ * with the maintained artists hub-count deltas (keystone 2) in one atomic batch, so a new edge and
+ * the count that mirrors it can never half-apply.
+ *
+ * No pre-read is needed to know which edges are NEW: this sweep's worklist selects only edge-less
+ * tracks (`ta.track_id is null`, see `listWork`) and the resolve yields one edge per credited
+ * artist. `certified` comes straight off the worklist row's `is_catalogue` (keystone 1). See
+ * lib/server/hub-counts.ts.
+ */
 async function insertEdges(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
   edges: ReadonlyArray<CreditEdge>,
+  certified: boolean,
 ): Promise<number> {
   if (edges.length === 0) {
     return 0;
@@ -315,12 +331,20 @@ async function insertEdges(
   const values = edges.map(() => "(?, ?, ?)").join(", ");
   const args = edges.flatMap((edge) => [trackId, edge.artistId, edge.position]);
 
-  const result = await db.execute({
-    args,
-    sql: `insert or ignore into track_artists (track_id, artist_id, position) values ${values}`,
-  });
+  const results = await db.batch(
+    [
+      {
+        args,
+        sql: `insert or ignore into track_artists (track_id, artist_id, position) values ${values}`,
+      },
+      ...hubCountArtistEdgeStatements(
+        edges.map((edge) => ({ artistId: edge.artistId, certified, trackId })),
+      ),
+    ],
+    "write",
+  );
 
-  return result.rowsAffected;
+  return results[0]?.rowsAffected ?? 0;
 }
 
 /** Stamp one visited track's `artist_credits_backfilled_at` so it drains the worklist. */
@@ -429,7 +453,13 @@ export async function resolveArtistCredits(
     }
 
     // `edged` (including a zero-credit no-match): write the edges, count mint/adopt/match, stamp.
-    edgesWritten += await insertEdges(db, row.track_id, outcome.edges);
+    edgesWritten += await insertEdges(
+      db,
+      row.track_id,
+      outcome.edges,
+      // Keystone 1's flag, read off the worklist row — the hub-count deltas need no extra query.
+      row.is_catalogue !== undefined && Number(row.is_catalogue) === 0,
+    );
     mintedArtists += outcome.minted;
     matchedArtists += outcome.matched;
     adoptedArtists += outcome.adopted;
