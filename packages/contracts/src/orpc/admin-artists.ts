@@ -131,6 +131,7 @@ export const ResolvedSocialSchema = z
     platform: z.enum([
       "bandcamp",
       "beatport",
+      "bluesky",
       "facebook",
       "homepage",
       "instagram",

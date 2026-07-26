@@ -8,6 +8,7 @@
  *   - soundcloud  → `soundcloud.com/oembed` JSON (404 = account gone)
  *   - mixcloud    → `api.mixcloud.com/<user>/` (404 = gone)
  *   - youtube     → `youtube.com/@|user|channel` (404 = handle/channel gone)
+ *   - bluesky     → `public.api.bsky.app` resolveHandle (400 = handle no longer resolves)
  * bandcamp + homepage are RELIABLE enough to REPORT but NOT to auto-remove: they probe
  * arbitrary artist domains, where an expired TLS cert or a timeout is caught as "dead"
  * while the site is actually live (verified: foxstevenson.com throws cert-expired yet is
@@ -45,11 +46,17 @@ export const RELIABLE: ReadonlySet<string> = new Set([
   "soundcloud",
   "mixcloud",
   "youtube",
+  "bluesky",
   "bandcamp",
   "homepage",
 ]);
 /** Subset trustworthy enough to auto-REMOVE — arbitrary-domain oracles (bandcamp/homepage) are NOT. */
-export const REMOVABLE: ReadonlySet<string> = new Set(["soundcloud", "mixcloud", "youtube"]);
+export const REMOVABLE: ReadonlySet<string> = new Set([
+  "soundcloud",
+  "mixcloud",
+  "youtube",
+  "bluesky",
+]);
 
 export type Verdict = "live" | "dead" | "unknown" | "host-dead";
 export type Row = {
@@ -69,6 +76,14 @@ export function interpretStatus(platform: string, status: number | "neterr"): Ve
       return "unknown";
     }
     return status === 200 ? "live" : status === 404 ? "dead" : "unknown";
+  }
+  if (platform === "bluesky") {
+    // resolveHandle answers 200 with a DID for a live handle, 400 for one that no longer
+    // resolves (its "gone" — the honest oracle). A DID-form profile is skipped upstream.
+    if (status === "neterr") {
+      return "unknown";
+    }
+    return status === 200 ? "live" : status === 400 || status === 404 ? "dead" : "unknown";
   }
   if (platform === "bandcamp" || platform === "homepage") {
     if (status === "neterr") {
@@ -134,6 +149,22 @@ async function probe(row: Row): Promise<Verdict> {
     }
     if (platform === "youtube") {
       return interpretStatus(platform, await fetchStatus(url, { cookie: "SOCS=CAI" }));
+    }
+    if (platform === "bluesky") {
+      // The identity is the /profile/<handle> segment. A DID-form profile is already a
+      // stable identity — resolveHandle can't check it — so skip rather than misjudge.
+      const handle = new URL(url).pathname.split("/").filter(Boolean)[1];
+      if (!handle || handle.startsWith("did:")) {
+        return "unknown";
+      }
+      return interpretStatus(
+        platform,
+        await fetchStatus(
+          `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(
+            handle,
+          )}`,
+        ),
+      );
     }
     if (platform === "bandcamp") {
       return interpretStatus(platform, await fetchStatus(new URL(url).origin));

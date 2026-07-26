@@ -47,6 +47,10 @@ describe("ARTIST_SOCIAL_PLATFORMS", () => {
   it("includes homepage as the catch-all platform", () => {
     expect(ARTIST_SOCIAL_PLATFORMS).toContain("homepage");
   });
+
+  it("includes bluesky (a first-class social)", () => {
+    expect(ARTIST_SOCIAL_PLATFORMS).toContain("bluesky");
+  });
 });
 
 describe("urlHostMatchesPlatform", () => {
@@ -58,6 +62,7 @@ describe("urlHostMatchesPlatform", () => {
     ["soundcloud", "https://soundcloud.com/artist"],
     ["instagram", "https://instagram.com/artist"],
     ["tiktok", "https://www.tiktok.com/@artist"],
+    ["bluesky", "https://bsky.app/profile/artist.bsky.social"],
     ["beatport", "https://www.beatport.com/artist/x/1"],
     ["twitter", "https://x.com/artist"],
     ["twitter", "https://twitter.com/artist"],

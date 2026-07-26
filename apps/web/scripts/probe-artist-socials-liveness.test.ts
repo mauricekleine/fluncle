@@ -38,6 +38,16 @@ describe("interpretStatus — arbitrary-domain oracles (homepage/bandcamp)", () 
   }
 });
 
+describe("interpretStatus — bluesky (resolveHandle honest oracle)", () => {
+  it("200→live, 400/404→dead (handle no longer resolves), other→unknown, neterr→unknown", () => {
+    expect(interpretStatus("bluesky", 200)).toBe("live");
+    expect(interpretStatus("bluesky", 400)).toBe("dead");
+    expect(interpretStatus("bluesky", 404)).toBe("dead");
+    expect(interpretStatus("bluesky", 429)).toBe("unknown");
+    expect(interpretStatus("bluesky", "neterr")).toBe("unknown");
+  });
+});
+
 describe("interpretStatus — soft platforms are never a verdict", () => {
   for (const p of ["instagram", "tiktok", "facebook", "twitter", "beatport", "twitch"]) {
     it(`${p} is always unknown`, () => {
@@ -49,8 +59,8 @@ describe("interpretStatus — soft platforms are never a verdict", () => {
 });
 
 describe("RELIABLE vs REMOVABLE — arbitrary-domain oracles report but never auto-remove", () => {
-  it("soundcloud/mixcloud/youtube are removable", () => {
-    for (const p of ["soundcloud", "mixcloud", "youtube"]) {
+  it("soundcloud/mixcloud/youtube/bluesky are removable (valid-cert honest oracles)", () => {
+    for (const p of ["soundcloud", "mixcloud", "youtube", "bluesky"]) {
       expect(RELIABLE.has(p)).toBe(true);
       expect(REMOVABLE.has(p)).toBe(true);
     }

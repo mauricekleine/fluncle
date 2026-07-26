@@ -19,6 +19,7 @@ import { type Ref, useCallback, useEffect, useId, useMemo, useRef, useState } fr
 import {
   siBandcamp,
   siBeatport,
+  siBluesky,
   siFacebook,
   siInstagram,
   siMixcloud,
@@ -134,6 +135,7 @@ const fetchFreshLinks = createServerFn({ method: "GET" }).handler(
 const PLATFORM_LABELS: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
   beatport: "Beatport",
+  bluesky: "Bluesky",
   facebook: "Facebook",
   homepage: "Homepage",
   instagram: "Instagram",
@@ -166,6 +168,8 @@ function PlatformLogo({
       return <BrandIcon className={className} icon={siBandcamp} />;
     case "beatport":
       return <BrandIcon className={className} icon={siBeatport} />;
+    case "bluesky":
+      return <BrandIcon className={className} icon={siBluesky} />;
     case "facebook":
       return <BrandIcon className={className} icon={siFacebook} />;
     case "instagram":

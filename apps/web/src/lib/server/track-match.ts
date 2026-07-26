@@ -36,6 +36,23 @@ const NEUTRAL_DESCRIPTORS = new Set([
   "original version",
 ]);
 
+// The subset of VERSION_WORDS strong enough to mark a version even BARE at the end of a
+// title — no parens, no dash ("Paint It Black VIP" vs Spotify's "Paint It Black (Vip)";
+// measured as a real anchor false-miss, 2026-07-26). Deliberately narrow: `dub`, `mix`,
+// `version`, `edit`, `flip`, and `extended` are genuine title-final words all over
+// jungle/DnB ("… Dub" titles), and folding one of those off a real title would let two
+// different recordings match — a wrong anchor is worse than a missed one.
+const BARE_TRAILING_VERSION_WORDS = new Set([
+  "bootleg",
+  "instrumental",
+  "refix",
+  "remaster",
+  "remix",
+  "rework",
+  "rmx",
+  "vip",
+]);
+
 const ARTIST_SPLIT = /\s*(?:,|&|\/|\band\b|\bx\b|\bvs\b|\bversus\b|\bwith\b)\s*/;
 const FEAT_INLINE = /\b(?:feat|ft|featuring)\b\.?.*$/i;
 const PUNCT = /[^a-z0-9 ]+/g;
@@ -130,7 +147,23 @@ export function splitTitle(title: string): { base: string; descriptor: string } 
   // Drop an inline feat. from the base too.
   working = working.replace(FEAT_INLINE, "");
 
-  return { base: fold(working), descriptor };
+  let base = fold(working);
+
+  // A BARE trailing strong version word ("Paint It Black VIP") is the same version the
+  // parenthesized spelling names — fold it into the descriptor so the two forms share a
+  // key. Only when no descriptor was found yet, and only when a non-empty base remains
+  // (a title that IS just "VIP" stays a title).
+  if (!descriptor) {
+    const tokens = base.split(" ");
+    const last = tokens.at(-1) ?? "";
+
+    if (tokens.length > 1 && BARE_TRAILING_VERSION_WORDS.has(last)) {
+      descriptor = last;
+      base = tokens.slice(0, -1).join(" ");
+    }
+  }
+
+  return { base, descriptor };
 }
 
 /**

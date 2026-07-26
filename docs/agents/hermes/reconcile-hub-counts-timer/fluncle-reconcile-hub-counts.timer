@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-reconcile-hub-counts timer — reconcile the maintained hub counts against truth at 04:10 Amsterdam on the rave-02 host (not the Hermes gateway)
+
+[Timer]
+# 04:10 Europe/Amsterdam via the explicit OnCalendar TZ suffix — the host clock is UTC (only the
+# Hermes container is TZ-pinned), so we name the zone here; DST-safe, needs systemd >=252. A fixed
+# deep-off-peak nightly slot rather than a rolling interval that drifts across the day, so the
+# counters settle at the same wall-clock moment every night and the journal reads as one clean daily
+# cadence. Chosen to sit in a free minute clear of the other daily jobs (logbook 00:40, audit 01:00,
+# cluster 02:20, backup 03:00, sentry-triage 03:30, reach 04:00, demand 04:40, audit-review 05:00) —
+# specifically AFTER the reach snapshot (04:00) and BEFORE the demand reorder (04:40), which is the
+# widest free gap in the nightly run. Persistent catches up a slot the box slept through on the next
+# wake; a caught-up extra run is a safe no-op (the pass is idempotent — on a healthy archive every
+# statement matches zero rows and writes nothing).
+OnCalendar=*-*-* 04:10:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

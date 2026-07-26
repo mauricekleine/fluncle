@@ -98,6 +98,11 @@ describe("classifyMbUrl", () => {
     expect(classifyMbUrl("https://twitch.tv/flunclelive")).toBe("twitch");
   });
 
+  it("classifies Bluesky profile URLs (handle and DID forms)", () => {
+    expect(classifyMbUrl("https://bsky.app/profile/nutone.bsky.social")).toBe("bluesky");
+    expect(classifyMbUrl("https://bsky.app/profile/did:plc:abc123")).toBe("bluesky");
+  });
+
   it("returns null for known aggregators (linktr.ee, discogs, etc.)", () => {
     expect(classifyMbUrl("https://linktr.ee/artist")).toBeNull();
     expect(classifyMbUrl("https://www.discogs.com/artist/12345")).toBeNull();
@@ -218,6 +223,27 @@ describe("normalizeProfileUrl", () => {
     ).toBe("https://www.twitch.tv/flunclelive");
     // A non-channel section (the video list) has no handle → null.
     expect(await normalizeProfileUrl("twitch", "https://www.twitch.tv/directory")).toBeNull();
+  });
+
+  it("normalizes a Bluesky profile URL and reduces a deep link to the profile root", async () => {
+    // A handle-form profile is kept as-is (idempotent).
+    expect(
+      await normalizeProfileUrl("bluesky", "https://bsky.app/profile/nutone.bsky.social"),
+    ).toBe("https://bsky.app/profile/nutone.bsky.social");
+    // A custom-domain handle works the same way.
+    expect(await normalizeProfileUrl("bluesky", "https://bsky.app/profile/fluncle.com")).toBe(
+      "https://bsky.app/profile/fluncle.com",
+    );
+    // A DID-form profile is preserved (the DID IS the identity).
+    expect(await normalizeProfileUrl("bluesky", "https://bsky.app/profile/did:plc:abc123")).toBe(
+      "https://bsky.app/profile/did:plc:abc123",
+    );
+    // A post deep link collapses to the profile root.
+    expect(
+      await normalizeProfileUrl("bluesky", "https://bsky.app/profile/nutone.bsky.social/post/xyz"),
+    ).toBe("https://bsky.app/profile/nutone.bsky.social");
+    // A URL with no /profile/ segment is rejected.
+    expect(await normalizeProfileUrl("bluesky", "https://bsky.app/")).toBeNull();
   });
 
   it("reduces a Bandcamp album deep-link to the artist origin", async () => {
@@ -1008,6 +1034,16 @@ describe("validateSocialUrlForPlatform", () => {
     expect(
       await validateSocialUrlForPlatform("homepage", "https://soundcloud.com/dimension"),
     ).toEqual({ ok: false, reason: "That's a SoundCloud link, not a homepage" });
+  });
+
+  it("accepts a Bluesky profile URL and rejects a non-Bluesky host in a bluesky row", async () => {
+    expect(
+      await validateSocialUrlForPlatform("bluesky", "https://bsky.app/profile/nutone.bsky.social"),
+    ).toEqual({ ok: true, url: "https://bsky.app/profile/nutone.bsky.social" });
+
+    expect(
+      await validateSocialUrlForPlatform("bluesky", "https://www.instagram.com/someone"),
+    ).toEqual({ ok: false, reason: "Not a Bluesky link" });
   });
 
   it("rejects an empty value and a non-http(s) scheme", async () => {

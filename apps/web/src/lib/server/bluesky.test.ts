@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type TrackMetadata } from "./spotify";
-import { formatBlueskyPost, linkFacet, normalizeIdentifier } from "./bluesky";
+import { formatBlueskyPost, linkFacet, normalizeIdentifier, resolveBlueskyHandle } from "./bluesky";
 
 // The Bluesky finding post is built by pure functions — formatBlueskyPost
 // (the text + external-card fields + the inlined-link facet), linkFacet (the
@@ -98,6 +98,67 @@ describe("normalizeIdentifier", () => {
 
   it("trims surrounding whitespace before checking for the @", () => {
     expect(normalizeIdentifier(" @fluncle.com ")).toBe("fluncle.com");
+  });
+});
+
+describe("resolveBlueskyHandle", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the DID when the public identity API resolves the handle", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ did: "did:plc:abc123" })));
+
+    expect(await resolveBlueskyHandle("nutone.bsky.social")).toBe("did:plc:abc123");
+  });
+
+  it("strips a leading @ before resolving (the stored-handle form)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ did: "did:plc:xyz" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await resolveBlueskyHandle("@fluncle.com")).toBe("did:plc:xyz");
+    // The @ never reaches the query — the API takes the bare handle.
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("handle=fluncle.com");
+  });
+
+  it("returns a DID identifier as-is without a network call (it's already resolved)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await resolveBlueskyHandle("did:plc:already")).toBe("did:plc:already");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns null for a handle the API can't resolve (a 400 = a dead link)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json(
+            { error: "InvalidRequest", message: "Unable to resolve handle" },
+            { status: 400 },
+          ),
+        ),
+    );
+
+    expect(await resolveBlueskyHandle("gone.bsky.social")).toBeNull();
+  });
+
+  it("returns null on a malformed body and on a network error (best-effort, never throws)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ notADid: true })));
+    expect(await resolveBlueskyHandle("weird.bsky.social")).toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    expect(await resolveBlueskyHandle("offline.bsky.social")).toBeNull();
+  });
+
+  it("returns null for an empty identifier without a network call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await resolveBlueskyHandle("   ")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

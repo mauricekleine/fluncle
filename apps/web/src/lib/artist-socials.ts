@@ -13,6 +13,7 @@ export type ArtistSocialPlatform =
   | "beatport"
   | "instagram"
   | "tiktok"
+  | "bluesky"
   | "twitter"
   | "facebook"
   | "mixcloud"
@@ -26,6 +27,7 @@ export const ARTIST_SOCIAL_PLATFORMS: ArtistSocialPlatform[] = [
   "soundcloud",
   "instagram",
   "tiktok",
+  "bluesky",
   "mixcloud",
   "twitch",
   "bandcamp",
@@ -81,6 +83,9 @@ function platformOfHost(raw: string): ArtistSocialPlatform | null {
   }
   if (host === "tiktok.com") {
     return "tiktok";
+  }
+  if (host === "bsky.app") {
+    return "bluesky";
   }
   if (host === "bandcamp.com" || raw.includes(".bandcamp.com")) {
     return "bandcamp";

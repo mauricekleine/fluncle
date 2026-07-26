@@ -410,6 +410,13 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // no TanStack route file; oRPC owns the path directly, like context_track. Admin
   // tier (agent-allowed): the box's status cron POSTs a snapshot with its agent token.
   "POST /admin/health": "record_health",
+  // The hub-counts reconciliation sweep (docs/db-scale-backlog Wave 2 keystone 2, slice C) —
+  // contract-only oRPC (no TanStack route file; oRPC owns the path directly, like
+  // record_catalogue_snapshot). Admin tier (agent-allowed): the box's nightly
+  // `fluncle-reconcile-hub-counts` cron POSTs a bare trigger with its agent token and the Worker
+  // corrects the drifted counters in SQL. `reconcile_hub_counts` does not match a public prefix,
+  // so it MUST be listed here to satisfy the "holds exactly" check.
+  "POST /admin/hub-counts/reconcile": "reconcile_hub_counts",
   // The label-alias confirm (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
   // tier: fold a candidate spelling into the label; the agent token 403s.
   "POST /admin/labels/aliases/{id}/confirm": "confirm_label_alias",

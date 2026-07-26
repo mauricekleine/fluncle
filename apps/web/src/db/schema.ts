@@ -2755,6 +2755,7 @@ export const artistSocials = sqliteTable(
         "soundcloud",
         "instagram",
         "tiktok",
+        "bluesky",
         "bandcamp",
         "beatport",
         "twitter",

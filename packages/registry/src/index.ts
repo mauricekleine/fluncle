@@ -1627,6 +1627,24 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "secondary" },
   },
   {
+    exposedContent: [
+      "nightly hub-counts reconciliation — re-derives renderable_track_count / certified_finding_count for every label/album/artist and corrects only the rows that drifted (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.reconcile-hub-counts",
+    operatorNotes:
+      "04:10 Amsterdam (after the 04:00 reach snapshot, before the 04:40 demand tick), a rave-02 host systemd timer (docs/agents/hermes/reconcile-hub-counts-timer/). The SELF-HEALING BACKSTOP under keystone 2's maintained hub counts: they are moved as DELTAS by every edge-writing path (recompute-from-truth measured 27,400 ms at 150k hosted vs ~200 ms for the delta form), and a maintained counter drifts silently — a missed write path, a non-atomic bulk op, or an out-of-band write (the catalogue-prune skill deletes tracks straight out of the database). Keystone 2's own rollout proved it on day one: the deploy-window skew left 44 artists / 3 albums / 1 label wrong until a manual reconcile. A bare trigger (the funnel-snapshot shape): fires the AGENT-tier reconcile_hub_counts op once and the Worker runs two statements per table — a grouped `UPDATE … FROM (… GROUP BY fk)` guarded by a counts-DIFFER predicate (so rowsAffected IS the corrected-row count) plus a zero-truth pass for an entity whose last track vanished. The artists source is PINNED to `track_artists JOIN tracks` so orphaned edges never count. Idempotent; zero LLM tokens; no new secret. The corrected-row numbers are the operator's DRIFT AUDIT — journalctl -u fluncle-reconcile-hub-counts.service | grep AUDIT. Source: docs/agents/hermes/scripts/reconcile-hub-counts.*.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-reconcile-hub-counts",
+      kind: "cron",
+      schedule: { time: "04:10", tz: "Europe/Amsterdam" },
+    },
+    statusDescription: "keeps the archive's counts adding up",
+    title: "Count check",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin reach collect",
     exposedContent: [
       "daily snapshot of Fluncle's numbers across every platform (followers / subscribers / plays / stars) → one append-only row per (platform, metric) behind the public /reach page (--no-agent)",
