@@ -15,6 +15,7 @@ Mirrors the existing Spotify/YouTube/Mixcloud token discipline exactly:
 - **The durable token lives Worker-side** (`twitch_auth`, one row), minted server-side and refreshed on demand. The CLI/box never holds it.
 - **The redirect URI is derived from the request origin**, so there is no `*_REDIRECT_URI` var — but the callback URL MUST be registered in the Twitch app console: `<origin>/api/admin/twitch/auth/callback`.
 - **Connect flow:** visit `/api/admin/twitch/auth/start` from a logged-in admin session → it returns `{ authUrl }` → follow it, grant **as the broadcaster account** (the follower total needs the broadcaster's own user token + `moderator:read:followers` — an app token no longer suffices; Twitch change-log 2023-09-06) → the callback stores the token and bounces to `/admin?twitch=connected`.
+- **Finish in the SAME browser you started in.** A browser-started connect binds its OAuth state to a short-lived nonce cookie the start leg sets (docs/admin-shell.md § Auth), so pasting the `authUrl` into a different browser or profile makes the callback answer `invalid_state` — by design. Starting the flow with a Bearer token instead (the CLI path) skips the binding, so the URL is portable there.
 - **Verify:** `fluncle admin reach collect` — twitch leaves the `skipped` list and appears under `collected` with `followers`.
 
 ## What is deliberately NOT here
