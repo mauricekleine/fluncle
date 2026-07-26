@@ -138,11 +138,12 @@ export function FindingsGrid({ findings }: { findings: TrackListItem[] }) {
                   the 640 one this used to ask for was ~8× the pixels a tile can show, on a page
                   whose whole HTML is 11 KB (43 KB → 10 KB per cover, measured on /album/addicted).
                   The `large` rung still rides og:image + the JSON-LD, where the consumer is a
-                  crawler's full-size card rather than a tile. */}
-                {/* The FIRST tile is the band's lead cover and always above the fold on every
-                    graph page, so it is the page's LCP candidate: fetch it eagerly at high
-                    priority. Tiles 2..n stay lazy — the whole point of the signal is that one
-                    image carries it. */}
+                  crawler's full-size card rather than a tile.
+
+                  The FIRST tile is also the band's lead cover, above the fold on every graph page
+                  and so the page's LCP candidate — it fetches eagerly at high priority, and the
+                  route preloads this exact URL from its head(). Tiles 2..n stay lazy: the whole
+                  point of the signal is that one image carries it. */}
                 <TrackArtwork
                   alt=""
                   className="artist-grid-cover"

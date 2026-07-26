@@ -4,7 +4,8 @@ import { firstPaintFootagePoster } from "./log-footage";
 // The /log page's LCP element is the footage pane's POSTER, not the clip: the clip holds
 // `preload="none"` until it is near the viewport, so the poster is the only thing the pane paints
 // first. `firstPaintFootagePoster` is that URL, lifted out so the ROUTE can preload it from `head()`
-// instead of leaving the browser to find it on a `<video poster>` attribute ~46 KB into the body.
+// instead of leaving the browser to find it on a `<video poster>` attribute in the body (measured on
+// the live /log/052.9.5E: `</head>` at byte 8,363, the poster attribute at byte 13,038).
 //
 // The contract these pin is the one that makes the preload a HEAD START rather than a second
 // request: it must reproduce the component's unmeasured first-paint branch byte for byte —
