@@ -23,10 +23,12 @@
 //                      past ~85% full, down past ~93% — catches a filling disk
 //                      before it strands the next pin-watch rebuild.
 //        cron.*      — read ~/.hermes/cron/output/<job>/ per Hermes cron: newest *.md,
-//                      its last line parsed as JSON (`.ok !== false`), AND fresh within
-//                      ~3× the cron's cadence. Emitted as ONE service PER cron (service
-//                      id = the registry surface name, e.g. `cron.enrich`), so /status
-//                      shows every humming system on its own row — not one aggregate.
+//                      fresh within ~3× the cron's cadence, AND carrying the sweep's
+//                      contracted JSON summary with `.ok !== false`. A marker with NO
+//                      summary is a run that was KILLED before it could speak → down (see
+//                      judgeCron). Emitted as ONE service PER cron (service id = the
+//                      registry surface name, e.g. `cron.enrich`), so /status shows every
+//                      humming system on its own row — not one aggregate.
 //        render-box  — read ${HOME}/.render-conductor/state (idle|rendering both ok;
 //                      missing = "not yet provisioned", ok). NEVER wakes the box.
 //        hermes      — self-evident: this prober runs ON the box, so ok.
@@ -539,7 +541,7 @@ function probeDisk(): Check {
 // add it here too (this script can't import the workspace package on the box).
 // One known cron: the registry surface id we emit, the bare token its output-dir
 // header carries, and its cadence.
-type CronDef = { cadenceMs: number; match: string; service: string };
+export type CronDef = { cadenceMs: number; match: string; service: string };
 
 const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
@@ -631,7 +633,13 @@ const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 24 * 60 * 60_000, match: "sentry-triage", service: "cron.sentry-triage" },
 ];
 
-type CronVerdict = "fresh-ok" | "lagging" | "failed" | "failed-once" | "no-data";
+export type CronVerdict =
+  | "fresh-ok"
+  | "lagging"
+  | "failed"
+  | "failed-once"
+  | "no-data"
+  | "no-summary";
 
 /**
  * The cron NAME a given output dir belongs to (from the newest run-file's
@@ -714,10 +722,90 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
   return claimed;
 }
 
-/** Judge one cron's claimed dir: newest *.md fresh-enough AND its last line `.ok !== false`. */
-function judgeCron(cron: CronDef, dir: string | undefined): CronVerdict {
+/**
+ * The JSON summary line a marker carries, or null when it carries none.
+ *
+ * EVERY sweep is contracted to end its stdout with one JSON summary line — that is the whole
+ * point of `cron-output.sh`'s "the LAST line is the sweep's JSON summary". But the marker is
+ * WRITTEN BY THE WRAPPER, not by the sweep: `emit_cron_output` runs the payload, captures its
+ * stdout, and writes the header + whatever it captured. So a sweep that is SIGKILLed (an OOM,
+ * the runner's ~120s budget) still leaves a marker — a 28-byte file whose only line is the
+ * `# Cron Job: …` header. Reading just the LAST non-empty line and shrugging when it isn't
+ * JSON therefore graded a totally dead run as healthy: `fluncle-backup` was OOM-killed three
+ * nights running (2026-07-24/25/26, status=137) and `cron.backup` read GREEN throughout.
+ *
+ * So: scan UPWARDS for the last line that parses as a JSON object. That keeps the two
+ * legitimate shapes healthy — a clean summary on the last line, and a summary followed by
+ * trailing log noise — while a marker with no summary at all is what it looks like: a run
+ * that never got to speak.
+ */
+export function findJsonSummary(body: string): Record<string, unknown> | null {
+  const lines = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] ?? "";
+
+    // Cheap gate before the parse: only an object literal can be a summary.
+    if (!line.startsWith("{")) {
+      continue;
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(line);
+
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Not this line — keep walking up.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * How long this box has been up, in ms — or null where that can't be known (no procfs).
+ * Used to age a never-ran cron out of "no runs yet": on a box that has been up for days, a
+ * cron with no output has not "not started yet", it has never fired.
+ */
+export function boxUptimeMs(): number | null {
+  try {
+    const seconds = Number.parseFloat(readFileSync("/proc/uptime", "utf8").split(/\s+/)[0] ?? "");
+
+    return Number.isFinite(seconds) ? seconds * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Judge one cron's claimed dir: the newest *.md must be fresh enough AND carry a JSON summary
+ * that doesn't say `ok: false`.
+ *
+ * `uptimeMs` is the box's uptime (null = unknown). It only matters for the no-runs-at-all
+ * case: a timer that never installed, or never fired, used to read "no runs yet / ok" FOREVER.
+ * Once the box has been up longer than this cron's own stale budget, that silence is the same
+ * signal as a stale marker — `lagging`.
+ */
+export function judgeCron(
+  cron: CronDef,
+  dir: string | undefined,
+  uptimeMs: number | null = null,
+): CronVerdict {
+  // The stale budget: a run within 3× the cadence (plus a small floor for clock jitter).
+  const staleBudgetMs = Math.max(cron.cadenceMs * 3, 90_000);
+
+  // No output dir at all, or an unreadable one. Fresh box ⇒ genuinely "no runs yet"; a box
+  // that has been up past this cron's whole stale budget ⇒ it should have produced something.
+  const noData = (): CronVerdict =>
+    uptimeMs !== null && uptimeMs > staleBudgetMs ? "lagging" : "no-data";
+
   if (!dir) {
-    return "no-data"; // no output dir yet — defensively ok-unknown, never down
+    return noData();
   }
 
   let runFiles: { mtimeMs: number; path: string }[];
@@ -729,80 +817,81 @@ function judgeCron(cron: CronDef, dir: string | undefined): CronVerdict {
       .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
   } catch {
-    return "no-data";
+    return noData();
   }
 
   const newest = runFiles[0];
 
   if (!newest) {
-    return "no-data"; // dir exists but no runs yet
+    return noData(); // dir exists but no runs yet
   }
 
-  // Freshness: a run within 3× the cadence (plus a small floor for clock jitter).
-  const ageMs = Date.now() - newest.mtimeMs;
-  const staleBudgetMs = Math.max(cron.cadenceMs * 3, 90_000);
-
-  if (ageMs > staleBudgetMs) {
+  // Freshness first — a stale marker is "behind schedule" whatever it says.
+  if (Date.now() - newest.mtimeMs > staleBudgetMs) {
     return "lagging";
   }
 
-  // Content health: the LAST non-empty line parsed as JSON, `.ok !== false`. A run
-  // whose summary isn't JSON (or has no `ok`) is treated as healthy — only an
-  // explicit `{ ok: false }` is a failure (the sweeps emit that on a hard stop).
-  let lastLine = "";
+  let body: string;
 
   try {
-    const lines = readFileSync(newest.path, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    lastLine = lines[lines.length - 1] ?? "";
+    body = readFileSync(newest.path, "utf8");
   } catch {
     return "fresh-ok"; // unreadable body but fresh file — don't false-alarm
   }
 
-  try {
-    const parsed = JSON.parse(lastLine) as { ok?: unknown };
+  const summary = findJsonSummary(body);
 
-    if (parsed && typeof parsed === "object" && parsed.ok === false) {
-      // ONE failed run is not an outage — every sweep retries on its own cadence, and a
-      // transient (a MusicBrainz slow day timing out one crawl tick) self-heals on the next
-      // tick. Alarming DOWN on a single miss made /status + Discord flap all morning
-      // (2026-07-13). So: the newest run failed AND the one before it also failed ⇒ the job
-      // is genuinely stuck ⇒ "failed" (down). A lone failure ⇒ "failed-once" (degraded,
-      // "watching the retry") — visible, never silent, but not a page.
-      return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
-    }
-  } catch {
-    // Not JSON — fine; many cron summaries are a human line. Freshness governs.
+  if (!summary) {
+    // NO SUMMARY AT ALL. The wrapper wrote a marker but the sweep never emitted its
+    // contracted JSON line — the signature of a run that was KILLED mid-flight (OOM, the
+    // runner budget). Unlike `ok: false` (a sweep reporting a handled, usually transient
+    // failure and retrying on its own cadence) this is the process dying, so it does NOT get
+    // the one-miss grace: it is a failure the first time it is seen. Three OOM-killed backup
+    // nights read green under the old lenience; never again.
+    return "no-summary";
+  }
+
+  if (summary.ok === false) {
+    // ONE failed run is not an outage — every sweep retries on its own cadence, and a
+    // transient (a MusicBrainz slow day timing out one crawl tick) self-heals on the next
+    // tick. Alarming DOWN on a single miss made /status + Discord flap all morning
+    // (2026-07-13). So: the newest run failed AND the one before it also failed ⇒ the job
+    // is genuinely stuck ⇒ "failed" (down). A lone failure ⇒ "failed-once" (degraded,
+    // "watching the retry") — visible, never silent, but not a page.
+    return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
   }
 
   return "fresh-ok";
 }
 
-/** Did a (previous) run file's last non-empty line report `ok: false`? Unreadable/absent ⇒ no. */
+/**
+ * Did a (previous) run file fail? `ok: false` counts, and so does a marker with NO summary —
+ * a killed run is a failed run, so two killed nights escalate the same way two reported
+ * failures do. Unreadable/absent ⇒ no (never invent a failure).
+ */
 function runFailed(path: string | undefined): boolean {
   if (!path) {
     return false;
   }
 
   try {
-    const lines = readFileSync(path, "utf8")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const parsed = JSON.parse(lines[lines.length - 1] ?? "") as { ok?: unknown };
+    const summary = findJsonSummary(readFileSync(path, "utf8"));
 
-    return typeof parsed === "object" && parsed !== null && parsed.ok === false;
+    return summary === null || summary.ok === false;
   } catch {
     return false;
   }
 }
 
 /** Map one cron's verdict to its public Check (status + a short, public-safe note). */
-function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
+export function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
   const base = { latencyMs: null, service: cron.service };
+
+  if (verdict === "no-summary") {
+    // The marker exists but the sweep never emitted its summary — it was killed mid-run.
+    // Down on the first sighting: a process that died is not a job "watching its retry".
+    return { ...base, message: msg("last run died mid-flight"), status: "down" };
+  }
 
   if (verdict === "failed") {
     // Two consecutive failed runs — the job is stuck, not unlucky. A real outage.
@@ -837,9 +926,10 @@ function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
  */
 function probeCrons(): Check[] {
   const claimed = claimCronDirs(AUTOMATION_CRONS);
+  const uptimeMs = boxUptimeMs();
 
   return AUTOMATION_CRONS.map((cron) =>
-    cronCheck(cron, judgeCron(cron, claimed.get(cron.service))),
+    cronCheck(cron, judgeCron(cron, claimed.get(cron.service), uptimeMs)),
   );
 }
 
@@ -1257,9 +1347,12 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(summary));
 }
 
-main().catch((error) => {
-  // A truly unexpected failure (not a probe failure — those are caught per-probe).
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.log(JSON.stringify({ ok: false, reason: "prober_error" }));
-  process.exit(1);
-});
+// Guarded so the unit tests can import `judgeCron` / `findJsonSummary` without firing a tick.
+if (import.meta.main) {
+  main().catch((error) => {
+    // A truly unexpected failure (not a probe failure — those are caught per-probe).
+    log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    console.log(JSON.stringify({ ok: false, reason: "prober_error" }));
+    process.exit(1);
+  });
+}
