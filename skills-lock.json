@@ -66,7 +66,7 @@
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",
       "sourceType": "local",
-      "computedHash": "9ca08f4bf5240635688436d098f4b48d5e8cf16fdf931e77b137d9ed5a96f762"
+      "computedHash": "a68aec82eac50674f762ab03f55e17ca22aa0434006ac82b92d51d303208d9b8"
     },
     "fluncle-publish": {
       "source": "packages/skills/fluncle-publish",
@@ -113,17 +113,23 @@
       "sourceType": "local",
       "computedHash": "d3f26683b3fc30dace0c9b21f4b75a5c822ead069bc73291863b263182b603fd"
     },
+    "impeccable": {
+      "source": "pbakaus/impeccable",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/impeccable/SKILL.md",
+      "computedHash": "8e68c45ab038a3707795034a060b90098e08250ae60ad9987e9e73ec269aaf7e"
+    },
     "improve": {
       "source": "shadcn/improve",
       "sourceType": "github",
       "skillPath": "skills/improve/SKILL.md",
       "computedHash": "39a9358732dcff385e9e4d3e60b4547856f834e54a58b35e455aa9bd49928c13"
     },
-    "postiz": {
-      "source": "gitroomhq/postiz-agent",
+    "react-doctor": {
+      "source": "millionco/react-doctor",
       "sourceType": "github",
-      "skillPath": "SKILL.md",
-      "computedHash": "bb1a28c176a8c31305ad60b0bce66c536fe195b7943d0b7c669ae7b26f24a916"
+      "skillPath": "skills/react-doctor/SKILL.md",
+      "computedHash": "99ce09a65a0c78f23bc685739e106f02edb1279699a94805368d54ea7f399d6f"
     },
     "react-email": {
       "source": "resend/resend-skills",
@@ -164,7 +170,7 @@
     "taste": {
       "source": "packages/skills/taste",
       "sourceType": "local",
-      "computedHash": "5f5843ddbf100be24ad706491b9ec54e29e6ad7f373c364849f830eb5f8a11c2"
+      "computedHash": "9b2eb91093a806417830d94b861daf6095c831b8c2bde92d211ff5b7250920fd"
     },
     "vercel-composition-patterns": {
       "source": "vercel-labs/agent-skills",

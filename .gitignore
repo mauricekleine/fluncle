@@ -89,10 +89,6 @@ apps/web/public/void/accretion.png
 apps/web/public/void/discman.png
 apps/web/public/void/event-horizon.png
 
-# fluncle-sprites skill install symlinks (skills-lock.json + the package are the truth)
-.claude/skills/fluncle-sprites
-.agents/skills/fluncle-sprites/
-
 # The show orchestrator's dedicated Chromium profile (runtime state, never content)
 packages/live/.show-profile/
 

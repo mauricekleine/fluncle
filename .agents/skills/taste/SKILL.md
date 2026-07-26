@@ -5,6 +5,8 @@ description: "Evaluate and improve the taste and design quality of code, archite
 
 # Taste for Makers
 
+Adapted from Paul Graham's essay ["Taste for Makers"](https://paulgraham.com/taste.html) (2002) — the 14 principles and their framing are his; the prompts, checklists, and repo-specific application are ours.
+
 Taste is not subjective. As you get better at designing things, your tastes change — and you know they're getting better, which means your old tastes were not merely different but worse. Good and bad design exist. This skill helps you see the difference.
 
 The recipe for great work: very exacting taste, plus the ability to gratify it.

@@ -5,56 +5,21 @@ description: Use when working in the Fluncle repository on the Bun/Turborepo mon
 
 # Fluncle Operator
 
-Use this skill to preserve the core Fluncle architecture: `apps/web` owns public and admin API routes, including Spotify, Telegram, and Turso mutation behavior. The CLI is a thin HTTP client for public reads and authenticated admin commands. Raycast and deployment surfaces should call `fluncle`; they should not reimplement Spotify, Telegram, Turso, or HTTP API behavior.
+`AGENTS.md` at the repo root is the standing law and this skill does not restate it: its **Architecture** section owns the module boundaries (`apps/web` owns the public and admin API surfaces, the CLI is a thin HTTP client, Raycast calls `fluncle` rather than reimplementing Spotify/Telegram/Turso, publishing authority stays behind the authenticated admin API), and its **Quality Checks** section owns which commands to run for the surface you touched. Read them there — a second copy here only rots.
 
-## Start Here
+What this skill adds is the per-surface routing below and the gotchas AGENTS.md is too high-level to carry.
 
-1. Inspect the current state first:
-
-```bash
-git status -sb
-rg --files -g '!node_modules' -g '!dist'
-```
-
-2. Route by task:
+## Route by task
 
 - CLI behavior or JSON contracts: read `references/cli-contract.md`.
-- Raycast commands, local install, or command refresh issues: read `references/raycast.md`.
-- Public web app or fluncle.com changes: put public/admin HTTP surfaces on oRPC contract ops (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router) with server modules under `apps/web/src/lib/server`; `apps/web/src/routes/api` file routes are only the documented carve-outs (auth redirects, uploads/streaming, non-JSON emitters, `/status`+`/health`) — see `AGENTS.md` Architecture.
+- Raycast commands, local install, or stale-command issues: read `references/raycast.md`.
 - VPS install or standalone binary deployment: read `references/vps-deploy.md`.
-
-3. Know where local config lives, and keep all of it out of commits: `apps/web/.dev.vars` is the web app's local env (template at `apps/web/.dev.vars.tpl`), `apps/web/.dev/` holds the per-worktree libSQL database (see [docs/local-database.md](../../../docs/local-database.md)), and the CLI reads its own operator profiles from `~/.config/fluncle/.env.<profile>` outside the repo (`--env local` / `--env production`). Also keep `node_modules`, `dist`, and generated temporary assets out of commits.
-
-## Validation Checklist
-
-Run checks matching the touched surface:
-
-```bash
-bun run typecheck
-bun run --cwd apps/cli fluncle recent --limit 1 --json
-```
-
-For Raycast changes:
-
-```bash
-bun run --cwd apps/raycast build
-bun run --cwd apps/raycast lint
-```
-
-For web changes:
-
-```bash
-bun run --cwd apps/web typecheck
-bun run --cwd apps/web build
-bun run --cwd apps/web lint
-```
-
-For CLI changes that affect deployment, rebuild and verify the local or VPS standalone binary. See the deployment references.
+- Public web app or admin surfaces: `AGENTS.md` → Architecture. New HTTP surfaces go on oRPC contract ops (`packages/contracts/src/orpc/**`, registered in the `apps/web/src/lib/server/orpc/**` router); the `apps/web/src/routes/api` file routes are only the documented carve-outs.
+- Local config and env profiles, all of it uncommitted: `apps/web/.dev.vars` is the web app's local env (template at `apps/web/.dev.vars.tpl`), `apps/web/.dev/` holds the per-worktree libSQL database (see [docs/local-database.md](../../../docs/local-database.md)), and the CLI reads its own operator profiles from `~/.config/fluncle/.env.<profile>` outside the repo (`--env local` / `--env production`).
 
 ## Known Gotchas
 
 - Raycast runs with a minimal shell environment. Do not point Raycast at a Bun-linked `#!/usr/bin/env bun` script; install a standalone macOS binary at the configured CLI path.
-- After changing Raycast command manifests, `bun run build` may compile but Raycast may keep stale command indexing. Run `bun run dev` briefly to refresh, then stop it.
+- After changing Raycast command manifests, `bun run build` may compile while Raycast keeps stale command indexing. Run `bun run dev` briefly to refresh, then stop it.
 - `fluncle admin tracks publish` intentionally treats Spotify track IDs as case-sensitive.
-- `fluncle recent` and the Raycast recent bangers command must read through the CLI, not directly through Turso.
-- `apps/web` owns server-side API behavior. Public routes can read Turso; authenticated admin routes can publish to Spotify and Telegram.
+- `fluncle recent` and the Raycast recent-bangers command must read through the CLI, never directly through Turso.
