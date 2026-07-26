@@ -35,6 +35,44 @@ const PANE_CEILING_WIDTH: Record<CropOrientation, RenditionWidth> = {
   portrait: 720,
 };
 
+// The poster's rung at first paint: one BELOW the portrait pane's ceiling. A still under a moving
+// clip does not need the clip's density, and the rung down is a third of the bytes (measured on a
+// real finding: 720×1280 = 243 KB, 480×853 = 89 KB). The component derives the same number from its
+// measured width; this constant is the unmeasured case, which is the one the preload has to match.
+const FIRST_PAINT_POSTER_WIDTH = stepDownRenditionWidth(PANE_CEILING_WIDTH.portrait, 1);
+
+/**
+ * THE URL THE PANE FETCHES AT FIRST PAINT — the finding's poster frame, which is the /log page's
+ * LCP element (the clip itself cannot paint before it: `preload` is `none` until the pane is near
+ * the viewport, and the poster is what holds the pane meanwhile).
+ *
+ * Exported so the ROUTE can preload it from `head()`. Without that the browser discovers it only on
+ * the `<video poster>` attribute in the BODY, behind everything <head> declares — measured on
+ * /log/052.9.5E: `</head>` closes at byte 8,363 and `poster="…"` sits at byte 13,038, so discovery
+ * waits out the render-blocking CSS for a 23.5 KB image that is the page's largest paint.
+ *
+ * It mirrors the component's unmeasured first-paint branch EXACTLY: portrait orientation (the
+ * mobile-first pane `useMediaQuery` reports until mounted, so it is what SSR emits too), the rung
+ * above, zero stall downshifts, nothing failed yet. Desktop swaps to the landscape crop after
+ * hydration — already true of today's SSR markup, so the preload adds no request the page was not
+ * already making.
+ *
+ * Undefined when the finding carries no footage: then the pane falls through a frame transform that
+ * cannot exist to the bundle poster to the album cover, and which of those three actually paints is
+ * not knowable from the route. A preload has to be a certainty or it is just an extra request.
+ */
+export function firstPaintFootagePoster(track: Track): string | undefined {
+  if (!track.logId || !track.videoUrl) {
+    return undefined;
+  }
+
+  const version = videoVersion(track.videoSquaredAt);
+
+  return track.videoSquaredAt
+    ? videoCropPoster(track.logId, "portrait", FIRST_PAINT_POSTER_WIDTH, 0, version)
+    : videoPoster(track.logId, undefined, version);
+}
+
 // The log page's media element: the finding's footage as ONE element of the
 // archival plate (the page register), not a full-bleed reel — the cinematic
 // register is the Stories dialog. Footage runs as a muted loop (gesture-gated
@@ -180,6 +218,10 @@ export function LogFootage({ track }: { track: Track }) {
   //
   // It rides the measured `paneWidth`, never the stall-downshifted width: a wedged
   // clip must not also re-fetch a poster the page already holds.
+  //
+  // Unmeasured + portrait — SSR and first paint — this resolves to FIRST_PAINT_POSTER_WIDTH, which
+  // is what `firstPaintFootagePoster` (the route's preload) derives. Keep the two expressions in
+  // step or the preload becomes a second fetch instead of a head start.
   const posterWidth = stepDownRenditionWidth(paneWidth ?? PANE_CEILING_WIDTH[orientation], 1);
   const framePoster =
     track.logId && !framePosterFailed
@@ -283,10 +325,14 @@ export function LogFootage({ track }: { track: Track }) {
           tabIndex={-1}
         />
       ) : (
-        // No footage (or none of it survived the trip): the cover holds the frame.
+        // No footage (or none of it survived the trip): the cover holds the frame. It is the pane's
+        // only paint and sits above the fold, so it takes the high-priority signal — the same one
+        // the route spends on the poster when there IS footage.
         <img
           alt=""
           className="log-footage-media"
+          decoding="async"
+          fetchPriority="high"
           onError={() => setPosterFailed(true)}
           src={posterUrl}
         />

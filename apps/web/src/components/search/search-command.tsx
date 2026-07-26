@@ -44,6 +44,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { SpotifyIcon } from "@/components/platform-icons";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
+import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────
@@ -220,8 +221,18 @@ function EntityRow({
       onSelect={() => onPick(entity)}
       value={`${entity.kind}-${entity.slug}`}
     >
+      {/* A palette row's cover is 2.25rem — 36 CSS px, 72 on a 2× screen — so it takes the 64 rung
+          (an unowned artist portrait, Spotify's 160 floor), never the 640 the search DTO hands out
+          for consumers that never re-size. A palette can list ~20 rows at once, so this is the
+          heaviest single over-fetch a keystroke could trigger. */}
       {entity.imageUrl ? (
-        <img alt="" className="search-cover" loading="lazy" src={entity.imageUrl} />
+        <img
+          alt=""
+          className="search-cover"
+          decoding="async"
+          loading="lazy"
+          src={albumCoverAtSize(entity.imageUrl, "small")}
+        />
       ) : (
         <span aria-hidden="true" className="search-cover search-cover--empty" />
       )}

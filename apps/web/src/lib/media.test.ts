@@ -525,10 +525,33 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     );
   });
 
-  it("passes a non-provider URL (a raw artist avatar) through untouched", () => {
-    const avatar = "https://i.scdn.co/image/ab6761610000e5ebcafe";
+  // The PORTRAIT family. Spotify keys an artist photo off `ab676161`, a different prefix from album
+  // art's `ab67616d`, on its own 640/320/160 ladder — so this used to pass through untouched and
+  // ship the stored 640² into a 1.5rem chip (measured: 372 KB across /artist/1991's four kin chips).
+  it("swaps a Spotify ARTIST-portrait prefix down its own ladder", () => {
+    const portrait = "https://i.scdn.co/image/ab6761610000e5ebcafef00d";
 
-    expect(albumCoverAtSize(avatar, "small")).toBe(avatar);
+    expect(albumCoverAtSize(portrait, "medium")).toBe(
+      "https://i.scdn.co/image/ab67616100005174cafef00d",
+    );
+    // No 64 rung exists for a portrait, so `small` clamps UP to Spotify's 160 floor.
+    expect(albumCoverAtSize(portrait, "small")).toBe(
+      "https://i.scdn.co/image/ab6761610000f178cafef00d",
+    );
+    // …and `xl` clamps DOWN to 640, exactly as the album ladder does.
+    expect(albumCoverAtSize(portrait, "xl")).toBe(portrait);
+  });
+
+  it("upgrades a stored small portrait back to the large rung", () => {
+    expect(albumCoverAtSize("https://i.scdn.co/image/ab6761610000f178cafef00d", "large")).toBe(
+      "https://i.scdn.co/image/ab6761610000e5ebcafef00d",
+    );
+  });
+
+  it("passes a non-provider URL (a raw label logo on our own zone) through untouched", () => {
+    const logo = "https://found.fluncle.com/labels/some-label.jpg";
+
+    expect(albumCoverAtSize(logo, "small")).toBe(logo);
   });
 });
 
@@ -569,7 +592,7 @@ describe("bestArtistAvatarUrl — owned master preferred, raw avatar floor", () 
     expect(url).toContain("artists/some-artist.jpg");
   });
 
-  it("falls back to the raw Spotify avatar when unowned", () => {
+  it("falls back to the Spotify portrait at the large rung when unowned", () => {
     const raw = "https://i.scdn.co/image/ab6761610000e5ebcafe";
     const url = bestArtistAvatarUrl({
       imageKey: null,
@@ -579,5 +602,19 @@ describe("bestArtistAvatarUrl — owned master preferred, raw avatar floor", () 
     });
 
     expect(url).toBe(raw);
+  });
+
+  // Both branches come out at `large`, so the DTO's contract is one size whichever provider
+  // answered — a consumer that never re-sizes (mobile, search) cannot land on a 160px portrait
+  // because that happened to be the rung the backfill stored.
+  it("normalises a stored small portrait UP to the large rung", () => {
+    const url = bestArtistAvatarUrl({
+      imageKey: null,
+      imageState: "pending",
+      imageUpdatedAt: null,
+      imageUrl: "https://i.scdn.co/image/ab6761610000f178cafe",
+    });
+
+    expect(url).toBe("https://i.scdn.co/image/ab6761610000e5ebcafe");
   });
 });

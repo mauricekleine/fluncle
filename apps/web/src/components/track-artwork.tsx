@@ -14,10 +14,19 @@ import { cn } from "@/lib/utils";
 export function TrackArtwork({
   alt,
   className,
+  priority,
   src,
 }: {
   alt?: string;
   className?: string;
+  /**
+   * This cover is the page's above-the-fold lead image (the first tile of the findings grid that
+   * opens a graph page) — fetch it eagerly at high priority. A lazy image that happens to be in
+   * the viewport still loads, but Chrome holds it at Low priority behind the render-blocking CSS
+   * and defers it until layout, which is exactly the LCP an entity page waits on. Every other tile
+   * stays lazy; the signal only helps while it is scarce.
+   */
+  priority?: boolean;
   src?: string;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
@@ -40,7 +49,9 @@ export function TrackArtwork({
     <img
       alt={alt ?? ""}
       className={cn("track-artwork", className)}
-      loading="lazy"
+      decoding="async"
+      fetchPriority={priority ? "high" : undefined}
+      loading={priority ? "eager" : "lazy"}
       onError={() => setFailedSrc(src)}
       ref={imgRef}
       src={src}

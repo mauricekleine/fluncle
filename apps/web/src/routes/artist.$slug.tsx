@@ -282,6 +282,16 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     artistImageUrl ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
+  // THE LEAD IMAGE — the one this page's LCP waits on, preloaded below because the loader already
+  // holds its exact URL. It is the findings band's first cover when the band renders (the widest
+  // paint on the page: a ~114 CSS px tile against the masthead portrait's 80), else the masthead
+  // portrait itself, which leads a catalogue-only artist with no certified findings. Both come out
+  // at the `medium` rung — byte-identical to what the components ask for, so the preload is a hit
+  // and never a second fetch. Exactly one is spent: a preload only buys priority while it is
+  // scarce (the homepage cover is the same one-preload shape).
+  const leadGridCover = findings.find((finding) => finding.logId)?.albumImageUrl;
+  const leadImageUrl =
+    albumCoverAtSize(leadGridCover, "medium") ?? albumCoverAtSize(imageUrl, "medium");
 
   const musicGroup = musicGroupJsonLd(
     {
@@ -305,6 +315,12 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
+      // Preload the lead image (see `leadImageUrl`). Without it the browser discovers the cover
+      // mid-body-parse, behind the render-blocking CSS, and fetches it at Low priority; the
+      // preload starts it alongside the document's own subresources instead.
+      ...(leadImageUrl
+        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
+        : []),
       // RSS discovery: this artist's new-releases feed (the 30-day window, this artist only).
       // The bare `/artist/<slug>/fresh.xml`, never the paged catalogue URL.
       {
@@ -438,6 +454,10 @@ function ArtistPage() {
           <ArtistAvatar
             className="artist-masthead-avatar"
             name={name}
+            // The page's lead image, above the fold on every viewport and preloaded from the route
+            // head (the loader already knows this exact URL), so it must not be lazy — a lazy hero
+            // wastes the preload by re-discovering the image at Low priority after layout.
+            priority
             src={albumCoverAtSize(imageUrl, "medium")}
           />
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
@@ -498,7 +518,9 @@ function ArtistPage() {
                       }
                       name={neighbour.name}
                       // A 1.5rem chip avatar — 48 device px at 2× — takes the 64 rung, never the
-                      // 640 master the DTO hands out (26× the pixels this tile can show).
+                      // 640 master the DTO hands out (26× the pixels this tile can show). A kin
+                      // artist with no owned master lands on Spotify's portrait floor (160), the
+                      // smallest rendition that family publishes.
                       src={albumCoverAtSize(neighbour.imageUrl, "small")}
                     />
                     <span>{neighbour.name}</span>
