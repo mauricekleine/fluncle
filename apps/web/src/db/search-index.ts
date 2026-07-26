@@ -46,11 +46,12 @@
 // backstop if one ever is.
 //
 // ── AND WHY IT IS SAFE TO BUILD ──────────────────────────────────────────────────────
-// `tracks` holds 60 rows today, so the initial populate is a 60-row insert. This is the
-// cheapest hour the index will ever cost. It is also the exact OPPOSITE of the
-// `libsql_vector_idx` foot-gun (docs/local-database.md): that one wedged hosted Turso's
-// write path for 20+ minutes and silently built an EMPTY index locally. FTS5 does neither
-// — it was measured at ~114 ms over 100k rows in the Turso scale spike.
+// The populate is cheap at ANY size this archive will reach: FTS5 was measured at ~114 ms
+// over 100k rows in the Turso scale spike, and the target is 150k. So the cost does not
+// depend on catching the table small — it stays a sub-second step as the catalogue grows.
+// It is also the exact OPPOSITE of the `libsql_vector_idx` foot-gun
+// (docs/local-database.md): that one wedged hosted Turso's write path for 20+ minutes and
+// silently built an EMPTY index locally. FTS5 does neither.
 
 import { type Client } from "@libsql/client";
 

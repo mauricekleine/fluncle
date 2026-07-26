@@ -352,7 +352,7 @@ The per-user telescopes (§ above):
 Fluncle's Frontier (§ above — the per-user playlist, shipped DARK):
 
 - `apps/web/src/lib/server/frontier-playlist.ts` — the kill switch, the daily mint cap, mint-or-refresh (the mirror guard + the shared-Spotify-budget defer), the paced `refreshAllFrontierPlaylists` drain (the per-user cursor + due-gate), and the cover upload leg (`putFrontierCover` + the worklist).
-- `apps/web/src/lib/server/frontier-playlist.test.ts` — **the behaviour proof** (switch-off makes no Spotify call, create-once idempotence, the URI order, the description, the mirror guard, the daily cap, the sweep's iteration, the scope-failure degradation).
+- `apps/web/src/lib/server/frontier-playlist.integration.test.ts` — **the behaviour proof** (switch-off makes no Spotify call, create-once idempotence, the URI order, the description, the mirror guard, the daily cap, the sweep's iteration, the scope-failure degradation).
 - `packages/contracts/src/orpc/me-frontier.ts` + `apps/web/src/lib/server/orpc/me-frontier.ts` — the two `/me` ops (mint + read).
 - `packages/contracts/src/orpc/admin-frontier.ts` + `apps/web/src/lib/server/orpc/admin-frontier.ts` — the admin `refresh_frontier_playlists` op; `apps/cli/src/commands/admin-frontier.ts` is the thin client.
 - `packages/media/src/remotion/frontier-cover.tsx` + `packages/media/src/render/render-frontier-cover.ts` — the Node-side cover render; `apps/web/scripts/render-frontier-covers.ts` is the operator-run render + upload driver.
