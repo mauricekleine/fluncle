@@ -16,9 +16,9 @@
 //     bun rotation.ts            -> e.g. "security"
 //     bun rotation.ts 2026-07-12 -> the domain for a specific UTC date (for tests/dry-runs)
 
-// The seven audit domains, in cycle order. Each key maps 1:1 to a prompt file at
+// The eight audit domains, in cycle order. Each key maps 1:1 to a prompt file at
 // ./prompts/<key>.md (the auditor loads that file as its brief) and to a human label +
-// blurb (below) used in the PR title and the run log. Adding an eighth domain is: append
+// blurb (below) used in the PR title and the run log. Adding a ninth domain is: append
 // a key here, add its prompts/<key>.md, add a DOMAIN_META entry — nothing else.
 export const DOMAINS = [
   "design",
@@ -28,6 +28,7 @@ export const DOMAINS = [
   "surfaces-seo",
   "docs",
   "tests",
+  "db-query-shape",
 ] as const;
 
 export type AuditDomain = (typeof DOMAINS)[number];
@@ -38,6 +39,10 @@ export const DOMAIN_META: Record<AuditDomain, { label: string; blurb: string }> 
   architecture: {
     blurb: "dead code, duplication, the oRPC + coverage invariants, module boundaries",
     label: "Architecture & code quality",
+  },
+  "db-query-shape": {
+    blurb: "recompute-by-scan on the growing tables — anti-joins, hub group-bys, per-row loops",
+    label: "DB query shape at scale",
   },
   design: {
     blurb: "DESIGN.md adherence — Shadcn, iconography, dark/cover-led, WCAG AA",
@@ -77,7 +82,7 @@ export function daysSinceEpoch(date: Date): number {
 }
 
 // Tonight's domain (or the domain for an explicit date). The modulo is the whole selector —
-// stateless, continuous, and uniform across the seven-day cycle.
+// stateless, continuous, and uniform across the eight-day cycle.
 export function domainForDate(date: Date): AuditDomain {
   const idx = ((daysSinceEpoch(date) % DOMAINS.length) + DOMAINS.length) % DOMAINS.length;
   return DOMAINS[idx];

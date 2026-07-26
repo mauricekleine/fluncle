@@ -1,7 +1,7 @@
 ---
 name: fluncle-audit-operator
 description: >-
-  Operator runbook for Fluncle's nightly codebase-audit system — the two rave-02 host systemd timers (`fluncle-audit` at 01:00 and `fluncle-audit-review` at 05:00) that cycle one domain per night (design, voice, architecture, security, surfaces-seo, docs, tests), open a PR of safe fixes, and auto-merge it on green CI. Use this whenever you need to operate or change the audit: run or pilot a domain by hand, triage the findings ledger (`docs/audit-backlog.md`), handle a PR the reviewer held open, pause/resume or enable/disable the timers, tune a domain prompt or the rotation, wire its secrets, or bump its pinned `gh`. Trigger on any mention of the nightly audit, the audit bot, the audit PR/ledger, the rotation agents, or "what did the audit find". The repo is canonical and the box is a deploy target (baked scripts + host timers).
+  Operator runbook for Fluncle's nightly codebase-audit system — the two rave-02 host systemd timers (`fluncle-audit` at 01:00 and `fluncle-audit-review` at 05:00) that cycle one domain per night (design, voice, architecture, security, surfaces-seo, docs, tests, db-query-shape), open a PR of safe fixes, and auto-merge it on green CI. Use this whenever you need to operate or change the audit: run or pilot a domain by hand, triage the findings ledger (`docs/audit-backlog.md`), handle a PR the reviewer held open, pause/resume or enable/disable the timers, tune a domain prompt or the rotation, wire its secrets, or bump its pinned `gh`. Trigger on any mention of the nightly audit, the audit bot, the audit PR/ledger, the rotation agents, or "what did the audit find". The repo is canonical and the box is a deploy target (baked scripts + host timers).
 ---
 
 # Fluncle audit operator
@@ -10,9 +10,10 @@ Fluncle's codebase keeps itself top-notch through a nightly, domain-cycling audi
 systemd timers on the rave-02 box run full agentic `claude -p` sessions (subscription auth, zero
 OpenRouter tokens):
 
-- **`fluncle-audit`** (01:00 Amsterdam) — audits one domain (`epoch-day mod 7`: design · voice ·
-  architecture · security · surfaces-seo · docs · tests), fixes what's confidently correct, files
-  the high-impact/high-risk findings to `docs/audit-backlog.md`, and opens an `audit/<date>-<domain>` PR.
+- **`fluncle-audit`** (01:00 Amsterdam) — audits one domain (`epoch-day mod 8`: design · voice ·
+  architecture · security · surfaces-seo · docs · tests · db-query-shape), fixes what's confidently
+  correct, files the high-impact/high-risk findings to `docs/audit-backlog.md`, and opens an
+  `audit/<date>-<domain>` PR.
 - **`fluncle-audit-review`** (05:00) — reviews that PR adversarially, fixes small residual nits,
   and **merges** when required CI is green and nothing high-impact remains; otherwise comments and
   leaves it open for you.
@@ -52,6 +53,15 @@ newest run on top, deduped. Promote the ones worth scheduling into `docs/plannin
 set a row's `status` to `done`/`wontfix` when handled — never silently delete
 (status carries the history). A high-impact finding the reviewer held the PR open for is both in the
 ledger and on the open PR.
+
+**Expect hosted-proof rows from `db-query-shape` night.** That domain (the semantic half of the
+DB-scale guardrail — `docs/db-scale-backlog.md`) fixes hoists, rewrites, and projection trims itself,
+but it is forbidden from shipping an index or a stored column: Turso keeps no planner statistics, so
+whether an index is even picked up is an empirical question only a scratch **hosted** Turso DB answers
+(`turso dev` is not evidence — `docs/local-database.md`). Those findings arrive as ledger rows that
+name the proof gate, and running it is yours: `apps/web/scripts/bench-db-scale.ts` against a scratch
+hosted DB, destroyed after. Five backlog items already died at that gate — the audit is told not to
+re-propose them.
 
 **Handle a held PR.** When the reviewer leaves an `audit/*` PR open with a comment, it found a
 high-impact/high-risk problem it wouldn't merge. Read the comment, decide, and merge or close it

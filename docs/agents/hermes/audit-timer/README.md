@@ -3,7 +3,7 @@
 Two repo-checked-in host systemd timers on the rave-02 host that keep the codebase top-notch
 without a human in the loop each night:
 
-- **`fluncle-audit`** (01:00 Amsterdam) — the **auditor**. Picks one domain on a 7-day rotation,
+- **`fluncle-audit`** (01:00 Amsterdam) — the **auditor**. Picks one domain on an 8-day rotation,
   audits it deeply, fixes what's safe, files the rest to `docs/audit-backlog.md`, and opens a PR.
 - **`fluncle-audit-review`** (05:00 Amsterdam) — the **reviewer**. Reviews the auditor's PR
   adversarially: fixes small residual nits and **merges** when CI is green and nothing
@@ -18,13 +18,24 @@ OpenRouter tokens), so the `.service` `TimeoutStartSec` is an hour, not 300s.
 
 ## The rotation
 
-`audit/rotation.ts` maps the day → one domain by `epoch-day mod 7` (stateless, continuous across
+`audit/rotation.ts` maps the day → one domain by `epoch-day mod 8` (stateless, continuous across
 year boundaries, timezone-independent):
 
-`design · voice · architecture · security · surfaces-seo · docs · tests`
+`design · voice · architecture · security · surfaces-seo · docs · tests · db-query-shape`
 
 Each domain has a brief at `audit/prompts/<domain>.md`, appended after the shared operating
 contract `audit/prompts/_preamble.md`. The reviewer uses `audit/prompts/_reviewer.md`.
+
+Adding a domain is three edits in `audit/rotation.ts` + one new file, and `rotation.test.ts` pins
+all three together: append the key to `DOMAINS`, add its `DOMAIN_META` label + blurb, and write
+`audit/prompts/<key>.md`. The driver is domain-agnostic (it resolves the brief by name), so nothing
+in `audit-sweep.sh` or the units changes — the next rotation slot picks the new domain up on its own.
+
+`db-query-shape` is the newest slot (added 2026-07-26): the semantic half of the DB-scale guardrail
+from `docs/db-scale-backlog.md` — it hunts recompute-by-full-scan on the four growing tables
+(`tracks`, `crawl_frontier`, `track_artists`, `findings`-as-anti-join) that the static build-fail net
+`apps/web/src/lib/server/db-query-shape.test.ts` cannot see. It fixes hoists and rewrites; an index
+or a stored column is always filed, gated on an operator-run hosted-Turso proof.
 
 ## The contract (why it's safe to run unattended)
 
