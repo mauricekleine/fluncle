@@ -1511,7 +1511,13 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
   // joins on that, since `log_id` is nullable), which is exactly the set the Turso scan below ranks
   // (`where findings.log_id is not null`); the hydrator re-asserts the Log ID as defense-in-depth.
   // Falls through to the exact Turso scan when off/unprovisioned/down.
-  if (await isSonarLogEnabled()) {
+  const sonarLogFlag = await isSonarLogEnabled();
+  // TEMP sonar-log-debug — remove after diagnosis.
+  console.log("[sonar-dbg] getSimilarFindings", {
+    sonarLogFlag,
+    targetLen: target.length,
+  });
+  if (sonarLogFlag) {
     const matches = await searchSonar({
       excludeIds: [targetRow.track_id],
       filter: { certified: true },

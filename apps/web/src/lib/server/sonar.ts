@@ -128,6 +128,14 @@ export async function searchSonar(request: SonarSearchRequest): Promise<SonarMat
   const baseUrl = await readOptionalEnv("SONAR_BASE_URL");
   const secret = await readOptionalEnv("SONAR_SECRET");
 
+  // TEMP sonar-log-debug — remove after diagnosis.
+  console.log("[sonar-dbg] searchSonar-entry", {
+    hasBaseUrl: Boolean(baseUrl),
+    hasSecret: Boolean(secret),
+    index: request.index,
+    probeLen: request.probes[0]?.length ?? 0,
+  });
+
   // Triple-gate step 2: both env present, or there is no sonar to call — fall back.
   if (!baseUrl || !secret) {
     return null;
