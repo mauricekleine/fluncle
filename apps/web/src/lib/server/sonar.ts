@@ -1,6 +1,7 @@
 // THE SONAR CLIENT — the Worker's thin HTTP door to the `sonar` vector sidecar (apps/sonar),
-// plus the four DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
-// stays on the existing Turso `vector_distance_cos` scan.
+// plus the five DARK FLAGS that decide, per surface, whether a vector lookup goes to sonar or
+// stays on the existing Turso `vector_distance_cos` scan. The architecture doc is
+// docs/vector-serving.md.
 //
 // WHY SONAR EXISTS. The live discovery surfaces (sonic search, "sounds like these artists", "more
 // like this", the /recommendations draft engine) rank by cosine similarity against the whole MuQ
