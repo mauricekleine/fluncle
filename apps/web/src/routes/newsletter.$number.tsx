@@ -4,6 +4,7 @@ import { type EditionDTO, orderedGalaxies } from "@/lib/editions";
 import { logPageUrl, siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
+import { newsletterBreadcrumbsJsonLd } from "@/lib/log-schema";
 import { editionsLabels } from "@/lib/server/edition-email";
 import { getEditionByNumber } from "@/lib/server/editions";
 import { listGalaxyNames } from "@/lib/server/galaxies-map";
@@ -75,6 +76,12 @@ function editionHead(edition: EditionDTO | undefined) {
         headline: edition.subject ?? `Edition #${edition.number}`,
         url: pageUrl,
       }),
+      // The trail, when the edition has a number to name. `number` is nullable on the DTO (a
+      // draft has none), and a breadcrumb whose leaf reads "#undefined" is worse than no
+      // breadcrumb — so an unnumbered edition simply gets no trail.
+      ...(edition.number === undefined
+        ? []
+        : [jsonLdScript(newsletterBreadcrumbsJsonLd(edition.number))]),
     ],
   };
 }

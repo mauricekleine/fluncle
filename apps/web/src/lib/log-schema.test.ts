@@ -6,11 +6,13 @@ import {
   artistBreadcrumbsJsonLd,
   breadcrumbsJsonLd,
   galaxyBreadcrumbsJsonLd,
+  logbookBreadcrumbsJsonLd,
   mixtapeAlbumJsonLd,
   musicAlbumJsonLd,
   musicGroupJsonLd,
   musicPlaylistJsonLd,
   musicRecordingJsonLd,
+  newsletterBreadcrumbsJsonLd,
   recordLabelJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
@@ -471,6 +473,38 @@ describe("breadcrumbsJsonLd", () => {
       "The log",
       "004.7.2I",
     ]);
+  });
+});
+
+describe("the detail-page trails that had none", () => {
+  // A Logbook entry and a newsletter edition are detail pages under a real hub, exactly like a
+  // finding under /log or an artist under /artists, and both shipped without a BreadcrumbList.
+  it("walks Fluncle → Logbook → the sector", () => {
+    const jsonLd = logbookBreadcrumbsJsonLd("036") as {
+      itemListElement: Array<{ item?: string; name: string; position: number }>;
+    };
+
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual([
+      "Fluncle",
+      "Logbook",
+      "Sector 036",
+    ]);
+    // The hub crumb points at the hub; the leaf carries no `item` (it IS this page).
+    expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/logbook");
+    expect(jsonLd.itemListElement[2]?.item).toBeUndefined();
+  });
+
+  it("walks Fluncle → Newsletter → the edition number", () => {
+    const jsonLd = newsletterBreadcrumbsJsonLd(4) as {
+      itemListElement: Array<{ item?: string; name: string }>;
+    };
+
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual([
+      "Fluncle",
+      "Newsletter",
+      "#4",
+    ]);
+    expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/newsletter");
   });
 });
 

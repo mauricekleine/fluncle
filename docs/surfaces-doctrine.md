@@ -32,7 +32,6 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 | `web.logbook`    | `/logbook`    | Fluncle's Logbook — the voyage as a first-person travelogue + `/logbook/:sector`, one sector-day written up                                                                                    | primary   |
 | `web.mixtapes`   | `/mixtapes`   | Fluncle's own DJ mixtapes — each a checkpoint set with an F-marked Log ID                                                                                                                      | primary   |
 | `web.galaxy`     | `/galaxy`     | the Galaxy game — the 8-bit fly-to-every-banger arcade front door (also at `galaxy.fluncle.com`)                                                                                               | primary   |
-| `web.stories`    | `/stories`    | the feed-first Stories surface + `/stories/:logId`, one finding as a Story                                                                                                                     | secondary |
 | `web.about`      | `/about`      | who Fluncle is, what the Galaxy is, how to read a Log ID                                                                                                                                       | secondary |
 | `web.newsletter` | `/newsletter` | the newsletter archive + `/newsletter/:number`, one past edition on the web                                                                                                                    | secondary |
 | `web.docs`       | `/docs`       | the Fumadocs developer docs + `/docs/api`, the embedded Scalar API reference                                                                                                                   | secondary |
@@ -105,8 +104,9 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | --------------------------- | -------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `discovery.llms`            | `/llms.txt`                            | `text/markdown`            | the plain-language map of the Galaxy for LLMs                                                                                     | primary   |
 | `discovery.sitemap`         | `/sitemap.xml`                         | `application/xml`          | the XML sitemap index of every public page                                                                                        | secondary |
-| `discovery.sitemap-shard`   | `/sitemap/$shard`                      | `application/xml`          | one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook URLs, auto-paged        | —         |
+| `discovery.sitemap-shard`   | `/sitemap/$shard`                      | `application/xml`          | one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook / docs URLs, auto-paged | —         |
 | `discovery.llms-full`       | `/llms-full.txt`                       | `text/markdown`            | the entire archive in one ingestible markdown document, every finding                                                             | secondary |
+| `discovery.docs-markdown`   | `/docs.md/:slug`                       | `text/markdown`            | one developer-doc page as clean Markdown, at `/docs.md/<slug>`                                                                    | tertiary  |
 | `discovery.openapi`         | `/api/v1/openapi.json`                 | `application/openapi+json` | the public API as an OpenAPI 3.1 document (admin paths excluded)                                                                  | secondary |
 | `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                               | tertiary  |
 | `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                                                                  | tertiary  |
@@ -242,7 +242,6 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `web.logbook`               | primary   |           |           |           |
 | `web.mixtapes`              | primary   | secondary |           |           |
 | `web.galaxy`                | primary   | secondary |           |           |
-| `web.stories`               | secondary |           |           |           |
 | `web.about`                 | secondary | tertiary  |           |           |
 | `web.newsletter`            | secondary |           |           |           |
 | `web.docs`                  | secondary |           |           |           |
@@ -301,6 +300,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `discovery.api-catalog`     | tertiary  |           |           |           |
 | `discovery.agent-skills`    | tertiary  |           |           |           |
 | `discovery.oembed`          | tertiary  |           |           |           |
+| `discovery.docs-markdown`   | tertiary  |           |           |           |
 | `discovery.cli-installer`   | tertiary  |           |           |           |
 | `mcp.server`                | primary   |           |           |           |
 | `dns.zone`                  | tertiary  |           |           | tertiary  |

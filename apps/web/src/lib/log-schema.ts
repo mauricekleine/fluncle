@@ -870,3 +870,34 @@ export function albumBreadcrumbsJsonLd(name: string): Record<string, unknown> {
     ],
   };
 }
+
+// The last two detail-page families to get a trail. Every other one already carried a
+// `BreadcrumbList` (a finding, an artist, a label, an album, a galaxy); a Logbook entry and a
+// newsletter edition are detail pages under a real hub too, so they get the same node — a
+// crawler reads the trail, and Google renders it in place of the raw URL.
+
+/** Fluncle → Logbook → the sector, e.g. "Sector 036". */
+export function logbookBreadcrumbsJsonLd(sectorLabel: string): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/logbook`, name: "Logbook", position: 2 },
+      { "@type": "ListItem", name: `Sector ${sectorLabel}`, position: 3 },
+    ],
+  };
+}
+
+/** Fluncle → Newsletter → the edition, e.g. "#4". */
+export function newsletterBreadcrumbsJsonLd(number: number): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
+      { "@type": "ListItem", item: `${siteUrl}/newsletter`, name: "Newsletter", position: 2 },
+      { "@type": "ListItem", name: `#${number}`, position: 3 },
+    ],
+  };
+}

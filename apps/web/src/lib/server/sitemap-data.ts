@@ -22,6 +22,7 @@
 // Using the hub reads here would orphan every crawler-discovered page from the sitemap — exactly
 // the invariant this file exists to hold. See docs/album-entity.md.
 
+import { DOCS_PAGES } from "../docs-pages";
 import { formatSector } from "../log-id-shared";
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "../media";
 import { mixtapeCoverUrl } from "../mixtapes";
@@ -29,6 +30,7 @@ import { artistTitleLine, definitionalSentences } from "../log-prose";
 import {
   type SitemapArtist,
   type SitemapBags,
+  type SitemapDoc,
   type SitemapEntity,
   type SitemapGalaxy,
   type SitemapLogbookEntry,
@@ -224,9 +226,14 @@ export async function collectSitemapBags(): Promise<SitemapBags> {
     slug: album.slug,
   }));
 
+  // The developer docs: a static list, not a read (see lib/docs-pages.ts — the MDX collection
+  // cannot be resolved from a module the tests exercise, so a parity test guards the list).
+  const docs: SitemapDoc[] = DOCS_PAGES.map((path) => ({ path }));
+
   return {
     albums,
     artists,
+    docs,
     galaxies,
     labels,
     logbook,

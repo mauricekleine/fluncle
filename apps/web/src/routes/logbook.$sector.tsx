@@ -6,6 +6,7 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
+import { logbookBreadcrumbsJsonLd } from "@/lib/log-schema";
 import { formatSector, parseSectorParam, sectorDateISO } from "@/lib/log-id-shared";
 import {
   type LogbookBlock,
@@ -109,7 +110,7 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
     // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload
     // before it reaches the inline <script> (rendered raw via dangerouslySetInnerHTML),
     // so a `</script>` in the (agent-authored) title/body can't break out.
-    scripts: [jsonLdScript(article)],
+    scripts: [jsonLdScript(article), jsonLdScript(logbookBreadcrumbsJsonLd(sectorLabel))],
   };
 }
 

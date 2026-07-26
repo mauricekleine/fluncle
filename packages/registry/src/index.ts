@@ -284,18 +284,19 @@ export const SURFACES: readonly Surface[] = [
     url: `${SITE}/mix`,
     weights: { web: "secondary" },
   },
-  {
-    exposedContent: [
-      "the feed-first Stories surface — full-bleed findings",
-      "/stories/:logId — one finding as a Story",
-    ],
-    kind: "web_route",
-    name: "web.stories",
-    probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
-    route: "/stories",
-    url: `${SITE}/stories`,
-    weights: { web: "secondary" },
-  },
+  // NB: there is deliberately NO `web.stories` surface any more. `/stories` and
+  // `/stories/:logId` are LEGACY 301 stubs (apps/web/src/routes/stories.index.tsx +
+  // stories.$logId.tsx, both a bare `throw redirect({ statusCode: 301 })` to /log) — the
+  // web-overhaul RFC §8 decision 5 folded the standalone Stories surface into the home feed,
+  // where a story now opens as a MASKED dialog whose displayed URL is `/log/<id>`
+  // (src/route-masking.test.ts pins that contract). So no reader ever sees a `/stories` URL,
+  // and the surface `web.stories` described — "the feed-first Stories surface", probed for a
+  // 200 — has not existed for the life of those redirects: the probe followed the 301 to /log
+  // and reported a healthy `/stories`, and its `web: "secondary"` weight claimed a homepage
+  // prominence the nav model never carried. A 301 is not a surface; the destination is, and
+  // `web.log` already catalogs it. The FEED behind the dialog is still registered, as
+  // `api.stories` (`GET /api/v1/stories`) — that op is live and the mobile Stories pager reads
+  // it. Same carve-out shape as the `/device` and `/embed` notes below.
   {
     exposedContent: ["who Fluncle is, what the Galaxy is, how to read a Log ID"],
     kind: "web_route",
@@ -945,7 +946,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "discovery",
     name: "discovery.sitemap",
     operatorNotes:
-      "A sitemap INDEX, not a flat urlset: the URLs live in children at /sitemap/<kind>-<n>.xml, ONE CHILD PER ENTITY TYPE (pages/findings/artists/labels/albums/galaxies/logbook), each auto-paged under Google's 50,000-URL ceiling so a breach cannot happen rather than merely not having happened yet. robots.txt still names this one URL — a crawler discovers the children from here. Splitting per entity type is also the diagnostic: Search Console reports coverage PER sitemap, so each entity type gets its own submitted/indexed count.",
+      "A sitemap INDEX, not a flat urlset: the URLs live in children at /sitemap/<kind>-<n>.xml, ONE CHILD PER ENTITY TYPE (pages/findings/artists/labels/albums/galaxies/logbook/docs), each auto-paged under Google's 50,000-URL ceiling so a breach cannot happen rather than merely not having happened yet. robots.txt still names this one URL — a crawler discovers the children from here. Splitting per entity type is also the diagnostic: Search Console reports coverage PER sitemap, so each entity type gets its own submitted/indexed count.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/sitemap.xml",
     url: `${SITE}/sitemap.xml`,
@@ -954,7 +955,7 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/xml",
     exposedContent: [
-      "one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook URLs, auto-paged",
+      "one child sitemap, per entity type: the pages / findings / artists / labels / albums / galaxies / logbook / docs URLs, auto-paged",
     ],
     kind: "discovery",
     name: "discovery.sitemap-shard",
@@ -988,6 +989,17 @@ export const SURFACES: readonly Surface[] = [
     route: "/llms.txt",
     url: `${SITE}/llms.txt`,
     weights: { web: "primary" },
+  },
+  {
+    apiFormat: "text/markdown",
+    exposedContent: ["one developer-doc page as clean Markdown, at `/docs.md/<slug>`"],
+    kind: "discovery",
+    name: "discovery.docs-markdown",
+    operatorNotes:
+      'The Markdown twin of every /docs page — front-matter-free, the title as the H1, the description as the lede, then the precompiled body (`includeProcessedMarkdown` in source.config.ts → `page.data.getText("processed")`). It is the endpoint behind the page-actions affordance ("View as Markdown", "Copy page", and the Open in ChatGPT/Claude/Cursor links, which carry this URL so the assistant pulls the clean Markdown), and each /docs page advertises it as `<link rel="alternate" type="text/markdown">` (routes/-docs-head.ts). A machine-FETCHED document rather than a page, so it is catalogued as `discovery` next to llms.txt. No probeConfig: the route is slug-parameterized, so there is no fixed URL to GET-probe (the `discovery.oembed` / `web.artist` precedent) — the post-deploy probe skips it for the same reason it skips /artist/:slug/fresh.xml. Source: apps/web/src/routes/docs[.]md.$.ts (a pure splat, mounted at /docs.md/$).',
+    route: "/docs.md/:slug",
+    url: `${SITE}/docs.md/cli`,
+    weights: { web: "tertiary" },
   },
   {
     apiFormat: "text/markdown",

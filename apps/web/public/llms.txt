@@ -20,8 +20,12 @@ Every finding has a permanent coordinate, a Log ID, written sector.orbit.mark, f
 - [Fluncle on Telegram](https://t.me/fluncle): one banger per post, most nights
 - [The archive](https://www.fluncle.com/): every certified track with the date Fluncle found it
 - [The log](https://www.fluncle.com/log): every finding's coordinate page, one per Log ID (e.g. https://www.fluncle.com/log/004.7.2I)
+- [The Logbook](https://www.fluncle.com/logbook): the voyage written up as a first-person travelogue, one entry per sector-day, with that day's findings inlined. One page per day, at https://www.fluncle.com/logbook/<sector>
 - [Every track](https://www.fluncle.com/tracks): the whole list, newest release first, filterable by release year, tempo, key, and label
+- [What just came out](https://www.fluncle.com/fresh): every drum & bass release from the last 30 days, freshest first, ordered by when the tune came out and not by when Fluncle found it
 - [Mixtapes](https://www.fluncle.com/mixtapes): Fluncle's own DJ mixtapes, each a checkpoint with a Log ID such as https://www.fluncle.com/log/019.F.1A
+- [The observation station](https://www.fluncle.com/radio): Fluncle's spoken field observations on a loop, one finding at a time, with transcripts. Also at https://radio.fluncle.com
+- [The newsletter archive](https://www.fluncle.com/newsletter): every edition Fluncle has sent, one page each at https://www.fluncle.com/newsletter/<number>
 - [About Fluncle](https://www.fluncle.com/about): who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I
 
 ## Artists, labels, and albums
@@ -43,11 +47,17 @@ Each page leads with the findings Fluncle has logged there. An artist, label, or
 
 ## Data
 
-- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings and mixtapes
-- [Fresh releases feed](https://www.fluncle.com/fresh.xml): the newest drum & bass releases over a 30-day window, as RSS (release-dated). Per-entity twins live at /artist/<slug>/fresh.xml and /label/<slug>/fresh.xml: the same feed narrowed to one artist or one label
-- [Tracks API](https://www.fluncle.com/api/v1/tracks): the archive as JSON, cursor-paginated; accepts limit (max 48) and cursor query params
+- [RSS feed](https://www.fluncle.com/rss.xml): the 25 most recent findings and mixtapes. The same list reads as an Atom feed at https://www.fluncle.com/atom.xml and as a JSON Feed at https://www.fluncle.com/feed.json
+- [Fresh releases feed](https://www.fluncle.com/fresh.xml): the newest drum & bass releases over a 30-day window, as RSS (release-dated), and as a JSON Feed at https://www.fluncle.com/fresh.json. Per-entity twins live at /artist/<slug>/fresh.xml and /label/<slug>/fresh.xml: the same feed narrowed to one artist or one label
+- [Mixtape podcast](https://www.fluncle.com/podcast.xml): every published mixtape as a podcast episode, for any podcast app
+- [Live calendar](https://www.fluncle.com/calendar.ics): Fluncle's planned live sessions as an iCalendar feed, plus every past mixtape dated by when it was recorded
+- [Findings API](https://www.fluncle.com/api/v1/findings): the findings and published mixtapes as JSON, newest found first, cursor-paginated; accepts limit (max 48) and cursor query params
+- [Tracks API](https://www.fluncle.com/api/v1/tracks): every track Fluncle holds as JSON, newest release first, one numbered page at a time; accepts page, plus certified=true to narrow to the findings or certified=false for the rest
+- [Fresh API](https://www.fluncle.com/api/v1/tracks/fresh): what just came out, the newest releases over a 30-day window, as JSON; accepts limit (max 100)
+- [Track by id](https://www.fluncle.com/api/v1/tracks/{idOrLogId}): one finding or mixtape by Log ID coordinate or Spotify track id, as JSON
 - [Mixtapes API](https://www.fluncle.com/api/v1/mixtapes): published mixtapes as JSON
 - [Random track](https://www.fluncle.com/api/v1/tracks/random): one pick from the archive, as JSON
+- [Archive search API](https://www.fluncle.com/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON
 
 ## Submit
 
@@ -63,6 +73,7 @@ Each page leads with the findings Fluncle has logged there. An artist, label, or
 - [API catalog](https://www.fluncle.com/.well-known/api-catalog): RFC 9727 linkset
 - [Agent skills](https://www.fluncle.com/.well-known/agent-skills/index.json): the fluncle-api skill, with digest
 - [llms-full.txt](https://www.fluncle.com/llms-full.txt): the entire archive in one document, every finding
+- [The docs](https://www.fluncle.com/docs): the field manual for the machinery, the API, the CLI, the rave terminal, the MCP server, the Log ID, the feeds, and Tor. Every page has a clean Markdown twin at /docs.md/<slug>, and the Getting started page is the bare https://www.fluncle.com/docs.md
 - Markdown homepage: GET https://www.fluncle.com/ with Accept: text/markdown
 
 ## Tools

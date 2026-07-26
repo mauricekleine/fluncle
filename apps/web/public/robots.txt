@@ -4,6 +4,10 @@
 
 User-agent: *
 Allow: /
+# Both admin API mounts: the canonical /api/v1/admin/* (every oRPC admin op plus the
+# admin file routes) and the legacy /api/admin/* alias. Listing only the alias left the
+# canonical path — where the whole admin surface actually lives — uncovered.
+Disallow: /api/v1/admin/
 Disallow: /api/admin/
 Disallow: /admin
 

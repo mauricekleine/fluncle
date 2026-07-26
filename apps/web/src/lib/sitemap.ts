@@ -10,7 +10,7 @@ import { siteUrl } from "./fluncle-links";
 // it cannot see itself approaching, and "we are nowhere near it" is a claim that expires.
 //
 // So `/sitemap.xml` is a `<sitemapindex>` and the URLs live in children, ONE CHILD PER ENTITY
-// TYPE (`pages` / `findings` / `artists` / `labels` / `albums` / `galaxies` / `logbook`) and
+// TYPE (`pages` / `findings` / `artists` / `labels` / `albums` / `galaxies` / `logbook` / `docs`) and
 // each type AUTO-PAGED at {@link SITEMAP_MAX_URLS}. The breach stops being something to watch
 // and becomes something that cannot happen: a type that outgrows a child grows a second child
 // instead.
@@ -47,6 +47,7 @@ export const SITEMAP_KINDS = [
   "albums",
   "galaxies",
   "logbook",
+  "docs",
 ] as const;
 
 export type SitemapKind = (typeof SITEMAP_KINDS)[number];
@@ -113,6 +114,14 @@ export type SitemapGalaxy = {
   slug: string;
 };
 
+// One `/docs/<slug>` developer-doc page — the Fumadocs content tree, one `<loc>` each. Text
+// only (no media), and honestly undated: the MDX carries no per-page timestamp, so a docs
+// entry omits `<lastmod>` rather than inventing a build stamp (the `galaxies` precedent).
+export type SitemapDoc = {
+  /** The page's own path as Fumadocs resolved it, e.g. `/docs/cli`. */
+  path: string;
+};
+
 /**
  * Everything the sitemap knows, gathered once. Both routes read the same bags — the index to
  * count and date its children, a child to slice its own page — so a URL the index promises is
@@ -121,6 +130,8 @@ export type SitemapGalaxy = {
 export type SitemapBags = {
   albums: SitemapEntity[];
   artists: SitemapArtist[];
+  /** The `/docs/<slug>` pages, WITHOUT the `/docs` hub — `pages` owns the hub. */
+  docs: SitemapDoc[];
   galaxies: SitemapGalaxy[];
   labels: SitemapEntity[];
   logbook: SitemapLogbookEntry[];
@@ -138,6 +149,7 @@ export type SitemapBags = {
 export const EMPTY_SITEMAP_BAGS: SitemapBags = {
   albums: [],
   artists: [],
+  docs: [],
   galaxies: [],
   labels: [],
   logbook: [],
@@ -229,6 +241,18 @@ function galaxyEntry(page: SitemapGalaxy): string {
   return `  <url>\n    <loc>${loc}</loc>\n  </url>`;
 }
 
+// A docs entry: just `<loc>`. The path already comes from Fumadocs as URL segments, so it is
+// joined rather than percent-encoded whole (`encodeURIComponent` would eat the slashes of a
+// nested doc); each SEGMENT is encoded instead.
+function docsEntry(page: SitemapDoc): string {
+  const path = page.path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+  return `  <url>\n    <loc>${siteUrl}${path}</loc>\n  </url>`;
+}
+
 /** The freshest ISO date in a bag of maybe-dated pages, or undefined when nothing is dated. */
 function freshest(dates: (string | undefined)[]): string | undefined {
   return dates
@@ -271,6 +295,9 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
 
     case "logbook":
       return bags.logbook.map((page) => logbookEntry(page));
+
+    case "docs":
+      return bags.docs.map((page) => docsEntry(page));
 
     case "pages": {
       const latest = bagLastmod(bags);
@@ -340,8 +367,10 @@ function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
       return freshest(bags.albums.map((page) => page.lastmod));
 
     // The lens page carries no single freshest timestamp (its members date their own /log
-    // entries), so a galaxies child is honestly undated — the tag is simply omitted.
+    // entries), so a galaxies child is honestly undated — the tag is simply omitted. The docs
+    // child is undated for the same reason: the MDX front matter carries no date.
     case "galaxies":
+    case "docs":
       return undefined;
 
     case "logbook":

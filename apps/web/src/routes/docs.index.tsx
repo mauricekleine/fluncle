@@ -1,13 +1,19 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { docsHead } from "./-docs-head";
 import { DocsPage } from "./-docs-page";
 
 // The /docs landing page — renders the landing `index.mdx` through the same
 // pipeline as every other doc.
+//
+// Route options follow TanStack's canonical order (loader before head), which is not
+// alphabetical — so sort-keys is off here.
+// oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/docs/")({
   component: Page,
   loader: async () => {
-    const { path } = await resolveIndex();
+    const page = await resolveIndex();
+    const { path } = page;
     // Warm the compiled MDX before render (same as /docs/$) so navigating back
     // to the index swaps in synchronously without blanking the content column.
     //
@@ -18,8 +24,9 @@ export const Route = createFileRoute("/docs/")({
 
     await preloadDocsPage(path);
 
-    return { path };
+    return page;
   },
+  head: ({ loaderData }) => docsHead(loaderData),
 });
 
 const resolveIndex = createServerFn({ method: "GET" }).handler(async () => {
@@ -29,7 +36,13 @@ const resolveIndex = createServerFn({ method: "GET" }).handler(async () => {
     throw notFound();
   }
 
-  return { path: page.path };
+  // The front matter rides back with the content path — see ./-docs-head.ts.
+  return {
+    description: page.data.description,
+    path: page.path,
+    title: page.data.title,
+    url: page.url,
+  };
 });
 
 function Page() {

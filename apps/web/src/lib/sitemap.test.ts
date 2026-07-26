@@ -60,6 +60,7 @@ describe("the sitemap index", () => {
       "albums-1.xml",
       "galaxies-1.xml",
       "logbook-1.xml",
+      "docs-1.xml",
     ]) {
       expect(xml).not.toContain(empty);
     }
@@ -74,6 +75,7 @@ describe("the sitemap index", () => {
       bags({
         albums: [{ lastmod: "2026-05-01T00:00:00.000Z", slug: "wormhole" }],
         artists: [{ lastmod: "2026-06-01T00:00:00.000Z", slug: "dimension" }],
+        docs: [{ path: "/docs/cli" }],
         galaxies: [{ slug: "deep-roller" }],
         labels: [{ lastmod: "2026-04-01T00:00:00.000Z", slug: "medschool" }],
         logbook: [{ lastmod: "2026-07-04T02:11:00.000Z", sector: "036" }],
@@ -89,6 +91,7 @@ describe("the sitemap index", () => {
       "albums-1.xml",
       "galaxies-1.xml",
       "logbook-1.xml",
+      "docs-1.xml",
     ]) {
       expect(xml).toContain(`<loc>${siteUrl}/sitemap/${child}</loc>`);
     }
@@ -276,6 +279,27 @@ describe("a child sitemap", () => {
     expect(xml).toContain(`<loc>${siteUrl}/docs</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/reach</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
+  });
+
+  it("puts one <loc> per developer-doc page in `docs`, and no <lastmod>", () => {
+    const xml =
+      buildSitemapShardXml(
+        "docs",
+        1,
+        bags({ docs: [{ path: "/docs/cli" }, { path: "/docs/mcp" }] }),
+      ) ?? "";
+
+    expect(xml).toContain(`<loc>${siteUrl}/docs/cli</loc>`);
+    expect(xml).toContain(`<loc>${siteUrl}/docs/mcp</loc>`);
+    // The MDX carries no per-page timestamp, so a docs entry is honestly undated.
+    expect(xml).not.toContain("<lastmod>");
+  });
+
+  it("keeps the /docs hub in `pages` and out of `docs` — one <loc>, one child", () => {
+    const source = bags({ docs: [{ path: "/docs/cli" }] });
+
+    expect(buildSitemapShardXml("pages", 1, source)).toContain(`<loc>${siteUrl}/docs</loc>`);
+    expect(buildSitemapShardXml("docs", 1, source)).not.toContain(`<loc>${siteUrl}/docs</loc>`);
   });
 
   it("puts one <loc> per authored sector-day in `logbook`", () => {

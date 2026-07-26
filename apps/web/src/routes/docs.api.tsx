@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ApiReferenceReact } from "@scalar/api-reference-react";
 import scalarCssUrl from "@scalar/api-reference-react/style.css?url";
+import { siteUrl } from "@/lib/fluncle-links";
 
 // The embedded Scalar API reference, at /docs/api inside the docs hub. It reads
 // the already-served OpenAPI 3.1 document at /api/v1/openapi.json (the same
@@ -23,6 +24,12 @@ export const Route = createFileRoute("/docs/api")({
   component: ApiReference,
   head: () => ({
     links: [
+      // Self-canonical, like every other doc page (see ./-docs-head.ts) — the reference is a
+      // real indexable page, not a variant of /docs.
+      {
+        href: `${siteUrl}/docs/api`,
+        rel: "canonical",
+      },
       {
         href: scalarCssUrl,
         rel: "stylesheet",
