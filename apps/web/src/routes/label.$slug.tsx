@@ -249,10 +249,23 @@ function labelHead(loaderData: LabelPageData | undefined) {
     logoImageUrl ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
+  // THE LEAD IMAGE — the findings band's first cover, this page's LCP candidate and above the fold
+  // on every viewport. Preloaded at the `medium` rung, byte-identical to what FindingsGrid asks for,
+  // so it is a cache hit rather than a second fetch. Same one-preload shape as /artist and /album;
+  // FindingsGrid marks the matching tile non-lazy. The label's own LOGO is deliberately NOT the
+  // candidate here: it is served as a raw untransformed R2 object today, so preloading it would
+  // prioritise the page's heaviest miss instead of its largest paint.
+  const leadImageUrl = albumCoverAtSize(
+    findings.find((finding) => finding.logId)?.albumImageUrl,
+    "medium",
+  );
 
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
+      ...(leadImageUrl
+        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
+        : []),
       // RSS discovery: this label's new-releases feed (the 30-day window, this label only).
       // The bare `/label/<slug>/fresh.xml`, never the paged catalogue URL.
       {

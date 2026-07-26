@@ -161,9 +161,22 @@ function albumHead(loaderData: AlbumPageData | undefined) {
           ? `The tracks on ${name}, ${factClause}, with the artists behind them.`
           : `The tracks on ${name}, with the artists behind them.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
+  // THE LEAD IMAGE — the findings band's first cover, which is this page's LCP candidate and is
+  // already above the fold on every viewport. Preloaded at the `medium` rung, byte-identical to what
+  // FindingsGrid asks for, so it is a cache hit rather than a second fetch. Same one-preload shape
+  // as /artist/<slug> and the homepage cover; FindingsGrid marks the matching tile non-lazy.
+  const leadImageUrl = albumCoverAtSize(
+    findings.find((finding) => finding.logId)?.albumImageUrl,
+    "medium",
+  );
 
   return {
-    links: [{ href: pageUrl, rel: "canonical" }],
+    links: [
+      { href: pageUrl, rel: "canonical" },
+      ...(leadImageUrl
+        ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
+        : []),
+    ],
     meta: [
       { title },
       { content: description, name: "description" },
