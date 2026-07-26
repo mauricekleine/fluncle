@@ -9,6 +9,7 @@ import { edgeCachePolicyFor, withEdgeCache } from "./lib/server/edge-cache";
 import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
+import { withSecurityHeaders } from "./lib/server/security-headers";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
 // The whole custom entry, wrapped once by Sentry so any unhandled throw from
@@ -52,80 +53,96 @@ const NOISE_TRACE_MATCHERS = [
   "/cdn-cgi",
 ];
 const serverEntry = createServerEntry({
+  // The security-header layer wraps the WHOLE dispatch, so every response — a contract
+  // op, an MCP frame, a discovery doc, a cache hit, a cold SSR render, a feed, a media
+  // proxy — leaves through it. It sits OUTSIDE `withEdgeCache` deliberately: a stored
+  // document would otherwise freeze whatever policy was current when it was rendered
+  // (up to 300s fresh + 3600s stale on a detail page), so the headers are stamped on
+  // the way out instead of baked into the cached body. See lib/server/security-headers.ts
+  // for what is applied to what, and for the structural embed-route CSP exemption.
   async fetch(request) {
-    // oRPC owns the API operations it has contracts for, mounted at the single
-    // canonical `/api/v1` prefix. It returns null when no procedure matched (the
-    // `matched: false` fall-through), so every unconverted route — and every
-    // non-API request — flows on to the existing handlers unchanged. This is the
-    // incremental-migration seam; it sits ahead of
-    // the router so a converted route is served by its contract, not the stale
-    // TanStack file route, while the rest of the surface is untouched.
-    const orpc = await handleOrpc(request);
-
-    if (orpc) {
-      return orpc;
-    }
-
-    // The MCP endpoint and its server card (the agent tool surface) sit ahead
-    // of the router, as do the agent discovery surfaces (well-known endpoints,
-    // markdown negotiation); everything else flows through unchanged.
-    // (galaxy.fluncle.com routing lives in the router's rewrite config, not
-    // here — it must run isomorphically or hydration undoes it.)
-    const mcp = await handleMcp(request);
-
-    if (mcp) {
-      return mcp;
-    }
-
-    const discovery = await handleAgentDiscovery(request);
-
-    if (discovery) {
-      return discovery;
-    }
-
-    // Edge-cache the public read surfaces: the log + entity detail pages (purge-backed page
-    // policy) and the hub/index/static/legal/docs pages (60s hub policy). The cold path is
-    // Worker SSR + Turso reads per render — measured at ~1s for `/artists`, ~98% of it server
-    // think — so a short TTL plus stale-while-revalidate (edge-cache.ts) turns the hot path into
-    // a cache hit. Detail pages get an explicit purge from the write paths; a hub rides a 60s
-    // fresh window instead, because it invalidates on any member change (see edge-cache.ts).
-    //
-    // `edgeCachePolicyFor` is the single decision point for WHICH paths are cacheable and under
-    // which TTL (the full cacheable set lives there), including the query-string rule: only a
-    // bare canonical URL is cached — plus a lone `?page=<n>` on the paginated catalogue hubs,
-    // folded into the cache key so page N never collides onto page 1. Every other variant
-    // (`?galaxy=…`, `?story=…`, `?platform=…`, `?page=2&…`) flows through uncached. The guards it
-    // cannot see are enforced here: a plain GET, an HTML-accepting client, and no admin cookie —
-    // an admin must always see live data, and a personalized/non-HTML response must never be
-    // shared-cached.
-    const url = new URL(request.url);
-    const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
-
-    if (
-      cachePolicy &&
-      request.method === "GET" &&
-      !hasAdminCookie(request) &&
-      (request.headers.get("accept")?.includes("text/html") ?? false)
-    ) {
-      const cached = await withEdgeCache(request, async () => handler.fetch(request), cachePolicy);
-
-      // The per-path .onion pill is most valuable here: a Tor user on /log/<id>
-      // should land on that exact finding's onion page. Inert until the onion
-      // exists (appendOnionLocation no-ops on an empty hostname).
-      return appendOnionLocation(cached, url);
-    }
-
-    const response = await handler.fetch(request);
-
-    // The homepage advertises machine-readable surfaces via RFC 8288 Link
-    // headers so agents can discover them without guessing paths; every HTML
-    // response also advertises its onion twin via Onion-Location (per-path,
-    // HTML-only, inert until WEB_ONION_HOSTNAME is set — see agent-discovery.ts).
-    const located = appendOnionLocation(response, url);
-
-    return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
+    return withSecurityHeaders(request, await dispatch(request));
   },
 });
+
+/**
+ * The dispatch spine: oRPC → MCP → agent discovery → the edge-cached/plain TanStack
+ * router. Extracted from the entry's `fetch` so the security-header layer has exactly
+ * one place to wrap, instead of every `return` inside the chain.
+ */
+async function dispatch(request: Request): Promise<Response> {
+  // oRPC owns the API operations it has contracts for, mounted at the single
+  // canonical `/api/v1` prefix. It returns null when no procedure matched (the
+  // `matched: false` fall-through), so every unconverted route — and every
+  // non-API request — flows on to the existing handlers unchanged. This is the
+  // incremental-migration seam; it sits ahead of
+  // the router so a converted route is served by its contract, not the stale
+  // TanStack file route, while the rest of the surface is untouched.
+  const orpc = await handleOrpc(request);
+
+  if (orpc) {
+    return orpc;
+  }
+
+  // The MCP endpoint and its server card (the agent tool surface) sit ahead
+  // of the router, as do the agent discovery surfaces (well-known endpoints,
+  // markdown negotiation); everything else flows through unchanged.
+  // (galaxy.fluncle.com routing lives in the router's rewrite config, not
+  // here — it must run isomorphically or hydration undoes it.)
+  const mcp = await handleMcp(request);
+
+  if (mcp) {
+    return mcp;
+  }
+
+  const discovery = await handleAgentDiscovery(request);
+
+  if (discovery) {
+    return discovery;
+  }
+
+  // Edge-cache the public read surfaces: the log + entity detail pages (purge-backed page
+  // policy) and the hub/index/static/legal/docs pages (60s hub policy). The cold path is
+  // Worker SSR + Turso reads per render — measured at ~1s for `/artists`, ~98% of it server
+  // think — so a short TTL plus stale-while-revalidate (edge-cache.ts) turns the hot path into
+  // a cache hit. Detail pages get an explicit purge from the write paths; a hub rides a 60s
+  // fresh window instead, because it invalidates on any member change (see edge-cache.ts).
+  //
+  // `edgeCachePolicyFor` is the single decision point for WHICH paths are cacheable and under
+  // which TTL (the full cacheable set lives there), including the query-string rule: only a
+  // bare canonical URL is cached — plus a lone `?page=<n>` on the paginated catalogue hubs,
+  // folded into the cache key so page N never collides onto page 1. Every other variant
+  // (`?galaxy=…`, `?story=…`, `?platform=…`, `?page=2&…`) flows through uncached. The guards it
+  // cannot see are enforced here: a plain GET, an HTML-accepting client, and no admin cookie —
+  // an admin must always see live data, and a personalized/non-HTML response must never be
+  // shared-cached.
+  const url = new URL(request.url);
+  const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
+
+  if (
+    cachePolicy &&
+    request.method === "GET" &&
+    !hasAdminCookie(request) &&
+    (request.headers.get("accept")?.includes("text/html") ?? false)
+  ) {
+    const cached = await withEdgeCache(request, async () => handler.fetch(request), cachePolicy);
+
+    // The per-path .onion pill is most valuable here: a Tor user on /log/<id>
+    // should land on that exact finding's onion page. Inert until the onion
+    // exists (appendOnionLocation no-ops on an empty hostname).
+    return appendOnionLocation(cached, url);
+  }
+
+  const response = await handler.fetch(request);
+
+  // The homepage advertises machine-readable surfaces via RFC 8288 Link
+  // headers so agents can discover them without guessing paths; every HTML
+  // response also advertises its onion twin via Onion-Location (per-path,
+  // HTML-only, inert until WEB_ONION_HOSTNAME is set — see agent-discovery.ts).
+  const located = appendOnionLocation(response, url);
+
+  return url.pathname === "/" ? appendAgentLinkHeaders(located) : located;
+}
 
 // Sentry's `withSentry` wraps a Cloudflare `ExportedHandler`, but TanStack's
 // `ServerEntry.fetch(request, opts?)` is not typed as one (its second parameter is

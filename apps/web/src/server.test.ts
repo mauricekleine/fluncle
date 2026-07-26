@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ENFORCED_CSP, REPORT_ONLY_CSP } from "./lib/server/security-headers";
 
 // The production fetch dispatch SPINE (server.ts). server.ts composes the Worker's
 // one fetch handler: `handleOrpc` mounted AHEAD of `handleMcp` AHEAD of
@@ -295,5 +296,139 @@ describe("server.ts shared-cache isolation", () => {
     }
 
     expect(entries.size).toBe(0);
+  });
+
+  // The security headers ride the way OUT, not the cached body — so a cache HIT (a
+  // document rendered and stored minutes ago) must carry today's policy just like a cold
+  // miss. This is the whole reason the layer sits outside `withEdgeCache`: baked into the
+  // stored response, a policy change would only take effect after the stale tail drained.
+  it("stamps the security headers on a cache HIT, not just the cold render", async () => {
+    const miss = await dispatch("https://www.fluncle.com/artists", { accept: "text/html" });
+
+    expect(miss.headers.get("x-edge-cache")).toBe("miss");
+    expect(miss.headers.get("x-content-type-options")).toBe("nosniff");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const hit = await dispatch("https://www.fluncle.com/artists", { accept: "text/html" });
+
+    expect(hit.headers.get("x-edge-cache")).toBe("fresh");
+    expect(hit.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(hit.headers.get("strict-transport-security")).toBe("max-age=31536000");
+    expect(hit.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(hit.headers.get("content-security-policy")).toBe(ENFORCED_CSP);
+    expect(hit.headers.get("content-security-policy-report-only")).toBe(REPORT_ONLY_CSP);
+    // The stored body itself is unstamped — the policy is applied per response, so it is
+    // never frozen at the age of the cached document.
+    expect(
+      entries.get("https://www.fluncle.com/artists")?.headers.get("content-security-policy"),
+    ).toBeNull();
+  });
+});
+
+// The security-header layer, driven through the REAL dispatch spine — the point being
+// that no branch escapes it: an oRPC contract reply, an MCP/discovery frame, a
+// non-HTML file-route emitter, an SSR document, and a route that owns its own CSP all
+// leave through the same wrap. The policy itself is unit-pinned in
+// lib/server/security-headers.test.ts.
+describe("server.ts security headers", () => {
+  it("puts nosniff on the REAL oRPC JSON reply (a contract op never escapes the layer)", async () => {
+    const response = await dispatch("https://www.fluncle.com/api/v1/search?q=a");
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    // A JSON reply is not a document: no framing, referrer or transport header on it.
+    expect(response.headers.get("content-security-policy")).toBeNull();
+    expect(response.headers.get("referrer-policy")).toBeNull();
+    expect(response.headers.get("strict-transport-security")).toBeNull();
+    // The body is untouched by the layer.
+    expect(await response.json()).toEqual({
+      code: "invalid_query",
+      message: "Search query must be at least 2 characters",
+      ok: false,
+    });
+  });
+
+  it("gives an SSR HTML document the full document header set", async () => {
+    const response = await dispatch("https://www.fluncle.com/about", { accept: "text/html" });
+
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("strict-transport-security")).toBe("max-age=31536000");
+    expect(response.headers.get("content-security-policy")).toBe(ENFORCED_CSP);
+    expect(response.headers.get("content-security-policy-report-only")).toBe(REPORT_ONLY_CSP);
+    expect(await response.text()).toBe("router-sentinel");
+  });
+
+  it("leaves a NON-HTML file-route emitter (a feed) with nosniff only — and intact", async () => {
+    // `/feed.xml`, the sitemap, robots, llms.txt, the OG images: file-route carve-outs
+    // that emit non-JSON, non-HTML bodies. Double-setting a document header on one of
+    // these is how a feed reader gets a surprise, so the layer must add nothing but
+    // nosniff and must not disturb the content type or the body.
+    hoisted.routerFetch.mockImplementationOnce(
+      async () =>
+        new Response('<?xml version="1.0"?><rss/>', {
+          headers: { "cache-control": "public, max-age=600", "content-type": "application/xml" },
+        }),
+    );
+
+    const response = await dispatch("https://www.fluncle.com/feed.xml");
+
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("content-type")).toBe("application/xml");
+    expect(response.headers.get("cache-control")).toBe("public, max-age=600");
+    expect(response.headers.get("content-security-policy")).toBeNull();
+    expect(response.headers.get("referrer-policy")).toBeNull();
+    expect(await response.text()).toBe('<?xml version="1.0"?><rss/>');
+  });
+
+  it("keeps the embed route's permissive frame-ancestors — the exemption survives the spine", async () => {
+    // The oEmbed card is the one route that declares its own CSP so third parties may
+    // frame it. Standing in for it here (the real route pulls the log resolver) proves
+    // the spine-level behaviour: an existing CSP is neither replaced by `'self'` nor
+    // shadowed by a report-only header, while nosniff/referrer/HSTS still apply.
+    hoisted.routerFetch.mockImplementationOnce(
+      async () =>
+        new Response("<!doctype html><html>card</html>", {
+          headers: {
+            "content-security-policy": "frame-ancestors *",
+            "content-type": "text/html; charset=utf-8",
+          },
+        }),
+    );
+
+    const response = await dispatch("https://www.fluncle.com/embed/001.A.01", {
+      accept: "text/html",
+    });
+
+    expect(response.headers.get("content-security-policy")).toBe("frame-ancestors *");
+    expect(response.headers.get("content-security-policy-report-only")).toBeNull();
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+  });
+
+  it("stamps an MCP frame and a discovery doc too (no stage bypasses the wrap)", async () => {
+    hoisted.handleMcp.mockResolvedValueOnce(
+      new Response("{}", { headers: { "content-type": "application/json" } }),
+    );
+    const mcp = await dispatch("https://www.fluncle.com/mcp");
+
+    expect(mcp.headers.get("x-content-type-options")).toBe("nosniff");
+
+    hoisted.handleAgentDiscovery.mockResolvedValueOnce(
+      new Response("# skill", { headers: { "content-type": "text/markdown" } }),
+    );
+    const discovery = await dispatch("https://www.fluncle.com/.well-known/agent");
+
+    expect(discovery.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("does NOT pin HSTS on a plain-http request (local dev, and the Tor mirror)", async () => {
+    const response = await dispatch("http://localhost:3000/about", { accept: "text/html" });
+
+    expect(response.headers.get("strict-transport-security")).toBeNull();
+    // Everything else still matches prod, so dev exercises the same policy.
+    expect(response.headers.get("content-security-policy")).toBe(ENFORCED_CSP);
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 });

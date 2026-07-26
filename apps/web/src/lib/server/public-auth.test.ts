@@ -6,6 +6,7 @@ import {
   isAllowedUsername,
   normalizeUsername,
   requireJsonMutation,
+  resolvePublicAuthBaseUrl,
   resolvePublicAuthSecret,
   type PublicUser,
   LAST_SEEN_BUMP_MS,
@@ -107,6 +108,48 @@ describe("public auth hardening", () => {
       "fluncle-dev-auth-secret-change-before-production",
     );
     expect(() => resolvePublicAuthSecret(undefined, false)).toThrow(/BETTER_AUTH_SECRET/);
+  });
+
+  // `baseURL` is what Better Auth derives `useSecureCookies` from, and what it stamps
+  // into every password-reset / verification link, so a silent localhost fallback in a
+  // deployed Worker is a degradation with no symptom. It now fails the same way the
+  // secret does. Both halves are pinned: the ALLOW path (dev keeps its default, and a
+  // provisioned value is honoured verbatim) and the BLOCK path (absent or blank outside
+  // dev throws rather than degrading).
+  it("requires BETTER_AUTH_URL outside local development, and never falls back silently", () => {
+    expect(resolvePublicAuthBaseUrl(undefined, true)).toBe("http://localhost:3000");
+    expect(resolvePublicAuthBaseUrl("https://www.fluncle.com", false)).toBe(
+      "https://www.fluncle.com",
+    );
+    // A trimmable value is honoured (a trailing newline off a secret store is not a fault).
+    expect(resolvePublicAuthBaseUrl("  https://www.fluncle.com\n", false)).toBe(
+      "https://www.fluncle.com",
+    );
+    expect(() => resolvePublicAuthBaseUrl(undefined, false)).toThrow(/BETTER_AUTH_URL/);
+    // A blank/whitespace value is ABSENT, not a valid base URL — the old `||` fallback
+    // treated `""` as falsy but `" "` as a usable URL.
+    expect(() => resolvePublicAuthBaseUrl("", false)).toThrow(/BETTER_AUTH_URL/);
+    expect(() => resolvePublicAuthBaseUrl("   ", false)).toThrow(/BETTER_AUTH_URL/);
+  });
+
+  // Better Auth refuses an untrusted Origin outright, so a request that legitimately
+  // arrives on the apex must not read as an auth failure. Both hosts we own are listed;
+  // the native scheme and the local dev origins are unchanged.
+  it("trusts the apex alongside www so an apex-served auth call is not an auth error", () => {
+    process.env.BETTER_AUTH_SECRET = "test-secret";
+    const options = createPublicAuthOptions(stubDb);
+
+    expect(options.trustedOrigins).toContain("https://fluncle.com");
+    expect(options.trustedOrigins).toContain("https://www.fluncle.com");
+    expect(options.trustedOrigins).toContain("fluncle://");
+    // And nothing beyond the origins we own / the native scheme / local dev.
+    expect(options.trustedOrigins).toEqual([
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://fluncle.com",
+      "https://www.fluncle.com",
+      "fluncle://",
+    ]);
   });
 
   it("requires same-origin metadata and a CSRF token for private mutations", () => {
