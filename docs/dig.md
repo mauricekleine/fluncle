@@ -62,17 +62,33 @@ dig +short latest.dig.fluncle.com TXT \
 
 Everything is environment-configurable (see `apps/dns/config.go`):
 
-| Variable                   | Default                   | Meaning                          |
-| -------------------------- | ------------------------- | -------------------------------- |
-| `FLUNCLE_DNS_LISTEN`       | `:53`                     | UDP+TCP bind address             |
-| `FLUNCLE_DNS_ZONE`         | `dig.fluncle.com`         | Authoritative zone               |
-| `FLUNCLE_DNS_NS`           | `ns1.dig.fluncle.com`     | Nameserver name (SOA/NS)         |
-| `FLUNCLE_DNS_MBOX`         | `hostmaster.fluncle.com`  | SOA admin mailbox                |
-| `FLUNCLE_DNS_API_BASE`     | `https://www.fluncle.com` | API origin                       |
-| `FLUNCLE_DNS_TTL`          | `300`                     | Answer-record TTL (seconds)      |
-| `FLUNCLE_DNS_NEGATIVE_TTL` | `60`                      | SOA minimum / negative-cache TTL |
-| `FLUNCLE_DNS_CACHE_TTL`    | `60`                      | In-memory API cache lifetime (s) |
-| `FLUNCLE_DNS_API_TIMEOUT`  | `5`                       | Upstream API request timeout (s) |
+| Variable                            | Default                   | Meaning                                  |
+| ----------------------------------- | ------------------------- | ---------------------------------------- |
+| `FLUNCLE_DNS_LISTEN`                | `:53`                     | UDP+TCP bind address                     |
+| `FLUNCLE_DNS_ZONE`                  | `dig.fluncle.com`         | Authoritative zone                       |
+| `FLUNCLE_DNS_NS`                    | `ns1.dig.fluncle.com`     | Nameserver name (SOA/NS)                 |
+| `FLUNCLE_DNS_MBOX`                  | `hostmaster.fluncle.com`  | SOA admin mailbox                        |
+| `FLUNCLE_DNS_API_BASE`              | `https://www.fluncle.com` | API origin                               |
+| `FLUNCLE_DNS_TTL`                   | `300`                     | Answer-record TTL (seconds)              |
+| `FLUNCLE_DNS_NEGATIVE_TTL`          | `60`                      | SOA minimum / negative-cache TTL         |
+| `FLUNCLE_DNS_CACHE_TTL`             | `60`                      | In-memory cache lifetime for a HIT (s)   |
+| `FLUNCLE_DNS_NEGATIVE_CACHE_TTL`    | `60`                      | …for a confirmed no-such-finding (s)     |
+| `FLUNCLE_DNS_ERROR_CACHE_TTL`       | `10`                      | …for an upstream failure (s)             |
+| `FLUNCLE_DNS_MAX_UPSTREAM_INFLIGHT` | `4`                       | Concurrent outbound API requests         |
+| `FLUNCLE_DNS_UPSTREAM_QPS`          | `20`                      | Outbound API requests started per second |
+| `FLUNCLE_DNS_MAX_UDP_SIZE`          | `1232`                    | UDP answer ceiling; over it, TC is set   |
+| `FLUNCLE_DNS_API_TIMEOUT`           | `5`                       | Upstream API request timeout (s)         |
+
+### Standing up to a flood
+
+The zone is an open UDP port in front of the public API, so the server never lets one packet become one outbound request. Every lookup VERDICT is cached, not just the hits: a confirmed "no such finding" and an upstream failure are held too, on their own TTLs above, so a random-label flood costs one API request per label per window instead of one per packet. On top of that, outbound requests pass a bounded budget (`FLUNCLE_DNS_MAX_UPSTREAM_INFLIGHT` concurrent, `FLUNCLE_DNS_UPSTREAM_QPS` started per second); past it a cold lookup answers SERVFAIL and makes no request at all, while anything already cached keeps resolving normally. The verdict cache is capped at 4,096 entries, and a real finding may evict a junk verdict to get in.
+
+A finding's TXT payload outgrows the 512-byte plain-DNS ceiling as soon as it carries an album and both URLs, so the server honours a client's EDNS0 buffer (clamped to `FLUNCLE_DNS_MAX_UDP_SIZE` — the DNS-flag-day 1232, which avoids IP fragmentation and keeps the reflection payload small) and sets TC on anything that still does not fit, which is the signal for the client to retry over TCP. TCP answers are never truncated. Verify both halves with `dig`:
+
+```bash
+dig @127.0.0.1 -p 15353 +noedns +ignore <coordinate>.dig.fluncle.com TXT   # tc flag, empty answer
+dig @127.0.0.1 -p 15353 +bufsize=4096 <coordinate>.dig.fluncle.com TXT     # whole answer, no tc
+```
 
 ## Local development
 

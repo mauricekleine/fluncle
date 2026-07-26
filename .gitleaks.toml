@@ -25,6 +25,11 @@ regexes = [
   # verify domain ownership before accepting URL submissions. Public by design — it is
   # not a credential and grants nothing beyond proving we control the served file.
   '''8337c1b41068549f248bf56f1fc465df''',
+  # The Cloudflare cache-purge ZONE id, a plain var in apps/web/wrangler.jsonc. Same
+  # rationale as the R2 account id above: a public zone IDENTIFIER naming which zone to
+  # purge, useless without the Cache-Purge-scoped CF_CACHE_PURGE_TOKEN, which is a
+  # Worker secret and never in the repo.
+  '''93b403e3d6ed70d10cdd2890c557376f''',
   # The two Sentry DSN public keys (browser + Worker), committed in
   # apps/web/src/lib/sentry-config.ts. A DSN is a PUBLIC ingestion identifier — like
   # the R2 account id above, it names where events go but grants nothing on its own
@@ -43,13 +48,18 @@ regexes = [
   # lands a hair over and reddened CI. Allowlist the whole family so the next store doesn't.
   '''fluncle\.[a-z0-9.-]+\.v\d+''',
 ]
+# Only DERIVED trees are excluded — build output, vendored deps, lockfiles. Anything
+# hand-written is scanned, including `.claude/` and `.agents/` (agent defs, hooks, and
+# the installed skill copies: ~500 tracked files that are prose ABOUT operator
+# procedures, which is exactly where a pasted token would land). They were excluded
+# wholesale until this pass; the tree and the full history both scan clean without the
+# exclusion, so there is nothing to trade for the coverage.
 paths = [
   '''(^|/)node_modules/''',
   '''(^|/)\.dev/''',
   '''(^|/)dist/''',
   '''(^|/)\.output/''',
   '''(^|/)\.source/''',
-  '''(^|/)\.(claude|agents)/''',
   '''(^|/)bun\.lock$''',
   # generated Worker types carry the public R2 account id (covered by the regex too)
   '''apps/web/worker-configuration\.d\.ts$''',

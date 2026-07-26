@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -100,6 +100,34 @@ describe("user-token store", () => {
 
     const mode = statSync(userTokenLocation()).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  test("tightens an ALREADY-LOOSE token file back to 0600 on re-login", () => {
+    // `writeFileSync`'s `mode` only applies on create, so a file left
+    // world-readable by an older CLI (or a stray `chmod`) would otherwise keep
+    // handing a live session token to every local account.
+    writeUserToken({ baseUrl: "https://www.fluncle.com", token: "first" });
+    chmodSync(userTokenLocation(), 0o644);
+    expect(statSync(userTokenLocation()).mode & 0o777).toBe(0o644);
+
+    writeUserToken({ baseUrl: "https://www.fluncle.com", token: "second" });
+
+    expect(statSync(userTokenLocation()).mode & 0o777).toBe(0o600);
+    // …and the write still landed.
+    expect(readUserToken()?.token).toBe("second");
+  });
+
+  test("creates the config dir 0700, and tightens a loose existing one", () => {
+    writeUserToken({ baseUrl: "https://www.fluncle.com", token: "user-tok" });
+
+    const dir = join(home, ".config", "fluncle");
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+
+    chmodSync(dir, 0o755);
+    writeUserToken({ baseUrl: "https://www.fluncle.com", token: "user-tok-2" });
+
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(readUserToken()?.token).toBe("user-tok-2");
   });
 
   test("clears the token (logout) and reports whether anything was removed", () => {
