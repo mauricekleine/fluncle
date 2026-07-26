@@ -9,7 +9,6 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { colors } from "@fluncle/tokens";
 import { useCallback, useEffect, useRef } from "react";
 import { HomeLinkHub } from "@/components/home/link-hub";
 import { LiveBanner } from "@/components/home/live-banner";
@@ -17,8 +16,9 @@ import { StoriesDialog } from "@/components/stories/stories-dialog";
 import { TrackRow } from "@/components/track-row";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
-import { fluncleEntityId, fluncleWebsiteId, siteUrl, telegramUrl } from "@/lib/fluncle-links";
-import { fluncleAsciiLogo, fluncleDescription } from "@/lib/identity";
+import { printConsoleGreeting } from "@/lib/console-greeting";
+import { fluncleEntityId, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
+import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { type FeedItem } from "@/lib/mixtapes";
 import { fetchTracks, type TracksResponse } from "@/lib/tracks";
@@ -235,14 +235,8 @@ function HomePage() {
   const live = initialPage.live;
 
   useEffect(() => {
-    console.log(
-      `%c${fluncleAsciiLogo}`,
-      `font: 800 10px ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1; color: ${colors.eclipseGold};`,
-    );
-    console.log(
-      `%cFresh bangers, most nights. Tune in, junglist → ${telegramUrl}`,
-      `color: ${colors.stardust}; font: 13px Oxanium, sans-serif;`,
-    );
+    // The wordmark + Telegram invite Fluncle prints for anyone who opens devtools.
+    printConsoleGreeting();
     // WebMCP: hand agent-driving browsers the same controls humans get.
     registerWebMcpTools();
   }, []);

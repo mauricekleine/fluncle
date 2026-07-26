@@ -29,6 +29,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { RecordingCueRail } from "@/components/admin/recording-cue-rail";
 import { StudioCropFrame } from "@/components/admin/studio-crop-frame";
@@ -97,12 +99,6 @@ const CLIP_LENGTH_PRESETS_MS = [15_000, 30_000, 60_000] as const;
 const DEFAULT_CLIP_LENGTH_MS = 15_000;
 // A clip needs a real window; `create_clip` rejects out ≤ in. Guard a tiny floor.
 const MIN_CLIP_MS = 1_000;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Resolve the recording in-process (a createServerFn calling the server helper directly,
 // the pattern the clip library uses — no client fetch, no CORS). A missing recording
@@ -1582,22 +1578,6 @@ function isOptionalHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }
 
 function useAutoNotice(): readonly [

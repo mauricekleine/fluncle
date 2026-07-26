@@ -1,27 +1,19 @@
 import { BookmarkSimpleIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
+import { authedJsonFetch } from "@/lib/authed-fetch";
 
 export function SaveFindingButton({ logId, trackId }: { logId: string; trackId: string }) {
   const [label, setLabel] = useState("Save finding");
 
   async function save() {
-    const tokenResponse = await fetch("/api/v1/me/csrf");
-
-    if (tokenResponse.status === 401) {
-      window.location.href = "/account";
-      return;
-    }
-
-    const { csrfToken } = (await tokenResponse.json()) as { csrfToken?: string };
-    const response = await fetch("/api/v1/me/saved-findings", {
+    // `undefined` means the session lapsed and the helper already sent them to sign in.
+    const response = await authedJsonFetch("/api/v1/me/saved-findings", {
       body: JSON.stringify({ logId, trackId }),
-      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken ?? "" },
       method: "POST",
     });
 
-    if (response.status === 401) {
-      window.location.href = "/account";
+    if (!response) {
       return;
     }
 

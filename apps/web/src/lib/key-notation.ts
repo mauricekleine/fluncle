@@ -17,6 +17,7 @@
 // first render and there is no hydration mismatch.
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { csrfJsonHeaders, fetchCsrfToken } from "./authed-fetch";
 import { keyToCamelotCode } from "./key-camelot";
 
 export const KEY_NOTATIONS = ["scales", "camelot"] as const;
@@ -123,17 +124,17 @@ function asNotation(value: unknown): KeyNotation | null {
  */
 async function pushPreferenceToAccount(next: KeyNotation): Promise<void> {
   try {
-    const tokenResponse = await fetch("/api/v1/me/csrf");
+    // `ignore`: a lapsed session must NOT navigate away from whatever page the user just
+    // flipped the notation on — the device value already holds, so we simply stop.
+    const csrfToken = await fetchCsrfToken({ onLapsedSession: "ignore" });
 
-    if (!tokenResponse.ok) {
+    if (csrfToken === undefined) {
       return;
     }
 
-    const { csrfToken } = (await tokenResponse.json()) as { csrfToken?: string };
-
     await fetch("/api/v1/me/preferences", {
       body: JSON.stringify({ keyNotation: next }),
-      headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken ?? "" },
+      headers: csrfJsonHeaders(csrfToken),
       method: "PATCH",
     });
   } catch {

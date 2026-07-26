@@ -9,6 +9,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useState } from "react";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { FindingIdentity } from "@/components/admin/finding-identity";
 import { ObjectList, ObjectRow } from "@/components/admin/object-row";
@@ -90,12 +92,6 @@ type RendersData = {
   queueMore: boolean;
   shipped: BoardTrackListItem[];
 };
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 const fetchRenders = createServerFn({ method: "GET" }).handler(async (): Promise<RendersData> => {
   if (!(await isAdminRequest())) {
@@ -668,22 +664,6 @@ async function postVideoAction(trackId: string, action: "purge" | "requeue"): Pr
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }
 
 // "3h" / "12m" / "2d" elapsed since `fromIso` (whole units, terse per VOICE.md's

@@ -30,6 +30,7 @@ import {
   siX,
   siYoutube,
 } from "simple-icons";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { BrandIcon } from "@/components/brand-icon";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -97,12 +98,6 @@ const ARTISTS_FRESH_KEY = ["admin", "artists", "fresh"] as const;
 // The /admin attention queue's key — a confirm/add here changes an artist-review row, so
 // invalidate it too and the dashboard's count stays honest without waiting on a refetch.
 const ATTENTION_KEY = ["admin", "attention"] as const;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // One page of the name-sorted artist board — a keyset slice, optionally name-filtered. The
 // loader calls it with no cursor for page 1; the infinite query pages by the returned cursor.

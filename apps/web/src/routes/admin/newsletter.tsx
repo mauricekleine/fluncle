@@ -9,6 +9,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useId, useState } from "react";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import {
   AlertDialog,
@@ -48,12 +50,6 @@ type EditionsLoaderData = {
 };
 
 const EDITIONS_KEY = ["admin", "editions"] as const;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 const fetchEditions = createServerFn({ method: "GET" }).handler(
   async (): Promise<EditionsLoaderData> => {
@@ -513,17 +509,4 @@ function useAutoNotice(): readonly [
     return () => window.clearTimeout(timer);
   }, [value]);
   return [value, setValue] as const;
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-  const text = await response.text().catch(() => "");
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

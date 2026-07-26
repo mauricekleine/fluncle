@@ -1,8 +1,7 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
+import { createFileRoute } from "@tanstack/react-router";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ChatConversation } from "@/components/chat/chat-conversation";
-import { isAdminRequest } from "@/lib/server/admin-auth";
 
 // ── ChatDnB — the workbench (the admin station) ─────────────────────────────────────────
 //
@@ -12,12 +11,6 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 // one the public /chat door renders; this route only wraps it in the AdminShell chrome and
 // points the transport at the admin-gated POST. Admin auth is the grant cookie, so no CSRF
 // token rides the transport here (the public door's session gate is the one that needs it).
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 export const Route = createFileRoute("/admin/chat")({
   beforeLoad: () => ensureAdmin(),

@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
 import {
@@ -83,12 +84,6 @@ function formatDelta(delta: number): string {
 
   return "0";
 }
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // The one-call read, server-side + in-process (no HTTP, no CORS), re-checking the grant. Computes
 // the live block fresh on every call — the loader and the focus-refetch both land here.

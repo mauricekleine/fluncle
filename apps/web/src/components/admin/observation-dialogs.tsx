@@ -19,11 +19,13 @@ import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 //   Observation — Fluncle's spoken `observation.mp3`. The dialog plays it from its
 //                 R2 url.
 //
-// TODO(backfill): neither dialog generates anything. Authoring + rendering an
-// observation needs an agent-authored, voice-gated script posted to the
-// `observe` endpoint (the agent holds copywriting-fluncle). When that
-// operator-trigger path exists, wire a "generate" action in here; for now the
-// board surfaces status + a view.
+// Neither dialog GENERATES anything, and that is now a choice rather than a gap. The
+// trigger path exists: `observe_track` (POST /admin/tracks/{trackId}/observe, admin
+// tier — the voice gate, the Cartesia render, and the R2 write all live server-side),
+// driven today by `fluncle admin tracks observe <id>` and the `fluncle-observation`
+// box timer. Wiring a "generate" button into these dialogs is DEFERRED to the admin
+// overhaul, which decides where a per-row action belongs across every station at once
+// (docs/admin-shell.md § placement contract) rather than growing one here first.
 
 type ContextDialogProps = {
   /** The context-note text once fetched ("" = still absent / not yet fetched). */

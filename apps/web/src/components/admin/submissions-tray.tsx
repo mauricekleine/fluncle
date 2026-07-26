@@ -20,6 +20,7 @@ import {
   SheetTitle,
 } from "@fluncle/ui/components/sheet";
 import { Skeleton } from "@fluncle/ui/components/skeleton";
+import { readError } from "@/lib/read-error";
 import { formatDate } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
@@ -330,20 +331,4 @@ async function publishSubmission(submission: Submission): Promise<void> {
       ? body.message
       : await readError(response),
   );
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

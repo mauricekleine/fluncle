@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
 import { isAdminRequest } from "@/lib/server/admin-auth";
@@ -53,12 +54,6 @@ function formatVelocity(perDay: number): string {
 
   return "flat";
 }
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // The one-call read, server-side + in-process (no HTTP, no CORS), re-checking the grant. The
 // loader and the focus-refetch both land here.

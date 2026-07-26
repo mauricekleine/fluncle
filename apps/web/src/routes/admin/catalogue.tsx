@@ -19,6 +19,8 @@ import {
   type CatalogueLens,
   type CatalogueMatch,
 } from "@fluncle/contracts";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import {
   AlertDialog,
@@ -93,12 +95,6 @@ type CataloguePayload = {
 };
 
 type CatalogueSearch = { lens: CatalogueLens };
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 const fetchCatalogue = createServerFn({ method: "GET" })
   .inputValidator((lens: CatalogueLens) => lens)
@@ -1278,17 +1274,4 @@ async function putCaptureBudget(input: {
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const data = (await response.clone().json()) as { message?: unknown };
-    if (typeof data.message === "string" && data.message.trim()) {
-      return data.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-  const text = await response.text().catch(() => "");
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

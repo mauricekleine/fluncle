@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@fluncle/ui/components/dialog";
+import { readError } from "@/lib/read-error";
 import { beatportSearchUrl } from "@/lib/beatport";
 import { albumCoverAtSize } from "@/lib/media";
 import { mixtapeDisplayTitle } from "@/lib/mixtapes";
@@ -311,17 +312,4 @@ async function appendCue(plan: PlanTarget, track: DialogTrack): Promise<void> {
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-  const text = await response.text().catch(() => "");
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

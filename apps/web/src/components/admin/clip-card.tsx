@@ -14,6 +14,7 @@ import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { readError } from "@/lib/read-error";
 import { InstagramIcon, TiktokIcon } from "@/components/platform-icons";
 import { Button } from "@fluncle/ui/components/button";
 import { Checkbox } from "@fluncle/ui/components/checkbox";
@@ -717,22 +718,4 @@ function ClipDownloads({ downloads, title }: { downloads: ClipDownloadUrls; titl
       </Button>
     </>
   );
-}
-
-// Extract a human error from a failed clip request (mirrors the library route's reader):
-// prefer a JSON `message`, fall back to text/status.
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

@@ -43,6 +43,8 @@ import {
   useState,
 } from "react";
 import { siBeatport } from "simple-icons";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { FindingIdentity, TrackMetaChips } from "@/components/admin/finding-identity";
 import { BrandIcon } from "@/components/brand-icon";
@@ -109,12 +111,6 @@ type MemberRef = {
 // A plan and its hydrated findings — the loader resolves each cue's `finding_id` to a live
 // finding so the builder renders rich rows (cover, BPM, key) after a reload.
 type PlanView = { members: MemberRef[]; recording: RecordingDTO };
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Every plan with its findings hydrated, every take (to attach + list), and the per-take
 // clip count. In-process: no HTTP, no CORS. Cues carry only text + a `finding_id`, so this
@@ -1084,19 +1080,6 @@ function lastSavedPlanned(signature: string): string {
 function lastSavedMembers(signature: string): string {
   const [, membersSig] = JSON.parse(signature) as [string, string];
   return membersSig;
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-  const text = await response.text().catch(() => "");
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }
 
 async function searchAdminTracks(q: string): Promise<TrackListItem[]> {

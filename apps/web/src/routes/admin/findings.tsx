@@ -10,6 +10,7 @@ import {
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AddFindingDialog } from "@/components/admin/add-finding-dialog";
 import {
   AddToPlanDialog,
@@ -161,12 +162,6 @@ function mixtapeStateOf(row: BoardRow): MixState {
   }
   return row.plans.length > 0 ? "plan" : "open";
 }
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Every admin server function re-checks the grant — the page guard only protects
 // the render, not the RPC behind a server function.

@@ -28,6 +28,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { usePublish } from "@/components/admin/use-publish";
 import { InstagramIcon, MixcloudIcon, TiktokIcon, YoutubeIcon } from "@/components/platform-icons";
@@ -82,12 +83,6 @@ const QUEUE_KEY = ["admin", "attention"] as const;
 // unused key (the patch no-ops on the absent cache) and instead invalidate
 // QUEUE_KEY ourselves so the row re-derives from the server.
 const DISTRIBUTE_KEY = ["admin", "attention-distribute"] as const;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Every admin server function re-checks the grant — the page guard only protects
 // the render, not the RPC behind a server function.

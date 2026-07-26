@@ -14,6 +14,7 @@ import {
 } from "@fluncle/ui/components/dialog";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
+import { csrfJsonHeaders, fetchCsrfToken } from "@/lib/authed-fetch";
 import { buildSaveSetBody, canSaveSet } from "@/lib/mix-save";
 
 // The quiet secondary in the plate masthead: a signed-in user names the chain they built and
@@ -82,16 +83,16 @@ export function SaveSetDialog({
     setBusy(true);
 
     try {
-      const tokenResponse = await fetch("/api/v1/me/csrf");
+      // ONE token for the whole save, because the PATCH may fall back to a POST below.
+      // `undefined` means the session lapsed between the check and the click and the
+      // helper already sent them to sign in.
+      const csrfToken = await fetchCsrfToken();
 
-      if (tokenResponse.status === 401) {
-        // The session lapsed between the check and the click — send them to sign in.
-        window.location.href = "/account";
+      if (csrfToken === undefined) {
         return;
       }
 
-      const { csrfToken } = (await tokenResponse.json()) as { csrfToken?: string };
-      const headers = { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken ?? "" };
+      const headers = csrfJsonHeaders(csrfToken);
       const body = JSON.stringify(buildSaveSetBody(name, serializedSet, serializedTaste));
       const savedName = name.trim();
 

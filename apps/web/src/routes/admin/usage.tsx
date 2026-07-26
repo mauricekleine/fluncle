@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode } from "react";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
 import { albumCoverAtSize } from "@/lib/media";
@@ -43,12 +44,6 @@ const STEP_LABELS: Record<string, string> = {
   "studio-clip": "Studio clips",
   video: "Video render",
 };
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // The two aggregations, server-side + in-process (no HTTP, no CORS).
 const fetchUsage = createServerFn({ method: "GET" }).handler(async (): Promise<CostInsights> => {

@@ -10,6 +10,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useState } from "react";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { PromptDiff } from "@/components/admin/prompt-diff";
@@ -75,12 +77,6 @@ const PROMPTS_KEY = ["admin", "prompts"] as const;
 
 /** The operator's "why", capped by the contract (`update_prompt`). */
 const NOTE_MAX_LENGTH = 280;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // One read feeds the whole station: every prompt, its baked default, the body running now, and
 // its full history. The table is a handful of rows, so a per-prompt fetch would buy nothing.
@@ -574,19 +570,4 @@ async function updatePrompt(slug: string, body: string, note?: string): Promise<
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const data = (await response.clone().json()) as { message?: unknown };
-    if (typeof data.message === "string" && data.message.trim()) {
-      return data.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

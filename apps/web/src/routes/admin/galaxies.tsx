@@ -14,6 +14,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { type FormEvent, type ReactNode, useCallback, useMemo, useState } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import {
   AlertDialog,
@@ -66,12 +68,6 @@ import { cn } from "@/lib/utils";
 const MEMBER_CAP = 24;
 
 const GALAXIES_KEY = ["admin", "galaxies"] as const;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 const fetchGalaxies = createServerFn({ method: "GET" }).handler(
   async (): Promise<GalaxyAdminWithMembers[]> => {
@@ -562,17 +558,4 @@ async function patchGalaxy(
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const data = (await response.clone().json()) as { message?: unknown };
-    if (typeof data.message === "string" && data.message.trim()) {
-      return data.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-  const text = await response.text().catch(() => "");
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

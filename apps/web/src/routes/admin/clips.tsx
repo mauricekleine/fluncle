@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { type ClipDrip, ClipCard } from "@/components/admin/clip-card";
 import { Button } from "@fluncle/ui/components/button";
@@ -55,12 +57,6 @@ import {
 // createServerFn calling the server helpers in-process) — not a cross-origin client fetch.
 // Filtering + newest-first sorting then run client-side over the loaded set (the backlog is
 // small; instant, no refetch).
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Every clip, newest-first. Server-side: in-process, no HTTP, no CORS.
 const fetchAllClips = createServerFn({ method: "GET" }).handler(async (): Promise<ClipDTO[]> => {
@@ -526,22 +522,6 @@ function EmptyLibrary() {
       </EmptyHeader>
     </Empty>
   );
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }
 
 // A transient notice that clears itself after 5s (the editor's pattern).

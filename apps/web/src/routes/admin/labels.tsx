@@ -14,6 +14,8 @@ import {
   type LabelAliasCandidate,
   type LabelSeedState,
 } from "@fluncle/contracts";
+import { readError } from "@/lib/read-error";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { Button } from "@fluncle/ui/components/button";
@@ -94,12 +96,6 @@ type LabelsBoard = {
   enabled: LabelsAdminPage;
   undecided: LabelsAdminPage;
 };
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // The loader's ONE round-trip: page 1 of each of the three sections plus the (already bounded)
 // alias candidates, in parallel. Each section then hydrates its own infinite query from its slice.
@@ -564,17 +560,4 @@ async function patchLabel(id: string, seedState: LabelSeedState): Promise<void> 
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-async function readError(response: Response): Promise<string> {
-  try {
-    const data = (await response.clone().json()) as { message?: unknown };
-    if (typeof data.message === "string" && data.message.trim()) {
-      return data.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-  const text = await response.text().catch(() => "");
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

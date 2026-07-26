@@ -4,6 +4,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ComponentType } from "react";
 import { siSoundcloud } from "simple-icons";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { BrandIcon } from "@/components/brand-icon";
@@ -26,12 +27,6 @@ import { listMixtapes } from "@/lib/server/mixtapes";
 // while its assets upload, and `hydrateMembers` so each row's tracklist count is honest. Reads
 // only — the distribution control plane (YouTube/Mixcloud finalize, cues, announce) lives on the
 // operator-tier oRPC ops the fluncle-mixtapes skill drives.
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Every minted mixtape, newest first (the helper orders by added/created desc). Server-side:
 // in-process, no HTTP, no CORS.

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { UploadRecordingDialog } from "@/components/admin/upload-recording-dialog";
@@ -26,12 +27,6 @@ import { listRecordings } from "@/lib/server/recordings";
 // first clip). Reads `list_recordings` + `list_clips` (the latter only for the per-recording
 // clip counts), both SERVER-SIDE in-process (a createServerFn calling the server helpers) —
 // not a cross-origin client fetch.
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // Every recording (the index rows + the count denominators).
 const fetchRecordings = createServerFn({ method: "GET" }).handler(

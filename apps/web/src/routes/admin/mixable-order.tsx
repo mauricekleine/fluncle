@@ -1,18 +1,17 @@
 import { WaveTriangleIcon } from "@phosphor-icons/react";
 import { useMutation } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { type MixReason } from "@fluncle/contracts";
 import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 import { Textarea } from "@fluncle/ui/components/textarea";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { isLogId } from "@/lib/log-id";
 import { mixReasonLabel } from "@/lib/mix-set";
-import { isAdminRequest } from "@/lib/server/admin-auth";
 
 // The dream-weaver (RFC mixability-engine, Unit 3): the operator pastes a pool of Log
 // IDs, gets a smooth PROPOSED order, and copies it into Rekordbox. THIN by design
@@ -20,12 +19,13 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 // ObjectList/ObjectRow. It PROPOSES, never publishes: `recordings promote` stays the
 // only way a mixtape is minted. The output is a smoothness-optimized chain, NOT an
 // energy-shaped set — the copy says so.
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
+//
+// A DELIBERATE deviation from the admin-route default (the loader-seeded react-query
+// hybrid, AGENTS.md § Architecture): this route has NO loader and NO seeded query. It
+// is a COMPUTE-ON-DEMAND tool, not a board — there is no resting data to hydrate,
+// because nothing exists until the operator pastes a pool and presses the button. The
+// one server call is therefore a `useMutation` keyed on that press, and an SSR seed
+// would have nothing to seed. The guard is the only thing `beforeLoad` does.
 
 export const Route = createFileRoute("/admin/mixable-order")({
   beforeLoad: () => ensureAdmin(),

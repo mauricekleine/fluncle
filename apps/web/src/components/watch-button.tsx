@@ -2,6 +2,7 @@ import { EyeIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { authClient } from "@/lib/auth-client";
+import { authedJsonFetch } from "@/lib/authed-fetch";
 
 // The quiet secondary in an artist/label masthead: a signed-in user watches the entity so a
 // future digest can reach for it (that digest is deferred — this only SAVES the watch).
@@ -89,40 +90,18 @@ export function WatchButton({
     };
   }, [entityId, kind, userId]);
 
-  async function csrf(): Promise<string | undefined> {
-    const res = await fetch("/api/v1/me/csrf");
-
-    if (res.status === 401) {
-      // The session lapsed between the mount check and the click — send them to sign in.
-      window.location.href = "/account";
-
-      return undefined;
-    }
-
-    const body = (await res.json()) as { csrfToken?: string };
-
-    return body.csrfToken ?? "";
-  }
-
   async function watch() {
     setBusy(true);
 
     try {
-      const token = await csrf();
-
-      if (token === undefined) {
-        return;
-      }
-
-      const response = await fetch("/api/v1/me/watches", {
+      // A lapsed session — on the token mint or the write itself — resolves undefined,
+      // the helper having already sent them to sign in.
+      const response = await authedJsonFetch("/api/v1/me/watches", {
         body: JSON.stringify({ entityId, kind }),
-        headers: { "Content-Type": "application/json", "x-fluncle-csrf": token },
         method: "POST",
       });
 
-      if (response.status === 401) {
-        window.location.href = "/account";
-
+      if (!response) {
         return;
       }
 
@@ -145,20 +124,11 @@ export function WatchButton({
     setBusy(true);
 
     try {
-      const token = await csrf();
-
-      if (token === undefined) {
-        return;
-      }
-
-      const response = await fetch(`/api/v1/me/watches/${watchId}`, {
-        headers: { "Content-Type": "application/json", "x-fluncle-csrf": token },
+      const response = await authedJsonFetch(`/api/v1/me/watches/${watchId}`, {
         method: "DELETE",
       });
 
-      if (response.status === 401) {
-        window.location.href = "/account";
-
+      if (!response) {
         return;
       }
 

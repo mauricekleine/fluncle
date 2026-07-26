@@ -49,6 +49,7 @@ import {
   SelectValue,
 } from "@fluncle/ui/components/select";
 import { Textarea } from "@fluncle/ui/components/textarea";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
 import { formatDate } from "@/lib/format";
@@ -125,12 +126,6 @@ const CADENCE_SUFFIX: Record<Cadence, string> = {
 };
 
 const SUBSCRIPTIONS_KEY = ["admin", "subscriptions"] as const;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 // The whole ledger, newest-updated first. Server-side: in-process, no HTTP, no CORS.
 const fetchSubscriptions = createServerFn({ method: "GET" }).handler(

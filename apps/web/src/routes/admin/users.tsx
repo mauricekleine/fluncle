@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type UserAdminItem } from "@fluncle/contracts";
+import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/admin/object-row";
 import { formatDate } from "@/lib/format";
@@ -21,12 +22,6 @@ import { listAdminUsers } from "@/lib/server/users";
 // many findings and sets an account has saved, and whether it has touched the Galaxy.
 
 const USERS_KEY = ["admin", "users"] as const;
-
-const ensureAdmin = createServerFn({ method: "GET" }).handler(async () => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
-});
 
 const fetchUsers = createServerFn({ method: "GET" }).handler(async (): Promise<UserAdminItem[]> => {
   if (!(await isAdminRequest())) {
