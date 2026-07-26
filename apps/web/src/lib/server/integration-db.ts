@@ -13,6 +13,7 @@ import { type Client, createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
+import { backfillHubCounts } from "../../../scripts/backfill-hub-counts";
 import { ensureSearchIndex } from "../../db/search-index";
 
 const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.url));
@@ -34,6 +35,25 @@ export async function createIntegrationDb(): Promise<Client> {
   await ensureSearchIndex(client);
 
   return client;
+}
+
+/**
+ * Bring the MAINTAINED hub counters (`renderable_track_count` / `certified_finding_count` on
+ * labels/albums/artists — keystone 2) into agreement with the edges a fixture just seeded.
+ *
+ * In production those two integers are moved as DELTAS by the write paths (lib/server/hub-counts.ts),
+ * and every entity-hub read — the `/labels` //albums //artists indexes, the API + MCP list ops, the
+ * sitemap rows, search's entity gate, the three bio worklists — now reads them instead of grouping
+ * `tracks` / `track_artists`. A fixture that inserts rows straight into those tables bypasses the
+ * delta writers, so its world would be internally inconsistent: edges present, counters at the DDL
+ * default of 0. Call this after seeding and the fixture matches what production holds.
+ *
+ * It is the REAL deploy backfill (`scripts/backfill-hub-counts.ts`, forced past its once-only guard)
+ * rather than a re-statement of the arithmetic, so a test's counters can never define "certified"
+ * differently from the write side.
+ */
+export async function syncHubCounts(client: Client): Promise<void> {
+  await backfillHubCounts(client, { force: true });
 }
 
 /** Returns the sorted list of every row's value for a single text column. */

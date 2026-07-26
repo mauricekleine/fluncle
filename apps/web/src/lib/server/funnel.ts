@@ -109,8 +109,9 @@ export type CatalogueSnapshotRow = CatalogueSnapshotCounts & {
  *   - `tracks` is the `/tracks` hub's own total (`countTracksHub({})` — every publicly-rendered row,
  *     findings + catalogue), so it matches the hub's masthead by construction.
  *   - `artists`/`albums`/`labels` are the INDEXABLE sets — entities whose page clears the
- *     thin-content floor (`HUB_RENDERABLE >= ARTIST/ALBUM/LABEL_INDEX_MIN…`), the exact rows the
- *     sitemap exposes (`countIndexableHubEntities`, reusing each hub's own scan + floor).
+ *     thin-content floor (the maintained `renderable_track_count >= ARTIST/ALBUM/LABEL_INDEX_MIN…`),
+ *     the exact rows the sitemap exposes (`countIndexableHubEntities`, reusing each hub's own table +
+ *     floor, so the card and the sitemap read the same stored column).
  * Live-only, like the stages/queues: computed on every load, never persisted to the snapshot series.
  */
 export type PublicSurfaceCounts = {

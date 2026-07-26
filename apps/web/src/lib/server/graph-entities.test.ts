@@ -33,7 +33,7 @@ import {
 } from "./albums";
 import { listArtistsHubPage, listArtistsMissingBio, upsertTrackArtists } from "./artists";
 import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
-import { createIntegrationDb } from "./integration-db";
+import { createIntegrationDb, syncHubCounts } from "./integration-db";
 import { getGraphPreview } from "./graph-preview";
 import {
   getLabelBySlug,
@@ -88,13 +88,27 @@ async function seedTrack(options: {
               (track_id, log_id, added_at, added_to_spotify, posted_to_telegram)
             values (?, ?, ?, 0, 0)`,
     });
+    // A certified track HAS a findings row, so keystone 1's maintained discriminator is 0 — the flip
+    // `publishTrack` / `certifyExistingTrack` perform. It is what the maintained hub counters read
+    // `certified` off (hub-counts.ts), so without it a linked finding would count as catalogue and
+    // its entity would read UNLIT on the hub.
+    await db.execute({
+      args: [options.trackId],
+      sql: `update tracks set is_catalogue = 0 where track_id = ?`,
+    });
   }
 }
 
-/** Run the reconciles: the labels deploy backfill, then the one-off album-graph catch-up. */
+/**
+ * Run the reconciles: the labels deploy backfill, then the one-off album-graph catch-up, then the
+ * hub-counts seed — the same order `db:backfill` runs them in on a deploy. The two link steps stamp
+ * `label_id` / `album_id` straight onto `tracks` without moving the maintained counters, so the
+ * counts pass has to follow them or the entity hubs would read a world with edges and no counts.
+ */
 async function reconcile(): Promise<void> {
   await backfillLabels(db);
   await backfillAlbums(db);
+  await syncHubCounts(db);
 }
 
 beforeEach(async () => {

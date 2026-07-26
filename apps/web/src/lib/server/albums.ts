@@ -36,6 +36,7 @@ import {
   type EntitySitemapRow,
   hubCountsBySlug,
   hubFindingCountsBySlug,
+  hubInclusionWhere,
   listCatalogueBrowsePage,
   listHubPage,
 } from "./labels";
@@ -293,15 +294,16 @@ export type AlbumBioWorkItem = { id: string; name: string; slug: string };
  * `describe_album` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
  * exactly the two ways an `/album/<slug>` page renders:
  *
- * - a CERTIFIED album (at least one coordinate-bearing finding) — the original floor, preserved
- *   verbatim, so a certified-but-thin album never regresses out of the queue; OR
+ * - a CERTIFIED album (at least one finding) — the original floor, preserved, so a
+ *   certified-but-thin album never regresses out of the queue; OR
  * - a findings-free CATALOGUE album whose page clears the thin-content floor
  *   ({@link ALBUM_INDEX_MIN_TRACKS}) on renderable tracks alone — a crawl-minted page that is
  *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
  *
- * The renderable count mirrors `listAlbumSitemapRows` exactly: over the `tracks.album_id` join, a
- * track counts when its finding is coordinate-bearing (`log_id is not null`) OR when there is no
- * finding row (the anti-join's `track_id is null` complement). Bounding the findings-free arm to the
+ * Both arms are the shared hub gate (`hubInclusionWhere`, labels.ts) — the STORED
+ * `certified_finding_count` / `renderable_track_count` on the album row, exactly the pair
+ * `listAlbumSitemapRows` and `/albums` now read, instead of the two correlated per-row subqueries
+ * over `tracks ⋈ findings` this used to compute on every tick. Bounding the findings-free arm to the
  * indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of stub
  * albums, and only the ones with a real page should ever enter the sweep.
  */
@@ -312,20 +314,7 @@ export async function listAlbumsMissingBio(limit: number): Promise<AlbumBioWorkI
     sql: `select a.id, a.name, a.slug
           from albums a
           where (a.bio is null or trim(a.bio) = '')
-            and (
-              exists (
-                select 1 from tracks t
-                join findings f on f.track_id = t.track_id
-                where t.album_id = a.id and f.log_id is not null
-              )
-              or (
-                select count(*)
-                from tracks t2
-                left join findings f2 on f2.track_id = t2.track_id
-                where t2.album_id = a.id
-                  and (f2.log_id is not null or f2.track_id is null)
-              ) >= ?
-            )
+            and ${hubInclusionWhere("a")}
           order by a.created_at asc
           limit ?`,
   });
@@ -371,10 +360,11 @@ function albumCover(row: AlbumCoverRow): string | undefined {
  * album is a page on its tracklist exactly as a discovered label is on its releases, so it belongs
  * here once it clears the floor.
  *
- * The floor is applied in SQL (`having`), never in the isolate: a finding counts when it is
- * coordinate-bearing (`log_id is not null`), a catalogue row is the anti-join's complement, and
- * their sum is the RENDERABLE track count the page's `indexable` keys off — so the two agree by
- * construction.
+ * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
+ * (keystone 2) — an indexed pre-filter on `albums` where it used to be a `having` over a grouped scan
+ * of the whole corpus. The `tracks ⋈ findings` join SURVIVES for the two per-row columns a `<url>`
+ * needs and the album row does not carry (`lastmod`, the freshest certified finding's date; the
+ * fallback cover), but it now walks only the albums the floor already admitted.
  */
 export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
   const db = await getDb();
@@ -389,9 +379,8 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
           from albums
           join tracks on tracks.album_id = albums.id
           left join findings on findings.track_id = tracks.track_id
+          where albums.renderable_track_count >= ?
           group by albums.id
-          having sum(case when findings.log_id is not null then 1 else 0 end)
-               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
           order by albums.slug asc`,
   });
 
@@ -418,10 +407,9 @@ export type AlbumHubEntry = {
 
 /** The ALBUMS hub's `?page=N` read, over every floor-clearing record (certified + catalogue). */
 const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
+  alias: "albums",
   entity: "albums",
   floor: ALBUM_INDEX_MIN_TRACKS,
-  from: "albums join tracks on tracks.album_id = albums.id",
-  groupBy: "albums.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     coverImageUrl: albumCover(row),
@@ -460,12 +448,12 @@ export function listAlbumsHubPage(
 }
 
 /** The ALBUMS full A–Z browse — every album with a page, certified or catalogue-only. */
-// Derives its scan + floor from ALBUMS_HUB_QUERY (the web hub's), so the MCP browse and the
+// Derives its table + floor from ALBUMS_HUB_QUERY (the web hub's), so the MCP browse and the
 // /albums page can never diverge on which albums exist; only the projection differs (name inline).
 const ALBUMS_BROWSE_QUERY: CatalogueBrowseQuery = {
+  alias: ALBUMS_HUB_QUERY.alias,
+  entity: ALBUMS_HUB_QUERY.entity,
   floor: ALBUMS_HUB_QUERY.floor,
-  from: ALBUMS_HUB_QUERY.from,
-  groupBy: ALBUMS_HUB_QUERY.groupBy,
   nameExpr: "albums.name",
   slugExpr: ALBUMS_HUB_QUERY.slugExpr,
 };
@@ -492,8 +480,8 @@ const ALBUM_COVER_JSON = `${ALBUM_COVER_SELECT},
 /**
  * One alphabetical page of the unified `/albums` index over the API — the `list_albums` read. The
  * SAME floor-clearing set the `/albums` web page and the MCP browse serve (all three off
- * `HUB_INCLUSION_HAVING`). Reuses the hub reader for the page + covers + pager, stamping each row's
- * `findingCount` from the shared fragments.
+ * `hubInclusionWhere`). Reuses the hub reader for the page + covers + pager, stamping each row's
+ * `findingCount` off the same stored column.
  */
 export async function listAlbumsApiPage(page: number): Promise<CatalogueListPage<AlbumListItem>> {
   const hub = await listHubPage(ALBUMS_HUB_QUERY, page);

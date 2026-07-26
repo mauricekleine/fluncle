@@ -209,8 +209,10 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
     // Both tracks carry the SAME label — only the certified one may count. In production every
     // finding's track carries the indexed `label_id` edge the admin count reads by (stamped by
     // the publish link + the deploy backfill); stamp it here so the count reads that edge, not the
-    // raw string. The uncertified catalogue track is linked too — HUB_CERTIFIED still excludes it
-    // (no `log_id`), which is exactly the guarantee under test.
+    // raw string. The uncertified catalogue track is linked too — the station's raw
+    // `sum(findings.log_id is not null)` aggregate still excludes it (no `log_id`), which is exactly the
+    // guarantee under test. `/admin/labels` is deliberately the ONE count kept off the maintained
+    // mirror, so a certification mismatch stays visible from truth here.
     await db.execute("update tracks set label = 'Hospital Records'");
     await db.execute({
       args: [NOW, NOW],

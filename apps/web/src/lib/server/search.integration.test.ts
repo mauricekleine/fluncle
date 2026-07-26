@@ -99,6 +99,14 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       args: [track.trackId, track.logId, "2026-07-01T00:00:00.000Z"],
       sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
     });
+    // Keystone 1's maintained discriminator, flipped exactly as `publishTrack` does: a track WITH a
+    // findings row is not catalogue. The link calls below read it to move the entity's maintained
+    // `certified_finding_count`, which is the half of the hub gate that decides whether search may
+    // offer this label/album at all — so the flip has to land before them.
+    await client.execute({
+      args: [track.trackId],
+      sql: `update tracks set is_catalogue = 0 where track_id = ?`,
+    });
   }
 
   // The GRAPH POINTERS, written by the REAL publish-path functions rather than by a hand-
@@ -714,7 +722,8 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
 // ── The entity gate follows the shared hub floor ─────────────────────────────────────
 
 // A label/album is offered as a JUMP when it clears the SAME gate the /labels + /albums hubs and the
-// API list drive off (`HUB_INCLUSION_HAVING`): a certified finding OR a page over the thin-content
+// API list drive off (`hubInclusionWhere`, over the maintained per-entity counters): a certified
+// finding OR a page over the thin-content
 // floor. So a catalogue-only label with enough renderable tracks is a real destination now — while a
 // below-floor imprint still declines the jump and falls back to the filter chip it always was.
 describe("the entity gate follows the shared hub floor (not certified-only)", () => {

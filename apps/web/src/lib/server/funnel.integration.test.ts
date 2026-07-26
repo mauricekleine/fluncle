@@ -10,6 +10,7 @@ import {
   seedCatalogueTrack,
   seedLabel,
   seedTrack,
+  syncHubCounts,
 } from "./integration-db";
 
 // THE CATALOGUE FUNNEL, PROVEN — against the REAL schema, on a real libSQL engine built from the
@@ -468,6 +469,10 @@ describe("getFunnel publicSurfaces (real SQL)", () => {
       await linkArtist(id, "art-out", index);
       await patchTrack(id, "album_id = 'alb-out', label_id = 'lab-out'");
     }
+
+    // The edges above are hand-stamped, so the maintained counters the indexable count + the three
+    // sitemap readers now filter on have to be brought into line with them.
+    await syncHubCounts(db);
 
     const { live } = await getFunnel();
 

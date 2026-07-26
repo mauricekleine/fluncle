@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createIntegrationDb, seedTrack } from "./integration-db";
+import { createIntegrationDb, seedTrack, syncHubCounts } from "./integration-db";
 import { renderSitemap } from "./sitemap-test-kit";
 
 // WHAT THE SURFACES DO WHEN THE CATALOGUE IS ACTUALLY BIG.
@@ -152,6 +152,10 @@ beforeAll(async () => {
   // Metalheadz: discovered by the walk, never ruled on, never certified. The crawler links
   // its rows to it, so it has plenty of content and zero standing.
   await seedCrawledRows(metalheadz, "Metalheadz", DISCOVERED_LABEL);
+  // The edges above are stamped in bulk SQL, which bypasses the delta writers that keep the
+  // maintained hub counters true — and those counters ARE the hub gate + the sitemap floor now.
+  // Bring them into agreement with what was just seeded, as the deploy backfill does.
+  await syncHubCounts(db);
 });
 
 describe("the catalogue at volume", () => {

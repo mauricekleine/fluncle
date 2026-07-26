@@ -20,6 +20,7 @@ import {
   hubCountsBySlug,
   hubCountsBySlugs,
   hubFindingCountsBySlug,
+  hubInclusionWhere,
   listCatalogueBrowsePage,
   listHubPage,
 } from "./labels";
@@ -169,17 +170,19 @@ export type EntityBioWorkItem = { id: string; name: string; slug: string };
  * `describe_artist` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
  * exactly the two ways an `/artist/<slug>` page renders:
  *
- * - a CERTIFIED artist (at least one coordinate-bearing finding) — the original floor, preserved
- *   verbatim, so a certified-but-thin artist never regresses out of the queue; OR
+ * - a CERTIFIED artist (at least one finding) — the original floor, preserved, so a
+ *   certified-but-thin artist never regresses out of the queue; OR
  * - a findings-free CATALOGUE artist whose page clears the thin-content floor
  *   ({@link ARTIST_INDEX_MIN_FINDINGS}) on renderable tracks alone — a crawl-minted page that is
  *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
  *
- * The renderable count mirrors `listArtistSitemapRows` exactly: over the canonical `track_artists`
- * join, a track counts when its finding is coordinate-bearing (`log_id is not null`) OR when there
- * is no finding row (the anti-join's `track_id is null` complement). Bounding the findings-free arm
- * to the indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of
- * stub artists, and only the ones with a real page should ever enter the sweep.
+ * Both arms are the shared hub gate (`hubInclusionWhere`, labels.ts) — the STORED
+ * `certified_finding_count` / `renderable_track_count` on the artist row, exactly the pair
+ * `listArtistSitemapRows` and `/artists` now read. It replaced two correlated per-row subqueries over
+ * `track_artists ⋈ tracks ⋈ findings`, the heaviest of the three (the edge table is ~2× `tracks`).
+ * Bounding the findings-free arm to the indexable floor caps the Firecrawl + `claude -p` cost — a
+ * wide crawl mints thousands of stub artists, and only the ones with a real page should ever enter
+ * the sweep.
  */
 export async function listArtistsMissingBio(limit: number): Promise<EntityBioWorkItem[]> {
   const db = await getDb();
@@ -188,21 +191,7 @@ export async function listArtistsMissingBio(limit: number): Promise<EntityBioWor
     sql: `select a.id, a.name, a.slug
           from artists a
           where (a.bio is null or trim(a.bio) = '')
-            and (
-              exists (
-                select 1 from track_artists ta
-                join findings f on f.track_id = ta.track_id
-                where ta.artist_id = a.id and f.log_id is not null
-              )
-              or (
-                select count(*)
-                from track_artists ta2
-                join tracks t on t.track_id = ta2.track_id
-                left join findings f2 on f2.track_id = t.track_id
-                where ta2.artist_id = a.id
-                  and (f2.log_id is not null or f2.track_id is null)
-              ) >= ?
-            )
+            and ${hubInclusionWhere("a")}
           order by a.created_at asc
           limit ?`,
   });
@@ -337,12 +326,12 @@ export async function countArtistFindings(artistId: string): Promise<number> {
  * artist with enough catalogue tracks belongs here — orphaning its page from the sitemap would
  * break the same invariant album-entity.md states.
  *
- * The floor is applied in SQL (`having`), never in the isolate: a finding counts when it is
- * coordinate-bearing (`log_id is not null`), a catalogue row is the anti-join's complement, and
- * their sum is the RENDERABLE track count the page's `indexable` keys off (the canonical
- * `track_artists` join both sides), so the two agree by construction. `lastmod` is the freshest
- * certified finding's date, undefined for an artist that carries none (catalogue rows have no
- * `added_at`, and `max` ignores nulls).
+ * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
+ * (keystone 2) — an indexed pre-filter on `artists` where it used to be a `having` over a grouped scan
+ * of `track_artists ⋈ tracks`, the ~2×-`tracks` edge table and the most expensive of the three
+ * sitemap walks. The join SURVIVES for the two per-row columns a `<url>` needs and the artist row does
+ * not carry: `lastmod` (the freshest certified finding's date, undefined for an artist that carries
+ * none — catalogue rows have no `added_at`, and `max` ignores nulls) and the cover.
  */
 export async function listArtistSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
   const db = await getDb();
@@ -359,9 +348,8 @@ export async function listArtistSitemapRows(minTracks: number): Promise<EntitySi
           join track_artists ta on ta.artist_id = a.id
           join tracks on tracks.track_id = ta.track_id
           left join findings on findings.track_id = tracks.track_id
+          where a.renderable_track_count >= ?
           group by a.id
-          having sum(case when findings.log_id is not null then 1 else 0 end)
-               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
           order by a.slug asc`,
   });
 
@@ -391,10 +379,9 @@ export type ArtistHubEntry = {
 
 /** The ARTISTS hub's `?page=N` + A–Z reads, over every floor-clearing artist (certified + catalogue). */
 const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
+  alias: "a",
   entity: "artists a",
   floor: ARTIST_INDEX_MIN_FINDINGS,
-  from: "artists a join track_artists ta on ta.artist_id = a.id join tracks on tracks.track_id = ta.track_id",
-  groupBy: "a.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
@@ -435,12 +422,12 @@ export function listArtistsHubPage(
 }
 
 /** The ARTISTS full A–Z browse — every artist with a page, certified or catalogue-only. */
-// Derives its scan + floor from ARTISTS_HUB_QUERY (the web hub's), so the MCP browse and the
+// Derives its table + floor from ARTISTS_HUB_QUERY (the web hub's), so the MCP browse and the
 // /artists page can never diverge on which artists exist; only the projection differs (name inline).
 const ARTISTS_BROWSE_QUERY: CatalogueBrowseQuery = {
+  alias: ARTISTS_HUB_QUERY.alias,
+  entity: ARTISTS_HUB_QUERY.entity,
   floor: ARTISTS_HUB_QUERY.floor,
-  from: ARTISTS_HUB_QUERY.from,
-  groupBy: ARTISTS_HUB_QUERY.groupBy,
   nameExpr: "a.name",
   slugExpr: ARTISTS_HUB_QUERY.slugExpr,
 };
@@ -547,8 +534,8 @@ async function artistSpotifyUrlsBySlug(slugs: string[]): Promise<Map<string, str
 /**
  * One alphabetical page of the unified `/artists` index over the API — the `list_artists` read: the
  * SAME floor-clearing set the `/artists` web page and the MCP browse serve (all three off
- * `HUB_INCLUSION_HAVING`). Reuses the hub reader for the page + pager, and stamps each row's
- * `spotifyUrl` + `findingCount` from bounded per-page reads over the shared fragments.
+ * `hubInclusionWhere`). Reuses the hub reader for the page + pager, and stamps each row's
+ * `spotifyUrl` + `findingCount` from bounded per-page reads over the same `artists` rows.
  */
 export async function listArtistsApiPage(page: number): Promise<CatalogueListPage<ArtistListItem>> {
   const hub = await listHubPage(ARTISTS_HUB_QUERY, page, false);

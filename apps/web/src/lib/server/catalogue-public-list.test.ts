@@ -3,8 +3,8 @@
 // an in-memory libSQL engine (the labels.test.ts harness). The load-bearing guarantees:
 //
 //   1. SAME INDEX AS THE WEB HUB: the API list is built on the shared `listHubPage` gate
-//      (`HUB_INCLUSION_HAVING` — a certified entity is always in, an uncertified one only above the
-//      renderable floor), so it serves EXACTLY the set the `/albums` //labels //artists web pages
+//      (`hubInclusionWhere` over the maintained counters — a certified entity is always in, an
+//      uncertified one only above the renderable floor), so it serves EXACTLY the set the web pages
 //      and the MCP browse do. A behavioural set-equality test pins that for all three readers: the
 //      API list's (slug, certified) set + total equals the web hub's, by construction.
 //   2. GET IS WIDER THAN THE LIST: a below-floor entity the list omits still RESOLVES from get (it
@@ -26,7 +26,7 @@ vi.mock("./db", async (importOriginal) => {
 
 import { getAlbumDetail, listAlbumsApiPage, listAlbumsHubPage } from "./albums";
 import { getArtistListItemBySlug, listArtistsApiPage, listArtistsHubPage } from "./artists";
-import { createIntegrationDb } from "./integration-db";
+import { createIntegrationDb, syncHubCounts } from "./integration-db";
 import { getLabelDetail, listLabelsApiPage, listLabelsHubPage } from "./labels";
 
 let db: Client;
@@ -81,6 +81,12 @@ async function seedTrack(options: {
       args: [options.trackId, options.logId],
       sql: `insert into findings (track_id, log_id, added_at) values (?, ?, '2020-01-01T00:00:00.000Z')`,
     });
+    // A certified track HAS a findings row, so keystone 1's maintained discriminator is 0 — the flip
+    // `publishTrack` / `certifyExistingTrack` perform, and what the hub counters read `certified` off.
+    await db.execute({
+      args: [options.trackId],
+      sql: `update tracks set is_catalogue = 0 where track_id = ?`,
+    });
   }
 }
 
@@ -117,6 +123,10 @@ beforeEach(async () => {
   }
   // t5 is the thin "tiny / solo / uno" triple (renderable 1 — below floor).
   await seedTrack({ albumId: "A_solo", artistId: "R_uno", labelId: "L_tiny", trackId: "t5" });
+
+  // The hub gate reads the MAINTAINED counters, which the raw inserts above bypass — so bring them
+  // into agreement with the edges just seeded, exactly as the delta write paths would have.
+  await syncHubCounts(db);
 });
 
 /** The (slug, certified) fingerprint of a page — what set-equality compares. */
@@ -233,7 +243,7 @@ describe("listArtistsApiPage / getArtistListItemBySlug", () => {
 });
 
 // The hub NAME FILTER (`?q=` on /artists //albums //labels) — applied SQL-side inside the ONE gated
-// CTE, so the shared `HUB_INCLUSION_HAVING` gate is untouched: a name match is a NARROWING of the
+// CTE, so the shared `hubInclusionWhere` gate is untouched: a name match is a NARROWING of the
 // same floor-clearing set, never a widening of it. Proven against the real schema, same seeded world.
 describe("listHubPage — the name filter (?q=)", () => {
   it("narrows the labels hub to a substring match, case-insensitively", async () => {

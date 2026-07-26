@@ -1,7 +1,12 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedTrack,
+  syncHubCounts,
+} from "./integration-db";
 import { readJson, req } from "./orpc-test-kit";
 
 // THE MULTI-ARTIST "SOUNDS LIKE THESE" READ, PROVEN — against the REAL vector schema, with vectors we
@@ -110,6 +115,11 @@ beforeEach(async () => {
   await seedCatalogueArtist("c", blend(axis(0), axis(1), 0.2));
   await seedCertifiedArtist("d", blend(axis(0), axis(1), 0.5));
   await seedCatalogueArtist("z", axis(40));
+
+  // `link` inserts the `track_artists` edge directly, so the maintained hub counters the
+  // ArtistListItem projection reads its `certified` / counts off never moved — reconcile them with
+  // the edges just seeded, as the delta write paths would have.
+  await syncHubCounts(db);
 
   // Build the centroids the scan reads.
   await rankArtists(100, NOW);

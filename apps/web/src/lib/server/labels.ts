@@ -585,22 +585,22 @@ export type EntitySitemapRow = {
  * page size, or it would omit every entity past the window and orphan its page).
  *
  * ── THE FLOOR IS APPLIED IN SQL ─────────────────────────────────────────────────────────
- * `having` it, not filtering it in the isolate: a wide crawl mints a `labels` row per imprint
+ * `where` it, not filtering it in the isolate: a wide crawl mints a `labels` row per imprint
  * it walks past and most will sit on one or two rows, so filtering in TypeScript would drag
  * every one of those stubs across the wire to throw them away (AGENTS.md — never rank or
  * filter a growing table in the Worker). `minTracks` is the caller's constant, so the gate
  * has exactly one definition and the page and the sitemap cannot drift apart.
  *
- * The counts are conditional aggregates over ONE pass (`left join findings`).
+ * The floor reads the STORED `renderable_track_count` (keystone 2), so the gate is an indexed
+ * pre-filter on `labels` and no longer a `having` over a grouped scan of the whole corpus. The
+ * `tracks ⋈ findings` join SURVIVES for the two per-row columns a `<url>` needs and the entity
+ * row does not carry — `lastmod` (the freshest certified finding's date, `max` over that join)
+ * and the cover — but it now walks only the labels the floor already admitted.
  */
 export async function listLabelSitemapRows(minTracks: number): Promise<EntitySitemapRow[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [minTracks],
-    // A finding counts only when it is coordinate-bearing (`log_id is not null`), because
-    // that is exactly what the page renders in the grid; a catalogue row is the anti-join's
-    // complement. Their sum is the RENDERABLE track count the page's `indexable` keys off,
-    // so the two agree by construction.
     sql: `select labels.slug as slug,
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
@@ -610,9 +610,8 @@ export async function listLabelSitemapRows(minTracks: number): Promise<EntitySit
           from labels
           join tracks on tracks.label_id = labels.id
           left join findings on findings.track_id = tracks.track_id
+          where labels.renderable_track_count >= ?
           group by labels.id
-          having sum(case when findings.log_id is not null then 1 else 0 end)
-               + sum(case when findings.track_id is null then 1 else 0 end) >= ?
           order by labels.slug asc`,
   });
 
@@ -667,28 +666,55 @@ export type LabelHubEntry = {
 // `catalogue-groups.ts`'s `fetchGroupTracks` does, so the labels/albums/artists reads cannot drift
 // apart.
 //
-// ── SCALE ──────────────────────────────────────────────────────────────────────────────────────
-// This is the same grouped-scan shape already proven against hosted Turso (catalogue-groups.ts's
-// `count(*) over ()` + `limit ? offset ?` window, hosted-proven by catalogue-scale.integration.test.ts)
-// — the scan (entity ⋈ tracks, `left join findings`, grouped) is UNCHANGED; only the `having`
-// admits certified entities now (`sum(certified) > 0 OR renderable >= floor`) instead of the
-// findings-free set alone, so the same walk returns a slightly larger grouped set. The window count
-// runs AFTER `having`, so `total` is the whole floor-clearing count; each page's `offset` walks one
-// bounded slice of that grouped scan — the tradeoff a numbered pager requires, never a whole-table
-// rank in the isolate.
-
-/** The `certified` / `renderable` aggregates, shared by every hub read so the gate has one home. */
-const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
-const HUB_RENDERABLE = `${HUB_CERTIFIED} + sum(case when findings.track_id is null then 1 else 0 end)`;
+// ── SCALE: THE GATE READS THE STORED COUNTS (keystone 2) ───────────────────────────────────────
+//
+// `labels`, `albums` and `artists` each carry two MAINTAINED integers — `renderable_track_count`
+// and `certified_finding_count`. Their canonical semantics live on `artists.certified_finding_count`
+// (schema.ts); the delta write side is lib/server/hub-counts.ts. They are the stored mirrors of the
+// aggregates every read in this section used to recompute over the growing tables:
+//
+//   `HUB_CERTIFIED`        `sum(findings.log_id is not null)`  ⇒  `<entity>.certified_finding_count`
+//   `HUB_RENDERABLE`       certified + the findings-free rows  ⇒  `<entity>.renderable_track_count`
+//   `HUB_INCLUSION_HAVING` `certified > 0 or renderable >= ?`  ⇒  {@link hubInclusionWhere}
+//
+// So the gate no longer walks `entity ⋈ tracks left join findings` and groups it — it FILTERS the
+// small entity table by two indexed integers (`labels_renderable_count_idx` and its twins). The
+// pagination offsets, the name-search LIKE and the alphabetical order all run over that table
+// alone, and a hub row's `track_count` / `certified` come off the same two columns. Measured at
+// 150k hosted: the labels gate 262 ms → 45 ms (5.8×), the artists gate 2,075 ms → 45 ms (46×, over
+// ~225k `track_artists` edges). The `count(*) over ()` window the paged shape used is likewise now
+// a `count(*)` over the entity table.
+//
+// THE ONE DIVERGENCE, and it is the write side's definition rather than a new one: the stored
+// `certified_finding_count` keys off `tracks.is_catalogue = 0` (a `findings` row EXISTS), where the
+// old aggregate keyed off `findings.log_id is not null` (that row also carries a coordinate). The
+// two differ only for a coordinate-less finding straggler — a state schema.ts describes as
+// momentary, whose one-time backfill has run — and slice A verified the stored pair exact against
+// production. Everything else is identical by construction.
 
 /**
- * The hub inclusion gate, single-sourced (the trailing `?` binds the floor): a CERTIFIED entity is
- * always in; an uncertified catalogue entity is in only when its page clears the thin-content floor.
- * The web hubs (`listHubPage`) and the MCP browse (`listCatalogueBrowsePage`) both drive their
- * `having` off THIS fragment, so the two indexes can never disagree on which entities exist.
- * `tools/browse.test.ts` asserts both reads embed it.
+ * The hub inclusion gate over an entity's STORED counts, single-sourced (the trailing `?` binds the
+ * floor): a CERTIFIED entity is always in; an uncertified catalogue entity is in only when its page
+ * clears the thin-content floor. `alias` is the entity table's name or alias as the read spells it
+ * (`labels`, `albums`, `a`) — a CONSTANT from the query fragments below, never reader input.
+ *
+ * Parenthesized on purpose: it is a `where` term now, so it has to compose with a name filter's
+ * `and` without the inner `or` escaping the gate.
+ *
+ * The web hubs (`listHubPage`), the MCP browse (`listCatalogueBrowsePage`), the API list ops, the
+ * three bio worklists and search's entity gate all drive off THIS one helper, so no two of them can
+ * disagree on which entities exist. `hub-stored-counts.integration.test.ts` pins every one of those
+ * consumers against a world where the columns and the raw edges deliberately disagree.
  */
-export const HUB_INCLUSION_HAVING = `${HUB_CERTIFIED} > 0 or ${HUB_RENDERABLE} >= ?`;
+export function hubInclusionWhere(alias: string): string {
+  return `(${alias}.certified_finding_count > 0 or ${alias}.renderable_track_count >= ?)`;
+}
+
+/** The stored RENDERABLE count, qualified by an entity read's table name/alias — the thin-content
+    floor's own term (`>= floor`), which is the SITEMAP's narrower gate, not the browsable index's. */
+function hubRenderableColumn(alias: string): string {
+  return `${alias}.renderable_track_count`;
+}
 
 /** A raw hub TILE row — the union of every tile column the three entity kinds select. The gated scan
     stamps `track_count` + `certified` onto it; the rest are the entity's own columns. */
@@ -708,17 +734,16 @@ type CatalogueHubRow = {
 /**
  * The entity-specific SQL for ONE hub, as CONSTANT fragments (never reader input).
  *
- * `from` is the entity table joined to `tracks` — the shape the GATED SCAN walks; the generic
- * appends the shared `left join findings`, the `group by`, the floor `having`, and the slug order.
- * `entity` is the bare entity table (with its alias, if any) the TILE LOOKUP reads: the gated scan
- * yields slugs, and the tile columns are then fetched for those ≤48 slugs alone. `select` adds
- * those tile columns, `mapRow` reads them.
+ * `entity` is the entity table with its alias if it has one (`labels`, `artists a`) — the ONLY table
+ * every read here touches now that the gate is two stored columns: the GATED SCAN filters it, and
+ * the TILE LOOKUP re-reads it for the ≤48 slugs the page shows. `alias` is how the read spells that
+ * table when it qualifies a column (`labels`, `a`), which is what the count columns and
+ * {@link hubInclusionWhere} are prefixed with. `select` adds the tile columns, `mapRow` reads them.
  */
 export type CatalogueHubQuery<Entry> = {
+  alias: string;
   entity: string;
   floor: number;
-  from: string;
-  groupBy: string;
   mapRow: (row: CatalogueHubRow) => Entry;
   /**
    * The entity's display-name column (e.g. `labels.name`, `a.name`) — the column the optional NAME
@@ -732,31 +757,26 @@ export type CatalogueHubQuery<Entry> = {
 
 /**
  * The count of INDEXABLE pages for one hub — every entity whose page clears the thin-content floor
- * (`HUB_RENDERABLE >= floor`). That is exactly the set the entity's `list…SitemapRows` enumerates
+ * (`renderable_track_count >= floor`). That is exactly the set the entity's `list…SitemapRows` enumerates
  * and the sitemap exposes as live, indexable public pages; `/admin/funnel`'s public-surfaces card
  * reads it so the card can never disagree with what search engines can reach.
  *
- * A grouped `count(*)` WRAPPER over the SAME `entity ⋈ tracks left join findings` scan the hub +
- * sitemap walk — the query's own `from`/`groupBy`/`floor` and the shared `HUB_RENDERABLE` predicate
- * reused verbatim, never redefined. Note the gate here is `renderable >= floor` ALONE (the sitemap's
- * indexable set), NOT the wider `HUB_INCLUSION_HAVING` (which also admits sub-floor CERTIFIED
- * entities into the browsable index). One pass, grouped on the indexed join key
- * (`tracks.album_id`/`tracks.label_id`/`track_artists.artist_id`) — no per-row subquery, no blob
- * crosses the wire.
+ * ONE `count(*)` over the entity table, gated by its STORED `renderable_track_count` — the same
+ * column the entity's sitemap reader now filters on, so the card and the sitemap cannot drift. Note
+ * the gate here is `renderable >= floor` ALONE (the sitemap's indexable set), NOT the wider
+ * {@link hubInclusionWhere} (which also admits sub-floor CERTIFIED entities into the browsable
+ * index). It replaced a grouped `count(*)` wrapper over `entity ⋈ tracks left join findings`; no
+ * growing table is touched at all now.
  */
 export async function countIndexableHubEntities(
-  query: Pick<CatalogueHubQuery<unknown>, "floor" | "from" | "groupBy">,
+  query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "floor">,
 ): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
     args: [query.floor],
-    sql: `select count(*) as n from (
-            select 1
-            from ${query.from}
-            left join findings on findings.track_id = tracks.track_id
-            group by ${query.groupBy}
-            having ${HUB_RENDERABLE} >= ?
-          )`,
+    sql: `select count(*) as n
+          from ${query.entity}
+          where ${hubRenderableColumn(query.alias)} >= ?`,
   });
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
@@ -815,17 +835,19 @@ export class CatalogueHubPageOutOfRangeError extends Error {}
  * records), which is exactly the two-scan cost this removes.
  *
  * ── WHAT THE GATE ADMITS ────────────────────────────────────────────────────────────────────────
- * A CERTIFIED entity is always in (`sum(certified) > 0`); an uncertified catalogue entity is in only
- * when its page clears the thin-content floor (`renderable >= floor`). That disjunction is the whole
- * ruling: the certified rows the editorial section used to carry, and the floor-gated catalogue rows
- * the second section used to, folded into ONE alphabetical list. The gated scan stamps each row's
- * `certified` flag (the certification light the tile reads) beside its renderable count.
+ * A CERTIFIED entity is always in (`certified_finding_count > 0`); an uncertified catalogue entity is
+ * in only when its page clears the thin-content floor (`renderable_track_count >= floor`). That
+ * disjunction is the whole ruling: the certified rows the editorial section used to carry, and the
+ * floor-gated catalogue rows the second section used to, folded into ONE alphabetical list. Both
+ * terms are STORED columns on the entity row (keystone 2), so the CTE reads the small entity table
+ * and touches no `tracks` / `track_artists` / `findings` at all — it carries each row's `certified`
+ * flag (the certification light the tile reads) beside its renderable count straight off the row.
  *
  * ── WHY THE TILES ARE A SECOND STATEMENT ────────────────────────────────────────────────────────
  * The gated scan carries only slug + renderable count + certified. The tile columns (name, cover,
  * owned-master key) come off a plain indexed `where slug in (…)` lookup of the ≤48 slugs the page
- * actually shows, so the per-row cover subqueries run 48 times rather than once per entity in the
- * gated set — the certified flag/count join the PAGED rows, never a whole-table read into the isolate.
+ * actually shows, so the per-row cover subqueries — the one part that still reaches into `tracks` —
+ * run 48 times rather than once per entity in the gated set.
  *
  * A page past the end is NOT an error here: it returns an empty slice with the honest `total` and
  * `pageCount`, and the ROUTE decides the 404 off `page > pageCount`. Nothing is ever clamped to page 1.
@@ -850,25 +872,24 @@ export async function listHubPage<Entry>(
        from gated g group by substr(g.slug, 1, 1)`
     : "";
 
-  // The optional NAME FILTER narrows the gated set BEFORE the gate is applied — a `where <nameExpr>
-  // like ?` on the entity's name column, so the total, the page's slice, and the A–Z lane all agree
-  // (every arm reads the ONE `gated` CTE). It leaves `HUB_INCLUSION_HAVING` untouched (the gate stays
-  // single-sourced): a name match that does not clear the floor is still out. The pattern's `?` sits
-  // inside the CTE ahead of the floor `?`, so its bind arg leads.
+  // The optional NAME FILTER narrows the gated set — a `<nameExpr> like ?` on the entity's name
+  // column ANDed with the gate, so the total, the page's slice, and the A–Z lane all agree (every arm
+  // reads the ONE `gated` CTE). It leaves the gate itself untouched (single-sourced in
+  // `hubInclusionWhere`, which parenthesizes its `or` so this `and` cannot widen it): a name match
+  // that does not clear the floor is still out. The pattern's `?` sits ahead of the floor `?`, so its
+  // bind arg leads.
   const term = typeof nameFilter === "string" ? nameFilter.trim() : "";
-  const nameWhere = term ? `where ${query.nameExpr} like ? escape '\\'` : "";
+  const nameWhere = term ? `${query.nameExpr} like ? escape '\\' and ` : "";
   const nameArgs = term ? [`%${escapeLikePattern(term)}%`] : [];
 
   const result = await db.execute({
     args: [...nameArgs, query.floor, limit, (page - 1) * limit],
     sql: `with gated as materialized (
-            select ${query.slugExpr} as slug, ${HUB_RENDERABLE} as track_count,
-                   (${HUB_CERTIFIED} > 0) as certified
-            from ${query.from}
-            left join findings on findings.track_id = tracks.track_id
-            ${nameWhere}
-            group by ${query.groupBy}
-            having ${HUB_INCLUSION_HAVING}
+            select ${query.slugExpr} as slug,
+                   ${query.alias}.renderable_track_count as track_count,
+                   (${query.alias}.certified_finding_count > 0) as certified
+            from ${query.entity}
+            where ${nameWhere}${hubInclusionWhere(query.alias)}
           )
           select 'total' as kind, '' as slug, (select count(*) from gated) as n, 0 as cert
           union all
@@ -965,12 +986,12 @@ export function letterPages(
 // ── THE FULL A–Z BROWSE: the hub index, MCP-shaped ────────────────────────────────────────────
 //
 // `listHubPage` above already folds certified + floor-clearing catalogue into ONE alphabetical
-// index (the `HUB_INCLUSION_HAVING` gate) for the /artists //albums //labels web pages. The MCP
+// index (the `hubInclusionWhere` gate) for the /artists //albums //labels web pages. The MCP
 // browse tools (list_artists/list_albums/list_labels) need the SAME entity set — same gate, same
 // floor, certified-always-in — but not the web tile: an agent reads name/slug/certified/trackCount,
-// never a cover. So this read shares the ONE gate fragment with `listHubPage` (they can never drift
-// on which entities exist) and keeps a lighter projection — the entity NAME is a bare grouped column
-// in the gated scan (no cover subquery, no second tile lookup), so one statement answers it.
+// never a cover. So this read shares the ONE gate helper with `listHubPage` (they can never drift on
+// which entities exist) and keeps a lighter projection — the entity NAME is a bare column of the
+// entity table (no cover subquery, no second tile lookup), so one statement answers it.
 
 /** One row of the full A–Z catalogue browse — an entity, whether Fluncle has certified it, its size. */
 export type CatalogueBrowseRow = {
@@ -991,15 +1012,14 @@ export type CatalogueBrowsePage = {
 };
 
 /**
- * The entity-specific SQL for one browse read, as CONSTANT fragments (never reader input). `from`
- * is the entity table joined to `tracks` (the gated scan's shape); the generic appends the shared
- * `left join findings`, the `group by`, the floor `having`, and the slug order. `nameExpr`/`slugExpr`
- * are bare grouped columns off the entity table.
+ * The entity-specific SQL for one browse read, as CONSTANT fragments (never reader input). `entity`
+ * is the entity table with its alias if it has one (the gated scan's only table); `alias` is how the
+ * read qualifies a column of it. `nameExpr`/`slugExpr` are bare columns off that table.
  */
 export type CatalogueBrowseQuery = {
+  alias: string;
+  entity: string;
   floor: number;
-  from: string;
-  groupBy: string;
   nameExpr: string;
   slugExpr: string;
 };
@@ -1009,11 +1029,12 @@ export const CATALOGUE_BROWSE_PAGE_SIZE = 50;
 
 /**
  * One numbered page of the full A–Z browse — every entity `listHubPage` would list (certified +
- * floor-clearing catalogue), from ONE pass over the gated set. It reuses `HUB_INCLUSION_HAVING` (the
- * ONE gate `listHubPage` drives off, so the MCP browse and the web hubs can never disagree on which
- * entities exist) and the same hosted-proven `materialized` CTE shape, but keeps a lighter projection
- * than the web hub: the entity NAME is a bare grouped column, so there is no second tile lookup and
- * no cover subquery an agent would only discard. A page past the end returns an empty slice with the
+ * floor-clearing catalogue), from ONE pass over the gated set. It reuses {@link hubInclusionWhere}
+ * (the ONE gate `listHubPage` drives off, so the MCP browse and the web hubs can never disagree on
+ * which entities exist) and the same `materialized` CTE shape, but keeps a lighter projection than
+ * the web hub: the entity NAME is a bare column of the entity table, so there is no second tile
+ * lookup and no cover subquery an agent would only discard — which makes this whole read a filtered
+ * slice of the entity table and nothing else. A page past the end returns an empty slice with the
  * honest total.
  */
 export async function listCatalogueBrowsePage(
@@ -1027,14 +1048,13 @@ export async function listCatalogueBrowsePage(
     // Arm 1 is the total (always one row, so an empty page still reports an honest size); arm 2 is
     // the page's slice, ordered and windowed by SQL. `kind` discriminates; a compound select gives
     // no cross-arm order, so the rows are re-sorted below over the ≤ page-size slice, never a
-    // growing set. The gate is `HUB_INCLUSION_HAVING`, shared verbatim with `listHubPage`.
+    // growing set. The gate is `hubInclusionWhere`, shared verbatim with `listHubPage`.
     sql: `with gated as materialized (
             select ${query.slugExpr} as slug, ${query.nameExpr} as name,
-                   ${HUB_RENDERABLE} as track_count, (${HUB_CERTIFIED} > 0) as certified
-            from ${query.from}
-            left join findings on findings.track_id = tracks.track_id
-            group by ${query.groupBy}
-            having ${HUB_INCLUSION_HAVING}
+                   ${query.alias}.renderable_track_count as track_count,
+                   (${query.alias}.certified_finding_count > 0) as certified
+            from ${query.entity}
+            where ${hubInclusionWhere(query.alias)}
           )
           select 'total' as kind, '' as slug, '' as name, 0 as track_count, 0 as certified,
                  (select count(*) from gated) as n
@@ -1075,10 +1095,9 @@ export async function listCatalogueBrowsePage(
 
 /** The LABELS hub's `?page=N` + A–Z reads, over every floor-clearing label (certified + catalogue). */
 const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
+  alias: "labels",
   entity: "labels",
   floor: LABEL_INDEX_MIN_TRACKS,
-  from: "labels join tracks on tracks.label_id = labels.id",
-  groupBy: "labels.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     coverImageUrl: coverFromJson(row.cover_json),
@@ -1113,12 +1132,12 @@ export function listLabelsHubPage(
   return listHubPage(LABELS_HUB_QUERY, page, !nameFilter, nameFilter);
 }
 
-// Derives its scan + floor from LABELS_HUB_QUERY (the web hub's), so the MCP browse and the
+// Derives its table + floor from LABELS_HUB_QUERY (the web hub's), so the MCP browse and the
 // /labels page can never diverge on which labels exist; only the projection differs (name inline).
 const LABELS_BROWSE_QUERY: CatalogueBrowseQuery = {
+  alias: LABELS_HUB_QUERY.alias,
+  entity: LABELS_HUB_QUERY.entity,
   floor: LABELS_HUB_QUERY.floor,
-  from: LABELS_HUB_QUERY.from,
-  groupBy: LABELS_HUB_QUERY.groupBy,
   nameExpr: "labels.name",
   slugExpr: LABELS_HUB_QUERY.slugExpr,
 };
@@ -1130,13 +1149,13 @@ export function listLabelsBrowsePage(page: number): Promise<CatalogueBrowsePage>
 // ── THE PUBLIC CATALOGUE LIST/GET API OPS (list_labels / get_label + the album/artist twins) ─────
 //
 // The public API list ops serve the SAME index the web /labels //albums //artists pages do: every
-// entity that clears the unified hub gate (`HUB_INCLUSION_HAVING` — a certified entity is always in,
+// entity that clears the unified hub gate (`hubInclusionWhere` — a certified entity is always in,
 // an uncertified one only above the renderable floor). So they are built ON the shared hub reader
 // (`listHubPage`, which already carries the gate, the cover tile lookup, and the pager) rather than
 // a bespoke scan — the API list, the web hub, and the MCP browse can never disagree on which entities
 // exist, and there is no separate scale proof to carry (the shared CTE is the hosted-proven one). The
-// API adds the ONE column the web tile does not project: `findingCount`, which is `HUB_CERTIFIED` (a
-// group's certified-finding count) fetched for the page's ≤48 slugs; cover/logo ride the hub row.
+// API adds the ONE column the web tile does not project: `findingCount`, the stored
+// `certified_finding_count` read for the page's ≤48 slugs; cover/logo ride the hub row.
 //
 // The GET ops resolve ANY entity that has a page — a below-floor entity the browse index omits still
 // renders on its `/label//album//artist/<slug>` page (just noindex) — so get is intentionally WIDER
@@ -1151,13 +1170,14 @@ export type CatalogueListPage<Entry> = {
 };
 
 /**
- * Per-slug finding count — the `HUB_CERTIFIED` aggregate (a group's certified-finding count) over a
- * BOUNDED set of slugs, reusing a hub query's scan fragments so it agrees with that query's own
- * certified determination by construction. The API list adds this ONE column the web hub tile does
- * not project; `certified` + `trackCount` already ride the hub row.
+ * Per-slug finding count — the STORED `certified_finding_count` for a BOUNDED set of slugs, read off
+ * the same entity rows the gate filters, so it agrees with that query's own certified determination
+ * by construction. The API list adds this ONE column the web hub tile does not project; `certified` +
+ * `trackCount` already ride the hub row. An entity with no linked tracks now reports 0 rather than
+ * being absent from the map — the callers already floor a miss to 0, so the payload is unchanged.
  */
 export async function hubFindingCountsBySlug(
-  query: Pick<CatalogueHubQuery<unknown>, "from" | "groupBy" | "slugExpr">,
+  query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "slugExpr">,
   slugs: string[],
 ): Promise<Map<string, number>> {
   if (slugs.length === 0) {
@@ -1168,11 +1188,10 @@ export async function hubFindingCountsBySlug(
   const placeholders = slugs.map(() => "?").join(", ");
   const result = await db.execute({
     args: slugs,
-    sql: `select ${query.slugExpr} as slug, ${HUB_CERTIFIED} as finding_count
-          from ${query.from}
-          left join findings on findings.track_id = tracks.track_id
-          where ${query.slugExpr} in (${placeholders})
-          group by ${query.groupBy}`,
+    sql: `select ${query.slugExpr} as slug,
+                 ${query.alias}.certified_finding_count as finding_count
+          from ${query.entity}
+          where ${query.slugExpr} in (${placeholders})`,
   });
 
   const map = new Map<string, number>();
@@ -1185,15 +1204,16 @@ export async function hubFindingCountsBySlug(
 }
 
 /**
- * Counts for a BOUNDED SET of slugs — the `HUB_CERTIFIED` (certified-finding) + `HUB_RENDERABLE`
- * (renderable-track) aggregates over the same shared fragments the hub gate uses, so a row's
- * `certified`/`findingCount`/`trackCount` here agree with the hub's determination by construction.
- * The plural sibling of `hubCountsBySlug`, for a caller that already has a handful of slugs in hand
- * (the multi-artist "sounds like these" results) and wants their counts in one indexed read rather
- * than one round trip each. Returns a slug → counts map; a slug with no tracks is simply absent.
+ * Counts for a BOUNDED SET of slugs — the STORED `certified_finding_count` + `renderable_track_count`
+ * off the same entity rows the hub gate filters, so a row's `certified`/`findingCount`/`trackCount`
+ * here agree with the hub's determination by construction. The plural sibling of `hubCountsBySlug`,
+ * for a caller that already has a handful of slugs in hand (the multi-artist "sounds like these"
+ * results) and wants their counts in one indexed read rather than one round trip each. Returns a
+ * slug → counts map; a slug that names no entity is absent (one with no tracks now reports zeros,
+ * which is what its callers already substituted for a miss).
  */
 export async function hubCountsBySlugs(
-  query: Pick<CatalogueHubQuery<unknown>, "from" | "groupBy" | "slugExpr">,
+  query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "slugExpr">,
   slugs: string[],
 ): Promise<Map<string, { certified: boolean; findingCount: number; trackCount: number }>> {
   if (slugs.length === 0) {
@@ -1204,12 +1224,11 @@ export async function hubCountsBySlugs(
   const placeholders = slugs.map(() => "?").join(", ");
   const result = await db.execute({
     args: slugs,
-    sql: `select ${query.slugExpr} as slug, ${HUB_CERTIFIED} as finding_count,
-                 ${HUB_RENDERABLE} as track_count
-          from ${query.from}
-          left join findings on findings.track_id = tracks.track_id
-          where ${query.slugExpr} in (${placeholders})
-          group by ${query.groupBy}`,
+    sql: `select ${query.slugExpr} as slug,
+                 ${query.alias}.certified_finding_count as finding_count,
+                 ${query.alias}.renderable_track_count as track_count
+          from ${query.entity}
+          where ${query.slugExpr} in (${placeholders})`,
   });
 
   const map = new Map<string, { certified: boolean; findingCount: number; trackCount: number }>();
@@ -1229,22 +1248,22 @@ export async function hubCountsBySlugs(
 }
 
 /**
- * One entity's counts by slug — the `get_*` op's shape, computed the SAME way as the hub gate
- * (`HUB_CERTIFIED` / `HUB_RENDERABLE`) so a certified entity's list row and its get read agree.
- * Resolves ANY slug (a below-floor entity the list omits too); an entity with no tracks reports zero.
+ * One entity's counts by slug — the `get_*` op's shape, read off the SAME two stored columns the hub
+ * gate filters on, so a certified entity's list row and its get read agree. Resolves ANY slug (a
+ * below-floor entity the list omits too); an entity with no tracks, and a slug that names none at
+ * all, both report zero.
  */
 export async function hubCountsBySlug(
-  query: Pick<CatalogueHubQuery<unknown>, "from" | "groupBy" | "slugExpr">,
+  query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "slugExpr">,
   slug: string,
 ): Promise<{ certified: boolean; findingCount: number; trackCount: number }> {
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${HUB_CERTIFIED} as finding_count, ${HUB_RENDERABLE} as track_count
-          from ${query.from}
-          left join findings on findings.track_id = tracks.track_id
-          where ${query.slugExpr} = ?
-          group by ${query.groupBy}`,
+    sql: `select ${query.alias}.certified_finding_count as finding_count,
+                 ${query.alias}.renderable_track_count as track_count
+          from ${query.entity}
+          where ${query.slugExpr} = ?`,
   });
 
   const row = typedRows<{ finding_count: number; track_count: number }>(result.rows)[0];
@@ -1256,8 +1275,8 @@ export async function hubCountsBySlug(
 /**
  * One alphabetical page of the unified `/labels` index over the API — the `list_labels` read: the
  * SAME floor-clearing set the `/labels` web page and the MCP browse serve (all three off
- * `HUB_INCLUSION_HAVING`), so they can never disagree on which labels exist. Reuses the hub reader
- * for the page + covers + pager, and stamps each row's `findingCount` from the shared fragments.
+ * `hubInclusionWhere`), so they can never disagree on which labels exist. Reuses the hub reader
+ * for the page + covers + pager, and stamps each row's `findingCount` off the same stored column.
  * Blind to `seed_state` (crawl scope, never storage), like every public label read.
  */
 export async function listLabelsApiPage(page: number): Promise<CatalogueListPage<LabelListItem>> {
@@ -1447,12 +1466,21 @@ export async function listLabels(seedState?: LabelSeedState): Promise<LabelSeedI
 }
 
 /**
+ * The certified-finding aggregate the OPERATOR's station computes from the raw edge —
+ * `sum(findings.log_id is not null)` per group. It is what every public hub read used to compute too
+ * (schema.ts still names it `HUB_CERTIFIED` when it describes what the stored counters mirror), and
+ * the public side has moved OFF it onto `labels.certified_finding_count` (see
+ * {@link hubInclusionWhere} and the keystone-2 note above). It survives here, deliberately, for the
+ * ONE read below: `/admin/labels` is where a certification mismatch has to be VISIBLE, so its count
+ * is derived from truth rather than from the maintained mirror the reconciliation sweep backstops.
+ */
+const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
+
+/**
  * The certified-finding count for a BOUNDED set of label ids, grouped over the INDEXED
  * `tracks.label_id` edge (`where tracks.label_id in (…)`, on `tracks_label_id_idx`) — never a
- * whole-corpus `GROUP BY` over the raw `tracks.label` string. `HUB_CERTIFIED` (a group's
- * `log_id is not null` count), the same aggregate `hubFindingCountsBySlug` computes for the public
- * hub, so an admin row's count agrees with the public `/labels` row by construction. A label with
- * no findings is simply absent from the map.
+ * whole-corpus `GROUP BY` over the raw `tracks.label` string, and never a growing scan (the id set is
+ * one `/admin/labels` page). A label with no findings is simply absent from the map.
  */
 async function labelFindingCountsByIds(labelIds: string[]): Promise<Map<string, number>> {
   if (labelIds.length === 0) {
@@ -1598,17 +1626,19 @@ export type LabelBioWorkItem = { id: string; name: string; slug: string };
  * `describe_label` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
  * exactly the two ways a `/label/<slug>` page renders:
  *
- * - a CERTIFIED label (at least one coordinate-bearing finding) — the original floor, preserved
- *   verbatim, so a certified-but-thin label never regresses out of the queue; OR
+ * - a CERTIFIED label (at least one finding) — the original floor, preserved, so a
+ *   certified-but-thin label never regresses out of the queue; OR
  * - a findings-free CATALOGUE label whose page clears the thin-content floor
  *   ({@link LABEL_INDEX_MIN_TRACKS}) on renderable tracks alone — a crawl-minted page that is
  *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
  *
- * The renderable count mirrors `listLabelSitemapRows` exactly: over the `tracks.label_id` join, a
- * track counts when its finding is coordinate-bearing (`log_id is not null`) OR when there is no
- * finding row (the anti-join's `track_id is null` complement). Bounding the findings-free arm to the
- * indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of stub
- * labels, and only the ones with a real page should ever enter the sweep.
+ * Both arms are the shared hub gate ({@link hubInclusionWhere}) — the STORED
+ * `certified_finding_count` / `renderable_track_count` on the label row, which is exactly the pair
+ * `listLabelSitemapRows` and `/labels` now read. Two correlated per-row subqueries over
+ * `tracks ⋈ findings` used to compute them on every tick; the worklist is a filtered read of the
+ * labels table now. Bounding the findings-free arm to the indexable floor caps the Firecrawl +
+ * `claude -p` cost — a wide crawl mints thousands of stub labels, and only the ones with a real page
+ * should ever enter the sweep.
  */
 export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkItem[]> {
   const db = await getDb();
@@ -1617,20 +1647,7 @@ export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkI
     sql: `select l.id, l.name, l.slug
           from labels l
           where (l.bio is null or trim(l.bio) = '')
-            and (
-              exists (
-                select 1 from tracks t
-                join findings f on f.track_id = t.track_id
-                where t.label_id = l.id and f.log_id is not null
-              )
-              or (
-                select count(*)
-                from tracks t2
-                left join findings f2 on f2.track_id = t2.track_id
-                where t2.label_id = l.id
-                  and (f2.log_id is not null or f2.track_id is null)
-              ) >= ?
-            )
+            and ${hubInclusionWhere("l")}
           order by l.created_at asc
           limit ?`,
   });

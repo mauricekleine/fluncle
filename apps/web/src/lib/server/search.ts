@@ -67,7 +67,7 @@ import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
 import { getDb, typedRow, typedRows } from "./db";
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
-import { HUB_INCLUSION_HAVING, LABEL_INDEX_MIN_TRACKS } from "./labels";
+import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS } from "./labels";
 import { translateQuery } from "./search-llm";
 import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 
@@ -300,7 +300,7 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  *
  * An ARTIST is listed whatever it carries: the table is minted off the artist graph and every
  * row has a page. A LABEL or an ALBUM is offered when it clears the SHARED HUB GATE
- * ({@link HUB_INCLUSION_HAVING}) — a certified finding OR a page that clears the thin-content
+ * ({@link hubInclusionWhere}) — a certified finding OR a page that clears the thin-content
  * floor — so search offers EXACTLY the labels/albums the `/labels` + `/albums` hubs and the API
  * list. This replaces the old certified-only guard, which predated the unified hub index: a
  * catalogue-only label with enough renderable tracks now has a real page to jump to, so
@@ -389,10 +389,13 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
   return {
     // The needle binds the name predicate once, then the floor binds the shared hub gate's `?`.
     buildArgs: (needle, limit) => [needle, floor, limit],
-    // THE GATE, single-sourced with the hubs: `id in (…floor-clearing group scan…)` admits exactly
-    // the entities `/labels` + `/albums` list — a certified finding OR a page over the thin-content
-    // floor — never a bare crawler stub. The grouped subquery is bounded by the name predicate above
-    // (one or a few matched entities), so it is not a catalogue-wide scan on the search hot path.
+    // THE GATE, single-sourced with the hubs (`hubInclusionWhere`): it admits exactly the entities
+    // `/labels` + `/albums` list — a certified finding OR a page over the thin-content floor — never
+    // a bare crawler stub. Two STORED counters on the entity row answer it (keystone 2), so the
+    // grouped `id in (select … from tracks left join findings … group by …)` subquery this used to
+    // carry is gone entirely: the gate is now two integer comparisons on the row the name predicate
+    // already matched. The cover subquery is the one part that still reaches into `tracks`, and it
+    // runs only for those matched rows.
     sql: `select ${table}.name as name, ${table}.slug as slug, ${logoSelect}
             (select t.album_image_url
                from tracks t join findings f on f.track_id = t.track_id
@@ -400,13 +403,7 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
                order by f.added_at desc limit 1) as image_url
           from ${table}
           where lower(${table}.name) ${predicate}
-            and ${table}.id in (
-              select tracks.${pointer}
-              from tracks left join findings on findings.track_id = tracks.track_id
-              where tracks.${pointer} is not null
-              group by tracks.${pointer}
-              having ${HUB_INCLUSION_HAVING}
-            )
+            and ${hubInclusionWhere(table)}
           order by length(${table}.name) asc, ${table}.name asc
           limit ?`,
   };
