@@ -817,8 +817,16 @@ export const findings = sqliteTable(
     // reads recent grain families and diversifies (the grain ledger).
     videoGrain: text("video_grain"),
     // The AI model that authored the track's video, in <provider>/<model> notation
-    // (e.g. "anthropic/claude-opus-4-8"). Set when the video is uploaded; surfaced
-    // in /api/tracks alongside the vehicle. Defaults so existing rows backfill.
+    // (e.g. "anthropic/claude-opus-5"). Set when the video is uploaded; surfaced in
+    // /api/tracks alongside the vehicle.
+    //
+    // The STORED DEFAULT stays on Opus 4.8 deliberately — do not "fix" it. It is a
+    // legacy backfill placeholder: the insert in publish.ts omits video_model, so it
+    // only ever lands on a finding that has no video yet, and the real authoring model
+    // is written explicitly at upload time. No render ever reports this value. Changing
+    // it means an ALTER COLUMN, which forces drizzle-kit to drop and recreate EVERY
+    // index in the database (~125 of them, 20 on the ~150k-row tracks table) — not a
+    // price worth paying to relabel a placeholder that is always overwritten.
     videoModel: text("video_model").default("anthropic/claude-opus-4-8"),
     // The reasoning/thinking effort the authoring model ran at (e.g. "high",
     // "medium", "low"). Set when the video is uploaded; surfaced in /api/tracks so
