@@ -64,8 +64,10 @@ vi.mock("@/lib/server/artist-dossier", async (importOriginal) => ({
   getArtistNeighbours,
 }));
 
-const { ARTIST_CATALOGUE_SORT_DEFAULT, Route, resolveArtistPageData } =
-  await import("./artist.$slug");
+const { ARTIST_CATALOGUE_SORT_DEFAULT, Route } = await import("./artist.$slug");
+// The resolver lives beside the route rather than in it, so the route module carries no static
+// `lib/server/**` import into the browser bundle (see `-artist-page-data.ts`).
+const { resolveArtistPageData } = await import("./-artist-page-data");
 
 const ARTIST = {
   id: "artist-drift",

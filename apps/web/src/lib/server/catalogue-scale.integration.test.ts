@@ -245,7 +245,7 @@ describe("a label page's quieter rows are GROUPED and BOUNDED, totals counted in
   });
 
   it("keeps the page's JSON-LD and markup bounded by the same grouped page", async () => {
-    const { resolveLabelPageData } = await import("../../routes/label.$slug");
+    const { resolveLabelPageData } = await import("../../routes/-label-page-data");
     const { flattenArtistGroups, GRAPH_GROUP_ROW_CEILING } = await import("./catalogue-groups");
     const data = await resolveLabelPageData("hospital-records", "name", 1);
 
@@ -265,7 +265,7 @@ describe("a label page's quieter rows are GROUPED and BOUNDED, totals counted in
 
 describe("a label earns a page on its content, not on Fluncle's", () => {
   it("SERVES the label the crawler discovered, with no findings band and no apology", async () => {
-    const { resolveLabelPageData } = await import("../../routes/label.$slug");
+    const { resolveLabelPageData } = await import("../../routes/-label-page-data");
 
     // Metalheadz has 400 crawled rows and no finding. It is a page: a real record of what the
     // label put out. It used to 404.
@@ -284,7 +284,7 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
   });
 
   it("still serves the label Fluncle DID certify on, findings first", async () => {
-    const { resolveLabelPageData } = await import("../../routes/label.$slug");
+    const { resolveLabelPageData } = await import("../../routes/-label-page-data");
     const data = await resolveLabelPageData("hospital-records", "name", 1);
 
     if (data.status !== "found") {

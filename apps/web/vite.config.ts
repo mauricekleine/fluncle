@@ -158,6 +158,108 @@ function crawlerBannerPlugin(): Plugin {
   };
 }
 
+// THE EAGER-CHUNK PURITY GATE — a build-fail check, the `orpc-coverage` pattern applied to the
+// browser bundle.
+//
+// The client entry chunk is the one file EVERY page downloads before it paints; the `app` group
+// in `scripts/client-chunk-groups.ts` deliberately folds the whole statically-reachable set into
+// it. So a single stray static import of a server module does not cost one page — it costs the
+// homepage, and it does it silently: the build stays green, the types pass, the page renders.
+//
+// It happened. Measured on the built bundle, `db/schema.ts` + `lib/server/**` + the
+// `@libsql/client` / `drizzle-orm` chain behind `getDb` were ~232 KB of RENDERED dead modules in
+// that chunk, reached from four route files. The cause is structural rather than careless: a
+// route's `loader`, `head`, `validateSearch` and `loaderDeps` all live in the route's CRITICAL
+// half (only `component` is auto-split), so ANY of them touching a `lib/server/**` export — even
+// a bare integer constant — welds the database chain to first paint. TanStack Start's
+// import-protection guide names the same trap.
+//
+// Hence a gate rather than a comment. It fails the build with the offending modules named, and
+// the fix is always one of two moves:
+//   1. a value the `head`/`loader`/`validateSearch` genuinely needs → put it in a client-safe
+//      module and re-export it from the server one (`lib/catalogue.ts`, `lib/galaxies.ts`);
+//   2. the data resolution itself → a `-*-page-data.ts` sibling reached by a DYNAMIC import
+//      INSIDE the `createServerFn().handler()` body, which the client build removes wholesale.
+//
+// Deliberately scoped to the ENTRY chunk. Server modules still reach some LAZY route chunks (a
+// separate, much cheaper problem: a page pays only for its own route), and widening this gate to
+// every chunk is the next step, not this one — a gate nobody can get green teaches nothing.
+const CLIENT_SERVER_ONLY = /\/apps\/web\/src\/(lib\/server\/|db\/)/;
+
+/**
+ * The ONE permitted resident, and it earns the exemption by having no imports.
+ *
+ * `lib/server/track-match.ts` is the ratified folded title+artist matcher — a pure function over
+ * strings with an EMPTY import list, so unlike every other `lib/server/**` module it cannot drag a
+ * chain behind it (3 KB rendered, and 3 KB is where it ends). `lib/log-schema.ts` needs it to emit
+ * a finding's remixer credits, and log-schema is read from route `head`s, which are eagerly
+ * bundled by construction. Its path is also canon across `docs/`, the `fluncle-rekordbox-sync`
+ * skill and a Python port that is kept in lockstep, so relocating it is a repo-wide rename for
+ * 3 KB.
+ *
+ * The exemption is not taken on trust: the gate below RE-CHECKS the premise every build and fails
+ * if this module ever grows an import of its own. The day it does, it can drag the database chain
+ * in, and the exemption dies with the premise.
+ */
+const EAGER_CHUNK_PURE_EXCEPTION = "/apps/web/src/lib/server/track-match.ts";
+
+function eagerChunkPurityGate(): Plugin {
+  return {
+    apply: "build",
+    enforce: "post",
+    generateBundle(options: Rollup.NormalizedOutputOptions, bundle: Rollup.OutputBundle) {
+      if (!options.dir?.endsWith("client")) {
+        return;
+      }
+
+      const offenders: string[] = [];
+
+      for (const file of Object.values(bundle)) {
+        if (file.type !== "chunk" || !file.isEntry) {
+          continue;
+        }
+
+        for (const [id, module] of Object.entries(file.modules)) {
+          if (!CLIENT_SERVER_ONLY.test(id)) {
+            continue;
+          }
+
+          if (id.endsWith(EAGER_CHUNK_PURE_EXCEPTION)) {
+            // The exemption holds only while the premise does — no imports, nothing to drag.
+            const imported = this.getModuleInfo(id)?.importedIds ?? [];
+
+            if (imported.length === 0) {
+              continue;
+            }
+
+            offenders.push(
+              `${EAGER_CHUNK_PURE_EXCEPTION.slice(1)} — exempt ONLY while import-free, and it now imports ${imported.length}`,
+            );
+            continue;
+          }
+
+          offenders.push(`${id.replace(/^.*\/apps\/web\//, "")} (${module.renderedLength} B)`);
+        }
+      }
+
+      if (offenders.length > 0) {
+        this.error(
+          [
+            `Server-only modules reached the eager client entry chunk (${offenders.length}):`,
+            ...offenders.sort().map((offender) => `  - ${offender}`),
+            "",
+            "Every page downloads this chunk before it paints. A route's loader/head/",
+            "validateSearch/loaderDeps is eagerly bundled — move the value into a client-safe",
+            "module, or reach the resolver by a dynamic import inside the serverFn handler.",
+            "See docs/client-bundle.md.",
+          ].join("\n"),
+        );
+      }
+    },
+    name: "fluncle-eager-chunk-purity",
+  };
+}
+
 // The SERVER half of the e2e no-network rail.
 //
 // `tests/e2e/browser.ts`'s `blockExternalRequests` stubs what the BROWSER asks for. It
@@ -264,6 +366,8 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     crawlerBannerPlugin(),
+    // Fails the build when a server-only module lands in the chunk every page paints behind.
+    eagerChunkPurityGate(),
     // Last, per the plugin's guidance. Each instance uploads its bundle's source
     // maps + associates the release, then deletes only its OWN `.map` files.
     // `errorHandler` downgrades any upload failure (wrong slug, revoked token,
