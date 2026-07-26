@@ -1,0 +1,28 @@
+[Unit]
+Description=fluncle-reconcile-hub-counts — rave-02 host trigger for the nightly hub-counts reconciliation (the maintained-counter drift backstop)
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/reconcile-hub-counts-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash before the
+# sweep catch runs), the healthcheck prober never sees a failure. This catch-all posts a minimal
+# Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
+# user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
+# this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
+# The agent token comes from the shared op-injected ${HOME}/.fluncle-secrets.env the wrapper
+# sources; no new secret (every statement runs Worker-side).
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/reconcile-hub-counts.sh
+# One tick is a single bare trigger → one Worker request that runs two statements per entity table.
+# The full recompute measured 19.3s at 150k hosted as three correlated statements and the grouped
+# UPDATE … FROM shape is cheaper, so this ceiling has ample headroom; an over-long tick just skips
+# the next trigger and self-heals (the pass is idempotent).
+TimeoutStartSec=600
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

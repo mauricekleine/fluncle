@@ -98,6 +98,14 @@ const APPROVED_VERBS = new Set<string>([
   // measures it (`enrich`) — it ORDERS an existing corpus against Fluncle's taste, and the
   // ordering IS the product.
   "rank",
+  // `reconcile` (recompute a maintained/derived value from its source of truth and CORRECT the
+  // rows that disagree) — added deliberately with `reconcile_hub_counts`, the drift backstop under
+  // keystone 2's maintained hub counts. Genuinely new: not `backfill` (fill data that was never
+  // there — the one-time seed), not `rank` (order a corpus against taste), not `update` (accept a
+  // client body), not `verify` (adjudicate an artifact and record a verdict without fixing it),
+  // and not `resync` (push internal truth OUT to an external platform). This one compares an
+  // internal derived value against internal truth and REPAIRS the disagreement in place.
+  "reconcile",
   "render",
   // `requeue` (put a finding's video back on the render queue) — ratified into the
   // action set with the `requeue_video` re-render command.

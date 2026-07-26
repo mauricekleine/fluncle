@@ -567,6 +567,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // nothing, so the box's agent-token cron drives it.
   rank_artists: "admin",
   rank_catalogue: "admin",
+  // The hub-counts drift backstop (docs/db-scale-backlog Wave 2 keystone 2, slice C) — AGENT tier
+  // (adminAuth only, no operatorGuard), the rank_catalogue / record_catalogue_snapshot precedent.
+  // It rewrites only the DERIVED bookkeeping integers on labels/albums/artists, and only the rows
+  // whose stored counts disagreed with truth — it cannot mint a coordinate, write a note, or
+  // certify anything — so the box's nightly cron drives it with the agent token it already holds.
+  reconcile_hub_counts: "admin",
   // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost
   // rows with the agent token, and it writes only the internal cost_events ledger

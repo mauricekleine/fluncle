@@ -593,6 +593,15 @@ const AUTOMATION_CRONS: CronDef[] = [
   // as the newsletter. No token collision: no other cron token contains "frontier-refresh".
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
+  // The nightly hub-counts reconciliation (docs/db-scale-backlog Wave 2 keystone 2, slice C).
+  // `reconcile-hub-counts` is the longest token here and no other cron's `fluncle-…` dir header is a
+  // substring of it (nor it of theirs), so claimCronDirs' longest-match-first pass claims
+  // fluncle-reconcile-hub-counts cleanly.
+  {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "reconcile-hub-counts",
+    service: "cron.reconcile-hub-counts",
+  },
   { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" }, // daily Logbook author — a generous floor
   // The daily /reach snapshot. `reach` is a substring of no other cron's fluncle-<token> dir
   // header (and no other token is a substring of "reach"), so claimCronDirs' longest-match-first

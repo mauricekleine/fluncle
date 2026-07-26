@@ -48,6 +48,7 @@ import { adminEditionsHandlers } from "./orpc/admin-editions";
 import { adminFrontierHandlers } from "./orpc/admin-frontier";
 import { adminFunnelHandlers } from "./orpc/admin-funnel";
 import { adminHealthHandlers } from "./orpc/admin-health";
+import { adminHubCountsHandlers } from "./orpc/admin-hub-counts";
 import { adminLabelsHandlers } from "./orpc/admin-labels";
 import { adminLogbookHandlers } from "./orpc/admin-logbook";
 import { adminMigrationsHandlers } from "./orpc/admin-migrations";
@@ -116,6 +117,7 @@ export const router = os.router({
   ...adminFrontierHandlers(os),
   ...adminFunnelHandlers(os),
   ...adminHealthHandlers(os),
+  ...adminHubCountsHandlers(os),
   ...adminLabelsHandlers(os),
   ...adminLogbookHandlers(os),
   ...adminMigrationsHandlers(os),
