@@ -6,7 +6,7 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (sour
 
 ## Why a reconciliation sweep
 
-The counters are maintained as **deltas** by every edge-writing path ([`apps/web/src/lib/server/hub-counts.ts`](../../../apps/web/src/lib/server/hub-counts.ts)), because recompute-from-truth measured **27,400 ms at 150k hosted** against ~200 ms for the delta form. That trade buys the speed the catalogue-scale hubs need and takes on one debt: **a maintained counter drifts, silently.** Three ways, none of them fixable from inside the write side:
+The counters are maintained as **deltas** by every edge-writing path ([`apps/web/src/lib/server/hub-counts.ts`](../../../../apps/web/src/lib/server/hub-counts.ts)), because recompute-from-truth measured **27,400 ms at 150k hosted** against ~200 ms for the delta form. That trade buys the speed the catalogue-scale hubs need and takes on one debt: **a maintained counter drifts, silently.** Three ways, none of them fixable from inside the write side:
 
 - a **missed write path** — a new edge-writer that forgets its delta;
 - a **non-atomic bulk op** — a half-applied pair IS drift;

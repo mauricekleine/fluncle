@@ -9,8 +9,10 @@ import (
 	"github.com/miekg/dns"
 )
 
-// soaSerial is bumped per build; a static value is fine for a leaf zone whose
-// data is dynamic and short-TTL (resolvers do not AXFR us).
+// soaSerial is deliberately static — nothing bumps it, and nothing needs to. The
+// serial exists so a secondary knows when to re-transfer, and this is a leaf zone
+// with no secondaries: every answer is minted per query from the live API and
+// carries a short TTL, so resolvers re-ask rather than AXFR us.
 const soaSerial = 1
 
 // liveLabel is the reserved name (e.g. live.dig.fluncle.com) that answers the

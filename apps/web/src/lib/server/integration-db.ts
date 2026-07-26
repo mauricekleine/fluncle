@@ -56,7 +56,7 @@ export async function syncHubCounts(client: Client): Promise<void> {
   await backfillHubCounts(client, { force: true });
 }
 
-/** Returns the sorted list of every row's value for a single text column. */
+/** Returns how many rows a table holds. */
 export async function rowCount(client: Client, table: string): Promise<number> {
   // `table` is a fixed test-supplied identifier (never user input), so it is safe
   // to interpolate; libSQL has no bind slot for identifiers.

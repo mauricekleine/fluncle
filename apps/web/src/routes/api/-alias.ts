@@ -1,9 +1,16 @@
-// Shared plumbing for the /api/v1 ↔ /api dual-mount. Every API route is served
-// canonically under /api/v1/* with the bare /api/* path kept as a permanent
-// back-compat alias — the same handler object mounted at both paths (not a
-// redirect, so POST bodies for submissions/me survive). The source of truth is
-// the /api/* route file, which exports a typed `serverHandlers`; the /api/v1
-// mirror re-mounts the very same object.
+// Shared plumbing for the /api/v1 ↔ /api dual-mount of the FILE-ROUTE CARVE-OUTS —
+// the auth/OAuth redirects, the large-body/streaming/media routes, and the other
+// handlers that never became oRPC contract ops. Each is served canonically under
+// /api/v1/* with the bare /api/* path kept as a back-compat alias — the same handler
+// object mounted at both paths (not a redirect, so POST bodies survive). The source
+// of truth is the /api/* route file, which exports a typed `serverHandlers`; the
+// /api/v1 mirror re-mounts the very same object.
+//
+// This is NOT the whole API surface, and the dual mount is NOT the API-wide rule:
+// oRPC (the default for a public/admin HTTP surface) mounts at the single canonical
+// `/api/v1` prefix and the bare `/api/*` alias for a contract op is GONE — a bare
+// oRPC path falls through to the TanStack router as a 404. See `API_PREFIX` and the
+// mount comment in `apps/web/src/lib/server/orpc.ts` for that decision.
 //
 // This file is excluded from the route tree by its `-` prefix (TanStack's
 // routeFileIgnorePrefix), so it can be imported by routes without becoming one.

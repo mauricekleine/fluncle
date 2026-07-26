@@ -4,11 +4,22 @@
 // terminal, the MCP server, the CLI, and the on-box Hermes crons.
 //
 // It is PURE DATA (no runtime side effects, no I/O): just a typed catalog plus a
-// few selectors over it. It is consumed across the app — the `/status` probe, the
-// CLI `status` command, the MCP `get_status` tool, the homepage dev-row, llms.txt,
-// the sitemap, and the surfaces-doctrine doc all read the same list instead of each
-// hand-maintaining a drifting copy. When a new surface ships, add it here once;
-// every consumer picks it up.
+// few selectors over it. Two kinds of consumer read it, and the difference matters
+// when you add a surface:
+//
+// AUTOMATIC — reads the catalog at runtime, so a new entry needs no second edit:
+// the `/status` health board (`cronSurfaces()`), the box-side per-cron freshness
+// prober (a mirror of it, gated by a coverage test), the MCP `get_status` tool and
+// the CLI `status` command (`liveSurfaces()`), and the post-deploy probe.
+//
+// HAND-HONOURED — this catalog states the intent, a human still wires the consumer:
+// the surfaces-doctrine doc's tables (guarded by a parity test over this catalog),
+// the rave terminal menu (a hand-written Go slice in apps/ssh/main.go), the CLI help
+// surface (apps/cli/src/cli.ts), the homepage nav + dev-row (its own nav-model.ts),
+// llms.txt (agent-discovery.ts), and the sitemap (sitemap-data.ts). The
+// `surfacesForContext` / `surfacesByWeight` / `surfacesByKind` selectors exist for
+// exactly those and have no consumer outside this package yet — so a `web`/`ssh`/`cli`
+// weight is a declaration of prominence, not wiring.
 //
 // Scope discipline: this catalogs PUBLIC-facing and operator-known surfaces — the
 // reach of Fluncle's tentacles across the web. It is NOT a route table (the web app
