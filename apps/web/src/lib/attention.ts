@@ -26,6 +26,7 @@ import { type AttentionRow, type AttentionSourceCount } from "@fluncle/contracts
  * ALL of them, or the build breaks.
  */
 export type AttentionSource =
+  | "anchor-review"
   | "artist-review"
   | "attach-cues"
   | "capture-suspect"
@@ -40,6 +41,21 @@ export type AttentionSource =
   | "submission"
   | "tiktok-draft";
 
+/**
+ * The near-match on an anchor-review row: what the anchor gate refused, and whether it is
+ * anchorable. `descriptor` is the version words that differ from ours ("" when the CANDIDATE is the
+ * plain one and we are the labelled one); `deltaMs` is signed and inside ±1s by construction — the
+ * whole reason the descriptor disagreement reads as an upstream labelling error. `spotifyTrackId`
+ * absent ⇒ nothing to anchor to, so the row is informational and Accept is never offered.
+ */
+export type AttentionCandidate = {
+  artists: string[];
+  deltaMs: number;
+  descriptor: string;
+  spotifyTrackId?: string;
+  title: string;
+};
+
 /** One row of the queue — artwork, the object line, data, and action routing. */
 export type AttentionItem = {
   /** The oldest-first anchor (when this became the system's business). */
@@ -48,6 +64,8 @@ export type AttentionItem = {
   artUrl?: string;
   /** Held-note rows: how many times this finding's auto-note has bounced off the echo gate. */
   attempts?: number;
+  /** Anchor-review rows: the near-match the gate refused, and whether it can be anchored to. */
+  candidate?: AttentionCandidate;
   /** Present ⇒ the row rides the deadline tier, ordered by time-to-deadline. */
   deadlineAt?: string;
   /** The deep-link target when the primary action navigates. */
@@ -57,6 +75,8 @@ export type AttentionItem = {
   logId?: string;
   /** The machine an action is bound to (the machine model). */
   machine?: "M2" | "M5";
+  /** Anchor-review rows: the MusicBrainz recording page, where the metadata gets fixed upstream. */
+  mbUrl?: string;
   /** Distribution legs still missing on a promoted mixtape. */
   missing?: ("mixcloud" | "youtube")[];
   /** Artist-review rows: how many of an artist's socials still need a look. */
@@ -153,6 +173,31 @@ export type LabelReviewInput = {
   name: string;
 };
 
+/**
+ * A catalogue row the Spotify-anchor gate refused for ONE readable reason: a candidate that agreed
+ * on artists, base title, and duration but named a different version — the fingerprint of metadata
+ * that omits the version, so the row misses forever and retires under the retry cap. The gate
+ * records the near-match instead of discarding it (lib/server/anchor.ts § the anchor review); this
+ * is that note, on its way to a queue row the operator can rule on.
+ */
+export type AnchorReviewInput = {
+  /** When the suspicion was recorded — the queue's oldest-first anchor. */
+  anchorAt: string;
+  artUrl?: string;
+  artists: string[];
+  candidateArtists: string[];
+  candidateDescriptor: string;
+  /** Present ⇒ the candidate is anchorable, so the row offers Accept. */
+  candidateSpotifyTrackId?: string;
+  candidateTitle: string;
+  /** SIGNED candidate − row duration, in ms. */
+  deltaMs: number;
+  /** The bare MusicBrainz recording MBID, when the row carries one. */
+  mbRecordingId?: string;
+  title: string;
+  trackId: string;
+};
+
 /** A pending crew submission awaiting the operator's approve/reject in the review tray. */
 export type SubmissionInput = {
   artUrl?: string;
@@ -239,6 +284,7 @@ export type NewsletterInput = {
 };
 
 export type AttentionInputs = {
+  anchorReviews: AnchorReviewInput[];
   artistReviews: ArtistReviewInput[];
   captureSuspects: CaptureSuspectInput[];
   clipPosts: ClipPostInput[];
@@ -415,6 +461,37 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: `label-review:${review.labelId}`,
       source: "label-review",
       title: review.name,
+    });
+  }
+
+  // Each suspected version mismatch is one row — the anchor gate found a candidate that agreed
+  // with the row on everything except the version's NAME, which is how a comp track billed
+  // without its "(… Remix)" suffix looks from the outside. The gate refused it (a wrong anchor is
+  // worse than none) and wrote the near-match down; this row is the operator reading it. Never a
+  // deadline: the row is simply un-anchored, a state it has been in for months and can stay in.
+  // The ruling lives inline (both actions are one tap on the stored candidate — there is no
+  // station to deep-link to), and the MusicBrainz link rides along so he can fix the metadata at
+  // the source and let every downstream consumer benefit, not just us.
+  for (const review of inputs.anchorReviews) {
+    items.push({
+      anchorAt: review.anchorAt,
+      ...(review.artUrl ? { artUrl: review.artUrl } : {}),
+      candidate: {
+        artists: review.candidateArtists,
+        deltaMs: review.deltaMs,
+        descriptor: review.candidateDescriptor,
+        ...(review.candidateSpotifyTrackId
+          ? { spotifyTrackId: review.candidateSpotifyTrackId }
+          : {}),
+        title: review.candidateTitle,
+      },
+      id: `anchor-review:${review.trackId}`,
+      ...(review.mbRecordingId
+        ? { mbUrl: `https://musicbrainz.org/recording/${review.mbRecordingId}` }
+        : {}),
+      source: "anchor-review",
+      title: trackLabel(review.artists, review.title),
+      trackId: review.trackId,
     });
   }
 
@@ -596,6 +673,20 @@ export function formatSpan(ms: number): string {
   return `${Math.floor(clamped / 60_000)}m`;
 }
 
+/**
+ * A signed duration gap as the anchor-review row reads it: `+0.4s`, `-1.0s`, `0.0s`. One decimal,
+ * because the whole gap is inside a second and the tenths ARE the evidence — a candidate 0.0s from
+ * the row is a far stronger suspicion than one 0.9s away, and rounding to whole seconds would erase
+ * the difference. Always signed (except an exact zero) so the direction is readable at a glance.
+ */
+export function formatDelta(ms: number): string {
+  const seconds = ms / 1000;
+  const rounded = Math.abs(seconds) < 0.05 ? 0 : seconds;
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+
+  return `${sign}${Math.abs(rounded).toFixed(1)}s`;
+}
+
 /** A row's age readout off its oldest-first anchor. */
 export function formatAge(iso: string, now: number): string {
   const at = Date.parse(iso);
@@ -674,6 +765,7 @@ export function snoozeSlots(now: number): SnoozeSlot[] {
  * distribution, the clip library owns the drip).
  */
 export type PrimaryAction =
+  | { kind: "accept-anchor"; label: "Use this match" }
   | { kind: "copy-caption"; label: "Copy caption" }
   | { href: string; kind: "open"; label: string }
   | { kind: "push"; label: string; platform: "tiktok" | "youtube" }
@@ -681,6 +773,19 @@ export type PrimaryAction =
 
 export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
   switch (item.source) {
+    case "anchor-review":
+      // Both rulings are one tap on a candidate the server already holds, so unlike the label /
+      // submission / held-note rows there is no station to deep-link to — the decision IS the row.
+      // Accepting writes a Spotify anchor, which is publish-class for the CATALOGUE (it feeds the
+      // Telescope playlist and the certify path), and that is exactly why the op behind this tap is
+      // operator-tier: the authority lives in `resolve_anchor_review`, not in this button.
+      //
+      // With no anchorable candidate there is nothing to accept, so the row's primary becomes the
+      // MusicBrainz recording — the place the wrong metadata actually gets fixed, for every
+      // consumer of the open graph and not just for us.
+      return item.candidate?.spotifyTrackId
+        ? { kind: "accept-anchor", label: "Use this match" }
+        : { href: item.mbUrl ?? "/admin/catalogue", kind: "open", label: "Open in MusicBrainz" };
     case "artist-review":
       return { href: item.href ?? "/admin/artists", kind: "open", label: "Review" };
     case "attach-cues":
@@ -758,6 +863,9 @@ const SOURCE_ORDER: AttentionSource[] = [
   // A capture suspicion is a correctness cleanup, never urgent (the wrong bytes are inaudible on
   // every public surface), so it sits among the low-priority curation rows.
   "capture-suspect",
+  // A suspected version mismatch is the same class: the row has been un-anchored for months and
+  // nothing downstream is blocked on it. Low priority, and here to be SEEN.
+  "anchor-review",
   // A held auto-note is the least urgent row on the board and deliberately so: the finding
   // is simply note-less, which is a state it can sit in indefinitely without hurting
   // anything, and the sweep keeps trying to write a better line regardless. It is here to
@@ -772,8 +880,9 @@ const SOURCE_ORDER: AttentionSource[] = [
 /**
  * Where clicking a row lands the operator. Rows that carry an explicit `href`
  * (attach-cues, distribute, drip-empty, label-review, newsletter, submission, artist-review) open
- * it; the inline publish-loop rows (post-tiktok, post-youtube, tiktok-draft) have no href — their
- * action lives on the dashboard itself, so they open `/admin`.
+ * it; the inline publish-loop rows (post-tiktok, post-youtube, tiktok-draft) and the inline
+ * anchor-review ruling have no href — their action lives on the dashboard itself, so they open
+ * `/admin`.
  */
 export function attentionRowPath(item: AttentionItem): string {
   return item.href ?? "/admin";
@@ -815,6 +924,12 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
   const n = rows.length;
 
   switch (source) {
+    case "anchor-review":
+      // Name the MECHANISM, like the held-note row: "version" is what he has to rule on, and a
+      // bare "a track to check" would hide the one thing that makes the row answerable.
+      return n === 1
+        ? "a track that may be the wrong version"
+        : `${countWord(n)} tracks that may be the wrong version`;
     case "artist-review":
       return n === 1 ? "an artist's links to review" : `${countWord(n)} artists' links to review`;
     case "attach-cues":

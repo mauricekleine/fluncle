@@ -848,6 +848,72 @@ export const resolveAnchor = oc
     }),
   );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ANCHOR REVIEW — the one anchor miss a human can act on.
+//
+// The gate refuses a candidate whose version descriptor differs from the row's, and it is right to:
+// the original of a logged VIP must never anchor to the VIP. But a measured class of rows carries
+// MusicBrainz metadata that OMITS the version — a comp track billed plain "Typical Description" at
+// 394s where streaming holds the plain mix at 313s and "(Calibre Remix)" at 394s — so the duration
+// says remix while the title says original. Those rows miss deterministically forever and now retire
+// under the retry cap, with nothing written down.
+//
+// So the gate records the near-match on the row (`tracks.anchor_review_json`) and the /admin
+// attention queue surfaces it as an `anchor-review` row. NOTHING auto-anchors: the never-wrong-stamp
+// rail is why the anchor module exists, and a heuristic strong enough to raise a question is not
+// strong enough to answer it. This op is the operator's answer.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `resolve_anchor_review` → `POST /admin/catalogue/anchor/reviews/{trackId}/resolve` (operationId
+ * `resolveAnchorReview`).
+ *
+ * OPERATOR tier (`adminAuth` + `operatorGuard`) — the `resolve_note_rejection` shape and the
+ * `set_capture_budget` rule. Both rulings are the operator's alone, because a `spotify_uri` is the
+ * row's public identity: it feeds the private Telescope playlist and the certify path, and a wrong
+ * one is permanent. The machine may hold up the evidence; only he decides.
+ *
+ * `accepted` — the candidate IS the row. The anchor is written exactly as a verified gate hit writes
+ * it (uri + url, fill-empty-only cover + ISRC, the attempt stamp and its counter together) and the
+ * artists link off the SAME stored candidate, so an accepted anchor is indistinguishable downstream.
+ * `409 no_spotify_candidate` when the reviewed candidate carries no Spotify id — there is nothing to
+ * anchor to, and such a row rides the queue as information (the MusicBrainz link) instead.
+ *
+ * `dismissed` — not a match. The review is cleared and the row keeps its normal lifecycle: same
+ * stamp, same counter, same retry cap. Dismissing decides nothing except that this near-match wasn't it.
+ *
+ * Either way the review is GONE afterwards, so the queue row cannot come back for the same evidence.
+ * Codes: `not_found`/404 (unknown track), `no_review`/404 (nothing to rule on — a concurrent anchor
+ * cleared it), `certified`/409, `already_anchored`/409, `no_spotify_candidate`/409.
+ */
+export const resolveAnchorReview = oc
+  .route({
+    method: "POST",
+    operationId: "resolveAnchorReview",
+    path: "/admin/catalogue/anchor/reviews/{trackId}/resolve",
+    summary: "Rule on a suspected version mismatch: anchor to the candidate, or dismiss (operator)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      resolution: z.enum(["accepted", "dismissed"]),
+      trackId: z.string().min(1),
+    }),
+  )
+  .output(
+    z.object({
+      /** True when `accepted` wrote the anchor; false for a dismissal. */
+      anchored: z.boolean(),
+      ok: z.literal(true),
+      /** The candidate that was ruled on, echoed back so the caller can log what it decided. */
+      review: z.object({
+        candidateTitle: z.string(),
+        /** The Spotify id the row was anchored to; absent on a dismissal. */
+        spotifyTrackId: z.string().optional(),
+      }),
+    }),
+  );
+
 /**
  * `set_anchor_search` → `PUT /admin/catalogue/anchor/search` (operationId `setAnchorSearch`).
  *
@@ -1049,6 +1115,7 @@ export const adminCatalogueContract = {
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
   resolve_anchor: resolveAnchor,
+  resolve_anchor_review: resolveAnchorReview,
   set_anchor_apify: setAnchorApify,
   set_anchor_search: setAnchorSearch,
   set_capture_budget: setCaptureBudget,

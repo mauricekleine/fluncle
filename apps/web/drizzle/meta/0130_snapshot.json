@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8cbb4468-5284-4a41-909a-f993e6222ed2",
+  "id": "f1af93ea-07dc-4707-aa6b-a3cb70882f34",
   "prevId": "5d2a0c91-2c4d-46d8-bee9-d8f0b912cfce",
   "tables": {
     "account": {
@@ -4907,6 +4907,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "anchor_review_json": {
+          "name": "anchor_review_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "apple_music_url": {
           "name": "apple_music_url",
           "type": "text",
@@ -5070,14 +5077,6 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "has_embedding": {
-          "name": "has_embedding",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
         },
         "in_master_id": {
           "name": "in_master_id",
@@ -5323,25 +5322,6 @@
           "isUnique": false,
           "where": "\"tracks\".\"is_catalogue\" = 1"
         },
-        "tracks_funnel_scan_idx": {
-          "name": "tracks_funnel_scan_idx",
-          "columns": [
-            "is_catalogue",
-            "has_embedding",
-            "spotify_uri",
-            "source_audio_key",
-            "analyzed_from",
-            "dismissed_at",
-            "duplicate_of_track_id",
-            "nearest_finding_score",
-            "duration_ms",
-            "spotify_anchor_attempted_at",
-            "isrc",
-            "spotify_anchor_attempts",
-            "artists_json"
-          ],
-          "isUnique": false
-        },
         "tracks_release_date_idx": {
           "name": "tracks_release_date_idx",
           "columns": ["release_date"],
@@ -5412,6 +5392,12 @@
           "columns": ["nearest_finding_score"],
           "isUnique": false,
           "where": "\"tracks\".\"spotify_uri\" is null"
+        },
+        "tracks_anchor_review_idx": {
+          "name": "tracks_anchor_review_idx",
+          "columns": ["track_id"],
+          "isUnique": false,
+          "where": "\"tracks\".\"anchor_review_json\" is not null"
         },
         "tracks_dismissed_idx": {
           "name": "tracks_dismissed_idx",

@@ -16,6 +16,7 @@ type Source = AttentionQueue["rows"][number]["source"];
 // A section header + a row glyph per source, in the same priority order the digest
 // emits its counts. Interface glyphs only (the Raycast set) — no brand marks.
 const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
+  "anchor-review": { icon: Icon.QuestionMark, title: "Version checks" },
   "artist-review": { icon: Icon.Person, title: "Artist links" },
   "attach-cues": { icon: Icon.BulletPoints, title: "Attach cues" },
   "capture-suspect": { icon: Icon.Waveform, title: "Capture checks" },

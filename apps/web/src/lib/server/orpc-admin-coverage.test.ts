@@ -337,6 +337,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // a miss. `resolve_anchor` does not match a public prefix, so it MUST be listed here to satisfy the
   // "holds exactly" check. Static `/resolve` beats no param — it nests under the `/anchor` POST above.
   "POST /admin/catalogue/anchor/resolve": "resolve_anchor",
+  // The operator's ruling on a SUSPECTED VERSION MISMATCH the anchor gate held back — contract-only
+  // oRPC (no TanStack route file; the /admin attention queue calls it inline). OPERATOR tier, unlike
+  // every other anchor op here: `accepted` writes a `spotify_uri`, which is the row's public identity
+  // (the Telescope playlist, the certify path) and permanent if wrong — so the machine that raised
+  // the suspicion is deliberately barred from acting on it.
+  "POST /admin/catalogue/anchor/reviews/{trackId}/resolve": "resolve_anchor_review",
   // The operator's reset for the cross-cutting Apple failure-regime breaker (RFC musickit U1) —
   // contract-only oRPC (no TanStack route file). OPERATOR tier: it re-arms a spend-adjacent
   // external integration a machine should not silently un-brake (the `set_capture_budget` rule).

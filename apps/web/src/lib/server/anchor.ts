@@ -53,6 +53,16 @@
 // worklist can back a missed row off (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of re-asking
 // it every tick (each re-ask is a billed Apify search). See docs/catalogue-crawler.md § the anchor.
 //
+// ── ONE MISS IS WRITTEN DOWN: THE ANCHOR REVIEW ──────────────────────────────────────────────
+// A miss is normally silent, and normally that is right. One class is not: a candidate that agrees
+// with the row on artists, base title, and duration (inside 1s) but names a DIFFERENT version. That
+// is the fingerprint of MusicBrainz metadata missing the version — a comp track billed plain at the
+// remix's length — so the row can never anchor, misses every tick, and retires under the cap with
+// nobody the wiser. `detectVersionMismatch` spots exactly that shape after BOTH rungs miss and
+// records it on the row (`tracks.anchor_review_json`), where the /admin attention queue reads it and
+// the OPERATOR rules with `resolve_anchor_review`. The gate is not loosened by one millisecond: the
+// review is evidence beside a miss, never an anchor. See "THE ANCHOR REVIEW" section at the bottom.
+//
 // The same UPDATE also bumps `spotify_anchor_attempts` (`coalesce(…, 0) + 1`) — the RETRY CAP's
 // counter, which is what makes the backoff terminate rather than re-ask forever: at
 // `ANCHOR_MAX_ATTEMPTS` full attempts the worklist stops offering the row (track-work.ts). The stamp
@@ -71,7 +81,7 @@ import {
   searchTrackCandidates,
   type TrackSearchResult,
 } from "./spotify";
-import { matchKey, normalizeArtists } from "./track-match";
+import { matchKey, normalizeArtists, splitTitle } from "./track-match";
 
 /**
  * ±window on the row↔candidate duration match — one of the search rung's three verification
@@ -130,6 +140,17 @@ type VerifiableCandidate = {
 };
 
 /**
+ * The "closest duration to the row wins" comparator every rung tiebreaks with — the one place the
+ * rule is written, shared by the gate, the ISRC rung, and the mismatch detector below. A candidate
+ * with no duration sorts as if it were 0 (the gate has already dropped it by then).
+ */
+function closestTo<T extends { durationMs?: null | number }>(rowDurationMs: number) {
+  return (left: T, right: T) =>
+    Math.abs((left.durationMs ?? 0) - rowDurationMs) -
+    Math.abs((right.durationMs ?? 0) - rowDurationMs);
+}
+
+/**
  * THE VERIFIED-SEARCH GATE. A candidate anchors ONLY when it clears ALL THREE signals: the same
  * artist SET, the same base title, and the same version descriptor as the row (all three carried
  * by the ratified `matchKey` fold — which deliberately keeps a remix/VIP descriptor distinct, so
@@ -154,9 +175,7 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
   candidates: T[],
 ): T | undefined {
   const rowKey = matchKey(rowArtists, rowTitle);
-  const byClosestDuration = (left: T, right: T) =>
-    Math.abs((left.durationMs ?? 0) - rowDurationMs) -
-    Math.abs((right.durationMs ?? 0) - rowDurationMs);
+  const byClosestDuration = closestTo<T>(rowDurationMs);
 
   const full = candidates
     .filter(
@@ -201,6 +220,77 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
       return matchKey(rowArtists, candidate.title) === rowKey;
     })
     .sort(byClosestDuration)[0];
+}
+
+/**
+ * THE SUSPECTED VERSION MISMATCH — the one miss the gate writes DOWN instead of forgetting.
+ *
+ * A measured class of catalogue rows carries MusicBrainz metadata that OMITS the version: a
+ * compilation track billed as plain "Typical Description" at 394s, where streaming holds the plain
+ * mix at 313s and "(Calibre Remix)" at 394s. The duration fingerprints it — the row IS the remix,
+ * mislabelled upstream — but the descriptor signal (correctly, and permanently) refuses the anchor,
+ * so the row misses every tick until it retires under the retry cap. Nobody ever learns why.
+ *
+ * This detects exactly that shape, and ONLY after both gate rungs have missed: a candidate whose
+ * artist set EQUALS the row's or is a non-empty PROPER SUBSET of it (the same one-way relation the
+ * subset fallback allows — a candidate crediting artists the row does not name is a different
+ * credit, not a mislabelled version), the SAME base title, a duration inside the TIGHT
+ * `ANCHOR_SUBSET_DURATION_TOLERANCE_MS` window, and a DIFFERENT version descriptor. The tight
+ * window is the whole precision story: at ≤1s the duration is doing the identifying, which is the
+ * only reason a descriptor disagreement is readable as an upstream labelling error rather than as
+ * two genuinely different recordings. Of the suspects, the closest duration wins.
+ *
+ * It is EVIDENCE, NEVER AN ANCHOR. The caller records it on the row for the operator's eye
+ * (`recordAnchorReview`) and the miss stands exactly as it did before — the never-wrong-stamp rail
+ * is the reason this module exists, and a heuristic strong enough to raise a question is nowhere
+ * near strong enough to stamp an identity. Only the operator's `resolve_anchor_review` binds it.
+ *
+ * `undefined` when the row has no measured duration, no artists, or no base title (nothing to
+ * fingerprint against, so nothing to suspect), or when no candidate fits the shape.
+ */
+export function detectVersionMismatch<T extends VerifiableCandidate>(
+  rowArtists: string[],
+  rowTitle: string,
+  rowDurationMs: number,
+  candidates: T[],
+): T | undefined {
+  const rowNames = normalizeArtists(rowArtists);
+  const row = splitTitle(rowTitle);
+
+  if (!(rowDurationMs > 0) || rowNames.size === 0 || !row.base) {
+    return undefined;
+  }
+
+  return candidates
+    .filter((candidate) => {
+      if (
+        typeof candidate.durationMs !== "number" ||
+        Math.abs(candidate.durationMs - rowDurationMs) > ANCHOR_SUBSET_DURATION_TOLERANCE_MS
+      ) {
+        return false;
+      }
+
+      const candidateNames = normalizeArtists(candidate.artists);
+
+      // Equal-or-proper-subset, one way (the subset fallback's relation): every credited name
+      // must be one the row names, and the row may name more.
+      if (candidateNames.size === 0 || candidateNames.size > rowNames.size) {
+        return false;
+      }
+
+      for (const name of candidateNames) {
+        if (!rowNames.has(name)) {
+          return false;
+        }
+      }
+
+      const split = splitTitle(candidate.title);
+
+      // The SAME recording by every signal except the one that names the version — which is
+      // precisely the suspicion.
+      return split.base === row.base && split.descriptor !== row.descriptor;
+    })
+    .sort(closestTo<T>(rowDurationMs))[0];
 }
 
 /** The minimal shape the exact-ISRC rung reads off a candidate. */
@@ -277,8 +367,17 @@ type AnchorRow = {
   title: string;
 };
 
-/** The catalogue row the anchor targets is missing, certified, or already anchored. */
-export type AnchorTrackReason = "already_anchored" | "certified" | "not_found";
+/**
+ * The catalogue row the anchor targets is missing, certified, or already anchored — plus the two
+ * rails the operator's anchor-review ruling adds: the row carries no review to rule on, and the
+ * reviewed candidate carries no Spotify id to anchor TO.
+ */
+export type AnchorTrackReason =
+  | "already_anchored"
+  | "certified"
+  | "no_review"
+  | "no_spotify_candidate"
+  | "not_found";
 
 export class AnchorTrackError extends Error {
   reason: AnchorTrackReason;
@@ -313,9 +412,9 @@ export class AnchorTrackError extends Error {
 export async function anchorTrack(
   trackId: string,
   candidates: AnchorCandidate[],
-  options: { stampOnMiss?: boolean } = {},
+  options: { source?: AnchorReviewSource; stampOnMiss?: boolean } = {},
 ): Promise<{ anchored: boolean; verifiedBy: AnchorVerification }> {
-  const { stampOnMiss = true } = options;
+  const { source = "apify", stampOnMiss = true } = options;
   const db = await getDb();
 
   const found = await db.execute({
@@ -389,6 +488,26 @@ export async function anchorTrack(
   const now = new Date().toISOString();
 
   if (!verified) {
+    // BOTH gate rungs missed. Before the row goes back in the pile, ask the ONE question a miss
+    // can still answer usefully: was a candidate the same recording under a different version
+    // name? A suspect is recorded for the operator's eye and changes NOTHING about the miss —
+    // no anchor, no altered stamp — so this write is invisible to every rung and every worklist.
+    const suspect = detectVersionMismatch(
+      rowArtists,
+      row.title,
+      durationMs,
+      candidates.map((candidate) => ({
+        artists: candidate.artists.map((artist) => artist.name),
+        candidate,
+        durationMs: candidate.durationMs,
+        title: candidate.title,
+      })),
+    );
+
+    if (suspect) {
+      await recordAnchorReview(db, trackId, row.title, suspect.candidate, source, now);
+    }
+
     // A MISS — leave the row un-anchored. Stamp the attempt so the worklist backs the row off,
     // UNLESS this is the free rung (`stampOnMiss: false`), which must not back a row off before the
     // metered Apify fallback has had its turn on it (see the doc above).
@@ -424,13 +543,18 @@ export async function anchorTrack(
       now,
       trackId,
     ],
+    // The anchor landed, so any suspected-version-mismatch review this row was carrying describes a
+    // miss that no longer exists — it is CLEARED here rather than left to nag the operator with a
+    // question the machine has now answered itself (the queue's trust rule: never surface a row the
+    // system cannot confirm is actionable). Unconditional: clearing a NULL costs nothing.
     sql: `update tracks
           set spotify_uri = ?,
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
               isrc = coalesce(isrc, ?),
               spotify_anchor_attempted_at = ?,
-              spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+              spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
+              anchor_review_json = null
           where track_id = ?`,
   });
 
@@ -536,7 +660,7 @@ async function resolveViaListenBrainz(
     return null;
   }
 
-  return anchorTrack(trackId, [candidate], { stampOnMiss: false });
+  return anchorTrack(trackId, [candidate], { source: "listenbrainz", stampOnMiss: false });
 }
 
 /**
@@ -595,7 +719,10 @@ async function resolveViaSpotifySearch(
       const candidate = await metadataCandidate(lookup.match.trackId);
 
       if (candidate) {
-        const result = await anchorTrack(trackId, [candidate], { stampOnMiss: false });
+        const result = await anchorTrack(trackId, [candidate], {
+          source: "spotify-isrc",
+          stampOnMiss: false,
+        });
 
         if (result.anchored) {
           return {
@@ -622,6 +749,7 @@ async function resolveViaSpotifySearch(
   }
 
   const result = await anchorTrack(trackId, candidates.map(searchResultCandidate), {
+    source: "spotify-search",
     stampOnMiss: false,
   });
 
@@ -862,4 +990,377 @@ export async function resolveAnchorFree(
   }
 
   return { ...searchOutcome, apifyEnabled, isrcRecoveredByDeezer };
+}
+
+// ── THE ANCHOR REVIEW: a miss the operator can read ──────────────────────────────────────────
+// Everything above is a machine deciding, silently, in one of two directions: anchored, or not.
+// That is the right shape for a precision gate and the wrong shape for the one miss that is
+// ACTIONABLE — the suspected version mismatch (`detectVersionMismatch`), where the metadata we hold
+// is wrong rather than the match. Those rows miss deterministically forever and now retire under
+// the retry cap, so a pipeline that discards the near-match discards the only evidence anyone could
+// act on. This half writes it down (`tracks.anchor_review_json`), reads it back for the /admin
+// attention queue, and lets the OPERATOR — never a machine — either bind the row to the reviewed
+// candidate or say it is not a match.
+//
+// The rails, in one place:
+//   - the gate is UNCHANGED. A review is a note beside a miss, never a looser rule.
+//   - a review NEVER outlives its miss: any anchor clears it (`anchorTrack`'s hit write), and so
+//     does either ruling.
+//   - ACCEPTING is operator-only, and refuses a candidate with no Spotify id — there would be
+//     nothing to anchor to. Such a review (a Deezer-rung suspect, or one seeded by the backfill
+//     script) rides the queue as INFORMATION: the MusicBrainz link so the operator can fix the
+//     metadata upstream, and the row re-detects with a Spotify-sourced candidate on a later tick.
+
+/** Why a row is in the operator's anchor-review queue. One reason today; the column is a note, not a flag. */
+export type AnchorReviewReason = "version_mismatch";
+
+/**
+ * Which rung produced the reviewed candidate — provenance for the operator, never a verdict.
+ * `apify` is the default (the box's `anchor_track` POST); `deezer` is reachable only through the
+ * backfill script, which may seed a suspect the ISRC-recovery rung noticed.
+ */
+export type AnchorReviewSource =
+  | "apify"
+  | "deezer"
+  | "listenbrainz"
+  | "spotify-isrc"
+  | "spotify-search";
+
+/**
+ * The reviewed candidate, as stored. It carries everything the ACCEPT write needs so the ruling
+ * spends no vendor call: the artists with their stable Spotify ids (so the accepted anchor links
+ * the graph exactly as a gate hit does), the cover, the ISRC, and the duration the suspicion was
+ * measured on. `spotifyTrackId` is OPTIONAL by design — see the section header.
+ */
+export type AnchorReviewCandidate = {
+  albumImageUrl?: null | string;
+  artists: AnchorArtist[];
+  durationMs: number;
+  isrc?: null | string;
+  source: AnchorReviewSource;
+  spotifyTrackId?: null | string;
+  title: string;
+};
+
+/** The stored note itself: the candidate, the row's own title at detection time, why, and when. */
+export type AnchorReview = {
+  at: string;
+  candidate: AnchorReviewCandidate;
+  reason: AnchorReviewReason;
+  /** The row's title AS IT READ when the suspicion was recorded — the other half of the evidence. */
+  title: string;
+};
+
+/**
+ * The most anchor-review rows the attention queue will ever carry — the `LABEL_REVIEW_QUEUE_LIMIT`
+ * discipline. A suspected mismatch is rare, so this cap is not expected to bite; it exists so a bad
+ * crawl batch (or a wide backfill seed) can never drown the queue's other thirteen sources in the
+ * `/admin` SSR payload, the react-query cache, and the one-per-line CLI + Raycast reads.
+ */
+export const ANCHOR_REVIEW_QUEUE_LIMIT = 25;
+
+/**
+ * Parse a stored review, tolerantly. A row whose JSON is absent, malformed, or shaped wrong reads
+ * as NO review (and logs): the column is operator evidence, so a corrupt value must degrade to
+ * silence rather than throw on an `/admin` load or wedge the anchor sweep mid-tick.
+ */
+export function parseAnchorReview(raw: null | string | undefined): AnchorReview | undefined {
+  if (!raw?.trim()) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    logEvent("warn", "anchor.review-parse-failed", { error });
+
+    return undefined;
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    return undefined;
+  }
+
+  const review = parsed as Partial<AnchorReview>;
+  const candidate = review.candidate;
+
+  if (
+    typeof review.at !== "string" ||
+    typeof review.title !== "string" ||
+    review.reason !== "version_mismatch" ||
+    typeof candidate !== "object" ||
+    candidate === null ||
+    typeof candidate.title !== "string" ||
+    typeof candidate.durationMs !== "number" ||
+    !Array.isArray(candidate.artists)
+  ) {
+    logEvent("warn", "anchor.review-shape-invalid", {});
+
+    return undefined;
+  }
+
+  return {
+    at: review.at,
+    candidate: {
+      albumImageUrl: candidate.albumImageUrl ?? null,
+      artists: candidate.artists.filter(
+        (artist): artist is AnchorArtist =>
+          typeof artist === "object" && artist !== null && typeof artist.name === "string",
+      ),
+      durationMs: candidate.durationMs,
+      isrc: candidate.isrc ?? null,
+      source: candidate.source ?? "apify",
+      spotifyTrackId: candidate.spotifyTrackId ?? null,
+      title: candidate.title,
+    },
+    reason: "version_mismatch",
+    title: review.title,
+  };
+}
+
+/**
+ * Write (or OVERWRITE) a row's suspected-version-mismatch review. Overwrite is deliberate: a row is
+ * re-asked for months, and the NEWEST near-match is the one worth reading — a later rung's suspect
+ * is better evidence than a stale one, and keeping a history would turn a note into a ledger nobody
+ * reads. Best-effort by design at the call site: the anchor's own stamping is what must not fail.
+ */
+async function recordAnchorReview(
+  db: Awaited<ReturnType<typeof getDb>>,
+  trackId: string,
+  rowTitle: string,
+  candidate: AnchorCandidate,
+  source: AnchorReviewSource,
+  at: string,
+): Promise<void> {
+  const review: AnchorReview = {
+    at,
+    candidate: {
+      albumImageUrl: candidate.albumImageUrl ?? null,
+      artists: candidate.artists,
+      durationMs: candidate.durationMs ?? 0,
+      isrc: candidate.isrc ?? null,
+      source,
+      spotifyTrackId: candidate.spotifyTrackId,
+      title: candidate.title,
+    },
+    reason: "version_mismatch",
+    title: rowTitle,
+  };
+
+  await db.execute({
+    args: [JSON.stringify(review), trackId],
+    sql: `update tracks set anchor_review_json = ? where track_id = ?`,
+  });
+}
+
+/** One anchor-review queue row — the row's identity, the candidate's, and the gap between them. */
+export type AnchorReviewRow = {
+  /** When the suspicion was recorded — the queue's oldest-first anchor. */
+  anchorAt: string;
+  artUrl?: string;
+  artists: string[];
+  candidateArtists: string[];
+  /** The candidate's version descriptor ("calibre remix"); "" when IT is the plain one. */
+  candidateDescriptor: string;
+  /** Present ⇒ the candidate can be anchored to, so Accept is offered. */
+  candidateSpotifyTrackId?: string;
+  candidateTitle: string;
+  /** SIGNED candidate − row duration, in ms. Inside ±1s by construction; the sign is the read. */
+  deltaMs: number;
+  /** The bare MusicBrainz recording MBID (any `mb_` prefix stripped), when the row carries one. */
+  mbRecordingId?: string;
+  title: string;
+  trackId: string;
+};
+
+/**
+ * The attention-queue source: every UN-ANCHORED catalogue row carrying a suspected-version-mismatch
+ * review, capped at {@link ANCHOR_REVIEW_QUEUE_LIMIT}.
+ *
+ * The trust rule, as SQL: `spotify_uri is null` (an anchored row's review is history — a hit clears
+ * it, and this guards a row anchored by any path that somehow did not) and `dismissed_at is null`
+ * (a row the operator already said "not for me" about is not his business). Both ride the tiny
+ * partial `tracks_anchor_review_idx`, so this never scans the growing `tracks` table — which
+ * matters here more than anywhere: every embedded row carries a 4 KB vector blob that a full scan
+ * would drag off the page.
+ *
+ * Ordered by `track_id` (the index's own order — stable and index-served) rather than by the
+ * review's `at`, which lives inside the JSON and would cost a per-row `json_extract` + a sort. The
+ * queue's ORDERING is the pure model's job anyway: it sorts every source oldest-first on `anchorAt`.
+ */
+export async function listAnchorReviewRows(): Promise<AnchorReviewRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [ANCHOR_REVIEW_QUEUE_LIMIT],
+    sql: `select track_id, title, artists_json, album_image_url, duration_ms,
+                 mb_recording_id, anchor_review_json
+          from tracks
+          where anchor_review_json is not null
+            and spotify_uri is null
+            and dismissed_at is null
+          order by track_id asc
+          limit ?`,
+  });
+
+  const rows = typedRows<{
+    album_image_url: null | string;
+    anchor_review_json: null | string;
+    artists_json: null | string;
+    duration_ms: null | number;
+    mb_recording_id: null | string;
+    title: string;
+    track_id: string;
+  }>(result.rows);
+
+  return rows.flatMap((row): AnchorReviewRow[] => {
+    const review = parseAnchorReview(row.anchor_review_json);
+
+    // A row whose note we cannot read is not a row the operator can act on (the trust rule).
+    if (!review) {
+      return [];
+    }
+
+    const mbid = (row.mb_recording_id ?? "").replace(/^mb_/, "").trim();
+    const spotifyTrackId = review.candidate.spotifyTrackId?.trim();
+
+    return [
+      {
+        anchorAt: review.at,
+        ...(row.album_image_url ? { artUrl: row.album_image_url } : {}),
+        artists: parseArtistsJson(row.artists_json ?? "[]"),
+        candidateArtists: review.candidate.artists.map((artist) => artist.name),
+        candidateDescriptor: splitTitle(review.candidate.title).descriptor,
+        ...(spotifyTrackId ? { candidateSpotifyTrackId: spotifyTrackId } : {}),
+        candidateTitle: review.candidate.title,
+        deltaMs: review.candidate.durationMs - Number(row.duration_ms ?? 0),
+        ...(mbid ? { mbRecordingId: mbid } : {}),
+        title: row.title,
+        trackId: row.track_id,
+      },
+    ];
+  });
+}
+
+/** The operator's two rulings on a held anchor review. */
+export type AnchorReviewResolution = "accepted" | "dismissed";
+
+/**
+ * THE OPERATOR'S RULING on a suspected version mismatch. The one path by which a review becomes an
+ * anchor — and it is operator-tier for the reason the whole module exists: the evidence is a
+ * heuristic, and a wrong `spotify_uri` poisons the Telescope playlist and the certify path
+ * permanently. A machine may raise the question; only a human may answer it.
+ *
+ * `accepted` — he read both titles and the candidate IS the row. The anchor is written EXACTLY as a
+ * gate hit writes it (uri + url, fill-empty-only cover + ISRC, the attempt stamp and its counter
+ * moving together as they always do) and the artists are linked off the SAME stored candidate, so
+ * an accepted anchor is indistinguishable from a verified one downstream. Refuses (`no_spotify_
+ * candidate`) when the reviewed candidate carries no Spotify id: there is nothing to anchor to, and
+ * inventing one is the failure mode this module is built to prevent.
+ *
+ * `dismissed` — not a match (or the metadata is right and streaming is wrong). The review is cleared
+ * and the row keeps its NORMAL lifecycle: same stamp, same counter, same retry cap. Dismissing
+ * decides nothing about the row except that this near-match was not it.
+ *
+ * The rails, before either: the row must EXIST, be UNCERTIFIED, be UN-ANCHORED, and carry a
+ * readable review (`no_review`). Each throws `AnchorTrackError` so the op maps it to an honest status.
+ */
+export async function resolveAnchorReview(
+  trackId: string,
+  resolution: AnchorReviewResolution,
+  now: Date = new Date(),
+): Promise<{ anchored: boolean; review: AnchorReview }> {
+  const db = await getDb();
+
+  const found = await db.execute({
+    args: [trackId],
+    sql: `select t.isrc, t.title, t.spotify_uri, t.anchor_review_json,
+                 (f.track_id is not null) as certified
+          from tracks t
+          left join findings f on f.track_id = t.track_id
+          where t.track_id = ?
+          limit 1`,
+  });
+
+  const row = typedRows<{
+    anchor_review_json: null | string;
+    certified: number;
+    isrc: null | string;
+    spotify_uri: null | string;
+    title: string;
+  }>(found.rows)[0];
+
+  if (!row) {
+    throw new AnchorTrackError("not_found", `No track with id ${trackId}`);
+  }
+
+  if (Number(row.certified) === 1) {
+    throw new AnchorTrackError(
+      "certified",
+      `Track ${trackId} is certified — its Spotify id is its identity, not an anchor to fill`,
+    );
+  }
+
+  if (row.spotify_uri) {
+    throw new AnchorTrackError(
+      "already_anchored",
+      `Track ${trackId} already carries a Spotify anchor`,
+    );
+  }
+
+  const review = parseAnchorReview(row.anchor_review_json);
+
+  if (!review) {
+    throw new AnchorTrackError("no_review", `Track ${trackId} carries no anchor review to rule on`);
+  }
+
+  if (resolution === "dismissed") {
+    await db.execute({
+      args: [trackId],
+      sql: `update tracks set anchor_review_json = null where track_id = ?`,
+    });
+
+    return { anchored: false, review };
+  }
+
+  const spotifyId = review.candidate.spotifyTrackId?.trim();
+
+  if (!spotifyId) {
+    throw new AnchorTrackError(
+      "no_spotify_candidate",
+      `The reviewed candidate for ${trackId} carries no Spotify track id to anchor to`,
+    );
+  }
+
+  // The gate's hit write, verbatim (see `anchorTrack`) — plus clearing the review the ruling settles.
+  await db.execute({
+    args: [
+      `spotify:track:${spotifyId}`,
+      `https://open.spotify.com/track/${spotifyId}`,
+      review.candidate.albumImageUrl ?? null,
+      review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null,
+      now.toISOString(),
+      trackId,
+    ],
+    sql: `update tracks
+          set spotify_uri = ?,
+              spotify_url = ?,
+              album_image_url = coalesce(album_image_url, ?),
+              isrc = coalesce(isrc, ?),
+              spotify_anchor_attempted_at = ?,
+              spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
+              anchor_review_json = null
+          where track_id = ?`,
+  });
+
+  await connectAnchorArtists(
+    trackId,
+    review.candidate.artists.map((artist) => artist.name),
+    review.candidate.artists.map((artist) => artist.id ?? ""),
+  );
+
+  logEvent("info", "anchor.review-accepted", { spotifyId, trackId });
+
+  return { anchored: true, review };
 }

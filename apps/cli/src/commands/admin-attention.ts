@@ -20,6 +20,7 @@ export async function attentionQueueCommand(): Promise<AttentionQueue> {
 
 /** The terse, deadpan source labels the CLI board tags each row with (CLI register). */
 const SOURCE_LABELS: Record<AttentionSource, string> = {
+  "anchor-review": "version check",
   "artist-review": "artist links",
   "attach-cues": "cues",
   "capture-suspect": "capture check",

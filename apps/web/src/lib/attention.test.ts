@@ -9,6 +9,7 @@ import {
   deriveAttentionItems,
   draftDeadline,
   formatAge,
+  formatDelta,
   formatSpan,
   orderQueue,
   primaryFor,
@@ -29,6 +30,7 @@ const DAY = 24 * HOUR;
 const iso = (at: number) => new Date(at).toISOString();
 
 const EMPTY_INPUTS: AttentionInputs = {
+  anchorReviews: [],
   artistReviews: [],
   captureSuspects: [],
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
@@ -353,6 +355,90 @@ describe("deriveAttentionItems", () => {
     });
   });
 
+  // The anchor gate's suspected version mismatches (lib/server/anchor.ts § the anchor review).
+  // The gate refused a candidate that agreed on artists, base title, and duration but named a
+  // different version — the fingerprint of metadata missing the version — so the near-match becomes
+  // a queue row the operator rules on inline. Nothing auto-anchors; the row is the question.
+  it("rows a suspected version mismatch with the candidate inline, ruling in place", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        anchorReviews: [
+          {
+            anchorAt: iso(NOW - 5 * DAY),
+            artists: ["Calibre"],
+            candidateArtists: ["Calibre"],
+            candidateDescriptor: "calibre remix",
+            candidateSpotifyTrackId: "spotRemix001",
+            candidateTitle: "Typical Description (Calibre Remix)",
+            deltaMs: 400,
+            mbRecordingId: "9f0c1234-5678-90ab-cdef-1234567890ab",
+            title: "Typical Description",
+            trackId: "mb_queued",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual({
+      anchorAt: iso(NOW - 5 * DAY),
+      candidate: {
+        artists: ["Calibre"],
+        deltaMs: 400,
+        descriptor: "calibre remix",
+        spotifyTrackId: "spotRemix001",
+        title: "Typical Description (Calibre Remix)",
+      },
+      id: "anchor-review:mb_queued",
+      mbUrl: "https://musicbrainz.org/recording/9f0c1234-5678-90ab-cdef-1234567890ab",
+      source: "anchor-review",
+      title: "Calibre — Typical Description",
+      trackId: "mb_queued",
+    });
+    // The row has been un-anchored for months — nothing is on fire, so no deadline tier.
+    expect(items[0]?.deadlineAt).toBeUndefined();
+    // Both rulings are one tap on the stored candidate, so there is no station to deep-link to.
+    expect(items[0]?.href).toBeUndefined();
+    expect(attentionRowPath(items[0] as AttentionItem)).toBe("/admin");
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      kind: "accept-anchor",
+      label: "Use this match",
+    });
+  });
+
+  it("offers the MusicBrainz fix instead of Accept when the candidate has no Spotify id", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        anchorReviews: [
+          {
+            anchorAt: iso(NOW - DAY),
+            artists: ["Calibre"],
+            candidateArtists: ["Calibre"],
+            candidateDescriptor: "",
+            candidateTitle: "Typical Description",
+            deltaMs: -200,
+            mbRecordingId: "9f0c1234-5678-90ab-cdef-1234567890ab",
+            title: "Typical Description (Calibre Remix)",
+            trackId: "mb_noid",
+          },
+        ],
+      },
+      NOW,
+    );
+
+    // Nothing to anchor to, so the row is INFORMATION: it points at the place the wrong metadata
+    // gets fixed for every consumer of the open graph, not just for us.
+    expect(items[0]?.candidate?.spotifyTrackId).toBeUndefined();
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      href: "https://musicbrainz.org/recording/9f0c1234-5678-90ab-cdef-1234567890ab",
+      kind: "open",
+      label: "Open in MusicBrainz",
+    });
+  });
+
   // The capture-verification backfill's finding mismatches (docs/the-ear.md § Wrong audio).
   // A machine never rewinds a public finding, so a fingerprint mismatch on one becomes a queue
   // row for the operator's ears — pre-evidenced, deep-linked to the catalogue workstation where
@@ -620,6 +706,14 @@ describe("the readouts", () => {
   it("ages a row off its anchor", () => {
     expect(formatAge(iso(NOW - 17 * DAY), NOW)).toBe("17d");
     expect(formatAge("not-a-date", NOW)).toBe("0m");
+  });
+
+  it("reads a signed duration gap to a tenth of a second (the anchor-review evidence)", () => {
+    expect(formatDelta(400)).toBe("+0.4s");
+    expect(formatDelta(-1000)).toBe("-1.0s");
+    // An exact (or sub-50ms) match carries no sign — it is not "more" or "less", it is the same.
+    expect(formatDelta(0)).toBe("0.0s");
+    expect(formatDelta(-20)).toBe("0.0s");
   });
 
   it("reads a live deadline as time left and a passed one as bounced", () => {

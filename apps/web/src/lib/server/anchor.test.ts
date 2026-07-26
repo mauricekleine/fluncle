@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { anchorSearchQuery, pickIsrcCandidate, pickVerifiedCandidate } from "./anchor";
+import {
+  anchorSearchQuery,
+  detectVersionMismatch,
+  parseAnchorReview,
+  pickIsrcCandidate,
+  pickVerifiedCandidate,
+} from "./anchor";
 
 // The verification rungs are pure, so they are unit-tested here without a database — the exact
 // title fold, artist set, ±2s duration window, and ISRC equality that decide whether a candidate
@@ -186,5 +192,158 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
     expect(pickVerifiedCandidate(["Muffler"], "Dribble", 200_000, candidates)?.spotifyTrackId).toBe(
       "near",
     );
+  });
+});
+
+describe("detectVersionMismatch — the one miss worth writing down", () => {
+  const base = { spotifyTrackId: "suspect" };
+
+  it("fires on the measured shape: same artists + base title + duration, DIFFERENT descriptor", () => {
+    // The real case (2026-07-26): a comp track whose MusicBrainz title omits the version. Our row
+    // says plain "Typical Description" at 394s; streaming has plain at 313s and the remix at 394s.
+    const candidates = [
+      {
+        ...base,
+        artists: ["Calibre"],
+        durationMs: 394_000,
+        title: "Typical Description (Calibre Remix)",
+      },
+    ];
+
+    expect(
+      detectVersionMismatch(["Calibre"], "Typical Description", 394_000, candidates)
+        ?.spotifyTrackId,
+    ).toBe("suspect");
+  });
+
+  it("fires the other way too: OUR row is the labelled one and the candidate is plain", () => {
+    const candidates = [
+      { ...base, artists: ["Calibre"], durationMs: 394_000, title: "Typical Description" },
+    ];
+
+    expect(
+      detectVersionMismatch(["Calibre"], "Typical Description (Calibre Remix)", 394_000, candidates)
+        ?.spotifyTrackId,
+    ).toBe("suspect");
+  });
+
+  it("does NOT fire on a plain full-gate miss — a different base title is a different track", () => {
+    const candidates = [
+      {
+        ...base,
+        artists: ["Calibre"],
+        durationMs: 394_000,
+        title: "Something Else (Calibre Remix)",
+      },
+    ];
+
+    expect(
+      detectVersionMismatch(["Calibre"], "Typical Description", 394_000, candidates),
+    ).toBeUndefined();
+  });
+
+  it("does NOT fire when the descriptors AGREE (that candidate is a plain duration/identity miss)", () => {
+    const candidates = [
+      { ...base, artists: ["Calibre"], durationMs: 394_000, title: "Typical Description" },
+    ];
+
+    expect(
+      detectVersionMismatch(["Calibre"], "Typical Description", 394_000, candidates),
+    ).toBeUndefined();
+  });
+
+  it("does NOT fire outside the TIGHT 1s window, even inside the gate's own 3s", () => {
+    // Past a second the duration stops doing the identifying, so a descriptor disagreement is just
+    // two different recordings again — exactly the case the gate is right to refuse silently.
+    const candidates = [
+      {
+        ...base,
+        artists: ["Calibre"],
+        durationMs: 396_000,
+        title: "Typical Description (Calibre Remix)",
+      },
+    ];
+
+    expect(
+      detectVersionMismatch(["Calibre"], "Typical Description", 394_000, candidates),
+    ).toBeUndefined();
+  });
+
+  it("fires on a SUBSET artist credit (the primary-only collab billing)", () => {
+    const candidates = [
+      { ...base, artists: ["LSB"], durationMs: 340_000, title: "Could Be (Anile Remix)" },
+    ];
+
+    expect(
+      detectVersionMismatch(["LSB", "DRS"], "Could Be", 340_000, candidates)?.spotifyTrackId,
+    ).toBe("suspect");
+  });
+
+  it("is one-way on artists: a candidate crediting MORE than the row is a different credit", () => {
+    const candidates = [
+      { ...base, artists: ["LSB", "DRS"], durationMs: 340_000, title: "Could Be (Anile Remix)" },
+    ];
+
+    expect(detectVersionMismatch(["LSB"], "Could Be", 340_000, candidates)).toBeUndefined();
+  });
+
+  it("does NOT fire on a disjoint artist set, however close the duration", () => {
+    const candidates = [
+      { ...base, artists: ["Someone Else"], durationMs: 340_000, title: "Could Be (Anile Remix)" },
+    ];
+
+    expect(detectVersionMismatch(["LSB", "DRS"], "Could Be", 340_000, candidates)).toBeUndefined();
+  });
+
+  it("drops a candidate with no duration, and picks the closest of those that qualify", () => {
+    const candidates = [
+      { artists: ["Calibre"], durationMs: null, spotifyTrackId: "no-dur", title: "Roll (VIP)" },
+      { artists: ["Calibre"], durationMs: 394_900, spotifyTrackId: "far", title: "Roll (VIP)" },
+      { artists: ["Calibre"], durationMs: 394_100, spotifyTrackId: "near", title: "Roll (VIP)" },
+    ];
+
+    expect(detectVersionMismatch(["Calibre"], "Roll", 394_000, candidates)?.spotifyTrackId).toBe(
+      "near",
+    );
+  });
+
+  it("refuses to suspect anything about a row with no duration, artists, or title", () => {
+    const candidates = [
+      { ...base, artists: ["Calibre"], durationMs: 394_000, title: "Roll (VIP)" },
+    ];
+
+    expect(detectVersionMismatch(["Calibre"], "Roll", 0, candidates)).toBeUndefined();
+    expect(detectVersionMismatch([], "Roll", 394_000, candidates)).toBeUndefined();
+    expect(detectVersionMismatch(["Calibre"], "   ", 394_000, candidates)).toBeUndefined();
+  });
+});
+
+describe("parseAnchorReview — a corrupt note reads as NO note, never a throw", () => {
+  it("round-trips a stored review", () => {
+    const stored = JSON.stringify({
+      at: "2026-07-26T00:00:00.000Z",
+      candidate: {
+        artists: [{ id: "sp-calibre", name: "Calibre" }],
+        durationMs: 394_000,
+        isrc: "GBCJY1300173",
+        source: "listenbrainz",
+        spotifyTrackId: "spot001",
+        title: "Typical Description (Calibre Remix)",
+      },
+      reason: "version_mismatch",
+      title: "Typical Description",
+    });
+
+    expect(parseAnchorReview(stored)?.candidate.spotifyTrackId).toBe("spot001");
+    expect(parseAnchorReview(stored)?.title).toBe("Typical Description");
+  });
+
+  it("reads absent, blank, malformed, and wrong-shaped values as no review", () => {
+    expect(parseAnchorReview(null)).toBeUndefined();
+    expect(parseAnchorReview("   ")).toBeUndefined();
+    expect(parseAnchorReview("{not json")).toBeUndefined();
+    expect(parseAnchorReview("[]")).toBeUndefined();
+    // A shape from some other feature, or a half-written row: no candidate, no reason.
+    expect(parseAnchorReview(JSON.stringify({ at: "x", title: "y" }))).toBeUndefined();
   });
 });

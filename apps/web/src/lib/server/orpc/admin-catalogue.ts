@@ -34,7 +34,13 @@
 // `input.query.*` and applies the same tolerant parse/clamp the backfills do.
 
 import { ORPCError } from "@orpc/server";
-import { type AnchorCandidate, anchorTrack, AnchorTrackError, resolveAnchorFree } from "../anchor";
+import {
+  type AnchorCandidate,
+  anchorTrack,
+  AnchorTrackError,
+  resolveAnchorFree,
+  resolveAnchorReview,
+} from "../anchor";
 import { isAnchorApifyEnabled, setAnchorApifyEnabled } from "../anchor-apify";
 import {
   isAnchorSpotifySearchEnabled,
@@ -386,6 +392,43 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  // POST /admin/catalogue/anchor/reviews/{trackId}/resolve — OPERATOR tier. The ruling on a
+  // suspected version mismatch: anchor the row to the candidate the gate refused, or dismiss it.
+  // Operator-only for the `set_capture_budget` reason — a `spotify_uri` is the row's public identity
+  // (the Telescope playlist, the certify path) and a wrong one is permanent, so the machine that
+  // raised the question does not get to answer it. The `AnchorTrackError` rails map to the honest
+  // status: missing row or nothing to rule on → 404, every state conflict → 409.
+  const resolveAnchorReviewHandler = os.resolve_anchor_review
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { anchored, review } = await resolveAnchorReview(input.trackId, input.resolution);
+        const spotifyTrackId = review.candidate.spotifyTrackId?.trim();
+
+        return {
+          anchored,
+          ok: true as const,
+          review: {
+            candidateTitle: review.candidate.title,
+            ...(anchored && spotifyTrackId ? { spotifyTrackId } : {}),
+          },
+        };
+      } catch (error) {
+        if (error instanceof AnchorTrackError) {
+          const missing = error.reason === "not_found" || error.reason === "no_review";
+
+          throw new ORPCError(missing ? "NOT_FOUND" : "CONFLICT", {
+            data: { apiCode: error.reason, apiMessage: error.message },
+            message: error.message,
+            status: missing ? 404 : 409,
+          });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
   // PUT /admin/catalogue/anchor/search — OPERATOR tier. Flip the DARK flag for slice 2's Spotify
   // anchor-search rungs (anchor-spotify-search.ts). Operator-only, the `set_capture_budget` rule: the
   // rungs point the shared official Spotify app (mints/publish) at the catalogue, which starved under
@@ -497,6 +540,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
     resolve_anchor: resolveAnchorHandler,
+    resolve_anchor_review: resolveAnchorReviewHandler,
     set_anchor_apify: setAnchorApifyHandler,
     set_anchor_search: setAnchorSearchHandler,
     set_capture_budget: setCaptureBudgetHandler,

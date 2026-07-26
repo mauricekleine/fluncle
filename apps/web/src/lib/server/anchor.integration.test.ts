@@ -447,3 +447,372 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     expect(ids.sort()).toEqual(["mb_real_name", "mb_with_calibre"]);
   });
 });
+
+// ── THE ANCHOR REVIEW ────────────────────────────────────────────────────────────────────────
+// The one miss the gate writes down: a candidate that agrees on artists, base title, and duration
+// but names a different version. Every guarantee here is a statement about SQL — the note is
+// written, the anchor is NOT, any anchor clears it, and the operator's ruling either anchors exactly
+// like a gate hit or clears the note and leaves the row's lifecycle alone — so these run against the
+// real migrated schema like the rungs above.
+
+/** The review JSON on a row, parsed (or undefined when the column is null). */
+async function readReview(trackId: string) {
+  const { parseAnchorReview } = await import("./anchor");
+  const result = await db.execute({
+    args: [trackId],
+    sql: "select anchor_review_json from tracks where track_id = ?",
+  });
+  const raw = result.rows[0]?.anchor_review_json;
+
+  return parseAnchorReview(typeof raw === "string" ? raw : null);
+}
+
+describe("anchorTrack — the suspected version mismatch it records on a miss", () => {
+  it("records the near-match, and still refuses to anchor", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    // Our row: plain title at the REMIX's length (the MusicBrainz metadata gap).
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      isrc: null,
+      title: "Typical Description",
+      trackId: "mb_mismatch",
+    });
+
+    const result = await anchorTrack("mb_mismatch", [
+      {
+        albumImageUrl: "https://i.scdn.co/image/remix",
+        artists: [{ id: "sp-calibre", name: "Calibre" }],
+        durationMs: 394_000,
+        isrc: "GBCJY1300173",
+        spotifyTrackId: "spotRemix001",
+        title: "Typical Description (Calibre Remix)",
+      },
+    ]);
+
+    // The gate is UNCHANGED: still a miss, still stamped, still un-anchored.
+    expect(result).toEqual({ anchored: false, verifiedBy: null });
+    const row = await db.execute(
+      "select spotify_uri, spotify_anchor_attempts from tracks where track_id = 'mb_mismatch'",
+    );
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+    expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(1);
+
+    const review = await readReview("mb_mismatch");
+    expect(review?.reason).toBe("version_mismatch");
+    expect(review?.title).toBe("Typical Description");
+    expect(review?.candidate.title).toBe("Typical Description (Calibre Remix)");
+    expect(review?.candidate.spotifyTrackId).toBe("spotRemix001");
+    expect(review?.candidate.durationMs).toBe(394_000);
+    expect(review?.candidate.artists).toEqual([{ id: "sp-calibre", name: "Calibre" }]);
+    // The rung is stamped so the operator can see where the suspicion came from; the box's
+    // `anchor_track` POST is `apify` by default.
+    expect(review?.candidate.source).toBe("apify");
+  });
+
+  it("records NOTHING on a plain miss (a duration too far out, descriptors agreeing)", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      title: "Dribble",
+      trackId: "mb_plainmiss",
+    });
+
+    await anchorTrack("mb_plainmiss", [
+      {
+        artists: [{ name: "Muffler" }],
+        durationMs: 203_500,
+        spotifyTrackId: "spotFar",
+        title: "Dribble",
+      },
+    ]);
+
+    expect(await readReview("mb_plainmiss")).toBeUndefined();
+  });
+
+  it("OVERWRITES a stale review on re-detection (the newest near-match is the one worth reading)", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      title: "Typical Description",
+      trackId: "mb_rewrite",
+    });
+
+    for (const spotifyTrackId of ["spotOld", "spotNew"]) {
+      await anchorTrack("mb_rewrite", [
+        {
+          artists: [{ name: "Calibre" }],
+          durationMs: 394_000,
+          spotifyTrackId,
+          title: "Typical Description (Calibre Remix)",
+        },
+      ]);
+    }
+
+    expect((await readReview("mb_rewrite"))?.candidate.spotifyTrackId).toBe("spotNew");
+  });
+
+  it("CLEARS the review when the row later anchors (a note never outlives its miss)", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      isrc: null,
+      title: "Typical Description",
+      trackId: "mb_healed",
+    });
+
+    // Tick one: the mismatch is recorded.
+    await anchorTrack("mb_healed", [
+      {
+        artists: [{ name: "Calibre" }],
+        durationMs: 394_000,
+        spotifyTrackId: "spotRemix001",
+        title: "Typical Description (Calibre Remix)",
+      },
+    ]);
+    expect(await readReview("mb_healed")).toBeDefined();
+
+    // Tick two: a candidate clears the gate honestly, so the question is answered by the machine.
+    const hit = await anchorTrack("mb_healed", [
+      {
+        artists: [{ name: "Calibre" }],
+        durationMs: 394_200,
+        spotifyTrackId: "spotPlain001",
+        title: "Typical Description",
+      },
+    ]);
+
+    expect(hit.anchored).toBe(true);
+    expect(await readReview("mb_healed")).toBeUndefined();
+  });
+});
+
+describe("resolveAnchorReview — the operator's ruling", () => {
+  /** Seed a row already carrying a recorded review (one miss against the mismatch shape). */
+  async function seedReviewed(trackId: string, spotifyTrackId: null | string): Promise<void> {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      isrc: null,
+      title: "Typical Description",
+      trackId,
+    });
+    await anchorTrack(trackId, [
+      {
+        albumImageUrl: "https://i.scdn.co/image/remix",
+        artists: [{ id: "sp-calibre", name: "Calibre" }],
+        durationMs: 394_000,
+        isrc: "GBCJY1300173",
+        spotifyTrackId: spotifyTrackId ?? "spotRemix001",
+        title: "Typical Description (Calibre Remix)",
+      },
+    ]);
+
+    // A rung with no Spotify id (a Deezer suspect, or a backfilled seed) — the informational case.
+    if (spotifyTrackId === null) {
+      const review = await readReview(trackId);
+      const stripped = { ...review, candidate: { ...review?.candidate, spotifyTrackId: null } };
+
+      await db.execute({
+        args: [JSON.stringify(stripped), trackId],
+        sql: "update tracks set anchor_review_json = ? where track_id = ?",
+      });
+    }
+  }
+
+  it("accepted: writes the anchor exactly like a gate hit, links the artists, and clears the review", async () => {
+    const { resolveAnchorReview } = await import("./anchor");
+
+    await seedReviewed("mb_accept", "spotRemix001");
+
+    const result = await resolveAnchorReview("mb_accept", "accepted");
+    expect(result.anchored).toBe(true);
+
+    const row = await db.execute(
+      "select spotify_uri, spotify_url, album_image_url, isrc, anchor_review_json, spotify_anchor_attempted_at, spotify_anchor_attempts from tracks where track_id = 'mb_accept'",
+    );
+    expect(text(row.rows[0]?.spotify_uri)).toBe("spotify:track:spotRemix001");
+    expect(text(row.rows[0]?.spotify_url)).toBe("https://open.spotify.com/track/spotRemix001");
+    expect(text(row.rows[0]?.album_image_url)).toBe("https://i.scdn.co/image/remix");
+    // The candidate's ISRC fills the row's empty one, the same fill-empty-only recovery a hit does.
+    expect(text(row.rows[0]?.isrc)).toBe("GBCJY1300173");
+    expect(row.rows[0]?.anchor_review_json).toBeNull();
+    expect(row.rows[0]?.spotify_anchor_attempted_at).not.toBeNull();
+    // The stamp and the counter move together, always — the miss that recorded the review bumped
+    // it to 1, and the accept is the second write.
+    expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(2);
+
+    // The graph edge rides the SAME stored candidate, so an accepted anchor links like a verified one.
+    const artist = await db.execute(
+      "select id from artists where spotify_artist_id = 'sp-calibre'",
+    );
+    expect(artist.rows.length).toBe(1);
+    const link = await db.execute({
+      args: [text(artist.rows[0]?.id)],
+      sql: "select 1 from track_artists where track_id = 'mb_accept' and artist_id = ?",
+    });
+    expect(link.rows.length).toBe(1);
+    // And it certifies NOTHING.
+    expect(Number((await db.execute("select count(*) as n from findings")).rows[0]?.n)).toBe(0);
+  });
+
+  it("dismissed: clears the review and leaves the row un-anchored on its normal lifecycle", async () => {
+    const { resolveAnchorReview } = await import("./anchor");
+
+    await seedReviewed("mb_dismiss", "spotRemix001");
+    const before = await db.execute(
+      "select spotify_anchor_attempts from tracks where track_id = 'mb_dismiss'",
+    );
+
+    const result = await resolveAnchorReview("mb_dismiss", "dismissed");
+    expect(result.anchored).toBe(false);
+
+    const row = await db.execute(
+      "select spotify_uri, anchor_review_json, spotify_anchor_attempts from tracks where track_id = 'mb_dismiss'",
+    );
+    expect(row.rows[0]?.anchor_review_json).toBeNull();
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+    // Dismissing spends no retry budget: the cap lifecycle is untouched.
+    expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(
+      Number(before.rows[0]?.spotify_anchor_attempts),
+    );
+  });
+
+  it("refuses to accept a candidate with no Spotify id, and keeps the review for the MB link", async () => {
+    const { resolveAnchorReview } = await import("./anchor");
+
+    await seedReviewed("mb_noid", null);
+
+    await expect(resolveAnchorReview("mb_noid", "accepted")).rejects.toMatchObject({
+      reason: "no_spotify_candidate",
+    });
+
+    const row = await db.execute(
+      "select spotify_uri, anchor_review_json from tracks where track_id = 'mb_noid'",
+    );
+    expect(row.rows[0]?.spotify_uri).toBeNull();
+    expect(row.rows[0]?.anchor_review_json).not.toBeNull();
+  });
+
+  it("throws no_review when there is nothing to rule on (a concurrent anchor cleared it)", async () => {
+    const { resolveAnchorReview } = await import("./anchor");
+
+    await seedUnanchored({ trackId: "mb_noreview" });
+
+    await expect(resolveAnchorReview("mb_noreview", "accepted")).rejects.toMatchObject({
+      reason: "no_review",
+    });
+  });
+
+  it("keeps the anchor rails: not_found, certified, already_anchored", async () => {
+    const { resolveAnchorReview } = await import("./anchor");
+
+    await expect(resolveAnchorReview("nope", "accepted")).rejects.toMatchObject({
+      reason: "not_found",
+    });
+
+    await seedTrack(db, { logId: "004.7.2I", title: "Certified", trackId: "spotifyCertified002" });
+    await expect(resolveAnchorReview("spotifyCertified002", "accepted")).rejects.toMatchObject({
+      reason: "certified",
+    });
+
+    await seedReviewed("mb_raced", "spotRemix001");
+    await db.execute(
+      "update tracks set spotify_uri = 'spotify:track:beat-you-to-it' where track_id = 'mb_raced'",
+    );
+    await expect(resolveAnchorReview("mb_raced", "accepted")).rejects.toMatchObject({
+      reason: "already_anchored",
+    });
+  });
+});
+
+describe("listAnchorReviewRows — the attention read", () => {
+  it("returns only un-anchored, non-dismissed rows carrying a review, with the evidence", async () => {
+    const { anchorTrack, listAnchorReviewRows } = await import("./anchor");
+
+    const record = async (trackId: string) => {
+      await anchorTrack(trackId, [
+        {
+          artists: [{ id: "sp-calibre", name: "Calibre" }],
+          durationMs: 394_400,
+          spotifyTrackId: "spotRemix001",
+          title: "Typical Description (Calibre Remix)",
+        },
+      ]);
+    };
+
+    // The one that should surface, with a MusicBrainz recording identity carrying the `mb_` prefix
+    // history's crawler rows have.
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      title: "Typical Description",
+      trackId: "mb_queued",
+    });
+    await record("mb_queued");
+    await db.execute(
+      "update tracks set mb_recording_id = 'mb_9f0c1234-5678-90ab-cdef-1234567890ab' where track_id = 'mb_queued'",
+    );
+
+    // Reviewed, then anchored by hand — its question is over.
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      title: "Typical Description",
+      trackId: "mb_anchored_review",
+    });
+    await record("mb_anchored_review");
+    await db.execute(
+      "update tracks set spotify_uri = 'spotify:track:x' where track_id = 'mb_anchored_review'",
+    );
+
+    // Reviewed, but the operator already said "not for me".
+    await seedUnanchored({
+      artists: ["Calibre"],
+      durationMs: 394_000,
+      title: "Typical Description",
+      trackId: "mb_dismissed_review",
+    });
+    await record("mb_dismissed_review");
+    await db.execute("update tracks set dismissed_at = ? where track_id = 'mb_dismissed_review'", [
+      NOW,
+    ]);
+
+    // No review at all.
+    await seedUnanchored({ trackId: "mb_quiet" });
+
+    const rows = await listAnchorReviewRows();
+
+    expect(rows.map((row) => row.trackId)).toEqual(["mb_queued"]);
+    expect(rows[0]?.title).toBe("Typical Description");
+    expect(rows[0]?.artists).toEqual(["Calibre"]);
+    expect(rows[0]?.candidateTitle).toBe("Typical Description (Calibre Remix)");
+    expect(rows[0]?.candidateDescriptor).toBe("calibre remix");
+    expect(rows[0]?.candidateArtists).toEqual(["Calibre"]);
+    expect(rows[0]?.candidateSpotifyTrackId).toBe("spotRemix001");
+    // Signed candidate − row, so the operator reads the direction as well as the size.
+    expect(rows[0]?.deltaMs).toBe(400);
+    // The `mb_` prefix is stripped so the link resolves.
+    expect(rows[0]?.mbRecordingId).toBe("9f0c1234-5678-90ab-cdef-1234567890ab");
+  });
+
+  it("drops a row whose review JSON is unreadable (never a half-rendered queue row)", async () => {
+    const { listAnchorReviewRows } = await import("./anchor");
+
+    await seedUnanchored({ trackId: "mb_corrupt" });
+    await db.execute(
+      "update tracks set anchor_review_json = '{not json' where track_id = 'mb_corrupt'",
+    );
+
+    expect(await listAnchorReviewRows()).toEqual([]);
+  });
+});

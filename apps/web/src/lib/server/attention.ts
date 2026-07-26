@@ -15,6 +15,7 @@ import {
   type SubmissionInput,
 } from "../attention";
 import { bestAlbumCoverUrl } from "../media";
+import { listAnchorReviewRows } from "./anchor";
 import { listArtistReviewRows, parseArtistsJson } from "./artists";
 import { listClipPosts } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
@@ -250,6 +251,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     recordings,
     mixtapes,
     clipPosts,
+    anchorReviews,
     artistReviews,
     captureSuspects,
     labelReviews,
@@ -264,6 +266,10 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listRecordings(),
     listMixtapes({ includeUnpublished: true }),
     listClipPosts(),
+    // Every un-anchored catalogue row whose anchor gate found a same-duration candidate under a
+    // DIFFERENT version name — the miss the gate writes down instead of forgetting (the trust rule:
+    // any anchor, and either ruling, clears the note, so a row here is genuinely still open).
+    listAnchorReviewRows(),
     listArtistReviewRows(),
     // Every finding whose captured audio failed the fingerprint check (the trust rule: a
     // ruled/flagged row leaves this read — flag_wrong_audio nulls the verdict).
@@ -291,6 +297,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
 
   const items = deriveAttentionItems(
     {
+      anchorReviews,
       artistReviews,
       captureSuspects,
       clipPosts: clipPosts.map((post) => ({

@@ -642,6 +642,14 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // with the agent token. It writes only catalogue-identity columns (`spotify_uri`/`spotify_url`),
   // never a certification, so an agent may drive it.
   resolve_anchor: "admin",
+  // The operator's ruling on a SUSPECTED VERSION MISMATCH the anchor gate held back — OPERATOR
+  // tier, the resolve_note_rejection precedent inverted onto the catalogue: `accepted` writes a
+  // `spotify_uri`, which IS the row's public identity (it feeds the Telescope playlist and the
+  // certify path) and is permanent if wrong. The machine that raised the suspicion is deliberately
+  // not allowed to act on it — that is the entire point of writing the review down instead of
+  // loosening the gate — so an agent token 403s here even though `anchor_track` beside it is
+  // agent-allowed (that one clears a HARD match; this one overrules a refusal).
+  resolve_anchor_review: "operator",
   // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
   // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
   resolve_artist: "admin",

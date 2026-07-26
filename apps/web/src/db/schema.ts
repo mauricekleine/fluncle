@@ -97,6 +97,25 @@ export const tracks = sqliteTable(
     //     like "preview" — anything that is not confirmed "full" is re-enrichable).
     analyzedAt: text("analyzed_at"),
     analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
+    // THE SUSPECTED-VERSION-MISMATCH REVIEW (../lib/server/anchor.ts § the review). A JSON note
+    // the anchor gate leaves on a catalogue row when it MISSED for one specific, measured reason:
+    // a candidate that agreed with the row on artists, base title, and duration (inside the tight
+    // subset window) but carried a DIFFERENT version descriptor — the fingerprint of a row whose
+    // MusicBrainz metadata omits the version ("Typical Description" at 394s, where streaming has
+    // the plain mix at 313s and "(Calibre Remix)" at 394s). Those rows miss deterministically
+    // forever and now retire under the retry cap, so the near-match is written down instead of
+    // discarded and the operator rules on it from the /admin attention queue.
+    //
+    // It is EVIDENCE, never a verdict: the gate still refuses to anchor (the never-wrong-stamp
+    // rail), and only the operator's `resolve_anchor_review` can bind the row to the candidate.
+    // Overwritten on re-detection (the newest near-match is the one worth reading) and CLEARED
+    // the moment the row anchors by any path, so a review can never outlive the miss it describes.
+    //
+    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule one screen
+    // down: a `.default()` on a `tracks` column makes drizzle regenerate the whole table and
+    // drop+recreate all ~125 indexes in the migration, a production stall. Readers treat NULL as
+    // "no review". Internal operator state — no public surface, no lastmod bump.
+    anchorReviewJson: text("anchor_review_json"),
     // The finding's Apple Music track URL — a public listen link, the Spotify twin.
     // CATALOGUE identity (it describes the recording, not the certification), so it
     // lives here and is just as true of an uncertified track. Resolved EXACTLY by
@@ -696,6 +715,20 @@ export const tracks = sqliteTable(
     index("tracks_anchor_fill_queue_idx")
       .on(table.nearestFindingScore)
       .where(sql`${table.spotifyUri} is null`),
+    // THE ANCHOR-REVIEW READ (the /admin attention queue's `anchor-review` source, anchor.ts
+    // `listAnchorReviewRows`). PARTIAL for the anchor-fill queue's reason and then some: a
+    // suspected version mismatch is RARE (a small, operator-drained slice of a growing table), so
+    // this index holds almost nothing and shrinks as he rules. It matters because the read runs on
+    // every `/admin` load and every `fluncle admin queue` tick, against the one table that carries
+    // a 4 KB `F32_BLOB(1024)` per embedded row — an unindexed `anchor_review_json is not null`
+    // filter is the blob-dragging full scan of a growing table AGENTS.md forbids. Indexed on
+    // `track_id` (the read's ordering + the identity it hands back) under the presence predicate,
+    // so the queue walks the reviews and never the catalogue. Plain ASC (a `desc()` index would
+    // poison the drizzle snapshot into rebuilding every index on the next migration — the ratified
+    // trap) and a plain btree, never the vector `libsql_vector_idx` that wedges hosted Turso.
+    index("tracks_anchor_review_idx")
+      .on(table.trackId)
+      .where(sql`${table.anchorReviewJson} is not null`),
     // THE OPERATOR'S DISMISSALS — "not for me" (docs/the-ear.md § The operator's actions).
     // PARTIAL, exactly like the anchor + embed queues above: dismissals are rare (an operator
     // act, never a machine one), so the index holds a tiny, near-static slice of a growing

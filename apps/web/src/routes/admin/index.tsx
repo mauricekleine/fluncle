@@ -1,10 +1,12 @@
 import {
   ArrowCounterClockwiseIcon,
+  ArrowSquareOutIcon,
   CassetteTapeIcon,
   CircleNotchIcon,
   ClockCountdownIcon,
   EnvelopeSimpleIcon,
   FilmSlateIcon,
+  GitDiffIcon,
   ImageIcon,
   MicrophoneStageIcon,
   PaperPlaneTiltIcon,
@@ -41,6 +43,7 @@ import {
   type AttentionSource,
   deadlineReadout,
   formatAge,
+  formatDelta,
   orderQueue,
   type PrimaryAction,
   primaryFor,
@@ -502,6 +505,42 @@ function AdminQueuePage() {
     [busyId, queryClient, settleOut],
   );
 
+  // Rule on a suspected version mismatch — `resolve_anchor_review`, operator-tier. Accepting
+  // anchors the row to the candidate the gate refused; dismissing clears the note and leaves the
+  // row's normal retry lifecycle alone. Either way the review is gone, so the row settles out.
+  const resolveAnchorReview = useCallback(
+    async (item: AttentionItem, resolution: "accepted" | "dismissed") => {
+      if (!item.trackId || busyId) {
+        return;
+      }
+      setBusyId(item.id);
+      try {
+        const response = await fetch(
+          `/api/v1/admin/catalogue/anchor/reviews/${encodeURIComponent(item.trackId)}/resolve`,
+          {
+            body: JSON.stringify({ resolution }),
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          },
+        );
+        const result = (await response.json()) as { message?: string; ok?: boolean };
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message ?? `Ruling failed (${response.status})`);
+        }
+        settleOut(item, () => {
+          setClearedIds((current) => new Set(current).add(item.id));
+          void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
+        });
+      } catch (caught) {
+        toast.error(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setBusyId(undefined);
+      }
+    },
+    [busyId, queryClient, settleOut],
+  );
+
   // Push the finding's video to a platform straight from the row — the same gated
   // draft op as the board (YouTube posts a public Short; TikTok drops a silent
   // inbox draft). Reconcile the queue afterwards: a fresh TikTok push becomes this
@@ -691,6 +730,7 @@ function AdminQueuePage() {
               onMarkPosted={markPosted}
               onPush={handlePush}
               onRePush={rePush}
+              onResolveAnchorReview={resolveAnchorReview}
               onRestore={handleRestore}
               onSelect={setSelectedId}
               onSnooze={handleSnooze}
@@ -714,6 +754,7 @@ function AdminQueuePage() {
 // ─── One row ──────────────────────────────────────────────────────────────────
 
 const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }>> = {
+  "anchor-review": GitDiffIcon,
   "artist-review": MicrophoneStageIcon,
   "attach-cues": FilmSlateIcon,
   "capture-suspect": WaveformIcon,
@@ -732,6 +773,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
 // The glyph's text equivalent — the row's source, spoken (the glyph itself is
 // decorative, so a screen reader still hears which platform/task the row is).
 const SOURCE_LABELS: Record<AttentionSource, string> = {
+  "anchor-review": "Version check",
   "artist-review": "Artist",
   "attach-cues": "Recording",
   "capture-suspect": "Capture check",
@@ -761,6 +803,7 @@ type QueueRowProps = {
   onMarkPosted: (item: AttentionItem, url: string) => void;
   onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
+  onResolveAnchorReview: (item: AttentionItem, resolution: "accepted" | "dismissed") => void;
   onRestore: (item: AttentionItem) => void;
   onSelect: (id: string) => void;
   onSnooze: (item: AttentionItem, until: string) => void;
@@ -790,6 +833,7 @@ function QueueRow({
   onMarkPosted,
   onPush,
   onRePush,
+  onResolveAnchorReview,
   onRestore,
   onSelect,
   onSnooze,
@@ -820,6 +864,10 @@ function QueueRow({
   // A pushed TikTok draft is finished in-app, then marked posted here (copy the cover, paste
   // the live URL). Only tiktok-draft rows carry that panel.
   const canFinish = item.source === "tiktok-draft";
+  // A suspected version mismatch carries a second ruling ("Not a match") beside the primary, plus
+  // the MusicBrainz link when the primary is not already it — the ruling is a two-way decision, and
+  // the upstream fix is the part that helps every other consumer of the open graph.
+  const candidate = item.source === "anchor-review" ? item.candidate : undefined;
   const parked = state === "snoozed" || state === "dismissed";
 
   return (
@@ -895,6 +943,14 @@ function QueueRow({
               {item.reviewLinks} to verify
             </span>
           ) : undefined}
+          {/* The length gap between our row and the candidate. It is the whole case: inside a
+              second, with the same artists and base title, the duration is what says "same
+              recording, different name" — so it reads as data (Oxanium, tabular). */}
+          {candidate ? (
+            <span className="font-display tracking-[-0.01em] tabular-nums">
+              {formatDelta(candidate.deltaMs)}
+            </span>
+          ) : undefined}
           {item.machine ? (
             <Badge
               className="px-1 py-0 font-display text-[10px] text-muted-foreground"
@@ -918,6 +974,24 @@ function QueueRow({
             decision). Only submission rows carry it, and only once the sweep has run. */}
         {item.verdict ? (
           <p className="mt-0.5 truncate text-[11px] italic text-muted-foreground">{item.verdict}</p>
+        ) : undefined}
+        {/* The other half of the evidence: what the gate found, and the version words that differ
+            from ours. The row's own title is above, so the two titles read side by side — which is
+            the entire decision. An empty descriptor means the CANDIDATE is the plain one and we are
+            the labelled row, so it is spelled out rather than left blank. */}
+        {candidate ? (
+          <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="truncate">
+              Candidate: {candidate.title}
+              {candidate.artists.length > 0 ? ` — ${candidate.artists.join(", ")}` : ""}
+            </span>
+            <Badge
+              className="shrink-0 px-1 py-0 font-display text-[10px] text-muted-foreground"
+              variant="outline"
+            >
+              {candidate.descriptor || "no version"}
+            </Badge>
+          </p>
         ) : undefined}
       </div>
 
@@ -944,6 +1018,7 @@ function QueueRow({
               busy={busy}
               copied={copied}
               item={item}
+              onAcceptAnchor={(target) => onResolveAnchorReview(target, "accepted")}
               onCopyCaption={onCopyCaption}
               onPush={onPush}
               onRePush={onRePush}
@@ -961,6 +1036,35 @@ function QueueRow({
                 onOpenChange={onFinishOpenChange}
                 open={finishOpen}
               />
+            ) : undefined}
+            {candidate ? (
+              <>
+                {/* The second ruling. It clears the note and nothing else: the row keeps its normal
+                    stamp, counter, and retry cap, so saying no decides only that this near-match
+                    was not it. Distinct from [x] Won't do, which hides the row in this browser. */}
+                <Button
+                  disabled={busy}
+                  onClick={() => onResolveAnchorReview(item, "dismissed")}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Not a match
+                </Button>
+                {/* The upstream fix. Omitted when the primary is already this link (an
+                    un-anchorable candidate), so the row never shows it twice. */}
+                {item.mbUrl && primary.kind !== "open" ? (
+                  <Button
+                    aria-label={`Open ${item.title} in MusicBrainz`}
+                    nativeButton={false}
+                    render={<a href={item.mbUrl} rel="noreferrer" target="_blank" />}
+                    size="icon-sm"
+                    title="Open in MusicBrainz"
+                    variant="ghost"
+                  >
+                    <ArrowSquareOutIcon aria-hidden="true" />
+                  </Button>
+                ) : undefined}
+              </>
             ) : undefined}
           </>
         )}
@@ -1015,6 +1119,7 @@ type PrimaryButtonProps = {
   busy: boolean;
   copied: boolean;
   item: AttentionItem;
+  onAcceptAnchor: (item: AttentionItem) => void;
   onCopyCaption: (item: AttentionItem) => void;
   onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
@@ -1032,6 +1137,7 @@ function PrimaryButton({
   busy,
   copied,
   item,
+  onAcceptAnchor,
   onCopyCaption,
   onPush,
   onRePush,
@@ -1041,6 +1147,23 @@ function PrimaryButton({
   selected,
 }: PrimaryButtonProps) {
   const variant = selected ? "default" : "outline";
+
+  if (primary.kind === "accept-anchor") {
+    return (
+      <Button
+        disabled={busy}
+        onClick={() => onAcceptAnchor(item)}
+        ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
+        size="sm"
+        variant={variant}
+      >
+        {busy ? (
+          <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+        ) : undefined}
+        {primary.label}
+      </Button>
+    );
+  }
 
   if (primary.kind === "open") {
     return (
