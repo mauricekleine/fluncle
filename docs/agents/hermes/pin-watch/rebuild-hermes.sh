@@ -2,8 +2,9 @@
 # fluncle-pin-watch — the rave-02 box's self-deploy.
 #
 # Watches main's baked CLI pins (the `fluncle` + Claude Code versions in
-# docs/agents/hermes/Dockerfile) AND main's baked content (the sweep scripts,
-# the skills, and the Dockerfile itself) against what the running Hermes
+# docs/agents/hermes/Dockerfile) AND main's baked content — everything that
+# Dockerfile COPYs (the sweep scripts, ALL of packages/skills, the baked font),
+# plus the Dockerfile itself — against what the running Hermes
 # container has; when main is ahead on EITHER, rebuilds the image and swaps the
 # container — with a
 # pre-smoke gate (the new image is fully smoke-tested in throwaway containers
@@ -18,6 +19,8 @@
 #
 # Run by pin-watch.timer (default: --if-stale, a no-op when current). Run once
 # by hand with --force to clear accumulated debt and validate the recipe.
+# `--fingerprint` prints the watched paths + the current hash and exits (no
+# docker, no network, no sync) — the cheap way to see what the box is watching.
 #
 # Doctrine: docs/agents/hermes-agent.md + the fluncle-hermes-operator skill.
 set -euo pipefail
@@ -34,28 +37,107 @@ SWEEP_DRAIN_TIMEOUT="${PINWATCH_SWEEP_DRAIN_TIMEOUT:-300}"  # max seconds to wai
 
 MODE="--if-stale"
 case "${1:-}" in
-  --force) MODE="--force" ;;     # rebuild regardless of drift (the operator pilot)
-  --dry-run) MODE="--dry-run" ;; # build + pre-smoke the new image, then STOP (never swap)
+  --force) MODE="--force" ;;             # rebuild regardless of drift (the operator pilot)
+  --dry-run) MODE="--dry-run" ;;         # build + pre-smoke the new image, then STOP (never swap)
+  --fingerprint) MODE="--fingerprint" ;; # print the watched paths + the fingerprint at REPO_DIR HEAD, then STOP
 esac
-
-# The paths the image BAKES from main (Dockerfile COPYs): the sweep scripts, the Dockerfile
-# itself, and the two skills the box runs. A change to any must trigger a rebuild — the CLI
-# pins do NOT move for a script-only change, so without this the fix never reaches the box.
-BAKED_PATHS=(
-  docs/agents/hermes/scripts
-  docs/agents/hermes/Dockerfile
-  packages/skills/fluncle-track-enrichment/scripts
-  packages/skills/copywriting-fluncle
-)
-# A deterministic fingerprint of the baked content at REPO_DIR HEAD. `git ls-tree -r` emits the
-# mode+type+blob-sha+path of every file under those paths, so any content change moves it. It reads
-# only HEAD's tree — no history — so it is safe on the depth-1 shallow clone.
-baked_fingerprint() {
-  git -C "$REPO_DIR" ls-tree -r HEAD -- "${BAKED_PATHS[@]}" | sha256sum | cut -d' ' -f1
-}
 
 log() { printf '[pin-watch] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
+
+# Discord alert (best-effort; never throws). Defined UP HERE — ahead of the path-set
+# resolution below, which alerts when it has to fall back — while $WEBHOOK is still read
+# later, off the LIVE container's env. Hence `${WEBHOOK:-}`: an alert fired before that
+# read (or on the docker-free --fingerprint path, which never reads it) is a silent no-op
+# rather than an unbound-variable crash.
+alert() {
+  [ -n "${WEBHOOK:-}" ] || return 0
+  curl -fsS -m 10 -H 'Content-Type: application/json' \
+    -d "$(printf '{"content":%s}' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \
+    "$WEBHOOK" >/dev/null 2>&1 || true
+}
+
+# ── the baked path set (derived from the Dockerfile's own COPY lines) ─────────────────────────
+# WHAT the image bakes is decided in exactly one place — the COPY lines in $DOCKERFILE — so the
+# fingerprint DERIVES its watch set from them rather than restating it. A hand-kept list drifts:
+# it used to name two skill sub-paths while the Dockerfile has long baked `COPY packages/skills`
+# WHOLESALE, so a new or edited skill rode into the image without ever moving the fingerprint and
+# the box ran it stale until some unrelated change happened to force a rebuild. Deriving makes
+# a new COPY self-covering — there is nothing here to remember to update.
+#
+# The parser is deliberately narrow, because the Dockerfile is ours: single-stage, plain-form
+# COPY. Take each COPY line, skip `--from=` (a stage/image source, not a repo path), drop the
+# remaining `--flag` tokens, and treat every token but the last (the destination) as a source.
+# The Dockerfile itself is appended separately — it is the recipe, never a COPY source.
+#
+# THE RAIL: if a COPY ever takes a shape this cannot read (JSON-array form, a `\` continuation,
+# a build-arg inside a path) the validation below fails the derived set over to
+# BAKED_PATHS_FALLBACK — a coarse SUPERSET of every root the image bakes today — and alerts. The
+# box then over-rebuilds instead of silently running stale content, which is the safe direction.
+# Keep the fallback a superset if the Dockerfile ever COPYs from a new top-level root.
+BAKED_PATHS_FALLBACK=(
+  docs/agents/hermes
+  packages/skills
+  apps/cli/assets/fonts
+)
+BAKED_PATHS=()
+
+# Emit the COPY sources declared in the Dockerfile at REPO_DIR HEAD, one per line, deduped.
+derive_baked_paths() {
+  awk '
+    toupper($1) == "COPY" {
+      if ($0 ~ /--from=/) next
+      n = 0
+      for (i = 2; i <= NF; i++) if ($i !~ /^--/) tok[++n] = $i
+      for (i = 1; i < n; i++) { sub(/\/+$/, "", tok[i]); print tok[i] }
+    }
+  ' "$REPO_DIR/$DOCKERFILE" | LC_ALL=C sort -u
+}
+
+# Every derived path must be a plain repo path that actually resolves in HEAD's tree. An
+# unmatched pathspec is the dangerous case: `git ls-tree` exits 0 and prints NOTHING, so a
+# mis-parsed path would silently shrink the fingerprint instead of erroring.
+validate_baked_paths() {
+  local p matched
+  [ "${#BAKED_PATHS[@]}" -gt 0 ] || return 1
+  for p in "${BAKED_PATHS[@]}"; do
+    case "$p" in '' | -* | /* | *'$'* | *'"'* | *"'"* | *'['*) return 1 ;; esac
+    matched="$(git -C "$REPO_DIR" ls-tree -r HEAD -- "$p")"
+    [ -n "$matched" ] || return 1
+  done
+}
+
+resolve_baked_paths() {
+  mapfile -t BAKED_PATHS < <(derive_baked_paths)
+  BAKED_PATHS+=("$DOCKERFILE")
+  if validate_baked_paths; then
+    log "baked paths (derived from the $DOCKERFILE COPY set): ${BAKED_PATHS[*]}"
+    return 0
+  fi
+  BAKED_PATHS=("${BAKED_PATHS_FALLBACK[@]}")
+  log "WARNING: could not derive the baked paths from $DOCKERFILE — using the coarse fallback: ${BAKED_PATHS[*]}"
+  alert "⚠️ pin-watch: could not parse the COPY set in $DOCKERFILE — fingerprinting the coarse fallback paths instead. The box still rebuilds (it over-triggers), but the parser needs a look."
+}
+
+# A deterministic fingerprint of the baked content at REPO_DIR HEAD. `git ls-tree -r` emits the
+# mode+type+blob-sha+path of every file under those paths, so any content change moves it. It reads
+# only HEAD's tree — no history — so it is safe on the depth-1 shallow clone. Sorted before hashing
+# so the hash depends on the CONTENT of the watched set, never on pathspec order.
+baked_fingerprint() {
+  git -C "$REPO_DIR" ls-tree -r HEAD -- "${BAKED_PATHS[@]}" | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+}
+
+# `--fingerprint`: answer "what is this box watching, and what does it hash to?" without touching
+# docker, the network, or the live container. Reads REPO_DIR's checkout exactly as it stands (no
+# fetch, no reset), so it is safe to point at any checkout via PINWATCH_REPO_DIR.
+if [ "$MODE" = "--fingerprint" ]; then
+  command -v git >/dev/null || die "git not found"
+  [ -d "$REPO_DIR/.git" ] || die "no git checkout at $REPO_DIR (set PINWATCH_REPO_DIR)"
+  resolve_baked_paths
+  printf 'paths: %s\n' "${BAKED_PATHS[*]}"
+  printf 'fingerprint: %s\n' "$(baked_fingerprint)"
+  exit 0
+fi
 
 # ── sweep quiesce (serialize the docker-heavy rebuild against the box's sweeps) ─
 # The rebuild's `docker build` + throwaway pre-smoke `docker run`s contend hard with
@@ -131,15 +213,9 @@ command -v docker >/dev/null || die "docker not found"
 command -v git >/dev/null || die "git not found"
 docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not running — refusing to act (an operator must (re)provision it)"
 
-# Discord alert (best-effort; the webhook is read from the LIVE container's env
-# so we never need a config file). Never throws.
+# The webhook is read from the LIVE container's env (see alert() above), so we never
+# need a config file.
 WEBHOOK="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^DISCORD_ALERT_WEBHOOK=//p' | head -1 || true)"
-alert() {
-  [ -n "$WEBHOOK" ] || return 0
-  curl -fsS -m 10 -H 'Content-Type: application/json' \
-    -d "$(printf '{"content":%s}' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \
-    "$WEBHOOK" >/dev/null 2>&1 || true
-}
 
 # Self-deploy health → the public /status board (the `self-deploy` row). Reuses
 # the agent token already in the LIVE container's env (the same token the
@@ -187,6 +263,9 @@ log "fluncle: have=$HAVE_FLUNCLE want=$WANT_FLUNCLE | claude-code: have=$HAVE_CL
 # ── 2b. read the baked-content fingerprint (main HEAD) vs the running image's stamp ────────────
 # The CLI pins do NOT move for a script-only change, so the fingerprint is what makes such a change
 # reach the box. An empty HAVE_FP (an image built before this fingerprint existed) counts as drift.
+# Resolve the watch set from the JUST-SYNCED Dockerfile first, so the set always matches the COPYs
+# of the image this run would actually build.
+resolve_baked_paths
 WANT_FP="$(baked_fingerprint)"
 HAVE_FP="$(docker exec "$CONTAINER" cat /opt/.hermes-baked-fp 2>/dev/null | tr -d '[:space:]' || true)"
 log "baked-fp: have=${HAVE_FP:-<none>} want=$WANT_FP"

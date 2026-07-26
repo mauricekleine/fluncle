@@ -16,6 +16,13 @@ ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
 # expiry is total lockout". Needs the auth key + ACL tagOwners to permit the tag;
 # if left unset, disable key expiry manually in the Tailscale admin.
 TS_TAGS="${TS_TAGS:-}"
+# The 1Password CLI (`op`). ON by default for this profile: it is a BASE PREREQUISITE of a
+# box that syncs secrets, not optional tooling — see the install block below. Set
+# INSTALL_OP=0 only for a private box that will never hold a secret template.
+INSTALL_OP="${INSTALL_OP:-1}"
+# Pinned only as the debsig policy directory name — 1Password's signing-key id, which is
+# part of the vendor's documented install recipe, not a version.
+OP_DEBSIG_KEY_ID="AC2D62742012EA22"
 
 if [[ "${EUID}" -ne 0 ]]; then
   printf 'bootstrap-private-vps.sh must run as root\n' >&2
@@ -36,6 +43,47 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg sudo ufw openssh-server
+
+# ── 1Password CLI (`op`) ──────────────────────────────────────────────────────
+# A BASE PREREQUISITE of this profile, which is why it sits here beside sudo/ufw/sshd
+# rather than in the optional groups of install-toolchain.sh. A private box's whole
+# secret layer begins with `op inject` (the secrets sync renders its env templates
+# through it). With no `op` on PATH that very first call is `command not found`, no env
+# file is ever written, and every job on the box then runs credential-less — a silent,
+# total failure of the secret layer with nothing to warn you. It must not be something
+# a minimal toolchain run can leave out.
+#
+# It reaches ONLY this profile by construction: the public SSH app server bootstraps
+# through bootstrap-rave-vps.sh instead, and that edge deliberately holds no 1Password
+# credential at all (SKILL.md § Rotate the agent token — `op` stays off the edge).
+#
+# Installed from the VENDOR apt repo — keyring + signed sources list, the same shape as
+# the Docker install in install-toolchain.sh — rather than a pinned tarball, so ordinary
+# `apt-get upgrade` carries the CLI forward instead of letting it rot at a version
+# nothing watches. Idempotent: `gpg --yes` overwrites an existing keyring and the repo,
+# policy, and debsig-keyring files are all rewritten in place, so a re-run is a no-op
+# reinstall. Recipe: https://developer.1password.com/docs/cli/get-started/
+if [[ "${INSTALL_OP}" == "1" ]]; then
+  log "Installing the 1Password CLI (op)"
+  op_arch="$(dpkg --print-architecture)"
+  curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
+    | gpg --dearmor --yes --output /usr/share/keyrings/1password-archive-keyring.gpg
+  chmod a+r /usr/share/keyrings/1password-archive-keyring.gpg
+  printf 'deb [arch=%s signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/%s stable main\n' \
+    "${op_arch}" "${op_arch}" >/etc/apt/sources.list.d/1password.list
+  # debsig-verify policy: the vendor signs the .deb itself, on top of the apt repo
+  # signature. Both the policy and its keyring live under the signing key's id.
+  install -d -m 0755 \
+    "/etc/debsig/policies/${OP_DEBSIG_KEY_ID}" \
+    "/usr/share/debsig/keyrings/${OP_DEBSIG_KEY_ID}"
+  curl -fsSL https://downloads.1password.com/linux/debian/debsig/1password.pol \
+    -o "/etc/debsig/policies/${OP_DEBSIG_KEY_ID}/1password.pol"
+  curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
+    | gpg --dearmor --yes --output "/usr/share/debsig/keyrings/${OP_DEBSIG_KEY_ID}/debsig.gpg"
+  apt-get update
+  apt-get install -y --no-install-recommends 1password-cli
+  op --version
+fi
 
 log "Creating admin user ${USERNAME}"
 if ! id "${USERNAME}" >/dev/null 2>&1; then

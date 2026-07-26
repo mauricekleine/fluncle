@@ -106,7 +106,7 @@
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "4ae1652d53fe9cb2a9200938833ce2bae1cdee1072d3e3f519fdd2ef64b681b6"
+      "computedHash": "d3f26683b3fc30dace0c9b21f4b75a5c822ead069bc73291863b263182b603fd"
     },
     "improve": {
       "source": "shadcn/improve",

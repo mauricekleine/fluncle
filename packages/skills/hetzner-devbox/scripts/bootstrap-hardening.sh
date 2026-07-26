@@ -84,6 +84,15 @@ printf 'Streaming %s hardening script to root@%s\n' "${PROFILE}" "${SERVER_IPV4}
   printf 'export USERNAME=%q\n' "${USERNAME}"
   printf 'export TS_AUTHKEY=%q\n' "${TS_AUTHKEY}"
   printf 'export TS_HOSTNAME=%q\n' "${TS_HOSTNAME}"
+  # Forward the remaining knobs the bootstrap scripts read, so a documented override
+  # actually reaches the remote instead of being silently dropped at this boundary
+  # (TS_TAGS is documented in SKILL.md but never made it across before). Forwarded only
+  # when set, so each bootstrap script's own default still applies.
+  for forwarded in TS_TAGS ADMIN_SSH_PORT INSTALL_OP; do
+    if [[ -n "${!forwarded:-}" ]]; then
+      printf 'export %s=%q\n' "${forwarded}" "${!forwarded}"
+    fi
+  done
   cat "${BOOTSTRAP_SCRIPT}"
 } | ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@${SERVER_IPV4}" 'bash -s'
 

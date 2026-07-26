@@ -23,6 +23,8 @@ It is an opinionated starting point, not a universal cloud provisioning framewor
 - Public SSH app firewall name: `fluncle-rave-public`
 - Tailscale hostname: server name
 - Bun version: `1.2.15`
+- Toolchain profile: `devbox` (the alternative is `agent-box`)
+- 1Password CLI (`op`) on the private profile: installed (`INSTALL_OP=1`)
 
 ## Required Local State
 
@@ -59,6 +61,8 @@ SERVER_IPV4=<public-ip> packages/skills/hetzner-devbox/scripts/bootstrap-hardeni
 
 This streams the vendored `scripts/bootstrap-private-vps.sh` over SSH, passes `TS_AUTHKEY` without putting the key on the command line, and configures the server as Tailscale-only. Admin access is **plain OpenSSH on `:2222`** reached over the tailnet (tunneled through WireGuard/UDP `41641`), **not** Tailscale SSH on `:22`. Tailscale SSH (`--ssh`) is deliberately NOT used: on a tailnet whose ACL sets the SSH `action` to `"check"`, it forces a per-session browser re-auth that blocks every headless/agent connection — plain sshd avoids it, and key-only auth + tailnet membership remain the two factors (no public exposure either way). After it finishes, verify `ssh -p 2222 admin@<tailscale-hostname>` works before relying on the firewall. **Disable Tailscale key expiry for the node** (admin console → Machines → ⋯ → Disable key expiry), or pass `TS_TAGS=tag:server` so the node joins tag-owned and is exempt from expiry — a private box has no public fallback, so an expired key is a total lockout.
 
+The bootstrap also installs the **1Password CLI (`op`)** from the vendor apt repo. This is a base prerequisite, not tooling: a private box's whole secret layer begins with `op inject`, so with no `op` on PATH that first sync call is `command not found`, no env file is ever written, and every job on the box then runs credential-less with nothing to warn you — which is why it lives here rather than among `install-toolchain.sh`'s optional groups. The vendor repo (not a pinned tarball) means ordinary `apt-get upgrade` keeps it current instead of letting it rot at a version nothing watches. Set `INSTALL_OP=0` for a private box that will never hold a secret template. The **public** SSH app profile deliberately does not get it — see [Rotate the agent token](#rotate-the-agent-token); `op` stays off the edge.
+
 4. Apply the Hetzner provider firewall:
 
 ```sh
@@ -74,6 +78,25 @@ packages/skills/hetzner-devbox/scripts/install-toolchain.sh
 ```
 
 This installs base packages, Docker Engine plus Compose, GitHub CLI, Bun, `uv`, current Node LTS user-locally, Codex CLI, and Claude Code by default. Set `INSTALL_*` flags to `0` to opt out of optional groups. Set `INSTALL_REMOTION_LIBS=1` to include headless Chromium runtime libraries.
+
+### Two toolchain postures
+
+`TOOLCHAIN_PROFILE` chooses the **defaults** for those groups; an explicitly-set `INSTALL_*` still wins.
+
+| `TOOLCHAIN_PROFILE`  | Base packages                                                                                      | Optional groups                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `devbox` _(default)_ | full dev set (`git`, `tmux`, `zsh`, `build-essential`, `python3`, `nodejs`, `npm`, ripgrep, fd, …) | Docker, gh, Bun, `uv`, Node LTS, Codex CLI, Claude Code — all **on** |
+| `agent-box`          | thin floor only (`ca-certificates`, `curl`, `gnupg`, `lsb-release`, `git`, `jq`)                   | Docker **on**; everything else **off**                               |
+
+Use `agent-box` for a host whose job is to **run containers** and that is administered from elsewhere:
+
+```sh
+TOOLCHAIN_PROFILE=agent-box packages/skills/hetzner-devbox/scripts/install-toolchain.sh
+```
+
+**Why the flag exists.** Fluncle's Hermes agent box is documented as "Docker only — deliberately no general dev tooling, for a small blast radius", yet the default `devbox` run installs a full workstation on the host: shells, compilers, a Python and a Node runtime, plus two agent CLIs. Running the written rebuild path therefore produced a materially more-tooled box than the architecture doc described, and nothing flagged the gap. `agent-box` is what that doc describes, expressed as a flag the script enforces rather than a sentence in a runbook.
+
+The `agent-box` floor is chosen, not minimal-for-its-own-sake: `git` + `curl` are what the box's self-deploy needs to pull and build from `main`, `gnupg`/`ca-certificates`/`lsb-release` are what the Docker apt repo needs, and every recurring job on such a box is a systemd unit running `docker exec` — so there is nothing for a shell profile, a compiler, or an interpreter to do on the host. `op` is deliberately **not** one of these groups; it is installed by the bootstrap (see step 3) so a minimal toolchain run can never strand the secret layer.
 
 ## Public SSH App Workflow
 
@@ -187,11 +210,14 @@ If provisioning from scratch, create the updater and timer on the host, download
 After setup, verify from a fresh local shell:
 
 ```sh
-ssh -p 2222 admin@agent-devbox-01 'bash -lc "id -nG; docker ps; bun --version; uv --version; node --version; gh --version | head -n 1; codex --version; claude --version"'
+ssh -p 2222 admin@agent-devbox-01 'bash -lc "id -nG; docker ps; op --version; bun --version; uv --version; node --version; gh --version | head -n 1; codex --version; claude --version"'
 ```
+
+On an `agent-box` host only the first three lines are expected to answer — `op --version` is the one that matters, because a box that syncs secrets and cannot find `op` fails silently.
 
 Also verify:
 
+- `op --version` answers on any private box (a missing `op` means the secret layer never materialises).
 - `hcloud firewall describe agent-devbox-private` shows only ICMP and UDP `41641` inbound.
 - `sudo ufw status verbose` on the server shows inbound allowed on `tailscale0` and no public SSH allow rule.
 - `admin` is in the `docker` group on a fresh login if Docker was installed.
@@ -216,4 +242,5 @@ For public SSH app servers, verify:
 - Treat adding `admin` to the Docker group as root-equivalent access and mention that tradeoff when relevant.
 - Ask before creating paid infrastructure when running this skill from an agent session.
 - Keep public SSH app servers minimal. Do not install Docker, Codex, Claude, or general dev tooling unless the user explicitly asks.
+- Provision a container-only host with `TOOLCHAIN_PROFILE=agent-box`. The default `devbox` profile puts a full workstation on the host, which is a wider blast radius than such a box is meant to have.
 - Public repositories must not contain Hetzner tokens, Tailscale auth keys, private SSH keys, production API tokens, or host-specific secrets.
