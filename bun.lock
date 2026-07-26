@@ -263,6 +263,7 @@
       "name": "@fluncle/tokens",
       "version": "0.1.0",
       "devDependencies": {
+        "@types/bun": "catalog:",
         "typescript": "catalog:",
       },
     },

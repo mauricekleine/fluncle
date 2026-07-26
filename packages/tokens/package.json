@@ -11,9 +11,11 @@
   },
   "scripts": {
     "generate": "bun scripts/generate-css.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/bun": "catalog:",
     "typescript": "catalog:"
   }
 }

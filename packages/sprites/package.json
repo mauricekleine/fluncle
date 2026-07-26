@@ -6,5 +6,11 @@
   "exports": {
     ".": "./src/index.ts",
     "./assets/*": "./assets/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
   }
 }

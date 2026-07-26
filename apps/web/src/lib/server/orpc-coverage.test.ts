@@ -166,8 +166,13 @@ const CARVE_OUT_ROUTES = new Set([
   // The generated-spec + tooling surfaces are documents, not API operations.
   "openapi[.]json",
   "postman[.]json",
+  // The set-level Open Graph card for a shared `/mix` link — a binary/render carve-out
+  // exactly like `og.$logId`: it emits a 1200×630 PNG through workers-og, never RPC JSON.
+  // Listed on its own because it is the one BARE-ONLY public route (mounted at
+  // /api/og/set with no /api/v1 twin), so only the bare walk below reaches it.
+  "og.set",
   // The machine-readable status read — the JSON sibling of the /status HTML
-  // dashboard (../../routes/api/status.ts). A public resource read like /api/health,
+  // dashboard (../../routes/api/v1/status.ts). A public resource read like /api/health,
   // deliberately NOT an oRPC operation: it just echoes the already-public
   // `service_status` snapshot for a poller (the rave-01 watchdog reads its
   // `secondsSinceFreshestReport`), so it carries no contract and stays carved out.
@@ -180,11 +185,26 @@ const CARVE_OUT_ROUTES = new Set([
 // admin tier is its own later wave, carved out above, not counted here).
 const PENDING_PUBLIC_OPS = new Set<string>([]);
 
-const V1_DIR = fileURLToPath(new URL("../../routes/api/v1", import.meta.url));
+const API_DIR = fileURLToPath(new URL("../../routes/api", import.meta.url));
+const V1_DIR = `${API_DIR}/v1`;
 
-// The file-route basenames actually present under /api/v1 (one level + nested),
-// excluding admin (its own wave) and the `-`-prefixed non-route helpers. Used to
-// keep PUBLIC_ROUTE_OPS honest: if a public route file exists with no entry, the
+// The two roots the public net walks. `/api/v1` is the canonical mount, but a route
+// may be mounted at the BARE `/api/*` path with NO /api/v1 twin (`og.set.ts`, at
+// /api/og/set, is the live instance) — and a bare-only route was checked by NEITHER
+// net: this file only ever walked v1, and orpc-admin-coverage.test.ts only ever walks
+// /api/admin. So the bare top level is walked too, and a new bare-only public route
+// now has to be documented or carved out like any other.
+const PUBLIC_ROUTE_DIRS = [V1_DIR, API_DIR];
+
+// Directories the public walk does NOT descend: `admin` has its own coverage net
+// (orpc-admin-coverage.test.ts), and `v1` is walked as a root in its own right — so
+// the bare walk must not re-enumerate it under a `v1/`-prefixed basename.
+const SKIPPED_DIRS = new Set(["admin", "v1"]);
+
+// The file-route basenames actually present under a root (one level + nested),
+// excluding the skipped dirs above, the `-`-prefixed non-route helpers, and the
+// colocated `*.test.ts` suites (a test beside a route is not a route). Used to keep
+// PUBLIC_ROUTE_OPS honest: if a public route file exists with no entry, the
 // enumeration is stale and the test flags it.
 function listRouteBasenames(dir: string, prefix = ""): string[] {
   const out: string[] = [];
@@ -193,15 +213,19 @@ function listRouteBasenames(dir: string, prefix = ""): string[] {
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
 
     if (entry.isDirectory()) {
-      if (entry.name === "admin") {
-        continue; // The admin wave has its own coverage; not in this public net.
+      if (SKIPPED_DIRS.has(entry.name)) {
+        continue;
       }
 
       out.push(...listRouteBasenames(`${dir}/${entry.name}`, rel));
       continue;
     }
 
-    if (!entry.name.endsWith(".ts") || entry.name.startsWith("-")) {
+    if (
+      !entry.name.endsWith(".ts") ||
+      entry.name.startsWith("-") ||
+      entry.name.includes(".test.")
+    ) {
       continue;
     }
 
@@ -270,7 +294,10 @@ describe("oRPC public-route contract coverage", () => {
       Object.keys(PUBLIC_ROUTE_OPS).map((path) => canonical(path.split(" ")[1] ?? path)),
     );
 
-    for (const basename of listRouteBasenames(V1_DIR)) {
+    // Both roots: the canonical /api/v1 tree AND the bare /api top level, so a
+    // BARE-ONLY route (no /api/v1 twin) is inside the net instead of in the gap
+    // between this file and orpc-admin-coverage.test.ts.
+    for (const basename of PUBLIC_ROUTE_DIRS.flatMap((dir) => listRouteBasenames(dir))) {
       if (isCarvedOut(basename)) {
         continue;
       }
@@ -280,5 +307,18 @@ describe("oRPC public-route contract coverage", () => {
         `route file "${basename}" has no entry in PUBLIC_ROUTE_OPS — document it (with its canonical verb_noun) or add it as a carve-out`,
       ).toBe(true);
     }
+  });
+
+  // The net is only worth having if it would actually catch the thing it was blind to.
+  // Prove the bare walk reaches a bare-only route (og.set today), so a future public
+  // route mounted at /api/<x> with no /api/v1/<x> twin cannot slip in unexamined.
+  it("walks the BARE /api top level, not just /api/v1", () => {
+    const bare = listRouteBasenames(API_DIR);
+
+    expect(bare).toContain("og.set");
+    // …and does not double-count the canonical tree under a `v1/` prefix.
+    expect(bare.some((basename) => basename.startsWith("v1/"))).toBe(false);
+    // …nor the admin tree, which has its own coverage net.
+    expect(bare.some((basename) => basename.startsWith("admin/"))).toBe(false);
   });
 });

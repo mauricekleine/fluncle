@@ -6,7 +6,8 @@
   "scripts": {
     "build": "go build -o dist/fluncle-dns .",
     "format": "gofmt -w .",
-    "lint": "go test ./...",
-    "typecheck": "go test ./..."
+    "lint": "go vet ./...",
+    "test": "go test ./...",
+    "typecheck": "go build -o /dev/null ./..."
   }
 }

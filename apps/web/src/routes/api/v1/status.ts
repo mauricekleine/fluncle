@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { getDb } from "@/lib/server/db";
 import { getLiveState } from "@/lib/server/live";
 import { getServiceStatuses } from "@/lib/server/status";
-import { type ApiHandlers, aliasHandlers } from "../-alias";
 
 /**
  * A WORKER-vantage Turso round-trip sample: the Worker times a `select 1` to the Turso
@@ -55,7 +54,15 @@ async function probeDbRoundTrip(): Promise<{ at: string; roundTripMs: number } |
 // The vocabulary cut removed the bare `/api/status` back-compat alias: this is the
 // single canonical mount. Deliberately NOT an oRPC operation — it is a resource read
 // like /api/v1/health (carved out of the oRPC coverage net), so it needs no contract.
-export const serverHandlers: ApiHandlers = {
+//
+// SINGLE-MOUNT, SO NO `aliasHandlers`: that helper's `as never` exists only to unbind the
+// phantom path coupling when ONE handler object is mounted at both /api/x and /api/v1/x
+// (see ../-alias.ts). With the bare twin gone there is nothing to share, and routing the
+// object through the cast erased TanStack's type-check at the mount for no benefit — a
+// handler with the wrong shape would have compiled. The handler is a plain exported
+// function mounted INLINE below (the shape ./openapi[.]json.ts uses), so the compiler
+// checks it against this route's own literal path; the export is what status.test.ts drives.
+export const serverHandlers = {
   GET: async () => {
     const [services, live, dbProbe] = await Promise.all([
       getServiceStatuses(),
@@ -126,5 +133,5 @@ export const serverHandlers: ApiHandlers = {
 };
 
 export const Route = createFileRoute("/api/v1/status")({
-  server: { handlers: aliasHandlers(serverHandlers) },
+  server: { handlers: serverHandlers },
 });

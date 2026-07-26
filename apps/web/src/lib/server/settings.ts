@@ -1,23 +1,57 @@
-// The lean global-flag KV (the `settings` table) — the ONE store every operator kill
-// switch rides. A kill switch has to be a flip, not a deploy: an automation that
+// The global string→string KV (the `settings` table) — the ONE store for any value that has
+// to change without a deploy. That requirement is what the store is FOR: an automation that
 // misbehaves at 3am must be stoppable from the admin UI or the CLI in one move, with no
-// build, no push, no Cloudflare rebuild. So each switch is a single row here, read by the
-// automation's own tick before it does anything.
+// build, no push, no Cloudflare rebuild. So each value is a single row here, read by its own
+// caller's tick before it does anything.
 //
-// Three switches live on it today, all the same shape (a `"true"`/`"false"` string under a
-// stable key, unset ⇒ OFF):
-//   - `clip_drip_paused`         — the Instagram clip drip-feed (./clip-social.ts)
-//   - `publish_advance_paused`   — the render → publish auto-advance (./publish-advance.ts)
-//   - `catalogue_capture_paused` — the metered catalogue audio capture (./capture-budget.ts)
+// THE INVARIANT EVERY READER OWES THE STORE: a row can be absent (a fresh deploy, a preview
+// branch, a wiped KV) or hold a value nothing here validates on write — `setSetting` takes
+// any string. So a read MUST degrade, never throw: parse into a bounded default, or treat
+// the row as cold and recompute. Concretely — a flag's unset state is its documented
+// default; a budget or a dial that fails to parse falls back to the calibrated constant
+// (smaller budget, never "unlimited"); a JSON cache that will not parse is a MISS that falls
+// through to the live read. No reader may make a `settings` row load-bearing for
+// correctness, because nothing guarantees the row is there or well-formed.
 //
-// And the KV also carries the first BUDGET (a non-negative integer as a string), because a
-// spending limit has exactly the same requirement a kill switch does — changeable in one
-// flip, with no deploy — and so it wants the same store:
-//   - `catalogue_capture_daily_tracks` / `catalogue_capture_daily_bytes` — the capture
-//     budget's rolling-24h caps (./capture-budget.ts). Unset or malformed ⇒ the conservative
-//     DEFAULT, never "unlimited": the failure mode of a budget must be a smaller budget.
+// WHAT RIDES IT TODAY — 31 keys across 14 modules, in six shapes (grep `getSetting(` for the
+// live list; each module owns its own exported key constant and its own default):
 //
-// Reuse these for the next one; never invent a second flag store.
+//   1. OPERATOR FLIPS — `"true"`/`"false"`, and the unset state is the deliberate default
+//      (some default-deny, some default-allow; each module's comment states which):
+//      `clip_drip_paused` (./clip-social.ts), `publish_advance_paused` (./publish-advance.ts),
+//      `catalogue_capture_paused` (./capture-budget.ts), `anchor_apify_enabled`
+//      (./anchor-apify.ts), `anchor_spotify_search_enabled` (./anchor-spotify-search.ts),
+//      `frontier.minting` (./frontier-playlist.ts).
+//   2. THE SIX SONAR DARK FLAGS (./sonar.ts) — `sonar_sonic_enabled`, `sonar_artists_enabled`,
+//      `sonar_log_enabled`, `sonar_recs_enabled`, `sonar_recs_catalogue_enabled`,
+//      `sonar_mix_enabled`. Same shape as (1), all DEFAULT-DENY, one per surface: this is how
+//      the vector sidecar ships dark and is lit surface by surface (docs/vector-serving.md).
+//   3. BUDGETS — a non-negative integer as a string: `catalogue_capture_daily_tracks` /
+//      `catalogue_capture_daily_bytes`, the capture budget's rolling-24h caps
+//      (./capture-budget.ts). Unset or malformed ⇒ the conservative DEFAULT.
+//   4. VOICE-GATE DIALS — a bounded number, retunable between sweep ticks:
+//      `{logbook,note,observation}_echo_min_phrase_words` / `…_max_overlap`
+//      (./logbook-echo.ts, ./note-rejections.ts, ./observation-rejections.ts). Out-of-bounds
+//      or nonsense degrades to the calibrated default, so the gate fails toward its defaults
+//      rather than open or shut.
+//   5. RUNTIME STATE the code itself writes (not operator dials) — the rolling rate-limit
+//      windows `spotify_calls_window_start` / `…_count` (./spotify-budget.ts) and
+//      `apple_calls_window_start` / `…_count`, the circuit breaker's
+//      `apple_auth_breaker_tripped_at` / `apple_auth_breaker_failures` (./apple-breaker.ts),
+//      the `anchor_apify_disabled_at` trip marker (./anchor-apify.ts), and the two telescope
+//      pointers `telescope.spotify_playlist_id` / `telescope.last_mirror`
+//      (./telescope-playlist.ts).
+//   6. JSON CACHES — `catalogue_summary_cache` and `catalogue_affinity_cache` (./catalogue.ts),
+//      the one shape that is not a scalar. BLESSED, and the invariant above is exactly why it
+//      is safe: both are precomputed reads whose cache is an OPTIMISATION, never the truth.
+//      The summary's six counts are maintained as ±1 deltas and a cold or unparseable row
+//      makes the delta a NO-OP (the next read cold-fills from one authoritative scan, and the
+//      rank sweep's recompute heals any drift); the affinity cache is display-only and a
+//      cold/corrupt row falls back to the live `readArchiveAffinity`. Every
+//      authorization-critical caller reads live, never the cache. A future cache belongs here
+//      only on the same terms: parse-or-recompute, and never the source of truth.
+//
+// Reuse these three functions for the next one; never invent a second flag store.
 
 import { getDb, typedRow } from "./db";
 

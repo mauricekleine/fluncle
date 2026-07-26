@@ -14,19 +14,10 @@ vi.mock("@/lib/server/db", () => ({ getDb: async () => ({ execute: dbExecute }) 
 vi.mock("@/lib/server/status", () => ({ getServiceStatuses: () => getServiceStatuses() }));
 vi.mock("@/lib/server/live", () => ({ getLiveState: () => getLiveState() }));
 
-const { serverHandlers } = await import("./v1/status");
+const { serverHandlers } = await import("./status");
 
 async function readJson(): Promise<Record<string, unknown>> {
-  const get = serverHandlers.GET;
-
-  if (!get) {
-    throw new Error("GET handler is not defined");
-  }
-
-  const response = await get({
-    params: {},
-    request: new Request("https://www.fluncle.com/api/status"),
-  });
+  const response = await serverHandlers.GET();
 
   return (await response.json()) as Record<string, unknown>;
 }
@@ -37,7 +28,7 @@ beforeEach(() => {
   getLiveState.mockReset().mockResolvedValue(null);
 });
 
-describe("/api/status dbProbe", () => {
+describe("/api/v1/status dbProbe", () => {
   it("reports the Worker→Turso round-trip on success", async () => {
     const body = await readJson();
     const probe = body["dbProbe"] as { at: string; roundTripMs: number } | null;

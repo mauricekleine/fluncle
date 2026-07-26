@@ -318,9 +318,14 @@ export async function adminRole(request: Request): Promise<AdminRole | null> {
   const token = header?.startsWith(prefix) ? header.slice(prefix.length) : undefined;
 
   if (token) {
-    const operatorToken = await readEnv("FLUNCLE_API_TOKEN");
+    // readOptionalEnv, NOT readEnv: on a deployment where FLUNCLE_API_TOKEN was never
+    // provisioned (a preview branch, a half-configured Worker) the throwing read turned
+    // a Bearer request into an unhandled 500 instead of the 401 it is. An absent
+    // operator token means "no operator can authenticate here", so fall through to the
+    // agent token and then to unauthorized — the same shape the agent read already has.
+    const operatorToken = await readOptionalEnv("FLUNCLE_API_TOKEN");
 
-    if (constantTimeEqual(token, operatorToken)) {
+    if (operatorToken && constantTimeEqual(token, operatorToken)) {
       return "operator";
     }
 

@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { constantTimeEqual } from "./env";
+import { adminRole, constantTimeEqual } from "./env";
 
 // constantTimeEqual guards the admin Bearer comparison (adminRole, line ~190/196)
 // and the OAuth-state signature check (verifySignedState, line ~299). Node's
@@ -52,5 +52,69 @@ describe("constantTimeEqual — length-mismatch safety", () => {
     // (a throw). The byte-buffer guard keeps it a clean false.
     expect(() => constantTimeEqual("é", "ee")).not.toThrow();
     expect(constantTimeEqual("é", "ee")).toBe(false);
+  });
+});
+
+// adminRole is the ONE gate every /api/admin/* route reads (requireAdmin and
+// requireOperator both call it). It reads the two Bearer carriers out of the env, and an
+// UNPROVISIONED deployment must still answer unauthorized — not throw. The operator read
+// used to be the THROWING `readEnv`, so a Bearer request against a Worker with no
+// FLUNCLE_API_TOKEN (a preview branch, a half-configured deploy) raised
+// `Missing FLUNCLE_API_TOKEN` out of the auth check and surfaced as an unhandled 500: an
+// availability bug that also named the missing secret. Pin the graceful shape: an absent
+// secret means that carrier simply cannot authenticate, and the request falls through.
+describe("adminRole — an unprovisioned deployment answers unauthorized, never throws", () => {
+  const guarded = ["ADMIN_SESSION_SECRET", "FLUNCLE_AGENT_TOKEN", "FLUNCLE_API_TOKEN"] as const;
+  const saved = new Map<string, string | undefined>();
+
+  function bearer(token: string): Request {
+    return new Request("https://www.fluncle.com/api/v1/admin/tracks", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeEach(() => {
+    for (const key of guarded) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const [key, value] of saved) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+
+    saved.clear();
+  });
+
+  it("returns null (never throws) when FLUNCLE_API_TOKEN is not provisioned", async () => {
+    await expect(adminRole(bearer("some-presented-token"))).resolves.toBeNull();
+  });
+
+  it("still admits the AGENT when only FLUNCLE_AGENT_TOKEN is provisioned", async () => {
+    process.env["FLUNCLE_AGENT_TOKEN"] = "the-agent-token";
+
+    expect(await adminRole(bearer("the-agent-token"))).toBe("agent");
+    expect(await adminRole(bearer("not-the-agent-token"))).toBeNull();
+  });
+
+  it("admits the OPERATOR on an exact FLUNCLE_API_TOKEN match", async () => {
+    process.env["FLUNCLE_API_TOKEN"] = "the-operator-token";
+
+    expect(await adminRole(bearer("the-operator-token"))).toBe("operator");
+    expect(await adminRole(bearer("the-operator-tokeX"))).toBeNull();
+  });
+
+  it("returns null for a request carrying no Authorization header at all", async () => {
+    process.env["FLUNCLE_API_TOKEN"] = "the-operator-token";
+
+    const bare = new Request("https://www.fluncle.com/api/v1/admin/tracks");
+
+    await expect(adminRole(bare)).resolves.toBeNull();
   });
 });
