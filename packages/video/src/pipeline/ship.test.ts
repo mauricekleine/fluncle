@@ -47,7 +47,7 @@ describe("parseShipArgs", () => {
       "--grain",
       "grainCoarseSilver",
       "--model",
-      "anthropic/claude-opus-4-8",
+      "anthropic/claude-opus-5",
       "--reasoning",
       "high",
       "--register",
@@ -56,7 +56,7 @@ describe("parseShipArgs", () => {
 
     expect(flags.vehicle).toBe("voronoi cellular");
     expect(flags.grain).toBe("grainCoarseSilver");
-    expect(flags.model).toBe("anthropic/claude-opus-4-8");
+    expect(flags.model).toBe("anthropic/claude-opus-5");
     expect(flags.reasoning).toBe("high");
     expect(flags.register).toBe("abstract");
   });
@@ -132,7 +132,7 @@ describe("buildRenderJson", () => {
     hasCompositionFile: true,
     hasIntentFile: true,
     hasPropsFile: true,
-    model: "anthropic/claude-opus-4-8",
+    model: "anthropic/claude-opus-5",
     palette: "amber-warm",
     paletteSwatches: ["#e8a94b", "#f2c976", "#171208"],
     plateSubject: null,
@@ -152,7 +152,7 @@ describe("buildRenderJson", () => {
       compositionSource: "composition.tsx",
       grain: "grainCoarseSilver",
       intent: "intent.json",
-      model: "anthropic/claude-opus-4-8",
+      model: "anthropic/claude-opus-5",
       props: "props.json",
       reasoning: "high",
       register: "abstract",

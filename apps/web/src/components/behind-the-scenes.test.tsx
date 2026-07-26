@@ -22,7 +22,7 @@ function track(overrides: Partial<Track>): Track {
 const FULL = track({
   logId: "0042.A1",
   videoGrain: "grainCoarseSilver",
-  videoModel: "anthropic/claude-opus-4-8",
+  videoModel: "anthropic/claude-opus-5",
   videoModelReasoning: "high",
   videoRegister: "abstract",
   videoUrl: "https://found.fluncle.com/0042.A1/footage.mp4",
@@ -51,10 +51,10 @@ describe("copy transforms", () => {
   });
 
   it("quotes the model telemetry verbatim — raw stored id plus effort, never a byline", () => {
-    expect(modelTelemetry(FULL)).toBe("anthropic/claude-opus-4-8 · effort high");
+    expect(modelTelemetry(FULL)).toBe("anthropic/claude-opus-5 · effort high");
     // No stored effort: the raw model id alone.
     expect(modelTelemetry(track({ ...FULL, videoModelReasoning: undefined }))).toBe(
-      "anthropic/claude-opus-4-8",
+      "anthropic/claude-opus-5",
     );
     // No stored model: no telemetry row at all.
     expect(modelTelemetry(track({ ...FULL, videoModel: undefined }))).toBeUndefined();

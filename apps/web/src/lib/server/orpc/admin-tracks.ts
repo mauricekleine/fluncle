@@ -1097,7 +1097,7 @@ export function adminTracksHandlers(os: Implementer) {
       const videoPalette = bodyPalette ?? manifestStamps.palette;
       const videoPlateSubject = bodyPlateSubject ?? manifestStamps.plateSubject;
       const videoStructure = bodyStructure ?? manifestStamps.structure;
-      const videoModel = bodyModel ?? manifestStamps.model ?? "anthropic/claude-opus-4-8";
+      const videoModel = bodyModel ?? manifestStamps.model ?? "anthropic/claude-opus-5";
       const videoModelReasoning = bodyReasoning ?? manifestStamps.reasoning ?? "high";
 
       const videoUrl = trackMedia(track.logId).videoUrl;

@@ -1581,7 +1581,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     expect(update.videoGrain).toBe("grainCoarseSilver");
     expect(update.videoRegister).toBe("abstract");
     expect(update.videoPalette).toBe("amber-warm");
-    expect(update.videoModel).toBe("anthropic/claude-opus-4-8");
+    expect(update.videoModel).toBe("anthropic/claude-opus-5");
     expect(update.videoModelReasoning).toBe("high");
     expect(typeof update.videoSquaredAt).toBe("string");
   });
@@ -1606,7 +1606,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     bucketGet.mockResolvedValueOnce({
       json: async () => ({
         grain: "grainFineEmulsion",
-        model: "anthropic/claude-opus-4-8",
+        model: "anthropic/claude-opus-5",
         palette: "teal-cool",
         // The plate subject is a top-level string; the structure is a NESTED { dominant } object
         // (render.json's StructureManifest) — the finalize path reads `structure.dominant` out of it.
@@ -1695,7 +1695,7 @@ describe("oRPC finalize_track_video (POST .../video/finalize)", () => {
     expect(response?.status).toBe(200);
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect(update.videoVehicle).toBeUndefined();
-    expect(update.videoModel).toBe("anthropic/claude-opus-4-8");
+    expect(update.videoModel).toBe("anthropic/claude-opus-5");
   });
 });
 

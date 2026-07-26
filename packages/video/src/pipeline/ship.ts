@@ -70,7 +70,7 @@ const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 // The authoring AI model (<provider>/<model>) and reasoning effort, written into
 // render.json alongside the vehicle so the upload step records the full
 // diversity-ledger entry. Fall back to any value already in the render manifest.
-const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-4-8";
+const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-5";
 const DEFAULT_VIDEO_REASONING = "high";
 
 // The register — the third diversity-ledger axis (composition style), written

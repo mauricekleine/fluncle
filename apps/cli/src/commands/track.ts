@@ -106,7 +106,7 @@ export type TrackVideoOptions = {
 
 // The authoring AI model recorded for a video, in <provider>/<model> notation.
 // The default when neither --model nor render.json supplies one.
-const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-4-8";
+const DEFAULT_VIDEO_MODEL = "anthropic/claude-opus-5";
 
 // The reasoning/thinking effort recorded for a video (e.g. "high"). The default
 // when neither --reasoning nor render.json supplies one.
