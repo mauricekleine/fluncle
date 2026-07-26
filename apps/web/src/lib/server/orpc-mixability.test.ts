@@ -77,18 +77,22 @@ describe("oRPC list_mixable_tracks (GET /tracks/{idOrLogId}/mixable)", () => {
     expect(body.findings[0]?.logId).toBe("004.7.2I");
   });
 
-  it("passes the exclude + taste seed through, and clamps the limit in-handler", async () => {
+  // `taste` STILL PARSES AND STILL 200s — it is a documented public parameter and a live `/mix`
+  // link carries it — but under single-probe-on-last the rail's probe is the chain's last track
+  // (`idOrLogId` itself), so an artist seed no longer reaches the rail at all. The seed keeps its
+  // real job on `list_mix_openers`. This pins the backward-compatible wire and the drop together.
+  it("passes the exclude through, ignores the taste seed, and clamps the limit in-handler", async () => {
     getMixableTracks.mockResolvedValueOnce([]);
 
     const { handleOrpc } = await import("./orpc");
-    await handleOrpc(
+    const response = await handleOrpc(
       get(
         "https://www.fluncle.com/api/v1/tracks/004.7.2I/mixable?exclude=004.7.2I,011.1.6E&taste=calibre,lsb&limit=999",
       ),
     );
 
+    expect(response?.status).toBe(200);
     expect(getMixableTracks).toHaveBeenCalledWith("004.7.2I", {
-      artistSlugs: ["calibre", "lsb"],
       exclude: ["004.7.2I", "011.1.6E"],
       limit: 32, // clamped to MIXABLE_MAX_LIMIT
     });

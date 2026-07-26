@@ -3,13 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { parseKey, toCamelot } from "../key-camelot";
-import { isNamedMove, rankMixable, sonicGateOpen, toMixTrack } from "./mixability";
 import {
-  getFindingsByGalaxyRanked,
-  getGalaxyAuditionMembers,
-  getMixableTracks,
-  getTasteCosines,
-} from "./tracks";
+  applyTaste,
+  isNamedMove,
+  rankMixable,
+  shortlistMixable,
+  sonicGateOpen,
+  TASTE_SHORTLIST,
+  tasteSubScore,
+  toMixTrack,
+} from "./mixability";
+import { getFindingsByGalaxyRanked, getGalaxyAuditionMembers, getMixableTracks } from "./tracks";
 
 // The other two readers that used to pull every vector into the isolate, now ranked IN SQL
 // (lib/server/embedding.ts, docs/local-database.md "Local is not production"): the `/mix` rail
@@ -18,7 +22,8 @@ import {
 // exact scan, paged in SQL). Real libSQL, real migrations, real vector functions — a mock
 // could not exercise any of it.
 //
-// Each has a PIN: the same findings in the same order as the old in-isolate ranking.
+// Each has a PIN: the same findings in the same order as an equivalent in-isolate ranking, so
+// the claim under test is always "the SQL cosine equals the JS cosine", never "the SQL is fast".
 
 const execute = vi.hoisted(() => vi.fn());
 let db: Client;
@@ -103,6 +108,13 @@ async function seed(rows: MixSeed[]): Promise<void> {
  * gate guarantees the neighbourhood is deep enough to fill the rail). So the reference
  * applies the same filter before ranking; the pin is still "the SQL cosine equals the JS
  * cosine, in the same order", which is what this test exists to prove.
+ *
+ * SINGLE-PROBE-ON-LAST: the rail is re-ranked by mixability × the candidate's calibrated
+ * cosine to the TARGET (the chain's last track), so the reference runs the same two stages —
+ * `shortlistMixable` then `applyTaste` — over cosines computed here in the isolate. When the
+ * target has no vector, or the archive has not cleared the sonic gate, taste is not live and
+ * the reference is the plain mixability order (which `applyTaste` over an all-null taste
+ * reproduces exactly, ties falling back to the shortlist's own order).
  */
 function rankInIsolate(rows: MixSeed[], targetId: string, limit: number): string[] {
   const target = rows.find((row) => row.trackId === targetId);
@@ -133,12 +145,35 @@ function rankInIsolate(rows: MixSeed[], targetId: string, limit: number): string
 
       return parsed ? isNamedMove(targetCamelot, toCamelot(parsed)) : false;
     })
-    .map((row) => ({ item: row.trackId, track: toMixTrack(toRow(row)) }));
+    .map((row) => ({
+      item: row.trackId,
+      sonicCos:
+        target.embedding && row.embedding
+          ? cosineSimilarity(target.embedding, row.embedding)
+          : null,
+      track: toMixTrack(toRow(row)),
+    }));
   const embedded = rows.filter((row) => row.embedding !== null).length;
+  const gateOpen = sonicGateOpen(embedded);
+  const options = { gateOpen };
+  const shortlist = shortlistMixable(
+    toMixTrack(toRow(target)),
+    candidates,
+    TASTE_SHORTLIST,
+    options,
+  );
+  const tasteLive = target.embedding !== null && gateOpen;
+  const cosByTrackId = new Map(
+    candidates.flatMap((candidate) =>
+      typeof candidate.sonicCos === "number" ? [[candidate.item, candidate.sonicCos] as const] : [],
+    ),
+  );
 
-  return rankMixable(toMixTrack(toRow(target)), candidates, limit, {
-    gateOpen: sonicGateOpen(embedded),
-  }).map((entry) => entry.item);
+  return applyTaste(
+    shortlist,
+    (trackId) => (tasteLive ? tasteSubScore(cosByTrackId.get(trackId) ?? null) : null),
+    limit,
+  ).map((entry) => entry.item);
 }
 
 beforeEach(async () => {
@@ -148,7 +183,7 @@ beforeEach(async () => {
 });
 
 describe("getMixableTracks", () => {
-  it("returns exactly what the old in-isolate scoring returned (same findings, same order)", async () => {
+  it("returns exactly what the in-isolate reference ranks (same findings, same order)", async () => {
     const rows = corpus();
 
     await seed(rows);
@@ -332,88 +367,186 @@ describe("the seeded vector round-trips through vector32/readEmbeddingBlob", () 
   });
 });
 
-// ── The taste fold ────────────────────────────────────────────────────────────────────────
-// `getTasteCosines` is the `/mix` rail's second vector statement: each shortlisted track's
-// similarity to its NEAREST seed probe. It used to be one `union all` branch per probe over a
-// `shortlist` CTE — the flattening trap (docs/local-database.md), which re-read every
-// shortlisted vector once per probe. It is now ONE pass with the probes folded by scalar
-// `min(…)` in the select list.
+// ── SINGLE-PROBE-ON-LAST: the ratified `/mix` taste model ─────────────────────────────────
 //
-// The pin is the file's usual one: the SQL cosine equals the JS cosine. Both branches are
-// covered on purpose — single-argument `min()` is SQLite's AGGREGATE min, so a one-probe query
-// that wrapped its lone term would collapse the whole scan to a single row instead of scoring
-// every track, and it would do so SILENTLY.
+// The rail's taste probe is ONE vector — the LAST track of the chain, which is the target
+// `getMixableTracks` is called with — and the rail is re-ranked by mixability × the calibrated
+// cosine to it. These fixtures hold key and BPM flat wherever adjacency is the thing under
+// test, so nothing but the vector can move the order.
 
-/** The reference: each track's max similarity over the probes, computed in the isolate. */
-function tasteInIsolate(
-  rows: MixSeed[],
-  trackIds: string[],
-  probes: number[][],
-): Map<string, number> {
-  const best = new Map<string, number>();
+/** A unit vector whose cosine to `axis(0)` is exactly `cos`, the remainder on `spread`. */
+function atCosine(cos: number, spread: number): number[] {
+  const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
-  for (const trackId of trackIds) {
-    const embedding = rows.find((row) => row.trackId === trackId)?.embedding;
+  values[0] = cos;
+  values[spread] = Math.sqrt(Math.max(0, 1 - cos * cos));
 
-    if (!embedding) {
-      continue;
-    }
-
-    best.set(trackId, Math.max(...probes.map((probe) => cosineSimilarity(embedding, probe))));
-  }
-
-  return best;
+  return values;
 }
 
-describe("the /mix taste fold ranks in SQL", () => {
-  const shortlist = ["t_01", "t_02", "t_03", "t_04", "t_05"];
+/** The unit basis vector on `index`. */
+function axis(index: number): number[] {
+  const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
-  it("matches the in-isolate max-similarity over many probes", async () => {
-    const rows = corpus();
+  values[index] = 1;
+
+  return values;
+}
+
+/** `seed()`'s deterministic coordinate for the row at `index` — the chain's exclusion token. */
+function logIdFor(index: number): string {
+  return `${100 + index}.${index % 10}.1A`;
+}
+
+/**
+ * Enough same-key, far-away rows to open the sonic coverage gate (11 embedded tracks in play).
+ * Their cosine to the target is 0, so they calibrate to 0 and settle at the foot of the rail.
+ */
+function gateFillers(from: number, key: string): MixSeed[] {
+  return Array.from({ length: 10 }, (_, index) => ({
+    bpm: 172,
+    embedding: axis(200 + index),
+    key,
+    trackId: `t_fill_${index}`,
+  }));
+}
+
+describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
+  it("re-ranks by mixability × adjacency, flipping a pair plain mixability ordered the other way", async () => {
+    // t_same_far is the cleaner MIX (same key), t_energy_near the nearer SOUND (a whole-tone
+    // energy move). Plain mixability prefers the first; single-probe-on-last prefers the second,
+    // because what follows a tune is a question about that tune's sound.
+    const rows: MixSeed[] = [
+      { bpm: 172, embedding: axis(0), key: "A minor", trackId: "t_target" },
+      // calibrate(0.635) = 0.3 → mix 0.755, rail 0.227
+      { bpm: 172, embedding: atCosine(0.635, 1), key: "A minor", trackId: "t_same_far" },
+      // calibrate(0.77) = 0.6 → mix 0.66, rail 0.396
+      { bpm: 172, embedding: atCosine(0.77, 2), key: "B minor", trackId: "t_energy_near" },
+      ...gateFillers(3, "A minor"),
+    ];
 
     await seed(rows);
 
-    const probes = [pseudoVector(11), pseudoVector(12), pseudoVector(13)];
-    const cosines = await getTasteCosines(
-      shortlist,
-      probes.map((probe) => toVectorProbe(probe)),
+    // The fixture's premise: B minor really is a NAMED move off A minor (an energy boost), so
+    // both candidates survive the `key in (…)` pre-filter and the comparison is about sound.
+    const targetKey = parseKey("A minor");
+    const energyKey = parseKey("B minor");
+    expect(targetKey).not.toBeNull();
+    expect(energyKey).not.toBeNull();
+    expect(
+      targetKey && energyKey ? isNamedMove(toCamelot(targetKey), toCamelot(energyKey)) : false,
+    ).toBe(true);
+
+    const rail = (await getMixableTracks("t_target", { limit: 12 })).map(
+      (candidate) => candidate.trackId,
     );
-    const expected = tasteInIsolate(rows, shortlist, probes);
 
-    expect([...cosines.keys()].sort()).toEqual(shortlist);
+    expect(rail[0]).toBe("t_energy_near");
+    expect(rail.indexOf("t_energy_near")).toBeLessThan(rail.indexOf("t_same_far"));
 
-    for (const trackId of shortlist) {
-      // float32 storage, so compare at float32 precision.
-      expect(cosines.get(trackId)).toBeCloseTo(expected.get(trackId) ?? Number.NaN, 6);
-    }
+    // …and the model really did change: plain mixability over the same pool orders them the
+    // other way round. This is the RANKING CHANGE that lands on merge, pinned.
+    const plain = rankInIsolatePlainMixability(rows, "t_target", 12);
+    expect(plain.indexOf("t_same_far")).toBeLessThan(plain.indexOf("t_energy_near"));
   });
 
-  it("scores EVERY track on a single probe rather than collapsing to one row", async () => {
-    const rows = corpus();
+  it("takes the LAST track as the probe, never the chain's centroid", async () => {
+    // A two-track chain pointing at two orthogonal places. `t_centroid` sits EXACTLY on their
+    // mean — the row a fold over the chain would crown — while `t_near_tail` sits close to the
+    // tail alone. The tail wins: the probe is the last track, and it is never averaged.
+    const rows: MixSeed[] = [
+      { bpm: 172, embedding: axis(0), key: "A minor", trackId: "t_head" },
+      { bpm: 172, embedding: axis(1), key: "A minor", trackId: "t_tail" },
+      {
+        bpm: 172,
+        embedding: axis(0).map((value, index) => (value + (axis(1)[index] ?? 0)) / Math.SQRT2),
+        key: "A minor",
+        trackId: "t_centroid",
+      },
+      {
+        bpm: 172,
+        embedding: axis(1).map((value, index) => value * 0.95 + (axis(2)[index] ?? 0) * 0.3122),
+        key: "A minor",
+        trackId: "t_near_tail",
+      },
+      ...gateFillers(4, "A minor"),
+    ];
 
     await seed(rows);
 
-    const probe = pseudoVector(11);
-    const cosines = await getTasteCosines(shortlist, [toVectorProbe(probe)]);
-    const expected = tasteInIsolate(rows, shortlist, [probe]);
+    const rail = (
+      await getMixableTracks("t_tail", {
+        // The chain, as the builder sends it: both already-picked tracks, by coordinate.
+        exclude: [logIdFor(0), logIdFor(1)],
+        limit: 12,
+      })
+    ).map((candidate) => candidate.trackId);
 
-    expect([...cosines.keys()].sort()).toEqual(shortlist);
-
-    for (const trackId of shortlist) {
-      expect(cosines.get(trackId)).toBeCloseTo(expected.get(trackId) ?? Number.NaN, 6);
-    }
+    expect(rail.indexOf("t_near_tail")).toBeLessThan(rail.indexOf("t_centroid"));
+    // The chain stays off its own rail, whichever token kind named it.
+    expect(rail).not.toContain("t_head");
+    expect(rail).not.toContain("t_tail");
   });
 
-  it("skips a shortlisted track with no vector instead of failing the scan", async () => {
-    const rows = corpus().map((row) =>
-      row.trackId === "t_03" ? { ...row, embedding: null } : row,
-    );
+  it("falls back to plain mixability when the last track has no vector to probe with", async () => {
+    const rows: MixSeed[] = [
+      { bpm: 172, embedding: null, key: "A minor", trackId: "t_target" },
+      { bpm: 172, embedding: atCosine(0.9, 1), key: "A minor", trackId: "t_near" },
+      { bpm: 172, embedding: atCosine(0.55, 2), key: "A minor", trackId: "t_far" },
+      ...gateFillers(3, "A minor"),
+    ];
 
     await seed(rows);
 
-    const cosines = await getTasteCosines(shortlist, [toVectorProbe(pseudoVector(11))]);
+    const rail = (await getMixableTracks("t_target", { limit: 12 })).map(
+      (candidate) => candidate.trackId,
+    );
 
-    expect(cosines.has("t_03")).toBe(false);
-    expect([...cosines.keys()].sort()).toEqual(shortlist.filter((id) => id !== "t_03"));
+    // No probe ⇒ no adjacency to multiply by ⇒ today's un-seeded rail, unchanged.
+    expect(rail).toEqual(rankInIsolatePlainMixability(rows, "t_target", 12));
   });
 });
+
+/** The OLD model's order: mixability alone, over the same named-move pool. */
+function rankInIsolatePlainMixability(rows: MixSeed[], targetId: string, limit: number): string[] {
+  const target = rows.find((row) => row.trackId === targetId);
+  const targetKey = target ? parseKey(target.key) : null;
+
+  if (!target || !targetKey) {
+    return [];
+  }
+
+  const targetCamelot = toCamelot(targetKey);
+  const toRow = (row: MixSeed) => ({
+    bpm: row.bpm,
+    embedding_blob: row.embedding ? toVectorProbe(row.embedding) : null,
+    features_json: JSON.stringify({
+      centroidHz: 1000 + rows.indexOf(row),
+      highRatio: rows.indexOf(row) / 100,
+      onsetRate: rows.indexOf(row),
+    }),
+    key: row.key,
+  });
+  const candidates = rows
+    .filter((row) => {
+      if (row.trackId === targetId) {
+        return false;
+      }
+
+      const parsed = parseKey(row.key);
+
+      return parsed ? isNamedMove(targetCamelot, toCamelot(parsed)) : false;
+    })
+    .map((row) => ({
+      item: row.trackId,
+      sonicCos:
+        target.embedding && row.embedding
+          ? cosineSimilarity(target.embedding, row.embedding)
+          : null,
+      track: toMixTrack(toRow(row)),
+    }));
+
+  return rankMixable(toMixTrack(toRow(target)), candidates, limit, {
+    gateOpen: sonicGateOpen(rows.filter((row) => row.embedding !== null).length),
+  }).map((entry) => entry.item);
+}

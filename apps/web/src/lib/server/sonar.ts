@@ -47,6 +47,8 @@ export const SONAR_LOG_ENABLED_KEY = "sonar_log_enabled";
  * top-k. The reasoning lives at the callsite (./recommendations.ts).
  */
 export const SONAR_RECS_ENABLED_KEY = "sonar_recs_enabled";
+/** The `/mix` rail's candidate scan → sonar `tracks` index (key-pre-filtered, both registers). */
+export const SONAR_MIX_ENABLED_KEY = "sonar_mix_enabled";
 
 /** Whether sonic search routes to sonar — THE DARK FLAG. DEFAULT FALSE; only "true" enables it. */
 export async function isSonarSonicEnabled(): Promise<boolean> {
@@ -71,6 +73,11 @@ export async function isSonarRecsEnabled(): Promise<boolean> {
   return (await getSetting(SONAR_RECS_ENABLED_KEY)) === "true";
 }
 
+/** Whether the `/mix` rail routes to sonar — THE DARK FLAG. DEFAULT FALSE; only "true" enables it. */
+export async function isSonarMixEnabled(): Promise<boolean> {
+  return (await getSetting(SONAR_MIX_ENABLED_KEY)) === "true";
+}
+
 /** Flip the sonic-search dark flag (operator). Writing anything but `true` leaves it OFF. */
 export async function setSonarSonicEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_SONIC_ENABLED_KEY, enabled ? "true" : "false");
@@ -89,6 +96,11 @@ export async function setSonarLogEnabled(enabled: boolean): Promise<void> {
 /** Flip the `/recommendations` dark flag (operator). Writing anything but `true` leaves it OFF. */
 export async function setSonarRecsEnabled(enabled: boolean): Promise<void> {
   await setSetting(SONAR_RECS_ENABLED_KEY, enabled ? "true" : "false");
+}
+
+/** Flip the `/mix`-rail dark flag (operator). Writing anything but `true` leaves it OFF. */
+export async function setSonarMixEnabled(enabled: boolean): Promise<void> {
+  await setSetting(SONAR_MIX_ENABLED_KEY, enabled ? "true" : "false");
 }
 
 // ── The client ────────────────────────────────────────────────────────────────────────────────

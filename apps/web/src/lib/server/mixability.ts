@@ -377,41 +377,44 @@ export function sonicSubScoreFromCosine(cos: number | null, gateOpen: boolean): 
 // ── Taste (the seed) ─────────────────────────────────────────────────────────
 
 /**
- * A candidate's TASTE score: how close it sits to the nearest track by an artist the reader
- * picked. Same MuQ space and same calibration as the sonic term — it is the same question
- * ("how close do these two sound?") asked against a different anchor.
+ * A candidate's TASTE score: how close it sits to the LAST track of the chain. Same MuQ space
+ * and same calibration as the sonic term — the same question ("how close do these two sound?")
+ * put to the rail a second time, as the thing that decides among the clean mixes rather than
+ * one weighted term inside them.
  *
- * MAX-SIMILARITY, NEVER A CENTROID, and the seed makes the argument harder than The Ear's,
- * not softer. The Ear ruled against a centroid because the operator's taste turned out to be
- * multi-modal (the k=4 galaxy fit found four regions he could name by ear, and their mean is
- * a place none of his taste lives). A hand-picked seed is multi-modal BY CONSTRUCTION: the
- * reader was asked for 5–10 artists precisely because one is not enough to describe them, and
- * the mean of a liquid roller and a neuro stepper is a vector that sounds like neither — it
- * would rank the tracks nearest that phantom ABOVE a dead ringer for any artist they actually
- * named. Max-sim lets each seed win on its own tracks. Naming more artists then only ever
- * ADDS reachable ground, which is the only behaviour a "pick the ones you like" control can
- * honestly promise.
+ * SINGLE-PROBE-ON-LAST, the ratified model. Mixing a transition is a question about the track
+ * you just played, so the probe is that track's vector and nothing else — not a fold over a
+ * seeded artist list, which is what this used to be (`tracks.ts`, "Taste: SINGLE-PROBE-ON-LAST").
+ * The chain is still the EXCLUDE list, which is what lets a set drift as it goes: track 5 is
+ * chosen next to track 4, which was chosen next to track 3.
  *
- * `null` when the candidate has no vector, or when nothing was seeded.
+ * NEVER A CENTROID (docs/the-ear.md), now by construction rather than by care: one probe has
+ * nothing to average. The Ear ruled a mean out because the operator's taste is multi-modal and
+ * the mean of a liquid roller and a neuro stepper is a vector that sounds like neither; a chain
+ * is multi-modal for the same reason, and the mean of where a set has BEEN is not where it is.
+ *
+ * `null` when the candidate has no vector, or when there is no probe to measure against.
  */
 export function tasteSubScore(cos: number | null): number | null {
   return cos === null ? null : calibrateCosine(cos);
 }
 
 /**
- * The RAIL score — what actually orders `/mix` once a taste seed is present: the product of
- * how cleanly a candidate mixes and how much it sounds like you.
+ * The RAIL score — what actually orders `/mix`: the product of how cleanly a candidate mixes
+ * and how close it sounds to the track it would follow.
  *
- * A PRODUCT, so both have to be true. Mixability is LOCAL (it is a fact about the pair — does
- * this beatmatch, does this key up), taste is GLOBAL (it is a fact about the reader). A sum
- * would let a spotless mix of something you would never play outrank a good mix of something
- * you love; a product will not. It is also parameter-free — there is no weight to pick, no
- * new constant to defend, and it degrades to plain mixability the instant taste is absent
- * (`null`), which is exactly the un-seeded rail this replaces.
+ * A PRODUCT, so both have to be true. Mixability answers "can I play this next" (does it
+ * beatmatch, does it key up — a fact the harmonic pre-filter already bounds); taste answers
+ * "should I" (is this the same room). A sum would let a spotless-but-alien mix outrank a good
+ * mix of the right thing; a product will not. It is also parameter-free — no weight to pick,
+ * no new constant to defend — and it degrades to plain mixability the instant taste is absent
+ * (`null`), which is exactly the rail a vectorless target still gets.
  *
- * And it anchors the chain. The sonic sub-score already pulls the rail toward the LAST track,
- * so a long chain drifts wherever the tail wandered; taste pulls it back toward the reader at
- * every step. Local cleanliness, global lane.
+ * WHY THE SONIC TERM IS NOT ENOUGH ON ITS OWN. `MIX_WEIGHTS.sonic` is 0.35 of a renormalized
+ * sum, so inside `scoreMix` sound is one voice among three and the key dominates. That is the
+ * right shape for "is this pair playable". It is the wrong shape for "which of these playable
+ * pairs comes first", where — the ratified call — adjacency to the last track is the question.
+ * Multiplying by it makes the ORDER about sound while the harmonic floor stays mandatory.
  */
 export function railScore(mix: number, taste: number | null): number {
   return taste === null ? mix : mix * taste;
@@ -672,15 +675,14 @@ export type MixScored<T> = { item: T; reason: MixReason; score: number };
 /**
  * How many of the cleanest mixes taste is allowed to choose among (`RAIL_DEPTH × 25`).
  *
- * Taste re-ranks a SHORTLIST rather than the whole archive, and that is a deliberate bound,
- * not a shortcut. Scoring taste means a `vector_distance_cos` per (candidate × seed probe):
- * over a five-figure catalogue with a dozen probes that is the cross join The Ear exists to
- * avoid — "it does not get slow, it dies". Over 300 it is a few thousand distance ops inside
- * the database, which is nothing.
+ * Taste re-ranks a SHORTLIST rather than the whole archive, and that is what keeps the tool's
+ * promise intact. The rail's claim is that EVERYTHING on it mixes clean; taste decides which of
+ * the clean ones you see first, and can never reach outside them to offer you something you
+ * would like but could not play. Cutting at 300 is what stops a merely-adjacent tune with a
+ * mediocre key relationship from climbing the rail on sound alone.
  *
- * It also keeps the tool's promise intact. The rail's claim is that EVERYTHING on it mixes
- * clean; taste decides which of the clean ones you see first, and can never reach outside
- * them to offer you something you would like but could not play.
+ * It is also the sonar route's `topK` (`mixRailFromSonar`, tracks.ts): the candidate set the
+ * engine ranks is the same size whichever engine found it.
  */
 export const TASTE_SHORTLIST = RAIL_DEPTH * 25;
 

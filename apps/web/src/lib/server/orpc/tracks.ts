@@ -3,7 +3,7 @@
 // op here and one spread line in the root — no other domain's file is touched.
 
 import { ORPCError } from "@orpc/server";
-import { parseSetParam, parseTasteParam } from "../../mix-set";
+import { parseSetParam } from "../../mix-set";
 import { clampFreshLimit, listFreshTracks } from "../fresh";
 import { CatalogueHubPageOutOfRangeError } from "../labels";
 import { listTracksHubPage, toCatalogueTrackListItem } from "../tracks-hub";
@@ -203,8 +203,12 @@ export function tracksHandlers(os: Implementer) {
   // feed's. An unknown coordinate / a keyless target / an empty archive all resolve to
   // `{ findings: [] }`.
   //
-  // `taste` is the seed: a comma-separated artist-slug list, which re-ranks the rail by
-  // mixability × taste. Absent, the rail is the plain mixability order.
+  // `taste` IS ACCEPTED AND NO LONGER RANKS THE RAIL. Under the ratified single-probe-on-last
+  // model the rail's taste probe is the chain's LAST track — which is `idOrLogId` itself — so an
+  // artist seed has nothing left to say about what follows it. The parameter stays on the wire
+  // (a live `/mix` link carries `?taste=`, and web + mobile both send it) and is simply not read
+  // here; the seed still does its real job on `list_mix_openers`, which picks what a set OPENS
+  // with. Removing it from the contract would 404 nothing and break every shared set link.
   //
   // NOTHING TO STRIP. The payload is `MixTrackSchema`, which carries no private field to
   // leak (no `sourceAudioKey`, no provenance) — and no finding-only field to leak into the
@@ -217,14 +221,12 @@ export function tracksHandlers(os: Implementer) {
   const listMixableTracksHandler = os.list_mixable_tracks.handler(async ({ input }) => {
     try {
       const limit = parseLimit(input.limit, MIXABLE_DEFAULT_LIMIT, MIXABLE_MAX_LIMIT);
-      // Reuse the canonical `/mix` codec parsers (mix-set) rather than an ad-hoc splitter:
-      // `taste` is a seed capped at MAX_TASTE_ARTISTS (10, slug-validated), `exclude` a set
-      // of chain tokens capped at MAX_SET_LENGTH (32, token-validated). This is a public
-      // unauth read with no rate limiter, so bounding the IN/NOT-IN placeholder lists here
-      // keeps a huge query string from inflating the whole-archive vector scan. The web
-      // client already enforces these caps, so nothing valid is rejected.
+      // Reuse the canonical `/mix` codec parser (mix-set) rather than an ad-hoc splitter:
+      // `exclude` is a set of chain tokens capped at MAX_SET_LENGTH (32, token-validated).
+      // This is a public unauth read with no rate limiter, so bounding the NOT-IN placeholder
+      // list here keeps a huge query string from inflating the whole-archive vector scan. The
+      // web client already enforces the cap, so nothing valid is rejected.
       const findings = await getMixableTracks(input.idOrLogId, {
-        artistSlugs: parseTasteParam(input.taste),
         exclude: parseSetParam(input.exclude),
         limit,
       });

@@ -19,7 +19,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { logEvent } from "./log";
-import { isSonarLogEnabled, searchSonar, type SonarMatch } from "./sonar";
+import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { isLogId } from "../log-id";
 import { dedupeByRecordingIdentity } from "./track-match";
 import {
@@ -27,6 +27,7 @@ import {
   type MixCandidate as RankCandidate,
   type MixChainDepth,
   mixChainDepth,
+  type MixTrack as RankTrack,
   namedMoveClasses,
   orderMixPath,
   rankMixable,
@@ -1738,127 +1739,68 @@ function camelotOfKey(key: string | null): Camelot | null {
   return parsed ? toCamelot(parsed) : null;
 }
 
-// ── Taste (the seed) ─────────────────────────────────────────────────────────
-
-/** At most this many tracks per seeded artist become probes (see `getTasteProbes`). */
-const PROBES_PER_ARTIST = 3;
-/** The hard cap on the probe set, whatever the seed's size (see `getTasteProbes`). */
-const MAX_TASTE_PROBES = 24;
-
-/**
- * The seed, as vectors: up to {@link PROBES_PER_ARTIST} embedded tracks per seeded artist,
- * capped at {@link MAX_TASTE_PROBES} overall.
- *
- * CAPPED, because taste is max-similarity and max-similarity costs a distance per (candidate
- * × probe). Uncapped, a reader who seeds an artist with 200 catalogue tracks turns the rail
- * into a cross join. Capped, the whole taste stage is `probes × TASTE_SHORTLIST` ≈ 7k
- * distance ops inside the database — less than one tick of The Ear's sweep.
- *
- * The cap does NOT collapse the seed's shape, which is the thing that would have broken it.
- * Three tracks per artist keeps every artist the reader named represented by their own
- * vectors, so max-sim still lets each of them win on their own ground (`tasteSubScore`); a
- * per-artist MEAN would have been the centroid this design exists to refuse, at artist
- * granularity. Certified tracks are preferred as probes — they are the ones whose audio
- * Fluncle has actually captured and analysed end to end — then the most popular.
- */
-async function getTasteProbes(artistSlugs: string[]): Promise<Uint8Array[]> {
-  const slugs = [...new Set(artistSlugs.map((slug) => slug.trim()).filter(Boolean))];
-
-  if (slugs.length === 0) {
-    return [];
-  }
-
-  const db = await getDb();
-  const placeholders = slugs.map(() => "?").join(", ");
-
-  // One query, one row per (artist, track) — ranked inside SQL, so only the survivors cross
-  // the wire. The vectors DO come back here (they are the probes; they must), but there are
-  // at most `MAX_TASTE_PROBES` of them, which is the whole reason for the cap.
-  const result = await db.execute({
-    args: slugs,
-    sql: `select vec from (
-            select tracks.embedding_blob as vec,
-                   row_number() over (
-                     partition by artists.id
-                     order by (findings.track_id is not null) desc, tracks.popularity desc
-                   ) as rank
-            from artists
-            join track_artists on track_artists.artist_id = artists.id
-            join tracks on tracks.track_id = track_artists.track_id
-            left join findings on findings.track_id = tracks.track_id
-            where artists.slug in (${placeholders})
-              and tracks.key is not null
-              and tracks.embedding_blob is not null
-          )
-          where rank <= ${PROBES_PER_ARTIST} and vec is not null
-          limit ${MAX_TASTE_PROBES}`,
-  });
-
-  return result.rows.flatMap((row) => {
-    const vector = readEmbeddingBlob((row as unknown as { vec: unknown }).vec);
-
-    return vector ? [toVectorProbe(vector)] : [];
-  });
-}
+// ── Taste: SINGLE-PROBE-ON-LAST ──────────────────────────────────────────────
+//
+// THE RATIFIED MODEL. Mixing a transition is a question about ADJACENCY TO THE TRACK YOU JUST
+// PLAYED, not about the whole set's average flavour. So the rail's taste probe is ONE vector —
+// the LAST track of the live chain — and nothing else. `getMixableTracks`' `idOrLogId` IS that
+// track: every caller passes the chain's tail (the web builder's `tail`, the mobile hook, the
+// MCP `build_set` seed), which is why this needs no new wire field to know what "last" means.
+//
+// WHAT IT REPLACED: a fold over up to 24 probes (3 per seeded artist) drawn from the reader's
+// `?taste=` artist seed, scored by a second SQL statement over the shortlist. Two things went
+// with it. The seed is no longer a RANKING input at all — it still picks what a set OPENS with
+// (`getMixOpeners`), which is where a "pick artists you like" control belongs, but once the
+// chain has a tail the tail is the whole question. And the second statement is gone: the
+// candidate scan below ALREADY computes each candidate's cosine to the target, so the taste
+// cosine is a number the rail is holding, not a number it has to go and ask for.
+//
+// STILL NEVER A CENTROID (docs/the-ear.md). One probe cannot be an average of anything — the
+// multi-probe fold this replaces was max-similarity precisely so it would not become a mean,
+// and single-probe-on-last is that property taken to its limit. The chain stays the exclude
+// list, so the set EVOLVES as it goes: track 5 is chosen next to track 4, which was chosen next
+// to track 3 — still in the neighbourhood of track 1, but it has drifted, which is what a set
+// does.
 
 /**
- * Each shortlisted track's TASTE cosine — its similarity to the NEAREST probe (`min` over the
- * cosine DISTANCES is the max over the similarities). Ranked in SQL: the shortlist's vectors
- * never enter the isolate, only one number per row comes back.
+ * Re-rank the rail under single-probe-on-last: mixability × taste, where taste is the
+ * candidate's calibrated cosine to the TARGET — the last track of the chain.
  *
- * ONE PASS, one distance term per probe, folded to the row's best in the select list — the
- * ratified multi-probe shape (`listRecommendations`, recommendations.ts; docs/local-database.md).
- * Each probe binds ONCE as a raw float32 blob, never as text (the 14× hosted cliff;
- * embedding.ts), and only one number per row comes back — the shortlist's vectors never enter
- * the isolate.
+ * `tasteLive` is false when there is no trustworthy measurement to multiply by (the target has
+ * no vector, or the archive has not cleared the sonic coverage gate). Then the rail is the plain
+ * mixability order, exactly the un-seeded rail this used to be. The two must move together:
+ * the gate exists to say "the MuQ term is not trustworthy here yet", and taste is that same
+ * measurement asked against the same anchor.
  *
- * NEVER a `union all` branch per probe over a shortlist CTE, which is what this was. The planner
- * does not materialize the CTE — it FLATTENS it and re-executes the shortlist scan once per
- * branch, so up to `MAX_TASTE_PROBES` probes meant up to 24 passes over the same
- * `TASTE_SHORTLIST` rows, dragging each 4 KB vector every time. Measured in prod on the public
- * `/mix` rail (Sentry, 2026-07-18→20): p95 7.4 s for this one statement. "Bounded by
- * construction" was true and beside the point — a bounded 24× re-read is still a 24× re-read.
- *
- * The one-probe case binds the BARE distance term: single-argument `min()` is SQLite's AGGREGATE
- * min, which would collapse the whole scan to one row.
- *
- * Exported for the vector-SQL pin (`tracks-vector-sql.test.ts`), which proves the fold's SQL
- * cosine equals the JS cosine over the same probes — including the one-probe branch, the case a
- * naive `min()` silently breaks. Not part of the module's public surface.
+ * Each candidate's cosine is read off `sonicCos`, which the caller already has — from
+ * `vector_distance_cos` on the Turso path, or from sonar's `score` on the sonar path (both
+ * cosine SIMILARITY, same scale). A candidate with no vector scores `null` and keeps its
+ * mixability rank rather than being punished for a missing measurement (`applyTaste`).
  */
-export async function getTasteCosines(
-  trackIds: string[],
-  probes: Uint8Array[],
-): Promise<Map<string, number>> {
-  if (trackIds.length === 0 || probes.length === 0) {
-    return new Map();
+function rankMixRail(
+  target: RankTrack,
+  candidates: RankCandidate<string>[],
+  limit: number,
+  options: { gateOpen: boolean; tasteLive: boolean },
+): { item: string; reason: MixReason }[] {
+  if (!options.tasteLive) {
+    return rankMixable(target, candidates, limit, { gateOpen: options.gateOpen });
   }
 
-  const db = await getDb();
-  const ids = trackIds.map(() => "?").join(", ");
-  const distanceTerms = probes.map(() => "vector_distance_cos(embedding_blob, ?)");
-  const bestDistance =
-    distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
-
-  const result = await db.execute({
-    // SQL-TEXT order: one probe per distance term in the select list, then the shortlist's ids.
-    args: [...probes, ...trackIds],
-    sql: `select track_id, ${bestDistance} as dist
-          from tracks
-          where track_id in (${ids}) and embedding_blob is not null`,
+  const cosByTrackId = new Map(
+    candidates.flatMap((candidate) =>
+      typeof candidate.sonicCos === "number" ? [[candidate.item, candidate.sonicCos] as const] : [],
+    ),
+  );
+  const shortlist = shortlistMixable(target, candidates, TASTE_SHORTLIST, {
+    gateOpen: options.gateOpen,
   });
 
-  const byTrackId = new Map<string, number>();
-
-  for (const row of typedRows<{ dist: number | null; track_id: string }>(result.rows)) {
-    const cos = cosineFromDistance(row.dist);
-
-    if (cos !== null) {
-      byTrackId.set(row.track_id, cos);
-    }
-  }
-
-  return byTrackId;
+  return applyTaste(
+    shortlist,
+    (trackId) => tasteSubScore(cosByTrackId.get(trackId) ?? null),
+    limit,
+  );
 }
 
 /**
@@ -1879,10 +1821,13 @@ export async function getTasteCosines(
  * ratified "btree pre-filter ahead of an exact vector scan" shape and the only reason this
  * survives a five-figure catalogue.
  *
- * TASTE, when `artistSlugs` is seeded: the engine shortlists the `TASTE_SHORTLIST` cleanest
- * mixes, SQL scores each one's similarity to the nearest seeded artist's track, and the rail
- * is re-ranked by mixability × taste (`railScore`). Everything on the rail still mixes clean —
- * taste only chooses among the clean ones.
+ * TASTE IS SINGLE-PROBE-ON-LAST (read the section header above): the engine shortlists the
+ * `TASTE_SHORTLIST` cleanest mixes and re-ranks them by mixability × the candidate's calibrated
+ * cosine to the TARGET, which is the chain's last track. `idOrLogId` IS that track — every
+ * caller passes the tail — so the probe costs no extra statement: the candidate scan already
+ * measured it. Everything on the rail still mixes clean; taste only chooses among the clean
+ * ones. No artist seed is involved; `?taste=` picks a set's OPENER (`getMixOpeners`), not its
+ * next step.
  *
  * `exclude` drops the already-chained tracks SERVER-SIDE (Log IDs and/or Spotify track ids,
  * mixed freely — a chain now holds both kinds) so a deep chain can't silently empty the rail.
@@ -1891,7 +1836,7 @@ export async function getTasteCosines(
  */
 export async function getMixableTracks(
   idOrLogId: string,
-  options: { artistSlugs?: string[]; exclude?: string[]; limit?: number } = {},
+  options: { exclude?: string[]; limit?: number } = {},
 ): Promise<MixCandidateDTO[]> {
   const limit = options.limit ?? RAIL_DEPTH;
 
@@ -1927,8 +1872,9 @@ export async function getMixableTracks(
     return [];
   }
 
-  // The target's vector becomes the probe. When it has none, every pair's sonic term is
-  // null anyway, so the scan skips the distance work entirely.
+  // The target's vector is the probe — the sonic term AND, since single-probe-on-last, the
+  // taste probe. When it has none, every pair's sonic term is null anyway, so the scan skips
+  // the distance work entirely and the rail degrades to plain mixability.
   const targetEmbedding = readEmbeddingBlob(targetRow.embedding_blob);
   const probe = targetEmbedding ? toVectorProbe(targetEmbedding) : null;
 
@@ -1937,6 +1883,29 @@ export async function getMixableTracks(
   const excluded = [...new Set((options.exclude ?? []).map((id) => id.trim()).filter(Boolean))];
   const excludedLogIds = excluded.filter((id) => isLogId(id));
   const excludedTrackIds = excluded.filter((id) => !isLogId(id));
+
+  const target = toMixTrack(targetRow);
+
+  // THE SONAR ROUTE (dark, DEFAULT OFF). It replaces the whole-archive `vector_distance_cos`
+  // scan below — the one statement here that grows with the catalogue — and nothing else: the
+  // same mixability engine ranks the candidates it returns, so a flag flip is a latency swap
+  // rather than a re-ranking. Requires a target vector (there is no probe without one). Falls
+  // through to the Turso scan when off / unprovisioned / down / empty.
+  if (targetEmbedding && (await isSonarMixEnabled())) {
+    const railed = await mixRailFromSonar({
+      excludedLogIds,
+      excludedTrackIds,
+      keys,
+      limit,
+      target,
+      targetEmbedding,
+      targetTrackId: targetRow.track_id,
+    });
+
+    if (railed) {
+      return railed;
+    }
+  }
 
   const keyClause = keys.map(() => "?").join(", ");
   const logIdClause =
@@ -1993,29 +1962,144 @@ export async function getMixableTracks(
     candidateRows.filter((row) => Boolean(row.has_embedding)).length +
     (targetRow.embedding_blob !== null ? 1 : 0);
   const gateOpen = sonicGateOpen(embeddedCount);
-  const target = toMixTrack(targetRow);
 
-  const probes = await getTasteProbes(options.artistSlugs ?? []);
+  const ranked = rankMixRail(target, candidates, limit, {
+    gateOpen,
+    tasteLive: probe !== null && gateOpen,
+  });
 
-  // Un-seeded: rank straight to the rail. Seeded: shortlist the cleanest mixes, score each
-  // one's taste in SQL, and re-rank by mixability × taste.
-  const ranked =
-    probes.length === 0
-      ? rankMixable(target, candidates, limit, { gateOpen })
-      : await (async () => {
-          const shortlist = shortlistMixable(target, candidates, TASTE_SHORTLIST, { gateOpen });
-          const cosines = await getTasteCosines(
-            shortlist.map((entry) => entry.item),
-            probes,
-          );
+  return hydrateMixRail(ranked);
+}
 
-          return applyTaste(
-            shortlist,
-            (trackId) => tasteSubScore(cosines.get(trackId) ?? null),
-            limit,
-          );
-        })();
+/**
+ * The `/mix` rail's candidate scan, answered by sonar instead of Turso — or `null`, the
+ * "fall back to the Turso scan" signal, whenever sonar cannot be trusted to answer it.
+ *
+ * WHAT MOVES AND WHAT DOES NOT. Only the nearest-neighbour part moves. sonar returns
+ * `TASTE_SHORTLIST` ids nearest the single last-track probe, already key-pre-filtered, each with
+ * its cosine; this function then hydrates their four scoring columns and hands them to the SAME
+ * `rankMixRail` the Turso path uses, so the reason chip, the key/BPM weighting, the texture
+ * tiebreak and the DTO all come out identical. It asks for the SHORTLIST rather than the rail's
+ * `limit` deliberately: sonar orders by pure adjacency, the rail orders by mixability × adjacency
+ * (a same-key candidate at a middling cosine legitimately outranks a near-cosine one a fifth
+ * away), so taking sonar's top `limit` verbatim would have made the flag a ranking change.
+ *
+ * FILTER FIDELITY, the routing precondition. Two predicates guard the Turso scan and both must
+ * be reproduced EXACTLY in sonar's own filter, never re-applied while hydrating (that would cut
+ * into an already-decided top-k):
+ *   - `tracks.key in (…)` → `filter.key_in`. `namedMoveKeys` returns the archive's raw stored
+ *     key SPELLINGS and sonar stores that same `tracks.key` string verbatim (apps/sonar/turso.rs)
+ *     and compares it by equality — the same strings, the same test.
+ *   - the chain exclusions → `excludeIds`. sonar is keyed by `track_id` ONLY, and a chain token
+ *     may be a Log ID, so the Log IDs are RESOLVED to track ids here first. A coordinate that
+ *     resolves to nothing was never a candidate anyway.
+ *
+ * WHAT SONAR CANNOT SEE: its index holds only embedded tracks, so an un-embedded key-match —
+ * which the Turso scan still ranks on key+BPM alone — is absent from the sonar rail. That is the
+ * one accepted divergence, and it is the shape of the trade: routing a vector question to a
+ * vector index means the answer is drawn from the tracks that have vectors.
+ */
+async function mixRailFromSonar(params: {
+  excludedLogIds: string[];
+  excludedTrackIds: string[];
+  keys: string[];
+  limit: number;
+  target: RankTrack;
+  targetEmbedding: number[];
+  targetTrackId: string;
+}): Promise<MixCandidateDTO[] | null> {
+  const excludeIds = [
+    params.targetTrackId,
+    ...params.excludedTrackIds,
+    ...(await resolveTrackIdsByLogIds(params.excludedLogIds)),
+  ];
+  const matches = await searchSonar({
+    excludeIds,
+    filter: { key_in: params.keys },
+    index: "tracks",
+    probes: [params.targetEmbedding],
+    topK: TASTE_SHORTLIST,
+  });
 
+  if (!matches || matches.length === 0) {
+    return null;
+  }
+
+  const ids = [...new Set(matches.map((match) => match.id))];
+  const rowById = new Map((await getMixScoringRows(ids)).map((row) => [row.track_id, row]));
+  // WALK THE MATCHES, not the rows: sonar's order is the candidate order, so it is what breaks a
+  // scoring tie downstream (`shortlistMixable`/`applyTaste` both fall back to the input index).
+  // An id that no longer hydrates — deleted since sonar's last refresh — is dropped, never faked.
+  const candidates: RankCandidate<string>[] = matches.flatMap((match) => {
+    const row = rowById.get(match.id);
+
+    return row
+      ? [
+          {
+            item: row.track_id,
+            // sonar's `score` IS the cosine similarity (a normalized dot), the same scale
+            // `cosineFromDistance` puts the Turso path's distance on.
+            sonicCos: match.score,
+            track: toMixTrack({ ...row, embedding_blob: null }),
+          },
+        ]
+      : [];
+  });
+  // Every entry sonar holds is embedded, so the count in play is what it returned, plus the
+  // target. The gate stays the same global-coverage question it is on the Turso path.
+  const gateOpen = sonicGateOpen(matches.length + 1);
+  const ranked = rankMixRail(params.target, candidates, params.limit, {
+    gateOpen,
+    tasteLive: gateOpen,
+  });
+
+  // A rail the engine could not justify a single row of is a fallback, not an answer: the Turso
+  // scan sees candidates sonar cannot (the un-embedded ones), so falling back can only restore
+  // today's behaviour, never worsen it.
+  return ranked.length === 0 ? null : hydrateMixRail(ranked);
+}
+
+/** The chain's Log-ID tokens as `track_id`s — sonar excludes by track id only. */
+async function resolveTrackIdsByLogIds(logIds: string[]): Promise<string[]> {
+  if (logIds.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: logIds,
+    sql: `select tracks.track_id from ${MIX_FROM}
+          where findings.log_id in (${logIds.map(() => "?").join(", ")})`,
+  });
+
+  return typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id);
+}
+
+/**
+ * The four mixability-scoring columns for a set of track ids — the sonar path's hydrate, the
+ * flat `where track_id in (…)` counterpart of the Turso path's candidate scan, with no vector
+ * math in it. An id that no longer resolves is dropped, never faked.
+ */
+async function getMixScoringRows(trackIds: string[]): Promise<Omit<MixRow, "embedding_blob">[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: trackIds,
+    sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm, tracks.features_json
+          from ${MIX_FROM}
+          where tracks.track_id in (${trackIds.map(() => "?").join(", ")})`,
+  });
+
+  return typedRows<Omit<MixRow, "embedding_blob">>(result.rows);
+}
+
+/** The rail's tail, shared by both engines: ranked ids → the wire DTO, order preserved. */
+async function hydrateMixRail(
+  ranked: { item: string; reason: MixReason }[],
+): Promise<MixCandidateDTO[]> {
   if (ranked.length === 0) {
     return [];
   }

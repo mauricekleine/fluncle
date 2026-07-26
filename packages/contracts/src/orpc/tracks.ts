@@ -191,11 +191,17 @@ export const listSimilarTracks = oc
  * (DESIGN.md's Unlit Rule), so the flag picks a visual register and never a label. A row
  * with `certified: false` has no `logId` and cannot be given one — see `MixTrackSchema`.
  *
- * `taste` is the SEED: a comma-separated list of artist slugs (`list_mixable_artists`).
- * Present, the rail is ordered by mixability × taste rather than mixability alone — every
- * candidate still mixes clean, and the ones that sound like the artists you named come
- * first. Taste is max-similarity to the NEAREST seeded artist's track, never a centroid
- * (`tasteSubScore`). Absent or unresolvable, the rail is the plain mixability order.
+ * THE RAIL IS ORDERED BY ADJACENCY TO THE TRACK YOU JUST PLAYED — mixability × how close a
+ * candidate sits to `idOrLogId` itself, which is the chain's last track. One probe, never a
+ * fold and never a centroid: what follows a tune is a fact about THAT tune, and the chain
+ * (`exclude`) is what lets the set drift as it goes. Every candidate still mixes clean;
+ * adjacency only chooses among the clean ones.
+ *
+ * `taste` — a comma-separated list of artist slugs (`list_mixable_artists`) — is ACCEPTED and
+ * no longer orders this rail; it used to seed a multi-artist taste fold. It remains meaningful
+ * where a seed genuinely decides something: `list_mix_openers` picks what a set OPENS with. The
+ * parameter stays on the wire so existing `/mix` links, the web builder and the mobile app all
+ * keep working unchanged.
  *
  * `limit` is a tolerant optional string (default 12, clamped to 32), parsed in-handler
  * so a bad value degrades rather than 400-ing (mirrors `list_similar_tracks`).
