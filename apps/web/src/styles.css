@@ -1705,7 +1705,7 @@ body::before {
    gets the settled panel with no fade (the door is still emphasised, just still). */
 @media (prefers-reduced-motion: no-preference) {
   .log-trail--arrived::before {
-    animation: log-trail-arrive 700ms ease-out both;
+    animation: log-trail-arrive 180ms ease-out both;
   }
 }
 
