@@ -2,7 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
 
 import { type ApiHandlers, aliasHandlers } from "../-alias";
-import { jsonError, requireAdmin, requireOperator } from "../../../lib/server/env";
+import {
+  jsonError,
+  requireAdmin,
+  requireAdminMutationOrigin,
+  requireOperator,
+} from "../../../lib/server/env";
 import {
   apiErrorResponse,
   requireParam,
@@ -57,6 +62,15 @@ export const serverHandlers: ApiHandlers = {
 
     if (unauthorized) {
       return unauthorized;
+    }
+
+    // The multipart archive upload is a CLI (Bearer) path, so the origin guard is a
+    // no-op for it — it is here so the carve-out matches the RPC ops rather than
+    // being the one mutating admin route with weaker protection than its siblings.
+    const crossOrigin = requireAdminMutationOrigin(request);
+
+    if (crossOrigin) {
+      return crossOrigin;
     }
 
     const idOrLogId = requireParam(params.trackId, "trackId");

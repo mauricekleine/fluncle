@@ -114,6 +114,13 @@ const APPROVED_VERBS = new Set<string>([
   // cues and push it to the live platform — no re-upload) — added deliberately with the
   // `resync_mixtape_youtube` + `resync_mixtape_mixcloud` ops (both server-side).
   "resync",
+  // `revoke` (withdraw a credential that was already issued, so it stops being honoured) —
+  // added deliberately with `revoke_admin_grants`, the admin-session kill switch that bumps
+  // the grant epoch and invalidates every outstanding browser grant cookie. Genuinely new:
+  // not `delete` (drop an entity — the grants are stateless, there is no row to remove), not
+  // `reset` (restore an initial state), not `clear` (lift a flag on a row we keep), and the
+  // opposite of `mint`/`authorize` — it UN-ISSUES what was issued.
+  "revoke",
   // `verify` (check a stored artifact against a REFERENCE and record the verdict) — added
   // deliberately with the capture-verification `verify_capture` op (docs/the-ear.md § Wrong
   // audio): the captured full song is fingerprinted against the track's ISRC-resolved official

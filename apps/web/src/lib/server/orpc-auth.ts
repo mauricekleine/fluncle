@@ -26,7 +26,7 @@
 
 import { ORPCError, os } from "@orpc/server";
 import { requireAccountMutation } from "./account-data";
-import { type AdminRole, adminRole } from "./env";
+import { type AdminRole, adminRole, requireAdminMutationOrigin } from "./env";
 import { type PublicUser, requirePublicUser } from "./public-auth";
 
 // The initial context every oRPC request is handled with. The Worker seam
@@ -51,11 +51,24 @@ export const base = os.$context<OrpcContext>();
 // `adminAuth` — resolve the principal once. Mirrors `requireAdmin`: a null
 // principal is a 401; any admin principal (operator or agent) passes with its
 // role lifted into the context. ORPCError("UNAUTHORIZED") maps to HTTP 401.
+//
+// It then applies the ADMIN MUTATION ORIGIN GUARD (`requireAdminMutationOrigin`,
+// env.ts) — the cheap half of what the `/me` tier already runs. It fires only for a
+// state-changing method carried by the browser's grant COOKIE; a Bearer request (the
+// CLI, the agent box) is exempt by construction and byte-for-byte unaffected. Ordered
+// AFTER the principal resolves so an unauthenticated request still reads 401, exactly
+// like the live `/me` preamble runs auth before its origin/CSRF gate.
 export const adminAuth = base.middleware(async ({ context, next }) => {
   const role = await adminRole(context.request);
 
   if (!role) {
     throw new ORPCError("UNAUTHORIZED", { message: "Missing or invalid admin token" });
+  }
+
+  const crossOrigin = requireAdminMutationOrigin(context.request);
+
+  if (crossOrigin) {
+    await liftResponseToFault(crossOrigin);
   }
 
   return next({ context: { role } });

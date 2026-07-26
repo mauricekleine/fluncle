@@ -673,6 +673,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The per-link approve in the fresh-links section — operator tier: marks a link reviewed and
   // promotes a candidate onto the public artist page (the trust gate, at the link grain).
   review_artist_social: "operator",
+  // The admin session kill switch (bump the grant epoch, invalidating every browser
+  // grant cookie) — OPERATOR tier, deliberately not agent: a compromised agent token
+  // must not be able to lock the operator out of his own board. The operator fires it
+  // from the CLI (Bearer), which is not epoch-scoped, so it still works when the
+  // browser session is precisely what is being cut.
+  revoke_admin_grants: "operator",
   save_private_finding: "private-session",
   // The recommendation-seed add — private-session (privateUserMutation), the
   // save_private_finding precedent; the 12-seed cap 409s in the helper.

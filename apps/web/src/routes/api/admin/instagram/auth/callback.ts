@@ -6,6 +6,10 @@ import {
   instagramRedirectUri,
 } from "../../../../../lib/server/instagram";
 import { logEvent } from "../../../../../lib/server/log";
+import {
+  clearedStateCookie,
+  stateIsBoundToThisBrowser,
+} from "../../../../../lib/server/oauth-state";
 
 // Instagram redirects here after the consent screen. We verify the signed state
 // (purpose instagram-auth), exchange the code for a short-lived token, upgrade it to the
@@ -34,10 +38,18 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(400, "invalid_state", "Invalid state");
       }
 
+      // The browser binding, checked BEFORE the code is spent (oauth-state.ts).
+      if (!stateIsBoundToThisBrowser(request, statePayload)) {
+        return jsonError(400, "invalid_state", "Invalid state");
+      }
+
       await exchangeCodeForInstagramToken(code, instagramRedirectUri(url.origin));
 
       return new Response(null, {
-        headers: { Location: "/admin?instagram=connected" },
+        headers: {
+          Location: "/admin?instagram=connected",
+          "Set-Cookie": clearedStateCookie("instagram-auth"),
+        },
         status: 302,
       });
     } catch (authError) {

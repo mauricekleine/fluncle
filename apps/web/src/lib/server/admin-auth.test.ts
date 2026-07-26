@@ -1,13 +1,15 @@
 import { createHmac } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { isAllowedSpotifyUser, signGrant, verifyGrant } from "./admin-auth";
 import {
   ADMIN_COOKIE_NAME,
+  ADMIN_GRANT_EPOCH_KEY,
   ADMIN_GRANT_MAX_AGE_MS,
   adminRole,
   requireAdmin,
   requireOperator,
-  signState,
+  revokeAdminGrants,
+  signOauthState,
   verifyState,
 } from "./env";
 
@@ -15,8 +17,44 @@ const TOKEN = "test-token-admin-auth";
 const AGENT_TOKEN = "test-token-agent-auth";
 const SESSION_SECRET = "test-session-secret-admin-auth";
 
+// The grant epoch lives in the `settings` KV, which env.ts reads through a lazy
+// `import("./settings")`. Stub that KV in-memory: the epoch is a COLLABORATOR of the
+// auth logic under test, and stubbing it lets the suite drive the three states that
+// matter — unset (a fresh deploy), bumped (a revocation), and unreadable (a DB blip,
+// which must FAIL CLOSED).
+let epochValue: string | undefined;
+let epochReadThrows = false;
+
+vi.mock("./settings", () => ({
+  deleteSetting: async () => {
+    epochValue = undefined;
+  },
+  getSetting: async (key: string) => {
+    if (epochReadThrows) {
+      throw new Error("settings unreachable");
+    }
+
+    return key === ADMIN_GRANT_EPOCH_KEY ? epochValue : undefined;
+  },
+  setSetting: async (key: string, value: string) => {
+    if (key === ADMIN_GRANT_EPOCH_KEY) {
+      epochValue = value;
+    }
+  },
+}));
+
 function adminRequest(headers: Record<string, string>): Request {
   return new Request("https://fluncle.com/api/admin/tracks/abc", { headers, method: "PATCH" });
+}
+
+// A cookie-carried admin request that satisfies the mutation origin guard, so these
+// suites keep testing the CARRIER (cookie vs Bearer) rather than the origin check —
+// which has its own suite in ./admin-mutation-origin.test.ts.
+function cookieRequest(grant: string): Request {
+  return adminRequest({
+    cookie: `${ADMIN_COOKIE_NAME}=${grant}`,
+    origin: "https://fluncle.com",
+  });
 }
 
 // Pin deterministic secrets. readEnv reads process.env at call time (not import
@@ -37,11 +75,34 @@ beforeAll(() => {
   vi.setSystemTime(new Date("2026-06-22T12:00:00.000Z"));
 });
 
+beforeEach(() => {
+  epochValue = undefined;
+  epochReadThrows = false;
+});
+
 afterAll(() => {
   vi.useRealTimers();
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The two labeled subkeys env.ts derives from ADMIN_SESSION_SECRET. Reproduced here
+// (rather than imported) so the test pins the DERIVATION, not just the code path: if
+// the labels or the derivation change, these hand-forges stop verifying.
+function subkey(label: string): Buffer {
+  return createHmac("sha256", SESSION_SECRET).update(label).digest();
+}
+
+const GRANT_KEY = subkey("fluncle/admin-grant-cookie/v1");
+const OAUTH_KEY = subkey("fluncle/oauth-state/v1");
+
+/** Hand-forge a `<base64url body>.<base64url HMAC>` credential under an arbitrary key. */
+function forge(payload: Record<string, string | number>, key: Buffer | string): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", key).update(body).digest("base64url");
+
+  return `${body}.${signature}`;
+}
 
 describe("admin grant (the browser carrier)", () => {
   it("round-trips a freshly signed grant", async () => {
@@ -63,31 +124,168 @@ describe("admin grant (the browser carrier)", () => {
   });
 
   it("rejects an expired grant (older than the session window)", async () => {
-    const expired = await signState({
-      iat: Date.now() - (ADMIN_GRANT_MAX_AGE_MS + DAY_MS),
-      role: "admin",
-    });
+    const expired = forge(
+      { epoch: 0, iat: Date.now() - (ADMIN_GRANT_MAX_AGE_MS + DAY_MS), role: "admin" },
+      GRANT_KEY,
+    );
 
     expect(await verifyGrant(expired)).toBe(false);
   });
 
   it("rejects a validly signed payload that is not an admin grant", async () => {
-    // A real OAuth state is signed with the same key but carries no admin role.
-    const oauthState = await signState({ iat: Date.now(), purpose: "spotify-auth" });
+    const notAGrant = forge({ epoch: 0, iat: Date.now(), purpose: "spotify-auth" }, GRANT_KEY);
 
-    expect(await verifyGrant(oauthState)).toBe(false);
+    expect(await verifyGrant(notAGrant)).toBe(false);
+  });
+
+  it("keeps the 30-day window (revocation is the brake, not a shorter session)", async () => {
+    const nearlyStale = forge(
+      { epoch: 0, iat: Date.now() - (ADMIN_GRANT_MAX_AGE_MS - DAY_MS), role: "admin" },
+      GRANT_KEY,
+    );
+
+    expect(await verifyGrant(nearlyStale)).toBe(true);
+  });
+});
+
+// The key separation: ADMIN_SESSION_SECRET signs nothing directly, so a credential
+// minted for one purpose can never be replayed as the other — even though the two
+// share a root secret and a wire format.
+describe("grant cookie and OAuth state ride SEPARATE derived subkeys", () => {
+  it("refuses a grant payload signed with the OAUTH subkey", async () => {
+    const crossSigned = forge({ epoch: 0, iat: Date.now(), role: "admin" }, OAUTH_KEY);
+
+    expect(await verifyGrant(crossSigned)).toBe(false);
+    expect((await requireAdmin(cookieRequest(crossSigned)))?.status).toBe(401);
+  });
+
+  it("refuses an OAuth state signed with the GRANT subkey", async () => {
+    const crossSigned = forge({ iat: Date.now(), purpose: "spotify-auth" }, GRANT_KEY);
+
+    await expect(verifyState(crossSigned)).rejects.toThrow();
+  });
+
+  it("refuses either credential signed with the RAW root secret (keys are derived)", async () => {
+    const rawGrant = forge({ epoch: 0, iat: Date.now(), role: "admin" }, SESSION_SECRET);
+    const rawState = forge({ iat: Date.now(), purpose: "spotify-auth" }, SESSION_SECRET);
+
+    expect(await verifyGrant(rawGrant)).toBe(false);
+    await expect(verifyState(rawState)).rejects.toThrow();
+  });
+
+  it("still round-trips each credential under its OWN subkey", async () => {
+    expect(await verifyGrant(forge({ epoch: 0, iat: Date.now(), role: "admin" }, GRANT_KEY))).toBe(
+      true,
+    );
+    await expect(
+      verifyState(forge({ iat: Date.now(), purpose: "spotify-auth" }, OAUTH_KEY)),
+    ).resolves.toMatchObject({ purpose: "spotify-auth" });
+  });
+});
+
+// The revocation handle for an otherwise unrevocable stateless cookie.
+describe("grant epoch (revocation)", () => {
+  it("accepts a grant when the epoch key is UNSET (fresh deploy, epoch 0)", async () => {
+    const grant = await signGrant();
+
+    expect(epochValue).toBeUndefined();
+    expect(await verifyGrant(grant)).toBe(true);
+  });
+
+  it("kills every outstanding grant on a bump, and mints working ones after", async () => {
+    const before = await signGrant();
+    expect(await verifyGrant(before)).toBe(true);
+
+    expect(await revokeAdminGrants()).toBe(1);
+
+    // The pre-bump cookie is dead...
+    expect(await verifyGrant(before)).toBe(false);
+    expect((await requireAdmin(cookieRequest(before)))?.status).toBe(401);
+
+    // ...and a fresh login works immediately.
+    const after = await signGrant();
+    expect(await verifyGrant(after)).toBe(true);
+    expect(await requireAdmin(cookieRequest(after))).toBeUndefined();
+  });
+
+  it("bumps monotonically, so a second revoke also invalidates the first re-login", async () => {
+    await revokeAdminGrants();
+    const secondEra = await signGrant();
+
+    expect(await revokeAdminGrants()).toBe(2);
+    expect(await verifyGrant(secondEra)).toBe(false);
+  });
+
+  it("does NOT touch the Bearer carriers (the CLI/box are not epoch-scoped)", async () => {
+    await revokeAdminGrants();
+
+    expect(await requireAdmin(adminRequest({ Authorization: `Bearer ${TOKEN}` }))).toBeUndefined();
+    expect(
+      await requireAdmin(adminRequest({ Authorization: `Bearer ${AGENT_TOKEN}` })),
+    ).toBeUndefined();
+    expect(
+      await requireOperator(adminRequest({ Authorization: `Bearer ${TOKEN}` })),
+    ).toBeUndefined();
+  });
+
+  it("rejects a grant carrying NO epoch at all (pre-epoch cookie)", async () => {
+    const unEpoched = forge({ iat: Date.now(), role: "admin" }, GRANT_KEY);
+
+    expect(await verifyGrant(unEpoched)).toBe(false);
+  });
+
+  it("rejects a grant whose epoch is not an integer", async () => {
+    expect(
+      await verifyGrant(forge({ epoch: 1.5, iat: Date.now(), role: "admin" }, GRANT_KEY)),
+    ).toBe(false);
+  });
+
+  it("FAILS CLOSED when the epoch cannot be read (a revocation must never fail open)", async () => {
+    const grant = await signGrant();
+    expect(await verifyGrant(grant)).toBe(true);
+
+    epochReadThrows = true;
+
+    expect(await verifyGrant(grant)).toBe(false);
+    expect((await requireAdmin(cookieRequest(grant)))?.status).toBe(401);
+
+    // The Bearer carrier is unaffected, which is what keeps the CLI recovery path open.
+    expect(await requireAdmin(adminRequest({ Authorization: `Bearer ${TOKEN}` }))).toBeUndefined();
+  });
+
+  it("FAILS CLOSED on a malformed stored epoch, and a revoke REPAIRS it", async () => {
+    const grant = await signGrant();
+
+    for (const malformed of ["not-a-number", "", "   ", "-1", "1.5"]) {
+      epochValue = malformed;
+      expect(await verifyGrant(grant), malformed).toBe(false);
+    }
+
+    epochValue = "not-a-number";
+
+    // The repair jumps to a whole-seconds timestamp (the previous epoch is unknown,
+    // so incrementing would be unsafe), then normal minting works again.
+    const repaired = await revokeAdminGrants();
+    expect(repaired).toBe(Math.floor(Date.now() / 1000));
+    expect(await verifyGrant(await signGrant())).toBe(true);
   });
 });
 
 describe("verifyState keeps its tight OAuth window after the refactor", () => {
   it("accepts a state inside 10 minutes", async () => {
-    const fresh = await signState({ iat: Date.now() - 9 * 60 * 1000, purpose: "spotify-auth" });
+    const fresh = await signOauthState({
+      iat: Date.now() - 9 * 60 * 1000,
+      purpose: "spotify-auth",
+    });
 
     await expect(verifyState(fresh)).resolves.toMatchObject({ purpose: "spotify-auth" });
   });
 
   it("rejects a state older than 10 minutes (the admin window would have kept it)", async () => {
-    const stale = await signState({ iat: Date.now() - 11 * 60 * 1000, purpose: "spotify-auth" });
+    const stale = await signOauthState({
+      iat: Date.now() - 11 * 60 * 1000,
+      purpose: "spotify-auth",
+    });
 
     await expect(verifyState(stale)).rejects.toThrow();
   });
@@ -99,11 +297,7 @@ describe("requireAdmin accepts either carrier (one identity, two carriers)", () 
   });
 
   it("accepts the browser's signed grant cookie", async () => {
-    const grant = await signGrant();
-
-    expect(
-      await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${grant}` })),
-    ).toBeUndefined();
+    expect(await requireAdmin(cookieRequest(await signGrant()))).toBeUndefined();
   });
 
   it("401s a request with neither carrier", async () => {
@@ -117,9 +311,7 @@ describe("requireAdmin accepts either carrier (one identity, two carriers)", () 
     const tampered = `${grant.slice(0, -1)}${grant.at(-1) === "a" ? "b" : "a"}`;
 
     expect((await requireAdmin(adminRequest({ Authorization: "Bearer nope" })))?.status).toBe(401);
-    expect(
-      (await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${tampered}` })))?.status,
-    ).toBe(401);
+    expect((await requireAdmin(cookieRequest(tampered)))?.status).toBe(401);
   });
 });
 
@@ -133,9 +325,7 @@ describe("admin roles (operator vs agent)", () => {
   it("maps each carrier to its role", async () => {
     expect(await adminRole(bearer(TOKEN))).toBe("operator");
     expect(await adminRole(bearer(AGENT_TOKEN))).toBe("agent");
-    expect(
-      await adminRole(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${await signGrant()}` })),
-    ).toBe("operator");
+    expect(await adminRole(cookieRequest(await signGrant()))).toBe("operator");
     expect(await adminRole(adminRequest({}))).toBeNull();
     expect(await adminRole(bearer("nope"))).toBeNull();
   });
@@ -147,9 +337,7 @@ describe("admin roles (operator vs agent)", () => {
 
   it("requireOperator accepts the operator (token + cookie), 403s the agent, 401s a stranger", async () => {
     expect(await requireOperator(bearer(TOKEN))).toBeUndefined();
-    expect(
-      await requireOperator(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${await signGrant()}` })),
-    ).toBeUndefined();
+    expect(await requireOperator(cookieRequest(await signGrant()))).toBeUndefined();
 
     expect((await requireOperator(bearer(AGENT_TOKEN)))?.status).toBe(403);
     expect((await requireOperator(adminRequest({})))?.status).toBe(401);
@@ -166,43 +354,28 @@ describe("admin roles (operator vs agent)", () => {
 // Bearer token (FLUNCLE_API_TOKEN) must NOT verify — only ADMIN_SESSION_SECRET
 // does. So a leaked Bearer token can never forge a {role:"admin"} cookie.
 describe("admin-session signing key is split from the API Bearer token", () => {
-  // Hand-forge a "<base64url body>.<base64url HMAC>" state signed with `key`,
-  // mirroring signState's wire format so we can sign with an arbitrary secret.
-  function forgeState(payload: Record<string, string | number>, key: string): string {
-    const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-    const signature = createHmac("sha256", key).update(body).digest("base64url");
-
-    return `${body}.${signature}`;
-  }
-
   it("rejects a grant cookie forged with the API token (the old signing key)", async () => {
-    const forged = forgeState({ iat: Date.now(), role: "admin" }, TOKEN);
+    const forged = forge({ epoch: 0, iat: Date.now(), role: "admin" }, TOKEN);
 
     // The cookie carrier rejects it...
     expect(await verifyGrant(forged)).toBe(false);
     // ...and so does the route gate that consumes the same cookie.
-    expect(
-      (await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${forged}` })))?.status,
-    ).toBe(401);
+    expect((await requireAdmin(cookieRequest(forged)))?.status).toBe(401);
   });
 
   it("rejects an OAuth state forged with the API token", async () => {
-    const forged = forgeState({ iat: Date.now(), purpose: "spotify-auth" }, TOKEN);
+    const forged = forge({ iat: Date.now(), purpose: "spotify-auth" }, TOKEN);
 
     await expect(verifyState(forged)).rejects.toThrow();
   });
 
-  it("accepts a grant/state signed with ADMIN_SESSION_SECRET", async () => {
-    // signState uses ADMIN_SESSION_SECRET; an equivalent hand-forge with the same
-    // secret must verify — proving the split moved the key, not broke signing.
+  it("accepts a grant signed with the grant subkey derived from ADMIN_SESSION_SECRET", async () => {
     const grant = await signGrant();
     expect(await verifyGrant(grant)).toBe(true);
 
-    const forgedWithSecret = forgeState({ iat: Date.now(), role: "admin" }, SESSION_SECRET);
-    expect(await verifyGrant(forgedWithSecret)).toBe(true);
-    expect(
-      await requireAdmin(adminRequest({ cookie: `${ADMIN_COOKIE_NAME}=${forgedWithSecret}` })),
-    ).toBeUndefined();
+    const forgedWithSubkey = forge({ epoch: 0, iat: Date.now(), role: "admin" }, GRANT_KEY);
+    expect(await verifyGrant(forgedWithSubkey)).toBe(true);
+    expect(await requireAdmin(cookieRequest(forgedWithSubkey))).toBeUndefined();
   });
 });
 

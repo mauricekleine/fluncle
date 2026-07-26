@@ -6,6 +6,10 @@ import {
   exchangeCodeForMixcloudToken,
   mixcloudRedirectUri,
 } from "../../../../../lib/server/mixcloud";
+import {
+  clearedStateCookie,
+  stateIsBoundToThisBrowser,
+} from "../../../../../lib/server/oauth-state";
 
 // Mixcloud redirects here after the consent screen. We verify the signed state
 // (purpose mixcloud-auth), exchange the code for the access token, store it in
@@ -33,10 +37,18 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(400, "invalid_state", "Invalid state");
       }
 
+      // The browser binding, checked BEFORE the code is spent (oauth-state.ts).
+      if (!stateIsBoundToThisBrowser(request, statePayload)) {
+        return jsonError(400, "invalid_state", "Invalid state");
+      }
+
       await exchangeCodeForMixcloudToken(code, mixcloudRedirectUri(url.origin));
 
       return new Response(null, {
-        headers: { Location: "/admin?mixcloud=connected" },
+        headers: {
+          Location: "/admin?mixcloud=connected",
+          "Set-Cookie": clearedStateCookie("mixcloud-auth"),
+        },
         status: 302,
       });
     } catch (authError) {

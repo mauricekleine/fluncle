@@ -286,6 +286,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly). Agent tier: the box's future bio sweep drives
   // the fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/artists/{slug}/bio": "describe_artist",
+  // The admin session kill switch — contract-only oRPC (no TanStack route file; oRPC
+  // owns the path directly). Operator tier: bump the grant epoch so every outstanding
+  // browser grant cookie stops verifying at once.
+  "POST /admin/auth/revoke-grants": "revoke_admin_grants",
   // The artist-entity backfill (Unit 1 of the artist-relationship RFC) —
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly).
   // Agent tier: the box's `fluncle-artist-backfill` cron drives it with its agent token.
