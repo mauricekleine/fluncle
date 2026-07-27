@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createIntegrationDb, seedCatalogueTrack } from "../src/lib/server/integration-db";
 import { backfillHasEmbedding } from "./backfill-has-embedding";
 
-// The keystone-3 backfill (docs/db-scale-backlog Wave 2 #3): the migration adds `has_embedding`
-// DEFAULT 0, so every EXISTING row lands un-embedded — wrong for every row that already carries a
+// The `has_embedding` backfill (docs/db-scale-backlog Wave 2 #4, built for #7): the migration adds
+// the column DEFAULT 0, so every EXISTING row lands un-embedded — wrong for every row carrying a
 // vector. This flips exactly those, and only those. Driven against the real migrated schema so the
 // SQL under test is byte-identical to production.
 
