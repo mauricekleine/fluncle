@@ -120,9 +120,8 @@ export async function providerRedirect(
 }
 
 /**
- * The shared body of all six per-platform `auth/start` routes, branching on the
- * CARRIER (never
- * on a client-supplied hint):
+ * The shared body of all six per-platform start routes, branching on the CARRIER —
+ * never on a client-supplied hint:
  *
  * - COOKIE (a browser, the /admin board's connect button) → mint the bound state
  *   here and answer with the provider's URL plus its nonce cookie, as before.
