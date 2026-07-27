@@ -75,8 +75,8 @@ function LogbookIndexPage() {
           <p className="log-nameplate">Fluncle's Logbook</p>
           <h1 className="log-coordinate log-index-title">The logbook</h1>
           <p className="log-index-intro">
-            At the end of a day out there I write it up: what it was like, and how each banger
-            landed. {entries.length} logged so far.
+            At the end of a day out there, I write it up: what it was like, and how each banger
+            landed. {entries.length} entries logged so far.
           </p>
         </header>
 
