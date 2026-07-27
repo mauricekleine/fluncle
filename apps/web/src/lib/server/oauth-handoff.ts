@@ -44,7 +44,7 @@ export const OAUTH_HANDOFF_PATH = "/api/v1/admin/oauth/handoff";
  * ONE registry, read by both front doors — the browser start route and the handoff
  * route — so the two can never drift into building different URLs for the same flow.
  *
- * Two of the six derive their redirect URI from the request origin rather than an
+ * Three of the six derive their redirect URI from the request origin rather than an
  * env var (Mixcloud, Twitch, Instagram), which is why `origin` is a parameter here
  * instead of something each builder reads for itself.
  */
