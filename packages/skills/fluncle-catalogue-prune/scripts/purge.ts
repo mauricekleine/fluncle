@@ -9,7 +9,7 @@
 // frontier edition, the run ABORTS and reports it — an off-genre track showing up there is a
 // surprise a human must resolve, never a silent delete.
 import { writeFileSync } from "node:fs";
-import { chunk, getOrSet, loadCatalogue, safePurgeArtists } from "./lib";
+import { chunk, deleteTracksWithEdges, getOrSet, loadCatalogue, safePurgeArtists } from "./lib";
 
 const CONFIRM = process.argv.includes("--confirm");
 const OUT = process.env.PRUNE_OUT_DIR ?? ".";
@@ -126,6 +126,20 @@ async function selAll(table: string, col: string, ids: string[]) {
   }
   return out;
 }
+// The edge delete runs on BOTH keys, so the rollback captures both and de-dupes on the composite
+// key — otherwise restoring would double-insert every edge that matches on artist AND track.
+const seenEdges = new Set<string>();
+const edgeRollback = [
+  ...(await selAll("track_artists", "artist_id", A)),
+  ...(await selAll("track_artists", "track_id", T)),
+].filter((r) => {
+  const key = JSON.stringify([r.artist_id, r.track_id]);
+  if (seenEdges.has(key)) {
+    return false;
+  }
+  seenEdges.add(key);
+  return true;
+});
 const rollback = {
   albums: await selAll("albums", "id", AL),
   artist_aliases: await selAll("artist_aliases", "artist_id", A),
@@ -133,7 +147,7 @@ const rollback = {
   artists: await selAll("artists", "id", A),
   at: new Date().toISOString(),
   cost_events: await selAll("cost_events", "track_id", T),
-  track_artists: await selAll("track_artists", "artist_id", A),
+  track_artists: edgeRollback,
   tracks: await selAll("tracks", "track_id", T),
 };
 writeFileSync(`${OUT}/purge-rollback.json`, JSON.stringify(rollback, null, 2));
@@ -162,8 +176,21 @@ await del("artist_aliases", "artist_id", A);
 await del("artist_centroids", "artist_id", A);
 await del("artist_similar", "artist_id", A);
 await del("artist_similar", "neighbour_artist_id", A);
+// The purged artists' edges on tracks that SURVIVE (a shared/collab track is never deletable, so
+// its edge to a deleted artist has to go by artist_id or the `artists` delete strands it).
 await del("track_artists", "artist_id", A);
-await del("tracks", "track_id", T);
+// The deletable tracks and THEIR edges, atomically — edges die with their tracks, keyed by the
+// same id set, so no orphaned edge can survive the purge. See `deleteTracksWithEdges` in lib.ts.
+const removed = await deleteTracksWithEdges(db, T);
+console.log(`  deleted track_artists.track_id: ${removed.edges}`);
+console.log(`  deleted tracks.track_id: ${removed.tracks}`);
 await del("albums", "id", AL);
 await del("artists", "id", A);
 console.log(`\nDONE. Rollback: ${OUT}/purge-rollback.json`);
+// HUB COUNTS: this purge runs OUT OF BAND, straight against prod, so the maintained
+// `renderable_track_count` / `certified_finding_count` on artists/labels/albums now overstate the
+// truth. That is a KNOWN and DESIGNED-FOR drift class: the nightly `reconcile_hub_counts` sweep
+// recomputes those counters from truth and rewrites only the rows that disagree, so they self-heal
+// within a day (docs/agents/hermes/reconcile-hub-counts-timer/README.md names this skill as one of
+// the three drift sources). Deliberately NOT wired into this script — a destructive tool stays
+// simple, and the sweep owns that drift.

@@ -61,7 +61,7 @@
     "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
     "test": "turbo run test",
-    "test:scripts": "bun test --cwd scripts && bun test --cwd docs/agents/hermes/scripts && bun test --cwd packages/skills/fluncle-track-enrichment/scripts && bun test --cwd packages/skills/fluncle-box-restore/scripts",
+    "test:scripts": "bun test --cwd scripts && bun test --cwd docs/agents/hermes/scripts && bun test --cwd packages/skills/fluncle-track-enrichment/scripts && bun test --cwd packages/skills/fluncle-box-restore/scripts && bun test --cwd packages/skills/fluncle-catalogue-prune/scripts",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
     "typecheck": "turbo run typecheck",
     "doctor": "npx react-doctor@latest"

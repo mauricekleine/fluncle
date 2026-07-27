@@ -85,7 +85,11 @@ bun run packages/skills/fluncle-catalogue-prune/scripts/purge.ts --confirm  # wr
 
 The purge is **artist-driven**: it deletes only safe-purge artists (no finding, no enabled-label track, AND ≥1 track on a label you've explicitly **disabled** — so an artist with only undecided/no-label tracks is never swept in on a metadata gap), the tracks credited _only_ to them, orphan albums, and the cascade (edges, socials, aliases, centroids/similar, cost_events). It writes a full per-row rollback first. The **entanglement guard** aborts if any deletable track is in a mixtape, a user save, a published post, or a frontier edition — that's a surprise for a human, never a silent delete.
 
+**Edges die with their tracks.** The track delete and the `track_artists` delete for the same ids ride one transaction, so a deleted track can never strand an edge behind it. `track_artists` is the only table referencing `tracks.track_id` that is neither guarded nor swept by the artist cascade — everything else is either protected (`findings`, and the nine guard tables) or cascaded (`cost_events`).
+
 **The dry-run NAMES every artist it would delete, with their labels — eyeball that list; every one should be recognisably off-genre.** If a count is far larger than expected, a label ruling was wrong — go back to step 2.
+
+**After a purge, the hub counts lag.** The maintained `renderable_track_count` / `certified_finding_count` on artists/labels/albums are delta-maintained by the server's write paths, and this purge writes straight to prod out of band — so they overstate the truth until the nightly `reconcile_hub_counts` sweep recomputes them (within a day; it names this skill as one of its three drift sources). To correct them immediately instead of waiting, fire that sweep's trigger by hand: `POST /api/v1/admin/hub-counts/reconcile` with an admin token.
 
 ### 5 — Verify
 
@@ -99,14 +103,27 @@ for s in miles-davis bob-marley-the-wailers loxy degs; do
 
 The scan's last section lists non-DnB artists kept alive by a _token_ DnB remix (MusicBrainz bills a remix to the original artist). These are a small, slow-growing tail — handle sporadically, by hand. For each, decide: strip the off-genre back-catalogue but **keep the DnB remix track** (often on a multi-genre disabled label like fabric/StreetBeat — do NOT blanket-delete by label). Or leave it: a page showing only "Song (DnB Producer remix)" is on-brand and useful long-tail SEO. There is no `--confirm` for this step on purpose; it is per-track judgement. See `references/traps.md` § "original-of-remix".
 
+### 7 — Orphaned edges (one-off, from the deletes that came before this rail)
+
+An **orphaned edge** is a `track_artists` row pointing at a track that no longer exists. Purges done before the transactional pair above left 62 of them across 36 artists (measured 2026-07-26). They render as nothing and count as nothing, but they lie to anything that reads `track_artists` raw. Sweep them up once:
+
+```bash
+bun run packages/skills/fluncle-catalogue-prune/scripts/clean-orphan-edges.ts            # dry-run: count + per-artist breakdown
+bun run packages/skills/fluncle-catalogue-prune/scripts/clean-orphan-edges.ts --apply    # rollback JSON, delete, re-count
+```
+
+Safe to re-run — once clean it finds nothing. `--apply` prints before/after counts and warns if any survive (which would mean something is still writing them).
+
 ## Rollback
 
-Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`. To undo, re-insert the captured rows (they are full `select *` snapshots) or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`.
+Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `orphan-edges-rollback.json`. To undo, re-insert the captured rows (they are full `select *` snapshots) or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`.
 
 ## Files
 
 - `scripts/scan.ts` — read-only: buckets, off-boundary labels, residual.
 - `scripts/rule-labels.ts` — enable/disable labels by name (dry-run/`--confirm`, rollback).
 - `scripts/purge.ts` — artist-driven purge with entanglement guard + rollback.
-- `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition.
+- `scripts/clean-orphan-edges.ts` — one-off: `track_artists` rows whose track is gone (dry-run/`--apply`, rollback).
+- `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition + the atomic track/edge delete.
+- `scripts/orphan-edges.test.ts` — the delete pair's order/atomicity and the orphan predicate, against a stubbed client (`bun test --cwd packages/skills/fluncle-catalogue-prune/scripts`, wired into the root `test:scripts`).
 - `references/traps.md` — **read first**: the false-positives every naive rule hits.
