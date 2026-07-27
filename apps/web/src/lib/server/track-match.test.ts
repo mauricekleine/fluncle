@@ -104,6 +104,61 @@ describe("splitTitle", () => {
     expect(splitTitle("Remix")).toEqual({ base: "remix", descriptor: "" });
   });
 
+  it("folds the `rmx` spelling onto `remix` so the two forms share a key", () => {
+    // Measured 2026-07-26: our row "Feels Like Before (Air.K & Cephei rmx)" vs streaming's
+    // "(Air.K & Cephei Remix)" — same recording, Δduration ≤1s, permanently un-anchorable
+    // while the descriptor stayed an opaque string.
+    expect(splitTitle("Feels Like Before (Air.K & Cephei rmx)")).toEqual({
+      base: "feels like before",
+      descriptor: "air k and cephei remix",
+    });
+    expect(matchKey(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
+      matchKey(["Minos"], "Feels Like Before (Air.K & Cephei Remix)"),
+    );
+    // The dash-suffixed spelling folds the same way.
+    expect(matchKey(["Minos"], "Feels Like Before - Air.K & Cephei rmx")).toBe(
+      matchKey(["Minos"], "Feels Like Before (Air.K & Cephei Remix)"),
+    );
+  });
+
+  it("drops a redundant trailing `mix` after a version word", () => {
+    // Measured 2026-07-26: "Part of Me (instrumental mix)" vs streaming's "(Instrumental)".
+    expect(splitTitle("Part of Me (instrumental mix)")).toEqual({
+      base: "part of me",
+      descriptor: "instrumental",
+    });
+    expect(matchKey(["Klute"], "Part of Me (instrumental mix)")).toBe(
+      matchKey(["Klute"], "Part of Me (Instrumental)"),
+    );
+    expect(splitTitle("Song (Dub Mix)")).toEqual({ base: "song", descriptor: "dub" });
+  });
+
+  it("leaves a `mix` alone when dropping it would empty the descriptor or a non-version word precedes it", () => {
+    // A bare "(Mix)" keeps its one token — an empty descriptor would fold it onto the original.
+    expect(splitTitle("Song (Mix)")).toEqual({ base: "song", descriptor: "mix" });
+    expect(matchKey(["Klute"], "Song (Mix)")).not.toBe(matchKey(["Klute"], "Song"));
+    // "dj" is not a version word, so "dj mix" is left whole (no descriptor-subset matching).
+    expect(splitTitle("Song (Nu:Tone DJ Mix)")).toEqual({
+      base: "song",
+      descriptor: "nu tone dj mix",
+    });
+  });
+
+  it("canonicalizes AFTER the neutral check, so Original/Extended Mix still fold to the original", () => {
+    // "original mix" is neutral BEFORE canonicalization could turn it into a distinguishing
+    // "original" — the ordering is the guarantee, so assert the resulting identity too.
+    expect(splitTitle("Song (Original Mix)")).toEqual({ base: "song", descriptor: "" });
+    expect(matchKey(["Klute"], "Song (Original Mix)")).toBe(matchKey(["Klute"], "Song"));
+    expect(splitTitle("Song (Extended Mix)")).toEqual({ base: "song", descriptor: "" });
+    expect(matchKey(["Klute"], "Song (Extended Mix)")).toBe(matchKey(["Klute"], "Song"));
+    expect(matchKey(["Klute"], "Song - Original Mix")).toBe(matchKey(["Klute"], "Song"));
+  });
+
+  it("canonicalizes a BARE trailing `rmx` too", () => {
+    expect(splitTitle("Song rmx")).toEqual({ base: "song", descriptor: "remix" });
+    expect(matchKey(["Klute"], "Song rmx")).toBe(matchKey(["Klute"], "Song (Remix)"));
+  });
+
   it("a found descriptor wins over a bare trailing word", () => {
     // The paren descriptor is already the identity; the base keeps its remaining words.
     expect(splitTitle("Song VIP (Calibre Remix)")).toEqual({
@@ -290,5 +345,23 @@ describe("deriveRemixerNames (the remixer credit, RFC label-lineage-remixer U2)"
 
   it("does NOT treat the neutral 'Original Mix' as a remixer descriptor", () => {
     expect(deriveRemixerNames("Nobody Else (Original Mix)", ["Axwell"])).toEqual([]);
+  });
+
+  it("is unchanged by descriptor canonicalization — the version word is stripped either spelling", () => {
+    // `rmx` canonicalizes to `remix`; both are VERSION_WORDS, so the remainder is the same name.
+    expect(
+      deriveRemixerNames("Feels Like Before (Air.K & Cephei rmx)", [
+        "Minos",
+        "Air.K",
+        "Cephei",
+      ]).sort(),
+    ).toEqual(["Air.K", "Cephei"]);
+    expect(deriveRemixerNames("Nobody Else (Calibre rmx)", ["Axwell", "Calibre"])).toEqual([
+      "Calibre",
+    ]);
+    // A bare "(rmx)" names nobody, exactly as a bare "(Remix)" does.
+    expect(deriveRemixerNames("Nobody Else (rmx)", ["Axwell"])).toEqual([]);
+    // "instrumental mix" collapses to "instrumental" — still a version word, still no remixer.
+    expect(deriveRemixerNames("Part of Me (instrumental mix)", ["Klute"])).toEqual([]);
   });
 });

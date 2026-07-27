@@ -87,6 +87,68 @@ def test_remix_is_not_matched_to_original():
     assert r.stats.unmatched == 1
 
 
+# ── descriptor canonicalization — one spelling for one version ──
+# Kept in lockstep with the TS port's `canonicalizeDescriptor`
+# (apps/web/src/lib/server/track-match.ts + its track-match.test.ts cases).
+
+@pytest.mark.parametrize(
+    "title,expected",
+    [
+        # The two measured anchor false-misses (2026-07-26): same recording, two spellings.
+        ("Feels Like Before (Air.K & Cephei rmx)", ("feels like before", "air k and cephei remix")),
+        ("Feels Like Before (Air.K & Cephei Remix)", ("feels like before", "air k and cephei remix")),
+        ("Feels Like Before - Air.K & Cephei rmx", ("feels like before", "air k and cephei remix")),
+        ("Part of Me (instrumental mix)", ("part of me", "instrumental")),
+        ("Part of Me (Instrumental)", ("part of me", "instrumental")),
+        # A redundant trailing `mix` after a version word goes.
+        ("Song (Dub Mix)", ("song", "dub")),
+        # Guards: a bare `mix` stays (dropping it would empty the descriptor), and a
+        # non-version word before the `mix` is left whole (no descriptor-subset matching).
+        ("Song (Mix)", ("song", "mix")),
+        ("Song (Nu:Tone DJ Mix)", ("song", "nu tone dj mix")),
+        # The NEUTRAL check runs BEFORE canonicalization, so these still fold to the original.
+        ("Song (Original Mix)", ("song", "")),
+        ("Song (Extended Mix)", ("song", "")),
+        ("Song - Original Mix", ("song", "")),
+        # "(Original Version)" is neutral too — the TS port had it first, a parity run
+        # over _split_title caught the drift (2026-07-27).
+        ("Song (Original Version)", ("song", "")),
+        ("Song - Original Version", ("song", "")),
+        # A BARE trailing `rmx` canonicalizes too.
+        ("Song rmx", ("song", "remix")),
+    ],
+)
+def test_descriptor_canonicalization(title, expected):
+    assert rs._split_title(title) == expected
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("Feels Like Before (Air.K & Cephei rmx)", "Feels Like Before (Air.K & Cephei Remix)"),
+        ("Part of Me (instrumental mix)", "Part of Me (Instrumental)"),
+        ("Song rmx", "Song (Remix)"),
+        ("Song (Original Mix)", "Song"),
+    ],
+)
+def test_synonym_spellings_share_a_match_key(a, b):
+    assert rs.match_key(["Minos"], a) == rs.match_key(["Minos"], b)
+
+
+def test_bare_mix_still_differs_from_the_original():
+    assert rs.match_key(["Klute"], "Song (Mix)") != rs.match_key(["Klute"], "Song")
+
+
+def test_rekordbox_rmx_spelling_now_matches_the_archive_remix():
+    # The end-to-end payoff: Rekordbox's "rmx" row resolves to the archive's "Remix" finding.
+    r = _one(
+        _track(title="Feels Like Before (Air.K & Cephei Remix)", artists=["Minos"]),
+        [_rb("Minos", "Feels Like Before (Air.K & Cephei rmx)", "Gm", 174.0)],
+    )
+    assert r.stats.unmatched == 0
+    assert any(p.bpm == 174.0 for p in r.proposals)
+
+
 # ── KEY rules ──
 
 def test_operator_key_is_never_touched():

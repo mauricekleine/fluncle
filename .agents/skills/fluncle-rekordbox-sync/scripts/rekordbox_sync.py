@@ -182,7 +182,10 @@ _VERSION_WORDS = {
 }
 
 # Suffixes that name a version but are NOT distinguishing - they are the original.
-_NEUTRAL_DESCRIPTORS = {"original mix", "original", "extended mix"}
+# Mirrors NEUTRAL_DESCRIPTORS in the TS port (apps/web/src/lib/server/track-match.ts) -
+# keep the two in lockstep ("original version" was added there first; a parity run over
+# _split_title caught the drift, 2026-07-27).
+_NEUTRAL_DESCRIPTORS = {"original mix", "original", "extended mix", "original version"}
 
 # The subset of _VERSION_WORDS strong enough to mark a version even BARE at the end of a
 # title - no parens, no dash ("Paint It Black VIP" vs "Paint It Black (Vip)"; a measured
@@ -193,6 +196,14 @@ _NEUTRAL_DESCRIPTORS = {"original mix", "original", "extended mix"}
 _BARE_TRAILING_VERSION_WORDS = {
     "bootleg", "instrumental", "refix", "remaster", "remix", "rework", "rmx", "vip",
 }
+
+# Token spellings that name the SAME version word. Two platforms writing one recording two
+# ways ("(Air.K & Cephei rmx)" vs "(Air.K & Cephei Remix)") is a measured anchor false-miss
+# (2026-07-26), so the descriptor's tokens are rewritten to one spelling before it becomes
+# identity. Deliberately tiny - only spellings observed in the wild go in; a new synonym is a
+# one-line addition here. Mirrors DESCRIPTOR_TOKEN_SYNONYMS in the TS port
+# (apps/web/src/lib/server/track-match.ts) - keep the two in lockstep.
+_DESCRIPTOR_TOKEN_SYNONYMS = {"rmx": "remix"}
 
 _ARTIST_SPLIT = re.compile(r"\s*(?:,|&|/|\band\b|\bx\b|\bvs\b|\bversus\b|\bwith\b)\s*")
 _FEAT_INLINE = re.compile(r"\b(?:feat|ft|featuring)\b\.?.*$", re.IGNORECASE)
@@ -229,9 +240,38 @@ def _normalize_artists(artists: object) -> frozenset[str]:
     return frozenset(name for name in names if name)
 
 
+def _canonicalize_descriptor(descriptor: str) -> str:
+    """One spelling for one version.
+
+    Two platforms name the SAME version two ways, and an opaque descriptor makes those
+    permanently un-anchorable - so once a descriptor IS the identity, fold its synonym
+    spellings together:
+      - a token synonym (_DESCRIPTOR_TOKEN_SYNONYMS): `rmx` -> `remix`;
+      - a redundant trailing `mix` after a version word: `instrumental mix` -> `instrumental`,
+        `dub mix` -> `dub` (the `mix` adds nothing the preceding word did not already say).
+
+    Runs LAST, on a descriptor _split_title has already accepted - so the _NEUTRAL_DESCRIPTORS
+    check still reads the raw folded spelling and "Original Mix" keeps folding to the original
+    rather than becoming a distinguishing "original". A bare `mix` is left alone (dropping it
+    would empty the descriptor), and a non-version word before the `mix` is left alone too
+    ("dj mix" stays). Mirrors canonicalizeDescriptor in the TS port
+    (apps/web/src/lib/server/track-match.ts) - keep the two in lockstep.
+    """
+    if not descriptor:
+        return ""
+
+    tokens = [_DESCRIPTOR_TOKEN_SYNONYMS.get(t, t) for t in descriptor.split(" ")]
+
+    if len(tokens) > 1 and tokens[-1] == "mix" and tokens[-2] in _VERSION_WORDS:
+        tokens.pop()
+
+    return " ".join(tokens)
+
+
 def _split_title(title: str) -> tuple[str, str]:
     """(base_title, descriptor) - the base with feat./mix suffixes removed, plus the
-    distinguishing version descriptor ("" for the original)."""
+    distinguishing version descriptor ("" for the original), canonicalized to one
+    spelling by _canonicalize_descriptor."""
     working = str(title or "")
     descriptor = ""
 
@@ -287,7 +327,7 @@ def _split_title(title: str) -> tuple[str, str]:
             descriptor = tokens[-1]
             base = " ".join(tokens[:-1])
 
-    return base, descriptor
+    return base, _canonicalize_descriptor(descriptor)
 
 
 def match_key(artists: object, title: str) -> tuple[frozenset[str], str, str]:

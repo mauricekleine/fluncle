@@ -8,6 +8,9 @@
 //   - `feat.` credits dropped (a "A feat. B" matches a stored ["A"]);
 //   - a REMIX / VIP / edit is a DIFFERENT recording — its mix-descriptor is part
 //     of the identity, so "Song (Calibre Remix)" never matches the original;
+//   - that descriptor is canonicalized to ONE spelling before it becomes identity
+//     (`rmx`→`remix`, a redundant trailing `mix` dropped), so two platforms spelling
+//     the same version differently still resolve to the same recording;
 //   - anything ambiguous resolves to NOTHING (honest silence over a wrong link).
 
 // Words that mark a parenthetical / dash-suffix as a distinct VERSION of a track.
@@ -53,6 +56,15 @@ const BARE_TRAILING_VERSION_WORDS = new Set([
   "vip",
 ]);
 
+// Token spellings that name the SAME version word. Two platforms writing one recording
+// two ways ("(Air.K & Cephei rmx)" vs "(Air.K & Cephei Remix)") is a measured anchor
+// false-miss (2026-07-26), so the descriptor's tokens are rewritten to one spelling
+// before it becomes identity. Deliberately tiny — only spellings observed in the wild
+// go in; a new synonym is a one-line addition here.
+// Mirrored by `_DESCRIPTOR_TOKEN_SYNONYMS` in
+// packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py — keep in lockstep.
+const DESCRIPTOR_TOKEN_SYNONYMS = new Map([["rmx", "remix"]]);
+
 const ARTIST_SPLIT = /\s*(?:,|&|\/|\band\b|\bx\b|\bvs\b|\bversus\b|\bwith\b)\s*/;
 const FEAT_INLINE = /\b(?:feat|ft|featuring)\b\.?.*$/i;
 const PUNCT = /[^a-z0-9 ]+/g;
@@ -90,8 +102,41 @@ export function normalizeArtists(artists: string[] | string): Set<string> {
 }
 
 /**
+ * One spelling for one version. Two platforms name the SAME version two ways, and an opaque
+ * descriptor makes those permanently un-anchorable — so once a descriptor IS the identity, fold
+ * its synonym spellings together:
+ *   - a token synonym ({@link DESCRIPTOR_TOKEN_SYNONYMS}): `rmx` → `remix`;
+ *   - a redundant trailing `mix` after a version word: `instrumental mix` → `instrumental`,
+ *     `dub mix` → `dub` (the `mix` adds nothing the preceding word did not already say).
+ *
+ * Runs LAST, on a descriptor `splitTitle` has already accepted — so the {@link NEUTRAL_DESCRIPTORS}
+ * check still reads the raw folded spelling and "Original Mix" keeps folding to the original rather
+ * than becoming a distinguishing "original". A bare `mix` is left alone (dropping it would empty
+ * the descriptor), and a non-version word before the `mix` is left alone too ("dj mix" stays).
+ *
+ * Mirrored by `_canonicalize_descriptor` in
+ * packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py — keep the two in lockstep.
+ */
+function canonicalizeDescriptor(descriptor: string): string {
+  if (!descriptor) {
+    return "";
+  }
+
+  const tokens = descriptor
+    .split(" ")
+    .map((token) => DESCRIPTOR_TOKEN_SYNONYMS.get(token) ?? token);
+
+  if (tokens.length > 1 && tokens.at(-1) === "mix" && VERSION_WORDS.has(tokens.at(-2) ?? "")) {
+    tokens.pop();
+  }
+
+  return tokens.join(" ");
+}
+
+/**
  * `(base title, version descriptor)` — the base with feat./mix suffixes removed,
- * plus the distinguishing version descriptor ("" for the original).
+ * plus the distinguishing version descriptor ("" for the original), canonicalized to
+ * one spelling by {@link canonicalizeDescriptor}.
  */
 export function splitTitle(title: string): { base: string; descriptor: string } {
   let working = title;
@@ -163,7 +208,7 @@ export function splitTitle(title: string): { base: string; descriptor: string } 
     }
   }
 
-  return { base, descriptor };
+  return { base, descriptor: canonicalizeDescriptor(descriptor) };
 }
 
 /**
