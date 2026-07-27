@@ -1446,8 +1446,16 @@ export async function reconcileLabels(): Promise<number> {
  * A label WITHOUT its finding count — the shape the seed-set read returns. The finding count is
  * DERIVED and only the `/admin/labels` station shows it, so the count is computed there (bounded to
  * a page), never on this read: the crawler asks for its seed set every tick and never uses a count.
+ *
+ * It carries ONE column the admin item does not: `mbLabelId`, the label's RULED MusicBrainz
+ * identity. The catalogue crawler's seed resolution is the consumer — a ruled MBID is the
+ * authority for which MusicBrainz label a seed slug means, so the crawler must be able to read it
+ * off the seed set it already fetches (crawl.ts `expandSeedLabel`) rather than searching a name
+ * that namesakes share. It is server-side only: `list_labels_admin` projects the contract shape.
  */
-export type LabelSeedItem = Omit<LabelAdminItem, "findingCount">;
+export type LabelSeedItem = Omit<LabelAdminItem, "findingCount"> & {
+  mbLabelId: null | string;
+};
 
 /** One paged section of the `/admin/labels` station — one seed state, bounded, name-sorted. */
 export type LabelsAdminPage = {
@@ -1457,11 +1465,12 @@ export type LabelsAdminPage = {
   total: number;
 };
 
-function toLabelSeedItem(row: LabelRow): LabelSeedItem {
+function toLabelSeedItem(row: LabelRow & { mb_label_id: null | string }): LabelSeedItem {
   return {
     createdAt: row.created_at,
     id: row.id,
     logoImageUrl: labelLogoUrl(row.image_key),
+    mbLabelId: row.mb_label_id,
     name: row.name,
     ruledAt: row.ruled_at,
     seedState: row.seed_state,
@@ -1476,20 +1485,25 @@ function toLabelSeedItem(row: LabelRow): LabelSeedItem {
  * consumer of `seed_state`. It is deliberately COUNTLESS — the whole-corpus finding aggregate this
  * read used to pay on every crawl tick was for a count the crawler never reads. The `/admin/labels`
  * station's finding counts come from {@link listLabelsPage} instead, bounded to the visible page.
+ *
+ * It projects `mb_label_id` alongside the admin columns — one more column on a read the crawler
+ * already makes, so the seed resolver gets the ruled identity for free instead of paying a second
+ * query for it. See {@link LabelSeedItem}.
  */
 export async function listLabels(seedState?: LabelSeedState): Promise<LabelSeedItem[]> {
   const db = await getDb();
   const result = seedState
     ? await db.execute({
         args: [seedState],
-        sql: `select ${LABEL_COLUMNS} from labels where seed_state = ? order by name collate nocase`,
+        sql: `select ${LABEL_COLUMNS}, mb_label_id
+              from labels where seed_state = ? order by name collate nocase`,
       })
     : await db.execute({
         args: [],
-        sql: `select ${LABEL_COLUMNS} from labels order by name collate nocase`,
+        sql: `select ${LABEL_COLUMNS}, mb_label_id from labels order by name collate nocase`,
       });
 
-  return typedRows<LabelRow>(result.rows).map(toLabelSeedItem);
+  return typedRows<LabelRow & { mb_label_id: null | string }>(result.rows).map(toLabelSeedItem);
 }
 
 /**

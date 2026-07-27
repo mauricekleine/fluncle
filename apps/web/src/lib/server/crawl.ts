@@ -294,9 +294,12 @@ export function catalogueTrackId(recordingMbid: string): string {
 
 // The aggressive label fold ("Medschool" ⇄ "Med School", "Pilot." ⇄ "Pilot") is the shared
 // `labelFold` (re-exported from ./labels), so the crawler's label dedup and the Apple
-// recordLabel corroboration agree by construction. When two MB labels fold the same (there
-// are two "Hospital Records", London and US), the first — MusicBrainz returns them
-// score-ordered — wins, so the choice is deterministic rather than arbitrary.
+// recordLabel corroboration agree by construction. A fold is a NAME test, never an identity
+// test: two unrelated labels fold the same (there are two "Hospital Records", London and US;
+// two "Radar Records", Belgian DnB and UK punk). Seed resolution used to take the first —
+// MusicBrainz returns them score-ordered — which is deterministic and WRONG whenever the
+// operator meant the other one. It now resolves on the ruled `labels.mb_label_id` and declines
+// to guess when the name alone is ambiguous; see `expandSeedLabel`.
 const fold = labelFold;
 
 // ── Frontier persistence ─────────────────────────────────────────────────────
@@ -536,6 +539,12 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
  *   - `seed_state = 'enabled'` (joined on the node's `label_slug`) — a subscription is only for
  *     labels the operator still seeds from. A `disabled`/`undecided` label's node never re-arms:
  *     re-arm is crawl SCOPE, the same rule seeding obeys.
+ *   - THE IDENTITY GUARD — the node's `external_id` must BE the label's ruled `mb_label_id`
+ *     (or the row must carry no ruling yet). `label_slug` alone is not identity: a node minted
+ *     from a namesake resolve (see `expandSeedLabel`'s namesake seal) carries the RIGHT slug and
+ *     the WRONG MBID, so a slug-only join re-armed the wrong label's browse forever under the
+ *     operator's correct ruling — measured live 2026-07-27, Radar Records at 7 attempts. A
+ *     mismatched node simply stops being re-armed; nothing it already stored is touched here.
  *   - `kind = 'label'` — never an artist or release node (those are re-reached BY the browse).
  *   - `state = 'done'` — a `failed` node is owned by its own exponential backoff; never disturb it.
  *   - `done_at < now − REARM_AFTER_DAYS` — a freshly-drained label is not re-walked immediately.
@@ -550,22 +559,31 @@ async function rearmSeedLabels(): Promise<number> {
   const now = new Date().toISOString();
 
   // One bounded UPDATE. The subquery picks the batch (oldest-done-first, capped) — SQLite forbids
-  // ORDER BY/LIMIT on the UPDATE itself but allows it in the row-selecting subquery. `label_slug`
-  // is joined to the `enabled` seed set (a bounded, tens-of-rows table), never pulled into the isolate.
-  // `cursor → REARM_TAIL` arms the TAIL-FIRST re-read (`expandRearmedBrowse`), not a full forward re-walk.
+  // ORDER BY/LIMIT on the UPDATE itself but allows it in the row-selecting subquery. The seed join
+  // is a CORRELATED `exists` rather than `label_slug in (…)` because it now tests two things about
+  // the SAME row — the label is still enabled AND this node is the label's ruled MusicBrainz
+  // identity — against a bounded, tens-of-rows table keyed on its unique `slug`; nothing is pulled
+  // into the isolate either way. A row with no `mb_label_id` has no ruling to contradict, so it
+  // re-arms exactly as before. `cursor → REARM_TAIL` arms the TAIL-FIRST re-read
+  // (`expandRearmedBrowse`), not a full forward re-walk.
   const result = await db.execute({
     args: [REARM_TAIL, now, cutoff, REARM_BATCH],
     sql: `update crawl_frontier
           set state = 'pending', cursor = ?, updated_at = ?
           where id in (
-            select id from crawl_frontier
-            where kind = 'label'
-              and source = 'musicbrainz'
-              and state = 'done'
-              and done_at is not null
-              and done_at < ?
-              and label_slug in (select slug from labels where seed_state = 'enabled')
-            order by done_at asc, id asc
+            select node.id from crawl_frontier as node
+            where node.kind = 'label'
+              and node.source = 'musicbrainz'
+              and node.state = 'done'
+              and node.done_at is not null
+              and node.done_at < ?
+              and exists (
+                select 1 from labels
+                where labels.slug = node.label_slug
+                  and labels.seed_state = 'enabled'
+                  and (labels.mb_label_id is null or labels.mb_label_id = node.external_id)
+              )
+            order by node.done_at asc, node.id asc
             limit ?
           )`,
   });
@@ -842,6 +860,21 @@ async function mb<T>(path: string): Promise<T | null> {
  * rate-limited) name→MBID lookup RESUMABLE and recorded, instead of a lookup repeated
  * on every tick. A label MusicBrainz does not know is `skipped` with a reason — recorded
  * honestly, never retried forever, and visible in `get_crawl_status`.
+ *
+ * ── THE NAMESAKE SEAL: THE RULED IDENTITY IS THE AUTHORITY ─────────────────────────────
+ * A label NAME is not an identity. Same-named labels fold identically (`labelFold` is
+ * deliberately aggressive), so a free-text search's top-scoring hit is whichever namesake
+ * MusicBrainz ranks first — not the one the operator ruled on. Measured live 2026-07-27: the
+ * operator enabled the Belgian drum & bass "Radar Records" and the crawl walked the 1978 UK
+ * punk label (MB score 100 vs 85), minting 303 new-wave tracks under his enabled ruling. Six
+ * enabled seeds in all had been resolved to a namesake this way.
+ *
+ * So the resolution order is now IDENTITY FIRST, name second:
+ *   1. `labels.mb_label_id` — the RULED identity, written by the independent label
+ *      identity-resolution path (label-images.ts) and by this function's own persist below.
+ *      When it is there, it IS the answer: enqueue that MBID and make no search at all.
+ *   2. The free-text search, for a row that carries no MBID yet — with the ambiguity guard
+ *      below, so a coin-flip is never taken on the operator's behalf.
  */
 async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
   const labels = await listLabels("enabled");
@@ -853,31 +886,74 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
     return { ...EMPTY, next: { cursor: 0, note: "label no longer enabled", state: "skipped" } };
   }
 
+  if (label.mbLabelId) {
+    // Step 1 — the ruled identity. No search: a name lookup could only disagree with it, and
+    // when it disagrees the name is what is wrong. Nothing to persist either (it is already
+    // stored), so this path costs ZERO MusicBrainz requests.
+    return {
+      ...EMPTY,
+      enqueued: await enqueue({
+        externalId: label.mbLabelId,
+        hop: 0,
+        kind: "label",
+        labelSlug: label.slug,
+        parentId: node.id,
+        source: "musicbrainz",
+      }),
+    };
+  }
+
+  // Step 2 — the fallback, for a label whose identity nobody has resolved yet.
+  //
   // A FREE-TEXT query, not a field-scoped exact phrase: `label:"Medschool"` returns
   // nothing (MusicBrainz spells it "Med School"), while the free-text search returns it
   // at score 100. Verified live. The exactness lives in the fold, not in the query.
   const search = await mb<MbLabelSearch>(`/label?query=${encodeURIComponent(label.name)}&limit=5`);
   const want = fold(label.name);
-  const match = (search?.labels ?? []).find(
-    (candidate) => candidate.id && candidate.name && fold(candidate.name) === want,
+  const matches = (search?.labels ?? []).filter(
+    (candidate): candidate is { id: string; name: string } =>
+      typeof candidate.id === "string" &&
+      typeof candidate.name === "string" &&
+      fold(candidate.name) === want,
   );
+  // Distinct MBIDs — one label listed twice is one candidate, not an ambiguity.
+  const candidateIds = [...new Set(matches.map((candidate) => candidate.id))];
+  const [only] = candidateIds;
 
-  if (!match?.id) {
+  if (!only) {
     return {
       ...EMPTY,
       next: { cursor: 0, note: "no exact MusicBrainz label match", state: "skipped" },
     };
   }
 
-  // Persist the MBID the walk already resolved — the label-image sweep reads it to skip its own
+  if (candidateIds.length > 1) {
+    // THE AMBIGUITY GUARD. Two namesakes fold the same and nothing in the archive says which
+    // one he meant, so the crawl declines to guess: `skipped`, with the candidates named in the
+    // note, and a log line so the seed surfaces for a human identity ruling. Ruling it is a
+    // one-field write (`labels.mb_label_id`), after which step 1 above takes over forever.
+    logEvent("warn", "crawl.seed-label-ambiguous", { candidates: candidateIds, slug: label.slug });
+
+    return {
+      ...EMPTY,
+      next: {
+        cursor: 0,
+        note: `ambiguous MusicBrainz label match: ${candidateIds.join(", ")}`,
+        state: "skipped",
+      },
+    };
+  }
+
+  // Persist the MBID the walk just resolved — the label-image sweep reads it to skip its own
   // MB search (and it is the label's durable KG anchor). Non-clobbering + best-effort: it never
-  // fights the sweep and a failure here must not derail the crawl. See label-images.ts.
-  await setLabelMbLabelId(label.slug, match.id).catch((error) => {
+  // fights the sweep and a failure here must not derail the crawl. See label-images.ts. It is
+  // also what turns this seed into a step-1 resolve on every later tick.
+  await setLabelMbLabelId(label.slug, only).catch((error) => {
     logEvent("warn", "crawl.persist-mb-label-id-failed", { error, slug: label.slug });
   });
 
   const enqueued = await enqueue({
-    externalId: match.id,
+    externalId: only,
     hop: 0,
     kind: "label",
     labelSlug: label.slug,

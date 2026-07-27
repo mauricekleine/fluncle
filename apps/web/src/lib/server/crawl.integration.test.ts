@@ -792,6 +792,202 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   });
 });
 
+// ── THE NAMESAKE SEAL: a ruled identity beats a name ────────────────────────────────────────────
+//
+// A label NAME is not an identity. Measured live 2026-07-27: the operator enabled the Belgian drum
+// & bass "Radar Records"; the seed resolver's free-text search returned the 1978 UK PUNK namesake
+// first (MB score 100 vs 85), both names fold identically, so the crawl walked the punk label and
+// minted 303 new-wave tracks under his enabled ruling. And because the re-arm joined its nodes to
+// the seed set on `label_slug` ALONE, that wrong-namesake node kept re-arming forever (7 attempts).
+// Six enabled seeds were resolved this way. These are the two tripwires that close it.
+
+describe("the namesake seal — the ruled mb_label_id is the resolver's authority", () => {
+  const RIGHT_MBID = "label-radar-dnb";
+  const WRONG_MBID = "label-radar-punk";
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /**
+   * MusicBrainz over a namesake pair, with the search calls COUNTED. The punk label outranks the
+   * DnB one on exactly the same name — the live shape. `labels` may hold either or none.
+   */
+  function stubNamesakes(candidates: { id: string; name: string; score: number }[]): {
+    searchCalls: () => number;
+  } {
+    let searches = 0;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/label?query=")) {
+          searches += 1;
+
+          return json({ labels: candidates });
+        }
+
+        // Either namesake's browse answers empty — this block is about IDENTITY, not the walk.
+        if (url.includes("/release?label=")) {
+          return json({ "release-count": 0, releases: [] });
+        }
+
+        return json({});
+      }),
+    );
+
+    return { searchCalls: () => searches };
+  }
+
+  /** The operator's enabled Radar Records, with (or without) its ruled MusicBrainz identity. */
+  async function seedRadar(mbLabelId: null | string): Promise<void> {
+    await db.execute("update labels set seed_state = 'disabled'"); // silence the Medschool walk
+    await seedLabel("Radar Records", "radar-records", "enabled");
+
+    if (mbLabelId) {
+      await db.execute({
+        args: [mbLabelId],
+        sql: `update labels set mb_label_id = ? where slug = 'radar-records'`,
+      });
+    }
+  }
+
+  it("enqueues the RULED mbid and never asks MusicBrainz to guess from the name", async () => {
+    // The punk namesake would win the search. The ruling says otherwise, so the search never runs.
+    const mb = stubNamesakes([
+      { id: WRONG_MBID, name: "Radar Records", score: 100 },
+      { id: RIGHT_MBID, name: "Radar Records", score: 85 },
+    ]);
+
+    await seedRadar(RIGHT_MBID);
+    await drain(0);
+
+    // ZERO name lookups: a ruled identity cannot be improved on by a search, only contradicted.
+    expect(mb.searchCalls()).toBe(0);
+
+    const nodes = await db.execute(
+      "select external_id from crawl_frontier where kind = 'label' and source = 'musicbrainz'",
+    );
+    expect(nodes.rows.map((row) => text(row.external_id))).toEqual([RIGHT_MBID]);
+
+    // The seed node resolved cleanly — no skip, no failure.
+    const seed = await db.execute(
+      "select state, note from crawl_frontier where id = 'fluncle:label:radar-records'",
+    );
+    expect(seed.rows[0]?.state).toBe("done");
+    expect(seed.rows[0]?.note).toBeNull();
+  });
+
+  it("SKIPS an ambiguous name instead of picking one — the mbids ride the note for a human", async () => {
+    const mb = stubNamesakes([
+      { id: WRONG_MBID, name: "Radar Records", score: 100 },
+      { id: RIGHT_MBID, name: "Radar Records", score: 85 },
+    ]);
+
+    // No ruling on this row — so the fallback search runs, and finds two exact folds.
+    await seedRadar(null);
+    await drain(0);
+
+    expect(mb.searchCalls()).toBe(1);
+
+    const seed = await db.execute(
+      "select state, note from crawl_frontier where id = 'fluncle:label:radar-records'",
+    );
+    expect(seed.rows[0]?.state).toBe("skipped");
+    // Both candidates are named, so the ruling is a copy-paste rather than a re-investigation.
+    expect(text(seed.rows[0]?.note)).toContain(WRONG_MBID);
+    expect(text(seed.rows[0]?.note)).toContain(RIGHT_MBID);
+
+    // NOTHING was walked and nothing was written: no MB label node, and no guessed identity
+    // persisted onto the operator's row (the seal's whole point — a coin-flip is not a ruling).
+    const nodes = await db.execute(
+      "select count(*) as n from crawl_frontier where source = 'musicbrainz'",
+    );
+    expect(Number(nodes.rows[0]?.n)).toBe(0);
+
+    const label = await db.execute("select mb_label_id from labels where slug = 'radar-records'");
+    expect(label.rows[0]?.mb_label_id).toBeNull();
+  });
+
+  it("still resolves a SINGLE exact match by name, and persists it as the ruling", async () => {
+    // One exact fold plus a near-miss that does not fold ("Radar" ≠ "Radar Records") — the
+    // unambiguous case must keep working, or the guard has quietly disabled seed resolution.
+    const mb = stubNamesakes([
+      { id: RIGHT_MBID, name: "Radar Records", score: 100 },
+      { id: "label-radar-other", name: "Radar", score: 70 },
+    ]);
+
+    await seedRadar(null);
+    await drain(0);
+
+    expect(mb.searchCalls()).toBe(1);
+
+    const nodes = await db.execute(
+      "select external_id from crawl_frontier where kind = 'label' and source = 'musicbrainz'",
+    );
+    expect(nodes.rows.map((row) => text(row.external_id))).toEqual([RIGHT_MBID]);
+
+    // Persisted, so every later tick resolves off the ruling and makes no search at all.
+    const label = await db.execute("select mb_label_id from labels where slug = 'radar-records'");
+    expect(label.rows[0]?.mb_label_id).toBe(RIGHT_MBID);
+  });
+
+  it("re-arms a node that IS the ruled identity, never a namesake node wearing the right slug", async () => {
+    const { REARM_AFTER_DAYS, crawlCatalogue } = await import("./crawl");
+    await db.execute("update labels set seed_state = 'disabled'"); // silence the Medschool walk
+
+    const old = new Date(Date.now() - (REARM_AFTER_DAYS + 2) * DAY_MS).toISOString();
+
+    /** An aged, drained MusicBrainz label browse node under one seed slug. */
+    const plantNode = async (slug: string, mbid: string): Promise<void> => {
+      await db.execute({
+        args: [`musicbrainz:label:${mbid}`, mbid, slug, old, old, old],
+        sql: `insert into crawl_frontier
+                (id, kind, source, external_id, hop, parent_id, label_slug, state, done_at, created_at, updated_at)
+              values (?, 'label', 'musicbrainz', ?, 0, null, ?, 'done', ?, ?, ?)`,
+      });
+    };
+
+    /** An enabled seed label, optionally carrying the operator's identity ruling. */
+    const plantLabel = async (slug: string, mbLabelId: null | string): Promise<void> => {
+      await seedLabel(slug, slug, "enabled");
+
+      if (mbLabelId) {
+        await db.execute({
+          args: [mbLabelId, slug],
+          sql: `update labels set mb_label_id = ? where slug = ?`,
+        });
+      }
+    };
+
+    // 1. RULED AND MATCHING — the node IS the label's identity. Re-arms (the subscription).
+    await plantLabel("ruled-match", "mb-ruled-match");
+    await plantNode("ruled-match", "mb-ruled-match");
+
+    // 2. RULED AND MISMATCHED — the live bug. Right slug, WRONG label. Must never re-arm again.
+    await plantLabel("ruled-namesake", "mb-the-real-one");
+    await plantNode("ruled-namesake", "mb-the-namesake");
+
+    // 3. UNRULED — no `mb_label_id` to contradict, so it re-arms exactly as it always did.
+    await plantLabel("unruled", null);
+    await plantNode("unruled", "mb-unruled");
+
+    // `limit: 0` re-arms and picks NOTHING, so these assertions read the re-arm's own effect
+    // rather than the browse expansion that would otherwise consume it in the same pass.
+    const pass = await crawlCatalogue({ limit: 0, maxHop: 0 });
+    expect(pass.seedsRearmed).toBe(2);
+    expect(pass.expanded).toBe(0);
+
+    const states = await db.execute(
+      "select external_id, state from crawl_frontier where source = 'musicbrainz'",
+    );
+    const byMbid = new Map(states.rows.map((row) => [text(row.external_id), text(row.state)]));
+    expect(byMbid.get("mb-ruled-match")).toBe("pending");
+    expect(byMbid.get("mb-the-namesake")).toBe("done");
+    expect(byMbid.get("mb-unruled")).toBe("pending");
+  });
+});
+
 // ── THE DEDUPE CONTRACT: MB-walk-later convergence with a tap-first row (D8) ─────────────────────
 //
 // The freshness tap (label-releases.ts) mints `sp_<spotify-track-id>` rows for day-one releases.
