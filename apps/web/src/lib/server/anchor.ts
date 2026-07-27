@@ -81,7 +81,7 @@ import {
   searchTrackCandidates,
   type TrackSearchResult,
 } from "./spotify";
-import { matchKey, normalizeArtists, splitTitle } from "./track-match";
+import { canonicalizeSearchTitle, matchKey, normalizeArtists, splitTitle } from "./track-match";
 
 /**
  * ±window on the row↔candidate duration match — one of the search rung's three verification
@@ -107,9 +107,18 @@ export const ANCHOR_DURATION_TOLERANCE_MS = 3000;
  */
 export const ANCHOR_SUBSET_DURATION_TOLERANCE_MS = 1000;
 
-/** The free-text query the search rung asks of Spotify — the row's artists, then its title. */
+/**
+ * The free-text query the search rung asks of Spotify — the row's artists, then its title, spelled
+ * the way the platforms index it (`canonicalizeSearchTitle`: `rmx` → `Remix`, a redundant trailing
+ * `mix` dropped — the retrieval-side twin of the identity fold `anchorTrack`'s gate verifies with,
+ * kept in lockstep in ./track-match). Asking for the row's own spelling of a version the platform
+ * writes differently returns NOTHING, and a gate handed no candidate cannot forgive anything.
+ *
+ * ONE owner, every rung: this is what the Worker's search rung sends, and what `list_track_work`
+ * hands the box's Apify sweep as each row's ready-made `anchorQuery` (the sweep never builds one).
+ */
 export function anchorSearchQuery(artists: string[], title: string): string {
-  return [...artists, title].join(" ").trim();
+  return [...artists, canonicalizeSearchTitle(title)].join(" ").trim();
 }
 
 /** One credited artist on a candidate — its name, and its stable Spotify id when the actor carried one. */

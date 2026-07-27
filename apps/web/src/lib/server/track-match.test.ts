@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTrackMatchIndex,
+  canonicalizeSearchTitle,
   dedupeByRecordingIdentity,
   deriveRemixerNames,
   fold,
@@ -165,6 +166,72 @@ describe("splitTitle", () => {
       base: "song vip",
       descriptor: "calibre remix",
     });
+  });
+});
+
+describe("canonicalizeSearchTitle (the query spelling)", () => {
+  // The retrieval-side twin of the descriptor fold: the SAME two rules on the RAW title the anchor
+  // rungs search with. Both cases below are measured anchor misses (2026-07-27) — retrievable under
+  // the canonical spelling, unreachable under the row's own.
+  it("spells `rmx` the way the platforms index it", () => {
+    expect(canonicalizeSearchTitle("Feels Like Before (Air.K & Cephei rmx)")).toBe(
+      "Feels Like Before (Air.K & Cephei Remix)",
+    );
+  });
+
+  it("drops a redundant trailing `mix` after a version word", () => {
+    expect(canonicalizeSearchTitle("Part of Me (instrumental mix)")).toBe(
+      "Part of Me (instrumental)",
+    );
+    expect(canonicalizeSearchTitle("Song (Dub Mix)")).toBe("Song (Dub)");
+    expect(canonicalizeSearchTitle("Song - Instrumental Mix")).toBe("Song - Instrumental");
+  });
+
+  it("keeps the title's own casing, punctuation, and accents — it is not the folded key", () => {
+    expect(canonicalizeSearchTitle("Feels Like Before (Air.K & Cephei rmx)")).toContain(
+      "Air.K & Cephei",
+    );
+    // The row's register is preserved: a shouted title keeps shouting, a lowercase descriptor stays
+    // lowercase. Only the `rmx`/`mix` token itself is rewritten.
+    expect(canonicalizeSearchTitle("FEELS LIKE BEFORE (AIR.K RMX)")).toBe(
+      "FEELS LIKE BEFORE (AIR.K REMIX)",
+    );
+    expect(canonicalizeSearchTitle("Café del Mar (Ratty rmx)")).toBe("Café del Mar (Ratty Remix)");
+  });
+
+  it("holds the same guards the identity fold does", () => {
+    // Dropping the `mix` would empty the descriptor.
+    expect(canonicalizeSearchTitle("Song (Mix)")).toBe("Song (Mix)");
+    // A non-version word before it — a DJ mix is not a version of the track.
+    expect(canonicalizeSearchTitle("Song (Nu:Tone DJ Mix)")).toBe("Song (Nu:Tone DJ Mix)");
+    // A neutral descriptor names the original; `splitTitle` never folds it, so nor does the query.
+    expect(canonicalizeSearchTitle("Song (Extended Mix)")).toBe("Song (Extended Mix)");
+    expect(canonicalizeSearchTitle("Song (Original Mix)")).toBe("Song (Original Mix)");
+  });
+
+  it("passes an ordinary title through byte-identical", () => {
+    for (const title of [
+      "Weightless",
+      "Let's Leave Tomorrow (feat. Bev Lee Harling)",
+      "Song (Calibre Remix)",
+      "Paint It Black VIP",
+      "Mr Right On",
+      "",
+    ]) {
+      expect(canonicalizeSearchTitle(title)).toBe(title);
+    }
+  });
+
+  it("stays in lockstep with the identity fold — the canonical query still keys the same recording", () => {
+    for (const title of [
+      "Feels Like Before (Air.K & Cephei rmx)",
+      "Part of Me (instrumental mix)",
+      "Song - Instrumental Mix",
+      "Song (Nu:Tone DJ Mix)",
+      "Song (Extended Mix)",
+    ]) {
+      expect(matchKey(["Klute"], canonicalizeSearchTitle(title))).toBe(matchKey(["Klute"], title));
+    }
   });
 });
 

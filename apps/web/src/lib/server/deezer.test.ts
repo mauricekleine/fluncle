@@ -70,6 +70,22 @@ describe("searchDeezerCandidates", () => {
     expect(candidates.map((candidate) => candidate.isrc)).toEqual(["GBEXH1900314"]);
   });
 
+  it("asks in the canonical query spelling, the same one every other anchor rung sends", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(body([HIT]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await searchDeezerCandidates({
+      artists: ["Minos"],
+      title: "Feels Like Before (Air.K & Cephei rmx)",
+    });
+
+    // `rmx` → `Remix`: Deezer indexes the canonical spelling, so the raw one recovers no ISRC at all.
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(decodeURIComponent(String(url))).toContain(
+      'artist:"Minos" track:"Feels Like Before (Air.K & Cephei Remix)"',
+    );
+  });
+
   it("returns [] without a fetch when the artist or title is blank", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

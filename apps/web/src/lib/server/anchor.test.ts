@@ -22,6 +22,18 @@ describe("anchorSearchQuery", () => {
   it("handles a row with no artists", () => {
     expect(anchorSearchQuery([], "Amen Break")).toBe("Amen Break");
   });
+
+  // RETRIEVAL, not verification: the gate forgives these spellings, but only on a candidate we were
+  // handed — and the platform hands back nothing when asked in the row's own spelling. Both rows are
+  // measured misses (2026-07-27), retrievable under the canonical spelling.
+  it("asks in the spelling the platforms index", () => {
+    expect(anchorSearchQuery(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
+      "Minos Feels Like Before (Air.K & Cephei Remix)",
+    );
+    expect(anchorSearchQuery(["Klute"], "Part of Me (instrumental mix)")).toBe(
+      "Klute Part of Me (instrumental)",
+    );
+  });
 });
 
 describe("pickIsrcCandidate — the exact rung", () => {

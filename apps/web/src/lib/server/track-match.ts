@@ -12,6 +12,9 @@
 //     (`rmx`→`remix`, a redundant trailing `mix` dropped), so two platforms spelling
 //     the same version differently still resolve to the same recording;
 //   - anything ambiguous resolves to NOTHING (honest silence over a wrong link).
+// `canonicalizeSearchTitle` is the retrieval-side twin of that descriptor fold: the same two rules
+// applied to the RAW title the anchor rungs SEARCH with, so the spelling we ask for is the spelling
+// the platforms index — a gate that forgives a spelling the query never asks for judges nothing.
 
 // Words that mark a parenthetical / dash-suffix as a distinct VERSION of a track.
 const VERSION_WORDS = new Set([
@@ -60,7 +63,8 @@ const BARE_TRAILING_VERSION_WORDS = new Set([
 // two ways ("(Air.K & Cephei rmx)" vs "(Air.K & Cephei Remix)") is a measured anchor
 // false-miss (2026-07-26), so the descriptor's tokens are rewritten to one spelling
 // before it becomes identity. Deliberately tiny — only spellings observed in the wild
-// go in; a new synonym is a one-line addition here.
+// go in; a new synonym is a one-line addition here — and BOTH sides of the fold read this
+// one map: `canonicalizeDescriptor` (identity) and `canonicalizeSearchTitle` (retrieval).
 // Mirrored by `_DESCRIPTOR_TOKEN_SYNONYMS` in
 // packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py — keep in lockstep.
 const DESCRIPTOR_TOKEN_SYNONYMS = new Map([["rmx", "remix"]]);
@@ -116,6 +120,9 @@ export function normalizeArtists(artists: string[] | string): Set<string> {
  *
  * Mirrored by `_canonicalize_descriptor` in
  * packages/skills/fluncle-rekordbox-sync/scripts/rekordbox_sync.py — keep the two in lockstep.
+ * {@link canonicalizeSearchTitle} is the RETRIEVAL-side twin of these same two rules — the two
+ * move together, because a gate that forgives a spelling the query never asks for is a gate with
+ * nothing to judge.
  */
 function canonicalizeDescriptor(descriptor: string): string {
   if (!descriptor) {
@@ -131,6 +138,84 @@ function canonicalizeDescriptor(descriptor: string): string {
   }
 
   return tokens.join(" ");
+}
+
+// One alternation over every synonym spelling, derived from the map itself so a new entry needs no
+// second edit here. Word-boundaried and case-insensitive: only the whole token is rewritten.
+const SYNONYM_TOKEN_PATTERN = new RegExp(
+  `\\b(?:${[...DESCRIPTOR_TOKEN_SYNONYMS.keys()].join("|")})\\b`,
+  "gi",
+);
+
+// A redundant trailing `mix` on a RAW descriptor, with whatever separator (space, dot, dash,
+// underscore) precedes it — the raw-string counterpart of `canonicalizeDescriptor`'s `tokens.pop()`.
+const TRAILING_MIX = /[\s._–—-]*mix\s*$/i;
+
+/** The canonical spelling in a raw title's own register: ALL-CAPS stays shouted, anything else Titles. */
+function displaySpelling(matched: string, canonical: string): string {
+  const shouted = matched === matched.toUpperCase() && matched !== matched.toLowerCase();
+
+  return shouted
+    ? canonical.toUpperCase()
+    : canonical.slice(0, 1).toUpperCase() + canonical.slice(1);
+}
+
+/**
+ * Drop a redundant trailing `mix` from ONE raw version descriptor, under exactly the guards
+ * {@link canonicalizeDescriptor} applies to the folded one: never when dropping it would empty the
+ * descriptor ("(Mix)" stays), never after a non-version word ("(Nu:Tone DJ Mix)" stays), and never on
+ * a {@link NEUTRAL_DESCRIPTORS} spelling ("(Extended Mix)" stays — `splitTitle` never lets that reach
+ * the fold, so the query must not touch it either). Only the `mix` leaves; the rest of the raw text —
+ * its casing, its dots, its ampersands — is returned untouched.
+ */
+function dropRedundantMix(descriptor: string): string {
+  const folded = fold(descriptor);
+  const tokens = folded ? folded.split(" ") : [];
+
+  const redundant =
+    tokens.length > 1 &&
+    tokens.at(-1) === "mix" &&
+    VERSION_WORDS.has(tokens.at(-2) ?? "") &&
+    !NEUTRAL_DESCRIPTORS.has(folded);
+
+  return redundant ? descriptor.replace(TRAILING_MIX, "") : descriptor;
+}
+
+/**
+ * THE QUERY SPELLING — the retrieval-side twin of {@link canonicalizeDescriptor}. The identity fold
+ * forgives two platforms spelling one version two ways, but it only ever runs on a candidate we
+ * already HAVE: if the search we sent was spelled the row's way and the platform indexes the other
+ * way, the gate is handed nothing to judge and the row misses forever (measured 2026-07-27 — Minos
+ * "Feels Like Before (Air.K & Cephei rmx)" and Klute "Part of Me (instrumental mix)", both
+ * retrievable under the canonical spelling, both unreachable under the raw one).
+ *
+ * So the SAME two rules run on the RAW title we ASK with — a synonym token
+ * ({@link DESCRIPTOR_TOKEN_SYNONYMS}: `rmx` → `Remix`) and a redundant trailing `mix` inside a
+ * version parenthetical / dash-suffix ({@link dropRedundantMix}) — and nothing else. This is NOT the
+ * folded key: the title keeps its real casing, its dots, its ampersands, because that is the string
+ * platform search relevance is tuned for. A title with neither pattern comes back byte-identical.
+ *
+ * Every anchor rung's query goes through here — the Worker's own Spotify search and the box's Apify
+ * sweep via `anchorSearchQuery` (anchor.ts), the pre-anchor ISRC recovery via `searchDeezerCandidates`
+ * (deezer.ts) — so one spelling is asked everywhere. Verification is unchanged: the candidates that
+ * come back are still judged against the row's RAW title through `matchKey`.
+ */
+export function canonicalizeSearchTitle(title: string): string {
+  const spelled = title.replace(SYNONYM_TOKEN_PATTERN, (match) =>
+    displaySpelling(match, DESCRIPTOR_TOKEN_SYNONYMS.get(match.toLowerCase()) ?? match),
+  );
+
+  // Parenthetical / bracket groups — the descriptor's usual home, rewritten in place.
+  const degrouped = spelled.replace(
+    /([([])([^)\]]*)([)\]])/g,
+    (_full, open: string, inner: string, close: string) => open + dropRedundantMix(inner) + close,
+  );
+
+  // A dash-suffixed version ("Song - Instrumental Mix"), the other form `splitTitle` accepts. Skipped
+  // when the suffix carries a bracket, since that group was already handled above.
+  return degrouped.replace(/(\s[-–—]\s)(.+)$/, (full, separator: string, suffix: string) =>
+    /[([)\]]/.test(suffix) ? full : separator + dropRedundantMix(suffix),
+  );
 }
 
 /**

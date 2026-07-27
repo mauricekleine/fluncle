@@ -18,6 +18,7 @@
 // a miss is always preferred to a guess: this client just fetches and normalizes; anchor.ts rules.
 
 import { logEvent } from "./log";
+import { canonicalizeSearchTitle } from "./track-match";
 
 type DeezerTrack = {
   album?: { id?: number };
@@ -101,7 +102,13 @@ export async function searchDeezerCandidates(input: {
   title: string;
 }): Promise<DeezerIsrcCandidate[]> {
   const artist = input.artists[0]?.replaceAll('"', " ").trim();
-  const title = input.title.replaceAll('"', " ").trim();
+
+  // The QUERY SPELLING, the same one every other anchor rung asks with (`canonicalizeSearchTitle` in
+  // ./track-match: `rmx` → `Remix`, a redundant trailing `mix` dropped — the retrieval twin of the
+  // `canonicalizeDescriptor` fold this client's CALLER verifies with, kept in lockstep there). Deezer's
+  // index carries the canonical spelling, so a row asking in its own returns nothing at all and can
+  // never recover its ISRC. The caller still verifies against the row's RAW title.
+  const title = canonicalizeSearchTitle(input.title.replaceAll('"', " ")).trim();
 
   if (!artist || !title) {
     return [];
