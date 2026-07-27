@@ -68,7 +68,7 @@ function blockBody(pattern: RegExp, what: string): string {
   return match[1] ?? "";
 }
 
-// The menu, parsed out of `menuItems()`: `{id: "latest", label: "Latest bangers"},`.
+// The menu, parsed out of `menuItems()`: `{id: "latest", label: "Latest findings"},`.
 const menuBody = blockBody(/func menuItems\(\) \[\]menuItem \{([\s\S]*?)\n\}/, "menuItems()");
 const menuIds = new Set(
   [...menuBody.matchAll(/\{id: "([a-z-]+)"/g)].map((match) => match[1] ?? ""),

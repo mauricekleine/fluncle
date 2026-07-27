@@ -120,7 +120,7 @@ Two naming surfaces: the **deep-link command argument** (`ssh rave.fluncle.com <
 
 Deep links (`parseBootCommand`): `latest`, `fresh`, `random`, or a bare Log ID coordinate (e.g. `004.7.2I`, `019.F.1A`). Lowercase, single words.
 
-Menu item labels (`menuItems()`, 12 items): `Latest bangers`, `Fresh releases`, `Artist archive`, `Sonic galaxies`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `System status`, `About`, `Quit`. Title Case, in-fiction nouns. `Sonic galaxies` opens the browse-by-feel galaxies screen (list + open, cloning `Artist archive`); it reads the same public `list_galaxies`/`get_galaxy` ops the CLI's `fluncle galaxies [slug]` does, so the operation reads the same across CLI, API, and SSH.
+Menu item labels (`menuItems()`, 12 items): `Latest findings`, `Fresh releases`, `Artist archive`, `Sonic galaxies`, `Mixtape archive`, `Random banger`, `Submit a track`, `Subscribe`, `Install CLI`, `System status`, `About`, `Quit`. Title Case, in-fiction nouns. `Sonic galaxies` opens the browse-by-feel galaxies screen (list + open, cloning `Artist archive`); it reads the same public `list_galaxies`/`get_galaxy` ops the CLI's `fluncle galaxies [slug]` does, so the operation reads the same across CLI, API, and SSH.
 
 Note the deep-link `latest` maps to the CLI's `recent`, the API's `listFindings` (`GET /findings`), and the MCP's `list_findings` — **four names for one read**, all naming the found-order feed after the vocabulary cut.
 
@@ -231,7 +231,7 @@ The voice canon (`VOICE.md`, `packages/skills/copywriting-fluncle/references/voi
 
 - **Machine-facing names** (CLI command/flag identifiers, API paths, `operationId`s, MCP tool names) use the plain machine noun `track` and a closed verb set. These have "no crew in the room" — the Narrator rule says keep them honestly-plain. This is where the convention applies in full.
 - **Human-facing copy** on any surface (CLI help text and output prose, SSH menu labels and detail screens, admin board action labels, empty states, confirmations) uses the voice nouns — `finding`, `banger`, `recovered`, `certify`, `Fluncle's Findings` — under the Garnish Rule (Earth verbs, cosmic trim; the cosmos modifies, never replaces the verb in functional controls). The convention does **not** force these toward the machine noun.
-- The seam runs **per token, not per surface.** The CLI has both: the command identifier `recent` is machine-facing (lives in the registry), while its description "The latest bangers, newest first" is voice. The SSH deep-link `latest` is a machine token (a registered alias of `list_tracks`); the menu label `Latest bangers` is voice. Keeping them in the registry as aliases is what makes the mapping explicit instead of accidental.
+- The seam runs **per token, not per surface.** The CLI has both: the command identifier `recent` is machine-facing (lives in the registry), while its description "The latest bangers, newest first" is voice. The SSH deep-link `latest` is a machine token (a registered alias of `list_tracks`); the menu label `Latest findings` is voice. Keeping them in the registry as aliases is what makes the mapping explicit instead of accidental.
 
 So the convention's job at the boundary is narrow: make every _machine_ name derivable from one registry, and record each _voice_ alias (`recent`, `latest`, `Random banger`) against its canonical op so nobody has to reverse-engineer which screen calls which endpoint.
 

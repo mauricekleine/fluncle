@@ -1327,13 +1327,13 @@ func (m model) menuRuleWidth() int {
 
 func (m model) renderLatest() string {
 	if m.loading {
-		return statusView("Latest bangers", "Scanning the archive...")
+		return statusView("Latest findings", "Scanning the archive...")
 	}
 	if m.err != "" {
-		return errorView("Latest bangers", m.err)
+		return errorView("Latest findings", m.err)
 	}
 	if len(m.tracks) == 0 {
-		return statusView("Latest bangers", "No findings logged yet. Quiet sector tonight.")
+		return statusView("Latest findings", "No findings logged yet. Quiet sector tonight.")
 	}
 
 	// Indices count down from the newest: use the API total count when available,
@@ -1353,7 +1353,7 @@ func (m model) renderLatest() string {
 		content = append(content, selectableTrackRow(index == m.selected, coord, track.Artists, track.Title))
 	}
 	help := helpLine("↑/↓ j/k move", "enter select", "q back", "ctrl+c quit")
-	return scaffold("Latest bangers", "", content, help)
+	return scaffold("Latest findings", "", content, help)
 }
 
 func (m model) renderFresh() string {
@@ -2365,7 +2365,7 @@ type menuItem struct {
 
 func menuItems() []menuItem {
 	return []menuItem{
-		{id: "latest", label: "Latest bangers"},
+		{id: "latest", label: "Latest findings"},
 		{id: "fresh", label: "Fresh releases"},
 		{id: "artists", label: "Artist archive"},
 		{id: "galaxies", label: "Sonic galaxies"},
