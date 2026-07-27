@@ -1,4 +1,5 @@
 import { readdirSync } from "node:fs";
+import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DOCS_PAGES } from "./docs-pages";
@@ -11,12 +12,27 @@ import { DOCS_PAGES } from "./docs-pages";
 
 const CONTENT_DIR = fileURLToPath(new URL("../../content/docs", import.meta.url));
 
-/** Every `/docs/<slug>` path the content tree implies, alphabetical, `index.mdx` excluded. */
+/**
+ * Every `/docs/<slug>` path the content tree implies, alphabetical, the `/docs` hub excluded.
+ *
+ * RECURSIVE on purpose. The content tree is flat today, but Fumadocs resolves nested folders
+ * too — `routes/docs.$.tsx` is a splat that splits the slug on `/` precisely so it can serve
+ * them. A shallow read would let `content/docs/guides/foo.mdx` pass this net unnoticed AND fall
+ * out of the sitemap, which is the exact drift the net exists to catch. A folder's own
+ * `index.mdx` is its parent path (`guides/index.mdx` → `/docs/guides`), matching how
+ * `docsSource.getPage(slugs)` resolves it.
+ */
 function docsOnDisk(): string[] {
-  return readdirSync(CONTENT_DIR)
+  return readdirSync(CONTENT_DIR, { recursive: true })
+    .map((entry) => String(entry).split(sep).join("/"))
     .filter((entry) => entry.endsWith(".mdx"))
-    .map((entry) => entry.replace(/\.mdx$/, ""))
-    .filter((slug) => slug !== "index")
+    .map((entry) =>
+      entry
+        .replace(/\.mdx$/, "")
+        .replace(/(^|\/)index$/, "$1")
+        .replace(/\/$/, ""),
+    )
+    .filter((slug) => slug !== "")
     .sort()
     .map((slug) => `/docs/${slug}`);
 }
