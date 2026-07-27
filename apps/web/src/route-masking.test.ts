@@ -32,11 +32,6 @@ function buildRouter() {
   });
 }
 
-async function settled(router: ReturnType<typeof buildRouter>) {
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  await router.load();
-}
-
 describe("Stories dialog route masking", () => {
   it("opens masked: the actual location keeps the feed mounted, the URL shows /log/<id>", async () => {
     const router = buildRouter();
@@ -47,7 +42,6 @@ describe("Stories dialog route masking", () => {
       search: { story: "004.7.2I" },
       to: "/",
     } as never);
-    await settled(router);
 
     // The ACTUAL route is the home feed with the dialog search param...
     expect(router.state.location.pathname).toBe("/");
@@ -65,10 +59,16 @@ describe("Stories dialog route masking", () => {
       search: { story: "004.7.2I" },
       to: "/",
     } as never);
-    await settled(router);
 
+    // No wall-clock wait settles either step. A navigate() resolves its own
+    // commitLocationPromise only after the load it kicks off commits, and it
+    // kicks that load off itself here because nothing subscribes to history
+    // headlessly (the React Transitioner is what would). A memory history's
+    // back() moves the index synchronously — no blocker can await ahead of it
+    // with none registered — and load() re-reads history.location on the way
+    // in, so the fresh entry is already there when we ask for it.
     router.history.back();
-    await settled(router);
+    await router.load();
 
     expect(router.state.location.pathname).toBe("/");
     expect((router.state.location.search as { story?: string }).story).toBeUndefined();
@@ -84,7 +84,6 @@ describe("Stories dialog route masking", () => {
       search: { story: "004.7.2I" },
       to: "/",
     } as never);
-    await settled(router);
 
     // Three flicks, each a masked REPLACE navigation (the player's URL sync).
     for (const logId of ["004.0.1C", "004.6.0Q", "005.9.9L"]) {
@@ -94,13 +93,12 @@ describe("Stories dialog route masking", () => {
         search: { story: logId },
         to: "/",
       } as never);
-      await settled(router);
     }
 
     expect(router.state.location.maskedLocation?.pathname).toBe("/log/005.9.9L");
 
     router.history.back();
-    await settled(router);
+    await router.load();
 
     // One back() exits the dialog completely — flicks never stacked entries.
     expect(router.state.location.pathname).toBe("/");
