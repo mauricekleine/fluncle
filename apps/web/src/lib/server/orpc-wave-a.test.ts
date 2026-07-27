@@ -67,9 +67,9 @@ beforeEach(async () => {
   listTracks.mockReset();
   createSubmission.mockReset();
   subscribeToNewsletter.mockReset();
-  // Clear the search handler's recent-query cache so an entry from one test
+  // Clear the shared search_tracks recent-query cache so an entry from one test
   // never serves another (the cache is exercised on its own elsewhere).
-  const { __resetSearchCache } = await import("./orpc/search");
+  const { __resetSearchCache } = await import("./track-search");
   __resetSearchCache();
 });
 

@@ -2,8 +2,9 @@ import { siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
-import { ApiError, searchTrackCandidates } from "./spotify";
+import { ApiError } from "./spotify";
 import { readCoordinate, resourceUri, SHARED_TOOLS, toMcpTool } from "./tools/registry";
+import { searchTracks } from "./track-search";
 import { listTracks } from "./tracks";
 
 // A small, stateless Model Context Protocol server: the same drum & bass
@@ -73,18 +74,25 @@ type McpTool = {
 // archive, and is not in the shared registry). Every other tool — the archive reads, the entity /
 // dossier reads, the set builder, "artists like this", and the two write verbs — is projected from
 // the shared registry below, so its name/description/schema never drifts from ChatDnB or WebMCP.
-const mcpOnlyTools: McpTool[] = [
+// Not in the registry ⇒ nothing enforces its parity with the WebMCP twin, so
+// lib/mcp-webmcp-parity.test.ts pins the two by hand.
+export const mcpOnlyTools: McpTool[] = [
   {
     description:
       "Search Spotify for track candidates by name or Spotify track URL. Use a result's id and spotifyUrl with submit_track.",
-    execute: async (args) => {
+    execute: async (args, request) => {
       const query = asTrimmedString(args.query);
 
       if (query.length < minQueryLength) {
         throw new ApiError("invalid_query", "Search query must be at least 2 characters", 400);
       }
 
-      return { ok: true, results: await searchTrackCandidates(query) };
+      // MANDATORY: /mcp is public and unauthenticated, and this is the one tool that spends
+      // the operator's shared Spotify token. It goes through the guarded capability, so it
+      // shares the HTTP twin's per-IP budget (same `action`, same window ⇒ one limiter) —
+      // exactly like search_archive. Over the limit, assertRateLimit throws an ApiError the
+      // dispatcher renders as an isError tool result.
+      return { ok: true, results: await searchTracks({ query, request }) };
     },
     inputSchema: {
       properties: {

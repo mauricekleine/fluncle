@@ -5,9 +5,11 @@ import { type TrackListItem } from "./tracks";
 
 // `get_status` reads the status store; the resource + get_track paths read the log
 // resolver and the recent-tracks list. We mock exactly those three so the JSON-RPC
-// calls stay hermetic. The remaining tool dependencies (spotify, newsletter,
-// submissions, and the rest of ./tracks) are imported by mcp.ts but never invoked by
-// these calls, so they stay real (./tracks is partial-mocked: only listTracks swaps).
+// calls stay hermetic. The remaining tool dependencies (newsletter, submissions, and
+// the rest of ./tracks) are imported by mcp.ts but never invoked by these calls, so
+// they stay real (./tracks and ./spotify are partial-mocked: only listTracks and the
+// network-touching searchTrackCandidates swap, so ApiError stays the real class the
+// dispatcher instanceof-checks).
 const statuses = vi.hoisted(() => vi.fn<() => Promise<ServiceStatusRow[]>>());
 const resolveTarget = vi.hoisted(() => vi.fn());
 const listTracksMock = vi.hoisted(() => vi.fn());
@@ -16,6 +18,8 @@ const listFreshMock = vi.hoisted(() => vi.fn());
 // hermetic (no DB, no network, no real rate-limit store).
 const searchArchiveMock = vi.hoisted(() => vi.fn());
 const assertRateLimitMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
+// The MCP-only Spotify candidate search — the one tool that spends the operator's token.
+const searchTrackCandidatesMock = vi.hoisted(() => vi.fn());
 const getFindingsByArtistMock = vi.hoisted(() => vi.fn());
 const getFindingsByLabelMock = vi.hoisted(() => vi.fn());
 const getMixableTracksMock = vi.hoisted(() => vi.fn());
@@ -72,6 +76,12 @@ vi.mock("./catalogue-groups", () => ({
 
 vi.mock("./search", () => ({ searchArchive: searchArchiveMock }));
 vi.mock("./rate-limit", () => ({ assertRateLimit: assertRateLimitMock }));
+// Partial-mock ./spotify so `ApiError` stays the real class (the dispatcher renders a tool
+// error by instanceof) while the Spotify network call is stubbed for search_tracks.
+vi.mock("./spotify", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./spotify")>()),
+  searchTrackCandidates: searchTrackCandidatesMock,
+}));
 vi.mock("./artists", () => ({
   countArtistFindings: countArtistFindingsMock,
   getArtistBySlug: getArtistBySlugMock,
@@ -93,6 +103,10 @@ vi.mock("./fresh", async (importOriginal) => ({
 }));
 
 const { handleMcp } = await import("./mcp");
+// The real ApiError class (./spotify is only partial-mocked) and the shared search_tracks
+// cache's test seam, both imported after the mocks are registered like handleMcp above.
+const { ApiError } = await import("./spotify");
+const { __resetSearchCache } = await import("./track-search");
 
 // Aliased to the untyped hoisted mocks (mockResolvedValue takes the fixture as-is).
 const resolveTargetMock = resolveTarget;
@@ -847,5 +861,66 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
 
     expect(data.found).toBe(false);
     expect(getArtistNeighboursMock).not.toHaveBeenCalled();
+  });
+});
+
+// search_tracks is the ONE tool that spends the operator's shared Spotify token, on a public
+// unauthenticated endpoint. The HTTP twin has always guarded it; this mount called the vendor
+// directly until the guard moved into the shared capability (./track-search.ts), so these
+// assertions are the tripwire for that bypass coming back.
+describe("MCP search_tracks — the shared Spotify-token guard", () => {
+  beforeEach(() => {
+    assertRateLimitMock.mockReset();
+    assertRateLimitMock.mockResolvedValue(undefined);
+    searchTrackCandidatesMock.mockReset();
+    searchTrackCandidatesMock.mockResolvedValue([]);
+    // A cached query from one test must not answer another — the limiter assertions below
+    // depend on knowing exactly when the vendor is reached.
+    __resetSearchCache();
+  });
+
+  it("rejects a query under the 2-character floor without touching the limiter or Spotify", async () => {
+    const { data, isError } = await callTool("search_tracks", { query: "a" });
+
+    expect(isError).toBe(true);
+    expect(data.code).toBe("invalid_query");
+    expect(assertRateLimitMock).not.toHaveBeenCalled();
+    expect(searchTrackCandidatesMock).not.toHaveBeenCalled();
+  });
+
+  it("RATE-LIMITS on the HTTP twin's shared budget, then searches", async () => {
+    searchTrackCandidatesMock.mockResolvedValue([{ artists: ["Netsky"], id: "sp1", title: "Rio" }]);
+
+    const { data, isError } = await callTool("search_tracks", { query: "netsky rio" });
+
+    expect(isError).toBe(false);
+    // 🔴 MANDATORY: the same `action` + window as the public GET /api/v1/search op, so the
+    // two mounts share ONE per-IP budget rather than the MCP handing out a second one.
+    expect(assertRateLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "search_tracks", limit: 30, windowMs: 60_000 }),
+    );
+    expect(searchTrackCandidatesMock).toHaveBeenCalledWith("netsky rio");
+    expect(data.results).toEqual([{ artists: ["Netsky"], id: "sp1", title: "Rio" }]);
+  });
+
+  it("charges the limiter on a cache hit too, so a repeat can't grind the token for free", async () => {
+    await callTool("search_tracks", { query: "amen break" });
+    await callTool("search_tracks", { query: "amen break" });
+
+    expect(assertRateLimitMock).toHaveBeenCalledTimes(2);
+    // The second call is served from the shared recent-query cache — the token is spent once.
+    expect(searchTrackCandidatesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an isError result over the limit rather than throwing", async () => {
+    assertRateLimitMock.mockRejectedValue(
+      new ApiError("rate_limited", "Too many requests. Try again later.", 429),
+    );
+
+    const { data, isError } = await callTool("search_tracks", { query: "netsky" });
+
+    expect(isError).toBe(true);
+    expect(data).toMatchObject({ code: "rate_limited", ok: false });
+    expect(searchTrackCandidatesMock).not.toHaveBeenCalled();
   });
 });

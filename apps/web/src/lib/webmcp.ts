@@ -149,8 +149,9 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
 };
 
 // WebMCP-only tool: the Spotify candidate search (Epic-2 territory, not in the shared registry —
-// it searches Spotify, not the archive).
-const webmcpOnlyTools: WebMcpTool[] = [
+// it searches Spotify, not the archive). Outside the registry nothing enforces its parity with the
+// server-MCP twin, so lib/mcp-webmcp-parity.test.ts pins the two by hand (hence the export).
+export const webmcpOnlyTools: WebMcpTool[] = [
   {
     description:
       "Search Spotify for track candidates by name or Spotify track URL. Use a result's id and spotifyUrl with submit_track.",
