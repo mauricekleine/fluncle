@@ -11,10 +11,12 @@
 #
 # WHAT IT DOES: every ~10m it probes each Fluncle service (the Worker, R2, DNS, the
 # SSH app, the on-box automation crons, the scale-to-zero render box, Hermes itself),
-# detects status TRANSITIONS against a local state file, Discord-pings ONLY on a
-# transition (a service going down OR recovering — never on a steady state, so no
-# spam), and POSTs the snapshot to the agent-tier `POST /api/v1/admin/health`
-# (oRPC `record_health`) that feeds the public page.
+# detects status TRANSITIONS against a local state file, Discord-pings on a transition
+# (a service going down OR recovering) AND on persistence (a service still down after
+# HEALTHCHECK_ESCALATE_AFTER consecutive ticks, then on a doubling ladder — so a
+# sustained outage keeps speaking without pinging every tick), and POSTs the snapshot to
+# the agent-tier `POST /api/v1/admin/health` (oRPC `record_health`) that feeds the
+# public page.
 #
 # Why a .sh that execs a .ts: this thin bash wrapper sets up the PATH, sources the
 # probe-target env file, pins the bun interpreter, and then execs the bun orchestrator
@@ -47,6 +49,10 @@
 #                              orchestrator curls it at the end of every completed
 #                              tick so an outside service alerts if THIS box (the
 #                              prober) ever goes dark. Unset ⇒ no beacon, skipped.
+#   HEALTHCHECK_ESCALATE_AFTER — OPTIONAL. Consecutive down ticks before a service
+#                              escalates (default 6 ≈ 1h at the 10m cadence), then a
+#                              doubling ladder. Its sibling HEALTHCHECK_TICK_MS only
+#                              tunes the wall-clock duration printed in that alert.
 #
 # FLUNCLE_API_TOKEN (the agent-scoped token that authorizes the snapshot POST) is
 # already in the running container's environment (set at `docker run` from the

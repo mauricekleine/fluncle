@@ -35,11 +35,14 @@
 //        cron.healthcheck — self-evident: this IS the prober; reaching here means its
 //                      host timer fired → ok (it has no gateway output dir to read).
 //      (onion — OUT OF SCOPE for v1; see the TODO below.)
-//   2. TRANSITIONS: load ${HOME}/.healthcheck/state.json (service → last status); a
-//      probe `transitioned` when prev !== current. Write the new map back.
+//   2. TRANSITIONS + STREAKS: load ${HOME}/.healthcheck/state.json (service → last
+//      status + how many consecutive ticks it has been down); a probe `transitioned`
+//      when prev !== current. Write the new map back.
 //   3. ALERT: if any service transitioned to `down`, OR any recovered (down → ok/
 //      degraded), Discord-ping once (best-effort) naming what changed. Nothing
-//      changed → no ping (no spam).
+//      changed → no ping (no spam). PLUS: a service that stays down long enough
+//      escalates on a doubling ladder (see ESCALATE_AFTER_TICKS) so a sustained
+//      outage keeps speaking instead of going quiet after its one edge-triggered ping.
 //   4. POST the snapshot to ${HEALTHCHECK_WORKER_URL}/api/v1/admin/health (record_health,
 //      Authorization: Bearer ${FLUNCLE_API_TOKEN}). Best-effort: the alert already
 //      fired, so a failed POST is logged, never thrown.
@@ -91,7 +94,32 @@ const PROBE_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_TIMEOUT_MS ?? "
 const POST_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_POST_TIMEOUT_MS ?? "", 10) || 20000;
 const POST_ATTEMPTS = Number.parseInt(process.env.HEALTHCHECK_POST_ATTEMPTS ?? "", 10) || 3;
 
-// State (the transition memory) lives in the mounted, writable HOME.
+// ESCALATION — the counterpart to edge-triggered alerting. The transition alert fires
+// ONCE, when a service flips to down; a service that then STAYS down is silent forever
+// after by construction. (Measured 2026-07-27: one sweep failed every hour for ~20 hours
+// and every single tick read `transitioned: false ⇒ alerted: false`. The prober was right
+// the whole time and never said so twice.) So the prober also counts CONSECUTIVE down
+// ticks per service and speaks again once that count crosses a threshold — which turns
+// DURATION into its own signal, the one thing neither notification path could express.
+//
+// The default of 6 ticks reads off the prober's own cadence: the host timer fires every
+// ~10m (OnUnitActiveSec in ../healthcheck-timer/fluncle-healthcheck.timer), so 6
+// consecutive down ticks ≈ 1 hour of unbroken failure — long enough that every
+// self-healing sweep has had several retries and a flap has resolved, short enough that a
+// terminal condition (a depleted budget, a revoked credential) is heard the same hour.
+//
+// DEAD-MAN'S CAVEAT: this escalates only for surfaces the prober probes WHILE IT IS
+// ALIVE. A prober that dies escalates nothing about anything — that case is covered by
+// the separate external dead-man's-switch beacon (pingBeacon below), which alerts when
+// the ticks STOP. Out of scope here; noted so this is never mistaken for full coverage.
+const ESCALATE_AFTER_TICKS = Number.parseInt(process.env.HEALTHCHECK_ESCALATE_AFTER ?? "", 10) || 6;
+
+// The tick cadence, used ONLY to turn a streak into the approximate wall-clock duration
+// the escalation text carries. Mirrors the timer unit's OnUnitActiveSec; if that ever
+// changes, change this with it (or set HEALTHCHECK_TICK_MS in the box env).
+const TICK_INTERVAL_MS = Number.parseInt(process.env.HEALTHCHECK_TICK_MS ?? "", 10) || 10 * 60_000;
+
+// State (the transition + streak memory) lives in the mounted, writable HOME.
 const STATE_DIR = join(HOME, ".healthcheck");
 const STATE_FILE = join(STATE_DIR, "state.json");
 
@@ -131,7 +159,17 @@ type Check = {
 
 type CheckWithTransition = Check & { transitioned: boolean };
 
-type StateMap = Record<string, Status>;
+/**
+ * What the prober remembers about one service between ticks: its last status, how many
+ * CONSECUTIVE ticks it has read `down` (0 whenever it isn't), and the streak at which it
+ * was last escalated (0 = never, which re-arms the ladder on every recovery).
+ */
+export type ServiceState = { downStreak: number; escalatedStreak: number; status: Status };
+
+type StateMap = Record<string, ServiceState>;
+
+/** One service due an escalation this tick. */
+export type Escalation = { service: string; streak: number };
 
 // ---------------------------------------------------------------------------
 // Shared helpers.
@@ -1030,11 +1068,78 @@ function probeHealthcheck(): Check {
 }
 
 // ---------------------------------------------------------------------------
-// State: the transition memory. Load the prior map, compute `transitioned` per
-// check, write the new map back. A read/parse failure starts from an empty map (so
-// the FIRST tick after a state loss reports every service as a fresh transition —
-// acceptable, it just re-baselines).
+// State: the transition + streak memory. Load the prior map, compute `transitioned`
+// and the consecutive-down streak per check, write the new map back. A read/parse
+// failure starts from an empty map (so the FIRST tick after a state loss reports every
+// service as a fresh transition — acceptable, it just re-baselines).
+//
+// TWO SHAPES ON DISK. v1 was a flat `service → status` map; v2 wraps richer per-service
+// entries under `services`. `normalizeState` reads BOTH, because the box is running a
+// v1 file right now and a prober that throws on it would take the dead-man's beacon down
+// with it. Anything unreadable — a v1 status string, a truncated write, a stray key —
+// degrades to a fresh entry, never an exception.
 // ---------------------------------------------------------------------------
+
+const STATE_VERSION = 2;
+
+function isStatus(value: unknown): value is Status {
+  return value === "ok" || value === "degraded" || value === "down";
+}
+
+/** A non-negative integer count from anything; junk (or a negative) reads as 0. */
+function asCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
+ * Read whatever is in the state file into the current shape.
+ *
+ * Accepts the v2 `{ version, services: { <id>: { status, downStreak, escalatedStreak } } }`
+ * and the legacy v1 flat `{ <id>: "ok" }` alike — a v1 entry simply arrives with its
+ * counters at zero, i.e. its ladder restarts from this tick. Entries whose status can't be
+ * resolved (including v2's own `version` scalar when the file is read flat) are dropped.
+ */
+export function normalizeState(parsed: unknown): StateMap {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const wrapped = record.services;
+  const entries =
+    wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)
+      ? (wrapped as Record<string, unknown>)
+      : record;
+
+  const state: StateMap = {};
+
+  for (const [service, value] of Object.entries(entries)) {
+    if (isStatus(value)) {
+      // v1: the value IS the status. Counters start fresh.
+      state[service] = { downStreak: 0, escalatedStreak: 0, status: value };
+
+      continue;
+    }
+
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+
+    const entry = value as Record<string, unknown>;
+
+    if (!isStatus(entry.status)) {
+      continue;
+    }
+
+    state[service] = {
+      downStreak: asCount(entry.downStreak),
+      escalatedStreak: asCount(entry.escalatedStreak),
+      status: entry.status,
+    };
+  }
+
+  return state;
+}
 
 function loadState(): StateMap {
   if (!existsSync(STATE_FILE)) {
@@ -1042,11 +1147,7 @@ function loadState(): StateMap {
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown;
-
-    if (parsed && typeof parsed === "object") {
-      return parsed as StateMap;
-    }
+    return normalizeState(JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown);
   } catch (error) {
     log(
       `could not read state (${error instanceof Error ? error.message : String(error)}) — re-baselining`,
@@ -1056,26 +1157,67 @@ function loadState(): StateMap {
   return {};
 }
 
-function writeState(checks: Check[]): void {
-  const next: StateMap = {};
+/** Exactly what goes on disk — exported so the round-trip is tested through the real shape. */
+export function serializeState(next: StateMap): string {
+  return `${JSON.stringify({ services: next, version: STATE_VERSION }, null, 2)}\n`;
+}
 
-  for (const check of checks) {
-    next[check.service] = check.status;
-  }
-
+function writeState(next: StateMap): void {
   try {
     // mkdir -p the state dir (recursive is a no-op when it already exists).
     mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(STATE_FILE, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+    writeFileSync(STATE_FILE, serializeState(next), "utf8");
   } catch (error) {
     log(`could not write state (${error instanceof Error ? error.message : String(error)})`);
   }
 }
 
+/**
+ * This tick's memory for one service: carry the consecutive-down streak forward, or reset
+ * it (and the escalation ladder) the moment the service reads anything other than `down`.
+ * A recovery therefore re-arms escalation from scratch — a service that flaps down/up/down
+ * never accumulates its way to an escalation.
+ */
+export function nextServiceState(prev: ServiceState | undefined, status: Status): ServiceState {
+  if (status !== "down") {
+    return { downStreak: 0, escalatedStreak: 0, status };
+  }
+
+  // Only a run of `down` carries forward; anything else is a fresh streak of one.
+  const running = prev?.status === "down" ? prev : undefined;
+
+  return {
+    downStreak: (running?.downStreak ?? 0) + 1,
+    escalatedStreak: running?.escalatedStreak ?? 0,
+    status,
+  };
+}
+
+/**
+ * Is this service due an escalation on this tick?
+ *
+ * The first one fires at `threshold` consecutive down ticks; each one after that waits for
+ * the streak to DOUBLE (6, 12, 24, 48 …). That keeps a sustained outage visible for as long
+ * as it lasts while the alerts themselves thin out — an escalation that repeated every tick
+ * would just become the noise the transition-only rule was protecting against.
+ */
+export function escalationDue(state: ServiceState, threshold = ESCALATE_AFTER_TICKS): boolean {
+  if (state.status !== "down") {
+    return false;
+  }
+
+  const due = state.escalatedStreak > 0 ? state.escalatedStreak * 2 : threshold;
+
+  return state.downStreak >= due;
+}
+
 // ---------------------------------------------------------------------------
-// ALERT: Discord-ping ONLY on a transition — a service going down, or recovering
-// (down → ok/degraded). Steady state pings nothing (no spam). Best-effort; never
-// throws. Reuses observe-sweep's curl-webhook shape.
+// ALERT: Discord-ping on a transition — a service going down, or recovering (down →
+// ok/degraded) — and on PERSISTENCE, once a down service has held the state for
+// ESCALATE_AFTER_TICKS consecutive checks and then on a doubling ladder. A steady OK
+// pings nothing, and a steady DOWN pings on the ladder rather than every tick (no spam,
+// but never silence either). Best-effort; never throws. Reuses observe-sweep's
+// curl-webhook shape.
 // ---------------------------------------------------------------------------
 
 function pingDiscord(content: string): void {
@@ -1159,7 +1301,7 @@ function buildAlert(checks: CheckWithTransition[], prev: StateMap): string | nul
 
     if (check.status === "down") {
       nowDown.push(check.service);
-    } else if (prev[check.service] === "down") {
+    } else if (prev[check.service]?.status === "down") {
       // A flip OUT of `down` (→ ok or degraded) is a recovery worth announcing.
       recovered.push(check.service);
     }
@@ -1180,6 +1322,63 @@ function buildAlert(checks: CheckWithTransition[], prev: StateMap): string | nul
   }
 
   return `Fluncle status: ${parts.join(" — ")}`;
+}
+
+/**
+ * A streak rendered as the rough wall-clock time it represents. Approximate on purpose —
+ * the operator needs "an hour" vs "most of a day", not a stopwatch.
+ */
+export function formatStreakDuration(streak: number, tickMs = TICK_INTERVAL_MS): string {
+  const minutes = Math.round((streak * tickMs) / 60_000);
+
+  if (minutes < 60) {
+    return `~${minutes}m`;
+  }
+
+  const hours = minutes / 60;
+
+  if (hours < 24) {
+    return `~${Math.round(hours)}h`;
+  }
+
+  return `~${Math.round((hours / 24) * 10) / 10}d`;
+}
+
+// Past this many services escalating on the SAME tick, the alert collapses to one summary
+// line. That case is a box-wide outage (every cron row escalating together), where ~45
+// per-service lines would blow Discord's 2,000-character message cap and get the whole post
+// rejected — the one failure mode that would turn the loudest alert into silence.
+const ESCALATION_LINE_LIMIT = 8;
+
+/**
+ * The escalation text: one line per service that has now been down long enough to stop
+ * being plausibly transient. Deliberately louder than the transition line (🚨 vs 🔴) and
+ * deliberately carrying the two facts the transition line can't — how many checks, and how
+ * long. Plain operator voice; an ops alert is not a place for the Fluncle register.
+ */
+export function buildEscalationAlert(
+  escalations: Escalation[],
+  tickMs = TICK_INTERVAL_MS,
+): string | null {
+  if (escalations.length === 0) {
+    return null;
+  }
+
+  const line = ({ service, streak }: Escalation) =>
+    `🚨 ${service} STILL DOWN — ${streak} consecutive checks (${formatStreakDuration(streak, tickMs)}). This is not a transient.`;
+
+  if (escalations.length <= ESCALATION_LINE_LIMIT) {
+    return escalations.map(line).join("\n");
+  }
+
+  // Non-empty by the guard above, so the bare reduce is safe.
+  const longest = escalations.reduce((worst, next) => (next.streak > worst.streak ? next : worst));
+  const named = escalations
+    .slice(0, ESCALATION_LINE_LIMIT)
+    .map((escalation) => escalation.service)
+    .join(", ");
+
+  return `🚨 ${escalations.length} services STILL DOWN — longest ${longest.streak} consecutive checks (${formatStreakDuration(longest.streak, tickMs)}): ${named}, +${escalations.length - ESCALATION_LINE_LIMIT} more. This is not a transient.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1305,18 +1504,44 @@ async function main(): Promise<void> {
   const prev = loadState();
   const withTransition: CheckWithTransition[] = checks.map((check) => ({
     ...check,
-    transitioned: prev[check.service] !== undefined && prev[check.service] !== check.status,
+    transitioned: prev[check.service] !== undefined && prev[check.service]?.status !== check.status,
   }));
 
-  // Persist the new map for the next tick BEFORE the network POST (so a POST failure
-  // never loses the transition baseline).
-  writeState(checks);
+  // Carry each service's consecutive-down streak forward and collect whoever crossed an
+  // escalation rung this tick (stamping the streak we escalated at, so the next rung is a
+  // doubling away rather than the very next tick).
+  const next: StateMap = {};
+  const escalations: Escalation[] = [];
 
-  // Alert ONLY on a transition to down or a recovery from down.
+  for (const check of checks) {
+    const state = nextServiceState(prev[check.service], check.status);
+    const escalate = escalationDue(state);
+
+    if (escalate) {
+      escalations.push({ service: check.service, streak: state.downStreak });
+    }
+
+    next[check.service] = escalate ? { ...state, escalatedStreak: state.downStreak } : state;
+  }
+
+  // Persist the new map for the next tick BEFORE the network POST (so a POST failure
+  // never loses the transition baseline or the streaks).
+  writeState(next);
+
+  // Alert on a transition to down or a recovery from down …
   const alert = buildAlert(withTransition, prev);
 
   if (alert) {
     pingDiscord(alert);
+  }
+
+  // … and, separately, on persistence: a service still down after ESCALATE_AFTER_TICKS
+  // consecutive checks, then again on the doubling ladder. Its own post so it reads as the
+  // different, louder thing it is rather than blending into the transition line.
+  const escalationAlert = buildEscalationAlert(escalations);
+
+  if (escalationAlert) {
+    pingDiscord(escalationAlert);
   }
 
   // Persist the snapshot to the page (best-effort).
@@ -1331,9 +1556,12 @@ async function main(): Promise<void> {
   // services' health (the snapshot carries that); a down service is a normal,
   // successful tick. `ok:false` would only mean the prober itself couldn't run.
   const summary = {
-    alerted: alert !== null,
+    alerted: alert !== null || escalationAlert !== null,
     at,
     down: withTransition.filter((c) => c.status === "down").map((c) => c.service),
+    // The services that crossed an escalation rung this tick, with the streak that did it —
+    // so a forensic read of the markers can see WHEN a sustained outage was escalated.
+    escalated: escalations,
     ok: true as const,
     posted,
     services: withTransition.map((c) => ({
