@@ -20,9 +20,19 @@ type LiveStatus = {
   live?: { on: boolean; title: string | null; url: string } | null;
 };
 
-// Commands that should NOT carry the callout: the admin group (operator output),
-// help, and the version/help flags. The callout rides human commands only.
-function shouldSkip(args: string[]): boolean {
+// Commands that should NOT carry the callout: the explicit opt-out and CI (a build
+// log or a scripted rig never wants the flourish — the same two gates the sibling
+// update notifier carries), the admin group (operator output), help, and the
+// version/help flags. The callout rides human commands only.
+export function shouldSkip(args: string[]): boolean {
+  if (process.env.FLUNCLE_NO_LIVE_CALLOUT === "1") {
+    return true;
+  }
+
+  if (process.env.CI) {
+    return true;
+  }
+
   if (args.length === 0) {
     return true;
   }
