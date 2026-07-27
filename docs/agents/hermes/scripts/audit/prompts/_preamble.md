@@ -12,16 +12,8 @@ The repo's own canon is your source of truth — it is all in this checkout: `AG
 
 Hunt the domain exhaustively — leave no corner unchecked. For each real finding, decide:
 
-- **Fix it** whenever you are **confident the change is correct and you can verify it** — even a
-  moderately sized change is fine, as long as it's within tonight's domain, reversible, respects
-  canon, and touches none of the hard rails below. Make the smallest change that _fully_ fixes it,
-  prefer a durable fix over a workaround, and tie off obvious loose threads the fix surfaces. Lean
-  toward fixing — a green, reviewed PR is the goal, and the 5am reviewer + the human are still a
-  gate behind you.
-- **File it** (don't edit) only when the change is genuinely **high-impact, high-risk,
-  cross-cutting, a judgment call, or would change product direction or canon** — the things that
-  deserve a human's eyes before anyone touches them. Filing means appending a row to the ledger
-  (below), not just mentioning it.
+- **Fix it** whenever you are **confident the change is correct and you can verify it** — even a moderately sized change is fine, as long as it's within tonight's domain, reversible, respects canon, and touches none of the hard rails below. Make the smallest change that _fully_ fixes it, prefer a durable fix over a workaround, and tie off obvious loose threads the fix surfaces. Lean toward fixing. Nothing you fix reaches production unreviewed: the 5am reviewer re-reads your whole diff adversarially and holds the PR open on a single high-impact doubt, the required checks gate the merge, and `deploy:gate` runs every package's suite before Cloudflare deploys. A reversible, tested, in-domain fix that turns out wrong costs one revert; a filed finding costs real time too — the ledger's oldest open row sat untouched for eighteen days. Price both honestly. (This does not soften the verification rule below: what you cannot verify from this box, you still file.)
+- **File it** (don't edit) only when the change is genuinely **high-impact, high-risk, cross-cutting, or would change product direction or canon** — the things that deserve a human's eyes before anyone touches them. Filing means appending a row to the ledger (below), not just mentioning it. A choice among several defensible VALUES — a ceiling, a batch size, a threshold, a wording — is not a judgment call when a constant in this repo bounds the real caller: pick the conservative end of what the code supports, state the number and the exact `file:line` constant that sized it in the PR body, and fix it. It is a judgment call only when the answer would reverse a written ruling, pick between two defensible directions, or change what the product is.
 
 The dividing line is impact/risk, not size: fix the clearly-correct, file the consequential. If a
 change is confident and verifiable, do it; if it needs a human call, file it.
@@ -34,6 +26,8 @@ finding **survives the merge** instead of dying in the PR body. **Dedupe**: befo
 check for an existing open row with the same domain + `path:line` + gist and skip it — never
 re-file the same thing you filed on a previous night.
 
+**Before you hunt, read the open rows in your own domain.** You already open the ledger to dedupe — go one step further. If an open row's proposed fix is now clearly-correct and verifiable under the rules above (most often a row filed for a value, a name, a one-line entry, or a doc claim), fix it tonight and flip that row's status to `fixed` with your branch as the ref. Quote the row's original filing reason in your PR body and say what answers it now. Closing a predecessor's row is among the best outcomes a night can have — but convert at most two rows per night, after the domain hunt, never instead of it. Never touch a row the operator has set to `done`/`wontfix`, and never flip a row whose blocker is a canon ruling, a destructive production action, or a hard rail — bring evidence to those and leave them open.
+
 ## Never touch (file instead, if relevant)
 
 Hard rails — never edit, even when a fix seems obvious:
@@ -44,6 +38,14 @@ Hard rails — never edit, even when a fix seems obvious:
 - Drizzle migrations under `apps/web/drizzle/` (generated, never hand-written);
 - `.github/workflows/*` and any CI / deploy config;
 - anything whose effect you cannot fully verify locally before finishing.
+
+**Still file, even when you are confident:**
+
+- reversing a written canon ruling, or a posture an earlier audit stated in the ledger — bring the evidence, let the human flip it;
+- anything destructive on production data (removing catalogue rows, entities, media);
+- anything needing a migration, a new index, or a stored column — an index's effect is only answerable on hosted Turso, which is not on this box;
+- restructuring a build-gating test's own decision logic — adding an entry to a coverage map is a fix, changing how the net decides what it covers is a file;
+- a dependency bump (the `fluncle-maintenance` skill's job).
 
 Never fabricate facts (tracks, dates, Log IDs, stats, artist bios). Never use the TypeScript
 non-null `!`.
