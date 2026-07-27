@@ -21,6 +21,7 @@
 // OpenAPI `operationId` (`get_track` → `getTrack`). The REST path mirrors the
 // live route; resources are plural, the op noun stays singular.
 
+import { isContractProcedure } from "@orpc/contract";
 import { adminAlbumsContract } from "./admin-albums";
 import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
@@ -477,3 +478,33 @@ export type FluncleContract = typeof contract;
  * either converted (named here) or on the explicit shrinking pending list.
  */
 export const CONTRACT_OPERATION_NAMES = Object.keys(contract) as Array<keyof typeof contract>;
+
+/**
+ * Every op's declared HTTP route, keyed by its canonical `verb_noun` name. The
+ * coverage tests (apps/web) split the registry into its PUBLIC and ADMIN halves by
+ * the route PATH — the machine-readable fact — rather than by guessing at the op's
+ * name prefix, so the two nets partition the surface with no gap between them.
+ *
+ * This is the ONE place the `~orpc` internals are read: `@orpc/contract` is a
+ * dependency of this package, not of its consumers, so a consumer asks here.
+ *
+ * A pathless op THROWS rather than being skipped — a silently-dropped op would
+ * fall out of both nets at once, which is the exact failure the nets exist to
+ * prevent.
+ */
+export const CONTRACT_OPERATION_ROUTES: Record<string, { method: string; path: string }> =
+  Object.fromEntries(
+    Object.entries(contract).map(([name, op]) => {
+      if (!isContractProcedure(op)) {
+        throw new Error(`contract op "${name}" is not a contract procedure`);
+      }
+
+      const { method, path } = op["~orpc"].route;
+
+      if (!method || !path) {
+        throw new Error(`contract op "${name}" declares no method + path`);
+      }
+
+      return [name, { method, path }];
+    }),
+  );

@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
+import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
 
 // Coverage scaffold for the oRPC migration. It enumerates the PUBLIC HTTP API
 // routes and asserts
@@ -16,6 +16,11 @@ import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
 // unnoticed. Going the other way is also a failure: a route may not be both
 // converted AND pending (the pending list must shrink as routes convert), and a
 // pending entry must correspond to a real route (no stale names).
+//
+// This net and the ADMIN net (orpc-admin-coverage.test.ts) PARTITION the registry, and
+// the line between them is each op's DECLARED ROUTE PATH: an `/admin` path belongs to the
+// sibling, everything else here. The path is a machine-readable fact the contract already
+// carries, so every op lands on exactly one net — no gap, no overlap.
 //
 // Phase 1 converted one route (`get_track`); the fan-out pilot added the three
 // public-unauth reads (`get_health`, `list_tracks`, `get_random_track`); fan-out
@@ -40,6 +45,14 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // as part of the public surface net.
   "DELETE /me/rec-seeds/{trackId}": "delete_private_rec_seed",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
+  // The saved-`/mix`-sets slice of the private-user tier — contract-only oRPC (no TanStack
+  // route file under /api/v1/me). The account never gates the tool: `/mix` stays fully usable
+  // signed-out (the set lives in the URL), and these ops only let a signed-in user KEEP a chain.
+  "DELETE /me/saved-sets/{id}": "delete_private_saved_set",
+  // The watched-entities slice of the private-user tier — contract-only oRPC (no TanStack
+  // route file under /api/v1/me). Signed-in storage only; every entity page stays fully
+  // usable signed-out.
+  "DELETE /me/watches/{id}": "delete_private_watch",
   // The albums domain — contract-only oRPC (the catalogue-browse API). No TanStack route
   // file under /api/v1/albums; oRPC serves these straight off the registry. Public reads,
   // catalogue-scoped + paginated, no auth.
@@ -80,6 +93,14 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // at the op (the session read scopes by user); zero editions is a clean empty array.
   "GET /me/frontier-editions": "list_private_frontier_editions",
   "GET /me/frontier-editions/{number}": "get_private_frontier_edition",
+  // A signed-in user's ONE public Spotify playlist, "Fluncle's Frontier" — contract-only
+  // oRPC (no TanStack route file under /api/v1/me). It lives on Fluncle's own Spotify
+  // account (no per-user OAuth); the READ is a plain cookie-session read, the MINT is
+  // CSRF-guarded and gated on a verified email.
+  "GET /me/frontier-playlist": "get_private_frontier_playlist",
+  // The signed-in traveller's collected findings, per galaxy — contract-only oRPC (no
+  // TanStack route file under /api/v1/me), the read side of the Galaxy game's per-find write.
+  "GET /me/galaxy-collection": "list_private_galaxy_collection",
   "GET /me/galaxy-progress": "get_private_galaxy_progress",
   // The cross-device preferences store — contract-only oRPC (no TanStack route file
   // under /api/v1/me), documented here as part of the public surface net.
@@ -87,7 +108,17 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /me/rec-seeds": "list_private_rec_seeds",
   "GET /me/recommendations": "list_private_recommendations",
   "GET /me/saved-findings": "list_private_saved_findings",
+  "GET /me/saved-sets": "list_private_saved_sets",
   "GET /me/submissions": "list_private_submissions",
+  "GET /me/watches": "list_private_watches",
+  // The `/mix` taste-seeding pair (+ the set-link resolver) — contract-only oRPC (no
+  // TanStack route file under /api/v1/mix). Public-unauth: `/mix` is a stranger's first
+  // contact with Fluncle, so no account stands between them and a set.
+  "GET /mix/artists": "list_mixable_artists",
+  "GET /mix/openers": "list_mix_openers",
+  // The set link's own read — resolves the chain of coordinates in the URL back to tracks.
+  // An unknown token thins the chain rather than faulting the read.
+  "GET /mix/set-tracks": "list_set_tracks",
   "GET /mixtapes": "list_mixtapes",
   // The newsletter archive reads.
   // Contract-only oRPC — there is no TanStack route file under /api/v1/newsletter
@@ -102,6 +133,10 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // RFC, Unit A); `random` is the kept fallback (RFC Unit B).
   "GET /radio/now-playing": "get_radio_now_playing",
   "GET /radio/random": "get_random_radio_track",
+  // The /reach page's numbers — contract-only oRPC (no TanStack route file under
+  // /api/v1/reach). Public tier: one bounded, grouped page read of the append-only
+  // `platform_stats` ledger; the write half is `record_platform_stats` on the admin net.
+  "GET /reach/stats": "list_platform_stats",
   "GET /search": "search_tracks",
   // Fluncle's OWN search — the archive, not Spotify (lib/server/search.ts). Contract-only
   // oRPC (no TanStack route file under /api/v1/search), so it has no route-file basename to
@@ -125,15 +160,19 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "GET /tracks/{idOrLogId}/similar": "list_similar_tracks",
   "PATCH /me/preferences": "update_private_preferences",
   "PATCH /me/profile": "update_private_profile",
+  "PATCH /me/saved-sets/{id}": "update_private_saved_set",
   "POST /devices": "register_device",
   "POST /me/delete": "delete_private_account",
   "POST /me/export": "export_private_account_data",
+  "POST /me/frontier-playlist": "mint_private_frontier_playlist",
   // The only `/me/galaxy-progress/logs` op is this POST collect-one (the game's
   // per-find write → `collectLogId`); there is no list-logs op, so it is named for
   // what it does (see ../orpc/me-galaxy.ts — oRPC owns the path directly now).
   "POST /me/galaxy-progress/logs": "collect_private_galaxy_log",
   "POST /me/rec-seeds": "save_private_rec_seed",
   "POST /me/saved-findings": "save_private_finding",
+  "POST /me/saved-sets": "save_private_set",
+  "POST /me/watches": "save_private_watch",
   "POST /newsletter": "subscribe_newsletter",
   "POST /submissions": "submit_track",
   "PUT /me/galaxy-progress": "merge_private_galaxy_progress",
@@ -241,6 +280,13 @@ function isCarvedOut(basename: string): boolean {
   );
 }
 
+// The line between the two coverage nets — the same predicate the admin sibling draws it
+// with. Matched on the segment boundary, not as a bare prefix, so a future `/administration`
+// path stays on this net instead of falling through to neither.
+function isAdminPath(path: string): boolean {
+  return path === "/admin" || path.startsWith("/admin/");
+}
+
 describe("oRPC public-route contract coverage", () => {
   const converted = new Set<string>(CONTRACT_OPERATION_NAMES);
 
@@ -254,6 +300,30 @@ describe("oRPC public-route contract coverage", () => {
     for (const op of publicOps) {
       expect(converted.has(op), `public op "${op}" is missing from the contract registry`).toBe(
         true,
+      );
+    }
+  });
+
+  it("holds EXACTLY the public ops (no non-admin op outside the map)", () => {
+    // The other half of the partition. The sibling admin net claims every op served off an
+    // `/admin` PATH; everything else is this file's, and must be named here. Together the two
+    // nets cover the registry with no gap — before this, an op could be exempted from the admin
+    // net by its NAME and never appear on the public one, so it was in neither.
+    const publicOps = new Set(Object.values(PUBLIC_ROUTE_OPS));
+
+    for (const op of CONTRACT_OPERATION_NAMES) {
+      const route = CONTRACT_OPERATION_ROUTES[op];
+
+      if (!route) {
+        expect.fail(`contract op "${op}" declares no route — it is outside both coverage nets`);
+      }
+
+      if (isAdminPath(route.path) || publicOps.has(op)) {
+        continue;
+      }
+
+      expect.fail(
+        `contract op "${op}" (${route.method} ${route.path}) is in the registry but absent from PUBLIC_ROUTE_OPS — document it here (or move it to an /admin path)`,
       );
     }
   });

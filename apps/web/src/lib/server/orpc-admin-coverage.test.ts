@@ -1,11 +1,18 @@
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
+import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
 
 // The ADMIN coverage scaffold for the oRPC migration. The sibling orpc-coverage.test.ts
 // draws the same net over the PUBLIC surface; this one extends it to ADMIN, which
 // the public net deliberately skips (it `continue`s past the `admin/` directory).
+//
+// The two nets PARTITION the registry, and the line between them is each op's
+// DECLARED ROUTE PATH: an `/admin` path belongs to this file, anything else to the
+// sibling. The path is a machine-readable fact the contract already carries, so
+// there is no gap and no overlap — where an op-name prefix list once decided it, a
+// destructive op could sit on an `/admin` path and still be waved through this net
+// because its name happened to start with `merge_` or `list_`.
 //
 // Every admin HTTP route is either:
 //   - CONVERTED — owned by an oRPC contract (named in the registry), or
@@ -69,15 +76,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // delete are operator tier (the operator's private spend data — a valid agent token 403s).
   "DELETE /admin/subscriptions/{id}": "delete_subscription",
   // The three entity bio WORKLISTS — contract-only oRPC (no TanStack route file). Admin tier
-  // (agent-allowed reads): the box's bio sweeps drain them with the agent token. All three match
-  // the public `list_` prefix, so the "holds exactly" check skips them; they live here for
-  // completeness (like `list_labels_admin`) so the admin map stays a true index of the surface.
+  // (agent-allowed reads): the box's bio sweeps drain them with the agent token.
   "GET /admin/albums/bio-queue": "list_albums_missing_bio",
   // The album bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
   // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
   // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
-  // describe_album sibling. It does not match a public prefix, so it lives here to satisfy the
-  // "holds exactly" check.
+  // describe_album sibling.
   "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
   // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
   // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
@@ -86,24 +90,17 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/artists/bio-queue": "list_artists_missing_bio",
   // The artist review queue read (Unit 5) — contract-only oRPC (no TanStack route file).
   // Admin tier (agent-allowed); the operator's review-queue station reads it.
-  // `list_artist_socials` matches the public `list_` prefix so the "holds exactly" check
-  // skips it; it lives here for completeness.
   "GET /admin/artists/socials": "list_artist_socials",
   // The artist bio-draft — contract-only oRPC (no TanStack route file; oRPC owns the path
   // directly). Agent tier: the box's bio sweep triggers this Worker-side grounding read
-  // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token. It
-  // does not match a public prefix, so it lives here to satisfy the "holds exactly" check.
+  // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token.
   "GET /admin/artists/{slug}/bio-draft": "draft_artist_bio",
   // The `/admin` attention-queue digest read — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed): the operator's
-  // `fluncle admin queue` CLI + its Raycast menu bar read it. `get_attention` matches
-  // the public `get_` prefix so the "holds exactly" check skips it; it lives here for
-  // completeness (like `get_track_admin`).
+  // `fluncle admin queue` CLI + its Raycast menu bar read it.
   "GET /admin/attention": "get_attention",
   // THE EAR (docs/the-ear.md) — the ranked catalogue. Contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Admin tier (agent-allowed); `list_catalogue_tracks`
-  // matches the public `list_` prefix so the "holds exactly" check skips it, and it lives here
-  // for completeness (like `list_labels_admin`).
+  // file; oRPC owns the path directly). Admin tier (agent-allowed).
   "GET /admin/catalogue": "list_catalogue_tracks",
   // THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the spend readout behind the
   // brake on metered per-GB audio capture. Contract-only oRPC (no TanStack route file). Admin
@@ -121,42 +118,33 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/clips/social": "list_clip_posts",
   // The built clip caption (clean copy + the fluncle:// coordinate line(s)) —
   // contract-only oRPC (no TanStack route file). Admin tier (agent-allowed read); the
-  // clip-card UI (Wave 3-B) shows + copies it. `get_clip_caption` matches the public
-  // `get_` prefix so the "holds exactly" check skips it; it lives here for completeness.
+  // clip-card UI (Wave 3-B) shows + copies it.
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
   // The Frontier kill switch's READ — agent-allowed (contract-only oRPC; the
   // get_capture_budget precedent: a read of an operator dial is not the dial).
   "GET /admin/frontier/minting": "get_frontier_minting",
   // The catalogue funnel read (docs/admin-shell.md) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly). `get_funnel` matches the public `get_`
-  // prefix so the "holds exactly" check skips it; it lives here for completeness. Admin tier.
+  // TanStack route file; oRPC owns the path directly). Admin tier.
   "GET /admin/funnel": "get_funnel",
   // The sonic galaxy map's admin read (browse-by-feel RFC) — contract-only oRPC (no
-  // TanStack route file; oRPC owns the path directly). `list_galaxies_admin` matches
-  // the public `list_` prefix so the "holds exactly" check skips it; it lives here for
-  // completeness. Admin tier (agent-allowed — the `fluncle-cluster` cron reads it).
+  // TanStack route file; oRPC owns the path directly). Admin tier (agent-allowed — the
+  // `fluncle-cluster` cron reads it).
   "GET /admin/galaxies": "list_galaxies_admin",
   // The label entity + the operator's crawl-seed control — contract-only oRPC (no TanStack
   // route file; oRPC owns the path directly). Admin tier (agent-allowed read): the
-  // catalogue crawler reads its seed set here (`?seedState=enabled`). `list_labels_admin`
-  // matches the public `list_` prefix so the "holds exactly" check skips it; it lives here
-  // for completeness (like `list_galaxies_admin`).
+  // catalogue crawler reads its seed set here (`?seedState=enabled`).
   "GET /admin/labels": "list_labels_admin",
   // The label-alias review reads (RFC musickit-second-authority, U2a) — contract-only oRPC.
-  // Admin tier (agent-allowed read); `list_label_aliases` matches the public `list_` prefix so
-  // the "holds exactly" check skips it, but the entry keeps this map honest.
+  // Admin tier (agent-allowed read).
   "GET /admin/labels/aliases": "list_label_aliases",
   "GET /admin/labels/bio-queue": "list_labels_missing_bio",
   // The label bio-draft — contract-only oRPC (no TanStack route file). Agent tier: the box's
   // bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding titles → a
-  // ready-to-author prompt) with its agent token; the describe_label sibling. It does not
-  // match a public prefix, so it lives here to satisfy the "holds exactly" check.
+  // ready-to-author prompt) with its agent token; the describe_label sibling.
   "GET /admin/labels/{slug}/bio-draft": "draft_label_bio",
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
   // The logbook sweep's gap+material read — contract-only oRPC (no TanStack route
-  // file; oRPC owns the path directly). Admin tier (agent-allowed). `list_logbook_gaps`
-  // matches the public `list_` prefix so the "holds exactly" check skips it; it lives
-  // here for completeness (like `list_editions_admin`).
+  // file; oRPC owns the path directly). Admin tier (agent-allowed).
   "GET /admin/logbook/gaps": "list_logbook_gaps",
   "GET /admin/mixtapes": "list_mixtapes_admin",
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
@@ -166,19 +154,16 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/newsletter/editions": "list_editions_admin",
   // The echo gate's ledger — the auto-notes it refused to store, kept with the reason so
   // the operator can read them and rule. Contract-only oRPC (no TanStack route file).
-  // Admin tier (agent-allowed read). `list_note_rejections` matches the public `list_`
-  // prefix so the "holds exactly" check skips it; it lives here for completeness.
+  // Admin tier (agent-allowed read).
   "GET /admin/note-rejections": "list_note_rejections",
   // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
-  // spoken sibling of the note-rejections ledger. `list_observation_rejections` matches the
-  // public `list_` prefix so the "holds exactly" check skips it.
+  // spoken sibling of the note-rejections ledger.
   "GET /admin/observation-rejections": "list_observation_rejections",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
   // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
   // and a baked image, so the API is the ONLY way a prompt reaches it without a rebake.
-  // `list_prompts` (OPERATOR) matches the public `list_` prefix so the "holds exactly"
-  // check skips it; it lives here for completeness.
+  // `list_prompts` is OPERATOR tier.
   "GET /admin/prompts": "list_prompts",
   "GET /admin/prompts/{slug}": "get_prompt",
   "GET /admin/recordings": "list_recordings",
@@ -190,41 +175,30 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/submissions": "list_submissions",
   "GET /admin/submissions/{submissionId}": "get_submission",
   // The cost-ledger read (COST-02) — contract-only oRPC (no TanStack route file).
-  // Admin tier. `list_subscriptions` matches the public `list_` prefix so the "holds
-  // exactly" check skips it; it lives here for completeness (like `list_artist_socials`).
+  // Admin tier.
   "GET /admin/subscriptions": "list_subscriptions",
   "GET /admin/tracks": "list_tracks_admin",
   // The embedded corpus (browse-by-feel RFC) — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed): the `fluncle-cluster`
-  // cron's input. `list_track_embeddings` matches the public `list_` prefix so the
-  // "holds exactly" check skips it; it lives here for completeness. Static `/embeddings`
-  // beats the `/{trackId}` param in oRPC's matcher (the `/tracks/random` precedent).
+  // cron's input. Static `/embeddings` beats the `/{trackId}` param in oRPC's matcher (the
+  // `/tracks/random` precedent).
   "GET /admin/tracks/embeddings": "list_track_embeddings",
   // The dream-weaver order proposal (RFC mixability-engine) — contract-only oRPC (no
   // TanStack route file; oRPC owns the path directly). Admin tier (agent-allowed read).
-  // `get_mixable_order` matches the public `get_` prefix so the "holds exactly" check
-  // skips it; it lives here for completeness (like `get_track_admin`).
   "GET /admin/tracks/mixable-order": "get_mixable_order",
   // The audio pipeline's WORKLIST (capture/analyse/embed), in the order the metered capture
   // budget should be spent (docs/gpu-batch-embed.md) — contract-only oRPC (no TanStack route
-  // file). Admin tier (agent-allowed read); the box's sweeps drain it. `list_track_work`
-  // matches the public `list_` prefix so the "holds exactly" check skips it; it lives here
-  // for completeness.
+  // file). Admin tier (agent-allowed read); the box's sweeps drain it.
   "GET /admin/tracks/work": "list_track_work",
   // The single-finding admin lookup — contract-only oRPC (no TanStack route file; oRPC
   // owns the path directly, like context_track). Admin tier (agent-allowed read).
-  // `get_track_admin` matches the public `get_` prefix so the "holds exactly" check
-  // skips it; it lives here for completeness (like `get_clip_caption`).
   "GET /admin/tracks/{trackId}": "get_track_admin",
   // The box author's spent-move fuel (the observation vibe-neighbour layer) — contract-only
   // oRPC. AGENT tier: the observe sweep reads it every tick with its agent token.
-  // `list_observation_neighbours` matches the public `list_` prefix so the check skips it.
   "GET /admin/tracks/{trackId}/observation-neighbours": "list_observation_neighbours",
   "GET /admin/tracks/{trackId}/social": "list_track_social",
   // The user-account roster — contract-only oRPC (no TanStack route file; oRPC owns the
-  // path directly). Admin tier (agent-allowed read). `list_users_admin` matches the public
-  // `list_` prefix so the "holds exactly" check skips it; it lives here for completeness
-  // (like `list_labels_admin`).
+  // path directly). Admin tier (agent-allowed read).
   "GET /admin/users": "list_users_admin",
   // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
@@ -268,8 +242,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/albums/{slug}/bio": "describe_album",
   // The similar-artists precompute sweep (D6) — contract-only oRPC (no TanStack route file;
-  // oRPC owns the path directly). Agent tier: the box's agent-token cron drives one tick. It
-  // does not match a public prefix, so it lives here to satisfy the "holds exactly" check.
+  // oRPC owns the path directly). Agent tier: the box's agent-token cron drives one tick.
   "POST /admin/artists/rank": "rank_artists",
   // The identity-graph per-social write (Unit 5) — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Operator tier (the queue's manual confirm).
@@ -338,8 +311,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The FREE first rung of the resolver waterfall (slice 1) — contract-only oRPC (no TanStack route
   // file). AGENT tier (the anchor_track precedent): the box's `fluncle-anchor` sweep calls it first
   // per row (server resolves ListenBrainz → Spotify by-id, verifies, writes) and spends Apify only on
-  // a miss. `resolve_anchor` does not match a public prefix, so it MUST be listed here to satisfy the
-  // "holds exactly" check. Static `/resolve` beats no param — it nests under the `/anchor` POST above.
+  // a miss. Static `/resolve` beats no param — it nests under the `/anchor` POST above.
   "POST /admin/catalogue/anchor/resolve": "resolve_anchor",
   // The operator's ruling on a SUSPECTED VERSION MISMATCH the anchor gate held back — contract-only
   // oRPC (no TanStack route file; the /admin attention queue calls it inline). OPERATOR tier, unlike
@@ -359,9 +331,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // precedent): the box's `fluncle-verify-captures` sweep fingerprints a capture against its
   // official preview and reports the verdict; the SERVER routes it (docs/the-ear.md § Wrong
   // audio) — a catalogue mismatch quarantines, a FINDING mismatch only raises the operator
-  // attention item (a machine never rewinds a public finding). Its worklist read
-  // (`list_unverified_captures`, above) matches the public `list_` prefix and lives here for
-  // completeness.
+  // attention item (a machine never rewinds a public finding). Its worklist read is
+  // `list_unverified_captures`, above.
   "POST /admin/catalogue/captures/verify": "verify_capture",
   // Certify an existing catalogue row in place — contract-only oRPC. OPERATOR tier: certifying is
   // the one act the catalogue domain forbids a machine (docs/the-ear.md § The operator's actions).
@@ -412,8 +383,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/frontier-playlists/refresh": "refresh_frontier_playlists",
   // The mint-cover retry drain (E2) — contract-only oRPC (no TanStack route file; oRPC owns the
   // path). Admin tier (agent-allowed): the box cron + the operator render + upload every owing
-  // Frontier cover IN THE WORKER with the agent token. `upload_frontier_covers` does not match a
-  // public prefix, so it MUST be listed here to satisfy the "holds exactly" check.
+  // Frontier cover IN THE WORKER with the agent token.
   "POST /admin/frontier/covers": "upload_frontier_covers",
   // record_catalogue_snapshot (the catalogue-funnel daily snapshot,
   // docs/admin-shell.md) is contract-only oRPC — no TanStack route file; oRPC owns the
@@ -428,8 +398,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // contract-only oRPC (no TanStack route file; oRPC owns the path directly, like
   // record_catalogue_snapshot). Admin tier (agent-allowed): the box's nightly
   // `fluncle-reconcile-hub-counts` cron POSTs a bare trigger with its agent token and the Worker
-  // corrects the drifted counters in SQL. `reconcile_hub_counts` does not match a public prefix,
-  // so it MUST be listed here to satisfy the "holds exactly" check.
+  // corrects the drifted counters in SQL.
   "POST /admin/hub-counts/reconcile": "reconcile_hub_counts",
   // The label-alias confirm (RFC musickit-second-authority, U2a) — contract-only oRPC. Operator
   // tier: fold a candidate spelling into the label; the agent token 403s.
@@ -441,9 +410,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The label MERGE — fold a losing label into the canonical one (re-point every FK, reconcile
   // identity + facts). Contract-only oRPC (no TanStack route file). OPERATOR tier (the
   // `update_label` precedent): collapsing two public entities into one is an editorial act, so
-  // the agent token 403s. `merge_label` matches the `merge_` public prefix (allow-listed for the
-  // `/me` galaxy-progress merge), so the "holds exactly" check skips it — which is exactly why it
-  // must be listed here.
+  // the agent token 403s. Its `merge_` name once bought it an exemption from the "holds exactly"
+  // check (that prefix was allow-listed for the `/me` galaxy-progress merge); splitting the nets by
+  // PATH ended it — a destructive operator op cannot name its way out of this net.
   "POST /admin/labels/{slug}/merge": "merge_label",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
   // The logbook nightly author — contract-only oRPC (no TanStack route file; oRPC owns
@@ -686,6 +655,13 @@ function canonical(value: string): string {
   return value.replace(/[./]/g, " ").replace(/[${}]/g, "").trim().split(/\s+/).join("/");
 }
 
+// The line between the two coverage nets. Matched on the segment boundary, not as a
+// bare prefix, so a future `/administration` path lands on the public net rather
+// than silently claiming admin exemption here.
+function isAdminPath(path: string): boolean {
+  return path === "/admin" || path.startsWith("/admin/");
+}
+
 describe("oRPC admin-route contract coverage", () => {
   const converted = new Set<string>(CONTRACT_OPERATION_NAMES);
 
@@ -719,45 +695,55 @@ describe("oRPC admin-route contract coverage", () => {
     }
   });
 
-  it("the admin registry holds EXACTLY this pilot's ops (no admin op outside the map)", () => {
-    // Every admin op in the contract registry must be a NAMED (non-PENDING) entry
-    // here. Catches an op converted in another file whose route the map didn't
-    // record — the pending list must shrink, by name, as routes convert. The
-    // public ops are excluded by matching only against the admin map's values.
+  it("the admin registry holds EXACTLY the admin-path ops (no admin op outside the map)", () => {
+    // Every op served off an `/admin` PATH must be a NAMED (non-PENDING) entry here.
+    // Catches an op converted in another file whose route the map didn't record — the
+    // pending list must shrink, by name, as routes convert.
+    //
+    // The split is by the op's DECLARED PATH, never by its name: an op named
+    // `list_catalogue_tracks` or `merge_label` is admin because it is served at
+    // `/admin/...`, and no naming choice can move it out of this net.
     const namedAdminOps = new Set(Object.values(ADMIN_ROUTE_OPS).filter((op) => op !== PENDING));
-    // The ops the public coverage net owns; admin coverage ignores them here.
-    const PUBLIC_OP_PREFIXES = [
-      "get_",
-      "list_",
-      "search_",
-      "submit_",
-      "subscribe_",
-      "save_",
-      "unsave_",
-      "collect_",
-      "merge_",
-      "delete_private",
-      "export_private",
-      "update_private",
-      // The `/me` Frontier mint (E2) — a private-session op, not admin. Scoped to
-      // `mint_private` so the admin token mints (`mint_youtube_token`,
-      // `mint_mixcloud_token`) stay on the admin net where they belong.
-      "mint_private",
-      "register_device",
-      "deregister_device",
-    ];
-    const isPublicOp = (op: string) => PUBLIC_OP_PREFIXES.some((p) => op.startsWith(p));
 
     for (const op of converted) {
-      if (isPublicOp(op) || namedAdminOps.has(op)) {
+      const route = CONTRACT_OPERATION_ROUTES[op];
+
+      if (!route) {
+        expect.fail(`contract op "${op}" declares no route — it is outside both coverage nets`);
+      }
+
+      if (!isAdminPath(route.path) || namedAdminOps.has(op)) {
         continue;
       }
 
-      // An op that is neither a known public op nor a documented admin op slipped
-      // into the registry without a coverage entry.
+      // An admin-path op with no coverage entry slipped into the registry.
       expect.fail(
-        `contract op "${op}" is in the registry but absent from ADMIN_ROUTE_OPS — add its admin route entry (or document it on the public net)`,
+        `contract op "${op}" (${route.method} ${route.path}) is in the registry but absent from ADMIN_ROUTE_OPS — add its admin route entry`,
       );
+    }
+  });
+
+  it("every admin map key matches the op's declared route", () => {
+    // The map is keyed by `METHOD /path`. Pin those keys to the contract's own
+    // declaration so a route the op moved can't leave a stale key behind — the map
+    // stays a true index of the admin surface rather than a parallel spelling of it.
+    for (const [key, op] of Object.entries(ADMIN_ROUTE_OPS)) {
+      if (op === PENDING) {
+        continue;
+      }
+
+      const route = CONTRACT_OPERATION_ROUTES[op];
+
+      expect(route, `admin op "${op}" (${key}) is not in the contract registry`).toBeDefined();
+
+      if (!route) {
+        continue;
+      }
+
+      expect(
+        `${route.method} ${route.path}`,
+        `admin map key for "${op}" does not match its declared route`,
+      ).toBe(key);
     }
   });
 
