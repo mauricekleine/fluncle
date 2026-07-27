@@ -76,7 +76,7 @@ Return one entry per label in your slice via the structured schema. \`evidence\`
 phase("Research");
 const results = await parallel(
   starts.map(
-    (start, i) => () =>
+    (start) => () =>
       agent(brief(start), {
         effort: "medium",
         label: `labels ${start}-${Math.min(start + batch, total) - 1}`,
