@@ -74,7 +74,7 @@ Dependabot reports **1 critical, 6 high, 8 medium, 3 low** open against the repo
 
 The 19-PR housekeeping sweep left a queue of calls the code cannot settle. Each is small; the point of listing them together is that they are one operator sitting.
 
-- [ ] **CSP graduation.** `security-headers.ts` ships an enforcing `frame-ancestors 'self'` plus a full `Content-Security-Policy-Report-Only` policy. Graduating the report-only policy to enforcing needs a **report sink first** — no sink, no evidence, no safe flip.
+- [ ] **CSP graduation.** `security-headers.ts` ships an enforcing `frame-ancestors 'self'` plus a full `Content-Security-Policy-Report-Only` policy. The **report sink is wired** — violations POST to Sentry's Security feed (`report-uri` + `report-to`/`Reporting-Endpoints`, public https origins only; see [docs/error-tracking.md](../error-tracking.md)). What remains is the operator's: watch that feed across a real traffic window, separate extension noise from a genuine first-party subresource, then flip.
 - [ ] **HSTS `includeSubDomains` / `preload`.** Both are deliberately excluded today (one year, no preload, no subdomains — the conservative reading, and `preload` is a one-way door). Confirm or change the reading.
 - [ ] **The dependency-hygiene bundle:** `bun audit` in CI, the Renovate npm extension, the deepsec bump, and the three Dependabot dismissals.
 - [ ] **Branch protection:** the required-checks set and `enforce_admins`. Repo security settings are the operator's to toggle.

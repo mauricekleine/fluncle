@@ -18,9 +18,10 @@
 //     declared type. (Static assets — /assets, /fonts, the icons — are served by
 //     Cloudflare's asset server and never reach this Worker, so public/_headers
 //     carries the same nosniff for them.)
-//   - `Referrer-Policy` + `Strict-Transport-Security` + the framing CSP on HTML
-//     DOCUMENTS only. These are document-scoped concerns; a JSON API reply, a feed, an
-//     OG image, or a media proxy has no referrer to leak and no frame to protect.
+//   - `Referrer-Policy` + `Strict-Transport-Security` + the framing CSP + the report-only
+//     policy and its `Reporting-Endpoints` sink on HTML DOCUMENTS only. These are
+//     document-scoped concerns; a JSON API reply, a feed, an OG image, or a media proxy
+//     has no referrer to leak, no frame to protect, and no subresources to police.
 //
 // The embed exemption is STRUCTURAL, not a path string repeated here: a route that has
 // already set its own `Content-Security-Policy` OWNS its content policy, so this layer
@@ -28,6 +29,8 @@
 // (`frame-ancestors *`, so third parties may frame the oEmbed card), and it keeps it
 // without this module knowing the path. Any future route that needs its own policy
 // gets the same treatment for free.
+
+import { BROWSER_SENTRY_DSN, SENTRY_RELEASE } from "../sentry-config";
 
 /** The one header safe on every response, whatever its content type. */
 const NOSNIFF_HEADER = "X-Content-Type-Options";
@@ -136,19 +139,123 @@ export const REPORT_ONLY_CSP = [
   ].join(" "),
 ].join("; ");
 
+// ---------------------------------------------------------------------------
+// THE REPORT SINK. A report-only policy with nowhere to report is a policy that
+// produces no evidence — and no evidence means the flip to enforcing stays a guess
+// forever. Sentry ingests CSP violation reports directly at a per-project "Security
+// Header" endpoint, so the sink needs no route of our own, no storage, and no
+// rate-limiting to write: the endpoint is derived from a DSN this repo already commits.
+// ---------------------------------------------------------------------------
+
+/**
+ * The reporting group name shared by the policy's `report-to` directive and the
+ * `Reporting-Endpoints` response header. Only CSP reports name this group, so nothing
+ * else (deprecation, intervention, crash reports) is routed to Sentry — that would need
+ * a `default` endpoint, which is deliberately not declared.
+ */
+const CSP_REPORT_GROUP = "csp-endpoint";
+
+/**
+ * Turn a Sentry DSN into its Security Header (CSP) ingest endpoint.
+ *
+ * A DSN is `https://<publicKey>@<host>/<projectId>`, and Sentry's documented CSP
+ * endpoint is `https://<host>/api/<projectId>/security/?sentry_key=<publicKey>` —
+ * i.e. the same three parts rearranged, which is why this is derived rather than
+ * pasted: the endpoint can never drift from the DSN the SDK actually reports to.
+ * `sentry_release` is the documented optional parameter that attributes a violation to
+ * a build, and it is what turns "we have violations" into "THIS deploy added one".
+ *
+ * Returns `undefined` for anything that is not a parseable DSN with both parts. A
+ * malformed DSN must degrade to "no reporting" — never to a `report-uri undefined`
+ * that browsers would either reject outright or resolve against our own origin.
+ */
+export function sentryCspReportEndpoint(dsn: string, release?: string): string | undefined {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(dsn);
+  } catch {
+    return undefined;
+  }
+
+  const publicKey = parsed.username;
+  const projectId = parsed.pathname.replace(/^\/+/, "");
+
+  if (publicKey.length === 0 || projectId.length === 0) {
+    return undefined;
+  }
+
+  const query = new URLSearchParams({ sentry_key: publicKey });
+
+  if (typeof release === "string" && release.length > 0) {
+    query.set("sentry_release", release);
+  }
+
+  return `${parsed.protocol}//${parsed.host}/api/${projectId}/security/?${query.toString()}`;
+}
+
+/**
+ * The endpoint violations are POSTed to. Derived from the BROWSER project's DSN, not the
+ * Worker's: a CSP violation is something a visitor's browser observed, so it belongs next
+ * to the client-side errors it correlates with, in the project whose feed already covers
+ * the browser.
+ */
+export const SENTRY_CSP_REPORT_ENDPOINT = sentryCspReportEndpoint(
+  BROWSER_SENTRY_DSN,
+  SENTRY_RELEASE,
+);
+
+/**
+ * The report-only policy WITH the sink attached — the variant served on a real public
+ * origin (see `isPublicHttpsOrigin`).
+ *
+ * Both reporting directives are sent, exactly as Sentry documents. `report-uri` is
+ * deprecated-but-universally-supported and is the compatibility floor: Firefox and Safari
+ * still have nothing else. `report-to` is the Reporting-API successor, and a browser that
+ * honours it ignores `report-uri` — so naming both is additive, never duplicated. The
+ * group it names is defined by the `Reporting-Endpoints` header below.
+ *
+ * The legacy `Report-To` JSON header (Reporting API v0) is deliberately NOT sent:
+ * `Reporting-Endpoints` supersedes it in every engine that ever shipped v0, and the
+ * browsers that shipped neither are covered by `report-uri` anyway.
+ *
+ * Falls back to the bare policy if the DSN ever fails to parse — the policy itself must
+ * never depend on the sink existing.
+ */
+export const REPORT_ONLY_CSP_WITH_REPORTING = SENTRY_CSP_REPORT_ENDPOINT
+  ? `${REPORT_ONLY_CSP}; report-uri ${SENTRY_CSP_REPORT_ENDPOINT}; report-to ${CSP_REPORT_GROUP}`
+  : REPORT_ONLY_CSP;
+
+/** The `Reporting-Endpoints` header value that gives the policy's `report-to` group a URL. */
+export const REPORTING_ENDPOINTS_VALUE = SENTRY_CSP_REPORT_ENDPOINT
+  ? `${CSP_REPORT_GROUP}="${SENTRY_CSP_REPORT_ENDPOINT}"`
+  : undefined;
+
 /** True when this response is an HTML DOCUMENT (the only thing the document-scoped headers target). */
 function isHtmlResponse(response: Response): boolean {
   return response.headers.get("content-type")?.toLowerCase().includes("text/html") ?? false;
 }
 
 /**
- * True when HSTS may be sent. Only over a genuine `https://` request: RFC 6797 has the
- * UA ignore the header off a non-secure transport anyway, and gating on it keeps the
- * header out of local dev (`http://localhost:3000`, where a cached HSTS pin would
- * wedge every other http localhost project on the machine) and off the .onion mirror,
- * which is served over http by design.
+ * True when this request came in over a genuine public `https://` origin — the gate on
+ * the two headers that must not reach local dev or the Tor mirror. One predicate, two
+ * reasons:
+ *
+ *   - HSTS. RFC 6797 has the UA ignore the header off a non-secure transport anyway, and
+ *     gating on it keeps the header out of local dev (`http://localhost:3000`, where a
+ *     cached HSTS pin would wedge every other http localhost project on the machine) and
+ *     off the .onion mirror, which is served over http by design.
+ *   - CSP REPORTING. A dev session must not fire a live side channel: every violation a
+ *     local `bun run dev` or a headless browser smoke provoked would land in the operator's
+ *     production Security feed, drowning the real signal in exactly the window the feed is
+ *     being watched to decide the flip. And a Tor visitor's browser must never be handed
+ *     an instruction to POST to sentry.io — the mirror exists so that visitor is not
+ *     traceable to a third party.
+ *
+ * The DIRECTIVES are identical everywhere, so dev still exercises the same policy; only
+ * the sink is withheld.
  */
-function allowsHsts(url: URL): boolean {
+function isPublicHttpsOrigin(url: URL): boolean {
   return url.protocol === "https:" && !url.hostname.endsWith(".onion");
 }
 
@@ -166,7 +273,10 @@ export function securityHeadersFor(request: Request, response: Response): [strin
 
   headers.push(["Referrer-Policy", REFERRER_POLICY_VALUE]);
 
-  if (allowsHsts(new URL(request.url))) {
+  const url = new URL(request.url);
+  const isPublic = isPublicHttpsOrigin(url);
+
+  if (isPublic) {
     headers.push(["Strict-Transport-Security", HSTS_VALUE]);
   }
 
@@ -175,8 +285,18 @@ export function securityHeadersFor(request: Request, response: Response): [strin
   // layered over it. This is what keeps the oEmbed card's `frame-ancestors *` intact
   // without this module carrying `/embed/` anywhere.
   if (!response.headers.has("content-security-policy")) {
+    // The ENFORCING header stays reporting-free on purpose. It carries `frame-ancestors`
+    // and nothing else; a framing block is a deliberate, already-understood outcome, and
+    // pointing it at the sink would mix enforced blocks into the feed the report-only
+    // rollout is being read from.
     headers.push(["Content-Security-Policy", ENFORCED_CSP]);
-    headers.push(["Content-Security-Policy-Report-Only", REPORT_ONLY_CSP]);
+
+    if (isPublic && REPORTING_ENDPOINTS_VALUE) {
+      headers.push(["Content-Security-Policy-Report-Only", REPORT_ONLY_CSP_WITH_REPORTING]);
+      headers.push(["Reporting-Endpoints", REPORTING_ENDPOINTS_VALUE]);
+    } else {
+      headers.push(["Content-Security-Policy-Report-Only", REPORT_ONLY_CSP]);
+    }
   }
 
   return headers;

@@ -1,9 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { BROWSER_SENTRY_DSN, SENTRY_RELEASE } from "../sentry-config";
 import {
   ENFORCED_CSP,
   REPORT_ONLY_CSP,
+  REPORT_ONLY_CSP_WITH_REPORTING,
+  REPORTING_ENDPOINTS_VALUE,
   securityHeadersFor,
+  SENTRY_CSP_REPORT_ENDPOINT,
+  sentryCspReportEndpoint,
   withSecurityHeaders,
 } from "./security-headers";
 
@@ -65,8 +70,9 @@ describe("securityHeadersFor", () => {
 
     expect(headers).toEqual({
       "Content-Security-Policy": "frame-ancestors 'self'",
-      "Content-Security-Policy-Report-Only": REPORT_ONLY_CSP,
+      "Content-Security-Policy-Report-Only": REPORT_ONLY_CSP_WITH_REPORTING,
       "Referrer-Policy": "strict-origin-when-cross-origin",
+      "Reporting-Endpoints": REPORTING_ENDPOINTS_VALUE,
       "Strict-Transport-Security": "max-age=31536000",
       "X-Content-Type-Options": "nosniff",
     });
@@ -146,6 +152,144 @@ describe("securityHeadersFor", () => {
     });
   });
 
+  // THE REPORT SINK. A report-only policy with nowhere to report produces no evidence,
+  // and the flip to enforcing stays a guess. These pin that the sink is wired, that it is
+  // derived from the committed DSN rather than pasted, and — the half that matters just as
+  // much — that it is withheld everywhere a report would be noise or a privacy leak.
+  describe("CSP violation reporting", () => {
+    it("derives Sentry's Security Header endpoint from a DSN", () => {
+      expect(
+        sentryCspReportEndpoint(
+          "https://abc123@o4511752557232128.ingest.de.sentry.io/4511752574468176",
+        ),
+      ).toBe(
+        "https://o4511752557232128.ingest.de.sentry.io/api/4511752574468176/security/?sentry_key=abc123",
+      );
+    });
+
+    it("attributes a violation to the build when a release is known", () => {
+      // `sentry_release` is Sentry's documented optional parameter, and it is what turns
+      // "we have violations" into "THIS deploy added one".
+      expect(sentryCspReportEndpoint("https://abc123@ingest.example.com/42", "deadbeef")).toBe(
+        "https://ingest.example.com/api/42/security/?sentry_key=abc123&sentry_release=deadbeef",
+      );
+    });
+
+    it("omits sentry_release when the release is unknown or empty", () => {
+      // A shallow CI checkout leaves SENTRY_RELEASE undefined; the endpoint must stay
+      // valid rather than carry an empty or literal-`undefined` release.
+      for (const release of [undefined, ""]) {
+        expect(sentryCspReportEndpoint("https://abc123@ingest.example.com/42", release)).toBe(
+          "https://ingest.example.com/api/42/security/?sentry_key=abc123",
+        );
+      }
+    });
+
+    it("degrades to NO endpoint on a DSN it cannot read", () => {
+      // A malformed DSN must mean "no reporting" — never a `report-uri undefined`, which a
+      // browser would either reject or resolve against our own origin and POST to us.
+      const unusable = [
+        "",
+        "not a url",
+        // No public key.
+        "https://o1.ingest.de.sentry.io/4511752574468176",
+        // No project id.
+        "https://abc123@o1.ingest.de.sentry.io",
+        "https://abc123@o1.ingest.de.sentry.io/",
+      ];
+
+      for (const dsn of unusable) {
+        expect(sentryCspReportEndpoint(dsn)).toBeUndefined();
+      }
+    });
+
+    it("points the live endpoint at the BROWSER project's ingest", () => {
+      // A CSP violation is something a visitor's browser observed, so it belongs beside
+      // the client-side errors it correlates with — not in the Worker project.
+      expect(SENTRY_CSP_REPORT_ENDPOINT).toBe(
+        sentryCspReportEndpoint(BROWSER_SENTRY_DSN, SENTRY_RELEASE),
+      );
+      expect(SENTRY_CSP_REPORT_ENDPOINT).toContain(".ingest.de.sentry.io/api/");
+      expect(SENTRY_CSP_REPORT_ENDPOINT).toContain("/security/?sentry_key=");
+    });
+
+    it("attaches BOTH reporting directives to the report-only policy", () => {
+      const headers = headerMap(httpsGet(), html());
+      const policy = headers["Content-Security-Policy-Report-Only"];
+
+      // `report-uri` is the compatibility floor (Firefox and Safari still have nothing
+      // else); `report-to` is the Reporting-API successor a modern engine prefers.
+      expect(policy).toContain(`report-uri ${SENTRY_CSP_REPORT_ENDPOINT}`);
+      expect(policy).toContain("report-to csp-endpoint");
+      // The base policy is carried through unchanged — reporting is appended, never a
+      // rewrite of the directives.
+      expect(policy?.startsWith(`${REPORT_ONLY_CSP};`)).toBe(true);
+    });
+
+    it("gives the report-to group a URL via Reporting-Endpoints", () => {
+      const headers = headerMap(httpsGet(), html());
+
+      expect(headers["Reporting-Endpoints"]).toBe(`csp-endpoint="${SENTRY_CSP_REPORT_ENDPOINT}"`);
+      // The legacy Reporting-API-v0 header is deliberately not sent — `Reporting-Endpoints`
+      // supersedes it, and `report-uri` covers the engines that shipped neither.
+      expect(headers["Report-To"]).toBeUndefined();
+    });
+
+    it("leaves the ENFORCING header reporting-free", () => {
+      // It carries `frame-ancestors` and nothing else. A framing block is a deliberate,
+      // already-understood outcome; routing it to the sink would mix enforced blocks into
+      // the feed the report-only rollout is being read from.
+      const headers = headerMap(httpsGet(), html());
+
+      expect(headers["Content-Security-Policy"]).toBe(ENFORCED_CSP);
+      expect(headers["Content-Security-Policy"]).not.toContain("report-uri");
+      expect(headers["Content-Security-Policy"]).not.toContain("report-to");
+    });
+
+    it("withholds the sink over http — a dev session must not fire a live side channel", () => {
+      // Every violation a local `bun run dev` or a headless browser smoke provoked would
+      // otherwise land in the production Security feed, drowning the real signal in exactly
+      // the window that feed is being watched to decide the flip.
+      const headers = headerMap(new Request("http://localhost:3000/"), html());
+
+      expect(headers["Content-Security-Policy-Report-Only"]).toBe(REPORT_ONLY_CSP);
+      expect(headers["Content-Security-Policy-Report-Only"]).not.toContain("report-uri");
+      expect(headers["Reporting-Endpoints"]).toBeUndefined();
+    });
+
+    it("withholds the sink from the .onion mirror", () => {
+      // A Tor visitor's browser must never be handed an instruction to POST to sentry.io —
+      // the mirror exists so that visitor is not traceable to a third party.
+      const headers = headerMap(
+        new Request("https://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion/log"),
+        html(),
+      );
+
+      expect(headers["Content-Security-Policy-Report-Only"]).toBe(REPORT_ONLY_CSP);
+      expect(headers["Reporting-Endpoints"]).toBeUndefined();
+    });
+
+    it("sends no reporting header to a route that owns its own CSP", () => {
+      // The structural exemption covers the sink too: the oEmbed card gets no report-only
+      // policy, so a `Reporting-Endpoints` header would name a group nothing references.
+      const headers = headerMap(
+        httpsGet("https://www.fluncle.com/embed/001.A.01"),
+        html({ "content-security-policy": "frame-ancestors *" }),
+      );
+
+      expect(headers["Reporting-Endpoints"]).toBeUndefined();
+    });
+
+    it("sends no reporting header on a NON-document reply", () => {
+      const headers = headerMap(
+        httpsGet("https://www.fluncle.com/api/v1/search?q=ab"),
+        new Response("{}", { headers: { "content-type": "application/json" } }),
+      );
+
+      expect(headers["Reporting-Endpoints"]).toBeUndefined();
+    });
+  });
+
   describe("HSTS is sent only where it is safe", () => {
     it("is sent over https", () => {
       expect(headerMap(httpsGet(), html())["Strict-Transport-Security"]).toBe("max-age=31536000");
@@ -155,9 +299,12 @@ describe("securityHeadersFor", () => {
       const headers = headerMap(new Request("http://localhost:3000/"), html());
 
       expect(headers["Strict-Transport-Security"]).toBeUndefined();
-      // The rest of the document headers still apply in dev, so dev matches prod.
+      // The rest of the document headers still apply in dev, and the DIRECTIVES are
+      // identical to prod's — only the report sink is withheld, so dev exercises the same
+      // policy without writing to the production Security feed.
       expect(headers["Referrer-Policy"]).toBe("strict-origin-when-cross-origin");
       expect(headers["Content-Security-Policy"]).toBe(ENFORCED_CSP);
+      expect(headers["Content-Security-Policy-Report-Only"]).toBe(REPORT_ONLY_CSP);
     });
 
     it("is NOT sent to a .onion host — the Tor mirror is http by design", () => {

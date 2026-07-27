@@ -38,6 +38,22 @@ The Team plan's 5M spans/mo is the budget the sampler is tuned against. The **p9
 
 Both SDKs initialize **only in a production build** (`import.meta.env.PROD`, statically `false` under `vite dev` / `bun run dev` / the smoke routine, `true` in the deployed Worker bundle). A dev session sends nothing, and when the DSN is absent the SDK is inert.
 
+## CSP violation reports — the report sink
+
+Sentry is also the sink for **Content-Security-Policy violation reports**, which land in its own **Security** feed (Sentry ingests them at a per-project Security Header endpoint, so this needs no route, no storage, and no rate-limiting of ours).
+
+`apps/web/src/lib/server/security-headers.ts` derives that endpoint from the committed **browser** DSN rather than pasting it — a DSN is `https://<publicKey>@<host>/<projectId>` and the endpoint is `https://<host>/api/<projectId>/security/?sentry_key=<publicKey>`, the same three parts rearranged, so the sink can never drift from the DSN the SDK reports to. It carries `sentry_release` too, so a violation is attributed to the build that introduced it. The browser project is the right home: a CSP violation is something a **visitor's browser** observed, and it belongs beside the client-side errors it correlates with. A DSN that fails to parse degrades to **no reporting** — never a `report-uri undefined`.
+
+Three headers carry it, all on HTML documents only:
+
+- `Content-Security-Policy-Report-Only: …; report-uri <endpoint>; report-to csp-endpoint` — both directives, as Sentry documents. `report-uri` is deprecated-but-universal and is the compatibility floor (Firefox and Safari still have nothing else); `report-to` is the Reporting-API successor, which a browser that honours it prefers, ignoring `report-uri`. The legacy `Report-To` JSON header (Reporting API v0) is deliberately not sent — `Reporting-Endpoints` supersedes it, and `report-uri` covers the engines that shipped neither.
+- `Reporting-Endpoints: csp-endpoint="<endpoint>"` — gives that group its URL. Only `csp-endpoint` is declared and no `default`, so nothing else (deprecation, intervention, crash reports) is routed to Sentry.
+- The **enforcing** `Content-Security-Policy` header stays reporting-free. It carries `frame-ancestors 'self'` and nothing else; a framing block is a deliberate, already-understood outcome, and routing it here would mix enforced blocks into the feed the report-only rollout is read from.
+
+**Where the sink is withheld.** Only a public `https://` origin gets it. Local dev (`http://localhost:3000`) and the `.onion` mirror get the identical policy **directives** with no `report-uri`, no `report-to`, and no `Reporting-Endpoints` — a dev session or a headless browser smoke must not write into the production Security feed in exactly the window it is being watched, and a Tor visitor's browser must never be handed an instruction to POST to sentry.io.
+
+**Expected volume, and why the operator watches before flipping.** Every visitor's browser reports, and a report-only policy reports on things that are not attacks: a browser extension injecting a script or stylesheet into the page is the single largest source, and `script-src`'s `'unsafe-inline'` does not cover an extension's `src=`. Expect the feed to be extension noise plus a long tail of ISP/proxy injection. Sentry groups by directive + blocked URI, so the noise collapses into a handful of issues rather than a flood, and its inbound filters can drop the browser-extension class outright if it gets loud. **Graduating the report-only policy to enforcing is an operator decision made from this feed** — watch it across a real traffic window, confirm no legitimate first-party subresource appears, then flip. No evidence, no flip.
+
 ## What is pending
 
 The **mobile app** (`apps/mobile`) is not wired here; it rides its own 1.1 build. The **on-box agent sweeps** (rave-02 systemd timers) do not report to Sentry — their failure path is the systemd/Discord operator channel, not this one. Both are deliberate: this slice is the web app's browser + Worker surface.
