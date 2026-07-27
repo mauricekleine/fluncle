@@ -26,7 +26,7 @@
     "fluncle-audit-operator": {
       "source": "packages/skills/fluncle-audit-operator",
       "sourceType": "local",
-      "computedHash": "989e0e3bf22ccd412f2fc14c87502b744bffda47e9cebef85e4fb79f070949a3"
+      "computedHash": "a5f96136817da6704e7aa89225a9b8a59f0a149685bb9a8f0c366737e830ab79"
     },
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",

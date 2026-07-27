@@ -34,7 +34,7 @@ This is the ruling, and it is the whole point of the control. **`seed_state` ans
 - **`enabled`** means the next crawl may dig from it.
 - **`undecided`** is where a brand-new label enters: **never silently crawled, never silently dropped.** It surfaces in the `/admin` attention queue until a human rules on it.
 
-"What we crawl FROM" and "what we KEEP" are separate concepts, and they stay that way in the code: no read anywhere joins `seed_state` to a decision about what is shown, kept, or deleted, and none ever should. `apps/web/src/lib/server/labels.test.ts` pins this with a test that disables a label and asserts the `tracks` table comes out byte-identical.
+"What we crawl FROM" and "what we KEEP" are separate concepts, and they stay that way in the code: no read anywhere joins `seed_state` to a decision about what is shown, kept, or deleted, and none ever should. `apps/web/src/lib/server/labels.test.ts` pins this with a test that disables a label and asserts the `tracks` table comes out byte-identical. This reach has been tested and ruled on: a 2026-07-26 audit proposed gating INDEXABILITY (noindex + sitemap membership) on the label's ruling, and the operator ruled it down on 2026-07-27 — offering a page to a search engine is presentation, not acquisition, so `seed_state` does not touch it either; off-genre residue is handled by the destructive prune pass and the crawler's own boundary gate, never by this column.
 
 ## How a label gets a row
 

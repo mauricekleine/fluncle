@@ -48,11 +48,12 @@ docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/aud
 without pushing — inspect the diff there. Drop `--dry-run` to open a real PR. Review a specific PR:
 `audit-review-sweep.sh --pr <N>`.
 
-**Triage the ledger.** `docs/audit-backlog.md` accumulates the filed (not-auto-fixed) findings,
-newest run on top, deduped. Promote the ones worth scheduling into `docs/planning/ROADMAP.md`;
-set a row's `status` to `done`/`wontfix` when handled — never silently delete
-(status carries the history). A high-impact finding the reviewer held the PR open for is both in the
-ledger and on the open PR.
+**Triage the ledger.** `docs/audit-backlog.md` is forward-facing — open findings only, newest run
+on top, deduped, never a changelog. Promote the ones worth scheduling into `docs/planning/ROADMAP.md`;
+when a row is handled (fixed, rejected, or overtaken), DELETE it in the PR that settles it and name
+the resolution in that PR's body — git history carries the record, and a ruling that must outlive
+its row is written into the canon doc it governs instead. A high-impact finding the reviewer held
+the PR open for is both in the ledger and on the open PR.
 
 **Expect hosted-proof rows from `db-query-shape` night.** That domain (the semantic half of the
 DB-scale guardrail — `docs/db-scale-backlog.md`) fixes hoists, rewrites, and projection trims itself,
