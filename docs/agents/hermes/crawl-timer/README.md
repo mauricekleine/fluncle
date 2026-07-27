@@ -55,6 +55,6 @@ systemctl list-timers fluncle-crawl.timer
 
 **Before the first tick, rule on the seed set.** `fluncle admin catalogue crawl --dry-run` prints how many labels are enabled. Whatever is enabled when the timer starts is the neighbourhood it will walk.
 
-**It is already on /status.** `cron.crawl` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober's `CRON_SPECS`, so the moment the timer runs its first tick the `/status` row goes live. Nothing further to wire.
+**It is already on /status.** `cron.crawl` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober's `AUTOMATION_CRONS`, so the moment the timer runs its first tick the `/status` row goes live. Nothing further to wire.
 
 **Enable `fluncle-rank` alongside it.** The Ear's ranking sweep ([../rank-timer/README.md](../rank-timer/README.md)) is what turns the rows this crawl brings back into `/admin/catalogue`. It shipped without a schedule on purpose — a timer ranking an empty table means nothing — and this crawler is what gives it something to rank. The two are one loop.

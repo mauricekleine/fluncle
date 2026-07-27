@@ -36,10 +36,4 @@ systemctl list-timers fluncle-triage.timer
 
 (A full re-provision restores it automatically — [`../install-host-timers.sh`](../install-host-timers.sh) globs every `*-timer/` dir, so this timer is installed + enabled alongside the others; the manual pass above is only for the FIRST enable on an already-running box.)
 
-**Optional — add it to /status monitoring.** To have the `fluncle-healthcheck` prober report `cron.triage`, add one row to `CRON_SPECS` in [`../scripts/fluncle-healthcheck.ts`](../scripts/fluncle-healthcheck.ts):
-
-```ts
-{ cadenceMs: 15 * 60_000, match: "triage", service: "cron.triage" },
-```
-
-then rebake the image (pin-watch will roll it out). Left out by default so `/status` never advertises a cron that is not yet enabled.
+**It is already on /status.** `cron.triage` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober's `AUTOMATION_CRONS`, so the moment the timer runs its first tick the `/status` row goes live. Nothing further to wire.
