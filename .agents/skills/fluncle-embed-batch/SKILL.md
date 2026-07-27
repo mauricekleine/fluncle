@@ -212,7 +212,7 @@ An embedded-but-unranked track is in the archive but not yet placed in The Ear's
 - **The pod's env is in PID 1, not your shell** — SSH in and the injected secrets are simply absent (`/etc/rp_environment` only carries RunPod's own vars). Import from `/proc/1/environ`.
 - **`pip install muq` resolves deps that break the image** — unpinned, it takes transformers 5.x and numpy 2.x, both fatal against the template's torch 2.1, and neither errors at install time. The bootstrap pins `transformers==4.40.2` + `numpy<2`; keep the pins if you touch it.
 - **Do not abort a slow start too early** — cold setup runs tens of minutes before the first embed. A 45-minute never-started guard killed a healthy pod mid-warmup on the first attempt.
-- **Always resumable** — an embedded track leaves the `embedding_json IS NULL` queue and write-back is per-track, so a reclaimed pod or a slept Mac loses nothing. Just launch again.
+- **Always resumable** — an embedded track leaves the `embedding_blob IS NULL` queue and write-back is per-track, so a reclaimed pod or a slept Mac loses nothing. Just launch again.
 - **The batch can only measure, never speak** — it sends `{ embedding }` and nothing else; the certification rail 409s anything that would make Fluncle _say_ something about a track. Safe to run against uncertified catalogue rows all day.
 
 ## Where the concrete detail lives
