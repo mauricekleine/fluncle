@@ -7,6 +7,11 @@
 // It is fully self-contained: it injects its own scoped stylesheet (every selector under
 // `.fpl`), builds all its DOM inside the container, and tears everything down on destroy.
 // Sprites are served from /pipeline/*.png; the live cron heartbeat reads /api/status.
+//
+// PAINT: the per-machine / per-surface tint palette below is lore art, exempt from the One
+// Sun Rule (DESIGN.md §2, The Lore-Art Paint Exemption; ratified 2026-07-27). The exemption
+// is hue diversity only — Nebula Violet (#ab7bff) stays reserved for the live callout,
+// neutrals lean warm, and nothing here carries a black elevation shadow.
 
 import { LOGOS } from "./logos";
 
@@ -313,7 +318,7 @@ const S: Station[] = [
 const K: Kiosk[] = [
   { label: "web", tint: "#f0a24a", url: "https://www.fluncle.com/", wh: "the archive" },
   { label: "/log", tint: "#ffcf70", url: "https://www.fluncle.com/log", wh: "the coordinate" },
-  { label: "galaxy", tint: "#ab7bff", url: "https://galaxy.fluncle.com", wh: "the game" },
+  { label: "galaxy", tint: "#e070c8", url: "https://galaxy.fluncle.com", wh: "the game" },
   { label: "radio", tint: "#6f9bd6", url: "https://radio.fluncle.com", wh: "observations" },
   { label: "CLI", tint: "#4fb39a", url: "https://www.fluncle.com/docs", wh: "terminal" },
   { label: "SSH", tint: "#63d69a", url: "https://www.fluncle.com/docs", wh: "rave." },
@@ -421,8 +426,8 @@ const SVGNS = "http://www.w3.org/2000/svg";
 
 const STYLES = `
 .fpl{--bg:#090a0b;--panel:#10100d;--line:#241f18;--cream:#f4ead7;--cream-dim:#b7ab95;--faint:#6e6657;
-  --gold:#ffd057;--gold-2:#b88a00;--red:#ff6b57;--m-worker:#e8833a;--m-rave02:#6f9bd6;--m-rave03:#ab7bff;
-  --m-vps01:#63d69a;--m-m5:#4fb39a;--m-m2:#e0897d;--m-browser:#9aa0ad;
+  --gold:#ffd057;--gold-2:#b88a00;--red:#ff6b57;--m-worker:#e8833a;--m-rave02:#6f9bd6;--m-rave03:#e070c8;
+  --m-vps01:#63d69a;--m-m5:#4fb39a;--m-m2:#e0897d;--m-browser:#a8a08f;
   position:absolute;inset:0;color:var(--cream);
   font:13px/1.4 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 .fpl *{box-sizing:border-box}
@@ -435,7 +440,7 @@ const STYLES = `
   flex-direction:column;align-items:center;gap:8px;pointer-events:none}
 .fpl .hw{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 10px;pointer-events:auto;
   background:#10100dcc;border:1px solid var(--line);border-radius:999px;padding:7px 15px;
-  max-width:min(92vw,780px);box-shadow:0 6px 18px #0007;
+  max-width:min(92vw,780px);
   -webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);cursor:default}
 .fpl .hw-lbl{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8a8070;font-weight:700;margin-right:2px}
 .fpl .legend{display:flex;gap:6px 12px;flex-wrap:wrap;justify-content:center}
@@ -452,7 +457,7 @@ const STYLES = `
 .fpl .world{position:absolute;top:0;left:0;will-change:transform;transform-origin:0 0}
 .fpl .world>img{max-width:none;height:auto}
 .fpl .zoomctl{position:absolute;right:20px;bottom:18px;z-index:30;display:flex;align-items:center;gap:1px;
-  background:#10100dcc;border:1px solid var(--line);border-radius:10px;padding:3px;box-shadow:0 6px 18px #0007;
+  background:#10100dcc;border:1px solid var(--line);border-radius:10px;padding:3px;
   -webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px)}
 .fpl .zoomctl button{all:unset;cursor:pointer;color:var(--cream-dim);font-size:16px;line-height:1;width:28px;height:28px;
   display:grid;place-items:center;border-radius:7px;transition:background .1s}
@@ -471,7 +476,7 @@ const STYLES = `
 .fpl .divider{position:absolute;top:92px;bottom:150px;width:1px;background:linear-gradient(#241f1800,#2b2519,#241f1800)}
 .fpl .wires{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
 .fpl .card{position:absolute;width:188px;min-height:56px;background:var(--panel);border:1px solid var(--line);
-  border-top:3px solid var(--m-worker);border-radius:9px;padding:9px 11px;box-shadow:0 6px 18px #0007;
+  border-top:3px solid var(--m-worker);border-radius:9px;padding:9px 11px;box-shadow:0 0 0 1px #d0b99029;
   display:flex;flex-direction:column}
 .fpl .card .main{display:flex;gap:9px;align-items:flex-start}
 .fpl .card .body{flex:1;min-width:0}
@@ -499,7 +504,7 @@ const STYLES = `
 .fpl .hbstat .dot{width:7px;height:7px;border-radius:50%;background:#63d69a;--pc:#63d69a80;animation:fpl-hbpulse 1.8s ease-out infinite}
 .fpl .card.human{border-top-style:dashed}
 .fpl .listener{position:absolute;width:176px;height:237px;image-rendering:pixelated;pointer-events:none;
-  background-size:400% 100%;background-repeat:no-repeat;filter:drop-shadow(0 8px 16px #0009);
+  background-size:400% 100%;background-repeat:no-repeat;
   animation:fpl-nodframes .69s steps(4) infinite,fpl-bob .69s linear infinite}
 @keyframes fpl-nodframes{to{background-position-x:-704px}}
 @keyframes fpl-bob{0%,100%{transform:none}50%{transform:translateY(2px)}}
@@ -533,15 +538,15 @@ const STYLES = `
 .fpl .kiosk:hover{transform:translateY(-4px)}
 .fpl .kiosk:focus-visible{outline:2px solid var(--tint);outline-offset:4px;border-radius:8px}
 .fpl .kiosk img{width:76px;height:76px;image-rendering:pixelated;display:block;margin:0 auto 2px;
-  filter:drop-shadow(0 0 8px color-mix(in srgb,var(--tint) 55%,transparent)) drop-shadow(0 5px 7px #0009)}
-.fpl .kiosk:hover img{filter:drop-shadow(0 0 14px color-mix(in srgb,var(--tint) 82%,transparent)) drop-shadow(0 7px 9px #000a)}
+  filter:drop-shadow(0 0 8px color-mix(in srgb,var(--tint) 55%,transparent))}
+.fpl .kiosk:hover img{filter:drop-shadow(0 0 14px color-mix(in srgb,var(--tint) 82%,transparent))}
 .fpl .kiosk .lb{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--tint) 66%,var(--cream))}
 .fpl .kiosk .wh{font-size:9.5px;color:var(--faint)}
 .fpl .kiosk:hover .wh{color:var(--cream-dim)}
 .fpl .floatk{position:absolute;width:104px;text-align:center;--tint:#7bd0c0;pointer-events:none;
   animation:fpl-float 5.4s ease-in-out infinite}
 .fpl .floatk img{width:76px;height:76px;image-rendering:pixelated;display:block;margin:0 auto 2px;
-  filter:drop-shadow(0 0 8px color-mix(in srgb,var(--tint) 55%,transparent)) drop-shadow(0 5px 7px #0009)}
+  filter:drop-shadow(0 0 8px color-mix(in srgb,var(--tint) 55%,transparent))}
 .fpl .floatk .lb{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--tint) 66%,var(--cream))}
 .fpl .floatk .wh{font-size:9.5px;color:var(--faint);letter-spacing:.04em}
 .fpl .floatk .dangle{position:absolute;left:2px;top:72px;overflow:visible}

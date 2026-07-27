@@ -29,7 +29,7 @@ The renderer scales sprites by world distance, so exact source dimensions are no
 
 ## The canon ramp
 
-Generated art is quantized to this palette (mirrors `apps/web/src/game/palette.ts` / DESIGN.md). Do not introduce off-canon hues.
+Generated art is quantized to this palette (mirrors `apps/web/src/game/palette.ts` / DESIGN.md). Do not introduce off-canon hues. The `/pipeline` infographic's multi-hue paint carve-out (DESIGN.md §2, The Lore-Art Paint Exemption) does NOT reach the game: this ramp is the stricter one and it is unchanged.
 
 - Warm blacks: Deep Field `#090a0b`, Sleeve Black `#10100d`, Tape Black `#171611`
 - Cream ramp: `#fffbf2` / `#f4ead7` / `#b7ab95` / `#6e6657`
