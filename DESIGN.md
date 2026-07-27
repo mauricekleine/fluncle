@@ -30,7 +30,7 @@ typography:
   title:
     fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1.02rem"
-    fontWeight: 700
+    fontWeight: 800
     lineHeight: 1.18
     letterSpacing: "-0.01em"
   body:
@@ -41,7 +41,7 @@ typography:
   label:
     fontFamily: "Space Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.76rem"
-    fontWeight: 700
+    fontWeight: 800
   mono:
     fontFamily: "Monaspace Krypton, ui-monospace, SF Mono, Menlo, monospace"
     fontSize: "0.82rem"
@@ -161,7 +161,7 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 ## 3. Typography
 
 **Display Font:** Oxanium (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 200–800
-**Body Font:** Space Grotesk (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 300–700 — 700 is its ceiling, so no body-face role may ask for 800
+**Body Font:** Space Grotesk (SIL OFL, self-hosted; with ui-sans-serif, system-ui fallback), weights 300–700 — 700 is its ceiling, so the 800 Title and Label ask for renders as that heaviest cut (ratified 2026-07-27)
 **Mono Font:** Monaspace Krypton (GitHub Next's mechanical mono, SIL OFL, self-hosted; with ui-monospace, SF Mono fallback), weights 400 + 700
 
 **Character:** Oxanium is the voice of the artifact: a squared, techy face that reads like the printing on a Discman, used for the wordmark, track numerals, and brand moments. Space Grotesk carries the reading: a geometric grotesque with just enough oddness in its details to sound like Fluncle rather than like a settings screen, while still disappearing when you are scanning metadata. Monaspace Krypton is the machine's own voice on the terminal surfaces (the "for the nerds" faceplate, the CLI/SSH dialogs): a mechanical mono that signals "real tool" without shouting. The pairing is "machine label + plain reading + terminal", not a typographic performance.
@@ -172,9 +172,9 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 
 - **Display** (800, ad hoc sizes, -0.02em): Oxanium, reserved for brand marks and the plate mastheads. The one sanctioned large on-page heading is a masthead nameplate (a brand-mark plate: the stamped FLUNCLE'S FINDINGS lockup on the home plate, the coordinate on a log plate); body headings stay quiet, and the cover art remains the hero image.
 - **Numeric** (400, 0.98rem, -0.02em, tabular-nums): Oxanium track indices (#01, #02). Always tabular.
-- **Title** (700, 1.02rem, 1.18, -0.01em): Track titles. Bold cream against the dark; the loudest text on the page. 700 is Space Grotesk's heaviest cut — a rule asking for 800 would silently clamp here, so the canon asks for what the face can actually give.
+- **Title** (800, 1.02rem, 1.18, -0.01em): Track titles. Bold cream against the dark; the loudest text on the page. Space Grotesk stops at 700, so 800 lands on that heaviest cut — the canon asks for the weight it wants and lets the face give what it has.
 - **Body** (400, 0.9rem, 1.25): Artist lines, descriptions, form text in Stardust or Starlight Cream.
-- **Label** (700, 0.76rem): Column headers and form labels. Bold and small, never uppercase-tracked.
+- **Label** (800, 0.76rem): Column headers and form labels. Bold and small, never uppercase-tracked.
 - **Mono** (400/700, 0.82rem, 1.5): Monaspace Krypton, reserved for the terminal surfaces: the "for the nerds" faceplate legend (700) and its items, the CLI install command, and command examples. The machine's own voice, quoted verbatim.
 
 ### Named Rules
