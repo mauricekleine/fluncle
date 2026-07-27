@@ -712,8 +712,52 @@ export const tracks = sqliteTable(
     // it. The residual predicates the worklist adds (`duration_ms > 0`, `dismissed_at is null`,
     // `duplicate_of_track_id is null`, the re-ask backoff) are cheap filters on the small page the
     // index walk hands back — never a table scan. See track-work.ts `kind: "anchor"`.
+    //
+    // SUPERSEDED for that worklist by `tracks_anchor_order_idx` below, which carries the SAME
+    // partial predicate and leads with the `has_embedding` mirror the drain order actually sorts
+    // on first. This one is KEPT: it is not a prefix of the new index (the new one leads with a
+    // different column), so anything wanting `nearest_finding_score` order over the un-anchored
+    // slice without a `has_embedding` lead still needs it. Nothing in `apps/web/src` pins it by
+    // name (there is no `INDEXED BY` anywhere), and its only ORDER-BY consumer is the worklist
+    // that moves off it — which makes it a DROP CANDIDATE, gated like every schema change on a
+    // hosted `EXPLAIN QUERY PLAN` over its remaining `spotify_uri is null` readers (the
+    // `anchor-apify.ts` requeue UPDATE, funnel.ts's anchor arm), never on local evidence.
+    // Recorded in docs/db-scale-backlog.md § Index drop candidates.
     index("tracks_anchor_fill_queue_idx")
       .on(table.nearestFindingScore)
+      .where(sql`${table.spotifyUri} is null`),
+    // THE ANCHOR WORKLIST'S DRAIN ORDER (docs/db-scale-backlog Wave 2 #4; the box's hourly Apify
+    // sweep, docs/catalogue-crawler.md § the anchor). The queue above indexes the worklist's
+    // SECOND sort key; this one indexes the whole ORDER BY, in order, so the sweep's page is an
+    // index walk that stops at LIMIT instead of a materialise-and-sort of the entire un-anchored
+    // catalogue (the bulk of it, growing toward 150k, shrinking only as metered anchoring catches
+    // up).
+    //
+    // PARTIAL on `spotify_uri is null`, and that predicate is a CONTRACT with
+    // `kindClause("anchor")` (track-work.ts), which carries the identical clause literally: SQLite
+    // only considers a partial index when the query's WHERE provably implies its predicate, so if
+    // that clause is ever reworded past recognition the planner silently drops back to the scan.
+    // The worklist's other gates (`duration_ms > 0`, `dismissed_at is null`, the re-ask backoff,
+    // the retry cap, the unanchorable credits) stay residual filters on the page the walk hands
+    // back — same class as on the queue above.
+    //
+    // WHY `has_embedding` LEADS: the drain order is "a row Fluncle already spent capture + embed
+    // money on is the one he most wants recommendable, so anchor it first" — the mirror IS the
+    // first sort key. It has to be a stored column, not the raw `embedding_blob is not null`
+    // expression the order used to read: a btree cannot key on an expression, and an index on that
+    // expression is never chosen by the planner (measured — see the funnel scan's three failed
+    // shapes). The mirror is maintained in the same statement as every vector write (see
+    // `has_embedding` above), so this index is walking the truth, not a copy of it.
+    //
+    // PLAIN ASC throughout (a `desc()` index would poison the drizzle snapshot into rebuilding
+    // every index on the next migration — the ratified trap), and a plain btree, never the vector
+    // `libsql_vector_idx` that wedges hosted Turso. The query's `desc, desc, desc` reads it as ONE
+    // REVERSE WALK — which is exactly why `track_id` is here as the third column AND why the
+    // query's tiebreak is `desc` rather than `asc`: a mixed `desc, desc, asc` cannot ride the
+    // composite and forces a temp B-tree over the whole un-anchored set. Same law as
+    // `tracks_capture_priority_track_id_idx` below.
+    index("tracks_anchor_order_idx")
+      .on(table.hasEmbedding, table.nearestFindingScore, table.trackId)
       .where(sql`${table.spotifyUri} is null`),
     // THE ANCHOR-REVIEW READ (the /admin attention queue's `anchor-review` source, anchor.ts
     // `listAnchorReviewRows`). PARTIAL for the anchor-fill queue's reason and then some: a

@@ -282,17 +282,35 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
  * metered Apify anchor spend (docs/catalogue-crawler.md § the anchor). The anchor worklist is
  * catalogue-only (a finding's Spotify id is its identity), so there is no certified/findings
  * split here; the drain order is:
- *   1. EMBEDDED rows first (`embedding_blob is not null`) — a row Fluncle has already spent
- *      capture + embed money on is one he most wants recommendable, so anchor it first.
- *   2. Then `nearest_finding_score DESC NULLS LAST` — the Ear's best un-anchored candidates,
- *      the ones closest to his taste, ahead of the unranked tail.
+ *   1. EMBEDDED rows first (`has_embedding`) — a row Fluncle has already spent capture + embed
+ *      money on is one he most wants recommendable, so anchor it first.
+ *   2. Then `nearest_finding_score DESC` — the Ear's best un-anchored candidates, the ones
+ *      closest to his taste, ahead of the unranked tail.
  *   3. Then `track_id` — a deterministic tiebreak so a batch is reproducible.
- * Both ordering columns are read IN SQL (never selected into the isolate); the ranked, embedded
- * head rides `tracks_anchor_fill_queue_idx` (schema.ts).
+ *
+ * Every ordering column is read IN SQL (never selected into the isolate), and the whole clause is
+ * ONE REVERSE WALK of `tracks_anchor_order_idx` — the plain-ASC `(has_embedding,
+ * nearest_finding_score, track_id) where spotify_uri is null` partial index (schema.ts), whose
+ * predicate is the same literal clause `kindClause("anchor")` carries. Three spellings here are
+ * load-bearing:
+ *
+ *   · `t.has_embedding`, not `(t.embedding_blob is not null)`. A btree cannot key on an
+ *     expression, so the old spelling forced the sweep to materialise the whole un-anchored set,
+ *     table-probe each row for the blob's null-ness and sort — hourly, over a set that grows with
+ *     the catalogue. The mirror is written in the same statement as every vector (schema.ts §
+ *     `has_embedding`), so this reads the truth rather than a copy of it.
+ *   · no `nulls last`. SQLite sorts NULL smallest, so a plain `desc` ALREADY puts the unranked
+ *     tail last — the two spellings are exactly equivalent, and the plain one gives the planner
+ *     nothing extra to reason about when matching the clause to the index.
+ *   · `track_id desc`, not `asc`. A mixed `desc, desc, asc` cannot ride the composite as one
+ *     reverse walk and forces a temp B-tree over the entire un-anchored set. The tiebreak exists
+ *     only for a deterministic order among otherwise-equal rows and its direction is arbitrary —
+ *     nothing depends on it (there is no keyset pagination on this read, just LIMIT) — so it goes
+ *     `desc`. Same law as the `/admin/catalogue` capture lens (catalogue.ts).
  */
-const ANCHOR_ORDER = `order by (t.embedding_blob is not null) desc,
-  t.nearest_finding_score desc nulls last,
-  t.track_id asc`;
+const ANCHOR_ORDER = `order by t.has_embedding desc,
+  t.nearest_finding_score desc,
+  t.track_id desc`;
 
 /** The scope's WHERE fragment. Static literals — never interpolated user input. */
 export function scopeClause(scope: TrackWorkScope): string {
@@ -366,9 +384,11 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //   · ANCHORABLE AT ALL             — the sole credit is a real artist, not an `Unknown Artist` /
     //                                     `Various Artists` placeholder no search could ever match
     //                                     (`UNANCHORABLE_ARTISTS_JSON`).
-    // The last two are residual filters on the page `tracks_anchor_fill_queue_idx` hands back — the
+    // The last two are residual filters on the page `tracks_anchor_order_idx` hands back — the
     // same class as `duration_ms > 0` / `dismissed_at is null` beside them, evaluated on rows the walk
     // has already read, so the query PLAN is unchanged (no new index, no widened index predicate).
+    // `t.spotify_uri is null` below is the one clause that is NOT residual: it is the literal the
+    // partial index's predicate is matched against, so keep the two spelled the same (schema.ts).
     const cutoff = new Date(
       Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();

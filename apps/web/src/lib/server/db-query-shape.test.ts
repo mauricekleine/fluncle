@@ -537,7 +537,7 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     file: "lib/server/tracks-hub.ts",
     pattern: "fn-wrapped:substr-release-date",
     reason:
-      "tracksHubYearLaneQuery's `group by substr(tracks.release_date, 1, 4)` — OWNED by backlog Wave-2 item 5 (a maintained year→renderable-count rollup). Held behind a 60s memo today.",
+      "tracksHubYearLaneQuery's `group by substr(tracks.release_date, 1, 4)` — BOUNDED on purpose, behind the 60s memo the unfiltered lane always reads. The maintained year→renderable-count rollup that would have retired it was DROPPED from the backlog on 2026-07-27 (operator ruling, docs/db-scale-backlog.md status header), so this is a standing survivor rather than a queued one; git history holds the rollup analysis if the lane ever starts costing.",
   },
   {
     count: 1,
