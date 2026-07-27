@@ -104,6 +104,8 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     name,
     slug,
     socials,
+    discogsUrl,
+    lastfmUrl,
     mbid,
     spotifyUrl,
     wikidataQid,
@@ -151,7 +153,9 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     {
       alternateNames,
       bio,
+      discogsUrl,
       imageUrl,
+      lastfmUrl,
       mbid,
       name,
       slug,

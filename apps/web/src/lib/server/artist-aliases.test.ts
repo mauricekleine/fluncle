@@ -49,7 +49,8 @@ describe("persistResolution — MB aliases are upserted idempotently", () => {
     holder.db = db;
 
     await db.execute(
-      `create table artists (id text primary key, mbid text, wikidata_qid text, resolved_at text, updated_at text)`,
+      `create table artists (id text primary key, mbid text, wikidata_qid text, discogs_url text,
+        lastfm_url text, resolved_at text, updated_at text)`,
     );
     await db.execute(
       `create table artist_socials (id text primary key, artist_id text, platform text, url text,

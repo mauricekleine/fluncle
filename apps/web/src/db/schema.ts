@@ -2636,10 +2636,10 @@ export const recordingCues = sqliteTable(
 // `spotifyArtistId` is nullable to admit white-label or unsigned artists whose Spotify
 // profile is absent; the unique index still guards against duplicates when the id is
 // present. `slug` is the real-name kebab-cased public path segment, minted once and
-// never changed (collision-salted: "dimension", "dimension-2", ...). `mbid` and
-// `wikidataQid` are the KG anchors (the resolver fills them; the artist pages build
-// `sameAs` from them). `resolvedAt` is the single resolution stamp (null = never
-// attempted; the artist-sweep queue).
+// never changed (collision-salted: "dimension", "dimension-2", ...). `mbid`,
+// `wikidataQid`, `discogsUrl` and `lastfmUrl` are the KG anchors (the resolver fills
+// them; the artist pages build `sameAs` from them). `resolvedAt` is the single
+// resolution stamp (null = never attempted; the artist-sweep queue).
 export const artists = sqliteTable(
   "artists",
   {
@@ -2704,6 +2704,20 @@ export const artists = sqliteTable(
     // default, seeded onto history by `scripts/backfill-hub-counts.ts` at deploy time.
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
+    // ── THE SECONDARY KG ANCHORS (the label precedent, cloned onto the artist) ────────
+    // Two more off-site identities for the artist page's `sameAs`, alongside `mbid` +
+    // `wikidata_qid`. They follow `labels.discogs_label_id` EXACTLY: an identity column on
+    // the entity, emitted into JSON-LD, with NO rendered link and NO `artist_socials` row —
+    // Discogs and Last.fm are catalogue pages, not the artist's own channels, and the socials
+    // table is the SOCIAL surfaces only (see the `artist_socials` header). They are stored as
+    // whole URLs rather than ids because MusicBrainz hands us the URL and neither host has a
+    // stable id we could re-render from (a Discogs artist path is `<id>-<name>`).
+    //
+    // MB-RELATION-SOURCED ONLY. `classifyMbAnchorUrl` (artist-resolution.ts) mints these from a
+    // MusicBrainz url-rel and nothing else — a URL guessed from an artist's name is a fabricated
+    // anchor, and a wrong `sameAs` edge misidentifies the entity to every crawler that reads it.
+    // Written `coalesce(?, …)` by `persistResolution`, so a re-resolve never clears a known one.
+    discogsUrl: text("discogs_url"),
     id: text("id").primaryKey(),
     // ── THE OWNED AVATAR MASTER (RFC musickit-second-authority, U3b) ─────────────────
     // The same image state machine as `albums`, so an artist serves its OWN 1200²-capped
@@ -2729,6 +2743,8 @@ export const artists = sqliteTable(
     // image backfill; null until fetched (the render falls back to a monogram
     // tile). The owned-master sweep downloads THIS into R2 (image_key above).
     imageUrl: text("image_url"),
+    /** The artist's Last.fm page — the second secondary KG anchor; see `discogs_url` above. */
+    lastfmUrl: text("lastfm_url"),
     mbid: text("mbid"),
     name: text("name").notNull(),
     /** Total linked tracks (certified + catalogue) — see `certified_finding_count` above. */

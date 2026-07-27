@@ -69,7 +69,10 @@ export type ArtistPageData =
       socials: ArtistSocialLink[];
       sort: CatalogueSort;
       status: "found";
-      // The identity graph the JSON-LD's sameAs draws on (KG anchors).
+      // The identity graph the JSON-LD's sameAs draws on (KG anchors). Discogs + Last.fm are
+      // MB-relation-sourced identities with no rendered link — schema only.
+      discogsUrl: string | undefined;
+      lastfmUrl: string | undefined;
       mbid: string | undefined;
       spotifyUrl: string | undefined;
       wikidataQid: string | undefined;
@@ -139,6 +142,7 @@ export async function resolveArtistPageData(
     alternateNames,
     bio: artist.bio,
     catalogue,
+    discogsUrl: artist.discogsUrl,
     dossier: { ...signature, findingCount: gridFindings.length, neighbours },
     findings,
     id: artist.id,
@@ -153,6 +157,7 @@ export async function resolveArtistPageData(
     // catalogue tracks is a real page and indexes; a 1–2-track one renders noindex
     // (docs/artist-relationship.md).
     indexable: canonicalFindingCount + catalogue.totalTracks >= ARTIST_INDEX_MIN_FINDINGS,
+    lastfmUrl: artist.lastfmUrl,
     mbid: artist.mbid,
     name: artist.name,
     slug: artist.slug,

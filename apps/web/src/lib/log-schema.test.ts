@@ -256,18 +256,18 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
     { artists: ["Dimension"], logId: "010.1.1A", title: "UK" },
     { artists: ["Dimension", "Sub Focus"], logId: "011.2.3B", title: "Desire" },
   ];
-  const jsonLd = musicGroupJsonLd(
-    {
-      imageUrl: "https://img/dimension.jpg",
-      mbid: "mbid-123",
-      name: "Dimension",
-      slug: "dimension",
-      socials: ["https://open.spotify.com/artist/abc", "https://instagram.com/dimensiondnb"],
-      spotifyUrl: "https://open.spotify.com/artist/abc",
-      wikidataQid: "Q123",
-    },
-    findings,
-  );
+  const artist = {
+    discogsUrl: "https://www.discogs.com/artist/2529557-Dimension",
+    imageUrl: "https://img/dimension.jpg",
+    lastfmUrl: "https://www.last.fm/music/Dimension",
+    mbid: "mbid-123",
+    name: "Dimension",
+    slug: "dimension",
+    socials: ["https://open.spotify.com/artist/abc", "https://instagram.com/dimensiondnb"],
+    spotifyUrl: "https://open.spotify.com/artist/abc",
+    wikidataQid: "Q123",
+  };
+  const jsonLd = musicGroupJsonLd(artist, findings);
 
   it("is a MusicGroup carrying its own @id (twin of the /log byArtist node)", () => {
     expect(jsonLd["@type"]).toBe("MusicGroup");
@@ -277,8 +277,28 @@ describe("musicGroupJsonLd (the artist page schema)", () => {
     expect(jsonLd.image).toBe("https://img/dimension.jpg");
   });
 
-  it("orders sameAs Wikidata > MusicBrainz > Spotify > socials, de-duplicated", () => {
+  it("orders sameAs Wikidata > MusicBrainz > Discogs > Last.fm > Spotify > socials, de-duplicated", () => {
+    // The two metadata anchors rank directly under MusicBrainz — an authority's record OF the
+    // artist outranks a channel the artist runs — mirroring the label Organization's sameAs.
     expect(jsonLd.sameAs).toEqual([
+      "https://www.wikidata.org/wiki/Q123",
+      "https://musicbrainz.org/artist/mbid-123",
+      "https://www.discogs.com/artist/2529557-Dimension",
+      "https://www.last.fm/music/Dimension",
+      "https://open.spotify.com/artist/abc",
+      "https://instagram.com/dimensiondnb",
+    ]);
+  });
+
+  it("omits the Discogs + Last.fm anchors entirely when the artist carries neither", () => {
+    // The overwhelmingly common case today (only MB-resolved artists carry them): the anchors
+    // are simply absent from sameAs — never an empty string, never a synthesized guess.
+    const bare = musicGroupJsonLd(
+      { ...artist, discogsUrl: undefined, lastfmUrl: undefined },
+      findings,
+    );
+
+    expect(bare.sameAs).toEqual([
       "https://www.wikidata.org/wiki/Q123",
       "https://musicbrainz.org/artist/mbid-123",
       "https://open.spotify.com/artist/abc",

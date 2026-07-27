@@ -419,7 +419,15 @@ export type MusicGroupArtist = {
    * null`.
    */
   bio?: string;
+  /**
+   * The artist's Discogs page — a secondary identity anchor, the artist twin of the label
+   * Organization's Discogs `sameAs`. MusicBrainz-relation-sourced only (never guessed from a
+   * name), schema-only (no rendered link). Absent ⇒ it simply isn't in `sameAs`.
+   */
+  discogsUrl?: string;
   imageUrl: string;
+  /** The artist's Last.fm page — the second secondary anchor; same rules as `discogsUrl`. */
+  lastfmUrl?: string;
   mbid?: string;
   name: string;
   slug: string;
@@ -436,12 +444,18 @@ export type MusicGroupFinding = {
   title: string;
 };
 
-// The identity graph's off-site anchors, ranked Wikidata > MusicBrainz > Spotify >
-// the confirmed socials, de-duplicated (a spotify social row can repeat spotifyUrl).
+// The identity graph's off-site anchors, ranked Wikidata > MusicBrainz > Discogs > Last.fm >
+// Spotify > the confirmed socials, de-duplicated (a spotify social row can repeat spotifyUrl).
+// The two metadata anchors sit directly under MusicBrainz — they are the same KIND of thing as
+// it (an authority's record OF the artist, which is what a reconciling crawler wants first),
+// where Spotify and the socials are channels the artist happens to run. This mirrors the label
+// Organization's `sameAs` (`labelOrganizationSameAs`), which ranks MusicBrainz then Discogs.
 function artistSameAs(artist: MusicGroupArtist): string[] {
   const ordered = [
     artist.wikidataQid ? `https://www.wikidata.org/wiki/${artist.wikidataQid}` : undefined,
     artist.mbid ? `https://musicbrainz.org/artist/${artist.mbid}` : undefined,
+    artist.discogsUrl,
+    artist.lastfmUrl,
     artist.spotifyUrl,
     ...artist.socials,
   ];

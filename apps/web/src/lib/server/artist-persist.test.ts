@@ -61,7 +61,8 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
     holder.db = db;
 
     await db.execute(
-      `create table artists (id text primary key, mbid text, wikidata_qid text, resolved_at text, updated_at text)`,
+      `create table artists (id text primary key, mbid text, wikidata_qid text, discogs_url text,
+        lastfm_url text, resolved_at text, updated_at text)`,
     );
     await db.execute(
       `create table artist_socials (id text primary key, artist_id text, platform text, url text,
@@ -197,7 +198,8 @@ describe("persistResolution — the per-link review stamp (reviewed_at)", () => 
     holder.db = db;
 
     await db.execute(
-      `create table artists (id text primary key, mbid text, wikidata_qid text, resolved_at text, updated_at text)`,
+      `create table artists (id text primary key, mbid text, wikidata_qid text, discogs_url text,
+        lastfm_url text, resolved_at text, updated_at text)`,
     );
     await db.execute(
       `create table artist_socials (id text primary key, artist_id text, platform text, url text,
@@ -269,5 +271,70 @@ describe("persistResolution — the per-link review stamp (reviewed_at)", () => 
     const row = await readSocial(db, "soundcloud");
     expect(row?.url).toBe("https://soundcloud.com/moved");
     expect(row?.reviewed_at).toBeNull();
+  });
+});
+
+describe("persistResolution — the secondary KG anchors (Discogs + Last.fm)", () => {
+  let db: Client;
+
+  beforeEach(async () => {
+    db = createClient({ url: ":memory:" });
+    holder.db = db;
+
+    await db.execute(
+      `create table artists (id text primary key, mbid text, wikidata_qid text, discogs_url text,
+        lastfm_url text, resolved_at text, updated_at text)`,
+    );
+    await db.execute(
+      `create table artist_socials (id text primary key, artist_id text, platform text, url text,
+        source text, status text, reviewed_at text, created_at text, updated_at text, unique(artist_id, platform))`,
+    );
+    await db.execute({ args: ["a1"], sql: `insert into artists (id) values (?)` });
+  });
+
+  async function readAnchors(): Promise<{ discogs_url: unknown; lastfm_url: unknown } | undefined> {
+    const result = await db.execute({
+      args: ["a1"],
+      sql: `select discogs_url, lastfm_url from artists where id = ?`,
+    });
+
+    return result.rows[0] as unknown as { discogs_url: unknown; lastfm_url: unknown } | undefined;
+  }
+
+  it("stamps both anchors onto the artist row", async () => {
+    await persistResolution("a1", "mb1", null, [], "auto", [], [], {
+      discogsUrl: "https://www.discogs.com/artist/4321-Andromedik",
+      lastfmUrl: "https://www.last.fm/music/Andromedik",
+    });
+
+    expect(await readAnchors()).toMatchObject({
+      discogs_url: "https://www.discogs.com/artist/4321-Andromedik",
+      lastfm_url: "https://www.last.fm/music/Andromedik",
+    });
+  });
+
+  it("a thinner re-resolve NEVER clears a known anchor (the coalesce guarantee)", async () => {
+    // Same never-clobber semantics as mbid/wikidata_qid: MB answering with fewer relations than
+    // last time must not blank an identity the archive already holds.
+    await persistResolution("a1", "mb1", null, [], "auto", [], [], {
+      discogsUrl: "https://www.discogs.com/artist/4321-Andromedik",
+      lastfmUrl: "https://www.last.fm/music/Andromedik",
+    });
+
+    await persistResolution("a1", "mb1", null, [], "auto", [], [], {
+      discogsUrl: null,
+      lastfmUrl: null,
+    });
+
+    expect(await readAnchors()).toMatchObject({
+      discogs_url: "https://www.discogs.com/artist/4321-Andromedik",
+      lastfm_url: "https://www.last.fm/music/Andromedik",
+    });
+  });
+
+  it("leaves both null when the resolver passes no anchors at all", async () => {
+    await persistResolution("a1", "mb1", null, [], "auto", []);
+
+    expect(await readAnchors()).toMatchObject({ discogs_url: null, lastfm_url: null });
   });
 });

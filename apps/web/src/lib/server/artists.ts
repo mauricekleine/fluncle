@@ -67,6 +67,13 @@ export type ArtistRecord = {
    * need not carry it; the surfacing PR reads it off `getArtistBySlug`. See lib/server/bio.ts.
    */
   bio?: string;
+  /**
+   * The artist's Discogs page — a secondary KG anchor for `sameAs`, resolved from a MusicBrainz
+   * url-rel and NEVER guessed from a name. Undefined until the resolver walks one. It is an
+   * identity, not a channel: nothing on the page links to it (the `labels.discogs_label_id`
+   * precedent).
+   */
+  discogsUrl: string | undefined;
   id: string;
   /**
    * The artist's OWN portrait — the owned avatar master (RFC U3b) when resolved, else the raw
@@ -75,6 +82,8 @@ export type ArtistRecord = {
    * album cover; also the masthead ArtistAvatar's source.
    */
   imageUrl: string | undefined;
+  /** The artist's Last.fm page — the second secondary KG anchor; see `discogsUrl`. */
+  lastfmUrl: string | undefined;
   mbid: string | undefined;
   name: string;
   slug: string;
@@ -97,7 +106,7 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, bio,
+    sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, discogs_url, lastfm_url, bio,
                  image_url, image_key, image_state, image_updated_at
           from artists where slug = ? limit 1`,
   });
@@ -110,6 +119,7 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
 
   return {
     bio: optionalText(row["bio"]),
+    discogsUrl: optionalText(row["discogs_url"]),
     id: row["id"],
     // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url — the same
     // `bestArtistAvatarUrl` ladder the /artists index + the graph chips use.
@@ -119,6 +129,7 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
       imageUpdatedAt: optionalText(row["image_updated_at"]),
       imageUrl: optionalText(row["image_url"]),
     }),
+    lastfmUrl: optionalText(row["lastfm_url"]),
     mbid: optionalText(row["mbid"]),
     name: row["name"],
     slug: typeof row["slug"] === "string" ? row["slug"] : slug,

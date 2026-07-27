@@ -70,7 +70,9 @@ const { ARTIST_CATALOGUE_SORT_DEFAULT, Route } = await import("./artist.$slug");
 const { resolveArtistPageData } = await import("./-artist-page-data");
 
 const ARTIST = {
+  discogsUrl: undefined,
   id: "artist-drift",
+  lastfmUrl: undefined,
   mbid: undefined,
   name: "Drift",
   slug: "drift",
@@ -100,6 +102,16 @@ function robotsMeta(data: unknown): string | undefined {
 /** The `<meta name="description">` — the same string og:/twitter: description carry. */
 function metaDescription(data: unknown): string | undefined {
   return headMeta(data).find((entry) => entry.name === "description")?.content;
+}
+
+/** The head's first JSON-LD payload — the MusicGroup (`jsonLdScript` children still parse as JSON). */
+function musicGroupFromHead(data: unknown): Record<string, unknown> {
+  const head = Route.options.head?.({ loaderData: data } as never) as
+    | { scripts?: Array<{ children?: string }> }
+    | undefined;
+  const payload = head?.scripts?.[0]?.children;
+
+  return payload ? (JSON.parse(payload) as Record<string, unknown>) : {};
 }
 
 /** The route's resolved catalogue sort for a given (validated) search — where the default lands. */
@@ -224,6 +236,41 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(data.indexable).toBe(true);
     // Past the gate: no robots override, so the page is indexable.
     expect(robotsMeta(data)).toBeUndefined();
+  });
+
+  it("carries the Discogs + Last.fm anchors from the record into the MusicGroup's sameAs", async () => {
+    // The KG anchors are schema-only — nothing on the page links to them — so the loader
+    // carrying them into `sameAs` IS the whole surface. Ranked directly under MusicBrainz.
+    getArtistBySlug.mockResolvedValue({
+      ...ARTIST,
+      discogsUrl: "https://www.discogs.com/artist/4321-Drift",
+      lastfmUrl: "https://www.last.fm/music/Drift",
+      mbid: "mb-drift",
+    });
+    getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
+    countArtistFindings.mockResolvedValue(1);
+
+    const data = await resolveArtistPageData("drift", "name", 1);
+
+    expect(data).toMatchObject({
+      discogsUrl: "https://www.discogs.com/artist/4321-Drift",
+      lastfmUrl: "https://www.last.fm/music/Drift",
+    });
+    expect(musicGroupFromHead(data).sameAs).toEqual([
+      "https://musicbrainz.org/artist/mb-drift",
+      "https://www.discogs.com/artist/4321-Drift",
+      "https://www.last.fm/music/Drift",
+    ]);
+  });
+
+  it("emits no anchor for an artist that carries none — sameAs simply omits them", async () => {
+    getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
+    countArtistFindings.mockResolvedValue(1);
+
+    const data = await resolveArtistPageData("drift", "name", 1);
+
+    expect(data).toMatchObject({ discogsUrl: undefined, lastfmUrl: undefined });
+    expect(musicGroupFromHead(data)).not.toHaveProperty("sameAs");
   });
 
   it("reports a missing artist without touching the finding counts", async () => {

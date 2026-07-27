@@ -161,6 +161,10 @@ export type ArtistResolutionResult = {
   artistId: string;
   mbid: string | null;
   wikidataQid: string | null;
+  // The secondary KG anchors (the artist's Discogs/Last.fm pages) — `sameAs` identities the
+  // artist page emits, with no rendered link. Null when MusicBrainz carried no such relation.
+  discogsUrl: string | null;
+  lastfmUrl: string | null;
   socials: ResolvedSocial[];
   rateLimited: boolean;
 };
@@ -276,6 +280,44 @@ export function classifyMbUrl(
   }
 
   // Everything else (Wikipedia, streaming, VIAF, ISNI, IMDb, …) is unhandled → skip.
+  return null;
+}
+
+/**
+ * Classify an MB url-relation as a secondary KG identity ANCHOR — a metadata catalogue page
+ * that is NOT a social row but IS a real off-site identity for the artist page's `sameAs`.
+ *
+ * The counterpart to `classifyMbUrl`, deliberately separate rather than a widening of it:
+ * Discogs and Last.fm stay in `METADATA_HOSTS` and stay null there, so the operator's inline
+ * social-URL validation and the Firecrawl search bucket keep rejecting them as social platforms.
+ * They land on `artists.discogs_url` / `artists.lastfm_url` instead — the `labels.discogs_label_id`
+ * precedent, an identity column with no rendered link.
+ *
+ * Path-shape guarded, because only an ARTIST page is an identity: a Discogs `/release/…` or a
+ * bare host says nothing about who this artist is. Query strings are irrelevant to the shape,
+ * so the caller stores `stripQuery(resource)`.
+ */
+export function classifyMbAnchorUrl(resource: string): "discogs" | "lastfm" | null {
+  let host: string;
+  let path: string;
+
+  try {
+    const url = new URL(resource);
+
+    host = url.hostname.replace(/^www\./, "");
+    path = url.pathname;
+  } catch {
+    return null;
+  }
+
+  if (host === "discogs.com" && path.startsWith("/artist/")) {
+    return "discogs";
+  }
+
+  if (host === "last.fm" && path.startsWith("/music/")) {
+    return "lastfm";
+  }
+
   return null;
 }
 
@@ -718,18 +760,38 @@ const NAME_SEARCH_MAX_DEEP_FETCH = 5;
 
 // ── URL-rel classification ────────────────────────────────────────────────────
 
-/** Classify an MB artist's url-rels into resolved socials + the Wikidata QID. */
-async function extractSocialsFromArtistData(
-  artistData: MbArtistResponse,
-): Promise<{ socials: ResolvedSocial[]; wikidataQid: string | null; hubUrls: string[] }> {
+/** Classify an MB artist's url-rels into resolved socials + the KG anchors. */
+async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promise<{
+  socials: ResolvedSocial[];
+  wikidataQid: string | null;
+  discogsUrl: string | null;
+  lastfmUrl: string | null;
+  hubUrls: string[];
+}> {
   const socials: ResolvedSocial[] = [];
   const hubUrls: string[] = [];
   let wikidataQid: string | null = null;
+  let discogsUrl: string | null = null;
+  let lastfmUrl: string | null = null;
 
   for (const relation of artistData.relations ?? []) {
     const resource = relation.url?.resource;
 
     if (!resource) {
+      continue;
+    }
+
+    // A secondary KG anchor (Discogs/Last.fm) — an off-site identity for `sameAs`, never a
+    // social row and never a rendered link. First one wins, exactly like the socials below.
+    const anchor = classifyMbAnchorUrl(resource);
+
+    if (anchor) {
+      if (anchor === "discogs") {
+        discogsUrl ??= stripQuery(resource);
+      } else {
+        lastfmUrl ??= stripQuery(resource);
+      }
+
       continue;
     }
 
@@ -775,7 +837,7 @@ async function extractSocialsFromArtistData(
     }
   }
 
-  return { hubUrls, socials, wikidataQid };
+  return { discogsUrl, hubUrls, lastfmUrl, socials, wikidataQid };
 }
 
 /**
@@ -818,6 +880,10 @@ export function extractAliasesFromArtistData(
 type MbResolution = {
   mbid: string | null;
   wikidataQid: string | null;
+  // The secondary KG anchors MB carried (Discogs/Last.fm artist pages) — `sameAs` identities,
+  // not socials. Null when the matched MB entity had no such url-rel; never synthesized.
+  discogsUrl: string | null;
+  lastfmUrl: string | null;
   socials: ResolvedSocial[];
   // The artist's MusicBrainz aliases (the many-names problem) — harvested off the SAME matched
   // candidate's `inc=aliases` payload, so they cost no extra MB call.
@@ -835,7 +901,9 @@ type MbResolution = {
 function emptyResolution(mbid: string | null, rateLimited: boolean): MbResolution {
   return {
     aliases: [],
+    discogsUrl: null,
     hubUrls: [],
+    lastfmUrl: null,
     mbSocialStatus: "candidate",
     mbid,
     rateLimited,
@@ -930,11 +998,14 @@ export async function resolveArtistViaMb(
     // (3) Definitive identity match — accept immediately, even over a higher score.
     // Identity confirmed by the Spotify cross-reference → socials are trusted (auto).
     if (spotifyArtistId && candidateSpotifyId && candidateSpotifyId === spotifyArtistId) {
-      const { socials, wikidataQid, hubUrls } = await extractSocialsFromArtistData(artistData);
+      const { socials, wikidataQid, discogsUrl, lastfmUrl, hubUrls } =
+        await extractSocialsFromArtistData(artistData);
 
       return {
         aliases: extractAliasesFromArtistData(artistData, trimmedName),
+        discogsUrl,
         hubUrls,
+        lastfmUrl,
         mbSocialStatus: "auto",
         mbid: candidateId,
         rateLimited: false,
@@ -967,13 +1038,16 @@ export async function resolveArtistViaMb(
   // fallback is name+score only (no identity confirmation) → its socials persist as
   // "candidate", never public until an operator confirms them.
   if (!anyCandidateHadSpotifyRel && fallbackCandidate?.id && fallbackData) {
-    const { socials, wikidataQid, hubUrls } = await extractSocialsFromArtistData(fallbackData);
+    const { socials, wikidataQid, discogsUrl, lastfmUrl, hubUrls } =
+      await extractSocialsFromArtistData(fallbackData);
 
     return {
       // Even the soft (name+score) match's aliases are harvested — they come from the same MB
       // entity, and an alias is a low-risk display-name enrichment (never a link on a public page).
       aliases: extractAliasesFromArtistData(fallbackData, trimmedName),
+      discogsUrl,
       hubUrls,
+      lastfmUrl,
       mbSocialStatus: "candidate",
       mbid: fallbackCandidate.id,
       rateLimited: false,
@@ -1359,7 +1433,7 @@ async function fetchExistingPlatforms(artistId: string): Promise<Set<ArtistSocia
 }
 
 /**
- * Upsert artist_socials rows and stamp artists.mbid / .wikidata_qid / .resolved_at.
+ * Upsert artist_socials rows and stamp the artist's KG anchors + .resolved_at.
  *
  * OPERATOR ROWS ARE IMMUNE. A re-resolve never overwrites a link the operator owns — one
  * they ADDED (`source='operator'`) or CONFIRMED (`status='confirmed'`): its url, source,
@@ -1371,6 +1445,10 @@ async function fetchExistingPlatforms(artistId: string): Promise<Set<ArtistSocia
  * `mbSocialStatus` carries the MB socials' trust: "auto" (public/trusted) for an exact
  * Spotify-id identity match, "candidate" (awaits an operator glance) for the weaker
  * name+score soft fallback.
+ *
+ * `anchors` carries the secondary KG anchors (Discogs/Last.fm) on the same never-clobber terms
+ * as `mbid`/`wikidataQid`: a null leaves whatever is stored, so a re-resolve that MB answers
+ * more thinly than last time can never blank an anchor the archive already holds.
  */
 export async function persistResolution(
   artistId: string,
@@ -1380,16 +1458,22 @@ export async function persistResolution(
   mbSocialStatus: "auto" | "candidate",
   firecrawlSocials: ResolvedSocial[],
   mbAliases: ResolvedAlias[] = [],
+  anchors: { discogsUrl: string | null; lastfmUrl: string | null } = {
+    discogsUrl: null,
+    lastfmUrl: null,
+  },
 ): Promise<void> {
   const db = await getDb();
   const nowIso = new Date().toISOString();
 
   // Stamp the KG anchors + resolvedAt on the artist row.
   await db.execute({
-    args: [mbid, wikidataQid, nowIso, nowIso, artistId],
+    args: [mbid, wikidataQid, anchors.discogsUrl, anchors.lastfmUrl, nowIso, nowIso, artistId],
     sql: `update artists
           set mbid = coalesce(?, mbid),
               wikidata_qid = coalesce(?, wikidata_qid),
+              discogs_url = coalesce(?, discogs_url),
+              lastfm_url = coalesce(?, lastfm_url),
               resolved_at = ?,
               updated_at = ?
           where id = ?`,
@@ -1496,6 +1580,8 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
   if (mbResult.rateLimited) {
     return {
       artistId,
+      discogsUrl: null,
+      lastfmUrl: null,
       mbid: null,
       rateLimited: true,
       socials: [],
@@ -1528,10 +1614,13 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     mbResult.mbSocialStatus,
     firecrawlSocials,
     mbResult.aliases,
+    { discogsUrl: mbResult.discogsUrl, lastfmUrl: mbResult.lastfmUrl },
   );
 
   return {
     artistId,
+    discogsUrl: mbResult.discogsUrl,
+    lastfmUrl: mbResult.lastfmUrl,
     mbid: mbResult.mbid,
     rateLimited: false,
     socials: [...mbResult.socials, ...firecrawlSocials],

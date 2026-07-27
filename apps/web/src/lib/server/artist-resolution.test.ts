@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRateLimitForTests,
   type ArtistSocialPlatform,
+  classifyMbAnchorUrl,
   classifyMbUrl,
   luceneEscapePhrase,
   normalizeProfileUrl,
@@ -127,6 +128,44 @@ describe("classifyMbUrl", () => {
     expect(classifyMbUrl("https://en.wikipedia.org/wiki/ArtistName", "wikipedia")).toBeNull();
     expect(classifyMbUrl("https://viaf.org/viaf/12345", "VIAF")).toBeNull();
     expect(classifyMbUrl("https://www.imdb.com/name/nm1234567/", "IMDb")).toBeNull();
+  });
+});
+
+// ── classifyMbAnchorUrl ───────────────────────────────────────────────────────
+
+describe("classifyMbAnchorUrl (the secondary KG anchors)", () => {
+  it("classifies a Discogs ARTIST page", () => {
+    expect(classifyMbAnchorUrl("https://www.discogs.com/artist/12345-Nu-Tone")).toBe("discogs");
+    expect(classifyMbAnchorUrl("https://discogs.com/artist/12345")).toBe("discogs");
+  });
+
+  it("classifies a Last.fm MUSIC page", () => {
+    expect(classifyMbAnchorUrl("https://www.last.fm/music/Nu:Tone")).toBe("lastfm");
+    expect(classifyMbAnchorUrl("https://last.fm/music/Dimension")).toBe("lastfm");
+  });
+
+  it("returns null for the right host on the wrong path shape", () => {
+    // Only an ARTIST page is an identity: a release, a label, or a bare host says nothing about
+    // who this artist is, and a wrong sameAs edge misidentifies the entity to every crawler.
+    expect(classifyMbAnchorUrl("https://www.discogs.com/release/98765-Some-EP")).toBeNull();
+    expect(classifyMbAnchorUrl("https://www.discogs.com/label/1111-Hospital")).toBeNull();
+    expect(classifyMbAnchorUrl("https://www.discogs.com")).toBeNull();
+    expect(classifyMbAnchorUrl("https://www.last.fm/user/someone")).toBeNull();
+    expect(classifyMbAnchorUrl("https://www.last.fm")).toBeNull();
+  });
+
+  it("returns null for any other host, and for an unparseable URL", () => {
+    expect(classifyMbAnchorUrl("https://www.instagram.com/artistname")).toBeNull();
+    expect(classifyMbAnchorUrl("https://musicbrainz.org/artist/mbid-1")).toBeNull();
+    expect(classifyMbAnchorUrl("not-a-url")).toBeNull();
+  });
+
+  it("leaves classifyMbUrl untouched — both hosts stay non-social metadata sites", () => {
+    // The regression guard on the deliberate split: promoting these to `sameAs` anchors must NOT
+    // make them acceptable as artist_socials rows. The operator's inline social-URL validation
+    // and the Firecrawl search bucket both read `classifyMbUrl`, and both must keep rejecting them.
+    expect(classifyMbUrl("https://www.discogs.com/artist/12345-Nu-Tone")).toBeNull();
+    expect(classifyMbUrl("https://www.last.fm/music/Nu:Tone")).toBeNull();
   });
 });
 
@@ -343,6 +382,62 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     // Name search was the entry point; no ISRC endpoint is ever consulted.
     expect(calls.some((c) => c.includes("artist?query="))).toBe(true);
     expect(calls.some((c) => c.includes("/isrc/"))).toBe(false);
+  });
+
+  it("harvests the Discogs + Last.fm anchors from the url-rels, query-stripped and never a social", async () => {
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-andromedik", name: "Andromedik", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-andromedik",
+          name: "Andromedik",
+          relations: [
+            { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
+            { url: { resource: "https://www.discogs.com/artist/4321-Andromedik?anv=Andro" } },
+            { url: { resource: "https://www.last.fm/music/Andromedik" } },
+            // The wrong path shape on the right host stays dropped — not an identity.
+            { url: { resource: "https://www.discogs.com/release/999-Some-EP" } },
+          ],
+        },
+        match: "artist/mb-andromedik",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.discogsUrl).toBe("https://www.discogs.com/artist/4321-Andromedik");
+    expect(result.lastfmUrl).toBe("https://www.last.fm/music/Andromedik");
+    // The anchors live on the artist row, never in the social identity graph.
+    expect(result.socials.map((s) => s.platform)).toEqual(["spotify"]);
+  });
+
+  it("leaves both anchors null when MusicBrainz carried no such relation", async () => {
+    // The never-synthesize rail: no relation ⇒ no anchor. A URL guessed from the artist's name
+    // would be a fabricated identity, and `persistResolution` coalesces a null to whatever is stored.
+    mockFetch([
+      {
+        body: { artists: [{ id: "mb-andromedik", name: "Andromedik", score: 100 }] },
+        match: MB_ARTIST_SEARCH,
+      },
+      {
+        body: {
+          id: "mb-andromedik",
+          name: "Andromedik",
+          relations: [
+            { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
+          ],
+        },
+        match: "artist/mb-andromedik",
+      },
+    ]);
+
+    const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
+
+    expect(result.discogsUrl).toBeNull();
+    expect(result.lastfmUrl).toBeNull();
   });
 
   it("captures MB link hubs (linktree + homepage) as gap-fill scrape seeds in hubUrls", async () => {
