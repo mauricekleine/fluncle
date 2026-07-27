@@ -154,12 +154,13 @@ export async function seedE2eData(client: Client): Promise<void> {
     sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
   });
   // The maintained hub counts the real write paths would have moved (keystone 2,
-  // lib/server/hub-counts.ts): one certified finding on each of the three entities. Seeded here
-  // rather than left at the DDL default so the fixture matches what production holds — the entity
-  // hubs read these columns.
-  for (const table of ["albums", "artists", "labels"]) {
+  // lib/server/hub-counts.ts): one certified finding on each of the ALBUM and ARTIST entities,
+  // which are wired to that one track. Seeded here rather than left at the DDL default so the
+  // fixture matches what production holds — the entity hubs read these columns. The LABEL's pair
+  // is set by `stampLabelPointers` below, once every track that carries its name is pointed at it.
+  for (const table of ["albums", "artists"]) {
     await client.execute({
-      args: [table === "albums" ? ALBUM.id : table === "artists" ? ARTIST.id : LABEL.id],
+      args: [table === "albums" ? ALBUM.id : ARTIST.id],
       sql: `update ${table} set renderable_track_count = 1, certified_finding_count = 1 where id = ?`,
     });
   }
@@ -195,6 +196,40 @@ export async function seedE2eData(client: Client): Promise<void> {
     id: MIXTAPE.id,
     logId: MIXTAPE.logId,
     title: MIXTAPE.title,
+  });
+
+  await stampLabelPointers(client);
+}
+
+/**
+ * EVERY track pressed by the seeded label points AT it — the pointer and the raw string say the
+ * same thing, which is what production holds and what the fixture used to fake.
+ *
+ * `linkTrackToLabel` runs on every publish, so a label's name on `tracks.label` and its id on
+ * `tracks.label_id` arrive together; `scripts/backfill-labels.ts` (in the deploy chain) reconciles
+ * any row that predates its entity. Left half-wired here — one pointer, nine name strings, and a
+ * counter claiming one renderable track — the fixture described a world the archive cannot be in,
+ * and the `/tracks?label=` filter (which resolves the typed name to `labels.id` and seeks
+ * `tracks.label_id`) would read one row where the reader can see nine.
+ *
+ * The counters are then DERIVED from those pointers rather than typed, so they cannot drift from
+ * the rows: `certified_finding_count` reads keystone 1's `is_catalogue = 0` discriminator, exactly
+ * as the write sites do.
+ */
+async function stampLabelPointers(client: Client): Promise<void> {
+  await client.execute({
+    args: [LABEL.id, LABEL.name],
+    sql: `update tracks set label_id = ? where label = ?`,
+  });
+  await client.execute({
+    args: [LABEL.id],
+    sql: `update labels
+             set renderable_track_count =
+                   (select count(*) from tracks where tracks.label_id = labels.id),
+                 certified_finding_count =
+                   (select count(*) from tracks
+                     where tracks.label_id = labels.id and tracks.is_catalogue = 0)
+           where id = ?`,
   });
 }
 
