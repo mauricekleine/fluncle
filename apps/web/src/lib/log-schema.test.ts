@@ -479,16 +479,14 @@ describe("breadcrumbsJsonLd", () => {
 describe("the detail-page trails that had none", () => {
   // A Logbook entry and a newsletter edition are detail pages under a real hub, exactly like a
   // finding under /log or an artist under /artists, and both shipped without a BreadcrumbList.
-  it("walks Fluncle → Logbook → the sector", () => {
+  // The leaf is the BARE coordinate: VOICE.md §3 keeps "sector" as first-person colour, never
+  // a structural label, so the trail ends on the same `036` the page's h1 wears.
+  it("walks Fluncle → Logbook → the entry's coordinate", () => {
     const jsonLd = logbookBreadcrumbsJsonLd("036") as {
       itemListElement: Array<{ item?: string; name: string; position: number }>;
     };
 
-    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual([
-      "Fluncle",
-      "Logbook",
-      "Sector 036",
-    ]);
+    expect(jsonLd.itemListElement.map((item) => item.name)).toEqual(["Fluncle", "Logbook", "036"]);
     // The hub crumb points at the hub; the leaf carries no `item` (it IS this page).
     expect(jsonLd.itemListElement[1]?.item).toBe("https://www.fluncle.com/logbook");
     expect(jsonLd.itemListElement[2]?.item).toBeUndefined();

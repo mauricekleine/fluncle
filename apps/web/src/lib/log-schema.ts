@@ -876,7 +876,7 @@ export function albumBreadcrumbsJsonLd(name: string): Record<string, unknown> {
 // newsletter edition are detail pages under a real hub too, so they get the same node — a
 // crawler reads the trail, and Google renders it in place of the raw URL.
 
-/** Fluncle → Logbook → the sector, e.g. "Sector 036". */
+/** Fluncle → Logbook → the entry's coordinate, e.g. "036" — the leaf the page's h1 wears. */
 export function logbookBreadcrumbsJsonLd(sectorLabel: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -884,7 +884,7 @@ export function logbookBreadcrumbsJsonLd(sectorLabel: string): Record<string, un
     itemListElement: [
       { "@type": "ListItem", item: `${siteUrl}/`, name: "Fluncle", position: 1 },
       { "@type": "ListItem", item: `${siteUrl}/logbook`, name: "Logbook", position: 2 },
-      { "@type": "ListItem", name: `Sector ${sectorLabel}`, position: 3 },
+      { "@type": "ListItem", name: sectorLabel, position: 3 },
     ],
   };
 }

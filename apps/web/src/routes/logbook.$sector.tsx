@@ -68,10 +68,13 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
   const { entry } = loaderData;
   const sectorLabel = formatSector(entry.sector);
   const pageUrl = `${siteUrl}${logbookPath(entry.sector)}`;
-  const title = `Sector ${sectorLabel} · Fluncle's Logbook`;
+  // Coordinate, then the human line, then the surface — the house title shape a finding
+  // already wears (`241.7.3A · Artist — Title · Fluncle`). The bare coordinate leads; the
+  // entry's own title keeps it from stranding a stranger in a SERP.
+  const title = `${sectorLabel} · ${entry.title} · Fluncle's Logbook`;
   const datePublished = sectorDateISO(entry.sector);
   // A short, honest description: the entry title, the human dateline.
-  const description = `${entry.title}. Fluncle's log for sector ${sectorLabel}, ${formatDateLong(datePublished)}.`;
+  const description = `${entry.title}. An entry from Fluncle's Logbook, ${formatDateLong(datePublished)}.`;
 
   // An Article that mirrors the visible entry (headline = title, the coordinate URL,
   // the sector-day as datePublished, the last (re)generation as dateModified, Fluncle
@@ -229,7 +232,10 @@ function NeighborLink({
       {isOlder ? undefined : <CaretLeftIcon aria-hidden="true" weight="bold" />}
       <span>
         <span className="log-neighbor-label">{isOlder ? "Earlier" : "Later"}</span>
-        <span className="log-neighbor-line">Sector {formatSector(neighbor.sector)}</span>
+        {/* The neighbor's own title, exactly as /log's prev/next carries an Artist — Title:
+            the line tells you where you're headed, and `.log-neighbor-line` already clips a
+            long one. A bare coordinate here would navigate by number alone. */}
+        <span className="log-neighbor-line">{neighbor.title}</span>
       </span>
       {isOlder ? <CaretRightIcon aria-hidden="true" weight="bold" /> : undefined}
     </Link>
@@ -253,7 +259,9 @@ function LogbookEntryPage() {
       <article className="log-plate logbook-entry">
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Logbook</p>
-          <h1 className="log-coordinate">Sector {sectorLabel}</h1>
+          {/* The bare coordinate, set as the coordinate it is — the same masthead a finding
+              wears at /log/<logId>. The dateline directly below carries the human date. */}
+          <h1 className="log-coordinate">{sectorLabel}</h1>
           <p className="logbook-dateline">
             <time dateTime={datePublished}>{formatDateLong(datePublished)}</time>
           </p>
