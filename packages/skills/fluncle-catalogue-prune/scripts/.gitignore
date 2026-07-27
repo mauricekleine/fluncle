@@ -1,0 +1,5 @@
+# A rollback JSON is a verbatim `select *` snapshot of PRODUCTION rows, and this repo is public.
+# `PRUNE_OUT_DIR` should point at the gitignored `apps/web/.dev/catalogue-prune` (SKILL.md § Setup),
+# but every script defaults it to `.` — so a run started from this directory drops its snapshot
+# right here. Never committable, whatever the reason.
+*-rollback.json

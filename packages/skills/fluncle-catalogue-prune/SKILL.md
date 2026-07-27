@@ -114,16 +114,78 @@ bun run packages/skills/fluncle-catalogue-prune/scripts/clean-orphan-edges.ts --
 
 Safe to re-run — once clean it finds nothing. `--apply` prints before/after counts and warns if any survive (which would mean something is still writing them).
 
+## Namesake repair (wrong MusicBrainz label walked under an enabled seed)
+
+**A different failure from everything above.** The pass so far assumes a wrong LABEL RULING: the operator's call on a label was too generous, so disabling it makes its artists purge-eligible. The namesake case is the opposite — **the ruling is right and the identity is wrong.** A seed label enters the frontier as `fluncle:label:<slug>`, a resolver node whose only job is to turn the operator's label NAME into a MusicBrainz label MBID. When two labels share a name, that resolution can pick the other one, and the crawler then walks a label nobody approved as though it were the approved seed.
+
+The case that created this section: **Radar Records** — a Belgian DnB label the operator correctly ruled `enabled`, whose slug resolved to a 1978 UK punk label of the same name. 303 tracks came in under an ENABLED seed, across six seeds affected the same way.
+
+**Why nothing above can fix it.** `purge.ts` needs a `disabled` label behind an artist before it will touch them, and disabling Radar Records would be a lie — the DnB label is genuinely a seed, and disabling it stops the crawl the operator wants. There is no label-level signal that separates the two labels, because at the label level they are the same row. Only a human naming the wrong artists resolves it. See `references/traps.md` § "the namesake class".
+
+### The ordered recipe
+
+**Order matters more here than anywhere else in this skill.** Repairing the frontier before the resolver fix is deployed just walks the impostor again on the next tick; purging the tracks before the frontier is repaired means the next tick re-writes them.
+
+**0 — The code seal must be DEPLOYED first.** The resolver has to key on `labels.mb_label_id` rather than a top-scoring name match, so a re-armed seed resolves to the identity the operator's ruling refers to. Confirm the fix is live on prod before touching anything — `apps/web/src/lib/server/crawl.ts`, and `docs/catalogue-crawler.md` for the boundary gate it sits in. Everything below is a no-op-then-regression without it.
+
+**1 — Repair the frontier.** One label at a time, dry-run first:
+
+```bash
+bun run packages/skills/fluncle-catalogue-prune/scripts/reseed-label.ts --slug radar-records
+bun run packages/skills/fluncle-catalogue-prune/scripts/reseed-label.ts --slug radar-records --confirm
+```
+
+The dry-run verifies the `labels` row exists, is `enabled`, and carries `mb_label_id` — that column is the **authority**, and with it missing the script refuses, because nothing can then tell the impostor from the original. It then lists every frontier label node for the slug and flags each MusicBrainz node whose `external_id` ≠ `mb_label_id` as **WRONG NAMESAKE**. `--confirm` resets the resolver node to `state='pending', cursor=0` (the next tick re-mints the correct MB node) and stamps each namesake node's `note` with `wrong namesake; retired <date>`. **The namesake rows are kept, never deleted** — the tightened re-arm join leaves them inert, and they are the record of what was walked.
+
+**2 — Identify the impostor's artists.** Human work, and the part no script does for you. Read `/artist/<slug>` pages under the affected label and separate the two rosters by name and by era. A punk act from 1978 and a DnB act from 2004 are not a close call once you look; do look. Keep the list in a file, one slug per line, with your reasoning in `#` comments — that file is the audit trail for a destructive act.
+
+**3 — Purge, dry-run first.**
+
+```bash
+bun run packages/skills/fluncle-catalogue-prune/scripts/purge-artists.ts --artists-file "$PRUNE_OUT_DIR/radar-namesake.txt"
+```
+
+**4 — Eyeball three lists.** The dry-run prints them because each one catches a different mistake:
+
+- **the artists**, with their labels and track counts — every name must be recognisably the wrong act;
+- **the labels the deleted tracks sit on**, each with its seed state — expect `[enabled seed]` here. That is the whole point of the tool and the one place in this skill where seeing `enabled` is correct rather than alarming. Anything you did not expect on this list means a named artist also released elsewhere, and the purge is wider than you think;
+- **the tracks that SURVIVE**, with the co-credit keeping each one alive — a track shared with an artist you did not name is never deleted, so the impostor's row disappears while a collaboration stays. If a track you meant to remove is on this list, the co-artist belongs in the list too.
+
+The run **hard-aborts** rather than skipping on: a slug with no `artists` row, a named artist carrying a `findings` track (Maurice's logged work — never a namesake), and any deletable track entangled in a mixtape, save, published post, or frontier edition. A refusal means your list is wrong; fix the list, don't work around it.
+
+**5 — Backup, then confirm.** Same backup as § 3 above (`db:pull-prod` into a timestamped copy), then:
+
+```bash
+bun run packages/skills/fluncle-catalogue-prune/scripts/purge-artists.ts --artists-file "$PRUNE_OUT_DIR/radar-namesake.txt" --confirm
+```
+
+It writes `purge-artists-rollback.json` before deleting and runs the identical cascade `purge.ts` runs — the shared code in `lib.ts`, not a second implementation.
+
+**6 — Verify both halves.** The purged pages should 404 and the real DnB act should still 200:
+
+```bash
+for s in <impostor-slug> <real-dnb-slug>; do
+  printf '%s → ' "$s"; curl -s -o /dev/null -w '%{http_code}\n' -H 'Accept: text/html' "https://www.fluncle.com/artist/$s?cb=$RANDOM"; done
+```
+
+Then watch the next crawl tick: the seed should resolve to `mb_label_id` and mint a MusicBrainz node whose `external_id` matches. If a namesake node goes `pending` again, the resolver fix is not actually live — stop and go back to step 0. Hub counts lag as after any purge; the nightly `reconcile_hub_counts` sweep heals them within a day.
+
 ## Rollback
 
-Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `orphan-edges-rollback.json`. To undo, re-insert the captured rows (they are full `select *` snapshots) or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`.
+Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `purge-artists-rollback.json`, `reseed-label-<slug>-rollback.json`, `orphan-edges-rollback.json`. To undo, re-insert the captured rows (they are full `select *` snapshots) or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`; the reseed rollback restores each frontier node's prior `state` / `cursor` / `note`.
 
 ## Files
 
 - `scripts/scan.ts` — read-only: buckets, off-boundary labels, residual.
 - `scripts/rule-labels.ts` — enable/disable labels by name (dry-run/`--confirm`, rollback).
-- `scripts/purge.ts` — artist-driven purge with entanglement guard + rollback.
+- `scripts/purge.ts` — LABEL-driven purge (safe-purge artists) with entanglement guard + rollback.
+- `scripts/purge-artists.ts` — TARGETED purge of an operator-named artist list, for the namesake case (dry-run/`--confirm`, rollback). Same cascade as `purge.ts`; hard-aborts on an unresolved slug, a findings track, or entanglement.
+- `scripts/reseed-label.ts` — frontier repair for a wrong-namesake seed: re-arm the resolver node, retire the impostor MusicBrainz nodes without deleting them (dry-run/`--confirm`, rollback).
 - `scripts/clean-orphan-edges.ts` — one-off: `track_artists` rows whose track is gone (dry-run/`--apply`, rollback).
-- `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition + the atomic track/edge delete.
-- `scripts/orphan-edges.test.ts` — the delete pair's order/atomicity and the orphan predicate, against a stubbed client (`bun test --cwd packages/skills/fluncle-catalogue-prune/scripts`, wired into the root `test:scripts`).
+- `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition + the named-artist resolution + the shared-credit survival rule + the one artist cascade (guard, rollback, FK-safe delete) both purges use + the atomic track/edge delete.
+- `scripts/orphan-edges.test.ts` — the delete pair's order/atomicity and the orphan predicate, against a stubbed client.
+- `scripts/purge-artists.test.ts` — the shared-credit survival rule, the findings/unknown-slug/entanglement hard aborts, the zero-write dry-run, and the cascade's delete order.
+- `scripts/reseed-label.test.ts` — the namesake classification against `mb_label_id`, the three refusals, the zero-write dry-run, and that a namesake node is noted rather than deleted.
 - `references/traps.md` — **read first**: the false-positives every naive rule hits.
+
+All three test files run under `bun test --cwd packages/skills/fluncle-catalogue-prune/scripts`, wired into the root `test:scripts` (so the deploy gate covers them). They drive a stubbed libSQL client and the shared no-network rail is armed — nothing here reaches prod.

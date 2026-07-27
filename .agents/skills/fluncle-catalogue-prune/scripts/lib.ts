@@ -162,6 +162,126 @@ export function safePurgeArtists(cat: Catalogue, agg = aggregateArtists(cat)): S
   return out;
 }
 
+/**
+ * The NAMED-ARTIST variant of the same question, for the targeted namesake purge.
+ *
+ * `safePurgeArtists` derives its set from label rulings; this one takes the set the OPERATOR
+ * typed. Same downstream cascade, different way of arriving at the artist ids — which is the
+ * whole point of the targeted tool: when a label ruling is RIGHT and the tracks under it belong
+ * to a same-named impostor, no label-level signal can express "these specific artists".
+ *
+ * Returns the resolved artists plus the two refusals the caller must abort on: slugs with no
+ * `artists` row, and named artists carrying a `findings` track (Maurice's real work — untouchable,
+ * and a hard abort rather than a skip, because a findings hit means the operator's list is wrong).
+ */
+export type NamedArtistResolution = {
+  found: { id: string; name: string; slug: string }[];
+  unknownSlugs: string[];
+  withFindings: { id: string; name: string; slug: string; trackIds: string[] }[];
+};
+
+export function resolveNamedArtists(cat: Catalogue, slugs: string[]): NamedArtistResolution {
+  const bySlug = new Map(cat.artists.map((a) => [a.slug, a]));
+  const found: NamedArtistResolution["found"] = [];
+  const unknownSlugs: string[] = [];
+
+  for (const slug of slugs) {
+    const artist = bySlug.get(slug);
+    if (artist) {
+      found.push({ id: artist.id, name: artist.name, slug: artist.slug });
+    } else {
+      unknownSlugs.push(slug);
+    }
+  }
+
+  const findingTracksByArtist = new Map<string, string[]>();
+  const ids = new Set(found.map((a) => a.id));
+  for (const e of cat.edges) {
+    if (ids.has(e.artist_id) && cat.findingTrackIds.has(e.track_id)) {
+      getOrSet(findingTracksByArtist, e.artist_id, () => [] as string[]).push(e.track_id);
+    }
+  }
+
+  return {
+    found,
+    unknownSlugs,
+    withFindings: found
+      .filter((a) => findingTracksByArtist.has(a.id))
+      .map((a) => ({ ...a, trackIds: findingTracksByArtist.get(a.id) ?? [] })),
+  };
+}
+
+/** `track_id` → the set of artist ids credited on it. The shared-credit index. */
+export function trackArtistIndex(cat: Catalogue): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  for (const e of cat.edges) {
+    getOrSet(index, e.track_id, () => new Set<string>()).add(e.artist_id);
+  }
+
+  return index;
+}
+
+/**
+ * THE SHARED-CREDIT SURVIVAL RULE. A track is deletable only when EVERY artist credited on it is
+ * in `artistIds` — one collaborator outside the set and the track survives, because deleting it
+ * would silently strip a track from an artist nobody ruled on. Findings are excluded by
+ * construction, belt-and-braces, in both purge paths.
+ *
+ * A track with no `track_artists` edge at all is never deletable: it is not reachable from any
+ * artist, so an artist-driven purge has no claim on it.
+ */
+export function tracksCreditedOnlyTo(
+  cat: Catalogue,
+  artistIds: ReadonlySet<string>,
+  index = trackArtistIndex(cat),
+): Set<string> {
+  const out = new Set<string>();
+  for (const [trackId, credited] of index) {
+    if (!cat.findingTrackIds.has(trackId) && [...credited].every((a) => artistIds.has(a))) {
+      out.add(trackId);
+    }
+  }
+
+  return out;
+}
+
+/** Albums losing their LAST track — every track on them is in `trackIds`, so the album goes too. */
+export function orphanAlbums(cat: Catalogue, trackIds: ReadonlySet<string>): Set<string> {
+  const albumTracks = new Map<string, string[]>();
+  for (const t of cat.tracks) {
+    if (t.album_id) {
+      getOrSet(albumTracks, t.album_id, () => [] as string[]).push(t.track_id);
+    }
+  }
+  const out = new Set<string>();
+  for (const [albumId, tids] of albumTracks) {
+    if (tids.every((tid) => trackIds.has(tid))) {
+      out.add(albumId);
+    }
+  }
+
+  return out;
+}
+
+/** Per-artist: the distinct raw `tracks.label` strings the artist's tracks sit on. The eyeball. */
+export function labelsByArtist(
+  cat: Catalogue,
+  artistIds: ReadonlySet<string>,
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const e of cat.edges) {
+    if (!artistIds.has(e.artist_id)) {
+      continue;
+    }
+    const t = cat.trackById.get(e.track_id);
+    if (t?.label) {
+      getOrSet(out, e.artist_id, () => new Set<string>()).add(t.label);
+    }
+  }
+
+  return out;
+}
+
 /** Get a map entry, creating it with `make()` if absent. Avoids non-null assertions. */
 export function getOrSet<K, V>(map: Map<K, V>, key: K, make: () => V): V {
   let v = map.get(key);
@@ -248,4 +368,179 @@ export async function deleteTracksWithEdges(
     tracks += Number(trackResult?.rowsAffected ?? 0);
   }
   return { edges, tracks };
+}
+
+// ── The artist cascade, shared by both purge paths ──────────────────────────────
+//
+// `purge.ts` (label-driven) and `purge-artists.ts` (operator-named) arrive at their artist set
+// differently and delete IDENTICALLY. That sameness is safety, not tidiness: the guard list, the
+// rollback shape, and the FK-safe delete order are the parts a second tool would get subtly wrong.
+// They live here once so there is exactly one cascade in this skill.
+
+/**
+ * THE ENTANGLEMENT GUARD's tables. A deletable track appearing in any of them is a REAL object a
+ * human put it in — a mixtape, a listener's save, a published post, a frontier edition. That is a
+ * surprise the operator resolves by hand; a purge aborts rather than deleting through it.
+ */
+export const ENTANGLEMENT_TABLES = [
+  "mixtape_tracks",
+  "user_saved_findings",
+  "social_posts",
+  "social_metrics",
+  "frontier_edition_tracks",
+  "user_galaxy_collections",
+  "user_rec_seeds",
+  "note_rejections",
+  "observation_rejections",
+];
+
+/** Housekeeping track-refs the cascade simply deletes (never real objects). */
+export const CASCADE_TRACK_TABLES = ["cost_events"];
+
+/** How many rows of `table` reference one of `trackIds`. */
+export async function countTrackRefs(
+  db: Client,
+  table: string,
+  trackIds: ReadonlySet<string>,
+): Promise<number> {
+  const result = await db.execute(`select track_id from ${table}`);
+
+  return result.rows.filter((r) => typeof r.track_id === "string" && trackIds.has(r.track_id))
+    .length;
+}
+
+/** Every guard table holding at least one deletable track. Empty ⇒ the purge may proceed. */
+export async function entanglementHits(
+  db: Client,
+  trackIds: ReadonlySet<string>,
+): Promise<{ hits: number; table: string }[]> {
+  const out: { hits: number; table: string }[] = [];
+  for (const table of ENTANGLEMENT_TABLES) {
+    const hits = await countTrackRefs(db, table, trackIds);
+    if (hits > 0) {
+      out.push({ hits, table });
+    }
+  }
+
+  return out;
+}
+
+/** `select *` of every row matching `col in (ids)`, chunked past the SQLite IN() limit. */
+export async function selectAllIn(
+  db: Client,
+  table: string,
+  col: string,
+  ids: string[],
+): Promise<unknown[]> {
+  const out: unknown[] = [];
+  for (const c of chunk(ids)) {
+    const result = await db.execute({
+      args: c,
+      sql: `select * from ${table} where ${col} in (${c.map(() => "?").join(",")})`,
+    });
+    out.push(...result.rows);
+  }
+
+  return out;
+}
+
+/** Delete every row matching `col in (ids)`, chunked. Returns the rows removed. */
+export async function deleteIn(
+  db: Client,
+  table: string,
+  col: string,
+  ids: string[],
+): Promise<number> {
+  let n = 0;
+  for (const c of chunk(ids)) {
+    const result = await db.execute({
+      args: c,
+      sql: `delete from ${table} where ${col} in (${c.map(() => "?").join(",")})`,
+    });
+    n += Number(result.rowsAffected);
+  }
+
+  return n;
+}
+
+export type ArtistCascadeRollback = {
+  albums: unknown[];
+  artist_aliases: unknown[];
+  artist_socials: unknown[];
+  artists: unknown[];
+  at: string;
+  cost_events: unknown[];
+  track_artists: unknown[];
+  tracks: unknown[];
+};
+
+/**
+ * The full per-row rollback, captured BEFORE anything is deleted.
+ *
+ * The edge delete runs on BOTH keys, so the rollback captures both and de-dupes on the composite
+ * key — otherwise restoring would double-insert every edge that matches on artist AND track.
+ */
+export async function captureArtistCascadeRollback(
+  db: Client,
+  artistIds: string[],
+  trackIds: string[],
+  albumIds: string[],
+): Promise<ArtistCascadeRollback> {
+  const seenEdges = new Set<string>();
+  const track_artists = [
+    ...(await selectAllIn(db, "track_artists", "artist_id", artistIds)),
+    ...(await selectAllIn(db, "track_artists", "track_id", trackIds)),
+  ].filter((row) => {
+    const r = row as { artist_id?: unknown; track_id?: unknown };
+    const key = JSON.stringify([r.artist_id, r.track_id]);
+    if (seenEdges.has(key)) {
+      return false;
+    }
+    seenEdges.add(key);
+
+    return true;
+  });
+
+  return {
+    albums: await selectAllIn(db, "albums", "id", albumIds),
+    artist_aliases: await selectAllIn(db, "artist_aliases", "artist_id", artistIds),
+    artist_socials: await selectAllIn(db, "artist_socials", "artist_id", artistIds),
+    artists: await selectAllIn(db, "artists", "id", artistIds),
+    at: new Date().toISOString(),
+    cost_events: await selectAllIn(db, "cost_events", "track_id", trackIds),
+    track_artists,
+    tracks: await selectAllIn(db, "tracks", "track_id", trackIds),
+  };
+}
+
+/**
+ * Delete the artists, their tracks, and the whole cascade in FK-safe order (children → parents).
+ *
+ * `track_artists` is deleted TWICE on purpose, on two different keys. By `artist_id` it clears the
+ * purged artists' edges on tracks that SURVIVE (a shared/collab track is never deletable, so its
+ * edge to a deleted artist has to go this way or the `artists` delete strands it). By `track_id` —
+ * inside `deleteTracksWithEdges` — it kills the deletable tracks' edges in the SAME transaction as
+ * the tracks, so no orphaned edge can survive the purge.
+ */
+export async function deleteArtistCascade(
+  db: Client,
+  artistIds: string[],
+  trackIds: string[],
+  albumIds: string[],
+): Promise<void> {
+  const del = async (table: string, col: string, ids: string[]) => {
+    console.log(`  deleted ${table}.${col}: ${await deleteIn(db, table, col, ids)}`);
+  };
+  await del("cost_events", "track_id", trackIds);
+  await del("artist_socials", "artist_id", artistIds);
+  await del("artist_aliases", "artist_id", artistIds);
+  await del("artist_centroids", "artist_id", artistIds);
+  await del("artist_similar", "artist_id", artistIds);
+  await del("artist_similar", "neighbour_artist_id", artistIds);
+  await del("track_artists", "artist_id", artistIds);
+  const removed = await deleteTracksWithEdges(db, trackIds);
+  console.log(`  deleted track_artists.track_id: ${removed.edges}`);
+  console.log(`  deleted tracks.track_id: ${removed.tracks}`);
+  await del("albums", "id", albumIds);
+  await del("artists", "id", artistIds);
 }
