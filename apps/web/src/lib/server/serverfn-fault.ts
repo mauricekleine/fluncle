@@ -21,16 +21,26 @@
 //     Redirects / not-founds are handled upstream in start.ts (control flow, never
 //     reaches here).
 //   - Anything else is an UNEXPECTED fault: the full detail goes to the server log
-//     and Sentry, and the wire gets a generic message — EXCEPT on `/admin`, which is
-//     operator-only, where the detailed message is diagnostics (the 2026-07-26
-//     incident proved its worth).
+//     and Sentry, and the wire gets a generic message — EXCEPT for a request that
+//     carries a VERIFIED admin principal, where the detailed message is operator
+//     diagnostics (the 2026-07-26 incident proved its worth).
+//
+// WHY VERIFIED IDENTITY, NOT THE PAGE PATH: an earlier draft granted detail when the
+// request "looked" admin (an `/admin` URL or Referer). Both are attacker-settable on
+// a direct call to a public server-fn endpoint, so that reopened the very leak this
+// closes — spoof two headers, receive driver internals. The gate is now `adminRole`,
+// the same non-spoofable primitive `requireAdmin` reads (a signed grant cookie or a
+// constant-time-checked Bearer token). A browser on `/admin` sends its grant cookie
+// on both the SSR page request and the same-origin server-fn fetch, so the operator
+// keeps full detail; nobody without a valid credential does.
 
 import * as Sentry from "@sentry/cloudflare";
+import { adminRole } from "./env";
 import { logEvent } from "./log";
 import { ApiError } from "./spotify";
 
 /**
- * The message that crosses the wire for a redacted (public) fault. It is never
+ * The message that crosses the wire for a redacted (non-admin) fault. It is never
  * rendered — the root `errorComponent` shows its own in-voice "Rough re-entry" copy —
  * but it is what a serialized `Error` carries, so it says nothing about the fault.
  * Matches the oRPC `apiFault` 500 body for one consistent generic string.
@@ -43,15 +53,18 @@ export const GENERIC_SERVERFN_FAULT_MESSAGE = "Internal error";
  * A deliberate `ApiError` is returned untouched (its message is a client contract,
  * exactly as the oRPC path echoes an `ApiError`). Anything else is an unexpected
  * fault: it is logged and captured server-side with full detail, then the raw error
- * is returned ONLY for an `/admin` request (operator diagnostics) — every other
- * surface gets a fresh generic `Error`, so no driver/upstream internals reach an
- * unauthenticated caller.
+ * is returned ONLY when the request carries a verified admin principal (operator
+ * diagnostics) — every other caller gets a fresh generic `Error`, so no
+ * driver/upstream internals reach an unauthenticated caller.
  *
  * `request` is the ambient server-fn request (from `getRequest()` in start.ts),
- * passed in so this stays a pure, unit-testable function; `undefined` (no request
- * context) is treated as public — the safe default.
+ * passed in so identity is resolved from the real credential; `undefined` (no request
+ * context) is treated as non-admin — the safe default.
  */
-export function redactServerFnFault(error: unknown, request: Request | undefined): unknown {
+export async function redactServerFnFault(
+  error: unknown,
+  request: Request | undefined,
+): Promise<unknown> {
   // A deliberate typed error is a client contract — its message is safe to echo,
   // exactly as the oRPC fault path echoes an ApiError.
   if (error instanceof ApiError) {
@@ -67,14 +80,13 @@ export function redactServerFnFault(error: unknown, request: Request | undefined
   // into a wire value, never rethrown out of the Worker), so `withSentry` never sees
   // it. This explicit capture is therefore the one and only server-side capture of
   // the real error — not a duplicate.
-  const path = pagePathForFault(request);
-
-  logEvent("error", "serverfn.unexpected-fault", { error, path });
+  logEvent("error", "serverfn.unexpected-fault", { error, path: requestPath(request) });
   Sentry.captureException(error, { tags: { source: "serverfn.redaction" } });
 
-  // /admin is operator-only, behind admin auth: the detailed message there is
-  // diagnostics, not a leak. Everywhere else the wire gets a generic message.
-  if (path?.startsWith("/admin") ?? false) {
+  // A verified admin principal (operator cookie or admin/agent Bearer token) gets the
+  // detail — it is diagnostics for them, not a leak. Everyone else gets a generic
+  // message.
+  if (await isAdminPrincipal(request)) {
     return error;
   }
 
@@ -82,35 +94,34 @@ export function redactServerFnFault(error: unknown, request: Request | undefined
 }
 
 /**
- * The page path this fault belongs to, or `undefined` when it cannot be determined.
- *
- * Two transports, two sources:
- *   - SSR runs the server fn IN-PROCESS, so `getRequest()` is the page request
- *     itself (`/admin/reach`, `/log/<id>`, …) — read its pathname.
- *   - A client navigation calls the server fn over HTTP at its own endpoint
- *     (`/_serverFn/...`), which carries no page path. The framework's client fetcher
- *     stamps `x-tsr-serverFn: true` on that request, and the browser stamps the
- *     originating page in the same-origin `Referer` (the app's
- *     `Referrer-Policy: strict-origin-when-cross-origin` sends the full path
- *     same-origin) — read the Referer's pathname.
- *
- * Keying off the `x-tsr-serverFn` header (not the URL) means the Referer is consulted
- * ONLY for a genuine HTTP server-fn call, so an operator navigating from `/admin` to
- * a public page (whose SSR request carries an `/admin` Referer) never leaks detail on
- * that public page.
+ * Whether the request proves a verified admin identity, via the SAME primitive every
+ * admin route reads (`adminRole` — a signed grant cookie or a constant-time-checked
+ * Bearer token, never a header/path claim). Fails closed: no request, or any error
+ * resolving the principal, reads as non-admin so the fault is redacted.
  */
-function pagePathForFault(request: Request | undefined): string | undefined {
+async function isAdminPrincipal(request: Request | undefined): Promise<boolean> {
+  if (!request) {
+    return false;
+  }
+
+  try {
+    return (await adminRole(request)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The request's own path, for the diagnostics log only (never the redaction
+ * decision). During SSR this is the page (`/admin/reach`, `/log/<id>`); on a
+ * client-navigation server-fn call it is the framework's `/_serverFn/...` endpoint.
+ */
+function requestPath(request: Request | undefined): string | undefined {
   if (!request) {
     return undefined;
   }
 
   try {
-    if (request.headers.get("x-tsr-serverFn") === "true") {
-      const referer = request.headers.get("referer");
-
-      return referer ? new URL(referer).pathname : undefined;
-    }
-
     return new URL(request.url).pathname;
   } catch {
     return undefined;

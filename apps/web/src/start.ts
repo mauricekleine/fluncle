@@ -29,7 +29,8 @@ import { getRequest } from "@tanstack/react-start/server";
 // dynamic import on the common auth-gate path. A real fault is handed to the
 // server-only redactor (dynamic import keeps the `lib/server/**` chain out of any
 // client chunk — docs/client-bundle.md), which logs + captures the full detail and
-// returns the wire-safe error (the raw message for /admin, a generic one elsewhere).
+// returns the wire-safe error (the raw message for a verified admin principal, a
+// generic one for everyone else).
 const serverFnFaultRedaction = createMiddleware({ type: "function" }).server(async ({ next }) => {
   try {
     return await next();
@@ -48,7 +49,7 @@ const serverFnFaultRedaction = createMiddleware({ type: "function" }).server(asy
 
     const { redactServerFnFault } = await import("./lib/server/serverfn-fault");
 
-    throw redactServerFnFault(error, request);
+    throw await redactServerFnFault(error, request);
   }
 });
 
