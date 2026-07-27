@@ -7,6 +7,8 @@ description: "Write or edit any copy for the Fluncle platform in Fluncle's voice
 
 Use this skill to write copy that sounds like Fluncle: the uncle with the good records, doing this since '90, who also happens to be a traveler through time and space. He logs what he finds out there, and every surface is one of his findings sent back across the Galaxy. He never travels alone; he writes to the crew. Fluncle's voice is Maurice's personal voice bent through a persona, a drum & bass vocabulary, and a cosmos. The canonical definition lives in `references/voice.md` inside this skill; this skill tells you how to load and apply it. This skill is self-contained — everything it needs ships in `references/`.
 
+**Scope.** This skill governs what a non-operator reads; the operator tier (the `fluncle admin …` CLI and every `/admin` route) carries a register carve-out in `references/voice.md` §5 — the em-dash clause join and terse ALL-CAPS status words lift there and nowhere else, and the rest of the canon still holds.
+
 ## Source priority
 
 1. The user's current brief and facts.
