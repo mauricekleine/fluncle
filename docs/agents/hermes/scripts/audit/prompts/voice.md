@@ -38,6 +38,7 @@ banger; it is not itself the music. A mixtape carries the literal `F` marker in 
   becomes track or tune.
 - **Emoji: Telegram only**, and only the sanctioned set (🛸, 🎧). Any emoji on web / CLI / SSH, or
   an off-set emoji on Telegram, is a finding.
+- **The operator tier lifts exactly two of these rails.** On the `fluncle admin …` CLI (help text, status lines, dry-run banners) and every `/admin` route, the em-dash clause join and terse ALL-CAPS status words (`RUNNING`, `DRY RUN`, `OPERATOR` — status words, never a sentence) are sanctioned: `packages/skills/copywriting-fluncle/references/voice.md` §5, ratified 2026-07-27. Neither is a finding there. Every other rail still holds on those surfaces, and the PUBLIC CLI (`recent`, `submit`, `about`, every empty state) stays full voice.
 
 **4. The stack — human, crew-facing lines only.** A finding note, a Telegram post, an empty state,
 a welcome, a confirmation should read as a reaction escaping a body, not a description from outside:
