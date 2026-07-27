@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_anchor_order_idx` ON `tracks` (`has_embedding`,`nearest_finding_score`,`track_id`) WHERE "tracks"."spotify_uri" is null;

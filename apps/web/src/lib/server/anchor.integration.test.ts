@@ -28,6 +28,19 @@ function zeroVector(): number[] {
   return Array.from<number>({ length: DIMS }).fill(0);
 }
 
+/**
+ * Give a row a vector THE WAY PRODUCTION DOES — the blob and its `has_embedding` mirror in the
+ * same statement (schema.ts § `has_embedding`; `embedding-mirror.test.ts` fails the build on a
+ * writer that forgets it). The anchor worklist's drain order sorts on the mirror, so a fixture
+ * that wrote only the blob would be testing a state the app cannot produce.
+ */
+async function embed(trackId: string): Promise<void> {
+  await db.execute({
+    args: [JSON.stringify(zeroVector()), trackId],
+    sql: "update tracks set embedding_blob = vector32(?), has_embedding = 1 where track_id = ?",
+  });
+}
+
 /** Insert an UN-ANCHORED catalogue row (spotify_uri NULL — the anchor worklist's shape). */
 async function seedUnanchored(row: {
   artists?: string[];
@@ -371,10 +384,7 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
 
     // C: embedded (no score) — must lead by the first key, ahead of the higher-scored B.
     await seedUnanchored({ title: "Embedded", trackId: "mb_c-embedded" });
-    await db.execute({
-      args: [JSON.stringify(zeroVector())],
-      sql: "update tracks set embedding_blob = vector32(?) where track_id = 'mb_c-embedded'",
-    });
+    await embed("mb_c-embedded");
     // B: not embedded, high score.
     await seedUnanchored({ title: "Ranked", trackId: "mb_b-ranked" });
     await db.execute(
@@ -392,6 +402,62 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     ]);
     // Each row carries a ready-made query so the box never builds one.
     expect(work[0]?.anchorQuery).toBe("Etherwood Embedded");
+  });
+
+  // THE ORDER BY'S SHAPE, pinned (docs/db-scale-backlog Wave 2 #4). The clause is written to be
+  // ONE REVERSE WALK of the plain-ASC `tracks_anchor_order_idx` — `(has_embedding,
+  // nearest_finding_score, track_id) where spotify_uri is null` — and each of the three tests
+  // below fixes one key of it, so a rewrite that quietly breaks the walk breaks a test instead.
+  it("sorts on the has_embedding MIRROR, not the vector itself", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The mirror is what the index keys on, so it is what the order must read. A row whose vector
+    // was written WITHOUT the mirror is a drift bug (`embedding-mirror.test.ts` fails the build on
+    // one), and here it proves which column the clause is actually sorting by.
+    await seedUnanchored({ title: "Mirrored", trackId: "mb_b-mirrored" });
+    await embed("mb_b-mirrored");
+    await seedUnanchored({ title: "Bare", trackId: "mb_a-bare" });
+    await db.execute({
+      args: [JSON.stringify(zeroVector())],
+      sql: "update tracks set embedding_blob = vector32(?) where track_id = 'mb_a-bare'",
+    });
+
+    const work = await listTrackWork({ kind: "anchor", limit: 10 });
+
+    expect(work.map((item) => item.trackId)).toEqual(["mb_b-mirrored", "mb_a-bare"]);
+  });
+
+  it("puts the unranked tail last WITHOUT a `nulls last` clause (SQLite sorts NULL smallest)", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedUnanchored({ title: "Unranked", trackId: "mb_z-unranked" });
+    await seedUnanchored({ title: "Low", trackId: "mb_a-low" });
+    await db.execute("update tracks set nearest_finding_score = 0.01 where track_id = 'mb_a-low'");
+
+    const work = await listTrackWork({ kind: "anchor", limit: 10 });
+
+    // Even the WORST-scored row outranks the unscored one, and `mb_z-` sorts after `mb_a-` by id —
+    // so this fails if a plain `desc` ever stopped meaning `desc nulls last`.
+    expect(work.map((item) => item.trackId)).toEqual(["mb_a-low", "mb_z-unranked"]);
+  });
+
+  it("breaks a tie on track_id DESC, so the whole clause stays one reverse index walk", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // Identical on both leading keys (both embedded, both scored 0.5): only the tiebreak decides.
+    // It is DESC on purpose — a mixed `desc, desc, asc` cannot ride the composite index and forces
+    // a temp B-tree over the entire un-anchored set. Its direction is otherwise arbitrary.
+    for (const trackId of ["mb_a-tie", "mb_b-tie", "mb_c-tie"]) {
+      await seedUnanchored({ title: "Tie", trackId });
+      await embed(trackId);
+      await db.execute("update tracks set nearest_finding_score = 0.5 where track_id = ?", [
+        trackId,
+      ]);
+    }
+
+    const work = await listTrackWork({ kind: "anchor", limit: 10 });
+
+    expect(work.map((item) => item.trackId)).toEqual(["mb_c-tie", "mb_b-tie", "mb_a-tie"]);
   });
 
   it("excludes anchored, certified, dismissed, duplicate, zero-duration, and recently-attempted rows", async () => {
