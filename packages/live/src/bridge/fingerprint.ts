@@ -23,8 +23,59 @@ import { type Fingerprint } from "./matcher";
 import { MEL_SAMPLE_RATE, melFrames } from "./mel";
 import { type AdminAuth } from "./plan";
 
-// ffmpeg on PATH by default (mirrors download-preview.ts's FLUNCLE_FFMPEG).
-const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
+/** The streaming s16le reassembler: bytes in (at any chunk boundary), mono PCM out. */
+export type S16leSink = {
+  /** The samples pushed so far — a view, valid until the next `push`. */
+  finish: () => Float32Array;
+  /** Feed one raw s16le chunk; an odd trailing byte is carried into the next call. */
+  push: (chunk: Uint8Array) => void;
+};
+
+/**
+ * The chunk-boundary-safe half of `decodeMono`, lifted out so it can be tested without
+ * ffmpeg: ffmpeg's stdout arrives in arbitrary chunks, so a sample's two bytes can land
+ * in different ones. Holds the odd low byte across the boundary and grows the pre-sized
+ * buffer (1.5× + one second of headroom) when the seed runs out.
+ */
+export function createS16leSink(seed = MEL_SAMPLE_RATE * 40): S16leSink {
+  let samples = new Float32Array(seed);
+  let count = 0;
+  let leftover = -1; // a low byte carried across a chunk boundary, or -1
+
+  const push = (v: number): void => {
+    if (count >= samples.length) {
+      const grown = new Float32Array(Math.ceil(samples.length * 1.5) + MEL_SAMPLE_RATE);
+      grown.set(samples);
+      samples = grown;
+    }
+    samples[count++] = v;
+  };
+
+  /** Little-endian signed 16-bit → [-1, 1). */
+  const pushSample = (lo: number, hi: number): void => {
+    const raw = lo | (hi << 8);
+    push((raw >= 0x8000 ? raw - 0x10000 : raw) / 32768);
+  };
+
+  return {
+    finish: () => (count === samples.length ? samples : samples.subarray(0, count)),
+    push: (chunk) => {
+      let i = 0;
+      const end = chunk.length;
+      if (leftover >= 0 && end > 0) {
+        pushSample(leftover, chunk[0]);
+        leftover = -1;
+        i = 1;
+      }
+      for (; i + 1 < end; i += 2) {
+        pushSample(chunk[i], chunk[i + 1]);
+      }
+      if (i < end) {
+        leftover = chunk[i];
+      }
+    },
+  };
+}
 
 /**
  * Decode audio to mono Float32 PCM at MEL_SAMPLE_RATE, streaming ffmpeg's raw
@@ -32,6 +83,9 @@ const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
  * container bytes piped to stdin. Pre-sizes when possible, grows if needed.
  */
 async function decodeMono(input: string | Uint8Array): Promise<Float32Array> {
+  // ffmpeg on PATH by default (mirrors download-preview.ts's FLUNCLE_FFMPEG). Resolved per
+  // call, not at import, so a test can point it at a binary that is not there.
+  const ffmpeg = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
   const fromStdin = typeof input !== "string";
   const args = [
     "-v",
@@ -50,53 +104,29 @@ async function decodeMono(input: string | Uint8Array): Promise<Float32Array> {
   ];
 
   return await new Promise<Float32Array>((resolve, reject) => {
-    const child = spawn(FFMPEG, args, {
+    const child = spawn(ffmpeg, args, {
       stdio: [fromStdin ? "pipe" : "ignore", "pipe", "pipe"],
     });
 
-    let samples = new Float32Array(MEL_SAMPLE_RATE * 40); // ~40s seed; grows as needed
-    let count = 0;
-    let leftover = -1; // a low byte carried across a chunk boundary, or -1
+    const sink = createS16leSink(MEL_SAMPLE_RATE * 40); // ~40s seed; grows as needed
     let stderr = "";
 
-    const push = (v: number): void => {
-      if (count >= samples.length) {
-        const grown = new Float32Array(Math.ceil(samples.length * 1.5) + MEL_SAMPLE_RATE);
-        grown.set(samples);
-        samples = grown;
-      }
-      samples[count++] = v;
-    };
-
     if (!child.stdout) {
-      reject(new Error(`${FFMPEG} produced no stdout stream`));
+      reject(new Error(`${ffmpeg} produced no stdout stream`));
       return;
     }
     child.stderr?.on("data", (c: Buffer) => {
       stderr += c.toString();
     });
     child.stdout.on("data", (chunk: Buffer) => {
-      let i = 0;
-      const end = chunk.length;
-      if (leftover >= 0 && end > 0) {
-        const raw = leftover | (chunk[0] << 8);
-        push((raw >= 0x8000 ? raw - 0x10000 : raw) / 32768);
-        leftover = -1;
-        i = 1;
-      }
-      for (; i + 1 < end; i += 2) {
-        push(chunk.readInt16LE(i) / 32768);
-      }
-      if (i < end) {
-        leftover = chunk[i];
-      }
+      sink.push(chunk);
     });
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) {
-        resolve(count === samples.length ? samples : samples.subarray(0, count));
+        resolve(sink.finish());
       } else {
-        reject(new Error(`${FFMPEG} exited with ${code}\n${stderr.slice(-2000)}`));
+        reject(new Error(`${ffmpeg} exited with ${code}\n${stderr.slice(-2000)}`));
       }
     });
 
