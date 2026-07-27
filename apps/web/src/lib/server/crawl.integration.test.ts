@@ -429,6 +429,45 @@ describe("the catalogue crawler", () => {
     expect(new Set(rows.rows.map((row) => text(row.slug)))).toEqual(new Set(["medschool"]));
   });
 
+  it("links the artist edge by IDENTITY, refusing a same-named row that is somebody else", async () => {
+    // THE HOMONYM SEAL, through the real crawler (artists.ts § THE HOMONYM SEAL). The credits'
+    // MB artist ids ride from the release parse to the link step positionally aligned with
+    // `artists_json`, so this also pins that ALIGNMENT: the fixture credits Etherwood AND Various
+    // Artists, and VA must occupy its own slot as a null rather than shifting Etherwood's id onto
+    // the wrong name. A row named `Etherwood` that is a DIFFERENT MusicBrainz artist gets no edge.
+    const now = new Date().toISOString();
+    await db.execute({
+      args: ["art-impostor", "Etherwood", "etherwood", OTHER_ARTIST_MBID, now, now],
+      sql: `insert into artists (id, name, slug, mbid, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)`,
+    });
+
+    await drain();
+
+    const edges = await db.execute(
+      `select count(*) as n from track_artists where artist_id = 'art-impostor'`,
+    );
+    expect(Number(edges.rows[0]?.n)).toBe(0);
+  });
+
+  it("links the artist edge when the credit's mbid IS that row's identity", async () => {
+    // The other half of the rail: the seal must not cost the crawler its real links.
+    const now = new Date().toISOString();
+    await db.execute({
+      args: ["art-etherwood", "Etherwood", "etherwood", ARTIST_MBID, now, now],
+      sql: `insert into artists (id, name, slug, mbid, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)`,
+    });
+
+    await drain();
+
+    const edges = await db.execute(
+      `select count(*) as n from track_artists where artist_id = 'art-etherwood'`,
+    );
+    // Both stored (enabled-label) tracks credit Etherwood; the Hospital hop-2 track is gated out.
+    expect(Number(edges.rows[0]?.n)).toBe(2);
+  });
+
   it("mints + links the ALBUM inline, folded on the release-group MBID", async () => {
     // The album edge is now written INLINE at crawl time (no deferred deploy backfill),
     // folded on MusicBrainz's release-group MBID (`inc=release-groups`). Only the ENABLED-label
