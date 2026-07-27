@@ -10,8 +10,9 @@
 //
 // PAINT: the per-machine / per-surface tint palette below is lore art, exempt from the One
 // Sun Rule (DESIGN.md §2, The Lore-Art Paint Exemption; ratified 2026-07-27). The exemption
-// is hue diversity only — Nebula Violet (#ab7bff) stays reserved for the live callout,
-// neutrals lean warm, and nothing here carries a black elevation shadow.
+// buys hue diversity and nothing else, so three constraints still hold here: no hue may sit
+// in Nebula Violet's reserved BAND (#ab7bff is h262; the arc is roughly h240–h300 — blue the
+// top channel with red above green), every neutral leans warm, elevation stays shadow-free.
 
 import { LOGOS } from "./logos";
 
@@ -331,7 +332,7 @@ const K: Kiosk[] = [
   { label: "dig", tint: "#e0897d", url: "https://www.fluncle.com/docs", wh: "DNS TXT" },
   { label: "RSS", tint: "#f38020", url: "https://www.fluncle.com/rss.xml", wh: "feeds" },
   { label: "API", tint: "#d6b24a", url: "https://www.fluncle.com/docs/api", wh: "JSON" },
-  { label: "onion", tint: "#9a62d0", url: "https://www.fluncle.com/docs", wh: "Tor" },
+  { label: "onion", tint: "#93c47d", url: "https://www.fluncle.com/docs", wh: "Tor" },
   {
     label: "Lens",
     tint: "#ff8f6b",
@@ -532,7 +533,7 @@ const STYLES = `
   .fpl .hbstat{display:block;text-align:center;max-width:88vw}
   .fpl .hbstat .dot{display:inline-block;vertical-align:middle;margin-right:6px}
 }
-.fpl .card.dream{background:#120f16}
+.fpl .card.dream{background:#171611}
 .fpl .kiosk{position:absolute;width:104px;text-align:center;text-decoration:none;color:inherit;cursor:pointer;
   --tint:#e8833a;transition:transform .13s ease}
 .fpl .kiosk:hover{transform:translateY(-4px)}
