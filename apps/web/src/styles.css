@@ -323,7 +323,9 @@ body::before {
   background: var(--eclipse-gold);
   border-radius: 50%;
   bottom: 0.625rem;
-  box-shadow: 0 4px 10px -3px rgb(0 0 0 / 0.6);
+  /* A warm hairline ring, never an elevation drop shadow (DESIGN §4 Through-the-Glass,
+     §2 Warm Dark) — it separates the gold disc from bright cover art without a neutral black. */
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--deep-field) 70%, transparent);
   color: var(--primary-foreground);
   display: flex;
   height: 1.875rem;
