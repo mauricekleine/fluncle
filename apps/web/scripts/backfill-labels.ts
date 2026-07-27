@@ -39,6 +39,8 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
+
 /** The once-ever marker: present ⇒ the D7 bootstrap has already run. */
 const SEED_MARKER_KEY = "labels_seeded_at";
 
@@ -115,6 +117,23 @@ export async function loadConfirmedAliases(client: Client): Promise<Map<string, 
  * the whole catalogue. This is the self-healing path by which a track written by ANY writer
  * that does not know the column exists (an admin update) is linked into the graph. The
  * catalogue crawler stamps its own pointers per release (crawl.ts); this is its backstop.
+ *
+ * ── IT CREDITS THE MAINTAINED HUB COUNTERS ─────────────────────────────────────────────
+ * `labels.renderable_track_count` / `certified_finding_count` are DELTA-written by every
+ * runtime link path (lib/server/hub-counts.ts). This bulk stamp is the deploy's, and moves
+ * the same edge, so it moves the same counters — otherwise it leaks drift on every push and
+ * the nightly `reconcile_hub_counts` sweep spends its audit correcting rows this script
+ * dirtied, which is exactly the signal that audit exists to carry.
+ *
+ * THE DELTA IS A PURE CREDIT, because the WHERE is fill-null-only (`label_id is null`): a
+ * stamped track pointed at NOTHING a moment ago, so there is never an old entity to debit.
+ * That collapses the general re-point arithmetic (`hubCountMoveStatements`) down to one
+ * bounded aggregate per label — the CENSUS below, run over the UPDATE's exact predicate
+ * BEFORE it fires, because afterwards the rows no longer match it. `rowsAffected` cannot
+ * stand in: it gives the total but not the certified split.
+ *
+ * COST: one extra aggregate per label that actually resolves to a row, over the same
+ * `tracks_label_id_idx`-drained set the loop already walks — empty on a steady-state deploy.
  */
 export async function linkTracksToLabels(
   client: Client,
@@ -149,12 +168,36 @@ export async function linkTracksToLabels(
       continue;
     }
 
-    const updated = await client.execute({
-      args: [labelId, raw],
-      sql: `update tracks set label_id = ? where label_id is null and trim(label) = ?`,
+    // The census, over the UPDATE's predicate verbatim. `certified` keys off the maintained
+    // `is_catalogue` discriminator (keystone 1), never a `findings` join.
+    const census = await client.execute({
+      args: [raw],
+      sql: `select count(*) as n, sum(case when is_catalogue = 0 then 1 else 0 end) as cert
+            from tracks
+            where label_id is null and trim(label) = ?`,
     });
+    const renderable = Number(census.rows[0]?.n ?? 0);
 
-    linked += updated.rowsAffected;
+    if (renderable === 0) {
+      // Nothing left to stamp — an earlier iteration's trim-equal spelling already claimed these
+      // rows. Skip the UPDATE and, load-bearingly, the credit: a zero-row stamp must move nothing.
+      continue;
+    }
+
+    const certified = Number(census.rows[0]?.cert ?? 0);
+    // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
+    const [updated] = await client.batch(
+      [
+        {
+          args: [labelId, raw],
+          sql: `update tracks set label_id = ? where label_id is null and trim(label) = ?`,
+        },
+        hubCountDeltaStatement("labels", labelId, { certified, renderable }),
+      ],
+      "write",
+    );
+
+    linked += updated?.rowsAffected ?? 0;
   }
 
   return linked;

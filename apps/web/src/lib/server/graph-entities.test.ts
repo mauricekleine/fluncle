@@ -101,9 +101,9 @@ async function seedTrack(options: {
 
 /**
  * Run the reconciles: the labels deploy backfill, then the one-off album-graph catch-up, then the
- * hub-counts seed — the same order `db:backfill` runs them in on a deploy. The two link steps stamp
- * `label_id` / `album_id` straight onto `tracks` without moving the maintained counters, so the
- * counts pass has to follow them or the entity hubs would read a world with edges and no counts.
+ * hub-counts seed — the same order `db:backfill` runs them in on a deploy. Both link steps now
+ * credit the maintained counters themselves (see the census-then-batch block below), so the counts
+ * pass is a no-op recompute here; it stays because these tests also seed edges by raw SQL.
  */
 async function reconcile(): Promise<void> {
   await backfillLabels(db);
@@ -301,6 +301,181 @@ describe("the reconcile (scripts/backfill-album-graph.ts + backfill-labels.ts)",
     expect(second).toEqual({ linked: 0, minted: 0 });
     expect(secondLabels.minted).toBe(0);
     expect(secondLabels.linked).toBe(0);
+  });
+});
+
+// THE DEPLOY-TIME BULK STAMPS AND THE MAINTAINED COUNTERS (docs/db-scale-backlog Wave 2 keystone 2).
+// `labels` / `albums` carry `renderable_track_count` + `certified_finding_count`, delta-written by
+// every runtime link path (hub-counts.ts). These two bulk stamps are the DEPLOY's link path and were
+// the last known leak: they moved the edge and left the counters behind, so the nightly
+// `reconcile_hub_counts` sweep spent its audit correcting rows the deploy dirtied. With them
+// crediting, a non-zero nightly audit is a REAL signal again.
+//
+// Every test here runs the backfill ALONE — never through `reconcile()`, whose `syncHubCounts` pass
+// recomputes from truth and would mask exactly the bug under test.
+describe("the deploy-time bulk stamps credit the maintained hub counters", () => {
+  async function counts(
+    table: "albums" | "labels",
+    slug: string,
+  ): Promise<{ certified: number; renderable: number }> {
+    const result = await db.execute({
+      args: [slug],
+      sql: `select renderable_track_count as renderable, certified_finding_count as certified
+            from ${table} where slug = ?`,
+    });
+    const row = result.rows[0];
+
+    return { certified: Number(row?.certified ?? -1), renderable: Number(row?.renderable ?? -1) };
+  }
+
+  type BatchCall = { mode: unknown; statements: { args?: unknown; sql?: string }[] };
+
+  /** A client that records every `batch` call, so the atomicity SHAPE can be asserted. */
+  function recording(calls: BatchCall[]): Client {
+    return new Proxy(db, {
+      get(target, prop) {
+        if (prop === "batch") {
+          return async (
+            statements: Parameters<Client["batch"]>[0],
+            mode?: Parameters<Client["batch"]>[1],
+          ) => {
+            calls.push({ mode, statements: [...statements] as BatchCall["statements"] });
+
+            return target.batch(statements, mode);
+          };
+        }
+
+        const value = Reflect.get(target, prop);
+
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
+  it("LABELS: credits the stamped set — every linked track, and the certified subset", async () => {
+    // One finding plus two quieter catalogue rows on the same imprint: renderable 3, certified 1.
+    await seedTrack({
+      album: null,
+      label: "Hospital Records",
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "hc-lbl-1",
+    });
+    await seedTrack({ album: null, label: "Hospital Records", title: "Deep", trackId: "hc-lbl-2" });
+    await seedTrack({ album: null, label: "Hospital Records", title: "Cut", trackId: "hc-lbl-3" });
+    // A second imprint proves the credit lands on the RIGHT row, not on whichever came first.
+    await seedTrack({
+      album: null,
+      label: "Metalheadz",
+      logId: "001.1.2A",
+      title: "Other",
+      trackId: "hc-lbl-4",
+    });
+
+    await backfillLabels(db);
+
+    expect(await counts("labels", "hospital-records")).toEqual({ certified: 1, renderable: 3 });
+    expect(await counts("labels", "metalheadz")).toEqual({ certified: 1, renderable: 1 });
+  });
+
+  it("ALBUMS: credits the stamped set — every linked track, and the certified subset", async () => {
+    await seedTrack({
+      album: "Wormhole",
+      label: null,
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "hc-alb-1",
+    });
+    await seedTrack({ album: "Wormhole", label: null, title: "Deep", trackId: "hc-alb-2" });
+    await seedTrack({ album: "Wormhole", label: null, title: "Cut", trackId: "hc-alb-3" });
+
+    await backfillAlbums(db);
+
+    expect(await counts("albums", "wormhole")).toEqual({ certified: 1, renderable: 3 });
+  });
+
+  it("credits ONCE when two spellings trim to the same string — the zero-row census skips", async () => {
+    // `group by label` yields two rows here, but both trim to "Hospital Records", so the FIRST
+    // iteration's `trim(label) = ?` stamps both. The second iteration's census must read zero and
+    // skip the credit — without it the counters would double to 4/2.
+    await seedTrack({
+      album: null,
+      label: "Hospital Records",
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "hc-trim-1",
+    });
+    await seedTrack({
+      album: null,
+      label: "  Hospital Records  ",
+      title: "Deep",
+      trackId: "hc-trim-2",
+    });
+
+    await backfillLabels(db);
+
+    expect(await counts("labels", "hospital-records")).toEqual({ certified: 1, renderable: 2 });
+  });
+
+  it("does not re-credit on a second deploy — the steady state moves nothing", async () => {
+    await seedTrack({
+      album: "Wormhole",
+      label: "Hospital Records",
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "hc-idem-1",
+    });
+    await seedTrack({
+      album: "Wormhole",
+      label: "Hospital Records",
+      title: "Deep",
+      trackId: "hc-idem-2",
+    });
+
+    await backfillLabels(db);
+    await backfillAlbums(db);
+    // Every deploy runs both again; the pointers are stamped, so nothing matches and nothing moves.
+    await backfillLabels(db);
+    await backfillAlbums(db);
+
+    expect(await counts("labels", "hospital-records")).toEqual({ certified: 1, renderable: 2 });
+    expect(await counts("albums", "wormhole")).toEqual({ certified: 1, renderable: 2 });
+  });
+
+  it("rides ONE write batch — the stamp and the credit can never half-apply", async () => {
+    await seedTrack({
+      album: "Wormhole",
+      label: "Hospital Records",
+      logId: "001.1.1A",
+      title: "Cert",
+      trackId: "hc-atomic-1",
+    });
+
+    const labelCalls: BatchCall[] = [];
+    const albumCalls: BatchCall[] = [];
+
+    await backfillLabels(recording(labelCalls));
+    await backfillAlbums(recording(albumCalls));
+
+    for (const [calls, table, foreignKey] of [
+      [labelCalls, "labels", "label_id"],
+      [albumCalls, "albums", "album_id"],
+    ] as const) {
+      expect(calls).toHaveLength(1);
+
+      const call = calls[0];
+
+      expect(call?.mode).toBe("write");
+      expect(call?.statements).toHaveLength(2);
+      // The edge write first, the counter move second, in the same atomic batch.
+      expect(call?.statements[0]?.sql).toContain(`update tracks set ${foreignKey} = ?`);
+      expect(call?.statements[1]?.sql).toContain(`update ${table}`);
+      expect(call?.statements[1]?.sql).toContain("renderable_track_count");
+      expect(call?.statements[1]?.sql).toContain("certified_finding_count");
+      // The credit is a PURE credit (+1 renderable / +1 certified) — a fill-null-only WHERE has
+      // no old entity to debit, so no debit statement is in the batch at all.
+      expect(call?.statements[1]?.args).toEqual([1, 1, expect.any(String)]);
+    }
   });
 });
 

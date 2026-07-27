@@ -42,6 +42,8 @@ import { type Client, createClient } from "@libsql/client/web";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
 
+import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
+
 export type AlbumsBackfillResult = {
   /** Tracks whose `album_id` pointer this run stamped. */
   linked: number;
@@ -113,6 +115,22 @@ export async function backfillAlbums(client: Client): Promise<AlbumsBackfillResu
  * The fold happens here in TS (SQLite has no `slugify`), but what it folds is the UNLINKED
  * set — drained through `tracks_album_id_idx`, and empty once the inline path has caught up —
  * never the whole catalogue.
+ *
+ * ── IT CREDITS THE MAINTAINED HUB COUNTERS ─────────────────────────────────────────────
+ * `albums.renderable_track_count` / `certified_finding_count` are DELTA-written by every
+ * runtime link path (lib/server/hub-counts.ts). This bulk stamp moves the same edge, so it
+ * moves the same counters — otherwise it leaks drift the nightly `reconcile_hub_counts`
+ * sweep has to spend its audit correcting, which is exactly the signal that audit carries.
+ *
+ * THE DELTA IS A PURE CREDIT, because the WHERE is fill-null-only (`album_id is null`): a
+ * stamped track pointed at NOTHING a moment ago, so there is never an old entity to debit.
+ * That collapses the general re-point arithmetic (`hubCountMoveStatements`) down to one
+ * bounded aggregate per album — the CENSUS below, run over the UPDATE's exact predicate
+ * BEFORE it fires, because afterwards the rows no longer match it. `rowsAffected` cannot
+ * stand in: it gives the total but not the certified split.
+ *
+ * COST: one extra aggregate per album that actually resolves to a row, over the same
+ * `tracks_album_id_idx`-drained set the loop already walks.
  */
 export async function linkTracksToAlbums(client: Client): Promise<number> {
   const unlinked = await client.execute({
@@ -141,12 +159,36 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
       continue;
     }
 
-    const updated = await client.execute({
-      args: [albumId, raw],
-      sql: `update tracks set album_id = ? where album_id is null and trim(album) = ?`,
+    // The census, over the UPDATE's predicate verbatim. `certified` keys off the maintained
+    // `is_catalogue` discriminator (keystone 1), never a `findings` join.
+    const census = await client.execute({
+      args: [raw],
+      sql: `select count(*) as n, sum(case when is_catalogue = 0 then 1 else 0 end) as cert
+            from tracks
+            where album_id is null and trim(album) = ?`,
     });
+    const renderable = Number(census.rows[0]?.n ?? 0);
 
-    linked += updated.rowsAffected;
+    if (renderable === 0) {
+      // Nothing left to stamp — an earlier iteration's trim-equal spelling already claimed these
+      // rows. Skip the UPDATE and, load-bearingly, the credit: a zero-row stamp must move nothing.
+      continue;
+    }
+
+    const certified = Number(census.rows[0]?.cert ?? 0);
+    // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
+    const [updated] = await client.batch(
+      [
+        {
+          args: [albumId, raw],
+          sql: `update tracks set album_id = ? where album_id is null and trim(album) = ?`,
+        },
+        hubCountDeltaStatement("albums", albumId, { certified, renderable }),
+      ],
+      "write",
+    );
+
+    linked += updated?.rowsAffected ?? 0;
   }
 
   return linked;
