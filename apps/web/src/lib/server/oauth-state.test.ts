@@ -15,10 +15,12 @@ import {
 // platform tokens. AFTER: the start leg also hands the browser an HttpOnly cookie
 // holding that nonce, and the callback refuses the exchange unless the two match.
 //
-// The CLI carve-out is tested as explicitly as the binding is: `fluncle admin auth
-// <platform>` calls the start route with a Bearer token and the operator opens the URL
-// in a different client, so there is no cookie to bind to. The requirement is recorded
-// in the SIGNED state (`bind`), which no attacker can flip.
+// THE CLI CARVE-OUT IS GONE. `fluncle admin auth <platform>` used to receive the
+// PROVIDER's authorize URL with a `bind: "none"` state — replayable for ten minutes,
+// because the operator opened it in a client that had never been handed a cookie. A
+// Bearer-carried start now prints a Fluncle-origin handoff link instead
+// (./oauth-handoff.ts + its suite), so this module mints exactly one kind of state and
+// the callback gate REJECTS every other `bind` rather than waving it through.
 
 const SESSION_SECRET = "test-session-secret-oauth-state";
 
@@ -66,9 +68,9 @@ describe("stateCookieName", () => {
   });
 });
 
-describe("mintOauthState — the browser path", () => {
+describe("mintOauthState", () => {
   it("signs a bound state and hands back the matching nonce cookie", async () => {
-    const { setCookie, state } = await mintOauthState("youtube-auth", { bindToBrowser: true });
+    const { setCookie, state } = await mintOauthState("youtube-auth");
     const payload = await verifyState(state);
 
     expect(payload).toMatchObject({ bind: "cookie", purpose: "youtube-auth" });
@@ -81,7 +83,7 @@ describe("mintOauthState — the browser path", () => {
   });
 
   it("sets HttpOnly + SameSite=Lax + a 10-minute life, scoped to /api", async () => {
-    const { setCookie } = await mintOauthState("youtube-auth", { bindToBrowser: true });
+    const { setCookie } = await mintOauthState("youtube-auth");
     const { attributes } = parseSetCookie(setCookie ?? "");
 
     expect(attributes).toContain("HttpOnly");
@@ -93,27 +95,43 @@ describe("mintOauthState — the browser path", () => {
   });
 
   it("mints a FRESH nonce every time (no reuse across starts)", async () => {
-    const first = await mintOauthState("youtube-auth", { bindToBrowser: true });
-    const second = await mintOauthState("youtube-auth", { bindToBrowser: true });
+    const first = await mintOauthState("youtube-auth");
+    const second = await mintOauthState("youtube-auth");
 
     expect(parseSetCookie(first.setCookie ?? "").value).not.toBe(
       parseSetCookie(second.setCookie ?? "").value,
     );
   });
-});
 
-describe("mintOauthState — the CLI path", () => {
-  it("signs an UNBOUND state and sets no cookie (the browser is a different client)", async () => {
-    const { setCookie, state } = await mintOauthState("youtube-auth", { bindToBrowser: false });
+  it("has NO unbound variant — every mint binds, so `setCookie` is unconditional", async () => {
+    for (const purpose of ["youtube-auth", "mixcloud-auth", "admin-login"]) {
+      const { setCookie, state } = await mintOauthState(purpose);
 
-    expect(setCookie).toBeUndefined();
-    expect(await verifyState(state)).toMatchObject({ bind: "none", purpose: "youtube-auth" });
+      expect(setCookie).toBeTypeOf("string");
+      expect(await verifyState(state)).toMatchObject({ bind: "cookie", purpose });
+    }
+  });
+
+  it("carries extra claims (the login's handoff ticket) but never lets one shadow `bind`", async () => {
+    const { state } = await mintOauthState("admin-login", {
+      bind: "none",
+      handoff: "ticket-value",
+      purpose: "spotify-auth",
+    });
+
+    // The fixed fields are spread LAST, so a caller cannot downgrade the binding or
+    // repoint the purpose by naming one of them in `claims`.
+    expect(await verifyState(state)).toMatchObject({
+      bind: "cookie",
+      handoff: "ticket-value",
+      purpose: "admin-login",
+    });
   });
 });
 
 describe("stateIsBoundToThisBrowser — the callback gate", () => {
   it("ACCEPTS the browser that started the flow (cookie matches the nonce)", async () => {
-    const { setCookie, state } = await mintOauthState("youtube-auth", { bindToBrowser: true });
+    const { setCookie, state } = await mintOauthState("youtube-auth");
     const payload = await verifyState(state);
 
     expect(stateIsBoundToThisBrowser(callbackRequest(setCookie?.split("; ")[0]), payload)).toBe(
@@ -122,7 +140,7 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
   });
 
   it("REFUSES a state replayed in a browser that has no cookie", async () => {
-    const { state } = await mintOauthState("youtube-auth", { bindToBrowser: true });
+    const { state } = await mintOauthState("youtube-auth");
     const payload = await verifyState(state);
 
     expect(stateIsBoundToThisBrowser(callbackRequest(), payload)).toBe(false);
@@ -133,8 +151,8 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
   });
 
   it("REFUSES a state whose nonce is not the one this browser holds", async () => {
-    const mine = await mintOauthState("youtube-auth", { bindToBrowser: true });
-    const theirs = await mintOauthState("youtube-auth", { bindToBrowser: true });
+    const mine = await mintOauthState("youtube-auth");
+    const theirs = await mintOauthState("youtube-auth");
     const theirPayload = await verifyState(theirs.state);
 
     // My browser presents MY nonce against THEIR state — the two halves must match.
@@ -144,8 +162,8 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
   });
 
   it("REFUSES a cross-FLOW cookie (a YouTube nonce cannot satisfy a Mixcloud state)", async () => {
-    const youtube = await mintOauthState("youtube-auth", { bindToBrowser: true });
-    const mixcloud = await mintOauthState("mixcloud-auth", { bindToBrowser: true });
+    const youtube = await mintOauthState("youtube-auth");
+    const mixcloud = await mintOauthState("mixcloud-auth");
     const mixcloudPayload = await verifyState(mixcloud.state);
 
     expect(
@@ -157,8 +175,8 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
   });
 
   it("ALLOWS two concurrent flows: each cookie satisfies its own state", async () => {
-    const youtube = await mintOauthState("youtube-auth", { bindToBrowser: true });
-    const mixcloud = await mintOauthState("mixcloud-auth", { bindToBrowser: true });
+    const youtube = await mintOauthState("youtube-auth");
+    const mixcloud = await mintOauthState("mixcloud-auth");
     const both = [youtube, mixcloud].map((m) => m.setCookie?.split("; ")[0]).join("; ");
 
     expect(stateIsBoundToThisBrowser(callbackRequest(both), await verifyState(youtube.state))).toBe(
@@ -169,21 +187,28 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
     ).toBe(true);
   });
 
-  it("passes an UNBOUND (CLI-minted) state through, cookie or not", async () => {
-    const { state } = await mintOauthState("youtube-auth", { bindToBrowser: false });
-    const payload = await verifyState(state);
-
-    expect(stateIsBoundToThisBrowser(callbackRequest(), payload)).toBe(true);
-  });
-
-  it("treats a state with no `bind` at all as unbound (pre-deploy states expire on their own)", () => {
+  it('REJECTS the retired `bind: "none"` even with the right cookie present', () => {
+    // The unbound state is gone with the CLI carve-out. A state still carrying it is
+    // either pre-deploy (it expires in ten minutes) or someone re-signing an old
+    // shape — either way the callback refuses rather than skipping the cookie check.
     expect(
-      stateIsBoundToThisBrowser(callbackRequest(), {
+      stateIsBoundToThisBrowser(callbackRequest("fluncle_oauth_youtube_auth=n"), {
+        bind: "none",
         iat: Date.now(),
         nonce: "n",
         purpose: "youtube-auth",
       }),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("REJECTS a state with no `bind` at all (reject-unknown, not pass-through)", () => {
+    expect(
+      stateIsBoundToThisBrowser(callbackRequest("fluncle_oauth_youtube_auth=n"), {
+        iat: Date.now(),
+        nonce: "n",
+        purpose: "youtube-auth",
+      }),
+    ).toBe(false);
   });
 
   it("refuses a bound state with a missing purpose or nonce (nothing to match on)", () => {

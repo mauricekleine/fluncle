@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { hasBearerHeader, requireOperator } from "../../../../../lib/server/env";
-import { apiErrorResponse } from "../../../../../lib/server/http-errors";
-import { mintOauthState } from "../../../../../lib/server/oauth-state";
-import { buildSpotifyAuthUrl } from "../../../../../lib/server/spotify";
+import { requireOperator } from "../../../../../lib/server/env";
+import { startOauthConnect } from "../../../../../lib/server/oauth-handoff";
 
+// The PUBLISH-auth start; the sibling login.ts is the identity front door. The
+// carrier branch lives in `startOauthConnect` (lib/server/oauth-handoff.ts): a
+// browser gets the provider URL + its nonce cookie, a Bearer caller gets a
+// Fluncle-origin handoff link that mints the state in the operator's browser.
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request }) => {
     const unauthorized = await requireOperator(request);
@@ -13,24 +15,7 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    try {
-      // Browser start (grant cookie, no Bearer) ⇒ the state is pinned to this
-      // browser via the nonce cookie; CLI start (Bearer) ⇒ unbound (oauth-state.ts).
-      const { setCookie, state } = await mintOauthState("spotify-auth", {
-        bindToBrowser: !hasBearerHeader(request),
-      });
-      const authUrl = await buildSpotifyAuthUrl(state);
-
-      return Response.json(
-        {
-          authUrl,
-          ok: true,
-        },
-        setCookie ? { headers: { "Set-Cookie": setCookie } } : undefined,
-      );
-    } catch (error) {
-      return apiErrorResponse(error);
-    }
+    return startOauthConnect(request, "spotify-auth");
   },
 };
 

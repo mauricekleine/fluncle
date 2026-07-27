@@ -1,12 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { type ApiHandlers, aliasHandlers } from "../../../-alias";
-import { hasBearerHeader, requireOperator } from "../../../../../lib/server/env";
-import { apiErrorResponse } from "../../../../../lib/server/http-errors";
-import { mintOauthState } from "../../../../../lib/server/oauth-state";
-import { buildTikTokAuthUrl } from "../../../../../lib/server/tiktok";
+import { requireOperator } from "../../../../../lib/server/env";
+import { startOauthConnect } from "../../../../../lib/server/oauth-handoff";
 
 // Admin-gated start of our own TikTok OAuth (Display API per-video metrics). Mirrors the
 // YouTube start route; the callback verifies the same signed state (purpose tiktok-auth).
+// The carrier branch lives in `startOauthConnect` (lib/server/oauth-handoff.ts): a
+// browser gets the provider URL + its nonce cookie, a Bearer caller gets a
+// Fluncle-origin handoff link that mints the state in the operator's browser.
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request }) => {
     const unauthorized = await requireOperator(request);
@@ -15,24 +16,7 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    try {
-      // Browser start ⇒ the state is pinned to this browser by a nonce cookie; CLI
-      // start (Bearer) ⇒ unbound (oauth-state.ts).
-      const { setCookie, state } = await mintOauthState("tiktok-auth", {
-        bindToBrowser: !hasBearerHeader(request),
-      });
-      const authUrl = await buildTikTokAuthUrl(state);
-
-      return Response.json(
-        {
-          authUrl,
-          ok: true,
-        },
-        setCookie ? { headers: { "Set-Cookie": setCookie } } : undefined,
-      );
-    } catch (error) {
-      return apiErrorResponse(error);
-    }
+    return startOauthConnect(request, "tiktok-auth");
   },
 };
 

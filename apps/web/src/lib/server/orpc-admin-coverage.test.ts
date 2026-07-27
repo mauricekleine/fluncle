@@ -630,6 +630,10 @@ const ADMIN_CARVE_OUT_ROUTE_PREFIXES = [
   // TikTok Display-API OAuth (per-video metrics ledger): 302 browser redirects like the
   // others, not RPC JSON — a permanent carve-out.
   "tiktok/auth/",
+  // The CLI → browser handoff (lib/server/oauth-handoff.ts): the Fluncle-origin link a
+  // Bearer-carried connect prints. It answers a 302 to the provider (or to /admin/login),
+  // never RPC JSON — the same permanent carve-out class as the starts and callbacks above.
+  "oauth/",
 ];
 
 const ADMIN_CARVE_OUT_ROUTES = new Set([

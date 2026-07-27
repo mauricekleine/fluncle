@@ -307,6 +307,11 @@ export const ADMIN_COOKIE_NAME = "fluncle_admin";
 // one-line operator choice, not a prerequisite.
 export const ADMIN_GRANT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+// The CLI handoff ticket's window (lib/server/oauth-handoff.ts). Matched to the
+// OAuth state window on purpose: the ticket exists only to carry a terminal-printed
+// connect into a browser, and a link that outlives the flow it starts is just a
+// longer-lived credential.
+export const OAUTH_HANDOFF_MAX_AGE_MS = 10 * 60 * 1000;
 
 // ── The grant epoch: revocation for a stateless cookie ────────────────────────
 // A signed grant cookie is self-contained, so before this there was NO way to
@@ -547,6 +552,11 @@ export function jsonError(status: number, code: string, message: string): Respon
 // the other. CHANGING A LABEL invalidates every credential signed under it.
 const GRANT_KEY_LABEL = "fluncle/admin-grant-cookie/v1";
 const OAUTH_STATE_KEY_LABEL = "fluncle/oauth-state/v1";
+// The third label: the CLI handoff ticket. Its OWN subkey, so a handoff ticket can
+// never verify as an OAuth state (which would smuggle an unbound state past the
+// callback) nor as a grant cookie — the same isolation the other two already have
+// from each other, extended to the carrier this closes the CLI hole with.
+const OAUTH_HANDOFF_KEY_LABEL = "fluncle/oauth-handoff/v1";
 
 async function signingSubkey(label: string): Promise<Buffer> {
   const root = await readEnv("ADMIN_SESSION_SECRET");
@@ -601,6 +611,23 @@ export async function signOauthState(payload: Record<string, string | number>): 
 
 export async function verifyState(state: string): Promise<Record<string, unknown>> {
   return verifyWithKey(await signingSubkey(OAUTH_STATE_KEY_LABEL), state, OAUTH_STATE_MAX_AGE_MS);
+}
+
+/**
+ * Sign a CLI handoff ticket under its own subkey (lib/server/oauth-handoff.ts).
+ * Ten-minute window, enforced on the way back in by `verifyOauthHandoff`.
+ */
+export async function signOauthHandoff(payload: Record<string, string | number>): Promise<string> {
+  return signWithKey(await signingSubkey(OAUTH_HANDOFF_KEY_LABEL), payload);
+}
+
+/** Throws on a bad signature or an expired ticket, exactly like `verifyState`. */
+export async function verifyOauthHandoff(token: string): Promise<Record<string, unknown>> {
+  return verifyWithKey(
+    await signingSubkey(OAUTH_HANDOFF_KEY_LABEL),
+    token,
+    OAUTH_HANDOFF_MAX_AGE_MS,
+  );
 }
 
 /**

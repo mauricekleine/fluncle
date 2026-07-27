@@ -1,4 +1,4 @@
-// OAuth state, bound to the browser that started the flow.
+// OAuth state, bound to the browser that started the flow. ALWAYS.
 //
 // THE HOLE THIS CLOSES. Every one of Fluncle's seven OAuth legs (the admin Spotify
 // login, plus the six platform connects: spotify-auth, youtube, mixcloud, tiktok,
@@ -9,7 +9,7 @@
 // THEIR platform tokens under Fluncle's own account row. The signature stopped
 // forgery; nothing stopped replay.
 //
-// THE FIX. The start leg now also hands the browser a short-lived HttpOnly cookie
+// THE FIX. The start leg also hands the browser a short-lived HttpOnly cookie
 // carrying the same nonce, and the callback refuses to exchange the code unless the
 // cookie matches the nonce inside the signed state. A state lifted from a log, a
 // terminal, or browser history is then useless in any OTHER browser — the two halves
@@ -21,23 +21,21 @@
 // the cookie and break every flow), while a cross-site sub-resource request cannot
 // read it.
 //
-// THE CLI CARVE-OUT, stated plainly. `fluncle admin auth <platform>` calls the start
-// route with a Bearer token, prints the authorize URL, and the operator opens it in a
-// browser — a DIFFERENT client from the one that received the response, so there is
-// no cookie to bind to. The bind requirement is therefore recorded IN THE SIGNED
-// STATE (`bind: "cookie" | "none"`), which an attacker cannot flip. A browser-started
-// flow is always bound; a CLI-started flow keeps exactly today's behaviour (signature
-// + 10-minute window). The residual is a CLI-minted state replayable for 10 minutes,
-// unchanged from before this module — closing it needs a Fluncle-origin handoff URL
-// for the CLI path (a follow-up, not a regression).
+// THE CLI CARVE-OUT IS GONE. `fluncle admin auth <platform>` used to call the start
+// route with a Bearer token and print the PROVIDER's authorize URL — a different
+// client from the one that received the response, so there was no cookie to bind to.
+// That case signed `bind: "none"` and kept only the signature + window, leaving a
+// CLI-minted state replayable for ten minutes. It no longer exists: a Bearer-carried
+// start now prints a FLUNCLE-ORIGIN handoff link (./oauth-handoff.ts) that mints the
+// state inside the operator's logged-in browser, so this module has exactly one
+// path. `bind` therefore has one legal value, and the callback gate REJECTS anything
+// else — a state with a missing, unknown, or tampered `bind` is refused rather than
+// waved through as "probably a CLI start".
 
 import { constantTimeEqual, readCookie, signOauthState } from "./env";
 
 /** How long the browser holds the nonce — the OAuth state window, matched. */
 const STATE_COOKIE_MAX_AGE_S = 10 * 60;
-
-/** Whether the state must be matched against a browser cookie at the callback. */
-export type StateBinding = "cookie" | "none";
 
 /**
  * The per-purpose cookie name. One cookie PER FLOW, not one shared cookie: the
@@ -63,24 +61,29 @@ function cookieAttributes(maxAgeSeconds: number): string[] {
 }
 
 /**
- * Mint a signed OAuth state plus, when the caller is a browser, the `Set-Cookie`
- * that pins it to that browser.
+ * Mint a signed OAuth state plus the `Set-Cookie` that pins it to this browser.
  *
- * `bindToBrowser` is decided by the CARRIER, never by a client-supplied hint: the
- * start routes pass `!hasBearerHeader(request)`, so a cookie-carried (browser) start
- * binds and a Bearer-carried (CLI/agent) start does not.
+ * There is no unbound variant and no `bindToBrowser` switch: every caller is a
+ * browser now (a Bearer-carried start is answered with a handoff link instead of a
+ * provider URL — ./oauth-handoff.ts), so `setCookie` is unconditional and the
+ * callback can demand it unconditionally.
+ *
+ * `claims` is merged UNDER the fixed fields, never over them: the admin-login leg
+ * carries the handoff ticket it must return to after sign-in, and no caller can
+ * shadow `bind`, `iat`, `nonce`, or `purpose` by naming one of them.
  */
 export async function mintOauthState(
   purpose: string,
-  options: { bindToBrowser: boolean },
-): Promise<{ setCookie?: string; state: string }> {
+  claims: Record<string, string> = {},
+): Promise<{ setCookie: string; state: string }> {
   const nonce = crypto.randomUUID();
-  const bind: StateBinding = options.bindToBrowser ? "cookie" : "none";
-  const state = await signOauthState({ bind, iat: Date.now(), nonce, purpose });
-
-  if (!options.bindToBrowser) {
-    return { state };
-  }
+  const state = await signOauthState({
+    ...claims,
+    bind: "cookie",
+    iat: Date.now(),
+    nonce,
+    purpose,
+  });
 
   return {
     setCookie: [
@@ -99,21 +102,20 @@ export function clearedStateCookie(purpose: string): string {
 /**
  * Whether a verified state payload is allowed to proceed to the token exchange.
  *
- * - `bind: "cookie"` (a browser-started flow) → the request MUST carry the matching
- *   nonce cookie. A missing, empty, or different cookie is refused.
- * - `bind: "none"` (a CLI-started flow) → no cookie exists to check; the signature
- *   and the 10-minute window are the whole gate, exactly as before.
- * - anything else (a state minted before this shipped, or a tampered `bind`) → the
- *   signature already proved Fluncle minted it, so treat an unknown binding as
- *   unbound rather than breaking a flow mid-consent. Those states expire in ten
- *   minutes regardless, and the key rotation on this deploy already invalidated them.
+ * REJECT-UNKNOWN. Only `bind: "cookie"` with the matching nonce cookie passes.
+ * Anything else — a missing `bind`, the retired `"none"`, a tampered value — is
+ * refused. The signature already proved Fluncle minted the state, so this is not
+ * about forgery; it is that a state Fluncle can no longer explain the binding of is
+ * a state Fluncle should not spend an authorization code on. The one cost is that a
+ * flow already mid-consent when this deploys fails at the callback; those states
+ * live ten minutes, and the operator just runs the connect again.
  */
 export function stateIsBoundToThisBrowser(
   request: Request,
   payload: Record<string, unknown>,
 ): boolean {
   if (payload.bind !== "cookie") {
-    return true;
+    return false;
   }
 
   const purpose = typeof payload.purpose === "string" ? payload.purpose : "";

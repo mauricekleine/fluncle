@@ -3,6 +3,7 @@ import { type ApiHandlers, aliasHandlers } from "../../../-alias";
 import { grantCookie, isAllowedSpotifyUser, signGrant } from "../../../../../lib/server/admin-auth";
 import { jsonError, verifyState } from "../../../../../lib/server/env";
 import { logEvent } from "../../../../../lib/server/log";
+import { handoffUrl } from "../../../../../lib/server/oauth-handoff";
 import {
   clearedStateCookie,
   stateIsBoundToThisBrowser,
@@ -47,8 +48,17 @@ export const serverHandlers: ApiHandlers = {
           });
         }
 
+        // The CLI round trip (lib/server/oauth-handoff.ts): if the operator got here
+        // by opening a connect link while signed out, the login state carries that
+        // ticket and we drop them back on the connect instead of the board. The
+        // destination is a FIXED path with the ticket as a percent-encoded query
+        // value — never a caller-supplied URL — and the handoff route re-verifies
+        // the ticket from scratch, so a stale one just answers "expired" there.
+        const carried = statePayload.handoff;
+        const destination =
+          typeof carried === "string" && carried ? handoffUrl("", carried) : "/admin";
         // Two Set-Cookie headers: the grant in, the consumed state nonce out.
-        const headers = new Headers({ Location: "/admin" });
+        const headers = new Headers({ Location: destination });
         headers.append("Set-Cookie", grantCookie(await signGrant()));
         headers.append("Set-Cookie", clearedStateCookie("admin-login"));
 
