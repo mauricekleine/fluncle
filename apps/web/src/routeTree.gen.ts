@@ -105,6 +105,7 @@ import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
 import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
 import { Route as ApiV1MeAvatarRouteImport } from './routes/api/v1/me/avatar'
 import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
+import { Route as ApiV1AdminChatRouteImport } from './routes/api/v1/admin/chat'
 import { Route as ApiAdminOauthHandoffRouteImport } from './routes/api/admin/oauth/handoff'
 import { Route as ApiV1AdminOauthHandoffRouteImport } from './routes/api/v1/admin/oauth/handoff'
 import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
@@ -126,6 +127,8 @@ import { Route as ApiAdminInstagramAuthStartRouteImport } from './routes/api/adm
 import { Route as ApiAdminInstagramAuthCallbackRouteImport } from './routes/api/admin/instagram/auth/callback'
 import { Route as ApiV1AdminYoutubeAuthStartRouteImport } from './routes/api/v1/admin/youtube/auth/start'
 import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/v1/admin/youtube/auth/callback'
+import { Route as ApiV1AdminTwitchAuthStartRouteImport } from './routes/api/v1/admin/twitch/auth/start'
+import { Route as ApiV1AdminTwitchAuthCallbackRouteImport } from './routes/api/v1/admin/twitch/auth/callback'
 import { Route as ApiV1AdminTracksTrackIdSourceAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.source-audio'
 import { Route as ApiV1AdminTracksTrackIdSilentClipRouteImport } from './routes/api/v1/admin/tracks.$trackId.silent-clip'
 import { Route as ApiV1AdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview-audio'
@@ -137,6 +140,8 @@ import { Route as ApiV1AdminSpotifyAuthLoginRouteImport } from './routes/api/v1/
 import { Route as ApiV1AdminSpotifyAuthCallbackRouteImport } from './routes/api/v1/admin/spotify/auth/callback'
 import { Route as ApiV1AdminMixcloudAuthStartRouteImport } from './routes/api/v1/admin/mixcloud/auth/start'
 import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api/v1/admin/mixcloud/auth/callback'
+import { Route as ApiV1AdminInstagramAuthStartRouteImport } from './routes/api/v1/admin/instagram/auth/start'
+import { Route as ApiV1AdminInstagramAuthCallbackRouteImport } from './routes/api/v1/admin/instagram/auth/callback'
 
 const TracksRoute = TracksRouteImport.update({
   id: '/tracks',
@@ -619,6 +624,11 @@ const ApiV1AdminLogoutRoute = ApiV1AdminLogoutRouteImport.update({
   path: '/api/v1/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1AdminChatRoute = ApiV1AdminChatRouteImport.update({
+  id: '/api/v1/admin/chat',
+  path: '/api/v1/admin/chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminOauthHandoffRoute = ApiAdminOauthHandoffRouteImport.update({
   id: '/api/admin/oauth/handoff',
   path: '/api/admin/oauth/handoff',
@@ -741,6 +751,18 @@ const ApiV1AdminYoutubeAuthCallbackRoute =
     path: '/api/v1/admin/youtube/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiV1AdminTwitchAuthStartRoute =
+  ApiV1AdminTwitchAuthStartRouteImport.update({
+    id: '/api/v1/admin/twitch/auth/start',
+    path: '/api/v1/admin/twitch/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTwitchAuthCallbackRoute =
+  ApiV1AdminTwitchAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/twitch/auth/callback',
+    path: '/api/v1/admin/twitch/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiV1AdminTracksTrackIdSourceAudioRoute =
   ApiV1AdminTracksTrackIdSourceAudioRouteImport.update({
     id: '/api/v1/admin/tracks/$trackId/source-audio',
@@ -805,6 +827,18 @@ const ApiV1AdminMixcloudAuthCallbackRoute =
   ApiV1AdminMixcloudAuthCallbackRouteImport.update({
     id: '/api/v1/admin/mixcloud/auth/callback',
     path: '/api/v1/admin/mixcloud/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminInstagramAuthStartRoute =
+  ApiV1AdminInstagramAuthStartRouteImport.update({
+    id: '/api/v1/admin/instagram/auth/start',
+    path: '/api/v1/admin/instagram/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminInstagramAuthCallbackRoute =
+  ApiV1AdminInstagramAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/instagram/auth/callback',
+    path: '/api/v1/admin/instagram/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
 
@@ -901,6 +935,7 @@ export interface FileRoutesByFullPath {
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
+  '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
@@ -924,6 +959,8 @@ export interface FileRoutesByFullPath {
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/oauth/handoff': typeof ApiV1AdminOauthHandoffRoute
+  '/api/v1/admin/instagram/auth/callback': typeof ApiV1AdminInstagramAuthCallbackRoute
+  '/api/v1/admin/instagram/auth/start': typeof ApiV1AdminInstagramAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
   '/api/v1/admin/mixcloud/auth/start': typeof ApiV1AdminMixcloudAuthStartRoute
   '/api/v1/admin/spotify/auth/callback': typeof ApiV1AdminSpotifyAuthCallbackRoute
@@ -935,6 +972,8 @@ export interface FileRoutesByFullPath {
   '/api/v1/admin/tracks/$trackId/preview-audio': typeof ApiV1AdminTracksTrackIdPreviewAudioRoute
   '/api/v1/admin/tracks/$trackId/silent-clip': typeof ApiV1AdminTracksTrackIdSilentClipRoute
   '/api/v1/admin/tracks/$trackId/source-audio': typeof ApiV1AdminTracksTrackIdSourceAudioRoute
+  '/api/v1/admin/twitch/auth/callback': typeof ApiV1AdminTwitchAuthCallbackRoute
+  '/api/v1/admin/twitch/auth/start': typeof ApiV1AdminTwitchAuthStartRoute
   '/api/v1/admin/youtube/auth/callback': typeof ApiV1AdminYoutubeAuthCallbackRoute
   '/api/v1/admin/youtube/auth/start': typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -1029,6 +1068,7 @@ export interface FileRoutesByTo {
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
+  '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
@@ -1052,6 +1092,8 @@ export interface FileRoutesByTo {
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/oauth/handoff': typeof ApiV1AdminOauthHandoffRoute
+  '/api/v1/admin/instagram/auth/callback': typeof ApiV1AdminInstagramAuthCallbackRoute
+  '/api/v1/admin/instagram/auth/start': typeof ApiV1AdminInstagramAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
   '/api/v1/admin/mixcloud/auth/start': typeof ApiV1AdminMixcloudAuthStartRoute
   '/api/v1/admin/spotify/auth/callback': typeof ApiV1AdminSpotifyAuthCallbackRoute
@@ -1063,6 +1105,8 @@ export interface FileRoutesByTo {
   '/api/v1/admin/tracks/$trackId/preview-audio': typeof ApiV1AdminTracksTrackIdPreviewAudioRoute
   '/api/v1/admin/tracks/$trackId/silent-clip': typeof ApiV1AdminTracksTrackIdSilentClipRoute
   '/api/v1/admin/tracks/$trackId/source-audio': typeof ApiV1AdminTracksTrackIdSourceAudioRoute
+  '/api/v1/admin/twitch/auth/callback': typeof ApiV1AdminTwitchAuthCallbackRoute
+  '/api/v1/admin/twitch/auth/start': typeof ApiV1AdminTwitchAuthStartRoute
   '/api/v1/admin/youtube/auth/callback': typeof ApiV1AdminYoutubeAuthCallbackRoute
   '/api/v1/admin/youtube/auth/start': typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -1160,6 +1204,7 @@ export interface FileRoutesById {
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
+  '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
@@ -1183,6 +1228,8 @@ export interface FileRoutesById {
   '/api/admin/youtube/auth/callback': typeof ApiAdminYoutubeAuthCallbackRoute
   '/api/admin/youtube/auth/start': typeof ApiAdminYoutubeAuthStartRoute
   '/api/v1/admin/oauth/handoff': typeof ApiV1AdminOauthHandoffRoute
+  '/api/v1/admin/instagram/auth/callback': typeof ApiV1AdminInstagramAuthCallbackRoute
+  '/api/v1/admin/instagram/auth/start': typeof ApiV1AdminInstagramAuthStartRoute
   '/api/v1/admin/mixcloud/auth/callback': typeof ApiV1AdminMixcloudAuthCallbackRoute
   '/api/v1/admin/mixcloud/auth/start': typeof ApiV1AdminMixcloudAuthStartRoute
   '/api/v1/admin/spotify/auth/callback': typeof ApiV1AdminSpotifyAuthCallbackRoute
@@ -1194,6 +1241,8 @@ export interface FileRoutesById {
   '/api/v1/admin/tracks/$trackId/preview-audio': typeof ApiV1AdminTracksTrackIdPreviewAudioRoute
   '/api/v1/admin/tracks/$trackId/silent-clip': typeof ApiV1AdminTracksTrackIdSilentClipRoute
   '/api/v1/admin/tracks/$trackId/source-audio': typeof ApiV1AdminTracksTrackIdSourceAudioRoute
+  '/api/v1/admin/twitch/auth/callback': typeof ApiV1AdminTwitchAuthCallbackRoute
+  '/api/v1/admin/twitch/auth/start': typeof ApiV1AdminTwitchAuthStartRoute
   '/api/v1/admin/youtube/auth/callback': typeof ApiV1AdminYoutubeAuthCallbackRoute
   '/api/v1/admin/youtube/auth/start': typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -1292,6 +1341,7 @@ export interface FileRouteTypes {
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
     | '/api/admin/oauth/handoff'
+    | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
@@ -1315,6 +1365,8 @@ export interface FileRouteTypes {
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/oauth/handoff'
+    | '/api/v1/admin/instagram/auth/callback'
+    | '/api/v1/admin/instagram/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
     | '/api/v1/admin/mixcloud/auth/start'
     | '/api/v1/admin/spotify/auth/callback'
@@ -1326,6 +1378,8 @@ export interface FileRouteTypes {
     | '/api/v1/admin/tracks/$trackId/preview-audio'
     | '/api/v1/admin/tracks/$trackId/silent-clip'
     | '/api/v1/admin/tracks/$trackId/source-audio'
+    | '/api/v1/admin/twitch/auth/callback'
+    | '/api/v1/admin/twitch/auth/start'
     | '/api/v1/admin/youtube/auth/callback'
     | '/api/v1/admin/youtube/auth/start'
   fileRoutesByTo: FileRoutesByTo
@@ -1420,6 +1474,7 @@ export interface FileRouteTypes {
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
     | '/api/admin/oauth/handoff'
+    | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
@@ -1443,6 +1498,8 @@ export interface FileRouteTypes {
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/oauth/handoff'
+    | '/api/v1/admin/instagram/auth/callback'
+    | '/api/v1/admin/instagram/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
     | '/api/v1/admin/mixcloud/auth/start'
     | '/api/v1/admin/spotify/auth/callback'
@@ -1454,6 +1511,8 @@ export interface FileRouteTypes {
     | '/api/v1/admin/tracks/$trackId/preview-audio'
     | '/api/v1/admin/tracks/$trackId/silent-clip'
     | '/api/v1/admin/tracks/$trackId/source-audio'
+    | '/api/v1/admin/twitch/auth/callback'
+    | '/api/v1/admin/twitch/auth/start'
     | '/api/v1/admin/youtube/auth/callback'
     | '/api/v1/admin/youtube/auth/start'
   id:
@@ -1550,6 +1609,7 @@ export interface FileRouteTypes {
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
     | '/api/admin/oauth/handoff'
+    | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
@@ -1573,6 +1633,8 @@ export interface FileRouteTypes {
     | '/api/admin/youtube/auth/callback'
     | '/api/admin/youtube/auth/start'
     | '/api/v1/admin/oauth/handoff'
+    | '/api/v1/admin/instagram/auth/callback'
+    | '/api/v1/admin/instagram/auth/start'
     | '/api/v1/admin/mixcloud/auth/callback'
     | '/api/v1/admin/mixcloud/auth/start'
     | '/api/v1/admin/spotify/auth/callback'
@@ -1584,6 +1646,8 @@ export interface FileRouteTypes {
     | '/api/v1/admin/tracks/$trackId/preview-audio'
     | '/api/v1/admin/tracks/$trackId/silent-clip'
     | '/api/v1/admin/tracks/$trackId/source-audio'
+    | '/api/v1/admin/twitch/auth/callback'
+    | '/api/v1/admin/twitch/auth/start'
     | '/api/v1/admin/youtube/auth/callback'
     | '/api/v1/admin/youtube/auth/start'
   fileRoutesById: FileRoutesById
@@ -1654,6 +1718,7 @@ export interface RootRouteChildren {
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1StatusRoute: typeof ApiV1StatusRoute
   ApiAdminOauthHandoffRoute: typeof ApiAdminOauthHandoffRoute
+  ApiV1AdminChatRoute: typeof ApiV1AdminChatRoute
   ApiV1AdminLogoutRoute: typeof ApiV1AdminLogoutRoute
   ApiV1MeAvatarRoute: typeof ApiV1MeAvatarRoute
   ApiV1MixtapeCoverLogIdRoute: typeof ApiV1MixtapeCoverLogIdRoute
@@ -1677,6 +1742,8 @@ export interface RootRouteChildren {
   ApiAdminYoutubeAuthCallbackRoute: typeof ApiAdminYoutubeAuthCallbackRoute
   ApiAdminYoutubeAuthStartRoute: typeof ApiAdminYoutubeAuthStartRoute
   ApiV1AdminOauthHandoffRoute: typeof ApiV1AdminOauthHandoffRoute
+  ApiV1AdminInstagramAuthCallbackRoute: typeof ApiV1AdminInstagramAuthCallbackRoute
+  ApiV1AdminInstagramAuthStartRoute: typeof ApiV1AdminInstagramAuthStartRoute
   ApiV1AdminMixcloudAuthCallbackRoute: typeof ApiV1AdminMixcloudAuthCallbackRoute
   ApiV1AdminMixcloudAuthStartRoute: typeof ApiV1AdminMixcloudAuthStartRoute
   ApiV1AdminSpotifyAuthCallbackRoute: typeof ApiV1AdminSpotifyAuthCallbackRoute
@@ -1688,6 +1755,8 @@ export interface RootRouteChildren {
   ApiV1AdminTracksTrackIdPreviewAudioRoute: typeof ApiV1AdminTracksTrackIdPreviewAudioRoute
   ApiV1AdminTracksTrackIdSilentClipRoute: typeof ApiV1AdminTracksTrackIdSilentClipRoute
   ApiV1AdminTracksTrackIdSourceAudioRoute: typeof ApiV1AdminTracksTrackIdSourceAudioRoute
+  ApiV1AdminTwitchAuthCallbackRoute: typeof ApiV1AdminTwitchAuthCallbackRoute
+  ApiV1AdminTwitchAuthStartRoute: typeof ApiV1AdminTwitchAuthStartRoute
   ApiV1AdminYoutubeAuthCallbackRoute: typeof ApiV1AdminYoutubeAuthCallbackRoute
   ApiV1AdminYoutubeAuthStartRoute: typeof ApiV1AdminYoutubeAuthStartRoute
 }
@@ -2366,6 +2435,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1AdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/admin/chat': {
+      id: '/api/v1/admin/chat'
+      path: '/api/v1/admin/chat'
+      fullPath: '/api/v1/admin/chat'
+      preLoaderRoute: typeof ApiV1AdminChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/oauth/handoff': {
       id: '/api/admin/oauth/handoff'
       path: '/api/admin/oauth/handoff'
@@ -2513,6 +2589,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1AdminYoutubeAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/admin/twitch/auth/start': {
+      id: '/api/v1/admin/twitch/auth/start'
+      path: '/api/v1/admin/twitch/auth/start'
+      fullPath: '/api/v1/admin/twitch/auth/start'
+      preLoaderRoute: typeof ApiV1AdminTwitchAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/twitch/auth/callback': {
+      id: '/api/v1/admin/twitch/auth/callback'
+      path: '/api/v1/admin/twitch/auth/callback'
+      fullPath: '/api/v1/admin/twitch/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminTwitchAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/admin/tracks/$trackId/source-audio': {
       id: '/api/v1/admin/tracks/$trackId/source-audio'
       path: '/api/v1/admin/tracks/$trackId/source-audio'
@@ -2588,6 +2678,20 @@ declare module '@tanstack/react-router' {
       path: '/api/v1/admin/mixcloud/auth/callback'
       fullPath: '/api/v1/admin/mixcloud/auth/callback'
       preLoaderRoute: typeof ApiV1AdminMixcloudAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/instagram/auth/start': {
+      id: '/api/v1/admin/instagram/auth/start'
+      path: '/api/v1/admin/instagram/auth/start'
+      fullPath: '/api/v1/admin/instagram/auth/start'
+      preLoaderRoute: typeof ApiV1AdminInstagramAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/instagram/auth/callback': {
+      id: '/api/v1/admin/instagram/auth/callback'
+      path: '/api/v1/admin/instagram/auth/callback'
+      fullPath: '/api/v1/admin/instagram/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminInstagramAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -2752,6 +2856,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1StatusRoute: ApiV1StatusRoute,
   ApiAdminOauthHandoffRoute: ApiAdminOauthHandoffRoute,
+  ApiV1AdminChatRoute: ApiV1AdminChatRoute,
   ApiV1AdminLogoutRoute: ApiV1AdminLogoutRoute,
   ApiV1MeAvatarRoute: ApiV1MeAvatarRoute,
   ApiV1MixtapeCoverLogIdRoute: ApiV1MixtapeCoverLogIdRoute,
@@ -2776,6 +2881,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminYoutubeAuthCallbackRoute: ApiAdminYoutubeAuthCallbackRoute,
   ApiAdminYoutubeAuthStartRoute: ApiAdminYoutubeAuthStartRoute,
   ApiV1AdminOauthHandoffRoute: ApiV1AdminOauthHandoffRoute,
+  ApiV1AdminInstagramAuthCallbackRoute: ApiV1AdminInstagramAuthCallbackRoute,
+  ApiV1AdminInstagramAuthStartRoute: ApiV1AdminInstagramAuthStartRoute,
   ApiV1AdminMixcloudAuthCallbackRoute: ApiV1AdminMixcloudAuthCallbackRoute,
   ApiV1AdminMixcloudAuthStartRoute: ApiV1AdminMixcloudAuthStartRoute,
   ApiV1AdminSpotifyAuthCallbackRoute: ApiV1AdminSpotifyAuthCallbackRoute,
@@ -2790,6 +2897,8 @@ const rootRouteChildren: RootRouteChildren = {
     ApiV1AdminTracksTrackIdSilentClipRoute,
   ApiV1AdminTracksTrackIdSourceAudioRoute:
     ApiV1AdminTracksTrackIdSourceAudioRoute,
+  ApiV1AdminTwitchAuthCallbackRoute: ApiV1AdminTwitchAuthCallbackRoute,
+  ApiV1AdminTwitchAuthStartRoute: ApiV1AdminTwitchAuthStartRoute,
   ApiV1AdminYoutubeAuthCallbackRoute: ApiV1AdminYoutubeAuthCallbackRoute,
   ApiV1AdminYoutubeAuthStartRoute: ApiV1AdminYoutubeAuthStartRoute,
 }

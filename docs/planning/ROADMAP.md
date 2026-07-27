@@ -75,12 +75,11 @@ The 2026-07-27 rulings session settled most of the sweep's queue (HSTS posture k
 
 The sonar release gate is a build and lives under _The enforcement gates_ below.
 
-### The enforcement gates — three holes at the deploy boundary
+### The enforcement gates — two holes at the deploy boundary
 
-The build-fail coverage tests and `deploy:gate` are how this repo keeps architecture claims true. Three places where the guard has a gap:
+The build-fail coverage tests and `deploy:gate` are how this repo keeps architecture claims true. Two places where the guard has a gap:
 
 - **Decide public-vs-admin by PATH, not op-name prefix.** `orpc-admin-coverage.test.ts` classifies with `PUBLIC_OP_PREFIXES` and `op.startsWith(p)`, so any admin op whose name happens to start with a public prefix silently escapes the registry check — a name collision punches a hole in a build-fail gate. Ledger row: `docs/audit-backlog.md` (architecture, 2026-07-26).
-- **Rule on the `/api/v1` ↔ `/api` dual-mount.** `routes/api/-alias.ts` documents the contract (versioned path, bare path as back-compat alias, the same object re-mounted) but six file-routes are reachable only at the legacy path (`api/admin/chat.ts`, `api/og.set.ts`, and the Instagram + Twitch auth start/callback pairs). Mirror them or declare them deliberately unversioned — then pin the ruling with a test. Ledger row: `docs/audit-backlog.md` (architecture, 2026-07-26).
 - **Gate the sonar release.** `.github/workflows/sonar-release.yml` builds and publishes the rolling pre-release with no `cargo test`, no `clippy`, no `fmt --check`, and the box self-swaps off that release — so a merge to `apps/sonar/**` reaches the live engine ungated. This is the `deploy:gate` principle applied to the one deploy path that escapes it.
 
 ### Sonar — fully commissioned; replication stays a tripwire
