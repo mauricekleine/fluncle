@@ -179,6 +179,14 @@ type TrackCandidate = {
   album: string | null;
   albumImageUrl: string | null;
   artists: string[];
+  /**
+   * The MusicBrainz artist id behind each entry of `artists`, POSITIONALLY ALIGNED with it (null
+   * where the credit named nobody resolvable, or named Various Artists). This is the identity the
+   * artist-edge seal needs: without it a credited NAME is all the link step has, and two acts that
+   * share a name land on one `artists` row (artists.ts § THE HOMONYM SEAL). Never stored on the
+   * `tracks` row — it is carried from the release parse to `linkTracksToArtistEntities` and dropped.
+   */
+  creditMbids: (null | string)[];
   durationMs: number;
   inMasterId: number | null;
   inReleaseId: number | null;
@@ -1235,15 +1243,20 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
       }
 
       const credits = recording["artist-credit"] ?? release["artist-credit"] ?? [];
-      const artists = credits
-        .map((credit) => credit.artist?.name ?? credit.name)
-        .filter((name): name is string => Boolean(name));
+      // Name and MB artist id are kept TOGETHER through the filter so the two arrays stay
+      // positionally aligned — the alignment is what lets the link step tell which identity a
+      // given credited name carries (crawl → `linkTracksToArtistEntities`'s homonym seal).
+      const named = credits
+        .map((credit) => ({
+          mbid: credit.artist?.id ?? null,
+          name: credit.artist?.name ?? credit.name,
+        }))
+        .filter((credit): credit is { mbid: null | string; name: string } => Boolean(credit.name));
+      const artists = named.map((credit) => credit.name);
 
-      for (const credit of credits) {
-        const id = credit.artist?.id;
-
-        if (id && id !== VARIOUS_ARTISTS_MBID) {
-          artistMbids.add(id);
+      for (const credit of named) {
+        if (credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID) {
+          artistMbids.add(credit.mbid);
         }
       }
 
@@ -1251,6 +1264,13 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
         album: release.title ?? null,
         albumImageUrl: coverUrl,
         artists: artists.length > 0 ? artists : ["Unknown"],
+        // The `["Unknown"]` fallback above names no identity, so its slot is null too.
+        creditMbids:
+          artists.length > 0
+            ? named.map((credit) =>
+                credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID ? credit.mbid : null,
+              )
+            : [null],
         // `duration_ms` is NOT NULL on `tracks`. MusicBrainz genuinely does not always
         // know a recording's length, and 0 is the honest "unknown" — never a guess.
         durationMs: recording.length ?? track.length ?? 0,
@@ -1305,7 +1325,20 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     // by `spotify_artist_id` for a track that gains a Spotify presence. A track credited to nobody he
     // has found stays unlinked until its
     // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
-    await linkTracksToArtistEntities(writtenIds);
+    //
+    // The credits' MB artist ids ride along, which is what makes this link IDENTITY-CHECKED rather
+    // than name-only: a credited name whose MB id belongs to a different act than the same-named
+    // `artists` row gets NO edge (artists.ts § THE HOMONYM SEAL). This is the crawl-side half of the
+    // conflation fix; the credit sweep already refused these by construction.
+    await linkTracksToArtistEntities(
+      writtenIds,
+      new Map(
+        candidates.map((candidate) => [
+          catalogueTrackId(candidate.recordingId),
+          candidate.creditMbids,
+        ]),
+      ),
+    );
 
     // Stamp any remixer credit these titles name (RFC label-lineage-remixer, U2), now the
     // `track_artists` edges exist. A crawled remix by an ALREADY-CERTIFIED remixer (the only kind

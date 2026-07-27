@@ -25,7 +25,7 @@ vi.mock("./db", async () => {
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 
-const { buildArtistFoldMap, matchTrackNames, resolveArtistEdges } =
+const { buildArtistFoldMap, buildIdentityClaimedNames, matchTrackNames, resolveArtistEdges } =
   await import("./backfill-artist-edges");
 
 beforeEach(() => {
@@ -129,6 +129,84 @@ describe("matchTrackNames", () => {
 
     expect(match.totalNames).toBe(1);
     expect(match.matchedNames).toBe(1);
+  });
+});
+
+// ── The spelling rail: the punctuation half of the conflation seal ────────────────────────────
+//
+// The live case this pins: prod held the drum & bass act `K` (Audio Couture / Subtitles, an MB
+// identity) and the crawler brought in a Japanese pop act credited `K.`. `fold()` collapses the
+// period, so 23 of the J-pop act's tracks were stamped onto the DnB act's row and rendered on his
+// public page. An identity-claimed row now answers only to its own spellings.
+describe("buildIdentityClaimedNames", () => {
+  const aliases = [{ alias: "Kay", artist_id: "art-k" }];
+
+  it("indexes ONLY artists that carry an mbid, by fold, with their real spellings", () => {
+    const claimed = buildIdentityClaimedNames(
+      [
+        { id: "art-k", mbid: "mb-k-dnb", name: "K" },
+        { id: "art-open", mbid: null, name: "Luna" },
+      ],
+      aliases,
+    );
+
+    // Indexed BY FOLD KEY, so an alias guards its own key rather than widening the real name's —
+    // the same shape `buildArtistFoldMap` uses, so the two maps are looked up with one key.
+    expect(claimed.get("k")).toEqual(new Set(["k"]));
+    expect(claimed.get("kay")).toEqual(new Set(["kay"]));
+    // The unclaimed row is absent entirely — it keeps the historical fold latitude.
+    expect(claimed.has("luna")).toBe(false);
+  });
+
+  it("an alias of an UNCLAIMED artist is not indexed either", () => {
+    const claimed = buildIdentityClaimedNames(
+      [{ id: "art-open", mbid: null, name: "K" }],
+      [{ alias: "Kay", artist_id: "art-open" }],
+    );
+
+    expect(claimed.size).toBe(0);
+  });
+});
+
+describe("matchTrackNames — the identity spelling rail", () => {
+  const map = new Map<string, string>([
+    ["k", "art-k"],
+    ["kay", "art-k"],
+  ]);
+  const claimed = buildIdentityClaimedNames(
+    [{ id: "art-k", mbid: "mb-k-dnb", name: "K" }],
+    [{ alias: "Kay", artist_id: "art-k" }],
+  );
+
+  it('REFUSES a punctuation-only near-miss onto an identity-claimed row ("K." ⇏ K)', () => {
+    const match = matchTrackNames(["K."], map, claimed);
+
+    expect(match.edges).toEqual([]);
+    // It stays in the residual, so the mbid-keyed credit sweep can mint it as its own artist.
+    expect(match.matchedNames).toBe(0);
+    expect(match.totalNames).toBe(1);
+  });
+
+  it("still matches the artist's OWN spelling, case-insensitively", () => {
+    expect(matchTrackNames(["k"], map, claimed).edges).toEqual([
+      { artistId: "art-k", position: 1 },
+    ]);
+  });
+
+  it("still matches a TRUSTED ALIAS spelling", () => {
+    expect(matchTrackNames(["Kay"], map, claimed).edges).toEqual([
+      { artistId: "art-k", position: 1 },
+    ]);
+  });
+
+  it("leaves an UNCLAIMED row's historical fold latitude untouched", () => {
+    const open = buildIdentityClaimedNames([{ id: "art-k", mbid: null, name: "K" }], []);
+
+    expect(matchTrackNames(["K."], map, open).edges).toEqual([{ artistId: "art-k", position: 1 }]);
+  });
+
+  it("omitting the rail entirely is the historical behaviour", () => {
+    expect(matchTrackNames(["K."], map).edges).toEqual([{ artistId: "art-k", position: 1 }]);
   });
 });
 

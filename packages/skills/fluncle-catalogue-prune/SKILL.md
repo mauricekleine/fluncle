@@ -170,9 +170,49 @@ for s in <impostor-slug> <real-dnb-slug>; do
 
 Then watch the next crawl tick: the seed should resolve to `mb_label_id` and mint a MusicBrainz node whose `external_id` matches. If a namesake node goes `pending` again, the resolver fix is not actually live — stop and go back to step 0. Hub counts lag as after any purge; the nightly `reconcile_hub_counts` sweep heals them within a day.
 
+## Conflated entities (one artists row, two real acts)
+
+**The case the namesake purge deliberately leaves behind.** `purge-artists.ts` deletes an artist WHOLE, so it spares any artist holding genuine enabled-label tracks — correctly, because deleting them would take a real drum & bass page with them. What survives that rule is the **conflated row**: ONE `artists` row carrying a real DnB act AND an unrelated same-named act whose tracks arrived on the impostor walk. The impostor's tracks still render on the real act's public page.
+
+The case that created this section: **`K`** — the Audio Couture / Subtitles / Breakbeat Science drum & bass act, whose row also held 23 tracks by a Japanese pop act credited `K.` on the avex "Cutting Edge" impostor walk. Same shape on `Luna`, `Rose`, `The Kaleidoscope`, `Danger` and others.
+
+**How a row ends up holding two acts — sealed in code, so this is cleanup, not an ongoing leak.** Three paths write `track_artists` edges and only one checked identity. Measured on prod 2026-07-27 across the six namesake labels: of 225 impostor-side edges, **181** came from the crawl-time link (`linkTracksToArtistEntities`, which joined on `artists.name` alone while holding the credit's MusicBrainz artist id), **29** from slice 0's fold (`fold("K.") === fold("K")` — punctuation collapses), and **15** from the mbid-keyed credit sweep, which refuses homonyms by construction and so wrote only genuine crossovers. Both name-only paths now apply the credit sweep's ladder — mbid match wins, a name may only claim an UNCLAIMED row, and a row carrying a different mbid gets no edge (`apps/web/src/lib/server/artists.ts` § THE HOMONYM SEAL).
+
+### 1 — Detect (read-only)
+
+```bash
+bun run packages/skills/fluncle-catalogue-prune/scripts/find-conflated-artists.ts
+bun run …/find-conflated-artists.ts --no-musicbrainz            # local signals only, no vendor calls
+bun run …/find-conflated-artists.ts --labels "radar-records" --samples 3
+```
+
+It derives the impostor-walk labels from the **frontier** (the `wrong namesake; retired …` notes `reseed-label.ts` leaves behind), takes every artist holding tracks on BOTH an impostor label and another enabled label, and prints one evidence block each: per-side track counts, labels, titles, the raw credit spellings (`K` vs `K.`), which code path wrote each side's edges, and — sampling each side's recordings through MusicBrainz at 1 req/1.2s — **which MB artist those recordings are actually credited to**.
+
+That last line is the ruling. Disjoint MB artist ids on the two sides ⇒ `CONFLATION (proven)`; a shared id ⇒ `crossover (proven)`; anything unanswered stays `unsure` and is yours to research by hand. Evidence also lands in `$PRUNE_OUT_DIR/conflated-artists.json`.
+
+**A crossover is not a conflation.** One act really did appear on both labels — a drum & bass remix billed to the original artist is the common shape. Those stay exactly as they are.
+
+### 2 — Repair, dry-run first
+
+```bash
+# SPLIT — the other act keeps its tracks on a NEW artists row of its own (nothing is deleted)
+bun run …/split-artist.ts --artist k --labels "cutting-edge" --into "K." --into-mbid <mb-artist-id>
+
+# STRIP — the other act's catalogue has no business on a DnB archive; delete those tracks
+bun run …/split-artist.ts --artist the-kaleidoscope --labels "cutting-edge" --strip
+```
+
+Prefer **SPLIT** when the other act is real and worth its own page, or whenever you would rather not destroy data to fix an identity mistake — it is an `update` of `track_artists.artist_id`, so `position` and `role` ride across and the move is reversible from the rollback. Use **STRIP** when the catalogue is simply off-genre; it goes through the same `deleteTracksWithEdges` transaction, entanglement guard and per-row rollback both purges use.
+
+Pass `--into-mbid` whenever the detector named the impostor side's MusicBrainz artist — a row born with its real identity is one the seal can defend later.
+
+**The rails, all hard aborts:** an unresolved slug; `--labels` that match none of the artist's tracks; an artist with **nothing** outside the impostor labels (that is a whole-artist namesake — use `purge-artists.ts`); a `findings` row on the impostor side; and, for `--strip`, any entangled track. A co-credited impostor-side track is **held back**, never moved or deleted, because re-pointing it would silently change what the co-artist's page shows.
+
+Re-run with `--confirm` after a fresh backup (§ 3 above). The `artists` row itself is never deleted by this tool — that is the whole difference from `purge-artists.ts`. Hub counts lag as after any purge.
+
 ## Rollback
 
-Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `purge-artists-rollback.json`, `reseed-label-<slug>-rollback.json`, `orphan-edges-rollback.json`. To undo, re-insert the captured rows (they are full `select *` snapshots) or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`; the reseed rollback restores each frontier node's prior `state` / `cursor` / `note`.
+Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `purge-artists-rollback.json`, `reseed-label-<slug>-rollback.json`, `orphan-edges-rollback.json`, `split-artist-<slug>-rollback.json`. To undo, re-insert the captured rows (they are full `select *` snapshots) or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`; the reseed rollback restores each frontier node's prior `state` / `cursor` / `note`.
 
 ## Files
 
@@ -181,11 +221,15 @@ Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `p
 - `scripts/purge.ts` — LABEL-driven purge (safe-purge artists) with entanglement guard + rollback.
 - `scripts/purge-artists.ts` — TARGETED purge of an operator-named artist list, for the namesake case (dry-run/`--confirm`, rollback). Same cascade as `purge.ts`; hard-aborts on an unresolved slug, a findings track, or entanglement.
 - `scripts/reseed-label.ts` — frontier repair for a wrong-namesake seed: re-arm the resolver node, retire the impostor MusicBrainz nodes without deleting them (dry-run/`--confirm`, rollback).
+- `scripts/find-conflated-artists.ts` — READ-ONLY detector for one `artists` row holding two real acts: per-side evidence plus the MusicBrainz identity of each side's recordings.
+- `scripts/split-artist.ts` — the conflation repair: SPLIT the other act onto a new row (re-point edges) or STRIP its tracks (dry-run/`--confirm`, rollback, shared cascade + guard).
 - `scripts/clean-orphan-edges.ts` — one-off: `track_artists` rows whose track is gone (dry-run/`--apply`, rollback).
 - `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition + the named-artist resolution + the shared-credit survival rule + the one artist cascade (guard, rollback, FK-safe delete) both purges use + the atomic track/edge delete.
 - `scripts/orphan-edges.test.ts` — the delete pair's order/atomicity and the orphan predicate, against a stubbed client.
 - `scripts/purge-artists.test.ts` — the shared-credit survival rule, the findings/unknown-slug/entanglement hard aborts, the zero-write dry-run, and the cascade's delete order.
 - `scripts/reseed-label.test.ts` — the namesake classification against `mb_label_id`, the three refusals, the zero-write dry-run, and that a namesake node is noted rather than deleted.
+- `scripts/find-conflated-artists.test.ts` — the candidate gate, the edge-writer attribution, the MB verdict (and its refusal to guess), and that the whole run only reads.
+- `scripts/split-artist.test.ts` — the shared-credit hold-back, the findings / not-actually-conflated / entanglement aborts, both zero-write dry-runs, and the two apply shapes.
 - `references/traps.md` — **read first**: the false-positives every naive rule hits.
 
-All three test files run under `bun test --cwd packages/skills/fluncle-catalogue-prune/scripts`, wired into the root `test:scripts` (so the deploy gate covers them). They drive a stubbed libSQL client and the shared no-network rail is armed — nothing here reaches prod.
+All test files run under `bun test --cwd packages/skills/fluncle-catalogue-prune/scripts`, wired into the root `test:scripts` (so the deploy gate covers them). They drive a stubbed libSQL client and the shared no-network rail is armed — nothing here reaches prod.

@@ -830,28 +830,124 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
  * NEW-edge set is therefore read first — the same join, anti-joined against the edges that already
  * exist and carrying each track's `is_catalogue` — and the per-artist deltas ride the insert's
  * batch. Bounded by `trackIds`, exactly like the insert it mirrors.
+ *
+ * ── THE HOMONYM SEAL (`creditMbids`) ─────────────────────────────────────────────────────────
+ * A bare name is not an identity. Folding one onto an `artists` row is how TWO real-world acts
+ * that share a name end up on ONE Fluncle row — the CONFLATION class (docs/artist-relationship.md
+ * § Conflated entities). Measured on prod 2026-07-27: of 225 edges joining a namesake-walked
+ * label's tracks to an artist that also holds clean enabled-label tracks, 181 were written by THIS
+ * function's name join and only 15 by the mbid-keyed credit sweep, which refuses them by design.
+ *
+ * The crawler HAS each credit's MusicBrainz artist id in hand when it writes the track (it is
+ * already collecting them for the artist hop) and used to throw them away here. It now passes them
+ * as `creditMbids` — per track, positionally aligned with `artists_json` — and this function
+ * applies the SAME ladder `backfill-artist-credits.ts` ratified for the credit sweep:
+ *
+ *   1. an `artists` row carrying that exact `mbid` → link it (identity-true);
+ *   2. no such row → the name fold may link, but ONLY to a row whose OWN `mbid` is null (an
+ *      identity nobody has claimed yet);
+ *   3. a name-folded row already carrying a DIFFERENT `mbid` → NO EDGE. It is a homonym, and a
+ *      wrong merge of two artists is unrecoverable (there is no artist merge op) while a missing
+ *      edge is not. Fail closed, exactly as rung 2 of `createCreditResolver` does.
+ *
+ * Minting stays out of scope here (this function has never minted); an unclaimed MB identity is
+ * the credit sweep's job. `creditMbids` is OPTIONAL and the SQL is byte-identical without it, so
+ * the Spotify-sourced freshness tap (`label-releases.ts`, which has no MB ids to give) keeps its
+ * exact behaviour and only the MusicBrainz-sourced crawler gains the rail.
  */
-export async function linkTracksToArtistEntities(trackIds: string[]): Promise<number> {
+export type CreditMbidsByTrack = ReadonlyMap<string, ReadonlyArray<null | string>>;
+
+/**
+ * The `(track_id, position, mbid)` triples the seal binds, as ONE JSON argument.
+ *
+ * One bound arg rather than 3-per-credit placeholders: a caller may pass a couple of hundred track
+ * ids, and 3 × credits × tracks would crowd libSQL's per-statement variable ceiling. Only credits
+ * that actually carry an mbid become a triple — a null one is simply absent, which the `left join`
+ * reads as "no identity for this credit" and falls through to the plain name fold.
+ */
+export function creditMbidTriples(
+  trackIds: readonly string[],
+  creditMbids: CreditMbidsByTrack,
+): Array<[string, number, string]> {
+  const triples: Array<[string, number, string]> = [];
+
+  for (const trackId of trackIds) {
+    const mbids = creditMbids.get(trackId);
+
+    if (!mbids) {
+      continue;
+    }
+
+    for (let i = 0; i < mbids.length; i++) {
+      const mbid = mbids[i];
+
+      if (mbid) {
+        triples.push([trackId, i + 1, mbid]);
+      }
+    }
+  }
+
+  return triples;
+}
+
+export async function linkTracksToArtistEntities(
+  trackIds: string[],
+  creditMbids?: CreditMbidsByTrack,
+): Promise<number> {
   if (trackIds.length === 0) {
     return 0;
   }
 
   const db = await getDb();
   const placeholders = trackIds.map(() => "?").join(", ");
+  const triples = creditMbids ? creditMbidTriples(trackIds, creditMbids) : [];
+  // The identity side of the seal, bound as ONE json argument (see `creditMbidTriples`). Absent —
+  // no caller-supplied ids, or none of them carried one — the statement below stays byte-identical
+  // to the name-only join this function has always run.
+  const identityArgs = triples.length > 0 ? [JSON.stringify(triples)] : [];
+  const identityCte =
+    triples.length > 0
+      ? `with credit_id as (
+           select json_extract(value, '$[0]') as track_id,
+                  json_extract(value, '$[1]') as position,
+                  json_extract(value, '$[2]') as mbid
+             from json_each(?)
+         )
+         `
+      : "";
+  // The join predicate. Without identity it is the historical case-insensitive name match. With it,
+  // the three-rung ladder in the doc comment above: the mbid row wins; a name fold may only claim an
+  // UNCLAIMED row, and only while no row holds the credit's mbid; a row holding a DIFFERENT mbid is a
+  // homonym and matches nothing.
+  const identityJoin =
+    triples.length > 0
+      ? `left join credit_id ci
+             on ci.track_id = tracks.track_id and ci.position = credit.key + 1
+         join artists a on case
+             when ci.mbid is not null then (
+                  a.mbid = ci.mbid
+               or (a.mbid is null
+                   and a.name = credit.value collate nocase
+                   and not exists (select 1 from artists claimed where claimed.mbid = ci.mbid))
+             )
+             else a.name = credit.value collate nocase
+           end`
+      : `join artists a on a.name = credit.value collate nocase`;
   // `json_each` explodes `artists_json` into one row per credited name; `credit.key` is the
   // 0-based array index, which is exactly the 1-based `position` the column wants. The name
   // match is the same case-insensitive fold every other entity uses to relate a raw captured
   // string to its normalized twin.
-  const linkSelect = `select tracks.track_id, a.id as artist_id, credit.key + 1 as position,
+  const linkSelect = `${identityCte}select tracks.track_id, a.id as artist_id, credit.key + 1 as position,
                              tracks.is_catalogue as is_catalogue
                       from tracks
                       join json_each(tracks.artists_json) credit
-                      join artists a on a.name = credit.value collate nocase
+                      ${identityJoin}
                       where tracks.track_id in (${placeholders})`;
+  const linkArgs = [...identityArgs, ...trackIds];
   // The edges this insert will really CREATE — the same join, minus the ones already held.
   // `group by` folds a track that credits one artist twice (the PK stores a single row).
   const pending = await db.execute({
-    args: trackIds,
+    args: linkArgs,
     sql: `select track_id, artist_id, is_catalogue
           from (${linkSelect}) candidate
           where not exists (
@@ -873,7 +969,7 @@ export async function linkTracksToArtistEntities(trackIds: string[]): Promise<nu
   const results = await db.batch(
     [
       {
-        args: trackIds,
+        args: linkArgs,
         sql: `insert or ignore into track_artists (track_id, artist_id, position)
               select track_id, artist_id, position from (${linkSelect}) candidate`,
       },

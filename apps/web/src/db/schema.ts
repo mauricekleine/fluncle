@@ -2821,6 +2821,13 @@ export const artists = sqliteTable(
     // `track_artists`. Plain ASC — SQLite reverse-scans it, and a drizzle `desc()` index poisons
     // the snapshot (the ratified trap).
     index("artists_renderable_count_idx").on(table.renderableTrackCount),
+    // The identity seek behind the artist-edge HOMONYM SEAL (lib/server/artists.ts). Both of its
+    // mbid clauses — "is there a row carrying this credit's mbid" and "does the name-folded row
+    // carry a different one" — run per credited artist inside the crawler's per-release link, so
+    // without an index each one scans the whole artists table. Not unique on purpose: `mbid` is
+    // nullable and overwhelmingly null today, and a UNIQUE index would turn the credit sweep's
+    // rare double-mint into a write error rather than a row for the operator to merge. Plain ASC.
+    index("artists_mbid_idx").on(table.mbid),
   ],
 );
 

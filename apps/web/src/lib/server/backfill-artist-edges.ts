@@ -149,11 +149,75 @@ export function buildArtistFoldMap(
 }
 
 /**
+ * The EXACT spellings an IDENTITY-CLAIMED artist answers to, keyed by fold — the punctuation half of
+ * the conflation seal (artists.ts § THE HOMONYM SEAL is the identity half).
+ *
+ * `fold()` collapses punctuation and diacritics, so `"K."` and `"K"` fold to the same key. That is
+ * the right latitude for a row nobody has identified yet, and the wrong latitude for one that
+ * carries an `mbid`: an MB artist id is a curated identity, and quietly attaching a DIFFERENTLY
+ * SPELLED credit to it merges two acts. Measured on prod 2026-07-27: the J-pop act credited `"K."`
+ * had 23 tracks folded onto the Audio Couture / Subtitles drum & bass act `"K"` this exact way.
+ *
+ * So for a row with an `mbid`, this map holds the spellings it may still be matched on — its own
+ * name plus its trusted aliases, lowercased — and `matchTrackNames` refuses anything else. A row
+ * with NO mbid is absent from this map entirely and keeps the historical fold latitude, because
+ * there is no identity there to protect and the fold is all the signal that exists.
+ */
+export function buildIdentityClaimedNames(
+  artists: ReadonlyArray<{ id: string; mbid?: null | string; name: string }>,
+  aliases: ReadonlyArray<{ alias: string; artist_id: string }>,
+): Map<string, Set<string>> {
+  const claimed = new Set(
+    artists.filter((artist) => Boolean(artist.mbid)).map((artist) => artist.id),
+  );
+  const byFold = new Map<string, Set<string>>();
+  const add = (id: string, spelling: string) => {
+    const key = fold(spelling);
+
+    if (!key || !claimed.has(id)) {
+      return;
+    }
+
+    getOrAdd(byFold, key).add(spelling.toLowerCase());
+  };
+
+  for (const artist of artists) {
+    add(artist.id, artist.name);
+  }
+
+  for (const { alias, artist_id: artistId } of aliases) {
+    add(artistId, alias);
+  }
+
+  return byFold;
+}
+
+/** Get a set entry, creating it when absent. Avoids a non-null assertion. */
+function getOrAdd(map: Map<string, Set<string>>, key: string): Set<string> {
+  let set = map.get(key);
+
+  if (set === undefined) {
+    set = new Set<string>();
+    map.set(key, set);
+  }
+
+  return set;
+}
+
+/**
  * Match one track's credited names against the fold map. Empty names are skipped (they count toward
  * neither total nor matched). A single artist credited twice yields ONE edge (the natural key
  * dedupes anyway); the position is the 1-based index of that artist's FIRST occurrence.
+ *
+ * `identityClaimedNames` (optional — omitted, behaviour is exactly the historical fold) applies the
+ * spelling rail above: when the fold lands on an artist that has claimed an MB identity, the credit
+ * must be one of that artist's real spellings, not merely something that folds to it.
  */
-export function matchTrackNames(names: string[], foldMap: Map<string, string>): TrackNameMatch {
+export function matchTrackNames(
+  names: string[],
+  foldMap: Map<string, string>,
+  identityClaimedNames?: ReadonlyMap<string, ReadonlySet<string>>,
+): TrackNameMatch {
   const edges: Array<{ artistId: string; position: number }> = [];
   const seen = new Set<string>();
   let totalNames = 0;
@@ -168,9 +232,19 @@ export function matchTrackNames(names: string[], foldMap: Map<string, string>): 
 
     totalNames += 1;
 
-    const artistId = foldMap.get(fold(name));
+    const key = fold(name);
+    const artistId = foldMap.get(key);
 
     if (artistId === undefined) {
+      continue;
+    }
+
+    // The spelling rail: an identity-claimed fold answers only to its own spellings. A near-miss is
+    // NOT a match, so it counts toward the unmatched residual and can reach the mbid-keyed credit
+    // sweep, which is the path allowed to decide it is a separate artist and mint one.
+    const spellings = identityClaimedNames?.get(key);
+
+    if (spellings && !spellings.has(name.toLowerCase())) {
       continue;
     }
 
@@ -230,10 +304,11 @@ async function listWork(
 /** Load the full `artists` name corpus (id + canonical name) for the fold map — one bounded read. */
 async function loadArtists(
   db: Awaited<ReturnType<typeof getDb>>,
-): Promise<Array<{ id: string; name: string }>> {
-  const result = await db.execute({ args: [], sql: `select id, name from artists` });
+): Promise<Array<{ id: string; mbid: null | string; name: string }>> {
+  // `mbid` rides along for the spelling rail (`buildIdentityClaimedNames`) — same one bounded read.
+  const result = await db.execute({ args: [], sql: `select id, name, mbid from artists` });
 
-  return typedRows<{ id: string; name: string }>(result.rows);
+  return typedRows<{ id: string; mbid: null | string; name: string }>(result.rows);
 }
 
 /** Load the TRUSTED alias corpus — real-name AKAs only (`kind='name'`, `status in
@@ -360,6 +435,7 @@ export async function resolveArtistEdges(
   // Build the fold map once for the whole batch (set-based; no per-name query).
   const [artists, aliases] = await Promise.all([loadArtists(db), loadAliases(db)]);
   const foldMap = buildArtistFoldMap(artists, aliases);
+  const identityClaimedNames = buildIdentityClaimedNames(artists, aliases);
 
   const tuples: Array<[string, string, number]> = [];
   const visited: string[] = [];
@@ -374,7 +450,11 @@ export async function resolveArtistEdges(
       certifiedTracks.add(row.track_id);
     }
 
-    const match = matchTrackNames(parseArtistsJson(row.artists_json), foldMap);
+    const match = matchTrackNames(
+      parseArtistsJson(row.artists_json),
+      foldMap,
+      identityClaimedNames,
+    );
     unmatchedNames += match.totalNames - match.matchedNames;
 
     for (const edge of match.edges) {

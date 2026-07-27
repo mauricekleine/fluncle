@@ -1,0 +1,1 @@
+CREATE INDEX `artists_mbid_idx` ON `artists` (`mbid`);
