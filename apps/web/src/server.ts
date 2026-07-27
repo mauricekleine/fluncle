@@ -102,28 +102,35 @@ async function dispatch(request: Request): Promise<Response> {
   }
 
   // Edge-cache the public read surfaces: the log + entity detail pages (purge-backed page
-  // policy) and the hub/index/static/legal/docs pages (60s hub policy). The cold path is
-  // Worker SSR + Turso reads per render — measured at ~1s for `/artists`, ~98% of it server
-  // think — so a short TTL plus stale-while-revalidate (edge-cache.ts) turns the hot path into
-  // a cache hit. Detail pages get an explicit purge from the write paths; a hub rides a 60s
-  // fresh window instead, because it invalidates on any member change (see edge-cache.ts).
+  // policy), the hub/index/static/legal/docs pages (60s hub policy), and the sitemap documents
+  // (1h sitemap policy). The cold path is Worker SSR + Turso reads per render — measured at ~1s
+  // for `/artists`, ~98% of it server think — so a short TTL plus stale-while-revalidate
+  // (edge-cache.ts) turns the hot path into a cache hit. Detail pages get an explicit purge from
+  // the write paths; a hub rides a 60s fresh window instead, because it invalidates on any member
+  // change (see edge-cache.ts).
   //
   // `edgeCachePolicyFor` is the single decision point for WHICH paths are cacheable and under
   // which TTL (the full cacheable set lives there), including the query-string rule: only a
   // bare canonical URL is cached — plus a lone `?page=<n>` on the paginated catalogue hubs,
   // folded into the cache key so page N never collides onto page 1. Every other variant
   // (`?galaxy=…`, `?story=…`, `?platform=…`, `?page=2&…`) flows through uncached. The guards it
-  // cannot see are enforced here: a plain GET, an HTML-accepting client, and no admin cookie —
-  // an admin must always see live data, and a personalized/non-HTML response must never be
-  // shared-cached.
+  // cannot see are enforced here: a plain GET and no admin cookie — an admin must always see live
+  // data, and a personalized response must never be shared-cached.
+  //
+  // The HTML tiers additionally require an HTML-accepting client, so a server-fn/JSON response
+  // off a page path is never stored as the page. The SITEMAP tier deliberately does not: a
+  // crawler fetching `/sitemap.xml` sends `Accept: application/xml` or nothing useful at all, and
+  // the route answers XML either way — the policy's `contentType` is what enforces the shape
+  // instead (edge-cache.ts, `isStorable`).
   const url = new URL(request.url);
   const cachePolicy = edgeCachePolicyFor(url.pathname, url.search);
+  const acceptsHtml = request.headers.get("accept")?.includes("text/html") ?? false;
 
   if (
     cachePolicy &&
     request.method === "GET" &&
     !hasAdminCookie(request) &&
-    (request.headers.get("accept")?.includes("text/html") ?? false)
+    (cachePolicy.contentType !== "text/html" || acceptsHtml)
   ) {
     const cached = await withEdgeCache(request, async () => handler.fetch(request), cachePolicy);
 

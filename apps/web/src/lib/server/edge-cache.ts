@@ -12,9 +12,10 @@ function edgeCache(): Cache | undefined {
   return store?.default;
 }
 
-// Edge HTML cache for the public read surfaces: the log pages (`/log`, `/log/<id>`),
-// the entity detail pages (`/artist|/album|/label/<slug>`), and the hub/index pages
-// (`/`, `/artists`, `/albums`, `/labels`, `/tracks`, `/fresh`).
+// Edge cache for the public read surfaces: the log pages (`/log`, `/log/<id>`), the
+// entity detail pages (`/artist|/album|/label/<slug>`), the hub/index pages (`/`,
+// `/artists`, `/albums`, `/labels`, `/tracks`, `/fresh`), and — the one non-HTML tier —
+// the sitemap documents (`/sitemap.xml` and its children).
 //
 // Why the Cache API, not bare `Cache-Control`: this Worker IS the origin — it
 // renders the SSR document itself rather than `fetch()`ing an upstream. Cloudflare
@@ -42,6 +43,14 @@ function edgeCache(): Cache | undefined {
 export type EdgeCachePolicy = {
   /** The browser/CDN-facing `Cache-Control` for a response served under this policy. */
   readonly cacheControl: string;
+  /**
+   * The ONE response content-type a path under this policy is allowed to store. It is the
+   * storability gate (`isStorable`) AND the reason the HTML tiers can require an HTML-accepting
+   * client while the sitemap tier cannot: a sitemap route answers XML to every crawler, whatever
+   * it put in `Accept`. Anything else off the same path (a redirect, a 404, an error page) is
+   * never stored as the document.
+   */
+  readonly contentType: "application/xml" | "text/html";
   /** Within this many seconds of being stored, a cached document is served as-is. */
   readonly freshSeconds: number;
   /** What we ask `caches.default` to keep the entry for: the whole fresh+stale window. */
@@ -53,9 +62,14 @@ export type EdgeCachePolicy = {
 // `s-maxage`/`stale-while-revalidate` let any downstream shared cache (and Cloudflare's own,
 // where applicable) apply the same policy; `max-age=0` keeps private browser caches honest so
 // a viewer always revalidates against the edge rather than pinning a stale page locally.
-function policy(freshSeconds: number, swrSeconds: number): EdgeCachePolicy {
+function policy(
+  freshSeconds: number,
+  swrSeconds: number,
+  contentType: EdgeCachePolicy["contentType"] = "text/html",
+): EdgeCachePolicy {
   return {
     cacheControl: `public, max-age=0, s-maxage=${freshSeconds}, stale-while-revalidate=${swrSeconds}`,
+    contentType,
     freshSeconds,
     storedMaxAge: freshSeconds + swrSeconds,
     swrSeconds,
@@ -93,6 +107,30 @@ export const HUB_SWR_SECONDS = 600;
 
 /** The hub/index policy. */
 export const HUB_CACHE_POLICY = policy(HUB_FRESH_SECONDS, HUB_SWR_SECONDS);
+
+// Fresh window for the SITEMAP documents (`/sitemap.xml` and its `/sitemap/<kind>-<n>.xml`
+// children). An hour, because a crawl cadence tolerates far more staleness than a reader does:
+// a finding that lands at 09:00 being listed at 09:59 costs nothing, and the alternative — every
+// crawler hit paying the archive-wide read behind these documents — is what made `/sitemap.xml`
+// answer in seconds and time the post-deploy surface sweep out.
+export const SITEMAP_FRESH_SECONDS = 3_600;
+// A day-long stale tail, where the HTML tiers get an hour. The reason theirs is short does not
+// apply here: an XML document references no build-scoped `/assets/<hash>.js`, so it cannot outlive
+// its build into a broken page. A crawler that comes back inside the day is served instantly
+// while the refresh runs behind it.
+export const SITEMAP_SWR_SECONDS = 86_400;
+
+/**
+ * The sitemap policy — the one non-HTML tier. Its `contentType` is what lets `server.ts` skip the
+ * HTML-accepting-client guard for these paths (a crawler asking for `application/xml`, or sending
+ * no useful `Accept` at all, must still be served from cache) while `isStorable` keeps a 404 or a
+ * stray HTML error page from ever being stored as the sitemap.
+ */
+export const SITEMAP_CACHE_POLICY = policy(
+  SITEMAP_FRESH_SECONDS,
+  SITEMAP_SWR_SECONDS,
+  "application/xml",
+);
 
 /** The detail-page directive. Kept as a named export because it is the site's default shape. */
 export const PUBLIC_CACHE_CONTROL = PAGE_CACHE_POLICY.cacheControl;
@@ -244,17 +282,33 @@ export function isCacheableHubRequest(pathname: string, search: string): boolean
   return isStaticHubPath(pathname);
 }
 
+// The sitemap documents: the index and its per-kind children. Bare canonical URLs only (the key
+// drops the query, and neither document has a legitimate query variant); the child's whole
+// identity rides its path segment, so each child keys as its own entry. A malformed segment 404s
+// and `isStorable` refuses to store it.
+const SITEMAP_PATH = /^\/sitemap(?:\.xml|\/[A-Za-z0-9._-]+)$/;
+
+/** True for `/sitemap.xml` or one of its `/sitemap/<kind>-<n>.xml` children, query-free. */
+export function isCacheableSitemapRequest(pathname: string, search: string): boolean {
+  return search === "" && SITEMAP_PATH.test(pathname);
+}
+
 /**
  * THE chokepoint: the policy this request should be edge-cached under, or `undefined` when it
  * must not be shared-cached at all. Every caller (server.ts) goes through this one function, so
  * the "which paths are cacheable, and for how long" decision is defined and tested in one place.
  *
  * Callers remain responsible for the request-shape guards this function cannot see: GET only, no
- * admin cookie, and an HTML-accepting client (see server.ts).
+ * admin cookie, and — for the HTML tiers ONLY — an HTML-accepting client (see server.ts, which
+ * reads `contentType` off the returned policy to decide).
  */
 export function edgeCachePolicyFor(pathname: string, search: string): EdgeCachePolicy | undefined {
   if (isCacheableLogPath(pathname) || isCacheableEntityRequest(pathname, search)) {
     return PAGE_CACHE_POLICY;
+  }
+
+  if (isCacheableSitemapRequest(pathname, search)) {
+    return SITEMAP_CACHE_POLICY;
   }
 
   return isCacheableHubRequest(pathname, search) ? HUB_CACHE_POLICY : undefined;
@@ -324,7 +378,7 @@ export async function withEdgeCache(
   // Cold miss: render, store (if cacheable), and serve.
   const response = await render();
 
-  if (isStorable(response)) {
+  if (isStorable(response, cachePolicy)) {
     waitUntil(cache.put(cacheKey, toStoredResponse(response.clone(), cachePolicy)));
   }
 
@@ -339,7 +393,7 @@ async function refresh(
 ): Promise<void> {
   const response = await render();
 
-  if (isStorable(response)) {
+  if (isStorable(response, cachePolicy)) {
     await cache.put(cacheKey, toStoredResponse(response, cachePolicy));
   } else {
     // The page stopped being cacheable (e.g. it now 404s/redirects): evict so the
@@ -348,12 +402,13 @@ async function refresh(
   }
 }
 
-// Only cache a plain 200 HTML document. A 301 (trackId → coordinate), a 404
-// (missing finding), or anything non-HTML must never be edge-cached as the page.
-function isStorable(response: Response): boolean {
+// Only cache a plain 200 of the ONE shape the policy's paths emit. A 301 (trackId →
+// coordinate), a 404 (a missing finding, a sitemap shard past the end), or a response of
+// the wrong type must never be edge-cached as the document.
+function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
   return (
     response.status === 200 &&
-    (response.headers.get("content-type")?.includes("text/html") ?? false)
+    (response.headers.get("content-type")?.includes(cachePolicy.contentType) ?? false)
   );
 }
 
@@ -394,7 +449,7 @@ function tagHit(
 function tagResponse(response: Response, status: string, cachePolicy: EdgeCachePolicy): Response {
   const out = new Response(response.body, response);
 
-  if (isStorable(response)) {
+  if (isStorable(response, cachePolicy)) {
     out.headers.set("Cache-Control", cachePolicy.cacheControl);
   }
 

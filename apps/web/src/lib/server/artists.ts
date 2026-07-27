@@ -365,6 +365,28 @@ export async function listArtistSitemapRows(minTracks: number): Promise<EntitySi
   }));
 }
 
+/**
+ * The FRESHEST `lastmod` across every indexable `/artist/<slug>` page — the one date the sitemap
+ * INDEX needs from this bag. The exact twin of `maxLabelSitemapLastmod` (labels.ts), which carries
+ * the reasoning: driven from `findings` outward through indexed lookups (`tracks.track_id` PK →
+ * `track_artists.track_id` → `artists.id` PK), so the walk is bounded by the certified corpus and
+ * never by `track_artists`, the ~2×-`tracks` edge table the row reader has to group over.
+ */
+export async function maxArtistSitemapLastmod(minTracks: number): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select max(findings.added_at) as lastmod
+          from findings
+          join tracks on tracks.track_id = findings.track_id
+          join track_artists ta on ta.track_id = tracks.track_id
+          join artists a on a.id = ta.artist_id
+          where a.renderable_track_count >= ?`,
+  });
+
+  return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
+}
+
 /** An artist tile in the unified `/artists` index — lit (certified) or unlit, one row shape for both. */
 export type ArtistHubEntry = {
   /** True ⇔ the artist has ≥1 coordinate-bearing finding — the certification light, visual only. */

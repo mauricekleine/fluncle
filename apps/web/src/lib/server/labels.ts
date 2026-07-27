@@ -627,6 +627,32 @@ export async function listLabelSitemapRows(minTracks: number): Promise<EntitySit
   }));
 }
 
+/**
+ * The FRESHEST `lastmod` across every indexable `/label/<slug>` page — the one date the sitemap
+ * INDEX needs from this bag, and the twin of `maxArtistSitemapLastmod` / `maxAlbumSitemapLastmod`.
+ * Identical in value to `max` over {@link listLabelSitemapRows}'s dates, computed in SQL so the
+ * index never drags a row per label into the isolate to find it (AGENTS.md — never rank or
+ * aggregate a growing table in the Worker).
+ *
+ * It is driven from `findings` OUTWARD, not from `labels` inward, and that is the shape: the
+ * answer is the newest CERTIFIED date, so the certified corpus — the small table — is the natural
+ * outer, and every hop from it is a unique-key lookup (`tracks.track_id` PK → `labels.id` PK).
+ * The walk is therefore bounded by the findings count, never by `tracks`.
+ */
+export async function maxLabelSitemapLastmod(minTracks: number): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select max(findings.added_at) as lastmod
+          from findings
+          join tracks on tracks.track_id = findings.track_id
+          join labels on labels.id = tracks.label_id
+          where labels.renderable_track_count >= ?`,
+  });
+
+  return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
+}
+
 // ── THE UNIFIED HUB: one catalogue-scale index per entity (ratified 2026-07-20) ───────────────
 //
 // `/labels`, `/albums`, and `/artists` are each ONE index of every entity Fluncle holds —

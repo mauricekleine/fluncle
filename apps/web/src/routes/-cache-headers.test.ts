@@ -19,7 +19,9 @@ vi.mock("../lib/server/db", () => ({
 }));
 vi.mock("../lib/server/artists", () => ({
   ARTIST_INDEX_MIN_FINDINGS: 3,
+  countIndexableArtists: vi.fn(async () => 0),
   listArtistSitemapRows: vi.fn(async () => []),
+  maxArtistSitemapLastmod: vi.fn(async () => undefined),
   parseArtistsJson: () => [],
 }));
 vi.mock("../lib/server/galaxies-map", () => ({
@@ -72,10 +74,12 @@ describe("Cache-Control on the crawler-facing surfaces", () => {
     ["rss.xml", () => import("./rss[.]xml"), FEED_CACHE],
     ["atom.xml", () => import("./atom[.]xml"), FEED_CACHE],
     ["feed.json", () => import("./feed[.]json"), FEED_CACHE],
+    // The sitemap's directive IS the edge policy's (SITEMAP_CACHE_POLICY): these paths are served
+    // through `withEdgeCache`, so origin and edge state the same window rather than two.
     [
       "sitemap.xml",
       () => import("./sitemap[.]xml"),
-      "public, max-age=3600, s-maxage=21600, stale-while-revalidate=86400",
+      "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
     ],
     ["indexnow key", () => import("./8337c1b41068549f248bf56f1fc465df[.]txt"), FEED_CACHE],
   ])("%s answers with its exact Cache-Control", async (_name, importer, expected) => {

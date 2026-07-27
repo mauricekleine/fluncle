@@ -393,6 +393,27 @@ export async function listAlbumSitemapRows(minTracks: number): Promise<EntitySit
   );
 }
 
+/**
+ * The FRESHEST `lastmod` across every indexable `/album/<slug>` page — the one date the sitemap
+ * INDEX needs from this bag. The exact twin of `maxLabelSitemapLastmod`, and that function carries
+ * the reasoning: the read is driven from `findings` outward through PK lookups, so it is bounded
+ * by the certified corpus rather than by the growing `tracks` table, and the aggregate is done in
+ * SQL rather than by pulling a row per album into the isolate.
+ */
+export async function maxAlbumSitemapLastmod(minTracks: number): Promise<string | undefined> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select max(findings.added_at) as lastmod
+          from findings
+          join tracks on tracks.track_id = findings.track_id
+          join albums on albums.id = tracks.album_id
+          where albums.renderable_track_count >= ?`,
+  });
+
+  return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
+}
+
 /** An album tile in the unified `/albums` index — lit (certified) or unlit, one row shape for both. */
 export type AlbumHubEntry = {
   /** True ⇔ the album carries ≥1 coordinate-bearing finding — the certification light, visual only. */

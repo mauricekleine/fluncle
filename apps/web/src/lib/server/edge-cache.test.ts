@@ -15,6 +15,9 @@ import {
   purgeEntityCache,
   purgeEntityCaches,
   purgeLogCache,
+  SITEMAP_CACHE_POLICY,
+  SITEMAP_FRESH_SECONDS,
+  SITEMAP_SWR_SECONDS,
   SWR_SECONDS,
   withEdgeCache,
 } from "./edge-cache";
@@ -100,6 +103,35 @@ describe("the hub policy", () => {
     expect(HUB_CACHE_POLICY.cacheControl).toBe(
       "public, max-age=0, s-maxage=60, stale-while-revalidate=600",
     );
+  });
+});
+
+describe("the sitemap policy", () => {
+  it("holds a sitemap fresh for an hour with a day-long stale tail", () => {
+    // A crawl cadence tolerates staleness a reader would not: an hour is well inside what
+    // Search Console expects, and the alternative is every crawler hit paying the
+    // archive-wide read behind the document (measured 3.2–13.6s, and timing the post-deploy
+    // surface sweep out twice).
+    expect(SITEMAP_FRESH_SECONDS).toBe(3_600);
+    expect(SITEMAP_SWR_SECONDS).toBe(86_400);
+    expect(SITEMAP_CACHE_POLICY.cacheControl).toBe(
+      "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400",
+    );
+    expect(SITEMAP_CACHE_POLICY.storedMaxAge).toBe(SITEMAP_FRESH_SECONDS + SITEMAP_SWR_SECONDS);
+  });
+
+  it("is the one XML tier — the HTML tiers stay HTML", () => {
+    // `contentType` is both the storability gate and what lets server.ts skip the
+    // HTML-accepting-client guard for a crawler that asks for XML (or asks for nothing).
+    expect(SITEMAP_CACHE_POLICY.contentType).toBe("application/xml");
+    expect(PAGE_CACHE_POLICY.contentType).toBe("text/html");
+    expect(HUB_CACHE_POLICY.contentType).toBe("text/html");
+  });
+
+  it("outlives its build safely, unlike the HTML tiers", () => {
+    // The HTML tail is capped at an hour because an SSR document references build-scoped
+    // `/assets/<hash>.js`. An XML sitemap references no assets, so a day-long tail is free.
+    expect(SITEMAP_SWR_SECONDS).toBeGreaterThan(SWR_SECONDS);
   });
 });
 
@@ -213,6 +245,40 @@ describe("edgeCachePolicyFor", () => {
     expect(edgeCachePolicyFor("/fresh", "")).toBe(HUB_CACHE_POLICY);
     // A lone page on a paginated hub rides the hub policy (its key folds the page).
     expect(edgeCachePolicyFor("/artists", "?page=3")).toBe(HUB_CACHE_POLICY);
+  });
+
+  it("routes the sitemap documents to the sitemap policy, index and children alike", () => {
+    expect(edgeCachePolicyFor("/sitemap.xml", "")).toBe(SITEMAP_CACHE_POLICY);
+
+    for (const shard of [
+      "/sitemap/pages-1.xml",
+      "/sitemap/findings-1.xml",
+      "/sitemap/findings-2.xml",
+      "/sitemap/artists-1.xml",
+      "/sitemap/labels-1.xml",
+      "/sitemap/albums-1.xml",
+      "/sitemap/galaxies-1.xml",
+      "/sitemap/logbook-1.xml",
+      "/sitemap/docs-1.xml",
+    ]) {
+      expect(edgeCachePolicyFor(shard, "")).toBe(SITEMAP_CACHE_POLICY);
+    }
+
+    // Each child keys as its own entry, so no two children can collide — the whole identity is
+    // in the path segment and the key drops nothing.
+    expect(edgeCachePolicyFor("/sitemap/labels-1.xml", "")).toBe(
+      edgeCachePolicyFor("/sitemap/albums-1.xml", ""),
+    );
+  });
+
+  it("refuses a query variant or a sibling that merely shares the `sitemap` stem", () => {
+    // The key drops the query, so a `?page=` variant must never be shared-cached as the document.
+    expect(edgeCachePolicyFor("/sitemap.xml", "?page=2")).toBeUndefined();
+    expect(edgeCachePolicyFor("/sitemap/findings-1.xml", "?utm=x")).toBeUndefined();
+    // A nested path is not a child, and a bare `/sitemap` is not a document.
+    expect(edgeCachePolicyFor("/sitemap/findings/1.xml", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/sitemap", "")).toBeUndefined();
+    expect(edgeCachePolicyFor("/sitemaps.xml", "")).toBeUndefined();
   });
 
   it("routes the newly-enrolled stable public pages to the hub policy", () => {
@@ -478,6 +544,72 @@ describe("withEdgeCache", () => {
       await withEdgeCache(
         new Request("https://www.fluncle.com/tracks"),
         async () => new Response("{}", { headers: { "content-type": "application/json" } }),
+        HUB_CACHE_POLICY,
+      );
+      await Promise.resolve();
+
+      expect(fake.entries.size).toBe(0);
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("stores and serves an XML sitemap under the sitemap policy", async () => {
+    const fake = installFakeCache();
+    const xml = (): Response =>
+      new Response("<sitemapindex/>", {
+        headers: { "content-type": "application/xml; charset=utf-8" },
+      });
+
+    try {
+      const miss = await withEdgeCache(
+        new Request("https://www.fluncle.com/sitemap.xml"),
+        async () => xml(),
+        SITEMAP_CACHE_POLICY,
+      );
+      await Promise.resolve();
+
+      expect(miss.headers.get("x-edge-cache")).toBe("miss");
+      expect(miss.headers.get("Cache-Control")).toBe(SITEMAP_CACHE_POLICY.cacheControl);
+      expect(fake.entries.size).toBe(1);
+
+      // The second crawl is served from the store — the whole point: the archive-wide read
+      // behind the document runs once an hour, not once per crawler.
+      const hit = await withEdgeCache(
+        new Request("https://www.fluncle.com/sitemap.xml"),
+        async () => {
+          throw new Error("must not re-render a fresh sitemap");
+        },
+        SITEMAP_CACHE_POLICY,
+      );
+
+      expect(hit.headers.get("x-edge-cache")).toBe("fresh");
+      expect(await hit.text()).toBe("<sitemapindex/>");
+    } finally {
+      fake.restore();
+    }
+  });
+
+  it("stores only the policy's own content-type — a shard 404 or a stray page is never stored", async () => {
+    const fake = installFakeCache();
+
+    try {
+      // A shard past the end 404s with a plain-text body: never stored as the sitemap.
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/sitemap/findings-9.xml"),
+        async () => new Response("Not found", { status: 404 }),
+        SITEMAP_CACHE_POLICY,
+      );
+      // Nor an HTML body off a sitemap path (an error page slipping through the router).
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/sitemap/labels-1.xml"),
+        async () => html("<html>oops</html>"),
+        SITEMAP_CACHE_POLICY,
+      );
+      // And the gate runs both ways: XML is not storable under an HTML policy.
+      await withEdgeCache(
+        new Request("https://www.fluncle.com/artists"),
+        async () => new Response("<x/>", { headers: { "content-type": "application/xml" } }),
         HUB_CACHE_POLICY,
       );
       await Promise.resolve();

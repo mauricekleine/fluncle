@@ -37,7 +37,7 @@ export const SITEMAP_MAX_URLS = 45_000;
 /**
  * The kinds, and the order the index lists them in. One child PER ENTITY TYPE (not a single
  * `graph` bucket) so Search Console reports indexing per type and a changed type refetches
- * alone. `pages` is the static hubs; the rest map one-to-one onto the {@link SitemapBags}.
+ * alone. `pages` is the static hubs; the rest map one-to-one onto the {@link SitemapRowBags}.
  */
 export const SITEMAP_KINDS = [
   "pages",
@@ -123,11 +123,11 @@ export type SitemapDoc = {
 };
 
 /**
- * Everything the sitemap knows, gathered once. Both routes read the same bags — the index to
- * count and date its children, a child to slice its own page — so a URL the index promises is
- * always a URL the child serves.
+ * The ROW bags — every `<url>` the sitemap can list, one array per entity kind. A CHILD sitemap
+ * slices exactly one of these, which is why the data layer fetches one at a time
+ * (`collectSitemapBag`) rather than all seven for every request.
  */
-export type SitemapBags = {
+export type SitemapRowBags = {
   albums: SitemapEntity[];
   artists: SitemapArtist[];
   /** The `/docs/<slug>` pages, WITHOUT the `/docs` hub — `pages` owns the hub. */
@@ -137,16 +137,45 @@ export type SitemapBags = {
   logbook: SitemapLogbookEntry[];
   /** The `/log/<coordinate>` pages: findings AND published mixtapes. */
   logs: SitemapLogPage[];
+};
+
+/**
+ * What the `pages` child needs and no row bag carries: the two hub timestamps and the two
+ * self-lifting gates.
+ *
+ * It is a field of its own rather than something derived from the row bags because that is what
+ * lets the `pages` child be built from four small aggregates instead of every URL in the archive
+ * — the whole reason `/sitemap.xml` stopped dragging the corpus through the isolate.
+ * {@link sitemapPagesFromBags} is the pure derivation from full bags, and the data layer's
+ * aggregate read must agree with it (pinned by `sitemap-data.integration.test.ts`).
+ */
+export type SitemapPages = {
+  /**
+   * Whether the `/galaxies` lens index is listed — true once the map is fully named, which is
+   * exactly `galaxies.length > 0` (the reader feeds an empty bag before the launch gate opens).
+   */
+  galaxiesOpen: boolean;
+  /** The freshest content date across the archive — every hub `<loc>`'s `<lastmod>`. */
+  latest?: string;
+  /** The freshest authored logbook entry — the `/logbook` hub's own `<lastmod>`. */
+  logbookLatest?: string;
   /**
    * Whether `/mix` is open to the world — the route's own self-lifting gate
    * (`getMixChainDepth().open`). Listed in `pages` only while true, exactly as `/galaxies`
-   * rides `galaxies.length`: the launch gate self-lifts with no deploy, and the sitemap
+   * rides `galaxiesOpen`: the launch gate self-lifts with no deploy, and the sitemap
    * lights the hub up the same day the tool does.
    */
   mixOpen: boolean;
 };
 
-export const EMPTY_SITEMAP_BAGS: SitemapBags = {
+/**
+ * Everything one sitemap document needs. A CHILD is built from the single row bag it slices (plus
+ * `pages` for the static child); the INDEX is built from {@link SitemapIndexStats} instead, which
+ * is the same information counted and dated without the rows.
+ */
+export type SitemapBags = SitemapRowBags & { pages: SitemapPages };
+
+export const EMPTY_SITEMAP_ROW_BAGS: SitemapRowBags = {
   albums: [],
   artists: [],
   docs: [],
@@ -154,8 +183,25 @@ export const EMPTY_SITEMAP_BAGS: SitemapBags = {
   labels: [],
   logbook: [],
   logs: [],
-  mixOpen: false,
 };
+
+export const EMPTY_SITEMAP_BAGS: SitemapBags = {
+  ...EMPTY_SITEMAP_ROW_BAGS,
+  pages: { galaxiesOpen: false, mixOpen: false },
+};
+
+/** One child's line in the index: how many URLs it holds, and the freshest date among them. */
+export type SitemapKindStats = {
+  count: number;
+  lastmod?: string;
+};
+
+/**
+ * The whole index, as numbers and dates — the ONLY thing `/sitemap.xml` needs. Seven small
+ * `count`/`max()` reads produce this; seven full row reads are no longer paid to emit ~eight
+ * `<sitemap>` lines.
+ */
+export type SitemapIndexStats = Record<SitemapKind, SitemapKindStats>;
 
 // Escape the five XML metacharacters so a Spotify-sourced title/artist or an
 // operator note can't malform the document (a bare `&` invalidates the feed, and
@@ -261,14 +307,27 @@ function freshest(dates: (string | undefined)[]): string | undefined {
     .at(-1);
 }
 
-function bagLastmod(bags: SitemapBags): string | undefined {
-  return freshest([
-    ...bags.logs.map((page) => page.lastmod),
-    ...bags.artists.map((page) => page.lastmod),
-    ...bags.logbook.map((page) => page.lastmod),
-    ...bags.labels.map((page) => page.lastmod),
-    ...bags.albums.map((page) => page.lastmod),
-  ]);
+/**
+ * The `pages` child's inputs, derived from FULL row bags — the reference the data layer's lean
+ * aggregate read has to match, and what the unit tests build their fixtures through.
+ *
+ * `latest` is the freshest date anywhere in the archive (the hubs' shared `<lastmod>`);
+ * `logbookLatest` dates the `/logbook` hub alone. `mixOpen` is the one input no bag implies, so
+ * it is passed in.
+ */
+export function sitemapPagesFromBags(bags: SitemapRowBags, mixOpen: boolean): SitemapPages {
+  return {
+    galaxiesOpen: bags.galaxies.length > 0,
+    latest: freshest([
+      ...bags.logs.map((page) => page.lastmod),
+      ...bags.artists.map((page) => page.lastmod),
+      ...bags.logbook.map((page) => page.lastmod),
+      ...bags.labels.map((page) => page.lastmod),
+      ...bags.albums.map((page) => page.lastmod),
+    ]),
+    logbookLatest: freshest(bags.logbook.map((page) => page.lastmod)),
+    mixOpen,
+  };
 }
 
 /**
@@ -300,9 +359,9 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
       return bags.docs.map((page) => docsEntry(page));
 
     case "pages": {
-      const latest = bagLastmod(bags);
-      // The /logbook index's lastmod: the freshest authored entry.
-      const logbookLatest = freshest(bags.logbook.map((page) => page.lastmod));
+      // The two hub timestamps + the two gates, already aggregated (SitemapPages) — so the static
+      // child costs four small reads, never a walk of the archive it dates itself from.
+      const { galaxiesOpen, latest, logbookLatest, mixOpen } = bags.pages;
 
       return [
         staticEntry(`${siteUrl}/`, latest),
@@ -342,10 +401,10 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         // `getMixChainDepth().open` the route checks). Closed, the tool is private (operator
         // + strangers sent home), so it stays out of the sitemap; the day the archive is deep
         // enough it opens on its own, the hub lights up here with no deploy.
-        ...(bags.mixOpen ? [staticEntry(`${siteUrl}/mix`)] : []),
-        // The `/galaxies` lens index — listed only once the launch gate has opened (the route
+        ...(mixOpen ? [staticEntry(`${siteUrl}/mix`)] : []),
+        // The `/galaxies` lens index — listed only once the launch gate has opened (the reader
         // feeds an empty `galaxies` bag before then, keeping the pre-launch dark state).
-        ...(bags.galaxies.length > 0 ? [staticEntry(`${siteUrl}/galaxies`)] : []),
+        ...(galaxiesOpen ? [staticEntry(`${siteUrl}/galaxies`)] : []),
       ];
     }
   }
@@ -377,13 +436,54 @@ function kindLastmod(kind: SitemapKind, bags: SitemapBags): string | undefined {
       return freshest(bags.logbook.map((page) => page.lastmod));
 
     case "pages":
-      return bagLastmod(bags);
+      return bags.pages.latest;
   }
 }
 
-/** How many children one kind needs. Always ≥ 1 for `pages` (the hubs are never empty). */
+/** How many children a kind of `count` URLs needs. Always ≥ 1 for `pages` (the hubs are never empty). */
+export function shardCountForSize(count: number): number {
+  return Math.ceil(count / SITEMAP_MAX_URLS);
+}
+
+/** How many children one kind needs, from full bags. */
 export function shardCount(kind: SitemapKind, bags: SitemapBags): number {
-  return Math.ceil(kindEntries(kind, bags).length / SITEMAP_MAX_URLS);
+  return shardCountForSize(kindEntries(kind, bags).length);
+}
+
+/**
+ * The `pages` child's line in the index. It is the one kind whose SIZE is a function of the two
+ * gates rather than of a row bag (17 hubs, plus `/mix` and `/galaxies` when open), so the data
+ * layer counts it through here instead of guessing the number.
+ */
+export function sitemapPagesStats(pages: SitemapPages): SitemapKindStats {
+  return {
+    count: kindEntries("pages", { ...EMPTY_SITEMAP_ROW_BAGS, pages }).length,
+    lastmod: pages.latest,
+  };
+}
+
+/**
+ * The index stats derived from FULL row bags — the reference path. The data layer answers the
+ * same question with seven `count`/`max()` reads instead (`collectSitemapIndexStats`), and
+ * `sitemap-data.integration.test.ts` pins the two against each other over a seeded archive, so
+ * the cheap read can never quietly start promising a different index than the children serve.
+ */
+export function sitemapIndexStatsFromBags(bags: SitemapBags): SitemapIndexStats {
+  const statsFor = (kind: SitemapKind): SitemapKindStats => ({
+    count: kindEntries(kind, bags).length,
+    lastmod: kindLastmod(kind, bags),
+  });
+
+  return {
+    albums: statsFor("albums"),
+    artists: statsFor("artists"),
+    docs: statsFor("docs"),
+    findings: statsFor("findings"),
+    galaxies: statsFor("galaxies"),
+    labels: statsFor("labels"),
+    logbook: statsFor("logbook"),
+    pages: statsFor("pages"),
+  };
 }
 
 /** The path of one child, 1-indexed: `/sitemap/findings-1.xml`. */
@@ -432,12 +532,16 @@ export function buildSitemapShardXml(
 /**
  * `/sitemap.xml` — the index. Lists every child that actually has URLs, so an archive with no
  * logbook advertises no logbook sitemap rather than an empty one.
+ *
+ * It takes STATS, not bags: the index carries no `<url>` of its own, so a count and a date per
+ * kind is the whole input, and asking for the rows to derive them was the reason a ~1KB document
+ * cost multiple seconds and grew with the catalogue.
  */
-export function buildSitemapIndexXml(bags: SitemapBags): string {
+export function buildSitemapIndexXml(stats: SitemapIndexStats): string {
   const children = SITEMAP_KINDS.flatMap((kind) => {
-    const lastmod = kindLastmod(kind, bags);
+    const { count, lastmod } = stats[kind];
 
-    return Array.from({ length: shardCount(kind, bags) }, (_unused, index) => {
+    return Array.from({ length: shardCountForSize(count) }, (_unused, index) => {
       const loc = `${siteUrl}${shardPath(kind, index + 1)}`;
 
       return `  <sitemap>\n    <loc>${loc}</loc>${lastmodTag(lastmod)}\n  </sitemap>`;

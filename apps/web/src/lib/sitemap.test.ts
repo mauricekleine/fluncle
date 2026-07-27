@@ -3,17 +3,31 @@ import { siteUrl } from "./fluncle-links";
 import {
   buildSitemapIndexXml,
   buildSitemapShardXml,
-  EMPTY_SITEMAP_BAGS,
+  EMPTY_SITEMAP_ROW_BAGS,
   parseShard,
   shardCount,
   SITEMAP_KINDS,
   shardPath,
   type SitemapBags,
+  sitemapIndexStatsFromBags,
+  sitemapPagesFromBags,
+  type SitemapRowBags,
   SITEMAP_MAX_URLS,
 } from "./sitemap";
 
-function bags(overrides: Partial<SitemapBags> = {}): SitemapBags {
-  return { ...EMPTY_SITEMAP_BAGS, ...overrides };
+// The fixture builder derives `pages` the way the pure reference does, so a case only ever states
+// the rows it cares about (and `mixOpen`, the one input no bag implies).
+function bags(overrides: Partial<SitemapRowBags> & { mixOpen?: boolean } = {}): SitemapBags {
+  const rows: SitemapRowBags = { ...EMPTY_SITEMAP_ROW_BAGS, ...overrides };
+
+  return { ...rows, pages: sitemapPagesFromBags(rows, overrides.mixOpen ?? false) };
+}
+
+const EMPTY_SITEMAP_BAGS = bags();
+
+/** The index as the route builds it: stats derived from the bags, then rendered. */
+function indexXml(source: SitemapBags): string {
+  return buildSitemapIndexXml(sitemapIndexStatsFromBags(source));
 }
 
 // Every `<loc>` the index would ever serve: walk every kind × every one of its pages and pull
@@ -36,7 +50,7 @@ const LOGS = [
 
 describe("the sitemap index", () => {
   it("carries no <url> of its own — only <sitemap> children", () => {
-    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+    const xml = indexXml(bags({ logs: LOGS }));
 
     expect(xml).toContain("<sitemapindex");
     expect(xml).not.toContain("<url>");
@@ -44,7 +58,7 @@ describe("the sitemap index", () => {
   });
 
   it("lists the hubs child and the findings child", () => {
-    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+    const xml = indexXml(bags({ logs: LOGS }));
 
     expect(xml).toContain(`<loc>${siteUrl}/sitemap/pages-1.xml</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/sitemap/findings-1.xml</loc>`);
@@ -52,7 +66,7 @@ describe("the sitemap index", () => {
 
   it("omits a child for a kind with nothing in it", () => {
     // An empty <urlset> tells a crawler the URLs were REMOVED; a missing sitemap says nothing.
-    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+    const xml = indexXml(bags({ logs: LOGS }));
 
     for (const empty of [
       "artists-1.xml",
@@ -71,7 +85,7 @@ describe("the sitemap index", () => {
   it("lists a child per NON-EMPTY entity type, each on its own line", () => {
     // The whole point of the split: artists / labels / albums / galaxies are four children, not
     // one `graph`, so GSC reports each type's submitted/indexed count on its own.
-    const xml = buildSitemapIndexXml(
+    const xml = indexXml(
       bags({
         albums: [{ lastmod: "2026-05-01T00:00:00.000Z", slug: "wormhole" }],
         artists: [{ lastmod: "2026-06-01T00:00:00.000Z", slug: "dimension" }],
@@ -98,7 +112,7 @@ describe("the sitemap index", () => {
   });
 
   it("dates each entity-type child from its own freshest member", () => {
-    const xml = buildSitemapIndexXml(
+    const xml = indexXml(
       bags({
         artists: [
           { lastmod: "2026-06-01T00:00:00.000Z", slug: "dimension" },
@@ -118,7 +132,7 @@ describe("the sitemap index", () => {
   });
 
   it("leaves a galaxies child undated — the lens page has no honest lastmod", () => {
-    const xml = buildSitemapIndexXml(bags({ galaxies: [{ slug: "deep-roller" }] }));
+    const xml = indexXml(bags({ galaxies: [{ slug: "deep-roller" }] }));
     const galaxiesLine = xml.slice(xml.indexOf("galaxies-1.xml"));
 
     expect(galaxiesLine).toContain("galaxies-1.xml");
@@ -127,11 +141,11 @@ describe("the sitemap index", () => {
   });
 
   it("always lists the hubs child, even on an empty archive", () => {
-    expect(buildSitemapIndexXml(EMPTY_SITEMAP_BAGS)).toContain("pages-1.xml");
+    expect(indexXml(EMPTY_SITEMAP_BAGS)).toContain("pages-1.xml");
   });
 
   it("dates each child from its own freshest entry, never a build stamp", () => {
-    const xml = buildSitemapIndexXml(bags({ logs: LOGS }));
+    const xml = indexXml(bags({ logs: LOGS }));
 
     expect(xml.slice(xml.indexOf("findings-1.xml"))).toContain(
       "<lastmod>2026-06-10T14:57:38.786Z</lastmod>",
@@ -143,7 +157,7 @@ describe("the sitemap index", () => {
       lastmod: "2026-06-10T14:57:38.786Z",
       logId: `0${index}.6.8K`,
     }));
-    const xml = buildSitemapIndexXml(bags({ logs: many }));
+    const xml = indexXml(bags({ logs: many }));
 
     expect(shardCount("findings", bags({ logs: many }))).toBe(2);
     expect(xml).toContain("findings-1.xml");
@@ -440,7 +454,7 @@ describe("a child sitemap", () => {
     expect(buildSitemapShardXml("artists", 2, artistBags)?.match(/<loc>/g)).toHaveLength(2);
     expect(buildSitemapShardXml("artists", 3, artistBags)).toBeUndefined();
     // The index advertises both artist children.
-    const index = buildSitemapIndexXml(artistBags);
+    const index = indexXml(artistBags);
     expect(index).toContain("artists-1.xml");
     expect(index).toContain("artists-2.xml");
   });

@@ -1,11 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { buildSitemapShardXml, parseShard } from "../lib/sitemap";
-import { collectSitemapBags, SITEMAP_HEADERS } from "../lib/server/sitemap-data";
+import { collectSitemapBag, SITEMAP_HEADERS } from "../lib/server/sitemap-data";
 
 // `/sitemap/<kind>-<n>.xml` — one child of the sitemap index. `kind` is one per entity type:
 // pages / findings / artists / labels / albums / galaxies / logbook; `n` is 1-indexed and only
-// ever exceeds 1 once a kind outgrows SITEMAP_MAX_URLS. Both this route and the index read
-// `collectSitemapBags()`, so a child always serves exactly what the index promised.
+// ever exceeds 1 once a kind outgrows SITEMAP_MAX_URLS.
+//
+// It fetches ONLY its own bag (`collectSitemapBag(kind)`), never the other six — a labels child
+// has no business reading every finding to print a label list. The index's counts come from the
+// same reads' aggregates (`collectSitemapIndexStats`), so a child still serves exactly what the
+// index promised.
 //
 // The `.xml` rides INSIDE the `$shard` param (the route is `/sitemap/$shard`, not
 // `/sitemap/$shard.xml`) — a `$param.xml` segment makes TanStack name the param `shard.xml`,
@@ -34,7 +38,8 @@ export const Route = createFileRoute("/sitemap/$shard")({
           return notFoundResponse();
         }
 
-        const xml = buildSitemapShardXml(shard.kind, shard.page, await collectSitemapBags());
+        const bag = await collectSitemapBag(shard.kind);
+        const xml = buildSitemapShardXml(shard.kind, shard.page, bag);
 
         return xml ? new Response(xml, { headers: SITEMAP_HEADERS }) : notFoundResponse();
       },
