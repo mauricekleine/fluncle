@@ -136,7 +136,7 @@ A mixtape sits at its sector, which the Galaxy game maps to a distance from Eart
 The internal plumbing and the external distribution chain are **shipped**. Remaining follow-ups (also tracked in `docs/planning/ROADMAP.md` → _Fluncle's own mixtapes_):
 
 - **Member tracks that aren't findings yet:** add them as findings first, or allow non-finding members in a mixtape's tracklist.
-- **Per-track cue offsets — shipped.** Rekordbox load times can't supply them (see Tracklist), so they're marked against the take in the Fluncle Studio cue rail (`/admin/studio/<recordingId>`, `set_mixtape_cues` / `update_mixtape_cue` over `recording_cues`; see `docs/fluncle-studio.md`). They feed the YouTube chapters, Mixcloud sections, and `/log` times.
+- **Per-track cue offsets — shipped.** Rekordbox load times can't supply them (see Tracklist), so they're marked against the take in the Fluncle Studio cue rail (`/admin/studio/<recordingId>`, `replace_recording_cues` over `recording_cues`, which `promote` seeds into `mixtape_tracks.start_ms`; `set_mixtape_cues` re-times a published set; see `docs/fluncle-studio.md`). They feed the YouTube chapters, Mixcloud sections, and `/log` times.
 
 ## Cross-links
 

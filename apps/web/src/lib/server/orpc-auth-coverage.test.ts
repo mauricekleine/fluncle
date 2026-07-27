@@ -751,9 +751,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // valid agent token 403s.
   update_logbook_entry: "operator",
   update_mixtape: "operator",
-  // The interactive single-cue write (Studio cue rail) — operator tier: it re-times a
-  // published set's surface, so the agent token 403s (like set_mixtape_cues).
-  update_mixtape_cue: "operator",
   // Retuning the auto-note echo gate's thresholds — operator tier: the dials decide what
   // Fluncle will and will not say about his own archive, so an agent token 403s at
   // operatorGuard (the update_galaxy precedent). They live in the `settings` KV, so the

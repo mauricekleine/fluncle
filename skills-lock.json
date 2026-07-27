@@ -61,7 +61,7 @@
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
       "sourceType": "local",
-      "computedHash": "e241d9191d407d5602149311848a3d6b11c44926d85cb87eafc4e1714b7d3750"
+      "computedHash": "fc8df313539acd9708fa5d31d392e20899f05b45f00f48b01cb5615957ee71d4"
     },
     "fluncle-operator": {
       "source": "packages/skills/fluncle-operator",

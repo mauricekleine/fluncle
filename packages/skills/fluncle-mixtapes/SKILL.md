@@ -247,8 +247,9 @@ The tracklist cues are often refined **after** a set is already live (the initia
 - **CLI**:
 
 ```bash
-# Mark/adjust cues first on the Fluncle Studio cue rail (the `set_mixtape_cues` /
-# `update_mixtape_cue` ops — the old `mixtapes members` draft command retired):
+# Mark/adjust cues first on the Fluncle Studio cue rail (the `replace_recording_cues`
+# op, or `set_mixtape_cues` for a published set — the old `mixtapes members` draft
+# command and the `update_mixtape_cue` op both retired):
 # …then re-sync the derived metadata to the live platforms:
 fluncle admin mixtapes resync <idOrLogId>                    # both platforms it's distributed to
 fluncle admin mixtapes resync <idOrLogId> --youtube          # only YouTube
