@@ -85,4 +85,41 @@ describe("seedScale seeds the maintained mirrors, not their DDL defaults", () =>
       SCALE - FINDINGS,
     );
   });
+
+  // The entity counters are the same class of trap one table over (Wave 2 keystone 2, and now the
+  // gate the Wave 3-2 name→id resolution declines on). At the DDL default of 0 every read that
+  // gates on them takes its other branch, so the bench would measure a world where the fast path
+  // never runs — green, and about nothing.
+  it("keeps each entity's hub counters equal to the edges it actually holds", async () => {
+    expect(
+      await count(`select count(*) as n from labels e
+                    where e.renderable_track_count <>
+                          (select count(*) from tracks t where t.label_id = e.id)
+                       or e.certified_finding_count <>
+                          (select count(*) from tracks t where t.label_id = e.id and t.is_catalogue = 0)`),
+    ).toBe(0);
+    expect(
+      await count(`select count(*) as n from albums e
+                    where e.renderable_track_count <>
+                          (select count(*) from tracks t where t.album_id = e.id)
+                       or e.certified_finding_count <>
+                          (select count(*) from tracks t where t.album_id = e.id and t.is_catalogue = 0)`),
+    ).toBe(0);
+    expect(
+      await count(`select count(*) as n from artists e
+                    where e.renderable_track_count <>
+                          (select count(*) from track_artists ta where ta.artist_id = e.id)`),
+    ).toBe(0);
+
+    // …and the counters are not uniformly zero, so the equivalences above are not vacuous.
+    expect(
+      await count("select count(*) as n from artists where renderable_track_count > 0"),
+    ).toBeGreaterThan(0);
+    expect(
+      await count("select count(*) as n from labels where renderable_track_count > 0"),
+    ).toBeGreaterThan(0);
+    expect(
+      await count("select count(*) as n from albums where renderable_track_count > 0"),
+    ).toBeGreaterThan(0);
+  });
 });

@@ -557,4 +557,46 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
       },
     ];
   });
+
+  await reconcileHubCounts(client, opts);
+}
+
+/**
+ * THE ENTITY HUB COUNTERS (Wave 2 keystone 2), written from the edges this seeder just laid.
+ *
+ * Same rule as the two `tracks` mirrors: a DDL default is what production never contains. Left at
+ * 0 these are not a cosmetic gap — every read that gates on them (the `/labels` + `/albums` hub
+ * inclusion gate, search's entity offer, and the Wave 3-2 name→id filter resolution, which declines
+ * to seek an entity whose counter says it holds nothing) would take its OTHER branch, so the bench
+ * would time a world where the fast path never runs.
+ *
+ * Derived, never invented: `renderable_track_count` is the linked-track count exactly as
+ * `HUB_RENDERABLE` defines it, and `certified_finding_count` reads keystone 1's `is_catalogue = 0`
+ * discriminator rather than joining `findings`. Each correlated count is index-served
+ * (`tracks_label_id_idx` / `tracks_album_id_idx` / `track_artists_artist_id_idx`), so this is a pass
+ * of range counts over the entity tables, not a scan per row.
+ */
+async function reconcileHubCounts(client: Client, opts: ScaleSeedOptions): Promise<void> {
+  const statements = [
+    `update labels set
+       renderable_track_count = (select count(*) from tracks where tracks.label_id = labels.id),
+       certified_finding_count = (select count(*) from tracks
+                                  where tracks.label_id = labels.id and tracks.is_catalogue = 0)`,
+    `update albums set
+       renderable_track_count = (select count(*) from tracks where tracks.album_id = albums.id),
+       certified_finding_count = (select count(*) from tracks
+                                  where tracks.album_id = albums.id and tracks.is_catalogue = 0)`,
+    `update artists set
+       renderable_track_count = (select count(*) from track_artists ta where ta.artist_id = artists.id),
+       certified_finding_count = (select count(*) from track_artists ta
+                                  join tracks t on t.track_id = ta.track_id
+                                  where ta.artist_id = artists.id and t.is_catalogue = 0)`,
+  ];
+
+  for (const sql of statements) {
+    await client.execute(sql);
+  }
+
+  emit(opts, "  hub counts reconciled (labels, albums, artists)");
+  process.stdout.write("\n");
 }

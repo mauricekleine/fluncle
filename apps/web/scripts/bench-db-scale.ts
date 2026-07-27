@@ -354,7 +354,54 @@ const PROOFS: Proof[] = [
     rewrite: false,
     title: "Ear lens: duplicate-prefix walk → partial index skipping the dupe head",
   },
+  {
+    // search.ts compileFilters — the name filters (backlog Wave 3-2). Baseline: the artist's
+    // leading-wildcard LIKE over `artists_json`, plus the label/album/key `lower()` wraps, each a
+    // full pass over `tracks`. After: the SAME builder handed resolved ids, so the clauses become
+    // the `track_artists` edge seek and the indexed `label_id`/`album_id` pointers, and the key
+    // compares the bare column (tracks_key_idx). No new index — every one of them already exists.
+    //
+    // Both sides come from the REAL builder, so the bench cannot drift from production. It compares
+    // SHAPES, not row-for-row equivalence: in the seeded world `tracks.label` (an imprint-name
+    // domain) and `tracks.label_id` (the mega-label distribution) are independent, and no `album`
+    // string is seeded at all — which changes what comes back, not what the planner has to read.
+    after: searchFilterReads(true),
+    baseline: searchFilterReads(false),
+    item: 20,
+    rewrite: true,
+    title:
+      "search name filters: JSON LIKE + lower() scans → track_artists / label_id / album_id / key seeks",
+  },
 ];
+
+/**
+ * The four name/key filters as production executes them — one read each, through search's own LEFT
+ * JOIN and ORDER BY. `resolved` picks the branch: the ids the entity resolution would have found
+ * (the seeded `artist-0` / mega-label / `album-0`), or nothing, which is the string fallback.
+ */
+function searchFilterReads(resolved: boolean): Query[] {
+  const ids = resolved ? { albumId: "album-0", artistId: "artist-0", labelId: MEGA_LABEL_ID } : {};
+  const filters = [
+    { artist: "Artist 0" },
+    { label: "Hospital Records" },
+    { album: "Album 0" },
+    { key: "A minor" },
+  ];
+
+  return filters.map((filter) => {
+    const clauses = compileFilters(filter, ids);
+
+    return {
+      args: [...clauses.flatMap((clause) => clause.args), 12],
+      sql: `select tracks.track_id, tracks.title, tracks.bpm, tracks.key, tracks.label, findings.log_id
+            from tracks left join findings on findings.track_id = tracks.track_id
+            where ${clauses.map((clause) => clause.sql).join(" and ")}
+            order by case when findings.track_id is null then 1 else 0 end asc,
+                     tracks.release_date desc, tracks.track_id asc
+            limit ?`,
+    };
+  });
+}
 
 function labelCatalogueFoldSql(): string {
   return `with label_credits as (

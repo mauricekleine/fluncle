@@ -118,11 +118,21 @@ describe("keySpellings — one question, however it is spelled", () => {
 
     expect(parsed).not.toBeNull();
     expect(parsed && keySpellings(parsed).sort()).toEqual([
-      "a# min",
-      "a# minor",
-      "bb min",
-      "bb minor",
+      "A# min",
+      "A# minor",
+      "Bb min",
+      "Bb minor",
     ]);
+  });
+
+  // The spellings ARE the bind args of `tracks.key in (…)`, so they have to be the strings the
+  // column actually holds — the analyzer's and the Rekordbox sync's `<Note> major|minor`. Emit
+  // them lower-cased again and the filter silently matches nothing at all.
+  it("spells the key the way the archive stores it, so the comparison needs no lower()", () => {
+    const parsed = parseKey("bb minor");
+
+    expect(parsed && keySpellings(parsed)).toContain("A# minor");
+    expect(parsed && keySpellings(parsed)).not.toContain("a# minor");
   });
 
   it("asks the same question for Bb minor as for A# minor (they are one key)", () => {
@@ -138,7 +148,7 @@ describe("keySpellings — one question, however it is spelled", () => {
     const major = parseKey("A major");
 
     expect(major).not.toBeNull();
-    expect(major && keySpellings(major)).toContain("a major");
-    expect(major && keySpellings(major)).not.toContain("a minor");
+    expect(major && keySpellings(major)).toContain("A major");
+    expect(major && keySpellings(major)).not.toContain("A minor");
   });
 });

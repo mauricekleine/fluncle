@@ -70,7 +70,12 @@ import {
   leadArtistAvatarUrl,
 } from "./fresh";
 import { type CatalogueHubNumberedPage, CatalogueHubPageOutOfRangeError } from "./labels";
-import { type Clause, compileFilters } from "./search";
+import {
+  type Clause,
+  compileFilters,
+  resolveFilterEntities,
+  type ResolvedFilterEntities,
+} from "./search";
 import { fold } from "./track-match";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 
@@ -167,11 +172,10 @@ function galaxyClause(slug: string): Clause {
   };
 }
 
-/** Assemble the where-clause set: the shared compiled filters + the galaxy extension. */
-export function tracksHubClauses(filters: TracksHubFilters): Clause[] {
-  // The shared six, compiled by the SAME function `/search` uses. Only the shared subset is passed
-  // — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's filter vocabulary.
-  const shared: SearchFilters = {
+/** The hub's filter set as the shared `SearchFilters` vocabulary — the subset `/search` compiles,
+    and the ONE place the mapping lives, so the clause builder and the id resolver see one object. */
+function sharedFilters(filters: TracksHubFilters): SearchFilters {
+  return {
     bpmMax: filters.bpmMax,
     bpmMin: filters.bpmMin,
     key: filters.key,
@@ -179,8 +183,31 @@ export function tracksHubClauses(filters: TracksHubFilters): Clause[] {
     yearMax: filters.yearMax,
     yearMin: filters.yearMin,
   };
+}
 
-  const clauses = compileFilters(shared);
+/**
+ * Resolve the hub's one name filter — the imprint — to its indexed `labels.id`, so the label clause
+ * compiles to `tracks.label_id = ?` instead of `lower(tracks.label) = ?` (backlog Wave 3-2). ONE
+ * unique-index seek on the small `labels` table per read, and it stays a raw-string filter when the
+ * name resolves to nothing: the label control deliberately accepts a free-typed imprint that has no
+ * entity behind it, and that is exactly the case the fallback exists for.
+ */
+export async function resolveTracksHubEntities(
+  filters: TracksHubFilters,
+): Promise<ResolvedFilterEntities> {
+  return resolveFilterEntities(sharedFilters(filters));
+}
+
+/** Assemble the where-clause set: the shared compiled filters + the galaxy extension. `resolved` is
+    {@link resolveTracksHubEntities}' answer; omitting it compiles the raw-string fallback, which is
+    what the hosted bench and any caller with no id in hand wants. */
+export function tracksHubClauses(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities = {},
+): Clause[] {
+  // The shared six, compiled by the SAME function `/search` uses. Only the shared subset is passed
+  // — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's filter vocabulary.
+  const clauses = compileFilters(sharedFilters(filters), resolved);
 
   if (filters.galaxy) {
     clauses.push(galaxyClause(filters.galaxy));
@@ -420,11 +447,14 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
  *      in code by the step-1 position (the `in` clause returns rows in arbitrary order).
  */
 /** The filtered `count(*)` — the pager's total, over the same clause set as the id page. */
-export function tracksHubCountQuery(filters: TracksHubFilters): {
+export function tracksHubCountQuery(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities = {},
+): {
   args: (number | string)[];
   sql: string;
 } {
-  const clauses = tracksHubClauses(filters);
+  const clauses = tracksHubClauses(filters, resolved);
   const { args, where } = whereFor(clauses);
 
   return {
@@ -448,8 +478,9 @@ export function tracksHubIdPageQuery(
   filters: TracksHubFilters,
   limit: number,
   offset: number,
+  resolved: ResolvedFilterEntities = {},
 ): { args: (number | string)[]; sql: string } {
-  const clauses = tracksHubClauses(filters);
+  const clauses = tracksHubClauses(filters, resolved);
   const { args, where } = whereFor(clauses);
 
   return {
@@ -484,10 +515,14 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
 
 /** The pager's total for a filter set, served from the TTL memo. Page-independent by construction —
     every `?page=N` of one filter set asks the same question of the same rows. */
-async function countTracksHub(filters: TracksHubFilters): Promise<number> {
-  const query = tracksHubCountQuery(filters);
+async function countTracksHub(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities,
+): Promise<number> {
+  const clauses = tracksHubClauses(filters, resolved);
+  const query = tracksHubCountQuery(filters, resolved);
 
-  return memoizedAggregate(aggregateKey("count", tracksHubClauses(filters)), async () => {
+  return memoizedAggregate(aggregateKey("count", clauses), async () => {
     const db = await getDb();
     const result = await db.execute(query);
 
@@ -501,12 +536,15 @@ export async function listTracksHubPage(
 ): Promise<CatalogueHubNumberedPage<TracksHubEntry>> {
   const db = await getDb();
   const limit = TRACKS_HUB_PAGE_SIZE;
+  // The imprint name → `labels.id`, ONCE for both reads below, so the pager total and the id slice
+  // compile the same clause set (the memo key is that clause set) and both ride `tracks_label_id_idx`.
+  const resolved = await resolveTracksHubEntities(filters);
 
   // Step 1 (+ the total, in parallel): the id slice. The total is page-independent, so it rides the
   // TTL memo — a walk down the pager pays that full-set aggregate once, not once per page.
   const [total, idsResult] = await Promise.all([
-    countTracksHub(filters),
-    db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit)),
+    countTracksHub(filters, resolved),
+    db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved)),
   ]);
 
   const ids = typedRows<{ track_id: string }>(idsResult.rows).map((row) => row.track_id);
@@ -601,14 +639,17 @@ export function yearPages(
  * never a per-year query. The route hides the lane when a year filter is active (a single year needs
  * no time lane), so the filters here carry no year bound in practice.
  */
-export function tracksHubYearLaneQuery(filters: TracksHubFilters): {
+export function tracksHubYearLaneQuery(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities = {},
+): {
   args: (number | string)[];
   clauses: Clause[];
   sql: string;
 } {
   const clauses: Clause[] = [
     { args: [], sql: `tracks.release_date is not null` },
-    ...tracksHubClauses(filters),
+    ...tracksHubClauses(filters, resolved),
   ];
   const { args, where } = whereFor(clauses);
 
@@ -630,7 +671,10 @@ export function tracksHubYearLaneQuery(filters: TracksHubFilters): {
 export async function listTracksHubYearLane(
   filters: TracksHubFilters,
 ): Promise<TracksHubYearLaneEntry[]> {
-  const { clauses, ...query } = tracksHubYearLaneQuery(filters);
+  const { clauses, ...query } = tracksHubYearLaneQuery(
+    filters,
+    await resolveTracksHubEntities(filters),
+  );
 
   return memoizedAggregate(aggregateKey("years", clauses), async () => {
     const db = await getDb();

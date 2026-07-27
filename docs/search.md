@@ -42,6 +42,16 @@ Tier 4's model is handed a sentence and returns a `SearchFilters` object — `{ 
 
 The schema is the safety property. A model that tries to hand back tracks hands back nothing (`parseFilterReply` validates against the Zod schema, and the schema has no field that could carry a result).
 
+### A filter's name becomes an id before it becomes SQL
+
+A filter carries a **name** — a name is what a reader types, and a name is all the model is allowed to emit. Compiled straight against the raw columns, that name cost a full pass over a growing table on the single most common search there is: `artist: "Netsky"` was `lower(tracks.artists_json) like '%netsky%'`, which had to read and lower-case every track's stored JSON credits to answer it. The label and album filters wrapped their columns the same way, and the key filter wrapped `tracks.key`, so the btrees sitting right there went unused.
+
+The data model had already done that work. So the names are resolved **once**, at the top of the read (`resolveFilterEntities`), against the small entity tables — and `compileFilters` turns a resolved name into a seek: the artist into `track_artists.artist_id` (the same edge `/artist/<slug>` lists an artist's catalogue by), the label and the album into the indexed `tracks.label_id` / `tracks.album_id` pointers. The artist read is alias-tolerant, on the same trust rule as the entity tier, so an AKA filters exactly as the primary name does. Every tier that executes filters inherits this, including the model's — a name it emits is resolved by a database lookup, never by a model call, so nothing moves onto the hot path.
+
+**And a name the graph does not hold falls back to the string match.** Resolution requires the entity's maintained `renderable_track_count` to be above zero — the stored mirror of the very edge the filter is about to seek. An artist whose crawled catalogue the edge backfill has not reached, or a crawler-minted imprint with nothing pointing at it, therefore does not resolve, and the read compiles the substring/equality clause it always did. That is deliberate: a seek against an entity with no edges would return a confident, silent **empty**, which is a worse answer than a slow query. The fallback is the degradation contract holding at the level of one filter.
+
+The key filter took the same shape from the other side. There is no id to resolve to, so the **input** is normalised instead of the column: whatever the reader typed folds to the closed set of canonical spellings the archive actually stores (`<Note> major|minor` — what the analyzer writes, what the Rekordbox sync converts flats and Camelot codes to, and what the `/tracks` key control offers), and the filter compares the bare column against them. "Bb minor" and "A# minor" still ask one question; `tracks_key_idx` now answers it.
+
 ### It degrades; it never breaks
 
 `translateQuery` returns `null` when the model is unprovisioned, slow (past a 3-second deadline), or failing — every failure mode collapses to that one answer. Tier 4 then falls back to FTS5 with **OR** semantics: bm25 ranks by rarity, so the one distinctive word in the sentence carries the result. The response carries `degraded: true` and the dialog says so, rather than passing text hits off as the filters you asked for.

@@ -26,6 +26,15 @@
 // Tier 4's model emits FILTERS, never rows. It cannot hallucinate a track, because it never
 // sees one and never returns one — SQL does every retrieval. See `search-llm.ts`.
 //
+// ── AND A FILTER'S NAME BECOMES AN ID BEFORE IT BECOMES SQL ──────────────────────────
+// A filter carries a NAME — that is all a reader types and all the model may emit. Compiled
+// against the raw columns that meant a full pass over a growing table on the commonest search
+// there is ("tracks by <artist>" read every track's JSON credits). So every path that executes
+// filters resolves the names FIRST (`resolveFilterEntities`) against the small entity tables,
+// and `compileFilters` turns a resolved name into an indexed seek — the `track_artists` edge,
+// `tracks.label_id`, `tracks.album_id`. A name the graph does not hold falls back to the old
+// string match, which is the honest answer for a name that has no entity behind it.
+//
 // ── AND IF IT IS DOWN, SEARCH STILL WORKS ────────────────────────────────────────────
 // `translateQuery` returns `null` when the model is unprovisioned, slow, or failing. Tier 4
 // then falls back to the FTS5 path with OR semantics + bm25 — so "Andromedik tracks in A
@@ -619,39 +628,193 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
 export type Clause = { args: (number | string)[]; sql: string };
 
 /**
+ * The entity ids a filter set's NAMES resolved to — the indexed path {@link compileFilters}
+ * takes when the graph already knows the name a reader (or the model) typed. An absent id is
+ * not an error: it is the signal to compile the raw-string fallback instead.
+ *
+ * Produced by {@link resolveFilterEntities}, threaded in as a second argument rather than looked
+ * up inside the compiler, because the compiler is SYNCHRONOUS and shared with the `/tracks` hub —
+ * one resolve per read, at the read's own top, and both surfaces compile the same clause set.
+ */
+export type ResolvedFilterEntities = {
+  albumId?: string;
+  artistId?: string;
+  labelId?: string;
+};
+
+/**
+ * THE NAME → ID STEP, and the reason the hottest search shape is no longer a catalogue scan.
+ *
+ * A filter arrives carrying a NAME, because a name is what a reader typed and all the model tier
+ * is allowed to emit. Compiled against the raw columns, a name costs a full pass over a growing
+ * table — `lower(tracks.artists_json) like '%netsky%'` had to read and lower-case every track's
+ * JSON credits to answer "tracks by Netsky", on the single most common search there is. But the
+ * data model already did that work: `track_artists` holds the artist edge, `tracks.label_id` and
+ * `tracks.album_id` hold the imprint and the record, and all three are indexed. So the name is
+ * resolved ONCE, here, against the SMALL entity tables, and the filter becomes a seek.
+ *
+ * Three bounded lookups at most, and only for the filters actually present:
+ *   - ARTIST — alias-tolerant (the same `kind='name'` + `status in ('auto','confirmed')` trust
+ *     the entity tier resolves an AKA by), name or slug, primary name winning a tie.
+ *   - LABEL / ALBUM — by SLUG, the unique key, folded from the typed name the same way
+ *     `resolveEntity`'s album probe folds it (punctuation-insensitive, so "Wormhole" and
+ *     "wormhole." ask one question).
+ *
+ * AND THE COUNT GUARD IS WHAT KEEPS IT HONEST. Each read requires the entity's maintained
+ * `renderable_track_count > 0` (keystone 2) — the stored mirror of exactly the edge the filter is
+ * about to seek. An entity with no edges yet (an artist whose crawled catalogue the edge backfill
+ * has not reached, a crawler-minted imprint with nothing pointing at it) therefore does NOT
+ * resolve, and the caller compiles the substring fallback — today's answer, unchanged. Without
+ * the guard the seek would return a confident, silent EMPTY for exactly those entities, which is
+ * a worse failure than a slow query: the fallback is the degradation contract holding.
+ *
+ * The residual it does not cover: an artist with SOME edges but not all of them (the two draining
+ * backfill crons, `fluncle-artist-edges` + `fluncle-artist-credits`, are what converge that) reads
+ * from the graph, so search returns what `/artist/<slug>` returns. That is the shape the artist
+ * page's catalogue list already tells the truth in; search now agrees with it instead of quietly
+ * disagreeing.
+ */
+export async function resolveFilterEntities(
+  filters: SearchFilters,
+): Promise<ResolvedFilterEntities> {
+  const [artistId, labelId, albumId] = await Promise.all([
+    filters.artist ? resolveFilterArtistId(filters.artist) : Promise.resolve(undefined),
+    filters.label ? resolveFilterEntityId("labels", filters.label) : Promise.resolve(undefined),
+    filters.album ? resolveFilterEntityId("albums", filters.album) : Promise.resolve(undefined),
+  ]);
+
+  return {
+    ...(albumId ? { albumId } : {}),
+    ...(artistId ? { artistId } : {}),
+    ...(labelId ? { labelId } : {}),
+  };
+}
+
+/**
+ * One artist NAME (or slug, or a trusted AKA) → `artists.id`, or `undefined`. Bounded: one read of
+ * the archive-sized `artists` table, riding `artists_name_nocase_idx` / the slug unique index, with
+ * `artist_aliases` correlated by `artist_id`. `name_rank` breaks a tie the primary name's way, the
+ * same rule the entity tier and `resolveArtistCentroids` hold. `renderable_track_count > 0` is the
+ * count guard: no edges, no id, and the caller keeps the substring fallback.
+ */
+async function resolveFilterArtistId(name: string): Promise<string | undefined> {
+  const needle = name.trim().toLowerCase();
+
+  if (needle.length === 0) {
+    return undefined;
+  }
+
+  const slug = slugify(name);
+  const db = await getDb();
+  const result = await db.execute({
+    // Binds in SQL-text order: the name_rank case (name, slug), then the where (name, slug, alias).
+    args: [needle, slug, needle, slug, needle],
+    sql: `select artists.id as id,
+                 case when lower(artists.name) = ? or artists.slug = ? then 0 else 1 end as name_rank
+          from artists
+          where artists.renderable_track_count > 0
+            and (lower(artists.name) = ?
+                 or artists.slug = ?
+                 or exists (select 1 from artist_aliases
+                            where artist_aliases.artist_id = artists.id
+                              and artist_aliases.kind = 'name'
+                              and artist_aliases.status in ('auto', 'confirmed')
+                              and lower(artist_aliases.alias) = ?))
+          order by name_rank asc, length(artists.name) asc, artists.name asc
+          limit 1`,
+  });
+
+  return typedRow<{ id: string }>(result.rows)?.id;
+}
+
+/**
+ * One label/album NAME → its entity id, or `undefined`. A single unique-index seek on the slug —
+ * the shape `resolveEntity`'s album probe already established, for the same reason (the slug is
+ * the key; `lower(tracks.album) = ?` was the unindexable question). Same count guard as the artist
+ * read: an imprint the crawler minted but nothing points at does not resolve.
+ */
+async function resolveFilterEntityId(
+  table: "albums" | "labels",
+  name: string,
+): Promise<string | undefined> {
+  const slug = slugify(name);
+
+  if (!slug) {
+    return undefined;
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [slug],
+    // `table` is a closed union of two literals — never anything a stranger or a model typed.
+    sql: `select id from ${table} where slug = ? and renderable_track_count > 0 limit 1`,
+  });
+
+  return typedRow<{ id: string }>(result.rows)?.id;
+}
+
+/**
  * Compile a `SearchFilters` object into `where` clauses. Every value is a BIND ARG; nothing
  * the model emitted is ever interpolated into SQL. (The model is untrusted input with extra
  * steps — it is downstream of a stranger's search box.)
  *
- * `artist` matches the raw `artists_json` text, the same substring shape `searchTracks` in
- * `tracks.ts` uses: good enough to find an artist inside the stored array without unpacking
- * it, and it costs a scan the archive is nowhere near needing an index for.
+ * `resolved` is {@link resolveFilterEntities}' answer — the ids the filter's names were found to
+ * be. It decides which SHAPE each name filter takes, and both shapes return the same rows for an
+ * entity the graph knows:
  *
- * `key` goes through {@link keySpellings}, so "Bb minor" and "A# minor" ask one question.
+ *   - `artist` → an indexed edge seek through `track_artists` (`track_artists_artist_id_idx`)
+ *     when the name resolved; the raw `artists_json` substring scan when it did not. The
+ *     substring is what `searchTracks` in `tracks.ts` uses, and there it is bounded by the
+ *     findings join — here it is the FALLBACK, reached only for a name Fluncle holds no linked
+ *     entity for, which is also the only case where it can still find something the graph cannot.
+ *   - `label` / `album` → `tracks.label_id` / `tracks.album_id`, the indexed graph pointers, when
+ *     the name resolved; the raw-string equality when it did not (a free-typed imprint on the
+ *     `/tracks` hub is a legitimate filter with no entity behind it).
+ *
+ * `key` goes through {@link keySpellings} as an EXACT set of canonical spellings, so "Bb minor"
+ * and "A# minor" ask one question and `tracks_key_idx` answers it — the column is never wrapped.
  * `text` goes through the FTS index (a subquery, so bm25 does not have to survive the join).
  *
  * EXPORTED because the `/tracks` hub (`tracks-hub.ts`) compiles the SAME filter vocabulary
  * (`yearMin`/`yearMax`, `bpmMin`/`bpmMax`, `key`, `label`) off the SAME schema — the whole point
  * of aligning the hub's URL params with `SearchFilters`. The hub passes only that subset (never
- * `artist`/`album`/`text`) and adds its own `galaxy` clause on top; the key-spelling fold and the
- * `substr(release_date,1,4)` year compare live HERE, once, so the two surfaces cannot drift.
+ * `artist`/`album`/`text`) and adds its own `galaxy` clause on top; the key-spelling fold, the
+ * name→id shapes and the sargable year compare live HERE, once, so the two surfaces cannot drift.
  */
-export function compileFilters(filters: SearchFilters): Clause[] {
+export function compileFilters(
+  filters: SearchFilters,
+  resolved: ResolvedFilterEntities = {},
+): Clause[] {
   const clauses: Clause[] = [];
 
   if (filters.artist) {
-    clauses.push({
-      args: [filters.artist.toLowerCase()],
-      sql: `lower(tracks.artists_json) like '%' || ? || '%'`,
-    });
+    clauses.push(
+      resolved.artistId
+        ? {
+            args: [resolved.artistId],
+            sql: `tracks.track_id in (select track_id from track_artists where artist_id = ?)`,
+          }
+        : {
+            args: [filters.artist.toLowerCase()],
+            sql: `lower(tracks.artists_json) like '%' || ? || '%'`,
+          },
+    );
   }
 
   if (filters.label) {
-    clauses.push({ args: [filters.label.toLowerCase()], sql: `lower(tracks.label) = ?` });
+    clauses.push(
+      resolved.labelId
+        ? { args: [resolved.labelId], sql: `tracks.label_id = ?` }
+        : { args: [filters.label.toLowerCase()], sql: `lower(tracks.label) = ?` },
+    );
   }
 
   if (filters.album) {
-    clauses.push({ args: [filters.album.toLowerCase()], sql: `lower(tracks.album) = ?` });
+    clauses.push(
+      resolved.albumId
+        ? { args: [resolved.albumId], sql: `tracks.album_id = ?` }
+        : { args: [filters.album.toLowerCase()], sql: `lower(tracks.album) = ?` },
+    );
   }
 
   const parsedKey = parseKey(filters.key);
@@ -661,7 +824,7 @@ export function compileFilters(filters: SearchFilters): Clause[] {
 
     clauses.push({
       args: spellings,
-      sql: `lower(tracks.key) in (${spellings.map(() => "?").join(", ")})`,
+      sql: `tracks.key in (${spellings.map(() => "?").join(", ")})`,
     });
   }
 
@@ -713,7 +876,7 @@ export function compileFilters(filters: SearchFilters): Clause[] {
  * question. It returns nothing instead, and the caller degrades.
  */
 async function runFilters(filters: SearchFilters, limit: number): Promise<SearchResult> {
-  const clauses = compileFilters(filters);
+  const clauses = compileFilters(filters, await resolveFilterEntities(filters));
 
   if (clauses.length === 0) {
     return empty("filters");
@@ -859,7 +1022,9 @@ export async function rankTracksByVector(
     }
   }
 
-  const clauses = compileFilters(columnFilters);
+  // The pre-filter is compiled through the SAME name→id resolution the non-sonic path uses, so
+  // "like Nine Clouds, by Netsky" narrows on the artist EDGE before the scan touches a vector.
+  const clauses = compileFilters(columnFilters, await resolveFilterEntities(columnFilters));
   const where = [
     ...clauses.map((clause) => clause.sql),
     ...(excludeTrackId ? ["tracks.track_id != ?"] : []),
@@ -896,9 +1061,11 @@ export async function rankTracksByVector(
  * flag flip stays a pure latency win and never a ranking change.
  *
  * sonar can express ONLY inclusive BPM bounds with identical semantics. `key` is deliberately NOT
- * mapped: the Turso path matches `lower(tracks.key)` against a spread of lower-case spellings
- * ({@link keySpellings}), while sonar compares the raw `tracks.key` string EXACTLY (case-sensitive),
- * so the two disagree — a key filter must fall back. `artist`/`album`/`label`/`year`/`text` have no
+ * mapped: the Turso path matches the bare `tracks.key` column against a spread of canonical
+ * spellings ({@link keySpellings}) and sonar's `key_in` is now the same kind of exact set, so the
+ * two could be made to agree — but routing key queries to sonar is a RANKING-affecting flag change,
+ * not the query-shape fix this path just took, so it stays a fallback until that is measured.
+ * `artist`/`album`/`label`/`year`/`text` have no
  * sonar-filter equivalent at all, so any of them present also falls back (hydration cannot re-apply
  * them without breaking sonar's top-k, so routing to sonar would silently drop the filter).
  */
@@ -1203,6 +1370,10 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
     // papering over it with fuzzy text hits would be a worse product than saying so. But when
     // the filters were only loose words (or the sonic reference resolved to no real track),
     // there is nothing honest to report yet, so fall through to the text search below.
+    //
+    // Compiled UNRESOLVED on purpose: this asks only HOW MANY column clauses the filters carry,
+    // and a name compiles to exactly one clause whether it resolved to an id or fell back to the
+    // string. Resolving here would be a second round of lookups to learn nothing new.
     if (compileFilters({ ...filters, text: undefined }).length > 0) {
       return filtered;
     }

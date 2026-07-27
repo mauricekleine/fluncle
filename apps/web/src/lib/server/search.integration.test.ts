@@ -19,9 +19,10 @@
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linkTrackToAlbum } from "./albums";
+import { linkTracksToArtistEntities } from "./artists";
 import { createIntegrationDb } from "./integration-db";
 import { linkTrackToLabel } from "./labels";
-import { searchArchive } from "./search";
+import { compileFilters, resolveFilterEntities, searchArchive } from "./search";
 
 // The LLM tier is a network call. Stubbed here so each test states EXACTLY what the model
 // returned — including "nothing", which is the degradation the spec demands be proven.
@@ -550,6 +551,197 @@ describe("tier 4 — language becomes filters, and SQL does the retrieval", () =
   });
 });
 
+// ── The name filters, resolved to indexed ids ────────────────────────────────────────
+
+// A filter carries a NAME; the graph is keyed by ID. Compiled against the raw columns, a name
+// meant a full pass over `tracks` on the commonest search there is — so the name is resolved
+// FIRST, against the small entity tables, and the filter becomes an indexed seek
+// (`track_artists.artist_id`, `tracks.label_id`, `tracks.album_id`).
+//
+// These tests are the SAME test twice on purpose: the id path and the string path must return
+// the same rows for an entity the graph knows, and the string path must still be REACHED —
+// and still work — for a name it does not. Backlog Wave 3-2.
+describe("the name filters resolve to indexed ids (and fall back when they cannot)", () => {
+  /** Mint the artist entities the graph edges need, then stamp the edges through the REAL
+      production link path (which also moves the maintained `renderable_track_count` the
+      resolver's guard reads — a hand-rolled insert would leave it at 0 and prove nothing). */
+  async function seedArtistEntities(
+    entities: { name: string; slug: string }[],
+    trackIds: string[],
+  ): Promise<void> {
+    for (const [index, entity] of entities.entries()) {
+      await db.execute({
+        args: [`ax${index}`, entity.name, entity.slug],
+        sql: `insert into artists (id, name, slug, created_at, updated_at)
+              values (?, ?, ?, '2026-07-01', '2026-07-01')`,
+      });
+    }
+
+    await linkTracksToArtistEntities(trackIds);
+  }
+
+  /** The compiled SQL for one filter set, resolved exactly as the reads resolve it. */
+  async function compiledSql(filters: Parameters<typeof compileFilters>[0]): Promise<string> {
+    const clauses = compileFilters(filters, await resolveFilterEntities(filters));
+
+    return clauses.map((clause) => clause.sql).join(" and ");
+  }
+
+  it("seeks the artist EDGE, and returns exactly what the substring scan returned", async () => {
+    // The fixture's `a1` Netsky row has no edges yet, so this is the fallback's answer…
+    const beforeSql = await compiledSql({ artist: "Netsky" });
+    const before = await searchArchive({ q: "Netsky" });
+
+    expect(beforeSql).toContain("lower(tracks.artists_json) like");
+
+    // …and after the edges land it is the graph's answer. Identical rows, different shape.
+    await seedArtistEntities([], ["certified-netsky", "uncertified-netsky"]);
+
+    const afterSql = await compiledSql({ artist: "Netsky" });
+    const after = await searchArchive({ q: "Netsky" });
+
+    expect(afterSql).toBe(
+      `tracks.track_id in (select track_id from track_artists where artist_id = ?)`,
+    );
+    expect(after.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+    expect(after.results.map((hit) => hit.trackId)).toEqual(
+      before.results.map((hit) => hit.trackId),
+    );
+  });
+
+  it("finds a track that credits the artist SECOND — an edge is not a lead credit", async () => {
+    // "Take Me Away - Lexurus Remix" credits ["Andromedik", "Lexurus"]; Lexurus is position 2.
+    await seedArtistEntities([{ name: "Lexurus", slug: "lexurus" }], ["certified-andromedik"]);
+    translateQuery.mockResolvedValue({ artist: "Lexurus" });
+
+    const result = await searchArchive({ q: "Lexurus tracks" });
+
+    expect(await compiledSql({ artist: "Lexurus" })).toContain("track_artists");
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-andromedik"]);
+  });
+
+  it("KEEPS the substring scan for a name Fluncle holds no artist entity for", async () => {
+    // Bev Lee Harling is credited on the Netsky finding but has no `artists` row — nothing to
+    // seek, so the only thing that can still answer is the raw credit text. It does.
+    translateQuery.mockResolvedValue({ artist: "Bev Lee Harling" });
+
+    const result = await searchArchive({ q: "Bev Lee Harling tracks" });
+
+    expect(await resolveFilterEntities({ artist: "Bev Lee Harling" })).toEqual({});
+    expect(await compiledSql({ artist: "Bev Lee Harling" })).toContain(
+      "lower(tracks.artists_json) like",
+    );
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-netsky"]);
+  });
+
+  it("keeps the substring scan for an artist whose edges have not landed yet", async () => {
+    // THE COUNT GUARD. `a1` (Netsky) exists but carries no edges — resolving it would hand back a
+    // confident, silent EMPTY. It stays on the string, which is the degradation contract holding.
+    expect(await resolveFilterEntities({ artist: "Netsky" })).toEqual({});
+
+    const result = await searchArchive({ q: "Netsky" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("reads the GRAPH on the model's tier too — the emitted name is resolved, not scanned", async () => {
+    await seedArtistEntities([], ["certified-netsky", "uncertified-netsky"]);
+    // Drop ONE edge while the raw `artists_json` still credits Netsky on both rows. A filter that
+    // read the JSON would return two; one that seeks the edge returns one. It returns one.
+    await db.execute({
+      args: ["uncertified-netsky"],
+      sql: `delete from track_artists where track_id = ?`,
+    });
+    translateQuery.mockResolvedValue({ artist: "Netsky" });
+
+    const result = await searchArchive({ q: "netsky tunes please" });
+
+    expect(result.kind).toBe("filters");
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-netsky"]);
+  });
+
+  it("narrows the SONIC pre-filter by the same edge — one pass, before any vector is touched", async () => {
+    await seedArtistEntities([], ["certified-netsky", "uncertified-netsky"]);
+    translateQuery.mockResolvedValue({ artist: "Netsky", soundsLike: "Nine Clouds" });
+
+    const result = await searchArchive({ q: "like Nine Clouds but Netsky" });
+
+    expect(result.kind).toBe("sonic");
+    // Ranked by distance to the 1991 anchor: netsky@0.1 then uncertified-netsky@0.3, and NOTHING
+    // else — the artist edge bounded the scan.
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("filters the LABEL by its indexed pointer, with the same rows the string gave", async () => {
+    translateQuery.mockResolvedValue({ label: "Hospital Records" });
+
+    const result = await searchArchive({ q: "anything on Hospital Records" });
+
+    expect(await compiledSql({ label: "Hospital Records" })).toBe("tracks.label_id = ?");
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("folds punctuation on the way to the label id — one question, however it is typed", async () => {
+    // The pointer is reached by SLUG, so "hospital records" and "Hospital-Records!" ask the same
+    // question — the fold `resolveEntity`'s album probe already established.
+    expect(await resolveFilterEntities({ label: "Hospital-Records!" })).toEqual(
+      await resolveFilterEntities({ label: "hospital records" }),
+    );
+  });
+
+  it("filters the ALBUM by its indexed pointer", async () => {
+    translateQuery.mockResolvedValue({ album: "Second Nature" });
+
+    const result = await searchArchive({ q: "the record called Second Nature" });
+
+    expect(await compiledSql({ album: "Second Nature" })).toBe("tracks.album_id = ?");
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("keeps the raw-string compare for an imprint with nothing pointing at it", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into labels (id, name, slug, created_at, updated_at)
+            values ('l-stub', 'Walked Past', 'walked-past', '2026-07-01', '2026-07-01')`,
+    });
+
+    expect(await resolveFilterEntities({ label: "Walked Past" })).toEqual({});
+    expect(await compiledSql({ label: "Walked Past" })).toBe("lower(tracks.label) = ?");
+  });
+
+  it("compares the KEY column bare, against the spellings the archive stores", async () => {
+    // No `lower(tracks.key)` anywhere: the INPUT is normalised, so `tracks_key_idx` can be seeked.
+    const sql = await compiledSql({ key: "a minor" });
+
+    expect(sql).not.toContain("lower(");
+    expect(sql).toContain("tracks.key in (");
+
+    translateQuery.mockResolvedValue({ key: "a minor" });
+
+    const result = await searchArchive({ q: "anything in a MINOR" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+});
+
 // ── The sonic tier ───────────────────────────────────────────────────────────────────
 
 describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
@@ -855,7 +1047,8 @@ describe("the compound sonic tier — sound like several artists", () => {
     const sql = scan?.sql ?? "";
 
     expect(sql).toContain("vector_distance_cos(tracks.embedding_blob, ?)");
-    expect(sql).toContain("lower(tracks.key) in"); // the btree pre-filter, in the same statement
+    expect(sql).toContain("tracks.key in"); // the btree pre-filter, in the same statement
+    expect(sql).not.toContain("lower(tracks.key)"); // …and it is the BARE column, so the btree serves it
     expect(sql).toContain("order by dist asc");
     expect(sql).not.toContain("union all"); // one pass, no fan-out
     expect((sql.match(/vector_distance_cos/g) ?? []).length).toBe(1);

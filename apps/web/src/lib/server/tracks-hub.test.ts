@@ -33,6 +33,8 @@ import {
   listTracksHubPage,
   listTracksHubYearLane,
   resetTracksHubAggregateCache,
+  resolveTracksHubEntities,
+  tracksHubClauses,
   tracksHubCountQuery,
   tracksHubIdPageQuery,
   tracksHubYearLaneQuery,
@@ -274,13 +276,43 @@ describe("listTracksHubPage — the filters compose with the page", () => {
     expect(ids(items)).toEqual(["y2024"]);
   });
 
-  it("filters by label (the raw string, case-insensitively)", async () => {
+  // A free-typed imprint with no entity behind it is a legitimate filter (the control offers it),
+  // so the raw-string compare is the fallback and has to keep working.
+  it("filters by label (the raw string, case-insensitively) when no entity holds the name", async () => {
     await seedTrack({ label: "Hospital Records", releaseDate: "2022-01-01", trackId: "hosp" });
     await seedTrack({ label: "Shogun Audio", releaseDate: "2022-01-01", trackId: "shogun" });
 
     const { items } = await listTracksHubPage({ label: "hospital records" }, 1);
 
     expect(ids(items)).toEqual(["hosp"]);
+  });
+
+  // …and when the entity IS there, the typed name is resolved to `labels.id` first and the filter
+  // becomes an indexed seek on `tracks.label_id` — same rows, no `lower(tracks.label)` scan
+  // (backlog Wave 3-2). The counter is what the resolver's guard reads, so it is moved here the way
+  // the link path moves it.
+  it("filters by the label's indexed pointer once the imprint has an entity", async () => {
+    await seedLabel("lbl_hosp", "Hospital Records", "hospital-records");
+    await db.execute(`update labels set renderable_track_count = 1 where id = 'lbl_hosp'`);
+    await seedTrack({
+      label: "Hospital Records",
+      labelId: "lbl_hosp",
+      releaseDate: "2022-01-01",
+      trackId: "hosp",
+    });
+    await seedTrack({ label: "Shogun Audio", releaseDate: "2022-01-01", trackId: "shogun" });
+
+    const resolved = await resolveTracksHubEntities({ label: "Hospital Records" });
+    const { items, total } = await listTracksHubPage({ label: "Hospital Records" }, 1);
+
+    expect(resolved).toEqual({ labelId: "lbl_hosp" });
+    expect(tracksHubClauses({ label: "Hospital Records" }, resolved)[0]?.sql).toBe(
+      "tracks.label_id = ?",
+    );
+    expect(ids(items)).toEqual(["hosp"]);
+    // The pager total rides the same resolved clause set — the memo key IS that clause set, so a
+    // count compiled unresolved beside a resolved page read would be two different questions.
+    expect(total).toBe(1);
   });
 
   it("filters by certification (the API tri-state), reading the maintained is_catalogue flag", async () => {

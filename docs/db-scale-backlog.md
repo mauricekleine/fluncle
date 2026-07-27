@@ -172,12 +172,13 @@ Every index on a growing table is paid for on every write to it, so a REDUNDANT 
 
 **2. Search compileFilters: resolve name filters to indexed ids + key canonicalization** · **needs hosted proof**
 `tier=design · tracks · T1, T9`
-**STATUS: DESIGN — recommended, pending a decision.**
+**STATUS: BUILT, pending the hosted spot-proof.** Prune this item once that proof lands and the PR merges.
 
-- loc: apps/web/src/lib/server/search.ts:645-648 (artist LIKE), apps/web/src/lib/server/search.ts:651-656 (label/album lower()) + :659-668 (key lower()), runFilters:712 + rankTracksByVector:838 pre-filter
-- shape: The artist filter is `lower(artists_json) like '%'||?||'%'` — a leading-wildcard LIKE over unindexed JSON → full 48k→150k scan on the SINGLE most common search shape (every exactly-named artist). label/album `lower(tracks.label/album)=?` and `lower(tracks.key) in (…)` wrap columns and defeat the btrees that exist.
-- impact: HIGH — the hottest, most common search shape.
-- fix: artist: resolveEntity already holds artists.id → filter `tracks.track_id in (select track_id from track_artists where artist_id=?)` (track_artists_artist_id_idx); tier-4 LLM path resolves the emitted name to an id first, substring only as fallback. label/album: filter the resolved `tracks.label_id`/`album_id` (indexed) instead of the raw string. key: store a canonical/lowercased key form and index it (verify hosted). Requires threading ids through compileFilters — a design change. (The year clause was the Wave-1 cheap rewrite, now shipped.)
+- shape (before): The artist filter was `lower(artists_json) like '%'||?||'%'` — a leading-wildcard LIKE over unindexed JSON → full 48k→150k scan on the SINGLE most common search shape (every exactly-named artist). label/album `lower(tracks.label/album)=?` and `lower(tracks.key) in (…)` wrapped columns and defeated the btrees that exist.
+- built: `resolveFilterEntities` (apps/web/src/lib/server/search.ts) resolves a filter's NAME to an entity id once per read, and `compileFilters(filters, resolved)` compiles the seek: artist → `tracks.track_id in (select track_id from track_artists where artist_id = ?)` (track_artists_artist_id_idx), label/album → `tracks.label_id`/`tracks.album_id`. Every executing path threads it (runFilters, the sonic pre-filter in rankTracksByVector, and the `/tracks` hub, which resolves its imprint the same way) so the tier-4 LLM path inherits it — the model still only ever emits a name. NO migration and no stored column was needed for the key: storage is already the closed canonical set (`<Note> major|minor` — the analyzer writes it, the Rekordbox sync converts flats/Camelot to it, KEY_FILTER_OPTIONS offers it), so `keySpellings` normalises the INPUT instead and the clause is a bare `tracks.key in (…)` riding tracks_key_idx.
+- the fallback is deliberate and reachable: resolution requires the entity's maintained `renderable_track_count > 0`, so a name with no entity — or one whose edges the artist-edge backfill has not reached — keeps the old string clause rather than returning a confident empty. That is what the two shrunken guardrail allowlist entries on search.ts now cover (lower-tracks 4 → 3, the key clause gone; the leading-wildcard LIKE stays at 1 as the artist fallback).
+- residual: an artist with SOME edges but not all reads what the graph holds (which is what `/artist/<slug>`'s catalogue list already shows); the `fluncle-artist-edges` + `fluncle-artist-credits` crons are what converge it.
+- proof still owed: hosted-scratch p50 + EXPLAIN on the three seeks vs the scans they replace, at 150k.
 
 **3. tracks-hub numbered pager: keyset/seek pagination for the deep tail** · **needs hosted proof**
 `tier=design · tracks · T6, T1`

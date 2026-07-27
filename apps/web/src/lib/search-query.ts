@@ -213,23 +213,25 @@ function withoutStopwords(tokens: string[]): string[] {
 // ── The key filter ───────────────────────────────────────────────────────────────────
 
 // Every spelling of a pitch class that could have been written into `tracks.key`, indexed by
-// pitch class (0 = C … 11 = B). The analyzer writes sharps ("C# minor"); a Rekordbox-graded
-// or hand-entered key can arrive flat or with a Unicode accidental. Enharmonics fold to one
-// class, so asking for "Bb minor" and asking for "A# minor" are the same question and both
-// return the same rows.
+// pitch class (0 = C … 11 = B), in the CASING the archive actually stores. The analyzer writes
+// sharps ("C# minor"); the Rekordbox sync converts a flat or a Camelot code to that same sharp
+// spelling before it writes ("Bbm" → "A# minor", "8A" → "A minor"); the `/tracks` key control
+// offers exactly those 24 strings (`KEY_FILTER_OPTIONS`). The flats are here for a hand-typed
+// operator key, and because enharmonics fold to one class — asking for "Bb minor" and asking
+// for "A# minor" are the same question and both return the same rows.
 const PITCH_SPELLINGS: Record<number, string[]> = {
-  0: ["c", "b#"],
-  1: ["c#", "db"],
-  10: ["a#", "bb"],
-  11: ["b", "cb"],
-  2: ["d"],
-  3: ["d#", "eb"],
-  4: ["e", "fb"],
-  5: ["f", "e#"],
-  6: ["f#", "gb"],
-  7: ["g"],
-  8: ["g#", "ab"],
-  9: ["a"],
+  0: ["C", "B#"],
+  1: ["C#", "Db"],
+  10: ["A#", "Bb"],
+  11: ["B", "Cb"],
+  2: ["D"],
+  3: ["D#", "Eb"],
+  4: ["E", "Fb"],
+  5: ["F", "E#"],
+  6: ["F#", "Gb"],
+  7: ["G"],
+  8: ["G#", "Ab"],
+  9: ["A"],
 };
 
 // The mode words a stored key might carry, per mode. `parseKey` (lib/key-camelot.ts) accepts
@@ -240,15 +242,23 @@ const MODE_WORDS: Record<"major" | "minor", string[]> = {
 };
 
 /**
- * Every `lower(tracks.key)` value that means the SAME key as the parsed one — the IN-list a
- * key filter binds.
+ * Every `tracks.key` value that means the SAME key as the parsed one — the IN-list a key filter
+ * binds, in the archive's own casing so the comparison is a BARE column equality.
  *
- * Matching keys as text is the honest way to do it here: `tracks.key` is a display string,
- * there is no pitch-class column to compare against, and normalising one in SQL would mean a
- * function call per row (an unindexable scan). An `IN` over a dozen literal spellings is one
- * b-tree probe per spelling and stays a b-tree probe when the catalogue is 41k rows deep —
- * which is exactly the "btree pre-filter" a sonic query needs in front of its vector scan
- * (docs/local-database.md).
+ * Matching keys as text is the honest way to do it here: `tracks.key` is a display string and
+ * there is no pitch-class column to compare against. What changed (backlog Wave 3-2) is the SIDE
+ * the normalising happens on. It used to be the column's — `lower(tracks.key) in (…)` — which is
+ * a function call per row, so `tracks_key_idx` could never be seeked and the filter degraded into
+ * a scan of a growing table. The INPUT is what gets normalised now: the parser folds whatever the
+ * reader typed onto a closed set of canonical spellings, and each one is a b-tree probe that
+ * stays a b-tree probe at 150k rows — which is exactly the "btree pre-filter" a sonic query needs
+ * in front of its vector scan (docs/local-database.md).
+ *
+ * The spread is deliberately wider than what any writer emits (both enharmonic notes × both mode
+ * words) because a probe costs a seek and a miss costs nothing. What it does NOT cover is a
+ * DIFFERENT CASING of the same words ("A# Minor"): every path that writes this column normalises
+ * to `<Note> major|minor` first — the analyzer, the Rekordbox sync's Camelot/flat map, the hub's
+ * own key control — and a census of the archive's distinct `key` values found no other shape.
  *
  * Takes the already-parsed key so this file stays free of the parser's tolerance rules
  * (`lib/key-camelot.ts` owns those, and owns them once).

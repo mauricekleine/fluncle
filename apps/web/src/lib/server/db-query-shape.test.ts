@@ -512,11 +512,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
 
   // ── function-wrapped filter columns ────────────────────────────────────────────
   {
-    count: 4,
+    count: 3,
     file: "lib/server/search.ts",
     pattern: "fn-wrapped:lower-tracks",
     reason:
-      "compileFilters' artist / label / album / key clauses — OWNED by backlog Wave 3-2 (resolve the name filters to indexed `label_id`/`album_id`/`artist_id`, store a canonical key form). A design change that threads resolved ids through compileFilters; the year clause was the cheap half and already shipped as a sargable range.",
+      "compileFilters' artist / label / album FALLBACK clauses — what is left of Wave 3-2 after the name filters became indexed seeks. Each is now reached only when `resolveFilterEntities` found NO entity for the typed name (no `artists`/`labels`/`albums` row, or one with zero linked tracks), where there is no id to seek and the string match is the only thing that can still answer. The resolved path compiles `track_artists.artist_id` / `tracks.label_id` / `tracks.album_id` instead, and the KEY clause left this list entirely (it now compares the bare column against canonical spellings, riding tracks_key_idx).",
   },
   {
     count: 1,
@@ -544,7 +544,7 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     file: "lib/server/search.ts",
     pattern: "fn-wrapped:leading-wildcard-like",
     reason:
-      "The artist substring filter — the same clause as the Wave 3-2 entry above, counted once more under the leading-wildcard shape. It is the single hottest search shape and the one the design call exists for.",
+      "The artist substring FALLBACK — the same clause as the Wave 3-2 entry above, counted once more under the leading-wildcard shape. It was the hottest search shape in the app; it is now the path a name Fluncle holds no linked artist entity for takes, which is the only case where a scan can still find what the `track_artists` seek cannot.",
   },
   {
     count: 4,
