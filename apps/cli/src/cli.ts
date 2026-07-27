@@ -1552,7 +1552,7 @@ function addAdminCommands(program: Command): void {
   adminNewsletter
     .command("draft")
     .description("Persist a newsletter edition draft (the agent authors it, you send it)")
-    .option("--content-file <file>", "Structured edition content payload (JSON)")
+    .option("--content-file <file>", "Structured edition payload (JSON)")
     .option("--subject <text>", "Email subject line")
     .option("--window-since <date>", "Discovery-window start (ISO)")
     .option("--window-until <date>", "Discovery-window end (ISO)")
@@ -1576,7 +1576,7 @@ function addAdminCommands(program: Command): void {
     .command("update")
     .description("Update a draft edition's payload, subject, or window")
     .argument("[id]")
-    .option("--content-file <file>", "Structured edition content payload (JSON)")
+    .option("--content-file <file>", "Structured edition payload (JSON)")
     .option("--subject <text>", "Email subject line")
     .option("--window-since <date>", "Discovery-window start (ISO)")
     .option("--window-until <date>", "Discovery-window end (ISO)")

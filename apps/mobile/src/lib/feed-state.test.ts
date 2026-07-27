@@ -63,6 +63,14 @@ assertEqual(feedCopy.error.retry, "Try again", "retry control label");
 // Substrings, so "stream" covers "streaming" and "mint" covers "minted" — the
 // Engine-Room Rule's word, the one that drifted onto three surfaces before it was
 // caught, so it is pinned here too.
+//
+// The canonical list is BANNED_WORDS in apps/web/src/lib/server/voice-words.ts,
+// read by the runtime voice gates and by the repo-wide static voice lint
+// (apps/web/src/lib/server/voice-lint.test.ts), which now covers apps/mobile/src
+// too. A mobile test cannot import across apps, and this list is deliberately
+// WIDER than the canonical one — substring matching plus the Engine-Room Rule's
+// "mint" — so it stays as the local backstop rather than being deleted. Keep it
+// in step when a canon ratification changes voice-words.ts.
 const BANNED_IDENTITY_WORDS = [
   "transmission",
   "signal",

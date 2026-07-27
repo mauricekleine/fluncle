@@ -20,7 +20,7 @@ import { listUpcomingPlans } from "../lib/server/recordings";
 // its internal Galaxy-vocab handle); the teaser is intentional.
 
 const PRODID = "-//Fluncle//Live Sessions//EN";
-const CALENDAR_NAME = "Fluncle — Live Sessions";
+const CALENDAR_NAME = "Fluncle live sessions";
 
 export const Route = createFileRoute("/calendar.ics")({
   server: {
@@ -87,7 +87,7 @@ function buildPlanEvent(plan: RecordingDTO, now: Date, dtstamp: string): string[
 
   const tracklist = formatCueTracklist(plan);
   const description = [
-    "Fluncle goes live — fresh drum & bass, mixed live across the Galaxy. Tune in on Twitch.",
+    "Fluncle goes live on Twitch, mixing fresh drum & bass across the Galaxy. Tune in.",
     tracklist ? `\n\nWhat's queued:\n${tracklist}` : "",
   ].join("");
 
@@ -122,7 +122,7 @@ function buildMixtapeEvent(mixtape: MixtapeDTO, dtstamp: string): string[] | nul
   const description = [
     mixtape.note?.trim()
       ? mixtape.note.trim()
-      : "A checkpoint Fluncle settled along the way — a stretch of findings dreamt into one long mix.",
+      : "A checkpoint Fluncle settled along the way. He dreamt a stretch of findings into one long mix.",
     `\n\nListen: ${link}`,
     tracklist ? `\n\nTracklist:\n${tracklist}` : "",
   ].join("");

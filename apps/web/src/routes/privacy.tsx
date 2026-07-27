@@ -159,8 +159,8 @@ function PrivacyPage() {
             <div className="log-about-definition">
               <dt>What it reads</dt>
               <dd>
-                Each page's text, locally in your browser, to spot coordinates. The page content is
-                not collected, stored, or sent anywhere.
+                Each page's text, locally in your browser, to spot coordinates. None of that text is
+                collected, stored, or sent anywhere.
               </dd>
             </div>
             <div className="log-about-definition">

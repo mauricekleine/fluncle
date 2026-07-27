@@ -431,7 +431,7 @@ function SearchDialog({
             the other. */}
         {data.degraded ? (
           <p className="search-note search-note--degraded">
-            Reading by name only right now — showing the closest words.
+            Reading by name only right now, showing the closest words.
           </p>
         ) : undefined}
 

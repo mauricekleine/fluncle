@@ -33,6 +33,7 @@ import { readEnv, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
 import { ApiError } from "./spotify";
+import { BANNED_WORDS } from "./voice-words";
 
 // ── The script + render artifacts (R2 `observation.json` shape) ──────────────
 
@@ -122,21 +123,9 @@ export type ObservationArtifact = ObservationScript & {
 // live Fluncle voice surface, so a banned word in a SPOKEN artifact is a brand
 // failure that can't be skimmed past — the gate hard-fails the render.
 
-// VOICE.md §3 banned identity words. `signal`/`transmission` are the radio
-// metaphor the dimension/log metaphor replaced; `anomaly` is the sci-fi cliché;
-// `curated`/`content` are gallery/marketing words; `stream(ing)` as identity is
-// Spotify's, not Fluncle's. Matched as whole words, case-insensitively.
-const BANNED_WORDS = [
-  "signal",
-  "signals",
-  "transmission",
-  "transmissions",
-  "anomaly",
-  "curated",
-  "curation",
-  "content",
-  "streaming",
-] as const;
+// The VOICE.md §3 banned identity words live in ./voice-words.ts, shared with the
+// build-time static lint over hand-written UI strings (./voice-lint.test.ts) so a
+// canon ratification can never land in one gate and miss the other.
 
 // Earthly geography is banned from the SPOKEN read: the cosmos replaces the map,
 // so no countries, cities, nationalities, or regions. The context_note (firecrawl
