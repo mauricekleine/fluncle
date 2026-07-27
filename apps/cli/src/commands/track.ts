@@ -427,7 +427,7 @@ async function readManifestFields(
 
   if (missing.length > 0) {
     console.error(
-      `[video] render.json is missing ${missing.join(", ")} — the finding ships without its diversity-ledger stamp(s); fix the render bundle's render.json`,
+      `[video] render.json is missing ${missing.join(", ")}, so the finding ships without its diversity-ledger stamp(s); fix the render bundle's render.json`,
     );
   }
 

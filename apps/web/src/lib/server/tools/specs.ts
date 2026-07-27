@@ -249,7 +249,7 @@ export const searchArchiveSpec = defineSpec({
     query: z
       .string()
       .min(2)
-      .describe("What to dig for — a name, a label, a key/BPM, or 'sounds like <track>'."),
+      .describe("What to dig for (a name, a label, a key/BPM, or 'sounds like <track>')."),
   }),
   name: "search_archive",
   // Chat splits the result into two registers (PR-4): certified findings + unlit catalogue rows.
@@ -264,7 +264,7 @@ export const searchArchiveSpec = defineSpec({
 export const getArtistSpec = defineSpec({
   access: "public",
   description:
-    "Look up one artist Fluncle has logged, BY NAME (e.g. Netsky). Returns his certified findings from that artist, plus their public socials and the slug of their page. Returns nothing — he has not logged them — when there is no certified finding from that name.",
+    "Look up one artist Fluncle has logged, BY NAME (e.g. Netsky). Returns his certified findings from that artist, plus their public socials and the slug of their page. Returns nothing (he has not logged them) when there is no certified finding from that name.",
   effect: "read",
   input: z.object({
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
@@ -283,7 +283,7 @@ export const getArtistSpec = defineSpec({
 export const getLabelSpec = defineSpec({
   access: "public",
   description:
-    "Look up one label Fluncle has logged, BY NAME (e.g. Hospital Records). Returns his certified findings on that label, plus any confirmed alternate spellings and the slug of its page. Returns nothing — he has found nothing on it — when there is no certified finding on that name.",
+    "Look up one label Fluncle has logged, BY NAME (e.g. Hospital Records). Returns his certified findings on that label, plus any confirmed alternate spellings and the slug of its page. Returns nothing (he has found nothing on it) when there is no certified finding on that name.",
   effect: "read",
   input: z.object({
     name: z
@@ -303,13 +303,13 @@ export const getLabelSpec = defineSpec({
 export const buildSetSpec = defineSpec({
   access: "public",
   description:
-    "Chain a mixable set from one of Fluncle's findings. Give it a starting finding — a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name — and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It starts from a finding, and returns nothing when he has not logged a starting point.",
+    "Chain a mixable set from one of Fluncle's findings. Give it a starting finding, either a Log ID coordinate he has logged (e.g. 004.7.2I) or a track name, and it returns an ordered set of what mixes in cleanly after it, each step carrying the REASON it mixes (same key, next key over, tempo locked), never a number. It starts from a finding, and returns nothing when he has not logged a starting point.",
   effect: "read",
   input: z.object({
     seed: z
       .string()
       .min(1)
-      .describe("A finding to start from — a Log ID coordinate (004.7.2I) or a track name."),
+      .describe("A finding to start from, either a Log ID coordinate (004.7.2I) or a track name."),
   }),
   name: "build_set",
   // MCP + chat only: build_set takes a name/coordinate and returns a reasoned set with a /mix

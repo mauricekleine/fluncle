@@ -73,7 +73,7 @@ function buildBody(
 // with a clear message rather than a server `invalid_content`.
 function readContentFile(filePath: string): unknown {
   if (!existsSync(filePath)) {
-    throw new CliError("file_not_found", `Content file not found: ${filePath}`);
+    throw new CliError("file_not_found", `Edition payload file not found: ${filePath}`);
   }
 
   const text = readFileSync(filePath, "utf-8");
@@ -83,7 +83,7 @@ function readContentFile(filePath: string): unknown {
   } catch (error) {
     throw new CliError(
       "invalid_content_json",
-      `Content JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
+      `Edition payload JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }

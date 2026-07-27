@@ -115,6 +115,7 @@ export async function recordingGetCommand(
 
   console.log(formatRecordingSummary(recording));
   // A PLAN (no video yet) owns no key — print the honest absence.
+  // voice-lint-allow: the `—` NULL-CELL glyph, explicitly blessed by the 2026-07-18 `audit/20260717-voice` ledger row
   console.log(`  r2Key: ${recording.r2Key ?? "— (no set video)"}`);
 
   for (const cue of recording.tracklist) {

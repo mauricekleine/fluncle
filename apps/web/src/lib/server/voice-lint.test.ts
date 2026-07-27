@@ -12,14 +12,11 @@
 // every build. The judgment half — is this line said, not written; does it turn to
 // the crew — stays with the `copywriting-fluncle` skill and the `canon-reviewer`.
 //
-// THE THREE RAILS. Only mechanically unambiguous rules land here. Measured over
-// the scanned roots (276 files / ~13k literals): 7 true positives, 0 false
-// positives, all 7 fixed in the commit that added this file.
+// THE THREE RAILS. Only mechanically unambiguous rules land here.
 //   (a) BANNED WORDS — VOICE.md §3, whole-word and case-insensitive, from the ONE
 //       shared list in ./voice-words.ts (the runtime gates read the same array).
 //       PROSE ONLY: `Content-Type`, `AbortSignal`, `contentEditable` and friends
-//       are the large false-positive surface, and the prose heuristic below cuts
-//       48 raw hits down to the 3 real ones.
+//       are the large false-positive surface, so `isProse` below decides.
 //   (b) PROSE EM DASH — VOICE.md §6 sanctions exactly one em dash, the
 //       `Artist — Title` tracklist separator. That separator is always written as
 //       a literal that is ONLY the separator (`" — "`), so a literal matching
@@ -27,19 +24,22 @@
 //       literal kinds, not just prose (a title or an aria-label is copy too).
 //   (c) EXCLAMATION MARKS — the Dry Rule, prose only (`!` is everywhere in code).
 //
-// WHAT IS SCANNED, AND WHAT IS NOT. Every skip is a deliberate register or
-// tooling boundary, written down here so the net's edges are explicit:
-//   - `apps/web/src/routes`, `apps/web/src/components`, `apps/mobile/src`,
-//     `apps/extension/src` — the public web, mobile, and extension surfaces.
-//   - `apps/cli/src` — scanned for rails (a) and (c) only. Rail (b) is EXCLUDED
-//     there: the operator-tier CLI register uses `—` as a clause separator as one
-//     systematic house style (~35 instances in `cli.ts`), and whether the prose
-//     discipline reaches operator tool output is an open CANON question, not
-//     drift. See the 2026-07-18 `audit/20260717-voice` row in
-//     docs/audit-backlog.md; when a human rules on it, flip `emDash` below.
-//   - `/admin` is SKIPPED entirely (`routes/admin`, `routes/api/admin`,
-//     `routes/api/v1/admin`, `components/admin`): the operator workstation is a
-//     different register, and it is where the engine-room vocabulary belongs.
+// WHAT IS SCANNED. See SCAN_ROOTS: the public web, mobile, and extension
+// surfaces, the CLI, and two named modules out of `apps/web/src/lib` (below).
+//
+// WHAT IS NOT, AND WHY. Every edge is a deliberate register or tooling boundary:
+//   - `/admin` under the web roots is skipped ENTIRELY (see SKIPPED_DIRECTORIES):
+//     the operator workstation is a different register, and it is where the
+//     engine-room vocabulary belongs.
+//   - THE ONE ASYMMETRY, stated on purpose: the web `/admin` tree is skipped
+//     outright, while the CLI's admin tree IS scanned for banned words and only
+//     exempted from the em-dash rail. They differ because the exemptions have
+//     different causes — the web `/admin` register is settled canon (operator
+//     chrome, engine-room words allowed), whereas the CLI em dash is an OPEN
+//     canon question with the banned-word list never in dispute on any surface.
+//     A banned identity word is wrong in operator CLI output too, so it stays
+//     caught there; if the CLI register is ever ruled full-voice, delete
+//     EM_DASH_EXEMPT_PREFIXES rather than widening the web skip.
 //   - `*.test.*` files are skipped — a test's fixtures deliberately contain the
 //     violations it asserts on (this file included).
 //   - `*.d.ts` files are skipped: declarations carry no copy.
@@ -47,21 +47,34 @@
 //     ROUTING, not from copy (`-docs-page.tsx` renders UI, `-home-data.ts` carries
 //     page strings), and including them measured clean.
 //
-// OUT OF SCOPE, deliberately:
-//   - `apps/ssh/main.go` — Go, so oxc cannot parse it. Its em dashes are `Artist —
-//     Title` separators today; a Go-side scan is its own slice.
-//   - `apps/web/public/*.txt` — robots.txt comments and the standard
-//     Content-Signal header are not Fluncle's prose.
-//   - `packages/**` — shared libraries; their user-facing strings reach a surface
-//     through one of the scanned apps.
-//   - `/admin`, per the register boundary above.
+// OUT OF SCOPE — each a real boundary with a real cost, not a claim that nothing
+// there matters:
+//   - The REST of `apps/web/src/lib`. Measured 2026-07-27 with these exact rails:
+//     287 files carrying 60 prose em dashes and 7 banned-word hits. They are
+//     overwhelmingly operator/DB/API strings (status reasons, query builders,
+//     vendor payloads) where the register question is unsettled, so scanning the
+//     tree wholesale would bury the gate in a judgment call it cannot make. The
+//     two modules whose strings reach a PUBLIC audience are pulled into
+//     SCAN_ROOTS individually instead. Drawing the real `lib/**` boundary is a
+//     follow-up, and it is a canon question before it is a code one.
+//   - `apps/ssh/main.go` — Go, so oxc cannot parse it. Its em dashes are
+//     `Artist — Title` separators today; a Go-side scan is its own slice.
+//   - `apps/web/public/*.txt` — `llms.txt` and `humans.txt` are hand-written,
+//     voice-governed prose and DO belong under these rails; they are skipped only
+//     because oxc parses JavaScript, not plain text. A text-file scanner is a
+//     separate, worthwhile slice (a prose em dash shipped in `llms.txt` before).
+//   - `packages/**` — a deliberate boundary, not an empty one: a literal in a
+//     package is never re-typed in the app, so e.g. `packages/registry` surface
+//     titles render on `/status`, the SSH menu, and MCP unchecked. Extending the
+//     roots there is cheap and wanted; it is held back only to keep this slice
+//     reviewable.
 //
 // THE ESCAPE HATCH. Put `// voice-lint-allow: <reason>` (or, inside JSX,
 // `{/* voice-lint-allow: <reason> */}`) on the line DIRECTLY ABOVE the offending
 // line. The reason must be non-empty — a bare marker suppresses nothing, so an
 // exemption always says why it earned one.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
@@ -70,14 +83,18 @@ import { BANNED_WORDS } from "./voice-words";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
-/** Each scanned root, and whether the prose-em-dash rail applies to it. */
-const SCAN_ROOTS: { emDash: boolean; path: string }[] = [
-  { emDash: true, path: "apps/web/src/routes" },
-  { emDash: true, path: "apps/web/src/components" },
-  { emDash: true, path: "apps/mobile/src" },
-  { emDash: true, path: "apps/extension/src" },
-  // The operator CLI register: banned words + the Dry Rule, no em-dash rail.
-  { emDash: false, path: "apps/cli/src" },
+/** Directories walked in full, plus two individually-named files (see header). */
+const SCAN_ROOTS = [
+  "apps/web/src/routes",
+  "apps/web/src/components",
+  "apps/mobile/src",
+  "apps/extension/src",
+  "apps/cli/src",
+  // The MCP tool descriptions: a PUBLIC agent surface — an assistant reads these
+  // strings out to a stranger, so they are copy even though they live in lib/.
+  "apps/web/src/lib/server/tools/specs.ts",
+  // Renders the markdown home that agents and crawlers read.
+  "apps/web/src/lib/server/agent-discovery.ts",
 ];
 
 /** The operator workstation — a different register, out of the public net. */
@@ -88,10 +105,54 @@ const SKIPPED_DIRECTORIES = [
   "apps/web/src/routes/api/v1/admin",
 ];
 
+/**
+ * The em-dash rail (b) only. The operator-tier CLI uses `—` as a clause separator
+ * as one systematic house style, and whether the prose discipline reaches operator
+ * tool output is an OPEN CANON QUESTION — see the 2026-07-18 `audit/20260717-voice`
+ * row in docs/audit-backlog.md, which also blesses the `—` null-cell glyph. Scoped
+ * to the ADMIN tree only: `cli.ts` (where every admin command's description is
+ * registered, and where the ledger measured ~35 instances) and the `admin-*`
+ * command modules. The PUBLIC CLI commands are held to the rail like any other
+ * surface. Rails (a) and (c) apply everywhere; a banned identity word is never
+ * in dispute.
+ */
+const EM_DASH_EXEMPT_PREFIXES = ["apps/cli/src/cli.ts", "apps/cli/src/commands/admin-"];
+
+/**
+ * Keys whose value is COPY by construction, so the four-word floor is waived for
+ * them. Without this the gate misses exactly the violation that motivated it:
+ * `title: "Lost the signal"` is three words, so the floor alone would let the
+ * mobile Stories slip through again.
+ */
+const COPY_KEYS = new Set([
+  "alt",
+  "aria-label",
+  "ariaLabel",
+  "body",
+  "description",
+  "label",
+  "message",
+  "placeholder",
+  "title",
+]);
+
 const SCANNED_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx"];
 
 /** VOICE.md §6: the `Artist — Title` separator is written as its own literal. */
 const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
+
+/**
+ * A real `Key: value` string ("Log ID: 241.7.3A", "Content-Type: text/calendar"):
+ * at most two words before the colon. Deliberately NOT a bare `": "` test — a
+ * colon is one of the canon's own prescribed replacements for a prose em dash, so
+ * excluding every string containing one would blind the gate to the very copy the
+ * em-dash rail pushes authors toward writing.
+ */
+const KEY_VALUE_PREFIX = /^[A-Za-z][\w-]*(?: [\w-]+)?: /;
+
+/** A copy module, or an object named `…Copy` — every string inside is copy. */
+const COPY_MODULE = /(?:^|\/)(?:copy|[\w-]+-copy)\.tsx?$/;
+const COPY_IDENTIFIER = /copy$/i;
 
 const ALLOW_MARKER = /voice-lint-allow:(.*)$/;
 
@@ -103,9 +164,18 @@ type Rail = "banned-word" | "exclamation" | "prose-em-dash";
 
 type Violation = { file: string; line: number; rail: Rail; text: string };
 
-type Literal = { isJsxText: boolean; line: number; text: string };
+type Literal = { isCopy: boolean; isJsxText: boolean; line: number; text: string };
+
+function emDashApplies(file: string): boolean {
+  return !EM_DASH_EXEMPT_PREFIXES.some((prefix) => file.startsWith(prefix));
+}
 
 function collectFiles(root: string, files: string[]): void {
+  if (statSync(join(REPO_ROOT, root)).isFile()) {
+    files.push(root);
+    return;
+  }
+
   for (const entry of readdirSync(join(REPO_ROOT, root), { withFileTypes: true })) {
     const child = `${root}/${entry.name}`;
 
@@ -129,7 +199,9 @@ function collectFiles(root: string, files: string[]): void {
 /**
  * Every string the source ships: JSX text (whitespace-collapsed, the way a reader
  * sees it), string literals, and template chunks. Line numbers are the node's
- * START line, which is the line the escape hatch sits above.
+ * START line, which is the line the escape hatch sits above. Each literal also
+ * carries whether it sits in a COPY position — under a copy-shaped key, inside a
+ * `…Copy` object, or in a copy module — which waives the word floor in `isProse`.
  */
 function collectLiterals(file: string, source: string): Literal[] {
   const parsed = parseSync(file, source);
@@ -161,16 +233,17 @@ function collectLiterals(file: string, source: string): Literal[] {
     return low + 1;
   };
 
+  const inCopyModule = COPY_MODULE.test(file);
   const literals: Literal[] = [];
 
-  const visit = (node: unknown): void => {
+  const visit = (node: unknown, isCopy: boolean): void => {
     if (node === null || typeof node !== "object") {
       return;
     }
 
     if (Array.isArray(node)) {
       for (const child of node) {
-        visit(child);
+        visit(child, isCopy);
       }
       return;
     }
@@ -181,34 +254,60 @@ function collectLiterals(file: string, source: string): Literal[] {
     if (record.type === "JSXText" && typeof record.value === "string") {
       const text = record.value.replace(/\s+/g, " ").trim();
       if (text.length > 0) {
-        literals.push({ isJsxText: true, line, text });
+        literals.push({ isCopy: true, isJsxText: true, line, text });
       }
     } else if (record.type === "Literal" && typeof record.value === "string") {
-      literals.push({ isJsxText: false, line, text: record.value });
+      literals.push({ isCopy: isCopy || inCopyModule, isJsxText: false, line, text: record.value });
     } else if (record.type === "TemplateElement") {
       const cooked = (record.value as { cooked?: unknown } | undefined)?.cooked;
       if (typeof cooked === "string" && cooked.trim().length > 0) {
-        literals.push({ isJsxText: false, line, text: cooked });
+        literals.push({ isCopy: isCopy || inCopyModule, isJsxText: false, line, text: cooked });
       }
+    }
+
+    // `const feedCopy = { … }` — every string inside is copy, whatever its key.
+    if (record.type === "VariableDeclarator") {
+      const id = record.id as Record<string, unknown> | undefined;
+      if (typeof id?.name === "string" && COPY_IDENTIFIER.test(id.name)) {
+        visit(record.init, true);
+        return;
+      }
+    }
+
+    // A copy-shaped key marks its whole value subtree as copy.
+    if (record.type === "Property" || record.type === "PropertyDefinition") {
+      const key = record.key as Record<string, unknown> | undefined;
+      const name =
+        typeof key?.name === "string" ? key.name : typeof key?.value === "string" ? key.value : "";
+      visit(record.value, isCopy || COPY_KEYS.has(name));
+      visit(record.key, false);
+      return;
+    }
+
+    if (record.type === "JSXAttribute") {
+      const name = record.name as Record<string, unknown> | undefined;
+      visit(record.value, typeof name?.name === "string" && COPY_KEYS.has(name.name));
+      return;
     }
 
     for (const key of Object.keys(record)) {
       if (key !== "type" && key !== "start" && key !== "end") {
-        visit(record[key]);
+        visit(record[key], isCopy);
       }
     }
   };
 
-  visit(parsed.program as unknown);
+  visit(parsed.program as unknown, false);
   return literals;
 }
 
 /**
  * Is this literal PROSE a reader meets, rather than a class name, a header, a
  * selector, or a code fragment? Rendered JSX text always is. A quoted string
- * qualifies on four cheap signals: it reads as a sentence (four words or more),
- * carries no markup/code punctuation, is not a `Key: value` pair, and holds no
- * URL/comment `//`. This is what keeps `Content-Type`, `AbortSignal`, and
+ * qualifies when it carries no markup/code punctuation, is not a `Key: value`
+ * pair, holds no URL/comment `//`, and then either sits in a COPY position (a
+ * copy-shaped key, a `…Copy` object, a copy module) or reads as a sentence at
+ * four words or more. This keeps `Content-Type`, `AbortSignal`, and
  * `contentEditable` out of rail (a) without an allowlist per identifier.
  */
 function isProse(literal: Literal): boolean {
@@ -216,12 +315,16 @@ function isProse(literal: Literal): boolean {
     return true;
   }
 
-  if (/[<>{};=]/.test(literal.text) || literal.text.includes(": ")) {
+  if (/[<>{};=]/.test(literal.text) || KEY_VALUE_PREFIX.test(literal.text)) {
     return false;
   }
 
   if (literal.text.includes("//")) {
     return false;
+  }
+
+  if (literal.isCopy) {
+    return true;
   }
 
   return literal.text.trim().split(/\s+/).filter(Boolean).length >= 4;
@@ -276,33 +379,30 @@ function formatViolation(violation: Violation): string {
   return `${violation.rail} ${violation.file}:${violation.line} ${JSON.stringify(violation.text)}`;
 }
 
+function scanEverything(): { files: string[]; violations: Violation[] } {
+  const files: string[] = [];
+  for (const root of SCAN_ROOTS) {
+    collectFiles(root, files);
+  }
+
+  const violations: Violation[] = [];
+  for (const file of files) {
+    const source = readFileSync(join(REPO_ROOT, file), "utf8");
+    violations.push(...scanSource(file, source, { emDash: emDashApplies(file) }));
+  }
+
+  return { files, violations };
+}
+
 describe("voice lint", () => {
   it("finds no banned word, prose em dash, or exclamation mark in a user-facing literal", () => {
-    const violations: Violation[] = [];
-
-    for (const root of SCAN_ROOTS) {
-      const files: string[] = [];
-      collectFiles(root.path, files);
-      expect(files.length, `no files found under ${root.path}`).toBeGreaterThan(0);
-
-      for (const file of files) {
-        const source = readFileSync(join(REPO_ROOT, file), "utf8");
-        violations.push(...scanSource(file, source, { emDash: root.emDash }));
-      }
-    }
-
+    const { violations } = scanEverything();
     expect(violations.map(formatViolation)).toEqual([]);
   });
 
   it("draws its net where it says: the public surfaces in, the operator workstation out", () => {
-    const scanned = new Set<string>();
-    for (const root of SCAN_ROOTS) {
-      const files: string[] = [];
-      collectFiles(root.path, files);
-      for (const file of files) {
-        scanned.add(file);
-      }
-    }
+    const { files } = scanEverything();
+    const scanned = new Set(files);
 
     // One real copy-carrying file per scanned root, so a root that quietly stops
     // resolving fails loudly instead of passing with an empty file list.
@@ -311,6 +411,8 @@ describe("voice lint", () => {
     expect(scanned.has("apps/mobile/src/lib/feed-state.ts")).toBe(true);
     expect(scanned.has("apps/extension/src/copy.ts")).toBe(true);
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/tools/specs.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
 
     const strays = [...scanned].filter(
       (file) =>
@@ -318,12 +420,19 @@ describe("voice lint", () => {
         SKIPPED_DIRECTORIES.some((directory) => file.startsWith(`${directory}/`)),
     );
     expect(strays).toEqual([]);
+
+    // The em-dash carve-out is the CLI ADMIN tree only, never a public surface.
+    expect(emDashApplies("apps/cli/src/cli.ts")).toBe(false);
+    expect(emDashApplies("apps/cli/src/commands/admin-tracks.ts")).toBe(false);
+    expect(emDashApplies("apps/cli/src/commands/recent.ts")).toBe(true);
+    expect(emDashApplies("apps/web/src/routes/privacy.tsx")).toBe(true);
   });
 });
 
 // A detector is unproven until a synthetic failure makes it fire. This fixture
-// carries one violation per rail plus the two things that must NOT fire: the
-// `Artist — Title` separator literal and an excused line.
+// carries one violation per rail, the two copy positions that waive the word
+// floor, and everything that must NOT fire: the `Artist — Title` separator, a
+// real `Key: value` pair, code strings, and the escape hatch in both forms.
 const FIXTURE_FILE = "fixture.tsx";
 
 const FIXTURE_SOURCE = `export function Fixture() {
@@ -333,6 +442,8 @@ const FIXTURE_SOURCE = `export function Fixture() {
   const shouty = "Three findings landed on the log tonight!";
   const contentType = "Content-Type";
   const cssClass = "search-note search-note--degraded";
+  const keyValue = "Curation: off";
+  const midSentenceColon = "Two things tonight: the curated shelf went quiet";
   // voice-lint-allow: proving the escape hatch suppresses a real hit
   const excused = "The curated selection landed on the log tonight";
   // voice-lint-allow:
@@ -345,44 +456,53 @@ const FIXTURE_SOURCE = `export function Fixture() {
     </p>
   );
 }
+
+export const fixtureCopy = {
+  empty: { title: "Lost the signal" },
+  footer: "Curated by hand",
+};
 `;
 
 describe("voice lint rails", () => {
   const fired = scanSource(FIXTURE_FILE, FIXTURE_SOURCE, { emDash: true });
+  const textsFor = (rail: Rail) =>
+    fired.filter((violation) => violation.rail === rail).map((violation) => violation.text);
 
   it("fires on a banned identity word in prose", () => {
-    const hits = fired.filter((violation) => violation.rail === "banned-word");
-    expect(hits.map((violation) => violation.text)).toEqual([
+    expect(textsFor("banned-word")).toEqual([
       "The signal came back clean from out there tonight",
+      // The colon is mid-sentence, so the `Key: value` exclusion must not swallow it.
+      "Two things tonight: the curated shelf went quiet",
       "A transmission arrived from out there tonight",
+      // Three words: caught only because `title` is a copy-shaped key.
+      "Lost the signal",
+      // Three words under a NON-copy key: caught only because the object is `…Copy`.
+      "Curated by hand",
     ]);
   });
 
   it("fires on a prose em dash, in a quoted string and in JSX text alike", () => {
-    const hits = fired.filter((violation) => violation.rail === "prose-em-dash");
-    expect(hits.map((violation) => violation.text)).toEqual([
+    expect(textsFor("prose-em-dash")).toEqual([
       "Two things happened tonight — the second one was louder",
       "Body text with a dash — right here",
     ]);
   });
 
   it("fires on an exclamation mark in prose", () => {
-    const hits = fired.filter((violation) => violation.rail === "exclamation");
-    expect(hits.map((violation) => violation.text)).toEqual([
-      "Three findings landed on the log tonight!",
-    ]);
+    expect(textsFor("exclamation")).toEqual(["Three findings landed on the log tonight!"]);
   });
 
-  it("holds the `Artist — Title` separator, code strings, and excused lines", () => {
+  it("holds the separator, real `Key: value` pairs, code strings, and excused lines", () => {
     const texts = fired.map((violation) => violation.text);
     expect(texts).not.toContain(" — ");
+    expect(texts).not.toContain("Curation: off");
     expect(texts).not.toContain("Content-Type");
     expect(texts).not.toContain("search-note search-note--degraded");
     expect(texts).not.toContain("The curated selection landed on the log tonight");
     expect(texts).not.toContain("An anomaly landed on the log here tonight");
   });
 
-  it("holds every em dash when the root is the operator CLI register", () => {
+  it("holds every em dash when the file is in the CLI admin carve-out", () => {
     const cli = scanSource(FIXTURE_FILE, FIXTURE_SOURCE, { emDash: false });
     expect(cli.some((violation) => violation.rail === "prose-em-dash")).toBe(false);
     expect(cli.some((violation) => violation.rail === "banned-word")).toBe(true);

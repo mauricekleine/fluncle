@@ -20,7 +20,7 @@ import { listUpcomingPlans } from "../lib/server/recordings";
 // its internal Galaxy-vocab handle); the teaser is intentional.
 
 const PRODID = "-//Fluncle//Live Sessions//EN";
-const CALENDAR_NAME = "Fluncle live sessions";
+const CALENDAR_NAME = "Fluncle's live sessions";
 
 export const Route = createFileRoute("/calendar.ics")({
   server: {
@@ -50,7 +50,7 @@ export const Route = createFileRoute("/calendar.ics")({
           "METHOD:PUBLISH",
           `X-WR-CALNAME:${escapeText(CALENDAR_NAME)}`,
           `X-WR-CALDESC:${escapeText(
-            "When Fluncle goes live and the mixtapes he settled along the way. Subscribe and tune in.",
+            "Fluncle's live sessions, plus every mixtape he's left along the way. Subscribe and tune in.",
           )}`,
           ...events,
           "END:VCALENDAR",
@@ -87,7 +87,7 @@ function buildPlanEvent(plan: RecordingDTO, now: Date, dtstamp: string): string[
 
   const tracklist = formatCueTracklist(plan);
   const description = [
-    "Fluncle goes live on Twitch, mixing fresh drum & bass across the Galaxy. Tune in.",
+    "I'm going live on Twitch, mixing fresh drum & bass. Come through, cosmonauts.",
     tracklist ? `\n\nWhat's queued:\n${tracklist}` : "",
   ].join("");
 
@@ -122,7 +122,7 @@ function buildMixtapeEvent(mixtape: MixtapeDTO, dtstamp: string): string[] | nul
   const description = [
     mixtape.note?.trim()
       ? mixtape.note.trim()
-      : "A checkpoint Fluncle settled along the way. He dreamt a stretch of findings into one long mix.",
+      : "I dreamt a stretch of findings into one long mix and left it here as a checkpoint. Put it on loud.",
     `\n\nListen: ${link}`,
     tracklist ? `\n\nTracklist:\n${tracklist}` : "",
   ].join("");
