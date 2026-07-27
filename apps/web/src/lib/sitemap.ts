@@ -392,6 +392,11 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/privacy`),
         staticEntry(`${siteUrl}/terms`),
         staticEntry(`${siteUrl}/galaxy`),
+        // The always-on player — self-canonical and indexable like the rest, and listed
+        // unconditionally because the stream is always live. The `loc` also does consolidation
+        // work: radio.fluncle.com serves the identical document, so naming the www URL here is
+        // the tie-break that points the duplicate home.
+        staticEntry(`${siteUrl}/radio`),
         // The console pages — real, self-canonical, indexable surfaces that were footer-only
         // for discovery until now: the docs hub, the reach page, and the live status board.
         staticEntry(`${siteUrl}/docs`),
@@ -452,7 +457,7 @@ export function shardCount(kind: SitemapKind, bags: SitemapBags): number {
 
 /**
  * The `pages` child's line in the index. It is the one kind whose SIZE is a function of the two
- * gates rather than of a row bag (17 hubs, plus `/mix` and `/galaxies` when open), so the data
+ * gates rather than of a row bag (18 hubs, plus `/mix` and `/galaxies` when open), so the data
  * layer counts it through here instead of guessing the number.
  */
 export function sitemapPagesStats(pages: SitemapPages): SitemapKindStats {
