@@ -234,6 +234,7 @@
         "remotion": "catalog:",
       },
       "devDependencies": {
+        "@fluncle/test-support": "workspace:*",
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
         "typescript": "catalog:",

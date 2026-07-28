@@ -11,7 +11,15 @@ import { FrontierCover } from "./frontier-cover";
 import { GalaxyOg } from "./galaxy-og";
 import { MixtapeCover } from "./mixtape-cover";
 import { MIXTAPE_COVER_SPECS } from "./mixtape-cover-specs";
+import {
+  SYNTHETIC_AVATAR_ID,
+  SYNTHETIC_AVATAR_SIZE,
+  SYNTHETIC_SLEEVE_ID,
+  SYNTHETIC_SLEEVE_SIZE,
+} from "./screenshot-asset-specs";
 import { SOCIAL_SPECS } from "./socials-specs";
+import { SyntheticAvatar } from "./synthetic-avatar";
+import { SyntheticSleeve } from "./synthetic-sleeve";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -95,6 +103,31 @@ export const RemotionRoot: React.FC = () => {
           width={spec.width}
         />
       ))}
+
+      {/* The store-screenshot art (Guideline 5.2.1 — own-IP sleeves and artist marks).
+          ONE <Still> each, re-selected per fixture with different inputProps by
+          `bun run render:screenshot-assets`, because the fixture list lives outside this
+          package (@fluncle/test-support/screenshot-fixtures — the web seed reads the same
+          list). The defaults below are what Studio previews.
+          See docs/mobile-store-screenshots.md. */}
+      <Still
+        component={SyntheticSleeve}
+        defaultProps={{
+          artist: "Nova Kestrel",
+          seed: "synthetic-aurora",
+          title: "Synthetic Aurora",
+        }}
+        height={SYNTHETIC_SLEEVE_SIZE}
+        id={SYNTHETIC_SLEEVE_ID}
+        width={SYNTHETIC_SLEEVE_SIZE}
+      />
+      <Still
+        component={SyntheticAvatar}
+        defaultProps={{ name: "Nova Kestrel", seed: "nova-kestrel" }}
+        height={SYNTHETIC_AVATAR_SIZE}
+        id={SYNTHETIC_AVATAR_ID}
+        width={SYNTHETIC_AVATAR_SIZE}
+      />
     </>
   );
 };

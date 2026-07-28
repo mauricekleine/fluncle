@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     "./no-network": "./src/no-network.ts",
-    "./preload": "./src/preload.ts"
+    "./preload": "./src/preload.ts",
+    "./screenshot-fixtures": "./src/screenshot-fixtures.ts"
   },
   "scripts": {
     "test": "bun test",
