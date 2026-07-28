@@ -322,6 +322,53 @@ render_produced_video() {
   printf '%s' "$out" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const t=JSON.parse(s).track||{};process.exit(t.videoUrl?0:1)}catch(e){process.exit(0)}})'
 }
 
+# --- the restoring window: `box resume` returns before the box can answer -----------
+# MEASURED 2026-07-27, three ticks in a row (17:42Z, 19:44Z, 22:46Z): `box resume` returns
+# SUCCESS immediately, but the box then spends a few seconds RESTORING, and every call
+# against it in that window fails with
+# {"code":"box_restoring","error":"box restoring (500)","status":500} — the freshen ssh, both
+# scp refreshes, and the render trigger itself, a ~6s burst. The trigger's launch-line check
+# read that healthy box as WEDGED and condemned it, so each occurrence cost the hourly slot
+# PLUS a full reprovision (fresh clone + toolchain install).
+#
+# So `box_restoring` is RETRY, never wedge. This gate is a bounded poll of a trivial
+# `box ssh` — the verb the freshen needs next, so answering it IS the readiness that matters,
+# and no new verb is invented against a pre-1.0 channel-tracking CLI. It is bounded by WALL
+# CLOCK (probe latency counts, not just the sleeps) and deliberately well under the unit's
+# `TimeoutStartSec=180`, so a box that never comes back ends the tick cleanly instead of
+# being killed between resume and trigger.
+#
+# `0` when the box answers. Non-zero when it never did — a genuine timeout or a different
+# error — and the caller then carries on exactly as before, so the trigger's launch-line
+# check stays the wedge authority and a truly dead box still lands in the condemn path.
+BOX_READY_TIMEOUT="${BOX_READY_TIMEOUT:-75}"  # max seconds to wait out a restoring box
+BOX_READY_INTERVAL="${BOX_READY_INTERVAL:-5}" # seconds between readiness probes
+await_box_ready() {
+  local id="$1" out rc began waited
+  [ -n "$id" ] || return 1
+  began="$(now)"
+  while :; do
+    out="$("$BOX_BIN" ssh "$id" 'true' 2>&1)"
+    rc=$?
+    waited="$(($(now) - began))"
+    if [ "$rc" = "0" ]; then
+      [ "$waited" -gt 0 ] && log "box $id ready after ${waited}s"
+      return 0
+    fi
+    printf '%s\n' "$out" >>"$LOG_FILE"
+    if ! printf '%s' "$out" | grep -q 'box_restoring'; then
+      log "box $id readiness probe failed with something other than a restore (rc=$rc) — proceeding"
+      return 1
+    fi
+    if [ "$waited" -ge "$BOX_READY_TIMEOUT" ]; then
+      log "box $id still restoring after ${waited}s — giving up the wait"
+      return 1
+    fi
+    log "box $id restoring — waiting (${waited}s elapsed)"
+    sleep "$BOX_READY_INTERVAL"
+  done
+}
+
 # Freshen a RESUMED snapshot's stale checkout to current `main`. The render box is
 # scale-to-zero (asleep but for a render), so it can't watch `main` itself like the
 # rave-02 `fluncle-pin-watch` timer — the conductor does it here, at wake, before the
@@ -552,6 +599,10 @@ log "queue head: $head"
 # reclaimed it (idle boxes + snapshots are purged past the archive window).
 if [ -n "$boxid" ] && "$BOX_BIN" resume "$boxid" >/dev/null 2>&1; then
   log "resumed box $boxid"
+  # WAIT OUT THE RESTORE (see await_box_ready): a resume returns before the box can answer,
+  # and every call inside that window 500s with `box_restoring`. Gate the first contact here
+  # so the burst never reaches the trigger's wedge check as a false condemn.
+  await_box_ready "$boxid" || log "no ready signal from $boxid — proceeding; the trigger check decides"
   # A resume can succeed while box.ascii's snapshot dropped ~/fluncle. freshen_checkout
   # returns 2 in that case: stop the checkout-less box (it renders nothing) and fall
   # through to a fresh reprovision, so a lost checkout self-heals instead of looping on
