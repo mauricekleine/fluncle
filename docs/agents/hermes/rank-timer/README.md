@@ -29,6 +29,10 @@ The crawler runs **one pass per tick** because its pace is a _vendor's_ rate lim
 
 Every automation cron runs off repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-rank`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper. Both `cron.rank` and `cron.crawl` are registered in `@fluncle/registry`, so they light up `/status` the moment the timers run.
 
+## `TimeoutStartSec` bounds the exec CLIENT, not the work
+
+Worth knowing before you read a red tick as a broken sweep: the unit's `ExecStart` is a `docker exec`, so `TimeoutStartSec` bounds the CLIENT process on the host — not the sweep running inside the container. When systemd gives up it kills the exec client and marks the unit failed (firing `OnFailure`), while the container-side loop keeps running unsupervised to completion and still self-writes its `/status` marker. Measured on rave-02 2026-07-28: with the old 300s ceiling, 81% of ticks since 2026-07-26 ended `Result: timeout` on work that had already succeeded — `/status` stayed green off the marker while `systemctl --failed` showed red, so the alarm was pure noise and the ceiling bounded nothing. The timeout is now sized to the measured tick (see the unit file), which is the honest fix; genuinely reaping the in-container work would need the sweep to carry its own deadline, and that is deliberately not built here.
+
 ## Activation (OPERATOR-GATED — the repo half ships; the box enable does not)
 
 Enable it **alongside** `fluncle-crawl` — the two are one loop, and ranking an empty table is the thing The Ear declined to schedule. No new secret.

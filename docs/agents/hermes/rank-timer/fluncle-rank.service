@@ -18,7 +18,16 @@ Type=oneshot
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/rank-sweep.sh
 # A PURE trigger — zero LLM tokens. The work is SQL inside the Worker; the tick drains up to
 # FLUNCLE_RANK_MAX_CALLS batches and stops, so it is bounded even right after a big crawl.
-TimeoutStartSec=300
+# The BUDGET is the bound, not the wall clock: a full tick is MAX_CALLS=8 × BATCH=250, and as
+# the catalogue tripled over ten days each call went from a few seconds to ~60s+ — so a full
+# tick is 7–9 min. Measured 2026-07-28 on rave-02: the old 300s ceiling failed 81% of ticks
+# since 2026-07-26, every one of them `Result: timeout` on work that had ALREADY landed
+# (`"ok":true` markers throughout). Worse, the kill only reaps the docker-exec CLIENT while
+# the container-side work runs on, so /status stayed green while `systemctl --failed` showed
+# red and OnFailure alerted — pure phantom red. 900s covers the measured tick with headroom
+# and still sits well under the 30-min cadence, so there is no overlap risk (systemd skips an
+# overlapping trigger on a oneshot rather than double-firing).
+TimeoutStartSec=900
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
