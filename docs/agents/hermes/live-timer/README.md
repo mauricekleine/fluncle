@@ -4,9 +4,9 @@ The rave-02 host trigger for the `--no-agent` **live-set poller**. `fluncle-live
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/fluncle-live.sh`](../scripts/fluncle-live.sh) → [`../scripts/fluncle-live.ts`](../scripts/fluncle-live.ts)) — riding the image and auto-updating from `main` via pin-watch (Unit A). The `.sh` sources `${HOME}/.fluncle-secrets.env` (the Twitch client id/secret) and runs the bun orchestrator.
 
-## Not yet on /status (a flagged follow-up)
+## On /status
 
-`fluncle-live` is **not** in the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `AUTOMATION_CRONS`, so there is no `cron.live` row on `/status` today. The sweep self-writes a `# Cron Job: fluncle-live` marker (via [`cron-output.sh`](../scripts/cron-output.sh)) so a future prober entry would light up with zero sweep changes — but adding that entry (and its `@fluncle/registry` surface) is a follow-up, out of this migration's scope (the prober was kept UNCHANGED here).
+**It is already on /status.** `cron.live` is registered in `@fluncle/registry` and in the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `AUTOMATION_CRONS` (1m cadence), and the sweep self-writes its `# Cron Job: fluncle-live` marker (via [`cron-output.sh`](../scripts/cron-output.sh)), so the row reflects real runs. Nothing further to wire. (This poller ran unregistered for months — no surface, no prober row — which is why a dead poller was invisible on the board; the prober's entry carries that note.)
 
 ## Why a host timer
 
