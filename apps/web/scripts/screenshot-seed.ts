@@ -64,8 +64,8 @@ const LABEL = {
 };
 const ALBUM = {
   id: `${SCREENSHOT_ID_PREFIX}album-signal`,
-  name: "Signal Bloom",
-  slug: `${SCREENSHOT_ID_PREFIX}signal-bloom`,
+  name: "Ember Bloom",
+  slug: `${SCREENSHOT_ID_PREFIX}ember-bloom`,
 };
 
 /** A fixed base epoch, so a re-run produces byte-identical found dates. */
