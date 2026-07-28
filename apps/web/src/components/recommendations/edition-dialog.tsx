@@ -186,8 +186,11 @@ function EditionRow({
       <span className="rec-edition-actions">
         {track.spotifyUrl ? (
           <Button
-            aria-label={`Open ${trackLine} in Spotify`}
+            // One action, one label: this icon-only control opens the same door as the
+            // labelled "Listen on Spotify" buttons elsewhere, so it says the same words.
+            aria-label={`Listen on Spotify: ${trackLine}`}
             nativeButton={false}
+            // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's aria-label onto this anchor.
             render={<a href={track.spotifyUrl} rel="noopener noreferrer" target="_blank" />}
             size="icon"
             variant="ghost"

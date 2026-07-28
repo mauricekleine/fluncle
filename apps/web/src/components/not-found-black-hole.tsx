@@ -118,6 +118,7 @@ export function NotFoundBlackHole(): ReactNode {
             aria-live="polite"
             className="void404-throw"
             nativeButton={false}
+            // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
             render={<a href="/log" onClick={handleThrow} />}
           >
             {throwing ? COPY.throwing : COPY.throwCta}

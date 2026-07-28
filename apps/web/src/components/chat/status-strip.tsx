@@ -5,7 +5,8 @@
 // a status is an inline system readout, not a hero — so it stays a quiet strip in the transcript.
 // The dot mirrors the /status page's own idiom: the gold heartbeat (the sanctioned status-dot use
 // of Eclipse Gold, per The One Sun Rule) when everything is up, a static Re-entry Red dot when it
-// is not. The dot is aria-hidden; the headline carries the meaning, and role="status" announces it.
+// is not. The dot is aria-hidden; the headline carries the meaning, and <output>'s native status
+// role announces it.
 
 /** The status shape get_status emits (summarizeStatus): a health boolean and the phrased line. */
 export type ChatStatus = {
@@ -36,9 +37,11 @@ export function StatusStrip({ status }: { status: ChatStatus }) {
   const ok = status.ok ?? false;
 
   return (
-    <p className="flex items-center gap-2 px-1 text-xs text-muted-foreground" role="status">
+    // `<output>` carries the status role natively. The `flex` utility sets its
+    // display, so the swap off `<p>` costs nothing visually.
+    <output className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
       <StatusDot ok={ok} />
       <span className="text-foreground">{headline}</span>
-    </p>
+    </output>
   );
 }

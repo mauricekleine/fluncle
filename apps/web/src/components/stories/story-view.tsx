@@ -3,6 +3,7 @@ import { siSpotify, siTiktok } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { Button } from "@fluncle/ui/components/button";
 import { formatDate } from "@/lib/format";
+import { artistTitleLine } from "@/lib/log-prose";
 import {
   albumCoverAtSize,
   trackMedia,
@@ -219,9 +220,12 @@ export function StoryView({
     }
   }, [active, playing, videoUrl]);
 
+  const trackLine = artistTitleLine(track);
+
   return (
     <div className="story-view">
       {masterVideoUrl ? (
+        // oxlint-disable-next-line jsx-a11y/media-has-caption -- the footage carries the tune and no speech, so there is nothing to caption; the track's name and artist sit beside it in text.
         <video
           aria-hidden="true"
           className="story-footage"
@@ -268,9 +272,14 @@ export function StoryView({
             {formatDate(track.addedAt)}
           </time>
         </p>
+        {/* Up to three stories are mounted at once, so these links name their track:
+            without it a screen reader's link list reads three identical "Listen on
+            Spotify". The visible string stays the prefix (WCAG 2.5.3, Label in Name). */}
         <div className="story-actions">
           <Button
+            aria-label={`Listen on Spotify: ${trackLine}`}
             nativeButton={false}
+            // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's label onto this anchor.
             render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
             size="sm"
             tabIndex={active ? 0 : -1}
@@ -281,7 +290,9 @@ export function StoryView({
           </Button>
           {track.tiktokUrl ? (
             <Button
+              aria-label={`Watch on TikTok: ${trackLine}`}
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's label onto this anchor.
               render={<a href={track.tiktokUrl} rel="noreferrer" target="_blank" />}
               size="sm"
               tabIndex={active ? 0 : -1}

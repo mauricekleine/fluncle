@@ -1092,6 +1092,7 @@ function RadioPage() {
                 {current.logPageUrl ? (
                   <Button
                     nativeButton={false}
+                    // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
                     render={<a href={current.logPageUrl} />}
                     size="sm"
                     variant="outline"
@@ -1101,6 +1102,7 @@ function RadioPage() {
                 ) : undefined}
                 <Button
                   nativeButton={false}
+                  // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
                   render={<a href={current.spotifyUrl} rel="noreferrer" target="_blank" />}
                   size="sm"
                   variant="outline"
@@ -1190,9 +1192,9 @@ function RadioMessage({
   return (
     <main className="radio-gate">
       <h1 className="sr-only">{title}</h1>
-      <p className="radio-gate-subtitle" role="status">
-        {children}
-      </p>
+      {/* `<output>` carries the status role natively. `.radio-gate` is a grid, so
+          the element is blockified and `.radio-gate-subtitle`'s max-width still bites. */}
+      <output className="radio-gate-subtitle">{children}</output>
       {/* A lean-back surface still needs a door out when there's nothing to
           play: back to the archive or the full log. */}
       {wayBack ? (

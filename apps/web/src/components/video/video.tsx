@@ -350,6 +350,7 @@ function Scrubber({ label = "Seek" }: { label?: string }) {
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}
       ref={trackRef}
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a pointer-dragged scrubber with a painted track, fill, and thumb; a native <input type="range"> can't carry it.
       role="slider"
       tabIndex={0}
     >

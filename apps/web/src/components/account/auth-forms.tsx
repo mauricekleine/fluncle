@@ -364,6 +364,7 @@ export function ClaimUsernameDialog({
           </DialogHeader>
           <div className="py-4">
             <Field label="Username">
+              {/* oxlint-disable-next-line jsx-a11y/no-autofocus -- the only field in a dialog opened to claim a username; focus belongs here the moment it opens. */}
               <Input autoFocus onChange={(event) => setValue(event.target.value)} value={value} />
             </Field>
             {error ? (

@@ -200,6 +200,7 @@ export function PlaylistPanel({
               {cta.kind === "open" ? (
                 <Button
                   nativeButton={false}
+                  // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
                   render={<a href={cta.url} rel="noopener noreferrer" target="_blank" />}
                 >
                   <SpotifyIcon />

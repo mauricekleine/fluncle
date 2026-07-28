@@ -17,6 +17,7 @@ export function BrandIcon({
     <svg
       aria-hidden={title ? undefined : true}
       fill="currentColor"
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- an inline <svg> carries role="img" by convention; swapping to <img> would need an external asset.
       role="img"
       viewBox="0 0 24 24"
       xmlns="http://www.w3.org/2000/svg"

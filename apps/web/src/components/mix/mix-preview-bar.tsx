@@ -73,10 +73,11 @@ export function MixPreviewBar({
 
   return createPortal(
     <div className="fixed inset-x-0 bottom-0 z-50 px-4 pb-4 sm:px-6 lg:px-8">
-      <div
+      {/* A labelled `<section>` is the region landmark natively; the `flex` utility
+          keeps the layout identical to the `<div role="region">` it replaces. */}
+      <section
         aria-label="Preview"
         className="relative mx-auto flex max-w-2xl items-center gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
-        role="region"
       >
         {/* A thin gold hairline for progress — gold placed like light (One Sun),
             no waveform, no scrubber. Reduced motion drops the eased sweep. */}
@@ -112,7 +113,7 @@ export function MixPreviewBar({
         <Button aria-label="Close preview" onClick={stopPreview} size="icon" variant="outline">
           <XIcon className="size-4" />
         </Button>
-      </div>
+      </section>
     </div>,
     document.body,
   );

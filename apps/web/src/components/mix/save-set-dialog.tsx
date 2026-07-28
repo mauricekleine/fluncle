@@ -189,6 +189,7 @@ export function SaveSetDialog({
           <Label className="grid gap-2 text-sm font-bold" htmlFor="set-name">
             Set name
             <Input
+              // oxlint-disable-next-line jsx-a11y/no-autofocus -- the only field in a dialog opened to name a set; focus belongs here the moment it opens.
               autoFocus
               id="set-name"
               maxLength={80}

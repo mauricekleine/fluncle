@@ -238,6 +238,7 @@ function CollectionGroup({
           aria-valuemin={0}
           aria-valuenow={collected}
           className="account-collection-meter"
+          // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a painted meter with its own fill element; a native <progress> can't carry this treatment.
           role="progressbar"
         >
           <span

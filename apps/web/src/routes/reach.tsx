@@ -657,6 +657,7 @@ function ReachPage() {
               <div
                 aria-label="Filter by platform"
                 className="-mx-1 flex max-w-full gap-1.5 overflow-x-auto px-1 py-1"
+                // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a rail of filter buttons, not form fields; <fieldset>'s min-inline-size would break the horizontal scroll.
                 role="group"
               >
                 <button
@@ -681,6 +682,7 @@ function ReachPage() {
                   ))}
               </div>
 
+              {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a row of period buttons, not form fields; <fieldset> would name itself from a <legend> this row has no room for. */}
               <div aria-label="Period" className="flex gap-1.5" role="group">
                 {PERIODS.map((period) => (
                   <button

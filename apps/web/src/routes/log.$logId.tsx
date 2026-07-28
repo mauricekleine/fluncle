@@ -527,6 +527,7 @@ function LogPage() {
         <div className="log-actions">
           <Button
             nativeButton={false}
+            // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
             render={<a href={track.spotifyUrl} rel="noreferrer" target="_blank" />}
             size="lg"
           >
@@ -536,6 +537,7 @@ function LogPage() {
           {track.appleMusicUrl ? (
             <Button
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
               render={<a href={track.appleMusicUrl} rel="noreferrer" target="_blank" />}
               size="lg"
               variant="outline"
@@ -548,6 +550,7 @@ function LogPage() {
           {track.tiktokUrl ? (
             <Button
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
               render={<a href={track.tiktokUrl} rel="noreferrer" target="_blank" />}
               size="lg"
               variant="outline"
@@ -559,6 +562,7 @@ function LogPage() {
           {track.youtubeUrl ? (
             <Button
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
               render={<a href={track.youtubeUrl} rel="noreferrer" target="_blank" />}
               size="lg"
               variant="outline"
@@ -777,6 +781,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
           {mixtape.externalUrls.mixcloud ? (
             <Button
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
               render={<a href={mixtape.externalUrls.mixcloud} rel="noreferrer" target="_blank" />}
               size="lg"
             >
@@ -787,6 +792,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
           {mixtape.externalUrls.youtube ? (
             <Button
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
               render={<a href={mixtape.externalUrls.youtube} rel="noreferrer" target="_blank" />}
               size="lg"
               variant="outline"
@@ -798,6 +804,7 @@ function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
           {mixtape.externalUrls.soundcloud ? (
             <Button
               nativeButton={false}
+              // oxlint-disable-next-line jsx-a11y/anchor-has-content, jsx-a11y/control-has-associated-label -- Base UI's render prop merges the Button's children onto this anchor, so it ships with its label.
               render={<a href={mixtape.externalUrls.soundcloud} rel="noreferrer" target="_blank" />}
               size="lg"
               variant="outline"
