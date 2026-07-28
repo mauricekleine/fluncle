@@ -95,16 +95,10 @@ Everything proven in the 2026-07-24 audit has shipped; what remains is a short o
 - **`/artists` carries ~890 ms of server time its twin hubs don't.** Measured TTFB 890 ms of a 2268 ms median FCP, against 80–125 ms on `/labels` and `/albums` running the identical `listHubPage`. PR #919 proposed a covering index (`artists_hub_gate_idx` over `(slug, renderable_track_count, certified_finding_count)`) and explicitly did not implement or EXPLAIN it. Same shape as the proven funnel-scan fix, and it would apply to all three hubs. **File this into `docs/db-scale-backlog.md` first** — today the claim exists only in a merged PR body.
 - **Four design calls await a decision** — the per-user recommendations cache, search `compileFilters` resolving names to indexed ids, tracks-hub keyset pagination for the deep tail, and the capture split-OR merge (`docs/db-scale-backlog.md` Wave 3). They are decisions, not builds; the ledger holds the shapes and impacts. The capture one stays gated on the operator opening catalogue capture, and it is now a build-or-don't rather than a two-path choice — the `capturable` flag it used to be weighed against was dropped on 2026-07-27, along with the rank-sweep `match_key`/`needs_rank` columns and the `/tracks` year-lane rollup. Git history holds all three analyses if a trigger brings one back.
 
-### Static voice lint over user-facing literals
+### Ruling-time label identity on `/admin/labels` (small)
 
-The voice canon is enforced only on **agent-authored** text at write time — `BANNED_WORDS` lives in `apps/web/src/lib/server/observation.ts` and nothing checks a hand-written string. Add a static lint over user-facing literals so a hand-typed string faces the same gate the auto-note does. Ledger row: `docs/audit-backlog.md` (voice, 2026-07-25) — the one genuinely directional row in that ledger.
+The station renders the logo and the seed-ruling buttons and nothing else, so "which Helix?" — or "which Radar Records?", the 2026-07-27 namesake class — is answered by a periodic identity audit instead of at the moment of the ruling. Show each label's MusicBrainz entity (name + disambiguation + founding) beside the buttons. The crawler's mbid-authority seal (#966) covers the machine half; this is the human half. (Sole survivor of the pruned artist-primary-capture RFC — its Slice 2, a preview-BPM capture gate, is ruled OUT permanently: BPM is never a gate, `docs/the-ear.md`.)
 
-### One RFC in flight — artist-primary capture
-
-[docs/rfcs/artist-primary-capture-rfc.md](../rfcs/artist-primary-capture-rfc.md) is the only file in `docs/rfcs/`; slices 0, 1, and 1b shipped and the file carries only the remainder. Prune it when the rest ship.
-
-- **Slice 2 — gate a capture buy on free preview BPM.** Octave-folded, confident-reject-only, checked **before the money leaves**. Nothing in `apps/web/src/lib/server` does a capture-time BPM pre-check today; the only octave-fold logic is post-capture analysis in the enrichment skill.
-- **Slice 4 — MusicBrainz identity at ruling time on `/admin/labels` (small).** The station renders the logo and the seed-ruling buttons and nothing else, so "which Helix?" is answered by a periodic manual identity audit instead of at the moment of the ruling. Showing each label's MB entity beside the buttons retires that compensating control.
 - **Doc debt, not roadmap work:** slice 3's catalogue cleanup pass effectively shipped as the `fluncle-catalogue-prune` skill. The RFC still calls it "(later)" — a two-line true-up in the RFC, and citing slice 3 as open work would be wrong.
 
 ### The acquisition boundary — `capture-sweep.ts` is in the wrong repo (parked 2026-07-11)
