@@ -15,17 +15,25 @@ export default defineConfig({
   },
   test: {
     coverage: {
-      include: ["src/**"],
+      // Source files only. A bare `src/**` also handed the v8 provider this package's
+      // .md/.json/.css/.ttf assets, which it tries to parse as JS when it builds the
+      // uncovered-file map — `src/lib/server/fonts/README.md` threw a rolldown PARSE_ERROR
+      // stack trace into every `deploy:gate` log. It never failed the run, just buried the
+      // real output. Narrowing to the extensions v8 can actually instrument drops the noise
+      // and leaves the measured source set unchanged.
+      include: ["src/**/*.{ts,tsx}"],
       provider: "v8",
       reporter: ["text", "html"],
-      // Ratchet floors: a few points below today's measured coverage
-      // (stmts 47.8 / branch 42.1 / funcs 41.7 / lines 48.0) so the gate blocks
-      // regressions without failing the current suite. Raise these as coverage grows.
+      // Ratchet floors: ~4 points below today's measured coverage
+      // (stmts 52.0 / branch 45.6 / funcs 46.0 / lines 52.1, measured 2026-07-28) so the
+      // gate blocks regressions without failing the current suite. Raise these as coverage
+      // grows — they had drifted ~8 points slack before this pass, which is a regression
+      // budget nobody chose.
       thresholds: {
-        branches: 38,
-        functions: 37,
-        lines: 44,
-        statements: 44,
+        branches: 41,
+        functions: 42,
+        lines: 48,
+        statements: 48,
       },
     },
     environment: "node",
