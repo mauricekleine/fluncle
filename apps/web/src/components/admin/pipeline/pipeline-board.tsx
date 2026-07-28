@@ -194,7 +194,12 @@ function RowMenu({ row }: { row: BoardRow }) {
             disabled={!row.logId}
             render={
               row.logId ? (
-                <a href={r2FolderUrl(row.logId)} rel="noreferrer" target="_blank" />
+                <a
+                  aria-label={`Open in R2 — ${row.title}`}
+                  href={r2FolderUrl(row.logId)}
+                  rel="noreferrer"
+                  target="_blank"
+                />
               ) : undefined
             }
           >
@@ -204,7 +209,12 @@ function RowMenu({ row }: { row: BoardRow }) {
           <DropdownMenuItem
             disabled={!row.logId}
             render={
-              row.logId ? <a href={`/api/v1/admin/tracks/${row.trackId}/silent-clip`} /> : undefined
+              row.logId ? (
+                <a
+                  aria-label={`Download silent clip — ${row.title}`}
+                  href={`/api/v1/admin/tracks/${row.trackId}/silent-clip`}
+                />
+              ) : undefined
             }
           >
             <DownloadSimpleIcon aria-hidden="true" className="size-4" />

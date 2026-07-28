@@ -466,6 +466,7 @@ function KeyNotationCog() {
         <PopoverContent align="end" className="w-64 space-y-3" side="right">
           <div className="space-y-1.5">
             <Label id={labelId}>Key notation</Label>
+            {/* oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a labelled set of toggle buttons in a popover, not a form control group; `fieldset`/`legend` would be wrong markup here. */}
             <div aria-labelledby={labelId} className="flex gap-1.5" role="group">
               {NOTATION_OPTIONS.map((option) => (
                 <Button

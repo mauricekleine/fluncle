@@ -222,6 +222,7 @@ export function StudioEnergyLane({
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         ref={laneRef}
+        // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a labelled pointer-driven lane, not a form-control grouping; `fieldset`/`legend` would be wrong markup here.
         role="group"
       >
         {/* The curve (warm-neutral ramp): Stardust rail + a Starlight-Cream played

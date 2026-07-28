@@ -942,11 +942,11 @@ function ListenLink({
 }) {
   return (
     <Button
-      aria-label={label}
       // `nativeButton={false}` is required when the render node is an <a>: Base UI otherwise
-      // keeps native button semantics on a link, which breaks a11y.
+      // keeps native button semantics on a link, which breaks a11y. The accessible name rides
+      // the render node for the same reason — that is the element the DOM (and the lint) sees.
       nativeButton={false}
-      render={<a href={href} rel="noreferrer" target="_blank" title={label} />}
+      render={<a aria-label={label} href={href} rel="noreferrer" target="_blank" title={label} />}
       size="icon-sm"
       variant="ghost"
     >

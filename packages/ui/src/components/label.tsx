@@ -4,6 +4,7 @@ import { cn } from "#lib/utils";
 
 function Label({ className, ...props }: React.ComponentProps<"label">) {
   return (
+    // oxlint-disable-next-line jsx-a11y/label-has-associated-control -- generic shadcn primitive: it cannot know its control, so callers wire `htmlFor`/`id` or nest the input (upstream shadcn ships this same bare passthrough).
     <label
       data-slot="label"
       className={cn(

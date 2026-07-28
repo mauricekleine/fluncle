@@ -866,6 +866,11 @@ function QueueRow({
   const parked = state === "snoozed" || state === "dismissed";
 
   return (
+    // The click only moves the queue's cursor — the same thing j/k and the arrows do in the
+    // single-key loop above, so the keyboard path is already complete and the row's own actions
+    // are real buttons and links. A `role="button"` bolt-on would wrap those controls in a
+    // fake button and read the whole row as one control, which is worse.
+    // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- pointer shortcut for an existing, complete keyboard path (see above).
     <li
       className={cn(
         "flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-3 py-2.5 transition-[opacity,background-color] duration-200 ease-out last:border-0 sm:px-4",
@@ -1049,9 +1054,15 @@ function QueueRow({
                     un-anchorable candidate), so the row never shows it twice. */}
                 {item.mbUrl && primary.kind !== "open" ? (
                   <Button
-                    aria-label={`Open ${item.title} in MusicBrainz`}
                     nativeButton={false}
-                    render={<a href={item.mbUrl} rel="noreferrer" target="_blank" />}
+                    render={
+                      <a
+                        aria-label={`Open ${item.title} in MusicBrainz`}
+                        href={item.mbUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                      />
+                    }
                     size="icon-sm"
                     title="Open in MusicBrainz"
                     variant="ghost"
@@ -1165,7 +1176,10 @@ function PrimaryButton({
       <Button
         nativeButton={false}
         render={
+          // The visible label repeats down the queue ("Review", "Distribute"), so the
+          // accessible name carries the row it belongs to.
           <a
+            aria-label={`${primary.label} — ${item.title}`}
             href={primary.href}
             ref={(el: HTMLAnchorElement | null) => registerPrimary(item.id, el)}
           />

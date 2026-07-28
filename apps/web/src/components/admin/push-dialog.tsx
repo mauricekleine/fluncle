@@ -140,7 +140,15 @@ function PushDialogBody({
             className="flex-1"
             disabled={!cover}
             nativeButton={false}
-            render={<a download href={cover} rel="noreferrer" target="_blank" />}
+            render={
+              <a
+                aria-label="Download cover"
+                download
+                href={cover}
+                rel="noreferrer"
+                target="_blank"
+              />
+            }
             variant="outline"
           >
             <DownloadSimpleIcon aria-hidden="true" />
@@ -197,6 +205,7 @@ function PushDialogBody({
         <div className="flex flex-col gap-2">
           <Label htmlFor="push-url">Live URL</Label>
           <Input
+            // oxlint-disable-next-line jsx-a11y/no-autofocus -- the confirm step's one field: the operator arrives here to paste the live URL, and only when it is not already live.
             autoFocus={!isLive}
             id="push-url"
             onChange={(event) => setUrl(event.target.value)}
@@ -226,7 +235,14 @@ function PushDialogBody({
               {isLive && post?.url ? (
                 <Button
                   nativeButton={false}
-                  render={<a href={post.url} rel="noreferrer" target="_blank" />}
+                  render={
+                    <a
+                      aria-label={`View the live ${platform.label} post`}
+                      href={post.url}
+                      rel="noreferrer"
+                      target="_blank"
+                    />
+                  }
                   size="sm"
                   variant="outline"
                 >

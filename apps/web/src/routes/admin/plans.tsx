@@ -822,11 +822,11 @@ function SortableMemberRow({
         </span>
       ) : null}
       <Button
-        aria-label={`Search ${member.title} on Beatport`}
         className="text-muted-foreground"
         nativeButton={false}
         render={
           <a
+            aria-label={`Search ${member.title} on Beatport`}
             href={beatportSearchUrl(member.artists, member.title)}
             rel="noreferrer"
             target="_blank"

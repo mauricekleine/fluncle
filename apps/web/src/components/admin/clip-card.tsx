@@ -257,6 +257,7 @@ export function ClipCard({
             nothing here (the drip cron skips uncut clips server-side). */}
         {isDone ? (
           <div className="flex items-center gap-2">
+            {/* oxlint-disable-next-line jsx-a11y/label-has-associated-control -- the control IS nested: Base UI's Checkbox.Root renders a hidden <input type="checkbox"> beside its span, so this label is wired and the hit area toggles; the rule just cannot see through the component. */}
             <label className="flex shrink-0 cursor-pointer items-center">
               <Checkbox
                 aria-label={selected ? "Deselect clip" : "Select clip to schedule"}
@@ -696,10 +697,19 @@ function ClipPreview({
 function ClipDownloads({ downloads, title }: { downloads: ClipDownloadUrls; title: string }) {
   return (
     <>
+      {/* The accessible name rides the <a>, not the Button: Base UI merges the two onto the
+          same DOM node, and only the render element satisfies the a11y lint. */}
       <Button
-        aria-label={`Download the clip from ${title} with audio, for Instagram`}
         nativeButton={false}
-        render={<a download href={downloads.withAudio} rel="noopener noreferrer" target="_blank" />}
+        render={
+          <a
+            aria-label={`Download the clip from ${title} with audio, for Instagram`}
+            download
+            href={downloads.withAudio}
+            rel="noopener noreferrer"
+            target="_blank"
+          />
+        }
         size="sm"
         variant="outline"
       >
@@ -707,9 +717,16 @@ function ClipDownloads({ downloads, title }: { downloads: ClipDownloadUrls; titl
         <InstagramIcon className="size-3.5" />
       </Button>
       <Button
-        aria-label={`Download the silent clip from ${title}, for TikTok`}
         nativeButton={false}
-        render={<a download href={downloads.silent} rel="noopener noreferrer" target="_blank" />}
+        render={
+          <a
+            aria-label={`Download the silent clip from ${title}, for TikTok`}
+            download
+            href={downloads.silent}
+            rel="noopener noreferrer"
+            target="_blank"
+          />
+        }
         size="sm"
         variant="outline"
       >

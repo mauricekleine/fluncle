@@ -115,6 +115,7 @@ export function StudioCropFrame({
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}
       ref={boxRef}
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- a labelled pointer-driven crop window, not a form-control grouping; `fieldset`/`legend` would be wrong markup here.
       role="group"
     >
       {/* The dimmed-out side scrims + the bright 9:16 keep window between them. */}

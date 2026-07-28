@@ -72,6 +72,7 @@ function NoteDialogBody({
       <HeldNotePanel onUseAsDraft={setNote} trackId={row.trackId} />
 
       <Textarea
+        // oxlint-disable-next-line jsx-a11y/no-autofocus -- the dialog exists to write this one note; landing focus in its only field is the point of opening it, and "Save & next" walks a batch.
         autoFocus
         maxLength={NOTE_MAX_LENGTH}
         onChange={(event) => setNote(event.target.value)}

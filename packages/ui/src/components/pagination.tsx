@@ -43,6 +43,7 @@ function PaginationLink({ className, isActive, size = "icon", ...props }: Pagina
       className={cn(className)}
       nativeButton={false}
       render={
+        // oxlint-disable-next-line jsx-a11y/anchor-has-content -- Base UI merges the Button's children (and any caller `aria-label`, as PaginationPrevious/Next pass) into this anchor; the rule only sees the childless literal.
         <a
           aria-current={isActive ? "page" : undefined}
           data-slot="pagination-link"

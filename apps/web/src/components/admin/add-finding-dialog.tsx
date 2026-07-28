@@ -164,6 +164,7 @@ export function AddFindingDialog({ onAdded, onOpenChange, open }: AddFindingDial
                 aria-describedby={linkInvalid ? linkErrorId : undefined}
                 aria-invalid={linkInvalid || undefined}
                 autoComplete="off"
+                // oxlint-disable-next-line jsx-a11y/no-autofocus -- the dialog's whole job is this one field; the operator opens it with a Spotify link already on the clipboard.
                 autoFocus
                 id={linkId}
                 inputMode="url"
@@ -248,6 +249,7 @@ function LoggedPanel({ onDone, result }: { onDone: () => void; result: PublishTr
 
       {/* autoFocus: the submit button the operator just pressed unmounted with
           the form — land keyboard focus on the panel's one action. */}
+      {/* oxlint-disable-next-line jsx-a11y/no-autofocus -- recovers keyboard focus the unmounted submit button took with it; without it focus falls to <body>. */}
       <Button autoFocus className="w-full" onClick={onDone} variant="outline">
         Done
       </Button>
@@ -294,6 +296,7 @@ function FoundPanel({
       </div>
 
       {/* autoFocus: same focus hand-off as the logged panel. */}
+      {/* oxlint-disable-next-line jsx-a11y/no-autofocus -- recovers keyboard focus the unmounted submit button took with it; without it focus falls to <body>. */}
       <Button autoFocus className="w-full" onClick={onDone} variant="outline">
         Done
       </Button>

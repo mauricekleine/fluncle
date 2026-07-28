@@ -55,7 +55,11 @@ function AdminLoginPage() {
               Sign in to finish the connect you started in the terminal.
             </p>
           ) : undefined}
-          <Button nativeButton={false} render={<a href={loginHref} />} size="lg">
+          <Button
+            nativeButton={false}
+            render={<a aria-label="Log in with Spotify" href={loginHref} />}
+            size="lg"
+          >
             <BrandIcon icon={siSpotify} />
             Log in with Spotify
           </Button>

@@ -617,6 +617,7 @@ function StudioEditorBody({
   const cueProgress = recordingCueProgress(tracklist);
 
   return (
+    // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- `role="application"` IS the declaration that this region owns its keys; the shortcuts reach it by bubbling from whichever child holds focus, and `handleKeyDown` yields to typing and to focused buttons/links first.
     <div
       aria-label={`Studio clip editor for ${title}`}
       className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,48rem)] xl:grid-rows-[minmax(0,1fr)] xl:gap-0 xl:overflow-hidden"
