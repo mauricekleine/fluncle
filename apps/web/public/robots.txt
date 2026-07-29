@@ -6,10 +6,14 @@ User-agent: *
 Allow: /
 # Both admin API mounts: the canonical /api/v1/admin/* (every oRPC admin op plus the
 # admin file routes) and the legacy /api/admin/* alias. Listing only the alias left the
-# canonical path — where the whole admin surface actually lives — uncovered.
+# canonical path uncovered, which is where the whole admin surface actually lives.
 Disallow: /api/v1/admin/
 Disallow: /api/admin/
 Disallow: /admin
+# The Spotify hop (/out/spotify/<trackId>) is a 302 for a person following a link, not a
+# page. Crawling it indexes nothing, and it would put a Fluncle redirect between the archive
+# and Spotify in a crawler's link graph. Same reason structured data keeps the raw link.
+Disallow: /out/
 
 # Content Signals (https://contentsignals.org/): the archive is open for
 # search, AI answers, and training. Crawl away applies to the robots too.

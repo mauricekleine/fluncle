@@ -9,268 +9,149 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as TracksRouteImport } from './routes/tracks'
-import { Route as TermsRouteImport } from './routes/terms'
-import { Route as StatusRouteImport } from './routes/status'
-import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
-import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
-import { Route as ResetPasswordRouteImport } from './routes/reset-password'
-import { Route as RecommendationsRouteImport } from './routes/recommendations'
-import { Route as ReachRouteImport } from './routes/reach'
-import { Route as RadioRouteImport } from './routes/radio'
-import { Route as PrivacyRouteImport } from './routes/privacy'
-import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
-import { Route as PipelineRouteImport } from './routes/pipeline'
-import { Route as OembedRouteImport } from './routes/oembed'
-import { Route as MixRouteImport } from './routes/mix'
-import { Route as GalaxyRouteImport } from './routes/galaxy'
-import { Route as FreshDotxmlRouteImport } from './routes/fresh[.]xml'
-import { Route as FreshDotjsonRouteImport } from './routes/fresh[.]json'
-import { Route as FreshRouteImport } from './routes/fresh'
-import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
-import { Route as DocsRouteImport } from './routes/docs'
-import { Route as DeviceRouteImport } from './routes/device'
-import { Route as ChatRouteImport } from './routes/chat'
-import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
-import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
-import { Route as AccountRouteImport } from './routes/account'
-import { Route as AboutRouteImport } from './routes/about'
-import { Route as R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport } from './routes/8337c1b41068549f248bf56f1fc465df[.]txt'
-import { Route as CoordinateRouteImport } from './routes/$coordinate'
-import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as StoriesIndexRouteImport } from './routes/stories.index'
-import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
-import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
-import { Route as LogbookIndexRouteImport } from './routes/logbook.index'
-import { Route as LogIndexRouteImport } from './routes/log.index'
-import { Route as LabelsIndexRouteImport } from './routes/labels.index'
-import { Route as GalaxiesIndexRouteImport } from './routes/galaxies.index'
-import { Route as DocsIndexRouteImport } from './routes/docs.index'
-import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
-import { Route as AlbumsIndexRouteImport } from './routes/albums.index'
+import { Route as CoordinateRouteImport } from './routes/$coordinate'
+import { Route as R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport } from './routes/8337c1b41068549f248bf56f1fc465df[.]txt'
+import { Route as AboutRouteImport } from './routes/about'
+import { Route as AccountRouteImport } from './routes/account'
+import { Route as AdminRouteRouteImport } from './routes/admin/route'
+import { Route as AtomDotxmlRouteImport } from './routes/atom[.]xml'
+import { Route as CalendarDoticsRouteImport } from './routes/calendar[.]ics'
+import { Route as ChatRouteImport } from './routes/chat'
+import { Route as DeviceRouteImport } from './routes/device'
+import { Route as DocsRouteImport } from './routes/docs'
+import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
+import { Route as FreshRouteImport } from './routes/fresh'
+import { Route as FreshDotjsonRouteImport } from './routes/fresh[.]json'
+import { Route as FreshDotxmlRouteImport } from './routes/fresh[.]xml'
+import { Route as GalaxyRouteImport } from './routes/galaxy'
+import { Route as MixRouteImport } from './routes/mix'
+import { Route as OembedRouteImport } from './routes/oembed'
+import { Route as PipelineRouteImport } from './routes/pipeline'
+import { Route as PodcastDotxmlRouteImport } from './routes/podcast[.]xml'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as RadioRouteImport } from './routes/radio'
+import { Route as ReachRouteImport } from './routes/reach'
+import { Route as RecommendationsRouteImport } from './routes/recommendations'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as RssDotxmlRouteImport } from './routes/rss[.]xml'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
+import { Route as StatusRouteImport } from './routes/status'
+import { Route as TermsRouteImport } from './routes/terms'
+import { Route as TracksRouteImport } from './routes/tracks'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
-import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
-import { Route as SitemapShardRouteImport } from './routes/sitemap.$shard'
-import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
-import { Route as LogbookSectorRouteImport } from './routes/logbook.$sector'
-import { Route as LogLogIdRouteImport } from './routes/log.$logId'
-import { Route as LabelSlugRouteImport } from './routes/label.$slug'
-import { Route as GalaxiesSlugRouteImport } from './routes/galaxies.$slug'
-import { Route as EmbedLogIdRouteImport } from './routes/embed.$logId'
-import { Route as DocsApiRouteImport } from './routes/docs.api'
-import { Route as DocsSplatRouteImport } from './routes/docs.$'
-import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
-import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
-import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
-import { Route as ApiChatRouteImport } from './routes/api/chat'
-import { Route as AlbumSlugRouteImport } from './routes/album.$slug'
-import { Route as AdminUsersRouteImport } from './routes/admin/users'
-import { Route as AdminUsageRouteImport } from './routes/admin/usage'
-import { Route as AdminRendersRouteImport } from './routes/admin/renders'
-import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
-import { Route as AdminReachRouteImport } from './routes/admin/reach'
-import { Route as AdminPromptsRouteImport } from './routes/admin/prompts'
-import { Route as AdminPlansRouteImport } from './routes/admin/plans'
-import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
-import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
-import { Route as AdminMixableOrderRouteImport } from './routes/admin/mixable-order'
-import { Route as AdminLoginRouteImport } from './routes/admin/login'
-import { Route as AdminLabelsRouteImport } from './routes/admin/labels'
-import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
-import { Route as AdminFunnelRouteImport } from './routes/admin/funnel'
-import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
-import { Route as AdminCostsRouteImport } from './routes/admin/costs'
-import { Route as AdminClipsRouteImport } from './routes/admin/clips'
-import { Route as AdminChatRouteImport } from './routes/admin/chat'
-import { Route as AdminCatalogueRouteImport } from './routes/admin/catalogue'
 import { Route as AdminArtistsRouteImport } from './routes/admin/artists'
-import { Route as LabelSlugFreshDotxmlRouteImport } from './routes/label.$slug.fresh[.]xml'
-import { Route as ArtistSlugFreshDotxmlRouteImport } from './routes/artist.$slug.fresh[.]xml'
-import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
-import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
-import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
-import { Route as ApiV1ChatRouteImport } from './routes/api/v1/chat'
-import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
-import { Route as ApiOgSetRouteImport } from './routes/api/og.set'
-import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
-import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
-import { Route as ApiMeAvatarRouteImport } from './routes/api/me/avatar'
-import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
-import { Route as ApiAdminChatRouteImport } from './routes/api/admin/chat'
+import { Route as AdminCatalogueRouteImport } from './routes/admin/catalogue'
+import { Route as AdminChatRouteImport } from './routes/admin/chat'
+import { Route as AdminClipsRouteImport } from './routes/admin/clips'
+import { Route as AdminCostsRouteImport } from './routes/admin/costs'
+import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
+import { Route as AdminFunnelRouteImport } from './routes/admin/funnel'
+import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
+import { Route as AdminLabelsRouteImport } from './routes/admin/labels'
+import { Route as AdminLoginRouteImport } from './routes/admin/login'
+import { Route as AdminMixableOrderRouteImport } from './routes/admin/mixable-order'
+import { Route as AdminMixtapesRouteImport } from './routes/admin/mixtapes'
+import { Route as AdminNewsletterRouteImport } from './routes/admin/newsletter'
+import { Route as AdminPlansRouteImport } from './routes/admin/plans'
+import { Route as AdminPromptsRouteImport } from './routes/admin/prompts'
+import { Route as AdminReachRouteImport } from './routes/admin/reach'
+import { Route as AdminRecordingsRouteImport } from './routes/admin/recordings'
+import { Route as AdminRendersRouteImport } from './routes/admin/renders'
+import { Route as AdminUsageRouteImport } from './routes/admin/usage'
+import { Route as AdminUsersRouteImport } from './routes/admin/users'
+import { Route as AlbumSlugRouteImport } from './routes/album.$slug'
+import { Route as AlbumsIndexRouteImport } from './routes/albums.index'
+import { Route as ApiChatRouteImport } from './routes/api/chat'
+import { Route as ArtistSlugRouteImport } from './routes/artist.$slug'
+import { Route as ArtistsIndexRouteImport } from './routes/artists.index'
+import { Route as CliLatestDotshRouteImport } from './routes/cli/latest[.]sh'
+import { Route as DocsDotmdSplatRouteImport } from './routes/docs[.]md.$'
+import { Route as DocsIndexRouteImport } from './routes/docs.index'
+import { Route as DocsSplatRouteImport } from './routes/docs.$'
+import { Route as DocsApiRouteImport } from './routes/docs.api'
+import { Route as EmbedLogIdRouteImport } from './routes/embed.$logId'
+import { Route as GalaxiesIndexRouteImport } from './routes/galaxies.index'
+import { Route as GalaxiesSlugRouteImport } from './routes/galaxies.$slug'
+import { Route as LabelSlugRouteImport } from './routes/label.$slug'
+import { Route as LabelsIndexRouteImport } from './routes/labels.index'
+import { Route as LogIndexRouteImport } from './routes/log.index'
+import { Route as LogLogIdRouteImport } from './routes/log.$logId'
+import { Route as LogbookIndexRouteImport } from './routes/logbook.index'
+import { Route as LogbookSectorRouteImport } from './routes/logbook.$sector'
+import { Route as MixtapesIndexRouteImport } from './routes/mixtapes.index'
+import { Route as NewsletterIndexRouteImport } from './routes/newsletter.index'
+import { Route as NewsletterNumberRouteImport } from './routes/newsletter.$number'
+import { Route as SitemapShardRouteImport } from './routes/sitemap.$shard'
+import { Route as StoriesIndexRouteImport } from './routes/stories.index'
+import { Route as StoriesLogIdRouteImport } from './routes/stories.$logId'
 import { Route as AdminStudioRecordingIdRouteImport } from './routes/admin/studio.$recordingId'
-import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
-import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
-import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
-import { Route as ApiV1MeAvatarRouteImport } from './routes/api/v1/me/avatar'
-import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
-import { Route as ApiV1AdminChatRouteImport } from './routes/api/v1/admin/chat'
+import { Route as ApiAdminChatRouteImport } from './routes/api/admin/chat'
+import { Route as ApiAdminLogoutRouteImport } from './routes/api/admin/logout'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiMeAvatarRouteImport } from './routes/api/me/avatar'
+import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
+import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
+import { Route as ApiOgSetRouteImport } from './routes/api/og.set'
+import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
+import { Route as ApiV1ChatRouteImport } from './routes/api/v1/chat'
+import { Route as ApiV1OpenapiDotjsonRouteImport } from './routes/api/v1/openapi[.]json'
+import { Route as ApiV1PostmanDotjsonRouteImport } from './routes/api/v1/postman[.]json'
+import { Route as ApiV1StatusRouteImport } from './routes/api/v1/status'
+import { Route as ArtistSlugFreshDotxmlRouteImport } from './routes/artist.$slug.fresh[.]xml'
+import { Route as LabelSlugFreshDotxmlRouteImport } from './routes/label.$slug.fresh[.]xml'
+import { Route as OutSpotifyTrackIdRouteImport } from './routes/out.spotify.$trackId'
 import { Route as ApiAdminOauthHandoffRouteImport } from './routes/api/admin/oauth/handoff'
-import { Route as ApiV1AdminOauthHandoffRouteImport } from './routes/api/v1/admin/oauth/handoff'
-import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
-import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
-import { Route as ApiAdminTwitchAuthStartRouteImport } from './routes/api/admin/twitch/auth/start'
-import { Route as ApiAdminTwitchAuthCallbackRouteImport } from './routes/api/admin/twitch/auth/callback'
-import { Route as ApiAdminTracksTrackIdSourceAudioRouteImport } from './routes/api/admin/tracks.$trackId.source-audio'
-import { Route as ApiAdminTracksTrackIdSilentClipRouteImport } from './routes/api/admin/tracks.$trackId.silent-clip'
-import { Route as ApiAdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/admin/tracks.$trackId.preview-audio'
-import { Route as ApiAdminTracksTrackIdPreviewRouteImport } from './routes/api/admin/tracks.$trackId.preview'
-import { Route as ApiAdminTiktokAuthStartRouteImport } from './routes/api/admin/tiktok/auth/start'
-import { Route as ApiAdminTiktokAuthCallbackRouteImport } from './routes/api/admin/tiktok/auth/callback'
-import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
-import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
-import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
-import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admin/mixcloud/auth/start'
-import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
-import { Route as ApiAdminInstagramAuthStartRouteImport } from './routes/api/admin/instagram/auth/start'
+import { Route as ApiV1AdminChatRouteImport } from './routes/api/v1/admin/chat'
+import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
+import { Route as ApiV1MeAvatarRouteImport } from './routes/api/v1/me/avatar'
+import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
+import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
+import { Route as ApiV1PreviewIdOrLogIdRouteImport } from './routes/api/v1/preview.$idOrLogId'
 import { Route as ApiAdminInstagramAuthCallbackRouteImport } from './routes/api/admin/instagram/auth/callback'
-import { Route as ApiV1AdminYoutubeAuthStartRouteImport } from './routes/api/v1/admin/youtube/auth/start'
-import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/v1/admin/youtube/auth/callback'
-import { Route as ApiV1AdminTwitchAuthStartRouteImport } from './routes/api/v1/admin/twitch/auth/start'
-import { Route as ApiV1AdminTwitchAuthCallbackRouteImport } from './routes/api/v1/admin/twitch/auth/callback'
-import { Route as ApiV1AdminTracksTrackIdSourceAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.source-audio'
-import { Route as ApiV1AdminTracksTrackIdSilentClipRouteImport } from './routes/api/v1/admin/tracks.$trackId.silent-clip'
-import { Route as ApiV1AdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview-audio'
-import { Route as ApiV1AdminTracksTrackIdPreviewRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview'
-import { Route as ApiV1AdminTiktokAuthStartRouteImport } from './routes/api/v1/admin/tiktok/auth/start'
-import { Route as ApiV1AdminTiktokAuthCallbackRouteImport } from './routes/api/v1/admin/tiktok/auth/callback'
-import { Route as ApiV1AdminSpotifyAuthStartRouteImport } from './routes/api/v1/admin/spotify/auth/start'
-import { Route as ApiV1AdminSpotifyAuthLoginRouteImport } from './routes/api/v1/admin/spotify/auth/login'
-import { Route as ApiV1AdminSpotifyAuthCallbackRouteImport } from './routes/api/v1/admin/spotify/auth/callback'
-import { Route as ApiV1AdminMixcloudAuthStartRouteImport } from './routes/api/v1/admin/mixcloud/auth/start'
-import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api/v1/admin/mixcloud/auth/callback'
-import { Route as ApiV1AdminInstagramAuthStartRouteImport } from './routes/api/v1/admin/instagram/auth/start'
+import { Route as ApiAdminInstagramAuthStartRouteImport } from './routes/api/admin/instagram/auth/start'
+import { Route as ApiAdminMixcloudAuthCallbackRouteImport } from './routes/api/admin/mixcloud/auth/callback'
+import { Route as ApiAdminMixcloudAuthStartRouteImport } from './routes/api/admin/mixcloud/auth/start'
+import { Route as ApiAdminSpotifyAuthCallbackRouteImport } from './routes/api/admin/spotify/auth/callback'
+import { Route as ApiAdminSpotifyAuthLoginRouteImport } from './routes/api/admin/spotify/auth/login'
+import { Route as ApiAdminSpotifyAuthStartRouteImport } from './routes/api/admin/spotify/auth/start'
+import { Route as ApiAdminTiktokAuthCallbackRouteImport } from './routes/api/admin/tiktok/auth/callback'
+import { Route as ApiAdminTiktokAuthStartRouteImport } from './routes/api/admin/tiktok/auth/start'
+import { Route as ApiAdminTracksTrackIdPreviewRouteImport } from './routes/api/admin/tracks.$trackId.preview'
+import { Route as ApiAdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/admin/tracks.$trackId.preview-audio'
+import { Route as ApiAdminTracksTrackIdSilentClipRouteImport } from './routes/api/admin/tracks.$trackId.silent-clip'
+import { Route as ApiAdminTracksTrackIdSourceAudioRouteImport } from './routes/api/admin/tracks.$trackId.source-audio'
+import { Route as ApiAdminTwitchAuthCallbackRouteImport } from './routes/api/admin/twitch/auth/callback'
+import { Route as ApiAdminTwitchAuthStartRouteImport } from './routes/api/admin/twitch/auth/start'
+import { Route as ApiAdminYoutubeAuthCallbackRouteImport } from './routes/api/admin/youtube/auth/callback'
+import { Route as ApiAdminYoutubeAuthStartRouteImport } from './routes/api/admin/youtube/auth/start'
+import { Route as ApiV1AdminOauthHandoffRouteImport } from './routes/api/v1/admin/oauth/handoff'
 import { Route as ApiV1AdminInstagramAuthCallbackRouteImport } from './routes/api/v1/admin/instagram/auth/callback'
+import { Route as ApiV1AdminInstagramAuthStartRouteImport } from './routes/api/v1/admin/instagram/auth/start'
+import { Route as ApiV1AdminMixcloudAuthCallbackRouteImport } from './routes/api/v1/admin/mixcloud/auth/callback'
+import { Route as ApiV1AdminMixcloudAuthStartRouteImport } from './routes/api/v1/admin/mixcloud/auth/start'
+import { Route as ApiV1AdminSpotifyAuthCallbackRouteImport } from './routes/api/v1/admin/spotify/auth/callback'
+import { Route as ApiV1AdminSpotifyAuthLoginRouteImport } from './routes/api/v1/admin/spotify/auth/login'
+import { Route as ApiV1AdminSpotifyAuthStartRouteImport } from './routes/api/v1/admin/spotify/auth/start'
+import { Route as ApiV1AdminTiktokAuthCallbackRouteImport } from './routes/api/v1/admin/tiktok/auth/callback'
+import { Route as ApiV1AdminTiktokAuthStartRouteImport } from './routes/api/v1/admin/tiktok/auth/start'
+import { Route as ApiV1AdminTracksTrackIdPreviewRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview'
+import { Route as ApiV1AdminTracksTrackIdPreviewAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.preview-audio'
+import { Route as ApiV1AdminTracksTrackIdSilentClipRouteImport } from './routes/api/v1/admin/tracks.$trackId.silent-clip'
+import { Route as ApiV1AdminTracksTrackIdSourceAudioRouteImport } from './routes/api/v1/admin/tracks.$trackId.source-audio'
+import { Route as ApiV1AdminTwitchAuthCallbackRouteImport } from './routes/api/v1/admin/twitch/auth/callback'
+import { Route as ApiV1AdminTwitchAuthStartRouteImport } from './routes/api/v1/admin/twitch/auth/start'
+import { Route as ApiV1AdminYoutubeAuthCallbackRouteImport } from './routes/api/v1/admin/youtube/auth/callback'
+import { Route as ApiV1AdminYoutubeAuthStartRouteImport } from './routes/api/v1/admin/youtube/auth/start'
 
-const TracksRoute = TracksRouteImport.update({
-  id: '/tracks',
-  path: '/tracks',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TermsRoute = TermsRouteImport.update({
-  id: '/terms',
-  path: '/terms',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StatusRoute = StatusRouteImport.update({
-  id: '/status',
-  path: '/status',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
-  id: '/sitemap.xml',
-  path: '/sitemap.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RssDotxmlRoute = RssDotxmlRouteImport.update({
-  id: '/rss.xml',
-  path: '/rss.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ResetPasswordRoute = ResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RecommendationsRoute = RecommendationsRouteImport.update({
-  id: '/recommendations',
-  path: '/recommendations',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ReachRoute = ReachRouteImport.update({
-  id: '/reach',
-  path: '/reach',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RadioRoute = RadioRouteImport.update({
-  id: '/radio',
-  path: '/radio',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PrivacyRoute = PrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PodcastDotxmlRoute = PodcastDotxmlRouteImport.update({
-  id: '/podcast.xml',
-  path: '/podcast.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PipelineRoute = PipelineRouteImport.update({
-  id: '/pipeline',
-  path: '/pipeline',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OembedRoute = OembedRouteImport.update({
-  id: '/oembed',
-  path: '/oembed',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MixRoute = MixRouteImport.update({
-  id: '/mix',
-  path: '/mix',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GalaxyRoute = GalaxyRouteImport.update({
-  id: '/galaxy',
-  path: '/galaxy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FreshDotxmlRoute = FreshDotxmlRouteImport.update({
-  id: '/fresh.xml',
-  path: '/fresh.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FreshDotjsonRoute = FreshDotjsonRouteImport.update({
-  id: '/fresh.json',
-  path: '/fresh.json',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FreshRoute = FreshRouteImport.update({
-  id: '/fresh',
-  path: '/fresh',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
-  id: '/feed.json',
-  path: '/feed.json',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocsRoute = DocsRouteImport.update({
-  id: '/docs',
-  path: '/docs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DeviceRoute = DeviceRouteImport.update({
-  id: '/device',
-  path: '/device',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ChatRoute = ChatRouteImport.update({
-  id: '/chat',
-  path: '/chat',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CalendarDoticsRoute = CalendarDoticsRouteImport.update({
-  id: '/calendar.ics',
-  path: '/calendar.ics',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AtomDotxmlRoute = AtomDotxmlRouteImport.update({
-  id: '/atom.xml',
-  path: '/atom.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AccountRoute = AccountRouteImport.update({
-  id: '/account',
-  path: '/account',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AboutRoute = AboutRouteImport.update({
-  id: '/about',
-  path: '/about',
+const CoordinateRoute = CoordinateRouteImport.update({
+  id: '/$coordinate',
+  path: '/$coordinate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const R8337c1b41068549f248bf56f1fc465dfDottxtRoute =
@@ -279,9 +160,14 @@ const R8337c1b41068549f248bf56f1fc465dfDottxtRoute =
     path: '/8337c1b41068549f248bf56f1fc465df.txt',
     getParentRoute: () => rootRouteImport,
   } as any)
-const CoordinateRoute = CoordinateRouteImport.update({
-  id: '/$coordinate',
-  path: '/$coordinate',
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountRoute = AccountRouteImport.update({
+  id: '/account',
+  path: '/account',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRouteRoute = AdminRouteRouteImport.update({
@@ -289,59 +175,124 @@ const AdminRouteRoute = AdminRouteRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const AtomDotxmlRoute = AtomDotxmlRouteImport.update({
+  id: '/atom.xml',
+  path: '/atom.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
-const StoriesIndexRoute = StoriesIndexRouteImport.update({
-  id: '/stories/',
-  path: '/stories/',
+const CalendarDoticsRoute = CalendarDoticsRouteImport.update({
+  id: '/calendar.ics',
+  path: '/calendar.ics',
   getParentRoute: () => rootRouteImport,
 } as any)
-const NewsletterIndexRoute = NewsletterIndexRouteImport.update({
-  id: '/newsletter/',
-  path: '/newsletter/',
+const ChatRoute = ChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MixtapesIndexRoute = MixtapesIndexRouteImport.update({
-  id: '/mixtapes/',
-  path: '/mixtapes/',
+const DeviceRoute = DeviceRouteImport.update({
+  id: '/device',
+  path: '/device',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LogbookIndexRoute = LogbookIndexRouteImport.update({
-  id: '/logbook/',
-  path: '/logbook/',
+const DocsRoute = DocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LogIndexRoute = LogIndexRouteImport.update({
-  id: '/log/',
-  path: '/log/',
+const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
+  id: '/feed.json',
+  path: '/feed.json',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LabelsIndexRoute = LabelsIndexRouteImport.update({
-  id: '/labels/',
-  path: '/labels/',
+const FreshRoute = FreshRouteImport.update({
+  id: '/fresh',
+  path: '/fresh',
   getParentRoute: () => rootRouteImport,
 } as any)
-const GalaxiesIndexRoute = GalaxiesIndexRouteImport.update({
-  id: '/galaxies/',
-  path: '/galaxies/',
+const FreshDotjsonRoute = FreshDotjsonRouteImport.update({
+  id: '/fresh.json',
+  path: '/fresh.json',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DocsIndexRoute = DocsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => DocsRoute,
-} as any)
-const ArtistsIndexRoute = ArtistsIndexRouteImport.update({
-  id: '/artists/',
-  path: '/artists/',
+const FreshDotxmlRoute = FreshDotxmlRouteImport.update({
+  id: '/fresh.xml',
+  path: '/fresh.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AlbumsIndexRoute = AlbumsIndexRouteImport.update({
-  id: '/albums/',
-  path: '/albums/',
+const GalaxyRoute = GalaxyRouteImport.update({
+  id: '/galaxy',
+  path: '/galaxy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MixRoute = MixRouteImport.update({
+  id: '/mix',
+  path: '/mix',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OembedRoute = OembedRouteImport.update({
+  id: '/oembed',
+  path: '/oembed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PipelineRoute = PipelineRouteImport.update({
+  id: '/pipeline',
+  path: '/pipeline',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PodcastDotxmlRoute = PodcastDotxmlRouteImport.update({
+  id: '/podcast.xml',
+  path: '/podcast.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RadioRoute = RadioRouteImport.update({
+  id: '/radio',
+  path: '/radio',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ReachRoute = ReachRouteImport.update({
+  id: '/reach',
+  path: '/reach',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RecommendationsRoute = RecommendationsRouteImport.update({
+  id: '/recommendations',
+  path: '/recommendations',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RssDotxmlRoute = RssDotxmlRouteImport.update({
+  id: '/rss.xml',
+  path: '/rss.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TracksRoute = TracksRouteImport.update({
+  id: '/tracks',
+  path: '/tracks',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
@@ -349,169 +300,9 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
-  id: '/stories/$logId',
-  path: '/stories/$logId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SitemapShardRoute = SitemapShardRouteImport.update({
-  id: '/sitemap/$shard',
-  path: '/sitemap/$shard',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NewsletterNumberRoute = NewsletterNumberRouteImport.update({
-  id: '/newsletter/$number',
-  path: '/newsletter/$number',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LogbookSectorRoute = LogbookSectorRouteImport.update({
-  id: '/logbook/$sector',
-  path: '/logbook/$sector',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LogLogIdRoute = LogLogIdRouteImport.update({
-  id: '/log/$logId',
-  path: '/log/$logId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LabelSlugRoute = LabelSlugRouteImport.update({
-  id: '/label/$slug',
-  path: '/label/$slug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const GalaxiesSlugRoute = GalaxiesSlugRouteImport.update({
-  id: '/galaxies/$slug',
-  path: '/galaxies/$slug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const EmbedLogIdRoute = EmbedLogIdRouteImport.update({
-  id: '/embed/$logId',
-  path: '/embed/$logId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DocsApiRoute = DocsApiRouteImport.update({
-  id: '/api',
-  path: '/api',
-  getParentRoute: () => DocsRoute,
-} as any)
-const DocsSplatRoute = DocsSplatRouteImport.update({
-  id: '/$',
-  path: '/$',
-  getParentRoute: () => DocsRoute,
-} as any)
-const DocsDotmdSplatRoute = DocsDotmdSplatRouteImport.update({
-  id: '/docs.md/$',
-  path: '/docs.md/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
-  id: '/cli/latest.sh',
-  path: '/cli/latest.sh',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ArtistSlugRoute = ArtistSlugRouteImport.update({
-  id: '/artist/$slug',
-  path: '/artist/$slug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiChatRoute = ApiChatRouteImport.update({
-  id: '/api/chat',
-  path: '/api/chat',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AlbumSlugRoute = AlbumSlugRouteImport.update({
-  id: '/album/$slug',
-  path: '/album/$slug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminUsersRoute = AdminUsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminUsageRoute = AdminUsageRouteImport.update({
-  id: '/usage',
-  path: '/usage',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminRendersRoute = AdminRendersRouteImport.update({
-  id: '/renders',
-  path: '/renders',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminRecordingsRoute = AdminRecordingsRouteImport.update({
-  id: '/recordings',
-  path: '/recordings',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminReachRoute = AdminReachRouteImport.update({
-  id: '/reach',
-  path: '/reach',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminPromptsRoute = AdminPromptsRouteImport.update({
-  id: '/prompts',
-  path: '/prompts',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminPlansRoute = AdminPlansRouteImport.update({
-  id: '/plans',
-  path: '/plans',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminNewsletterRoute = AdminNewsletterRouteImport.update({
-  id: '/newsletter',
-  path: '/newsletter',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminMixtapesRoute = AdminMixtapesRouteImport.update({
-  id: '/mixtapes',
-  path: '/mixtapes',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminMixableOrderRoute = AdminMixableOrderRouteImport.update({
-  id: '/mixable-order',
-  path: '/mixable-order',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminLoginRoute = AdminLoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminLabelsRoute = AdminLabelsRouteImport.update({
-  id: '/labels',
-  path: '/labels',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminGalaxiesRoute = AdminGalaxiesRouteImport.update({
-  id: '/galaxies',
-  path: '/galaxies',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminFunnelRoute = AdminFunnelRouteImport.update({
-  id: '/funnel',
-  path: '/funnel',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminFindingsRoute = AdminFindingsRouteImport.update({
-  id: '/findings',
-  path: '/findings',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminCostsRoute = AdminCostsRouteImport.update({
-  id: '/costs',
-  path: '/costs',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminClipsRoute = AdminClipsRouteImport.update({
-  id: '/clips',
-  path: '/clips',
-  getParentRoute: () => AdminRouteRoute,
-} as any)
-const AdminChatRoute = AdminChatRouteImport.update({
-  id: '/chat',
-  path: '/chat',
+const AdminArtistsRoute = AdminArtistsRouteImport.update({
+  id: '/artists',
+  path: '/artists',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminCatalogueRoute = AdminCatalogueRouteImport.update({
@@ -519,79 +310,219 @@ const AdminCatalogueRoute = AdminCatalogueRouteImport.update({
   path: '/catalogue',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const AdminArtistsRoute = AdminArtistsRouteImport.update({
-  id: '/artists',
-  path: '/artists',
+const AdminChatRoute = AdminChatRouteImport.update({
+  id: '/chat',
+  path: '/chat',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const LabelSlugFreshDotxmlRoute = LabelSlugFreshDotxmlRouteImport.update({
-  id: '/fresh.xml',
-  path: '/fresh.xml',
-  getParentRoute: () => LabelSlugRoute,
+const AdminClipsRoute = AdminClipsRouteImport.update({
+  id: '/clips',
+  path: '/clips',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
-const ArtistSlugFreshDotxmlRoute = ArtistSlugFreshDotxmlRouteImport.update({
-  id: '/fresh.xml',
-  path: '/fresh.xml',
-  getParentRoute: () => ArtistSlugRoute,
+const AdminCostsRoute = AdminCostsRouteImport.update({
+  id: '/costs',
+  path: '/costs',
+  getParentRoute: () => AdminRouteRoute,
 } as any)
-const ApiV1StatusRoute = ApiV1StatusRouteImport.update({
-  id: '/api/v1/status',
-  path: '/api/v1/status',
+const AdminFindingsRoute = AdminFindingsRouteImport.update({
+  id: '/findings',
+  path: '/findings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminFunnelRoute = AdminFunnelRouteImport.update({
+  id: '/funnel',
+  path: '/funnel',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminGalaxiesRoute = AdminGalaxiesRouteImport.update({
+  id: '/galaxies',
+  path: '/galaxies',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminLabelsRoute = AdminLabelsRouteImport.update({
+  id: '/labels',
+  path: '/labels',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminLoginRoute = AdminLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminMixableOrderRoute = AdminMixableOrderRouteImport.update({
+  id: '/mixable-order',
+  path: '/mixable-order',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminMixtapesRoute = AdminMixtapesRouteImport.update({
+  id: '/mixtapes',
+  path: '/mixtapes',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminNewsletterRoute = AdminNewsletterRouteImport.update({
+  id: '/newsletter',
+  path: '/newsletter',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminPlansRoute = AdminPlansRouteImport.update({
+  id: '/plans',
+  path: '/plans',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminPromptsRoute = AdminPromptsRouteImport.update({
+  id: '/prompts',
+  path: '/prompts',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminReachRoute = AdminReachRouteImport.update({
+  id: '/reach',
+  path: '/reach',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminRecordingsRoute = AdminRecordingsRouteImport.update({
+  id: '/recordings',
+  path: '/recordings',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminRendersRoute = AdminRendersRouteImport.update({
+  id: '/renders',
+  path: '/renders',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminUsageRoute = AdminUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminUsersRoute = AdminUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AlbumSlugRoute = AlbumSlugRouteImport.update({
+  id: '/album/$slug',
+  path: '/album/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1PostmanDotjsonRoute = ApiV1PostmanDotjsonRouteImport.update({
-  id: '/api/v1/postman.json',
-  path: '/api/v1/postman.json',
+const AlbumsIndexRoute = AlbumsIndexRouteImport.update({
+  id: '/albums/',
+  path: '/albums/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
-  id: '/api/v1/openapi.json',
-  path: '/api/v1/openapi.json',
+const ApiChatRoute = ApiChatRouteImport.update({
+  id: '/api/chat',
+  path: '/api/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1ChatRoute = ApiV1ChatRouteImport.update({
-  id: '/api/v1/chat',
-  path: '/api/v1/chat',
+const ArtistSlugRoute = ArtistSlugRouteImport.update({
+  id: '/artist/$slug',
+  path: '/artist/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
-  id: '/api/preview/$idOrLogId',
-  path: '/api/preview/$idOrLogId',
+const ArtistsIndexRoute = ArtistsIndexRouteImport.update({
+  id: '/artists/',
+  path: '/artists/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiOgSetRoute = ApiOgSetRouteImport.update({
-  id: '/api/og/set',
-  path: '/api/og/set',
+const CliLatestDotshRoute = CliLatestDotshRouteImport.update({
+  id: '/cli/latest.sh',
+  path: '/cli/latest.sh',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
-  id: '/api/og/$logId',
-  path: '/api/og/$logId',
+const DocsDotmdSplatRoute = DocsDotmdSplatRouteImport.update({
+  id: '/docs.md/$',
+  path: '/docs.md/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiMixtapeCoverLogIdRoute = ApiMixtapeCoverLogIdRouteImport.update({
-  id: '/api/mixtape-cover/$logId',
-  path: '/api/mixtape-cover/$logId',
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: '/$',
+  path: '/$',
+  getParentRoute: () => DocsRoute,
+} as any)
+const DocsApiRoute = DocsApiRouteImport.update({
+  id: '/api',
+  path: '/api',
+  getParentRoute: () => DocsRoute,
+} as any)
+const EmbedLogIdRoute = EmbedLogIdRouteImport.update({
+  id: '/embed/$logId',
+  path: '/embed/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiMeAvatarRoute = ApiMeAvatarRouteImport.update({
-  id: '/api/me/avatar',
-  path: '/api/me/avatar',
+const GalaxiesIndexRoute = GalaxiesIndexRouteImport.update({
+  id: '/galaxies/',
+  path: '/galaxies/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
+const GalaxiesSlugRoute = GalaxiesSlugRouteImport.update({
+  id: '/galaxies/$slug',
+  path: '/galaxies/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
-  id: '/api/admin/logout',
-  path: '/api/admin/logout',
+const LabelSlugRoute = LabelSlugRouteImport.update({
+  id: '/label/$slug',
+  path: '/label/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAdminChatRoute = ApiAdminChatRouteImport.update({
-  id: '/api/admin/chat',
-  path: '/api/admin/chat',
+const LabelsIndexRoute = LabelsIndexRouteImport.update({
+  id: '/labels/',
+  path: '/labels/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogIndexRoute = LogIndexRouteImport.update({
+  id: '/log/',
+  path: '/log/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogLogIdRoute = LogLogIdRouteImport.update({
+  id: '/log/$logId',
+  path: '/log/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogbookIndexRoute = LogbookIndexRouteImport.update({
+  id: '/logbook/',
+  path: '/logbook/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LogbookSectorRoute = LogbookSectorRouteImport.update({
+  id: '/logbook/$sector',
+  path: '/logbook/$sector',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MixtapesIndexRoute = MixtapesIndexRouteImport.update({
+  id: '/mixtapes/',
+  path: '/mixtapes/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NewsletterIndexRoute = NewsletterIndexRouteImport.update({
+  id: '/newsletter/',
+  path: '/newsletter/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NewsletterNumberRoute = NewsletterNumberRouteImport.update({
+  id: '/newsletter/$number',
+  path: '/newsletter/$number',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapShardRoute = SitemapShardRouteImport.update({
+  id: '/sitemap/$shard',
+  path: '/sitemap/$shard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StoriesIndexRoute = StoriesIndexRouteImport.update({
+  id: '/stories/',
+  path: '/stories/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StoriesLogIdRoute = StoriesLogIdRouteImport.update({
+  id: '/stories/$logId',
+  path: '/stories/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminStudioRecordingIdRoute = AdminStudioRecordingIdRouteImport.update({
@@ -599,34 +530,79 @@ const AdminStudioRecordingIdRoute = AdminStudioRecordingIdRouteImport.update({
   path: '/studio/$recordingId',
   getParentRoute: () => AdminRouteRoute,
 } as any)
-const ApiV1PreviewIdOrLogIdRoute = ApiV1PreviewIdOrLogIdRouteImport.update({
-  id: '/api/v1/preview/$idOrLogId',
-  path: '/api/v1/preview/$idOrLogId',
+const ApiAdminChatRoute = ApiAdminChatRouteImport.update({
+  id: '/api/admin/chat',
+  path: '/api/admin/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1OgLogIdRoute = ApiV1OgLogIdRouteImport.update({
-  id: '/api/v1/og/$logId',
-  path: '/api/v1/og/$logId',
+const ApiAdminLogoutRoute = ApiAdminLogoutRouteImport.update({
+  id: '/api/admin/logout',
+  path: '/api/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1MixtapeCoverLogIdRoute = ApiV1MixtapeCoverLogIdRouteImport.update({
-  id: '/api/v1/mixtape-cover/$logId',
-  path: '/api/v1/mixtape-cover/$logId',
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1MeAvatarRoute = ApiV1MeAvatarRouteImport.update({
-  id: '/api/v1/me/avatar',
-  path: '/api/v1/me/avatar',
+const ApiMeAvatarRoute = ApiMeAvatarRouteImport.update({
+  id: '/api/me/avatar',
+  path: '/api/me/avatar',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1AdminLogoutRoute = ApiV1AdminLogoutRouteImport.update({
-  id: '/api/v1/admin/logout',
-  path: '/api/v1/admin/logout',
+const ApiMixtapeCoverLogIdRoute = ApiMixtapeCoverLogIdRouteImport.update({
+  id: '/api/mixtape-cover/$logId',
+  path: '/api/mixtape-cover/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1AdminChatRoute = ApiV1AdminChatRouteImport.update({
-  id: '/api/v1/admin/chat',
-  path: '/api/v1/admin/chat',
+const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
+  id: '/api/og/$logId',
+  path: '/api/og/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOgSetRoute = ApiOgSetRouteImport.update({
+  id: '/api/og/set',
+  path: '/api/og/set',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPreviewIdOrLogIdRoute = ApiPreviewIdOrLogIdRouteImport.update({
+  id: '/api/preview/$idOrLogId',
+  path: '/api/preview/$idOrLogId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1ChatRoute = ApiV1ChatRouteImport.update({
+  id: '/api/v1/chat',
+  path: '/api/v1/chat',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1OpenapiDotjsonRoute = ApiV1OpenapiDotjsonRouteImport.update({
+  id: '/api/v1/openapi.json',
+  path: '/api/v1/openapi.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1PostmanDotjsonRoute = ApiV1PostmanDotjsonRouteImport.update({
+  id: '/api/v1/postman.json',
+  path: '/api/v1/postman.json',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1StatusRoute = ApiV1StatusRouteImport.update({
+  id: '/api/v1/status',
+  path: '/api/v1/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ArtistSlugFreshDotxmlRoute = ArtistSlugFreshDotxmlRouteImport.update({
+  id: '/fresh.xml',
+  path: '/fresh.xml',
+  getParentRoute: () => ArtistSlugRoute,
+} as any)
+const LabelSlugFreshDotxmlRoute = LabelSlugFreshDotxmlRouteImport.update({
+  id: '/fresh.xml',
+  path: '/fresh.xml',
+  getParentRoute: () => LabelSlugRoute,
+} as any)
+const OutSpotifyTrackIdRoute = OutSpotifyTrackIdRouteImport.update({
+  id: '/out/spotify/$trackId',
+  path: '/out/spotify/$trackId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAdminOauthHandoffRoute = ApiAdminOauthHandoffRouteImport.update({
@@ -634,97 +610,40 @@ const ApiAdminOauthHandoffRoute = ApiAdminOauthHandoffRouteImport.update({
   path: '/api/admin/oauth/handoff',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1AdminOauthHandoffRoute = ApiV1AdminOauthHandoffRouteImport.update({
-  id: '/api/v1/admin/oauth/handoff',
-  path: '/api/v1/admin/oauth/handoff',
+const ApiV1AdminChatRoute = ApiV1AdminChatRouteImport.update({
+  id: '/api/v1/admin/chat',
+  path: '/api/v1/admin/chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAdminYoutubeAuthStartRoute =
-  ApiAdminYoutubeAuthStartRouteImport.update({
-    id: '/api/admin/youtube/auth/start',
-    path: '/api/admin/youtube/auth/start',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminYoutubeAuthCallbackRoute =
-  ApiAdminYoutubeAuthCallbackRouteImport.update({
-    id: '/api/admin/youtube/auth/callback',
-    path: '/api/admin/youtube/auth/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminTwitchAuthStartRoute = ApiAdminTwitchAuthStartRouteImport.update({
-  id: '/api/admin/twitch/auth/start',
-  path: '/api/admin/twitch/auth/start',
+const ApiV1AdminLogoutRoute = ApiV1AdminLogoutRouteImport.update({
+  id: '/api/v1/admin/logout',
+  path: '/api/v1/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAdminTwitchAuthCallbackRoute =
-  ApiAdminTwitchAuthCallbackRouteImport.update({
-    id: '/api/admin/twitch/auth/callback',
-    path: '/api/admin/twitch/auth/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminTracksTrackIdSourceAudioRoute =
-  ApiAdminTracksTrackIdSourceAudioRouteImport.update({
-    id: '/api/admin/tracks/$trackId/source-audio',
-    path: '/api/admin/tracks/$trackId/source-audio',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminTracksTrackIdSilentClipRoute =
-  ApiAdminTracksTrackIdSilentClipRouteImport.update({
-    id: '/api/admin/tracks/$trackId/silent-clip',
-    path: '/api/admin/tracks/$trackId/silent-clip',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminTracksTrackIdPreviewAudioRoute =
-  ApiAdminTracksTrackIdPreviewAudioRouteImport.update({
-    id: '/api/admin/tracks/$trackId/preview-audio',
-    path: '/api/admin/tracks/$trackId/preview-audio',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminTracksTrackIdPreviewRoute =
-  ApiAdminTracksTrackIdPreviewRouteImport.update({
-    id: '/api/admin/tracks/$trackId/preview',
-    path: '/api/admin/tracks/$trackId/preview',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminTiktokAuthStartRoute = ApiAdminTiktokAuthStartRouteImport.update({
-  id: '/api/admin/tiktok/auth/start',
-  path: '/api/admin/tiktok/auth/start',
+const ApiV1MeAvatarRoute = ApiV1MeAvatarRouteImport.update({
+  id: '/api/v1/me/avatar',
+  path: '/api/v1/me/avatar',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAdminTiktokAuthCallbackRoute =
-  ApiAdminTiktokAuthCallbackRouteImport.update({
-    id: '/api/admin/tiktok/auth/callback',
-    path: '/api/admin/tiktok/auth/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminSpotifyAuthStartRoute =
-  ApiAdminSpotifyAuthStartRouteImport.update({
-    id: '/api/admin/spotify/auth/start',
-    path: '/api/admin/spotify/auth/start',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminSpotifyAuthLoginRoute =
-  ApiAdminSpotifyAuthLoginRouteImport.update({
-    id: '/api/admin/spotify/auth/login',
-    path: '/api/admin/spotify/auth/login',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminSpotifyAuthCallbackRoute =
-  ApiAdminSpotifyAuthCallbackRouteImport.update({
-    id: '/api/admin/spotify/auth/callback',
-    path: '/api/admin/spotify/auth/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminMixcloudAuthStartRoute =
-  ApiAdminMixcloudAuthStartRouteImport.update({
-    id: '/api/admin/mixcloud/auth/start',
-    path: '/api/admin/mixcloud/auth/start',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiAdminMixcloudAuthCallbackRoute =
-  ApiAdminMixcloudAuthCallbackRouteImport.update({
-    id: '/api/admin/mixcloud/auth/callback',
-    path: '/api/admin/mixcloud/auth/callback',
+const ApiV1MixtapeCoverLogIdRoute = ApiV1MixtapeCoverLogIdRouteImport.update({
+  id: '/api/v1/mixtape-cover/$logId',
+  path: '/api/v1/mixtape-cover/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1OgLogIdRoute = ApiV1OgLogIdRouteImport.update({
+  id: '/api/v1/og/$logId',
+  path: '/api/v1/og/$logId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1PreviewIdOrLogIdRoute = ApiV1PreviewIdOrLogIdRouteImport.update({
+  id: '/api/v1/preview/$idOrLogId',
+  path: '/api/v1/preview/$idOrLogId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminInstagramAuthCallbackRoute =
+  ApiAdminInstagramAuthCallbackRouteImport.update({
+    id: '/api/admin/instagram/auth/callback',
+    path: '/api/admin/instagram/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiAdminInstagramAuthStartRoute =
@@ -733,100 +652,103 @@ const ApiAdminInstagramAuthStartRoute =
     path: '/api/admin/instagram/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiAdminInstagramAuthCallbackRoute =
-  ApiAdminInstagramAuthCallbackRouteImport.update({
-    id: '/api/admin/instagram/auth/callback',
-    path: '/api/admin/instagram/auth/callback',
+const ApiAdminMixcloudAuthCallbackRoute =
+  ApiAdminMixcloudAuthCallbackRouteImport.update({
+    id: '/api/admin/mixcloud/auth/callback',
+    path: '/api/admin/mixcloud/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminYoutubeAuthStartRoute =
-  ApiV1AdminYoutubeAuthStartRouteImport.update({
-    id: '/api/v1/admin/youtube/auth/start',
-    path: '/api/v1/admin/youtube/auth/start',
+const ApiAdminMixcloudAuthStartRoute =
+  ApiAdminMixcloudAuthStartRouteImport.update({
+    id: '/api/admin/mixcloud/auth/start',
+    path: '/api/admin/mixcloud/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminYoutubeAuthCallbackRoute =
-  ApiV1AdminYoutubeAuthCallbackRouteImport.update({
-    id: '/api/v1/admin/youtube/auth/callback',
-    path: '/api/v1/admin/youtube/auth/callback',
+const ApiAdminSpotifyAuthCallbackRoute =
+  ApiAdminSpotifyAuthCallbackRouteImport.update({
+    id: '/api/admin/spotify/auth/callback',
+    path: '/api/admin/spotify/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTwitchAuthStartRoute =
-  ApiV1AdminTwitchAuthStartRouteImport.update({
-    id: '/api/v1/admin/twitch/auth/start',
-    path: '/api/v1/admin/twitch/auth/start',
+const ApiAdminSpotifyAuthLoginRoute =
+  ApiAdminSpotifyAuthLoginRouteImport.update({
+    id: '/api/admin/spotify/auth/login',
+    path: '/api/admin/spotify/auth/login',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTwitchAuthCallbackRoute =
-  ApiV1AdminTwitchAuthCallbackRouteImport.update({
-    id: '/api/v1/admin/twitch/auth/callback',
-    path: '/api/v1/admin/twitch/auth/callback',
+const ApiAdminSpotifyAuthStartRoute =
+  ApiAdminSpotifyAuthStartRouteImport.update({
+    id: '/api/admin/spotify/auth/start',
+    path: '/api/admin/spotify/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTracksTrackIdSourceAudioRoute =
-  ApiV1AdminTracksTrackIdSourceAudioRouteImport.update({
-    id: '/api/v1/admin/tracks/$trackId/source-audio',
-    path: '/api/v1/admin/tracks/$trackId/source-audio',
+const ApiAdminTiktokAuthCallbackRoute =
+  ApiAdminTiktokAuthCallbackRouteImport.update({
+    id: '/api/admin/tiktok/auth/callback',
+    path: '/api/admin/tiktok/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTracksTrackIdSilentClipRoute =
-  ApiV1AdminTracksTrackIdSilentClipRouteImport.update({
-    id: '/api/v1/admin/tracks/$trackId/silent-clip',
-    path: '/api/v1/admin/tracks/$trackId/silent-clip',
+const ApiAdminTiktokAuthStartRoute = ApiAdminTiktokAuthStartRouteImport.update({
+  id: '/api/admin/tiktok/auth/start',
+  path: '/api/admin/tiktok/auth/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminTracksTrackIdPreviewRoute =
+  ApiAdminTracksTrackIdPreviewRouteImport.update({
+    id: '/api/admin/tracks/$trackId/preview',
+    path: '/api/admin/tracks/$trackId/preview',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTracksTrackIdPreviewAudioRoute =
-  ApiV1AdminTracksTrackIdPreviewAudioRouteImport.update({
-    id: '/api/v1/admin/tracks/$trackId/preview-audio',
-    path: '/api/v1/admin/tracks/$trackId/preview-audio',
+const ApiAdminTracksTrackIdPreviewAudioRoute =
+  ApiAdminTracksTrackIdPreviewAudioRouteImport.update({
+    id: '/api/admin/tracks/$trackId/preview-audio',
+    path: '/api/admin/tracks/$trackId/preview-audio',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTracksTrackIdPreviewRoute =
-  ApiV1AdminTracksTrackIdPreviewRouteImport.update({
-    id: '/api/v1/admin/tracks/$trackId/preview',
-    path: '/api/v1/admin/tracks/$trackId/preview',
+const ApiAdminTracksTrackIdSilentClipRoute =
+  ApiAdminTracksTrackIdSilentClipRouteImport.update({
+    id: '/api/admin/tracks/$trackId/silent-clip',
+    path: '/api/admin/tracks/$trackId/silent-clip',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTiktokAuthStartRoute =
-  ApiV1AdminTiktokAuthStartRouteImport.update({
-    id: '/api/v1/admin/tiktok/auth/start',
-    path: '/api/v1/admin/tiktok/auth/start',
+const ApiAdminTracksTrackIdSourceAudioRoute =
+  ApiAdminTracksTrackIdSourceAudioRouteImport.update({
+    id: '/api/admin/tracks/$trackId/source-audio',
+    path: '/api/admin/tracks/$trackId/source-audio',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminTiktokAuthCallbackRoute =
-  ApiV1AdminTiktokAuthCallbackRouteImport.update({
-    id: '/api/v1/admin/tiktok/auth/callback',
-    path: '/api/v1/admin/tiktok/auth/callback',
+const ApiAdminTwitchAuthCallbackRoute =
+  ApiAdminTwitchAuthCallbackRouteImport.update({
+    id: '/api/admin/twitch/auth/callback',
+    path: '/api/admin/twitch/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminSpotifyAuthStartRoute =
-  ApiV1AdminSpotifyAuthStartRouteImport.update({
-    id: '/api/v1/admin/spotify/auth/start',
-    path: '/api/v1/admin/spotify/auth/start',
+const ApiAdminTwitchAuthStartRoute = ApiAdminTwitchAuthStartRouteImport.update({
+  id: '/api/admin/twitch/auth/start',
+  path: '/api/admin/twitch/auth/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminYoutubeAuthCallbackRoute =
+  ApiAdminYoutubeAuthCallbackRouteImport.update({
+    id: '/api/admin/youtube/auth/callback',
+    path: '/api/admin/youtube/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminSpotifyAuthLoginRoute =
-  ApiV1AdminSpotifyAuthLoginRouteImport.update({
-    id: '/api/v1/admin/spotify/auth/login',
-    path: '/api/v1/admin/spotify/auth/login',
+const ApiAdminYoutubeAuthStartRoute =
+  ApiAdminYoutubeAuthStartRouteImport.update({
+    id: '/api/admin/youtube/auth/start',
+    path: '/api/admin/youtube/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminSpotifyAuthCallbackRoute =
-  ApiV1AdminSpotifyAuthCallbackRouteImport.update({
-    id: '/api/v1/admin/spotify/auth/callback',
-    path: '/api/v1/admin/spotify/auth/callback',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiV1AdminMixcloudAuthStartRoute =
-  ApiV1AdminMixcloudAuthStartRouteImport.update({
-    id: '/api/v1/admin/mixcloud/auth/start',
-    path: '/api/v1/admin/mixcloud/auth/start',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiV1AdminMixcloudAuthCallbackRoute =
-  ApiV1AdminMixcloudAuthCallbackRouteImport.update({
-    id: '/api/v1/admin/mixcloud/auth/callback',
-    path: '/api/v1/admin/mixcloud/auth/callback',
+const ApiV1AdminOauthHandoffRoute = ApiV1AdminOauthHandoffRouteImport.update({
+  id: '/api/v1/admin/oauth/handoff',
+  path: '/api/v1/admin/oauth/handoff',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1AdminInstagramAuthCallbackRoute =
+  ApiV1AdminInstagramAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/instagram/auth/callback',
+    path: '/api/v1/admin/instagram/auth/callback',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiV1AdminInstagramAuthStartRoute =
@@ -835,10 +757,94 @@ const ApiV1AdminInstagramAuthStartRoute =
     path: '/api/v1/admin/instagram/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiV1AdminInstagramAuthCallbackRoute =
-  ApiV1AdminInstagramAuthCallbackRouteImport.update({
-    id: '/api/v1/admin/instagram/auth/callback',
-    path: '/api/v1/admin/instagram/auth/callback',
+const ApiV1AdminMixcloudAuthCallbackRoute =
+  ApiV1AdminMixcloudAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/mixcloud/auth/callback',
+    path: '/api/v1/admin/mixcloud/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminMixcloudAuthStartRoute =
+  ApiV1AdminMixcloudAuthStartRouteImport.update({
+    id: '/api/v1/admin/mixcloud/auth/start',
+    path: '/api/v1/admin/mixcloud/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminSpotifyAuthCallbackRoute =
+  ApiV1AdminSpotifyAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/spotify/auth/callback',
+    path: '/api/v1/admin/spotify/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminSpotifyAuthLoginRoute =
+  ApiV1AdminSpotifyAuthLoginRouteImport.update({
+    id: '/api/v1/admin/spotify/auth/login',
+    path: '/api/v1/admin/spotify/auth/login',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminSpotifyAuthStartRoute =
+  ApiV1AdminSpotifyAuthStartRouteImport.update({
+    id: '/api/v1/admin/spotify/auth/start',
+    path: '/api/v1/admin/spotify/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTiktokAuthCallbackRoute =
+  ApiV1AdminTiktokAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/tiktok/auth/callback',
+    path: '/api/v1/admin/tiktok/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTiktokAuthStartRoute =
+  ApiV1AdminTiktokAuthStartRouteImport.update({
+    id: '/api/v1/admin/tiktok/auth/start',
+    path: '/api/v1/admin/tiktok/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTracksTrackIdPreviewRoute =
+  ApiV1AdminTracksTrackIdPreviewRouteImport.update({
+    id: '/api/v1/admin/tracks/$trackId/preview',
+    path: '/api/v1/admin/tracks/$trackId/preview',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTracksTrackIdPreviewAudioRoute =
+  ApiV1AdminTracksTrackIdPreviewAudioRouteImport.update({
+    id: '/api/v1/admin/tracks/$trackId/preview-audio',
+    path: '/api/v1/admin/tracks/$trackId/preview-audio',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTracksTrackIdSilentClipRoute =
+  ApiV1AdminTracksTrackIdSilentClipRouteImport.update({
+    id: '/api/v1/admin/tracks/$trackId/silent-clip',
+    path: '/api/v1/admin/tracks/$trackId/silent-clip',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTracksTrackIdSourceAudioRoute =
+  ApiV1AdminTracksTrackIdSourceAudioRouteImport.update({
+    id: '/api/v1/admin/tracks/$trackId/source-audio',
+    path: '/api/v1/admin/tracks/$trackId/source-audio',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTwitchAuthCallbackRoute =
+  ApiV1AdminTwitchAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/twitch/auth/callback',
+    path: '/api/v1/admin/twitch/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminTwitchAuthStartRoute =
+  ApiV1AdminTwitchAuthStartRouteImport.update({
+    id: '/api/v1/admin/twitch/auth/start',
+    path: '/api/v1/admin/twitch/auth/start',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminYoutubeAuthCallbackRoute =
+  ApiV1AdminYoutubeAuthCallbackRouteImport.update({
+    id: '/api/v1/admin/youtube/auth/callback',
+    path: '/api/v1/admin/youtube/auth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiV1AdminYoutubeAuthStartRoute =
+  ApiV1AdminYoutubeAuthStartRouteImport.update({
+    id: '/api/v1/admin/youtube/auth/start',
+    path: '/api/v1/admin/youtube/auth/start',
     getParentRoute: () => rootRouteImport,
   } as any)
 
@@ -934,6 +940,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/status': typeof ApiV1StatusRoute
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
+  '/out/spotify/$trackId': typeof OutSpotifyTrackIdRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
@@ -1067,6 +1074,7 @@ export interface FileRoutesByTo {
   '/api/v1/status': typeof ApiV1StatusRoute
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
+  '/out/spotify/$trackId': typeof OutSpotifyTrackIdRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
@@ -1203,6 +1211,7 @@ export interface FileRoutesById {
   '/api/v1/status': typeof ApiV1StatusRoute
   '/artist/$slug/fresh.xml': typeof ArtistSlugFreshDotxmlRoute
   '/label/$slug/fresh.xml': typeof LabelSlugFreshDotxmlRoute
+  '/out/spotify/$trackId': typeof OutSpotifyTrackIdRoute
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
@@ -1340,6 +1349,7 @@ export interface FileRouteTypes {
     | '/api/v1/status'
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
+    | '/out/spotify/$trackId'
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
@@ -1473,6 +1483,7 @@ export interface FileRouteTypes {
     | '/api/v1/status'
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
+    | '/out/spotify/$trackId'
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
@@ -1608,6 +1619,7 @@ export interface FileRouteTypes {
     | '/api/v1/status'
     | '/artist/$slug/fresh.xml'
     | '/label/$slug/fresh.xml'
+    | '/out/spotify/$trackId'
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
@@ -1717,6 +1729,7 @@ export interface RootRouteChildren {
   ApiV1OpenapiDotjsonRoute: typeof ApiV1OpenapiDotjsonRoute
   ApiV1PostmanDotjsonRoute: typeof ApiV1PostmanDotjsonRoute
   ApiV1StatusRoute: typeof ApiV1StatusRoute
+  OutSpotifyTrackIdRoute: typeof OutSpotifyTrackIdRoute
   ApiAdminOauthHandoffRoute: typeof ApiAdminOauthHandoffRoute
   ApiV1AdminChatRoute: typeof ApiV1AdminChatRoute
   ApiV1AdminLogoutRoute: typeof ApiV1AdminLogoutRoute
@@ -1763,193 +1776,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/tracks': {
-      id: '/tracks'
-      path: '/tracks'
-      fullPath: '/tracks'
-      preLoaderRoute: typeof TracksRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/terms': {
-      id: '/terms'
-      path: '/terms'
-      fullPath: '/terms'
-      preLoaderRoute: typeof TermsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/status': {
-      id: '/status'
-      path: '/status'
-      fullPath: '/status'
-      preLoaderRoute: typeof StatusRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sitemap.xml': {
-      id: '/sitemap.xml'
-      path: '/sitemap.xml'
-      fullPath: '/sitemap.xml'
-      preLoaderRoute: typeof SitemapDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/rss.xml': {
-      id: '/rss.xml'
-      path: '/rss.xml'
-      fullPath: '/rss.xml'
-      preLoaderRoute: typeof RssDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/recommendations': {
-      id: '/recommendations'
-      path: '/recommendations'
-      fullPath: '/recommendations'
-      preLoaderRoute: typeof RecommendationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reach': {
-      id: '/reach'
-      path: '/reach'
-      fullPath: '/reach'
-      preLoaderRoute: typeof ReachRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/radio': {
-      id: '/radio'
-      path: '/radio'
-      fullPath: '/radio'
-      preLoaderRoute: typeof RadioRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/privacy': {
-      id: '/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof PrivacyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/podcast.xml': {
-      id: '/podcast.xml'
-      path: '/podcast.xml'
-      fullPath: '/podcast.xml'
-      preLoaderRoute: typeof PodcastDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/pipeline': {
-      id: '/pipeline'
-      path: '/pipeline'
-      fullPath: '/pipeline'
-      preLoaderRoute: typeof PipelineRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/oembed': {
-      id: '/oembed'
-      path: '/oembed'
-      fullPath: '/oembed'
-      preLoaderRoute: typeof OembedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/mix': {
-      id: '/mix'
-      path: '/mix'
-      fullPath: '/mix'
-      preLoaderRoute: typeof MixRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/galaxy': {
-      id: '/galaxy'
-      path: '/galaxy'
-      fullPath: '/galaxy'
-      preLoaderRoute: typeof GalaxyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/fresh.xml': {
-      id: '/fresh.xml'
-      path: '/fresh.xml'
-      fullPath: '/fresh.xml'
-      preLoaderRoute: typeof FreshDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/fresh.json': {
-      id: '/fresh.json'
-      path: '/fresh.json'
-      fullPath: '/fresh.json'
-      preLoaderRoute: typeof FreshDotjsonRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/fresh': {
-      id: '/fresh'
-      path: '/fresh'
-      fullPath: '/fresh'
-      preLoaderRoute: typeof FreshRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/feed.json': {
-      id: '/feed.json'
-      path: '/feed.json'
-      fullPath: '/feed.json'
-      preLoaderRoute: typeof FeedDotjsonRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/docs': {
-      id: '/docs'
-      path: '/docs'
-      fullPath: '/docs'
-      preLoaderRoute: typeof DocsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/device': {
-      id: '/device'
-      path: '/device'
-      fullPath: '/device'
-      preLoaderRoute: typeof DeviceRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/chat': {
-      id: '/chat'
-      path: '/chat'
-      fullPath: '/chat'
-      preLoaderRoute: typeof ChatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/calendar.ics': {
-      id: '/calendar.ics'
-      path: '/calendar.ics'
-      fullPath: '/calendar.ics'
-      preLoaderRoute: typeof CalendarDoticsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/atom.xml': {
-      id: '/atom.xml'
-      path: '/atom.xml'
-      fullPath: '/atom.xml'
-      preLoaderRoute: typeof AtomDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/account': {
-      id: '/account'
-      path: '/account'
-      fullPath: '/account'
-      preLoaderRoute: typeof AccountRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/about': {
-      id: '/about'
-      path: '/about'
-      fullPath: '/about'
-      preLoaderRoute: typeof AboutRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/8337c1b41068549f248bf56f1fc465df.txt': {
-      id: '/8337c1b41068549f248bf56f1fc465df.txt'
-      path: '/8337c1b41068549f248bf56f1fc465df.txt'
-      fullPath: '/8337c1b41068549f248bf56f1fc465df.txt'
-      preLoaderRoute: typeof R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$coordinate': {
@@ -1959,6 +1790,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CoordinateRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/8337c1b41068549f248bf56f1fc465df.txt': {
+      id: '/8337c1b41068549f248bf56f1fc465df.txt'
+      path: '/8337c1b41068549f248bf56f1fc465df.txt'
+      fullPath: '/8337c1b41068549f248bf56f1fc465df.txt'
+      preLoaderRoute: typeof R8337c1b41068549f248bf56f1fc465dfDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account': {
+      id: '/account'
+      path: '/account'
+      fullPath: '/account'
+      preLoaderRoute: typeof AccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin': {
       id: '/admin'
       path: '/admin'
@@ -1966,81 +1818,172 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/atom.xml': {
+      id: '/atom.xml'
+      path: '/atom.xml'
+      fullPath: '/atom.xml'
+      preLoaderRoute: typeof AtomDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/stories/': {
-      id: '/stories/'
-      path: '/stories'
-      fullPath: '/stories/'
-      preLoaderRoute: typeof StoriesIndexRouteImport
+    '/calendar.ics': {
+      id: '/calendar.ics'
+      path: '/calendar.ics'
+      fullPath: '/calendar.ics'
+      preLoaderRoute: typeof CalendarDoticsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/newsletter/': {
-      id: '/newsletter/'
-      path: '/newsletter'
-      fullPath: '/newsletter/'
-      preLoaderRoute: typeof NewsletterIndexRouteImport
+    '/chat': {
+      id: '/chat'
+      path: '/chat'
+      fullPath: '/chat'
+      preLoaderRoute: typeof ChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/mixtapes/': {
-      id: '/mixtapes/'
-      path: '/mixtapes'
-      fullPath: '/mixtapes/'
-      preLoaderRoute: typeof MixtapesIndexRouteImport
+    '/device': {
+      id: '/device'
+      path: '/device'
+      fullPath: '/device'
+      preLoaderRoute: typeof DeviceRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/logbook/': {
-      id: '/logbook/'
-      path: '/logbook'
-      fullPath: '/logbook/'
-      preLoaderRoute: typeof LogbookIndexRouteImport
+    '/docs': {
+      id: '/docs'
+      path: '/docs'
+      fullPath: '/docs'
+      preLoaderRoute: typeof DocsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/log/': {
-      id: '/log/'
-      path: '/log'
-      fullPath: '/log/'
-      preLoaderRoute: typeof LogIndexRouteImport
+    '/feed.json': {
+      id: '/feed.json'
+      path: '/feed.json'
+      fullPath: '/feed.json'
+      preLoaderRoute: typeof FeedDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/labels/': {
-      id: '/labels/'
-      path: '/labels'
-      fullPath: '/labels/'
-      preLoaderRoute: typeof LabelsIndexRouteImport
+    '/fresh': {
+      id: '/fresh'
+      path: '/fresh'
+      fullPath: '/fresh'
+      preLoaderRoute: typeof FreshRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/galaxies/': {
-      id: '/galaxies/'
-      path: '/galaxies'
-      fullPath: '/galaxies/'
-      preLoaderRoute: typeof GalaxiesIndexRouteImport
+    '/fresh.json': {
+      id: '/fresh.json'
+      path: '/fresh.json'
+      fullPath: '/fresh.json'
+      preLoaderRoute: typeof FreshDotjsonRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/docs/': {
-      id: '/docs/'
-      path: '/'
-      fullPath: '/docs/'
-      preLoaderRoute: typeof DocsIndexRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/artists/': {
-      id: '/artists/'
-      path: '/artists'
-      fullPath: '/artists/'
-      preLoaderRoute: typeof ArtistsIndexRouteImport
+    '/fresh.xml': {
+      id: '/fresh.xml'
+      path: '/fresh.xml'
+      fullPath: '/fresh.xml'
+      preLoaderRoute: typeof FreshDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/albums/': {
-      id: '/albums/'
-      path: '/albums'
-      fullPath: '/albums/'
-      preLoaderRoute: typeof AlbumsIndexRouteImport
+    '/galaxy': {
+      id: '/galaxy'
+      path: '/galaxy'
+      fullPath: '/galaxy'
+      preLoaderRoute: typeof GalaxyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mix': {
+      id: '/mix'
+      path: '/mix'
+      fullPath: '/mix'
+      preLoaderRoute: typeof MixRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oembed': {
+      id: '/oembed'
+      path: '/oembed'
+      fullPath: '/oembed'
+      preLoaderRoute: typeof OembedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/pipeline': {
+      id: '/pipeline'
+      path: '/pipeline'
+      fullPath: '/pipeline'
+      preLoaderRoute: typeof PipelineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/podcast.xml': {
+      id: '/podcast.xml'
+      path: '/podcast.xml'
+      fullPath: '/podcast.xml'
+      preLoaderRoute: typeof PodcastDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/radio': {
+      id: '/radio'
+      path: '/radio'
+      fullPath: '/radio'
+      preLoaderRoute: typeof RadioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reach': {
+      id: '/reach'
+      path: '/reach'
+      fullPath: '/reach'
+      preLoaderRoute: typeof ReachRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/recommendations': {
+      id: '/recommendations'
+      path: '/recommendations'
+      fullPath: '/recommendations'
+      preLoaderRoute: typeof RecommendationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rss.xml': {
+      id: '/rss.xml'
+      path: '/rss.xml'
+      fullPath: '/rss.xml'
+      preLoaderRoute: typeof RssDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tracks': {
+      id: '/tracks'
+      path: '/tracks'
+      fullPath: '/tracks'
+      preLoaderRoute: typeof TracksRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/': {
@@ -2050,235 +1993,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/stories/$logId': {
-      id: '/stories/$logId'
-      path: '/stories/$logId'
-      fullPath: '/stories/$logId'
-      preLoaderRoute: typeof StoriesLogIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sitemap/$shard': {
-      id: '/sitemap/$shard'
-      path: '/sitemap/$shard'
-      fullPath: '/sitemap/$shard'
-      preLoaderRoute: typeof SitemapShardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/newsletter/$number': {
-      id: '/newsletter/$number'
-      path: '/newsletter/$number'
-      fullPath: '/newsletter/$number'
-      preLoaderRoute: typeof NewsletterNumberRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/logbook/$sector': {
-      id: '/logbook/$sector'
-      path: '/logbook/$sector'
-      fullPath: '/logbook/$sector'
-      preLoaderRoute: typeof LogbookSectorRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/log/$logId': {
-      id: '/log/$logId'
-      path: '/log/$logId'
-      fullPath: '/log/$logId'
-      preLoaderRoute: typeof LogLogIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/label/$slug': {
-      id: '/label/$slug'
-      path: '/label/$slug'
-      fullPath: '/label/$slug'
-      preLoaderRoute: typeof LabelSlugRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/galaxies/$slug': {
-      id: '/galaxies/$slug'
-      path: '/galaxies/$slug'
-      fullPath: '/galaxies/$slug'
-      preLoaderRoute: typeof GalaxiesSlugRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/embed/$logId': {
-      id: '/embed/$logId'
-      path: '/embed/$logId'
-      fullPath: '/embed/$logId'
-      preLoaderRoute: typeof EmbedLogIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/docs/api': {
-      id: '/docs/api'
-      path: '/api'
-      fullPath: '/docs/api'
-      preLoaderRoute: typeof DocsApiRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/docs/$': {
-      id: '/docs/$'
-      path: '/$'
-      fullPath: '/docs/$'
-      preLoaderRoute: typeof DocsSplatRouteImport
-      parentRoute: typeof DocsRoute
-    }
-    '/docs.md/$': {
-      id: '/docs.md/$'
-      path: '/docs.md/$'
-      fullPath: '/docs.md/$'
-      preLoaderRoute: typeof DocsDotmdSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/cli/latest.sh': {
-      id: '/cli/latest.sh'
-      path: '/cli/latest.sh'
-      fullPath: '/cli/latest.sh'
-      preLoaderRoute: typeof CliLatestDotshRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/artist/$slug': {
-      id: '/artist/$slug'
-      path: '/artist/$slug'
-      fullPath: '/artist/$slug'
-      preLoaderRoute: typeof ArtistSlugRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/chat': {
-      id: '/api/chat'
-      path: '/api/chat'
-      fullPath: '/api/chat'
-      preLoaderRoute: typeof ApiChatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/album/$slug': {
-      id: '/album/$slug'
-      path: '/album/$slug'
-      fullPath: '/album/$slug'
-      preLoaderRoute: typeof AlbumSlugRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/users': {
-      id: '/admin/users'
-      path: '/users'
-      fullPath: '/admin/users'
-      preLoaderRoute: typeof AdminUsersRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/usage': {
-      id: '/admin/usage'
-      path: '/usage'
-      fullPath: '/admin/usage'
-      preLoaderRoute: typeof AdminUsageRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/renders': {
-      id: '/admin/renders'
-      path: '/renders'
-      fullPath: '/admin/renders'
-      preLoaderRoute: typeof AdminRendersRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/recordings': {
-      id: '/admin/recordings'
-      path: '/recordings'
-      fullPath: '/admin/recordings'
-      preLoaderRoute: typeof AdminRecordingsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/reach': {
-      id: '/admin/reach'
-      path: '/reach'
-      fullPath: '/admin/reach'
-      preLoaderRoute: typeof AdminReachRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/prompts': {
-      id: '/admin/prompts'
-      path: '/prompts'
-      fullPath: '/admin/prompts'
-      preLoaderRoute: typeof AdminPromptsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/plans': {
-      id: '/admin/plans'
-      path: '/plans'
-      fullPath: '/admin/plans'
-      preLoaderRoute: typeof AdminPlansRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/newsletter': {
-      id: '/admin/newsletter'
-      path: '/newsletter'
-      fullPath: '/admin/newsletter'
-      preLoaderRoute: typeof AdminNewsletterRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/mixtapes': {
-      id: '/admin/mixtapes'
-      path: '/mixtapes'
-      fullPath: '/admin/mixtapes'
-      preLoaderRoute: typeof AdminMixtapesRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/mixable-order': {
-      id: '/admin/mixable-order'
-      path: '/mixable-order'
-      fullPath: '/admin/mixable-order'
-      preLoaderRoute: typeof AdminMixableOrderRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/login': {
-      id: '/admin/login'
-      path: '/login'
-      fullPath: '/admin/login'
-      preLoaderRoute: typeof AdminLoginRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/labels': {
-      id: '/admin/labels'
-      path: '/labels'
-      fullPath: '/admin/labels'
-      preLoaderRoute: typeof AdminLabelsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/galaxies': {
-      id: '/admin/galaxies'
-      path: '/galaxies'
-      fullPath: '/admin/galaxies'
-      preLoaderRoute: typeof AdminGalaxiesRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/funnel': {
-      id: '/admin/funnel'
-      path: '/funnel'
-      fullPath: '/admin/funnel'
-      preLoaderRoute: typeof AdminFunnelRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/findings': {
-      id: '/admin/findings'
-      path: '/findings'
-      fullPath: '/admin/findings'
-      preLoaderRoute: typeof AdminFindingsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/costs': {
-      id: '/admin/costs'
-      path: '/costs'
-      fullPath: '/admin/costs'
-      preLoaderRoute: typeof AdminCostsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/clips': {
-      id: '/admin/clips'
-      path: '/clips'
-      fullPath: '/admin/clips'
-      preLoaderRoute: typeof AdminClipsRouteImport
-      parentRoute: typeof AdminRouteRoute
-    }
-    '/admin/chat': {
-      id: '/admin/chat'
-      path: '/chat'
-      fullPath: '/admin/chat'
-      preLoaderRoute: typeof AdminChatRouteImport
+    '/admin/artists': {
+      id: '/admin/artists'
+      path: '/artists'
+      fullPath: '/admin/artists'
+      preLoaderRoute: typeof AdminArtistsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/catalogue': {
@@ -2288,109 +2007,305 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCatalogueRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/admin/artists': {
-      id: '/admin/artists'
-      path: '/artists'
-      fullPath: '/admin/artists'
-      preLoaderRoute: typeof AdminArtistsRouteImport
+    '/admin/chat': {
+      id: '/admin/chat'
+      path: '/chat'
+      fullPath: '/admin/chat'
+      preLoaderRoute: typeof AdminChatRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/label/$slug/fresh.xml': {
-      id: '/label/$slug/fresh.xml'
-      path: '/fresh.xml'
-      fullPath: '/label/$slug/fresh.xml'
-      preLoaderRoute: typeof LabelSlugFreshDotxmlRouteImport
-      parentRoute: typeof LabelSlugRoute
+    '/admin/clips': {
+      id: '/admin/clips'
+      path: '/clips'
+      fullPath: '/admin/clips'
+      preLoaderRoute: typeof AdminClipsRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
-    '/artist/$slug/fresh.xml': {
-      id: '/artist/$slug/fresh.xml'
-      path: '/fresh.xml'
-      fullPath: '/artist/$slug/fresh.xml'
-      preLoaderRoute: typeof ArtistSlugFreshDotxmlRouteImport
-      parentRoute: typeof ArtistSlugRoute
+    '/admin/costs': {
+      id: '/admin/costs'
+      path: '/costs'
+      fullPath: '/admin/costs'
+      preLoaderRoute: typeof AdminCostsRouteImport
+      parentRoute: typeof AdminRouteRoute
     }
-    '/api/v1/status': {
-      id: '/api/v1/status'
-      path: '/api/v1/status'
-      fullPath: '/api/v1/status'
-      preLoaderRoute: typeof ApiV1StatusRouteImport
+    '/admin/findings': {
+      id: '/admin/findings'
+      path: '/findings'
+      fullPath: '/admin/findings'
+      preLoaderRoute: typeof AdminFindingsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/funnel': {
+      id: '/admin/funnel'
+      path: '/funnel'
+      fullPath: '/admin/funnel'
+      preLoaderRoute: typeof AdminFunnelRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/galaxies': {
+      id: '/admin/galaxies'
+      path: '/galaxies'
+      fullPath: '/admin/galaxies'
+      preLoaderRoute: typeof AdminGalaxiesRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/labels': {
+      id: '/admin/labels'
+      path: '/labels'
+      fullPath: '/admin/labels'
+      preLoaderRoute: typeof AdminLabelsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/login': {
+      id: '/admin/login'
+      path: '/login'
+      fullPath: '/admin/login'
+      preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/mixable-order': {
+      id: '/admin/mixable-order'
+      path: '/mixable-order'
+      fullPath: '/admin/mixable-order'
+      preLoaderRoute: typeof AdminMixableOrderRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/mixtapes': {
+      id: '/admin/mixtapes'
+      path: '/mixtapes'
+      fullPath: '/admin/mixtapes'
+      preLoaderRoute: typeof AdminMixtapesRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/newsletter': {
+      id: '/admin/newsletter'
+      path: '/newsletter'
+      fullPath: '/admin/newsletter'
+      preLoaderRoute: typeof AdminNewsletterRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/plans': {
+      id: '/admin/plans'
+      path: '/plans'
+      fullPath: '/admin/plans'
+      preLoaderRoute: typeof AdminPlansRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/prompts': {
+      id: '/admin/prompts'
+      path: '/prompts'
+      fullPath: '/admin/prompts'
+      preLoaderRoute: typeof AdminPromptsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/reach': {
+      id: '/admin/reach'
+      path: '/reach'
+      fullPath: '/admin/reach'
+      preLoaderRoute: typeof AdminReachRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/recordings': {
+      id: '/admin/recordings'
+      path: '/recordings'
+      fullPath: '/admin/recordings'
+      preLoaderRoute: typeof AdminRecordingsRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/renders': {
+      id: '/admin/renders'
+      path: '/renders'
+      fullPath: '/admin/renders'
+      preLoaderRoute: typeof AdminRendersRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/usage': {
+      id: '/admin/usage'
+      path: '/usage'
+      fullPath: '/admin/usage'
+      preLoaderRoute: typeof AdminUsageRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/users': {
+      id: '/admin/users'
+      path: '/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/album/$slug': {
+      id: '/album/$slug'
+      path: '/album/$slug'
+      fullPath: '/album/$slug'
+      preLoaderRoute: typeof AlbumSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/postman.json': {
-      id: '/api/v1/postman.json'
-      path: '/api/v1/postman.json'
-      fullPath: '/api/v1/postman.json'
-      preLoaderRoute: typeof ApiV1PostmanDotjsonRouteImport
+    '/albums/': {
+      id: '/albums/'
+      path: '/albums'
+      fullPath: '/albums/'
+      preLoaderRoute: typeof AlbumsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/openapi.json': {
-      id: '/api/v1/openapi.json'
-      path: '/api/v1/openapi.json'
-      fullPath: '/api/v1/openapi.json'
-      preLoaderRoute: typeof ApiV1OpenapiDotjsonRouteImport
+    '/api/chat': {
+      id: '/api/chat'
+      path: '/api/chat'
+      fullPath: '/api/chat'
+      preLoaderRoute: typeof ApiChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/chat': {
-      id: '/api/v1/chat'
-      path: '/api/v1/chat'
-      fullPath: '/api/v1/chat'
-      preLoaderRoute: typeof ApiV1ChatRouteImport
+    '/artist/$slug': {
+      id: '/artist/$slug'
+      path: '/artist/$slug'
+      fullPath: '/artist/$slug'
+      preLoaderRoute: typeof ArtistSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/preview/$idOrLogId': {
-      id: '/api/preview/$idOrLogId'
-      path: '/api/preview/$idOrLogId'
-      fullPath: '/api/preview/$idOrLogId'
-      preLoaderRoute: typeof ApiPreviewIdOrLogIdRouteImport
+    '/artists/': {
+      id: '/artists/'
+      path: '/artists'
+      fullPath: '/artists/'
+      preLoaderRoute: typeof ArtistsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/og/set': {
-      id: '/api/og/set'
-      path: '/api/og/set'
-      fullPath: '/api/og/set'
-      preLoaderRoute: typeof ApiOgSetRouteImport
+    '/cli/latest.sh': {
+      id: '/cli/latest.sh'
+      path: '/cli/latest.sh'
+      fullPath: '/cli/latest.sh'
+      preLoaderRoute: typeof CliLatestDotshRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/og/$logId': {
-      id: '/api/og/$logId'
-      path: '/api/og/$logId'
-      fullPath: '/api/og/$logId'
-      preLoaderRoute: typeof ApiOgLogIdRouteImport
+    '/docs.md/$': {
+      id: '/docs.md/$'
+      path: '/docs.md/$'
+      fullPath: '/docs.md/$'
+      preLoaderRoute: typeof DocsDotmdSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/mixtape-cover/$logId': {
-      id: '/api/mixtape-cover/$logId'
-      path: '/api/mixtape-cover/$logId'
-      fullPath: '/api/mixtape-cover/$logId'
-      preLoaderRoute: typeof ApiMixtapeCoverLogIdRouteImport
+    '/docs/': {
+      id: '/docs/'
+      path: '/'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/$': {
+      id: '/docs/$'
+      path: '/$'
+      fullPath: '/docs/$'
+      preLoaderRoute: typeof DocsSplatRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/docs/api': {
+      id: '/docs/api'
+      path: '/api'
+      fullPath: '/docs/api'
+      preLoaderRoute: typeof DocsApiRouteImport
+      parentRoute: typeof DocsRoute
+    }
+    '/embed/$logId': {
+      id: '/embed/$logId'
+      path: '/embed/$logId'
+      fullPath: '/embed/$logId'
+      preLoaderRoute: typeof EmbedLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/me/avatar': {
-      id: '/api/me/avatar'
-      path: '/api/me/avatar'
-      fullPath: '/api/me/avatar'
-      preLoaderRoute: typeof ApiMeAvatarRouteImport
+    '/galaxies/': {
+      id: '/galaxies/'
+      path: '/galaxies'
+      fullPath: '/galaxies/'
+      preLoaderRoute: typeof GalaxiesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/$': {
-      id: '/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/api/auth/$'
-      preLoaderRoute: typeof ApiAuthSplatRouteImport
+    '/galaxies/$slug': {
+      id: '/galaxies/$slug'
+      path: '/galaxies/$slug'
+      fullPath: '/galaxies/$slug'
+      preLoaderRoute: typeof GalaxiesSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/logout': {
-      id: '/api/admin/logout'
-      path: '/api/admin/logout'
-      fullPath: '/api/admin/logout'
-      preLoaderRoute: typeof ApiAdminLogoutRouteImport
+    '/label/$slug': {
+      id: '/label/$slug'
+      path: '/label/$slug'
+      fullPath: '/label/$slug'
+      preLoaderRoute: typeof LabelSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/chat': {
-      id: '/api/admin/chat'
-      path: '/api/admin/chat'
-      fullPath: '/api/admin/chat'
-      preLoaderRoute: typeof ApiAdminChatRouteImport
+    '/labels/': {
+      id: '/labels/'
+      path: '/labels'
+      fullPath: '/labels/'
+      preLoaderRoute: typeof LabelsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/log/': {
+      id: '/log/'
+      path: '/log'
+      fullPath: '/log/'
+      preLoaderRoute: typeof LogIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/log/$logId': {
+      id: '/log/$logId'
+      path: '/log/$logId'
+      fullPath: '/log/$logId'
+      preLoaderRoute: typeof LogLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/logbook/': {
+      id: '/logbook/'
+      path: '/logbook'
+      fullPath: '/logbook/'
+      preLoaderRoute: typeof LogbookIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/logbook/$sector': {
+      id: '/logbook/$sector'
+      path: '/logbook/$sector'
+      fullPath: '/logbook/$sector'
+      preLoaderRoute: typeof LogbookSectorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mixtapes/': {
+      id: '/mixtapes/'
+      path: '/mixtapes'
+      fullPath: '/mixtapes/'
+      preLoaderRoute: typeof MixtapesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/newsletter/': {
+      id: '/newsletter/'
+      path: '/newsletter'
+      fullPath: '/newsletter/'
+      preLoaderRoute: typeof NewsletterIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/newsletter/$number': {
+      id: '/newsletter/$number'
+      path: '/newsletter/$number'
+      fullPath: '/newsletter/$number'
+      preLoaderRoute: typeof NewsletterNumberRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap/$shard': {
+      id: '/sitemap/$shard'
+      path: '/sitemap/$shard'
+      fullPath: '/sitemap/$shard'
+      preLoaderRoute: typeof SitemapShardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stories/': {
+      id: '/stories/'
+      path: '/stories'
+      fullPath: '/stories/'
+      preLoaderRoute: typeof StoriesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stories/$logId': {
+      id: '/stories/$logId'
+      path: '/stories/$logId'
+      fullPath: '/stories/$logId'
+      preLoaderRoute: typeof StoriesLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/studio/$recordingId': {
@@ -2400,46 +2315,109 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminStudioRecordingIdRouteImport
       parentRoute: typeof AdminRouteRoute
     }
-    '/api/v1/preview/$idOrLogId': {
-      id: '/api/v1/preview/$idOrLogId'
-      path: '/api/v1/preview/$idOrLogId'
-      fullPath: '/api/v1/preview/$idOrLogId'
-      preLoaderRoute: typeof ApiV1PreviewIdOrLogIdRouteImport
+    '/api/admin/chat': {
+      id: '/api/admin/chat'
+      path: '/api/admin/chat'
+      fullPath: '/api/admin/chat'
+      preLoaderRoute: typeof ApiAdminChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/og/$logId': {
-      id: '/api/v1/og/$logId'
-      path: '/api/v1/og/$logId'
-      fullPath: '/api/v1/og/$logId'
-      preLoaderRoute: typeof ApiV1OgLogIdRouteImport
+    '/api/admin/logout': {
+      id: '/api/admin/logout'
+      path: '/api/admin/logout'
+      fullPath: '/api/admin/logout'
+      preLoaderRoute: typeof ApiAdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/mixtape-cover/$logId': {
-      id: '/api/v1/mixtape-cover/$logId'
-      path: '/api/v1/mixtape-cover/$logId'
-      fullPath: '/api/v1/mixtape-cover/$logId'
-      preLoaderRoute: typeof ApiV1MixtapeCoverLogIdRouteImport
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/me/avatar': {
-      id: '/api/v1/me/avatar'
-      path: '/api/v1/me/avatar'
-      fullPath: '/api/v1/me/avatar'
-      preLoaderRoute: typeof ApiV1MeAvatarRouteImport
+    '/api/me/avatar': {
+      id: '/api/me/avatar'
+      path: '/api/me/avatar'
+      fullPath: '/api/me/avatar'
+      preLoaderRoute: typeof ApiMeAvatarRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/logout': {
-      id: '/api/v1/admin/logout'
-      path: '/api/v1/admin/logout'
-      fullPath: '/api/v1/admin/logout'
-      preLoaderRoute: typeof ApiV1AdminLogoutRouteImport
+    '/api/mixtape-cover/$logId': {
+      id: '/api/mixtape-cover/$logId'
+      path: '/api/mixtape-cover/$logId'
+      fullPath: '/api/mixtape-cover/$logId'
+      preLoaderRoute: typeof ApiMixtapeCoverLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/chat': {
-      id: '/api/v1/admin/chat'
-      path: '/api/v1/admin/chat'
-      fullPath: '/api/v1/admin/chat'
-      preLoaderRoute: typeof ApiV1AdminChatRouteImport
+    '/api/og/$logId': {
+      id: '/api/og/$logId'
+      path: '/api/og/$logId'
+      fullPath: '/api/og/$logId'
+      preLoaderRoute: typeof ApiOgLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/og/set': {
+      id: '/api/og/set'
+      path: '/api/og/set'
+      fullPath: '/api/og/set'
+      preLoaderRoute: typeof ApiOgSetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/preview/$idOrLogId': {
+      id: '/api/preview/$idOrLogId'
+      path: '/api/preview/$idOrLogId'
+      fullPath: '/api/preview/$idOrLogId'
+      preLoaderRoute: typeof ApiPreviewIdOrLogIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/chat': {
+      id: '/api/v1/chat'
+      path: '/api/v1/chat'
+      fullPath: '/api/v1/chat'
+      preLoaderRoute: typeof ApiV1ChatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/openapi.json': {
+      id: '/api/v1/openapi.json'
+      path: '/api/v1/openapi.json'
+      fullPath: '/api/v1/openapi.json'
+      preLoaderRoute: typeof ApiV1OpenapiDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/postman.json': {
+      id: '/api/v1/postman.json'
+      path: '/api/v1/postman.json'
+      fullPath: '/api/v1/postman.json'
+      preLoaderRoute: typeof ApiV1PostmanDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/status': {
+      id: '/api/v1/status'
+      path: '/api/v1/status'
+      fullPath: '/api/v1/status'
+      preLoaderRoute: typeof ApiV1StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/artist/$slug/fresh.xml': {
+      id: '/artist/$slug/fresh.xml'
+      path: '/fresh.xml'
+      fullPath: '/artist/$slug/fresh.xml'
+      preLoaderRoute: typeof ArtistSlugFreshDotxmlRouteImport
+      parentRoute: typeof ArtistSlugRoute
+    }
+    '/label/$slug/fresh.xml': {
+      id: '/label/$slug/fresh.xml'
+      path: '/fresh.xml'
+      fullPath: '/label/$slug/fresh.xml'
+      preLoaderRoute: typeof LabelSlugFreshDotxmlRouteImport
+      parentRoute: typeof LabelSlugRoute
+    }
+    '/out/spotify/$trackId': {
+      id: '/out/spotify/$trackId'
+      path: '/out/spotify/$trackId'
+      fullPath: '/out/spotify/$trackId'
+      preLoaderRoute: typeof OutSpotifyTrackIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/oauth/handoff': {
@@ -2449,123 +2427,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminOauthHandoffRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/oauth/handoff': {
-      id: '/api/v1/admin/oauth/handoff'
-      path: '/api/v1/admin/oauth/handoff'
-      fullPath: '/api/v1/admin/oauth/handoff'
-      preLoaderRoute: typeof ApiV1AdminOauthHandoffRouteImport
+    '/api/v1/admin/chat': {
+      id: '/api/v1/admin/chat'
+      path: '/api/v1/admin/chat'
+      fullPath: '/api/v1/admin/chat'
+      preLoaderRoute: typeof ApiV1AdminChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/youtube/auth/start': {
-      id: '/api/admin/youtube/auth/start'
-      path: '/api/admin/youtube/auth/start'
-      fullPath: '/api/admin/youtube/auth/start'
-      preLoaderRoute: typeof ApiAdminYoutubeAuthStartRouteImport
+    '/api/v1/admin/logout': {
+      id: '/api/v1/admin/logout'
+      path: '/api/v1/admin/logout'
+      fullPath: '/api/v1/admin/logout'
+      preLoaderRoute: typeof ApiV1AdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/youtube/auth/callback': {
-      id: '/api/admin/youtube/auth/callback'
-      path: '/api/admin/youtube/auth/callback'
-      fullPath: '/api/admin/youtube/auth/callback'
-      preLoaderRoute: typeof ApiAdminYoutubeAuthCallbackRouteImport
+    '/api/v1/me/avatar': {
+      id: '/api/v1/me/avatar'
+      path: '/api/v1/me/avatar'
+      fullPath: '/api/v1/me/avatar'
+      preLoaderRoute: typeof ApiV1MeAvatarRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/twitch/auth/start': {
-      id: '/api/admin/twitch/auth/start'
-      path: '/api/admin/twitch/auth/start'
-      fullPath: '/api/admin/twitch/auth/start'
-      preLoaderRoute: typeof ApiAdminTwitchAuthStartRouteImport
+    '/api/v1/mixtape-cover/$logId': {
+      id: '/api/v1/mixtape-cover/$logId'
+      path: '/api/v1/mixtape-cover/$logId'
+      fullPath: '/api/v1/mixtape-cover/$logId'
+      preLoaderRoute: typeof ApiV1MixtapeCoverLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/twitch/auth/callback': {
-      id: '/api/admin/twitch/auth/callback'
-      path: '/api/admin/twitch/auth/callback'
-      fullPath: '/api/admin/twitch/auth/callback'
-      preLoaderRoute: typeof ApiAdminTwitchAuthCallbackRouteImport
+    '/api/v1/og/$logId': {
+      id: '/api/v1/og/$logId'
+      path: '/api/v1/og/$logId'
+      fullPath: '/api/v1/og/$logId'
+      preLoaderRoute: typeof ApiV1OgLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/admin/tracks/$trackId/source-audio': {
-      id: '/api/admin/tracks/$trackId/source-audio'
-      path: '/api/admin/tracks/$trackId/source-audio'
-      fullPath: '/api/admin/tracks/$trackId/source-audio'
-      preLoaderRoute: typeof ApiAdminTracksTrackIdSourceAudioRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/tracks/$trackId/silent-clip': {
-      id: '/api/admin/tracks/$trackId/silent-clip'
-      path: '/api/admin/tracks/$trackId/silent-clip'
-      fullPath: '/api/admin/tracks/$trackId/silent-clip'
-      preLoaderRoute: typeof ApiAdminTracksTrackIdSilentClipRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/tracks/$trackId/preview-audio': {
-      id: '/api/admin/tracks/$trackId/preview-audio'
-      path: '/api/admin/tracks/$trackId/preview-audio'
-      fullPath: '/api/admin/tracks/$trackId/preview-audio'
-      preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewAudioRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/tracks/$trackId/preview': {
-      id: '/api/admin/tracks/$trackId/preview'
-      path: '/api/admin/tracks/$trackId/preview'
-      fullPath: '/api/admin/tracks/$trackId/preview'
-      preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/tiktok/auth/start': {
-      id: '/api/admin/tiktok/auth/start'
-      path: '/api/admin/tiktok/auth/start'
-      fullPath: '/api/admin/tiktok/auth/start'
-      preLoaderRoute: typeof ApiAdminTiktokAuthStartRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/tiktok/auth/callback': {
-      id: '/api/admin/tiktok/auth/callback'
-      path: '/api/admin/tiktok/auth/callback'
-      fullPath: '/api/admin/tiktok/auth/callback'
-      preLoaderRoute: typeof ApiAdminTiktokAuthCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/spotify/auth/start': {
-      id: '/api/admin/spotify/auth/start'
-      path: '/api/admin/spotify/auth/start'
-      fullPath: '/api/admin/spotify/auth/start'
-      preLoaderRoute: typeof ApiAdminSpotifyAuthStartRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/spotify/auth/login': {
-      id: '/api/admin/spotify/auth/login'
-      path: '/api/admin/spotify/auth/login'
-      fullPath: '/api/admin/spotify/auth/login'
-      preLoaderRoute: typeof ApiAdminSpotifyAuthLoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/spotify/auth/callback': {
-      id: '/api/admin/spotify/auth/callback'
-      path: '/api/admin/spotify/auth/callback'
-      fullPath: '/api/admin/spotify/auth/callback'
-      preLoaderRoute: typeof ApiAdminSpotifyAuthCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/mixcloud/auth/start': {
-      id: '/api/admin/mixcloud/auth/start'
-      path: '/api/admin/mixcloud/auth/start'
-      fullPath: '/api/admin/mixcloud/auth/start'
-      preLoaderRoute: typeof ApiAdminMixcloudAuthStartRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/mixcloud/auth/callback': {
-      id: '/api/admin/mixcloud/auth/callback'
-      path: '/api/admin/mixcloud/auth/callback'
-      fullPath: '/api/admin/mixcloud/auth/callback'
-      preLoaderRoute: typeof ApiAdminMixcloudAuthCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/admin/instagram/auth/start': {
-      id: '/api/admin/instagram/auth/start'
-      path: '/api/admin/instagram/auth/start'
-      fullPath: '/api/admin/instagram/auth/start'
-      preLoaderRoute: typeof ApiAdminInstagramAuthStartRouteImport
+    '/api/v1/preview/$idOrLogId': {
+      id: '/api/v1/preview/$idOrLogId'
+      path: '/api/v1/preview/$idOrLogId'
+      fullPath: '/api/v1/preview/$idOrLogId'
+      preLoaderRoute: typeof ApiV1PreviewIdOrLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/instagram/auth/callback': {
@@ -2575,109 +2476,130 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminInstagramAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/youtube/auth/start': {
-      id: '/api/v1/admin/youtube/auth/start'
-      path: '/api/v1/admin/youtube/auth/start'
-      fullPath: '/api/v1/admin/youtube/auth/start'
-      preLoaderRoute: typeof ApiV1AdminYoutubeAuthStartRouteImport
+    '/api/admin/instagram/auth/start': {
+      id: '/api/admin/instagram/auth/start'
+      path: '/api/admin/instagram/auth/start'
+      fullPath: '/api/admin/instagram/auth/start'
+      preLoaderRoute: typeof ApiAdminInstagramAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/youtube/auth/callback': {
-      id: '/api/v1/admin/youtube/auth/callback'
-      path: '/api/v1/admin/youtube/auth/callback'
-      fullPath: '/api/v1/admin/youtube/auth/callback'
-      preLoaderRoute: typeof ApiV1AdminYoutubeAuthCallbackRouteImport
+    '/api/admin/mixcloud/auth/callback': {
+      id: '/api/admin/mixcloud/auth/callback'
+      path: '/api/admin/mixcloud/auth/callback'
+      fullPath: '/api/admin/mixcloud/auth/callback'
+      preLoaderRoute: typeof ApiAdminMixcloudAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/twitch/auth/start': {
-      id: '/api/v1/admin/twitch/auth/start'
-      path: '/api/v1/admin/twitch/auth/start'
-      fullPath: '/api/v1/admin/twitch/auth/start'
-      preLoaderRoute: typeof ApiV1AdminTwitchAuthStartRouteImport
+    '/api/admin/mixcloud/auth/start': {
+      id: '/api/admin/mixcloud/auth/start'
+      path: '/api/admin/mixcloud/auth/start'
+      fullPath: '/api/admin/mixcloud/auth/start'
+      preLoaderRoute: typeof ApiAdminMixcloudAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/twitch/auth/callback': {
-      id: '/api/v1/admin/twitch/auth/callback'
-      path: '/api/v1/admin/twitch/auth/callback'
-      fullPath: '/api/v1/admin/twitch/auth/callback'
-      preLoaderRoute: typeof ApiV1AdminTwitchAuthCallbackRouteImport
+    '/api/admin/spotify/auth/callback': {
+      id: '/api/admin/spotify/auth/callback'
+      path: '/api/admin/spotify/auth/callback'
+      fullPath: '/api/admin/spotify/auth/callback'
+      preLoaderRoute: typeof ApiAdminSpotifyAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/tracks/$trackId/source-audio': {
-      id: '/api/v1/admin/tracks/$trackId/source-audio'
-      path: '/api/v1/admin/tracks/$trackId/source-audio'
-      fullPath: '/api/v1/admin/tracks/$trackId/source-audio'
-      preLoaderRoute: typeof ApiV1AdminTracksTrackIdSourceAudioRouteImport
+    '/api/admin/spotify/auth/login': {
+      id: '/api/admin/spotify/auth/login'
+      path: '/api/admin/spotify/auth/login'
+      fullPath: '/api/admin/spotify/auth/login'
+      preLoaderRoute: typeof ApiAdminSpotifyAuthLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/tracks/$trackId/silent-clip': {
-      id: '/api/v1/admin/tracks/$trackId/silent-clip'
-      path: '/api/v1/admin/tracks/$trackId/silent-clip'
-      fullPath: '/api/v1/admin/tracks/$trackId/silent-clip'
-      preLoaderRoute: typeof ApiV1AdminTracksTrackIdSilentClipRouteImport
+    '/api/admin/spotify/auth/start': {
+      id: '/api/admin/spotify/auth/start'
+      path: '/api/admin/spotify/auth/start'
+      fullPath: '/api/admin/spotify/auth/start'
+      preLoaderRoute: typeof ApiAdminSpotifyAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/tracks/$trackId/preview-audio': {
-      id: '/api/v1/admin/tracks/$trackId/preview-audio'
-      path: '/api/v1/admin/tracks/$trackId/preview-audio'
-      fullPath: '/api/v1/admin/tracks/$trackId/preview-audio'
-      preLoaderRoute: typeof ApiV1AdminTracksTrackIdPreviewAudioRouteImport
+    '/api/admin/tiktok/auth/callback': {
+      id: '/api/admin/tiktok/auth/callback'
+      path: '/api/admin/tiktok/auth/callback'
+      fullPath: '/api/admin/tiktok/auth/callback'
+      preLoaderRoute: typeof ApiAdminTiktokAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/tracks/$trackId/preview': {
-      id: '/api/v1/admin/tracks/$trackId/preview'
-      path: '/api/v1/admin/tracks/$trackId/preview'
-      fullPath: '/api/v1/admin/tracks/$trackId/preview'
-      preLoaderRoute: typeof ApiV1AdminTracksTrackIdPreviewRouteImport
+    '/api/admin/tiktok/auth/start': {
+      id: '/api/admin/tiktok/auth/start'
+      path: '/api/admin/tiktok/auth/start'
+      fullPath: '/api/admin/tiktok/auth/start'
+      preLoaderRoute: typeof ApiAdminTiktokAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/tiktok/auth/start': {
-      id: '/api/v1/admin/tiktok/auth/start'
-      path: '/api/v1/admin/tiktok/auth/start'
-      fullPath: '/api/v1/admin/tiktok/auth/start'
-      preLoaderRoute: typeof ApiV1AdminTiktokAuthStartRouteImport
+    '/api/admin/tracks/$trackId/preview': {
+      id: '/api/admin/tracks/$trackId/preview'
+      path: '/api/admin/tracks/$trackId/preview'
+      fullPath: '/api/admin/tracks/$trackId/preview'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/tiktok/auth/callback': {
-      id: '/api/v1/admin/tiktok/auth/callback'
-      path: '/api/v1/admin/tiktok/auth/callback'
-      fullPath: '/api/v1/admin/tiktok/auth/callback'
-      preLoaderRoute: typeof ApiV1AdminTiktokAuthCallbackRouteImport
+    '/api/admin/tracks/$trackId/preview-audio': {
+      id: '/api/admin/tracks/$trackId/preview-audio'
+      path: '/api/admin/tracks/$trackId/preview-audio'
+      fullPath: '/api/admin/tracks/$trackId/preview-audio'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdPreviewAudioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/spotify/auth/start': {
-      id: '/api/v1/admin/spotify/auth/start'
-      path: '/api/v1/admin/spotify/auth/start'
-      fullPath: '/api/v1/admin/spotify/auth/start'
-      preLoaderRoute: typeof ApiV1AdminSpotifyAuthStartRouteImport
+    '/api/admin/tracks/$trackId/silent-clip': {
+      id: '/api/admin/tracks/$trackId/silent-clip'
+      path: '/api/admin/tracks/$trackId/silent-clip'
+      fullPath: '/api/admin/tracks/$trackId/silent-clip'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdSilentClipRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/spotify/auth/login': {
-      id: '/api/v1/admin/spotify/auth/login'
-      path: '/api/v1/admin/spotify/auth/login'
-      fullPath: '/api/v1/admin/spotify/auth/login'
-      preLoaderRoute: typeof ApiV1AdminSpotifyAuthLoginRouteImport
+    '/api/admin/tracks/$trackId/source-audio': {
+      id: '/api/admin/tracks/$trackId/source-audio'
+      path: '/api/admin/tracks/$trackId/source-audio'
+      fullPath: '/api/admin/tracks/$trackId/source-audio'
+      preLoaderRoute: typeof ApiAdminTracksTrackIdSourceAudioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/spotify/auth/callback': {
-      id: '/api/v1/admin/spotify/auth/callback'
-      path: '/api/v1/admin/spotify/auth/callback'
-      fullPath: '/api/v1/admin/spotify/auth/callback'
-      preLoaderRoute: typeof ApiV1AdminSpotifyAuthCallbackRouteImport
+    '/api/admin/twitch/auth/callback': {
+      id: '/api/admin/twitch/auth/callback'
+      path: '/api/admin/twitch/auth/callback'
+      fullPath: '/api/admin/twitch/auth/callback'
+      preLoaderRoute: typeof ApiAdminTwitchAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/mixcloud/auth/start': {
-      id: '/api/v1/admin/mixcloud/auth/start'
-      path: '/api/v1/admin/mixcloud/auth/start'
-      fullPath: '/api/v1/admin/mixcloud/auth/start'
-      preLoaderRoute: typeof ApiV1AdminMixcloudAuthStartRouteImport
+    '/api/admin/twitch/auth/start': {
+      id: '/api/admin/twitch/auth/start'
+      path: '/api/admin/twitch/auth/start'
+      fullPath: '/api/admin/twitch/auth/start'
+      preLoaderRoute: typeof ApiAdminTwitchAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/mixcloud/auth/callback': {
-      id: '/api/v1/admin/mixcloud/auth/callback'
-      path: '/api/v1/admin/mixcloud/auth/callback'
-      fullPath: '/api/v1/admin/mixcloud/auth/callback'
-      preLoaderRoute: typeof ApiV1AdminMixcloudAuthCallbackRouteImport
+    '/api/admin/youtube/auth/callback': {
+      id: '/api/admin/youtube/auth/callback'
+      path: '/api/admin/youtube/auth/callback'
+      fullPath: '/api/admin/youtube/auth/callback'
+      preLoaderRoute: typeof ApiAdminYoutubeAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/youtube/auth/start': {
+      id: '/api/admin/youtube/auth/start'
+      path: '/api/admin/youtube/auth/start'
+      fullPath: '/api/admin/youtube/auth/start'
+      preLoaderRoute: typeof ApiAdminYoutubeAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/oauth/handoff': {
+      id: '/api/v1/admin/oauth/handoff'
+      path: '/api/v1/admin/oauth/handoff'
+      fullPath: '/api/v1/admin/oauth/handoff'
+      preLoaderRoute: typeof ApiV1AdminOauthHandoffRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/instagram/auth/callback': {
+      id: '/api/v1/admin/instagram/auth/callback'
+      path: '/api/v1/admin/instagram/auth/callback'
+      fullPath: '/api/v1/admin/instagram/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminInstagramAuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/admin/instagram/auth/start': {
@@ -2687,11 +2609,109 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1AdminInstagramAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/admin/instagram/auth/callback': {
-      id: '/api/v1/admin/instagram/auth/callback'
-      path: '/api/v1/admin/instagram/auth/callback'
-      fullPath: '/api/v1/admin/instagram/auth/callback'
-      preLoaderRoute: typeof ApiV1AdminInstagramAuthCallbackRouteImport
+    '/api/v1/admin/mixcloud/auth/callback': {
+      id: '/api/v1/admin/mixcloud/auth/callback'
+      path: '/api/v1/admin/mixcloud/auth/callback'
+      fullPath: '/api/v1/admin/mixcloud/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminMixcloudAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/mixcloud/auth/start': {
+      id: '/api/v1/admin/mixcloud/auth/start'
+      path: '/api/v1/admin/mixcloud/auth/start'
+      fullPath: '/api/v1/admin/mixcloud/auth/start'
+      preLoaderRoute: typeof ApiV1AdminMixcloudAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/spotify/auth/callback': {
+      id: '/api/v1/admin/spotify/auth/callback'
+      path: '/api/v1/admin/spotify/auth/callback'
+      fullPath: '/api/v1/admin/spotify/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminSpotifyAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/spotify/auth/login': {
+      id: '/api/v1/admin/spotify/auth/login'
+      path: '/api/v1/admin/spotify/auth/login'
+      fullPath: '/api/v1/admin/spotify/auth/login'
+      preLoaderRoute: typeof ApiV1AdminSpotifyAuthLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/spotify/auth/start': {
+      id: '/api/v1/admin/spotify/auth/start'
+      path: '/api/v1/admin/spotify/auth/start'
+      fullPath: '/api/v1/admin/spotify/auth/start'
+      preLoaderRoute: typeof ApiV1AdminSpotifyAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tiktok/auth/callback': {
+      id: '/api/v1/admin/tiktok/auth/callback'
+      path: '/api/v1/admin/tiktok/auth/callback'
+      fullPath: '/api/v1/admin/tiktok/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminTiktokAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tiktok/auth/start': {
+      id: '/api/v1/admin/tiktok/auth/start'
+      path: '/api/v1/admin/tiktok/auth/start'
+      fullPath: '/api/v1/admin/tiktok/auth/start'
+      preLoaderRoute: typeof ApiV1AdminTiktokAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tracks/$trackId/preview': {
+      id: '/api/v1/admin/tracks/$trackId/preview'
+      path: '/api/v1/admin/tracks/$trackId/preview'
+      fullPath: '/api/v1/admin/tracks/$trackId/preview'
+      preLoaderRoute: typeof ApiV1AdminTracksTrackIdPreviewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tracks/$trackId/preview-audio': {
+      id: '/api/v1/admin/tracks/$trackId/preview-audio'
+      path: '/api/v1/admin/tracks/$trackId/preview-audio'
+      fullPath: '/api/v1/admin/tracks/$trackId/preview-audio'
+      preLoaderRoute: typeof ApiV1AdminTracksTrackIdPreviewAudioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tracks/$trackId/silent-clip': {
+      id: '/api/v1/admin/tracks/$trackId/silent-clip'
+      path: '/api/v1/admin/tracks/$trackId/silent-clip'
+      fullPath: '/api/v1/admin/tracks/$trackId/silent-clip'
+      preLoaderRoute: typeof ApiV1AdminTracksTrackIdSilentClipRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/tracks/$trackId/source-audio': {
+      id: '/api/v1/admin/tracks/$trackId/source-audio'
+      path: '/api/v1/admin/tracks/$trackId/source-audio'
+      fullPath: '/api/v1/admin/tracks/$trackId/source-audio'
+      preLoaderRoute: typeof ApiV1AdminTracksTrackIdSourceAudioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/twitch/auth/callback': {
+      id: '/api/v1/admin/twitch/auth/callback'
+      path: '/api/v1/admin/twitch/auth/callback'
+      fullPath: '/api/v1/admin/twitch/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminTwitchAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/twitch/auth/start': {
+      id: '/api/v1/admin/twitch/auth/start'
+      path: '/api/v1/admin/twitch/auth/start'
+      fullPath: '/api/v1/admin/twitch/auth/start'
+      preLoaderRoute: typeof ApiV1AdminTwitchAuthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/youtube/auth/callback': {
+      id: '/api/v1/admin/youtube/auth/callback'
+      path: '/api/v1/admin/youtube/auth/callback'
+      fullPath: '/api/v1/admin/youtube/auth/callback'
+      preLoaderRoute: typeof ApiV1AdminYoutubeAuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/admin/youtube/auth/start': {
+      id: '/api/v1/admin/youtube/auth/start'
+      path: '/api/v1/admin/youtube/auth/start'
+      fullPath: '/api/v1/admin/youtube/auth/start'
+      preLoaderRoute: typeof ApiV1AdminYoutubeAuthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -2855,6 +2875,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1OpenapiDotjsonRoute: ApiV1OpenapiDotjsonRoute,
   ApiV1PostmanDotjsonRoute: ApiV1PostmanDotjsonRoute,
   ApiV1StatusRoute: ApiV1StatusRoute,
+  OutSpotifyTrackIdRoute: OutSpotifyTrackIdRoute,
   ApiAdminOauthHandoffRoute: ApiAdminOauthHandoffRoute,
   ApiV1AdminChatRoute: ApiV1AdminChatRoute,
   ApiV1AdminLogoutRoute: ApiV1AdminLogoutRoute,

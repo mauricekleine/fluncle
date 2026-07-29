@@ -254,6 +254,14 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           discogsAttemptedAt,
           discogsResolved ? nowIso : null,
           discogsAttemptedAt === null ? 0 : 1,
+          // THE ANCHOR HIT TIME (schema.ts § `spotify_anchored_at`). A finding is born ANCHORED —
+          // the id came from the operator's Spotify URL and was re-read through Spotify's own API
+          // (`fetchTrack`), so this moment IS when the link was verified. The attempt stamp beside
+          // it stays NULL, correctly: the anchor GATE never ran on this row, and stamping a
+          // last-attempt time it never had would put a publish-born finding into the re-ask
+          // backoff's reading. The provenance pair stays NULL too — publish records no rung, so the
+          // envelope reads `unknown-legacy`: "we hold no record of how", never a claim.
+          nowIso,
           // is_catalogue = 0: born CERTIFIED. The certification half is minted in the SAME batch
           // (findingInsertStatement below), so the maintained invariant (a track with a findings
           // row is is_catalogue = 0) holds from the very first write, never a moment as `1`.
@@ -280,8 +288,9 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             backfill_discogs_attempted_at,
             backfill_discogs_done_at,
             backfill_discogs_attempts,
+            spotify_anchored_at,
             is_catalogue
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       },
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.
@@ -571,8 +580,19 @@ export async function certifyExistingTrack(
       spotifyUri = lookup.match.spotifyUri;
       spotifyUrl = lookup.match.spotifyUrl;
       await db.execute({
-        args: [spotifyUri, spotifyUrl, trackId],
-        sql: `update tracks set spotify_uri = ?, spotify_url = ? where track_id = ?`,
+        args: [spotifyUri, spotifyUrl, new Date().toISOString(), trackId],
+        // The provenance rides the SAME statement as the link (schema.ts § the pair). This IS the
+        // `spotify-isrc` rung — Spotify's own `/search?type=track&q=isrc:` read, matched on the
+        // recording's real identity — so it is recorded as such rather than left to read as legacy;
+        // an exact-ISRC anchor is the strongest provenance in the corpus and the envelope should
+        // say so.
+        sql: `update tracks
+              set spotify_uri = ?,
+                  spotify_url = ?,
+                  spotify_anchor_source = 'spotify-isrc',
+                  spotify_anchor_verified_by = 'isrc',
+                  spotify_anchored_at = ?
+              where track_id = ?`,
       });
     }
   }

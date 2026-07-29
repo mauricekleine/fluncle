@@ -564,6 +564,56 @@ export const tracks = sqliteTable(
     // "never attempted", exactly as the null stamp beside it does. Internal reliability state, like
     // the rest of the catalogue side-channel — no public surface, no lastmod bump.
     spotifyAnchorAttempts: integer("spotify_anchor_attempts"),
+    // THE ANCHOR PROVENANCE PAIR (RFC dnb-identity-graph, Unit 1 item 4) — WHICH RUNG found the
+    // Spotify id, and HOW it was verified. Both were computed and returned on every anchor and then
+    // thrown away; the identity envelope has to say how it knows a link is right, so they are
+    // persisted now. Written in the SAME UPDATE as `spotify_uri` — the gate's hit (anchor.ts
+    // `anchorTrack`) and the operator's accepted review (`resolveAnchorReview`) — never separately,
+    // so a row can never carry an anchor with someone else's provenance.
+    //
+    // `spotify_anchor_source` = the RUNG, the five-member `AnchorReviewSource` verbatim
+    // ("apify" | "deezer" | "listenbrainz" | "spotify-isrc" | "spotify-search"). NULL on an
+    // operator-accepted review (no rung fetched it — he did) and on every row anchored before these
+    // columns existed.
+    //
+    // `spotify_anchor_verified_by` = the SIGNAL that cleared the gate:
+    //   · "isrc"          — the candidate's ISRC equalled the row's. The recording's real identity.
+    //   · "search"        — the full verified triple (same artist SET, same base title, same version
+    //                       descriptor) inside ±ANCHOR_DURATION_TOLERANCE_MS.
+    //   · "search-subset" — the ±1s PROPER-SUBSET fallback (a platform crediting only the primary
+    //                       artist of a collab). A DISTINCT confidence from "search" on purpose: the
+    //                       artist signal was loosened and paid for with a hardened duration one, and
+    //                       an envelope that flattened the two would overstate what Fluncle checked.
+    //   · "operator"      — he read both titles and ruled (`resolve_anchor_review`). These are the
+    //                       best-provenance anchors in the corpus and must never read as legacy.
+    //
+    // NULL on both ⇒ the envelope reads `unknown-legacy`: anchored before the columns existed, or by
+    // a path that records no rung (publish, whose Spotify id IS the user's input, re-read through
+    // Spotify's own API). Honest — "we hold no record of how" — never a claim.
+    //
+    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule above: a
+    // `.default()` on a `tracks` column makes drizzle regenerate the whole table and drop+recreate
+    // all ~125 indexes. PUBLIC (the identity envelope serves them, `get_track`'s identity
+    // projection), but no lastmod bump: provenance for an existing link moves no finding.
+    spotifyAnchorSource: text("spotify_anchor_source"),
+    spotifyAnchorVerifiedBy: text("spotify_anchor_verified_by"),
+    // THE ANCHOR HIT TIME (RFC dnb-identity-graph, Unit 1 item 4) — when the Spotify link was
+    // actually WRITTEN, as distinct from `spotify_anchor_attempted_at` one screen up, which is a
+    // LAST-ATTEMPT stamp. The two look interchangeable and are not: the attempt stamp is NULL on a
+    // publish-born finding (publish never runs the anchor gate), and on a re-asked row it moves with
+    // every miss. Serving an attempt time as "verified at" would be a false claim, which is why the
+    // envelope carries `atMeaning` and why this column exists to make the honest answer available at
+    // all.
+    //
+    // Written in the same UPDATE as `spotify_uri` by all three writers: the gate's hit, the
+    // operator's accepted review, and PUBLISH (its own `nowIso` — publish resolves the id through
+    // Spotify's own API read, so the moment it writes the row IS the moment the link was verified).
+    // NULL on every row anchored before this column existed ⇒ the envelope serves `at: null` with
+    // `atMeaning: null` rather than inventing one.
+    //
+    // NULLABLE, no `.default()` (the ~125-index rebuild trap). Public via the identity envelope; no
+    // lastmod bump.
+    spotifyAnchoredAt: text("spotify_anchored_at"),
     // NULLABLE (they were NOT NULL until the tracks/findings split): a catalogue track
     // resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id`
     // stays the opaque PK — today it happens to be the Spotify id; a catalogue-only track
@@ -737,6 +787,24 @@ export const tracks = sqliteTable(
     index("tracks_mb_recording_id_queue_idx")
       .on(table.trackId)
       .where(sql`${table.mbRecordingId} is null and ${table.mbRecordingIdAttemptedAt} is null`),
+    // The MBID VALUE index — "which row IS this MusicBrainz recording?" (RFC dnb-identity-graph,
+    // Unit 2: `get_track`'s `?mbid=` key). The partial queue index above cannot answer it: its
+    // predicate is `mb_recording_id is null`, so it indexes precisely the rows that have no MBID.
+    // Without this, an MBID lookup is a full scan of a table where every embedded row drags a 4 KB
+    // vector blob off the page — the ratified post-blob overflow trap.
+    //
+    // NOT unique and not partial, on purpose. Not unique: MBID is not deduped across birth paths (a
+    // crawler row and a Spotify-born finding can name the same recording), and a unique index would
+    // turn that into a failed migration rather than the `relation: "ambiguous"` the envelope is
+    // built to say. Not partial: this one is a VALUE lookup over the filled slice, which GROWS with
+    // the catalogue — the shrinking-slice logic that justifies the partial queue indexes above
+    // argues the other way here.
+    //
+    // COST OF THE BUILD, measured 2026-07-29 on a hosted scratch fork at 66,096 rows: 104s, because
+    // `mb_recording_id` sits post-blob and the build drags every row's overflow pages. It runs in
+    // the Cloudflare deploy's migrate step and holds the single writer for that window — reads
+    // proceed under WAL and the box sweeps retry, but the merge belongs at a quiet hour.
+    index("tracks_mb_recording_id_idx").on(table.mbRecordingId),
     // The track_artists graph-backfill queue — "not yet attempted by the name-fold backfill"
     // (backfill-artist-edges.ts, `backfill_artist_edges`, RFC artist-primary-capture slice 0).
     // PARTIAL for the `tracks_mb_recording_id_queue_idx` reason: the worklist is DERIVED and this

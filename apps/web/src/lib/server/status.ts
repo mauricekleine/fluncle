@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
+import { pruneRateLimitCounters } from "./rate-limit";
 
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
 export type ServiceHealthStatus = "ok" | "degraded" | "down";
@@ -264,4 +265,19 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
               limit ?
             )`,
   });
+
+  // And prune the rate limiter's spent windows, which nothing deleted from before (rate-limit.ts
+  // `pruneRateLimitCounters`). It rides here because this is the repo's periodic-maintenance write
+  // and a housekeeping delete must never sit on a read a caller is waiting for. NON-CRITICAL, the
+  // samples-ledger discipline above: a failure here is logged and swallowed, because the health
+  // snapshot this function exists for has already landed and must not be lost to upkeep.
+  try {
+    const pruned = await pruneRateLimitCounters();
+
+    if (pruned > 0) {
+      logEvent("info", "status.rate-limit-counters-pruned", { rows: pruned });
+    }
+  } catch (error) {
+    logEvent("error", "status.rate-limit-prune-failed", { error });
+  }
 }

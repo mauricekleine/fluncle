@@ -70,6 +70,30 @@ export async function consumeRateLimit({
   limit: number;
   windowMs: number;
 }): Promise<boolean> {
+  return (await bumpRateLimitCounter({ action, bucket, limit, windowMs })) !== undefined;
+}
+
+/**
+ * The atomic core itself, returning the counter's NEW VALUE rather than a verdict — `undefined`
+ * when the conditional update was a no-op (already at `limit`).
+ *
+ * `consumeRateLimit` is the one-line verdict wrapper over this, and is what a request path should
+ * use. The count matters to exactly one caller: the abuse detector, which needs to know HOW FAR a
+ * bucket is into a window to fire a threshold exactly once (identity-envelope.ts). Reading the
+ * counter back separately would reopen the read-then-write race this statement exists to close, so
+ * the count comes out of the same atomic statement or not at all.
+ */
+export async function bumpRateLimitCounter({
+  action,
+  bucket,
+  limit,
+  windowMs,
+}: {
+  action: string;
+  bucket: string;
+  limit: number;
+  windowMs: number;
+}): Promise<number | undefined> {
   const db = await getDb();
   // Align the window so every request in the same windowMs slice shares a row.
   const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs).toISOString();
@@ -89,7 +113,38 @@ export async function consumeRateLimit({
       returning count`,
   });
 
-  return typedRow<CounterRow>(result.rows) !== undefined;
+  return typedRow<CounterRow>(result.rows)?.count;
+}
+
+/**
+ * HOW LONG A SPENT COUNTER ROW IS KEPT. A fixed-window row is dead the moment its window closes —
+ * nothing reads a past window, ever — so this is pure headroom, not retention: long enough that the
+ * longest window in use (a day) plus any clock skew is comfortably inside, short enough that the
+ * table cannot grow without bound.
+ */
+const RATE_LIMIT_COUNTER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete rate-limit counter rows whose window closed long ago. Nothing in the repo deleted from
+ * `rate_limit_counters` before this: every limited request writes a row per (action, bucket,
+ * window), so the table only ever grew, and adding a per-IP DAILY dial (identity-envelope.ts) is
+ * what made that a real slope rather than a note.
+ *
+ * ONE cutoff delete, keyed on `window_start` — the same `delete … where <old>` shape the status
+ * ledger prunes with. It rides the periodic health snapshot (status.ts) rather than any request
+ * path: a maintenance write does not belong on a read a caller is waiting for, and the snapshot is
+ * already the repo's home for exactly this kind of upkeep. Returns the row count so a caller can
+ * log it.
+ */
+export async function pruneRateLimitCounters(now = Date.now()): Promise<number> {
+  const db = await getDb();
+  const cutoff = new Date(now - RATE_LIMIT_COUNTER_RETENTION_MS).toISOString();
+  const result = await db.execute({
+    args: [cutoff],
+    sql: `delete from rate_limit_counters where window_start < ?`,
+  });
+
+  return result.rowsAffected;
 }
 
 /**

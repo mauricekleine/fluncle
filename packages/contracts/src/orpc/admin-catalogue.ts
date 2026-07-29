@@ -775,7 +775,8 @@ export const AnchorCandidateSchema = z
  * class), so the box's agent token drives it. 404 when the track does not exist; 409 when it is
  * certified (a finding's Spotify id is its identity, not an anchor to fill) or already anchored (a
  * race with a user add). `{ ok, anchored, verifiedBy }` — `verifiedBy` is the rung that matched
- * (`isrc` | `search`), or null on a clean miss.
+ * (`isrc` | `search` | `search-subset` — the ±1s proper-subset fallback, a distinct confidence),
+ * or null on a clean miss.
  */
 export const anchorTrack = oc
   .route({
@@ -797,7 +798,7 @@ export const anchorTrack = oc
       anchored: z.boolean(),
       ok: z.literal(true),
       /** Which rung matched (`isrc` | `search`), or null on a clean miss. */
-      verifiedBy: z.enum(["isrc", "search"]).nullable(),
+      verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
     }),
   );
 
@@ -955,7 +956,7 @@ export const resolveAnchor = oc
       /** True iff a Spotify SEARCH was issued this call — the box's pacer signal. OFF flag ⇒ false. */
       spotifySearchDone: z.boolean(),
       /** Which gate rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
-      verifiedBy: z.enum(["isrc", "search"]).nullable(),
+      verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
     }),
   );
 

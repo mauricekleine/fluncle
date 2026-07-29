@@ -62,6 +62,12 @@ export function useFinding(idOrLogId: string) {
           return { finding: res.track, kind: "finding" };
         }
 
+        // The op's third arm is the identity projection, and the app never asks for it (it
+        // passes no `identity` / `isrc` / `mbid` key), so this narrows rather than handles it.
+        if (!("mixtape" in res)) {
+          return { kind: "missing" };
+        }
+
         return { kind: "mixtape", logId: res.mixtape.logId };
       },
     }),

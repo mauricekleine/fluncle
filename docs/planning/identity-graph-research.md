@@ -151,6 +151,25 @@ Stripe EEA: 1.5% + €0.25 card fee + 0.7% Billing (a €5 sub nets ≈ €4.64;
 
 Platform breadth among ISRC-bearing rows: certified — 51 rows at 2 platforms, 34 at 3; catalogue — 8,836 at 0, 16,772 at 1, 8,256 at 2, none at 3 (Apple absent). ISRC collisions: 33,004 ISRCs unique, 459 shared by 2 rows, 9 by 3 (~1.4% of ISRCs — arrays required; 5× rarer than the external ~8% estimate). Birth-path (Q5): crawler rows 65,247 all MBID-bearing; spotify-born 78 certified (46 with MBID, 59%) + 20 catalogue (0 MBID). Entities (Q4): artists 9,364 (80% MBID, 49% Spotify, 3% Wikidata); albums 9,395 (99% MBID, 20 Apple album ids, 20 UPC); labels 1,233 (99% MBID). Q1's plan confirmed `SCAN tracks USING COVERING INDEX tracks_funnel_scan_idx`; Q2 (uncovered) completed in ~4.8s wall including network — a one-off cost, never a live op.
 
+## Wave 2 hosted proofs (2026-07-29)
+
+Run against a hosted Turso scratch FORK of prod (never `turso dev` — the local engine diverges on exactly these behaviours), destroyed after.
+
+- **The MBID value index build: 104s at 66,096 rows.** `create index tracks_mb_recording_id_idx on tracks (mb_recording_id)`. The cost is not the column, it is the column's POSITION: `mb_recording_id` sits post-`embedding_blob` (cid 28 of 62, Q0), so the build drags every row's 4 KB vector overflow pages to read one text field. Operational consequence, carried verbatim into the shipping PR: the migration auto-applies in the CF build and holds the single writer ~2 min; merge at a quiet hour; reads proceed under WAL, sweeps retry.
+- **The plans, confirmed by `EXPLAIN QUERY PLAN` on the fork:** `where mb_recording_id = ?` → `SEARCH tracks USING INDEX tracks_mb_recording_id_idx`; `where isrc = ?` → `SEARCH tracks USING INDEX tracks_isrc_idx` (the pre-existing index, which is why the ISRC key needs no new one — and why the key must be normalized in the isolate rather than wrapped in `upper()` in SQL).
+- **A keyed identity read: 239 ms wall including network, sub-ms server-side seek.** The wall time is the round trip; the database work is the index seek plus one row fetch, which is the shape the whole envelope was designed around (explicit column list, no blob).
+- **The dial write load: 40 sequential counter upserts in 1.10 s over one connection** (~27 ms each, network-dominated). Two rows per metered request (a burst window and a daily window) is therefore ~55 ms of writes on a read that already costs 239 ms — acceptable, and the reason the dials ride the existing atomic limiter rather than anything new.
+
+### ADPLA §3.3.6(D) — RETRIEVED 2026-07-29 (the clause the RFC left open)
+
+Fetched from `developer.apple.com/support/downloads/terms/apple-developer-program/Apple-Developer-Program-License-Agreement-English.pdf` (the PDF the RFC recorded as declining a fetch; the dated filename 404s, the undated one serves). §3.3.6 is "Entertainment Technologies"; subsection D is MusicKit. The two operative sentences, verbatim:
+
+> "You agree not to call the MusicKit APIs or use MusicKit JS (or otherwise attempt to gain information through the MusicKit APIs or MusicKit JS) for purposes unrelated to facilitating access to Your end users' Apple Music subscriptions."
+
+> "You may play MusicKit Content only as rendered by the MusicKit APIs or MusicKit JS and only as permitted in the Documentation (e.g., album art and music-related text from the MusicKit API may not be used separately from music playback or managing playlists)."
+
+**The read:** it does NOT permit third-party redistribution. Fluncle's Apple links come from the Apple Music API's exact-ISRC lookup, and serving them to an arbitrary machine caller is neither "facilitating access to Your end users' Apple Music subscriptions" nor use alongside playback or playlist management. So Apple ships `unsupported` in machine-served answers — now on a read clause rather than on an unread one — while first-party rendering on Fluncle's own pages continues unchanged. The full Apple state is still computed off its columns behind one constant (`APPLE_LINKS_MACHINE_SERVED`), so a future re-ruling is a one-line flip rather than a rebuild.
+
 ## The operator rulings (2026-07-29 interview) — recorded here for provenance
 
 (1) Unlit confirmed — uncertified rows served, certified boolean the only tier carrier. (2) Artifact = reader page + `get_track` keyed extension; no standalone endpoint; no nightly dump for now (trigger: a real consumer, likely label outreach). (3) Posture A free; the links-map free-commitment is contract-scoped (Spotify V.5); Fluncle's own analysis stays monetizable later. (4) Pre-overhaul, build now. (5) No retirement trigger (nothing accretes standing cost). (6) Wrong-answer channel = hey@fluncle.com. (7) The Spotify hop served EVERYWHERE (stored raw, served `/out/spotify/<fluncleTrackId>`), carve-outs: JSON-LD/sameAs stays raw; the iOS app resolves the hop to preserve instant app-open. (8) Dials: 30/min/IP + 1,000/day/IP on the identity lookups. Interview addition: the Apple catalogue backfill cron leg is enabled (the biggest idle coverage lever — 33,853 ISRC-bearing rows to try).

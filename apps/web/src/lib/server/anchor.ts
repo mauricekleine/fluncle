@@ -140,8 +140,25 @@ export type AnchorCandidate = {
   title: string;
 };
 
-/** Which rung verified an anchor, or `null` on a miss. */
-export type AnchorVerification = "isrc" | "search" | null;
+/**
+ * Which SIGNAL verified an anchor, or `null` on a miss — persisted as
+ * `tracks.spotify_anchor_verified_by` (schema.ts) and served as the identity envelope's
+ * `verification.method`.
+ *
+ * `search-subset` is DISTINCT from `search` on purpose: the ±1s proper-subset fallback loosened the
+ * artist signal and paid for it with a hardened duration one, so it is a different confidence and
+ * an envelope that flattened the two would overstate what was checked. `operator` is written only
+ * by `resolveAnchorReview`'s accept — a human read both titles.
+ */
+export type AnchorVerification = "isrc" | "operator" | "search" | "search-subset" | null;
+
+/**
+ * The subset of {@link AnchorVerification} the automated GATE can return — everything but
+ * `operator`, which only the human ruling in `resolveAnchorReview` writes. Split from the persisted
+ * domain so the `anchor_track` / `resolve_anchor` contracts advertise exactly the values their
+ * handlers can produce, rather than a value no machine path can reach.
+ */
+export type AnchorGateVerification = Exclude<AnchorVerification, "operator">;
 
 /** The minimal shape the verified-search gate reads off a candidate. */
 type VerifiableCandidate = {
@@ -185,6 +202,25 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
   rowDurationMs: number,
   candidates: T[],
 ): T | undefined {
+  return verifySearchCandidate(rowArtists, rowTitle, rowDurationMs, candidates)?.candidate;
+}
+
+/**
+ * {@link pickVerifiedCandidate}, plus WHICH of its two rungs cleared — `"search"` for the full
+ * triple, `"search-subset"` for the ±1s proper-subset fallback. The gate has always known this and
+ * always discarded it; the anchor write persists it now (`tracks.spotify_anchor_verified_by`), so
+ * the identity envelope can say which confidence a link was verified at instead of flattening two
+ * genuinely different checks into one word.
+ *
+ * `pickVerifiedCandidate` stays the shape every non-persisting caller wants (the Deezer
+ * ISRC-recovery gate does not care which rung agreed, only that one did), so this is additive.
+ */
+export function verifySearchCandidate<T extends VerifiableCandidate>(
+  rowArtists: string[],
+  rowTitle: string,
+  rowDurationMs: number,
+  candidates: T[],
+): undefined | { candidate: T; via: "search" | "search-subset" } {
   const rowKey = matchKey(rowArtists, rowTitle);
   const byClosestDuration = closestTo<T>(rowDurationMs);
 
@@ -198,7 +234,7 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
     .sort(byClosestDuration)[0];
 
   if (full) {
-    return full;
+    return { candidate: full, via: "search" };
   }
 
   // The subset fallback. Compare base title + descriptor with the row's artist set SUBSTITUTED
@@ -206,7 +242,7 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
   // checked explicitly as a proper, non-empty subset.
   const rowNames = normalizeArtists(rowArtists);
 
-  return candidates
+  const subset = candidates
     .filter((candidate) => {
       if (
         typeof candidate.durationMs !== "number" ||
@@ -231,6 +267,8 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
       return matchKey(rowArtists, candidate.title) === rowKey;
     })
     .sort(byClosestDuration)[0];
+
+  return subset ? { candidate: subset, via: "search-subset" } : undefined;
 }
 
 /**
@@ -424,7 +462,7 @@ export async function anchorTrack(
   trackId: string,
   candidates: AnchorCandidate[],
   options: { source?: AnchorReviewSource; stampOnMiss?: boolean } = {},
-): Promise<{ anchored: boolean; verifiedBy: AnchorVerification }> {
+): Promise<{ anchored: boolean; verifiedBy: AnchorGateVerification }> {
   const { source = "apify", stampOnMiss = true } = options;
   const db = await getDb();
 
@@ -463,7 +501,7 @@ export async function anchorTrack(
 
   // RUNG ONE — exact ISRC. Only when the row carries one; the closest-duration winner takes it.
   let verified: AnchorCandidate | undefined;
-  let verifiedBy: AnchorVerification = null;
+  let verifiedBy: AnchorGateVerification = null;
 
   if (row.isrc) {
     const isrcHit = pickIsrcCandidate(row.isrc, durationMs, candidates);
@@ -478,7 +516,7 @@ export async function anchorTrack(
   // nothing among the candidates. A row with no measured duration cannot clear the triple, so the
   // gate simply returns nothing for it (a permanent no-stamp, correctly).
   if (!verified) {
-    const searchHit = pickVerifiedCandidate(
+    const searchHit = verifySearchCandidate(
       rowArtists,
       row.title,
       durationMs,
@@ -491,8 +529,10 @@ export async function anchorTrack(
     );
 
     if (searchHit) {
-      verified = searchHit.candidate;
-      verifiedBy = "search";
+      verified = searchHit.candidate.candidate;
+      // The gate's own word for which rung cleared — "search-subset" when only the ±1s
+      // proper-subset fallback agreed. Persisted below, so the envelope never overstates it.
+      verifiedBy = searchHit.via;
     }
   }
 
@@ -552,6 +592,12 @@ export async function anchorTrack(
       // lets a related pressing resolve via the exact ISRC rung instead of fuzzy search.
       verified.isrc?.trim() ? verified.isrc.trim() : null,
       now,
+      // THE PROVENANCE PAIR + THE HIT TIME (schema.ts § `spotify_anchor_source`). They ride the
+      // SAME statement as `spotify_uri` on purpose: a link and the story of how it was found are
+      // one fact, and writing them apart would let a row wear someone else's provenance.
+      source,
+      verifiedBy,
+      now,
       trackId,
     ],
     // The anchor landed, so any suspected-version-mismatch review this row was carrying describes a
@@ -565,6 +611,9 @@ export async function anchorTrack(
               isrc = coalesce(isrc, ?),
               spotify_anchor_attempted_at = ?,
               spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
+              spotify_anchor_source = ?,
+              spotify_anchor_verified_by = ?,
+              spotify_anchored_at = ?,
               anchor_review_json = null
           where track_id = ?`,
   });
@@ -608,7 +657,7 @@ export type AnchorResolveResult = {
   isrcRecoveredByDeezer: boolean;
   source: AnchorResolveSource | null;
   spotifySearchDone: boolean;
-  verifiedBy: AnchorVerification;
+  verifiedBy: AnchorGateVerification;
 };
 
 /**
@@ -653,7 +702,7 @@ async function metadataCandidate(spotifyTrackId: string): Promise<AnchorCandidat
 async function resolveViaListenBrainz(
   trackId: string,
   mbid: null | string,
-): Promise<{ anchored: boolean; verifiedBy: AnchorVerification } | null> {
+): Promise<{ anchored: boolean; verifiedBy: AnchorGateVerification } | null> {
   if (!mbid) {
     return null;
   }
@@ -1420,6 +1469,10 @@ export async function resolveAnchorReview(
       review.candidate.albumImageUrl ?? null,
       review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null,
       now.toISOString(),
+      // `verified_by = 'operator'`, and `source` left NULL: no rung found this link — he did, off
+      // evidence a rung could only raise as a question. These are the best-provenance anchors in
+      // the corpus and the envelope must never read them as legacy (schema.ts § the pair).
+      now.toISOString(),
       trackId,
     ],
     sql: `update tracks
@@ -1429,6 +1482,9 @@ export async function resolveAnchorReview(
               isrc = coalesce(isrc, ?),
               spotify_anchor_attempted_at = ?,
               spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
+              spotify_anchor_source = null,
+              spotify_anchor_verified_by = 'operator',
+              spotify_anchored_at = ?,
               anchor_review_json = null
           where track_id = ?`,
   });

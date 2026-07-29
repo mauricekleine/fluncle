@@ -1685,13 +1685,16 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
-    command: "fluncle admin backfills discogs && fluncle admin backfills lastfm",
-    exposedContent: ["Discogs id + Last.fm love catalogue repair (--no-agent, Worker HTTP)"],
+    command:
+      "fluncle admin backfills discogs && fluncle admin backfills lastfm && fluncle admin backfills apple-music && fluncle admin backfills apple-catalogue",
+    exposedContent: [
+      "Discogs id + Last.fm love + Apple Music link repair, findings then catalogue (--no-agent, Worker HTTP)",
+    ],
     kind: "cron",
     name: "cron.backfill",
     operatorNotes: "every 30m. Pure HTTP driving, zero LLM tokens. Agent tier.",
     probeConfig: { cadenceMs: 30 * MINUTE_MS, cronName: "fluncle-backfill", kind: "cron" },
-    statusDescription: "repairs Discogs ids and Last.fm loves",
+    statusDescription: "repairs Discogs ids, Last.fm loves, and Apple Music links",
     title: "Metadata backfill",
     weights: { status: "hidden" },
   },

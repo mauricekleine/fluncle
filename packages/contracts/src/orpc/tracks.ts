@@ -15,6 +15,116 @@ import {
 } from "./_shared";
 
 /**
+ * How a link or identifier came to be trusted. Mirrors `IdentityMethod` in
+ * apps/web/src/lib/server/identity-envelope.ts; every value is backed by a stored
+ * column or by the row's own primary key, and `unknown-legacy` means Fluncle holds
+ * no record of how rather than that the check was weak.
+ */
+const IdentityMethodSchema = z
+  .enum(["isrc", "operator", "pk-derived", "search", "search-subset", "unknown-legacy"])
+  .describe("How the identifier or link came to be trusted.");
+
+/**
+ * Why a Spotify look will not happen. Derived from the same predicate the acquisition
+ * worklist itself is built on, so the answer here and the queue's behaviour cannot
+ * disagree. A closed set: each value names a condition of the recording's own row.
+ */
+const IdentityRefusalSchema = z
+  .enum(["attempt-cap-reached", "credit-not-an-identity", "dismissed", "duplicate", "no-duration"])
+  .describe("Which condition of the recording stops Fluncle looking again.");
+
+/**
+ * One platform's or identifier's answer. The `state` field is the discriminant, and
+ * the four negative states are the point of this whole response: Fluncle says when he
+ * looked and found nothing, when nobody has looked yet, when he will not look, and when
+ * he covers no such link at all, instead of leaving a caller to read silence.
+ */
+const IdentityStateSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("verified"),
+    url: z.string().optional(),
+    value: z.string().optional(),
+    verification: z.object({
+      at: z.string().nullable(),
+      atMeaning: z
+        .enum(["attempted", "verified"])
+        .nullable()
+        .describe(
+          "What the timestamp means: the moment Fluncle wrote the link, or the moment a look concluded. Null where Fluncle holds no timestamp.",
+        ),
+      method: IdentityMethodSchema,
+      source: z
+        .string()
+        .nullable()
+        .describe("Which source turned up the candidate, where one is recorded."),
+    }),
+  }),
+  z.object({
+    attempts: z
+      .number()
+      .optional()
+      .describe(
+        "Total concluded looks. Present only where a count is kept; absent where the stored number is a spending budget rather than a tally.",
+      ),
+    cap: z.number().nullable(),
+    lastAttemptedAt: z.string().nullable(),
+    retry: z.enum(["capped", "recheckable", "single-shot"]),
+    state: z.literal("absent"),
+    terminal: z
+      .boolean()
+      .nullable()
+      .describe("Whether Fluncle will look again. Null where nothing stored settles it."),
+  }),
+  z.object({ reason: IdentityRefusalSchema, state: z.literal("refused") }),
+  z.object({ state: z.literal("unattempted") }),
+  z.object({ state: z.literal("unsupported") }),
+]);
+
+/**
+ * One recording. `certified` is the only field that says whether Fluncle has certified
+ * this recording; `logId` is carried beside it and never inferred from it, because a
+ * recording can hold one without the other while a certification is being written.
+ */
+const IdentityRecordingSchema = z.object({
+  artists: z.array(z.string()),
+  certified: z.boolean(),
+  identifiers: z.object({ isrc: IdentityStateSchema, mbRecordingId: IdentityStateSchema }),
+  links: z.object({
+    appleMusic: IdentityStateSchema,
+    deezer: IdentityStateSchema,
+    discogs: IdentityStateSchema,
+    spotify: IdentityStateSchema,
+    tidal: IdentityStateSchema,
+  }),
+  logId: z.string().nullable(),
+  relation: z
+    .union([
+      z.literal("ambiguous"),
+      z.literal("canonical"),
+      z.templateLiteral(["duplicate-of:", z.string()]),
+    ])
+    .describe(
+      "How this recording stands to the others the key returned: canonical, ambiguous, or duplicate-of:<trackId>.",
+    ),
+  title: z.string(),
+  trackId: z.string(),
+});
+
+/**
+ * The identity answer. Always an array, because an ISRC or a MusicBrainz recording id
+ * can name more than one recording in the archive and picking a winner silently is the
+ * behaviour this response exists to avoid.
+ */
+export const IdentityEnvelopeSchema = z.object({
+  meta: z.object({
+    asOf: z.string(),
+    attribution: z.string(),
+    contact: z.string().describe("Where to write when an answer here is wrong."),
+  }),
+  recordings: z.array(IdentityRecordingSchema),
+});
+
+/**
  * `get_track` → `GET /tracks/{idOrLogId}` (operationId `getTrack`).
  *
  * Public read of a single finding by its Spotify trackId OR its Log ID — the
@@ -22,20 +132,62 @@ import {
  * ID can also resolve to a mixtape, so the response is the discriminated
  * `{ ok: true } & ({ track } | { mixtape })` envelope (mirrors `TrackGetResponse`
  * in ../index.ts, plus the mixtape arm the live route already serves).
+ *
+ * THE IDENTITY PROJECTION (RFC dnb-identity-graph, Unit 2). Three query params turn
+ * the same op into the identity answer — the recording's identifiers and platform
+ * links, each carrying whether Fluncle holds it, looked and missed, will not look, or
+ * covers no such link:
+ *
+ *   - `identity=1` — return the identity answer for the recording named in the path.
+ *   - `isrc=<ISRC>` — look the recording up by ISRC instead. Always the identity answer.
+ *   - `mbid=<uuid>` — look it up by MusicBrainz recording id. Always the identity answer.
+ *
+ * THE KEY IS EXCLUSIVE. Exactly one of the three lookup keys may be supplied, and the
+ * path segment counts as one of them: pass a single `-` in the path when the key rides
+ * a query param (`GET /tracks/-?isrc=GBABC1234567`). Two keys at once is a 422, as is a
+ * key that is not a well-formed ISRC or UUID. Every one of those is thrown IN-HANDLER,
+ * on the `search_tracks` precedent: the input schema stays tolerant optional strings,
+ * because oRPC's own schema rejection emits a 400 and the honest answer to a
+ * well-formed request carrying an unusable value is a 422.
+ *
+ * A key that matches nothing is a 404, and carries no invitation to submit the
+ * recording. The identity reads are rate limited per caller; the plain read is not.
  */
 export const getTrack = oc
   .route({
     method: "GET",
     operationId: "getTrack",
     path: "/tracks/{idOrLogId}",
-    summary: "Get a finding (or mixtape) by Spotify trackId or Log ID",
+    summary:
+      "Get a finding or mixtape by Spotify trackId or Log ID, or a recording's identifiers and links by ISRC or MusicBrainz id",
     tags: ["Tracks"],
   })
-  .input(z.object({ idOrLogId: z.string() }))
+  .input(
+    z.object({
+      idOrLogId: z
+        .string()
+        .describe(
+          "A Spotify trackId or a Log ID. A single - when the key rides a query parameter instead.",
+        ),
+      identity: z
+        .string()
+        .optional()
+        .describe("Any value turns on the identity answer for the recording in the path."),
+      isrc: z
+        .string()
+        .optional()
+        .describe("Look the recording up by ISRC instead. Pass a single - in the path."),
+      mbid: z
+        .string()
+        .optional()
+        .describe("Look it up by MusicBrainz recording id. Pass a single - in the path."),
+    }),
+  )
   .output(
     z.union([
       z.object({ ok: z.literal(true), track: TrackListItemSchema }),
       z.object({ mixtape: MixtapeDTOSchema, ok: z.literal(true) }),
+      z.object({ identity: IdentityEnvelopeSchema, ok: z.literal(true) }),
     ]),
   );
 

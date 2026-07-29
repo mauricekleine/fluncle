@@ -16,6 +16,14 @@ import {
   toPublicTrackListItem,
 } from "../tracks";
 import { resolveLogPageTarget } from "../log-resolver";
+import {
+  type IdentityKey,
+  normalizeIsrcKey,
+  normalizeMbidKey,
+  readIdentity,
+} from "../identity-envelope";
+import { assertIdentityReadAllowed } from "../identity-dials";
+import { ApiError } from "../spotify";
 import { apiFault, type Implementer, parseLimit } from "./_shared";
 
 // Feed page-size bounds, ported verbatim from the live feed route.
@@ -31,6 +39,73 @@ const SIMILAR_MAX_LIMIT = 24;
 // off it), still modestly capped; parsed tolerantly like the `list_findings` feed.
 const MIXABLE_DEFAULT_LIMIT = 12;
 const MIXABLE_MAX_LIMIT = 32;
+
+/**
+ * THE PATH PLACEHOLDER. `GET /tracks/{idOrLogId}` needs a path segment, and `/tracks` itself is the
+ * archive enumerator, so a caller keying on an ISRC or an MBID passes a single `-` and puts the key
+ * in the query. It is the one spelling that keeps the key EXCLUSIVE: without it a request could
+ * carry a path id and a query ISRC that name different recordings, and the op would have to pick.
+ */
+const IDENTITY_PATH_PLACEHOLDER = "-";
+
+/**
+ * Decide which identity key (if any) this request carries, and refuse the malformed ones.
+ *
+ * `undefined` ⇒ no identity projection was asked for and the plain finding read runs, byte-for-byte
+ * as before. Every refusal is an in-handler `ApiError` at 422, on the `search_tracks` precedent:
+ * the contract's input stays tolerant optional strings, because oRPC's own schema rejection emits a
+ * 400 and 422 is the honest status for a well-formed request carrying an unusable value.
+ */
+function identityKeyFor(input: {
+  identity?: string;
+  idOrLogId: string;
+  isrc?: string;
+  mbid?: string;
+}): IdentityKey | undefined {
+  const isrc = input.isrc?.trim();
+  const mbid = input.mbid?.trim();
+  const path = input.idOrLogId.trim();
+  const pathIsKey = path !== "" && path !== IDENTITY_PATH_PLACEHOLDER;
+
+  const supplied = [pathIsKey, Boolean(isrc), Boolean(mbid)].filter(Boolean).length;
+
+  if (supplied > 1) {
+    throw new ApiError(
+      "invalid_key",
+      `One key at a time. Pass "${IDENTITY_PATH_PLACEHOLDER}" in the path when the key is a query parameter.`,
+      422,
+    );
+  }
+
+  if (isrc) {
+    const normalized = normalizeIsrcKey(isrc);
+
+    if (!normalized) {
+      throw new ApiError("invalid_isrc", "That's not a well-formed ISRC.", 422);
+    }
+
+    return { isrc: normalized, kind: "isrc" };
+  }
+
+  if (mbid) {
+    const normalized = normalizeMbidKey(mbid);
+
+    if (!normalized) {
+      throw new ApiError("invalid_mbid", "That's not a well-formed MusicBrainz recording id.", 422);
+    }
+
+    return { kind: "mbid", mbid: normalized };
+  }
+
+  if (!pathIsKey) {
+    // No usable key anywhere: the placeholder was passed with nothing to look up.
+    throw new ApiError("invalid_key", "Pass a Log ID, a track id, an ISRC, or an MBID.", 422);
+  }
+
+  // The projection is opt-in on the path key: a bare read keeps serving the finding DTO every
+  // existing caller depends on. Any non-empty value turns it on, the tolerant-parse habit.
+  return input.identity?.trim() ? { idOrLogId: path, kind: "idOrLogId" } : undefined;
+}
 
 /**
  * Normalize a discovery-window bound exactly as the live route's `parseTimestamp`
@@ -57,8 +132,26 @@ export function tracksHandlers(os: Implementer) {
   // `get_track` — public read of one finding (or mixtape) by Spotify trackId or
   // Log ID. Port of /api/tracks/{idOrLogId} GET: resolve, 404 via ORPCError when
   // absent, else the `{ ok: true } & ({ track } | { mixtape })` envelope.
-  const getTrack = os.get_track.handler(async ({ input }) => {
+  const getTrack = os.get_track.handler(async ({ context, input }) => {
     try {
+      const identityKey = identityKeyFor(input);
+
+      if (identityKey) {
+        // METERED (identity-dials.ts): this is the read whose value to a harvester is the
+        // aggregate rather than the row. The plain read below stays unmetered.
+        await assertIdentityReadAllowed(context.request);
+
+        const identity = await readIdentity(identityKey);
+
+        if (!identity) {
+          // No submission affordance in the message, deliberately: a machine caller must never be
+          // pointed at the crew's triage queue.
+          throw new ORPCError("NOT_FOUND", { message: "No recording for that key" });
+        }
+
+        return { identity, ok: true } as const;
+      }
+
       const target = await resolveLogPageTarget(input.idOrLogId);
 
       if (!target) {

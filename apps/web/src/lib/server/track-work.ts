@@ -373,6 +373,92 @@ export function scopeClause(scope: TrackWorkScope): string {
  *   too — the forced row must still get its vector, or the exoneration the override exists for
  *   never runs.
  */
+/**
+ * A machine name for each of the anchor worklist's FIVE PERMANENT exclusions — the reasons a row
+ * will never be offered a Spotify search again, as opposed to the temporal re-ask backoff, which is
+ * only "not yet". The identity envelope serves one of these as its `refused` reason, so the strings
+ * are a wire contract: a closed enum, no tier nouns, and each names the row's own condition rather
+ * than the queue's opinion of it.
+ */
+export type AnchorRefusalReason =
+  | "attempt-cap-reached"
+  | "credit-not-an-identity"
+  | "dismissed"
+  | "duplicate"
+  | "no-duration";
+
+/**
+ * THE FIVE PERMANENT EXCLUSIONS, as ONE reusable SQL fragment — the shared predicate
+ * {@link kindClause}'s `anchor` arm and the identity envelope's `refused` state are both derived
+ * from, so the two can never drift into saying different things about the same row.
+ *
+ * It is spelled POSITIVELY (the row is still ELIGIBLE) because that is how the worklist reads it;
+ * the envelope negates it, and `anchorRefusalReason` below names WHICH clause failed. Deliberately
+ * NOT included: `f.track_id is null` (a scope, not a row property), `t.spotify_uri is null` (the
+ * derived worklist itself — a row that HAS a link is `verified`, never `refused`), and the 14-day
+ * re-ask backoff (temporal — "not yet" is `absent`, not `refused`; a row under the backoff will be
+ * asked again and the envelope must not claim otherwise).
+ *
+ * Every reference is `t.`-qualified, matching the worklist's `tracks t left join findings f` alias,
+ * so a caller must use the same alias.
+ */
+export function anchorEligibilityClause(): { args: string[]; sql: string } {
+  const unanchorable = UNANCHORABLE_ARTISTS_JSON.map(() => "?").join(", ");
+
+  return {
+    args: [...UNANCHORABLE_ARTISTS_JSON],
+    // The cap is a trusted module int (interpolated); the unanchorable literals are BOUND.
+    sql: `t.duration_ms > 0
+            and t.dismissed_at is null
+            and t.duplicate_of_track_id is null
+            and coalesce(t.spotify_anchor_attempts, 0) < ${ANCHOR_MAX_ATTEMPTS}
+            and lower(t.artists_json) not in (${unanchorable})`,
+  };
+}
+
+/** The row shape {@link anchorRefusalReason} reads — the five columns the clause above tests. */
+export type AnchorEligibilityRow = {
+  artistsJson: null | string;
+  dismissedAt: null | string;
+  durationMs: null | number;
+  duplicateOfTrackId: null | string;
+  spotifyAnchorAttempts: null | number;
+};
+
+/**
+ * The TypeScript twin of {@link anchorEligibilityClause}: `undefined` when the row is eligible,
+ * else which permanent exclusion fires. The two are kept in lockstep by a row-for-row integration
+ * test (identity-envelope.integration.test.ts) that runs the SQL over a fixture table and asserts
+ * the two sets agree exactly — the only way to be sure a wire claim and a worklist agree.
+ *
+ * ORDER IS THE READING, not a precedence fight: the clauses are independent, and when several fire
+ * the first below is served. It leads with the operator's own acts (a dismissal, a duplicate
+ * verdict) because those are the answer a reader actually wants, then the structural facts.
+ */
+export function anchorRefusalReason(row: AnchorEligibilityRow): AnchorRefusalReason | undefined {
+  if (row.dismissedAt !== null) {
+    return "dismissed";
+  }
+
+  if (row.duplicateOfTrackId !== null) {
+    return "duplicate";
+  }
+
+  if (!(Number(row.durationMs ?? 0) > 0)) {
+    return "no-duration";
+  }
+
+  if ((row.spotifyAnchorAttempts ?? 0) >= ANCHOR_MAX_ATTEMPTS) {
+    return "attempt-cap-reached";
+  }
+
+  if (UNANCHORABLE_ARTISTS_JSON.includes((row.artistsJson ?? "").toLowerCase())) {
+    return "credit-not-an-identity";
+  }
+
+  return undefined;
+}
+
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
   if (kind === "anchor") {
     // THE ANCHOR WORKLIST (docs/catalogue-crawler.md § the anchor). Catalogue-only by construction
@@ -403,20 +489,18 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     const cutoff = new Date(
       Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
-    // The cap is a trusted module int (interpolated, exactly as `CAPTURE_MAX_FAILURES` is in the
-    // capture arm below); the cutoff and the unanchorable literals are BOUND.
-    const unanchorable = UNANCHORABLE_ARTISTS_JSON.map(() => "?").join(", ");
+    // The five PERMANENT exclusions come from the shared `anchorEligibilityClause` above — the same
+    // fragment the identity envelope negates for its `refused` state, so the queue and the wire can
+    // never disagree about a row. What stays HERE is what is local to the worklist: its catalogue
+    // scope, the derived un-anchored predicate, and the temporal re-ask backoff (BOUND cutoff).
+    const permanent = anchorEligibilityClause();
 
     return {
-      args: [cutoff, ...UNANCHORABLE_ARTISTS_JSON],
+      args: [cutoff, ...permanent.args],
       sql: `f.track_id is null
             and t.spotify_uri is null
-            and t.duration_ms > 0
-            and t.dismissed_at is null
-            and t.duplicate_of_track_id is null
             and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)
-            and coalesce(t.spotify_anchor_attempts, 0) < ${ANCHOR_MAX_ATTEMPTS}
-            and lower(t.artists_json) not in (${unanchorable})`,
+            and ${permanent.sql}`,
     };
   }
 

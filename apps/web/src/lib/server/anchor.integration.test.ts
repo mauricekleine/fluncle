@@ -700,6 +700,115 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
   });
 });
 
+describe("the anchor provenance pair, persisted with the link", () => {
+  /** The three provenance columns the identity envelope reads (schema.ts § the pair). */
+  async function provenance(trackId: string) {
+    const row = await db.execute({
+      args: [trackId],
+      sql: `select spotify_anchor_source, spotify_anchor_verified_by, spotify_anchored_at
+            from tracks where track_id = ?`,
+    });
+
+    return {
+      anchoredAt: row.rows[0]?.spotify_anchored_at,
+      source: row.rows[0]?.spotify_anchor_source,
+      verifiedBy: row.rows[0]?.spotify_anchor_verified_by,
+    };
+  }
+
+  it("records the RUNG and the SIGNAL on an exact-ISRC hit", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({ isrc: "GBCJY1300173", trackId: "mb_prov_isrc" });
+    await anchorTrack(
+      "mb_prov_isrc",
+      [
+        {
+          artists: [{ id: "sp-eth", name: "Etherwood" }],
+          durationMs: 261_901,
+          isrc: "GBCJY1300173",
+          spotifyTrackId: "spotIsrc",
+          title: "Weightless",
+        },
+      ],
+      { source: "listenbrainz" },
+    );
+
+    const stamped = await provenance("mb_prov_isrc");
+
+    expect(stamped.source).toBe("listenbrainz");
+    expect(stamped.verifiedBy).toBe("isrc");
+    // The HIT time, distinct from the last-attempt stamp beside it.
+    expect(stamped.anchoredAt).not.toBeNull();
+  });
+
+  it("distinguishes the ±1s PROPER-SUBSET fallback from the full search triple", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    // Full gate: the candidate credits the row's whole artist set.
+    await seedUnanchored({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      title: "Dribble",
+      trackId: "mb_prov_full",
+    });
+    await anchorTrack("mb_prov_full", [
+      {
+        artists: [{ id: "sp-muffler", name: "Muffler" }],
+        durationMs: 201_000,
+        isrc: null,
+        spotifyTrackId: "spotFull",
+        title: "Dribble",
+      },
+    ]);
+
+    // Subset fallback: the platform credits only the primary artist of a collab, so the artist
+    // signal is loosened and paid for with the tight ±1s duration window.
+    await seedUnanchored({
+      artists: ["LSB", "DRS"],
+      durationMs: 200_000,
+      isrc: null,
+      title: "Could Be",
+      trackId: "mb_prov_subset",
+    });
+    await anchorTrack("mb_prov_subset", [
+      {
+        artists: [{ id: "sp-lsb", name: "LSB" }],
+        durationMs: 200_000,
+        isrc: null,
+        spotifyTrackId: "spotSubset",
+        title: "Could Be",
+      },
+    ]);
+
+    expect((await provenance("mb_prov_full")).verifiedBy).toBe("search");
+    // A DISTINCT confidence, and the envelope must never flatten the two.
+    expect((await provenance("mb_prov_subset")).verifiedBy).toBe("search-subset");
+  });
+
+  it("leaves the pair NULL on a miss, so nothing wears provenance it did not earn", async () => {
+    const { anchorTrack } = await import("./anchor");
+
+    await seedUnanchored({ isrc: null, title: "Nothing Matches", trackId: "mb_prov_miss" });
+    await anchorTrack("mb_prov_miss", [
+      {
+        artists: [{ id: "sp-other", name: "Someone Else" }],
+        durationMs: 120_000,
+        isrc: null,
+        spotifyTrackId: "spotNope",
+        title: "A Different Tune",
+      },
+    ]);
+
+    expect(await provenance("mb_prov_miss")).toEqual({
+      anchoredAt: null,
+      source: null,
+      verifiedBy: null,
+    });
+  });
+});
+
 describe("resolveAnchorReview — the operator's ruling", () => {
   /** Seed a row already carrying a recorded review (one miss against the mismatch shape). */
   async function seedReviewed(trackId: string, spotifyTrackId: null | string): Promise<void> {
@@ -756,6 +865,16 @@ describe("resolveAnchorReview — the operator's ruling", () => {
     // The stamp and the counter move together, always — the miss that recorded the review bumped
     // it to 1, and the accept is the second write.
     expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(2);
+
+    // ...and the provenance says a HUMAN ruled, never that we have no record. These are the
+    // best-provenance anchors in the corpus, and the envelope must not read them as legacy.
+    const provenance = await db.execute(
+      "select spotify_anchor_source, spotify_anchor_verified_by, spotify_anchored_at from tracks where track_id = 'mb_accept'",
+    );
+    expect(text(provenance.rows[0]?.spotify_anchor_verified_by)).toBe("operator");
+    // No rung fetched it; he did. A null source is the honest answer, not a gap.
+    expect(provenance.rows[0]?.spotify_anchor_source).toBeNull();
+    expect(provenance.rows[0]?.spotify_anchored_at).not.toBeNull();
 
     // The graph edge rides the SAME stored candidate, so an accepted anchor links like a verified one.
     const artist = await db.execute(
