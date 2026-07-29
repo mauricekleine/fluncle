@@ -118,10 +118,11 @@ run_event_now() {
 # <<< END MIRRORED BLOCK: record_run_event <<<
 
 # The agent token this script POSTs with, read out of the sweep-secrets file it maintains —
-# so it introduces NO new credential and nothing from `op` beyond what it already handles. It
-# is read from the file as it stands BEFORE this run rewrites it, which is the point: a run
-# that dies at `op inject` still has last sync's token and can still report its own failure.
-# Never echoed, never logged, never passed on a command line.
+# so it introduces NO new credential and nothing from `op` beyond what it already handles.
+# Read ONCE, at emit time, which covers both cases without a second read: the file is only
+# ever replaced by an atomic `install`, so a run that dies at `op inject` still finds LAST
+# sync's token on disk and can report its own failure, and a run that got as far as installing
+# finds the freshly-rotated one. Never echoed, never logged, never passed on a command line.
 read_secret_token() {
   [ -r "$SWEEP_OUT" ] || return 0
   sed -n 's/^[[:space:]]*FLUNCLE_API_TOKEN=//p' "$SWEEP_OUT" 2>/dev/null | tail -1 \
@@ -160,9 +161,7 @@ on_exit() {
   _cleanup || true
 }
 STARTED_AT="$(run_event_now)"
-trap on_exit EXIT
-
-FLUNCLE_API_TOKEN="${FLUNCLE_API_TOKEN:-$(read_secret_token)}"
+trap 'on_exit' EXIT
 
 [ -r "$BOOTSTRAP" ] || {
   ERRORS=$((ERRORS + 1))
@@ -221,10 +220,6 @@ install -m 600 ${ROOT_OWN[@]+"${ROOT_OWN[@]}"} "$tg" "$GATEWAY_OUT"
 PRODUCED=$((PRODUCED + 1))
 install -m 600 ${HERMES_OWN[@]+"${HERMES_OWN[@]}"} "$ts" "$SWEEP_OUT"
 PRODUCED=$((PRODUCED + 1))
-
-# The token may have rotated in 1Password since the file this run started from; re-read it
-# from the copy just installed so the ledger POST below uses the current one.
-FLUNCLE_API_TOKEN="$(read_secret_token)"
 
 # GSC service-account key → a standalone 0600 json file (its json can't be a clean shell env
 # var, so it rides alongside the env file rather than inside it). The nightly audit's

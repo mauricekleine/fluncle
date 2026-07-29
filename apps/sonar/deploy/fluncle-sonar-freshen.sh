@@ -223,7 +223,7 @@ on_exit() {
   _cleanup || true
 }
 SF_STARTED_AT="$(run_event_now)"
-trap on_exit EXIT
+trap 'on_exit' EXIT
 
 # ── single-flight ─────────────────────────────────────────────────────────────
 # A tick that finds the lock held is NEITHER ok nor down — it is gated, and its counters stay

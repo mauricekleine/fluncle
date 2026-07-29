@@ -45,6 +45,28 @@ Re-arming is one `systemctl start --no-block` of the service: that gives `OnUnit
 
 A clean pass logs `ok — every active timer has a next elapse` and exits 0.
 
+## What it reports
+
+A clean exit code is the weakest possible signal from a **detector**. This unit legitimately re-arms nothing for months, so `produced == 0` says nothing at all about its health — and a pass that enumerates ZERO timers exits 0 and logs the same reassuring line while being completely blind. That is not hypothetical: a watchdog on the other box ran 897 consecutive times with zero checks and stayed green throughout.
+
+So every pass ends with a JSON summary line on stdout and POSTs it to the run ledger (`record_run`, agent tier) with the run's start, end, and exit code:
+
+```json
+{
+  "ok": true,
+  "checked": 43,
+  "produced": 0,
+  "errors": 0,
+  "queueDepth": 0,
+  "gateState": null,
+  "expectedIntervalMs": 900000
+}
+```
+
+`checked` is the DENOMINATOR — timers examined, counted before any filter — and it is the only field that separates a healthy idle pass from a blind one. `produced` is re-arms performed, `errors` failed re-arms, `queueDepth` the stranded timers this pass found; the ledger alarms on `produced == 0 AND queueDepth > 0`, so finding nothing to do stays silent forever while finding stranded timers and re-arming none does not. `ok` is DERIVED from the exit code and the error count, never a literal. `expectedIntervalMs` mirrors this unit's own `OnCalendar`, and `run-events.test.ts` pins the pair against the `.timer` file so a cadence change cannot quietly teach the ledger the wrong freshness budget.
+
+The agent token for the POST is read off the LIVE container's env via `docker inspect` — the same credential-free read the Discord webhook uses, so this unit still holds no config file and reads nothing from `op`. No token, or the container down, means no POST: absence of a row reads as a missed run, which is the alarm.
+
 ## Verifying it
 
 The detector is unproven until a synthetic failure makes it fire. Use a scratch unit, never a real sweep.
