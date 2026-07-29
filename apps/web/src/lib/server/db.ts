@@ -9,7 +9,7 @@ import {
 import { startSpan, type Span } from "@sentry/core";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "../../db/schema";
-import { readEnvs } from "./env";
+import { readEnvs, readOptionalEnv } from "./env";
 
 // Every DB query runs inside a Sentry `db.query` span so slow queries surface in
 // the Queries insight + the auto "Slow DB Queries" detector (op `db*`, SELECT,
@@ -259,6 +259,39 @@ export async function getDrizzleDb() {
   const client = await getDb();
 
   return drizzle(client, { schema });
+}
+
+/**
+ * THE SECOND DATABASE — `fluncle-telemetry`, the run ledger's own store
+ * (`src/db/telemetry-schema.ts`). A sibling of `getDb`, reading the TELEMETRY env pair
+ * and wearing the SAME `instrument()` Sentry-span proxy, so a telemetry query shows up
+ * in the Queries insight exactly like a primary one.
+ *
+ * WHY A SECOND CLIENT AT ALL: libSQL has a single writer and this system has a measured
+ * scar where a timer convoy stalled it. A run ledger behind that same writer goes dark
+ * precisely when the wedge it should be diagnosing happens, so it lives on the other
+ * side of it (see the telemetry schema's header for the full rationale).
+ *
+ * IT RETURNS `undefined` WHEN UNPROVISIONED, and that is the load-bearing behaviour, not
+ * an oversight. Local dev, the test suite, and preview deployments have no telemetry
+ * database; `readOptionalEnv` (not `readEnvs`, which throws) means the caller gets
+ * `undefined` and turns the write into a no-op. A missing telemetry database must never
+ * break a product path — the ledger is diagnostics, and diagnostics that can take down
+ * the thing they observe are worse than no diagnostics. Both vars are required together:
+ * half a pair is a misconfiguration, and dialling a URL with no token would fail on
+ * every write instead of degrading cleanly here.
+ */
+export async function getTelemetryDb(): Promise<Client | undefined> {
+  const [url, authToken] = await Promise.all([
+    readOptionalEnv("TURSO_TELEMETRY_DATABASE_URL"),
+    readOptionalEnv("TURSO_TELEMETRY_AUTH_TOKEN"),
+  ]);
+
+  if (!url || !authToken) {
+    return undefined;
+  }
+
+  return instrument(createClient({ authToken, url }));
 }
 
 export function typedRow<T extends object>(rows: Row[]): T | undefined {
