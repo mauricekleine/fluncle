@@ -125,6 +125,12 @@ export const SERVICE_ORDER = [
   "hermes",
   "render-box",
   "disk",
+  // The box-condition sibling of `disk`, and the one row that is ABOUT the automation rather
+  // than being a cron: each `cron.*` row reports the verdict its sweep gave itself, while this
+  // one reports what those sweeps LOGGED — the errors a tick can pile up while still ending
+  // `{ ok: true }`. Core, next to disk, because both answer "how is the box holding up", and
+  // deliberately NOT under the automation headings, where it would read as a 36th cron.
+  "sweep-errors",
 ];
 
 // The registry is the SINGLE SOURCE OF TRUTH for a cron row's title + one-line
@@ -167,6 +173,7 @@ export const INFRA_SERVICE_LABELS: Record<string, string> = {
   "self-deploy-ssh": "Self-deploy (SSH)",
   sonar: "Sonar",
   ssh: "SSH terminal",
+  "sweep-errors": "Sweep errors",
   web: "Web",
 };
 
@@ -187,6 +194,7 @@ export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   "self-deploy-ssh": "the rave terminal rebuilds itself when apps/ssh changes",
   sonar: "the sonic-similarity engine",
   ssh: "rave.fluncle.com",
+  "sweep-errors": "errors the automation logs while still reporting ok",
   web: "www.fluncle.com",
 };
 

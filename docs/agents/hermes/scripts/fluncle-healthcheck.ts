@@ -778,8 +778,12 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
  * that never got to speak.
  */
 export function findJsonSummary(body: string): Record<string, unknown> | null {
-  const lines = body
-    .split("\n")
+  // Only ever scan the STDOUT region. cron-output.sh appends a delimited stderr tail below it
+  // (see STDERR_DELIMITER), and the summary lives in the sweep's stdout by contract — reading
+  // past the delimiter would let a stderr line that happens to be a JSON object impersonate
+  // the summary. An old-shaped marker has no delimiter and is unaffected.
+  const lines = splitMarker(body)
+    .stdout.split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
 
@@ -962,13 +966,382 @@ export function cronCheck(cron: CronDef, verdict: CronVerdict): Check {
  * actually owns. Each cron stands or falls on its own row — "look how many systems are
  * humming" — instead of collapsing into a single aggregate.
  */
-function probeCrons(): Check[] {
-  const claimed = claimCronDirs(AUTOMATION_CRONS);
+function probeCrons(claimed: Map<string, string>): Check[] {
   const uptimeMs = boxUptimeMs();
 
   return AUTOMATION_CRONS.map((cron) =>
     cronCheck(cron, judgeCron(cron, claimed.get(cron.service), uptimeMs)),
   );
+}
+
+// ---------------------------------------------------------------------------
+// PROBE: sweep-errors — the SECOND signal over the same markers, and a deliberately
+// SEPARATE one.
+//
+// THE HOLE THIS FILLS. `judgeCron` above reads exactly one thing out of a marker: the
+// sweep's own `{ ok }` verdict. That verdict is the sweep's opinion of its TICK, not of its
+// WORK — a sweep that walks a batch of 10, fails all 10 for the same reason, and returns
+// `{"ok":true,"failed":10}` is telling the truth (the tick ran, the queue is intact, it will
+// retry) and reads perfectly green. Two days of real box output, aggregated: 610 capture
+// bot-challenges, and three entity slugs each rejected ~90 times by the bio voice gate — the
+// SAME three, over and over, a queue that could not drain. Every one of those ticks was
+// `ok: true`, and `/status` was right to say so. Nothing anywhere was reading the rest.
+//
+// THE RULE, in one sentence: count the evidence a sweep leaves that WORK DID NOT GET DONE,
+// sum it over a rolling window, and say so when it crosses a threshold — without ever
+// touching the sweep's own verdict.
+//
+// The evidence is two explicit, reviewable lists and nothing else:
+//   • STRAIN_PHRASES — substrings that appear in a sweep's stderr when an item did not get
+//     done. Empirically tuned against all 191 `log()` string literals in this directory, not
+//     guessed: `skipping` alone was tested and REJECTED (a note sweep logs "already on file —
+//     skipping the authoring spend" on a healthy no-op), which is why the entity-bio signature
+//     is the far tighter "stays queued" — the item is still in the queue, by the sweep's own
+//     words. There is deliberately no /error/i catch-all.
+//   • STRAIN_COUNTER_KEYS / STRAIN_FLAG_KEYS — fields the sweeps ALREADY put in their JSON
+//     summaries and no one reads (`failed`, `gateSkipped`, `throttled`). Exact machine counts,
+//     zero interpretation. `skipped` and `unmatched` are deliberately absent: both are ordinary
+//     outcomes here, not failures.
+//
+// WHY IT IS ITS OWN ROW. The sweep's `{ ok }` contract stays exactly as it was, and this
+// never edits, wraps, or overrides it: `cron.capture` still reads whatever capture said about
+// itself. Strain lands on ONE separate `sweep-errors` row instead of ~35 per-sweep rows,
+// because `service_status` rows are upserted and never deleted — a row minted for a
+// one-afternoon condition would sit on the public board forever (`RETIRED_SERVICE_IDS` in
+// apps/web/src/lib/server/status.ts is the hand-curated cost of exactly that mistake).
+// The row carries the count; the Discord line names the sweeps.
+// ---------------------------------------------------------------------------
+
+/**
+ * The line cron-output.sh writes between a marker's captured stdout and its captured stderr
+ * tail. MIRRORED there as CRON_OUTPUT_STDERR_DELIMITER — change one, change the other; a test
+ * pins the pair in lockstep by reading the shell source.
+ */
+export const STDERR_DELIMITER = "<!-- fluncle-cron-output: stderr tail -->";
+
+/**
+ * Split a marker into its stdout region (the summary lives here) and its stderr tail (the
+ * errors live here). A marker written before the tail existed has no delimiter and is all
+ * stdout — which is exactly how it used to read, so nothing about the old shape changes.
+ */
+export function splitMarker(body: string): { stderr: string; stdout: string } {
+  const index = body.indexOf(STDERR_DELIMITER);
+
+  if (index === -1) {
+    return { stderr: "", stdout: body };
+  }
+
+  return { stderr: body.slice(index + STDERR_DELIMITER.length), stdout: body.slice(0, index) };
+}
+
+/**
+ * THE VOCABULARY — the whole detector's false-positive surface, kept short and readable on
+ * purpose. A stderr line counts as one point of strain if it contains any of these
+ * (case-insensitively). Every entry says "an item did not get done"; none of them appears in
+ * the high-volume healthy chatter (`embedded + written`, `catalogue done (bpm …)`, `authoring
+ * with Worker-gathered Firecrawl facts`, `baked paths (derived from …)`), which is the test
+ * that matters — a detector that fires on the 471-a-day success line is worse than none.
+ */
+export const STRAIN_PHRASES: readonly string[] = [
+  "aborting the batch",
+  "bot-challenged",
+  "could not",
+  // The per-row catch shared by ~10 sweeps ("error on <id>: …", "unexpected error on <id>: …")
+  // — the single most common way a sweep says "this item did not get done, moving on". The
+  // trailing space is load-bearing: it matches the catch line and not the word "error" loose
+  // in prose.
+  "error on ",
+  "failed",
+  "failure",
+  // `fatal:` and claude's own error envelope. Both are exact strings the sweeps print, and
+  // `is_error` is the signature of an authoring tick that left its item queued.
+  "fatal:",
+  "giving up",
+  "is_error",
+  "rate-limited",
+  "rejected the",
+  "retrying",
+  "stays queued",
+  "stays un-triaged",
+  "throttled",
+  "timed out",
+  "unable to",
+  "unavailable",
+];
+
+/**
+ * Summary fields that COUNT work that did not get done. Each unit is one point — these are
+ * the sweeps' own numbers, so there is nothing to interpret. Deliberately excluded: `skipped`
+ * and `unmatched`, both of which are ordinary outcomes (an already-noted finding, a capture
+ * whose fingerprint did not match) rather than failures.
+ */
+export const STRAIN_COUNTER_KEYS: readonly string[] = [
+  "errors",
+  "failed",
+  "gateSkipped",
+  "rejected",
+];
+
+/** Summary fields that FLAG a strained tick when `true`. One point each. */
+export const STRAIN_FLAG_KEYS: readonly string[] = ["throttled"];
+
+/** Strain points from a marker's stderr tail: one per line matching the vocabulary. */
+export function countDistressLines(stderrRegion: string): number {
+  let points = 0;
+
+  for (const raw of stderrRegion.split("\n")) {
+    // Strip the blockquote prefix cron-output.sh writes, then normalise for matching.
+    const line = raw
+      .replace(/^\s*>\s?/, "")
+      .trim()
+      .toLowerCase();
+
+    if (line && STRAIN_PHRASES.some((phrase) => line.includes(phrase))) {
+      points += 1;
+    }
+  }
+
+  return points;
+}
+
+/** Strain points from a marker's JSON summary: its own failure counters and flags. */
+export function countSummaryStrain(summary: Record<string, unknown> | null): number {
+  if (!summary) {
+    return 0;
+  }
+
+  let points = 0;
+
+  for (const key of STRAIN_COUNTER_KEYS) {
+    const value = summary[key];
+
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      points += Math.floor(value);
+    }
+  }
+
+  for (const key of STRAIN_FLAG_KEYS) {
+    if (summary[key] === true) {
+      points += 1;
+    }
+  }
+
+  return points;
+}
+
+/**
+ * The strain one marker (one tick) contributes. Both halves count, and a failure that is BOTH
+ * logged and counted scores twice — that is fine and deliberate: the threshold is calibrated
+ * against observed totals, not against a notion of one-point-per-incident.
+ */
+export function markerStrain(body: string): number {
+  return countDistressLines(splitMarker(body).stderr) + countSummaryStrain(findJsonSummary(body));
+}
+
+// ── THE STRAIN DIAL — the ONE place these numbers are tuned. ──────────────────
+// Every threshold is env-overridable on the box, so tuning after a day of real data needs no
+// rebake: set it in the box env, restart the timer, done.
+//
+// WINDOW (6h). Long enough that a slow cron contributes several ticks; short enough that a
+// fixed condition clears the board the same morning rather than a full day later.
+//
+// POINTS (12). The bar for "standing condition, not a bad moment". Read against the measured
+// two-day sample: capture took ~305 bot-challenges/day (~76 in a 6h window) and the three bio
+// crons ~136 rejections/day between them — both comfortably over. A single sweep tick cannot
+// reach it alone on batch size (the batch caps here run 4–10 items).
+//
+// TICKS (3). The spread requirement, and the reason one catastrophic tick does NOT land here:
+// that case is already `judgeCron`'s (`ok:false`, or a killed run with no summary). This row
+// is only ever about a condition that KEEPS happening.
+//
+// The window is measured with a per-cron rolling state (hourly buckets in the prober's state
+// file) rather than by re-reading the marker dir, because cron-output.sh prunes to ~20 markers
+// — for the 1-minute `live` cron that is 20 minutes of history, far short of any useful window.
+const STRAIN_WINDOW_MS =
+  Number.parseInt(process.env.HEALTHCHECK_STRAIN_WINDOW_MS ?? "", 10) || 6 * 60 * 60_000;
+const STRAIN_MIN_POINTS = Number.parseInt(process.env.HEALTHCHECK_STRAIN_POINTS ?? "", 10) || 12;
+const STRAIN_MIN_TICKS = Number.parseInt(process.env.HEALTHCHECK_STRAIN_TICKS ?? "", 10) || 3;
+
+/** Bucket granularity for the rolling window — one hour keeps the state file tiny (≤7/cron). */
+const STRAIN_BUCKET_MS = 60 * 60_000;
+
+/** One hour of accrued strain for one cron. */
+export type StrainBucket = { points: number; ticks: number };
+
+/**
+ * What the prober remembers about one cron's strain between ticks: the hourly buckets inside
+ * the window, whether it was already reported strained (so the Discord line is edge-triggered),
+ * and the newest marker mtime already folded in (so no marker is ever counted twice).
+ */
+export type StrainState = {
+  buckets: Record<string, StrainBucket>;
+  strained: boolean;
+  watermarkMs: number;
+};
+
+type StrainMap = Record<string, StrainState>;
+
+/**
+ * Fold this tick's new markers into a cron's rolling window: accrue each sample into its own
+ * hour bucket, advance the watermark past everything seen, and drop whatever has aged out.
+ *
+ * The watermark is what makes this exact rather than approximate — the prober ticks every
+ * ~10m and every marker written since the last tick is still on disk (the pruner keeps ~20),
+ * so every tick of every cron is counted once and only once.
+ */
+export function foldStrain(
+  prev: StrainState | undefined,
+  samples: { atMs: number; points: number }[],
+  now: number,
+  windowMs: number = STRAIN_WINDOW_MS,
+): StrainState {
+  const buckets: Record<string, StrainBucket> = { ...prev?.buckets };
+  let watermarkMs = prev?.watermarkMs ?? 0;
+
+  for (const sample of samples) {
+    watermarkMs = Math.max(watermarkMs, sample.atMs);
+
+    if (sample.points <= 0) {
+      continue; // A clean tick advances the watermark and nothing else.
+    }
+
+    const key = String(Math.floor(sample.atMs / STRAIN_BUCKET_MS) * STRAIN_BUCKET_MS);
+    const bucket = buckets[key] ?? { points: 0, ticks: 0 };
+
+    buckets[key] = { points: bucket.points + sample.points, ticks: bucket.ticks + 1 };
+  }
+
+  const cutoff = now - windowMs;
+  const kept: Record<string, StrainBucket> = {};
+
+  for (const [key, bucket] of Object.entries(buckets)) {
+    const start = Number.parseInt(key, 10);
+
+    if (Number.isFinite(start) && start + STRAIN_BUCKET_MS > cutoff) {
+      kept[key] = bucket;
+    }
+  }
+
+  return { buckets: kept, strained: prev?.strained ?? false, watermarkMs };
+}
+
+/** A cron's totals across the buckets still inside the window. */
+export function strainTotals(state: StrainState | undefined, now: number): StrainBucket {
+  const cutoff = now - STRAIN_WINDOW_MS;
+  const totals: StrainBucket = { points: 0, ticks: 0 };
+
+  for (const [key, bucket] of Object.entries(state?.buckets ?? {})) {
+    const start = Number.parseInt(key, 10);
+
+    if (Number.isFinite(start) && start + STRAIN_BUCKET_MS > cutoff) {
+      totals.points += bucket.points;
+      totals.ticks += bucket.ticks;
+    }
+  }
+
+  return totals;
+}
+
+/** Both gates: enough evidence, AND spread across enough separate ticks to be standing. */
+export function isStrained(
+  totals: StrainBucket,
+  minPoints = STRAIN_MIN_POINTS,
+  minTicks = STRAIN_MIN_TICKS,
+): boolean {
+  return totals.points >= minPoints && totals.ticks >= minTicks;
+}
+
+/**
+ * The `sweep-errors` row. `degraded`, never `down`: every one of these sweeps is RUNNING and
+ * reporting for itself on its own row, so calling the box down would be a lie the /status
+ * headline would then repeat. The operator's loud channel is the Discord line below.
+ */
+export function sweepStrainCheck(strained: string[]): Check {
+  const service = "sweep-errors";
+
+  if (strained.length === 0) {
+    return { latencyMs: null, message: msg("no repeat errors"), service, status: "ok" };
+  }
+
+  const names = strained.map((id) => id.replace(/^cron\./, "")).join(", ");
+
+  return {
+    latencyMs: null,
+    message: msg(
+      `${strained.length} sweep${strained.length === 1 ? "" : "s"} logging repeat errors: ${names}`,
+    ),
+    service,
+    status: "degraded",
+  };
+}
+
+/**
+ * The strain markers a cron has written since the prober last looked, each scored. Newly-seen
+ * only — the watermark is what keeps a marker from being counted on every tick for as long as
+ * it survives the pruner.
+ *
+ * The comparison is strictly `>`, so the one thing it can lose is a marker written in the SAME
+ * MILLISECOND as the newest one the prober already folded in. That costs a few points out of a
+ * six-hour window and can never invent strain, which is the direction that matters.
+ */
+function readStrainSamples(
+  dir: string | undefined,
+  watermarkMs: number,
+): { atMs: number; points: number }[] {
+  if (!dir) {
+    return [];
+  }
+
+  try {
+    return readdirSync(dir)
+      .filter((entry) => entry.endsWith(".md"))
+      .map((entry) => join(dir, entry))
+      .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
+      .filter((file) => file.mtimeMs > watermarkMs)
+      .map((file) => ({
+        atMs: file.mtimeMs,
+        points: markerStrain(readFileSync(file.path, "utf8")),
+      }));
+  } catch {
+    return []; // An unreadable dir is judgeCron's problem to report, never a strain alarm.
+  }
+}
+
+/**
+ * Score every cron's new markers, roll the window forward, and report which sweeps are now in
+ * a standing error condition — plus which just entered or left it, so the Discord line can be
+ * edge-triggered exactly like the service transitions are.
+ */
+export function probeSweepStrain(
+  claimed: Map<string, string>,
+  prev: StrainMap,
+  now = Date.now(),
+): { check: Check; cleared: string[]; newly: string[]; next: StrainMap; strained: string[] } {
+  const next: StrainMap = {};
+  const strained: string[] = [];
+  const newly: string[] = [];
+  const cleared: string[] = [];
+
+  for (const cron of AUTOMATION_CRONS) {
+    const before = prev[cron.service];
+    const samples = readStrainSamples(claimed.get(cron.service), before?.watermarkMs ?? 0);
+    const state = foldStrain(before, samples, now);
+    const nowStrained = isStrained(strainTotals(state, now));
+
+    if (nowStrained) {
+      strained.push(cron.service);
+
+      if (before?.strained !== true) {
+        newly.push(cron.service);
+      }
+    } else if (before?.strained === true) {
+      cleared.push(cron.service);
+    }
+
+    next[cron.service] = { ...state, strained: nowStrained };
+  }
+
+  return { check: sweepStrainCheck(strained), cleared, newly, next, strained };
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,7 +1453,10 @@ function probeHealthcheck(): Check {
 // degrades to a fresh entry, never an exception.
 // ---------------------------------------------------------------------------
 
-const STATE_VERSION = 2;
+// v3 adds the `strain` section (the per-cron rolling error window). It is additive and read
+// defensively, so a v1/v2 file on disk still loads and simply starts its strain windows empty
+// — and an older prober reading a v3 file only ever looks at `services`, which is untouched.
+const STATE_VERSION = 3;
 
 function isStatus(value: unknown): value is Status {
   return value === "ok" || value === "degraded" || value === "down";
@@ -1141,32 +1517,85 @@ export function normalizeState(parsed: unknown): StateMap {
   return state;
 }
 
-function loadState(): StateMap {
-  if (!existsSync(STATE_FILE)) {
+/**
+ * Read the v3 `strain` section: per-cron hourly buckets + watermark + the reported flag.
+ * Everything is validated field by field — a v1/v2 file (no section at all), a truncated
+ * write, or any junk simply yields an empty map, and the windows refill from the markers
+ * still on disk within a tick or two. It must never throw: this is the same read that
+ * carries the transition baseline.
+ */
+export function normalizeStrain(parsed: unknown): StrainMap {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {};
   }
 
+  const section = (parsed as Record<string, unknown>).strain;
+
+  if (!section || typeof section !== "object" || Array.isArray(section)) {
+    return {};
+  }
+
+  const strain: StrainMap = {};
+
+  for (const [service, value] of Object.entries(section as Record<string, unknown>)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+
+    const entry = value as Record<string, unknown>;
+    const rawBuckets = entry.buckets;
+    const buckets: Record<string, StrainBucket> = {};
+
+    if (rawBuckets && typeof rawBuckets === "object" && !Array.isArray(rawBuckets)) {
+      for (const [key, bucket] of Object.entries(rawBuckets as Record<string, unknown>)) {
+        if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) {
+          continue;
+        }
+
+        const shape = bucket as Record<string, unknown>;
+
+        buckets[key] = { points: asCount(shape.points), ticks: asCount(shape.ticks) };
+      }
+    }
+
+    strain[service] = {
+      buckets,
+      strained: entry.strained === true,
+      watermarkMs: asCount(entry.watermarkMs),
+    };
+  }
+
+  return strain;
+}
+
+function loadState(): { services: StateMap; strain: StrainMap } {
+  if (!existsSync(STATE_FILE)) {
+    return { services: {}, strain: {} };
+  }
+
   try {
-    return normalizeState(JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown);
+    const parsed: unknown = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+
+    return { services: normalizeState(parsed), strain: normalizeStrain(parsed) };
   } catch (error) {
     log(
       `could not read state (${error instanceof Error ? error.message : String(error)}) — re-baselining`,
     );
   }
 
-  return {};
+  return { services: {}, strain: {} };
 }
 
 /** Exactly what goes on disk — exported so the round-trip is tested through the real shape. */
-export function serializeState(next: StateMap): string {
-  return `${JSON.stringify({ services: next, version: STATE_VERSION }, null, 2)}\n`;
+export function serializeState(next: StateMap, strain: StrainMap = {}): string {
+  return `${JSON.stringify({ services: next, strain, version: STATE_VERSION }, null, 2)}\n`;
 }
 
-function writeState(next: StateMap): void {
+function writeState(next: StateMap, strain: StrainMap): void {
   try {
     // mkdir -p the state dir (recursive is a no-op when it already exists).
     mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(STATE_FILE, serializeState(next), "utf8");
+    writeFileSync(STATE_FILE, serializeState(next, strain), "utf8");
   } catch (error) {
     log(`could not write state (${error instanceof Error ? error.message : String(error)})`);
   }
@@ -1381,6 +1810,36 @@ export function buildEscalationAlert(
   return `🚨 ${escalations.length} services STILL DOWN — longest ${longest.streak} consecutive checks (${formatStreakDuration(longest.streak, tickMs)}): ${named}, +${escalations.length - ESCALATION_LINE_LIMIT} more. This is not a transient.`;
 }
 
+/**
+ * The strain line — the one that actually NAMES the sweeps, which the aggregate `sweep-errors`
+ * row cannot.
+ *
+ * EDGE-TRIGGERED, exactly like `buildAlert`: it speaks when a sweep ENTERS the condition and
+ * when it LEAVES, never on the ticks in between. There is no escalation ladder here on
+ * purpose — the window itself is 6 hours, so "still strained" is the default state of a real
+ * condition and a per-tick reminder would be the noise this detector exists to avoid. The
+ * standing visibility is the /status row, which stays degraded for as long as it is true.
+ */
+export function buildStrainAlert(newly: string[], cleared: string[]): string | null {
+  if (newly.length === 0 && cleared.length === 0) {
+    return null;
+  }
+
+  const parts: string[] = [];
+
+  if (newly.length > 0) {
+    parts.push(
+      `⚠️ logging repeat errors while still reporting ok: ${newly.join(", ")}. Their own summaries are green; the marker bodies are not.`,
+    );
+  }
+
+  if (cleared.length > 0) {
+    parts.push(`🟢 quiet again: ${cleared.join(", ")}`);
+  }
+
+  return parts.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // POST: send the snapshot to the agent-tier record_health endpoint. Best-effort —
 // the alert already fired, so a failed POST is logged, never thrown. Returns true
@@ -1474,7 +1933,10 @@ async function main(): Promise<void> {
   ]);
   const dns = probeDns();
   const disk = probeDisk();
-  const crons = probeCrons();
+  // The cron output dirs are claimed ONCE and read by both consumers: judgeCron for each
+  // sweep's own `{ ok }` verdict, and the strain detector for what the marker bodies say.
+  const claimed = claimCronDirs(AUTOMATION_CRONS);
+  const crons = probeCrons(claimed);
   const renderBox = probeRenderBox();
   const hermes = probeHermes();
   // The prober's own row — self-evident (it's run by a host timer, not the gateway,
@@ -1486,6 +1948,13 @@ async function main(): Promise<void> {
   // (the state map is keyed by service id), so a single cron going down/recovering
   // pings on its own. cron.healthcheck rides alongside the gateway crons even though
   // it's emitted self-evidently.
+  // Transitions + strain both read the same state file.
+  const { services: prev, strain: prevStrain } = loadState();
+
+  // The second read of the same markers: what the sweeps LOGGED, as opposed to what they
+  // reported about themselves. One aggregate row; the sweeps are named in the Discord line.
+  const sweepStrain = probeSweepStrain(claimed, prevStrain);
+
   const checks: Check[] = [
     web,
     db,
@@ -1494,14 +1963,13 @@ async function main(): Promise<void> {
     dns,
     ssh,
     disk,
+    sweepStrain.check,
     ...crons,
     healthcheck,
     renderBox,
     hermes,
   ];
 
-  // Transitions against the prior state map.
-  const prev = loadState();
   const withTransition: CheckWithTransition[] = checks.map((check) => ({
     ...check,
     transitioned: prev[check.service] !== undefined && prev[check.service]?.status !== check.status,
@@ -1525,8 +1993,8 @@ async function main(): Promise<void> {
   }
 
   // Persist the new map for the next tick BEFORE the network POST (so a POST failure
-  // never loses the transition baseline or the streaks).
-  writeState(next);
+  // never loses the transition baseline, the streaks, or the strain windows).
+  writeState(next, sweepStrain.next);
 
   // Alert on a transition to down or a recovery from down …
   const alert = buildAlert(withTransition, prev);
@@ -1544,6 +2012,15 @@ async function main(): Promise<void> {
     pingDiscord(escalationAlert);
   }
 
+  // … and, separately again, on STRAIN: a sweep whose own summary still says ok but whose
+  // marker body has been carrying errors for hours. Its own post because it is a different
+  // claim — nothing is down, something is not getting done.
+  const strainAlert = buildStrainAlert(sweepStrain.newly, sweepStrain.cleared);
+
+  if (strainAlert) {
+    pingDiscord(strainAlert);
+  }
+
   // Persist the snapshot to the page (best-effort).
   const posted = await postSnapshot(at, withTransition);
 
@@ -1556,7 +2033,7 @@ async function main(): Promise<void> {
   // services' health (the snapshot carries that); a down service is a normal,
   // successful tick. `ok:false` would only mean the prober itself couldn't run.
   const summary = {
-    alerted: alert !== null || escalationAlert !== null,
+    alerted: alert !== null || escalationAlert !== null || strainAlert !== null,
     at,
     down: withTransition.filter((c) => c.status === "down").map((c) => c.service),
     // The services that crossed an escalation rung this tick, with the streak that did it —
@@ -1569,6 +2046,9 @@ async function main(): Promise<void> {
       status: c.status,
       transitioned: c.transitioned,
     })),
+    // The sweeps whose marker bodies are carrying repeat errors — separate from `down` by
+    // construction, since every one of them is reporting itself healthy.
+    strained: sweepStrain.strained,
     transitions: withTransition.filter((c) => c.transitioned).map((c) => c.service),
   };
 

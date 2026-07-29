@@ -27,16 +27,27 @@ import { join } from "node:path";
 import {
   boxUptimeMs,
   buildEscalationAlert,
+  buildStrainAlert,
+  countDistressLines,
+  countSummaryStrain,
   type CronDef,
   cronCheck,
   escalationDue,
   findJsonSummary,
+  foldStrain,
   formatStreakDuration,
+  isStrained,
   judgeCron,
+  markerStrain,
   nextServiceState,
   normalizeState,
+  normalizeStrain,
   serializeState,
   type ServiceState,
+  STDERR_DELIMITER,
+  type StrainState,
+  strainTotals,
+  sweepStrainCheck,
 } from "./fluncle-healthcheck";
 
 const CRON: CronDef = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
@@ -395,5 +406,308 @@ describe("boxUptimeMs", () => {
     // The box is Linux (procfs); a dev Mac is not. Both answers are valid — what must never
     // happen is a wrong number, since it decides whether silence means "booting" or "dead".
     expect(uptime === null || uptime > 0).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE STRAIN DETECTOR — the second read of the same marker.
+//
+// The two fixtures below ARE the specification. They are real box output, aggregated over two
+// days and sorted by frequency; the split between them is the operator's own judgement about
+// which lines are a problem. A detector is only as good as its behaviour on this exact table,
+// in BOTH directions — the errors have to fire it, and the 1,200-a-day success chatter must
+// not. (The plumbing that carries these lines from a sweep's stderr to the marker on disk is
+// proven separately, against the real bash, in cron-output.test.ts.)
+// ---------------------------------------------------------------------------
+
+/** Lines the operator classed as REAL PROBLEMS. Every one must score. */
+const REAL_PROBLEMS: readonly { count: number; line: string }[] = [
+  {
+    count: 347,
+    line: "[capture-sweep] bot-challenged at search — re-rolling the proxy session for a fresh exit",
+  },
+  {
+    count: 263,
+    line: "[capture-sweep] bot-challenged at download — re-rolling the proxy session for a fresh exit",
+  },
+  {
+    count: 92,
+    line: "[entity-bio-sweep] future-signal: the voice gate / length rejected the bio — skipping (stays queued)",
+  },
+  {
+    count: 91,
+    line: "[entity-bio-sweep] jungle-sound-the-bassline-strikes-back: the voice gate / length rejected the bio — skipping (stays queued)",
+  },
+  {
+    count: 90,
+    line: "[entity-bio-sweep] invaderz-transmissions: the voice gate / length rejected the bio — skipping (stays queued)",
+  },
+  {
+    count: 76,
+    line: "[crawl-sweep] MusicBrainz throttled the pass — stopped clean; the next tick resumes.",
+  },
+  { count: 50, line: "[fluncle-live] poll failed, retrying once: The operation was aborted." },
+  {
+    count: 49,
+    line: "[fluncle-healthcheck] record_health POST attempt 1/3 failed (The operation was aborted.); retrying",
+  },
+];
+
+/** Benign high-volume chatter. NONE of it may score — this is the false-positive gate. */
+const BENIGN_CHATTER: readonly { count: number; line: string }[] = [
+  { count: 471, line: "[embed-sweep] mb_<id>: embedded + written" },
+  { count: 454, line: "[enrich-sweep] mb_<id>: catalogue done (bpm null, key null)" },
+  { count: 153, line: "[enrich-sweep] mb_<id>: catalogue done (bpm 174.02, key null)" },
+  {
+    count: 92,
+    line: "[entity-bio-sweep] future-signal: authoring with Worker-gathered Firecrawl facts",
+  },
+  {
+    count: 48,
+    line: "[pin-watch] baked paths (derived from the docs/agents/hermes/Dockerfile COPY set): scripts skills Dockerfile",
+  },
+];
+
+/** A marker carrying a summary plus the given stderr lines, in the wrapper's exact shape. */
+function strainMarker(summary: string, stderrLines: readonly string[]): string {
+  const tail =
+    stderrLines.length === 0
+      ? ""
+      : `${STDERR_DELIMITER}\n${stderrLines.map((line) => `> ${line}`).join("\n")}\n`;
+
+  return `# Cron Job: fluncle-backup\n\n${summary}\n${tail}`;
+}
+
+describe("the strain vocabulary against the real box output", () => {
+  test("EVERY real problem line scores (the detector FIRES)", () => {
+    const missed = REAL_PROBLEMS.filter(({ line }) => countDistressLines(`> ${line}`) === 0);
+
+    expect(missed.map((entry) => entry.line)).toEqual([]);
+  });
+
+  test("EVERY benign chatter line scores zero (the detector STAYS QUIET)", () => {
+    const tripped = BENIGN_CHATTER.filter(({ line }) => countDistressLines(`> ${line}`) > 0);
+
+    expect(tripped.map((entry) => entry.line)).toEqual([]);
+  });
+
+  test("the busiest benign line cannot trip the detector at ANY volume", () => {
+    // 471 embed successes in two days is the highest-frequency line on the box. Feed one tick
+    // 500 of them: still zero. This is the whole reason the rule is a named-phrase list rather
+    // than something like /error/i.
+    const flood = Array.from({ length: 500 }, () => BENIGN_CHATTER[0]?.line ?? "");
+
+    expect(markerStrain(strainMarker('{"ok":true,"embedded":500}', flood))).toBe(0);
+  });
+
+  test("the per-row catch line every sweep shares is caught", () => {
+    // `error on <id>: …` and `unexpected error on <id>: …` are the shared per-item catch in
+    // ~10 sweeps — the single most common way a sweep says "this one did not get done". They
+    // were MISSED by the first draft of the vocabulary; an audit over all 238 `log()` string
+    // literals in this directory is what surfaced them. Same for claude's own error envelope,
+    // which is the signature of an authoring tick that left its item queued.
+    expect(countDistressLines("> [note-sweep] error on 241.7.3A: Firecrawl 502")).toBe(1);
+    expect(countDistressLines("> [capture-sweep] unexpected error on mb_x: socket closed")).toBe(1);
+    expect(
+      countDistressLines(
+        "> [logbook-sweep] claude -p returned is_error (max_turns) — leaving day queued",
+      ),
+    ).toBe(1);
+    expect(countDistressLines("> [rank-sweep] fatal: cannot reach the Worker")).toBe(1);
+  });
+
+  test("a mixed tick counts only the problems", () => {
+    const body = strainMarker('{"ok":true}', [
+      ...BENIGN_CHATTER.map((entry) => entry.line),
+      ...REAL_PROBLEMS.map((entry) => entry.line),
+    ]);
+
+    expect(markerStrain(body)).toBe(REAL_PROBLEMS.length);
+  });
+});
+
+describe("the summary half — the sweeps' own counters", () => {
+  test("failure counters and distress flags score; success counters do not", () => {
+    // entity-bio's real summary shape: the gate skips ARE the stuck loop, in its own numbers.
+    expect(countSummaryStrain({ authored: 0, gateSkipped: 3, ok: true, queueRemaining: 40 })).toBe(
+      3,
+    );
+    // crawl's real summary shape: `throttled` is a boolean, worth one point.
+    expect(countSummaryStrain({ ok: true, throttled: true, tracksWritten: 120 })).toBe(1);
+    // capture's real summary shape: `skipped`/`unmatched` are ordinary outcomes, not failures.
+    expect(countSummaryStrain({ done: 4, failed: 2, ok: true, skipped: 6, unmatched: 3 })).toBe(2);
+    // A clean tick scores nothing at all, whatever else it reports.
+    expect(countSummaryStrain({ done: 10, embedded: 471, ok: true })).toBe(0);
+    expect(countSummaryStrain(null)).toBe(0);
+  });
+
+  test("a sweep's own `{ ok }` verdict is NEVER touched by any of this", () => {
+    // THE FIRST CONSTRAINT: strain must not falsify a sweep's report. A marker with 200 error
+    // lines still reads `fresh-ok` to judgeCron, because that is what the sweep actually said.
+    const body = strainMarker(
+      '{"ok":true,"batch":10,"failed":10}',
+      Array.from({ length: 200 }, () => REAL_PROBLEMS[0]?.line ?? ""),
+    );
+    const dir = markerDir([{ ageMs: 60_000, body }]);
+
+    expect(findJsonSummary(body)).toMatchObject({ ok: true });
+    expect(judgeCron(CRON, dir)).toBe("fresh-ok");
+    expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
+
+    // …and yet the strain is fully visible on the separate signal: 200 lines + 10 `failed`.
+    expect(markerStrain(body)).toBe(210);
+  });
+});
+
+describe("splitMarker / findJsonSummary across the delimiter", () => {
+  test("a stderr line that looks like a summary cannot become one", () => {
+    const body = strainMarker('{"ok":true,"real":1}', ['{"ok":false,"reason":"a log line"}']);
+
+    expect(findJsonSummary(body)).toEqual({ ok: true, real: 1 });
+  });
+
+  test("an old-shaped marker (no delimiter) reads exactly as it always did", () => {
+    expect(findJsonSummary(marker('{"ok":true}\ntrailing noise\n'))).toEqual({ ok: true });
+    expect(markerStrain(marker('{"ok":true}\n'))).toBe(0);
+  });
+
+  test("a killed run's header-only marker scores nothing and carries no summary", () => {
+    expect(markerStrain(KILLED_MARKER)).toBe(0);
+    expect(findJsonSummary(KILLED_MARKER)).toBeNull();
+  });
+});
+
+describe("the rolling window", () => {
+  const HOUR = 60 * 60_000;
+
+  test("samples accrue into hourly buckets and age out of the window", () => {
+    const now = 10 * HOUR;
+    // Two heavy ticks 7 hours ago (outside the default 6h window) and two light ones just now.
+    const state = foldStrain(
+      undefined,
+      [
+        { atMs: now - 7 * HOUR, points: 50 },
+        { atMs: now - 7 * HOUR + 60_000, points: 50 },
+        { atMs: now - 1000, points: 4 },
+        { atMs: now - 500, points: 5 },
+      ],
+      now,
+    );
+
+    expect(strainTotals(state, now)).toEqual({ points: 9, ticks: 2 });
+  });
+
+  test("the watermark advances so a marker is never counted twice", () => {
+    const now = 5 * HOUR;
+    const first = foldStrain(undefined, [{ atMs: now - 1000, points: 6 }], now);
+
+    expect(first.watermarkMs).toBe(now - 1000);
+
+    // The next tick re-reads the dir; readStrainSamples filters by this watermark, so only
+    // genuinely new markers fold in.
+    const second = foldStrain(first, [{ atMs: now - 500, points: 6 }], now);
+
+    expect(strainTotals(second, now)).toEqual({ points: 12, ticks: 2 });
+    expect(second.watermarkMs).toBe(now - 500);
+  });
+
+  test("a clean tick advances the watermark and accrues nothing", () => {
+    const now = 3 * HOUR;
+    const state = foldStrain(undefined, [{ atMs: now - 100, points: 0 }], now);
+
+    expect(state.watermarkMs).toBe(now - 100);
+    expect(strainTotals(state, now)).toEqual({ points: 0, ticks: 0 });
+  });
+});
+
+describe("the two gates — enough evidence AND enough spread", () => {
+  test("one catastrophic tick does NOT strain (that case belongs to judgeCron)", () => {
+    expect(isStrained({ points: 400, ticks: 1 })).toBe(false);
+    expect(isStrained({ points: 40, ticks: 2 })).toBe(false);
+  });
+
+  test("a trickle across many ticks does not strain until the evidence adds up", () => {
+    expect(isStrained({ points: 11, ticks: 11 })).toBe(false);
+    expect(isStrained({ points: 12, ticks: 3 })).toBe(true);
+  });
+
+  test("the measured capture condition strains; a quiet morning does not", () => {
+    // capture logged ~305 bot-challenges a day → ~76 in a 6h window, spread over many ticks.
+    expect(isStrained({ points: 76, ticks: 40 })).toBe(true);
+    // A handful of transient retries across a morning is exactly the noise we must not page on.
+    expect(isStrained({ points: 5, ticks: 4 })).toBe(false);
+  });
+});
+
+describe("the sweep-errors row + the strain alert", () => {
+  test("clean reads ok; strained reads degraded and NEVER down", () => {
+    expect(sweepStrainCheck([])).toMatchObject({ message: "no repeat errors", status: "ok" });
+
+    const check = sweepStrainCheck(["cron.capture", "cron.artist-bio", "cron.crawl"]);
+
+    expect(check.status).toBe("degraded");
+    expect(check.message).toBe("3 sweeps logging repeat errors: capture, artist-bio, crawl");
+    expect(check.service).toBe("sweep-errors");
+  });
+
+  test("one strained sweep reads in the singular", () => {
+    expect(sweepStrainCheck(["cron.capture"]).message).toBe(
+      "1 sweep logging repeat errors: capture",
+    );
+  });
+
+  test("the message stays inside the public-safe 120-char cap", () => {
+    const many = Array.from({ length: 30 }, (_, index) => `cron.sweep-number-${index}`);
+
+    expect((sweepStrainCheck(many).message ?? "").length).toBeLessThanOrEqual(120);
+  });
+
+  test("the Discord line is edge-triggered on entering and on leaving", () => {
+    expect(buildStrainAlert([], [])).toBeNull();
+    expect(buildStrainAlert(["cron.capture"], [])).toContain("cron.capture");
+    expect(buildStrainAlert([], ["cron.crawl"])).toContain("quiet again: cron.crawl");
+  });
+});
+
+describe("normalizeStrain — the v3 state section", () => {
+  test("a v1/v2 file with no strain section loads empty, never throws", () => {
+    expect(normalizeStrain({ web: "ok" })).toEqual({});
+    expect(normalizeStrain({ services: {}, version: 2 })).toEqual({});
+    expect(normalizeStrain(null)).toEqual({});
+    expect(normalizeStrain("nonsense")).toEqual({});
+  });
+
+  test("junk inside the section is floored rather than trusted", () => {
+    expect(
+      normalizeStrain({
+        strain: {
+          "cron.capture": {
+            buckets: { "3600000": { points: -5, ticks: "x" }, bad: null },
+            strained: "yes",
+            watermarkMs: -1,
+          },
+        },
+      }),
+    ).toEqual({
+      "cron.capture": {
+        buckets: { "3600000": { points: 0, ticks: 0 } },
+        strained: false,
+        watermarkMs: 0,
+      },
+    });
+  });
+
+  test("a real v3 file round-trips through serialize → parse → normalize", () => {
+    const strain: Record<string, StrainState> = {
+      "cron.capture": {
+        buckets: { "7200000": { points: 40, ticks: 12 } },
+        strained: true,
+        watermarkMs: 7_260_000,
+      },
+    };
+    const parsed: unknown = JSON.parse(serializeState({}, strain));
+
+    expect(normalizeStrain(parsed)).toEqual(strain);
+    expect(normalizeState(parsed)).toEqual({});
   });
 });

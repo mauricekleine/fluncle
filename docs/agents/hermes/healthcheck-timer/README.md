@@ -28,6 +28,20 @@ So the state file also carries a per-service **consecutive-down streak**, and a 
 
 The state file is versioned and read defensively: an older or truncated file degrades to fresh counters rather than throwing, because a prober that crashes on its own state takes the dead-man's beacon down with it. And that beacon is the boundary of this mechanism — escalation only covers surfaces the prober probes **while it is alive**; the prober's own death is what `HEALTHCHECK_BEACON_URL` is for.
 
+## Sweep strain: the errors a green tick can hide
+
+Both rules above are built on a cron's `{ ok }` verdict, and that verdict is the sweep's opinion of its TICK, not of its WORK. A sweep that walks a batch of ten, fails all ten for the same reason, and returns `{"ok":true,"failed":10}` is telling the truth — the tick ran, the queue is intact, it retries on its own cadence — and it reads perfectly green here. Measured over two days of real box output: 610 capture bot-challenges, and the same three entity slugs rejected ~90 times each by the bio voice gate (a queue that could not drain). Every one of those ticks was `ok: true`, `/status` was right to say so, and nothing anywhere read the rest.
+
+Nothing COULD read the rest, in fact: every sweep's `log()` is `console.error`, and `cron-output.sh` used to capture stdout only, so the marker on disk held the JSON summary and not one word of the errors. Both halves are fixed together — the wrapper now appends a bounded, delimited, blockquoted tail of the sweep's stderr below the summary (see [`../scripts/cron-output.sh`](../scripts/cron-output.sh)), and the prober reads it.
+
+The rule, in plain words: **count the evidence a sweep leaves that work did not get done, sum it per cron over a rolling 6-hour window, and report a sweep once that total crosses a threshold AND is spread across at least three separate ticks.** Evidence is two explicit lists and nothing else — `STRAIN_PHRASES` (substrings that mean an item did not get done, tuned against all 238 `log()` string literals in `../scripts/`, so `skipping` is deliberately absent and the far tighter `stays queued` is not) and the failure counters the sweeps already put in their own summaries (`failed`, `gateSkipped`, `throttled`). There is no `/error/i` catch-all: a detector that fires on the 471-a-day `embedded + written` line is worse than no detector.
+
+Three properties worth knowing before touching it:
+
+- **It never edits a sweep's own verdict.** `cron.capture` still reports exactly what capture said about itself. Strain is a SEPARATE signal on its own `sweep-errors` row — one aggregate row rather than ~35, because `service_status` rows are upserted and never deleted, so a row minted for a one-afternoon condition would sit on the public board forever.
+- **The row is `degraded`, never `down`.** Every strained sweep is running. The loud channel is Discord, which is edge-triggered on entering and leaving the condition and names the sweeps the aggregate row cannot.
+- **Every threshold is env-overridable**, all three in one block in `fluncle-healthcheck.ts` (`HEALTHCHECK_STRAIN_WINDOW_MS` = 6h, `HEALTHCHECK_STRAIN_POINTS` = 12, `HEALTHCHECK_STRAIN_TICKS` = 3). Tuning after a day of real data needs a box env change and a timer restart, not a rebake.
+
 ## Deploy (on rave-02, one time)
 
 The probe script is BAKED into the image at `/opt/hermes-scripts/` (it rides the image and auto-updates from `main` via pin-watch — no `docker cp`), so **no script redeploy is needed**. This is only the host-timer install plus retiring the old gateway cron.
