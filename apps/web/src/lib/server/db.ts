@@ -6,7 +6,7 @@ import {
   type Row,
   type TransactionMode,
 } from "@libsql/client/web";
-import { startSpan } from "@sentry/core";
+import { startSpan, type Span } from "@sentry/core";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "../../db/schema";
 import { readEnvs } from "./env";
@@ -44,6 +44,140 @@ function statementSql(statement: InStatement): string {
   return typeof statement === "string" ? statement : statement.sql;
 }
 
+// ── Transient-gateway retry ────────────────────────────────────────────────
+//
+// Turso is reached over HTTP and its gateway occasionally answers a bare 5xx
+// that has nothing to do with the query (observed in prod as a single
+// `LibsqlError: SERVER_ERROR: Server returned HTTP status 502` that took a
+// crawler's `/artist/<slug>` render to the root error boundary). The libsql
+// HTTP transport has NO retry of its own, and one page render fans out to
+// several independent round trips, so a bare client turns every transient
+// gateway blip into a rendered error page.
+//
+// THE SAFETY CONTRACT: reads retry, writes NEVER do. A 5xx on a write is
+// ambiguous — the write may well have been applied before the gateway gave
+// up — so re-running it risks double-applying it. Only the `execute` path
+// retries, and only for a statement the classifier is CONFIDENT is a read;
+// `batch` never retries (a batch is one unit and can contain writes) and
+// `transaction` is untouched.
+
+// 2 retries = 3 attempts total. The backoff array's length IS the retry cap,
+// so tuning is one edit. Kept short: an `/artist/*` render fires several of
+// these concurrently and the Worker has a wall-clock budget.
+export const DB_RETRY_BACKOFF_MS = [50, 150];
+export const DB_MAX_RETRIES = DB_RETRY_BACKOFF_MS.length;
+const DB_RETRY_JITTER_MS = 50;
+
+// Only a transient gateway status. 4xx is our fault and will fail identically.
+// 524 is EXCLUDED ON PURPOSE: it means the gateway already timed out waiting on
+// this query, so re-running it just doubles the load for a near-certain second
+// timeout. Do not "fix" that omission.
+const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504]);
+
+// `mapHranaError` wraps the hrana `HttpServerError` (which carries the numeric
+// `status`) as the `LibsqlError`'s `cause`, and a closed stream can wrap it one
+// level deeper still — so walk a bounded cause chain looking for a status.
+const MAX_CAUSE_DEPTH = 3;
+
+function hasNumericStatus(value: unknown): value is { status: number } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "status" in value &&
+    typeof value.status === "number"
+  );
+}
+
+function causeOf(value: unknown): unknown {
+  return typeof value === "object" && value !== null && "cause" in value ? value.cause : undefined;
+}
+
+function isRetryableGatewayError(error: unknown): boolean {
+  let current: unknown = error;
+
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth += 1) {
+    if (hasNumericStatus(current)) {
+      return RETRYABLE_GATEWAY_STATUSES.has(current.status);
+    }
+
+    current = causeOf(current);
+
+    if (current === undefined) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+// Leading whitespace and leading SQL comments, so a commented statement is
+// still classified by its actual first keyword.
+const LEADING_NOISE = /^(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)+/;
+const WRITE_VERB = /\b(?:insert|update|delete|replace)\b/;
+
+// Classifies off the SQL string, because that is all the chokepoint has.
+//
+// A read is: `select …`, OR `with …` that contains no write verb — SQLite
+// allows `WITH … INSERT/UPDATE/DELETE`, which is exactly why the second half
+// of that condition exists. Everything else (`pragma`, `begin`, `insert`,
+// `update`, `delete`, `replace`, anything unrecognized) is NOT retryable.
+//
+// THE FAILURE DIRECTION IS ASYMMETRIC: a false negative — declining to retry
+// something that was in fact a read — is harmless, it is exactly today's
+// behaviour. A false positive — retrying a write — is a correctness bug that
+// can double-apply it. So when this is unsure, it does not retry.
+function isRetryableRead(sql: string): boolean {
+  const normalized = sql.replace(LEADING_NOISE, "").toLowerCase();
+
+  if (/^select\b/.test(normalized)) {
+    return true;
+  }
+
+  return /^with\b/.test(normalized) && !WRITE_VERB.test(normalized);
+}
+
+// Created inside the request path only — a module-level timer or promise chain
+// wedges Worker isolates.
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function recordRetries(span: Span, attempt: number): void {
+  if (attempt > 0) {
+    span.setAttribute("db.retry.attempts", attempt);
+  }
+}
+
+// Runs inside the caller's `db.query` span so one logical query stays ONE span
+// (no phantom spans; the Slow DB Queries detector keeps working).
+async function runWithRetry<T>(run: () => Promise<T>, span: Span): Promise<T> {
+  let attempt = 0;
+
+  for (;;) {
+    try {
+      const result = await run();
+
+      recordRetries(span, attempt);
+
+      return result;
+    } catch (error) {
+      const backoffMs = DB_RETRY_BACKOFF_MS[attempt];
+
+      if (backoffMs === undefined || !isRetryableGatewayError(error)) {
+        recordRetries(span, attempt);
+
+        throw error;
+      }
+
+      attempt += 1;
+
+      await delay(backoffMs + Math.random() * DB_RETRY_JITTER_MS);
+    }
+  }
+}
+
 // One chokepoint: wrap the created client in a Proxy that opens a `db.query`
 // span around `execute` and `batch` (every query path in the app) and forwards
 // everything else — `transaction`, `close`, `sync`, drizzle's own calls —
@@ -59,18 +193,25 @@ function instrument(client: Client): Client {
     get(target, property, receiver) {
       if (property === "execute") {
         return (statement: InStatement, args?: InArgs) => {
-          const sql = spanName(statementSql(statement));
+          const sql = statementSql(statement);
+          const name = spanName(sql);
 
           return startSpan(
             {
-              attributes: { "db.statement": sql, "db.system": "sqlite" },
-              name: sql,
+              attributes: { "db.statement": name, "db.system": "sqlite" },
+              name,
               op: "db.query",
             },
-            () =>
-              args !== undefined && typeof statement === "string"
-                ? target.execute(statement, args)
-                : target.execute(statement),
+            (span) => {
+              const run = () =>
+                args !== undefined && typeof statement === "string"
+                  ? target.execute(statement, args)
+                  : target.execute(statement);
+
+              // A write (or anything the classifier can't vouch for) runs
+              // exactly once, exactly as before.
+              return isRetryableRead(sql) ? runWithRetry(run, span) : run();
+            },
           );
         };
       }
