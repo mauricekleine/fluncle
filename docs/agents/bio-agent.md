@@ -67,8 +67,38 @@ A rejection used to leave the entity queued with nothing counting the attempts, 
 - **Each rejection is fed back into the next pass** as the exact reason to fix (`buildRewriteBlock` in the sweep, the logbook sweep's shape), so a rewrite is aimed rather than blind.
 - **The third draft LANDS.** The last attempt delivers `--final-attempt`, and the Worker (`acceptFinalDraftBio`) stores the draft even if the voice scan refuses it. This is a BACKSTOP, not the routine path — with the name exemption in place, the entities that caused the runaway now clear the gate on attempt 1.
 - **The acceptance is never silent.** The Worker logs `describe_<kind>: FINAL-ATTEMPT ACCEPTANCE`, returns `gateBypassed: true` + the accepted `voiceViolations`, the CLI prints them, and the sweep logs `FINAL-ATTEMPT ACCEPTANCE … REVIEW THIS <KIND>` and counts them as `bypassedGate` in its summary line. **Grep the cron output for `FINAL-ATTEMPT ACCEPTANCE` to find every bio that landed this way.** The acceptance bypasses the voice SCAN only: an absent, too-short, or too-long draft is still refused.
-- **The count persists across ticks** in a small on-box TSV at `$HOME/.entity-bio-sweep/attempts` (`<kind>:<slug><TAB>attempts<TAB>lastEpoch`), the shape of the render conductor's poison ledger and covered by the nightly box-state backup. The attempt is burned **before** the model call, so a tick that dies mid-author cannot refund it. The entry is dropped the moment a bio lands.
+- **Only a gate REJECTION spends the budget.** A rejection is deterministic evidence that this draft was bad. A transport or model failure — a `claude -p` that exits non-zero, returns `is_error`, or returns nothing — is no evidence about the draft at all, because there is no draft; the entity keeps its whole budget and is retried next tick. Otherwise three flaky calls could write an entity off permanently, and a flaky THIRD call would leave it with no draft to accept and no retry. Those failures instead log a line the `/status` sweep-strain detector scores, so a sweep grinding on a broken model surfaces as `degraded`.
+- **The count persists across ticks** in a small on-box TSV at `$HOME/.entity-bio-sweep/attempts` (`<kind>:<slug><TAB>attempts<TAB>lastEpoch`), the shape of the render conductor's poison ledger and covered by the nightly box-state backup. It is written the moment a rejection lands, so a tick that dies later cannot un-spend it. The entry is dropped the moment a bio lands.
+- **The sweep's log WORDING is part of the contract.** Since the strain detector reads each sweep's captured stderr, these lines are scored: a rejected draft that is about to be rewritten reads as a step (a sweep that rewrites and then succeeds must not read as degraded), while an exhaustion, a transport failure, and a failed ledger write carry the distress vocabulary. The rule is written out above `describeOne` in the sweep and pinned by tests that score the real lines with the real detector.
 - **An exhausted entity is skipped without consuming the batch cap**, so it can never block the queue behind it — and it costs nothing at all (no draft fetch, no model call). It reports as `exhausted` in the summary. To re-arm one after the gate or the prompt changes, delete its line from that file.
+
+### What the final-attempt acceptance publishes
+
+On the third attempt, a bio that **failed** the automated voice gate is stored and published. It is not quarantined, not held for approval, and not marked in the database — it renders identically to a bio that passed. Only the voice SCAN is bypassed; an absent, too-short, or too-long draft is still refused and the entity reports as `exhausted` instead.
+
+**Where such a bio is publicly readable.** The page copy is the obvious half:
+
+| Surface                                                                | Form                                                                                                                                                                         |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/artist/<slug>`, `/label/<slug>`, `/album/<slug>` page body           | full text                                                                                                                                                                    |
+| `<meta name="description">` + `og:description` + `twitter:description` | truncated to ≤160 chars at a sentence boundary (`lib/meta-description.ts`)                                                                                                   |
+| The `GraphLink` hover card (`components/graph-link.tsx`)               | full text in the DOM, clamped to 4 lines by CSS only — and it appears **away from the entity's own page**: the homepage feed, log pages, the hub indexes, `/recommendations` |
+
+The **machine-readable discovery layer** is the half that surprises people, because none of it is page copy and all of it carries the paragraph in full:
+
+| Surface                                                                                    | Form                                                                                                           |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| JSON-LD `description` — `MusicGroup` / `Organization` / `MusicAlbum` (`lib/log-schema.ts`) | **full text, untruncated** — the same page that truncates its meta description emits the whole bio to crawlers |
+| The public MCP server `/mcp`, `get_artist` / `get_label`                                   | **full text, unauthenticated** — handed to arbitrary third-party agents                                        |
+| ChatDnB `/chat` artist + label cards                                                       | **full text**                                                                                                  |
+| `GET /api/v1/labels/{slug}`, `/api/v1/albums/{slug}`, `/api/v1/graph/{kind}/{slug}`        | full text, public JSON                                                                                         |
+| `fluncle labels <slug> --json`, `fluncle albums <slug> --json`                             | full text                                                                                                      |
+
+It does **not** reach `llms.txt`, the sitemap, any RSS/Atom/JSON/podcast/ICS feed, oEmbed, the OG images, `GET /api/v1/artists/{slug}` (that contract carries no `bio` field — an asymmetry with labels and albums), WebMCP, mobile, the SSH terminal, DNS, Raycast, or the extension.
+
+**Finding one.** Grep the cron output for `FINAL-ATTEMPT ACCEPTANCE`; the sweep's summary line carries a `bypassedGate` count; the Worker logs `describe_<kind>: FINAL-ATTEMPT ACCEPTANCE`; the `describe_*` API response carries `gateBypassed: true` + `voiceViolations`; the CLI prints both. **That log line is the only durable record** — `bio_status` has no value for "landed via the final attempt", so once the cron marker rotates a bypassed bio is indistinguishable in the database from one that cleared the gate.
+
+**This is a deliberate operator ruling**, taken after a canon review recommended dropping the acceptance on the grounds that the name exemption already clears the entities it was introduced for. To reverse it, `apps/web/src/lib/server/bio.ts` carries the removal recipe under `SEVERABLE`; nothing else depends on it, and a third rejected draft would simply land on the `exhausted` outcome the sweep already implements.
 
 ## The prompt lives in the DATABASE, not in the image
 
