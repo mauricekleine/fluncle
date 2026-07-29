@@ -15,22 +15,31 @@ import {
   buildSearchQuery,
   buildSourceAudioKey,
   buildStickyProxyUrl,
+  chooseDownloadRecovery,
   classifyChannelTrust,
+  classifyDownloadFailure,
   contentTypeForExt,
+  createBotChallengeMeter,
   durationWithinTolerance,
   extractSourceAudioSha256,
   hasForeignVersionMarker,
   isBotChallengeStderr,
   isTopicChannel,
+  logBotChallengeRecap,
   needsReenrichAfterCapture,
   normalizeChannelName,
   normalizeSearchQuery,
+  noteBotChallenge,
   pickCandidate,
   rankCandidates,
   rerollSessionId,
   shouldReenrichAfterCapture,
   verifyCaptureFile,
 } from "./capture-sweep";
+// The REAL /status strain detector, imported rather than re-implemented: since #994 this
+// sweep's stderr is teed into the marker and scored by these two functions, so the only
+// honest way to pin the wording contract is to run the real lines through them.
+import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
 
 describe("buildStickyProxyUrl", () => {
   test("appends __sessid.<sessionId> to the username and url-encodes user + pass", () => {
@@ -633,6 +642,230 @@ describe("isBotChallengeStderr — the IP-reputation verdict, classified apart f
       false,
     );
     expect(isBotChallengeStderr("")).toBe(false);
+  });
+});
+
+describe("classifyDownloadFailure — the flags the recovery decision runs on", () => {
+  test("anchors the 403 to the two forms yt-dlp actually prints", () => {
+    expect(
+      classifyDownloadFailure("ERROR: unable to download: HTTP Error 403: Forbidden").is403,
+    ).toBe(true);
+    expect(classifyDownloadFailure("giving up after 3 retries (status code 403)").is403).toBe(true);
+  });
+
+  test("a bare 403 ANYWHERE in stderr is no longer a 403 verdict", () => {
+    // The regression this fixes: `\b403\b` matched a video id, a byte count, a URL — and the
+    // download handler tested `is403` first, so such a line stole the branch.
+    expect(
+      classifyDownloadFailure("ERROR: [youtube] x403abc: This video is unavailable").is403,
+    ).toBe(false);
+    expect(classifyDownloadFailure("[download] 403 bytes written").is403).toBe(false);
+  });
+
+  test("still classifies the plain challenge and the DRM/bot-wall recoverability", () => {
+    const flags = classifyDownloadFailure(
+      "ERROR: [youtube] tup6Bgf8oQw: Sign in to confirm you're not a bot",
+    );
+
+    expect(flags.isBotChallenge).toBe(true);
+    expect(flags.isRecoverable).toBe(true);
+    expect(flags.is403).toBe(false);
+  });
+});
+
+describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403", () => {
+  // THE COMBINED SHAPE, and the reason this slice exists. A missing PO token makes yt-dlp
+  // print the bot challenge AND a 403 in the same stderr (yt-dlp wiki). Under the old order
+  // the 403 branch won and spent the run on a player-client fallback that cannot clear an
+  // IP-reputation ruling — the re-roll went unused on exactly the runs that needed it.
+  const COMBINED_STDERR = [
+    "ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you're not a bot. Use --cookies-from-browser",
+    "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+  ].join("\n");
+
+  test("a combined challenge+403 stderr takes the RE-ROLL, not the player-client fallback", () => {
+    const flags = classifyDownloadFailure(COMBINED_STDERR);
+
+    // Both markers really are present — the test would pass vacuously otherwise.
+    expect(flags.isBotChallenge).toBe(true);
+    expect(flags.is403).toBe(true);
+
+    expect(chooseDownloadRecovery(flags, true)).toBe("reroll");
+  });
+
+  test("with the run's one re-roll spent, the combined case falls back to the 403 branch", () => {
+    // Nothing better is left to try: the fallback is a worse answer than a fresh exit, not a
+    // wrong one, so it keeps its second chance rather than throwing the candidate away.
+    expect(chooseDownloadRecovery(classifyDownloadFailure(COMBINED_STDERR), false)).toBe(
+      "player-client-fallback",
+    );
+  });
+
+  test("a plain 403 with no challenge still takes the fallback, re-roll available or not", () => {
+    const flags = classifyDownloadFailure("ERROR: unable to download: HTTP Error 403: Forbidden");
+
+    expect(chooseDownloadRecovery(flags, true)).toBe("player-client-fallback");
+    expect(chooseDownloadRecovery(flags, false)).toBe("player-client-fallback");
+  });
+
+  test("a plain challenge re-rolls once and then gives the candidate up", () => {
+    const flags = classifyDownloadFailure("ERROR: [youtube] abc: Please sign in. Use --cookies");
+
+    expect(chooseDownloadRecovery(flags, true)).toBe("reroll");
+    expect(chooseDownloadRecovery(flags, false)).toBe("give-up");
+  });
+
+  test("anything else rethrows to the candidate walk", () => {
+    expect(chooseDownloadRecovery(classifyDownloadFailure("ERROR: DRM protected"), true)).toBe(
+      "give-up",
+    );
+  });
+});
+
+// ── THE BOT-CHALLENGE METER + ITS STRAIN CONTRACT ────────────────────────────────────────
+//
+// Two claims are pinned here, and the second one is pinned with the REAL detector rather than
+// by reasoning about the vocabulary:
+//
+//   1. EVERY challenge is counted. The re-roll fires at most once per track-run, and the log
+//      line used to live inside that guard — so the 610 lines two days of box output produced
+//      were "runs that hit their FIRST challenge", a floor, and no instrument could tell an
+//      operator whether a change to the challenge rate worked.
+//   2. The wording each line carries is what `countDistressLines` scores. A re-rolled
+//      challenge is recoverable friction on a healthy tick (~12% of runs) and must score
+//      ZERO — at that rate a scoring line means a `degraded` that can never clear. A
+//      challenge with the re-roll already spent is real distress and must score.
+
+/** Run something that logs, and score its REAL stderr with the REAL /status detector. */
+function withCapturedStderr(run: () => void): { lines: string[]; strain: number } {
+  const lines: string[] = [];
+  const original = console.error;
+
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+
+  try {
+    run();
+  } finally {
+    console.error = original;
+  }
+
+  return { lines, strain: countDistressLines(lines.join("\n")) };
+}
+
+describe("noteBotChallenge — the count", () => {
+  test("counts a challenge whether or not a re-roll was available", () => {
+    const meter = createBotChallengeMeter();
+
+    withCapturedStderr(() => {
+      noteBotChallenge(meter, "search", true);
+      noteBotChallenge(meter, "download", false);
+      noteBotChallenge(meter, "download", false);
+    });
+
+    // The old shape would have recorded ONE of these three — only the line that re-rolled.
+    expect(meter.total).toBe(3);
+    expect(meter.uncleared).toBe(2);
+  });
+
+  test("says WHERE it happened and WHETHER it re-rolled, so a line is self-explaining", () => {
+    const { lines } = withCapturedStderr(() => {
+      noteBotChallenge(createBotChallengeMeter(), "search", true);
+      noteBotChallenge(createBotChallengeMeter(), "download", false);
+    });
+
+    expect(lines[0]).toContain("at search");
+    expect(lines[0]).toContain("rerolled=true");
+    expect(lines[1]).toContain("at download");
+    expect(lines[1]).toContain("rerolled=false");
+  });
+
+  test("a meter that saw nothing emits no recap at all", () => {
+    const { lines } = withCapturedStderr(() => {
+      logBotChallengeRecap(createBotChallengeMeter());
+    });
+
+    expect(lines).toEqual([]);
+  });
+
+  test("the recap reports the split an operator needs to judge a fix", () => {
+    const meter = createBotChallengeMeter();
+    meter.total = 7;
+    meter.uncleared = 2;
+
+    const { lines } = withCapturedStderr(() => {
+      logBotChallengeRecap(meter);
+    });
+
+    expect(lines[0]).toContain("bot challenges this tick: 7");
+    expect(lines[0]).toContain("5 cleared by a re-roll");
+    expect(lines[0]).toContain("2 with the re-roll spent");
+  });
+});
+
+describe("what the sweep's challenge logs say to the /status strain detector", () => {
+  test("a RE-ROLLED challenge reads as ZERO strain — recoverable friction on a healthy tick", () => {
+    // ~12% of runs hit one. If this line scored, capture would sit at roughly 76 points in
+    // every 6h window against a 12-point threshold: `degraded` forever, with no condition
+    // anyone could fix. The hyphen is the whole mechanism — "bot challenge", never the
+    // STRAIN_PHRASES entry "bot-challenged".
+    const { lines, strain } = withCapturedStderr(() => {
+      noteBotChallenge(createBotChallengeMeter(), "search", true);
+      noteBotChallenge(createBotChallengeMeter(), "download", true);
+    });
+
+    expect(lines).toHaveLength(2);
+    expect(strain).toBe(0);
+  });
+
+  test("a challenge with the re-roll SPENT does score — nothing is left to swap onto", () => {
+    const { strain } = withCapturedStderr(() => {
+      noteBotChallenge(createBotChallengeMeter(), "download", false);
+    });
+
+    expect(strain).toBeGreaterThan(0);
+  });
+
+  test("a whole busy-but-healthy tick stays under the strain dial", () => {
+    // Twelve captures, every one of them challenged once and every challenge cleared, plus
+    // the recap. This is the steady state the two-day sample measured; it must read clean.
+    const meter = createBotChallengeMeter();
+    const { strain } = withCapturedStderr(() => {
+      for (let i = 0; i < 12; i += 1) {
+        noteBotChallenge(meter, i % 2 === 0 ? "search" : "download", true);
+      }
+      logBotChallengeRecap(meter);
+    });
+
+    expect(meter.total).toBe(12);
+    expect(strain).toBe(0);
+  });
+
+  test("the per-tick recap never accrues strain, even reporting uncleared challenges", () => {
+    // The recap is present on every challenged tick. A recap that scored would turn a known
+    // steady state into a permanent `degraded`, and the per-line signal already counted the
+    // uncleared ones — scoring here would double-count them too.
+    const meter = createBotChallengeMeter();
+    meter.total = 40;
+    meter.uncleared = 9;
+
+    expect(withCapturedStderr(() => logBotChallengeRecap(meter)).strain).toBe(0);
+  });
+
+  test("the new summary counters are not strain counters either", () => {
+    // `countSummaryStrain` scores a marker's JSON summary. Publishing the challenge RATE must
+    // not be the same thing as reporting failure — the keys are deliberately outside
+    // STRAIN_COUNTER_KEYS (`errors` / `failed` / `gateSkipped` / `rejected`).
+    expect(
+      countSummaryStrain({
+        batch: 4,
+        botChallenges: 31,
+        botChallengesUncleared: 6,
+        done: 4,
+        ok: true,
+      }),
+    ).toBe(0);
   });
 });
 

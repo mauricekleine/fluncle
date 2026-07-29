@@ -59,8 +59,10 @@
 // MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
 // exactly like backup-sweep.ts — keep them in step. The pure helpers below
 // (buildStickyProxyUrl / durationWithinTolerance / buildSourceAudioKey / pickCandidate /
-// needsReenrichAfterCapture / buildSearchQuery / isTopicChannel) are exported + unit-tested in
-// capture-sweep.test.ts; `main()` is
+// needsReenrichAfterCapture / buildSearchQuery / isTopicChannel / classifyDownloadFailure /
+// chooseDownloadRecovery) are exported + unit-tested in capture-sweep.test.ts, as are the
+// bot-challenge meter's two logging seams (noteBotChallenge / logBotChallengeRecap), whose
+// tests score their REAL stderr with the REAL /status strain detector; `main()` is
 // guarded behind `import.meta.main` so importing this module for the tests is side-effect
 // free (it does not spawn yt-dlp or touch R2).
 //
@@ -92,12 +94,19 @@
 //     verify-captures backfill). Match → stored + `capture_verification = 'preview-match'`;
 //     mismatch → rejected + remembered in `source_audio_rejected`, next candidate; no
 //     preview / no fpcalc → stored + `'unverified'` (the honest abstain, never a block).
-//   - On a 403 that survives the sticky session, retry the download once with
-//     `--extractor-args youtube:player_client=tv,web_safari` before marking `failed`.
 //   - On a BOT CHALLENGE ("Sign in to confirm you're not a bot" — an IP-reputation verdict
 //     on the proxy exit, which no client fallback clears), re-roll the sticky session ONCE
 //     per run (`<id>.r1`, a fresh residential exit) and retry; search and download share
 //     the one re-roll, and a run challenged on both exits leaves the rest to backoff.
+//   - On a 403 that survives the sticky session, retry the download once with
+//     `--extractor-args youtube:player_client=tv,web_safari` before marking `failed`. The
+//     challenge is tested FIRST and the 403 match is ANCHORED (`HTTP Error 403` /
+//     `status code 403`, never a bare `403`): a challenge stderr that also carries a 403 —
+//     the missing-PO-token shape — belongs to the re-roll, not to a client fallback that
+//     cannot clear an IP ruling.
+//   - EVERY challenge is metered and logged, not just the one that triggers the re-roll, and
+//     the tick's totals ride out in the JSON summary. See THE BOT-CHALLENGE METER below for
+//     that and for the strain contract these lines owe /status.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -271,6 +280,58 @@ export function buildStickyProxyUrl(options: {
  */
 export function isBotChallengeStderr(stderr: string): boolean {
   return /Sign in to confirm|not a bot|Please sign in/i.test(stderr);
+}
+
+/** What a failed yt-dlp download's stderr says about WHY, and so about what to try next. */
+export type DownloadErrorFlags = {
+  is403?: boolean;
+  isBotChallenge?: boolean;
+  isRecoverable?: boolean;
+};
+
+/**
+ * Read a failed download's stderr into the three flags the recovery decision runs on.
+ *
+ * `is403` is ANCHORED to the two forms yt-dlp actually prints. It used to also accept a bare
+ * `\b403\b`, which matches anywhere in stderr — a video id, a byte offset, a URL — and since
+ * the caller tested it FIRST, a bot-challenge stderr carrying a loose 403 was routed to the
+ * player-client fallback. That fallback cannot clear an IP-reputation ruling (module header),
+ * so the run's one re-roll went unspent on exactly the runs that needed it. The combined shape
+ * is not hypothetical: per the yt-dlp wiki it is what a missing PO token produces.
+ */
+export function classifyDownloadFailure(stderr: string): DownloadErrorFlags {
+  return {
+    is403: /HTTP Error 403|status code 403/.test(stderr),
+    isBotChallenge: isBotChallengeStderr(stderr),
+    // DRM-locked or bot-walled: this specific VIDEO can't be pulled, but another candidate
+    // for the same finding often can → the caller falls through to the next-ranked one.
+    isRecoverable: /DRM protected|Sign in to confirm|not a bot/i.test(stderr),
+  };
+}
+
+/** The three ways a failed download can be answered, in the order they are considered. */
+export type DownloadRecovery = "reroll" | "player-client-fallback" | "give-up";
+
+/**
+ * THE RECOVERY DECISION, and the whole reason it is a function: the ORDER is the fix.
+ *
+ * A bot challenge is asked about FIRST, because both flags are read off the same stderr and a
+ * challenge that also mentions a 403 is an IP-reputation verdict wearing a 403's clothes —
+ * only a fresh residential exit clears it. The 403 branch keeps its second chance: it answers
+ * a plain 403, and it still answers a challenge whose re-roll the run has already spent (there
+ * is nothing better left to try). Anything else rethrows to the candidate walk.
+ */
+export function chooseDownloadRecovery(
+  flags: DownloadErrorFlags,
+  canReroll: boolean,
+): DownloadRecovery {
+  if (flags.isBotChallenge && canReroll) {
+    return "reroll";
+  }
+  if (flags.is403) {
+    return "player-client-fallback";
+  }
+  return "give-up";
 }
 
 /**
@@ -1005,12 +1066,7 @@ function runYtDownload(
   const stderr = result.stderr || "";
   if (result.status !== 0) {
     const err = new Error(`yt-dlp download failed: ${stderr.slice(0, 200)}`);
-    (err as { is403?: boolean }).is403 = /HTTP Error 403|status code 403|\b403\b/.test(stderr);
-    // DRM-locked or bot-walled: this specific VIDEO can't be pulled, but another candidate
-    // for the same finding often can → the caller falls through to the next-ranked one.
-    (err as { isRecoverable?: boolean }).isRecoverable =
-      /DRM protected|Sign in to confirm|not a bot/i.test(stderr);
-    (err as { isBotChallenge?: boolean }).isBotChallenge = isBotChallengeStderr(stderr);
+    Object.assign(err, classifyDownloadFailure(stderr));
     throw err;
   }
 
@@ -1043,11 +1099,96 @@ function probeDurationSec(filePath: string): number {
   return Number((result.stdout || "").trim());
 }
 
+// ── THE BOT-CHALLENGE METER ──────────────────────────────────────────────────
+//
+// WHAT IT FIXES. The re-roll below fires at most ONCE per track-run (search and download
+// share the one re-roll), and the log line used to live INSIDE that guard — so a run's
+// second, third and fourth challenge were silent, and the number an operator could grep was
+// a FLOOR ("runs that hit their FIRST challenge"), never a rate. Nothing could tell him
+// whether a change to the proxy pool moved the challenge rate at all. Visibility and the
+// re-roll are now separate concerns: the guard still decides whether to RE-ROLL, this meter
+// always records. The tick's JSON summary carries the totals so the rate is readable without
+// grepping (`botChallenges` / `botChallengesUncleared`).
+//
+// ── THE STRAIN CONTRACT ──────────────────────────────────────────────────────
+// Since #994 `emit_cron_output` tees this sweep's STDERR into the /status marker, and
+// fluncle-healthcheck.ts's `countDistressLines` scores every line of it against
+// STRAIN_PHRASES. `log()` is `console.error`, so the WORDING below is load-bearing and the
+// split is deliberate:
+//
+//   • A challenge the re-roll CLEARS is recoverable friction on a healthy tick — the run
+//     moves to a fresh residential exit and usually completes. Measured over two days of box
+//     output: 610 such runs against 5,100 attempts, ~12%. At that rate a scoring line puts
+//     roughly 76 points into every 6h window against a 12-point threshold — a `degraded` that
+//     can never clear, which is worse than no signal at all. So this line carries NO strain
+//     phrase: it says "bot challenge" (a space) and never "bot-challenged" (the hyphenated
+//     STRAIN_PHRASES entry).
+//   • A challenge that arrives with the run's one re-roll already SPENT is the real thing:
+//     the exit is flagged and there is nothing left to swap onto. That line KEEPS the
+//     hyphenated "bot-challenged" and scores, exactly as before.
+//   • The per-tick recap carries no phrase either. It reports a steady-state number, and a
+//     number that is always present must never accrue strain.
+//
+// One hyphen is the entire difference, which is why both lines are built HERE, in one place,
+// and pinned in capture-sweep.test.ts by running the REAL captured stderr through the REAL
+// detector rather than by reasoning about the vocabulary.
+
+/** Where in a run a challenge landed — search and download share the single re-roll. */
+export type BotChallengeStage = "search" | "download";
+
+/** The tick-wide challenge tally: every challenge, and the subset no re-roll could clear. */
+export type BotChallengeMeter = { total: number; uncleared: number };
+
+export function createBotChallengeMeter(): BotChallengeMeter {
+  return { total: 0, uncleared: 0 };
+}
+
+/**
+ * Record ONE bot challenge — always, whether or not a re-roll was available. `rerolled` says
+ * which happened, and decides the wording per the strain contract above.
+ */
+export function noteBotChallenge(
+  meter: BotChallengeMeter,
+  stage: BotChallengeStage,
+  rerolled: boolean,
+): void {
+  meter.total += 1;
+
+  if (rerolled) {
+    // Deliberately "bot challenge", never "bot-challenged" — see the strain contract above.
+    log(`bot challenge at ${stage} (rerolled=true) — moving to a fresh residential exit`);
+    return;
+  }
+
+  meter.uncleared += 1;
+  log(`bot-challenged at ${stage} (rerolled=false) — the run's one re-roll is already spent`);
+}
+
+/**
+ * The tick's recap, emitted once at the end of a tick that saw any challenge. Strain-free by
+ * contract: the per-line signal above already scored the uncleared ones, and a recap that
+ * scored would double-count a steady state into a permanent `degraded`.
+ */
+export function logBotChallengeRecap(meter: BotChallengeMeter): void {
+  if (meter.total === 0) {
+    return;
+  }
+
+  const cleared = meter.total - meter.uncleared;
+
+  log(
+    `bot challenges this tick: ${meter.total} (${cleared} cleared by a re-roll, ${meter.uncleared} with the re-roll spent)`,
+  );
+}
+
 // ── Per-finding capture ────────────────────────────────────────────────────
 
 type FindingOutcome = "done" | "unmatched" | "failed" | "skipped";
 
-async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> {
+async function captureFinding(
+  finding: CaptureFinding,
+  meter: BotChallengeMeter,
+): Promise<FindingOutcome> {
   const { logId, trackId } = finding;
 
   // A CERTIFIED row with no coordinate is the impossible case (the queue requires
@@ -1091,11 +1232,18 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
     username: PROXY_USERNAME,
   });
   let activeProxyUrl = proxyUrl;
-  const rerollOnBotChallenge = (stage: string): boolean => {
-    if (activeProxyUrl === rerolledProxyUrl) {
+  // EVERY challenge is metered and logged; the guard decides only whether a re-roll is left.
+  // Keeping those two apart is the whole point — the old shape logged inside the guard, so a
+  // run's second challenge onward left no trace at all (see THE BOT-CHALLENGE METER above).
+  const rerollOnBotChallenge = (stage: BotChallengeStage): boolean => {
+    const canReroll = activeProxyUrl !== rerolledProxyUrl;
+
+    noteBotChallenge(meter, stage, canReroll);
+
+    if (!canReroll) {
       return false;
     }
-    log(`bot-challenged at ${stage} — re-rolling the proxy session for a fresh exit`);
+
     activeProxyUrl = rerolledProxyUrl;
     return true;
   };
@@ -1214,16 +1362,23 @@ async function captureFinding(finding: CaptureFinding): Promise<FindingOutcome> 
         try {
           file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, false);
         } catch (error) {
-          if ((error as { is403?: boolean }).is403) {
-            file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, true);
-          } else if (
-            (error as { isBotChallenge?: boolean }).isBotChallenge &&
-            rerollOnBotChallenge("download")
-          ) {
+          const flags = error as DownloadErrorFlags;
+          // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll`.
+          const recovery = chooseDownloadRecovery(flags, activeProxyUrl !== rerolledProxyUrl);
+
+          // Metered whichever branch wins — a challenge the run cannot clear is still a
+          // challenge, and its visibility must not ride on there being a re-roll left.
+          if (flags.isBotChallenge) {
+            rerollOnBotChallenge("download");
+          }
+
+          if (recovery === "reroll") {
             // A fresh exit usually clears the challenge for the SAME candidate; if it
             // throws again the outer catch handles it as before (recoverable → next
             // candidate, since the run's one re-roll is now spent).
             file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, false);
+          } else if (recovery === "player-client-fallback") {
+            file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, true);
           } else {
             throw error;
           }
@@ -1381,6 +1536,10 @@ async function main(): Promise<void> {
   const batch = queue.slice(0, Number.isFinite(BATCH_CAP) && BATCH_CAP > 0 ? BATCH_CAP : 4);
 
   const counts = { done: 0, failed: 0, skipped: 0, unmatched: 0 };
+  // ONE meter for the whole tick, shared by every worker (each `+= 1` is synchronous, so the
+  // pool cannot lose a count). It rides into the summary below as the rate an operator can
+  // finally read per tick instead of grepping a floor out of the journal.
+  const botChallenges = createBotChallengeMeter();
 
   // A fixed worker pool over the batch: `CONCURRENCY` workers each pull the next index. Catch
   // per-finding inside the worker — one failure must never abort the tick or starve a worker.
@@ -1395,7 +1554,7 @@ async function main(): Promise<void> {
       }
 
       try {
-        const outcome = await captureFinding(finding);
+        const outcome = await captureFinding(finding, botChallenges);
         counts[outcome] += 1;
       } catch (error) {
         counts.failed += 1;
@@ -1410,9 +1569,17 @@ async function main(): Promise<void> {
     Array.from({ length: Math.min(CONCURRENCY, batch.length) || 1 }, () => worker()),
   );
 
+  logBotChallengeRecap(botChallenges);
+
   console.log(
     JSON.stringify({
       batch: batch.length,
+      // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's STRAIN_COUNTER_KEYS
+      // (`errors` / `failed` / `gateSkipped` / `rejected`), so publishing the number does not
+      // by itself make a steady state read as strain — the same contract the log lines keep,
+      // and pinned by the same tests.
+      botChallenges: botChallenges.total,
+      botChallengesUncleared: botChallenges.uncleared,
       done: counts.done,
       elapsedMs: Date.now() - started,
       failed: counts.failed,
