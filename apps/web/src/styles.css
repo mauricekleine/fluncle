@@ -3565,6 +3565,119 @@ a.catalogue-letter:focus-visible {
   margin-top: 0.3rem;
 }
 
+/* ── THE IDENTITY PAGE (/identity, /identity/<key>) ────────────────────────────────────────
+   A catalogue page: the reference register throughout. The state rows reuse the plate's
+   definition-list grammar (.log-about-definitions), so nothing new is invented for a shape the
+   privacy and terms pages already own — only the pieces that are genuinely this page's are here. */
+
+/* The identifier the page answers for, set in the coordinate face (Oxanium tabular) because that is
+   what it is. Smaller than a Log ID's display size: a MusicBrainz id is 36 characters, and at the
+   coordinate's own clamp it would run past the plate rather than title it. */
+.identity-key {
+  font-size: clamp(1.15rem, 3.4vw, 1.65rem);
+  overflow-wrap: anywhere;
+}
+
+.identity-recording {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.identity-recording + .identity-recording {
+  border-top: 1px solid var(--border);
+  padding-top: 1.5rem;
+}
+
+.identity-title {
+  color: var(--starlight-cream);
+  font-size: 1.06rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+/* The link home reads as one without spending gold: a hairline underline that heats on hover,
+   never the Gold Veil a finding row takes (DESIGN.md's One Sun Rule). */
+.identity-title a {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--stardust) 45%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  transition: color 150ms ease-out;
+}
+
+.identity-title a:hover {
+  color: var(--accent-foreground);
+  text-decoration-color: currentcolor;
+}
+
+/* THE UNLIT REGISTER (DESIGN.md's Unlit Rule): a recording Fluncle has not certified is named so a
+   reader can tell the returned rows apart, and given nothing else. It steps down on all three axes
+   the unlit list uses — smaller, lighter, muted ink — so it cannot be mistaken for the certified
+   block above it, and it carries no coordinate and no link home because it has neither. No gold at
+   rest or on hover; focus, and only focus, stays loud everywhere else on the page. */
+.identity-title--unlit {
+  color: var(--stardust);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.identity-relation {
+  color: var(--muted-foreground);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* The state cell: the link (or the identifier itself) on its own line, the provenance under it. */
+.identity-out,
+.identity-value {
+  display: block;
+  font-weight: 700;
+}
+
+.identity-value {
+  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.identity-provenance {
+  color: var(--muted-foreground);
+  display: block;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.identity-out + .identity-provenance,
+.identity-value + .identity-provenance {
+  margin-top: 0.15rem;
+}
+
+.identity-lookup {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.identity-lookup-label {
+  color: var(--stardust);
+  font-size: 0.88rem;
+}
+
+.identity-lookup-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.identity-lookup-input {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.identity-again {
+  border-top: 1px solid var(--border);
+  padding-top: 1.4rem;
+}
+
 /* The feed's coordinate link */
 
 .track-log-id-link {

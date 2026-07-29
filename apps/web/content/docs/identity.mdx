@@ -1,0 +1,66 @@
+---
+title: Identity
+description: Look a recording up by ISRC, MusicBrainz id, or Log ID, and get the links Fluncle holds plus the ones he looked for and did not find.
+---
+
+Fluncle knows, for tens of thousands of recordings, that _this recording_ is _this Spotify link_ is _this MusicBrainz id_ is _this ISRC_. This is how you ask.
+
+Ask on the web at [`/identity`](/identity), or from a machine through the track endpoint. Both read the same answer, so the page and the API can never tell you different things.
+
+## The three keys
+
+| Key                      | Looks like     | Where it comes from                                                                              |
+| ------------------------ | -------------- | ------------------------------------------------------------------------------------------------ |
+| ISRC                     | `GBXXX0000000` | The recording's own international standard code. Hyphens and spaces are fine; they are stripped. |
+| MusicBrainz recording id | a UUID         | The recording's id at musicbrainz.org.                                                           |
+| Log ID                   | `004.7.2I`     | The coordinate Fluncle stamps on a recording he has certified. See [Log ID](/docs/log-id).       |
+
+One key, one page: `https://www.fluncle.com/identity/<key>`.
+
+**An answer is a list, not a row.** An ISRC is not unique in this archive, and neither is a MusicBrainz id across the paths a recording can arrive by. So a lookup answers with every recording that carries the key, and each one says how it stands to the others: the only answer, one of several nobody has ruled between, or a duplicate of another recording here. Picking a winner quietly is exactly what this surface exists not to do.
+
+## The five answers
+
+Per platform and per identifier, the answer is one of five. Three of them are the point.
+
+| Answer                         | What it means                                                                                                                                                                |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fluncle holds it               | The link or the identifier is here, with how he came to trust it and when he last checked.                                                                                   |
+| He looked and it was not there | A real look concluded and came back empty, with the date and whether he will look again.                                                                                     |
+| He is not looking              | Something about the recording's own row stops him: no length on file, no real artist credit, already held under another row, set aside, or asked as many times as he allows. |
+| Nobody has looked yet          | No look has ever run. Different from the one above, and the difference matters.                                                                                              |
+| He serves no link of that kind | Fluncle does not hand out links for that platform at all.                                                                                                                    |
+
+Most link services answer only the first and leave you to read silence for the rest. Fluncle can name all five because the machinery that goes looking has counted its attempts all along.
+
+Two rules hold the honesty in place. **Every answer is computed from something stored**: where nothing on file settles a question, the answer says Fluncle keeps no record rather than guessing in either direction. And **a date says what it marks**. The moment a link was written and the moment a look concluded are close but not the same claim, so the answer tells you which one you are reading.
+
+## What it will not tell you
+
+Certification is the one thing a lookup carries about Fluncle's own opinion, and it carries it as a single yes or no. A recording he has certified answers with its Log ID and its coordinate page; one he has not answers with its identifiers and its links and nothing else. There is no name, rank, or score for the second kind, on this surface or any other.
+
+## From a machine
+
+The track endpoint answers the same thing as JSON. Pass a single `-` in the path when the key rides a query parameter:
+
+```
+GET /api/v1/tracks/-?isrc=GBXXX0000000
+GET /api/v1/tracks/-?mbid=<uuid>
+GET /api/v1/tracks/004.7.2I?identity=1
+```
+
+Exactly one key at a time. A key that matches nothing is a `404`; a key that is not a well-formed ISRC or UUID is a `422`. The full request and response shapes are in the [API reference](/docs/api).
+
+Spotify links come back as `https://www.fluncle.com/out/spotify/<trackId>`, a redirect on Fluncle's own domain. Follow it and you land on Spotify. The one place the raw link is served instead is the structured data on a page, where a link is an identity claim rather than somewhere to go, and a redirect would break the claim.
+
+## Fair use
+
+The lookups are metered at **30 requests a minute** and **1,000 a day** from one place, counted per caller. Past either, the answer is a `429` and the meter resets on its own. That is the whole policy, it costs nothing, and there is no key to apply for.
+
+If you build on this, two things come with it: say the data came from Fluncle and link back to `fluncle.com`, and wherever you show a platform link, name that platform and link to it the way its own rules ask. The [terms](/terms) say the same thing in full.
+
+Recording identifiers here include data from [MusicBrainz](https://musicbrainz.org), released under CC0.
+
+## If an answer is wrong
+
+Email [hey@fluncle.com](mailto:hey@fluncle.com) with the key and what you expected. Fluncle will sort it out.

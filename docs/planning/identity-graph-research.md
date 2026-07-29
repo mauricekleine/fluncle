@@ -1,6 +1,8 @@
 # Identity graph — research evidence (2026-07-29)
 
-Companion to [docs/dnb-identity-graph-rfc.md](../dnb-identity-graph-rfc.md). Non-canonical planning input: the measured numbers, queries, and clauses the RFC's claims rest on, committed so the evidence outlives the session that gathered it (four research threads + two sub-verifications + a four-role adversarial panel, all 2026-07-29). Anything below not re-verifiable from this file or the cited primary source should be treated as UNVERIFIED before it carries a new decision.
+The evidence behind Fluncle's identity surface, kept after the build shipped. Non-canonical planning input: the measured numbers, queries, and clauses the decisions rest on, committed so they outlive the session that gathered them (four research threads + two sub-verifications + a four-role adversarial panel, all 2026-07-29). Anything below not re-verifiable from this file or the cited primary source should be treated as UNVERIFIED before it carries a new decision.
+
+What was built off this evidence is documented where it lives: the envelope and its five states in `apps/web/src/lib/server/identity-envelope.ts`, the dials in `identity-dials.ts`, the reader page at [/docs/identity](../../apps/web/content/docs/identity.mdx), and the surviving tail in [ROADMAP.md](./ROADMAP.md). The RFC these numbers were gathered for was pruned on ship (git history holds it).
 
 ## The market facts (all verified at primary sources, 2026-07-29)
 
