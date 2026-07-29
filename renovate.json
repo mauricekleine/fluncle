@@ -33,6 +33,12 @@
       "labels": ["dependencies", "npm"]
     },
     {
+      "description": "Same-major npm bumps ride the grouped PR; a new major waits for approval on the dependency dashboard, so a breaking bump is never carried in silently by a Monday group. The holds below override this with an outright block.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "HELD: eslint majors in apps/mobile — eslint-config-expo's plugin chain crashes under ESLint 10; rides the Expo SDK arc.",
       "matchFileNames": ["apps/mobile/package.json"],
       "matchPackageNames": ["eslint"],
