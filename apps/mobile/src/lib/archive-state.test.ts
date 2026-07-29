@@ -101,7 +101,16 @@ const BANNED_IDENTITY_WORDS = [
   "stream",
   "mint",
 ];
+assertEqual(
+  archiveCopy.offline,
+  "You're off the map for a minute. I'll pull the findings through the moment you're back.",
+  "the offline line is the canon-reviewed string",
+);
 assertTrue(!archiveCopy.offline.includes("!"), "no exclamation marks in the offline line");
+// "range" is the retired radio metaphor wearing a different word — the banned-substring
+// sweep below cannot catch it, so it is named here explicitly (the first draft shipped
+// "Out of range" and the canon review bounced it).
+assertTrue(!archiveCopy.offline.toLowerCase().includes("range"), "no radio-coverage framing");
 assertTrue(!archiveCopy.offline.includes("—"), "no em-dashes in the offline line");
 for (const word of BANNED_IDENTITY_WORDS) {
   assertTrue(

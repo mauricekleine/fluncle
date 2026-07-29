@@ -90,6 +90,26 @@ assertTrue(
   !("retry" in feedCopy.offline),
   "the offline state offers no retry control (it would be chrome that lies)",
 );
+// The offline strings are pinned byte-exact — they went through a canon review that
+// bounced the first draft, and the two traps it caught are invisible to the generic
+// banned-substring sweep below.
+assertEqual(feedCopy.offline.title, "Off the map", "the offline title is the reviewed string");
+assertEqual(
+  feedCopy.offline.body,
+  "I can't reach the archive from here. Soon as you're back online, I'll pull the findings straight through.",
+  "the offline body is the reviewed string",
+);
+for (const line of [feedCopy.offline.title, feedCopy.offline.body]) {
+  // Trap 1: "range" is the retired radio metaphor with the banned noun deleted ("Out of
+  // range" was the bounced first draft; "Lost the signal" shipped here once before that).
+  assertTrue(!line.toLowerCase().includes("range"), `no radio-coverage framing: "${line}"`);
+  // Trap 2: the Found Rule's family verb must not be spent on a network connection in the
+  // same breath as "the findings" ("Find a connection" was the other bounced clause).
+  assertTrue(
+    !/\bfind a\b/i.test(line),
+    `the found-family verb is not spent on a router: "${line}"`,
+  );
+}
 
 // 8. The prose obeys the Dry Rule (no exclamation marks), carries no em-dashes, and
 // names none of VOICE.md's retired identity words (the radio metaphor especially —

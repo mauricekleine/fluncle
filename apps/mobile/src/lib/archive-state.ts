@@ -52,7 +52,8 @@ export function archiveView({
  * the state branch, like feed-state.ts's copy, so a test pins the literal.
  */
 export const archiveCopy = {
-  offline: "You're offline. I'll pull the findings through the moment you're back.",
+  offline:
+    "You're off the map for a minute. I'll pull the findings through the moment you're back.",
 } as const;
 
 /**

@@ -53,9 +53,14 @@ export const feedCopy = {
   footer: "Finding more",
   loading: "Tuning in",
   // Offline carries no retry control: the query resumes itself the moment the device is
-  // back, so a button here would be a second, slower way to do what already happens.
+  // back, so a button here would be a second, slower way to do what already happens. The
+  // body must not issue an imperative either, for the same reason — there is nothing the
+  // reader has to go do. Two words this copy deliberately avoids: "range"/"signal" (the
+  // radio metaphor VOICE.md retired — "Lost the signal" shipped on this exact screen once)
+  // and "find" (the Found Rule's family verb; spending it on a router one clause from "the
+  // findings" makes the reader parse it twice with two meanings).
   offline: {
-    body: "I can't reach the archive from here. Find a connection and I'll pull the findings straight through.",
-    title: "Out of range",
+    body: "I can't reach the archive from here. Soon as you're back online, I'll pull the findings straight through.",
+    title: "Off the map",
   },
 } as const;
