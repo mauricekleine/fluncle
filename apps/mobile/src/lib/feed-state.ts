@@ -6,20 +6,30 @@
 // the error lede reuses the web error boundary's ratified "Rough re-entry" heading
 // rather than a radio metaphor). index.tsx renders whichever branch this resolves.
 
-export type FeedState = "loading" | "error" | "empty" | "ready";
+export type FeedState = "loading" | "offline" | "error" | "empty" | "ready";
 
 /**
  * Which state the feed is in, from the infinite query + the flattened count. Any data
  * already in hand wins (a background refetch failing never blanks a populated feed);
- * only a truly empty query falls through to loading / error / empty.
+ * only a truly empty query falls through to offline / loading / error / empty.
+ *
+ * `isPaused` is the offline branch, and it must be read BEFORE `isPending`: a query the
+ * online manager parked is `status: 'pending'` AND `fetchStatus: 'paused'` at the same
+ * time, so a loading state keyed on pending alone spins forever in a tunnel. It also
+ * outranks `isError`, because a stale error plus a paused retry is still, honestly, a
+ * connection problem, and "Try again" is a control that cannot work until one returns.
  */
 export function resolveFeedState(q: {
   count: number;
   isError: boolean;
+  isPaused: boolean;
   isPending: boolean;
 }): FeedState {
   if (q.count > 0) {
     return "ready";
+  }
+  if (q.isPaused) {
+    return "offline";
   }
   if (q.isPending) {
     return "loading";
@@ -42,4 +52,10 @@ export const feedCopy = {
   },
   footer: "Finding more",
   loading: "Tuning in",
+  // Offline carries no retry control: the query resumes itself the moment the device is
+  // back, so a button here would be a second, slower way to do what already happens.
+  offline: {
+    body: "I can't reach the archive from here. Find a connection and I'll pull the findings straight through.",
+    title: "Out of range",
+  },
 } as const;

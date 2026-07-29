@@ -23,41 +23,75 @@ function assertTrue(actual: boolean, message = "assertion failed"): void {
 
 // 1. First paint, nothing fetched yet → loading.
 assertEqual(
-  resolveFeedState({ count: 0, isError: false, isPending: true }),
+  resolveFeedState({ count: 0, isError: false, isPaused: false, isPending: true }),
   "loading",
   "pending + empty → loading",
 );
 
 // 2. The initial fetch failed with no data → error.
 assertEqual(
-  resolveFeedState({ count: 0, isError: true, isPending: false }),
+  resolveFeedState({ count: 0, isError: true, isPaused: false, isPending: false }),
   "error",
   "error + empty → error",
 );
 
 // 3. The query resolved but the archive is empty → empty.
 assertEqual(
-  resolveFeedState({ count: 0, isError: false, isPending: false }),
+  resolveFeedState({ count: 0, isError: false, isPaused: false, isPending: false }),
   "empty",
   "settled + empty → empty",
 );
 
-// 4. Any data in hand wins — a background refetch failing never blanks the feed.
+// 4. Any data in hand wins — a background refetch failing never blanks the feed, and
+//    neither does losing the connection.
 assertEqual(
-  resolveFeedState({ count: 3, isError: false, isPending: false }),
+  resolveFeedState({ count: 3, isError: false, isPaused: false, isPending: false }),
   "ready",
   "has data → ready",
 );
 assertEqual(
-  resolveFeedState({ count: 3, isError: true, isPending: false }),
+  resolveFeedState({ count: 3, isError: true, isPaused: false, isPending: false }),
   "ready",
   "has data even while erroring → ready",
 );
+assertEqual(
+  resolveFeedState({ count: 3, isError: false, isPaused: true, isPending: true }),
+  "ready",
+  "has data even while paused offline → ready (the data-wins law holds)",
+);
 
-// 5. The retry control is the ratified literal, not a voiced variant (Chrome Rule).
+// 5. Offline. A parked query is `status: 'pending'` AND `fetchStatus: 'paused'` at the
+//    same time, so "loading" must NOT be reachable here — that is the spinner that spins
+//    forever in a tunnel.
+assertEqual(
+  resolveFeedState({ count: 0, isError: false, isPaused: true, isPending: true }),
+  "offline",
+  "paused + pending + empty → offline, never loading",
+);
+assertEqual(
+  resolveFeedState({ count: 0, isError: false, isPaused: true, isPending: false }),
+  "offline",
+  "paused + settled + empty → offline, never empty",
+);
+// Precedence over a stale error: the retry control cannot work until a connection is
+// back, so the honest answer is the connection, not "give it another go".
+assertEqual(
+  resolveFeedState({ count: 0, isError: true, isPaused: true, isPending: false }),
+  "offline",
+  "paused + error + empty → offline, never error",
+);
+
+// 6. The retry control is the ratified literal, not a voiced variant (Chrome Rule).
 assertEqual(feedCopy.error.retry, "Try again", "retry control label");
 
-// 6. The prose obeys the Dry Rule (no exclamation marks), carries no em-dashes, and
+// 7. The offline state carries NO control: the query resumes itself the moment the device
+//    is back, so a button here would only ever work once it was already unnecessary.
+assertTrue(
+  !("retry" in feedCopy.offline),
+  "the offline state offers no retry control (it would be chrome that lies)",
+);
+
+// 8. The prose obeys the Dry Rule (no exclamation marks), carries no em-dashes, and
 // names none of VOICE.md's retired identity words (the radio metaphor especially —
 // "Lost the signal" shipped here once).
 // Substrings, so "stream" covers "streaming" and "mint" covers "minted" — the
@@ -89,6 +123,8 @@ const prose = [
   feedCopy.error.body,
   feedCopy.footer,
   feedCopy.loading,
+  feedCopy.offline.title,
+  feedCopy.offline.body,
 ];
 for (const line of prose) {
   assertTrue(!line.includes("!"), `no exclamation marks in prose: "${line}"`);

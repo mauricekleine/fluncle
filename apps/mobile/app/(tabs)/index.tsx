@@ -31,8 +31,16 @@ type FeedList = {
 // to <FeedPager>. Any data in hand wins; only a truly empty query falls to
 // loading / error / empty.
 export default function FeedScreen() {
-  const { data, fetchNextPage, hasNextPage, isError, isFetchingNextPage, isPending, refetch } =
-    useFindingsFeed();
+  const {
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isError,
+    isFetchingNextPage,
+    isPaused,
+    isPending,
+    refetch,
+  } = useFindingsFeed();
   // FEED-ONLY, by operator ruling (2026-07-24): the full-screen Feed shows only findings
   // with a Fluncle-rendered (first-party) video. An un-rendered finding would fall to the
   // album-art cover placeholder, which is off-brand and raises third-party-artwork /
@@ -41,10 +49,13 @@ export default function FeedScreen() {
   // consumer, not in `flattenFeed`. Filter rate is ~1% (nearly every finding is rendered),
   // so the pager's next-page fetch keys off `hasNextPage` (below), never the filtered count.
   const findings = flattenFeed(data?.pages).filter(hasRender);
-  const state = resolveFeedState({ count: findings.length, isError, isPending });
+  const state = resolveFeedState({ count: findings.length, isError, isPaused, isPending });
 
   if (state === "loading") {
     return <FeedLoading />;
+  }
+  if (state === "offline") {
+    return <FeedOffline />;
   }
   if (state === "error") {
     return <FeedError onRetry={() => void refetch()} />;
@@ -177,6 +188,20 @@ function FeedError({ onRetry }: { onRetry: () => void }) {
           </Text>
         )}
       </Pressable>
+    </View>
+  );
+}
+
+/**
+ * The device has no connection, so the feed query is parked rather than failing. No retry
+ * control: the query resumes itself the moment the device is back, and a button that only
+ * works once it already worked is chrome that lies.
+ */
+function FeedOffline() {
+  return (
+    <View style={[styles.screen, styles.center]}>
+      <Text style={[font.title, styles.title]}>{feedCopy.offline.title}</Text>
+      <Text style={[font.body, styles.body]}>{feedCopy.offline.body}</Text>
     </View>
   );
 }

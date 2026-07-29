@@ -9,7 +9,7 @@
 // (gated on a real conflict signal so it can never misfire before the server grows
 // dedupe).
 
-import { classifySubmit, faultInfo, submitOutcomeCopy } from "@/lib/submit-fault";
+import { classifySubmit, faultInfo, submitOutcomeCopy, submitPausedCopy } from "@/lib/submit-fault";
 
 // A tiny strict-equality assertion (see media.test.ts): framework- and dependency-free,
 // still throws (and fails the `bun test` process) on a mismatch.
@@ -87,4 +87,44 @@ assertEqual(
   submitOutcomeCopy.rate_limited,
   "Easy, fam. That's a fair few in a short stretch. Give it an hour, then send the next one.",
   "rate_limited copy is the ratified string",
+);
+
+// 8. The PAUSED copy — what the screen says while the device has no connection. Offline a
+//    mutation pauses rather than failing, so these replace the "Sending…" / "Searching…"
+//    labels that would otherwise sit there forever in a tunnel.
+//    The two labels are chrome: literal, no voice, no cosmos (the Chrome Rule).
+assertEqual(submitPausedCopy.sendLabel, "Waiting to send", "the send control's paused label");
+assertEqual(submitPausedCopy.searchLabel, "Waiting to search", "the search control's paused label");
+for (const label of [submitPausedCopy.sendLabel, submitPausedCopy.searchLabel]) {
+  assertEqual(label.includes("…"), false, `a paused label is a state, not an ellipsis: "${label}"`);
+}
+
+// The prose line beneath them is where the voice lives, and it must survive the same
+// rails as every other mobile string: no exclamation marks (the Dry Rule), no em-dashes,
+// and none of VOICE.md's retired identity words. "signal" is the one that matters here —
+// a connection state is exactly where the retired radio metaphor creeps back in.
+assertEqual(
+  submitPausedCopy.queuedLine,
+  "You're offline. I'm holding your track here, and I'll send it for review the moment you're back.",
+  "the queued-submission line is the ratified string",
+);
+assertEqual(
+  submitPausedCopy.queuedLine.includes("!"),
+  false,
+  "queued line has no exclamation mark",
+);
+assertEqual(submitPausedCopy.queuedLine.includes("—"), false, "queued line has no em-dash");
+for (const word of ["transmission", "signal", "anomaly", "curated", "content", "stream", "mint"]) {
+  assertEqual(
+    submitPausedCopy.queuedLine.toLowerCase().includes(word),
+    false,
+    `queued line carries no retired identity word "${word}"`,
+  );
+}
+// The promise is load-bearing: the submission really is persisted and replayed, so the
+// line names the track (the Name It Rule) rather than leaving a bare pronoun.
+assertEqual(
+  submitPausedCopy.queuedLine.includes("your track"),
+  true,
+  "the queued line names the noun it is holding",
 );

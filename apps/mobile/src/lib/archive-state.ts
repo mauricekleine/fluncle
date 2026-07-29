@@ -2,36 +2,58 @@
 // the state branch and the truncation/meta logic can be unit-tested in the repo's
 // framework-free harness (see submit-fault.test.ts) without mounting an RN tree.
 
-/** The four mutually-exclusive views the archive resolves before it renders. */
-export type ArchiveView = "loading" | "error" | "empty" | "list";
+/** The five mutually-exclusive views the archive resolves before it renders. */
+export type ArchiveView = "loading" | "offline" | "error" | "empty" | "list";
 
 /**
  * The honest state branch. A cold start is `loading` (skeletons, not an empty
- * state), a first-load failure with nothing to show is `error`, a genuinely empty
- * result is `empty`, and anything with findings is the `list`. Data wins over a
- * later error so a background refetch failure never nukes an already-loaded list;
- * this is what keeps "Quiet sector." from being a lie on every cold start.
+ * state), a device with no connection is `offline`, a first-load failure with
+ * nothing to show is `error`, a genuinely empty result is `empty`, and anything
+ * with findings is the `list`. Data wins over everything else so a background
+ * refetch failure never nukes an already-loaded list; this is what keeps "Quiet
+ * sector." from being a lie on every cold start.
+ *
+ * `isPaused` is read BEFORE `isPending`: a query the online manager parked is
+ * `status: 'pending'` AND `fetchStatus: 'paused'` at once, so skeletons keyed on
+ * pending alone shimmer forever in a tunnel. It also outranks `isError`, because a
+ * stale error plus a paused retry is a connection problem, and the error state's
+ * "Try again" control cannot work until one returns.
  */
 export function archiveView({
   count,
   isError,
+  isPaused,
   isPending,
 }: {
   count: number;
   isError: boolean;
+  isPaused: boolean;
   isPending: boolean;
 }): ArchiveView {
-  if (isPending) {
-    return "loading";
-  }
   if (count > 0) {
     return "list";
+  }
+  if (isPaused) {
+    return "offline";
+  }
+  if (isPending) {
+    return "loading";
   }
   if (isError) {
     return "error";
   }
   return "empty";
 }
+
+/**
+ * The archive's offline line. It carries no retry control (unlike the error state,
+ * which does): the feed query resumes on its own the moment the device is back, so a
+ * button here would be a second, slower way to do what already happens. Kept beside
+ * the state branch, like feed-state.ts's copy, so a test pins the literal.
+ */
+export const archiveCopy = {
+  offline: "You're offline. I'll pull the findings through the moment you're back.",
+} as const;
 
 /**
  * The finding row's primary line, split so the TITLE always survives truncation.

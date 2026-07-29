@@ -19,7 +19,7 @@ import { FindingRow, FindingRowSkeleton } from "@/components/finding-row";
 import { ArchiveRow } from "@/components/archive-row";
 import { EntityRow } from "@/components/entity-row";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
-import { archiveView } from "@/lib/archive-state";
+import { archiveCopy, archiveView } from "@/lib/archive-state";
 import { type SavedFinding } from "@/lib/saved-store";
 import { useSavedFindings } from "@/lib/saved";
 import { partitionEntities, partitionTracks, searchView } from "@/lib/search-state";
@@ -45,6 +45,7 @@ export default function ArchiveScreen() {
     hasNextPage,
     isError,
     isFetchingNextPage,
+    isPaused,
     isPending,
     isRefetching,
     refetch,
@@ -101,7 +102,7 @@ export default function ArchiveScreen() {
     setDebounced("");
   }, []);
 
-  const view = archiveView({ count: shown.length, isError, isPending });
+  const view = archiveView({ count: shown.length, isError, isPaused, isPending });
 
   return (
     <View style={{ flex: 1 }}>
@@ -147,6 +148,8 @@ export default function ArchiveScreen() {
           <SearchResults query={debounced} onPickHit={(hit) => pickHit(hit, router)} />
         ) : browse.kind === "saved" ? (
           <SavedList list={saved.list} ready={saved.ready} renderItem={renderSaved} />
+        ) : view === "offline" ? (
+          <ArchiveOffline />
         ) : view === "loading" ? (
           <LoadingRows count={7} />
         ) : view === "error" ? (
@@ -345,6 +348,20 @@ function LoadingRows({ count }: { count: number }) {
       {Array.from({ length: count }, (_, i) => (
         <FindingRowSkeleton key={i} isLast={i === count - 1} />
       ))}
+    </View>
+  );
+}
+
+// The device has no connection, so the feed query is PARKED rather than failed — a
+// different fact from ArchiveError below, and it gets a different answer. No "Try again":
+// the query resumes on its own the moment the device is back, so the control would only
+// ever work once it was already unnecessary.
+function ArchiveOffline() {
+  return (
+    <View style={styles.errorState}>
+      <Text accessibilityLiveRegion="polite" style={[font.body, styles.errorText]}>
+        {archiveCopy.offline}
+      </Text>
     </View>
   );
 }

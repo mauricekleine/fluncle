@@ -68,6 +68,27 @@ export function classifySubmit(error: unknown): SubmitOutcome {
   return "failed";
 }
 
+/**
+ * The submit screen's PAUSED copy — what the two controls say while the device has no
+ * connection, and the line that explains the queued send.
+ *
+ * Offline a mutation does not fail, it PAUSES (`status: 'pending'` with
+ * `fetchStatus: 'paused'`), so a control keyed on isPending alone reads "Sending…"
+ * forever in a tunnel. The two labels stay literal (the Chrome Rule); the voice lives in
+ * the prose line beneath them.
+ *
+ * The asymmetry in the copy is real, not decorative: a submission IS written to storage
+ * and replayed after a restart (see persist-config.ts), which is what earns the promise
+ * in `queuedLine`. A Spotify search is not persisted, so its label only reports the wait
+ * and promises nothing.
+ */
+export const submitPausedCopy = {
+  queuedLine:
+    "You're offline. I'm holding your track here, and I'll send it for review the moment you're back.",
+  searchLabel: "Waiting to search",
+  sendLabel: "Waiting to send",
+} as const;
+
 /** The in-voice line each outcome shows (crew register, VOICE.md). */
 export const submitOutcomeCopy: Record<SubmitOutcome, string> = {
   already_logged: "Already in the log, good ear. Great minds and all that.",

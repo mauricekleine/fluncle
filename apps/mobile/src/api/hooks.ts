@@ -6,6 +6,7 @@ import { useCallback } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FeedItem, type RadioNowPlaying, type TrackListItem } from "@fluncle/contracts";
 import { orpc } from "@/api/orpc";
+import { SUBMIT_TRACK_MUTATION_KEY, SUBMIT_TRACK_SCOPE } from "@/lib/persist-config";
 
 /** A feed page as the contract emits it (findings + published mixtapes interleaved). */
 type FeedPage = { nextCursor?: string; tracks: FeedItem[] };
@@ -116,9 +117,20 @@ export function useTrackSearch() {
  * its status (validation, the hourly rate limit, triage). `.mutate(SubmissionBody)`
  * resolves to `{ ok: true, submission }`; faults carry the server `{ status, data }`
  * the screen maps to its honest result states.
+ *
+ * The one mutation that is QUEUED AND REPLAYED offline: it is a real write the crew
+ * member meant to make, and its variables are a plain JSON contract body, so it survives
+ * a trip through storage intact. The stable key + scope are shared with the persist
+ * policy and with the defaults registered on the client (see @/api/mutation-defaults) —
+ * a replay after a cold start finds its function by this key alone.
  */
 export function useSubmitTrack() {
-  return useMutation(orpc.submit_track.mutationOptions());
+  return useMutation(
+    orpc.submit_track.mutationOptions({
+      mutationKey: SUBMIT_TRACK_MUTATION_KEY,
+      scope: SUBMIT_TRACK_SCOPE,
+    }),
+  );
 }
 
 /**

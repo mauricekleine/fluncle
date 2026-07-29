@@ -18,7 +18,7 @@ import { type TrackSearchResult } from "@fluncle/contracts";
 import { useSubmitTrack, useTrackSearch } from "@/api/hooks";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { HeatButton } from "@/components/heat-button";
-import { classifySubmit, submitOutcomeCopy } from "@/lib/submit-fault";
+import { classifySubmit, submitOutcomeCopy, submitPausedCopy } from "@/lib/submit-fault";
 import { color, font, radius } from "@/theme/tokens";
 
 // The submit flow (roadmap: the app becomes a funnel, not a mirror). A crew member
@@ -57,19 +57,21 @@ export default function SubmitScreen() {
   // One live announcement for the transient result-states so VoiceOver/TalkBack speak
   // them as they mount. Android reads the `accessibilityLiveRegion="polite"` nodes
   // below on its own; iOS has no live-region prop, so announce imperatively when the
-  // spoken line changes. `submit.isError` wins — once a send has been attempted it is
-  // the most recent event over a still-visible result list.
-  const announcement = submit.isError
-    ? submitOutcomeCopy[classifySubmit(submit.error)]
-    : shortQueryHint
-      ? SHORT_QUERY_HINT
-      : searchFailed
-        ? SEARCH_FAILED_LINE
-        : noMatches
-          ? NO_MATCHES_LINE
-          : results.length > 0
-            ? RESULTS_HEADING
-            : undefined;
+  // spoken line changes. A parked send wins outright, then `submit.isError` — once a send
+  // has been attempted it is the most recent event over a still-visible result list.
+  const announcement = submit.isPaused
+    ? submitPausedCopy.queuedLine
+    : submit.isError
+      ? submitOutcomeCopy[classifySubmit(submit.error)]
+      : shortQueryHint
+        ? SHORT_QUERY_HINT
+        : searchFailed
+          ? SEARCH_FAILED_LINE
+          : noMatches
+            ? NO_MATCHES_LINE
+            : results.length > 0
+              ? RESULTS_HEADING
+              : undefined;
 
   useEffect(() => {
     if (Platform.OS === "ios" && announcement !== undefined) {
@@ -190,7 +192,13 @@ export default function SubmitScreen() {
                     <Ionicons color={color.starlightCream} name="search" size={16} />
                   )
                 }
-                label={search.isPending ? "Searching…" : "Search"}
+                label={
+                  search.isPaused
+                    ? submitPausedCopy.searchLabel
+                    : search.isPending
+                      ? "Searching…"
+                      : "Search"
+                }
                 onPress={runSearch}
                 variant="outline"
               />
@@ -268,10 +276,24 @@ export default function SubmitScreen() {
                   />
                 </View>
                 <HeatButton
-                  label={submit.isPending ? "Sending…" : "Send for review"}
+                  label={
+                    submit.isPaused
+                      ? submitPausedCopy.sendLabel
+                      : submit.isPending
+                        ? "Sending…"
+                        : "Send for review"
+                  }
                   onPress={sendSelected}
                   disabled={submit.isPending}
                 />
+                {submit.isPaused ? (
+                  <Text
+                    accessibilityLiveRegion="polite"
+                    style={[font.body, { color: color.stardust }]}
+                  >
+                    {submitPausedCopy.queuedLine}
+                  </Text>
+                ) : null}
               </View>
             ) : null}
 
