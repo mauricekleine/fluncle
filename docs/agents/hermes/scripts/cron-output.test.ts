@@ -60,7 +60,11 @@ function writeRunner(
     script,
     [
       "#!/usr/bin/env bash",
-      "set -uo pipefail",
+      // `-e` ON PURPOSE: every real sweep wrapper sources this helper under
+      // `set -euo pipefail`, and the helper is full of pipelines whose failure is expected
+      // and swallowed (`grep` finding no summary line, the marker write, the prune). A
+      // harness running without `-e` would never see a missing `|| true`.
+      "set -euo pipefail",
       "unset FLUNCLE_API_TOKEN FLUNCLE_API_BASE_URL",
       `export HEALTHCHECK_CRON_OUTPUT_DIR=${JSON.stringify(outputDir)}`,
       // The rebake guard reads dirname($HOME)/rebake.lock; point HOME somewhere empty so the
