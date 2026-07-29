@@ -74,8 +74,23 @@ const BIO_MAX_CHARS = 500;
  *     Sound: The Bassline Strikes Back!" clears the Dry Rule's exclamation ban without that ban
  *     being weakened for anything Fluncle actually wrote.
  *
+ * THE MATCH IS WORD-BOUNDED, and it has to be. An unanchored replace fires INSIDE longer words, so
+ * the artist "Sign" would mask the middle out of "signal" (leaving " al", which scans clean) and
+ * "Mission:" would eat the tail of "transmission:" — silently amnestying the exact banned words the
+ * first property promises to keep. The boundaries are CONDITIONAL on the name's own edges, because
+ * a name may legitimately start or end in punctuation: `(?<!\w)` only when the name starts with a
+ * word character, `(?!\w)` only when it ends with one. That is what lets "…Strikes Back!" still
+ * mask while "Sign" stops being a substring wildcard.
+ *
  * A PARTIAL reference is still rejected: a bio about "Future Signal" that says only "Signal" trips
  * the ban. That is intended — conservative, and the rewrite can simply use the full name.
+ *
+ * THE ONE UNAVOIDABLE COST: when an entity's WHOLE name IS a banned word, masking it deletes every
+ * occurrence, so that word is amnestied in that entity's bio entirely — there is no way to tell
+ * "the artist Signal" from the noun in "a signal", because they are the same token. Production
+ * carries at least three such entities (`/artist/signal`, `/album/anomaly`, `/album/content`). It
+ * is the accepted cost of letting those pages have a bio at all; the alternative is that they
+ * cannot be written.
  *
  * The name is a trusted identity string from Fluncle's own DB, never free web content, so
  * regex-escaping it is the whole of the input handling it needs.
@@ -88,10 +103,14 @@ export function maskEntityName(text: string, entityName: string): string {
   }
 
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Only guard an edge the name actually presents to one: a name ending in `!` or `:` must still
+  // match when the next character is a letter.
+  const lead = /^\w/.test(name) ? "(?<!\\w)" : "";
+  const tail = /\w$/.test(name) ? "(?!\\w)" : "";
 
   // A single space, not an empty string: the masked span still separates the words around it, so
   // masking can never weld two neighbours into a token the scanner would read differently.
-  return text.replace(new RegExp(escaped, "gi"), " ");
+  return text.replace(new RegExp(`${lead}${escaped}${tail}`, "gi"), " ");
 }
 
 /**
@@ -124,6 +143,24 @@ export function gateBioText(text: unknown, entityName: string): string {
 function scanBioProse(bio: string, entityName: string): VoiceGateViolation[] {
   return scanObservationScript(maskEntityName(bio, entityName), { allowGeography: true });
 }
+
+// ── THE FINAL-ATTEMPT ACCEPTANCE — a SEVERABLE unit ──────────────────────────────────────
+//
+// This exists on the operator's explicit ruling and is under canon review; it may be reversed.
+// It is therefore built to come out in one clean deletion rather than an unpick. To remove it:
+//
+//   1. delete `acceptFinalDraftBio` and collapse `gateOrAcceptBio` to `{ bio: gateBioText(…) }`
+//      (the handlers spread its result, so they need no edit at all);
+//   2. drop `finalAttempt` / `gateBypassed` / `voiceViolations` from the three describe contracts;
+//   3. drop `--final-attempt` from the CLI (`buildBioBody`, `BioDescribeOptions`, the three
+//      `.option()` calls, the `gateBypassed` print) ;
+//   4. in the sweep, stop passing `finalAttempt` to `deliverBio` and drop the `bypassedGate`
+//      counter.
+//
+// NOTHING ELSE DEPENDS ON IT. The attempt budget is a separate mechanism and stands on its own:
+// with the acceptance gone, a third rejected draft simply lands on the `exhausted` terminal
+// outcome the sweep already implements and tests. The name exemption is likewise independent —
+// and note it now clears every example this acceptance was originally justified by.
 
 /**
  * THE FINAL-ATTEMPT ACCEPTANCE — the one place the bio voice SCAN is allowed not to hard-fail.

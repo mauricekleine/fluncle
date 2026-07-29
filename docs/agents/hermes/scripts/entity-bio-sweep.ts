@@ -311,7 +311,8 @@ export function formatAttemptLedger(ledger: AttemptLedger): string {
 
 /**
  * What the budget says about one entity RIGHT NOW:
- *   - `spent`     — attempts already burned (persisted).
+ *   - `spent`     — DRAFTS THE GATE HAS JUDGED AND REFUSED (persisted). Not "model calls made":
+ *                   see `describeOne` for why only a gate rejection may spend the budget.
  *   - `exhausted` — the budget is gone; this entity must never be authored again.
  *   - `attempt`   — the 1-based number of the attempt we are about to make.
  *   - `final`     — this is the LAST attempt, so its draft is delivered with `--final-attempt`
@@ -333,7 +334,10 @@ export function planAttempt(
   };
 }
 
-/** Burn one attempt. Called BEFORE the `claude -p` spend, so a crash mid-author cannot refund it. */
+/**
+ * Burn one attempt. Called ONLY when the gate has judged a draft and REFUSED it — never on a
+ * transport or model failure, which is no evidence about the draft at all (`describeOne`).
+ */
 export function recordAttempt(
   ledger: AttemptLedger,
   kind: EntityKind,
@@ -571,6 +575,10 @@ export function buildRewriteBlock(rejection: string | undefined, attempt: number
   return [
     `YOUR LAST DRAFT WAS REJECTED — ${reason}.`,
     "Write the paragraph again from the same facts, wording it so that reason no longer applies. Do not invent new facts to route around it, and do not pad the length; change the phrasing.",
+    // Avoiding a token is the easy way out, and the easy way out is flat: an expository,
+    // encyclopedia-voiced paragraph passes the scan and fails the Flat Copy Test. Say what the
+    // rewrite must KEEP, not just what it must lose.
+    "Keep the dossier register — dry, scene-literate, sentence case, plain facts; do not go generic to dodge the word.",
     "",
     "",
   ].join("\n");
@@ -620,8 +628,11 @@ async function authorBio(
       throw new ClaudeAuthError(combined.trim().slice(-300));
     }
 
+    // No draft was produced, so the entity's attempt budget is NOT spent — which makes this line
+    // the only thing watching a model that keeps falling over. It says "retrying" on purpose, so
+    // the /status strain detector scores it (see the strain-vocabulary contract on `describeOne`).
     log(
-      `claude -p exited ${code} (not auth): ${stderr.trim().slice(-200) || stdout.trim().slice(-200)}`,
+      `claude -p exited ${code} (not auth), no attempt spent — retrying next tick: ${stderr.trim().slice(-200) || stdout.trim().slice(-200)}`,
     );
 
     return null;
@@ -632,7 +643,9 @@ async function authorBio(
   try {
     envelope = JSON.parse(stdout) as ClaudeEnvelope;
   } catch {
-    log(`claude -p did not return JSON: ${stdout.slice(0, 200)}`);
+    log(
+      `claude -p did not return JSON, no attempt spent — retrying next tick: ${stdout.slice(0, 200)}`,
+    );
 
     return null;
   }
@@ -646,7 +659,9 @@ async function authorBio(
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
-    log(`claude -p returned is_error (${envelope.subtype ?? "?"}) — leaving entity queued`);
+    log(
+      `claude -p returned is_error (${envelope.subtype ?? "?"}), no attempt spent — retrying next tick`,
+    );
 
     return null;
   }
@@ -654,7 +669,7 @@ async function authorBio(
   const bio = typeof envelope.result === "string" ? envelope.result.trim() : "";
 
   if (!bio) {
-    log("claude -p returned an empty bio — leaving entity queued");
+    log("claude -p returned an empty bio, no attempt spent — retrying next tick");
 
     return null;
   }
@@ -781,8 +796,12 @@ function deliverBio(input: {
       ) {
         const rejection = readBioRejection(combined);
 
+        // Deliberately OUTSIDE the strain vocabulary: this draft is about to be rewritten, and an
+        // entity that rewrites and then lands is a healthy tick, not a degraded cron. The
+        // TERMINAL outcomes (exhausted, transport failure) carry the distress wording instead.
+        // See the strain-vocabulary contract above `describeOne`.
         log(
-          `${slug}: the voice gate / length rejected the bio${rejection ? ` (${rejection})` : ""}`,
+          `${slug}: draft did not clear the voice gate / length bounds${rejection ? ` (${rejection})` : ""}`,
         );
 
         return { gateBypassed: false, outcome: "gateSkipped", rejection };
@@ -835,8 +854,7 @@ function deliverBio(input: {
 //
 // THE ATTEMPT LIFECYCLE, in one place:
 //   1. The budget is `MAX_BIO_ATTEMPTS` (3) per entity FOR ALL TIME, persisted in the ledger.
-//   2. Attempt N is BURNED (written to disk) before the `claude -p` spend, so a crash, a timeout,
-//      or a container swap mid-author cannot refund it.
+//   2. ONLY A GATE REJECTION SPENDS IT (see below).
 //   3. A gate rejection with budget left → re-author, TOLD the reason (`buildRewriteBlock`).
 //   4. The LAST attempt delivers with `--final-attempt`: its draft lands even if the voice scan
 //      refuses it, and that acceptance is logged under its own marker.
@@ -844,9 +862,60 @@ function deliverBio(input: {
 //   6. An entity that has spent all three is `exhausted` — never authored again, and filtered out
 //      of the batch before the cap so it cannot block the queue behind it.
 //
+// WHAT MAY SPEND AN ATTEMPT — the distinction the whole budget rests on:
+//
+//   A GATE REJECTION is deterministic evidence that THIS DRAFT was bad. The Worker read the
+//   paragraph and refused it. Spend the budget: three such refusals mean the model is not going
+//   to get there, and the third draft is accepted rather than discarded.
+//
+//   A TRANSPORT OR MODEL FAILURE is no evidence about the draft at all — there IS no draft. A
+//   `claude -p` that exits non-zero, returns `is_error`, or returns nothing says something about
+//   the infrastructure, never about the entity. Spending the budget on it would let three flaky
+//   model calls write an entity off permanently, and if the THIRD call is the flaky one there is
+//   no draft to accept either — the entity ends up with no bio and no retry, forever, because the
+//   API had a bad afternoon. So these DO NOT burn: the entity keeps its whole budget and is
+//   retried next tick.
+//
+//   The loop that guards against is covered from the other side: every one of those failures logs
+//   a line the `/status` sweep-strain detector scores (fluncle-healthcheck.ts `STRAIN_PHRASES`),
+//   so a sweep grinding on a broken model call surfaces as `degraded` instead of silently
+//   spinning. Losing the budget as a bound is the right trade — the budget exists to stop a
+//   REWRITE loop, and a rewrite loop needs a rejection to continue.
+//
 // A DRY RUN spends no budget and touches no ledger: it is the operator's pre-flight, it stores
 // nothing, and it must not consume an entity's real attempts.
 // ---------------------------------------------------------------------------
+
+/**
+ * THE STRAIN VOCABULARY (the /status sweep-strain detector, fluncle-healthcheck.ts).
+ *
+ * Since #994 this sweep's stderr is captured into its cron marker and every line is scored: a
+ * line containing one of `STRAIN_PHRASES` is a point, 12 points over 3+ ticks in 6h reports the
+ * cron `degraded`. That makes the WORDING of these logs load-bearing, so the rule this file
+ * follows is written down once, here, and pinned by tests:
+ *
+ *   DISTRESS (must score) — the work did not get done and nothing here will fix it:
+ *     · a transport/model failure ("retrying next tick" — and note it no longer costs the entity
+ *       any budget, so the detector is the ONLY thing watching it)
+ *     · an entity EXHAUSTED ("giving up") — a permanent write-off, said once, on the tick it
+ *       happens
+ *     · a ledger write that failed ("could not persist")
+ *
+ *   NOT DISTRESS (must score zero) — a healthy sweep doing its job:
+ *     · a rejected draft that is ABOUT TO BE REWRITTEN. It is a step inside one entity's work,
+ *       not an outcome; scoring it would push a sweep that rewrites and then SUCCEEDS toward
+ *       `degraded`, which is the false positive that would make the detector worth ignoring.
+ *     · the FINAL-ATTEMPT ACCEPTANCE. A bio landing on the third attempt is a DESIGNED outcome,
+ *       and it already has its own review channel (the marker, `bypassedGate`, the API fields).
+ *     · the per-tick "skipping N exhausted" recap. The exhaustion was already reported once when
+ *       it happened; scoring the recap would accrue a point every tick forever for a known,
+ *       steady state, and a `degraded` that can never clear is noise.
+ */
+function logExhausted(kind: EntityKind, slug: string): void {
+  log(
+    `${slug}: EXHAUSTED — ${MAX_BIO_ATTEMPTS} drafts were rejected, giving up on this ${kind} (delete its line from ${attemptLedgerPath()} to re-arm)`,
+  );
+}
 
 // Exported so the unit test can drive the REAL loop against stub `fluncle`/`claude` binaries
 // (FLUNCLE_BIN / CLAUDE_BIN) rather than re-implementing the budget arithmetic beside it — the
@@ -869,9 +938,7 @@ export async function describeOne(
   // here means the budget ran out mid-tick. Either way, no draft is fetched and no model is
   // called — an exhausted entity costs nothing at all.
   if (ledger && planAttempt(ledger, kind, slug).exhausted) {
-    log(
-      `${slug}: EXHAUSTED — ${MAX_BIO_ATTEMPTS} authoring attempts spent, this ${kind} will not be authored again (delete its line from ${attemptLedgerPath()} to re-arm)`,
-    );
+    logExhausted(kind, slug);
 
     return { cost: null, outcome: "exhausted" };
   }
@@ -911,19 +978,9 @@ export async function describeOne(
         { attempt: 1, exhausted: false, final: false, spent: 0 };
 
     if (plan.exhausted) {
-      log(
-        `${slug}: EXHAUSTED — ${MAX_BIO_ATTEMPTS} authoring attempts spent, this ${kind} will not be authored again (delete its line from ${attemptLedgerPath()} to re-arm)`,
-      );
+      logExhausted(kind, slug);
 
       return { cost: null, outcome: "exhausted" };
-    }
-
-    // BURN THE ATTEMPT FIRST. Persisted before the model call, so the budget is honest even if
-    // this process never reaches the next line — the exact failure mode that made "retry" mean
-    // "forever" when nothing was counted at all.
-    if (ledger && ledgerPath) {
-      recordAttempt(ledger, kind, slug, Math.floor(Date.now() / 1000));
-      writeAttemptLedger(ledgerPath, ledger);
     }
 
     if (plan.attempt > 1) {
@@ -934,8 +991,9 @@ export async function describeOne(
       );
     }
 
-    // Throws ClaudeAuthError to abort the whole batch; returns null to leave THIS entity
-    // queued with its remaining budget intact (no bio stored, picked up next tick).
+    // Throws ClaudeAuthError to abort the whole batch; returns null on a transport/model failure
+    // — which leaves THIS entity queued with its budget UNSPENT (there is no draft to judge), and
+    // logs a line the strain detector scores so the failure is not silent.
     authored = await authorBio(
       kind,
       `${buildRewriteBlock(rejection, plan.attempt)}${draft.prompt}`,
@@ -955,21 +1013,28 @@ export async function describeOne(
       slug,
     });
 
-    // Anything but a gate rejection is terminal for this entity this tick. A rejection with no
-    // budget left is terminal too — but that only happens when the final attempt's draft was
-    // refused on a STRUCTURAL ground the acceptance still enforces (empty / too short / too
-    // long), so it is reported rather than retried.
+    // Anything but a gate rejection is terminal for this entity this tick.
     if (delivery.outcome !== "gateSkipped" || !ledger) {
       break;
     }
 
+    // THE ONE PLACE THE BUDGET IS SPENT: the gate read this draft and refused it. Persisted
+    // immediately, so the count is honest even if this process dies before the next pass.
     rejection = delivery.rejection;
+    recordAttempt(ledger, kind, slug, Math.floor(Date.now() / 1000));
+
+    if (ledgerPath) {
+      writeAttemptLedger(ledgerPath, ledger);
+    }
 
     if (planAttempt(ledger, kind, slug).exhausted) {
+      // Only reachable when the FINAL attempt's draft was refused on a STRUCTURAL ground the
+      // acceptance still enforces (empty / too short / too long) — the voice scan cannot refuse
+      // it at that point. Terminal, and said in the detector's vocabulary.
       log(
-        `${slug}: EXHAUSTED — the last of ${MAX_BIO_ATTEMPTS} attempts was still refused${
+        `${slug}: EXHAUSTED — the last of ${MAX_BIO_ATTEMPTS} drafts was still rejected${
           rejection ? ` (${rejection})` : ""
-        }; this ${kind} stays bio-less and will not be authored again`,
+        }; giving up on this ${kind}, it stays bio-less`,
       );
 
       return { cost: null, outcome: "exhausted" };
@@ -1073,6 +1138,24 @@ function parseKind(argv: string[]): EntityKind {
  * but are no longer work this sweep will ever do. Gate-skips and failures keep their remaining
  * budget and stay counted. Exported so the summary and its test cannot drift.
  */
+/**
+ * The once-per-tick recap of the entities this sweep is no longer working. Deliberately OUTSIDE
+ * the strain vocabulary (see the contract above `describeOne`): each of these was already
+ * reported as distress on the tick it exhausted, and this line repeats every tick for as long as
+ * they sit in the queue — scoring it would accrue a point an hour forever for a known, steady
+ * state, and a `degraded` that can never clear is noise. Exported so its wording is scored by a
+ * test rather than trusted.
+ */
+export function exhaustedRecapLine(kind: EntityKind, exhausted: readonly QueueRow[]): string {
+  const slugs = exhausted
+    .map((row) => row.slug)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join(", ");
+
+  return `not working ${exhausted.length} exhausted ${kind}(s) — ${MAX_BIO_ATTEMPTS} drafts spent each (${slugs})`;
+}
+
 export function remainingQueueDepth(
   queueLength: number,
   summary: { alreadyBio: number; authored: number; exhausted: number },
@@ -1157,13 +1240,7 @@ async function main(): Promise<void> {
   summary.exhausted = exhausted.length;
 
   if (exhausted.length > 0) {
-    log(
-      `skipping ${exhausted.length} exhausted ${kind}(s) — ${MAX_BIO_ATTEMPTS} attempts spent each, never authored again (${exhausted
-        .map((row) => row.slug)
-        .filter(Boolean)
-        .slice(0, 10)
-        .join(", ")})`,
-    );
+    log(exhaustedRecapLine(kind, exhausted));
   }
 
   // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the bios

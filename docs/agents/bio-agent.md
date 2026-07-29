@@ -54,7 +54,11 @@ Nothing about the bans changed: `BANNED_WORDS`, the Dry Rule, the "we" ban, and 
 - **The word is not amnestied, only the name.** A bio may name "Future Signal" and still fails if it uses "signal" as a generic word anywhere else in the paragraph.
 - **Masking the full name removes the punctuation inside it**, which is how an album titled with a `!` clears the Dry Rule without the Dry Rule being weakened for anything Fluncle actually wrote.
 
+The match is **word-bounded**, with the boundaries conditional on the name's own edges (`(?<!\w)` only when it starts with a word character, `(?!\w)` only when it ends with one). Without that, a short name is a substring wildcard: the artist "Sign" would mask the middle out of "signal" and "Mission:" would eat the tail of "transmission:", quietly amnestying the exact words the first property promises to keep policing. The conditional edges are what let a title ending in `!` still mask.
+
 A **partial** reference is still judged: a bio about "Future Signal" that says only "Signal" is rejected. That is deliberate — conservative, and the rewrite can use the full name.
+
+**The one unavoidable cost:** when an entity's **whole name IS a banned word**, that word is amnestied in its bio entirely — there is no way to tell "the artist Signal" from the noun in "a signal", because they are the same token. Production carries at least three such entities (`/artist/signal`, `/album/anomaly`, `/album/content`). It is the accepted cost of letting those pages have a bio at all; the alternative is that they cannot be written.
 
 ### The attempt budget: three authorings, ever
 

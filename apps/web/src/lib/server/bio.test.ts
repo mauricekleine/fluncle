@@ -162,6 +162,35 @@ describe("maskEntityName (what the scanner is allowed to see)", () => {
     expect(maskEntityName("Sub Focus (UK) rolls.", "Sub Focus (UK)")).toBe("  rolls.");
     expect(maskEntityName("A.B.C. rolls.", "A.B.C.")).toBe("  rolls.");
   });
+
+  // THE SUBSTRING TRAP. An unanchored replace fires inside longer words, which would silently
+  // amnesty the very words the exemption promises to keep policing. Both of these are entities
+  // that exist in production.
+  it("does NOT mask inside a longer word (the short-name case)", () => {
+    // Unanchored, "Sign" would leave " al" / " als" here and the bio would scan clean.
+    expect(
+      maskEntityName("Sign cut through the signal, and the signals keep coming.", "Sign"),
+    ).toBe("  cut through the signal, and the signals keep coming.");
+  });
+
+  it("does NOT mask inside a longer word when the name ends in punctuation", () => {
+    // Unanchored, "Mission:" would eat the tail of "transmission:".
+    expect(maskEntityName("The transmission: arrived late.", "Mission:")).toBe(
+      "The transmission: arrived late.",
+    );
+    // …but it still masks the entity's own name where it really appears.
+    expect(maskEntityName("Mission: arrived late.", "Mission:")).toBe("  arrived late.");
+  });
+
+  it("still masks a name that ENDS in punctuation followed by a letter", () => {
+    // The tail boundary is conditional precisely so this keeps working.
+    expect(
+      maskEntityName(
+        "Jungle Sound: The Bassline Strikes Back! is a compilation.",
+        "Jungle Sound: The Bassline Strikes Back!",
+      ),
+    ).toBe("  is a compilation.");
+  });
 });
 
 describe("gateBioText + the name exemption (the three production loops)", () => {
@@ -210,6 +239,38 @@ describe("gateBioText + the name exemption (the three production loops)", () => 
 
   // Conservative and intended: the exemption covers the FULL name only, so a shortened reference
   // is still judged. The rewrite can simply use the full name.
+  // THE REGRESSION THE BOUNDARIES EXIST FOR. `/artist/sign` is live and bio-less, so it is a
+  // candidate for the next sweep: without word boundaries its bio could say "signal" freely.
+  it("STILL REJECTS a banned word the entity's SHORT name is merely a prefix of", () => {
+    expect(
+      codeOf(() =>
+        gateBioText(
+          "Sign is a drum and bass producer whose records cut through the signal of a busy night, and I have logged plenty.",
+          "Sign",
+        ),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("STILL REJECTS a banned word the entity's punctuated name is a suffix of", () => {
+    expect(
+      codeOf(() =>
+        gateBioText(
+          "Mission: is a drum and bass imprint, and every transmission: from it lands the same way.",
+          "Mission:",
+        ),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  // The unavoidable cost, stated as a test so it is a KNOWN behaviour rather than a surprise:
+  // when the whole name IS the banned word there is no way to tell the entity from the noun.
+  it("fully amnesties a banned word when the entity's WHOLE name is that word (accepted cost)", () => {
+    const bio =
+      "Signal is a drum and bass producer with a long run of releases behind him. The drums do the talking, and I have logged enough to trust the stamp.";
+    expect(gateBioText(bio, "Signal")).toBe(bio);
+  });
+
   it("REJECTS a partial-name reference (the exemption is the full name only)", () => {
     expect(
       codeOf(() =>

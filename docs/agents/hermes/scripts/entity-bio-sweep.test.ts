@@ -25,6 +25,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { costEventId } from "./cost-emit";
+import { countDistressLines } from "./fluncle-healthcheck";
 
 // The stub rig has to be on disk and pointed at by env BEFORE the sweep module is evaluated:
 // FLUNCLE_BIN / CLAUDE_BIN / ENTITY_BIO_STATE_DIR are all read at module load.
@@ -38,6 +39,8 @@ mkdirSync(CONTROL, { recursive: true });
 
 // A stub `claude -p`: consumes the prompt on stdin, records the invocation (and the prompt, so a
 // test can prove the rewrite feedback reached the model), and emits the real JSON envelope shape.
+// `claude-verdict: down` makes it fail the way a flaky model does — a non-zero exit with no
+// draft, which must NOT cost the entity an attempt.
 writeFileSync(
   CLAUDE_STUB,
   `#!/usr/bin/env bash
@@ -45,6 +48,10 @@ set -euo pipefail
 prompt="$(cat)"
 printf '%s\\n---\\n' "$prompt" >> "${CONTROL}/prompts"
 printf 'x\\n' >> "${CONTROL}/authorings"
+if [ "$(cat "${CONTROL}/claude-verdict" 2>/dev/null || printf 'up')" = "down" ]; then
+  printf 'API Error: 529 overloaded_error\\n' >&2
+  exit 1
+fi
 printf '{"result":"A drum and bass producer with a long run behind them.","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":20},"modelUsage":{}}'
 `,
   { mode: 0o755 },
@@ -100,6 +107,7 @@ const {
   buildRewriteBlock,
   clearAttempts,
   describeOne,
+  exhaustedRecapLine,
   formatAttemptLedger,
   isAuthorableDraft,
   MAX_BIO_ATTEMPTS,
@@ -376,6 +384,12 @@ describe("readBioRejection + buildRewriteBlock (why a rewrite is aimed, not blin
     expect(block).toContain('banned identity word "signal"');
   });
 
+  test("…and is told to hold the register, so it cannot dodge the word by going flat", () => {
+    // "Avoid this token" alone invites an expository paragraph that passes the scan and fails
+    // the Flat Copy Test. The counterweight has to be in the instruction.
+    expect(buildRewriteBlock("anything", 2)).toContain("Keep the dossier register");
+  });
+
   test("a rewrite with no recoverable reason still says it was refused", () => {
     expect(buildRewriteBlock(undefined, 3)).toContain("refused by the voice gate");
   });
@@ -399,6 +413,34 @@ describe("remainingQueueDepth", () => {
 
 function verdict(value: "pass" | "reject" | "structural"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
+}
+
+/** `down` = `claude -p` exits non-zero with no draft, the flaky-model case. */
+function claudeVerdict(value: "up" | "down"): void {
+  writeFileSync(join(CONTROL, "claude-verdict"), value, "utf8");
+}
+
+/**
+ * Run one tick with the sweep's stderr captured, and score it with the REAL /status strain
+ * detector (`countDistressLines`). This is what stops the log WORDING from drifting: since #994
+ * these lines are scored, and a line that reads as distress when the sweep is behaving correctly
+ * would push the cron to `degraded` for no reason.
+ */
+async function tickWithStrain(slug: string): Promise<{ lines: string[]; strain: number }> {
+  const lines: string[] = [];
+  const original = console.error;
+
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+
+  try {
+    await tick(slug);
+  } finally {
+    console.error = original;
+  }
+
+  return { lines, strain: countDistressLines(lines.join("\n")) };
 }
 
 function readLines(file: string): string[] {
@@ -513,20 +555,153 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
     expect(describes().length).toBe(describesAfterBudget);
   });
 
-  test("the budget survives a tick that died mid-author — it is burned BEFORE the model call", async () => {
+  test("a partly-spent budget resumes where it left off across ticks", async () => {
     verdict("reject");
 
-    // One attempt, persisted, then the "process" ended without finishing the entity.
+    // One rejection already on the books, then the "process" ended without finishing the entity.
     const ledger = new Map();
 
     recordAttempt(ledger, "artist", "future-signal", 1);
     mkdirSync(STATE_DIR, { recursive: true });
     writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
 
-    // The next tick resumes with what is LEFT (2); it does not refund three fresh calls.
+    // The next tick resumes with what is LEFT (2); it does not refund three fresh drafts.
     await tick("future-signal");
 
     expect(authorings()).toBe(MAX_BIO_ATTEMPTS - 1);
+  });
+});
+
+// ── ONLY A GATE REJECTION MAY SPEND THE BUDGET ─────────────────────────────────────────
+//
+// A gate rejection is deterministic evidence that THIS DRAFT was bad. A transport/model failure
+// is no evidence about the draft at all — there is no draft. If flaky infrastructure could spend
+// the budget, three bad minutes would write an entity off permanently: and if the THIRD call were
+// the flaky one there would be no draft to accept either, so the entity would end up with no bio
+// and no retry, forever, through no fault of its own.
+
+describe("the transport/model failure never spends an attempt", () => {
+  beforeEach(() => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    claudeVerdict("up");
+  });
+
+  test("a failing `claude -p` leaves the budget untouched, however many ticks it fails for", async () => {
+    verdict("pass");
+    claudeVerdict("down");
+
+    for (let i = 0; i < 4; i += 1) {
+      expect((await tick("future-signal")).outcome).toBe("skipped");
+    }
+
+    // Four failed model calls, and the entity has still not spent a single attempt.
+    expect(authorings()).toBe(4);
+    expect(loadLedger().size).toBe(0);
+  });
+
+  test("…so the entity still gets its FULL budget once the model comes back", async () => {
+    verdict("reject");
+    claudeVerdict("down");
+    await tick("future-signal");
+    await tick("future-signal");
+
+    const wasted = authorings();
+
+    claudeVerdict("up");
+
+    const result = await tick("future-signal");
+
+    // The full three drafts, and the third still lands via the acceptance — nothing was eaten
+    // by the outage.
+    expect(authorings() - wasted).toBe(MAX_BIO_ATTEMPTS);
+    expect(describes()).toEqual([false, false, true]);
+    expect(result.outcome).toBe("authored");
+    expect(result.gateBypassed).toBe(true);
+  });
+
+  test("a model failure on the LAST attempt does not exhaust the entity", async () => {
+    verdict("reject");
+
+    // Burn the first two attempts on real rejections, so only the final one is left.
+    claudeVerdict("up");
+    const ledger = new Map();
+
+    recordAttempt(ledger, "artist", "future-signal", 1);
+    recordAttempt(ledger, "artist", "future-signal", 2);
+    mkdirSync(STATE_DIR, { recursive: true });
+    writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
+
+    // The model falls over on the final attempt. Before this rule that was a permanent
+    // write-off: no draft to accept, and no budget left to try again.
+    claudeVerdict("down");
+    expect((await tick("future-signal")).outcome).toBe("skipped");
+    expect(loadLedger().get(attemptKey("artist", "future-signal"))?.attempts).toBe(2);
+
+    // The model recovers, the final attempt happens for real, and the bio lands.
+    claudeVerdict("up");
+    const result = await tick("future-signal");
+
+    expect(result.outcome).toBe("authored");
+    expect(result.gateBypassed).toBe(true);
+  });
+});
+
+// ── THE STRAIN VOCABULARY ──────────────────────────────────────────────────────────────
+//
+// Since #994 this sweep's stderr is captured into its cron marker and scored by the /status
+// detector. These tests run the REAL loop, capture the REAL log lines, and score them with the
+// REAL `countDistressLines`, so the wording cannot drift away from what it must mean.
+
+describe("what the sweep's logs say to the /status strain detector", () => {
+  beforeEach(() => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    claudeVerdict("up");
+  });
+
+  test("a clean authoring tick reads as ZERO strain", async () => {
+    verdict("pass");
+
+    expect((await tickWithStrain("future-signal")).strain).toBe(0);
+  });
+
+  test("rewriting and then LANDING reads as ZERO strain — it is a healthy tick", async () => {
+    // The whole false-positive risk: two rejected drafts, one accepted bio. A sweep that
+    // rewrites and succeeds must never push its cron toward `degraded`.
+    verdict("reject");
+
+    const { lines, strain } = await tickWithStrain("future-signal");
+
+    expect(lines.join("\n")).toContain("FINAL-ATTEMPT ACCEPTANCE");
+    expect(strain).toBe(0);
+  });
+
+  test("EXHAUSTING an entity DOES read as strain — it is a permanent write-off", async () => {
+    verdict("structural");
+
+    expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
+  });
+
+  test("a transport/model failure DOES read as strain — nothing else is watching it now", async () => {
+    // It no longer costs the entity any budget, so this line is the only signal that a sweep is
+    // grinding against a broken model.
+    verdict("pass");
+    claudeVerdict("down");
+
+    expect((await tickWithStrain("future-signal")).strain).toBeGreaterThan(0);
+  });
+
+  test("the per-tick exhausted RECAP is silent — it would otherwise nag forever", () => {
+    // The line `main()` prints on every later tick for entities `selectBioWork` filtered out.
+    // Their exhaustion was already reported as distress on the tick it happened; repeating it
+    // hourly forever would be a `degraded` that can never clear.
+    const recap = exhaustedRecapLine("artist", [{ slug: "future-signal" }, { slug: "other" }]);
+
+    expect(recap).toContain("2 exhausted artist(s)");
+    expect(countDistressLines(recap)).toBe(0);
   });
 
   test("a DRY RUN spends no budget — the operator pre-flight is not an attempt", async () => {
