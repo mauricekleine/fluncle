@@ -110,7 +110,7 @@ describe("searchDeezerCandidates", () => {
   });
 
   it("returns [] on a malformed body (data is not an array)", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: { code: 4 } })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ something: "else" })));
 
     expect(await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" })).toEqual(
       [],
@@ -131,5 +131,93 @@ describe("searchDeezerCandidates", () => {
     expect(await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" })).toEqual(
       [],
     );
+  });
+});
+
+// ── THE QUOTA TRAP ───────────────────────────────────────────────────────────────────────────────
+// The regression that made this rung recover NOTHING in production for a week. Deezer answers a
+// throttle with **HTTP 200** and an error body instead of a result set — reproduced live against the
+// real endpoint (120 requests: all 200, the 93rd onward carrying
+// `{"error":{"type":"Exception","message":"Quota limit exceeded","code":4}}`). That walks past
+// `response.ok`, parses as valid JSON, and leaves `data` absent, so a client that only asks
+// "is `data` an array?" reads a THROTTLE as a clean MISS. The Worker egresses from Cloudflare's
+// SHARED edge IPs, where that quota is saturated by the whole platform, so the branch was taken on
+// every single call. A throttle must never again be indistinguishable from "no such track".
+
+/** Deezer's real quota answer, verbatim — a 200 with an error body and NO `data`. */
+const QUOTA_BODY = { error: { code: 4, message: "Quota limit exceeded", type: "Exception" } };
+
+const quotaResponse = () => Response.json(QUOTA_BODY);
+
+describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error body)", () => {
+  it("does NOT treat a quota error as a miss: it retries and returns the recovered candidates", async () => {
+    // Throttled twice, then a real result set — exactly the shared-egress-IP shape.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(quotaResponse())
+      .mockResolvedValueOnce(quotaResponse())
+      .mockResolvedValueOnce(body([HIT]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const candidates = await searchDeezerCandidates(
+      { artists: ["Calibre"], title: "Mr Right On" },
+      [0, 0],
+    );
+
+    // Before the fix this was `[]` — the ISRC was on the wire and thrown away.
+    expect(candidates).toEqual([
+      { artistName: "Calibre", durationMs: 132_000, isrc: "GBEXH1900314", title: "Mr Right On" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives up after the bounded retry budget rather than hammering a saturated quota", async () => {
+    // A FRESH Response per call — a body can only be read once, so a shared one would fail the
+    // second read for the wrong reason and hide whether the retry budget is really being spent.
+    const fetchMock = vi.fn().mockImplementation(() => quotaResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" }, [0, 0]),
+    ).toEqual([]);
+
+    // One initial attempt + exactly the two configured retries — never an unbounded loop.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a genuine empty result set a one-shot miss (a miss is still a miss)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(body([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await searchDeezerCandidates({ artists: ["Nobody"], title: "Nothing" }, [0, 0])).toEqual(
+      [],
+    );
+
+    // `data: []` is an ANSWER, not a throttle — retrying it would trade a free rung for wasted calls.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a non-quota Deezer exception (it is not going to un-fail)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ error: { code: 200, message: "Invalid query", type: "Exception" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" }, [0, 0]),
+    ).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a non-2xx response either", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("nope", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" }, [0, 0]),
+    ).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
