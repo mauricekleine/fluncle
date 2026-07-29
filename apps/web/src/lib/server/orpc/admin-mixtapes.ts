@@ -714,6 +714,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           ok: true as const,
           paused: true,
           posted: 0,
+          skippedBlank: 0,
           skippedCapped: 0,
         };
       }
@@ -731,6 +732,7 @@ export function adminMixtapesHandlers(os: Implementer) {
 
       let posted = 0;
       let failed = 0;
+      let skippedBlank = 0;
 
       // (d) Post each due, cut clip. A single failure marks its row `failed` (retryable by
       // the operator rescheduling it) and never aborts the rest of the tick. The permalink
@@ -739,6 +741,19 @@ export function adminMixtapesHandlers(os: Implementer) {
         try {
           // Rebuild the caption fresh at fire time, so a late re-cut / edit is reflected.
           const built = await buildClipCaption(item.clipId);
+
+          // NEVER POST NAKED. A blank built caption means the clip has no stored caption AND
+          // its window resolves to no cued track at all — posting it would put a Reel on
+          // Fluncle's Instagram crediting nobody. That is not an ERROR, so the row is NOT
+          // marked `failed`: the clip is simply not ready. It stays `scheduled` and this
+          // tick skips it, so the next tick fires it the moment someone cues the source
+          // recording or writes it a caption.
+          if (!built.builtCaption.trim()) {
+            logEvent("warn", "drip-clips.blank-caption-skipped", { clipId: item.clipId });
+            skippedBlank += 1;
+            continue;
+          }
+
           const { withAudio } = clipDownloadUrls(item.clipId);
           const { postId } = await pushInstagramReel({
             caption: built.builtCaption,
@@ -754,6 +769,8 @@ export function adminMixtapesHandlers(os: Implementer) {
         }
       }
 
+      // `attempted` counts the rows this tick took off the queue, so the tally always
+      // closes: attempted = posted + failed + skippedBlank.
       return {
         attempted: due.length,
         captured,
@@ -761,6 +778,7 @@ export function adminMixtapesHandlers(os: Implementer) {
         ok: true as const,
         paused: false,
         posted,
+        skippedBlank,
         skippedCapped,
       };
     } catch (error) {

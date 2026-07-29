@@ -10,6 +10,16 @@
 //     misattribution, RFC §5).
 // The coordinate is FROZEN into the stored caption at publish (a later slice); this
 // module is the derivation both that freeze and the live card read share.
+//
+// THE CUE-LABEL FALLBACK. A window can overlap cues that are all NON-findings (a dubplate,
+// a white label, anything Fluncle never certified). Those cues carry no Log ID, so there is
+// no coordinate to emit — but `resolveClipTracks` already hands back each covered track's
+// `Artist — Title` label, and throwing that away meant the clip went out crediting nobody.
+// So when the window resolves to tracks and NONE of them is a finding, the caption credits
+// what is playing by its label instead. Data-led, no authored prose: the sanctioned
+// `Artist — Title` separator and nothing else. A window that resolves to NO cue at all
+// (an un-cued recording) still builds an empty caption — honest silence, and the drip
+// tick refuses to post it (see `drip_clips`).
 
 import { type ClipDTO } from "@fluncle/contracts/orpc";
 import { type ClipTrackInput, resolveClipTracks } from "@fluncle/contracts/util";
@@ -65,16 +75,28 @@ function cuesToMembers(cues: CueRow[], logIdByFinding: Map<string, string>): Cli
   }));
 }
 
-// The coordinate line(s) for a clip: the promoted mixtape's Log ID if its source
-// recording is published, else the covered findings'. Deduped in play order (a set can
-// play a finding twice → one line).
-async function coordinateLines(clip: ClipDTO): Promise<string[]> {
+/** What a clip's window credits: the `fluncle://` coordinate line(s), else the covered
+ *  tracks' labels when the window resolves to cues but none of them is a finding. The two
+ *  are mutually exclusive — a coordinate is the stronger credit and wins whenever it exists. */
+type ClipCredit = {
+  /** The `fluncle://<logId>` line(s) — one per covered finding, or the promoted mixtape's. */
+  coordinates: string[];
+  /** The covered tracks' `Artist — Title` labels, only when `coordinates` is empty. */
+  trackLines: string[];
+};
+
+const NO_CREDIT: ClipCredit = { coordinates: [], trackLines: [] };
+
+// The credit line(s) for a clip: the promoted mixtape's Log ID if its source recording is
+// published, else the covered findings' coordinates, else the covered tracks' labels.
+// Deduped in play order (a set can play the same track twice → one line).
+async function clipCredit(clip: ClipDTO): Promise<ClipCredit> {
   if (clip.recordingId) {
     const recording = await getRecording(clip.recordingId);
 
     // Published: the whole set is one coordinate now — one line, the mixtape's `.F.` id.
     if (recording.logId) {
-      return [`fluncle://${recording.logId}`];
+      return { coordinates: [`fluncle://${recording.logId}`], trackLines: [] };
     }
 
     // Un-promoted: link every FINDING the clip window overlaps (a blend = multiple lines).
@@ -92,51 +114,68 @@ async function coordinateLines(clip: ClipDTO): Promise<string[]> {
       setDurationMs: recording.durationMs ?? 0,
     });
 
-    const seen = new Set<string>();
-    const lines: string[] = [];
+    const seenLogIds = new Set<string>();
+    const coordinates: string[] = [];
 
     for (const track of resolved) {
-      if (track.logId && !seen.has(track.logId)) {
-        seen.add(track.logId);
-        lines.push(`fluncle://${track.logId}`);
+      if (track.logId && !seenLogIds.has(track.logId)) {
+        seenLogIds.add(track.logId);
+        coordinates.push(`fluncle://${track.logId}`);
       }
     }
 
-    return lines;
+    if (coordinates.length > 0) {
+      return { coordinates, trackLines: [] };
+    }
+
+    // No coordinate to emit. If the window still covers cued tracks, credit them by label
+    // rather than posting a clip that names nobody (the cue-label fallback above).
+    const seenLabels = new Set<string>();
+    const trackLines: string[] = [];
+
+    for (const track of resolved) {
+      if (track.label && !seenLabels.has(track.label)) {
+        seenLabels.add(track.label);
+        trackLines.push(track.label);
+      }
+    }
+
+    return { coordinates, trackLines };
   }
 
   // A clip with no recording is unlinked (the legacy `mixtape_id` owner was dropped
   // in the plan→recording→mixtape Deploy-2 cutover — every legacy clip was repointed
   // onto its mixtape's recording first). Nothing to link.
-  return [];
+  return NO_CREDIT;
 }
 
-// Join the clean caption + the coordinate line(s): a blank line separates prose from
-// the coordinates; either half alone renders on its own.
-function composeCaption(caption: string | undefined, coordinates: string[]): string {
+// Join the clean caption + the credit line(s): a blank line separates prose from the
+// credit; either half alone renders on its own.
+function composeCaption(caption: string | undefined, credit: ClipCredit): string {
   const clean = caption?.trim() ?? "";
-  const coords = coordinates.join("\n");
+  const lines = [...credit.coordinates, ...credit.trackLines].join("\n");
 
-  if (!coords) {
+  if (!lines) {
     return clean;
   }
 
-  return clean ? `${clean}\n\n${coords}` : coords;
+  return clean ? `${clean}\n\n${lines}` : lines;
 }
 
 /**
  * Build a clip's caption for display/copy — the clean caption with the `fluncle://`
- * coordinate line(s) appended (RFC §5). Throws `clip_not_found`/404 when the clip is
- * gone (via `getClip`).
+ * coordinate line(s) appended, or the covered tracks' labels when the window covers cues
+ * that are not findings (RFC §5 + the cue-label fallback above). Throws
+ * `clip_not_found`/404 when the clip is gone (via `getClip`).
  */
 export async function buildClipCaption(clipId: string): Promise<BuiltClipCaption> {
   const clip = await getClip(clipId);
-  const coordinates = await coordinateLines(clip);
+  const credit = await clipCredit(clip);
 
   return {
-    builtCaption: composeCaption(clip.caption, coordinates),
+    builtCaption: composeCaption(clip.caption, credit),
     caption: clip.caption,
     clipId,
-    coordinates,
+    coordinates: credit.coordinates,
   };
 }

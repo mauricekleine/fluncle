@@ -189,9 +189,10 @@ Every clip you cut **auto-enters an Instagram queue** and drips out as a Reel �
 
 How it works:
 
-- **Auto-queue on create.** Creating a clip schedules it at `max(the queue tail, now) + a random 23–25h`. The jitter keeps post times drifting so the feed never reads as a bot posting at the same wall-clock minute daily. Default cadence ≈ 1 clip/day. The caption is the clip's built caption (clean copy + the `fluncle://` coordinate line once promoted).
+- **Auto-queue on create.** Creating a clip schedules it at `max(the queue tail, now) + a random 23–25h`. The jitter keeps post times drifting so the feed never reads as a bot posting at the same wall-clock minute daily. Default cadence ≈ 1 clip/day. The caption is rebuilt fresh at fire time: clean copy + the `fluncle://` coordinate line once promoted, else the covered cues' `Artist — Title` labels when the window plays tracks Fluncle never certified.
+- **A clip with a blank caption is never posted.** No stored caption AND no cued track under the window means the Reel would credit nobody, so the tick SKIPS it (reported as `skippedBlank`). It is not a failure: the row stays `scheduled` and fires on a later tick the moment you cue the source recording in Studio or write the clip a caption.
 - **The drip cron** (`cron.clip-drip`, ~every 20m, on the Hermes box) posts the due, cut clips through Postiz as Reels (single video + `post_type: "post"` = a Reel), bounded by a per-tick cap AND a rolling-24h IG cap (a conservative backstop under Meta's ~25/day). It's **admin-tier**, so the box's agent token drives it (the Worker owns the Postiz key). A `posted` row never re-fires (idempotent); a failed push is marked `failed` and is retryable by rescheduling.
-- **The kill switch.** One global flag pauses the whole drip within one tick (the schedule stays intact; nothing fires while paused). Toggle it from `/admin/clips` or the CLI:
+- **The kill switch, and it is DEFAULT-DENY.** One global flag (`clip_drip_paused`) pauses the whole drip within one tick (the schedule stays intact; nothing fires while paused). Only an explicit `false` runs it: an unset key, a fresh preview, a lost row all read as PAUSED, so the drip stays dark until you turn it on with `drip-resume`. Toggle it from `/admin/clips` or the CLI:
 
   ```bash
   fluncle admin clips drip-pause    # halt every future scheduled post

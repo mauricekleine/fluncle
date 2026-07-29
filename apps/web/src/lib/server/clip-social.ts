@@ -185,9 +185,12 @@ export async function setClipPostStatus(
   });
 }
 
-/** A due drip row the cron should post: its clip is `done` and its slot has arrived. */
+/** A due drip row the cron should post: its clip is `done` and its slot has arrived.
+ *  Deliberately NO caption: the drip tick rebuilds the caption fresh at fire time
+ *  (`buildClipCaption`), so the row's snapshot would be a second, staler source of the
+ *  same string. The snapshot stays on the row for the operator's read (`listClipPosts` /
+ *  `getClipPost`); it is simply not what gets posted. */
 export type DueClipPost = {
-  caption?: string;
   clipId: string;
   scheduledFor: string;
 };
@@ -208,7 +211,7 @@ export async function dueClipPosts(options: { limit: number }): Promise<DueClipP
   const db = await getDb();
   const result = await db.execute({
     args: [now, options.limit],
-    sql: `select p.clip_id, p.scheduled_for, p.caption
+    sql: `select p.clip_id, p.scheduled_for
           from mixtape_clip_social_posts p
           join mixtape_clips c on c.id = p.clip_id
           where p.platform = 'instagram'
@@ -219,10 +222,7 @@ export async function dueClipPosts(options: { limit: number }): Promise<DueClipP
           limit ?`,
   });
 
-  return typedRows<{ caption: string | null; clip_id: string; scheduled_for: string }>(
-    result.rows,
-  ).map((row) => ({
-    caption: str(row.caption),
+  return typedRows<{ clip_id: string; scheduled_for: string }>(result.rows).map((row) => ({
     clipId: row.clip_id,
     scheduledFor: row.scheduled_for,
   }));
@@ -339,9 +339,18 @@ export async function deleteClipPost(clipId: string): Promise<void> {
 
 // --- The kill switch (on the shared `settings` KV — see ./settings.ts) ---------------
 
-/** Whether the clip drip-feed is paused (the kill switch). Unset ⇒ not paused. */
+/**
+ * Whether the clip drip-feed is paused (the kill switch).
+ *
+ * DEFAULT-DENY, the `publish_advance_paused` shape (./publish-advance.ts): only the
+ * EXPLICIT string `"false"` means running. An unset key, an empty database, a fresh
+ * preview, a value nobody recognises — every one of them reads as PAUSED. The drip posts
+ * to Fluncle's public Instagram, so it may only run because an operator deliberately wrote
+ * `false` into this row; anything that loses the row falls back to silence rather than to
+ * posting.
+ */
 export async function isDripPaused(): Promise<boolean> {
-  return (await getSetting(CLIP_DRIP_PAUSED_KEY)) === "true";
+  return (await getSetting(CLIP_DRIP_PAUSED_KEY)) !== "false";
 }
 
 /** Pause / resume the clip drip-feed (the kill switch). Pausing keeps the schedule

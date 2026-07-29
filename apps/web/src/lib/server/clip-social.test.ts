@@ -78,15 +78,26 @@ describe("computeNextDripSlot", () => {
 });
 
 describe("the kill switch (settings KV)", () => {
-  it("reads paused only when the flag is exactly 'true'", async () => {
-    execute.mockResolvedValueOnce({ rows: [{ value: "true" }] });
-    expect(await isDripPaused()).toBe(true);
-
+  it("runs only when the flag is exactly 'false' (DEFAULT-DENY)", async () => {
     execute.mockResolvedValueOnce({ rows: [{ value: "false" }] });
     expect(await isDripPaused()).toBe(false);
 
-    execute.mockResolvedValueOnce({ rows: [] }); // unset ⇒ not paused
-    expect(await isDripPaused()).toBe(false);
+    execute.mockResolvedValueOnce({ rows: [{ value: "true" }] });
+    expect(await isDripPaused()).toBe(true);
+  });
+
+  it("reads PAUSED when the row is absent, empty, or unrecognised", async () => {
+    execute.mockResolvedValueOnce({ rows: [] }); // unset ⇒ paused
+    expect(await isDripPaused()).toBe(true);
+
+    execute.mockResolvedValueOnce({ rows: [{ value: "" }] });
+    expect(await isDripPaused()).toBe(true);
+
+    execute.mockResolvedValueOnce({ rows: [{ value: "no" }] });
+    expect(await isDripPaused()).toBe(true);
+
+    execute.mockResolvedValueOnce({ rows: [{ value: "False" }] }); // case-sensitive
+    expect(await isDripPaused()).toBe(true);
   });
 
   it("upserts 'true'/'false' on set", async () => {
@@ -112,18 +123,18 @@ describe("dueClipPosts", () => {
 
   it("selects only scheduled + due + done rows, bounded by the limit", async () => {
     execute.mockResolvedValueOnce({
-      rows: [{ caption: "hi", clip_id: "c1", scheduled_for: "2026-07-05T00:00:00.000Z" }],
+      rows: [{ clip_id: "c1", scheduled_for: "2026-07-05T00:00:00.000Z" }],
     });
 
     const due = await dueClipPosts({ limit: 3 });
 
-    expect(due).toEqual([
-      { caption: "hi", clipId: "c1", scheduledFor: "2026-07-05T00:00:00.000Z" },
-    ]);
+    expect(due).toEqual([{ clipId: "c1", scheduledFor: "2026-07-05T00:00:00.000Z" }]);
 
     // The SQL joins clips (status='done') and filters scheduled + scheduled_for <= now.
     const call = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
     expect(call.sql).toContain("status = 'scheduled'");
+    // The row's caption snapshot is NOT read — the drip tick rebuilds it at fire time.
+    expect(call.sql).not.toContain("p.caption");
     expect(call.sql).toContain("c.status = 'done'");
     expect(call.sql).toContain("scheduled_for <= ?");
     // The last bound arg is the limit.

@@ -5,7 +5,9 @@ import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./
 //   - the auth tiers: drip_clips + list_clip_posts are ADMIN (the AGENT box token
 //     passes); set_clip_schedule + set_clip_drip are OPERATOR (the agent is 403);
 //   - the drip logic: the kill switch no-ops the tick; due selection posts within the
-//     per-tick + 24h budget; a push error marks the row failed and never aborts the tick.
+//     per-tick + 24h budget; a push error marks the row failed and never aborts the tick;
+//     a clip whose caption builds BLANK is skipped rather than posted naked (it is not an
+//     error, so the row stays `scheduled` — a later tick fires it once it has a caption).
 // The store (`./clip-social`), Postiz (`./postiz`), the caption builder, and the clip
 // download URL are all mocked — the handler's job is the orchestration, not the DB/network.
 
@@ -105,6 +107,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       ok: true,
       paused: true,
       posted: 0,
+      skippedBlank: 0,
       skippedCapped: 0,
     });
     expect(dueClipPosts).not.toHaveBeenCalled();
@@ -114,8 +117,8 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
   it("posts the due clips (agent token) and marks each posted", async () => {
     countDueClipPosts.mockResolvedValue(2);
     dueClipPosts.mockResolvedValue([
-      { caption: "c1", clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
-      { caption: "c2", clipId: "clip-2", scheduledFor: "2026-07-05T01:00:00.000Z" },
+      { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
+      { clipId: "clip-2", scheduledFor: "2026-07-05T01:00:00.000Z" },
     ]);
     pushInstagramReel
       .mockResolvedValueOnce({ postId: "p1" })
@@ -132,6 +135,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       ok: true,
       paused: false,
       posted: 2,
+      skippedBlank: 0,
       skippedCapped: 0,
     });
     expect(pushInstagramReel).toHaveBeenCalledTimes(2);
@@ -149,7 +153,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     countRecentPostedInWindow.mockResolvedValue(9);
     countDueClipPosts.mockResolvedValue(5); // 5 due, only 1 postable this tick
     dueClipPosts.mockResolvedValue([
-      { caption: "c1", clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
+      { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
     ]);
 
     const { handleOrpc } = await import("./orpc");
@@ -164,6 +168,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       ok: true,
       paused: false,
       posted: 1,
+      skippedBlank: 0,
       skippedCapped: 4, // 5 due − 1 posted this tick
     });
   });
@@ -171,8 +176,8 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
   it("marks a failed push failed and continues the tick", async () => {
     countDueClipPosts.mockResolvedValue(2);
     dueClipPosts.mockResolvedValue([
-      { caption: "c1", clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
-      { caption: "c2", clipId: "clip-2", scheduledFor: "2026-07-05T01:00:00.000Z" },
+      { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
+      { clipId: "clip-2", scheduledFor: "2026-07-05T01:00:00.000Z" },
     ]);
     pushInstagramReel
       .mockRejectedValueOnce(new Error("Postiz 502"))
@@ -188,10 +193,92 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       ok: true,
       paused: false,
       posted: 1,
+      skippedBlank: 0,
       skippedCapped: 0,
     });
     expect(setClipPostStatus).toHaveBeenCalledWith("clip-1", "failed");
     expect(setClipPostStatus).toHaveBeenCalledWith("clip-2", "posted", { postizId: "p2" });
+  });
+
+  it("SKIPS a clip whose caption builds blank — never posts naked, never marks it failed", async () => {
+    countDueClipPosts.mockResolvedValue(1);
+    dueClipPosts.mockResolvedValue([
+      { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
+    ]);
+    // No stored caption and no cued track under the window → an empty built caption.
+    buildClipCaption.mockResolvedValue({ builtCaption: "", clipId: "clip-1", coordinates: [] });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
+
+    expect(await readJson(response)).toEqual({
+      attempted: 1,
+      captured: 0,
+      failed: 0,
+      ok: true,
+      paused: false,
+      posted: 0,
+      skippedBlank: 1,
+      skippedCapped: 0,
+    });
+    // Nothing reached Instagram, and the row is untouched — still `scheduled`, so the next
+    // tick fires it once the recording is cued or a caption is written.
+    expect(pushInstagramReel).not.toHaveBeenCalled();
+    expect(setClipPostStatus).not.toHaveBeenCalled();
+  });
+
+  it("treats a whitespace-only caption as blank too", async () => {
+    countDueClipPosts.mockResolvedValue(1);
+    dueClipPosts.mockResolvedValue([
+      { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
+    ]);
+    buildClipCaption.mockResolvedValue({
+      builtCaption: "  \n\n ",
+      clipId: "clip-1",
+      coordinates: [],
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
+
+    const body = (await readJson(response)) as { skippedBlank: number };
+    expect(body.skippedBlank).toBe(1);
+    expect(pushInstagramReel).not.toHaveBeenCalled();
+  });
+
+  it("skips only the blank clip and still posts its captioned neighbour", async () => {
+    countDueClipPosts.mockResolvedValue(2);
+    dueClipPosts.mockResolvedValue([
+      { clipId: "clip-blank", scheduledFor: "2026-07-05T00:00:00.000Z" },
+      { clipId: "clip-2", scheduledFor: "2026-07-05T01:00:00.000Z" },
+    ]);
+    buildClipCaption.mockImplementation(async (clipId: string) => ({
+      builtCaption: clipId === "clip-blank" ? "" : `caption for ${clipId}`,
+      clipId,
+      coordinates: [],
+    }));
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
+
+    // attempted = posted + failed + skippedBlank.
+    expect(await readJson(response)).toEqual({
+      attempted: 2,
+      captured: 0,
+      failed: 0,
+      ok: true,
+      paused: false,
+      posted: 1,
+      skippedBlank: 1,
+      skippedCapped: 0,
+    });
+    expect(pushInstagramReel).toHaveBeenCalledTimes(1);
+    expect(pushInstagramReel).toHaveBeenCalledWith({
+      caption: "caption for clip-2",
+      videoUrl: "https://found.fluncle.com/clip-2/footage.mp4",
+    });
+    expect(setClipPostStatus).toHaveBeenCalledTimes(1);
+    expect(setClipPostStatus).toHaveBeenCalledWith("clip-2", "posted", { postizId: "post-x" });
   });
 
   it("captures the IG permalink back onto a posted-but-unlinked clip (capture pass)", async () => {
@@ -214,6 +301,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       ok: true,
       paused: false,
       posted: 0,
+      skippedBlank: 0,
       skippedCapped: 0,
     });
     // Resolved against the IG platform, the URL back-filled, and the analytics id linked.
@@ -256,6 +344,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       ok: true,
       paused: true,
       posted: 0,
+      skippedBlank: 0,
       skippedCapped: 0,
     });
     expect(pushInstagramReel).not.toHaveBeenCalled();

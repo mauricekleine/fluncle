@@ -526,8 +526,15 @@ const ClipSocialPostSchema = z.object({
  * live IG permalink onto prior-tick posts — Instagram publishes the Reel async, so the
  * permalink lands a tick later; reported as `captured`), then, if the kill switch is on it
  * no-ops (`paused`), else it posts the due, cut clips to Instagram via Postiz, bounded by a
- * per-tick cap AND the rolling-24h IG cap. Idempotent (a `posted` row never re-fires). Empty
- * body (`{}`).
+ * per-tick cap AND the rolling-24h IG cap. Idempotent (a `posted` row never re-fires).
+ *
+ * The kill switch is DEFAULT-DENY: only an explicit `"false"` on `clip_drip_paused` runs
+ * the tick, so an unset key reads as paused and nothing posts until an operator says so.
+ * And a clip whose caption builds EMPTY is SKIPPED rather than posted (`skippedBlank`) —
+ * a credit-less Reel is never an acceptable output — while its row stays `scheduled`, so a
+ * later tick fires it once the source recording is cued or a caption is written.
+ *
+ * Empty body (`{}`).
  */
 export const dripClips = oc
   .route({
@@ -549,6 +556,9 @@ export const dripClips = oc
       // The kill switch was on this tick — nothing was posted (the capture pass still ran).
       paused: z.boolean(),
       posted: z.number(),
+      // Due rows skipped because their caption built EMPTY (no stored caption and no cued
+      // track under the window) — never posted, never marked `failed`, still `scheduled`.
+      skippedBlank: z.number(),
       // Due rows the per-tick / 24h cap deferred to a later tick.
       skippedCapped: z.number(),
     }),

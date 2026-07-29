@@ -116,7 +116,7 @@ export const REQUIRED_BUNDLE_FILES = [
 /**
  * Whether the render → publish auto-advance is paused (the kill switch).
  *
- * DEFAULT-DENY, and note the inversion against the clip drip's switch: only the EXPLICIT
+ * DEFAULT-DENY, the same shape the clip drip's switch now carries: only the EXPLICIT
  * string `"false"` means running. An unset key, an empty database, a fresh preview, a
  * value nobody recognises — every one of them reads as PAUSED. This is the property that
  * lets the feature ship dark and stay honest: the machine can publish to Fluncle's public

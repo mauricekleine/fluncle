@@ -5,7 +5,9 @@ import { buildClipCaption } from "./clip-caption";
 //   - PUBLISHED source recording → ONE line (the promoted mixtape's `.F.` Log ID);
 //   - un-promoted, window over ONE finding → one line;
 //   - un-promoted, window straddling TWO cues → a BLEND (two lines);
-//   - a non-finding cue → honest silence (no coordinate).
+//   - only NON-finding cues → no coordinate, but the cue-label fallback still credits
+//     what is playing (`Artist — Title`);
+//   - no cue at all → honest silence (the empty caption the drip tick refuses to post).
 // A clip's only owner is its recording since the plan→recording→mixtape Deploy-2
 // cutover dropped `mixtape_clips.mixtape_id`. The clip/recording reads are mocked;
 // only the finding_id→log_id lookup hits the (mocked) DB, so the test drives the
@@ -130,12 +132,75 @@ describe("buildClipCaption", () => {
     expect(built.builtCaption).toBe("the switch\n\nfluncle://019.F.1A\nfluncle://019.F.1B");
   });
 
-  it("skips a non-finding cue (no coordinate to emit) — honest silence", async () => {
+  it("a non-finding cue emits no coordinate but credits the track by label", async () => {
     state.clip = { id: "c", inMs: 10_000, outMs: 20_000, recordingId: "rec-1" };
     state.recording = { durationMs: 600_000 };
     // The only overlapping cue is a played-but-not-a-finding track: no logId.
     state.recordingCues = [
       { artists_text: "White Label", finding_id: null, start_ms: 0, title_text: "Dubplate" },
+    ];
+
+    const built = await buildClipCaption("c");
+
+    // No coordinate exists to emit, but the clip still says what is playing.
+    expect(built.coordinates).toEqual([]);
+    expect(built.builtCaption).toBe("White Label — Dubplate");
+  });
+
+  it("keeps a stored caption above the fallback label, blank line between", async () => {
+    state.clip = {
+      caption: "cut from the rolling set",
+      id: "c",
+      inMs: 10_000,
+      outMs: 20_000,
+      recordingId: "rec-1",
+    };
+    state.recording = { durationMs: 600_000 };
+    state.recordingCues = [
+      { artists_text: "Nucleus, Paradox", finding_id: null, start_ms: 0, title_text: "Airborne" },
+    ];
+
+    const built = await buildClipCaption("c");
+
+    expect(built.builtCaption).toBe("cut from the rolling set\n\nNucleus, Paradox — Airborne");
+  });
+
+  it("credits both tracks of a non-finding BLEND, deduped in play order", async () => {
+    state.clip = { id: "c", inMs: 100_000, outMs: 140_000, recordingId: "rec-1" };
+    state.recording = { durationMs: 600_000 };
+    state.recordingCues = [
+      { artists_text: "A", finding_id: null, start_ms: 0, title_text: "One" },
+      { artists_text: "B", finding_id: null, start_ms: 120_000, title_text: "Two" },
+    ];
+
+    const built = await buildClipCaption("c");
+
+    expect(built.coordinates).toEqual([]);
+    expect(built.builtCaption).toBe("A — One\nB — Two");
+  });
+
+  it("prefers the coordinate over the label when the blend has ONE finding", async () => {
+    state.clip = { id: "c", inMs: 100_000, outMs: 140_000, recordingId: "rec-1" };
+    state.recording = { durationMs: 600_000 };
+    state.recordingCues = [
+      { artists_text: "A", finding_id: null, start_ms: 0, title_text: "One" },
+      { artists_text: "B", finding_id: "t2", start_ms: 120_000, title_text: "Two" },
+    ];
+    state.logIdByFinding = { t2: "019.F.1B" };
+
+    const built = await buildClipCaption("c");
+
+    // A coordinate is the stronger credit: the fallback stays out of the way entirely.
+    expect(built.coordinates).toEqual(["fluncle://019.F.1B"]);
+    expect(built.builtCaption).toBe("fluncle://019.F.1B");
+  });
+
+  it("an UN-CUED recording still builds the empty caption (honest silence)", async () => {
+    state.clip = { id: "c", inMs: 10_000, outMs: 20_000, recordingId: "rec-1" };
+    state.recording = { durationMs: 600_000 };
+    // Cues exist but none is placed on the timeline, so nothing resolves — no label either.
+    state.recordingCues = [
+      { artists_text: "White Label", finding_id: null, start_ms: null, title_text: "Dubplate" },
     ];
 
     const built = await buildClipCaption("c");
