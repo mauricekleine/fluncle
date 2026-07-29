@@ -165,7 +165,7 @@ run_event_now() {
 # latter.
 emit_run_summary() {
   local rc="${1:-0}" ok="false" ended summary
-  [ "$SUMMARY_EMITTED" = "1" ] && return 0
+  if [ "$SUMMARY_EMITTED" = "1" ]; then return 0; fi
   SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
   if [ "$rc" -eq 0 ] && [ "$ERRORS" -eq 0 ]; then ok="true"; fi

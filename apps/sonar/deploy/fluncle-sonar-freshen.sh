@@ -201,7 +201,7 @@ run_event_now() {
 # verdict.
 emit_run_summary() {
   local rc="${1:-0}" ok="false" ended summary
-  [ "$SF_SUMMARY_EMITTED" = "1" ] && return 0
+  if [ "$SF_SUMMARY_EMITTED" = "1" ]; then return 0; fi
   SF_SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
   if [ "$rc" -eq 0 ] && [ "$SF_ERRORS" -eq 0 ]; then ok="true"; fi
