@@ -38,6 +38,19 @@
 # run with --dry-run to download + verify + pre-smoke and STOP (the live service is
 # never touched).
 #
+# ── WHY IT REPORTS A RUN (added 2026-07-29; RUN-01) ──────────────────────────
+# This unit posted a /status row and a Discord line and nothing else — no record of a tick
+# that RAN, only of one that had something to say. So the failure it cannot report is the one
+# that matters: a release feed it never reached, tick after tick, while the box quietly stays
+# behind. Every pass now ends with a JSON summary line and POSTs it to the run ledger.
+# `checked` is the denominator (0 until the feed actually resolves a commit, so a blind tick
+# is legible AS blind), `produced` counts a swap actually made, `queueDepth` a published build
+# not yet on the box — the pair the ledger's `produced == 0 AND queueDepth > 0` alarm reads.
+# `gateState` carries the third state that is neither ok nor down: a tick that skipped on the
+# lock, or an operator's `--force` / `--dry-run`, so an operator act never trips the alarm.
+# Counters report `null` when this run never got to try and `0` when it tried and found
+# nothing — the two are different facts and the ledger keeps them apart.
+#
 # Doctrine: apps/sonar/deploy/README.md.
 set -euo pipefail
 
@@ -67,6 +80,10 @@ BOOT_TIMEOUT_SECS="${SONARFRESHEN_BOOT_TIMEOUT_SECS:-180}"
 
 # Optional alert/status inputs (operator EnvironmentFile; all best-effort, all optional).
 WORKER_URL="${SONARFRESHEN_WORKER_URL:-https://www.fluncle.com}"
+# The run ledger reads the Worker base from the name every other box script uses. Point it at
+# the SAME Worker the /status post already targets, so an operator override moves both at once
+# and the two can never disagree about which Worker this box is talking to.
+FLUNCLE_API_BASE_URL="${FLUNCLE_API_BASE_URL:-$WORKER_URL}"
 
 MODE="--if-changed"
 case "${1:-}" in
@@ -77,11 +94,159 @@ esac
 log() { printf '[sonar-freshen] %s\n' "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
 
-# ── single-flight ─────────────────────────────────────────────────────────────
-exec 9>"$LOCK"
-flock -n 9 || { log "another run holds the lock; exiting"; exit 0; }
+# ── the run ledger (RUN-01) ───────────────────────────────────────────────────
+# `RUN_EVENT_INTERVAL_MS` MIRRORS this unit's own timer (`OnUnitActiveSec=1h` in
+# fluncle-sonar-freshen.timer); run-events.test.ts parses that file and pins the pair.
+RUN_EVENT_UNIT="fluncle-sonar-freshen"
+RUN_EVENT_INTERVAL_MS=3600000
 
-command -v curl >/dev/null || die "curl not found"
+# `null` = this run never got that far; a NUMBER = it tried and this is what it found. The
+# distinction is the whole point — `0` for "nothing published" and `0` for "never reached the
+# feed" would be the same green row otherwise.
+SF_CHECKED="null"
+SF_PRODUCED="null"
+SF_QUEUE="null"
+SF_ERRORS=0
+SF_GATE="null" # a JSON string once this tick is an operator act or a lock skip
+SF_SUMMARY_EMITTED=0
+SF_STARTED_AT=""
+
+# >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
+# The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
+# different boxes with no shared bash library between them: the ~41 container sweeps get it by
+# sourcing this file, and the three host units are each laid down as a lone file
+# (install-host-timers.sh copies only the script an ExecStart names; the sonar freshen lives on
+# another box entirely). `run-events.test.ts` compares the four copies byte for byte, so a
+# silent drift fails the build — the same mirror-plus-drift-test posture cost-emit.ts already
+# uses for the cost ledger.
+#
+# THE CONTRACT is owned by the agent-tier `record_run` oRPC op in
+# packages/contracts/src/orpc/, which a box script cannot import. Mirrored here: the endpoint
+# path, the five body fields, and the Bearer auth. If any of them changes in the workspace,
+# change it in all four copies (the drift test keeps them equal; only the workspace can tell
+# you they are RIGHT).
+#
+# THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
+# `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for
+# eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside
+# the number that contradicted it — so a self-reported `ok` is exactly the thing this ledger
+# must not accept.
+#
+# BEST-EFFORT, ALWAYS: no token or an empty base URL ⇒ silently skipped; every curl failure is
+# swallowed; the caller's exit code is never touched; the whole thing is hard-timeout bounded.
+# It is deliberately SILENT rather than logging a failure — a chatty retry line would land in
+# the marker's stderr tail and score against the strain detector. A dropped POST leaves a
+# missing row, a missing row reads as a missed run, and the roster alarms on that. Absence
+# being loud is why delivery need not be guaranteed.
+RUN_EVENT_PATH='/api/v1/admin/runs/events'
+# 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
+# measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
+# `fluncle-telemetry` database, which exists precisely so it never queues behind the primary's
+# single writer. 5s absorbs a cold isolate plus a slow tick and still sits two orders inside
+# the shortest unit TimeoutStartSec on either box.
+RUN_EVENT_TIMEOUT_SECS="${RUN_EVENT_TIMEOUT_SECS:-5}"
+
+# Escape one line for a JSON string literal, in pure bash parameter expansion — NOT
+# `sed -e 's/\t/\\t/'`, whose `\t` is a GNU extension that silently matches a literal `t` on
+# the BSD sed the tests run under. Capped at 4000 chars so a runaway line cannot inflate the
+# POST, and stripped of any remaining control character (raw ones are illegal in JSON).
+_run_event_json_string() {
+  local s="${1:0:4000}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '%s' "$s" | tr -d '\000-\037'
+}
+
+# record_run_event <unit> <started_at> <ended_at> <exit_code> <summary_raw>
+record_run_event() {
+  local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
+  local base token body
+  base="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
+  base="${base%/}"
+  token="${FLUNCLE_API_TOKEN:-}"
+  [ -n "$token" ] || return 0
+  [ -n "$base" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  case "$exit_code" in '' | *[!0-9]*) exit_code=0 ;; esac
+  body="$(printf '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}' \
+    "$(_run_event_json_string "$unit")" \
+    "$(_run_event_json_string "$started_at")" \
+    "$(_run_event_json_string "$ended_at")" \
+    "$exit_code" \
+    "$(_run_event_json_string "$summary_raw")")"
+  curl -s -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
+    -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1 || true
+  return 0
+}
+
+# The box clock, in the one format every copy sends. DISTINCT from the Worker's own write
+# time: a box row's `occurred_at` legitimately precedes its `created_at` under clock skew, and
+# the ledger keeps both. Seconds precision on purpose — `date +%3N` is GNU-only.
+run_event_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+# <<< END MIRRORED BLOCK: record_run_event <<<
+
+# Print the run's summary line and POST its envelope, exactly once, from whichever of this
+# script's many exit paths got here — the `die`s included, which is where the interesting
+# failures are. The summary LINE uses the fleet's camelCase counter names; the POST BODY uses
+# the ledger contract's snake_case fields. `ok` is DERIVED, never a literal.
+#
+# It goes to STDOUT while every other line here goes to stderr, deliberately: the ledger reads
+# the last non-empty STDOUT line, so the script's own chatter can never be mistaken for its
+# verdict.
+emit_run_summary() {
+  local rc="${1:-0}" ok="false" ended summary
+  [ "$SF_SUMMARY_EMITTED" = "1" ] && return 0
+  SF_SUMMARY_EMITTED=1
+  case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
+  if [ "$rc" -eq 0 ] && [ "$SF_ERRORS" -eq 0 ]; then ok="true"; fi
+  ended="$(run_event_now)"
+  summary="$(printf '{"ok":%s,"checked":%s,"produced":%s,"errors":%d,"queueDepth":%s,"gateState":%s,"expectedIntervalMs":%d}' \
+    "$ok" "$SF_CHECKED" "$SF_PRODUCED" "$SF_ERRORS" "$SF_QUEUE" "$SF_GATE" "$RUN_EVENT_INTERVAL_MS")"
+  printf '%s\n' "$summary"
+  record_run_event "$RUN_EVENT_UNIT" "$SF_STARTED_AT" "$ended" "$rc" "$summary" || true
+  return 0
+}
+
+# ONE exit trap for the whole script: the summary always runs, and `_cleanup` is re-pointed as
+# resources appear rather than each of them installing its own `trap … EXIT` (which would
+# silently replace the summary).
+_cleanup() { :; }
+on_exit() {
+  local rc=$?
+  emit_run_summary "$rc" || true
+  _cleanup || true
+}
+SF_STARTED_AT="$(run_event_now)"
+trap on_exit EXIT
+
+# ── single-flight ─────────────────────────────────────────────────────────────
+# A tick that finds the lock held is NEITHER ok nor down — it is gated, and its counters stay
+# `null` because it never looked at anything. Reported, not silent: an unbroken run of
+# lock-skips is itself a finding (a wedged predecessor holding the flock forever).
+exec 9>"$LOCK"
+flock -n 9 || {
+  log "another run holds the lock; exiting"
+  SF_GATE='"locked"'
+  exit 0
+}
+
+# Past the gate: this tick is really going to look, so the counters become numbers. They stay
+# 0 until something is actually found, which is what makes `checked:0` legible as "reached the
+# end of the run without ever resolving a published commit" rather than "never ran".
+SF_CHECKED=0
+SF_PRODUCED=0
+SF_QUEUE=0
+
+command -v curl >/dev/null || {
+  SF_ERRORS=$((SF_ERRORS + 1))
+  die "curl not found"
+}
 
 # ── Discord alert (best-effort; webhook from the operator EnvironmentFile). Never throws. ──
 alert() {
@@ -123,9 +288,14 @@ env_value() {
 # GitHub is having a moment): log it, mark degraded, and leave the box alone.
 mkdir -p "$STATE_DIR"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sonar-freshen.XXXXXX")"
-trap 'rm -rf "$WORK_DIR"' EXIT
+_cleanup() { rm -rf "$WORK_DIR"; }
 
+# An unreachable or malformed feed exits 0 ON PURPOSE (leave the box alone), and that is
+# exactly why it has to be COUNTED: a green exit code beside a nonzero error count must not
+# read green anywhere. `checked` stays 0 — this run resolved no published commit — so seven
+# days of a dead feed are legible as seven days of blindness rather than seven quiet successes.
 if ! curl -fsSL --retry 3 --retry-delay 2 -m 60 -o "$WORK_DIR/sonar.commit" "$ASSET_BASE/sonar.commit"; then
+  SF_ERRORS=$((SF_ERRORS + 1))
   log "could not fetch $ASSET_BASE/sonar.commit — leaving the live service alone"
   post_health degraded "the sonar release feed is unreachable; the live engine is untouched"
   exit 0
@@ -134,10 +304,14 @@ fi
 NEW_SHA="$(tr -d '[:space:]' <"$WORK_DIR/sonar.commit")"
 # Guard against an HTML error page or a truncated asset masquerading as a SHA.
 if ! printf '%s' "$NEW_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  SF_ERRORS=$((SF_ERRORS + 1))
   log "the published sonar.commit is not a commit SHA — refusing to act on it"
   post_health degraded "the sonar release feed looks malformed; the live engine is untouched"
   exit 0
 fi
+
+# The feed resolved a real commit: this run genuinely checked the published build.
+SF_CHECKED=1
 
 OLD_SHA="$(cat "$SHA_FILE" 2>/dev/null || true)"
 
@@ -149,17 +323,25 @@ OLD_SHA="$(cat "$SHA_FILE" 2>/dev/null || true)"
 # live service, so "preview the current release" should stay useful on a current box.
 if [ "$MODE" = "--force" ]; then
   reason="forced"
+  SF_GATE='"forced"'
 elif [ "$MODE" = "--dry-run" ]; then
   reason="dry run"
+  SF_GATE='"dry-run"'
 elif [ -z "$OLD_SHA" ]; then
   reason="no baseline (first run)"
 elif [ "$OLD_SHA" = "$NEW_SHA" ]; then
+  # The overwhelmingly common tick: checked 1, produced 0, queue 0. Nothing to do is not the
+  # same fact as nothing done, and the ledger's alarm conjunction leaves this one alone.
   log "${OLD_SHA:0:12} -> ${NEW_SHA:0:12} | already current — no-op"
   post_health ok "sonar current"
   exit 0
 else
   reason="a newer sonar build is published"
 fi
+# There is work on the table from here down. Until the swap lands it is BACKLOG, so an
+# abandoned deploy leaves `produced:0` beside `queueDepth:1` — the pair that alarms.
+# The two operator modes carry a `gateState`, so a pilot or a preview never trips it.
+SF_QUEUE=1
 log "${OLD_SHA:-<none>} -> $NEW_SHA | $reason"
 
 # ── 3. download + VERIFY (the trust boundary) ─────────────────────────────────
@@ -167,6 +349,7 @@ log "${OLD_SHA:-<none>} -> $NEW_SHA | $reason"
 # replaces "we compiled it ourselves". A mismatch means the artifact is corrupt or
 # tampered with: fail LOUDLY and never, under any mode, put it near the live service.
 download_fail() {
+  SF_ERRORS=$((SF_ERRORS + 1))
   alert "🛰️ sonar-freshen: DOWNLOAD/VERIFY FAILED ($1) for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current sonar binary"
   post_health degraded "a sonar update failed download or checksum verification; the live engine is untouched"
   die "download/verify failed: $1"
@@ -214,6 +397,7 @@ log "checksum verified for ${NEW_SHA:0:12}"
 # The refresh interval is pushed far out so the throwaway process never loads a
 # second time; it is reaped the moment the smoke resolves.
 presmoke_fail() {
+  SF_ERRORS=$((SF_ERRORS + 1))
   alert "🛰️ sonar-freshen: PRE-SMOKE FAILED ($1) for ${NEW_SHA:0:12} on rave-01 — box untouched, staying on the current sonar binary"
   post_health degraded "a sonar update failed validation; the live engine is untouched on the current binary"
   die "pre-smoke failed: $1"
@@ -241,7 +425,7 @@ TURSO_DATABASE_URL="$SMOKE_TURSO_URL" TURSO_AUTH_TOKEN="$SMOKE_TURSO_TOKEN" \
 SMOKE_PID=$!
 # Always reap the throwaway server — it holds a second full copy of the index in RAM.
 cleanup_smoke() { kill "$SMOKE_PID" >/dev/null 2>&1 || true; wait "$SMOKE_PID" 2>/dev/null || true; }
-trap 'cleanup_smoke; rm -rf "$WORK_DIR"' EXIT
+_cleanup() { cleanup_smoke; rm -rf "$WORK_DIR"; }
 
 # sonar's /health serialises `"ok":true` with no spaces (serde), so one grep is the
 # whole assertion: the process is up AND its indexes are built AND it answers HTTP.
@@ -259,7 +443,7 @@ for _ in $(seq 1 "$BOOT_TIMEOUT_SECS"); do
 done
 [ "$smoked" = "1" ] || presmoke_fail "the new binary did not serve a healthy /health within ${BOOT_TIMEOUT_SECS}s"
 cleanup_smoke
-trap 'rm -rf "$WORK_DIR"' EXIT
+_cleanup() { rm -rf "$WORK_DIR"; }
 log "pre-smoke passed"
 
 if [ "$MODE" = "--dry-run" ]; then
@@ -271,7 +455,10 @@ fi
 # Keep the current binary as the rollback target, then atomically replace the live
 # binary (rename on the same filesystem) and restart. Replacing the on-disk file under
 # the running process is safe on Linux (the old process holds its inode until restart).
-command -v systemctl >/dev/null || die "systemctl not found — cannot manage $SERVICE"
+command -v systemctl >/dev/null || {
+  SF_ERRORS=$((SF_ERRORS + 1))
+  die "systemctl not found — cannot manage $SERVICE"
+}
 
 # The live listener, read from the service env. Cloudflare proxies to this origin on
 # 443 with an Origin Certificate, so TLS is normally on; a cert path in the env is what
@@ -291,7 +478,10 @@ LIVE_CURL+=("$LIVE_SCHEME://127.0.0.1:$LIVE_PORT/health")
 live_healthy() { "${LIVE_CURL[@]}" 2>/dev/null | grep -q '"ok":true'; }
 
 if [ -f "$APP_BIN" ]; then
-  cp -f "$APP_BIN" "$PREV_BIN" || die "could not snapshot the current binary to $PREV_BIN"
+  cp -f "$APP_BIN" "$PREV_BIN" || {
+    SF_ERRORS=$((SF_ERRORS + 1))
+    die "could not snapshot the current binary to $PREV_BIN"
+  }
 fi
 install -m 0755 "$NEW_BIN" "$APP_BIN.new"
 mv -f "$APP_BIN.new" "$APP_BIN"
@@ -312,6 +502,9 @@ service_healthy() {
 
 # ── 6. post-swap smoke (the `if` keeps set -e from bare-exiting) ──────────────
 if service_healthy; then
+  # The one place a swap is real: the backlog is cleared and the work is written.
+  SF_PRODUCED=1
+  SF_QUEUE=0
   log "post-swap smoke passed — deployed ${NEW_SHA:0:12}"
   printf '%s\n' "$NEW_SHA" >"$SHA_FILE"
   rm -f "$PREV_BIN"
@@ -321,6 +514,7 @@ if service_healthy; then
 fi
 
 # ── 7. ROLLBACK — the box is never left broken ────────────────────────────────
+SF_ERRORS=$((SF_ERRORS + 1))
 log "the new binary did not come up healthy — rolling back"
 if [ -f "$PREV_BIN" ]; then
   install -m 0755 "$PREV_BIN" "$APP_BIN.rb"

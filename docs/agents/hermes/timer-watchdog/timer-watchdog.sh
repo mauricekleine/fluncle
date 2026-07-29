@@ -26,6 +26,17 @@
 #
 # Runs on `OnCalendar`, deliberately: a calendar timer always carries a realtime next
 # elapse, so the watchdog cannot itself fall into the hole it is watching for.
+#
+# ── WHY IT REPORTS A `checked` COUNT (added 2026-07-29; RUN-01) ────────────────
+# This unit wrote no run record of any kind, which made it invisible in exactly the way it
+# exists to prevent. A watchdog is a DETECTOR: it legitimately re-arms nothing for months, so
+# `produced == 0` says nothing about its health. Only the DENOMINATOR does. A watchdog that
+# enumerates ZERO timers and reports a clean pass is the precise shape of a real past
+# incident on the other box — 897 consecutive runs, zero checks, green the whole way. So
+# every pass now ends with a JSON summary line carrying `checked` (timers examined) beside
+# `produced` (re-arms), `errors`, and `queueDepth` (stranded timers found), and POSTs that
+# line to the run ledger. `ok` is DERIVED from the exit code and the error count — never a
+# literal, which is the bug this ledger was built to make impossible.
 set -uo pipefail
 
 SELF_TIMER="fluncle-timer-watchdog.timer"
@@ -35,7 +46,142 @@ CONTAINER="${HERMES_CONTAINER:-hermes}"
 # would occasionally kick a perfectly healthy sweep.
 RECHECK_DELAY="${TIMER_WATCHDOG_RECHECK_DELAY:-5}"
 
+# What this run reports as. `RUN_EVENT_UNIT` is the systemd unit stem (fluncle-timer-watchdog
+# .service); `RUN_EVENT_INTERVAL_MS` MIRRORS this unit's own timer — `OnCalendar=*:0/15`, so
+# 15 minutes — and run-events.test.ts parses the .timer file and pins the pair in lockstep, so
+# a cadence change that forgets this constant fails a build instead of quietly teaching the
+# ledger the wrong freshness budget.
+RUN_EVENT_UNIT="fluncle-timer-watchdog"
+RUN_EVENT_INTERVAL_MS=900000
+
+# The run's tally. `CHECKED` is the denominator that separates health from blindness;
+# `REARMED` is work actually done; `STRANDED` is the backlog this pass was asked to clear
+# (so `produced == 0 AND queueDepth > 0` is a real alarm, while an empty worklist is not).
+CHECKED=0
+REARMED=0
+ERRORS=0
+STRANDED=0
+SUMMARY_EMITTED=0
+STARTED_AT=""
+
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
+
+# Read one KEY out of the LIVE container's env — the credential-free read pin-watch and the
+# sweep-failure notifier already use, so this script still holds no config file and nothing
+# from `op`. Container down ⇒ empty ⇒ the caller degrades.
+container_env() {
+  docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n "s/^$1=//p" | head -1 || true
+}
+
+# >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
+# The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
+# different boxes with no shared bash library between them: the ~41 container sweeps get it by
+# sourcing this file, and the three host units are each laid down as a lone file
+# (install-host-timers.sh copies only the script an ExecStart names; the sonar freshen lives on
+# another box entirely). `run-events.test.ts` compares the four copies byte for byte, so a
+# silent drift fails the build — the same mirror-plus-drift-test posture cost-emit.ts already
+# uses for the cost ledger.
+#
+# THE CONTRACT is owned by the agent-tier `record_run` oRPC op in
+# packages/contracts/src/orpc/, which a box script cannot import. Mirrored here: the endpoint
+# path, the five body fields, and the Bearer auth. If any of them changes in the workspace,
+# change it in all four copies (the drift test keeps them equal; only the workspace can tell
+# you they are RIGHT).
+#
+# THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
+# `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for
+# eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside
+# the number that contradicted it — so a self-reported `ok` is exactly the thing this ledger
+# must not accept.
+#
+# BEST-EFFORT, ALWAYS: no token or an empty base URL ⇒ silently skipped; every curl failure is
+# swallowed; the caller's exit code is never touched; the whole thing is hard-timeout bounded.
+# It is deliberately SILENT rather than logging a failure — a chatty retry line would land in
+# the marker's stderr tail and score against the strain detector. A dropped POST leaves a
+# missing row, a missing row reads as a missed run, and the roster alarms on that. Absence
+# being loud is why delivery need not be guaranteed.
+RUN_EVENT_PATH='/api/v1/admin/runs/events'
+# 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
+# measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
+# `fluncle-telemetry` database, which exists precisely so it never queues behind the primary's
+# single writer. 5s absorbs a cold isolate plus a slow tick and still sits two orders inside
+# the shortest unit TimeoutStartSec on either box.
+RUN_EVENT_TIMEOUT_SECS="${RUN_EVENT_TIMEOUT_SECS:-5}"
+
+# Escape one line for a JSON string literal, in pure bash parameter expansion — NOT
+# `sed -e 's/\t/\\t/'`, whose `\t` is a GNU extension that silently matches a literal `t` on
+# the BSD sed the tests run under. Capped at 4000 chars so a runaway line cannot inflate the
+# POST, and stripped of any remaining control character (raw ones are illegal in JSON).
+_run_event_json_string() {
+  local s="${1:0:4000}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '%s' "$s" | tr -d '\000-\037'
+}
+
+# record_run_event <unit> <started_at> <ended_at> <exit_code> <summary_raw>
+record_run_event() {
+  local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
+  local base token body
+  base="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
+  base="${base%/}"
+  token="${FLUNCLE_API_TOKEN:-}"
+  [ -n "$token" ] || return 0
+  [ -n "$base" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  case "$exit_code" in '' | *[!0-9]*) exit_code=0 ;; esac
+  body="$(printf '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}' \
+    "$(_run_event_json_string "$unit")" \
+    "$(_run_event_json_string "$started_at")" \
+    "$(_run_event_json_string "$ended_at")" \
+    "$exit_code" \
+    "$(_run_event_json_string "$summary_raw")")"
+  curl -s -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
+    -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1 || true
+  return 0
+}
+
+# The box clock, in the one format every copy sends. DISTINCT from the Worker's own write
+# time: a box row's `occurred_at` legitimately precedes its `created_at` under clock skew, and
+# the ledger keeps both. Seconds precision on purpose — `date +%3N` is GNU-only.
+run_event_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+# <<< END MIRRORED BLOCK: record_run_event <<<
+
+# Print the run's summary line and POST its envelope, exactly once, whatever exit path got
+# here. Runs from an EXIT trap so a `return 1` deep in the script cannot skip it — the shape
+# that leaves a ledger row missing is the shape that reads as a missed run.
+#
+# NOTE THE TWO CASINGS, both deliberate. The summary LINE uses the fleet's camelCase counter
+# names (every other sweep prints `queueRemaining`, `gateSkipped`, `totalUnresolved`), because
+# it is the sweep's own line and the /status prober reads the same shape. The POST BODY uses
+# the ledger contract's snake_case field names. The Worker normalizes the former and owns the
+# latter.
+emit_run_summary() {
+  local rc="${1:-0}" ok="false" ended summary
+  [ "$SUMMARY_EMITTED" = "1" ] && return 0
+  SUMMARY_EMITTED=1
+  case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
+  if [ "$rc" -eq 0 ] && [ "$ERRORS" -eq 0 ]; then ok="true"; fi
+  ended="$(run_event_now)"
+  summary="$(printf '{"ok":%s,"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
+    "$ok" "$CHECKED" "$REARMED" "$ERRORS" "$STRANDED" "$RUN_EVENT_INTERVAL_MS")"
+  printf '%s\n' "$summary"
+  if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
+    FLUNCLE_API_TOKEN="$(container_env FLUNCLE_API_TOKEN)"
+  fi
+  record_run_event "$RUN_EVENT_UNIT" "$STARTED_AT" "$ended" "$rc" "$summary" || true
+  return 0
+}
+
+STARTED_AT="$(run_event_now)"
+trap 'emit_run_summary "$?"' EXIT
 
 # No armed trigger: monotonic elapse `infinity` AND no realtime elapse at all. A calendar
 # timer always reports a realtime elapse, so this stays false for a healthy one.
@@ -67,6 +213,9 @@ list_timers() {
 suspects=()
 while IFS= read -r timer; do
   [ -n "$timer" ] || continue
+  # The denominator, counted BEFORE any filter: this is how many timers the pass actually
+  # looked at. A pass that enumerates nothing must never be able to report a clean sweep.
+  CHECKED=$((CHECKED + 1))
   service="${timer%.timer}.service"
   has_no_next_elapse "$timer" || continue
   service_busy "$service" && continue
@@ -95,6 +244,11 @@ if [ "${#stranded[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# The backlog this pass is asked to clear. Reported as `queueDepth` so the ledger's alarm
+# conjunction (`produced == 0 AND queueDepth > 0`) fires on a watchdog that finds stranded
+# timers and re-arms none of them, while an empty worklist stays silent forever.
+STRANDED="${#stranded[@]}"
+
 # Re-arm by activating the service ONCE: that gives `OnUnitActiveSec` the reference point
 # it is missing, and the normal cadence resumes from this moment. `--no-block` so a long
 # sweep (anchor runs ~15 min) does not hold the watchdog open.
@@ -103,8 +257,10 @@ for timer in "${stranded[@]}"; do
   service="${timer%.timer}.service"
   if systemctl start --no-block "$service" >/dev/null 2>&1; then
     healed+=("${timer%.timer}")
+    REARMED=$((REARMED + 1))
     log "re-armed ${timer} (no next elapse; kicked ${service} once)"
   else
+    ERRORS=$((ERRORS + 1))
     log "FAILED to re-arm ${timer} — could not start ${service}"
   fi
 done
@@ -114,7 +270,7 @@ done
 # Alert regardless of the self-heal: a stranded timer means something stopped it outside
 # the paths that know to restore it, and that cause deserves eyes even once the sweep is
 # running again. The webhook is read off the live container's env — never stored here.
-webhook="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^DISCORD_ALERT_WEBHOOK=//p' | head -1 || true)"
+webhook="$(container_env DISCORD_ALERT_WEBHOOK)"
 if [ -n "$webhook" ]; then
   names="$(
     IFS=', '
