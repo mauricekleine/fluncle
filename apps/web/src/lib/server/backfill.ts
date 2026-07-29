@@ -656,17 +656,27 @@ async function setDiscogsIds(
   // uncertified track), while `updated_at` is the FINDING's public lastmod — the
   // `discogs.com/release/{id}` sameAs the write puts on /log is what moves. One batch,
   // so the id and the lastmod that advertises it can never diverge.
+  const now = new Date().toISOString();
+
   await db.batch(
     [
       {
-        args: [releaseId, masterId ?? null, trackId],
+        // The tracks-side attempt record rides the ids it describes (schema.ts § `backfill_discogs_*`
+        // on `tracks`), so a finding this sweep resolves can never read "attempted, no release"
+        // while carrying one. That set is the RECORDING's attempt record and is distinct from this
+        // sweep's own pacing state on `findings`, which `recordAttempt` keeps as before — the sweep
+        // writes both because it is the one path that moves both truths at once.
+        args: [releaseId, masterId ?? null, now, now, trackId],
         sql: `update tracks
           set in_release_id = ?,
-            in_master_id = ?
+            in_master_id = ?,
+            backfill_discogs_attempted_at = ?,
+            backfill_discogs_done_at = ?,
+            backfill_discogs_attempts = backfill_discogs_attempts + 1
           where track_id = ?`,
       },
       {
-        args: [new Date().toISOString(), trackId],
+        args: [now, trackId],
         sql: `update findings set updated_at = ? where track_id = ?`,
       },
     ],

@@ -217,6 +217,15 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     title: track.title,
   });
 
+  // THE DISCOGS ATTEMPT RECORD (schema.ts § `backfill_discogs_*` on `tracks`), read off the resolve
+  // above. `rateLimited` is what makes the stamp honest: an empty result under a live throttle is
+  // "we never got to ask", so it stamps NOTHING and the row stays genuinely unattempted for a later
+  // sweep. An empty result with no throttle is a real answer — "Discogs has no release we can
+  // confidently bind" — and stamps `attempted_at` with `done_at` left null. Failures stay 0: a
+  // mint-time look either concludes or is deferred, so there is no streak to back off from.
+  const discogsResolved = discogs.releaseId !== undefined || discogs.masterId !== undefined;
+  const discogsAttemptedAt = discogsResolved || !discogs.rateLimited ? nowIso : null;
+
   await db.batch(
     [
       {
@@ -236,6 +245,15 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           deezer.previewUrl ?? null,
           discogs.releaseId ?? null,
           discogs.masterId ?? null,
+          // THE ISRC ATTEMPT STAMP (schema.ts § `isrc_attempted_at`). Spotify's `external_ids` read
+          // has returned and the Deezer fallback above has had its turn, so the attempt has
+          // CONCLUDED — whichever way it went. A finding is born stamped, and an ISRC-less one says
+          // "looked, not there" instead of the ambiguous silence.
+          nowIso,
+          // THE DISCOGS ATTEMPT RECORD (schema.ts § `backfill_discogs_*` on `tracks`).
+          discogsAttemptedAt,
+          discogsResolved ? nowIso : null,
+          discogsAttemptedAt === null ? 0 : 1,
           // is_catalogue = 0: born CERTIFIED. The certification half is minted in the SAME batch
           // (findingInsertStatement below), so the maintained invariant (a track with a findings
           // row is is_catalogue = 0) holds from the very first write, never a moment as `1`.
@@ -258,8 +276,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             preview_url,
             in_release_id,
             in_master_id,
+            isrc_attempted_at,
+            backfill_discogs_attempted_at,
+            backfill_discogs_done_at,
+            backfill_discogs_attempts,
             is_catalogue
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       },
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.

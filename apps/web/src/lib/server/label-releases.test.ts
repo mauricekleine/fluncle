@@ -624,6 +624,49 @@ describe("probeLabelReleases", () => {
     expect(finding.rows).toHaveLength(0);
   });
 
+  it("stamps the ISRC ATTEMPT and leaves Discogs honestly unattempted (RFC identity-graph, Unit 1)", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Med School"],
+          id: "alb1",
+          name: "New EP",
+          releaseDate: "2026-07-18",
+          trackIds: ["t1", "t2"],
+        },
+      ],
+      searchAlbumIds: ["alb1"],
+      tracks: [
+        { id: "t1", isrc: "GB0000000001", title: "Foo" },
+        // No ISRC on Spotify's response at all — the look still concluded.
+        { id: "t2", title: "Bar" },
+      ],
+    });
+
+    await probeLabelReleases();
+
+    const rows = await db.execute(
+      `select track_id, isrc, isrc_attempted_at, backfill_discogs_attempted_at,
+              backfill_discogs_attempts
+       from tracks order by track_id`,
+    );
+
+    expect(rows.rows).toHaveLength(2);
+
+    for (const row of rows.rows) {
+      // The probe read concluded for both, so both say so — including the ISRC-less one, which is
+      // the whole point: "Spotify carries none" is a fact, not an absence of one.
+      expect(row.isrc_attempted_at).not.toBeNull();
+      // This path never looks at Discogs, so claiming an attempt there would be the lie. Untouched.
+      expect(row.backfill_discogs_attempted_at).toBeNull();
+      expect(Number(row.backfill_discogs_attempts)).toBe(0);
+    }
+
+    expect(rows.rows.find((row) => row.track_id === "sp_t2")?.isrc).toBeNull();
+  });
+
   it("skips a track already in the archive by ISRC (an MB-first row → the tap skips)", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     await seedCatalogueTrack(db, { title: "Foo", trackId: "mb_existing" });

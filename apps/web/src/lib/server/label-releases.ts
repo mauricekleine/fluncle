@@ -483,6 +483,9 @@ async function writeLabelReleaseTracks(
   let written = 0;
   let skipped = 0;
   const writtenIds: string[] = [];
+  // One instant for the whole batch — these rows all came out of the same probe pass, so they were
+  // all attempted at the same moment, and a per-row `new Date()` would only pretend otherwise.
+  const writtenAt = new Date().toISOString();
 
   for (const track of tracks) {
     const trackId = labelReleaseTrackId(track.spotifyTrackId);
@@ -512,14 +515,21 @@ async function writeLabelReleaseTracks(
         ctx.releaseDate,
         track.spotifyUri,
         track.spotifyUrl,
+        // THE ISRC ATTEMPT STAMP (schema.ts § `isrc_attempted_at`). The probe read
+        // `external_ids.isrc` off a real `GET /tracks/{id}` response — `parseProbeTrack` returns
+        // null on anything less — so the look has CONCLUDED here whichever way it went, and a
+        // tap-born row with no ISRC says "Spotify carries none" instead of the ambiguous silence.
+        writtenAt,
       ],
       // `capture_status`, `album_image_url`, `mb_recording_id`, `in_release_id`/`in_master_id` are
       // deliberately unnamed — the DDL defaults (NULL / 'pending') land. The album's own cover
-      // master arrives at ALBUM grain via its own sweep, never at this mint.
+      // master arrives at ALBUM grain via its own sweep, never at this mint. The Discogs attempt
+      // record is unnamed for the same reason and stays honest by it: no Discogs look happens on
+      // this path at all, so the row is genuinely `unattempted` there, not `absent`.
       sql: `insert into tracks
               (track_id, title, artists_json, duration_ms, album, isrc, label, release_date,
-               spotify_uri, spotify_url)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               spotify_uri, spotify_url, isrc_attempted_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (track_id) do nothing`,
     });
 

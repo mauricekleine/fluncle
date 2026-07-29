@@ -151,10 +151,19 @@ describe("backfillDiscogsIds — reliability gate", () => {
     expect(result.resolved).toEqual([
       { logId: "LOG-1", masterId: 9, releaseId: 42, source: "discogs" },
     ]);
-    // Two writes: set_discogs_ids + record done.
-    const recordDone = writes.find((w) => w.sql.includes("backfill_discogs_done_at = ?"));
+    // Two writes: set_discogs_ids + record done. The sweep's own PACING state is the one that
+    // resets the failure streak, which is what tells it apart from the tracks-side write below.
+    const recordDone = writes.find((w) => w.sql.includes("backfill_discogs_failures = 0"));
     expect(recordDone, "a done record should be written").toBeTruthy();
     expect(recordDone?.sql).toContain("backfill_discogs_failures = 0");
+
+    // …and the ids carry the RECORDING-grain attempt record with them (schema.ts §
+    // `backfill_discogs_*` on `tracks`, RFC dnb-identity-graph Unit 1). Without this a finding the
+    // sweep resolved would read "attempted, no release" to the identity ledger while carrying one.
+    const setIds = writes.find((w) => w.sql.includes("in_release_id = ?"));
+    expect(setIds?.sql).toContain("backfill_discogs_attempted_at = ?");
+    expect(setIds?.sql).toContain("backfill_discogs_done_at = ?");
+    expect(setIds?.sql).toContain("backfill_discogs_attempts = backfill_discogs_attempts + 1");
   });
 
   it("a throttled miss trips the circuit breaker — stops the run, no cooldown (next tick retries); a clean miss records TRIED", async () => {

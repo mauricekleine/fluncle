@@ -668,6 +668,9 @@ async function writeCatalogueTracks(
   let written = 0;
   let skipped = 0;
   const writtenIds: string[] = [];
+  // One instant for the whole batch — these rows all came out of the same release read, so they
+  // were all attempted at the same moment, and a per-row `new Date()` would only pretend otherwise.
+  const writtenAt = new Date().toISOString();
 
   for (const candidate of candidates) {
     const trackId = catalogueTrackId(candidate.recordingId);
@@ -705,11 +708,23 @@ async function writeCatalogueTracks(
         // on the prefix-strip backfill, and the `/log` MusicRecording emits it the moment such a row
         // is certified in place. The one-off `recording-mbids.ts` strip only catches history up.
         candidate.recordingId,
+        // THE TWO ATTEMPT STAMPS (schema.ts § `isrc_attempted_at`, § `backfill_discogs_*`). The
+        // release read this candidate came from carried BOTH answers — `recording.isrcs` and the
+        // `discogs` url-rels — so both looks have concluded by the time the row lands, and a
+        // catalogue row is born able to tell "MusicBrainz has none" from "nobody has looked". That
+        // matters more here than anywhere: the insert is `on conflict do nothing` and the
+        // per-finding Discogs sweep cannot reach a row with no `findings` row, so for a catalogue
+        // track this is the only stamp it will ever get.
+        writtenAt,
+        writtenAt,
+        candidate.inReleaseId === null && candidate.inMasterId === null ? null : writtenAt,
       ],
       sql: `insert into tracks
               (track_id, title, artists_json, duration_ms, album, album_image_url, isrc,
-               label, release_date, in_release_id, in_master_id, mb_recording_id)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               label, release_date, in_release_id, in_master_id, mb_recording_id,
+               isrc_attempted_at, backfill_discogs_attempted_at, backfill_discogs_done_at,
+               backfill_discogs_attempts)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             on conflict (track_id) do nothing`,
     });
 

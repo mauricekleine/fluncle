@@ -173,6 +173,47 @@ export const tracks = sqliteTable(
     backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
     backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
     backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
+    // The RECORDING-GRAIN Discogs attempt record (RFC dnb-identity-graph, Unit 1 item 2). Same
+    // four-column shape and rules as the `backfill_apple_music_*` set above — and it exists for one
+    // reason: without it a CATALOGUE row cannot tell `absent` from `unattempted` for Discogs. The
+    // ids themselves (`in_release_id` / `in_master_id`) are catalogue identity and already live on
+    // this table; only the "did anyone ever look?" half was missing here.
+    //
+    // WHO WRITES IT — the two paths that conclude a Discogs-id fill for a `tracks` row, both at
+    // MINT time, both stamping in the SAME statement that writes (or declines to write) the ids:
+    //   - the CATALOGUE CRAWLER (crawl.ts § writeCatalogueTracks). Its ids come free with the
+    //     release read — MusicBrainz's `discogs` url-rels, parsed by `parseDiscogsUrl` — so every
+    //     crawled row has had exactly one Discogs look concluded by the time it lands. This is the
+    //     ONLY writer a catalogue row will ever see: the crawler inserts `on conflict do nothing`
+    //     and the per-finding sweep below cannot reach a row with no `findings` row.
+    //   - PUBLISH (publish.ts). A finding is born from a real Discogs API resolve
+    //     (`discogsResolveRelease`, confidence-gated), so it is born attempted too.
+    //
+    // AND THE ONE UPDATER: the per-finding sweep's `setDiscogsIds` (backfill.ts) stamps this set
+    // alongside the ids it lands, so a certified row the sweep later fills never reads "attempted,
+    // no release" while carrying one.
+    //
+    // WHAT IT IS NOT. The per-finding sweep keeps its OWN `backfill_discogs_*` set on `findings`,
+    // and that set is NOT this one and is deliberately not rewired here (the Apple move — a column
+    // move plus a one-time carry — is a separate act). The two answer different questions and both
+    // are true: `findings`' set is the SWEEP'S PACING state (the cooldown window, the consecutive-
+    // failure streak, the /admin board's Discogs cell); THIS set is the recording's attempt record,
+    // read by the identity ledger for every tier at once. Consequence, written down so no reader is
+    // surprised: the sweep's own no-match "tried" outcome bumps only the `findings` side, so on a
+    // certified row this set's `*_attempts` / `*_attempted_at` are a FLOOR — never wrong about
+    // whether a look happened, merely conservative about how many and how recently.
+    //
+    // `*AttemptedAt` = the last concluded look. `*Attempts` = total looks. `*Failures` = the
+    // consecutive-failure streak (0 here — a mint-time look either lands ids or cleanly does not).
+    // `*DoneAt` = when ids were actually WRITTEN; set ⇒ the recording resolved. A clean no-match
+    // leaves `*DoneAt` null with `*AttemptedAt` set: the honest "looked, not there" the ledger
+    // serves. NULL/0 on rows that predate the columns (see scripts/backfill-identity-ledger.ts,
+    // which stamps the history that provably resolved). Internal reliability state — no public
+    // surface, no lastmod bump.
+    backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
+    backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
+    backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
+    backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
     bpm: real("bpm"),
     // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
     // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`
@@ -381,6 +422,42 @@ export const tracks = sqliteTable(
     // lastmod bump (a `tracks` write moves no finding).
     isCatalogue: integer("is_catalogue", { mode: "boolean" }).notNull().default(true),
     isrc: text("isrc"),
+    // THE ISRC ATTEMPT STAMP (RFC dnb-identity-graph, Unit 1 item 1) — the column that lets a
+    // NULL `isrc` say WHICH kind of nothing it is. Without it "no ISRC" is one undifferentiated
+    // silence; with it the honest negative separates out: a stamped row means "we looked, the
+    // recording has no ISRC we can reach — stop asking", an unstamped one means "never looked yet".
+    // The `mb_recording_id_attempted_at` discipline one screen down, applied to the other key.
+    //
+    // AN ATTEMPT IS ANY ISRC FILL PATH CONCLUDING — hit AND clean miss alike, since a miss is the
+    // fact worth remembering. The four paths, each stamping in the same statement that writes (or
+    // declines to write) the ISRC:
+    //   - PUBLISH (publish.ts): Spotify's `external_ids` read, plus the `lookupIsrcFromDeezer`
+    //     fallback when Spotify omits it. The metadata fetch has returned by then, so the attempt
+    //     has concluded whichever way it went — every finding is born stamped.
+    //   - THE FRESHNESS TAP (label-releases.ts): Spotify's `external_ids.isrc` off the per-track
+    //     probe. The probe parse returns null on anything short of a real track response, so a row
+    //     that lands has had its look concluded.
+    //   - THE CRAWLER (crawl.ts § writeCatalogueTracks): MusicBrainz's `recording.isrcs`, read as
+    //     part of the release walk. Every crawled row is born stamped, so the catalogue's ISRC-less
+    //     rows are honestly "MusicBrainz has none", not "nobody has looked".
+    //   - THE DEEZER-RECOVERY RUNG (anchor.ts § recoverIsrcViaDeezer): stamped on a verified
+    //     recovery, and on a gate-clean miss (Deezer answered, no candidate cleared the identity
+    //     gate). NOT stamped when the search came back empty — `searchDeezerCandidates` returns the
+    //     same empty array for "no results" and for a quota/network failure, and a throttle is not
+    //     an answer. Untouched beats a stamp we cannot stand behind.
+    //
+    // WHAT A LEGACY STAMP MEANS. scripts/backfill-identity-ledger.ts stamps the rows that already
+    // carry an ISRC, since a filled ISRC is proof a path concluded — but it cannot know WHEN, so it
+    // reads "filled by then, at the latest", never "verified then": a certified row takes its
+    // finding's `added_at` (which IS the publish attempt's own instant, so those are exact), and a
+    // catalogue row — `tracks` carries no mint timestamp at all — takes the backfill's run time.
+    // Any consumer serving this value must say it means ATTEMPTED, never VERIFIED.
+    //
+    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule below: a
+    // `.default()` on an EXISTING `tracks` column makes drizzle regenerate the whole table and
+    // drop+recreate all ~125 indexes. NULL is "never attempted". Internal reliability state — no
+    // public surface, no lastmod bump.
+    isrcAttemptedAt: text("isrc_attempted_at"),
     key: text("key"),
     // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
     // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL

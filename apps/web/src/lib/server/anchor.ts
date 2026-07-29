@@ -787,6 +787,12 @@ async function resolveViaSpotifySearch(
  * `artistName` folds into an artist set through `matchKey`). On any doubt, no recovery: the row simply
  * stays ISRC-less and falls to fuzzy, exactly as before this rung existed.
  *
+ * EITHER CONCLUSION IS AN ATTEMPT, and stamps `isrc_attempted_at` (schema.ts) — a recovery and a
+ * gate-clean refusal both answer the question. The ONE outcome that does not stamp is an empty
+ * candidate list, since `searchDeezerCandidates` returns the same empty array for "Deezer has
+ * nothing" and for a quota/network failure; the row stays honestly unattempted rather than wearing
+ * a stamp we cannot stand behind.
+ *
  * A verified hit's ISRC is written FILL-EMPTY-ONLY (`coalesce(isrc, ?)`, mirroring the anchor-hit
  * write) — a real ISRC is never overwritten (defensive; we only reach here for an ISRC-less row) — and
  * returned so the SAME resolve call carries it forward in memory to the exact-ISRC rungs. Returns
@@ -844,15 +850,27 @@ export async function recoverIsrcViaDeezer(
   const recovered = verified?.isrc.trim();
 
   if (!recovered) {
+    // A GATE-CLEAN MISS, and therefore a concluded attempt: Deezer answered with candidates and not
+    // one of them cleared the identity gate. Stamped (schema.ts § `isrc_attempted_at`) so the row
+    // reads "looked, not there" rather than the ambiguous silence — the honest negative is the point
+    // of the column. Note where this sits: BELOW the empty-candidates return above, which is
+    // deliberately left unstamped, because `searchDeezerCandidates` hands back the same empty array
+    // for "Deezer has nothing" and for a quota/network failure, and a throttle is not an answer.
+    await db.execute({
+      args: [new Date().toISOString(), trackId],
+      sql: `update tracks set isrc_attempted_at = ? where track_id = ?`,
+    });
+
     return undefined;
   }
 
   // FILL-EMPTY-ONLY, exactly like the anchor-hit write (PR #813): a NULL is filled, a real ISRC is
   // never clobbered. Persisted whether or not a rung then anchors, so the next tick's exact-ISRC rung
-  // and the ISRC-equality dedup both benefit even on a full miss this tick.
+  // and the ISRC-equality dedup both benefit even on a full miss this tick. The attempt stamp rides
+  // the SAME statement — a recovery is a concluded attempt too, and the pair cannot be written apart.
   await db.execute({
-    args: [recovered, trackId],
-    sql: `update tracks set isrc = coalesce(isrc, ?) where track_id = ?`,
+    args: [recovered, new Date().toISOString(), trackId],
+    sql: `update tracks set isrc = coalesce(isrc, ?), isrc_attempted_at = ? where track_id = ?`,
   });
 
   return recovered;

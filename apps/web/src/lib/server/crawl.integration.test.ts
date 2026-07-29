@@ -45,6 +45,10 @@ function release(
   label: string,
   releaseGroup: null | string,
   tracks: { id: string; isrc?: string; title: string }[],
+  // MusicBrainz does not carry a `discogs` url-rel for every release. The crawler's Discogs ids
+  // come from that relation, so its absence is the "looked, nothing there" case the attempt record
+  // has to be able to say — modelled on the hop-2 release below.
+  withDiscogs = true,
 ) {
   return {
     "artist-credit": [{ artist: { id: ARTIST_MBID, name: "Etherwood" } }],
@@ -73,7 +77,9 @@ function release(
         })),
       },
     ],
-    relations: [{ type: "discogs", url: { resource: "https://www.discogs.com/release/6414598" } }],
+    relations: withDiscogs
+      ? [{ type: "discogs", url: { resource: "https://www.discogs.com/release/6414598" } }]
+      : [],
     title: `${label} sampler`,
   };
 }
@@ -118,9 +124,13 @@ function stubMusicbrainz(): void {
 
       if (url.includes(`/release/${HOP2_RELEASE}`)) {
         return json(
-          release(HOP2_RELEASE, "Hospital Records", HOP2_RELEASE_GROUP, [
-            { id: "rec-3", title: "A Hop-2 Track" },
-          ]),
+          release(
+            HOP2_RELEASE,
+            "Hospital Records",
+            HOP2_RELEASE_GROUP,
+            [{ id: "rec-3", title: "A Hop-2 Track" }],
+            false,
+          ),
         );
       }
 
@@ -230,6 +240,57 @@ describe("the catalogue crawler", () => {
       expect(row.source_audio_key).toBeNull();
       expect(row.embedding_blob).toBeNull();
     }
+  });
+
+  it("stamps the ISRC + Discogs ATTEMPT record on every row it writes (RFC identity-graph, Unit 1)", async () => {
+    await drain();
+
+    const rows = await db.execute(
+      `select track_id, isrc, isrc_attempted_at, in_release_id,
+              backfill_discogs_attempted_at, backfill_discogs_attempts,
+              backfill_discogs_done_at, backfill_discogs_failures
+       from tracks order by track_id`,
+    );
+
+    expect(rows.rows).toHaveLength(2);
+
+    for (const row of rows.rows) {
+      // The release read carried BOTH answers, so both looks concluded here. The ISRC-LESS row
+      // (rec-2) is the one that matters: it is stamped too, so it reads "MusicBrainz has none"
+      // rather than the ambiguous silence that used to be indistinguishable from "nobody looked".
+      expect(row.isrc_attempted_at).not.toBeNull();
+      expect(row.backfill_discogs_attempted_at).not.toBeNull();
+      expect(Number(row.backfill_discogs_attempts)).toBe(1);
+      expect(Number(row.backfill_discogs_failures)).toBe(0);
+      // This release DOES carry a discogs url-rel, so the look landed and is done.
+      expect(row.in_release_id).toBe(6414598);
+      expect(row.backfill_discogs_done_at).not.toBeNull();
+    }
+
+    // rec-2 has no ISRC at all — stamped all the same.
+    const isrcless = rows.rows.find((row) => row.track_id === "mb_rec-2");
+    expect(isrcless?.isrc).toBeNull();
+    expect(isrcless?.isrc_attempted_at).not.toBeNull();
+  });
+
+  it("records a Discogs look that found NOTHING as attempted-but-not-done", async () => {
+    // The hop-2 release carries no `discogs` url-rel. Rule its label in so the row is stored.
+    await seedLabel("Hospital Records", "hospital-records", "enabled");
+
+    await drain();
+
+    const row = await db.execute(
+      `select in_release_id, in_master_id, backfill_discogs_attempted_at,
+              backfill_discogs_attempts, backfill_discogs_done_at
+       from tracks where track_id = 'mb_rec-3'`,
+    );
+
+    expect(row.rows[0]?.in_release_id).toBeNull();
+    expect(row.rows[0]?.in_master_id).toBeNull();
+    // Looked, not there — the honest negative, and the state the ledger serves as `absent`.
+    expect(row.rows[0]?.backfill_discogs_attempted_at).not.toBeNull();
+    expect(Number(row.rows[0]?.backfill_discogs_attempts)).toBe(1);
+    expect(row.rows[0]?.backfill_discogs_done_at).toBeNull();
   });
 
   it("is IDEMPOTENT — a second crawl of the same graph writes zero new rows", async () => {
