@@ -4,12 +4,18 @@
 // sign-in, then each local action mirrors up fire-and-forget. THE LAW: the device store
 // stays the render source and anonymous saves are untouched — the account only SYNCS.
 //
-// Storage is `@react-native-async-storage/async-storage` (the sanctioned Expo choice;
-// added because the app had no storage module). The pure toggle/keying/(de)serialize
-// logic is ./saved-store.ts and the pure sync loop is ./saved-sync.ts — this file is only
-// the I/O, a shared in-memory cache (so the detail modal's bookmark and the archive's
-// Saved view stay in lockstep without a context provider), and the account wiring.
-import AsyncStorage from "@react-native-async-storage/async-storage";
+// Storage is `expo-sqlite/kv-store` — SQLite-backed, and the same store the offline-first
+// work builds on (RFC slice 1). It is an AsyncStorage-shaped drop-in, so the call sites
+// below keep their shape; the ONE thing the swap owes the phones already in the field is
+// the migration: a device holding saves under the old AsyncStorage key has them carried
+// across on the first read (./storage-migration.ts owns that, and its truth table).
+//
+// The pure toggle/keying/(de)serialize logic is ./saved-store.ts and the pure sync loop is
+// ./saved-sync.ts — this file is only the I/O, a shared in-memory cache (so the detail
+// modal's bookmark and the archive's Saved view stay in lockstep without a context
+// provider), and the account wiring.
+import LegacyAsyncStorage from "@react-native-async-storage/async-storage";
+import Storage from "expo-sqlite/kv-store";
 import { useCallback, useEffect, useState } from "react";
 import { authClient, meFetch } from "@/lib/auth-client";
 import {
@@ -21,6 +27,7 @@ import {
   toggleSaved,
 } from "@/lib/saved-store";
 import { deleteSavedFinding, pushSavedFinding, runUnionMerge } from "@/lib/saved-sync";
+import { readWithMigration } from "@/lib/storage-migration";
 
 const STORAGE_KEY = "fluncle.saved.v1";
 
@@ -33,7 +40,14 @@ async function loadOnce(): Promise<SavedFinding[]> {
   if (cache !== null) {
     return cache;
   }
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
+  // Reads kv-store, carrying an existing AsyncStorage value across on the first launch
+  // after the swap. Never throws: a failure on either side deserializes as empty, exactly
+  // as the plain read did before.
+  const raw = await readWithMigration({
+    key: STORAGE_KEY,
+    kv: Storage,
+    legacy: LegacyAsyncStorage,
+  }).catch(() => null);
   cache = deserialize(raw);
   return cache;
 }
@@ -46,7 +60,7 @@ function commit(next: SavedFinding[]): void {
   for (const listener of listeners) {
     listener(next);
   }
-  void AsyncStorage.setItem(STORAGE_KEY, serialize(next)).catch(() => undefined);
+  void Storage.setItem(STORAGE_KEY, serialize(next)).catch(() => undefined);
 }
 
 // --- Account sync (RFC: accounts in the pocket, slice 4) -------------------------------

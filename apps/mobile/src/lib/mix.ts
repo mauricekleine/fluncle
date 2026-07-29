@@ -3,9 +3,12 @@
 // serialize logic is ./mix-store.ts; this file is only the I/O and a shared in-memory cache
 // so every mounted instance of the Mix screen stays in lockstep without a context provider.
 //
-// Mirrors ./saved.ts exactly (the sanctioned AsyncStorage pattern) — one store, one
-// disk-read, fire-and-forget writes, an in-memory truth the UI reads.
-import AsyncStorage from "@react-native-async-storage/async-storage";
+// Mirrors ./saved.ts exactly (the sanctioned `expo-sqlite/kv-store` pattern) — one store,
+// one disk-read, fire-and-forget writes, an in-memory truth the UI reads, and the same
+// one-shot carry-across from the old AsyncStorage key so a set left in progress on a
+// phone in the field survives the update (./storage-migration.ts).
+import LegacyAsyncStorage from "@react-native-async-storage/async-storage";
+import Storage from "expo-sqlite/kv-store";
 import { useCallback, useEffect, useState } from "react";
 import { type MixTrack } from "@fluncle/contracts";
 import {
@@ -16,6 +19,7 @@ import {
   removeTrack,
   serialize,
 } from "@/lib/mix-store";
+import { readWithMigration } from "@/lib/storage-migration";
 
 const STORAGE_KEY = "fluncle.mix.v1";
 
@@ -29,7 +33,13 @@ async function loadOnce(): Promise<MixState> {
     return cache;
   }
 
-  const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
+  // Reads kv-store, carrying an existing AsyncStorage value across on the first launch
+  // after the swap. Never throws: a failure on either side deserializes as the empty set.
+  const raw = await readWithMigration({
+    key: STORAGE_KEY,
+    kv: Storage,
+    legacy: LegacyAsyncStorage,
+  }).catch(() => null);
   cache = deserialize(raw);
 
   return cache;
@@ -43,7 +53,7 @@ function commit(next: MixState): void {
   for (const listener of listeners) {
     listener(next);
   }
-  void AsyncStorage.setItem(STORAGE_KEY, serialize(next)).catch(() => undefined);
+  void Storage.setItem(STORAGE_KEY, serialize(next)).catch(() => undefined);
 }
 
 /**
