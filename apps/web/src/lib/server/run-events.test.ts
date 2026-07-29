@@ -34,20 +34,38 @@ describe("normalizeRunSummary — the emitter never grades itself", () => {
 });
 
 describe("normalizeRunSummary — a counter is a validated integer or a 400", () => {
-  it("REJECTS `errors` sent as an array (the real `failed:[]` shape)", () => {
-    // A naive `typeof value === "number"` guard drops this SILENTLY: `errors` stores NULL,
-    // `ok` falls back to the exit code alone, and a sweep that reported failures reads
-    // healthy. Real sweeps in this fleet emit exactly this shape.
+  it("REJECTS `errors` sent as an array", () => {
+    // A sweep whose error signal is a LIST rather than a count is a broken emitter, and a
+    // broken error signal is the one thing this ledger cannot absorb quietly — `ok` is
+    // derived from this number.
     expect(() => normalizeRunSummary('{"errors":[]}')).toThrow(
       /"errors" must be a non-negative integer/,
     );
   });
 
   it("REJECTS a counter sent as a string, a float, a negative, or null", () => {
+    // `typeof value === "number"` alone catches only the first and last of these — a float
+    // and a negative slide straight through it into a column that means "a count of work".
     expect(() => normalizeRunSummary('{"produced":"7"}')).toThrow(/non-negative integer/);
     expect(() => normalizeRunSummary('{"produced":1.5}')).toThrow(/non-negative integer/);
     expect(() => normalizeRunSummary('{"produced":-1}')).toThrow(/non-negative integer/);
     expect(() => normalizeRunSummary('{"produced":null}')).toThrow(/non-negative integer/);
+  });
+
+  it("surfaces the real `failed: []` shape instead of silently nulling it", () => {
+    // THE MEASURED DEFECT. A real sweep reports its failures under `failed`, not `errors`.
+    // An implementation that just reads `errors` finds nothing, stores NULL, and lets `ok`
+    // fall back to the exit code alone — the sweep reports failures and reads healthy, with
+    // nothing anywhere saying why. Here it lands on BOTH halves of the upgrade queue: the
+    // counter that is owing, and the key that should be renamed.
+    const result = normalizeRunSummary('{"failed":[],"produced":0}');
+
+    expect(result.errors).toBeNull();
+    expect(result.missingFields).toContain("errors");
+    expect(result.unrecognisedFields).toContain("failed");
+    // And the derived verdict is honest about what it does NOT know.
+    expect(deriveRunOk(0, result.errors)).toBe(true);
+    expect(deriveRunOk(1, result.errors)).toBe(false);
   });
 
   it("accepts 0 as a real reading, distinct from absent", () => {
