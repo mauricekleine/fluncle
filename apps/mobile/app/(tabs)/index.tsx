@@ -201,7 +201,12 @@ function FeedOffline() {
   return (
     <View style={[styles.screen, styles.center]}>
       <Text style={[font.title, styles.title]}>{feedCopy.offline.title}</Text>
-      <Text style={[font.body, styles.body]}>{feedCopy.offline.body}</Text>
+      {/* Announced like the archive's offline line (archive.tsx's ArchiveOffline): the two
+          offline states are the same state on sibling surfaces, so they speak the same way.
+          The inherited FeedError/FeedEmpty drift is deliberately left alone. */}
+      <Text accessibilityLiveRegion="polite" style={[font.body, styles.body]}>
+        {feedCopy.offline.body}
+      </Text>
     </View>
   );
 }
