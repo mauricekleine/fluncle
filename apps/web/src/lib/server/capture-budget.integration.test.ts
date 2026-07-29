@@ -187,3 +187,52 @@ describe("getCatalogueCaptureState — what the operator reads, and the queue ob
     expect(state.windowHours).toBe(24);
   });
 });
+
+// THE BRAKE'S OWN COST. `isCatalogueCaptureOpen` fires on every capture tick — 288 times a day —
+// where the `/admin` readout fires when someone looks. The kill switch WINS over both caps in
+// `catalogueCaptureVerdict`, so on the paused path (the default-deny resting state) the spend read
+// could never change the answer — and that read is the one query in this module whose cost tracks
+// how much the archive has been spending. These pin the short-circuit in both directions: no spend
+// statement while paused, and the same verdict as the readout once it is open.
+describe("isCatalogueCaptureOpen — the brake asks the cheap question first", () => {
+  /** Every statement the ledger's window read is recognisable by. */
+  const spendStatements = (calls: readonly unknown[][]): unknown[][] =>
+    calls.filter((call) => JSON.stringify(call[0] ?? "").includes("source_audio_attempted_at"));
+
+  it("reads NO spend while paused — the verdict is already decided", async () => {
+    const { isCatalogueCaptureOpen } = await import("./capture-budget");
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await captured("cat1000000000000000000", NOW - HOUR, 4_000_000);
+
+    const spy = vi.spyOn(db, "execute");
+
+    expect(await isCatalogueCaptureOpen(NOW)).toBe(false);
+    expect(spendStatements(spy.mock.calls)).toEqual([]);
+
+    spy.mockRestore();
+  });
+
+  it("reads the spend once it is un-paused, and agrees with the readout", async () => {
+    const { getCatalogueCaptureState, isCatalogueCaptureOpen, setCatalogueCaptureBudget } =
+      await import("./capture-budget");
+    const { setCatalogueCapturePaused } = await import("./capture-budget");
+
+    await setCatalogueCapturePaused(false);
+    await setCatalogueCaptureBudget({ dailyBytes: 10_000_000, dailyTracks: 1 });
+
+    const spy = vi.spyOn(db, "execute");
+
+    expect(await isCatalogueCaptureOpen(NOW)).toBe(true);
+    expect(spendStatements(spy.mock.calls).length).toBe(1);
+
+    spy.mockRestore();
+
+    // …and the cap still binds through the short-circuit, exactly as the readout reports it.
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await captured("cat1000000000000000000", NOW - HOUR, 1_000_000);
+
+    expect(await isCatalogueCaptureOpen(NOW)).toBe(false);
+    expect((await getCatalogueCaptureState(NOW)).closedReason).toBe("tracks_spent");
+  });
+});

@@ -960,50 +960,36 @@ async function readFindingIsrcs(): Promise<Map<string, string>> {
   return byIsrc;
 }
 
+/** The archive's TITLE+ARTIST identity, read once and folded BOTH ways. */
+type FindingIdentity = {
+  /** folded `matchKey` → the finding's `track_id`. Smallest `track_id` wins a shared identity. */
+  byMatchKey: Map<string, string>;
+  /** finding `track_id` → its folded `matchKey`. */
+  byTrack: Map<string, string>;
+};
+
 /**
- * The archive's TITLE+ARTIST identity map — finding `track_id` → its folded `matchKey`
- * (track-match.ts). This is the wrong-audio discriminator's corpus (docs/the-ear.md § Wrong
- * audio): when a catalogue row scores ≥ `WRONG_AUDIO_QUARANTINE` against a finding, the sweep
- * compares the row's own `matchKey` to the finding's — EQUAL is a true duplicate (same recording,
- * correct audio), DIFFERENT is wrong audio (the capture grabbed the artist's other, already-logged
- * track). Read only on a tick that actually has a near-1.0 row, so it stays off the common path.
+ * The archive's TITLE+ARTIST identity map (`matchKey`, track-match.ts), in BOTH directions from ONE
+ * read. The sweep needs each direction for a different question, and they are the same rows:
+ *
+ *   · `byTrack` (finding → key) is the WRONG-AUDIO discriminator (docs/the-ear.md § Wrong audio):
+ *     when a catalogue row scores ≥ `WRONG_AUDIO_QUARANTINE` against a finding, the sweep compares
+ *     the row's own key to that finding's — EQUAL is a true duplicate (same recording, correct
+ *     audio), DIFFERENT is wrong audio (the capture grabbed the artist's other, already-logged track).
+ *   · `byMatchKey` (key → finding) is the DUPLICATE detector (docs/the-ear.md § Duplicates, the
+ *     2026-07-15 "Drifting Away" ruling): a crawled row whose folded identity EQUALS a finding's is
+ *     the same song — a duplicate regardless of ISRC (a YouTube rip carries none) and regardless of
+ *     score (the rip scored a merely-0.94 twin). If two findings share an identity the SMALLEST
+ *     `track_id` wins, the same stable canonical precedent `readCatalogueIdentity` uses, so the
+ *     marker is idempotent across ticks.
+ *
+ * The two USED to be two functions issuing the byte-identical `findings join tracks` statement, and
+ * a tick carrying a near-1.0 row ran both — the same rows read twice in one call, the shape Wave 1
+ * retired for `readArchiveAffinity` (docs/db-scale-backlog "Shipped (live)" #4). The inverse fold is
+ * two lines of arithmetic over rows already in hand, so building both costs one read, not two.
  * Bounded by the FINDING count, like every affinity read.
  */
-async function readFindingIdentities(): Promise<Map<string, string>> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [],
-    sql: `select findings.track_id as track_id, tracks.title as title, tracks.artists_json as artists_json
-          from findings join tracks on tracks.track_id = findings.track_id`,
-  });
-
-  const byTrack = new Map<string, string>();
-
-  for (const row of typedRows<{ artists_json: string; title: string; track_id: string }>(
-    result.rows,
-  )) {
-    byTrack.set(row.track_id, matchKey(parseArtistsJson(row.artists_json), row.title));
-  }
-
-  return byTrack;
-}
-
-/**
- * The archive's TITLE+ARTIST identity map, INVERTED — folded `matchKey` → the certified finding's
- * `track_id`. The corpus for the matchKey-vs-findings duplicate detector (docs/the-ear.md §
- * Duplicates, the 2026-07-15 "Drifting Away" ruling): a crawled catalogue row whose folded
- * title+artist identity EQUALS a finding's is the same song — a duplicate regardless of ISRC (a
- * YouTube rip of a logged track carries none) and regardless of embedding score (the rip scored a
- * merely-0.94 twin of the finding). It is stamped `duplicate_of_track_id` + tier −2 exactly like the
- * ISRC match, on BOTH sides of the audio boundary (the pre-audio ladder and the scored path).
- *
- * The inverse of `readFindingIdentities` (finding → key, the near-1.0 wrong-audio discriminator):
- * this one is read on EVERY tick with candidates, because a title-duplicate can hide at ANY score,
- * not just in the near-1.0 band. If two findings share an identity the SMALLEST `track_id` wins —
- * the same stable, deterministic canonical precedent `readCatalogueIdentity` uses, so the marker is
- * idempotent across ticks. Bounded by the FINDING count, like every affinity read.
- */
-async function readFindingMatchKeys(): Promise<Map<string, string>> {
+async function readFindingIdentity(): Promise<FindingIdentity> {
   const db = await getDb();
   const result = await db.execute({
     args: [],
@@ -1012,11 +998,15 @@ async function readFindingMatchKeys(): Promise<Map<string, string>> {
   });
 
   const byMatchKey = new Map<string, string>();
+  const byTrack = new Map<string, string>();
 
   for (const row of typedRows<{ artists_json: string; title: string; track_id: string }>(
     result.rows,
   )) {
     const key = matchKey(parseArtistsJson(row.artists_json), row.title);
+
+    byTrack.set(row.track_id, key);
+
     const incumbent = byMatchKey.get(key);
 
     if (incumbent === undefined || row.track_id < incumbent) {
@@ -1024,7 +1014,7 @@ async function readFindingMatchKeys(): Promise<Map<string, string>> {
     }
   }
 
-  return byMatchKey;
+  return { byMatchKey, byTrack };
 }
 
 /**
@@ -1357,28 +1347,24 @@ export async function rankCatalogue(
   const preAudioTrackIds = needsPreAudio
     ? [...unvectored, ...nearWrongAudio].map((row) => row.track_id)
     : [];
-  const [
-    artistIdsByTrack,
-    archive,
-    findingIsrcs,
-    findingIdentities,
-    findingMatchKeys,
-    catalogueIdentity,
-  ] = await Promise.all([
-    readTrackArtistIds(preAudioTrackIds),
-    needsPreAudio ? readArchiveAffinity() : undefined,
-    needsPreAudio ? readFindingIsrcs() : undefined,
-    nearWrongAudio.length > 0 ? readFindingIdentities() : undefined,
-    // The INVERTED finding identity map (matchKey → finding) — needed on EVERY tick with
-    // candidates, because a matchKey twin of a logged finding (the "Drifting Away" ruling) can
-    // hide at ANY score, not just the near-1.0 band: an unvectored row may duplicate a finding
-    // by title, and a scored row at 0.94 may be that finding's YouTube-rip twin.
-    readFindingMatchKeys(),
-    // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
-    // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
-    // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
-    readCatalogueIdentity(),
-  ]);
+  const [artistIdsByTrack, archive, findingIsrcs, findingIdentity, catalogueIdentity] =
+    await Promise.all([
+      readTrackArtistIds(preAudioTrackIds),
+      needsPreAudio ? readArchiveAffinity() : undefined,
+      needsPreAudio ? readFindingIsrcs() : undefined,
+      // The finding identity, folded BOTH ways off ONE read. The inverted half (matchKey →
+      // finding) is needed on EVERY tick with candidates, because a matchKey twin of a logged
+      // finding (the "Drifting Away" ruling) can hide at ANY score, not just the near-1.0 band: an
+      // unvectored row may duplicate a finding by title, and a scored row at 0.94 may be that
+      // finding's YouTube-rip twin. The forward half (finding → matchKey) is the near-1.0
+      // wrong-audio discriminator, and it rides along for free rather than re-reading the rows.
+      readFindingIdentity(),
+      // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
+      // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
+      // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
+      readCatalogueIdentity(),
+    ]);
+  const findingMatchKeys = findingIdentity.byMatchKey;
 
   // ── The scored half, now with the wrong-audio veto (docs/the-ear.md § Wrong audio) ──
   let quarantined = 0;
@@ -1398,11 +1384,10 @@ export async function rankCatalogue(
       winner &&
       score !== null &&
       score >= WRONG_AUDIO_QUARANTINE &&
-      candidate.capture_status !== QUARANTINE_CLEARED &&
-      findingIdentities
+      candidate.capture_status !== QUARANTINE_CLEARED
     ) {
       const rowKey = matchKey(parseArtistsJson(candidate.artists_json), candidate.title);
-      const findingKey = findingIdentities.get(winner.fid);
+      const findingKey = findingIdentity.byTrack.get(winner.fid);
       const sameTitle = findingKey !== undefined && findingKey === rowKey;
       // The operator's force-capture (`DUPLICATE_CLEARED`, docs/the-ear.md § Duplicates) overrules
       // the DUPLICATE veto only: a same-title true-duplicate is NOT re-stamped (it falls through to
@@ -3133,17 +3118,17 @@ export async function verifyCapture(
   }
 
   // A MISMATCH on a CATALOGUE row — quarantine it (the machine may rewind an uncertified row).
-  const [archive, findingIsrcs, findingMatchKeys, artistIdsByTrack] = await Promise.all([
+  const [archive, findingIsrcs, findingIdentity, artistIdsByTrack] = await Promise.all([
     readArchiveAffinity(),
     readFindingIsrcs(),
-    readFindingMatchKeys(),
+    readFindingIdentity(),
     readTrackArtistIds([trackId]),
   ]);
   const preAudio = preAudioPriority(
     { artists_json: row.artists_json, isrc: row.isrc, label: row.label, title: row.title },
     archive,
     findingIsrcs,
-    findingMatchKeys,
+    findingIdentity.byMatchKey,
     artistIdsByTrack.get(trackId) ?? [],
   );
   const rejected = appendRejectedSha(

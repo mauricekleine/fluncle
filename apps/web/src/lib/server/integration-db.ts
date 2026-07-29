@@ -15,6 +15,7 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
 import { backfillHubCounts } from "../../../scripts/backfill-hub-counts";
 import { ensureSearchIndex } from "../../db/search-index";
+import { resetKeyHistogramCache } from "./key-histogram";
 
 const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.url));
 
@@ -36,6 +37,10 @@ export async function createIntegrationDb(): Promise<Client> {
     "write",
   );
   await ensureSearchIndex(client);
+  // An isolate-level memo outlives a fixture, so "no cross-test leakage" has to cover the module
+  // caches too — otherwise one suite's archive answers the next suite's read. The key histogram
+  // (key-histogram.ts, the `/mix` depth gate + rail pre-filter) is the one such cache on this path.
+  resetKeyHistogramCache();
 
   return client;
 }
