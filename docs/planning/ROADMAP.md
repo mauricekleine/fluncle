@@ -68,20 +68,14 @@ Monitoring, not work. Collapsed here so it stops occupying build sections.
 
 ### Dependency vulnerability posture — 18 open alerts (measured 2026-07-26)
 
-Every open alert is triaged (zero fix-now; the analysis lives in the ledger and the triage report). What is ahead: the three dismiss-candidate clicks on the `apps/sonar` alerts (operator, reason "vulnerable code is not actually used"), two upstream-pinned watches that close themselves when libsql's chain moves, the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the queue — and the CI-side half (`bun audit` + the Renovate npm extension, the follow-ups item below). (The triage analysis lives in git history — the audit ledger's rows were cleared 2026-07-27, the security rows among them.)
+Every open alert is triaged (zero fix-now; the analysis lives in the ledger and the triage report). What is ahead: two upstream-pinned watches that close themselves when libsql's chain moves, the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the queue — and the CI-side half (`bun audit` + the Renovate npm extension, the follow-ups item below). (The triage analysis lives in git history — the audit ledger's rows were cleared 2026-07-27, the security rows among them.)
 
 ### Housekeeping follow-ups — operator decisions pending (2026-07-26 sweep)
 
 Most of the sweep's queue is settled (git history + the ledgers hold the rulings). What is still open:
 
 - [ ] **CSP graduation.** `security-headers.ts` ships an enforcing `frame-ancestors 'self'` plus a full `Content-Security-Policy-Report-Only` policy. Violations report to Sentry's Security feed ([docs/error-tracking.md](../error-tracking.md)); the feed is clean. What is ahead: let it run across a real traffic window — absorbing any genuine first-party host into the policy as it appears, archiving extension noise — then flip the report-only policy to enforcing.
-- [ ] **The dependency-hygiene remainder:** `bun audit --audit-level=high` as a CI job and the Renovate npm/bun extension — the two moves that close the `bun.lock` blind spot (the deepsec bump shipped 2026-07-27; the three Dependabot dismissals are queued operator clicks).
-
-The sonar release gate is a build and lives under _The enforcement gates_ below.
-
-### The enforcement gate — one hole at the deploy boundary
-
-The build-fail coverage tests and `deploy:gate` are how this repo keeps architecture claims true. One place where the guard still has a gap: **gate the sonar release.** `.github/workflows/sonar-release.yml` builds and publishes the rolling pre-release with no `cargo test`, no `clippy`, no `fmt --check`, and the box self-swaps off that release — so a merge to `apps/sonar/**` reaches the live engine ungated. This is the `deploy:gate` principle applied to the one deploy path that escapes it.
+- [ ] **The dependency-hygiene remainder:** `bun audit --audit-level=high` as a CI job and the Renovate npm/bun extension — the two moves that close the `bun.lock` blind spot (the deepsec bump shipped 2026-07-27).
 
 ### Sonar regional replication — a tripwire, not a task
 
