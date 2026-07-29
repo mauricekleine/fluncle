@@ -6,6 +6,7 @@ import { parseSpotifyTrackId } from "../spotify-track-id";
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { logEvent } from "./log";
+import { recordSpotifyThrottle } from "./spotify-anchor-breaker";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
@@ -751,6 +752,23 @@ export async function spotifyFetch(
 
     if (response.ok) {
       return response;
+    }
+
+    if (response.status === 429) {
+      // THE ANCHOR BREAKER'S RECORD SIDE (./spotify-anchor-breaker.ts). Every throttled response on
+      // every path folds into one durable count, so "Spotify has been pushing back for ten minutes"
+      // becomes state the OPTIONAL anchor-search rungs can yield to. Recorded here rather than in
+      // the anchor rungs on purpose: the breaker protects the SHARED app, so pressure from a mint or
+      // the Frontier refresh must pause the optional work too.
+      //
+      // This is a RECORD, never a CONSULT: `spotifyFetch` does not read the breaker, so no
+      // user-facing Spotify call is ever gated by it. The recorder is total (it swallows its own
+      // faults), so this cannot change the outcome of the call it is observing — and it is awaited
+      // rather than floated because a Worker may cancel work left running past the response.
+      //
+      // It counts each 429 RESPONSE, including ones the retry below then waits out: a call that ate
+      // three throttles really is three units of pressure on the shared app.
+      await recordSpotifyThrottle();
     }
 
     // A 429 on an idempotent call is worth waiting out — but only while retries AND the

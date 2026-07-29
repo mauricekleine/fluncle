@@ -53,7 +53,27 @@ curl -fsS -X PUT https://www.fluncle.com/api/v1/admin/catalogue/anchor/search \
   -d '{"enabled":false}'
 ```
 
-Watch the Apify dashboard + the sweep's per-rung counters over the first night; if a mint ever looks starved, flip it OFF (or it self-protects: the Friday-morning window is skipped and the 60/min ceiling + 429 backoff keep it a trickle).
+Watch the Apify dashboard + the sweep's per-rung counters over the first night; if a mint ever looks starved, flip it OFF (or it self-protects: the Friday-morning window is skipped, the 60/min ceiling + 429 backoff keep it a trickle, and the throttle breaker below pauses the rungs outright).
+
+### The throttle breaker: what pauses the rungs when Spotify pushes back
+
+The flag above is the operator's switch; the breaker (`apps/web/src/lib/server/spotify-anchor-breaker.ts`) is the automatic one, and it is what makes the flag safe to leave ON unattended. **5 Spotify 429s inside a rolling 10 minutes** — counted at `spotifyFetch`, so from any path, not just this sweep — pause the Spotify search rungs for **1 hour** (one tick), then it re-arms itself. Nothing else is affected: a mint, publish, and the Frontier refresh never consult it, so the breaker can only ever cost the catalogue a tick.
+
+Two operator handles, both on the shared `settings` KV and effective on the next `resolve_anchor` tick with no deploy. Reading is agent-allowed; clearing is operator-only.
+
+```bash
+# INSPECT — why did the free Spotify rungs go quiet?
+curl -fsS https://www.fluncle.com/api/v1/admin/catalogue/anchor/breaker \
+  -H "Authorization: Bearer $FLUNCLE_OPERATOR_TOKEN"
+# → {"ok":true,"tripped":true,"reason":"throttled","trippedAt":"…","cooldownRemainingMs":…,"throttlesInWindow":0}
+
+# CLEAR — lift the pause early, once Spotify is confirmed healthy (it self-heals on the cooldown anyway)
+curl -fsS -X POST https://www.fluncle.com/api/v1/admin/catalogue/anchor/breaker/reset \
+  -H "Authorization: Bearer $FLUNCLE_OPERATOR_TOKEN" -H "Content-Type: application/json" -d '{}'
+# → {"ok":true,"tripped":false,"reason":null,"trippedAt":null,"cooldownRemainingMs":0,"throttlesInWindow":0}
+```
+
+`tripped: true` on the read is the answer to "the sweep says `spotifySearchDone: false` on every row and the flag is on". A read that ERRORS is itself meaningful: the breaker is default-deny, so a `settings` store it cannot read pauses the rungs — clear it with the reset once the store is back. The threshold, the failure window, and the cooldown are three named constants at the top of the breaker module; tune them there.
 
 ## Activation (OPERATOR-GATED — the repo half ships; the box enable does not)
 

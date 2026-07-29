@@ -414,6 +414,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // the append-only social_metrics ledger (per-post velocity + platform × axis pivots). Its
   // append WRITE sibling is `record_social_metrics`. Agent-allowed like `get_funnel`.
   get_social_metrics: "admin",
+  // The Spotify anchor-search throttle breaker's READ — admin tier (agent-allowed), the
+  // `get_capture_budget` precedent: reading why the free Spotify rungs paused spends nothing and
+  // publishes nothing, and the box's `fluncle-anchor` sweep is entitled to know. Its RESET sibling
+  // (`reset_spotify_anchor_breaker`) is operator-only — see below.
+  get_spotify_anchor_breaker: "admin",
   get_submission: "admin",
   // The single-finding admin lookup — admin tier (agent-allowed read), the
   // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read
@@ -638,6 +643,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // spend-adjacent external integration a machine should not silently un-brake (the
   // `set_capture_budget` neighbour's rule).
   reset_apple_breaker: "operator",
+  // The Spotify anchor-search throttle breaker's RESET — OPERATOR tier: it re-arms the one catalogue
+  // path that shares the official Spotify app with user-facing mints/publish, and the breaker exists
+  // because that app starved under 429s. A machine does not get to un-brake it — the
+  // `set_anchor_search` rule. (Its READ, `get_spotify_anchor_breaker`, is agent-allowed admin tier.)
+  reset_spotify_anchor_breaker: "operator",
   // The free ListenBrainz anchor rung (the resolver waterfall, slice 1) — ADMIN tier (adminAuth
   // only, no operatorGuard), the anchor_track precedent: the box's `fluncle-anchor` sweep drives it
   // with the agent token. It writes only catalogue-identity columns (`spotify_uri`/`spotify_url`),

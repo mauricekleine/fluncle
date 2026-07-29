@@ -1087,6 +1087,72 @@ export const setCaptureBudget = oc
 // (RFC musickit-second-authority, Cross-cutting). docs/track-lifecycle.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** The Spotify anchor breaker's readout — what both ops below return. */
+export const SpotifyAnchorBreakerStateSchema = z
+  .object({
+    /** Milliseconds left on the pause while tripped; 0 when clear. */
+    cooldownRemainingMs: z.number(),
+    /** Why it is paused (`"throttled"`), or null when clear. */
+    reason: z.string().nullable(),
+    /** 429s counted inside the live failure window (0 once the window decays, or after a trip). */
+    throttlesInWindow: z.number(),
+    /** True ⇒ the Spotify anchor SEARCH rungs are paused. NOTHING else is affected. */
+    tripped: z.boolean(),
+    /** ISO of the live trip, or null when clear. */
+    trippedAt: z.string().nullable(),
+  })
+  .meta({ id: "SpotifyAnchorBreakerState" });
+
+/**
+ * `get_spotify_anchor_breaker` → `GET /admin/catalogue/anchor/breaker` (operationId
+ * `getSpotifyAnchorBreaker`).
+ *
+ * Admin tier (agent-allowed READ, the `get_capture_budget` precedent) — the anchor breaker's
+ * readout. Sustained 429s on the ONE shared Spotify app (from ANY path — a mint, publish, the
+ * Frontier refresh, or the anchor sweep itself) trip a circuit breaker that PAUSES the optional
+ * Spotify anchor-search rungs and nothing else. A pause the operator cannot see is a pause he will
+ * misdiagnose as a broken sweep, so this is what answers "why did the anchor rungs go quiet".
+ *
+ * The read is agent-allowed for the same reason the capture budget's is: the box's `fluncle-anchor`
+ * sweep is entitled to know why its free rungs stopped resolving. It reads the SAME state the gate
+ * consults — a breaker display that can disagree with the breaker would be worse than none.
+ */
+export const getSpotifyAnchorBreaker = oc
+  .route({
+    method: "GET",
+    operationId: "getSpotifyAnchorBreaker",
+    path: "/admin/catalogue/anchor/breaker",
+    summary: "The Spotify anchor-search throttle breaker: tripped, why, and how long left",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true) }));
+
+/**
+ * `reset_spotify_anchor_breaker` → `POST /admin/catalogue/anchor/breaker/reset` (operationId
+ * `resetSpotifyAnchorBreaker`).
+ *
+ * OPERATOR tier — the `reset_apple_breaker` shape. Lifts the pause on the Spotify anchor-search
+ * rungs early and zeroes the throttle count, returning the breaker's state. The breaker already
+ * self-heals on its cooldown, so this is for two cases: the operator has confirmed Spotify is
+ * healthy and does not want to wait out the hour, or the stored state is unreadable (which reads as
+ * PAUSED by the default-deny rule) and he wants it cleared now.
+ *
+ * Operator tier because it re-arms the one catalogue path that shares the official Spotify app with
+ * user-facing mints and publish — the `set_anchor_search` rule. A machine does not get to un-brake
+ * the thing that just starved the app it is pointed at.
+ */
+export const resetSpotifyAnchorBreaker = oc
+  .route({
+    method: "POST",
+    operationId: "resetSpotifyAnchorBreaker",
+    path: "/admin/catalogue/anchor/breaker/reset",
+    summary: "Clear the Spotify anchor-search throttle breaker (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true) }));
+
 /** The Apple breaker's readout — what the reset returns, and observability shows. */
 export const AppleBreakerStateSchema = z
   .object({
@@ -1133,6 +1199,7 @@ export const adminCatalogueContract = {
   force_capture: forceCapture,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
+  get_spotify_anchor_breaker: getSpotifyAnchorBreaker,
   list_catalogue_tracks: listCatalogueTracks,
   list_unverified_captures: listUnverifiedCaptures,
   rank_catalogue: rankCatalogue,
@@ -1140,6 +1207,7 @@ export const adminCatalogueContract = {
   requeue_anchor: requeueAnchor,
   requeue_unmatched_captures: requeueUnmatchedCaptures,
   reset_apple_breaker: resetAppleBreaker,
+  reset_spotify_anchor_breaker: resetSpotifyAnchorBreaker,
   resolve_anchor: resolveAnchor,
   resolve_anchor_review: resolveAnchorReview,
   set_anchor_apify: setAnchorApify,

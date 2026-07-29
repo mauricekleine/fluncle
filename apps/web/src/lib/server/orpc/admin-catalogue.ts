@@ -66,6 +66,7 @@ import {
   verifyCapture,
 } from "../catalogue";
 import { recordDemand } from "../demand";
+import { getSpotifyAnchorBreakerState, resetSpotifyAnchorBreaker } from "../spotify-anchor-breaker";
 import { syncTelescopePlaylist } from "../telescope-playlist";
 import { crawlCatalogue, DEFAULT_MAX_HOP, getCrawlStatus, MAX_HOP_CEILING } from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -526,6 +527,36 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
     });
 
+  // GET /admin/catalogue/anchor/breaker — the Spotify anchor-search throttle breaker's readout.
+  // Admin tier (agent-allowed READ, the `get_capture_budget` precedent): reading why the free
+  // Spotify rungs went quiet publishes nothing and spends nothing, and the box's `fluncle-anchor`
+  // sweep is entitled to know. It reads the SAME state `anchorSpotifySearchAllowed` consults.
+  const getSpotifyAnchorBreakerHandler = os.get_spotify_anchor_breaker
+    .use(adminAuth)
+    .handler(async () => {
+      try {
+        return { ...(await getSpotifyAnchorBreakerState()), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  // POST /admin/catalogue/anchor/breaker/reset — OPERATOR tier, the `reset_apple_breaker` shape.
+  // Lift the anchor-search pause early once Spotify is confirmed healthy (the breaker self-heals on
+  // its cooldown anyway), or clear an unreadable state that the default-deny rule is pausing on. A
+  // machine does not get to re-arm the catalogue path that shares the official app with the mint —
+  // the `set_anchor_search` rule.
+  const resetSpotifyAnchorBreakerHandler = os.reset_spotify_anchor_breaker
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async () => {
+      try {
+        return { ...(await resetSpotifyAnchorBreaker()), ok: true as const };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   // POST /admin/catalogue/apple-breaker/reset — OPERATOR tier. Clear the cross-cutting Apple
   // failure-regime breaker once the token is fixed. Operator tier, the `set_capture_budget`
   // neighbour's rule: a machine does not get to silently re-arm a spend-adjacent external
@@ -550,6 +581,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     force_capture: forceCaptureHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
+    get_spotify_anchor_breaker: getSpotifyAnchorBreakerHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,
     rank_catalogue: rankCatalogueHandler,
@@ -557,6 +589,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     requeue_anchor: requeueAnchorHandler,
     requeue_unmatched_captures: requeueUnmatchedCapturesHandler,
     reset_apple_breaker: resetAppleBreakerHandler,
+    reset_spotify_anchor_breaker: resetSpotifyAnchorBreakerHandler,
     resolve_anchor: resolveAnchorHandler,
     resolve_anchor_review: resolveAnchorReviewHandler,
     set_anchor_apify: setAnchorApifyHandler,

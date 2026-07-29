@@ -33,7 +33,17 @@
 //      the belt-and-suspenders guard over the known peak. A mint always has headroom: the anchor
 //      search is a metered trickle that backs off on the first 429, so it yields the shared token to
 //      the user-facing paths rather than competing with them.
+//
+//   3. THE CIRCUIT BREAKER (./spotify-anchor-breaker.ts). The two guards above are a static schedule
+//      and a per-call wait; neither can see that Spotify has been pushing back for the last ten
+//      minutes. The breaker is that memory: N 429s inside a rolling window on ANY Spotify path trip
+//      it, and while it is tripped these rungs are SKIPPED exactly as the dark flag skips them — no
+//      `findSpotifyTrackByIsrc`, no `searchTrackCandidates`. It reads DEFAULT-DENY (an unreadable
+//      breaker state pauses the rungs), and it pauses NOTHING ELSE: the mint, publish, and the
+//      Frontier refresh never consult it. That is what makes the rungs safe to run unattended —
+//      "yields on the first 429" stops being a per-call hope and becomes an enforced pause.
 
+import { spotifyAnchorSearchBreakerTripped } from "./spotify-anchor-breaker";
 import { getSetting, setSetting } from "./settings";
 
 /** The dark flag on the shared `settings` KV. DEFAULT FALSE — only the literal "true" enables it. */
@@ -98,14 +108,29 @@ export function isWithinFrontierRefreshWindow(now: Date): boolean {
 
 /**
  * Whether the Spotify search rungs may run RIGHT NOW: the dark flag is on AND `now` is outside the
- * Friday-morning refresh window. When this is false, `resolveAnchorFree` issues ZERO Spotify search
- * calls — the load-bearing safety property, checked before either rung. `now` is injected so the
- * decision is deterministic in tests (the caller passes the real clock in production).
+ * Friday-morning refresh window AND the throttle breaker is not tripped. When this is false,
+ * `resolveAnchorFree` issues ZERO Spotify search calls — the load-bearing safety property, checked
+ * before either rung. `now` is injected so the decision is deterministic in tests (the caller passes
+ * the real clock in production).
+ *
+ * ORDER IS DELIBERATE: the pure Friday window first (free), then the dark flag, then the breaker.
+ * The flag is OFF by default, so a flag-OFF deployment pays EXACTLY the reads it paid before this
+ * breaker existed — the breaker's `settings` reads are spent only once the rungs are actually armed,
+ * which is also the only state in which they can matter.
+ *
+ * All three are ANDed, so adding the breaker can only ever subtract permission. Callers are
+ * unchanged: `anchor.ts` already treats a false here as "skip the Spotify rungs this call", and its
+ * stamp rule reads the dark flag separately — so a breaker-closed gate correctly leaves the row
+ * un-stamped and it keeps its turn for a later tick.
  */
 export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
   if (isWithinFrontierRefreshWindow(now)) {
     return false;
   }
 
-  return isAnchorSpotifySearchEnabled();
+  if (!(await isAnchorSpotifySearchEnabled())) {
+    return false;
+  }
+
+  return !(await spotifyAnchorSearchBreakerTripped(now.getTime()));
 }

@@ -102,6 +102,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // THE EAR (docs/the-ear.md) — the ranked catalogue. Contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed).
   "GET /admin/catalogue": "list_catalogue_tracks",
+  // The Spotify anchor-search THROTTLE breaker's READ — contract-only oRPC (no TanStack route
+  // file). Admin tier (agent-allowed, the `get_capture_budget` precedent): the box's anchor sweep
+  // is entitled to know why its free Spotify rungs went quiet. Its RESET sibling is operator tier.
+  "GET /admin/catalogue/anchor/breaker": "get_spotify_anchor_breaker",
   // THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the spend readout behind the
   // brake on metered per-GB audio capture. Contract-only oRPC (no TanStack route file). Admin
   // tier (agent-allowed READ): seeing what a budget has left spends nothing.
@@ -308,6 +312,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // rank_catalogue/verify_capture precedent): the box's `fluncle-anchor` Apify sweep POSTs verified
   // candidates and the Worker writes only catalogue-identity columns (never a certification).
   "POST /admin/catalogue/anchor": "anchor_track",
+  // The Spotify anchor-search THROTTLE breaker's RESET — contract-only oRPC. OPERATOR tier: it
+  // re-arms the one catalogue path that shares the official Spotify app with user-facing mints and
+  // publish, and the breaker exists because that app starved under 429s (the `set_anchor_search`
+  // rule). The breaker self-heals on its cooldown; this is the early lift.
+  "POST /admin/catalogue/anchor/breaker/reset": "reset_spotify_anchor_breaker",
   // The anchor-backoff requeue — operator tier (the same re-arms-metered-spend class as the
   // capture requeue below): clear named rows' 14-day re-ask stamp after a resolver improvement,
   // leaving the lifetime attempts cap untouched.

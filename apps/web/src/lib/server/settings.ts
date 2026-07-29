@@ -14,7 +14,7 @@
 // correctness, because nothing guarantees the row is there or well-formed. Shape (7) below is
 // the ONE argued exception, and it states its own reason.
 //
-// WHAT RIDES IT TODAY — 32 keys across 15 modules, in seven shapes (grep `getSetting(` for the
+// WHAT RIDES IT TODAY — 36 keys across 16 modules, in seven shapes (grep `getSetting(` for the
 // live list; each module owns its own exported key constant and its own default):
 //
 //   1. OPERATOR FLIPS — `"true"`/`"false"`, and the unset state is the deliberate default
@@ -39,6 +39,8 @@
 //      windows `spotify_calls_window_start` / `…_count` (./spotify-budget.ts) and
 //      `apple_calls_window_start` / `…_count`, the circuit breaker's
 //      `apple_auth_breaker_tripped_at` / `apple_auth_breaker_failures` (./apple-breaker.ts),
+//      the Spotify anchor breaker's `spotify_anchor_breaker_tripped_at` /
+//      `…_failures` / `…_reason` / `…_last_failure_at` (./spotify-anchor-breaker.ts),
 //      the `anchor_apify_disabled_at` trip marker (./anchor-apify.ts), and the two telescope
 //      pointers `telescope.spotify_playlist_id` / `telescope.last_mirror`
 //      (./telescope-playlist.ts).
