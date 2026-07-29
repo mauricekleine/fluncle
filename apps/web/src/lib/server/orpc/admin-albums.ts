@@ -51,7 +51,9 @@ export function adminAlbumsHandlers(os: Implementer) {
         name: album.name,
         slug: album.slug,
       });
-      const { bio, gateBypassed, voiceViolations } = gated;
+      // Only `bio` is destructured; the acceptance's own fields ride out via the spreads below,
+      // so removing them from `gateOrAcceptBio` needs no edit here (see bio.ts, "SEVERABLE").
+      const { bio } = gated;
 
       if (dryRun) {
         return { ...gated, dryRun: true as const, ok: true as const, slug: album.slug };
@@ -75,7 +77,7 @@ export function adminAlbumsHandlers(os: Implementer) {
       // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
       purgeEntityCache("album", album.slug);
 
-      return { bio, gateBypassed, ok: true as const, slug: album.slug, voiceViolations };
+      return { ...gated, ok: true as const, slug: album.slug };
     } catch (error) {
       throw toFault(error);
     }
