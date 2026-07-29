@@ -141,10 +141,6 @@ Both remaining tuning items now run from `/admin/prompts` with **no deploy and n
 - **Context-notes shape.** Tune the distill prompt against accumulated real notes: which Firecrawl facts are worth keeping, how the distilled prose plus the one-line `Texture:` reads, and how cleanly it fuels a grounded observation script. A noisy note makes a worse spoken observation.
 - **The Recovered-audio voice guide.** Fold Maurice's notes from real renders into the `copywriting-fluncle` voice reference + `observation-agent.md`: the arc (sensory → mood → connection → log ID → artist/title), line length and pacing for a heard surface, how hard the cosmos-sauce rides out loud, and where "too purple" begins. (SSML is not a lever — `<break>` tokens are stripped; Cartesia paces on punctuation.)
 
-### Label logos join the owned-cover ladder
-
-`labelLogoUrl` (`apps/web/src/lib/media.ts`) returns the raw R2 URL — no `/cdn-cgi/image` transform, no size ladder, no `?v` bust — so `/labels` ships full-size originals at catalogue scale, while the album fallback on the very same row **is** transformed. Serve label logos through the 64/300/640/1200 rungs and add the `labels` bust column (`image_updated_at` exists on the albums and artists tables, not on `labels`). Real bytes-on-the-wire win on a catalogue-scale hub, and the pattern already exists to copy — [docs/album-artwork.md](../album-artwork.md).
-
 ### Fluncle Studio — the caption gap blocks the IG validation
 
 Clipping is live end to end: `distribute --set-video` stages the rendition, `analyze-set.ts` suggests windows, `/admin/studio/<logId>` frames draggable 9:16 clips, the on-box `fluncle-studio-clip` cron cuts and ships each `footage.mp4`, and `/admin/clips` hands off IG (with audio) / TikTok (audio-stripped) downloads. The drip-feed scheduler is built too — the schedule/status table, kill-switch KV, `pushInstagramReel`, the agent-tier `drip_clips` tick, auto-queue with 23–25h jitter. Doctrine: [docs/fluncle-studio.md](../fluncle-studio.md).

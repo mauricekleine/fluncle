@@ -262,8 +262,12 @@ function LabelsPage() {
                     <TrackArtwork
                       alt=""
                       className="artist-grid-cover"
+                      // BOTH branches ask for the tile rung now: the logo rides the same
+                      // owned-master ladder the album fallback beside it does, so a label's own
+                      // picture is no longer the one full-size original on a catalogue-scale grid.
                       src={
-                        label.logoImageUrl ?? albumCoverAtSize(label.coverImageUrl, COVER_TILE_SIZE)
+                        albumCoverAtSize(label.logoImageUrl, COVER_TILE_SIZE) ??
+                        albumCoverAtSize(label.coverImageUrl, COVER_TILE_SIZE)
                       }
                     />
                     <span className="artist-grid-line">{label.name}</span>

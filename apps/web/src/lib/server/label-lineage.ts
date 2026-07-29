@@ -4,6 +4,9 @@
 // life-span + area + label-label relationships instead of its logo, and persisting:
 //   - `founding_date`   — MusicBrainz `life-span.begin`, verbatim (a year or a full date).
 //   - `founded_location`— MusicBrainz `area.name` ("London", "United Kingdom").
+//   - `disambiguation`  — MusicBrainz's disambiguation comment ("UK drum & bass label"), the field
+//     MB writes when a label name is not unique. It rides the DEFAULT lookup response, so it costs
+//     no extra call; it is OPERATOR-facing (the `/admin/labels` ruling line), never public copy.
 //   - `parent_label_id` — the label this one is a SUBLABEL / imprint of, matched to an EXISTING
 //     `labels` row by MBID. This path NEVER mints a label; an unmatched parent is counted in the
 //     summary, never created.
@@ -65,6 +68,7 @@ const PARENT_REL_TYPES = new Set(["label ownership", "imprint"]);
 type ResolveOutcome =
   | {
       kind: "resolved";
+      disambiguation: string | null;
       foundedLocation: string | null;
       foundingDate: string | null;
       parentLabelId: string | null;
@@ -102,17 +106,23 @@ type MbLabelRelation = {
 };
 type MbLabelLineageDetail = {
   area?: { name?: string } | null;
+  // MusicBrainz's disambiguation comment. It rides the DEFAULT `/label/<mbid>` response — no
+  // `inc=` asks for it — so keeping it costs this sweep nothing: one more field off a body the
+  // walk already fetched. MB sends `""` (not an absent key) for the many labels that never needed
+  // disambiguating, which is why it is trimmed to null below rather than stored verbatim.
+  disambiguation?: string | null;
   "life-span"?: { begin?: string | null } | null;
   relations?: MbLabelRelation[];
 };
 
 /**
  * One MusicBrainz label lookup with `inc=label-rels` → its founding date (`life-span.begin`),
- * founding place (`area.name`), and the MBIDs of its parent labels (the `backward` `label
- * ownership` / `imprint` relations). Returns `rateLimited: true` when MusicBrainz is throttling so
- * the caller can circuit-break.
+ * founding place (`area.name`), its DISAMBIGUATION comment, and the MBIDs of its parent labels
+ * (the `backward` `label ownership` / `imprint` relations). Returns `rateLimited: true` when
+ * MusicBrainz is throttling so the caller can circuit-break.
  */
 async function fetchMbLabelLineage(mbid: string): Promise<{
+  disambiguation: string | null;
   foundedLocation: string | null;
   foundingDate: string | null;
   parentMbids: string[];
@@ -123,11 +133,18 @@ async function fetchMbLabelLineage(mbid: string): Promise<{
   );
 
   if (rateLimited) {
-    return { foundedLocation: null, foundingDate: null, parentMbids: [], rateLimited: true };
+    return {
+      disambiguation: null,
+      foundedLocation: null,
+      foundingDate: null,
+      parentMbids: [],
+      rateLimited: true,
+    };
   }
 
   const begin = data?.["life-span"]?.begin;
   const areaName = data?.area?.name;
+  const comment = data?.disambiguation;
   const parentMbids: string[] = [];
 
   for (const relation of data?.relations ?? []) {
@@ -144,6 +161,7 @@ async function fetchMbLabelLineage(mbid: string): Promise<{
   }
 
   return {
+    disambiguation: typeof comment === "string" && comment.trim() ? comment.trim() : null,
     foundedLocation: typeof areaName === "string" && areaName.trim() ? areaName : null,
     foundingDate: typeof begin === "string" && begin.trim() ? begin : null,
     parentMbids,
@@ -212,16 +230,18 @@ async function markResolved(
   slug: string,
   foundingDate: string | null,
   foundedLocation: string | null,
+  disambiguation: string | null,
   parentLabelId: string | null,
 ): Promise<void> {
   const db = await getDb();
   const now = new Date().toISOString();
 
   await db.execute({
-    args: [foundingDate, foundedLocation, parentLabelId, now, now, slug],
+    args: [foundingDate, foundedLocation, disambiguation, parentLabelId, now, now, slug],
     sql: `update labels
           set founding_date = coalesce(founding_date, ?),
               founded_location = coalesce(founded_location, ?),
+              disambiguation = coalesce(disambiguation, ?),
               parent_label_id = coalesce(parent_label_id, ?),
               lineage_state = 'resolved', lineage_failures = 0,
               lineage_attempted_at = ?, updated_at = ?
@@ -313,6 +333,7 @@ async function resolveOneLabel(row: LabelWorkRow): Promise<ResolveOutcome> {
     }
 
     return {
+      disambiguation: lineage.disambiguation,
       foundedLocation: lineage.foundedLocation,
       foundingDate: lineage.foundingDate,
       kind: "resolved",
@@ -379,10 +400,12 @@ export async function resolveLabelLineage(
           row.slug,
           outcome.foundingDate,
           outcome.foundedLocation,
+          outcome.disambiguation,
           outcome.parentLabelId,
         );
         unmatchedParents += outcome.unmatchedParents;
         logEvent("info", "label-lineage.resolved", {
+          disambiguation: outcome.disambiguation,
           foundedLocation: outcome.foundedLocation,
           foundingDate: outcome.foundingDate,
           parentLabelId: outcome.parentLabelId,

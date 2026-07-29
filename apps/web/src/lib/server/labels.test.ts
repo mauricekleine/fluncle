@@ -329,19 +329,23 @@ describe("listLabels (the read, and the crawler's seed set)", () => {
     expect((await listLabels("undecided")).map((label) => label.slug)).toEqual(["chelou"]);
   });
 
+  // The logo rides the shared owned-cover ladder now (a `/cdn-cgi/image` rendition of the R2
+  // master with the `?v` vintage on the source), not the raw object it used to be.
   it("surfaces the label's own logo when a resolved image_key exists, undefined otherwise", async () => {
     await seedFinding("t1", "Hospital Records");
     await seedFinding("t2", "Anjunabeats");
     await reconcileLabels();
     await db.execute({
-      args: ["labels/hospital-records.jpg", "hospital-records"],
-      sql: `update labels set image_key = ?, image_state = 'resolved' where slug = ?`,
+      args: ["labels/hospital-records.jpg", "2026-07-29T00:00:00.000Z", "hospital-records"],
+      sql: `update labels
+            set image_key = ?, image_updated_at = ?, image_state = 'resolved'
+            where slug = ?`,
     });
 
     const bySlug = new Map((await listLabels()).map((label) => [label.slug, label]));
 
     expect(bySlug.get("hospital-records")?.logoImageUrl).toBe(
-      "https://found.fluncle.com/labels/hospital-records.jpg",
+      `https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/labels/hospital-records.jpg?v=${Date.parse("2026-07-29T00:00:00.000Z")}`,
     );
     expect(bySlug.get("anjunabeats")?.logoImageUrl).toBeUndefined();
   });

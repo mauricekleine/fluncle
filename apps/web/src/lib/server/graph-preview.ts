@@ -38,6 +38,9 @@ const PREVIEW_COVER_CAP = 4;
  * The findings' covers, freshest first, capped — the card's visual proof. A `leadCover` (a
  * label's own logo) takes the front slot when present, so a label's card leads with its real
  * logo and fills the rest with finding covers (deduped against the lead).
+ *
+ * The lead is taken down to the SAME `small` rung as the covers beside it — it sits in the same
+ * thumbnail row, so a label's logo has no reason to arrive ten times heavier than its neighbours.
  */
 function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
   const covers = findings.flatMap((finding) => {
@@ -46,9 +49,8 @@ function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
     return cover ? [cover] : [];
   });
 
-  const ordered = leadCover
-    ? [leadCover, ...covers.filter((cover) => cover !== leadCover)]
-    : covers;
+  const lead = albumCoverAtSize(leadCover, "small");
+  const ordered = lead ? [lead, ...covers.filter((cover) => cover !== lead)] : covers;
 
   return ordered.slice(0, PREVIEW_COVER_CAP);
 }

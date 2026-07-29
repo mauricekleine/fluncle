@@ -330,11 +330,17 @@ async function markResolved(slug: string, imageKey: string): Promise<void> {
   const now = new Date().toISOString();
 
   // A resolved logo IS a visible change to the label's picture, so bump `updated_at`.
+  //
+  // `image_updated_at` is the SERVING vintage, not a bookkeeping stamp: it rides the `?v` on the
+  // Cloudflare Images source (`labelLogoUrl` → `ownedCoverUrl`), so stamping it here is what makes
+  // a REPLACED logo at the same R2 key re-key every cached rendition instead of serving the old
+  // picture forever behind the transform cache (the video-variants `?v` lesson — a transform cache
+  // survives a zone purge). The albums/artists cover-master sweep stamps its twin for the same reason.
   await db.execute({
-    args: [imageKey, now, now, slug],
+    args: [imageKey, now, now, now, slug],
     sql: `update labels
           set image_key = ?, image_state = 'resolved', image_failures = 0,
-              image_attempted_at = ?, updated_at = ?
+              image_attempted_at = ?, image_updated_at = ?, updated_at = ?
           where slug = ?`,
   });
 }

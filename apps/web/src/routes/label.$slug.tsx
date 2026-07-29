@@ -105,15 +105,17 @@ function labelHead(loaderData: LabelPageData | undefined) {
   // then the freshest finding's cover, then the site cover as the final floor.
   const coverFinding = findings[0];
   const imageUrl =
-    logoImageUrl ??
+    albumCoverAtSize(logoImageUrl, "large") ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
   // THE LEAD IMAGE — the findings band's first cover, this page's LCP candidate and above the fold
   // on every viewport. Preloaded at the `medium` rung, byte-identical to what FindingsGrid asks for,
   // so it is a cache hit rather than a second fetch. Same one-preload shape as /artist and /album;
-  // FindingsGrid marks the matching tile non-lazy. The label's own LOGO is deliberately NOT the
-  // candidate here: it is served as a raw untransformed R2 object today, so preloading it would
-  // prioritise the page's heaviest miss instead of its largest paint.
+  // FindingsGrid marks the matching tile non-lazy. The label's own LOGO is not a candidate for a
+  // different reason than it once was: it is not PAINTED on this page at all. The masthead is the
+  // name, the bio, and the founding line — the logo is a HEAD-only asset (the OG/Twitter image
+  // above and the Organization's `logo` in the JSON-LD below), so preloading it would fetch an
+  // image the layout never asks for.
   const leadImageUrl = albumCoverAtSize(
     findings.find((finding) => finding.logId)?.albumImageUrl,
     "medium",

@@ -4,6 +4,7 @@ import {
   albumCoverAtSize,
   bestAlbumCoverUrl,
   bestArtistAvatarUrl,
+  labelLogoUrl,
   ownedCoverUrl,
   trackMedia,
   versionedObservationAudioUrl,
@@ -505,6 +506,53 @@ describe("ownedCoverUrl — Cloudflare Images transform", () => {
   });
 });
 
+// A label's logo joins that same ladder: its own R2 master, the same transform, the same `?v`.
+describe("labelLogoUrl — the label logo on the owned-cover ladder", () => {
+  const LOGO = "labels/hospital-records.jpg";
+
+  it("serves the logo through /cdn-cgi/image at the default large rung, ?v riding the source", () => {
+    const v = Date.parse("2026-07-13T00:00:00.000Z");
+
+    expect(labelLogoUrl(LOGO, "2026-07-13T00:00:00.000Z")).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/labels/hospital-records.jpg?v=${v}`,
+    );
+  });
+
+  it("maps each ladder rung to its width", () => {
+    expect(labelLogoUrl(LOGO, "x", "small")).toContain("width=64,");
+    expect(labelLogoUrl(LOGO, "x", "medium")).toContain("width=300,");
+    expect(labelLogoUrl(LOGO, "x", "large")).toContain("width=640,");
+    expect(labelLogoUrl(LOGO, "x", "xl")).toContain("width=1200,");
+  });
+
+  it("busts every rendition when a replaced logo bumps the vintage", () => {
+    expect(labelLogoUrl(LOGO, "2026-07-13T00:00:00.000Z")).not.toBe(
+      labelLogoUrl(LOGO, "2026-07-14T00:00:00.000Z"),
+    );
+  });
+
+  // A logo resolved before `labels.image_updated_at` existed carries a null vintage. It must still
+  // SERVE — floored to the constant bust, exactly as an album master with no vintage is.
+  it("floors a null vintage to the constant bust rather than failing", () => {
+    expect(labelLogoUrl(LOGO, null)).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/labels/hospital-records.jpg?v=1`,
+    );
+  });
+
+  it("returns undefined when the label has no logo of its own", () => {
+    expect(labelLogoUrl(null, "2026-07-13T00:00:00.000Z")).toBeUndefined();
+    expect(labelLogoUrl(undefined, undefined)).toBeUndefined();
+  });
+
+  // The whole point of joining the ladder: a surface re-sizes a logo exactly as it re-sizes a cover.
+  it("re-sizes through albumCoverAtSize like any other owned master", () => {
+    const large = labelLogoUrl(LOGO, "2026-07-13T00:00:00.000Z");
+
+    expect(albumCoverAtSize(large, "small")).toContain("width=64,");
+    expect(albumCoverAtSize(large, "small")).toContain("labels/hospital-records.jpg?v=");
+  });
+});
+
 describe("albumCoverAtSize — resizes BOTH providers", () => {
   it("rewrites an owned-master transform width to the requested rung", () => {
     const large = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
@@ -548,10 +596,12 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     );
   });
 
-  it("passes a non-provider URL (a raw label logo on our own zone) through untouched", () => {
-    const logo = "https://found.fluncle.com/labels/some-label.jpg";
+  // A BARE R2 object on our own zone — no transform prefix, so there is no `width=` to rewrite.
+  // (A real label logo no longer arrives in this shape: `labelLogoUrl` transforms it.)
+  it("passes a non-provider URL through untouched", () => {
+    const bare = "https://found.fluncle.com/labels/some-label.jpg";
 
-    expect(albumCoverAtSize(logo, "small")).toBe(logo);
+    expect(albumCoverAtSize(bare, "small")).toBe(bare);
   });
 });
 

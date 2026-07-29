@@ -8,7 +8,7 @@ import {
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import {
   type LabelAdminItem,
   type LabelAliasCandidate,
@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
+import { albumCoverAtSize } from "@/lib/media";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import {
@@ -383,7 +384,9 @@ function LabelRow({ label }: { label: LabelAdminItem }) {
             <span className="text-destructive" role="alert">
               {error}
             </span>
-          ) : undefined
+          ) : (
+            labelIdentity(label)
+          )
         }
         title={label.name}
       />
@@ -391,11 +394,66 @@ function LabelRow({ label }: { label: LabelAdminItem }) {
   );
 }
 
+// WHICH LABEL IS THIS? The ruling-time identity line.
+//
+// The row used to carry a name, a logo, a slug and two buttons — everything except the one thing a
+// ruling actually turns on. Three labels are called "Helix" and the operator was being asked to
+// decide about a name. So the row now says what MusicBrainz knows about the entity behind it:
+// its disambiguation comment (the field MB writes FOR exactly this problem), when and where it
+// started, and a link straight to the MBID so the whole entity is one click away while ruling.
+//
+// Every part is optional and most labels carry none — a label with nothing to say renders NO
+// subtitle at all rather than a placeholder or an empty row of separators. That is why this is a
+// plain node-returning helper and not a component: `ObjectLead` renders its subtitle WRAPPER
+// whenever the prop is a truthy element, so the emptiness has to be decided before the prop is
+// built, never inside a child that renders nothing.
+function labelIdentity(label: LabelAdminItem): ReactNode | undefined {
+  const foundingYear = label.foundingDate?.slice(0, 4);
+  const facts = [
+    label.disambiguation,
+    foundingYear ? `Founded ${foundingYear}` : undefined,
+    label.foundedLocation,
+  ].filter((fact): fact is string => typeof fact === "string" && fact.trim().length > 0);
+
+  if (facts.length === 0 && !label.mbLabelId) {
+    return undefined;
+  }
+
+  return (
+    <>
+      {facts.map((fact, index) => (
+        <Fragment key={fact}>
+          {index > 0 ? <span aria-hidden="true">·</span> : null}
+          <span className="truncate">{fact}</span>
+        </Fragment>
+      ))}
+      {label.mbLabelId ? (
+        <>
+          {facts.length > 0 ? <span aria-hidden="true">·</span> : null}
+          <a
+            className="text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+            href={`https://musicbrainz.org/label/${label.mbLabelId}`}
+            rel="noreferrer"
+            target="_blank"
+          >
+            MusicBrainz ↗
+          </a>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 // The label's OWN logo (the Discogs→R2 backfill), at the object row's md plate footprint. Falls
 // back to the exact tag-icon glyph when the label has no resolved logo yet, so a label without
 // an image reads exactly as it did before. Decorative (the name sits beside it), lazy-loaded.
+//
+// The plate is size-11 (44px), so it asks the owned-cover ladder for its SMALLEST rung: this is a
+// 50-row board and the logo is a decorative tile beside the name, never the thing being read.
 function LabelLogo({ logoImageUrl }: { logoImageUrl: string | undefined }) {
-  if (!logoImageUrl) {
+  const src = albumCoverAtSize(logoImageUrl, "small");
+
+  if (!src) {
     return <ObjectGlyph icon={TagIcon} />;
   }
 
@@ -404,7 +462,7 @@ function LabelLogo({ logoImageUrl }: { logoImageUrl: string | undefined }) {
       alt=""
       className="size-11 shrink-0 rounded-md border border-border object-cover"
       loading="lazy"
-      src={logoImageUrl}
+      src={src}
     />
   );
 }

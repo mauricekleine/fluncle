@@ -14,21 +14,6 @@ import { r2PublicUrl } from "@fluncle/contracts/util";
 
 export const FOUND_BASE = "https://found.fluncle.com";
 
-/**
- * A LABEL's own logo on R2 (`labels/<slug>.<ext>`), by the stored `labels.image_key`.
- * The label-images resolve sweep downloads the logo (Discogs → Wikidata) once and puts it
- * in the world-served bucket, so this is a plain object URL like every other found asset —
- * never a Discogs hotlink. Returns undefined when the label has no own image (the surface
- * then falls back to its freshest finding's album cover). See docs/label-entity.md.
- */
-export function labelLogoUrl(imageKey: string | null | undefined): string | undefined {
-  if (!imageKey) {
-    return undefined;
-  }
-
-  return r2PublicUrl(FOUND_BASE, imageKey);
-}
-
 /** The mixtape's episode audio on R2 (the podcast enclosure), by its Log ID. */
 export function mixtapeAudioUrl(logId: string): string {
   return `${FOUND_BASE}/${encodeURIComponent(logId)}/mixtape.m4a`;
@@ -265,13 +250,38 @@ export function ownedCoverUrl(
 }
 
 /**
+ * A LABEL's own logo on R2 (`labels/<slug>.<ext>`), by the stored `labels.image_key` — served up
+ * the SAME owned-master ladder as an album cover or an artist avatar. The label-images resolve
+ * sweep downloads the logo (Discogs → Wikidata) once into the world-served bucket, so this is our
+ * object on our zone, never a Discogs hotlink; it now goes out through Cloudflare Images
+ * (`format=auto` + a ladder width) with the `?v=<image_updated_at>` bust riding the source, so a
+ * replaced logo re-keys every rendition. Returns undefined when the label has no own image (the
+ * surface then falls back to its freshest finding's album cover). See docs/label-entity.md.
+ *
+ * It is a THIN delegation to {@link ownedCoverUrl}, not a `bestAlbumCoverUrl`-shaped three-way: a
+ * label carries no second image provider of its own, and the cover fallback belongs to the caller
+ * (the two images are different things — a logo and a sleeve — and only the surface knows which it
+ * would rather show). The DTO reads emit `large`, matching the album/artist contract, so a consumer
+ * that never re-sizes still gets a right-sized logo; `albumCoverAtSize` takes it down to the tile
+ * and admin-plate rungs exactly as it does for a cover.
+ */
+export function labelLogoUrl(
+  imageKey: string | null | undefined,
+  imageUpdatedAt: string | null | undefined,
+  size: CoverSize = "large",
+): string | undefined {
+  return ownedCoverUrl(imageKey, imageUpdatedAt, size);
+}
+
+/**
  * Re-size a cover URL to the requested rendition, whichever provider it carries:
- *   - an OWNED-master Cloudflare Images URL → rewrite its `width=` to the ladder rung;
+ *   - an OWNED-master Cloudflare Images URL (an album cover, an artist avatar, a LABEL LOGO — all
+ *     three ride one ladder now) → rewrite its `width=` to the ladder rung;
  *   - a stored Spotify album-art URL → swap the size-code prefix (Spotify has no >640, so `xl`
  *     clamps to `large`);
  *   - a stored Spotify ARTIST-portrait URL → swap its own size-code prefix (its ladder is
  *     640/320/160, so `small` clamps UP to 160 and `xl` clamps down to `large`);
- *   - anything else (a raw label logo, a future source) → untouched.
+ *   - anything else (a bare R2 object, a future source) → untouched.
  * `small` for the feed/index rows, `large` for the full-bleed /log poster. The generalisation of
  * the old `albumCoverAtSize` so the U3b owned masters resize at every existing call site.
  */

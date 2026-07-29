@@ -40,14 +40,16 @@ export function adminLabelsHandlers(os: Implementer) {
   // it is deliberately COUNTLESS — `listLabels` no longer pays the whole-corpus finding
   // aggregate the crawler never used. `findingCount` rides out as 0 here; the counts a human
   // sees live on the `/admin/labels` station, computed per-page over the indexed `label_id`
-  // edge (`listLabelsPage`), never on this hot seed read. `mbLabelId` rides the seed read for the
-  // crawler's IN-PROCESS resolver (crawl.ts) and is dropped here rather than left to zod's silent
-  // strip — the wire shape stays exactly `LabelAdminItem`.
+  // edge (`listLabelsPage`), never on this hot seed read. `mbLabelId` used to be DROPPED here
+  // because the contract shape had no field for it; `LabelAdminItem` now carries the identity
+  // fields (the ruling needs to know WHICH label it is), so the seed read passes them straight
+  // through and the wire shape is still exactly `LabelAdminItem`.
   const listLabelsAdminHandler = os.list_labels_admin.use(adminAuth).handler(async ({ input }) => {
     try {
-      const labels = (await listLabels(input.seedState)).map(
-        ({ mbLabelId: _serverOnly, ...label }) => ({ ...label, findingCount: 0 }),
-      );
+      const labels = (await listLabels(input.seedState)).map((label) => ({
+        ...label,
+        findingCount: 0,
+      }));
 
       return { labels, ok: true } as const;
     } catch (error) {

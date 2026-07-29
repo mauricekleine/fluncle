@@ -3045,7 +3045,9 @@ export const artistSocials = sqliteTable(
 //     crawler already resolves the MB id at walk time and now persists it here;
 //     the resolve sweep backfills the rest (and the labels the crawler never walks).
 //   - `image_key` — the R2 object key of the stored logo (served from
-//     found.fluncle.com via `labelLogoUrl`). NULL = no own image, fall to the cover.
+//     found.fluncle.com via `labelLogoUrl`, up the shared owned-cover ladder). NULL = no own
+//     image, fall to the cover.
+//   - `image_updated_at` — the `?v` bust vintage, the albums/artists column cloned across.
 //   - `image_state` — the resolve lifecycle: `pending` (needs a pass; the DDL
 //     default, so every existing + future label enters the worklist), `resolved`
 //     (has a logo), `none` (checked, no image anywhere — terminal, floors to cover).
@@ -3079,6 +3081,14 @@ export const labels = sqliteTable(
      */
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
+    // MusicBrainz's DISAMBIGUATION comment — the parenthetical an editor writes when a label
+    // name is not unique ("UK drum & bass label", "1990s US hip-hop imprint"). It is the one
+    // fact that answers "WHICH Helix?" at ruling time, so it rides the `/admin/labels` station's
+    // identity line beside the founding facts and the MBID. Walked by the lineage sweep from the
+    // same `/label/<mbid>` lookup that already carries it (label-lineage.ts) and stored VERBATIM;
+    // NULL until walked, and NULL for the many labels MusicBrainz never needed to disambiguate.
+    // OPERATOR-FACING only — the public `/label/<slug>` page never speaks it.
+    disambiguation: text("disambiguation"),
     // The Discogs label id (from the MB label's curated Discogs url-rel) — the source
     // of the logo image. NULL until the resolve sweep walks it (or MB carried no link).
     discogsLabelId: integer("discogs_label_id"),
@@ -3106,6 +3116,13 @@ export const labels = sqliteTable(
     imageState: text("image_state", { enum: ["pending", "resolved", "none"] })
       .notNull()
       .default("pending"),
+    // The `?v` bust VINTAGE, the `albums`/`artists` column cloned onto the label: a replaced
+    // logo bumps it, re-keying every Cloudflare Images rendition of the master (the
+    // video-variants `?v` lesson — a transform cache survives a zone purge). NULL for a logo
+    // resolved before this column existed, which floors the bust to a constant rather than
+    // failing. Read by `labelLogoUrl` (media.ts), which serves the logo up the SAME
+    // 64/300/640/1200 owned-cover ladder every album and artist image rides.
+    imageUpdatedAt: text("image_updated_at"),
     // ── THE FRESHNESS TAP (D8) ───────────────────────────────────────────────────────
     // A second vendor (Spotify) taps day-one freshness for ENABLED seed labels only: a bounded
     // per-label probe that mints METADATA-ONLY catalogue rows with day-one release dates, closing

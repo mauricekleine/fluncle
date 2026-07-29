@@ -60,11 +60,24 @@ export const LABEL_INDEX_MIN_TRACKS = 3;
 // shares one source of truth; re-exported here as the runtime home the label consumers reach.
 export { DISTRIBUTOR_DENYLIST, isDistributorLabel } from "../label-distributors";
 
-/** A row from the `labels` table (snake_case columns). */
+/**
+ * A row from the `labels` table (snake_case columns) — exactly what {@link LABEL_COLUMNS} selects.
+ *
+ * The four IDENTITY columns (`mb_label_id`, `disambiguation`, `founding_date`, `founded_location`)
+ * ride this shape because RULING on a label is an identity question: `/admin/labels` asks the
+ * operator to decide about "Helix", and a name plus a logo cannot tell him WHICH Helix. They are
+ * short text columns on an archive-sized table already being read, so carrying them costs the reads
+ * nothing and saves a second query.
+ */
 type LabelRow = {
   created_at: string;
+  disambiguation: string | null;
+  founded_location: string | null;
+  founding_date: string | null;
   id: string;
   image_key: string | null;
+  image_updated_at: string | null;
+  mb_label_id: string | null;
   name: string;
   ruled_at: string | null;
   seed_state: LabelSeedState;
@@ -93,9 +106,13 @@ export function labelSlug(raw: string | null | undefined): string | undefined {
 function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
   return {
     createdAt: row.created_at,
+    disambiguation: row.disambiguation,
     findingCount,
+    foundedLocation: row.founded_location,
+    foundingDate: row.founding_date,
     id: row.id,
-    logoImageUrl: labelLogoUrl(row.image_key),
+    logoImageUrl: labelLogoUrl(row.image_key, row.image_updated_at),
+    mbLabelId: row.mb_label_id,
     name: row.name,
     ruledAt: row.ruled_at,
     seedState: row.seed_state,
@@ -104,7 +121,14 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
   };
 }
 
-const LABEL_COLUMNS = "id, name, slug, seed_state, ruled_at, created_at, updated_at, image_key";
+/**
+ * The `labels` projection every admin/seed read shares — one list, so the reads cannot drift apart
+ * and {@link LabelRow} describes all of them. It carries the label's IDENTITY (`mb_label_id`,
+ * `disambiguation`, `founding_date`, `founded_location`) alongside its state, because the operator
+ * ruling on a label needs to know which label it IS.
+ */
+const LABEL_COLUMNS = `id, name, slug, seed_state, ruled_at, created_at, updated_at,
+   image_key, image_updated_at, mb_label_id, disambiguation, founding_date, founded_location`;
 
 /** The `/admin/labels` section page size — each of the three seed-state sections pages this many. */
 export const LABELS_ADMIN_PAGE_SIZE = 50;
@@ -384,8 +408,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS}, bio, mb_label_id, discogs_label_id,
-                 founding_date, founded_location, parent_label_id
+    sql: `select ${LABEL_COLUMNS}, bio, discogs_label_id, parent_label_id
           from labels where slug = ? limit 1`,
   });
 
@@ -393,9 +416,6 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
     LabelRow & {
       bio: string | null;
       discogs_label_id: number | null;
-      founded_location: string | null;
-      founding_date: string | null;
-      mb_label_id: string | null;
       parent_label_id: string | null;
     }
   >(result.rows)[0];
@@ -418,7 +438,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
         ? row.founding_date
         : undefined,
     id: row.id,
-    logoImageUrl: labelLogoUrl(row.image_key),
+    logoImageUrl: labelLogoUrl(row.image_key, row.image_updated_at),
     mbLabelId: typeof row.mb_label_id === "string" && row.mb_label_id ? row.mb_label_id : undefined,
     name: row.name,
     parentLabel: lineage.parentLabel,
@@ -1133,13 +1153,14 @@ const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     coverImageUrl: coverFromJson(row.cover_json),
-    logoImageUrl: labelLogoUrl(row.image_key ?? null),
+    logoImageUrl: labelLogoUrl(row.image_key ?? null, row.image_updated_at ?? null),
     name: row.name,
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
   nameExpr: "labels.name",
   select: `labels.name as name, labels.image_key as image_key,
+           labels.image_updated_at as image_updated_at,
            ${LABEL_CATALOGUE_COVER_JSON} as cover_json`,
   slugExpr: "labels.slug",
 };
@@ -1452,11 +1473,12 @@ export async function reconcileLabels(): Promise<number> {
  * DERIVED and only the `/admin/labels` station shows it, so the count is computed there (bounded to
  * a page), never on this read: the crawler asks for its seed set every tick and never uses a count.
  *
- * It carries ONE column the admin item does not: `mbLabelId`, the label's RULED MusicBrainz
- * identity. The catalogue crawler's seed resolution is the consumer — a ruled MBID is the
- * authority for which MusicBrainz label a seed slug means, so the crawler must be able to read it
- * off the seed set it already fetches (crawl.ts `expandSeedLabel`) rather than searching a name
- * that namesakes share. It is server-side only: `list_labels_admin` projects the contract shape.
+ * It NARROWS one field the admin item leaves optional: `mbLabelId`, the label's RULED MusicBrainz
+ * identity, is always PRESENT here (null or a string, never absent). The catalogue crawler's seed
+ * resolution is the consumer — a ruled MBID is the authority for which MusicBrainz label a seed slug
+ * means, so the crawler reads it off the seed set it already fetches (crawl.ts `expandSeedLabel`)
+ * rather than searching a name that namesakes share. The contract now carries the field too, so
+ * `list_labels_admin` no longer strips it on the way out.
  */
 export type LabelSeedItem = Omit<LabelAdminItem, "findingCount"> & {
   mbLabelId: null | string;
@@ -1470,18 +1492,10 @@ export type LabelsAdminPage = {
   total: number;
 };
 
-function toLabelSeedItem(row: LabelRow & { mb_label_id: null | string }): LabelSeedItem {
-  return {
-    createdAt: row.created_at,
-    id: row.id,
-    logoImageUrl: labelLogoUrl(row.image_key),
-    mbLabelId: row.mb_label_id,
-    name: row.name,
-    ruledAt: row.ruled_at,
-    seedState: row.seed_state,
-    slug: row.slug,
-    updatedAt: row.updated_at,
-  };
+function toLabelSeedItem(row: LabelRow): LabelSeedItem {
+  const { findingCount: _countless, ...item } = toLabelItem(row, 0);
+
+  return { ...item, mbLabelId: row.mb_label_id };
 }
 
 /**
@@ -1491,24 +1505,24 @@ function toLabelSeedItem(row: LabelRow & { mb_label_id: null | string }): LabelS
  * read used to pay on every crawl tick was for a count the crawler never reads. The `/admin/labels`
  * station's finding counts come from {@link listLabelsPage} instead, bounded to the visible page.
  *
- * It projects `mb_label_id` alongside the admin columns — one more column on a read the crawler
- * already makes, so the seed resolver gets the ruled identity for free instead of paying a second
- * query for it. See {@link LabelSeedItem}.
+ * `mb_label_id` rides {@link LABEL_COLUMNS} itself now — one shared projection for every admin/seed
+ * read, so the seed resolver gets the ruled identity for free instead of paying a second query for
+ * it. See {@link LabelSeedItem}.
  */
 export async function listLabels(seedState?: LabelSeedState): Promise<LabelSeedItem[]> {
   const db = await getDb();
   const result = seedState
     ? await db.execute({
         args: [seedState],
-        sql: `select ${LABEL_COLUMNS}, mb_label_id
+        sql: `select ${LABEL_COLUMNS}
               from labels where seed_state = ? order by name collate nocase`,
       })
     : await db.execute({
         args: [],
-        sql: `select ${LABEL_COLUMNS}, mb_label_id from labels order by name collate nocase`,
+        sql: `select ${LABEL_COLUMNS} from labels order by name collate nocase`,
       });
 
-  return typedRows<LabelRow & { mb_label_id: null | string }>(result.rows).map(toLabelSeedItem);
+  return typedRows<LabelRow>(result.rows).map(toLabelSeedItem);
 }
 
 /**

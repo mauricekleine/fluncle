@@ -266,6 +266,9 @@ type EntityRow = {
   image_updated_at?: string | null;
   image_url: string | null;
   logo_key?: string | null;
+  // The logo's `?v` bust vintage (labels only) — the label twin of `image_updated_at`, kept under
+  // its own name so it pairs with `logo_key` rather than shadowing the artist columns above.
+  logo_updated_at?: string | null;
   name: string;
   slug: string;
 };
@@ -409,7 +412,9 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
   const floor = kind === "album" ? ALBUM_INDEX_MIN_TRACKS : LABEL_INDEX_MIN_TRACKS;
   const isLabel = kind === "label";
   // Labels carry their own logo; albums don't (the pointer to the label owns that image).
-  const logoSelect = isLabel ? "labels.image_key as logo_key," : "";
+  const logoSelect = isLabel
+    ? "labels.image_key as logo_key, labels.image_updated_at as logo_updated_at,"
+    : "";
   // A LABEL answers to every spelling the operator has RULED (see the doctrine above); an ALBUM
   // has no alias table, so these three fragments are empty for it and its read is untouched.
   const labelAliasWhere = isLabel
@@ -466,7 +471,7 @@ function entityImageUrl(kind: SearchEntity["kind"], row: EntityRow): string | un
   }
 
   if (kind === "label") {
-    return labelLogoUrl(row.logo_key) ?? row.image_url ?? undefined;
+    return labelLogoUrl(row.logo_key, row.logo_updated_at) ?? row.image_url ?? undefined;
   }
 
   if (kind === "mixtape") {

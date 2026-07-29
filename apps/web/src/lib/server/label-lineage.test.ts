@@ -72,11 +72,15 @@ async function labelRow(slug: string): Promise<Record<string, unknown> | undefin
 function lineageResponse(opts: {
   begin?: string;
   areaName?: string;
+  // MusicBrainz sends `""` for a label it never had to disambiguate, so the tests below can
+  // reproduce BOTH shapes — a real comment and the empty string that must not be stored.
+  disambiguation?: string;
   parentMbids?: Array<{ id: string; type?: string; direction?: string }>;
 }) {
   return {
     data: {
       area: opts.areaName ? { name: opts.areaName } : undefined,
+      disambiguation: opts.disambiguation,
       "life-span": opts.begin ? { begin: opts.begin } : undefined,
       relations: (opts.parentMbids ?? []).map((parent) => ({
         direction: parent.direction ?? "backward",
@@ -147,6 +151,48 @@ describe("resolveLabelLineage", () => {
     expect(row?.["founded_location"]).toBe("United Kingdom");
     expect(row?.["parent_label_id"]).toBe(parentId);
     expect(row?.["lineage_state"]).toBe("resolved");
+  });
+
+  // The disambiguation comment is what answers "WHICH label is this?" on the `/admin/labels`
+  // ruling row, and it rides the SAME lookup the founding facts do — no extra vendor call.
+  it("persists the MusicBrainz disambiguation comment alongside the founding facts", async () => {
+    await seedLabel({ mbLabelId: "mb-helix", name: "Helix", slug: "helix" });
+    mbFetch.mockResolvedValue(
+      lineageResponse({
+        areaName: "London",
+        begin: "2011",
+        disambiguation: "  UK drum & bass label  ",
+      }),
+    );
+
+    await resolveLabelLineage(10, false);
+
+    const row = await labelRow("helix");
+    expect(row?.["disambiguation"]).toBe("UK drum & bass label");
+    expect(row?.["founding_date"]).toBe("2011");
+  });
+
+  it("stores nothing for the empty comment MusicBrainz sends by default", async () => {
+    await seedLabel({ mbLabelId: "mb-plain", name: "Plain Imprint", slug: "plain-imprint" });
+    mbFetch.mockResolvedValue(lineageResponse({ begin: "2019", disambiguation: "" }));
+
+    await resolveLabelLineage(10, false);
+
+    expect((await labelRow("plain-imprint"))?.["disambiguation"]).toBeNull();
+  });
+
+  // The whole write is `coalesce(column, ?)`, so a re-walk can never clobber a stored fact.
+  it("never clobbers a disambiguation already on the row", async () => {
+    await seedLabel({ mbLabelId: "mb-kept", name: "Kept", slug: "kept" });
+    await db.execute({
+      args: ["the operator's own note", "kept"],
+      sql: `update labels set disambiguation = ? where slug = ?`,
+    });
+    mbFetch.mockResolvedValue(lineageResponse({ disambiguation: "something else entirely" }));
+
+    await resolveLabelLineage(10, false);
+
+    expect((await labelRow("kept"))?.["disambiguation"]).toBe("the operator's own note");
   });
 
   it("counts a parent MusicBrainz names but the archive lacks (never mints it)", async () => {

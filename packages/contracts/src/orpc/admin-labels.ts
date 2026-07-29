@@ -43,14 +43,32 @@ export const LabelSeedStateSchema = z
  * `/admin/labels` station's read, and 0 on the countless `list_labels_admin` seed read.
  * `ruledAt` is the operator's stamp — null means no human has ruled this label yet (a machine
  * default or the one-time bootstrap). `logoImageUrl` is the label's OWN logo (its resolved
- * Discogs/Wikidata image on R2), absent when it has none yet.
+ * Discogs/Wikidata image on R2, served up the shared owned-cover ladder), absent when it has none yet.
+ *
+ * ── THE IDENTITY FIELDS ────────────────────────────────────────────────────────────────────
+ * A ruling is an identity question — "may we crawl from THIS label?" is unanswerable when three
+ * labels share the name. So the item also carries what MusicBrainz knows about which label this is:
+ * `mbLabelId` (the MBID, which the station links out to), `disambiguation` (MB's parenthetical
+ * comment, the one field written FOR this problem), and the founding pair `foundingDate` /
+ * `foundedLocation`. All four are ADDITIVE-OPTIONAL: nullable when a read carries them and absent
+ * from a read that does not, so an older client and the CLI keep working unchanged. Most labels
+ * legitimately carry none — MusicBrainz only disambiguates a name that needed it — and a label
+ * with none simply shows no identity line.
  */
 export const LabelAdminItemSchema = z
   .object({
     createdAt: z.string(),
+    /** MusicBrainz's disambiguation comment ("UK drum & bass label"), when it carries one. */
+    disambiguation: z.string().nullable().optional(),
     findingCount: z.number(),
+    /** MusicBrainz `area.name` — where the label started ("London"). */
+    foundedLocation: z.string().nullable().optional(),
+    /** MusicBrainz `life-span.begin`, verbatim — a bare year or a full date. */
+    foundingDate: z.string().nullable().optional(),
     id: z.string(),
     logoImageUrl: z.string().optional(),
+    /** The MusicBrainz label MBID — the entity the operator can open while ruling. */
+    mbLabelId: z.string().nullable().optional(),
     name: z.string(),
     ruledAt: z.string().nullable(),
     seedState: LabelSeedStateSchema,
