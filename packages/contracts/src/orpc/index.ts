@@ -156,6 +156,8 @@ export {
   crawlCatalogue,
   CrawlPassSchema,
   CrawlStatusSchema,
+  DEEZER_CANDIDATE_LIMIT,
+  DeezerIsrcCandidateSchema,
   getCaptureBudget,
   getCrawlStatus,
   listCatalogueTracks,

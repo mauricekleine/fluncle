@@ -767,7 +767,7 @@ export const AnchorCandidateSchema = z
  * trusted) and, on a hit, writes the `spotify_uri`/`spotify_url` anchor + links the candidate's
  * artists by their stable id. Two rungs, precision over recall: exact ISRC first (the actor returns
  * each candidate's ISRC), else the verified search triple (folded artist set + base title + version
- * descriptor + duration within ±2s). EVERY attempt stamps `spotify_anchor_attempted_at` and bumps
+ * descriptor + duration within ±3s). EVERY attempt stamps `spotify_anchor_attempted_at` and bumps
  * `spotify_anchor_attempts` — a hit AND a miss — so the worklist's re-ask backoff can fire and its
  * retry cap (`ANCHOR_MAX_ATTEMPTS`) can eventually retire a row that is simply not on Spotify.
  *
@@ -802,6 +802,27 @@ export const anchorTrack = oc
   );
 
 /**
+ * THE DEEZER PAGE SIZE, and the wire cap that follows from it — one number, owned here because both
+ * sides must agree: it is the `&limit=` the search asks Deezer for AND the most hits `resolve_anchor`
+ * will accept back for a row. A payload carrying more than Deezer's own page size is already wrong,
+ * whatever produced it, so it is refused at the edge rather than reasoned about in the handler.
+ *
+ * Deezer's search is FUZZY (it will lead with a remix), which is why we read a small handful and let
+ * the Worker's gate pick — never blindly the first. Five is that handful.
+ */
+export const DEEZER_CANDIDATE_LIMIT = 5;
+
+/**
+ * Length caps for a Deezer hit's three strings. Deliberately GENEROUS — far above any real billing or
+ * title, far below "unbounded" — because a cap that bites a legitimate hit turns a recoverable row
+ * into a rejected `resolve_anchor` call, which is a worse failure than the one being defended against.
+ */
+const DEEZER_TEXT_MAX = 300;
+
+/** An ISRC is 12 characters. The headroom absorbs a hyphenated or padded variant; nothing more. */
+const DEEZER_ISRC_MAX = 64;
+
+/**
  * One Deezer search hit the BOX fetched for an ISRC-less catalogue row (rung 0 of `resolve_anchor`).
  *
  * WHY THE BOX FETCHES IT. Deezer's public search takes no token, so its quota is purely PER-IP — and
@@ -819,16 +840,28 @@ export const anchorTrack = oc
  *
  * The fields are Deezer's, normalized: `artistName` is its BILLED string (`"Fred V & Grafix"`), folded
  * into an artist SET by the gate; `durationMs` is its seconds promoted to ms.
+ *
+ * EVERY FIELD IS BOUNDED, and that is the point. The box is a source this slice deliberately does NOT
+ * trust — the whole design is "the box fetches, the Worker rules" — so its payload is bounded at the
+ * contract edge and a violation fails as a clean 400, never as work the handler has to do. The bounds
+ * are defence in depth (the box sends at most {@link DEEZER_CANDIDATE_LIMIT} hits and the gate refuses
+ * a nonsense duration anyway), which is exactly the posture an untrusted source deserves.
  */
 export const DeezerIsrcCandidateSchema = z
   .object({
     /** Deezer's billed artist string for the hit — folded into an artist set by the gate. */
-    artistName: z.string(),
-    /** The hit's duration in MILLISECONDS (Deezer bills seconds; the box promotes them). */
-    durationMs: z.number(),
+    artistName: z.string().max(DEEZER_TEXT_MAX),
+    /**
+     * The hit's duration in MILLISECONDS (Deezer bills seconds; the box promotes them). POSITIVE and
+     * FINITE: a zero, negative, or non-finite duration is not a recording length, and the gate's
+     * `Math.abs(candidate - row) <= tolerance` would silently read it as a plain miss rather than as
+     * the malformed payload it is. (Zod 4's bare `z.number()` already rejects `NaN`/`Infinity`;
+     * `.finite()` says so out loud, `.positive()` is the part that is genuinely new.)
+     */
+    durationMs: z.number().positive().finite(),
     /** The recording's ISRC as Deezer holds it — the whole point of the rung, and never trusted unverified. */
-    isrc: z.string(),
-    title: z.string(),
+    isrc: z.string().max(DEEZER_ISRC_MAX),
+    title: z.string().max(DEEZER_TEXT_MAX),
   })
   .meta({ id: "DeezerIsrcCandidate" });
 
@@ -896,8 +929,12 @@ export const resolveAnchor = oc
        * The Deezer hits the BOX fetched for this row (rung 0). Present — INCLUDING an empty array,
        * which says "the box searched and found nothing usable" — ⇒ the server verifies exactly these
        * and issues no Deezer request of its own. Absent ⇒ the server searches Deezer itself.
+       *
+       * Capped at {@link DEEZER_CANDIDATE_LIMIT}, which is the same number the search asks Deezer for:
+       * a caller offering more hits than Deezer's own page size is already wrong, so it is refused at
+       * the boundary (a clean 400) rather than trusted to be harmless. The `requeue_anchor` discipline.
        */
-      deezerCandidates: z.array(DeezerIsrcCandidateSchema).optional(),
+      deezerCandidates: z.array(DeezerIsrcCandidateSchema).max(DEEZER_CANDIDATE_LIMIT).optional(),
       trackId: z.string().min(1),
     }),
   )

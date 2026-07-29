@@ -143,7 +143,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
     expect(fetchTrackMetadata).toHaveBeenCalledWith("lbAnchor001");
   });
 
-  it("anchors a no-ISRC row via the folded artist + title + ±2s search triple", async () => {
+  it("anchors a no-ISRC row via the folded artist + title + ±3s search triple", async () => {
     const { resolveAnchorFree } = await import("./anchor");
 
     await seedCatalogue({
@@ -389,7 +389,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     const { resolveAnchorFree } = await import("./anchor");
 
     // An ISRC-LESS crawler row. Deezer holds the real ISRC; its search hit matches the row's folded
-    // identity + duration (±2s), so it is trusted. The recovered ISRC then equals the ListenBrainz
+    // identity + duration (±3s), so it is trusted. The recovered ISRC then equals the ListenBrainz
     // candidate's own metadata ISRC, so the row anchors through the EXACT-ISRC rung (not fuzzy).
     await seedCatalogue({
       artists: ["Muffler"],
@@ -445,7 +445,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       title: "Dribble",
       trackId: "mb_dzbad",
     });
-    // A hit whose duration is 3s off the row (> the ±2s bar) — a wrong recording. It must be refused,
+    // A hit whose duration is 3.5s off the row (> the ±3s bar) — a wrong recording. It must be refused,
     // so its ISRC is never trusted and the row stays ISRC-less.
     searchDeezerCandidates.mockResolvedValue([
       { artistName: "Muffler", durationMs: 203_500, isrc: "GBWRONGDZ001", title: "Dribble" },

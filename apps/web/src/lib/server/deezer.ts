@@ -31,6 +31,8 @@
 // have no box in front of them: the certify path's ISRC pre-flight (`publish.ts`) and any
 // `resolve_anchor` call that supplies no box-fetched hits.
 
+import { DEEZER_CANDIDATE_LIMIT } from "@fluncle/contracts/orpc";
+
 import { logEvent } from "./log";
 import { canonicalizeSearchTitle } from "./track-match";
 
@@ -93,8 +95,12 @@ const DEEZER_TIMEOUT_MS = 10_000;
  * How many search hits to consider. Deezer's fuzzy search can return a near-miss (a remix, a re-edit)
  * ahead of the exact recording, so we read a small handful and let the caller's fold+duration gate
  * pick the one that truly matches — never blindly the first.
+ *
+ * The number lives in the CONTRACT (`DEEZER_CANDIDATE_LIMIT`) because both ends must agree on it: it
+ * is what this request asks Deezer for AND the cap `resolve_anchor` accepts back from the box, which
+ * runs this same search from its own IP. One constant, so the ask and the wire cap cannot drift apart.
  */
-const DEEZER_SEARCH_LIMIT = 5;
+const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 
 /**
  * THE QUOTA TRAP (the reason this rung recovered NOTHING from 2026-07-22 to 2026-07-29). Deezer does

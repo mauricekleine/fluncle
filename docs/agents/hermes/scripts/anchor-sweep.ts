@@ -608,7 +608,14 @@ const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 /** Per-request wall-clock deadline. Deezer answers well under a second; past this is a stalled socket. */
 const DEEZER_TIMEOUT_MS = 10_000;
 
-/** Hits to consider. Deezer's search is fuzzy, so the WORKER's gate picks from a small handful. */
+/**
+ * Hits to consider. Deezer's search is fuzzy, so the WORKER's gate picks from a small handful.
+ *
+ * This MUST equal the contract's `DEEZER_CANDIDATE_LIMIT` (packages/contracts, admin-catalogue.ts),
+ * which is the cap `resolve_anchor` accepts — send more and the whole call is refused as a 400. It is
+ * a literal here only because this script is baked standalone onto the box and imports nothing from
+ * the workspace; the contract is the owner, and this is the copy that follows it.
+ */
 const DEEZER_SEARCH_LIMIT = 5;
 
 /**

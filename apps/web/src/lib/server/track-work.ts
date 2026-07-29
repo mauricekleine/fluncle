@@ -382,7 +382,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     // Only rows worth spending a billed Apify search on:
     //   · `spotify_uri is null`         — the derived worklist: un-anchored rows only.
     //   · `duration_ms > 0`             — a row with no measured length can never clear the verified
-    //                                     search triple (the ±2s duration signal is missing), so a
+    //                                     search triple (the ±3s duration signal is missing), so a
     //                                     search on it is guaranteed-no-stamp money.
     //   · `dismissed_at is null`        — the operator's "not for me" (docs/the-ear.md); a dismissed
     //                                     row is out of the telescope, so an anchor buys nothing.

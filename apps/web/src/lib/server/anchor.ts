@@ -48,7 +48,7 @@
 //      whose ISRC matched nothing). A candidate anchors ONLY when it clears ALL THREE signals: the
 //      same artist SET, the same base title, and the same version descriptor (all three carried by
 //      the ratified `matchKey` fold — so the original of a logged VIP can never anchor to the VIP),
-//      AND a duration within ±2s of the row's. Of the candidates that clear it, the closest duration
+//      AND a duration within ±3s of the row's. Of the candidates that clear it, the closest duration
 //      wins. This is the SAME gate the in-Worker fill used, moved here verbatim.
 //
 // EVERY ATTEMPTED ROW is stamped `spotify_anchor_attempted_at` — a hit AND a miss — so the anchor
