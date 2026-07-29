@@ -13,9 +13,12 @@
 //                                  already covered (an open triage PR, or a row already in the
 //                                  ledger), enrich the survivors with the latest event's top
 //                                  in-app frames, and write a compact JSON worklist to <outFile>.
-//                                  Prints a one-line JSON summary. Never throws on a bad/absent
-//                                  token — it records the per-project error and writes an empty
-//                                  worklist, so the driver degrades to a clean SKIP.
+//                                  Prints a one-line JSON summary whose `ok` is DERIVED from the
+//                                  per-project failure count — a project that threw makes the line
+//                                  say `ok:false`, and the driver folds that into the /status
+//                                  marker. Never throws on a bad/absent token — it records the
+//                                  per-project error and writes an empty worklist, so the driver
+//                                  degrades to a clean SKIP.
 //   reconcile                      For each triage PR merged in the last ~48h, resolve the Sentry
 //                                  issue(s) its body references with `Sentry-Issue:`. This is the
 //                                  ONLY path that resolves an issue: we resolve a fix that actually
@@ -205,8 +208,13 @@ export async function listUnresolvedIssues(
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const url = new URL(`${API_BASE}/api/0/projects/${ORG}/${project}/issues/`);
+    // NO `statsPeriod`. This endpoint accepts only '', '24h' and '14d' — anything else is a 400
+    // (`Invalid stats_period. Valid choices are '', '24h', and '14d'`), which is exactly how this
+    // sweep fetched ZERO issues for 11 nights while reporting itself healthy. Leaving it unset
+    // sends the valid empty period. It is NOT the issue filter either way: on the project-issues
+    // endpoint `statsPeriod` picks the stats GRAPH returned per row, so no value here would ever
+    // have widened the window. A real time bound needs `start`/`end`, or date syntax inside `query`.
     url.searchParams.set("query", "is:unresolved");
-    url.searchParams.set("statsPeriod", "90d");
     url.searchParams.set("limit", "100");
     if (cursor) {
       url.searchParams.set("cursor", cursor);
@@ -445,10 +453,13 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
       2,
     ),
   );
+  // `ok` is DERIVED from the failure count, never asserted. A literal `ok: true` sat on this line
+  // directly beside `errors: errors.length` and printed `{"errors":2,"ok":true,…}` every night for
+  // 11 nights while BOTH projects' fetches threw. A summary that cannot say "no" is not a summary.
   console.log(
     JSON.stringify({
       errors: errors.length,
-      ok: true,
+      ok: errors.length === 0,
       totalUnresolved: all.length,
       triaged: enriched.length,
     }),

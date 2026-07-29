@@ -115,14 +115,44 @@ run_triage() {
 
   # 5. FETCH — tonight's NEW unresolved issues (deduped against open PRs + the ledger), enriched
   # with each issue's top in-app frames. Never crashes on a bad token — it writes an empty worklist.
+  #
+  # CAPTURE the helper's summary line rather than firehosing it to stderr. /status reads the LAST
+  # stdout line of THIS driver (cron-output.sh writes the marker; the prober parses it as JSON and
+  # checks `.ok !== false`), so a hardcoded `ok:true` down there reports green no matter what the
+  # helper found — which is precisely how a rejected query parameter stayed invisible for 11
+  # nights. The helper now DERIVES its `ok`; this driver folds that verdict into its own.
   local ledger="${ws}/docs/sentry-backlog.md"
-  "${BUN_BIN}" "${HELPER}" fetch "${ledger}" ".sentry/issues.json" >&2 \
+  local fetched
+  fetched="$("${BUN_BIN}" "${HELPER}" fetch "${ledger}" ".sentry/issues.json")" \
     || log "fetch returned nonzero (continuing; worklist may be empty)"
+  # The summary also reaches the marker verbatim: cron-output.sh keeps a stderr tail, so `log`
+  # puts the helper's own words in front of the operator without this driver having to splice a
+  # foreign JSON fragment into the line /status parses.
+  log "fetch: ${fetched:-<no summary printed>}"
+
+  # Reduce that verdict to a plain integer (bun one-liner; no jq on the box). A summary that is
+  # missing, malformed, or explicitly not-ok counts as at least one failure — ONLY an explicit
+  # `ok:true` is green. The `case` re-checks it is digits-only, because this value is interpolated
+  # into the JSON below and a surprise there would break the very line it exists to make honest.
+  local fetch_errors
+  fetch_errors="$("${BUN_BIN}" -e 'let n=1;try{const j=JSON.parse(process.argv[1]||"");if(j&&j.ok===true)n=0;else n=Math.max(1,Number(j&&j.errors)||1)}catch{}process.stdout.write(String(n))' "${fetched}" 2>/dev/null || echo 1)"
+  case "${fetch_errors}" in '' | *[!0-9]*) fetch_errors=1 ;; esac
+  # The verdict as a JSON literal, for the summary lines below. A PARTIAL failure (one project
+  # answered, the other threw) still yields a worklist, so the triage path needs it too — that run
+  # triaged something, but it did not see everything, and the board must say so.
+  local fetch_verdict="false"
+  [ "${fetch_errors}" != "0" ] || fetch_verdict="true"
 
   # Read the worklist count without jq (bun one-liner).
   local triaged
   triaged="$("${BUN_BIN}" -e 'const j=require("fs").existsSync(".sentry/issues.json")?JSON.parse(require("fs").readFileSync(".sentry/issues.json","utf8")):{};process.stdout.write(String((j.issues||[]).length))' 2>/dev/null || echo 0)"
   if [ "${triaged:-0}" = "0" ]; then
+    # An EMPTY worklist means one of two opposite things, and they must not share a summary line:
+    # a genuinely clean night, or a fetch that never got to look. Only the first is green.
+    if [ "${fetch_verdict}" != "true" ]; then
+      echo "{\"ok\":false,\"action\":\"fetch-failed\",\"triaged\":0,\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
+      return 1
+    fi
     echo "{\"ok\":true,\"action\":\"clean\",\"triaged\":0,\"reconcile\":${reconciled}}"
     return 0
   fi
@@ -187,7 +217,7 @@ ${worklist}
   if [ "${DRY_RUN}" = "1" ]; then
     log "DRY RUN complete — inspect ${ws} (branches uncommitted)"
     [ -r .sentry/report.md ] && { log "── report ──"; cat .sentry/report.md >&2; }
-    echo "{\"ok\":true,\"action\":\"dry-run\",\"triaged\":${triaged}}"
+    echo "{\"ok\":${fetch_verdict},\"action\":\"dry-run\",\"triaged\":${triaged},\"fetchErrors\":${fetch_errors}}"
     return 0
   fi
 
@@ -196,7 +226,7 @@ ${worklist}
   commented="$("${BUN_BIN}" "${HELPER}" comment "${date_tag}" 2>/dev/null || echo '{"commented":0}')"
   log "comment: ${commented}"
 
-  echo "{\"ok\":true,\"action\":\"triaged\",\"triaged\":${triaged},\"prs\":${opened:-0},\"reconcile\":${reconciled},\"comment\":${commented}}"
+  echo "{\"ok\":${fetch_verdict},\"action\":\"triaged\",\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented}}"
   return 0
 }
 
