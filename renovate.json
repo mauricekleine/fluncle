@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
-  "enabledManagers": ["github-actions"],
+  "enabledManagers": ["github-actions", "npm"],
   "labels": ["dependencies", "github-actions"],
   "timezone": "Europe/Amsterdam",
   "schedule": ["before 6am on monday"],
@@ -27,7 +27,13 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "HELD (inert until the npm/bun manager is enabled — encoded now so the config is already correct that day): eslint majors in apps/mobile — eslint-config-expo's plugin chain crashes under ESLint 10; rides the Expo SDK arc.",
+      "description": "One PR per window for the workspace dependencies too: the whole npm drift lands as a single grouped PR on the shared Monday schedule, opened for review (this config automerges nothing). The global minimumReleaseAge mirrors bunfig.toml's 259200s supply-chain brake, so nothing freshly published rides in. Labelled npm because the top-level pair names the actions PRs; the rules below carve out the packages that must not move.",
+      "matchManagers": ["npm"],
+      "groupName": "npm dependencies",
+      "labels": ["dependencies", "npm"]
+    },
+    {
+      "description": "HELD: eslint majors in apps/mobile — eslint-config-expo's plugin chain crashes under ESLint 10; rides the Expo SDK arc.",
       "matchFileNames": ["apps/mobile/package.json"],
       "matchPackageNames": ["eslint"],
       "matchUpdateTypes": ["major"],
