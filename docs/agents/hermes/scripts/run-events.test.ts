@@ -515,7 +515,11 @@ async function runSecretsSync(
     bootstrap,
     [
       "OP_SERVICE_ACCOUNT_TOKEN=stub",
-      ...(fixture.gsc ? ["FLUNCLE_GSC_OP_REF=op://stub/gsc"] : []),
+      // A PLACEHOLDER ref, never a concrete one (the CI working-tree grep rejects any
+      // `op://` path starting with an alphanumeric — AGENTS.md "Public Repo"), and SINGLE
+      // QUOTED because the script sources this file: an unquoted `<vault>` would be read as
+      // a redirection. The stub `op` ignores the argument anyway.
+      ...(fixture.gsc ? ["FLUNCLE_GSC_OP_REF='op://<vault>/<gsc-item>'"] : []),
     ].join("\n") + "\n",
     "utf8",
   );
