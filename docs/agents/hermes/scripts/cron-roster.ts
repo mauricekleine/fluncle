@@ -56,6 +56,11 @@
 // units. (This module rides the image as inert dead weight — it exports pure functions and runs
 // nothing at import time — so a bake that includes it costs nothing.)
 //
+// And baking the units in so the prober COULD derive at runtime would be a downgrade, not the
+// missing step: the copy in the image is frozen at bake time while the ones that actually fire
+// are whatever install-host-timers.sh last laid on the host. That trades a mirror something
+// checks for a mirror nothing checks — the exact swap this file exists to undo.
+//
 // The sibling guard over the same directory tree is install-host-timers.test.ts, which asks a
 // different question: does the INSTALLER lay every unit down? This one asks: does every unit it
 // lays down actually get WATCHED?
