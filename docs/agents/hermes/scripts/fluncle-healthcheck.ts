@@ -575,13 +575,28 @@ function probeDisk(): Check {
 // output-dir `# Cron Job:` header contains (e.g. the dir for `fluncle-context-note`
 // matches "context-note") + its cadence in ms. The staleness budget is 3× the
 // cadence: a job that hasn't produced output in three of its own cycles is genuinely
-// lagging. Mirror of @fluncle/registry cronSurfaces() — when a cron is added there,
-// add it here too (this script can't import the workspace package on the box).
+// lagging.
+//
+// THIS LIST IS NO LONGER HAND-KEPT — it is hand-CARRIED, and asserted.
+// cron-roster.ts DERIVES the same roster from the committed systemd timer units
+// (docs/agents/hermes/*/*.timer → the paired .service's ExecStart → the
+// `emit_cron_output <token>` it reaches → the timer's own OnUnitActiveSec/OnCalendar),
+// and cron-roster.test.ts fails the build when this literal and that derivation
+// disagree, in either direction, on either the token set or the cadence. It binds
+// @fluncle/registry's cron surfaces to the same units in the same pass, so all three
+// statements of one fact move together.
+//
+// It stays a literal here because the prober is deployed standalone: the image bakes
+// docs/agents/hermes/scripts/ and nothing else, while the timer units are laid down on
+// the HOST by install-host-timers.sh and never enter the container — so the box cannot
+// read a unit at tick time. The comments below (the claim-collision notes) are the part
+// no derivation can produce; keep writing them.
+//
 // One known cron: the registry surface id we emit, the bare token its output-dir
 // header carries, and its cadence.
 export type CronDef = { cadenceMs: number; match: string; service: string };
 
-const AUTOMATION_CRONS: CronDef[] = [
+export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
   { cadenceMs: 5 * 60_000, match: "embed", service: "cron.embed" },
   { cadenceMs: 24 * 60 * 60_000, match: "cluster", service: "cron.cluster" }, // nightly sonic-galaxy assignment
@@ -629,9 +644,14 @@ const AUTOMATION_CRONS: CronDef[] = [
   // a self-read would be circular. Its /status row is emitted self-evidently by
   // probeHealthcheck() below instead.
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
-  // The weekly Frontier playlist refresh (E2) — Fri 07:00 Amsterdam; same generous weekly floor
-  // as the newsletter. No token collision: no other cron token contains "frontier-refresh".
-  { cadenceMs: 7 * 24 * 60 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
+  // The Frontier playlist drain (E2) — every 15m. It USED to be a Friday-07:00 burst, and this
+  // entry kept saying so for as long as the burst had been gone: a 7-day cadence means a 21-day
+  // staleness budget, so a dead drain would have read `fresh` on /status for three weeks.
+  // @fluncle/registry's probeConfig had already been corrected; only this copy was left behind,
+  // which is precisely why cron-roster.test.ts now binds both to the timer unit. The crew still
+  // sees a ~weekly refresh — the pacing is in the sweep's due-gate, never in the cadence here.
+  // No token collision: no other cron token contains "frontier-refresh".
+  { cadenceMs: 15 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
   // The nightly hub-counts reconciliation (docs/db-scale-backlog Wave 2 keystone 2, slice C).
   // `reconcile-hub-counts` is the longest token here and no other cron's `fluncle-…` dir header is a

@@ -33,6 +33,12 @@ Seven sweeps sat dead for 13 hours with no alert. The catalogue anchor queue sta
 1. **Prevention** — `rearm_stalled_timer` in [`../pin-watch/rebuild-hermes.sh`](../pin-watch/rebuild-hermes.sh). The quiesce restore path now checks each timer it restarts and kicks the service once if it came back with no next elapse. This closes the exact hole the incident came through.
 2. **Detection** — this unit. An independent net that catches the same stranding from **any** cause: an `install-host-timers.sh` re-run shortly after boot, a manual `systemctl stop`, a crash mid-quiesce. It re-arms what it finds and posts a Discord alert naming the timers, because a stranded timer means something stopped it outside the paths that know to restore it.
 
+## The gap that is still open: nothing watches the watchdog
+
+This unit runs on the host, outside the container, so it never sources [`../scripts/cron-output.sh`](../scripts/cron-output.sh) and writes no `/status` marker — and unlike `pin-watch` (which POSTs its own `self-deploy` row) it POSTs nothing either. So it appears on `/status` **not at all**. A clean pass is silent by design, which means a watchdog that has been dead for a week looks exactly like a watchdog with nothing to do: the blind-detector shape this whole unit exists to catch, turned on itself. `fluncle-secrets-sync` is in the same position.
+
+It is recorded rather than papered over: both timers are declared in `NON_WRITER_TIMERS` in [`../scripts/cron-roster.ts`](../scripts/cron-roster.ts), whose guard fails the build if that declaration ever stops being true. Closing it properly means giving the pass a `/status` row of its own — a `checked` denominator, not a `healed` count, because a healthy watchdog legitimately heals nothing forever.
+
 ## Why `OnCalendar`
 
 The watchdog runs on `OnCalendar=*:0/15`, deliberately. A calendar timer always carries a realtime next elapse, so the watchdog **cannot fall into the hole it exists to find**. It is also the one form `Persistent=true` actually applies to.
