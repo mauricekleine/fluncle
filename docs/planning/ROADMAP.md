@@ -66,9 +66,9 @@ Monitoring, not work. Collapsed here so it stops occupying build sections.
 
 ## Next — freeze-safe work: reliability, hygiene, and the overhaul's prerequisites
 
-### Dependency vulnerability posture — 18 open alerts (measured 2026-07-26)
+### Dependency vulnerability posture — queue clear (0 open alerts, measured 2026-07-29)
 
-Every open alert is triaged (zero fix-now; the analysis lives in the ledger and the triage report). What is ahead: two upstream-pinned watches that close themselves when libsql's chain moves, the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the queue — and the CI-side half (`bun audit` + the Renovate npm extension, the follow-ups item below). (The triage analysis lives in git history — the audit ledger's rows were cleared 2026-07-27, the security rows among them.)
+The Dependabot queue is clear: 0 open (19 dismissed, 13 fixed; the triage analysis lives in git history — the audit ledger's rows were cleared 2026-07-27, the security rows among them). What is ahead: the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the queue — and the CI-side half (`bun audit` + the Renovate npm extension, the follow-ups item below).
 
 ### Housekeeping follow-ups — operator decisions pending (2026-07-26 sweep)
 
