@@ -29,6 +29,7 @@ vi.mock("./db", async (importOriginal) => {
 
 import {
   APPLE_LINKS_MACHINE_SERVED,
+  IDENTITY_METHODS,
   type IdentityRecording,
   type IdentityState,
   normalizeIsrcKey,
@@ -206,6 +207,30 @@ describe("the Spotify state, off the persisted provenance", () => {
       // The hit time is a REAL verification time, not the last-attempt stamp beside it.
       expect(verification.atMeaning).toBe("verified");
     }
+  });
+
+  it("reads a publish-born finding as `publish`, never as legacy", async () => {
+    // The best-provenance links in the archive: the operator handed over a Spotify URL and
+    // Spotify's own API returned the record. Before this value existed they read `unknown-legacy`,
+    // which was false about them twice over.
+    await insertTrack("t-publish", {
+      spotifyAnchoredAt: "2026-07-03T00:00:00.000Z",
+      spotifySource: "publish",
+      spotifyUri: "spotify:track:t-publish",
+      spotifyVerifiedBy: "publish",
+    });
+    await certify("t-publish", "004.7.2I");
+
+    const verification = verificationOf(
+      (await only({ idOrLogId: "t-publish", kind: "idOrLogId" })).links.spotify,
+    );
+
+    expect(verification.method).toBe("publish");
+    expect(verification.source).toBe("publish");
+    // A real verification time: the moment publish wrote the row IS the moment the link was
+    // verified, because the id was re-read through Spotify's own API to write it.
+    expect(verification.atMeaning).toBe("verified");
+    expect(verification.at).toBe("2026-07-03T00:00:00.000Z");
   });
 
   it("reads an operator-accepted review as `operator`, never as legacy", async () => {
@@ -593,6 +618,27 @@ describe("the key lookups and the relation between what they return", () => {
       await readIdentity({ kind: "mbid", mbid: "11111111-2222-3333-4444-555555555555" }),
     ).toBeUndefined();
     expect(await readIdentity({ idOrLogId: "nope", kind: "idOrLogId" })).toBeUndefined();
+  });
+});
+
+describe("the method enum is closed, and closed the SAME way on both sides", () => {
+  it("matches the contract's enum exactly, member for member", async () => {
+    // The one guard that stops the two definitions drifting. The server computes a `method` and the
+    // contract validates it, so a value added to one alone is either an unusable enum member or a
+    // response that fails its own schema at runtime — and neither shows up until a caller hits the
+    // exact row that produces it.
+    const { IdentityMethodSchema } = await import("@fluncle/contracts/orpc");
+
+    expect([...IdentityMethodSchema.options].sort()).toEqual([...IDENTITY_METHODS].sort());
+  });
+
+  it("carries no tier noun in any member", () => {
+    // The tier lives in the `certified` boolean and nowhere else, enum values included.
+    for (const method of IDENTITY_METHODS) {
+      for (const noun of ["finding", "catalogue", "banger", "uncertified"]) {
+        expect(method).not.toContain(noun);
+      }
+    }
   });
 });
 

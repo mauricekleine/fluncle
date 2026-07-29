@@ -150,15 +150,31 @@ export type AnchorCandidate = {
  * an envelope that flattened the two would overstate what was checked. `operator` is written only
  * by `resolveAnchorReview`'s accept — a human read both titles.
  */
-export type AnchorVerification = "isrc" | "operator" | "search" | "search-subset" | null;
+export type AnchorVerification =
+  | "isrc"
+  | "operator"
+  | "publish"
+  | "search"
+  | "search-subset"
+  | null;
 
 /**
  * The subset of {@link AnchorVerification} the automated GATE can return — everything but
- * `operator`, which only the human ruling in `resolveAnchorReview` writes. Split from the persisted
- * domain so the `anchor_track` / `resolve_anchor` contracts advertise exactly the values their
- * handlers can produce, rather than a value no machine path can reach.
+ * `operator` (only the human ruling in `resolveAnchorReview` writes it) and `publish` (only the add
+ * flow does). Split from the persisted domain so the `anchor_track` / `resolve_anchor` contracts
+ * advertise exactly the values their handlers can produce, rather than values no gate path reaches.
  */
-export type AnchorGateVerification = Exclude<AnchorVerification, "operator">;
+export type AnchorGateVerification = Exclude<AnchorVerification, "operator" | "publish">;
+
+/**
+ * The domain of `tracks.spotify_anchor_source` — WHICH PATH produced the link. A superset of
+ * {@link AnchorReviewSource} by exactly one member, and the split is deliberate:
+ * `AnchorReviewSource` is the domain of the REVIEW note's `candidate.source` (the five rungs that
+ * can fetch a candidate for the operator to rule on), and `publish` is not one of them — no rung
+ * searched, the operator handed over a Spotify URL and Spotify's own API answered. Widening
+ * `AnchorReviewSource` itself would let `publish` into a review note where it can never be true.
+ */
+export type AnchorSource = AnchorReviewSource | "publish";
 
 /** The minimal shape the verified-search gate reads off a candidate. */
 type VerifiableCandidate = {

@@ -254,13 +254,17 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           discogsAttemptedAt,
           discogsResolved ? nowIso : null,
           discogsAttemptedAt === null ? 0 : 1,
-          // THE ANCHOR HIT TIME (schema.ts § `spotify_anchored_at`). A finding is born ANCHORED —
-          // the id came from the operator's Spotify URL and was re-read through Spotify's own API
-          // (`fetchTrack`), so this moment IS when the link was verified. The attempt stamp beside
-          // it stays NULL, correctly: the anchor GATE never ran on this row, and stamping a
-          // last-attempt time it never had would put a publish-born finding into the re-ask
-          // backoff's reading. The provenance pair stays NULL too — publish records no rung, so the
-          // envelope reads `unknown-legacy`: "we hold no record of how", never a claim.
+          // THE ANCHOR PROVENANCE + THE HIT TIME (schema.ts § the pair). A finding is born
+          // ANCHORED, with the BEST provenance in the archive: the id came from the operator's own
+          // Spotify URL and was re-read through Spotify's own `GET /tracks/{id}`, so the platform's
+          // own record IS the answer. `source = 'publish'` names the path; `verified_by = 'publish'`
+          // names the signal, and it is a STRONGER claim than any search rung precisely because no
+          // gate ran — there was no candidate to compare, the id is the identity. These must never
+          // read `unknown-legacy`, which is what they did before this triple was written.
+          //
+          // The attempt stamp beside them stays NULL, correctly: the anchor GATE never ran here,
+          // and inventing a last-attempt time would put a publish-born finding into the re-ask
+          // backoff's reading.
           nowIso,
           // is_catalogue = 0: born CERTIFIED. The certification half is minted in the SAME batch
           // (findingInsertStatement below), so the maintained invariant (a track with a findings
@@ -289,8 +293,10 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             backfill_discogs_done_at,
             backfill_discogs_attempts,
             spotify_anchored_at,
+            spotify_anchor_source,
+            spotify_anchor_verified_by,
             is_catalogue
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publish', 'publish', ?)`,
       },
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.

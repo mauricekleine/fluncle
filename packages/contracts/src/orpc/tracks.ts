@@ -16,12 +16,22 @@ import {
 
 /**
  * How a link or identifier came to be trusted. Mirrors `IdentityMethod` in
- * apps/web/src/lib/server/identity-envelope.ts; every value is backed by a stored
- * column or by the row's own primary key, and `unknown-legacy` means Fluncle holds
- * no record of how rather than that the check was weak.
+ * apps/web/src/lib/server/identity-envelope.ts, and a test asserts the two sets are
+ * equal so neither side can gain a member alone. Every value is backed by a stored
+ * column or by the recording's own primary key:
+ *
+ *   - `isrc` — an ISRC equality decided it.
+ *   - `operator` — a human read the evidence and ruled.
+ *   - `pk-derived` — the identifier is the recording's origin, not a lookup result.
+ *   - `publish` — the link arrived with the add and was re-read through the platform's
+ *     own API. No check ran because nothing needed checking: the id is the identity.
+ *   - `search` — the full verified match cleared.
+ *   - `search-subset` — the narrower fallback cleared, on a weaker artist match paid
+ *     for with a tighter duration one. Kept apart from `search` on purpose.
+ *   - `unknown-legacy` — Fluncle holds no record of how, rather than the check being weak.
  */
-const IdentityMethodSchema = z
-  .enum(["isrc", "operator", "pk-derived", "search", "search-subset", "unknown-legacy"])
+export const IdentityMethodSchema = z
+  .enum(["isrc", "operator", "pk-derived", "publish", "search", "search-subset", "unknown-legacy"])
   .describe("How the identifier or link came to be trusted.");
 
 /**

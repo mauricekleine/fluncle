@@ -371,6 +371,9 @@ export { type SubmissionBody, submitTrack } from "./submissions";
 export {
   getRandomTrack,
   getTrack,
+  // Re-exported so the server's own `IdentityMethod` union can be asserted equal to it by a test —
+  // the two are computed and validated on opposite sides of the wire and must never drift.
+  IdentityMethodSchema,
   listFindings,
   listFresh,
   listMixableTracks,

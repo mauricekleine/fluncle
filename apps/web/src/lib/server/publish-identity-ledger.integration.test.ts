@@ -131,18 +131,19 @@ describe("publishTrack — the identity-ledger stamps", () => {
     expect(Number(row.backfill_discogs_failures)).toBe(0);
   });
 
-  it("is born ANCHORED — the hit time stamped, the last-attempt stamp left null", async () => {
+  it("is born ANCHORED, with `publish` provenance and the hit time stamped", async () => {
     // A finding's Spotify id came from the operator's URL and was re-read through Spotify's own
-    // API, so the moment publish writes the row IS the moment the link was verified. The anchor
-    // GATE never ran, so the last-attempt stamp beside it stays null rather than putting a
-    // publish-born row into the re-ask backoff's reading — and the provenance pair stays null
-    // because publish records no rung.
+    // API, so the moment publish writes the row IS the moment the link was verified, and the
+    // platform's own record is the signal. These are the best-provenance links in the archive and
+    // must never read `unknown-legacy`.
     const row = await publishAndRead();
 
     expect(row.spotify_anchored_at).not.toBeNull();
+    expect(row.spotify_anchor_source).toBe("publish");
+    expect(row.spotify_anchor_verified_by).toBe("publish");
+    // The anchor GATE never ran, so the last-attempt stamp stays null rather than putting a
+    // publish-born row into the re-ask backoff's reading.
     expect(row.spotify_anchor_attempted_at).toBeNull();
-    expect(row.spotify_anchor_source).toBeNull();
-    expect(row.spotify_anchor_verified_by).toBeNull();
   });
 
   it("stamps the ISRC attempt on a CLEAN MISS — Spotify omitted it and Deezer had none either", async () => {

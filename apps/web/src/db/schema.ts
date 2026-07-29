@@ -571,12 +571,13 @@ export const tracks = sqliteTable(
     // `anchorTrack`) and the operator's accepted review (`resolveAnchorReview`) — never separately,
     // so a row can never carry an anchor with someone else's provenance.
     //
-    // `spotify_anchor_source` = the RUNG, the five-member `AnchorReviewSource` verbatim
-    // ("apify" | "deezer" | "listenbrainz" | "spotify-isrc" | "spotify-search"). NULL on an
-    // operator-accepted review (no rung fetched it — he did) and on every row anchored before these
+    // `spotify_anchor_source` = WHICH PATH produced the link (`AnchorSource` in anchor.ts): the
+    // five-member `AnchorReviewSource` verbatim ("apify" | "deezer" | "listenbrainz" |
+    // "spotify-isrc" | "spotify-search"), plus "publish" for the add flow. NULL on an
+    // operator-accepted review (no path fetched it — he did) and on every row anchored before these
     // columns existed.
     //
-    // `spotify_anchor_verified_by` = the SIGNAL that cleared the gate:
+    // `spotify_anchor_verified_by` = the SIGNAL that made the link trustworthy:
     //   · "isrc"          — the candidate's ISRC equalled the row's. The recording's real identity.
     //   · "search"        — the full verified triple (same artist SET, same base title, same version
     //                       descriptor) inside ±ANCHOR_DURATION_TOLERANCE_MS.
@@ -586,10 +587,14 @@ export const tracks = sqliteTable(
     //                       an envelope that flattened the two would overstate what Fluncle checked.
     //   · "operator"      — he read both titles and ruled (`resolve_anchor_review`). These are the
     //                       best-provenance anchors in the corpus and must never read as legacy.
+    //   · "publish"       — the finding was ADDED from a Spotify URL, and the id was re-read through
+    //                       Spotify's own `GET /tracks/{id}`. No gate ran because there was nothing
+    //                       to gate: no candidate was compared, the id IS the identity and the
+    //                       platform's own record is the answer. That is a STRONGER claim than any
+    //                       search rung, so it must not read as legacy either.
     //
-    // NULL on both ⇒ the envelope reads `unknown-legacy`: anchored before the columns existed, or by
-    // a path that records no rung (publish, whose Spotify id IS the user's input, re-read through
-    // Spotify's own API). Honest — "we hold no record of how" — never a claim.
+    // NULL on both ⇒ the envelope reads `unknown-legacy`: anchored before the columns existed.
+    // Honest — "we hold no record of how" — never a claim.
     //
     // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule above: a
     // `.default()` on a `tracks` column makes drizzle regenerate the whole table and drop+recreate
@@ -605,7 +610,7 @@ export const tracks = sqliteTable(
     // envelope carries `atMeaning` and why this column exists to make the honest answer available at
     // all.
     //
-    // Written in the same UPDATE as `spotify_uri` by all three writers: the gate's hit, the
+    // Written in the same statement as `spotify_uri` by all three writers: the gate's hit, the
     // operator's accepted review, and PUBLISH (its own `nowIso` — publish resolves the id through
     // Spotify's own API read, so the moment it writes the row IS the moment the link was verified).
     // NULL on every row anchored before this column existed ⇒ the envelope serves `at: null` with

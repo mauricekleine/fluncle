@@ -210,7 +210,7 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
     const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
 
-    expect(result).toEqual({ discogsStamped: 1, isrcStamped: 1 });
+    expect(result).toEqual({ discogsStamped: 1, isrcStamped: 1, publishAnchorsStamped: 0 });
 
     const after = await ledger("sp_1");
 
@@ -238,7 +238,7 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
     const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
 
-    expect(result).toEqual({ discogsStamped: 0, isrcStamped: 0 });
+    expect(result).toEqual({ discogsStamped: 0, isrcStamped: 0, publishAnchorsStamped: 0 });
     expect((await ledger("mb_nothing")).isrc_attempted_at).toBeNull();
     expect((await ledger("mb_blank")).isrc_attempted_at).toBeNull();
     expect((await ledger("mb_nothing")).backfill_discogs_attempted_at).toBeNull();
@@ -250,7 +250,7 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
     const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
 
-    expect(result).toEqual({ discogsStamped: 1, isrcStamped: 1 });
+    expect(result).toEqual({ discogsStamped: 1, isrcStamped: 1, publishAnchorsStamped: 0 });
 
     const isrcOnly = await ledger("mb_isrc_only");
     const discogsOnly = await ledger("mb_discogs_only");
@@ -274,8 +274,8 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
     const second = await backfillIdentityLedger(db, "2026-07-30T00:00:00.000Z");
     const after = [await ledger("sp_2"), await ledger("mb_2")];
 
-    expect(first).toEqual({ discogsStamped: 1, isrcStamped: 2 });
-    expect(second).toEqual({ discogsStamped: 0, isrcStamped: 0 });
+    expect(first).toEqual({ discogsStamped: 1, isrcStamped: 2, publishAnchorsStamped: 0 });
+    expect(second).toEqual({ discogsStamped: 0, isrcStamped: 0, publishAnchorsStamped: 0 });
     expect(after).toEqual(before);
   });
 
@@ -292,7 +292,7 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
     const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
 
-    expect(result).toEqual({ discogsStamped: 0, isrcStamped: 0 });
+    expect(result).toEqual({ discogsStamped: 0, isrcStamped: 0, publishAnchorsStamped: 0 });
 
     const after = await ledger("mb_stamped");
 
@@ -300,5 +300,134 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
     expect(after.backfill_discogs_attempted_at).toBe("2026-01-01T00:00:00.000Z");
     // The real attempt's count survives — the backfill's floor of 1 never walks it back.
     expect(after.backfill_discogs_attempts).toBe(3);
+  });
+});
+// ── THE PUBLISH-BORN ANCHOR PROVENANCE (RFC dnb-identity-graph, Unit 1 item 4) ─────────────────
+//
+// The backfill's third statement claims something the others do not: it INFERS a provenance from
+// the shape of a row rather than from a value that is already there. So the test that matters is
+// not "does it stamp" — it is "can it stamp the wrong row", and every neighbouring row shape that
+// could plausibly be mistaken for a publish-born finding is seeded here and asserted untouched.
+
+describe("backfillIdentityLedger — the publish-born anchor provenance", () => {
+  /** A publish-born finding as history left it: PK = the Spotify id, uri derived from it, no provenance. */
+  async function insertPublishBorn(
+    spotifyId: string,
+    addedAt: string,
+    logId = "004.7.2I",
+  ): Promise<void> {
+    await db.execute({
+      args: [
+        spotifyId,
+        `spotify:track:${spotifyId}`,
+        `https://open.spotify.com/track/${spotifyId}`,
+      ],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url, is_catalogue)
+            values (?, 'Tune', '["Artist"]', 300000, ?, ?, 0)`,
+    });
+    // A Log ID is UNIQUE, so a fixture seeding two findings has to vary it.
+    await db.execute({
+      args: [spotifyId, logId, addedAt],
+      sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
+    });
+  }
+
+  async function provenance(trackId: string) {
+    const result = await db.execute({
+      args: [trackId],
+      sql: `select spotify_anchor_source, spotify_anchor_verified_by, spotify_anchored_at
+            from tracks where track_id = ?`,
+    });
+
+    return result.rows[0];
+  }
+
+  it("stamps a publish-born finding with `publish` and its finding's added_at", async () => {
+    await insertPublishBorn("abcdefghij0123456789AB", "2026-03-04T10:00:00.000Z");
+
+    const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
+
+    expect(result.publishAnchorsStamped).toBe(1);
+
+    const after = await provenance("abcdefghij0123456789AB");
+
+    expect(after?.spotify_anchor_source).toBe("publish");
+    expect(after?.spotify_anchor_verified_by).toBe("publish");
+    // The finding's own added_at, not this run's clock: publish writes the anchor and mints the
+    // finding in ONE batch, so that instant IS when the link was verified.
+    expect(after?.spotify_anchored_at).toBe("2026-03-04T10:00:00.000Z");
+  });
+
+  it("CANNOT mislabel the row shapes that sit next to it", async () => {
+    // 1. A CRAWLER-born row anchored by the gate and certified later. Its uri does not match its
+    //    PK, and nothing stored says whether the gate or the certify-in-place pre-flight put the
+    //    link there — so it must keep reading `unknown-legacy`, which is the truth for it.
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url, is_catalogue)
+            values ('mb_crawled', 'Tune', '["Artist"]', 300000, 'spotify:track:zzzzzzzzzzzzzzzzzzzzzz',
+                    'https://open.spotify.com/track/zzzzzzzzzzzzzzzzzzzzzz', 0)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into findings (track_id, log_id, added_at) values ('mb_crawled', '005.1.1A', '2026-04-01T00:00:00.000Z')`,
+    });
+
+    // 2. A FRESHNESS-TAP catalogue row. Its PK is `sp_<spotifyId>`, so `'spotify:track:' ||
+    //    track_id` can never equal its uri — the prefix is what keeps the two apart.
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url)
+            values ('sp_qqqqqqqqqqqqqqqqqqqqqq', 'Tune', '["Artist"]', 300000,
+                    'spotify:track:qqqqqqqqqqqqqqqqqqqqqq', 'https://open.spotify.com/track/qqqqqqqqqqqqqqqqqqqqqq')`,
+    });
+
+    // 3. A publish-SHAPED row with NO findings row. Whatever it is, it is not a certified finding,
+    //    and the EXISTS guard reads the invariant itself rather than the `is_catalogue` mirror.
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url)
+            values ('wwwwwwwwwwwwwwwwwwwwww', 'Tune', '["Artist"]', 300000,
+                    'spotify:track:wwwwwwwwwwwwwwwwwwwwww', 'https://open.spotify.com/track/wwwwwwwwwwwwwwwwwwwwww')`,
+    });
+
+    const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
+
+    expect(result.publishAnchorsStamped).toBe(0);
+
+    for (const trackId of ["mb_crawled", "sp_qqqqqqqqqqqqqqqqqqqqqq", "wwwwwwwwwwwwwwwwwwwwww"]) {
+      const after = await provenance(trackId);
+
+      expect(after?.spotify_anchor_source, trackId).toBeNull();
+      expect(after?.spotify_anchor_verified_by, trackId).toBeNull();
+    }
+  });
+
+  it("never overwrites provenance a real write has since recorded, and re-runs as a no-op", async () => {
+    await insertPublishBorn("ccccccccccccccccccccc1", "2026-03-04T10:00:00.000Z");
+    await db.execute({
+      args: [],
+      sql: `update tracks
+            set spotify_anchor_source = 'apify', spotify_anchor_verified_by = 'search',
+                spotify_anchored_at = '2026-05-05T00:00:00.000Z'
+            where track_id = 'ccccccccccccccccccccc1'`,
+    });
+
+    const first = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
+
+    expect(first.publishAnchorsStamped).toBe(0);
+    expect((await provenance("ccccccccccccccccccccc1"))?.spotify_anchor_verified_by).toBe("search");
+
+    // And the ordinary idempotence: a second run over a row the FIRST run stamped changes nothing.
+    await insertPublishBorn("dddddddddddddddddddddd", "2026-03-05T10:00:00.000Z", "006.2.2B");
+    expect(
+      (await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z")).publishAnchorsStamped,
+    ).toBe(1);
+    expect(
+      (await backfillIdentityLedger(db, "2026-07-30T00:00:00.000Z")).publishAnchorsStamped,
+    ).toBe(0);
+    expect((await provenance("dddddddddddddddddddddd"))?.spotify_anchored_at).toBe(
+      "2026-03-05T10:00:00.000Z",
+    );
   });
 });

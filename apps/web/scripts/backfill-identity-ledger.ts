@@ -3,7 +3,7 @@
  * The identity-ledger trues-up — IDEMPOTENT, and FOLDED INTO THE DEPLOY: `deploy:cf` runs it as
  * part of `db:backfill`, right after `db:migrate` lands the two columns it fills.
  *
- * ── WHY IT EXISTS (RFC dnb-identity-graph, Unit 1 items 1–2) ─────────────────────────────
+ * ── WHY IT EXISTS (RFC dnb-identity-graph, Unit 1 items 1–2 and 4) ───────────────────────
  * Two attempt stamps arrived on `tracks` — `isrc_attempted_at` and the `backfill_discogs_*` set —
  * so that a MISSING identifier can say which kind of missing it is: "we looked, it is not there"
  * or "nobody has looked yet". Every fill path now stamps as it concludes, but history predates
@@ -26,6 +26,10 @@
  * Anything serving these values must present them as ATTEMPTED, never as VERIFIED (the envelope's
  * `atMeaning` carries exactly that distinction).
  *
+ * The THIRD statement (the publish-born anchor provenance) is the one exception to that last rule,
+ * and earns it: a publish-born finding's `added_at` IS the moment the anchor was written, in the
+ * same batch, so it is served as VERIFIED. Its own block below carries the discriminator argument.
+ *
  * ── IDEMPOTENT ───────────────────────────────────────────────────────────────────────────
  * Each statement carries an `… is null` residual, so a second run matches nothing, writes nothing,
  * and — the property that matters — can never overwrite a stamp a real attempt has since written.
@@ -44,6 +48,8 @@ export type IdentityLedgerBackfillResult = {
   discogsStamped: number;
   /** Rows given an ISRC attempt stamp because they already carry an ISRC. */
   isrcStamped: number;
+  /** Publish-born findings given the `publish` anchor provenance history never recorded. */
+  publishAnchorsStamped: number;
 };
 
 /**
@@ -81,7 +87,49 @@ export async function backfillIdentityLedger(
             and backfill_discogs_attempted_at is null`,
   });
 
-  return { discogsStamped: discogs.rowsAffected, isrcStamped: isrc.rowsAffected };
+  // ── THE PUBLISH-BORN ANCHOR PROVENANCE (RFC dnb-identity-graph, Unit 1 item 4) ─────────────
+  // Publish now stamps `source`/`verified_by`/`anchored_at` = 'publish' as it mints, but every
+  // finding added before that landed carries NULL — and NULL reads `unknown-legacy` in the
+  // envelope, which for these rows is the WRONG answer twice over: they are the best-provenance
+  // links in the archive (Spotify's own API returned the record for an id the operator supplied),
+  // and "we hold no record of how" is simply false about them.
+  //
+  // THE DISCRIMINATOR, and why it cannot mislabel a row. `spotify_uri = 'spotify:track:' ||
+  // track_id` is the structural fingerprint of publish's own mint and of nothing else: publish
+  // derives the PK from the operator's URL (`parseSpotifyTrackUrl`) and writes the uri from the
+  // same fetched track in the SAME insert. Every other minting path PREFIXES its key — the crawler
+  // mints `mb_<mbid>`, the freshness tap mints `sp_<spotifyId>` — so neither can ever satisfy it
+  // (`spotify:track:mb_…` is not a uri anyone writes). And no path rewrites a certified row's uri
+  // afterwards: `anchorTrack` and `resolveAnchorReview` both throw `certified` before writing, and
+  // publish's certify-in-place ISRC pre-flight only fills a NULL uri, always onto a crawler-born
+  // PK. The findings EXISTS is the belt to that braces, and it reads the invariant itself rather
+  // than the `is_catalogue` mirror of it.
+  //
+  // WHAT IT DELIBERATELY LEAVES ALONE: a crawler-born row anchored by the gate (or by the
+  // certify-in-place pre-flight) and certified later. Its uri does not match its PK, so it is not
+  // touched, and it keeps reading `unknown-legacy` — which is the truth for it, because nothing
+  // stored distinguishes which of those two paths put the link there.
+  //
+  // IDEMPOTENT like its siblings: the `is null` residuals mean a second run matches nothing, and a
+  // row a real write has since stamped can never be overwritten.
+  const publishAnchors = await client.execute({
+    sql: `update tracks
+          set spotify_anchor_source = 'publish',
+              spotify_anchor_verified_by = 'publish',
+              spotify_anchored_at = coalesce(
+                spotify_anchored_at,
+                (select f.added_at from findings f where f.track_id = tracks.track_id))
+          where spotify_anchor_source is null
+            and spotify_anchor_verified_by is null
+            and spotify_uri = 'spotify:track:' || track_id
+            and exists (select 1 from findings f where f.track_id = tracks.track_id)`,
+  });
+
+  return {
+    discogsStamped: discogs.rowsAffected,
+    isrcStamped: isrc.rowsAffected,
+    publishAnchorsStamped: publishAnchors.rowsAffected,
+  };
 }
 
 async function main(): Promise<void> {
@@ -101,7 +149,8 @@ async function main(): Promise<void> {
 
   console.log(
     `identity ledger: ${result.isrcStamped} ISRC attempt stamp(s) · ` +
-      `${result.discogsStamped} Discogs attempt record(s).`,
+      `${result.discogsStamped} Discogs attempt record(s) · ` +
+      `${result.publishAnchorsStamped} publish anchor provenance stamp(s).`,
   );
 }
 

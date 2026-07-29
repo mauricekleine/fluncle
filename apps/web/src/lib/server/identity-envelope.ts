@@ -67,14 +67,42 @@ export const IDENTITY_ATTRIBUTION =
  */
 export const APPLE_LINKS_MACHINE_SERVED = false;
 
-/** How a link or identifier came to be trusted. Closed; every value is backed by a column or a PK. */
+/**
+ * How a link or identifier came to be trusted. CLOSED; every value is backed by a stored column or
+ * by the row's own primary key, and the set is asserted equal to the contract's enum by a test.
+ *
+ *   · `isrc`           — an ISRC equality decided it. The recording's real identity.
+ *   · `operator`       — a human read the evidence and ruled.
+ *   · `pk-derived`     — the identifier IS the row's origin, not a lookup result.
+ *   · `publish`        — the link came in with the add, re-read through the platform's own API.
+ *   · `search`         — the full verified triple cleared.
+ *   · `search-subset`  — the tighter proper-subset fallback cleared. A weaker artist signal paid
+ *                        for with a harder duration one, and deliberately not folded into `search`.
+ *   · `unknown-legacy` — Fluncle holds no record of how. Never a claim about the check itself.
+ */
 export type IdentityMethod =
   | "isrc"
   | "operator"
   | "pk-derived"
+  | "publish"
   | "search"
   | "search-subset"
   | "unknown-legacy";
+
+/**
+ * The same set as a runtime value, so the contract's enum and this union can be asserted equal by a
+ * test instead of drifting apart the first time one side gains a member. The `satisfies` keeps the
+ * two definitions honest with each other in the type system as well.
+ */
+export const IDENTITY_METHODS = [
+  "isrc",
+  "operator",
+  "pk-derived",
+  "publish",
+  "search",
+  "search-subset",
+  "unknown-legacy",
+] as const satisfies readonly IdentityMethod[];
 
 /**
  * What happens next after a miss.
@@ -284,8 +312,9 @@ function spotifyState(row: IdentityRow): IdentityState {
 
   if (id) {
     return verified(
-      // NULL provenance ⇒ `unknown-legacy`: anchored before the columns existed, or by a path that
-      // records no rung. It is "we hold no record of how", never a claim about the check itself.
+      // NULL provenance ⇒ `unknown-legacy`: anchored before the columns existed. It is "we hold no
+      // record of how", never a claim about the check itself. Every live write path now records
+      // one, publish included, so this reading drains rather than accumulating.
       (row.spotify_anchor_verified_by as IdentityMethod | null) ?? "unknown-legacy",
       row.spotify_anchored_at,
       "verified",
