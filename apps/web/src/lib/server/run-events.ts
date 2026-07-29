@@ -17,10 +17,12 @@
 //      `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that
 //      contradicted it. A summary that carries `ok` at all is REJECTED, so the emitter
 //      is forced to stop asserting its own health rather than merely being overruled.
-//   2. `errors` IS TYPE-VALIDATED. A real sweep emits `"failed":[]`; a naive
-//      `typeof === "number"` guard drops an array/string/null SILENTLY, storing NULL and
-//      letting `ok` fall back to the exit code alone. So a present-but-wrong-typed
-//      counter is a 400, not a shrug.
+//   2. A COUNTER IS A VALIDATED INTEGER OR A 400. `typeof === "number"` alone lets a
+//      float and a negative through into a column that means "a count of work", and
+//      `ok` is derived from one of these numbers. The adjacent real shape is a sweep
+//      reporting its failures as `"failed":[]` — a different KEY, not a wrong type: rules
+//      3 and 4 catch that one, by putting `errors` on the upgrade queue and `failed` in
+//      `unrecognised_fields` instead of letting the count vanish into a silent NULL.
 //   3. MISSING FIELDS ARE RECORDED, NOT GUESSED. The mandatory counters a summary did
 //      not carry are listed in `missing_fields`, and THAT LIST IS THE UPGRADE QUEUE.
 //      A counter the Worker invented is a counter nobody can trust.
@@ -139,8 +141,10 @@ function reject(message: string): never {
 }
 
 /**
- * A counter must be a finite, non-negative INTEGER. Rule 2: a present-but-wrong-typed
- * counter is a 400, never a silent NULL — `"failed": []` is the shape that taught this.
+ * A counter must be a finite, non-negative INTEGER — rule 2. `Number.isInteger` is doing
+ * the work a bare `typeof` check cannot: it rejects a float, an infinity, and a NaN, and
+ * the `< 0` rejects a negative. A present-but-wrong-typed counter is a 400 rather than a
+ * silent NULL, because `ok` is derived from one of these numbers.
  */
 function requireCount(field: string, value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
