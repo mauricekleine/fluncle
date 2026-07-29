@@ -29,13 +29,25 @@ import {
 
 const HELPER = join(import.meta.dir, "cron-output.sh");
 
-/** Run `emit_cron_output <job> -- bash <payload>` for real; return the marker it wrote. */
-function emit(
+type EmitOptions = { env?: Record<string, string>; sharedRoot?: string };
+type EmitResult = { code: number; dir: string; marker: string; stderr: string; stdout: string };
+
+/**
+ * Write the runner that sources the REAL helper and wraps a REAL payload, and return its
+ * path plus where the marker will land.
+ *
+ * `FLUNCLE_API_TOKEN` and `FLUNCLE_API_BASE_URL` are UNSET first, unconditionally. The
+ * wrapper's ledger POST is a `curl` in a child process, which the repo's no-network rail
+ * cannot see (it wraps `globalThis.fetch`), so an operator's real token sitting in the
+ * environment is the one way this suite could reach production. Every test that wants a POST
+ * sets both again, pointed at a loopback fixture.
+ */
+function writeRunner(
   job: string,
   payload: string,
-  sharedRoot?: string,
-): { code: number; dir: string; marker: string; stderr: string; stdout: string } {
-  const root = sharedRoot ?? mkdtempSync(join(tmpdir(), "fluncle-cron-output-"));
+  options: EmitOptions = {},
+): { outputDir: string; script: string } {
+  const root = options.sharedRoot ?? mkdtempSync(join(tmpdir(), "fluncle-cron-output-"));
   const outputDir = join(root, "output");
   const script = join(root, "run.sh");
   // The payload gets its own file rather than riding a `bash -c "…"` argument: embedded in the
@@ -49,30 +61,64 @@ function emit(
     [
       "#!/usr/bin/env bash",
       "set -uo pipefail",
+      "unset FLUNCLE_API_TOKEN FLUNCLE_API_BASE_URL",
       `export HEALTHCHECK_CRON_OUTPUT_DIR=${JSON.stringify(outputDir)}`,
       // The rebake guard reads dirname($HOME)/rebake.lock; point HOME somewhere empty so the
       // guard is a clean no-op instead of depending on the machine running the tests.
       `export HOME=${JSON.stringify(join(root, "home"))}`,
+      ...Object.entries(options.env ?? {}).map(
+        ([key, value]) => `export ${key}=${JSON.stringify(value)}`,
+      ),
       `. ${JSON.stringify(HELPER)}`,
       `emit_cron_output ${job} -- bash ${JSON.stringify(payloadPath)}`,
     ].join("\n"),
     "utf8",
   );
 
-  const run = spawnSync("bash", [script], { encoding: "utf8" });
+  return { outputDir, script };
+}
+
+function readNewestMarker(outputDir: string, job: string): { dir: string; marker: string } {
   const dir = join(outputDir, `fluncle-${job}`);
   const files = readdirSync(dir)
     .filter((entry) => entry.endsWith(".md"))
     .sort();
   const newest = files.at(-1) ?? "";
 
+  return { dir, marker: readFileSync(join(dir, newest), "utf8") };
+}
+
+/** Run `emit_cron_output <job> -- bash <payload>` for real; return the marker it wrote. */
+function emit(job: string, payload: string, options: EmitOptions = {}): EmitResult {
+  const { outputDir, script } = writeRunner(job, payload, options);
+  const run = spawnSync("bash", [script], { encoding: "utf8" });
+
   return {
     code: run.status ?? -1,
-    dir,
-    marker: readFileSync(join(dir, newest), "utf8"),
+    ...readNewestMarker(outputDir, job),
     stderr: run.stderr,
     stdout: run.stdout,
   };
+}
+
+/**
+ * The same run, ASYNCHRONOUSLY. `spawnSync` blocks the event loop, so a loopback fixture
+ * server could never answer the wrapper's POST — the request would sit unserved until the
+ * spawn returned, and every ledger test would "prove" a timeout. Anything that involves the
+ * fixture must go through here.
+ */
+async function emitAsync(
+  job: string,
+  payload: string,
+  options: EmitOptions = {},
+): Promise<EmitResult> {
+  const { outputDir, script } = writeRunner(job, payload, options);
+  const proc = Bun.spawn(["bash", script], { stderr: "pipe", stdout: "pipe" });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const code = await proc.exited;
+
+  return { code, ...readNewestMarker(outputDir, job), stderr, stdout };
 }
 
 // The exact lines the box logged, from two days of real journal output. Sanitised already
@@ -175,6 +221,278 @@ describe("emit_cron_output — the marker's shape", () => {
 });
 
 // ---------------------------------------------------------------------------
+// THE RUN LEDGER.
+//
+// Same principle as the suite above: drive the REAL bash against a REAL (loopback) server and
+// read what actually arrived on the wire. The whole point of the ledger is that a number
+// nobody consumes is a number nobody reads, so a test that asserts on a variable inside the
+// script rather than on the bytes it sent would repeat the original mistake.
+//
+// Nothing here touches the network. The runner unsets FLUNCLE_API_TOKEN before anything else,
+// and every POST is aimed at a fixture on 127.0.0.1.
+// ---------------------------------------------------------------------------
+
+type LedgerCall = { auth: string; body: string; method: string; path: string };
+type LedgerEnvelope = {
+  ended_at: string;
+  exit_code: number;
+  started_at: string;
+  summary_raw: string;
+  unit: string;
+};
+
+type LedgerMode = "accepts" | "rejects" | "hangs";
+
+/** Run `body` against a loopback ledger; hand back everything the ledger actually received. */
+async function withLedger<T>(
+  mode: LedgerMode,
+  body: (base: string, calls: LedgerCall[]) => Promise<T>,
+): Promise<T> {
+  const calls: LedgerCall[] = [];
+  const server = Bun.serve({
+    async fetch(request) {
+      calls.push({
+        auth: request.headers.get("authorization") ?? "",
+        body: await request.text(),
+        method: request.method,
+        path: new URL(request.url).pathname,
+      });
+
+      if (mode === "hangs") {
+        // Never answers. Proves the POST is bounded by its own timeout rather than by the
+        // server's good manners.
+        await new Promise(() => {});
+      }
+
+      return mode === "rejects"
+        ? Response.json({ error: "nope" }, { status: 500 })
+        : Response.json({ inserted: 1, ok: true });
+    },
+    port: 0,
+  });
+
+  try {
+    return await body(`http://127.0.0.1:${server.port}`, calls);
+  } finally {
+    await server.stop(true);
+  }
+}
+
+const ledgerEnv = (base: string, extra: Record<string, string> = {}) => ({
+  FLUNCLE_API_BASE_URL: base,
+  FLUNCLE_API_TOKEN: "fixture-agent-token",
+  ...extra,
+});
+
+function envelopeOf(calls: LedgerCall[]): LedgerEnvelope {
+  const call = calls[0];
+
+  if (!call) {
+    throw new Error("the ledger received no request at all");
+  }
+
+  return JSON.parse(call.body) as LedgerEnvelope;
+}
+
+describe("emit_cron_output — the run-ledger POST", () => {
+  test("posts the run envelope: the agent bearer, the path, and the five fields", async () => {
+    const { calls, code } = await withLedger("accepts", async (base, calls) => {
+      const run = await emitAsync("backup", `echo '{"ok":true,"tableCount":74}'`, {
+        env: ledgerEnv(base),
+      });
+
+      return { calls, code: run.code };
+    });
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.path).toBe("/api/v1/admin/runs/events");
+    expect(calls[0]?.auth).toBe("Bearer fixture-agent-token");
+
+    const envelope = envelopeOf(calls);
+
+    // `unit` is the systemd unit stem, matching the marker's `# Cron Job:` header — one name
+    // for the job across both consumers.
+    expect(envelope.unit).toBe("fluncle-backup");
+    expect(envelope.exit_code).toBe(0);
+    expect(envelope.summary_raw).toBe('{"ok":true,"tableCount":74}');
+    expect(envelope.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(envelope.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    // Box time, and there is exactly one field for it — the Worker stamps its own write time.
+    expect(Object.keys(envelope).sort()).toEqual([
+      "ended_at",
+      "exit_code",
+      "started_at",
+      "summary_raw",
+      "unit",
+    ]);
+  });
+
+  test("THE BODY CARRIES NO `ok` — the Worker derives it, and cannot be told otherwise", async () => {
+    // The sweep prints the exact line the Sentry triage cron printed for eleven nights: a
+    // hardcoded `ok:true` sitting beside the error count that contradicts it. It rides along
+    // verbatim inside `summary_raw` (that IS the evidence), and reaches the ledger as data —
+    // never as a field the row could be built from.
+    const { calls } = await withLedger("accepts", async (base, calls) => {
+      await emitAsync("sentry-triage", `echo '{"ok":true,"errors":2,"triaged":0}'`, {
+        env: ledgerEnv(base),
+      });
+
+      return { calls };
+    });
+
+    const envelope = envelopeOf(calls);
+
+    expect(envelope.summary_raw).toBe('{"ok":true,"errors":2,"triaged":0}');
+    expect("ok" in envelope).toBe(false);
+    expect(JSON.parse(envelope.summary_raw)).toMatchObject({ errors: 2, ok: true });
+  });
+
+  test("summary_raw is the LAST NON-EMPTY stdout line, not the first and not a blank", async () => {
+    const { calls } = await withLedger("accepts", async (base, calls) => {
+      await emitAsync(
+        "crawl",
+        [
+          "echo 'starting the pass'",
+          `echo '{"ok":true,"crawled":3}'`,
+          "echo ''",
+          "echo '   '",
+        ].join("\n"),
+        { env: ledgerEnv(base) },
+      );
+
+      return { calls };
+    });
+
+    expect(envelopeOf(calls).summary_raw).toBe('{"ok":true,"crawled":3}');
+  });
+
+  test("a stderr log line can never pose as the summary", async () => {
+    const { calls } = await withLedger("accepts", async (base, calls) => {
+      await emitAsync(
+        "note",
+        [
+          `echo '{"ok":false,"reason":"a log line, not the summary"}' >&2`,
+          `echo '{"ok":true,"noted":2}'`,
+        ].join("\n"),
+        { env: ledgerEnv(base) },
+      );
+
+      return { calls };
+    });
+
+    expect(envelopeOf(calls).summary_raw).toBe('{"ok":true,"noted":2}');
+  });
+
+  test("the exit code travels, so a failed run is a row rather than a silence", async () => {
+    const { calls, code } = await withLedger("accepts", async (base, calls) => {
+      const run = await emitAsync("crawl", `echo 'crawl pass failed' >&2; exit 17`, {
+        env: ledgerEnv(base),
+      });
+
+      return { calls, code: run.code };
+    });
+
+    expect(code).toBe(17);
+
+    const envelope = envelopeOf(calls);
+
+    expect(envelope.exit_code).toBe(17);
+    // The run printed no summary at all; the ledger records that honestly instead of inventing
+    // one — an empty `summary_raw` is what `missing_fields` is built from.
+    expect(envelope.summary_raw).toBe("");
+  });
+
+  test("a summary carrying quotes, backslashes and a raw tab still arrives as valid JSON", async () => {
+    // Every character the escaper has to handle, as RAW BYTES on the sweep's stdout: a bare
+    // double quote (which would end the JSON string early), a bare backslash (which would eat
+    // the next character), and a raw tab (which JSON forbids inside a string outright). A
+    // quoted heredoc puts them on the wire verbatim — `printf '%s'` would not, because bash
+    // hands `\t` through as two characters and the fixture would silently be testing nothing.
+    const messy = '{"ok":true,"note":"he said "go"","win":"C:\\tmp","tab":"a\tb"}';
+    const { calls } = await withLedger("accepts", async (base, calls) => {
+      await emitAsync("enrich", ["cat <<'PAYLOAD_EOF'", messy, "PAYLOAD_EOF"].join("\n"), {
+        env: ledgerEnv(base),
+      });
+
+      return { calls };
+    });
+
+    // The envelope parses at all — it would not if any of the three leaked through unescaped,
+    // which is the actual assertion; `envelopeOf` does the JSON.parse.
+    const envelope = envelopeOf(calls);
+
+    // And the line survives byte for byte, so the ledger holds what the sweep really said.
+    expect(envelope.summary_raw).toBe(messy);
+  });
+
+  test("no token ⇒ NO request at all (the box posts nothing it cannot authorize)", async () => {
+    const { calls, code } = await withLedger("accepts", async (base, calls) => {
+      const run = await emitAsync("backup", `echo '{"ok":true}'`, {
+        env: { FLUNCLE_API_BASE_URL: base },
+      });
+
+      return { calls, code: run.code };
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(code).toBe(0);
+  });
+
+  test("an empty base URL ⇒ NO request either", async () => {
+    const { calls } = await withLedger("accepts", async (base, calls) => {
+      await emitAsync("backup", `echo '{"ok":true}'`, {
+        env: { FLUNCLE_API_BASE_URL: "", FLUNCLE_API_TOKEN: "fixture-agent-token" },
+      });
+
+      return { base, calls };
+    });
+
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a rejecting ledger changes NOTHING about the run — exit code, marker, stdout", async () => {
+    const { code, marker, stdout } = await withLedger("rejects", async (base) =>
+      emitAsync("crawl", `echo '{"ok":true,"crawled":1}'; exit 9`, { env: ledgerEnv(base) }),
+    );
+
+    expect(code).toBe(9);
+    expect(findJsonSummary(marker)).toEqual({ crawled: 1, ok: true });
+    expect(stdout).toContain('{"ok":true,"crawled":1}');
+  });
+
+  test("an unreachable ledger changes nothing either", async () => {
+    // A port that was open just long enough to learn its number, then closed — so the connect
+    // is refused rather than timing out, and the test stays fast.
+    const dead = Bun.serve({ fetch: () => new Response("x"), port: 0 });
+    const base = `http://127.0.0.1:${dead.port}`;
+    await dead.stop(true);
+
+    const { code, marker } = await emitAsync("crawl", `echo '{"ok":true}'; exit 3`, {
+      env: ledgerEnv(base),
+    });
+
+    expect(code).toBe(3);
+    expect(findJsonSummary(marker)).toEqual({ ok: true });
+  });
+
+  test("a ledger that never answers is cut off by the POST's own timeout", async () => {
+    const started = Date.now();
+    const { code } = await withLedger("hangs", async (base) =>
+      emitAsync("backup", `echo '{"ok":true}'; exit 5`, {
+        env: ledgerEnv(base, { RUN_EVENT_TIMEOUT_SECS: "1" }),
+      }),
+    );
+    const elapsed = Date.now() - started;
+
+    expect(code).toBe(5);
+    // Bounded by the 1s budget, not by the sweep hanging until systemd's TimeoutStartSec.
+    expect(elapsed).toBeLessThan(5_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // THE WHOLE CHAIN, end to end.
 //
 // The suite above proves the wrapper writes the errors; the detector's own suite proves the
@@ -191,7 +509,7 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
     let dir = "";
 
     for (let index = 0; index < ticks; index += 1) {
-      dir = emit("backup", payload, root).dir;
+      dir = emit("backup", payload, { sharedRoot: root }).dir;
     }
 
     return dir;
