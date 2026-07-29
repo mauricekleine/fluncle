@@ -118,8 +118,13 @@ export const LABELS_ADMIN_PAGE_SIZE = 50;
  * string whose spelling an operator folded into another label (via a confirmed alias) would, on
  * the next `ensureLabel` or deploy `reconcileLabels`, re-mint its own slug as a NEW label —
  * un-doing the fold every deploy. Consulting confirmed aliases BEFORE minting closes that.
+ *
+ * EXPORTED because SEARCH asks the same question on the read side (`search.ts`): a filter naming a
+ * folded spelling must reach the canonical label, through THIS one resolver rather than a second
+ * spelling of the same join. Only `confirmed` ever resolves — a `candidate` is an unruled
+ * derivation guess, and search must never answer from one.
  */
-async function resolveConfirmedAliasLabelId(slug: string): Promise<string | undefined> {
+export async function resolveConfirmedAliasLabelId(slug: string): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
     args: [slug],

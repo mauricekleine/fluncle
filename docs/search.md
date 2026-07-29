@@ -36,6 +36,15 @@ Two rules carry the trust and the tie:
 - **Only a trusted display-name alias resolves** — `kind='name'` and `status in ('auto','confirmed')`, the exact set that feeds the public `alternateName`. For an artist there is no weaker `candidate` tier: a MusicBrainz alias is a direct statement of identity (born `auto`, trusted like an operator's `confirmed`), unlike the fuzzy cross-source `candidate` a `label_aliases` row must earn. A `hint` — a weak MB "Search hint" lead, never rendered publicly — never resolves a search either.
 - **The primary name wins a tie.** A query that is one artist's real name and another's AKA lands on the one it names directly: the read ranks a name match ahead of an alias-only match before length and alphabetical order.
 
+### And so does a label
+
+`label_aliases` is the structural twin of `artist_aliases` (see [the label entity](./label-entity.md)), and it was invisible to search: a `merge_label` folds the losing name in as a `confirmed` alias, `ensureLabel` consults that fold before minting a row — and then a reader typing the folded spelling found nothing. The label read now resolves through it exactly as the artist read does, on the same code path and under the same `predicate` (exact in tier 2, prefix in tier 3), with the primary name winning a tie the same way. The **filter** path folds too: a `label` filter whose slug seek misses falls back to `labels.ts`'s own confirmed-alias resolver — the one `ensureLabel` uses — so the read side and the write side answer "which label is this spelling?" from one place, in two indexed seeks rather than a join.
+
+Two rules diverge from the artist precedent, and both are load-bearing:
+
+- **Only `confirmed` resolves.** The trust enums are not the same shape: `artist_aliases.status` is `auto|confirmed` and both are trusted, while `label_aliases.status` is `candidate|confirmed`, where a `candidate` is an unruled Apple-derived guess sitting in the operator's `/admin/labels` review section. Trusting it the way an artist's `auto` is trusted would let a derivation rename a label in public. A `hint` never resolves either, on the artist read's rule.
+- **The hub gate outranks the fold.** An alias is a second spelling of a label, never a second inclusion rule — so both the entity tier and the filter path re-apply the gate the direct name match clears (`hubInclusionWhere` above; `renderable_track_count > 0` for the filter). A below-floor imprint that declines the jump by name declines it by alias, and the filter compiles the raw-string fallback exactly as before.
+
 ### The model emits filters, never rows
 
 Tier 4's model is handed a sentence and returns a `SearchFilters` object — `{ artist?, label?, album?, key?, bpmMin?, bpmMax?, yearMin?, yearMax?, text?, soundsLike?, soundsLikeArtists? }` — which the server compiles into bound SQL over real columns. It never sees a track, never names one, and never returns one. **A hallucinated finding is not a risk that is mitigated here; it is a thing the architecture cannot express.** The worst a bad parse can do is filter for something that is not in the archive and return an honest empty state.

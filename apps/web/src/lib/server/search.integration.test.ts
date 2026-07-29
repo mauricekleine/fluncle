@@ -413,6 +413,215 @@ describe("aliases — an artist answers to every name", () => {
   });
 });
 
+// ── Aliases · a label answers to every spelling the operator ruled ───────────────────
+
+// `label_aliases` is the structural twin of `artist_aliases`, and it was invisible to search: a
+// merge folds the loser's name in as a `confirmed` alias, `ensureLabel` consults that fold before
+// minting — and then a reader typing the folded spelling found nothing. The label read now resolves
+// through it exactly as the artist read does, under the same `predicate` (exact in tier 2, prefix
+// in tier 3), and the filter path folds the same way.
+//
+// THE ONE DIVERGENCE FROM THE ARTIST PRECEDENT, and the reason these tests are not a copy of the
+// ones above: the trust enums differ. `artist_aliases.status` is `auto|confirmed` and BOTH are
+// trusted; `label_aliases.status` is `candidate|confirmed`, where a `candidate` is an unruled
+// derivation guess the operator has not seen. Only `confirmed` may ever answer.
+describe("aliases — a label answers to every spelling the operator ruled", () => {
+  /** The `labels` row one slug names — minted by the real publish path, so its id is the real one. */
+  async function labelId(slug: string): Promise<string> {
+    const rows = await db.execute({ args: [slug], sql: `select id from labels where slug = ?` });
+    const id = rows.rows[0]?.id;
+
+    if (typeof id !== "string") {
+      throw new Error(`fixture: no labels row for ${slug}`);
+    }
+
+    return id;
+  }
+
+  async function addAlias(
+    label: string,
+    [id, alias, slug, source, kind, status]: [string, string, string, string, string, string],
+  ): Promise<void> {
+    await db.execute({
+      args: [id, await labelId(label), alias, slug, source, kind, status],
+      sql: `insert into label_aliases
+              (id, label_id, alias, alias_slug, source, kind, status, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, '2026-07-01')`,
+    });
+  }
+
+  /** The compiled SQL for one filter set, resolved exactly as the reads resolve it. */
+  async function compiledSql(filters: Parameters<typeof compileFilters>[0]): Promise<string> {
+    const clauses = compileFilters(filters, await resolveFilterEntities(filters));
+
+    return clauses.map((clause) => clause.sql).join(" and ");
+  }
+
+  beforeEach(async () => {
+    // A below-floor imprint the crawler walked past — nothing points at it, so it clears neither
+    // half of the hub gate. It carries a CONFIRMED alias, which must not be a way back in.
+    await db.execute({
+      args: [],
+      sql: `insert into labels (id, name, slug, created_at, updated_at)
+            values ('l-crawled', 'Crawled Imprint', 'crawled-imprint', '2026-07-01', '2026-07-01')`,
+    });
+
+    // Hospital Records absorbed "Med School" in a merge (the `confirmed` fold), carries a weak
+    // `hint` that is never public, and — the tie — also answers to "Andromedik", which is another
+    // real label's PRIMARY name.
+    await addAlias("hospital-records", [
+      "la1",
+      "Med School",
+      "med-school",
+      "operator",
+      "name",
+      "confirmed",
+    ]);
+    await addAlias("hospital-records", [
+      "la2",
+      "Hospitality Sound",
+      "hospitality-sound",
+      "musicbrainz",
+      "hint",
+      "confirmed",
+    ]);
+    await addAlias("hospital-records", [
+      "la3",
+      "Andromedik",
+      "andromedik",
+      "operator",
+      "name",
+      "confirmed",
+    ]);
+    // An UNRULED Apple derivation on the 1991 imprint — awaiting the operator, never an answer.
+    await addAlias("1991", [
+      "la4",
+      "Nineteen Ninety One",
+      "nineteen-ninety-one",
+      "apple",
+      "name",
+      "candidate",
+    ]);
+    await db.execute({
+      args: [],
+      sql: `insert into label_aliases
+              (id, label_id, alias, alias_slug, source, kind, status, created_at)
+            values ('la5', 'l-crawled', 'Walked Past Records', 'walked-past-records',
+                    'operator', 'name', 'confirmed', '2026-07-01')`,
+    });
+  });
+
+  it("resolves an EXACT confirmed alias to the label page — with the tracks the name gives", async () => {
+    const byName = await searchArchive({ q: "Hospital Records" });
+    const byAlias = await searchArchive({ q: "Med School" });
+
+    expect(byAlias.kind).toBe("entity");
+    expect(byAlias.redirect).toBe("/label/hospital-records");
+    expect(byAlias.entities).toEqual([
+      { kind: "label", name: "Hospital Records", slug: "hospital-records" },
+    ]);
+    // The alias lands on the canonical label, so it lists exactly what the real name lists.
+    expect(byAlias.results.map((hit) => hit.trackId)).toEqual(byName.results.map((h) => h.trackId));
+    expect(byAlias.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("prefix-matches a confirmed alias as a tier-3 jump target, exactly as it does the name", async () => {
+    // "med" is a bare token that is nobody's exact name — it falls to tier 3, where the prefix
+    // jump lives. The folded spelling surfaces the label beside the (here empty) row set.
+    const result = await searchArchive({ q: "med" });
+
+    expect(result.kind).toBe("token");
+    expect(result.entities).toEqual([
+      { kind: "label", name: "Hospital Records", slug: "hospital-records" },
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("lets the PRIMARY name win a tie against another label's alias", async () => {
+    // "Andromedik" is one label's real name AND Hospital's folded spelling. A name the query names
+    // DIRECTLY must beat one it only reaches through an alias.
+    const result = await searchArchive({ q: "Andromedik" });
+
+    expect(result.redirect).toBe("/label/andromedik");
+    expect(result.entities).toEqual([{ kind: "label", name: "Andromedik", slug: "andromedik" }]);
+  });
+
+  it("does NOT resolve a `candidate` alias — an unruled guess is never a public answer", async () => {
+    // THE DIVERGENCE FROM ARTISTS. `candidate` is an Apple-derived lead sitting in the operator's
+    // review queue; trusting it the way an artist's `auto` is trusted would let a derivation
+    // rename a label in public.
+    const result = await searchArchive({ q: "Nineteen Ninety One" });
+
+    expect(result.redirect).toBeUndefined();
+    expect(result.entities).toEqual([]);
+    expect(result.kind).not.toBe("entity");
+  });
+
+  it("does NOT resolve a `hint` alias, however it is ruled — a weak lead is never an answer", async () => {
+    const result = await searchArchive({ q: "Hospitality Sound" });
+
+    expect(result.redirect).toBeUndefined();
+    expect(result.entities).toEqual([]);
+  });
+
+  it("does NOT resurrect a below-floor label through its alias — the hub gate outranks the fold", async () => {
+    // "Crawled Imprint" declines the jump by NAME (the gate), so it must decline it by ALIAS too:
+    // the alias is a second spelling of the same label, never a second inclusion rule.
+    const byName = await searchArchive({ q: "Crawled Imprint" });
+    const byAlias = await searchArchive({ q: "Walked Past Records" });
+
+    expect(byName.entities).toEqual([]);
+    expect(byAlias.entities).toEqual([]);
+    expect(byAlias.redirect).toBeUndefined();
+  });
+
+  it("leaves the ALBUM read alone — an album has no alias table to fold through", async () => {
+    // The album branch shares this code path; the fold is label-only, so an album still answers to
+    // exactly one name and binds exactly one needle.
+    const result = await searchArchive({ q: "second nature" });
+
+    expect(result.redirect).toBe("/album/second-nature");
+  });
+
+  it("folds a confirmed alias in the FILTER path, straight to the indexed pointer", async () => {
+    expect(await resolveFilterEntities({ label: "Med School" })).toEqual(
+      await resolveFilterEntities({ label: "Hospital Records" }),
+    );
+    expect(await compiledSql({ label: "Med School" })).toBe("tracks.label_id = ?");
+
+    translateQuery.mockResolvedValue({ label: "Med School" });
+
+    const result = await searchArchive({ q: "anything on Med School" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+    ]);
+  });
+
+  it("folds punctuation on the way to the alias too — one question, however it is typed", async () => {
+    // Compared against the CANONICAL name, not against the other spelling: two empty answers are
+    // equal too, and that is exactly the failure this has to catch.
+    expect(await resolveFilterEntities({ label: "med-school!" })).toEqual(
+      await resolveFilterEntities({ label: "Hospital Records" }),
+    );
+  });
+
+  it("refuses a `candidate` alias in the filter path — the raw-string fallback stands", async () => {
+    expect(await resolveFilterEntities({ label: "Nineteen Ninety One" })).toEqual({});
+    expect(await compiledSql({ label: "Nineteen Ninety One" })).toBe("lower(tracks.label) = ?");
+  });
+
+  it("holds the count guard on the alias path — a below-floor label resolves no id", async () => {
+    expect(await resolveFilterEntities({ label: "Walked Past Records" })).toEqual({});
+    expect(await compiledSql({ label: "Walked Past Records" })).toBe("lower(tracks.label) = ?");
+  });
+});
+
 // ── Tier 3 · the bare token ──────────────────────────────────────────────────────────
 
 describe("tier 3 — a bare token", () => {

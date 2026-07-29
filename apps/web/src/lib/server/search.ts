@@ -76,7 +76,7 @@ import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
 import { getDb, typedRow, typedRows } from "./db";
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
-import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS } from "./labels";
+import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId } from "./labels";
 import { translateQuery } from "./search-llm";
 import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 
@@ -340,6 +340,21 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  * primary. Matched on `lower(alias)` — the same case-insensitive raw compare the name uses, not
  * the slug — and correlated by `artist_id` (`artist_aliases_artist_id_idx`), over an `artists`
  * table that stays archive-sized, so the read is bounded however deep the catalogue gets.
+ *
+ * AND SO DOES A LABEL. `label_aliases` is the structural twin of `artist_aliases` — the same fold
+ * an operator's label MERGE writes (the loser's name becomes a `confirmed` alias of the winner) and
+ * the same one `ensureLabel` consults before minting — so a spelling folded away on the write side
+ * had, until now, no way back on the read side: search answered nothing for a name the archive
+ * still holds under another spelling. The label read resolves through it exactly as the artist read
+ * does, with `name_rank` breaking a tie the primary name's way, and under the SAME `predicate`
+ * (exact in tier 2, prefix in tier 3). ONE DIFFERENCE, AND IT IS THE LOAD-BEARING ONE: the trust
+ * enums are NOT the same shape. `artist_aliases.status` is `auto|confirmed` and both are trusted
+ * (an `auto` there is a DIRECT MusicBrainz statement of identity); `label_aliases.status` is
+ * `candidate|confirmed`, where a `candidate` is an UNRULED derivation guess awaiting the operator.
+ * So this gate is `status = 'confirmed'` ONLY — the same trust the public `alternateName` and
+ * `ensureLabel`'s fold use. A `hint` never resolves either, on the same rule as the artist read.
+ * Correlated by `label_id`, which leads the `label_aliases_label_slug_source_idx` composite, over a
+ * `labels` table the hub gate already bounds. An ALBUM has no alias table; its read is unchanged.
  */
 function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
   if (kind === "artist") {
@@ -392,12 +407,29 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
   const table = kind === "album" ? "albums" : "labels";
   const pointer = kind === "album" ? "album_id" : "label_id";
   const floor = kind === "album" ? ALBUM_INDEX_MIN_TRACKS : LABEL_INDEX_MIN_TRACKS;
+  const isLabel = kind === "label";
   // Labels carry their own logo; albums don't (the pointer to the label owns that image).
-  const logoSelect = kind === "label" ? "labels.image_key as logo_key," : "";
+  const logoSelect = isLabel ? "labels.image_key as logo_key," : "";
+  // A LABEL answers to every spelling the operator has RULED (see the doctrine above); an ALBUM
+  // has no alias table, so these three fragments are empty for it and its read is untouched.
+  const labelAliasWhere = isLabel
+    ? `or exists (select 1 from label_aliases
+                  where label_aliases.label_id = labels.id
+                    and label_aliases.kind = 'name'
+                    and label_aliases.status = 'confirmed'
+                    and lower(label_aliases.alias) ${predicate})`
+    : "";
+  const labelRankSelect = isLabel
+    ? `case when lower(labels.name) ${predicate} then 0 else 1 end as name_rank,`
+    : "";
+  const labelRankOrder = isLabel ? "name_rank asc," : "";
 
   return {
-    // The needle binds the name predicate once, then the floor binds the shared hub gate's `?`.
-    buildArgs: (needle, limit) => [needle, floor, limit],
+    // A LABEL binds the needle three times, in SQL-TEXT order: the `name_rank` case, the name
+    // predicate, then the alias predicate. An ALBUM binds it once. Then the floor binds the
+    // shared hub gate's `?`.
+    buildArgs: (needle, limit) =>
+      isLabel ? [needle, needle, needle, floor, limit] : [needle, floor, limit],
     // THE GATE, single-sourced with the hubs (`hubInclusionWhere`): it admits exactly the entities
     // `/labels` + `/albums` list — a certified finding OR a page over the thin-content floor — never
     // a bare crawler stub. Two STORED counters on the entity row answer it (keystone 2), so the
@@ -405,15 +437,15 @@ function entitySql(kind: SearchEntity["kind"], predicate: string): EntityQuery {
     // carry is gone entirely: the gate is now two integer comparisons on the row the name predicate
     // already matched. The cover subquery is the one part that still reaches into `tracks`, and it
     // runs only for those matched rows.
-    sql: `select ${table}.name as name, ${table}.slug as slug, ${logoSelect}
+    sql: `select ${table}.name as name, ${table}.slug as slug, ${logoSelect} ${labelRankSelect}
             (select t.album_image_url
                from tracks t join findings f on f.track_id = t.track_id
                where t.${pointer} = ${table}.id and f.log_id is not null
                order by f.added_at desc limit 1) as image_url
           from ${table}
-          where lower(${table}.name) ${predicate}
+          where (lower(${table}.name) ${predicate} ${labelAliasWhere})
             and ${hubInclusionWhere(table)}
-          order by length(${table}.name) asc, ${table}.name asc
+          order by ${labelRankOrder} length(${table}.name) asc, ${table}.name asc
           limit ?`,
   };
 }
@@ -658,7 +690,9 @@ export type ResolvedFilterEntities = {
  *     the entity tier resolves an AKA by), name or slug, primary name winning a tie.
  *   - LABEL / ALBUM — by SLUG, the unique key, folded from the typed name the same way
  *     `resolveEntity`'s album probe folds it (punctuation-insensitive, so "Wormhole" and
- *     "wormhole." ask one question).
+ *     "wormhole." ask one question). A LABEL is additionally alias-tolerant, through the SAME
+ *     `confirmed`-only fold `ensureLabel` mints against — so a spelling an operator merged away
+ *     still reaches the label that absorbed it.
  *
  * AND THE COUNT GUARD IS WHAT KEEPS IT HONEST. Each read requires the entity's maintained
  * `renderable_track_count > 0` (keystone 2) — the stored mirror of exactly the edge the filter is
@@ -732,6 +766,18 @@ async function resolveFilterArtistId(name: string): Promise<string | undefined> 
  * the shape `resolveEntity`'s album probe already established, for the same reason (the slug is
  * the key; `lower(tracks.album) = ?` was the unindexable question). Same count guard as the artist
  * read: an imprint the crawler minted but nothing points at does not resolve.
+ *
+ * A LABEL gets a SECOND chance when that seek finds nothing: the CONFIRMED-ALIAS fold, through
+ * `labels.ts`'s own {@link resolveConfirmedAliasLabelId} — the very resolver `ensureLabel` consults
+ * before minting, so the read side and the write side answer "which label is this spelling?" from
+ * one place. It is two indexed seeks, never a join: `label_aliases_alias_slug_idx` on the folded
+ * slug, then the canonical row by primary key. Only `confirmed` resolves; a `candidate` is an
+ * unruled guess and must never become a filter.
+ *
+ * THE GATE HOLDS ON BOTH PATHS. The alias hand-back is re-read through the same
+ * `renderable_track_count > 0` guard the direct seek applies, so an alias can never resurrect a
+ * label the direct seek would have declined — the caller compiles the raw-string fallback instead,
+ * which is the degradation contract, unchanged.
  */
 async function resolveFilterEntityId(
   table: "albums" | "labels",
@@ -749,8 +795,24 @@ async function resolveFilterEntityId(
     // `table` is a closed union of two literals — never anything a stranger or a model typed.
     sql: `select id from ${table} where slug = ? and renderable_track_count > 0 limit 1`,
   });
+  const directId = typedRow<{ id: string }>(result.rows)?.id;
 
-  return typedRow<{ id: string }>(result.rows)?.id;
+  if (directId !== undefined || table === "albums") {
+    return directId;
+  }
+
+  const aliasId = await resolveConfirmedAliasLabelId(slug);
+
+  if (aliasId === undefined) {
+    return undefined;
+  }
+
+  const gated = await db.execute({
+    args: [aliasId],
+    sql: `select id from labels where id = ? and renderable_track_count > 0 limit 1`,
+  });
+
+  return typedRow<{ id: string }>(gated.rows)?.id;
 }
 
 /**
