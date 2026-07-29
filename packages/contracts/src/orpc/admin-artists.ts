@@ -387,10 +387,13 @@ export const updateArtistSocial = oc
  * the bio's provenance (0 = the registry's baked default, N = operator override N); the
  * sweep sends it, an operator-typed bio sends nothing (the column stays NULL). `dryRun`
  * runs the voice gate and stores nothing.
+ *
+ * `finalAttempt` is the on-box sweep's THIRD and last authoring pass (see `describeArtist`).
  */
 const DescribeEntityBodySchema = z.looseObject({
   bio: z.unknown().optional(),
   dryRun: z.unknown().optional(),
+  finalAttempt: z.boolean().optional(),
   promptVersion: z.number().int().min(0).optional(),
 });
 
@@ -409,6 +412,14 @@ const DescribeEntityBodySchema = z.looseObject({
  * true`); the agent NEVER clobbers an existing bio. `dryRun` runs the gate and stores
  * nothing. Codes: `not_found`/404, `no_bio`/400, `bio_too_short`/422, `bio_too_long`/422,
  * `voice_gate`/422.
+ *
+ * THE FINAL-ATTEMPT ACCEPTANCE (`finalAttempt: true`). The operator's ruling: an entity gets at
+ * most three authoring attempts and the THIRD draft LANDS rather than being discarded, because a
+ * bio must name its entity and a banned name can never be rewritten past the scan. On that one
+ * pass the voice SCAN is accepted rather than fatal — the length bounds and the fill-empty-only
+ * guarantee still hold — and the response carries `gateBypassed: true` plus the accepted
+ * `voiceViolations` so the operator can find and review every bio that landed this way. Only the
+ * on-box `entity-bio-sweep` sends it, and only on its third and last pass over one entity.
  */
 export const describeArtist = oc
   .route({
@@ -424,11 +435,16 @@ export const describeArtist = oc
       bio: z.string(),
       // `true` when `dryRun` was set: the voice gate ran, NOTHING was stored.
       dryRun: z.literal(true).optional(),
+      // `true` when the FINAL-ATTEMPT ACCEPTANCE let a bio through that the voice scan would
+      // otherwise have refused. THE OPERATOR REVIEW FLAG — absent on every normal write.
+      gateBypassed: z.literal(true).optional(),
       ok: z.literal(true),
       // `true` when a bio already existed and the fill-empty-only guard refused to
       // clobber it; absent on a fresh fill.
       skipped: z.boolean().optional(),
       slug: z.string(),
+      // The voice-gate reasons that were ACCEPTED, verbatim. Present only with `gateBypassed`.
+      voiceViolations: z.array(z.string()).optional(),
     }),
   );
 

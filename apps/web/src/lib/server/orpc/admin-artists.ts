@@ -25,7 +25,7 @@ import {
 import { listUnresolvedArtists, resolveArtist } from "../artist-resolution";
 import { backfillArtistImages } from "../backfill-artist-images";
 import { backfillArtists } from "../backfill-artists";
-import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
+import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
 import { purgeEntityCache } from "../edge-cache";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { getFindingsByArtist } from "../tracks";
@@ -297,11 +297,20 @@ export function adminArtistsHandlers(os: Implementer) {
       }
 
       // Voice-gate the agent-authored bio (defence in depth: the sweep gates as it writes;
-      // the Worker re-scans and hard-fails any violation before the bio is stored).
-      const bio = gateBioText(input.bio);
+      // the Worker re-scans and hard-fails any violation before the bio is stored) — UNLESS this
+      // is the sweep's third and last authoring pass, where the draft lands and the acceptance is
+      // logged + flagged instead (see `gateOrAcceptBio`).
+      const gated = gateOrAcceptBio({
+        bio: input.bio,
+        finalAttempt: input.finalAttempt === true,
+        kind: "artist",
+        name: artist.name,
+        slug: artist.slug,
+      });
+      const { bio, gateBypassed, voiceViolations } = gated;
 
       if (dryRun) {
-        return { bio, dryRun: true as const, ok: true as const, slug: artist.slug };
+        return { ...gated, dryRun: true as const, ok: true as const, slug: artist.slug };
       }
 
       // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL, so
@@ -324,7 +333,7 @@ export function adminArtistsHandlers(os: Implementer) {
       // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
       purgeEntityCache("artist", artist.slug);
 
-      return { bio, ok: true as const, slug: artist.slug };
+      return { bio, gateBypassed, ok: true as const, slug: artist.slug, voiceViolations };
     } catch (error) {
       throw toFault(error);
     }

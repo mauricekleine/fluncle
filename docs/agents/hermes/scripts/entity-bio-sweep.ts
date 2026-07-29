@@ -40,8 +40,19 @@
 //         `fluncle admin <kind>s describe <slug> --bio-file <tmp> --prompt-version <v> --json`
 //         → the Worker RE-SCANS (the voice gate, `gateBioText`) and FILLS AN EMPTY BIO ONLY.
 //         The SCRIPT posts it, never claude. A `skipped:true` (an operator bio already on file)
-//         is a clean no-op — the operator override always wins. A gate 403/422 → log which
-//         entity failed, skip it (stays queued), continue. The temp file is cleaned up either way.
+//         is a clean no-op — the operator override always wins. A gate 403/422 → re-author once
+//         more against the reason, up to the attempt budget below. The temp file is cleaned up
+//         either way.
+//
+// THE ATTEMPT BUDGET (see `MAX_BIO_ATTEMPTS`). An entity is authored for AT MOST THREE TIMES,
+// ever — the initial draft plus two rewrites — and the third draft LANDS (`--final-attempt`)
+// rather than being discarded. Each rejection is fed BACK into the next pass as the thing to fix,
+// the logbook sweep's shape, so a rewrite is aimed rather than blind. The count persists across
+// ticks in a small on-box ledger, an exhausted entity is skipped without consuming the batch cap,
+// and a bio that landed only because it was the final attempt is logged under its own
+// `FINAL-ATTEMPT ACCEPTANCE` marker for the operator to review. This replaced an unbounded loop:
+// a gate rejection used to leave the entity queued with nothing counting, which re-authored three
+// entities ~90 times each over two days.
 //
 // GROUNDING IS WORKER-PACED (the gap is CLOSED). The box is a thin CLI client and holds
 // NEITHER a `FIRECRAWL_API_KEY` (by convention — the Worker owns it; context-sweep.ts) NOR a
@@ -67,9 +78,9 @@
 // stdout: ONE JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
@@ -84,6 +95,42 @@ import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 // operator backfill raises the cap to drain the whole (bounded) corpus in one run.
 const BATCH_CAP = parsePositiveInt(process.env.ENTITY_BIO_BATCH_CAP, 1);
 const QUEUE_LIMIT = 200; // the server's `parseLimit` ceiling for the bio queue
+
+// ---------------------------------------------------------------------------
+// THE ATTEMPT BUDGET — the end of the rewrite loop.
+//
+// The operator's ruling (2026-07-29): "two re-writes max and at most, the third one becomes the
+// note." So an entity gets THREE authoring attempts, ever — the initial draft plus two rewrites —
+// and the third draft LANDS (`--final-attempt`) instead of being discarded. A fourth authoring
+// never happens.
+//
+// It is a hard constant, not an env knob: the number is a product decision, and a box env that
+// could quietly raise it is exactly how a bounded loop becomes an unbounded one again.
+//
+// WHY THIS EXISTS. A gate rejection used to be a plain skip that left the entity queued, with no
+// counter anywhere — so "retry" meant "forever". Three slugs were re-authored ~90 times each over
+// two days (~270 model calls on three entities) because their rejections were UNSATISFIABLE: the
+// gate scanned the whole bio, and a bio necessarily names its subject, so an artist called "Future
+// Signal", a label called "Invaderz Transmissions", and an album called "Jungle Sound: The Bassline
+// Strikes Back!" could not be written at all. That root cause is fixed at the source by the gate's
+// name exemption (apps/web/src/lib/server/bio.ts `maskEntityName`), so those three now clear on
+// attempt 1. This budget is the BACKSTOP that makes "keeps failing" bounded no matter the reason.
+//
+// THE THREE ATTEMPTS ARE NORMALLY SPENT IN ONE TICK, logbook-sweep style: a rejection is fed BACK
+// into the next authoring pass as the thing to fix, so the rewrite is aimed rather than blind
+// (re-authoring blind is the other half of why this never converged). The budget nonetheless
+// PERSISTS across ticks — each tick is a fresh process, and a tick that dies mid-entity (timeout,
+// container swap, a crash) must resume with what is left rather than refund three fresh calls.
+// ---------------------------------------------------------------------------
+
+export const MAX_BIO_ATTEMPTS = 3;
+
+// The ledger's home. `$HOME` is the mounted, backed-up data root on the box (the same anchor
+// render-conductor's poison ledger and the cron output markers hang off), so the count survives a
+// tick, a container swap, and a rebake. `ENTITY_BIO_STATE_DIR` overrides it for tests.
+const STATE_DIR =
+  process.env.ENTITY_BIO_STATE_DIR ??
+  join(process.env.HOME ?? "/opt/data/home", ".entity-bio-sweep");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
@@ -141,9 +188,13 @@ type BioDraft = {
 type BioResult = {
   bio?: string;
   dryRun?: boolean;
+  // `true` when `--final-attempt` stored a bio the voice scan refused — the review flag.
+  gateBypassed?: boolean;
   ok?: boolean;
   skipped?: boolean;
   slug?: string;
+  // The voice-gate reasons that were ACCEPTED, verbatim. Present only with `gateBypassed`.
+  voiceViolations?: string[];
 };
 
 // The `claude -p --output-format json` envelope. We take `.result` as the bio;
@@ -160,7 +211,9 @@ type ClaudeEnvelope = {
   usage?: { input_tokens?: number; output_tokens?: number };
 };
 
-type Outcome = "authored" | "alreadyBio" | "gateSkipped" | "skipped";
+// `exhausted` is the ONE terminal outcome: the entity spent all `MAX_BIO_ATTEMPTS` and this sweep
+// will never author for it again. Distinct from `gateSkipped` (a rejection with budget left).
+type Outcome = "authored" | "alreadyBio" | "exhausted" | "gateSkipped" | "skipped";
 
 // The authored bio plus the prompt version it was written under (N = operator override,
 // 0 = registry default, null = the baked-in fallback wrote it — stamped on the artifact
@@ -179,7 +232,12 @@ type AuthoredBio = {
 // The per-entity result: the outcome plus the cost row to emit — non-null ONLY when a
 // bio was actually authored AND stored this tick (a no-op / gate-skip / failure / dry-run
 // records nothing). Mirrors note-sweep's NoteResult.
-type DescribeResult = { cost: BoxCostEvent | null; outcome: Outcome };
+type DescribeResult = {
+  cost: BoxCostEvent | null;
+  /** `true` when the bio landed only because it was the FINAL attempt — the operator review flag. */
+  gateBypassed?: boolean;
+  outcome: Outcome;
+};
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -192,6 +250,166 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// ---------------------------------------------------------------------------
+// The attempt ledger — a flat TSV of `kind:slug<TAB>attempts<TAB>lastAttemptEpoch`, one line per
+// entity that has been authored for and not yet finished. The shape is render-conductor's poison
+// ledger (`logId<TAB>count<TAB>lastFailEpoch`) because it is the same job: remember, across
+// processes, how many times we have burned a budget on one item.
+//
+// An entry is DROPPED the moment a bio lands (or an operator bio is found), so the file holds only
+// in-flight and exhausted entities — a handful of lines, never a corpus. Losing the file (a box
+// rebuild) costs at most one fresh budget per stuck entity, and deleting a line is exactly how an
+// operator re-arms an entity after the gate or the prompt changes.
+// ---------------------------------------------------------------------------
+
+export type AttemptRecord = { attempts: number; lastAttemptEpoch: number };
+export type AttemptLedger = Map<string, AttemptRecord>;
+
+/** The ledger key: kind-qualified, because the three kinds share one box home and slugs collide. */
+export function attemptKey(kind: EntityKind, slug: string): string {
+  return `${kind}:${slug}`;
+}
+
+/** Where the ledger lives (`ENTITY_BIO_STATE_DIR`-overridable, for tests and for an operator move). */
+export function attemptLedgerPath(): string {
+  return join(STATE_DIR, "attempts");
+}
+
+/** Parse the TSV. TOTAL: a malformed or truncated line is dropped, never thrown on — a corrupt
+ *  ledger must degrade to "no memory", which costs one budget, not a dead cron. */
+export function parseAttemptLedger(text: string): AttemptLedger {
+  const ledger: AttemptLedger = new Map();
+
+  for (const line of text.split("\n")) {
+    const [key, attempts, epoch] = line.split("\t");
+    const parsed = Number.parseInt(attempts ?? "", 10);
+
+    if (!key || !Number.isFinite(parsed) || parsed <= 0) {
+      continue;
+    }
+
+    const parsedEpoch = Number.parseInt(epoch ?? "", 10);
+
+    ledger.set(key, {
+      attempts: parsed,
+      lastAttemptEpoch: Number.isFinite(parsedEpoch) ? parsedEpoch : 0,
+    });
+  }
+
+  return ledger;
+}
+
+/** Serialise the ledger back to TSV, key-sorted so the file is stable and diffable by eye. */
+export function formatAttemptLedger(ledger: AttemptLedger): string {
+  return [...ledger.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, record]) => `${key}\t${record.attempts}\t${record.lastAttemptEpoch}`)
+    .join("\n");
+}
+
+/**
+ * What the budget says about one entity RIGHT NOW:
+ *   - `spent`     — attempts already burned (persisted).
+ *   - `exhausted` — the budget is gone; this entity must never be authored again.
+ *   - `attempt`   — the 1-based number of the attempt we are about to make.
+ *   - `final`     — this is the LAST attempt, so its draft is delivered with `--final-attempt`
+ *                   and lands even if the voice scan refuses it.
+ */
+export function planAttempt(
+  ledger: AttemptLedger,
+  kind: EntityKind,
+  slug: string,
+): { attempt: number; exhausted: boolean; final: boolean; spent: number } {
+  const spent = ledger.get(attemptKey(kind, slug))?.attempts ?? 0;
+  const attempt = spent + 1;
+
+  return {
+    attempt,
+    exhausted: spent >= MAX_BIO_ATTEMPTS,
+    final: attempt >= MAX_BIO_ATTEMPTS,
+    spent,
+  };
+}
+
+/** Burn one attempt. Called BEFORE the `claude -p` spend, so a crash mid-author cannot refund it. */
+export function recordAttempt(
+  ledger: AttemptLedger,
+  kind: EntityKind,
+  slug: string,
+  nowEpoch: number,
+): AttemptLedger {
+  const key = attemptKey(kind, slug);
+
+  ledger.set(key, {
+    attempts: (ledger.get(key)?.attempts ?? 0) + 1,
+    lastAttemptEpoch: nowEpoch,
+  });
+
+  return ledger;
+}
+
+/** Forget an entity: its bio landed (or an operator's did), so the budget is no longer owed. */
+export function clearAttempts(
+  ledger: AttemptLedger,
+  kind: EntityKind,
+  slug: string,
+): AttemptLedger {
+  ledger.delete(attemptKey(kind, slug));
+
+  return ledger;
+}
+
+/**
+ * Split the queue into the rows this tick may work and the rows whose budget is gone.
+ *
+ * THE HEAD-OF-LINE RULE. The queue is oldest-first and BATCH_CAP is 1, so an exhausted entity at
+ * the head would otherwise block every entity behind it forever — turning an infinite-retry loop
+ * into a permanently-stalled sweep, which is worse. Exhausted rows are filtered out BEFORE the cap
+ * is applied (render-conductor's poisoned-head window, same reasoning), so the budget only ever
+ * costs the entity that spent it.
+ */
+export function selectBioWork(
+  queue: readonly QueueRow[],
+  ledger: AttemptLedger,
+  kind: EntityKind,
+  cap: number,
+): { exhausted: QueueRow[]; work: QueueRow[] } {
+  const exhausted: QueueRow[] = [];
+  const workable: QueueRow[] = [];
+
+  for (const row of queue) {
+    if (row.slug && planAttempt(ledger, kind, row.slug).exhausted) {
+      exhausted.push(row);
+      continue;
+    }
+
+    workable.push(row);
+  }
+
+  return { exhausted, work: workable.slice(0, cap) };
+}
+
+/** Read the ledger off disk. A missing/unreadable file is an EMPTY ledger, never an error. */
+function readAttemptLedger(path: string): AttemptLedger {
+  try {
+    return parseAttemptLedger(readFileSync(path, "utf8"));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Persist the ledger. Best-effort: a failed write costs one budget, it must never kill the tick. */
+function writeAttemptLedger(path: string, ledger: AttemptLedger): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${formatAttemptLedger(ledger)}\n`, "utf8");
+  } catch (error) {
+    log(
+      `could not persist the attempt ledger (${error instanceof Error ? error.message : String(error)}) — the budget may be re-spent next tick`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +526,56 @@ export function isAuthorableDraft(draft: BioDraft | null): draft is BioDraft & {
   );
 }
 
+/**
+ * Pull the rejection reason out of the Worker's 4xx so the next authoring pass can be TOLD what
+ * to fix. `gateBioText` throws `The bio fails the voice gate: <reasons>`; the length bounds throw
+ * `The bio is too short/long (<n> < <m> chars)`. The CLI prints the message raw or JSON-escaped
+ * depending on the path, so match both. Best-effort — a miss just means a less pointed rewrite.
+ *
+ * This is the logbook sweep's `readEchoedMove` in bio clothes, and it is half the fix: the old
+ * sweep re-authored BLIND, so even a satisfiable rejection had no reason to converge.
+ */
+export function readBioRejection(output: string): string | undefined {
+  const raw =
+    /The bio fails the voice gate: ([^\n]+)/.exec(output)?.[1] ??
+    /The bio is too (?:short|long) \([^)]*\)/.exec(output)?.[0];
+
+  if (!raw) {
+    return undefined;
+  }
+
+  return (
+    raw
+      // A JSON envelope escapes the reason's own quotes; put them back before trimming the tail.
+      .replace(/\\"/g, '"')
+      // …then drop whatever the envelope wrapped around it (`…"}` / `…","code":…`).
+      .replace(/"\s*[,}].*$/, "")
+      .trim()
+  );
+}
+
+/**
+ * The rejection feedback prepended to the Worker's prompt on a rewrite. Named the same way the
+ * logbook sweep names its echo block: the model is handed the exact reason its last draft was
+ * refused, plus the one instruction that matters — the FACTS do not change, only the wording.
+ */
+export function buildRewriteBlock(rejection: string | undefined, attempt: number): string {
+  if (attempt <= 1) {
+    return "";
+  }
+
+  const reason = rejection
+    ? `it was refused because: ${rejection}`
+    : "it was refused by the voice gate (no reason was recoverable)";
+
+  return [
+    `YOUR LAST DRAFT WAS REJECTED — ${reason}.`,
+    "Write the paragraph again from the same facts, wording it so that reason no longer applies. Do not invent new facts to route around it, and do not pad the length; change the phrasing.",
+    "",
+    "",
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Author one bio via `claude -p` (subscription auth, read-only tools) on the WORKER-SUPPLIED
 // prompt. Throws ClaudeAuthError on an auth/quota failure (abort the batch); returns null on
@@ -319,6 +587,9 @@ export function isAuthorableDraft(draft: BioDraft | null): draft is BioDraft & {
 // fallback prompt: if the Worker draft cannot be fetched, the entity is skipped (stays queued),
 // never authored against a stale copy. `promptVersion` is the Worker's registry version
 // (0 = baked default, N = override N), stamped on the stored bio as its provenance.
+//
+// A REWRITE (attempt 2 or 3) prepends the rejection feedback (`buildRewriteBlock`) to that same
+// Worker prompt — the box owns the retry framing, the Worker still owns the facts and the voice.
 // ---------------------------------------------------------------------------
 
 async function authorBio(
@@ -450,16 +721,26 @@ function modelForKind(kind: EntityKind): string {
 // Deliver one bio: write it to a temp file, post via the CLI (the Worker voice-gates +
 // fills-empty-only + stores), clean up. A `skipped:true` (an operator bio already on file)
 // is an `alreadyBio` no-op — the operator override wins. A gate rejection (403/422) is a
-// `gateSkipped` outcome — the entity stays queued for a future author pass.
+// `gateSkipped` outcome carrying the REASON, so the next attempt can be aimed at it.
+//
+// `finalAttempt` is the sweep's third and last pass over this entity: it adds `--final-attempt`,
+// which tells the Worker to store the draft even when the voice scan refuses it. The Worker
+// answers with `gateBypassed` + the accepted `voiceViolations`, and this logs that acceptance
+// under its own greppable marker — a bio that landed this way must never be indistinguishable
+// from one that cleared the gate.
 // ---------------------------------------------------------------------------
 
-function deliverBio(
-  kind: EntityKind,
-  slug: string,
-  bio: string,
-  promptVersion: number | null,
-  dryRun = false,
-): Outcome {
+type Delivery = { gateBypassed: boolean; outcome: Outcome; rejection?: string };
+
+function deliverBio(input: {
+  bio: string;
+  dryRun?: boolean;
+  finalAttempt?: boolean;
+  kind: EntityKind;
+  promptVersion: number | null;
+  slug: string;
+}): Delivery {
+  const { bio, dryRun = false, finalAttempt = false, kind, promptVersion, slug } = input;
   const group = groupForKind(kind);
   const dir = mkdtempSync(join(tmpdir(), "entity-bio-sweep-"));
   const bioPath = join(dir, "bio.txt");
@@ -479,14 +760,16 @@ function deliverBio(
       // fallback rather than by a version it never saw.
       ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       ...(dryRun ? ["--dry-run"] : []),
+      ...(finalAttempt ? ["--final-attempt"] : []),
       "--json",
     ]);
 
     if (code !== 0) {
-      const detail = `${stdout}\n${stderr}`.toLowerCase();
+      const combined = `${stdout}\n${stderr}`;
+      const detail = combined.toLowerCase();
 
       // The voice gate / length bounds reject with a 403/422 + a signature. Treat that as
-      // a skip (the entity stays queued), not a hard error.
+      // a skip (the entity keeps whatever budget is left), not a hard error.
       if (
         detail.includes("voice_gate") ||
         detail.includes("bio_too_short") ||
@@ -496,47 +779,84 @@ function deliverBio(
         detail.includes("422") ||
         detail.includes("forbidden")
       ) {
-        log(`${slug}: the voice gate / length rejected the bio — skipping (stays queued)`);
+        const rejection = readBioRejection(combined);
 
-        return "gateSkipped";
+        log(
+          `${slug}: the voice gate / length rejected the bio${rejection ? ` (${rejection})` : ""}`,
+        );
+
+        return { gateBypassed: false, outcome: "gateSkipped", rejection };
       }
 
       log(`${slug}: describe exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return "skipped";
+      return { gateBypassed: false, outcome: "skipped" };
     }
 
     // The fill-empty-only guard returns `skipped:true` when an operator bio already stands
     // — a clean no-op, NOT a failure (the operator override always wins).
+    let parsed: BioResult | undefined;
+
     try {
-      const parsed = JSON.parse(stdout) as BioResult;
-
-      if (parsed.skipped) {
-        log(`${slug}: a bio is already on file — operator bio stands, no-op`);
-
-        return "alreadyBio";
-      }
+      parsed = JSON.parse(stdout) as BioResult;
     } catch {
       // Non-JSON success is unexpected but harmless; treat as a fill.
     }
 
+    if (parsed?.skipped) {
+      log(`${slug}: a bio is already on file — operator bio stands, no-op`);
+
+      return { gateBypassed: false, outcome: "alreadyBio" };
+    }
+
+    // THE FINAL-ATTEMPT ACCEPTANCE, said out loud. This is the line an operator greps for to
+    // find every bio that was stored despite the voice gate refusing it.
+    if (parsed?.gateBypassed) {
+      log(
+        `${slug}: FINAL-ATTEMPT ACCEPTANCE — stored a bio the voice gate refused${
+          dryRun ? " (dry run, nothing stored)" : ""
+        }: ${(parsed.voiceViolations ?? []).join("; ") || "(no reasons reported)"} — REVIEW THIS ${kind.toUpperCase()}`,
+      );
+
+      return { gateBypassed: true, outcome: "authored" };
+    }
+
     log(`${slug}: bio ${dryRun ? "cleared the voice gate (dry run, nothing stored)" : "authored"}`);
 
-    return "authored";
+    return { gateBypassed: false, outcome: "authored" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
 }
 
 // ---------------------------------------------------------------------------
-// Per-entity: draft (Worker-paced grounding) → author → deliver.
+// Per-entity: draft (Worker-paced grounding) → author → deliver, up to the entity's REMAINING
+// attempt budget, feeding each rejection back into the next pass (logbook-sweep's shape).
+//
+// THE ATTEMPT LIFECYCLE, in one place:
+//   1. The budget is `MAX_BIO_ATTEMPTS` (3) per entity FOR ALL TIME, persisted in the ledger.
+//   2. Attempt N is BURNED (written to disk) before the `claude -p` spend, so a crash, a timeout,
+//      or a container swap mid-author cannot refund it.
+//   3. A gate rejection with budget left → re-author, TOLD the reason (`buildRewriteBlock`).
+//   4. The LAST attempt delivers with `--final-attempt`: its draft lands even if the voice scan
+//      refuses it, and that acceptance is logged under its own marker.
+//   5. A landed bio (or an operator bio) CLEARS the entity's ledger entry.
+//   6. An entity that has spent all three is `exhausted` — never authored again, and filtered out
+//      of the batch before the cap so it cannot block the queue behind it.
+//
+// A DRY RUN spends no budget and touches no ledger: it is the operator's pre-flight, it stores
+// nothing, and it must not consume an entity's real attempts.
 // ---------------------------------------------------------------------------
 
-async function describeOne(
+// Exported so the unit test can drive the REAL loop against stub `fluncle`/`claude` binaries
+// (FLUNCLE_BIN / CLAUDE_BIN) rather than re-implementing the budget arithmetic beside it — the
+// "authored at most three times, ever" guarantee is only worth as much as the code that runs it.
+export async function describeOne(
   kind: EntityKind,
   row: QueueRow,
-  dryRun = false,
+  options: { dryRun?: boolean; ledger?: AttemptLedger; ledgerPath?: string } = {},
 ): Promise<DescribeResult> {
+  const { dryRun = false, ledger, ledgerPath } = options;
   const slug = row.slug;
 
   if (!slug) {
@@ -545,12 +865,24 @@ async function describeOne(
     return { cost: null, outcome: "skipped" };
   }
 
+  // Belt-and-braces: `selectBioWork` already keeps exhausted rows out of the batch, so reaching
+  // here means the budget ran out mid-tick. Either way, no draft is fetched and no model is
+  // called — an exhausted entity costs nothing at all.
+  if (ledger && planAttempt(ledger, kind, slug).exhausted) {
+    log(
+      `${slug}: EXHAUSTED — ${MAX_BIO_ATTEMPTS} authoring attempts spent, this ${kind} will not be authored again (delete its line from ${attemptLedgerPath()} to re-arm)`,
+    );
+
+    return { cost: null, outcome: "exhausted" };
+  }
+
   const group = groupForKind(kind);
 
   // (a) DRAFT the grounding Worker-side: the Worker runs Firecrawl (its key) + pulls the
   // logged finding titles (its DB) and assembles the registered prompt. A failed call or a
   // `found:false` (unresolved slug) is a clean skip — the entity stays queued, retried next
-  // tick. The box never authors against a stale baked prompt.
+  // tick. The box never authors against a stale baked prompt. Fetched ONCE: the facts do not
+  // change between rewrites, only the wording does.
   const draft = fetchBioDraft(group, slug);
 
   if (!isAuthorableDraft(draft)) {
@@ -567,15 +899,91 @@ async function describeOne(
     log(`${slug}: authoring with Worker-gathered Firecrawl facts`);
   }
 
-  // (b) Author → (c) deliver. Throws ClaudeAuthError to abort the whole batch; returns
-  // null to leave THIS entity queued (no bio stored, picked up next tick).
-  const authored = await authorBio(kind, draft.prompt, draft.promptVersion ?? 0);
+  let authored: AuthoredBio | null = null;
+  let delivery: Delivery = { gateBypassed: false, outcome: "skipped" };
+  let rejection: string | undefined;
 
-  if (!authored) {
-    return { cost: null, outcome: "skipped" };
+  // (b) Author → (c) deliver, until the bio lands or the budget is gone.
+  for (;;) {
+    const plan = ledger
+      ? planAttempt(ledger, kind, slug)
+      : // A dry run has no ledger: it makes exactly one pass and never claims to be final.
+        { attempt: 1, exhausted: false, final: false, spent: 0 };
+
+    if (plan.exhausted) {
+      log(
+        `${slug}: EXHAUSTED — ${MAX_BIO_ATTEMPTS} authoring attempts spent, this ${kind} will not be authored again (delete its line from ${attemptLedgerPath()} to re-arm)`,
+      );
+
+      return { cost: null, outcome: "exhausted" };
+    }
+
+    // BURN THE ATTEMPT FIRST. Persisted before the model call, so the budget is honest even if
+    // this process never reaches the next line — the exact failure mode that made "retry" mean
+    // "forever" when nothing was counted at all.
+    if (ledger && ledgerPath) {
+      recordAttempt(ledger, kind, slug, Math.floor(Date.now() / 1000));
+      writeAttemptLedger(ledgerPath, ledger);
+    }
+
+    if (plan.attempt > 1) {
+      log(
+        `${slug}: re-authoring (attempt ${plan.attempt} of ${MAX_BIO_ATTEMPTS})${
+          plan.final ? " — the LAST one; its draft lands even if the gate refuses it" : ""
+        }`,
+      );
+    }
+
+    // Throws ClaudeAuthError to abort the whole batch; returns null to leave THIS entity
+    // queued with its remaining budget intact (no bio stored, picked up next tick).
+    authored = await authorBio(
+      kind,
+      `${buildRewriteBlock(rejection, plan.attempt)}${draft.prompt}`,
+      draft.promptVersion ?? 0,
+    );
+
+    if (!authored) {
+      return { cost: null, outcome: "skipped" };
+    }
+
+    delivery = deliverBio({
+      bio: authored.bio,
+      dryRun,
+      finalAttempt: plan.final,
+      kind,
+      promptVersion: authored.promptVersion,
+      slug,
+    });
+
+    // Anything but a gate rejection is terminal for this entity this tick. A rejection with no
+    // budget left is terminal too — but that only happens when the final attempt's draft was
+    // refused on a STRUCTURAL ground the acceptance still enforces (empty / too short / too
+    // long), so it is reported rather than retried.
+    if (delivery.outcome !== "gateSkipped" || !ledger) {
+      break;
+    }
+
+    rejection = delivery.rejection;
+
+    if (planAttempt(ledger, kind, slug).exhausted) {
+      log(
+        `${slug}: EXHAUSTED — the last of ${MAX_BIO_ATTEMPTS} attempts was still refused${
+          rejection ? ` (${rejection})` : ""
+        }; this ${kind} stays bio-less and will not be authored again`,
+      );
+
+      return { cost: null, outcome: "exhausted" };
+    }
   }
 
-  const outcome = deliverBio(kind, slug, authored.bio, authored.promptVersion, dryRun);
+  const outcome = delivery.outcome;
+
+  // The entity is done with this sweep: its bio landed, or an operator's already had. Drop its
+  // budget so a future re-queue (a cleared bio, a re-minted entity) starts fresh.
+  if (ledger && ledgerPath && (outcome === "authored" || outcome === "alreadyBio")) {
+    clearAttempts(ledger, kind, slug);
+    writeAttemptLedger(ledgerPath, ledger);
+  }
 
   // The dry run's whole product is the PARAGRAPH — print it where the operator can read it.
   if (dryRun) {
@@ -597,7 +1005,11 @@ async function describeOne(
   // Record the authoring spend ONLY when the bio actually landed (`authored`, not a
   // dry-run) — a gate-skip / operator-bio no-op / failure spent tokens too, but the
   // ledger tracks DELIVERED work (bioCostEvent enforces this).
-  return { cost: bioCostEvent({ authored, dryRun, outcome, slug }), outcome };
+  return {
+    cost: bioCostEvent({ authored, dryRun, outcome, slug }),
+    gateBypassed: delivery.gateBypassed,
+    outcome,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +1067,19 @@ function parseKind(argv: string[]): EntityKind {
   return value;
 }
 
+/**
+ * The WORKABLE queue depth left after this tick: the depth AT READ TIME minus what we finished
+ * (authored / operator-bio no-op) and minus the EXHAUSTED rows, which are still queued server-side
+ * but are no longer work this sweep will ever do. Gate-skips and failures keep their remaining
+ * budget and stay counted. Exported so the summary and its test cannot drift.
+ */
+export function remainingQueueDepth(
+  queueLength: number,
+  summary: { alreadyBio: number; authored: number; exhausted: number },
+): number {
+  return Math.max(0, queueLength - summary.authored - summary.alreadyBio - summary.exhausted);
+}
+
 // ---------------------------------------------------------------------------
 // Main — drain a bounded batch off the bio queue for one kind.
 // ---------------------------------------------------------------------------
@@ -678,7 +1103,8 @@ async function main(): Promise<void> {
 
     for (const slug of dryRunSlugs) {
       try {
-        outcomes[slug] = (await describeOne(kind, { name: slug, slug }, true)).outcome;
+        // No ledger: a pre-flight must not spend an entity's real attempt budget.
+        outcomes[slug] = (await describeOne(kind, { name: slug, slug }, { dryRun: true })).outcome;
       } catch (error) {
         outcomes[slug] = "failed";
         log(`error on ${slug}: ${error instanceof Error ? error.message : String(error)}`);
@@ -704,6 +1130,10 @@ async function main(): Promise<void> {
   const summary = {
     alreadyBio: 0,
     authored: 0,
+    // Bios that landed ONLY because it was the final attempt — each one wants an operator's eye.
+    bypassedGate: 0,
+    // Queued entities that have spent all `MAX_BIO_ATTEMPTS` and will never be authored again.
+    exhausted: 0,
     failed: 0,
     gateSkipped: 0,
     kind,
@@ -716,16 +1146,40 @@ async function main(): Promise<void> {
     return; // fast no-op
   }
 
+  // The attempt budgets, loaded once per tick and written through as they are spent.
+  const ledgerPath = attemptLedgerPath();
+  const ledger = readAttemptLedger(ledgerPath);
+
+  // Exhausted rows are dropped BEFORE the cap: an exhausted head must never block the entities
+  // behind it (that would trade an infinite loop for a permanent stall).
+  const { exhausted, work } = selectBioWork(queue, ledger, kind, BATCH_CAP);
+
+  summary.exhausted = exhausted.length;
+
+  if (exhausted.length > 0) {
+    log(
+      `skipping ${exhausted.length} exhausted ${kind}(s) — ${MAX_BIO_ATTEMPTS} attempts spent each, never authored again (${exhausted
+        .map((row) => row.slug)
+        .filter(Boolean)
+        .slice(0, 10)
+        .join(", ")})`,
+    );
+  }
+
   // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the bios
   // are already durable — a dropped POST only understates the ledger).
   const costs: BoxCostEvent[] = [];
 
-  for (const row of queue.slice(0, BATCH_CAP)) {
+  for (const row of work) {
     try {
-      const { cost, outcome } = await describeOne(kind, row);
+      const { cost, gateBypassed, outcome } = await describeOne(kind, row, { ledger, ledgerPath });
 
       if (cost) {
         costs.push(cost);
+      }
+
+      if (gateBypassed) {
+        summary.bypassedGate += 1;
       }
 
       if (outcome === "authored") {
@@ -734,6 +1188,8 @@ async function main(): Promise<void> {
         summary.alreadyBio += 1;
       } else if (outcome === "gateSkipped") {
         summary.gateSkipped += 1;
+      } else if (outcome === "exhausted") {
+        summary.exhausted += 1;
       } else {
         summary.failed += 1;
       }
@@ -747,7 +1203,7 @@ async function main(): Promise<void> {
             ok: false,
             reason: "claude_auth",
             ...summary,
-            queueRemaining: Math.max(0, queue.length - summary.authored - summary.alreadyBio),
+            queueRemaining: remainingQueueDepth(queue.length, summary),
           }),
         );
         process.exit(1);
@@ -760,9 +1216,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // queueRemaining is the queue depth AT READ TIME minus what we authored/no-op'd this
-  // tick (gate-skips + failures stay queued); the next tick re-reads the live queue.
-  summary.queueRemaining = Math.max(0, queue.length - summary.authored - summary.alreadyBio);
+  summary.queueRemaining = remainingQueueDepth(queue.length, summary);
 
   console.log(JSON.stringify({ ok: true, ...summary }));
 

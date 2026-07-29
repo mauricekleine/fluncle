@@ -15,7 +15,7 @@ import {
 // runs the voice gate and reports the verdict without storing anything.
 export async function describeAlbumCommand(
   slug: string,
-  options: { bio: string; dryRun?: boolean; promptVersion?: number },
+  options: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },
 ): Promise<EntityBioResult> {
   return adminApiPost<EntityBioResult>(
     `/api/v1/admin/albums/${encodeURIComponent(slug)}/bio`,

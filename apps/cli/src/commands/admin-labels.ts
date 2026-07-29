@@ -70,7 +70,7 @@ export async function updateLabelCommand(
 // runs the voice gate and reports the verdict without storing anything.
 export async function describeLabelCommand(
   slug: string,
-  options: { bio: string; dryRun?: boolean; promptVersion?: number },
+  options: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },
 ): Promise<EntityBioResult> {
   return adminApiPost<EntityBioResult>(
     `/api/v1/admin/labels/${encodeURIComponent(slug)}/bio`,

@@ -26,8 +26,14 @@ vi.mock("./env", () => ({
   readOptionalEnv: (...args: unknown[]) => readOptionalEnv(...args),
 }));
 
-const { buildEntityBioPrompt, buildEntityFactsQuery, fetchEntityFacts, gateBioText } =
-  await import("./bio");
+const {
+  acceptFinalDraftBio,
+  buildEntityBioPrompt,
+  buildEntityFactsQuery,
+  fetchEntityFacts,
+  gateBioText,
+  maskEntityName,
+} = await import("./bio");
 
 beforeEach(() => {
   execute.mockReset().mockRejectedValue(new Error("store down"));
@@ -48,28 +54,33 @@ function codeOf(run: () => unknown): string {
   return "(did not throw)";
 }
 
+// The entity a bio is about. Every `gateBioText` call takes one, and its occurrences are masked
+// out before the scan (THE NAME EXEMPTION) — so a name with no bearing on the case under test is
+// a no-op, and the exemption's own behaviour is pinned in its dedicated block below.
+const CALIBRE = "Calibre";
+
 describe("gateBioText", () => {
   it("passes a clean, dry entity bio", () => {
-    expect(gateBioText(GOOD_BIO)).toBe(GOOD_BIO);
+    expect(gateBioText(GOOD_BIO, CALIBRE)).toBe(GOOD_BIO);
   });
 
   it("trims surrounding whitespace", () => {
-    expect(gateBioText(`  ${GOOD_BIO}  `)).toBe(GOOD_BIO);
+    expect(gateBioText(`  ${GOOD_BIO}  `, CALIBRE)).toBe(GOOD_BIO);
   });
 
   it("throws no_bio for a non-string / empty", () => {
-    expect(codeOf(() => gateBioText(undefined))).toBe("no_bio");
-    expect(codeOf(() => gateBioText(42))).toBe("no_bio");
-    expect(codeOf(() => gateBioText("   "))).toBe("no_bio");
+    expect(codeOf(() => gateBioText(undefined, CALIBRE))).toBe("no_bio");
+    expect(codeOf(() => gateBioText(42, CALIBRE))).toBe("no_bio");
+    expect(codeOf(() => gateBioText("   ", CALIBRE))).toBe("no_bio");
   });
 
   it("throws bio_too_short below the floor", () => {
-    expect(codeOf(() => gateBioText("A producer."))).toBe("bio_too_short");
+    expect(codeOf(() => gateBioText("A producer.", CALIBRE))).toBe("bio_too_short");
   });
 
   it("throws bio_too_long over the 500-char ceiling", () => {
     // 260 two-char words = 520 chars, past the paragraph cap.
-    expect(codeOf(() => gateBioText("ok ".repeat(260)))).toBe("bio_too_long");
+    expect(codeOf(() => gateBioText("ok ".repeat(260), CALIBRE))).toBe("bio_too_long");
   });
 
   it("accepts a paragraph up to the ceiling (looser than the note's 280 budget)", () => {
@@ -80,42 +91,174 @@ describe("gateBioText", () => {
       "When one turns up in a set, the crew know before I say a word.";
     expect(paragraph.length).toBeGreaterThan(280);
     expect(paragraph.length).toBeLessThanOrEqual(500);
-    expect(gateBioText(paragraph)).toBe(paragraph);
+    expect(gateBioText(paragraph, CALIBRE)).toBe(paragraph);
   });
 
   it("rejects a banned identity word (voice_gate)", () => {
     expect(
       codeOf(() =>
-        gateBioText("A clean transmission of rolling menace, and I have logged plenty."),
+        gateBioText("A clean transmission of rolling menace, and I have logged plenty.", CALIBRE),
       ),
     ).toBe("voice_gate");
   });
 
   it("ACCEPTS earthly geography — the factual dossier register names a real place plainly", () => {
     const withCity = "Netsky is a drum and bass producer from Belgium. He has released widely.";
-    expect(gateBioText(withCity)).toBe(withCity);
+    expect(gateBioText(withCity, "Netsky")).toBe(withCity);
 
     const withLondon =
       "Hospital Records is a drum and bass label run out of London since the 1990s.";
-    expect(gateBioText(withLondon)).toBe(withLondon);
+    expect(gateBioText(withLondon, "Hospital Records")).toBe(withLondon);
   });
 
   it("returns a realistic factual bio naming geography, trimmed", () => {
     const factual =
       "Calibre is the alias of Dominick Martin, a drum and bass producer from Belfast. He runs the Signature Recordings label and is known for a warm, rolling sound.";
-    expect(gateBioText(`  ${factual}  `)).toBe(factual);
+    expect(gateBioText(`  ${factual}  `, CALIBRE)).toBe(factual);
   });
 
   it("rejects an exclamation mark — the Dry Rule (voice_gate)", () => {
-    expect(codeOf(() => gateBioText(`${GOOD_BIO.slice(0, -1)}!`))).toBe("voice_gate");
+    expect(codeOf(() => gateBioText(`${GOOD_BIO.slice(0, -1)}!`, CALIBRE))).toBe("voice_gate");
   });
 
   it('rejects "we"-as-company (voice_gate)', () => {
     expect(
       codeOf(() =>
-        gateBioText("We keep coming back to this one because the rollers breathe the way they do."),
+        gateBioText(
+          "We keep coming back to this one because the rollers breathe the way they do.",
+          CALIBRE,
+        ),
       ),
     ).toBe("voice_gate");
+  });
+});
+
+// ── THE NAME EXEMPTION ───────────────────────────────────────────────────────────────────
+//
+// The gate polices the prose FLUNCLE wrote and stops policing words it did not choose. An entity's
+// own name is not Fluncle's prose: "Future Signal", "Invaderz Transmissions", and "Jungle Sound:
+// The Bassline Strikes Back!" are real-world names, and a bio must be able to name its subject.
+// Before this, those three could not be written AT ALL — every rewrite named the entity, every
+// rewrite tripped the scan, and the box sweep re-authored them ~90 times each over two days.
+//
+// The bans themselves are untouched. Only the TEXT handed to the scanner changes: exact,
+// case-insensitive occurrences of the FULL name are masked out first.
+
+describe("maskEntityName (what the scanner is allowed to see)", () => {
+  it("masks every case-insensitive occurrence of the full name", () => {
+    expect(maskEntityName("Future Signal is future signal.", "Future Signal")).toBe("  is  .");
+  });
+
+  it("leaves the text alone when the name does not appear", () => {
+    expect(maskEntityName("A rolling stamp I trust.", "Calibre")).toBe("A rolling stamp I trust.");
+  });
+
+  it("leaves the text alone for a blank name (no name, nothing exempt)", () => {
+    expect(maskEntityName("A rolling stamp I trust.", "   ")).toBe("A rolling stamp I trust.");
+  });
+
+  it("escapes regex metacharacters in a name rather than interpreting them", () => {
+    // A name is a trusted identity string, but it is still not a pattern.
+    expect(maskEntityName("Sub Focus (UK) rolls.", "Sub Focus (UK)")).toBe("  rolls.");
+    expect(maskEntityName("A.B.C. rolls.", "A.B.C.")).toBe("  rolls.");
+  });
+});
+
+describe("gateBioText + the name exemption (the three production loops)", () => {
+  it("PASSES an artist whose own name carries a banned word", () => {
+    const bio =
+      "Future Signal is a drum and bass producer with a long run of releases behind him. The drums do the talking, and I have logged enough of them to trust the stamp.";
+    expect(gateBioText(bio, "Future Signal")).toBe(bio);
+  });
+
+  it("PASSES a label whose own name carries a banned word", () => {
+    const bio =
+      "Invaderz Transmissions is a drum and bass imprint with a taste for the heavier end. The records I have logged from it hold their nerve through the drop.";
+    expect(gateBioText(bio, "Invaderz Transmissions")).toBe(bio);
+  });
+
+  it("PASSES an album whose own title carries an exclamation mark (the Dry Rule)", () => {
+    // Masking the full title removes the punctuation INSIDE it — which is the whole mechanism.
+    const bio =
+      "Jungle Sound: The Bassline Strikes Back! is a compilation that pulls the older end of the sound back into the room. The cuts I have logged off it still hit.";
+    expect(gateBioText(bio, "Jungle Sound: The Bassline Strikes Back!")).toBe(bio);
+  });
+
+  // THE PROPERTY THAT KEEPS THE GATE MEANINGFUL. The exemption is for the NAME, not for the word:
+  // naming "Future Signal" is fine, using "signal" as a generic word is still a violation.
+  it("STILL REJECTS the banned word used generically elsewhere in the same bio", () => {
+    expect(
+      codeOf(() =>
+        gateBioText(
+          "Future Signal is a drum and bass producer. Every record is a signal that the night is turning, and I have logged plenty.",
+          "Future Signal",
+        ),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("STILL REJECTS an exclamation mark Fluncle wrote, on an entity whose title contains one", () => {
+    expect(
+      codeOf(() =>
+        gateBioText(
+          "Jungle Sound: The Bassline Strikes Back! is a compilation, and the cuts still hit!",
+          "Jungle Sound: The Bassline Strikes Back!",
+        ),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  // Conservative and intended: the exemption covers the FULL name only, so a shortened reference
+  // is still judged. The rewrite can simply use the full name.
+  it("REJECTS a partial-name reference (the exemption is the full name only)", () => {
+    expect(
+      codeOf(() =>
+        gateBioText(
+          "Signal is a drum and bass producer with a long run of releases behind him, and the drums do the talking.",
+          "Future Signal",
+        ),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("still measures LENGTH on the whole bio, name included", () => {
+    // The exemption is about what Fluncle is judged for SAYING, never about the paragraph's size.
+    expect(codeOf(() => gateBioText("Future Signal.", "Future Signal"))).toBe("bio_too_short");
+  });
+});
+
+// ── THE FINAL-ATTEMPT ACCEPTANCE ─────────────────────────────────────────────────────────
+//
+// The BACKSTOP under the attempt budget: after three authoring attempts the last draft is stored
+// even if the scan refuses it, so the queue can never spin on one entity forever. It bypasses the
+// voice SCAN only — a present, in-bounds bio is still required — and it hands the violations back
+// so the acceptance is logged and reviewable rather than silent.
+
+describe("acceptFinalDraftBio", () => {
+  it("returns a clean bio with NO violations (an ordinary write, no marker)", () => {
+    expect(acceptFinalDraftBio(GOOD_BIO, CALIBRE)).toEqual({ bio: GOOD_BIO, violations: [] });
+  });
+
+  it("ACCEPTS a bio the voice scan refuses, and reports why", () => {
+    const refused = "A clean transmission of rolling menace, and I have logged plenty.";
+    const accepted = acceptFinalDraftBio(refused, CALIBRE);
+
+    expect(accepted.bio).toBe(refused);
+    expect(accepted.violations).toHaveLength(1);
+    expect(accepted.violations[0]?.word).toBe("transmission");
+  });
+
+  it("runs the SAME name exemption, so it never reports the entity's own name back", () => {
+    const bio =
+      "Future Signal is a drum and bass producer with a long run of releases behind him. The drums do the talking, and I have logged enough of them to trust the stamp.";
+    expect(acceptFinalDraftBio(bio, "Future Signal").violations).toEqual([]);
+  });
+
+  it("STILL enforces the structural bounds — those are not voice judgments", () => {
+    expect(codeOf(() => acceptFinalDraftBio(undefined, CALIBRE))).toBe("no_bio");
+    expect(codeOf(() => acceptFinalDraftBio("   ", CALIBRE))).toBe("no_bio");
+    expect(codeOf(() => acceptFinalDraftBio("A producer.", CALIBRE))).toBe("bio_too_short");
+    expect(codeOf(() => acceptFinalDraftBio("ok ".repeat(260), CALIBRE))).toBe("bio_too_long");
   });
 });
 

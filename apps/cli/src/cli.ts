@@ -310,6 +310,8 @@ type BioDescribeOptions = {
   bio?: string;
   bioFile?: string;
   dryRun?: boolean;
+  /** The sweep's THIRD and last authoring pass: store the draft even if the voice scan refuses it. */
+  finalAttempt?: boolean;
   json: boolean;
   limit?: string;
   promptVersion?: string;
@@ -2789,6 +2791,11 @@ function addAdminCommands(program: Command): void {
       "Run the voice gate and report the verdict without storing anything",
       false,
     )
+    .option(
+      "--final-attempt",
+      "The sweep's third and last authoring pass: store the draft even if the voice scan refuses it (the length bounds still apply, and the write is flagged for review)",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (slug: string | undefined, options: BioDescribeOptions) => {
@@ -2862,6 +2869,11 @@ function addAdminCommands(program: Command): void {
     .option(
       "--dry-run",
       "Run the voice gate and report the verdict without storing anything",
+      false,
+    )
+    .option(
+      "--final-attempt",
+      "The sweep's third and last authoring pass: store the draft even if the voice scan refuses it (the length bounds still apply, and the write is flagged for review)",
       false,
     )
     .option("--json", "Print JSON", false)
@@ -2997,6 +3009,11 @@ function addAdminCommands(program: Command): void {
     .option(
       "--dry-run",
       "Run the voice gate and report the verdict without storing anything",
+      false,
+    )
+    .option(
+      "--final-attempt",
+      "The sweep's third and last authoring pass: store the draft even if the voice scan refuses it (the length bounds still apply, and the write is flagged for review)",
       false,
     )
     .option("--json", "Print JSON", false)
@@ -3261,20 +3278,21 @@ async function runEntityDescribe(
   options: BioDescribeOptions,
   describeCommand: (
     slug: string,
-    input: { bio: string; dryRun?: boolean; promptVersion?: number },
+    input: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },
   ) => Promise<import("./commands/admin-artists").EntityBioResult>,
 ): Promise<void> {
   const bio = options.bioFile ? readFileSync(options.bioFile, "utf8") : options.bio;
 
   if (!slug || !bio || !bio.trim()) {
     throw new Error(
-      `Usage: fluncle admin ${kind}s describe <slug> (--bio <text> | --bio-file <file>) [--dry-run] [--json]`,
+      `Usage: fluncle admin ${kind}s describe <slug> (--bio <text> | --bio-file <file>) [--dry-run] [--final-attempt] [--json]`,
     );
   }
 
   const result = await describeCommand(slug, {
     bio: bio.trim(),
     dryRun: options.dryRun,
+    finalAttempt: options.finalAttempt,
     promptVersion: parsePromptVersion(options.promptVersion),
   });
 
@@ -3296,6 +3314,15 @@ async function runEntityDescribe(
 
   console.log(`Authored the bio for ${result.slug}:`);
   console.log(`  ${result.bio}`);
+
+  // The final-attempt acceptance is never quiet: say what was let through, and what it broke.
+  if (result.gateBypassed) {
+    console.log("  FINAL ATTEMPT — the voice gate refused this bio and it was stored anyway:");
+
+    for (const violation of result.voiceViolations ?? []) {
+      console.log(`    - ${violation}`);
+    }
+  }
 }
 
 // `admin artists|labels|albums describe --queue` — the bio worklist (entities with findings but

@@ -27,24 +27,38 @@ export type EntityBioResult = {
   bio: string;
   // True on a --dry-run: the voice gate ran, nothing was stored.
   dryRun?: boolean;
+  // True when --final-attempt stored a bio the voice scan would otherwise have refused.
+  // THE OPERATOR REVIEW FLAG — absent on every normal write.
+  gateBypassed?: boolean;
   ok: boolean;
   // True when a bio already existed and the fill-empty-only guard refused to clobber it.
   skipped?: boolean;
   slug: string;
+  // The voice-gate reasons that were ACCEPTED, verbatim. Present only with `gateBypassed`.
+  voiceViolations?: string[];
 };
 
-type BioBody = { bio: string; dryRun?: boolean; promptVersion?: number };
+type BioBody = { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number };
 
-/** Build the POST body shared by both entity describe commands. */
+/** Build the POST body shared by all three entity describe commands. */
 export function buildBioBody(options: {
   bio: string;
   dryRun?: boolean;
+  finalAttempt?: boolean;
   promptVersion?: number;
 }): BioBody {
   const body: BioBody = { bio: options.bio };
 
   if (options.dryRun) {
     body.dryRun = true;
+  }
+
+  // The sweep's THIRD and last authoring pass over one entity: store the draft even if the
+  // voice scan refuses it (the length bounds and fill-empty-only still apply). Sent ONLY by
+  // the on-box entity-bio sweep; omitted entirely on every other call, so a normal describe
+  // is byte-identical to what it always was.
+  if (options.finalAttempt) {
+    body.finalAttempt = true;
   }
 
   if (typeof options.promptVersion === "number") {
@@ -59,7 +73,7 @@ export function buildBioBody(options: {
 // voice gate and reports the verdict without storing anything.
 export async function describeArtistCommand(
   slug: string,
-  options: { bio: string; dryRun?: boolean; promptVersion?: number },
+  options: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },
 ): Promise<EntityBioResult> {
   return adminApiPost<EntityBioResult>(
     `/api/v1/admin/artists/${encodeURIComponent(slug)}/bio`,

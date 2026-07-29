@@ -12,6 +12,13 @@
 //     cosmos-replaces-the-map ban would wrongly reject. It carries the bio's own longer length
 //     ceiling (a 2–4 sentence paragraph, not a one-line note). A bio lands on a public entity
 //     page, so a violation hard-fails the store — the same defence-in-depth the note gate gives.
+//     It carries THE NAME EXEMPTION (`maskEntityName`): the gate judges the prose FLUNCLE wrote,
+//     so the entity's own name is masked out before the scan. A bio may name "Future Signal"; it
+//     still fails on a generic "signal" anywhere else.
+//   - `acceptFinalDraftBio` — the ONE bounded exception to that hard fail, and a BACKSTOP rather
+//     than a routine path: after three authoring attempts the sweep's last draft is stored even
+//     when the scan refuses it, with the violations handed back so the acceptance is logged and
+//     reviewable, never silent.
 //   - `fetchEntityFacts` — the Firecrawl fact-gather, generalized from `fetchTrackContext`. It
 //     fires the SAME Firecrawl v2 search idiom (the shared `FIRECRAWL_SEARCH_URL` + the
 //     `FIRECRAWL_API_KEY` env read), drops the same lyric/junk domains, and returns the raw
@@ -28,7 +35,12 @@
 // labels.ts / albums.ts).
 
 import { readOptionalEnv } from "./env";
-import { FIRECRAWL_SEARCH_URL, isLyricDomain, scanObservationScript } from "./observation";
+import {
+  FIRECRAWL_SEARCH_URL,
+  isLyricDomain,
+  scanObservationScript,
+  type VoiceGateViolation,
+} from "./observation";
 import { renderRegisteredPrompt } from "./prompts";
 import { ApiError } from "./spotify";
 
@@ -44,6 +56,45 @@ const BIO_MIN_CHARS = 40;
 const BIO_MAX_CHARS = 500;
 
 /**
+ * THE NAME EXEMPTION (the operator's ruling, 2026-07-29): the voice gate polices every word
+ * FLUNCLE wrote, and stops policing words it did not choose. An entity's own name is not
+ * Fluncle's prose — "Future Signal", "Invaderz Transmissions", and "Jungle Sound: The Bassline
+ * Strikes Back!" are real-world names, and a bio about them must be allowed to name them.
+ *
+ * The mechanism is deliberately the narrowest one that works: mask EXACT, case-insensitive
+ * occurrences of the FULL name out of the text, then scan what is left. Nothing about the bans
+ * changes — `BANNED_WORDS`, the Dry Rule, the "we" ban, and the length bounds are untouched; only
+ * WHAT TEXT is handed to the scanner changes.
+ *
+ * Two properties this shape buys, both pinned by tests in ./bio.test.ts:
+ *   - It does NOT blanket-allow the banned word. A bio about "Future Signal" may name the artist
+ *     and still fails if it uses "signal" as a generic word anywhere else in the paragraph — which
+ *     is what keeps the gate meaningful rather than a per-entity amnesty.
+ *   - Masking the full name removes the punctuation INSIDE it, which is how the album "Jungle
+ *     Sound: The Bassline Strikes Back!" clears the Dry Rule's exclamation ban without that ban
+ *     being weakened for anything Fluncle actually wrote.
+ *
+ * A PARTIAL reference is still rejected: a bio about "Future Signal" that says only "Signal" trips
+ * the ban. That is intended — conservative, and the rewrite can simply use the full name.
+ *
+ * The name is a trusted identity string from Fluncle's own DB, never free web content, so
+ * regex-escaping it is the whole of the input handling it needs.
+ */
+export function maskEntityName(text: string, entityName: string): string {
+  const name = entityName.trim();
+
+  if (!name) {
+    return text; // no name to exempt — scan the text exactly as before
+  }
+
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // A single space, not an empty string: the masked span still separates the words around it, so
+  // masking can never weld two neighbours into a token the scanner would read differently.
+  return text.replace(new RegExp(escaped, "gi"), " ");
+}
+
+/**
  * Validate + voice-gate an agent-authored entity bio, throwing a clean ApiError on any
  * failure (the handler's catch turns it into a 4xx). Returns the trimmed bio on success.
  * Reuses the note/observation shared voice scan (one source of truth for the banned
@@ -52,8 +103,118 @@ const BIO_MAX_CHARS = 500;
  * or city plainly — the one ban this gate deliberately drops. It carries the bio's own
  * longer length bounds. The bio is a public entity surface, so a violation hard-fails the
  * store before it is ever shown.
+ *
+ * `entityName` is the entity this bio is ABOUT, and it is required rather than optional so a new
+ * call site cannot silently forget the exemption: its occurrences are masked out before the scan
+ * (see `maskEntityName`). The LENGTH bounds are measured on the WHOLE bio, name included — the
+ * exemption is about what Fluncle is judged for saying, not about how long the paragraph is.
  */
-export function gateBioText(text: unknown): string {
+export function gateBioText(text: unknown, entityName: string): string {
+  const trimmed = requireStorableBio(text);
+  const violations = scanBioProse(trimmed, entityName);
+
+  if (violations.length > 0) {
+    throw new ApiError("voice_gate", voiceGateMessage(violations), 422);
+  }
+
+  return trimmed;
+}
+
+/** The one scan both the gate and the final-attempt acceptance run: the bio minus its subject's name. */
+function scanBioProse(bio: string, entityName: string): VoiceGateViolation[] {
+  return scanObservationScript(maskEntityName(bio, entityName), { allowGeography: true });
+}
+
+/**
+ * THE FINAL-ATTEMPT ACCEPTANCE — the one place the bio voice SCAN is allowed not to hard-fail.
+ *
+ * The operator's ruling (2026-07-29): an entity gets at most THREE authoring attempts — the
+ * initial draft plus two rewrites — and the third draft LANDS rather than being discarded. The
+ * on-box `entity-bio-sweep` counts the attempts and asks for this by sending `finalAttempt` on
+ * its third and last pass; nothing else in the app may call it.
+ *
+ * It is the BACKSTOP, not the routine path. The unsatisfiable rejections that caused the runaway —
+ * an entity whose own NAME carries a banned word — are fixed at the source by the name exemption
+ * above, so a bio about "Future Signal" now clears the gate on attempt 1. What is left for this to
+ * catch is a genuinely bad draft: three passes of prose Fluncle chose that still will not clear.
+ * At that point another rewrite is a coin flip, and the operator's call is that the third draft
+ * lands and gets reviewed rather than the queue spinning on it forever.
+ *
+ * WHAT IT BYPASSES: the voice SCAN only — the banned-identity-word / exclamation / "we"-as-company
+ * checks. It returns the violations rather than swallowing them, so the caller can log the
+ * acceptance distinctly and the operator can find and review every bio that landed this way.
+ *
+ * WHAT IT STILL ENFORCES: `requireStorableBio` — a present, non-empty bio inside the length bounds.
+ * Those are not voice judgments; they are what makes the paragraph a renderable paragraph, and
+ * unlike a banned name a rewrite genuinely CAN converge on them (the prompt asks for 2–4
+ * sentences). A final attempt that is empty / too short / too long still hard-fails, and the sweep
+ * reports it as an exhausted entity rather than storing a stub or a Wikipedia dump.
+ *
+ * It deliberately does NOT retune `BIO_MIN_CHARS`, `BIO_MAX_CHARS`, or the banned lists — loosening
+ * the gate itself is a canon call, and this is a bounded escape hatch, not a lower bar.
+ */
+export function acceptFinalDraftBio(
+  text: unknown,
+  entityName: string,
+): { bio: string; violations: VoiceGateViolation[] } {
+  const bio = requireStorableBio(text);
+
+  // The SAME scan the gate runs, name exemption included — so the violations reported here are
+  // the real ones the operator has to review, not a stale reading of the entity's own name.
+  return { bio, violations: scanBioProse(bio, entityName) };
+}
+
+/**
+ * The ONE decision point every `describe_*` handler routes its bio through, so artist / label /
+ * album can never drift on when a voice violation is fatal.
+ *
+ * Normal pass (`finalAttempt` absent/false): `gateBioText`, which throws on any violation —
+ * unchanged behaviour, and the returned envelope carries no marker.
+ *
+ * The sweep's third and last pass (`finalAttempt: true`): `acceptFinalDraftBio`, which stores the
+ * draft anyway. When it actually accepted something the scan refused, this LOGS THE ACCEPTANCE
+ * distinctly (one greppable `FINAL-ATTEMPT ACCEPTANCE` line naming the entity and every reason)
+ * and returns `gateBypassed: true` + the reasons, so the box's cron output and the CLI carry the
+ * same review flag. A clean third draft is an ordinary write and gets no marker.
+ */
+export function gateOrAcceptBio(input: {
+  bio: unknown;
+  finalAttempt: boolean;
+  kind: EntityKind;
+  /** The entity this bio is ABOUT — its own name is exempt from the scan (`maskEntityName`). */
+  name: string;
+  slug: string;
+}): { bio: string; gateBypassed?: true; voiceViolations?: string[] } {
+  if (!input.finalAttempt) {
+    return { bio: gateBioText(input.bio, input.name) };
+  }
+
+  const { bio, violations } = acceptFinalDraftBio(input.bio, input.name);
+
+  if (violations.length === 0) {
+    return { bio };
+  }
+
+  const voiceViolations = violations.map((violation) => violation.reason);
+
+  console.warn(
+    `describe_${input.kind}: FINAL-ATTEMPT ACCEPTANCE — stored a bio the voice gate refused for ${input.kind} "${input.slug}". ${voiceGateMessage(violations)}`,
+  );
+
+  return { bio, gateBypassed: true, voiceViolations };
+}
+
+/** The `voice_gate` 422 message, shared so a bypassed acceptance logs the same words it would have thrown. */
+export function voiceGateMessage(violations: readonly VoiceGateViolation[]): string {
+  return `The bio fails the voice gate: ${violations.map((violation) => violation.reason).join("; ")}`;
+}
+
+/**
+ * The structural half of the bio gate: present, non-empty, and inside the length bounds. Shared by
+ * `gateBioText` and `acceptFinalDraftBio` so the two can never drift on what is STORABLE — only on
+ * whether a voice violation is fatal.
+ */
+function requireStorableBio(text: unknown): string {
   if (typeof text !== "string" || !text.trim()) {
     throw new ApiError("no_bio", "A `bio` (the entity's voiced paragraph) is required", 400);
   }
@@ -72,16 +233,6 @@ export function gateBioText(text: unknown): string {
     throw new ApiError(
       "bio_too_long",
       `The bio is too long (${trimmed.length} > ${BIO_MAX_CHARS} chars)`,
-      422,
-    );
-  }
-
-  const violations = scanObservationScript(trimmed, { allowGeography: true });
-
-  if (violations.length > 0) {
-    throw new ApiError(
-      "voice_gate",
-      `The bio fails the voice gate: ${violations.map((violation) => violation.reason).join("; ")}`,
       422,
     );
   }

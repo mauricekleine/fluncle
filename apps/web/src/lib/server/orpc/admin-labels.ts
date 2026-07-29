@@ -12,7 +12,7 @@
 // touches nothing already stored. Neither handler reads or writes a track, a finding, or
 // anything a crawl brought in — and neither ever should. See docs/label-entity.md.
 
-import { buildEntityBioPrompt, fetchEntityFacts, gateBioText } from "../bio";
+import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
 import { purgeEntityCache } from "../edge-cache";
 import {
   confirmLabelAlias,
@@ -178,11 +178,20 @@ export function adminLabelsHandlers(os: Implementer) {
         return { bio: label.bio, ok: true as const, skipped: true as const, slug: label.slug };
       }
 
-      // Voice-gate the agent-authored bio (defence in depth, re-scanned server-side).
-      const bio = gateBioText(input.bio);
+      // Voice-gate the agent-authored bio (defence in depth, re-scanned server-side) — UNLESS
+      // this is the sweep's third and last authoring pass, where the draft lands and the
+      // acceptance is logged + flagged instead (see `gateOrAcceptBio`).
+      const gated = gateOrAcceptBio({
+        bio: input.bio,
+        finalAttempt: input.finalAttempt === true,
+        kind: "label",
+        name: label.name,
+        slug: label.slug,
+      });
+      const { bio, gateBypassed, voiceViolations } = gated;
 
       if (dryRun) {
-        return { bio, dryRun: true as const, ok: true as const, slug: label.slug };
+        return { ...gated, dryRun: true as const, ok: true as const, slug: label.slug };
       }
 
       // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL.
@@ -203,7 +212,7 @@ export function adminLabelsHandlers(os: Implementer) {
       // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
       purgeEntityCache("label", label.slug);
 
-      return { bio, ok: true as const, slug: label.slug };
+      return { bio, gateBypassed, ok: true as const, slug: label.slug, voiceViolations };
     } catch (error) {
       throw toFault(error);
     }

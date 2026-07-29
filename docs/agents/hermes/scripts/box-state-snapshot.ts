@@ -140,6 +140,14 @@ export const BOX_STATE_INCLUDES: readonly BoxStateInclude[] = [
     required: false,
     what: "the prober's transition memory",
   },
+  {
+    // Not `required`: losing it costs at most one fresh authoring budget per still-queued
+    // entity, and it self-heals from there — a restore that lacks it is still a restore.
+    base: "home",
+    path: ".entity-bio-sweep",
+    required: false,
+    what: "the entity-bio sweep's per-entity attempt budgets",
+  },
 ];
 
 /**

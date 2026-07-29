@@ -39,11 +39,32 @@ The `draft_artist_bio` / `draft_label_bio` READ closes both gaps at once — the
 
 ## The cardinal safety guarantee: fill an EMPTY bio only
 
-`describe_artist` / `describe_label` fill an entity's bio **only when it is empty**. An entity that already carries a bio — operator-written **or** previously auto-authored — is a no-op (`skipped: true`); the box **never** clobbers an existing bio. **The operator override always wins**, enforced **server-side** (the atomic `fillEmptyArtistBio` / `fillEmptyLabelBio` SQL predicate gated on `bio IS NULL/''`). A gate rejection leaves the entity queued for a future pass.
+`describe_artist` / `describe_label` fill an entity's bio **only when it is empty**. An entity that already carries a bio — operator-written **or** previously auto-authored — is a no-op (`skipped: true`); the box **never** clobbers an existing bio. **The operator override always wins**, enforced **server-side** (the atomic `fillEmptyArtistBio` / `fillEmptyLabelBio` SQL predicate gated on `bio IS NULL/''`). A gate rejection leaves the entity queued for another pass — up to its attempt budget (below), never forever.
 
 ## The voice gate (a hard ship requirement)
 
 The bio is a live, **public** Fluncle surface. `gateBioText` (`lib/server/bio.ts`) reuses the SAME shared scan as the note (`scanObservationScript`) but in the factual-dossier register: it passes `{ allowGeography: true }`, so it keeps the banned-identity-word, no-exclamation Dry Rule, and no-"we"-as-company bans but NOT the geography ban (a Wikipedia-style bio names a real country/city plainly). It carries the bio's own longer length bounds (40–500 chars — a 2–4 sentence paragraph, not a one-line note). A violation hard-fails the store before the bio is shown. The box authors through `copywriting-fluncle`; the Worker re-scans (defence in depth); the operator override is the final content control.
+
+### The name exemption: the gate polices what FLUNCLE wrote
+
+The scan runs over the bio **with the entity's own name masked out** (`maskEntityName`, `lib/server/bio.ts`) — exact, case-insensitive occurrences of the full name, nothing else. An entity's name is not Fluncle's prose: "Future Signal", "Invaderz Transmissions", and "Jungle Sound: The Bassline Strikes Back!" are real-world names, and a bio about them must be able to name them. Without the exemption those three were **unwritable** — a bio necessarily names its subject, so every rewrite tripped the same ban and no draft could ever pass.
+
+Nothing about the bans changed: `BANNED_WORDS`, the Dry Rule, the "we" ban, and both length bounds are exactly as they were. Only the TEXT handed to the scanner changed. Two properties follow, and both are pinned by tests:
+
+- **The word is not amnestied, only the name.** A bio may name "Future Signal" and still fails if it uses "signal" as a generic word anywhere else in the paragraph.
+- **Masking the full name removes the punctuation inside it**, which is how an album titled with a `!` clears the Dry Rule without the Dry Rule being weakened for anything Fluncle actually wrote.
+
+A **partial** reference is still judged: a bio about "Future Signal" that says only "Signal" is rejected. That is deliberate — conservative, and the rewrite can use the full name.
+
+### The attempt budget: three authorings, ever
+
+A rejection used to leave the entity queued with nothing counting the attempts, so "retry" meant "forever" — three entities were re-authored ~90 times each over two days. An entity now gets **at most three authoring attempts, ever**: the initial draft plus two rewrites.
+
+- **Each rejection is fed back into the next pass** as the exact reason to fix (`buildRewriteBlock` in the sweep, the logbook sweep's shape), so a rewrite is aimed rather than blind.
+- **The third draft LANDS.** The last attempt delivers `--final-attempt`, and the Worker (`acceptFinalDraftBio`) stores the draft even if the voice scan refuses it. This is a BACKSTOP, not the routine path — with the name exemption in place, the entities that caused the runaway now clear the gate on attempt 1.
+- **The acceptance is never silent.** The Worker logs `describe_<kind>: FINAL-ATTEMPT ACCEPTANCE`, returns `gateBypassed: true` + the accepted `voiceViolations`, the CLI prints them, and the sweep logs `FINAL-ATTEMPT ACCEPTANCE … REVIEW THIS <KIND>` and counts them as `bypassedGate` in its summary line. **Grep the cron output for `FINAL-ATTEMPT ACCEPTANCE` to find every bio that landed this way.** The acceptance bypasses the voice SCAN only: an absent, too-short, or too-long draft is still refused.
+- **The count persists across ticks** in a small on-box TSV at `$HOME/.entity-bio-sweep/attempts` (`<kind>:<slug><TAB>attempts<TAB>lastEpoch`), the shape of the render conductor's poison ledger and covered by the nightly box-state backup. The attempt is burned **before** the model call, so a tick that dies mid-author cannot refund it. The entry is dropped the moment a bio lands.
+- **An exhausted entity is skipped without consuming the batch cap**, so it can never block the queue behind it — and it costs nothing at all (no draft fetch, no model call). It reports as `exhausted` in the summary. To re-arm one after the gate or the prompt changes, delete its line from that file.
 
 ## The prompt lives in the DATABASE, not in the image
 

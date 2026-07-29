@@ -292,6 +292,7 @@ export const rejectLabelAlias = oc
 const DescribeLabelBodySchema = z.looseObject({
   bio: z.unknown().optional(),
   dryRun: z.unknown().optional(),
+  finalAttempt: z.boolean().optional(),
   promptVersion: z.number().int().min(0).optional(),
 });
 
@@ -308,6 +309,12 @@ const DescribeLabelBodySchema = z.looseObject({
  * a bio — operator-written OR previously auto-authored — is a no-op (`skipped: true`); the
  * agent NEVER clobbers an existing bio. `dryRun` runs the gate and stores nothing. Codes:
  * `not_found`/404, `no_bio`/400, `bio_too_short`/422, `bio_too_long`/422, `voice_gate`/422.
+ *
+ * THE FINAL-ATTEMPT ACCEPTANCE (`finalAttempt: true`) — the `describe_artist` contract carries the
+ * canonical explanation. In short: the on-box sweep's THIRD and last authoring pass over one
+ * entity, where the voice SCAN is accepted rather than fatal (a label named "Invaderz
+ * Transmissions" can never be rewritten past it), the length bounds and the fill-empty-only
+ * guarantee still hold, and the response flags it with `gateBypassed` + `voiceViolations`.
  */
 export const describeLabel = oc
   .route({
@@ -323,11 +330,16 @@ export const describeLabel = oc
       bio: z.string(),
       // `true` when `dryRun` was set: the voice gate ran, NOTHING was stored.
       dryRun: z.literal(true).optional(),
+      // `true` when the FINAL-ATTEMPT ACCEPTANCE let a bio through that the voice scan would
+      // otherwise have refused. THE OPERATOR REVIEW FLAG — absent on every normal write.
+      gateBypassed: z.literal(true).optional(),
       ok: z.literal(true),
       // `true` when a bio already existed and the fill-empty-only guard refused to
       // clobber it; absent on a fresh fill.
       skipped: z.boolean().optional(),
       slug: z.string(),
+      // The voice-gate reasons that were ACCEPTED, verbatim. Present only with `gateBypassed`.
+      voiceViolations: z.array(z.string()).optional(),
     }),
   );
 
