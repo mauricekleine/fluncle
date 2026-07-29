@@ -74,6 +74,7 @@
 // and the archive is never starved by the speculative half.
 
 import { anchorSearchQuery } from "./anchor";
+import { deezerSearchQuery } from "./deezer";
 import { type CatalogueCaptureState, isCatalogueCaptureOpen } from "./capture-budget";
 import { LONG_FORM_MS, MIN_TRACK_MS } from "./catalogue";
 import { parseArtistsJson } from "./artists";
@@ -208,6 +209,16 @@ export type TrackWorkItem = {
   capturePriority: number | null;
   /** True when a `findings` row exists — the certification rail's flag, in the DTO. */
   certified: boolean;
+  /**
+   * The ready-made DEEZER search query (`deezerSearchQuery`: Deezer's `artist:"…" track:"…"` field
+   * syntax over the row's first artist + its canonicalized title) — a DIFFERENT spelling from
+   * `anchorQuery`, which is the free-text ask the Spotify rungs use. Attached ONLY for an ANCHOR row
+   * that carries NO ISRC, because that is exactly the row the pre-anchor ISRC-recovery rung acts on;
+   * its presence is the server telling the box "search Deezer for this one, from your own IP". Absent
+   * for every other kind, for a row that already has an ISRC, and when the row has no usable
+   * artist/title to ask with.
+   */
+  deezerQuery?: string;
   durationMs: number;
   isrc: null | string;
   label: null | string;
@@ -527,6 +538,12 @@ export async function listTrackWork(options: {
 
   const items: TrackWorkItem[] = typedRows<WorkRow>(result.rows).map((row) => {
     const artists = parseArtistsJson(row.artists_json);
+    // The ANCHOR-only Deezer ask, for an ISRC-LESS row only — the row the pre-anchor recovery rung
+    // acts on. Deezer's tokenless quota is per-IP and the Worker's shared edge IPs are saturated, so
+    // the BOX runs that search; the server still owns the SPELLING (deezer.ts `deezerSearchQuery`),
+    // so the sweep never invents a query, exactly as with `anchorQuery`.
+    const deezerQuery =
+      kind === "anchor" && !row.isrc?.trim() ? deezerSearchQuery(artists, row.title) : undefined;
 
     return {
       artists,
@@ -542,6 +559,7 @@ export async function listTrackWork(options: {
       // The ANCHOR-only ready-made query, so the box's Apify sweep never builds it (anchor.ts
       // `anchorSearchQuery`). Attached for the `anchor` worklist ONLY; absent for every other kind.
       ...(kind === "anchor" ? { anchorQuery: anchorSearchQuery(artists, row.title) } : {}),
+      ...(deezerQuery ? { deezerQuery } : {}),
       // The four CAPTURE-only trust/re-derive signals. Attached for the `capture` worklist
       // ONLY, so `analyze`/`embed` DTOs stay exactly as they were (byte-identical for those
       // sweeps). Each follows the finding-only capture DTO's omit-when-empty convention — a

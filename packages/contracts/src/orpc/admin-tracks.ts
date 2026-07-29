@@ -670,6 +670,15 @@ export const TrackWorkItemSchema = z
     bpm: z.number().optional(),
     capturePriority: z.number().nullable(),
     certified: z.boolean(),
+    /**
+     * The ready-made DEEZER search query — Deezer's `artist:"…" track:"…"` FIELD syntax, a different
+     * spelling from `anchorQuery`'s free text. Present ONLY on an `anchor` row that carries NO ISRC:
+     * that is the row the pre-anchor ISRC-recovery rung acts on, and its presence is the server
+     * telling the box to run that search from its own IP (Deezer's tokenless quota is per-IP, and the
+     * Worker's shared Cloudflare edge IPs are saturated). The box hands the hits back as
+     * `resolve_anchor`'s `deezerCandidates`; the server still verifies and writes.
+     */
+    deezerQuery: z.string().optional(),
     durationMs: z.number(),
     isrc: z.string().nullable(),
     label: z.string().nullable(),

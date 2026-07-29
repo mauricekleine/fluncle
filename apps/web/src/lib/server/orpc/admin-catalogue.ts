@@ -385,13 +385,21 @@ export function adminCatalogueHandlers(os: Implementer) {
   });
 
   // POST /admin/catalogue/anchor/resolve — AGENT tier. The FREE first rung of the resolver waterfall
-  // (docs/catalogue-crawler.md § the anchor). The box supplies NO candidates: the server resolves one
-  // from ListenBrainz (recording MBID → Spotify ids, free) + a single by-id Spotify metadata read, and
-  // runs it through the SAME verification gate `anchor_track` uses. The box's `fluncle-anchor` sweep
-  // calls this first per row and spends Apify only on a miss. Same `AnchorTrackError` → status mapping.
+  // (docs/catalogue-crawler.md § the anchor). The box supplies NO Spotify candidates: the server
+  // resolves one from ListenBrainz (recording MBID → Spotify ids, free) + a single by-id Spotify
+  // metadata read, and runs it through the SAME verification gate `anchor_track` uses. The box's
+  // `fluncle-anchor` sweep calls this first per row and spends Apify only on a miss. Same
+  // `AnchorTrackError` → status mapping.
+  //
+  // The ONE thing the box does hand over is `deezerCandidates` — the rung-0 ISRC-recovery hits it
+  // fetched from its own IP, because Deezer's tokenless quota is per-IP and the shared Cloudflare edge
+  // is saturated. They are evidence, not a verdict: `recoverIsrcViaDeezer` runs them through the same
+  // gate and the same fill-empty-only write as a Worker-fetched hit, and refuses them the same way.
   const resolveAnchorHandler = os.resolve_anchor.use(adminAuth).handler(async ({ input }) => {
     try {
-      const result = await resolveAnchorFree(input.trackId);
+      const result = await resolveAnchorFree(input.trackId, new Date(), {
+        deezerCandidates: input.deezerCandidates,
+      });
 
       return { ...result, ok: true as const };
     } catch (error) {

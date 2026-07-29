@@ -532,3 +532,139 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     expect(text((await anchorState("mb_dzout")).isrc)).toBeFalsy();
   });
 });
+
+// ── THE BOX-FETCHED DEEZER HITS ──────────────────────────────────────────────────────────────────
+// Deezer's tokenless quota is per-IP and the Worker egresses from Cloudflare's saturated shared edge,
+// so the SEARCH moved to the box (0 recoveries out of 5,133 rows over 3 days from the edge; 25/25
+// clean from the box). ONLY the fetch moved. These tests pin the half that did NOT: the gate is still
+// the only thing that can authorise an ISRC write, and it is the same gate, applied to the row as the
+// DATABASE holds it — so box-supplied hits get precisely what Worker-fetched ones got.
+describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
+  it("verifies box-supplied hits and writes the recovered ISRC, without asking Deezer itself", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_ok",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    const result = await resolveAnchorFree("mb_box_ok", new Date(), {
+      deezerCandidates: [
+        { artistName: "Muffler", durationMs: 201_000, isrc: "GBBOXDZ00001", title: "Dribble" },
+      ],
+    });
+
+    expect(result.isrcRecoveredByDeezer).toBe(true);
+    expect(text((await anchorState("mb_box_ok")).isrc)).toBe("GBBOXDZ00001");
+    // The Worker issued NO Deezer request of its own — the whole point of moving the fetch.
+    expect(searchDeezerCandidates).not.toHaveBeenCalled();
+  });
+
+  it("refuses a box-supplied hit that fails the gate — the box cannot bypass verification", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_bad",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    const result = await resolveAnchorFree("mb_box_bad", new Date(), {
+      deezerCandidates: [
+        // Wrong artist — the folded identity disagrees, so the ISRC is refused…
+        { artistName: "Etherwood", durationMs: 200_000, isrc: "GBWRONGART01", title: "Dribble" },
+        // …wrong version descriptor, so the original can never take the remix's ISRC…
+        {
+          artistName: "Muffler",
+          durationMs: 200_000,
+          isrc: "GBWRONGVER01",
+          title: "Dribble (Calibre Remix)",
+        },
+        // …and a duration outside the ratified window, so a different recording is refused too.
+        { artistName: "Muffler", durationMs: 240_000, isrc: "GBWRONGDUR01", title: "Dribble" },
+      ],
+    });
+
+    expect(result.isrcRecoveredByDeezer).toBe(false);
+    expect((await anchorState("mb_box_bad")).isrc).toBeNull();
+    expect(searchDeezerCandidates).not.toHaveBeenCalled();
+  });
+
+  it("never overwrites an existing ISRC with a box-supplied one (the server owns the ISRC-less gate)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: "EXISTINGISRC",
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_has",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    // A perfectly verifiable hit — but the ROW already carries an ISRC, and that gate is the
+    // server's to read, not the box's to assert. The fill-empty-only write stands.
+    const result = await resolveAnchorFree("mb_box_has", new Date(), {
+      deezerCandidates: [
+        { artistName: "Muffler", durationMs: 200_000, isrc: "GBBOXDZ00002", title: "Dribble" },
+      ],
+    });
+
+    expect(result.isrcRecoveredByDeezer).toBe(false);
+    expect(text((await anchorState("mb_box_has")).isrc)).toBe("EXISTINGISRC");
+  });
+
+  it("an EMPTY supplied list means the box searched and found nothing — the Worker does not re-ask", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_empty",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    const result = await resolveAnchorFree("mb_box_empty", new Date(), { deezerCandidates: [] });
+
+    expect(result.isrcRecoveredByDeezer).toBe(false);
+    expect((await anchorState("mb_box_empty")).isrc).toBeNull();
+    // Re-asking from the saturated shared edge is a known-dead request, so it is never made.
+    expect(searchDeezerCandidates).not.toHaveBeenCalled();
+  });
+
+  it("falls back to searching Deezer itself when no hits are supplied (the certify path, unchanged)", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_absent",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+    searchDeezerCandidates.mockResolvedValue([
+      { artistName: "Muffler", durationMs: 200_500, isrc: "GBSELFDZ0001", title: "Dribble" },
+    ]);
+
+    const result = await resolveAnchorFree("mb_box_absent");
+
+    expect(result.isrcRecoveredByDeezer).toBe(true);
+    expect(searchDeezerCandidates).toHaveBeenCalledTimes(1);
+    expect(text((await anchorState("mb_box_absent")).isrc)).toBe("GBSELFDZ0001");
+  });
+});

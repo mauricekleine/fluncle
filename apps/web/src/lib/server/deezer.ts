@@ -16,6 +16,20 @@
 // artist-set + base-title identity (`matchKey`) AND a duration within the ratified ±3s window — before
 // it trusts an ISRC (`anchor.ts`, the recovery step). A wrong ISRC seeds a wrong exact-ISRC anchor, so
 // a miss is always preferred to a guess: this client just fetches and normalizes; anchor.ts rules.
+//
+// ── WHO RUNS THE SEARCH: THE BOX, NOT THE EDGE ───────────────────────────────────────────────────
+// Deezer's public search takes no token, so its quota is purely PER-IP — and the Worker egresses from
+// Cloudflare's SHARED edge IPs, where that quota is spent by the whole platform rather than by Fluncle.
+// Measured in production: the recovery rung recovered 0 ISRCs out of 5,133 ISRC-less rows over 3 days,
+// while the SAME code answered 25/25 clean from the rave-02 box on its own dedicated IP. So the anchor
+// sweep now runs the FETCH on the box (docs/agents/hermes/scripts/anchor-sweep.ts) and POSTs the hits
+// to `resolve_anchor`; the VERIFICATION and the ISRC write never moved — they are still `anchor.ts`'s,
+// exactly as they were, which is the Apify precedent (the box fetches, the Worker rules).
+//
+// This client stays, and stays the ONE spelling of the query ({@link deezerSearchQuery}, which the
+// anchor worklist hands the box so the sweep never invents one). It still serves the two callers that
+// have no box in front of them: the certify path's ISRC pre-flight (`publish.ts`) and any
+// `resolve_anchor` call that supplies no box-fetched hits.
 
 import { logEvent } from "./log";
 import { canonicalizeSearchTitle } from "./track-match";
@@ -109,6 +123,33 @@ const DEEZER_QUOTA_ERROR_CODE = 4;
  */
 const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
 
+/**
+ * THE QUERY SPELLING — Deezer's precise field syntax (`artist:"<first artist>" track:"<title>"`), and
+ * the ONE place it is written. It is NOT the `anchorQuery` the Spotify rungs ask with (that one is the
+ * row's artists joined onto its title, `anchorSearchQuery` in ./anchor.ts): Deezer indexes by field,
+ * and a plain free-text ask returns a different, looser result set.
+ *
+ * The title is canonicalized (`canonicalizeSearchTitle` in ./track-match: `rmx` → `Remix`, a redundant
+ * trailing `mix` dropped — the retrieval twin of the `canonicalizeDescriptor` fold the CALLER verifies
+ * with, kept in lockstep there). Deezer's index carries the canonical spelling, so a row asking in its
+ * own returns nothing at all and can never recover its ISRC. The caller still verifies against the
+ * row's RAW title. Quotes are stripped from both parts — they would close the field syntax's own.
+ *
+ * ONE owner, every rung: this is what {@link searchDeezerCandidates} sends, and what `list_track_work`
+ * hands the box's anchor sweep as an ISRC-less row's ready-made `deezerQuery` (the sweep never builds
+ * one). `undefined` when the row has no usable artist or title to ask with.
+ */
+export function deezerSearchQuery(artists: string[], title: string): string | undefined {
+  const artist = artists[0]?.replaceAll('"', " ").trim();
+  const canonical = canonicalizeSearchTitle(title.replaceAll('"', " ")).trim();
+
+  if (!artist || !canonical) {
+    return undefined;
+  }
+
+  return `artist:"${artist}" track:"${canonical}"`;
+}
+
 /** One attempt's outcome: candidates, or the reason there are none (so the caller can retry a throttle). */
 type DeezerSearchAttempt =
   | { candidates: DeezerIsrcCandidate[]; outcome: "ok" }
@@ -117,7 +158,12 @@ type DeezerSearchAttempt =
 
 /**
  * Recover ISRC CANDIDATES for a catalogue row from Deezer's free search — the pre-anchor ISRC-recovery
- * rung (`anchor.ts`). Queries Deezer's precise field syntax (`artist:"…" track:"…"`) and returns each
+ * rung (`anchor.ts`), from WHEREVER this code is running. On the shared Cloudflare edge that is now the
+ * fallback path only (see the header): the anchor sweep runs this same search from the box's own IP and
+ * hands `resolve_anchor` the hits, so the Worker fetches nothing for those rows. It still runs here for
+ * the certify path's ISRC pre-flight and for any `resolve_anchor` call that supplies no hits.
+ *
+ * Queries Deezer's precise field syntax ({@link deezerSearchQuery}) and returns each
  * hit that carries a usable `isrc` + numeric `duration` + `title` + `artist.name`, normalized to
  * {@link DeezerIsrcCandidate}. It VERIFIES NOTHING — the caller re-runs the row against the same fold +
  * ±3s duration gate the anchor uses, and trusts an ISRC only on a hard match (a wrong ISRC would seed a
@@ -143,20 +189,11 @@ export async function searchDeezerCandidates(
   },
   retryDelaysMs: number[] = DEEZER_QUOTA_RETRY_DELAYS_MS,
 ): Promise<DeezerIsrcCandidate[]> {
-  const artist = input.artists[0]?.replaceAll('"', " ").trim();
+  const query = deezerSearchQuery(input.artists, input.title);
 
-  // The QUERY SPELLING, the same one every other anchor rung asks with (`canonicalizeSearchTitle` in
-  // ./track-match: `rmx` → `Remix`, a redundant trailing `mix` dropped — the retrieval twin of the
-  // `canonicalizeDescriptor` fold this client's CALLER verifies with, kept in lockstep there). Deezer's
-  // index carries the canonical spelling, so a row asking in its own returns nothing at all and can
-  // never recover its ISRC. The caller still verifies against the row's RAW title.
-  const title = canonicalizeSearchTitle(input.title.replaceAll('"', " ")).trim();
-
-  if (!artist || !title) {
+  if (!query) {
     return [];
   }
-
-  const query = `artist:"${artist}" track:"${title}"`;
 
   for (let attempt = 0; ; attempt += 1) {
     const result = await attemptDeezerSearch(query);

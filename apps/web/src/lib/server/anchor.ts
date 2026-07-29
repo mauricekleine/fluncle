@@ -32,10 +32,12 @@
 // the official Spotify app serves ONLY user-facing paths (adds, publish, the Frontier playlist mints)
 // plus the free rung's one by-id metadata read per hit — never a catalogue search.
 //
-// NO SOURCE'S VERDICT IS EVER TRUSTED. Neither the box's Apify match NOR ListenBrainz's mapping is
-// believed: the SERVER re-runs the full verification below against BOTH, exactly as it did when it
-// held the Spotify call — so a re-baked box script (or a wrong ListenBrainz map) can never invent a
-// looser match rule. This is the `verify_capture` doctrine: the sources fetch, the Worker rules.
+// NO SOURCE'S VERDICT IS EVER TRUSTED. Not the box's Apify match, not ListenBrainz's mapping, and not
+// the Deezer hits the box now fetches for rung 0 (`recoverIsrcViaDeezer`): the SERVER re-runs the full
+// verification below against ALL THREE, exactly as it did when it held the calls itself — so a re-baked
+// box script (or a wrong ListenBrainz map) can never invent a looser match rule, and the only thing a
+// box can change is WHETHER a candidate is offered, never whether one is accepted. This is the
+// `verify_capture` doctrine: the sources fetch, the Worker rules.
 //
 // ── TWO RUNGS, precision over recall ─────────────────────────────────────────────────────────
 //   1. ISRC EQUALITY — the exact rung. The Apify actor returns each candidate's `track_isrc`, so
@@ -72,7 +74,7 @@ import { isAnchorApifyEnabled } from "./anchor-apify";
 import { anchorSpotifySearchAllowed, isAnchorSpotifySearchEnabled } from "./anchor-spotify-search";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
-import { searchDeezerCandidates } from "./deezer";
+import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 import { logEvent } from "./log";
 import {
@@ -791,6 +793,17 @@ async function resolveViaSpotifySearch(
  * `undefined` on a miss (no artist/title/duration to verify against, a Deezer miss, or no hit clears
  * the gate). Best-effort: the Deezer client never throws, so a Deezer outage degrades cleanly to no
  * recovery — anchoring is never broken, only unhelped, on that row.
+ *
+ * WHO FETCHED THE HITS. `suppliedCandidates` is the box's — the anchor sweep runs the Deezer search
+ * from rave-02's own dedicated IP because Deezer's tokenless quota is PER-IP and the Worker's shared
+ * Cloudflare edge IPs are saturated by the whole platform (measured: 0 recoveries out of 5,133
+ * ISRC-less rows over 3 days from the edge, 25/25 clean from the box; see ./deezer.ts's header). ONLY
+ * THE FETCH MOVED: the gate below and the write below are unchanged and still the only thing that can
+ * authorise an ISRC, so a box that hands over a wrong hit gets exactly what a wrong Deezer answer
+ * always got — a refusal. The box's own verdict is never asked for and there is nothing to trust.
+ * PRESENT (even as an EMPTY array) ⇒ the box already searched and this call issues NO Deezer request;
+ * ABSENT ⇒ nobody searched yet, so we search here (the certify path, and any caller with no box in
+ * front of it). This is the `anchor_track`/Apify precedent: the sources fetch, the Worker rules.
  */
 export async function recoverIsrcViaDeezer(
   trackId: string,
@@ -798,13 +811,16 @@ export async function recoverIsrcViaDeezer(
   rowArtists: string[],
   rowTitle: string,
   rowDurationMs: number,
+  suppliedCandidates?: DeezerIsrcCandidate[],
 ): Promise<string | undefined> {
   // No stable duration or identity to verify against ⇒ we cannot trust a match, so we do not recover.
+  // Checked BEFORE the source split, so a box-supplied hit is held to the same precondition.
   if (!rowTitle.trim() || rowArtists.length === 0 || !(rowDurationMs > 0)) {
     return undefined;
   }
 
-  const candidates = await searchDeezerCandidates({ artists: rowArtists, title: rowTitle });
+  const candidates =
+    suppliedCandidates ?? (await searchDeezerCandidates({ artists: rowArtists, title: rowTitle }));
 
   if (candidates.length === 0) {
     return undefined;
@@ -921,10 +937,15 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
  * Spotify read that throws all resolve to a clean miss. The `AnchorTrackError` rails (not_found /
  * certified / already_anchored) still propagate, so the op maps them to the same honest status the
  * Apify path does. `now` is injected for deterministic tests.
+ *
+ * `options.deezerCandidates` are the Deezer hits the BOX fetched for this row from its own IP (see
+ * `recoverIsrcViaDeezer` — only the fetch moved; the gate and the write did not). Present ⇒ rung 0
+ * verifies exactly those and issues no Deezer request of its own; absent ⇒ rung 0 searches Deezer here.
  */
 export async function resolveAnchorFree(
   trackId: string,
   now: Date = new Date(),
+  options: { deezerCandidates?: DeezerIsrcCandidate[] } = {},
 ): Promise<AnchorResolveResult> {
   const db = await getDb();
 
@@ -962,7 +983,9 @@ export async function resolveAnchorFree(
   // RUNG 0 — the pre-anchor DEEZER ISRC-recovery rung. ONLY for an ISRC-less row; on a verified hit it
   // persists the ISRC (fill-empty-only) AND carries it forward in memory so the exact-ISRC rungs below
   // run on it this same call (ListenBrainz's `anchorTrack` re-reads the row and sees the persisted
-  // value; the Spotify rungs read `isrc` from the in-memory variable).
+  // value; the Spotify rungs read `isrc` from the in-memory variable). The ISRC-LESS gate is the
+  // SERVER's, not the box's: box-supplied hits on a row that already carries an ISRC are ignored here,
+  // exactly as a Deezer search would have been.
   let isrc = row.isrc;
   let isrcRecoveredByDeezer = false;
 
@@ -973,6 +996,7 @@ export async function resolveAnchorFree(
       rowArtists,
       row.title ?? "",
       Number(row.duration_ms ?? 0),
+      options.deezerCandidates,
     );
 
     if (recovered) {

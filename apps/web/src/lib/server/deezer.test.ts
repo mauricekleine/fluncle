@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { searchDeezerCandidates } from "./deezer";
+import { deezerSearchQuery, searchDeezerCandidates } from "./deezer";
 
 // The Deezer search client is a pure network→shape mapper for the pre-anchor ISRC-recovery rung. It
 // must NEVER throw: every unhappy path (a blank query, a non-2xx, an error body, a malformed shape, a
@@ -24,6 +24,44 @@ const body = (data: unknown[]) => Response.json({ data });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+// The query spelling is now handed to the BOX (the anchor worklist's `deezerQuery`), because the
+// Deezer FETCH runs there — its tokenless quota is per-IP and the Worker's shared edge IPs are
+// saturated. So this builder has to be exactly one function, exported, with no second spelling
+// anywhere: a sweep that invented its own would silently ask a different question.
+describe("deezerSearchQuery — the one spelling, shared with the box", () => {
+  it("builds Deezer's field syntax over the FIRST artist and the canonicalized title", () => {
+    expect(deezerSearchQuery(["Calibre", "DRS"], "Mr Right On")).toBe(
+      'artist:"Calibre" track:"Mr Right On"',
+    );
+    expect(deezerSearchQuery(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
+      'artist:"Minos" track:"Feels Like Before (Air.K & Cephei Remix)"',
+    );
+  });
+
+  it("strips quotes, which would otherwise close the field syntax's own", () => {
+    expect(deezerSearchQuery(['The "Boss"'], 'A "Loud" Tune')).toBe(
+      'artist:"The  Boss" track:"A  Loud  Tune"',
+    );
+  });
+
+  it("is undefined when there is no usable artist or title to ask with", () => {
+    expect(deezerSearchQuery([], "Mr Right On")).toBeUndefined();
+    expect(deezerSearchQuery(["Calibre"], "   ")).toBeUndefined();
+  });
+
+  it("is the spelling the client itself sends — one owner, no drift", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(body([HIT]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" });
+
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(decodeURIComponent(String(url))).toContain(
+      deezerSearchQuery(["Calibre"], "Mr Right On") ?? "never",
+    );
+  });
 });
 
 describe("searchDeezerCandidates", () => {

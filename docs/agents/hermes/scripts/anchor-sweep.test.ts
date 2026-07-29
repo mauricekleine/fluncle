@@ -8,7 +8,7 @@
 // Runs outside any package's test runner (bun:test), like crawl-sweep.test.ts:
 //   bun test docs/agents/hermes/scripts/anchor-sweep.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AnchorDeps,
   type ApifyResultItem,
@@ -18,6 +18,7 @@ import {
   parseLimitArg,
   runAnchorSweep,
   runAnchorTick,
+  searchDeezerOnBox,
   SPOTIFY_SEARCH_MIN_INTERVAL_MS,
   spotifySearchPaceMs,
 } from "./anchor-sweep";
@@ -158,6 +159,9 @@ describe("runAnchorTick", () => {
       // pre-waterfall behaviour the existing assertions were written against.
       resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
       runActor: () => Promise.resolve(APIFY_SAMPLE),
+      // No default worklist row carries a `deezerQuery`, so this is never reached unless a test
+      // opts in — the Deezer rung is scoped to ISRC-less rows by the SERVER, not by the sweep.
+      searchDeezer: () => Promise.resolve([]),
       sleep: () => Promise.resolve(),
       ...overrides,
     };
@@ -373,6 +377,130 @@ describe("runAnchorTick", () => {
     expect(summary.anchoredByIsrc).toBe(1);
     expect(summary.anchoredBySearch).toBe(1);
     expect(summary.missed).toBe(1);
+    // …and the throw is REPORTED. With Apify enabled these rows anchor via the fallback, so the tick
+    // reads healthy — which is exactly how a dead free rung stayed invisible for a week. The count is
+    // unconditional so the very first tick after a breakage says so.
+    expect(summary.freeRungErrors).toBe(3);
+  });
+
+  test("freeRungErrors is zero on a clean tick and survives the paged merge", async () => {
+    expect((await runAnchorTick(50, deps())).freeRungErrors).toBe(0);
+
+    // Two pages, one throwing row each → the merged summary must carry both, not the last page's.
+    const paged = await runAnchorSweep(
+      6,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "q1", trackId: "mb_a" },
+            { anchorQuery: "q2", trackId: "mb_b" },
+            { anchorQuery: "q3", trackId: "mb_c" },
+          ]),
+        resolveFree: (trackId) =>
+          trackId === "mb_c"
+            ? Promise.reject(new Error("resolve_anchor 500"))
+            : Promise.resolve({ anchored: true, source: "listenbrainz", verifiedBy: "isrc" }),
+      }),
+      3,
+    );
+
+    expect(paged.pages).toBe(2);
+    expect(paged.freeRungErrors).toBe(2);
+  });
+
+  test("Deezer rung 0: the box searches ONLY the rows the worklist asked it to, and hands the hits over", async () => {
+    const searched: string[] = [];
+    const supplied: Record<string, unknown> = {};
+    const hits = [
+      { artistName: "Muffler", durationMs: 201_000, isrc: "GBBOXDZ00001", title: "Dribble" },
+    ];
+
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            // ISRC-LESS ⇒ the server attached a `deezerQuery`, so this row gets the search.
+            {
+              anchorQuery: "Muffler Dribble",
+              deezerQuery: 'artist:"Muffler" track:"Dribble"',
+              trackId: "mb_dz",
+            },
+            // Already has an ISRC ⇒ no `deezerQuery`, so no Deezer request is spent on it.
+            { anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" },
+          ]),
+        resolveFree: (trackId, deezerCandidates) => {
+          supplied[trackId] = deezerCandidates;
+
+          return Promise.resolve({
+            anchored: true,
+            isrcRecoveredByDeezer: trackId === "mb_dz",
+            source: "listenbrainz",
+            verifiedBy: "isrc",
+          });
+        },
+        searchDeezer: (query) => {
+          searched.push(query);
+
+          return Promise.resolve(hits);
+        },
+      }),
+    );
+
+    expect(searched).toEqual(['artist:"Muffler" track:"Dribble"']);
+    // The hits ride the resolve call VERBATIM — the box normalizes, the Worker verifies and writes.
+    expect(supplied.mb_dz).toEqual(hits);
+    // A row with no `deezerQuery` sends NOTHING, so the server keeps its own (unchanged) behaviour.
+    expect(supplied.mb_hold).toBeUndefined();
+    expect(summary.isrcRecoveredByDeezer).toBe(1);
+    expect(summary.deezerSearchFailed).toBe(0);
+  });
+
+  test("Deezer rung 0: a FAILED box-side search is tallied and sends an empty list, never a re-ask", async () => {
+    const supplied: Record<string, unknown> = {};
+
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "q1", deezerQuery: 'artist:"A" track:"B"', trackId: "mb_fail" },
+            { anchorQuery: "q2", deezerQuery: 'artist:"C" track:"D"', trackId: "mb_empty" },
+          ]),
+        resolveFree: (trackId, deezerCandidates) => {
+          supplied[trackId] = deezerCandidates;
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+        // `null` = the search FAILED (quota-blind, network, bad body); `[]` = an honest empty result.
+        searchDeezer: (query) => Promise.resolve(query.includes('"A"') ? null : []),
+      }),
+    );
+
+    // Only the failure counts — the honest miss is not a fault, and conflating them would hide the
+    // one signal that says this box has gone quota-blind now that the fetch lives here.
+    expect(summary.deezerSearchFailed).toBe(1);
+    // BOTH send an empty list: re-asking from the saturated shared edge is a known-dead request.
+    expect(supplied.mb_fail).toEqual([]);
+    expect(supplied.mb_empty).toEqual([]);
+  });
+
+  test("Deezer rung 0: a search that THROWS is a failure, never a tick abort", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "q1", deezerQuery: 'artist:"A" track:"B"', trackId: "mb_throw" },
+          ]),
+        searchDeezer: () => Promise.reject(new Error("deezer exploded")),
+      }),
+    );
+
+    expect(summary.ok).toBe(true);
+    expect(summary.deezerSearchFailed).toBe(1);
+    // The row still ran the whole waterfall — it just recovered no ISRC.
+    expect(summary.missed).toBe(1);
   });
 
   test("slice 3: Apify OFF ⇒ SKIP the actor loop entirely; full misses counted `missed`, not skipped", async () => {
@@ -468,6 +596,116 @@ describe("runAnchorTick", () => {
   });
 });
 
+// ── THE BOX-SIDE DEEZER CLIENT (rung 0's fetch) ──────────────────────────────────────────────────
+// This code exists on the box precisely because Deezer's tokenless quota is per-IP: from Cloudflare's
+// shared edge the rung recovered 0 ISRCs out of 5,133 rows over 3 days, against 25/25 clean here. It
+// NORMALIZES and never judges — the Worker still verifies every hit and writes the ISRC. The one thing
+// it must get right is telling a FAILURE apart from an honest empty result, because Deezer signals a
+// throttle with HTTP **200** + an error body, and reading that as a miss is what hid the outage.
+describe("searchDeezerOnBox", () => {
+  const HIT = {
+    artist: { name: "Calibre" },
+    duration: 132,
+    isrc: "GBEXH1900314",
+    title: "Mr Right On",
+  };
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test("maps hits to the four fields the Worker's gate reads (duration promoted to ms)", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = ((url: string) => {
+      calls.push(String(url));
+
+      return Promise.resolve(Response.json({ data: [HIT] }));
+    }) as typeof globalThis.fetch;
+
+    expect(await searchDeezerOnBox('artist:"Calibre" track:"Mr Right On"')).toEqual([
+      { artistName: "Calibre", durationMs: 132_000, isrc: "GBEXH1900314", title: "Mr Right On" },
+    ]);
+    // The server's spelling is sent VERBATIM — the sweep never rewrites the query it was handed.
+    expect(decodeURIComponent(calls[0])).toContain('artist:"Calibre" track:"Mr Right On"');
+    expect(calls[0]).toContain("https://api.deezer.com/search/track?q=");
+  });
+
+  test("drops a hit missing any signal the gate needs, rather than sending an unverifiable one", async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        Response.json({
+          data: [
+            HIT,
+            { ...HIT, isrc: "  " }, // no ISRC → there is nothing to recover
+            { ...HIT, duration: 0 }, // no duration → the window cannot be applied
+            { ...HIT, artist: { name: "" } }, // no artist → the fold cannot be applied
+            { ...HIT, title: undefined }, // no title → the fold cannot be applied
+          ],
+        }),
+      )) as typeof globalThis.fetch;
+
+    expect((await searchDeezerOnBox("q"))?.map((hit) => hit.isrc)).toEqual(["GBEXH1900314"]);
+  });
+
+  test("an empty result set is [] (an honest miss), NOT a failure", async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(Response.json({ data: [] }))) as typeof globalThis.fetch;
+
+    expect(await searchDeezerOnBox("q")).toEqual([]);
+  });
+
+  test("THE QUOTA TRAP: a 200 carrying an error body is retried, then reported as a FAILURE", async () => {
+    let calls = 0;
+    globalThis.fetch = (() => {
+      calls += 1;
+
+      return Promise.resolve(
+        Response.json({ error: { code: 4, message: "Quota limit exceeded", type: "Exception" } }),
+      );
+    }) as typeof globalThis.fetch;
+
+    // `null`, never `[]` — reading a throttle as a clean miss is exactly what made the edge failure
+    // invisible for a week, and on the box it would hide a quota-blind IP the same way.
+    expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
+    expect(calls).toBe(3); // the first attempt plus the two bounded retries
+  });
+
+  test("a quota answer that clears on retry returns the candidates", async () => {
+    let calls = 0;
+    globalThis.fetch = (() => {
+      calls += 1;
+
+      return Promise.resolve(
+        calls === 1 ? Response.json({ error: { code: 4 } }) : Response.json({ data: [HIT] }),
+      );
+    }) as typeof globalThis.fetch;
+
+    expect((await searchDeezerOnBox("q", [0, 0]))?.length).toBe(1);
+    expect(calls).toBe(2);
+  });
+
+  test("a non-quota error body, a non-2xx, a bad body, and a thrown fetch are all failures — never a throw", async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(Response.json({ error: { code: 700 } }))) as typeof globalThis.fetch;
+    expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
+
+    globalThis.fetch = (() =>
+      Promise.resolve(new Response("nope", { status: 503 }))) as typeof globalThis.fetch;
+    expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
+
+    globalThis.fetch = (() =>
+      Promise.resolve(new Response("<html>", { status: 200 }))) as typeof globalThis.fetch;
+    expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
+
+    globalThis.fetch = (() => Promise.resolve(Response.json({}))) as typeof globalThis.fetch;
+    expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
+
+    globalThis.fetch = (() => Promise.reject(new Error("socket"))) as typeof globalThis.fetch;
+    expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
+  });
+});
+
 describe("spotifySearchPaceMs — the 60/min ceiling", () => {
   test("no wait before the first Spotify search (null last-start)", () => {
     expect(spotifySearchPaceMs(null, 10_000)).toBe(0);
@@ -506,8 +744,9 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
       log: () => {},
       now: () => 0,
       report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
-      resolveFree: () => Promise.resolve({ anchored: true, verifiedBy: "listenbrainz" }),
+      resolveFree: () => Promise.resolve({ anchored: true, verifiedBy: "isrc" }),
       runActor: () => Promise.resolve([]),
+      searchDeezer: () => Promise.resolve([]),
       sleep: () => Promise.resolve(),
     };
   }
@@ -537,6 +776,33 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
 
     expect(summary.pages).toBe(2);
     expect(summary.pulled).toBe(2);
+  });
+
+  test("carries the Deezer recovery + failure tallies across pages", async () => {
+    // Regression: the paged merge summed every anchor tally but silently DROPPED
+    // `isrcRecoveredByDeezer`, so a `--limit` burn always reported 0 recoveries — the one number
+    // that says whether the ISRC-recovery rung is alive at all.
+    const base = pagedDeps([rows("a", 2), rows("b", 2), rows("c", 2)]);
+    const summary = await runAnchorSweep(
+      4,
+      {
+        ...base,
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: true,
+            isrcRecoveredByDeezer: true,
+            source: "listenbrainz",
+            verifiedBy: "isrc",
+          }),
+        searchDeezer: () => Promise.resolve(null),
+      },
+      2,
+    );
+
+    expect(summary.pages).toBe(2);
+    expect(summary.isrcRecoveredByDeezer).toBe(4);
+    // No page's row carried a `deezerQuery`, so no search ran and nothing failed.
+    expect(summary.deezerSearchFailed).toBe(0);
   });
 
   test("a failing page stops the sweep and carries the error", async () => {

@@ -802,6 +802,37 @@ export const anchorTrack = oc
   );
 
 /**
+ * One Deezer search hit the BOX fetched for an ISRC-less catalogue row (rung 0 of `resolve_anchor`).
+ *
+ * WHY THE BOX FETCHES IT. Deezer's public search takes no token, so its quota is purely PER-IP — and
+ * the Worker egresses from Cloudflare's SHARED edge IPs, where that quota is spent by the whole
+ * platform rather than by Fluncle's one-request-per-row cadence. Measured in production: the rung
+ * recovered 0 ISRCs out of 5,133 ISRC-less rows over 3 days from the edge, while the same search
+ * answered 25/25 clean from the box's own dedicated IP. So the anchor sweep runs the search (with the
+ * ready-made `deezerQuery` the worklist hands it) and POSTs the hits here.
+ *
+ * WHAT DID NOT MOVE: the verification and the ISRC write. The server re-runs every hit through the
+ * SAME `pickVerifiedCandidate` gate the anchor uses — the folded artist-set + base-title identity AND
+ * the ratified duration window — against the row as the DATABASE holds it, then writes fill-empty-only.
+ * The box's own verdict is neither sent nor read: these four fields are evidence, and a hit that fails
+ * the gate is refused exactly as a Worker-fetched one is. The `anchor_track` precedent, unchanged.
+ *
+ * The fields are Deezer's, normalized: `artistName` is its BILLED string (`"Fred V & Grafix"`), folded
+ * into an artist SET by the gate; `durationMs` is its seconds promoted to ms.
+ */
+export const DeezerIsrcCandidateSchema = z
+  .object({
+    /** Deezer's billed artist string for the hit — folded into an artist set by the gate. */
+    artistName: z.string(),
+    /** The hit's duration in MILLISECONDS (Deezer bills seconds; the box promotes them). */
+    durationMs: z.number(),
+    /** The recording's ISRC as Deezer holds it — the whole point of the rung, and never trusted unverified. */
+    isrc: z.string(),
+    title: z.string(),
+  })
+  .meta({ id: "DeezerIsrcCandidate" });
+
+/**
  * `resolve_anchor` → `POST /admin/catalogue/anchor/resolve` (operationId `resolveAnchor`).
  *
  * Admin tier (AGENT-allowed WRITE), the `anchor_track` sibling and precedent. The FREE first rung of
@@ -820,13 +851,21 @@ export const anchorTrack = oc
  * identity columns and never certifies, so the box's agent token drives it. 404 when the track does
  * not exist; 409 when it is certified or already anchored.
  *
- * RUNG 0 — DEEZER ISRC-RECOVERY. Before any anchor rung, and ONLY for an ISRC-less row, the Worker
- * recovers the recording's real ISRC from Deezer's free, no-auth oracle (~60% of catalogue rows arrive
- * ISRC-less because our ISRC comes from MusicBrainz, whose underground-DnB ISRC coverage is sparse).
- * Every Deezer hit is re-verified against the row to the SAME fold + ±2s bar the anchor gate uses, then
+ * RUNG 0 — DEEZER ISRC-RECOVERY. Before any anchor rung, and ONLY for an ISRC-less row, the recording's
+ * real ISRC is recovered from Deezer's free, no-auth oracle (~60% of catalogue rows arrive ISRC-less
+ * because our ISRC comes from MusicBrainz, whose underground-DnB ISRC coverage is sparse). Every Deezer
+ * hit is re-verified against the row to the SAME fold + duration bar the anchor gate uses, then
  * persisted fill-empty-only — so anchoring runs through the high-precision exact-ISRC rungs instead of
  * fuzzy. `isrcRecoveredByDeezer` reports whether it fired (orthogonal to `anchored` — the recovered
  * ISRC is persisted even on a full miss). A Deezer outage degrades cleanly to no recovery.
+ *
+ * The SEARCH for that rung runs on the BOX ({@link DeezerIsrcCandidateSchema}): the sweep asks Deezer
+ * with the worklist's ready-made `deezerQuery` from its own dedicated IP and POSTs the hits as
+ * `deezerCandidates`, because Deezer's tokenless quota is per-IP and the Worker's shared edge IPs are
+ * saturated (0 recoveries out of 5,133 rows over 3 days, measured). PRESENT (even as an empty array) ⇒
+ * the Worker verifies exactly those and issues no Deezer request; ABSENT ⇒ the Worker searches itself,
+ * the pre-box behaviour, which is what a caller with no box in front of it still gets. Either way the
+ * VERIFICATION and the write are the server's alone — the box cannot authorise an ISRC, only offer one.
  *
  * SLICE 2 — the DARK Spotify SEARCH rungs (`anchor_spotify_search_enabled`, default OFF). When the
  * ListenBrainz rung misses AND the flag is on AND we are outside the Friday-refresh window, this also
@@ -851,7 +890,17 @@ export const resolveAnchor = oc
       "Resolve a catalogue row's Spotify anchor from the free rungs (ListenBrainz + dark Spotify search)",
     tags: ["Admin"],
   })
-  .input(z.object({ trackId: z.string().min(1) }))
+  .input(
+    z.object({
+      /**
+       * The Deezer hits the BOX fetched for this row (rung 0). Present — INCLUDING an empty array,
+       * which says "the box searched and found nothing usable" — ⇒ the server verifies exactly these
+       * and issues no Deezer request of its own. Absent ⇒ the server searches Deezer itself.
+       */
+      deezerCandidates: z.array(DeezerIsrcCandidateSchema).optional(),
+      trackId: z.string().min(1),
+    }),
+  )
   .output(
     z.object({
       /** True when a free rung verified a candidate and the anchor was written. */

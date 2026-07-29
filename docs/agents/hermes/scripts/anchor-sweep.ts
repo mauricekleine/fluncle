@@ -26,11 +26,21 @@
 // ── THE LOOP, per tick ───────────────────────────────────────────────────────────────────────
 //   (a) FETCH the anchor worklist from the Worker with the box's AGENT token
 //       (`GET /api/v1/admin/tracks/work?kind=anchor`). Each row carries a ready-made `anchorQuery`
-//       (the row's artists + title) so this driver stays dumb and never builds the query.
-//   (b) FREE RUNG first: POST each row's trackId to `resolve_anchor`. The WORKER resolves a
-//       ListenBrainz candidate (recording MBID → Spotify ids, no auth) + one by-id Spotify metadata
-//       read, verifies it against the SAME gate, and on a hit writes the anchor for free. A hit here
-//       means this row NEVER reaches the paid Apify rung.
+//       (the row's artists + title) so this driver stays dumb and never builds the query — and an
+//       ISRC-LESS row also carries a ready-made `deezerQuery` (Deezer's own field syntax), which is
+//       the server asking for the search in (b0).
+//   (b0) DEEZER ISRC RECOVERY, the one fetch this box makes on its OWN account. Deezer's public search
+//       takes no token, so its quota is per-IP: from Cloudflare's shared edge it recovered 0 ISRCs out
+//       of 5,133 ISRC-less rows over 3 days, while this box's dedicated IP answered 25/25 clean. So the
+//       SEARCH runs here and the hits ride the `resolve_anchor` call as `deezerCandidates`. The
+//       VERIFICATION and the ISRC write did NOT move — the Worker re-runs the row's identity fold +
+//       duration window over these hits and writes fill-empty-only, exactly as when it held the search.
+//       A failed search sends an empty list (never a re-ask from the dead edge) and is tallied as
+//       `deezerSearchFailed`, so a box that goes quota-blind shows on the first tick.
+//   (b) FREE RUNG next: POST each row's trackId (+ those Deezer hits) to `resolve_anchor`. The WORKER
+//       resolves a ListenBrainz candidate (recording MBID → Spotify ids, no auth) + one by-id Spotify
+//       metadata read, verifies it against the SAME gate, and on a hit writes the anchor for free. A
+//       hit here means this row NEVER reaches the paid Apify rung.
 //   (c) APIFY FALLBACK, over the free-rung MISSES only: RUN the Apify actor once per chunk of
 //       queries (`run-sync-get-dataset-items`), GROUP its flat result array by `target` (the query),
 //       map each to a candidate, and POST each row's candidates to `anchor_track`.
@@ -88,7 +98,28 @@ const log = (message: string) => console.error(`[anchor-sweep] ${message}`);
 /** One row of the anchor worklist (only the fields this sweep consumes). */
 export type AnchorWorkItem = {
   anchorQuery?: string;
+  /**
+   * The ready-made DEEZER search query (Deezer's `artist:"…" track:"…"` FIELD syntax — a DIFFERENT
+   * spelling from `anchorQuery`'s free text, which is why the server builds both). Present ONLY for a
+   * row with no ISRC: its presence IS the instruction to run the rung-0 ISRC-recovery search from this
+   * box's IP. Absent ⇒ this row needs no Deezer search and none is spent.
+   */
+  deezerQuery?: string;
   trackId?: string;
+};
+
+/**
+ * One Deezer search hit, normalized to the four fields `resolve_anchor`'s rung-0 gate reads. The box
+ * NORMALIZES; it never judges — the Worker re-runs the row's identity fold + duration window over
+ * these and writes an ISRC only on a hard match, exactly as it did when it held the search itself.
+ */
+export type DeezerCandidatePayload = {
+  /** Deezer's BILLED artist string (e.g. `"Fred V & Grafix"`) — the Worker folds it into a set. */
+  artistName: string;
+  /** Deezer bills seconds; promoted here so the Worker's ms window compares in one unit. */
+  durationMs: number;
+  isrc: string;
+  title: string;
 };
 
 /** One credited artist on an Apify candidate. */
@@ -152,7 +183,22 @@ export type AnchorSummary = {
   anchoredBySpotifyIsrc: number;
   /** Rows anchored by the DARK Spotify fuzzy-search rung (slice 2 — free of Apify, flag-gated). */
   anchoredBySpotifySearch: number;
+  /**
+   * Rows whose BOX-SIDE Deezer search failed outright — a network error, a non-2xx, a malformed body,
+   * or a quota answer that outlasted the retries. Reported because the fetch now lives HERE: the
+   * Worker's `deezer.search-quota-exhausted` log no longer fires for a sweep row, so without this
+   * number a box that has gone quota-blind would look exactly like a catalogue Deezer has never heard
+   * of. Those rows resolve normally, just unhelped (no ISRC recovered).
+   */
+  deezerSearchFailed: number;
   error: null | string;
+  /**
+   * Free-rung (`resolve_anchor`) calls that THREW. Counted UNCONDITIONALLY, because it is the tell
+   * that a rung is broken: with Apify enabled these rows fall silently through to the paid fallback
+   * and anchoring looks healthy, which is exactly how a dead free rung once stayed invisible for a
+   * week. Not part of `pulled` — a thrown call is already counted by whatever the row ends up as.
+   */
+  freeRungErrors: number;
   /** Rows whose ISRC was recovered from Deezer's free oracle before anchoring (the recovery rate). */
   isrcRecoveredByDeezer: number;
   /** Rows that verified nothing on ANY rung (a clean full miss — stamped, backed off). */
@@ -169,9 +215,22 @@ export type AnchorDeps = {
   /** A monotonic clock (ms). Injected so the Spotify-search pacer is deterministic in tests. */
   now: () => number;
   report: (trackId: string, candidates: AnchorCandidatePayload[]) => Promise<AnchorVerdict>;
-  /** The FREE first rung — the server resolves + verifies ListenBrainz + (dark) Spotify search for this row. */
-  resolveFree: (trackId: string) => Promise<AnchorVerdict>;
+  /**
+   * The FREE first rung — the server resolves + verifies ListenBrainz + (dark) Spotify search for this
+   * row. `deezerCandidates` are the rung-0 hits THIS BOX fetched: present (even empty) ⇒ the server
+   * verifies exactly those and asks Deezer nothing; omitted ⇒ the server searches Deezer itself.
+   */
+  resolveFree: (
+    trackId: string,
+    deezerCandidates?: DeezerCandidatePayload[],
+  ) => Promise<AnchorVerdict>;
   runActor: (queries: string[]) => Promise<ApifyResultItem[]>;
+  /**
+   * ONE Deezer search from THIS BOX's IP, for the rung-0 ISRC recovery. `null` means the search FAILED
+   * (network, non-2xx, malformed body, or a quota answer that outlasted the retries) as distinct from
+   * an honest empty result — the sweep tallies the two apart. Never throws.
+   */
+  searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | null>;
   /** Pause for `ms`. Injected so the Spotify-search pacer can be driven by a fake clock in tests. */
   sleep: (ms: number) => Promise<void>;
 };
@@ -292,7 +351,9 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     anchoredBySearch: 0,
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
+    deezerSearchFailed: 0,
     error: null,
+    freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
     missed: 0,
     ok: true,
@@ -312,7 +373,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
   // Only rows with both a trackId and a query are actionable; the rest are counted skipped.
   const rows = queue.filter(
-    (row): row is { anchorQuery: string; trackId: string } =>
+    (row): row is AnchorWorkItem & { anchorQuery: string; trackId: string } =>
       Boolean(row.trackId) && Boolean(row.anchorQuery),
   );
   summary.skipped += queue.length - rows.length;
@@ -341,6 +402,30 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
   let freeRungThrew = 0;
 
   for (const row of rows) {
+    // ── RUNG 0's FETCH, and the reason it lives here. Deezer's public search takes no token, so its
+    // quota is purely PER-IP — and the Worker egresses from Cloudflare's SHARED edge IPs, where that
+    // quota is spent by the whole platform rather than by Fluncle's one-request-per-row cadence.
+    // Measured in production: 0 ISRCs recovered out of 5,133 ISRC-less rows over 3 days from the edge,
+    // against 25/25 clean from this box's own dedicated IP. So the SEARCH runs here and the hits ride
+    // the `resolve_anchor` call. NOTHING ELSE MOVED: the Worker re-runs the row's identity fold +
+    // duration window over these hits and writes the ISRC fill-empty-only, exactly as before — this
+    // box offers evidence and is never asked for a verdict.
+    //
+    // Only a row the worklist attached a `deezerQuery` to (an ISRC-LESS row) is searched, so the
+    // request cadence stays one-per-recoverable-row. A FAILED search hands over an empty list rather
+    // than omitting the field: retrying it from the saturated edge is a known-dead request.
+    let deezerCandidates: DeezerCandidatePayload[] | undefined;
+
+    if (row.deezerQuery) {
+      const hits = await deps.searchDeezer(row.deezerQuery).catch(() => null);
+
+      if (hits === null) {
+        summary.deezerSearchFailed += 1;
+      }
+
+      deezerCandidates = hits ?? [];
+    }
+
     const waitMs = spotifySearchPaceMs(lastSearchStartMs, deps.now());
 
     if (waitMs > 0) {
@@ -350,7 +435,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     const startMs = deps.now();
 
     try {
-      const verdict = await deps.resolveFree(row.trackId);
+      const verdict = await deps.resolveFree(row.trackId, deezerCandidates);
 
       if (verdict.spotifySearchDone) {
         lastSearchStartMs = startMs;
@@ -384,6 +469,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
         `free rung ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       freeRungThrew += 1;
+      summary.freeRungErrors += 1;
     }
 
     apifyRows.push(row);
@@ -503,6 +589,145 @@ async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
   return Array.isArray(body) ? (body as ApifyResultItem[]) : [];
 }
 
+// ── THE BOX-SIDE DEEZER SEARCH (rung 0's fetch) ───────────────────────────────
+//
+// Deezer's public search takes no token, so its quota is purely PER-IP. That is the whole reason this
+// code is on the box and not in the Worker: the Worker egresses from Cloudflare's SHARED edge IPs,
+// where the quota is spent by the entire platform. Measured in production — 0 ISRCs recovered out of
+// 5,133 ISRC-less rows over 3 days from the edge; 25/25 clean, zero quota errors, in a tight
+// back-to-back burst from this box's own IP. No proxy: the box's IP is enough, and
+// `deezerSearchFailed` in the tick summary is the tripwire for the day it stops being.
+//
+// Politeness: IDENTIFIED (the honest Fluncle User-Agent, the same one the Worker presents) and BOUNDED
+// (a per-request deadline). One search per ISRC-less worklist row, issued one at a time down the
+// worklist — the cadence, never a burst, is what keeps us under Deezer's limit.
+
+/** The identifiable User-Agent Fluncle presents across the web — one honest identity. */
+const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
+
+/** Per-request wall-clock deadline. Deezer answers well under a second; past this is a stalled socket. */
+const DEEZER_TIMEOUT_MS = 10_000;
+
+/** Hits to consider. Deezer's search is fuzzy, so the WORKER's gate picks from a small handful. */
+const DEEZER_SEARCH_LIMIT = 5;
+
+/**
+ * THE QUOTA TRAP. Deezer does not signal a throttle with a 429, or with any non-2xx: it answers
+ * **HTTP 200** carrying `{"error":{"type":"Exception","message":"Quota limit exceeded","code":4}}`
+ * instead of a result set. That walks past `res.ok`, parses as valid JSON, and lands on an absent
+ * `data` — so a client that only asks "is `data` an array?" reads a THROTTLE as a clean MISS. It is
+ * read FIRST here, and treated as a failure, never as a miss.
+ */
+const DEEZER_QUOTA_ERROR_CODE = 4;
+
+/** Backoff between quota retries — Deezer's window is a few seconds wide, so a short wait lands fresh. */
+const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
+
+/** One Deezer search attempt's outcome, so a throttle can be retried and a hard failure cannot. */
+type DeezerAttempt =
+  | { candidates: DeezerCandidatePayload[]; outcome: "ok" }
+  | { outcome: "failed" }
+  | { outcome: "quota" };
+
+/** ONE Deezer search request, mapped to {@link DeezerAttempt}. Never throws. */
+async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
+  let res: Response;
+
+  try {
+    res = await fetch(
+      `https://api.deezer.com/search/track?q=${encodeURIComponent(query)}&limit=${DEEZER_SEARCH_LIMIT}`,
+      {
+        headers: { "User-Agent": DEEZER_USER_AGENT },
+        signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
+      },
+    );
+  } catch {
+    return { outcome: "failed" };
+  }
+
+  if (!res.ok) {
+    return { outcome: "failed" };
+  }
+
+  let body: unknown;
+
+  try {
+    body = await res.json();
+  } catch {
+    return { outcome: "failed" };
+  }
+
+  const parsed = body as {
+    data?: { artist?: { name?: string }; duration?: number; isrc?: string; title?: string }[];
+    error?: { code?: unknown };
+  };
+
+  // THE ERROR BODY, read BEFORE `data` — a 200 is not a result.
+  if (parsed.error) {
+    return parsed.error.code === DEEZER_QUOTA_ERROR_CODE
+      ? { outcome: "quota" }
+      : { outcome: "failed" };
+  }
+
+  if (!Array.isArray(parsed.data)) {
+    return { outcome: "failed" };
+  }
+
+  const candidates: DeezerCandidatePayload[] = [];
+
+  for (const hit of parsed.data) {
+    const isrc = hit.isrc?.trim() ?? "";
+    const title = hit.title?.trim() ?? "";
+    const artistName = hit.artist?.name?.trim() ?? "";
+
+    // A hit missing any of the four signals the Worker's gate reads cannot be verified, so it is
+    // dropped HERE rather than sent as an unverifiable payload. Dropping is the box's only judgement
+    // and it is one-way: it can withhold evidence, never manufacture it.
+    if (!isrc || !title || !artistName || typeof hit.duration !== "number" || hit.duration <= 0) {
+      continue;
+    }
+
+    candidates.push({ artistName, durationMs: Math.round(hit.duration * 1000), isrc, title });
+  }
+
+  return { candidates, outcome: "ok" };
+}
+
+/**
+ * The rung-0 Deezer search for one worklist row, with a bounded quota retry. Returns `null` when the
+ * search FAILED (so the tick can count it apart from an honest empty result) and never throws.
+ *
+ * `retryDelaysMs` is injected for deterministic tests; production uses the calibrated backoff.
+ */
+export async function searchDeezerOnBox(
+  query: string,
+  retryDelaysMs: number[] = DEEZER_QUOTA_RETRY_DELAYS_MS,
+): Promise<DeezerCandidatePayload[] | null> {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await attemptDeezerSearch(query);
+
+    if (result.outcome === "ok") {
+      return result.candidates;
+    }
+
+    const delay = result.outcome === "quota" ? retryDelaysMs[attempt] : undefined;
+
+    // A hard failure never retries (it is not going to un-fail); a quota retry stops once the bounded
+    // budget is spent. Either way this row gets no recovery, and the tick says so.
+    if (delay === undefined) {
+      log(
+        result.outcome === "quota"
+          ? `deezer quota exhausted after ${attempt + 1} attempts`
+          : "deezer search failed",
+      );
+
+      return null;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+}
+
 async function reportAnchor(
   trackId: string,
   candidates: AnchorCandidatePayload[],
@@ -534,12 +759,21 @@ async function reportAnchor(
  * (slice 2), verifies each against the same gate, and on a hit writes the anchor. The box supplies no
  * candidates; it just hands over the trackId. Only when ALL of these miss does the caller spend the
  * metered Apify search. `source` tells which rung anchored (for the tally); `spotifySearchDone` tells
- * whether a Spotify search was issued (for the pacer); `isrcRecoveredByDeezer` tells whether the
- * Worker recovered a verified ISRC from Deezer into this ISRC-less row before anchoring (for the tally).
+ * whether a Spotify search was issued (for the pacer); `isrcRecoveredByDeezer` tells whether a verified
+ * ISRC was recovered from Deezer into this ISRC-less row before anchoring (for the tally).
+ *
+ * `deezerCandidates` is the ONE thing the box hands over: the rung-0 Deezer hits it fetched from its
+ * own IP (see `searchDeezerOnBox`). Sent even when EMPTY, which tells the server "the box searched,
+ * ask Deezer nothing" — re-asking from the saturated shared edge is a known-dead request. Omitted for
+ * a row the worklist gave no `deezerQuery`, which is a row that already carries an ISRC. The server
+ * verifies these against the row and writes the ISRC itself; the box's opinion is never sent.
  */
-async function resolveAnchorFree(trackId: string): Promise<AnchorVerdict> {
+async function resolveAnchorFree(
+  trackId: string,
+  deezerCandidates?: DeezerCandidatePayload[],
+): Promise<AnchorVerdict> {
   const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor/resolve`, {
-    body: JSON.stringify({ trackId }),
+    body: JSON.stringify(deezerCandidates ? { deezerCandidates, trackId } : { trackId }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,
       "Content-Type": "application/json",
@@ -583,7 +817,9 @@ export async function runAnchorSweep(
     anchoredBySearch: 0,
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
+    deezerSearchFailed: 0,
     error: null as null | string,
+    freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
     missed: 0,
     ok: true,
@@ -613,6 +849,12 @@ export async function runAnchorSweep(
     merged.anchoredBySearch += page.anchoredBySearch;
     merged.anchoredBySpotifyIsrc += page.anchoredBySpotifyIsrc;
     merged.anchoredBySpotifySearch += page.anchoredBySpotifySearch;
+    merged.isrcRecoveredByDeezer += page.isrcRecoveredByDeezer;
+    // The two diagnostics ride along field-wise but stay OUT of `pulled` — neither is a row outcome:
+    // a failed Deezer search still resolves its row, and a thrown free rung is already counted by
+    // whatever that row ends up as (an Apify verdict, or `skipped` when Apify is off).
+    merged.deezerSearchFailed += page.deezerSearchFailed;
+    merged.freeRungErrors += page.freeRungErrors;
     merged.missed += page.missed;
     merged.skipped += page.skipped;
 
@@ -668,6 +910,7 @@ async function main(): Promise<void> {
     report: reportAnchor,
     resolveFree: resolveAnchorFree,
     runActor: runApifyActor,
+    searchDeezer: searchDeezerOnBox,
     sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
 
