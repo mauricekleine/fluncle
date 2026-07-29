@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import { DEEZER_CANDIDATE_LIMIT, resolveAnchor } from "./admin-catalogue";
 import { recordCost } from "./admin-costs";
+import { MAX_SUMMARY_RAW_CHARS, recordRun } from "./admin-telemetry";
 import { updateGalaxyMap } from "./admin-galaxies";
 
 /**
@@ -192,6 +193,96 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(resolveAnchor, { deezerCandidates: [{ isrc: "GBTESTDZ0001" }], trackId: "mb_1" }),
     false,
     "a hit missing the gate's signals is rejected",
+  );
+}
+
+// ── record_run: the run ledger's envelope, bounded and CLOSED ─────────────────────────────
+//
+// This one is not a batch cap. The envelope is assembled by a POSIX shell function on a box, so
+// the realistic threat is a buggy or skewed emitter, not a stranger — and the load-bearing property
+// is that the object is STRICT. A version skew between the wrapper and the Worker must degrade
+// LOUDLY (a 400, which leaves the row missing, which the absence alarm catches) rather than quietly
+// widening into a field nobody validated. Two keys can never appear: `ok`, because the ledger
+// derives it and a sweep asserting its own health is the defect that motivated the whole design,
+// and `id`, because it is derived from `unit` + `started_at`.
+{
+  const run = (over: Record<string, unknown> = {}) => ({
+    ended_at: "2026-07-29T03:00:12.500Z",
+    exit_code: 0,
+    started_at: "2026-07-29T03:00:00.000Z",
+    summary_raw: '{"produced":4}',
+    unit: "fluncle-enrich",
+    ...over,
+  });
+
+  assert.equal(accepts(recordRun, run()), true, "the live envelope shape is accepted");
+  assert.equal(
+    accepts(recordRun, run({ summary_raw: undefined })),
+    true,
+    "a sweep that printed no summary is still recordable",
+  );
+  assert.equal(
+    accepts(recordRun, run({ summary_raw: null })),
+    true,
+    "an explicitly null summary is still recordable",
+  );
+
+  // STRICT: an unknown envelope key is rejected, never ignored.
+  assert.equal(
+    accepts(recordRun, run({ ok: true })),
+    false,
+    "a caller-supplied `ok` is rejected at the envelope",
+  );
+  assert.equal(
+    accepts(recordRun, run({ id: "fluncle-enrich:2026-07-29T03:00:00.000Z" })),
+    false,
+    "a caller-supplied id is rejected — the Worker derives it",
+  );
+  assert.equal(
+    accepts(recordRun, run({ hostname: "some-box" })),
+    false,
+    "an unrecognised envelope key is rejected rather than silently widening the contract",
+  );
+
+  // Every field is REQUIRED: a run with no unit, no start, or no exit code is not a run.
+  for (const key of ["ended_at", "exit_code", "started_at", "unit"]) {
+    const partial: Record<string, unknown> = run();
+
+    delete partial[key];
+
+    assert.equal(accepts(recordRun, partial), false, `an envelope missing ${key} is rejected`);
+  }
+
+  // The bounds. `exit_code` is bash `$?`, definitionally 0–255.
+  assert.equal(accepts(recordRun, run({ exit_code: 255 })), true, "exit code AT the cap");
+  assert.equal(accepts(recordRun, run({ exit_code: 256 })), false, "an out-of-range exit code");
+  assert.equal(accepts(recordRun, run({ exit_code: -1 })), false, "a negative exit code");
+  assert.equal(accepts(recordRun, run({ exit_code: 1.5 })), false, "a fractional exit code");
+  assert.equal(accepts(recordRun, run({ unit: "" })), false, "an empty unit name");
+  assert.equal(accepts(recordRun, run({ unit: "u".repeat(128) })), true, "a unit name AT the cap");
+  assert.equal(
+    accepts(recordRun, run({ unit: "u".repeat(129) })),
+    false,
+    "one character past the unit cap",
+  );
+  assert.equal(accepts(recordRun, run({ started_at: "" })), false, "an empty start time");
+  assert.equal(
+    accepts(recordRun, run({ started_at: "t".repeat(65) })),
+    false,
+    "an oversized timestamp",
+  );
+
+  // The summary is REJECTED past the cap, never truncated: a silently-trimmed summary is a
+  // summary you cannot trust, and an untrustworthy diagnostic is what this ledger exists to end.
+  assert.equal(
+    accepts(recordRun, run({ summary_raw: "s".repeat(MAX_SUMMARY_RAW_CHARS) })),
+    true,
+    "a summary AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(recordRun, run({ summary_raw: "s".repeat(MAX_SUMMARY_RAW_CHARS + 1) })),
+    false,
+    "one character past the summary cap is rejected",
   );
 }
 

@@ -611,6 +611,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // every platform credential and the op writes only the internal platform_stats
   // table (no publish), so the box's agent token drives the bare trigger.
   record_platform_stats: "admin",
+  // The run ledger's write — agent tier (adminAuth only, no operatorGuard), the record_health /
+  // record_cost precedent: the box's cron wrapper POSTs one envelope per sweep tick, and the op
+  // writes only the internal run_events diagnostics ledger in the SECOND database (no publish,
+  // nothing to reverse), so the agent token drives it.
+  record_run: "admin",
   // The box's daily social-metrics cron snapshots each published post's Postiz per-post analytics —
   // agent tier (adminAuth only, no operatorGuard), the record_platform_stats / capture_post_urls
   // precedent: the Worker owns the Postiz key and the op writes only the internal social_metrics
