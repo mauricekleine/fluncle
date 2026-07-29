@@ -46,6 +46,7 @@ const LINK_ROWS = [
 /** The literal label on the link a `verified` state carries. "Listen on Spotify" is the ratified
  *  string for that action across the app (VOICE.md's Chrome Rule: one action, one label). */
 const OPEN_LABEL: Record<string, string> = {
+  "Apple Music": "Listen on Apple Music",
   Discogs: "Open on Discogs",
   MusicBrainz: "Open on MusicBrainz",
   Spotify: "Listen on Spotify",
@@ -117,7 +118,7 @@ function refusalPhrase(reason: AnchorRefusalReason): string {
       return "He set this recording aside.";
 
     case "duplicate":
-      return "He already holds this recording under another row here.";
+      return "He already has this recording down as a duplicate of another.";
 
     default:
       return "He holds no length for this recording, and the search needs one.";

@@ -88,7 +88,7 @@ function IdentityDoorPage() {
           </p>
           <dl>
             <div className="log-about-definition">
-              <dt>What you can look one up by</dt>
+              <dt>What you can look a recording up by</dt>
               <dd>
                 A recording&rsquo;s ISRC, its MusicBrainz recording id, or its Log ID coordinate if
                 Fluncle has certified it. One identifier can name more than one recording here, so
