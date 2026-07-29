@@ -18,14 +18,21 @@
 // The loop, idempotent by construction (the Worker skips already-done + cooling-down
 // findings server-side), fast no-op once the catalogue is drained:
 //
-//   1. `fluncle admin backfills discogs      --limit <N> --json`  → one paced batch.
-//   2. `fluncle admin backfills lastfm       --limit <N> --json`  → one paced batch.
-//   3. `fluncle admin backfills apple-music  --limit <N> --json`  → one paced batch.
+//   1. `fluncle admin backfills discogs         --limit <N> --json`  → one paced batch.
+//   2. `fluncle admin backfills lastfm          --limit <N> --json`  → one paced batch.
+//   3. `fluncle admin backfills apple-music     --limit <N> --json`  → one paced batch.
+//   4. `fluncle admin backfills apple-catalogue --limit <M> --json`  → one batched pass.
 //
 // The apple-music leg is a NO-OP until the Worker's MusicKit secrets are provisioned
 // (the summary carries `configured: false`), exactly like the lastfm leg is a no-op
-// without a session key — so this driver drives all three unconditionally and the
+// without a session key — so this driver drives all four unconditionally and the
 // server decides what actually runs.
+//
+// LEG 4 IS THE CATALOGUE SIBLING OF LEG 3, AND IT RUNS LAST ON PURPOSE. Both Apple
+// legs draw on ONE shared call meter + auth breaker in the Worker, so the order IS
+// the priority: the certified findings drain first, and whatever budget survives goes
+// to the catalogue. It carries its own larger limit because its oracle is BATCHED
+// (≤25 ISRCs per underlying request, versus one paced request per finding on leg 3).
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -46,6 +53,16 @@ import { spawnSync } from "node:child_process";
 // ---------------------------------------------------------------------------
 
 const BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_LIMIT ?? "3");
+
+// The CATALOGUE Apple leg gets its own, much larger limit: its oracle is BATCHED, so 100
+// rows cost ceil(100/25) = 4 underlying requests plus at most 10 paced album-facts calls —
+// ~14 meter ticks against the Worker's 18-per-minute Apple budget, and one server pass
+// (100 is exactly the server's own per-pass ceiling, and also the CLI's `--limit` max).
+// Matching the two means the CLI's drain loop is satisfied by that single pass instead of
+// re-requesting a cursor it does not have; a pass that comes back short (duplicate ISRCs
+// dedupe, the reliability gate) may cost ONE cheap follow-up pass, which the shared meter
+// bounds. 65k catalogue rows drain at ~100/tick × 48 ticks/day without ever starving leg 3.
+const CATALOGUE_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_CATALOGUE_LIMIT ?? "100");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -82,6 +99,24 @@ type AppleMusicSummary = {
   rateLimited?: boolean;
   resolvedCount?: number;
   skippedCount?: number;
+  unresolvedCount?: number;
+};
+
+type AppleCatalogueSummary = {
+  // Album rows given their second-authority facts (label/upc/artwork) this pass.
+  albumFactsWritten?: number;
+  // True when the pass STOPPED on the shared Apple auth breaker or a spent call budget —
+  // distinct from a 429 (`rateLimited`) and from a drained worklist. Recorded so a tick that
+  // yielded to leg 3's certified drain reads as YIELDED, never as a silent "0 resolved".
+  breakerTripped?: boolean;
+  // False when the Worker's MusicKit secrets are unset — the leg was a no-op this tick.
+  configured?: boolean;
+  failedCount?: number;
+  ok?: boolean;
+  rateLimited?: boolean;
+  resolvedCount?: number;
+  // No `skippedCount`: the catalogue worklist is a reliability-gated anti-join, so a
+  // cooling-down row never enters the pass to be reported as skipped.
   unresolvedCount?: number;
 };
 
@@ -141,12 +176,24 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 }
 
 // ---------------------------------------------------------------------------
-// Main — drive one bounded batch of each source. A failure of one source must
-// not abort the other; each is independently best-effort.
+// The tick — drive one bounded batch of each source, in order. A failure of one
+// source must not abort the next; each leg is independently best-effort, and the
+// ORDER is the priority (certified findings before the catalogue on the shared
+// Apple meter). Returns the summary; the entrypoint prints it.
 // ---------------------------------------------------------------------------
 
-function main(): void {
+export function runBackfillSweep() {
   const summary = {
+    "apple-catalogue": {
+      albumFacts: 0,
+      breakerTripped: false,
+      configured: false,
+      error: null as string | null,
+      failed: 0,
+      resolved: 0,
+      throttled: false,
+      unresolved: 0,
+    },
     "apple-music": {
       configured: false,
       error: null as string | null,
@@ -219,11 +266,45 @@ function main(): void {
     log(`apple-music backfill failed: ${summary["apple-music"].error}`);
   }
 
-  console.log(JSON.stringify(summary));
+  // The CATALOGUE Apple leg, last: leg 3's certified rows get first call on the shared
+  // Apple meter, and this drains whatever budget survives (RFC dnb-identity-graph U1.3).
+  try {
+    const catalogue = fluncleJson<AppleCatalogueSummary>([
+      "admin",
+      "backfills",
+      "apple-catalogue",
+      "--limit",
+      String(CATALOGUE_BATCH_LIMIT),
+    ]);
+    summary["apple-catalogue"].configured = catalogue.configured ?? false;
+    summary["apple-catalogue"].resolved = catalogue.resolvedCount ?? 0;
+    summary["apple-catalogue"].unresolved = catalogue.unresolvedCount ?? 0;
+    summary["apple-catalogue"].failed = catalogue.failedCount ?? 0;
+    summary["apple-catalogue"].albumFacts = catalogue.albumFactsWritten ?? 0;
+    summary["apple-catalogue"].throttled = catalogue.rateLimited ?? false;
+    summary["apple-catalogue"].breakerTripped = catalogue.breakerTripped ?? false;
+
+    if (catalogue.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
+      // summary — some resolved, some failed — distinct from the catch below.
+      log(
+        `apple-catalogue backfill partial: ${summary["apple-catalogue"].failed} row(s) failed this tick`,
+      );
+    }
+
+    if (summary["apple-catalogue"].breakerTripped) {
+      log("apple-catalogue backfill yielded: the shared Apple breaker/budget stopped the pass");
+    }
+  } catch (error) {
+    summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
+    log(`apple-catalogue backfill failed: ${summary["apple-catalogue"].error}`);
+  }
+
+  return summary;
 }
 
-// The cron runs this file directly; the guard keeps importing `fluncleJson` for
-// the tests (backfill-sweep.test.ts) side-effect free.
+// The cron runs this file directly; the guard keeps importing `fluncleJson` and
+// `runBackfillSweep` for the tests (backfill-sweep.test.ts) side-effect free.
 if (import.meta.main) {
-  main();
+  console.log(JSON.stringify(runBackfillSweep()));
 }
