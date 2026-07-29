@@ -62,6 +62,23 @@
 # The one shape this forbids is a sweep that leaves a LOCAL background child holding stderr
 # open, which would hold the pipe open too; no sweep does (`setsid`/`nohup`/`&` appear only in
 # render-detached.sh, which runs on the render box, not under this wrapper).
+#
+# ── THE RUN LEDGER (added 2026-07-29; RUN-01) ──────────────────────────────────
+# The marker answers "is this sweep fresh and did its last line say ok". It does NOT answer
+# "how much did it produce, out of how much backlog, over how many runs" — and that is the
+# question seven days of a silently-broken Deezer rung went unanswered on, with
+# `isrcRecoveredByDeezer: 0` printed in every tick summary and read by nobody. So every run
+# through this wrapper now also POSTs its envelope — unit, start, end, exit code, and the
+# sweep's own summary LINE, verbatim — to the `run_events` ledger. The Worker owns the schema:
+# it DERIVES `ok` (never trusts a caller's), normalizes the counters it recognises, and records
+# the mandatory ones the summary did not carry as `missing_fields` — which is the upgrade queue
+# that gets sweeps improved one at a time. Bash stays dumb, so no sweep needed changing for v1.
+#
+# KNOWN GAP, deliberate: the rebake guard above `exit`s at SOURCE time, before this wrapper
+# ever learns the job token, so a tick skipped for a container swap posts nothing and reads as
+# a missed run. That is the designed degradation (absence is the alarm), and inferring the
+# token from the sourcing script's filename would be wrong for `verify-captures` /
+# `reconcile-hub-counts` / `fluncle-live` / `clip-sweep` (job `studio-clip`) alike.
 
 # ── THE REBAKE GUARD (runs at source time, before any sweep work) ──────────────
 # A pin-watch rebuild+swap TERMs every in-flight `docker exec` when the container swaps —
@@ -101,6 +118,86 @@ CRON_OUTPUT_STDERR_DELIMITER='<!-- fluncle-cron-output: stderr tail -->'
 # retained markers, so a couple of hundred lines per tick is plenty; journald keeps the rest.
 CRON_OUTPUT_STDERR_LINES="${CRON_OUTPUT_STDERR_LINES:-200}"
 
+# >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
+# The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
+# different boxes with no shared bash library between them: the ~41 container sweeps get it by
+# sourcing this file, and the three host units are each laid down as a lone file
+# (install-host-timers.sh copies only the script an ExecStart names; the sonar freshen lives on
+# another box entirely). `run-events.test.ts` compares the four copies byte for byte, so a
+# silent drift fails the build — the same mirror-plus-drift-test posture cost-emit.ts already
+# uses for the cost ledger.
+#
+# THE CONTRACT is owned by the agent-tier `record_run` oRPC op in
+# packages/contracts/src/orpc/, which a box script cannot import. Mirrored here: the endpoint
+# path, the five body fields, and the Bearer auth. If any of them changes in the workspace,
+# change it in all four copies (the drift test keeps them equal; only the workspace can tell
+# you they are RIGHT).
+#
+# THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
+# `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for
+# eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside
+# the number that contradicted it — so a self-reported `ok` is exactly the thing this ledger
+# must not accept.
+#
+# BEST-EFFORT, ALWAYS: no token or an empty base URL ⇒ silently skipped; every curl failure is
+# swallowed; the caller's exit code is never touched; the whole thing is hard-timeout bounded.
+# It is deliberately SILENT rather than logging a failure — a chatty retry line would land in
+# the marker's stderr tail and score against the strain detector. A dropped POST leaves a
+# missing row, a missing row reads as a missed run, and the roster alarms on that. Absence
+# being loud is why delivery need not be guaranteed.
+RUN_EVENT_PATH='/api/v1/admin/runs/events'
+# 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
+# measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
+# `fluncle-telemetry` database, which exists precisely so it never queues behind the primary's
+# single writer. 5s absorbs a cold isolate plus a slow tick and still sits two orders inside
+# the shortest unit TimeoutStartSec on either box.
+RUN_EVENT_TIMEOUT_SECS="${RUN_EVENT_TIMEOUT_SECS:-5}"
+
+# Escape one line for a JSON string literal, in pure bash parameter expansion — NOT
+# `sed -e 's/\t/\\t/'`, whose `\t` is a GNU extension that silently matches a literal `t` on
+# the BSD sed the tests run under. Capped at 4000 chars so a runaway line cannot inflate the
+# POST, and stripped of any remaining control character (raw ones are illegal in JSON).
+_run_event_json_string() {
+  local s="${1:0:4000}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\t'/\\t}"
+  s="${s//$'\r'/\\r}"
+  printf '%s' "$s" | tr -d '\000-\037'
+}
+
+# record_run_event <unit> <started_at> <ended_at> <exit_code> <summary_raw>
+record_run_event() {
+  local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
+  local base token body
+  base="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
+  base="${base%/}"
+  token="${FLUNCLE_API_TOKEN:-}"
+  [ -n "$token" ] || return 0
+  [ -n "$base" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  case "$exit_code" in '' | *[!0-9]*) exit_code=0 ;; esac
+  body="$(printf '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}' \
+    "$(_run_event_json_string "$unit")" \
+    "$(_run_event_json_string "$started_at")" \
+    "$(_run_event_json_string "$ended_at")" \
+    "$exit_code" \
+    "$(_run_event_json_string "$summary_raw")")"
+  curl -s -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
+    -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${token}" \
+    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1 || true
+  return 0
+}
+
+# The box clock, in the one format every copy sends. DISTINCT from the Worker's own write
+# time: a box row's `occurred_at` legitimately precedes its `created_at` under clock skew, and
+# the ledger keeps both. Seconds precision on purpose — `date +%3N` is GNU-only.
+run_event_now() {
+  date -u +%Y-%m-%dT%H:%M:%SZ
+}
+# <<< END MIRRORED BLOCK: record_run_event <<<
+
 emit_cron_output() {
   local job="$1"
   shift
@@ -109,6 +206,7 @@ emit_cron_output() {
   fi
 
   local base marker tmp tmp_err tmp_rc rc=0
+  local started_at ended_at summary_raw
   base="$(_cron_output_dir)/fluncle-${job}"
   mkdir -p "$base" 2>/dev/null || true
   tmp="$(mktemp 2>/dev/null || printf '/tmp/cron-%s.%s.out' "$job" "$$")"
@@ -125,7 +223,9 @@ emit_cron_output() {
   # in its own subshell, so it is local) because a caller running under `set -e` would
   # otherwise abandon the subshell the moment the payload failed — skipping the very line that
   # records the exit code, and silently turning every failed sweep into rc=0.
+  started_at="$(run_event_now)"
   { set +e; "$@" >"$tmp"; printf '%s' "$?" >"$tmp_rc"; } 2>&1 | tee "$tmp_err" >&2
+  ended_at="$(run_event_now)"
 
   rc="$(cat "$tmp_rc" 2>/dev/null || printf 0)"
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
@@ -148,7 +248,15 @@ emit_cron_output() {
   # Re-emit the captured stdout so `journalctl -u fluncle-<job>` still shows the summary.
   # (stderr needs no re-emit — `tee` already streamed it live.)
   cat "$tmp" 2>/dev/null || true
+
+  # The ledger row. `summary_raw` is the LAST NON-EMPTY line of the captured STDOUT region —
+  # the same line the /status prober treats as the sweep's summary, read from the same bytes,
+  # so the two consumers can never disagree about which line a sweep meant. stderr is
+  # structurally excluded (it never reaches $tmp), so a chatty log line cannot pose as the
+  # summary here any more than it can in the marker.
+  summary_raw="$(grep -v '^[[:space:]]*$' "$tmp" 2>/dev/null | tail -n 1 || true)"
   rm -f "$tmp" "$tmp_err" "$tmp_rc" 2>/dev/null || true
+  record_run_event "fluncle-${job}" "$started_at" "$ended_at" "$rc" "$summary_raw" || true
 
   # Keep the dir bounded: newest ~20 markers, drop the older tail. Best-effort.
   # shellcheck disable=SC2012
