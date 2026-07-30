@@ -321,8 +321,15 @@ export function adminArtistsHandlers(os: Implementer) {
 
       // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL, so
       // an operator bio (or a concurrent tick) that landed between our read and this write
-      // matches no row and reports skipped, never clobbered.
-      const filled = await fillEmptyArtistBio(artist.slug, bio, input.promptVersion);
+      // matches no row and reports skipped, never clobbered. The accepted violations ride the
+      // SAME statement, so a bypassed bio raises its `bio-review` queue row the moment it
+      // lands and a clean one clears any flag that stood (see lib/server/bio-review.ts).
+      const filled = await fillEmptyArtistBio(
+        artist.slug,
+        bio,
+        input.promptVersion,
+        gated.voiceViolations ?? null,
+      );
 
       if (!filled) {
         const current = await getArtistBySlug(input.slug);

@@ -974,6 +974,13 @@
       "when": 1785420829569,
       "tag": "0138_purple_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 139,
+      "version": "6",
+      "when": 1785440611041,
+      "tag": "0139_modern_power_pack",
+      "breakpoints": true
     }
   ]
 }

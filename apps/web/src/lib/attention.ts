@@ -18,7 +18,7 @@ import { type AttentionRow, type AttentionSourceCount } from "@fluncle/contracts
 /**
  * The queue sources (the roadmap's data-honesty-verified EXISTS set).
  *
- * EXHAUSTIVE, and alphabetically sorted. It is mirrored by `AttentionSourceSchema` in
+ * EXHAUSTIVE, and alphabetically sorted (fifteen). It is mirrored by `AttentionSourceSchema` in
  * packages/contracts/src/orpc/admin-attention.ts and switched/mapped over in five more
  * places — `SOURCE_ORDER` + `primaryFor` + `briefPhrase` below, `SOURCE_ICONS` +
  * `SOURCE_LABELS` in routes/admin/index.tsx, `SOURCE_LABELS` in the CLI's
@@ -29,6 +29,7 @@ export type AttentionSource =
   | "anchor-review"
   | "artist-review"
   | "attach-cues"
+  | "bio-review"
   | "capture-suspect"
   | "distribute"
   | "drip-empty"
@@ -68,6 +69,8 @@ export type AttentionItem = {
   candidate?: AttentionCandidate;
   /** Present ⇒ the row rides the deadline tier, ordered by time-to-deadline. */
   deadlineAt?: string;
+  /** Bio-review rows: which entity the bypassed bio is about (the ruling's target). */
+  entity?: { kind: "album" | "artist" | "label"; slug: string };
   /** The deep-link target when the primary action navigates. */
   href?: string;
   /** Stable identity (`source:objectId`) — the snooze/won't-do map keys on it. */
@@ -86,6 +89,8 @@ export type AttentionItem = {
   trackId?: string;
   /** A submission row's pre-chew triage verdict (the sweep's advisory one-liner). */
   verdict?: string;
+  /** Bio-review rows: the voice-gate reasons the final-attempt acceptance let through. */
+  violations?: string[];
   /** How many dressed findings wait behind this one (the post-tiktok row's datum). */
   waiting?: number;
 };
@@ -171,6 +176,26 @@ export type LabelReviewInput = {
   anchorAt: string;
   labelId: string;
   name: string;
+};
+
+/**
+ * An artist / label / album whose BIO landed only because it was the sweep's final attempt.
+ *
+ * The entity-bio sweep gives an entity three authoring passes, and the third draft is stored even
+ * when the voice scan refuses it — the operator's ruling, and it stands, because the alternative is
+ * a queue that spins on one entity forever. But a bio that landed that way is public copy the gate
+ * said NO to, sitting on `/artist/<slug>`, in its JSON-LD, and on `/mcp`, and until this row existed
+ * the only thing that knew was a line in a cron's stderr. So it becomes a queue row carrying the
+ * gate's own reasons, and he rules: the bio stands, or it goes back for a rewrite.
+ */
+export type BioReviewInput = {
+  /** When the acceptance happened — the queue's oldest-first anchor. */
+  anchorAt: string;
+  kind: "album" | "artist" | "label";
+  name: string;
+  slug: string;
+  /** The voice-gate reasons that were ACCEPTED, verbatim — the row's evidence. */
+  violations: string[];
 };
 
 /**
@@ -286,6 +311,7 @@ export type NewsletterInput = {
 export type AttentionInputs = {
   anchorReviews: AnchorReviewInput[];
   artistReviews: ArtistReviewInput[];
+  bioReviews: BioReviewInput[];
   captureSuspects: CaptureSuspectInput[];
   clipPosts: ClipPostInput[];
   clips: ClipInput[];
@@ -461,6 +487,25 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: `label-review:${review.labelId}`,
       source: "label-review",
       title: review.name,
+    });
+  }
+
+  // Each bio that landed only because it was the sweep's FINAL attempt is one row — the voice gate
+  // read the paragraph, said no, and it went live anyway (the operator's own ruling, so the sweep
+  // terminates). That acceptance used to exist only as a line in a cron log, which is a review flag
+  // with no reader; here it is the row, carrying the gate's own reasons so the ruling can be made
+  // from the queue instead of from a grep. Both rulings act on state the server already holds, so
+  // like the anchor-review row the decision IS the row — there is no bio station to deep-link to.
+  // Never a deadline: the paragraph has already shipped, so nothing is racing; it is here to be
+  // SEEN. Oldest acceptance first, and it settles out the moment he rules.
+  for (const review of inputs.bioReviews) {
+    items.push({
+      anchorAt: review.anchorAt,
+      entity: { kind: review.kind, slug: review.slug },
+      id: `bio-review:${review.kind}:${review.slug}`,
+      source: "bio-review",
+      title: review.name,
+      violations: review.violations,
     });
   }
 
@@ -767,6 +812,7 @@ export function snoozeSlots(now: number): SnoozeSlot[] {
 export type PrimaryAction =
   | { kind: "accept-anchor"; label: "Use this match" }
   | { kind: "copy-caption"; label: "Copy caption" }
+  | { kind: "keep-bio"; label: "Bio stands" }
   | { href: string; kind: "open"; label: string }
   | { kind: "push"; label: string; platform: "tiktok" | "youtube" }
   | { kind: "re-push"; label: "Re-push draft" };
@@ -790,6 +836,13 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return { href: item.href ?? "/admin/artists", kind: "open", label: "Review" };
     case "attach-cues":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Attach cues" };
+    case "bio-review":
+      // Like the anchor-review row, both rulings act on state the server already holds and there is
+      // no station that owns a bio, so the decision IS the row: this primary blesses the paragraph
+      // the gate refused (clearing the flag and nothing else) and the row carries "Rewrite it"
+      // alongside, which empties the bio and hands the entity back to the sweep. The row shows the
+      // gate's own reasons, so it is a ruling he can make from here rather than a link somewhere.
+      return { kind: "keep-bio", label: "Bio stands" };
     case "capture-suspect":
       // The operator auditions the captured bytes on the catalogue workstation and rules with
       // flag_wrong_audio (or the CLI); the row opens there rather than flagging inline — flagging a
@@ -866,6 +919,10 @@ const SOURCE_ORDER: AttentionSource[] = [
   // A suspected version mismatch is the same class: the row has been un-anchored for months and
   // nothing downstream is blocked on it. Low priority, and here to be SEEN.
   "anchor-review",
+  // A bypassed bio is the same class again, with one difference worth naming: the copy is already
+  // PUBLIC, so unlike the rows above nothing is pending — the damage, if there is any, is done and
+  // steady. That makes it a review, never a race, and it sits with the other curation rows.
+  "bio-review",
   // A held auto-note is the least urgent row on the board and deliberately so: the finding
   // is simply note-less, which is a state it can sit in indefinitely without hurting
   // anything, and the sweep keeps trying to write a better line regardless. It is here to
@@ -881,8 +938,8 @@ const SOURCE_ORDER: AttentionSource[] = [
  * Where clicking a row lands the operator. Rows that carry an explicit `href`
  * (attach-cues, distribute, drip-empty, label-review, newsletter, submission, artist-review) open
  * it; the inline publish-loop rows (post-tiktok, post-youtube, tiktok-draft) and the inline
- * anchor-review ruling have no href — their action lives on the dashboard itself, so they open
- * `/admin`.
+ * anchor-review / bio-review rulings have no href — their action lives on the dashboard itself, so
+ * they open `/admin`.
  */
 export function attentionRowPath(item: AttentionItem): string {
   return item.href ?? "/admin";
@@ -934,6 +991,13 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       return n === 1 ? "an artist's links to review" : `${countWord(n)} artists' links to review`;
     case "attach-cues":
       return n === 1 ? "a recording waiting on cues" : `${countWord(n)} recordings waiting on cues`;
+    case "bio-review":
+      // Name the MECHANISM, like the held-note row: "past the voice gate" is the whole reason the
+      // row exists, and a bare "a bio to review" would hide the one fact he needs — the gate said
+      // no and the paragraph is live anyway.
+      return n === 1
+        ? "a bio that landed past the voice gate"
+        : `${countWord(n)} bios that landed past the voice gate`;
     case "capture-suspect":
       // Name the mechanism: the fingerprint check disagreed with the stored audio, and only the
       // operator's ears can settle it.

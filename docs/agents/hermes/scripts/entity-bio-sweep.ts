@@ -50,7 +50,8 @@
 // the logbook sweep's shape, so a rewrite is aimed rather than blind. The count persists across
 // ticks in a small on-box ledger, an exhausted entity is skipped without consuming the batch cap,
 // and a bio that landed only because it was the final attempt is logged under its own
-// `FINAL-ATTEMPT ACCEPTANCE` marker for the operator to review. This replaced an unbounded loop:
+// `FINAL-ATTEMPT ACCEPTANCE` marker AND raises a `bio-review` row on the /admin attention queue
+// (the Worker stamps the entity as it stores the bio). This replaced an unbounded loop:
 // a gate rejection used to leave the entity queued with nothing counting, which re-authored three
 // entities ~90 times each over two days.
 //
@@ -188,7 +189,9 @@ type BioDraft = {
 type BioResult = {
   bio?: string;
   dryRun?: boolean;
-  // `true` when `--final-attempt` stored a bio the voice scan refused — the review flag.
+  // `true` when `--final-attempt` stored a bio the voice scan refused. The Worker has already
+  // stamped the entity (`bio_gate_bypassed_at` + the reasons), which raises a `bio-review` row on
+  // the /admin attention queue — this field is the sweep's echo of that, not the review itself.
   gateBypassed?: boolean;
   ok?: boolean;
   skipped?: boolean;
@@ -234,7 +237,9 @@ type AuthoredBio = {
 // records nothing). Mirrors note-sweep's NoteResult.
 type DescribeResult = {
   cost: BoxCostEvent | null;
-  /** `true` when the bio landed only because it was the FINAL attempt — the operator review flag. */
+  /** `true` when the bio landed only because it was the FINAL attempt. It feeds the tick's
+   *  `bypassedGate` counter; the operator's REVIEW is the `bio-review` attention row the Worker
+   *  raised when it stored the bio (apps/web/src/lib/server/bio-review.ts). */
   gateBypassed?: boolean;
   outcome: Outcome;
 };
@@ -740,9 +745,10 @@ function modelForKind(kind: EntityKind): string {
 //
 // `finalAttempt` is the sweep's third and last pass over this entity: it adds `--final-attempt`,
 // which tells the Worker to store the draft even when the voice scan refuses it. The Worker
-// answers with `gateBypassed` + the accepted `voiceViolations`, and this logs that acceptance
-// under its own greppable marker — a bio that landed this way must never be indistinguishable
-// from one that cleared the gate.
+// answers with `gateBypassed` + the accepted `voiceViolations` AND stamps the entity so the
+// acceptance raises a `bio-review` row on the /admin attention queue — that queue row is the
+// operator's review; this line is the tick's own record of it, so a bio that landed this way is
+// never indistinguishable from one that cleared the gate in EITHER place.
 // ---------------------------------------------------------------------------
 
 type Delivery = { gateBypassed: boolean; outcome: Outcome; rejection?: string };
@@ -907,7 +913,8 @@ function deliverBio(input: {
  *       not an outcome; scoring it would push a sweep that rewrites and then SUCCEEDS toward
  *       `degraded`, which is the false positive that would make the detector worth ignoring.
  *     · the FINAL-ATTEMPT ACCEPTANCE. A bio landing on the third attempt is a DESIGNED outcome,
- *       and it already has its own review channel (the marker, `bypassedGate`, the API fields).
+ *       and it has its own review channel with a real reader: the `bio-review` row on the /admin
+ *       attention queue (plus the marker, `bypassedGate`, and the API fields).
  *     · the per-tick "skipping N exhausted" recap. The exhaustion was already reported once when
  *       it happened; scoring the recap would accrue a point every tick forever for a known,
  *       steady state, and a `degraded` that can never clear is noise.
@@ -1201,7 +1208,8 @@ async function main(): Promise<void> {
   const summary = {
     alreadyBio: 0,
     authored: 0,
-    // Bios that landed ONLY because it was the final attempt — each one wants an operator's eye.
+    // Bios that landed ONLY because it was the final attempt — this tick's count; the standing
+    // backlog is the `bio-review` queue each one raised (see `deliverBio`).
     bypassedGate: 0,
     // Queued entities that have spent all `MAX_BIO_ATTEMPTS` and will never be authored again.
     exhausted: 0,

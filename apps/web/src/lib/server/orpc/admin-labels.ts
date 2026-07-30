@@ -196,8 +196,15 @@ export function adminLabelsHandlers(os: Implementer) {
         return { ...gated, dryRun: true as const, ok: true as const, slug: label.slug };
       }
 
-      // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL.
-      const filled = await fillEmptyLabelBio(label.slug, bio, input.promptVersion);
+      // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL. The
+      // accepted violations ride the SAME statement, so a bypassed bio raises its `bio-review`
+      // queue row the moment it lands (see lib/server/bio-review.ts).
+      const filled = await fillEmptyLabelBio(
+        label.slug,
+        bio,
+        input.promptVersion,
+        gated.voiceViolations ?? null,
+      );
 
       if (!filled) {
         const current = await getLabelBySlug(input.slug);

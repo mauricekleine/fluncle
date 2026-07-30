@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import { type AlbumDetail, type AlbumListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl } from "../media";
+import { bioBypassColumns } from "./bio-review";
 import { getDb, typedRows } from "./db";
 import { relinkTracksToEntity } from "./hub-counts";
 import {
@@ -268,17 +269,25 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
  * already there / the album is gone). `promptVersion` is undefined for an operator-typed bio
  * and null when the sweep fell back to its baked prompt — both store NULL. The caller has
  * already voice-gated the bio (`gateBioText`).
+ *
+ * `gateBypass` carries the voice-gate reasons a FINAL-ATTEMPT ACCEPTANCE accepted, written in the
+ * SAME statement so a clean bio wipes the review flag by construction (see `fillEmptyArtistBio`
+ * and ./bio-review.ts).
  */
 export async function fillEmptyAlbumBio(
   slug: string,
   bio: string,
   promptVersion?: number | null,
+  gateBypass?: readonly string[] | null,
 ): Promise<boolean> {
   const db = await getDb();
+  const now = new Date().toISOString();
+  const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
   const result = await db.execute({
-    args: [bio, promptVersion ?? null, new Date().toISOString(), slug],
+    args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
     sql: `update albums
-            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved', updated_at = ?
+            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
+                bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
           where slug = ?
             and (bio is null or trim(bio) = '')`,
   });

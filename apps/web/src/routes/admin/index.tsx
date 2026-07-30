@@ -536,6 +536,44 @@ function AdminQueuePage() {
     [busyId, queryClient, settleOut],
   );
 
+  // Rule on a bio that landed past the voice gate — `resolve_bio_review`, operator-tier.
+  // `keep` blesses the paragraph (the flag clears, the page is untouched); `rewrite` empties the
+  // bio, which hands the entity back to the sweep's worklist with a fresh attempt budget. Either
+  // way the review is settled, so the row settles out.
+  const resolveBioReview = useCallback(
+    async (item: AttentionItem, resolution: "keep" | "rewrite") => {
+      const entity = item.entity;
+      if (!entity || busyId) {
+        return;
+      }
+      setBusyId(item.id);
+      try {
+        const response = await fetch(
+          `/api/v1/admin/bio-reviews/${encodeURIComponent(entity.kind)}/${encodeURIComponent(entity.slug)}/resolve`,
+          {
+            body: JSON.stringify({ resolution }),
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          },
+        );
+        const result = (await response.json()) as { message?: string; ok?: boolean };
+        if (!response.ok || !result.ok) {
+          throw new Error(result.message ?? `Ruling failed (${response.status})`);
+        }
+        settleOut(item, () => {
+          setClearedIds((current) => new Set(current).add(item.id));
+          void queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
+        });
+      } catch (caught) {
+        toast.error(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setBusyId(undefined);
+      }
+    },
+    [busyId, queryClient, settleOut],
+  );
+
   // Push the finding's video to a platform straight from the row — the same gated
   // draft op as the board (YouTube posts a public Short; TikTok drops a silent
   // inbox draft). Reconcile the queue afterwards: a fresh TikTok push becomes this
@@ -726,6 +764,7 @@ function AdminQueuePage() {
               onPush={handlePush}
               onRePush={rePush}
               onResolveAnchorReview={resolveAnchorReview}
+              onResolveBioReview={resolveBioReview}
               onRestore={handleRestore}
               onSelect={setSelectedId}
               onSnooze={handleSnooze}
@@ -752,6 +791,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
   "anchor-review": GitDiffIcon,
   "artist-review": MicrophoneStageIcon,
   "attach-cues": FilmSlateIcon,
+  "bio-review": QuotesIcon,
   "capture-suspect": WaveformIcon,
   distribute: CassetteTapeIcon,
   "drip-empty": InstagramIcon,
@@ -771,6 +811,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "anchor-review": "Version check",
   "artist-review": "Artist",
   "attach-cues": "Recording",
+  "bio-review": "Bio past the gate",
   "capture-suspect": "Capture check",
   distribute: "Mixtape",
   "drip-empty": "Instagram drip",
@@ -799,6 +840,7 @@ type QueueRowProps = {
   onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
   onResolveAnchorReview: (item: AttentionItem, resolution: "accepted" | "dismissed") => void;
+  onResolveBioReview: (item: AttentionItem, resolution: "keep" | "rewrite") => void;
   onRestore: (item: AttentionItem) => void;
   onSelect: (id: string) => void;
   onSnooze: (item: AttentionItem, until: string) => void;
@@ -829,6 +871,7 @@ function QueueRow({
   onPush,
   onRePush,
   onResolveAnchorReview,
+  onResolveBioReview,
   onRestore,
   onSelect,
   onSnooze,
@@ -863,6 +906,11 @@ function QueueRow({
   // the MusicBrainz link when the primary is not already it — the ruling is a two-way decision, and
   // the upstream fix is the part that helps every other consumer of the open graph.
   const candidate = item.source === "anchor-review" ? item.candidate : undefined;
+  // A bio that landed past the voice gate carries the same two-way inline ruling: the entity it
+  // belongs to is the ruling's target, and the gate's own reasons are the evidence he rules on —
+  // without them the row would be "a bio is wrong somewhere", which is not a decision.
+  const bioEntity = item.source === "bio-review" ? item.entity : undefined;
+  const bioViolations = bioEntity ? (item.violations ?? []) : [];
   const parked = state === "snoozed" || state === "dismissed";
 
   return (
@@ -951,6 +999,17 @@ function QueueRow({
               {formatDelta(candidate.deltaMs)}
             </span>
           ) : undefined}
+          {/* Which page the paragraph is on. A bio row's title is a bare entity name, and the
+              three kinds share a namespace, so without this "Helix" says nothing about where to
+              look. */}
+          {bioEntity ? (
+            <Badge
+              className="px-1 py-0 font-display text-[10px] text-muted-foreground"
+              variant="outline"
+            >
+              {bioEntity.kind}
+            </Badge>
+          ) : undefined}
           {item.machine ? (
             <Badge
               className="px-1 py-0 font-display text-[10px] text-muted-foreground"
@@ -993,6 +1052,34 @@ function QueueRow({
             </Badge>
           </p>
         ) : undefined}
+        {/* WHAT THE GATE SAID. This line is the row's entire reason to exist: the acceptance used
+            to be greppable-only, so the reasons were the thing being lost. They are the gate's own
+            words, verbatim, and the ruling above is made against them. A corrupt reasons column
+            still raises the row — it says so rather than disappearing. */}
+        {bioEntity ? (
+          <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="truncate">
+              Gate said:{" "}
+              {bioViolations.length > 0 ? bioViolations.join("; ") : "no reasons recorded"}
+            </span>
+            <Button
+              className="h-auto shrink-0 px-1 py-0 text-[11px]"
+              nativeButton={false}
+              render={
+                <a
+                  aria-label={`Read the bio on the ${bioEntity.kind} page — ${item.title}`}
+                  href={`/${bioEntity.kind}/${bioEntity.slug}`}
+                  rel="noreferrer"
+                  target="_blank"
+                />
+              }
+              size="sm"
+              variant="link"
+            >
+              Read it
+            </Button>
+          </p>
+        ) : undefined}
       </div>
 
       <div className="flex items-center gap-1 max-sm:w-full max-sm:justify-end">
@@ -1020,6 +1107,7 @@ function QueueRow({
               item={item}
               onAcceptAnchor={(target) => onResolveAnchorReview(target, "accepted")}
               onCopyCaption={onCopyCaption}
+              onKeepBio={(target) => onResolveBioReview(target, "keep")}
               onPush={onPush}
               onRePush={onRePush}
               primary={primary}
@@ -1027,6 +1115,20 @@ function QueueRow({
               registerPrimary={registerPrimary}
               selected={selected}
             />
+            {bioEntity ? (
+              // The second ruling. It empties the bio (and its provenance), which is what puts the
+              // entity back on the sweep's worklist with a fresh attempt budget — so this is
+              // "un-publish and try again", not a dismissal. Distinct from [x] Won't do, which
+              // only hides the row in this browser and leaves the paragraph live.
+              <Button
+                disabled={busy}
+                onClick={() => onResolveBioReview(item, "rewrite")}
+                size="sm"
+                variant="ghost"
+              >
+                Send it back
+              </Button>
+            ) : undefined}
             {canFinish ? (
               <MarkPostedPopover
                 busy={busy}
@@ -1127,6 +1229,7 @@ type PrimaryButtonProps = {
   item: AttentionItem;
   onAcceptAnchor: (item: AttentionItem) => void;
   onCopyCaption: (item: AttentionItem) => void;
+  onKeepBio: (item: AttentionItem) => void;
   onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
   primary: PrimaryAction;
@@ -1145,6 +1248,7 @@ function PrimaryButton({
   item,
   onAcceptAnchor,
   onCopyCaption,
+  onKeepBio,
   onPush,
   onRePush,
   primary,
@@ -1159,6 +1263,25 @@ function PrimaryButton({
       <Button
         disabled={busy}
         onClick={() => onAcceptAnchor(item)}
+        ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
+        size="sm"
+        variant={variant}
+      >
+        {busy ? (
+          <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+        ) : undefined}
+        {primary.label}
+      </Button>
+    );
+  }
+
+  // The bio ruling that KEEPS the paragraph — it clears the review flag and touches nothing
+  // public, which is why it is the primary: the common case is a gate that was over-strict.
+  if (primary.kind === "keep-bio") {
+    return (
+      <Button
+        disabled={busy || !item.entity}
+        onClick={() => onKeepBio(item)}
         ref={(el: HTMLElement | null) => registerPrimary(item.id, el)}
         size="sm"
         variant={variant}
