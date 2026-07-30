@@ -1,19 +1,28 @@
 // The identity answer, rendered — one recording's identifiers and its links out, with the honest
 // negative said in words rather than left as a gap.
 //
-// THE WHOLE POINT OF THIS FILE is the four states that are not "here it is". A link resolver that
-// only prints what it holds leaves a reader unable to tell "we never looked" from "we looked and it
-// is genuinely not there", and those are opposite facts. Every line below is computed from a real
+// THE WHOLE POINT OF THIS FILE is the states that are not "here it is". A link resolver that only
+// prints what it holds leaves a reader unable to tell "we never looked" from "we looked and it is
+// genuinely not there", and those are opposite facts. Every line below is computed from a real
 // column in the envelope (lib/server/identity-envelope.ts holds the discipline); where no column
-// backs a claim, the copy says he never wrote it down rather than inventing one.
+// backs a claim, the line says nothing rather than inventing one.
 //
-// ── THE REGISTER ──────────────────────────────────────────────────────────────────────────────
-// A catalogue page (VOICE.md §5, the Three Areas): the page states what the thing is, plainly.
-// Fluncle appears in the third person as the one who did the looking, never as narrator, and there
-// is no nameplate and no first-person intro. The catalogue register bans first-person NARRATION, not
-// the DOER: every sentence here has Fluncle doing an active verb (he looked, he matched it, he
-// brought it home), because an agentless line ("it came in with the find") is the ghost VOICE.md §4
-// exists to catch. No line describes the archive doing something on his behalf either.
+// ── THE REGISTER: A RECEIPT ───────────────────────────────────────────────────────────────────
+// The page is a receipt from a person who checked, and a receipt is legitimately AGENTLESS. The
+// reader is a stranger holding an ISRC asking two things: where does this recording live, and can I
+// trust the answer. Trust comes from precision and brevity, not personality. So the content of a row
+// is a method, a date, and a status, and it renders as exactly that: status-vocabulary fragments
+// joined by middots, with no subject, no sentences, and no idioms. Voice lives in the page's one
+// intro line (identity.$key.tsx) and nowhere else here. (Operator ruling, 2026-07-30. It supersedes
+// the two earlier rounds on this surface, which rendered the same provenance metadata as prose and
+// read as dead passive and then as narrated folksiness.)
+//
+// ── THE COVERAGE SET ──────────────────────────────────────────────────────────────────────────
+// The page renders rows ONLY for what the archive covers: ISRC, MusicBrainz, Spotify, Apple Music,
+// Discogs. Deezer and Tidal are absent by design — a "not covered" row is the API contract leaking
+// into a human surface, and it reads as a roadmap promise. The API still answers all five platforms
+// explicitly, `unsupported` included, because a machine needs the field to exist; the SCOPE of what
+// Fluncle covers is stated once in `/docs/identity` rather than once per recording.
 //
 // ── THE UNLIT RULE (DESIGN.md) ────────────────────────────────────────────────────────────────
 // A recording Fluncle has certified reads LIT: cream ink and its coordinate, linking home to its
@@ -27,7 +36,6 @@ import { formatDateLong } from "@/lib/format";
 import {
   type IdentityMethod,
   type IdentityRecording,
-  type IdentityRetry,
   type IdentityState,
 } from "@/lib/server/identity-envelope";
 import { type AnchorRefusalReason } from "@/lib/server/track-work";
@@ -38,12 +46,11 @@ const IDENTIFIER_ROWS = [
   { key: "mbRecordingId", label: "MusicBrainz" },
 ] as const;
 
+/** The covered platforms, and only those — see the coverage-set note in the file header. */
 const LINK_ROWS = [
   { key: "spotify", label: "Spotify" },
   { key: "appleMusic", label: "Apple Music" },
-  { key: "deezer", label: "Deezer" },
   { key: "discogs", label: "Discogs" },
-  { key: "tidal", label: "Tidal" },
 ] as const;
 
 /** The literal label on the link a `verified` state carries. "Listen on Spotify" is the ratified
@@ -55,122 +62,166 @@ const OPEN_LABEL: Record<string, string> = {
   Spotify: "Listen on Spotify",
 };
 
+/** The fragment separator, matching the middot the rest of the site already joins facts with. */
+function fragmentLine(...parts: (string | undefined)[]): string {
+  return parts.filter((part): part is string => Boolean(part)).join(" · ");
+}
+
 /**
- * How a link or identifier came to be trusted, in words a reader already has. The enum values are
- * the machine's; these are the deeds behind them, each with Fluncle doing the verb.
+ * HOW the row was decided, as a status fragment rather than a claim about anybody. Two families:
+ * `matched by …` where Fluncle ran a comparison, `from …` where the identifier is the record's own.
  *
- * `unknown-legacy` says he never wrote down where it came from, and says nothing about the check
- * itself: it is not a claim that the link is old, because the ISRC leg records no rung on any row.
+ * `unknown-legacy` returns nothing at all. No column records how that row came to be trusted, so the
+ * receipt makes no method claim and carries only its date — an absent fragment, never a vague one.
+ *
+ * `confirmed` and `checked` are RESERVED for the date fragment beside this one, where they carry the
+ * verified-vs-attempted distinction. No method fragment spends either word, or a line reads
+ * "confirmed by hand · confirmed Jul 1, 2026" and the distinction stops being legible.
  */
-function methodPhrase(method: IdentityMethod): string {
+function methodFragment(method: IdentityMethod, label: string): string | undefined {
   switch (method) {
     case "isrc":
-      return "Fluncle matched this on the recording's own ISRC";
+      return "matched by ISRC";
 
     case "operator":
-      return "Fluncle checked this one himself";
+      return "set by hand";
 
+    // The identifier IS this row's origin rather than a lookup result, which is the one thing the
+    // row cannot say by naming its own platform again.
     case "pk-derived":
-      return "Fluncle first met this recording under this id";
+      return "the id it arrived under";
 
     case "publish":
-      return "Fluncle brought this home with the find, straight from the platform's own record";
+      return `from ${label}'s own record`;
 
     case "search":
-      return "Fluncle matched it on artist, title, and length";
+      return "matched by artist, title, and length";
 
     case "search-subset":
-      return "Fluncle matched it on title and length, with only part of the artist name to go on";
+      return "matched by title and length, with part of the artist name";
 
     default:
-      return "Fluncle never wrote down how he came by this one";
+      return undefined;
   }
 }
 
-/** The timestamp clause, honest about what the date actually marks. */
-function whenPhrase(at: null | string, atMeaning: "attempted" | "verified" | null): string {
+/**
+ * WHEN, and honest about what the date marks. A verified stamp is the moment the link was written
+ * ("confirmed"); an attempted stamp is the moment a look concluded ("checked"). Serving one as the
+ * other is the easiest lie in this envelope to tell by accident, so the two words never swap.
+ */
+function whenFragment(
+  at: null | string,
+  atMeaning: "attempted" | "verified" | null,
+): string | undefined {
   if (!at || !atMeaning) {
-    return "";
+    return undefined;
   }
 
   return atMeaning === "verified"
-    ? `, confirmed ${formatDateLong(at)}`
-    : `, last checked ${formatDateLong(at)}`;
+    ? `confirmed ${formatDateLong(at)}`
+    : `checked ${formatDateLong(at)}`;
+}
+
+type AbsentState = Extract<IdentityState, { state: "absent" }>;
+
+/** Whether more looks are coming, off the two columns that decide it. Drives "checked" vs "last
+ *  checked": a row that will be asked again has a LAST check, one that will not simply has one. */
+function moreLooksComing(state: AbsentState): boolean {
+  return state.terminal !== true && state.retry !== "single-shot";
+}
+
+/**
+ * The count-and-date fragment of a miss. The tally is printed ONLY where a monotone counter backs it
+ * (the envelope withholds Spotify's, which is a spend budget the requeue decrements), and a row with
+ * neither a tally nor a stamp contributes nothing rather than a hedge.
+ */
+function checkedFragment(state: AbsentState): string | undefined {
+  const when = state.lastAttemptedAt ? formatDateLong(state.lastAttemptedAt) : undefined;
+
+  if (state.attempts !== undefined && state.attempts > 1) {
+    return when
+      ? `checked ${state.attempts} times, last ${when}`
+      : `checked ${state.attempts} times`;
+  }
+
+  if (!when) {
+    return undefined;
+  }
+
+  return moreLooksComing(state) ? `last checked ${when}` : `checked ${when}`;
 }
 
 /**
  * What happens after a miss, off the retry class the acquisition queue itself is built on.
- * `recheckable` earns the reason out loud: the catalogues out there keep growing, which is the whole
- * argument for asking the same question again.
+ *
+ * `terminal` is the only column that can say "never again", so it alone earns `retired`. A capped
+ * row that is not terminal is still under its budget and says so with the ceiling attached. A
+ * `single-shot` row with no terminal verdict on file gets NO fragment: that Fluncle holds no opinion
+ * is itself the honest answer, and inventing one either way would be the guess this surface exists
+ * to avoid.
  */
-function retryPhrase(retry: IdentityRetry, cap: null | number): string {
-  if (retry === "single-shot") {
-    return "He asked once and will not ask again.";
+function outlookFragment(state: AbsentState): string | undefined {
+  if (state.terminal === true) {
+    return "retired";
   }
 
-  if (retry === "recheckable") {
-    return "He will keep looking. A miss today is not a miss forever.";
+  if (state.retry === "recheckable") {
+    return "will be checked again";
   }
 
-  return cap ? `He will look again, up to ${cap} times in all.` : "He will look again.";
+  if (state.retry === "capped") {
+    return state.cap
+      ? `will be checked again, up to ${state.cap} times in all`
+      : "will be checked again";
+  }
+
+  return undefined;
 }
 
 /** Which condition of this recording's own row stops Fluncle looking. A closed set. */
-function refusalPhrase(reason: AnchorRefusalReason): string {
+function refusalLine(reason: AnchorRefusalReason): string {
   switch (reason) {
     case "attempt-cap-reached":
-      return "He has looked as many times as he allows himself.";
+      return fragmentLine("Not found", "checked as many times as allowed", "retired");
 
     case "credit-not-an-identity":
-      return "He has no real artist name to search on here.";
+      return fragmentLine("Not eligible", "no artist credit to search on");
 
     case "dismissed":
-      return "He set this recording aside.";
+      return "Set aside";
 
     case "duplicate":
-      return "He already has this recording down as a duplicate of another.";
+      return "Held as a duplicate of another recording";
 
     default:
-      return "He never got a length for this recording, and a search needs one.";
+      return fragmentLine("Not eligible", "no length on file");
   }
 }
 
-/**
- * Why Fluncle hands out no link of a given kind. Per platform, because the three reasons are three
- * different facts and one shared sentence flattened them into an error table: Deezer he reads to
- * CHECK an identity and never to send a reader anywhere, and Tidal he has no way in to at all. The
- * fallback covers a platform added later before someone has written its own truth here.
- *
- * APPLE is carried but not reached from this page today: the page reads the envelope `first-party`,
- * which computes Apple's real state (a link, or an honest negative), so `unsupported` for Apple is a
- * MACHINE answer. Its sentence stays here because the audience gate is one constant either way
- * (lib/server/identity-envelope.ts), and a posture re-ruled toward Apple must not fall back to the
- * generic line.
- */
-const NO_LINK_REASON: Record<string, string> = {
-  "Apple Music":
-    "Apple's rules keep these links tied to playback, so Fluncle hands none of them out here.",
-  Deezer:
-    "Fluncle reads Deezer for his own work, never to send you there, so he keeps no Deezer link at all.",
-  Tidal: "Fluncle has no way in to Tidal, so he has nothing to tell you about it.",
-};
+/** Every state that gets a row. `unsupported` is the one that does not — {@link StateRow} drops it
+ *  before this function is reached, so "not covered" can never render as a line. */
+type RenderedState = Exclude<IdentityState, { state: "unsupported" }>;
 
 /**
- * One row's answer: the state in plain words, plus the link where there is one.
+ * One row's answer: the status fragments, plus the link where there is one.
  *
- * The five states, and what each of them is honestly claiming:
- *   · verified    — Fluncle found it, and here is how and when he came to trust it.
- *   · absent      — he looked, came back empty-handed, and here is whether he will look again.
- *   · refused     — he will not look, and here is which condition of the row stops him.
+ * The four rendered states, and what each of them is honestly claiming:
+ *   · verified    — it is held, and here is how and when it came to be trusted.
+ *   · absent      — a look ran to the end and came back empty, and here is whether another is coming.
+ *   · refused     — no look will run, and here is which condition of the row stops it.
  *   · unattempted — nobody has gone looking.
- *   · unsupported — he hands out no link of that kind, and here is why for this platform.
+ *
+ * A `verified` line starts lowercase because it CAPTIONS the value or link above it; every other
+ * state starts capitalized because the fragment IS the answer and has nothing above it to hang from.
+ * Both are sentence case; the split is the grammar of the row, not an oversight.
  */
-function StateLine({ label, state }: { label: string; state: IdentityState }) {
+function StateLine({ label, state }: { label: string; state: RenderedState }) {
   if (state.state === "verified") {
-    const provenance = `${methodPhrase(state.verification.method)}${whenPhrase(
-      state.verification.at,
-      state.verification.atMeaning,
-    )}.`;
+    const line = fragmentLine(
+      methodFragment(state.verification.method, label),
+      whenFragment(state.verification.at, state.verification.atMeaning),
+    );
 
     // An identifier is worth printing (a reader copies it); a platform link is worth following.
     const openLabel = OPEN_LABEL[label];
@@ -184,54 +235,39 @@ function StateLine({ label, state }: { label: string; state: IdentityState }) {
         ) : (
           <span className="identity-value">{state.value}</span>
         )}
-        <span className="identity-provenance">{provenance}</span>
+        {line ? <span className="identity-provenance">{line}</span> : undefined}
       </>
     );
   }
 
   if (state.state === "absent") {
-    // One look is "on that day"; several is "last on that day". The count is present only where a
-    // real monotone tally backs it — Spotify's stored number is a spend budget the requeue
-    // decrements, so the envelope withholds it and the sentence honestly says only "looked".
-    const once = state.attempts === 1;
-    const looked =
-      state.attempts !== undefined && !once
-        ? `Fluncle looked ${state.attempts} times`
-        : once
-          ? "Fluncle looked once"
-          : "Fluncle looked";
-    const when = state.lastAttemptedAt
-      ? `, ${once ? "on" : "last on"} ${formatDateLong(state.lastAttemptedAt)}`
-      : "";
-
     return (
       <span className="identity-provenance">
-        {`${looked}${when}, and came back empty-handed. ${retryPhrase(state.retry, state.cap)}`}
+        {fragmentLine("Not found", checkedFragment(state), outlookFragment(state))}
       </span>
     );
   }
 
   if (state.state === "refused") {
-    return (
-      <span className="identity-provenance">
-        {`Fluncle is not looking. ${refusalPhrase(state.reason)}`}
-      </span>
-    );
+    return <span className="identity-provenance">{refusalLine(state.reason)}</span>;
   }
 
-  if (state.state === "unattempted") {
-    return <span className="identity-provenance">Nobody has gone looking yet.</span>;
-  }
-
-  return (
-    <span className="identity-provenance">
-      {NO_LINK_REASON[label] ?? `Fluncle hands out no ${label} link here.`}
-    </span>
-  );
+  return <span className="identity-provenance">Not checked yet</span>;
 }
 
-/** One definition row: the platform or identifier, then its answer. */
+/**
+ * One definition row: the platform or identifier, then its answer.
+ *
+ * `unsupported` gets NO ROW, and the guard lives here so that is true by construction rather than by
+ * the coverage list happening to exclude the two platforms that answer it today. A row reading "not
+ * covered" is the API's contract leaking onto a human surface, and to a reader it reads as a promise
+ * to add the platform later. Scope belongs in `/docs/identity`, said once, not once per recording.
+ */
 function StateRow({ label, state }: { label: string; state: IdentityState }) {
+  if (state.state === "unsupported") {
+    return undefined;
+  }
+
   return (
     <div className="log-about-definition">
       <dt>{label}</dt>
@@ -248,6 +284,9 @@ function StateRow({ label, state }: { label: string; state: IdentityState }) {
  * said once in the page's opening line instead of repeated over every block (the Recap Tell: a
  * sentence that restates what the reader already has advances nothing). `canonical` says nothing at
  * all: over a lone block, "this is the only one" is noise.
+ *
+ * Worded in the same status vocabulary the `duplicate` refusal carries, because it is the same fact
+ * said at block scale rather than row scale.
  */
 function RelationNote({ relation }: { relation: IdentityRecording["relation"] }) {
   if (relation === "canonical" || relation === "ambiguous") {
@@ -258,7 +297,7 @@ function RelationNote({ relation }: { relation: IdentityRecording["relation"] })
 
   return (
     <p className="identity-relation">
-      Fluncle has this one down as a duplicate of{" "}
+      Held as a duplicate of{" "}
       <Link params={{ key: twin }} to="/identity/$key">
         another recording here
       </Link>

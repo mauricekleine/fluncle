@@ -5,7 +5,7 @@ description: Look a recording up by ISRC, MusicBrainz id, or Log ID, and get the
 
 Fluncle knows, for tens of thousands of recordings, that _this recording_ is _this Spotify link_ is _this MusicBrainz id_ is _this ISRC_. This is how you ask.
 
-Ask on the web at [`/identity`](/identity), or from a machine through the track endpoint. Both read the same answer, so the page and the API tell you the same thing, with one exception: Apple Music, for a licence reason spelled out below.
+Ask on the web at [`/identity`](/identity), or from a machine through the track endpoint. Both read the same answer, so the page and the API tell you the same thing about a recording. They present it differently on purpose: the page is a receipt, one row per thing Fluncle covers, while the API answers every platform explicitly so a machine caller never has to infer a gap from a missing field. One field also differs in substance, and only one: Apple Music, for a licence reason spelled out below.
 
 ## The three keys
 
@@ -19,23 +19,29 @@ One key, one page: `https://www.fluncle.com/identity/<key>`.
 
 **An answer is a list, not a row.** An ISRC is not unique in this archive, and neither is a MusicBrainz id across the paths a recording can arrive by. So a lookup answers with every recording that answers to the key, and each recording says how it stands to the others: the only answer, one of several Fluncle has not ruled between, or a duplicate of another recording here. Picking a winner quietly is exactly what this surface exists not to do.
 
+## What is covered
+
+Five rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and three links out, **Spotify**, **Apple Music**, and **Discogs**. Apple Music is page-only, for the licence reason below.
+
+**Deezer and Tidal are not covered.** Fluncle reads Deezer for his own work and serves no link from it, and there is no Tidal integration here at all. Neither gets a row on the page. The API still answers both, `unsupported`, so a machine caller reads the scope from the response instead of guessing at it.
+
 ## The five answers
 
-Per platform and per identifier, the answer is one of five. Three of them are the point.
+Per platform and per identifier, the answer is one of five. Three of them are the point. On the page each one reads as a short line of plain status: the method, the date, and what happens next.
 
-| Answer                            | What it means                                                                                                                                                                               |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Fluncle found it                  | He has the link or the identifier, with how he came to trust it and when he last checked.                                                                                                   |
-| He looked and came back empty     | He ran a real look to the end and found nothing, with the date and whether he will go again.                                                                                                |
-| He is not looking                 | Something about the recording itself stops him: no length on file, no real artist credit, already down as a duplicate of another recording, set aside, or asked as many times as he allows. |
-| Nobody has gone looking yet       | Nobody has ever gone looking. Different from the one above, and the difference matters.                                                                                                     |
-| He hands out no link of that kind | Sometimes a platform's own rules say so, sometimes he simply has no way in. The answer names which.                                                                                         |
+| Answer        | On the page                                                     | What it means                                                                                                                                                                                                                                                                                           |
+| ------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verified`    | `matched by ISRC · confirmed Jul 29, 2026`                      | Fluncle has the link or the identifier, with how it came to be trusted and when. A row with nothing on file about the method carries its date alone.                                                                                                                                                    |
+| `absent`      | `Not found · last checked Jul 12, 2026 · will be checked again` | A real look ran to the end and found nothing, with the date, the tally where one is counted, and whether another look is coming. `retired` means there will not be.                                                                                                                                     |
+| `refused`     | `Not eligible · no length on file`                              | Something about the recording itself stops the look: no length on file, no artist credit to search on. Three of them read as their own verdict instead: `Set aside`, `Held as a duplicate of another recording`, and, at the attempt ceiling, `Not found · checked as many times as allowed · retired`. |
+| `unattempted` | `Not checked yet`                                               | Nobody has ever gone looking. Different from the one above, and the difference matters.                                                                                                                                                                                                                 |
+| `unsupported` | no row                                                          | The platform is outside the covered set. The API names it; the page shows only what is covered.                                                                                                                                                                                                         |
 
 A lookup that answers only the first leaves you to read silence for the rest. Fluncle can name all five because the machinery that goes looking has counted its attempts all along.
 
-**Apple Music is the one place the page and the API differ.** The page shows an Apple link the way any of Fluncle's own pages show one, honest negatives included. The API answers `unsupported` for Apple: Apple's rules let him show a link on his own pages, not hand it on for someone else to show. Deezer and Tidal give the same answer to both readers, and for their own reasons: he keeps no Deezer link at all, and he has no way in to Tidal.
+**Apple Music is the one place the page and the API disagree about a recording.** The page shows an Apple link the way any of Fluncle's own pages show one, honest negatives included. The API answers `unsupported` for Apple: Apple's rules let him show a link on his own pages, not hand it on for someone else to show.
 
-Two rules hold the honesty in place. **Every answer is computed from something stored**: where nothing on file settles a question, the answer says he never wrote it down rather than guessing in either direction. And **a date says what it marks**. The moment he wrote a link down and the moment he finished a look are close but not the same claim, so the answer tells you which one you are reading.
+Two rules hold the honesty in place. **Every answer is computed from something stored**: where nothing on file settles a question, the answer stays quiet rather than guessing in either direction. And **a date says what it marks**. The page spells the difference in one word: `confirmed` is the moment a link was written down, `checked` is the moment a look finished. Close, but not the same claim, and neither is ever printed as the other.
 
 ## What it will not tell you
 

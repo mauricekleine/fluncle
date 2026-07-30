@@ -9,17 +9,20 @@ import { type IdentityPageData } from "./-identity-page-data";
 // ── /identity/<key> — one recording's identifiers and links, and the honest negative ─────────
 //
 // The answer page. A reader (or a crawler, or an agent) arrives with an ISRC, a MusicBrainz
-// recording id, or a Log ID, and leaves knowing four things Fluncle can say and most link
-// resolvers cannot: which links he found and how he came to trust them, where he looked and came
-// back empty-handed, where he will not look and why, and where he hands out no link at all. The
-// machine twin of this page is `get_track`'s identity projection; both read the same envelope
-// module, so the page and the API can never answer differently. ONE field is audience-scoped: this
-// page reads `first-party`, so an Apple Music link renders here as it does on `/log`, while the API
-// answers Apple `unsupported` (identity-envelope.ts holds the clause and the reasoning).
+// recording id, or a Log ID, and leaves knowing three things most link resolvers cannot say: which
+// links are held and how each came to be trusted, where a look ran to the end and came back empty,
+// and where no look will run and why. The machine twin of this page is `get_track`'s identity
+// projection; both read the same envelope module, so the page and the API can never answer
+// differently about a recording. ONE field is audience-scoped: this page reads `first-party`, so an
+// Apple Music link renders here as it does on `/log`, while the API answers Apple `unsupported`
+// (identity-envelope.ts holds the clause and the reasoning). The page also renders only the COVERED
+// platforms while the API answers every one of them — a rendering choice, not a contract split; see
+// the coverage-set note in `components/identity-states.tsx`.
 //
-// A CATALOGUE PAGE (VOICE.md §5, the Three Areas): reference register throughout — it states what
-// the thing is, plainly, with Fluncle in the third person as the one who did the looking. No
-// nameplate, no first-person intro.
+// A RECEIPT (operator ruling, 2026-07-30): every per-row line is status-vocabulary fragments joined
+// by middots, agentless and terse, because trust on this surface comes from precision rather than
+// personality. Voice lives in the ONE intro line below and nowhere else on the page. No nameplate,
+// no first-person intro.
 //
 // ── WHY IT IS `noindex, follow` ───────────────────────────────────────────────────────────────
 // The page is deliberately crawlable and citable, and deliberately out of the search index. One
