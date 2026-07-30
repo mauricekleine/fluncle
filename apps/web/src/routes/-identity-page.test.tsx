@@ -172,7 +172,7 @@ describe("the identity answer", () => {
     // the machine answer and for a re-ruled posture, but this PAGE reads the envelope first-party and
     // so never receives `unsupported` for Apple — see the Apple case below.)
     expect(html).toContain(
-      "Fluncle uses Deezer to check a recording&#x27;s identity, never to send you there, so he keeps no Deezer link at all.",
+      "Fluncle reads Deezer for his own work, never to send you there, so he keeps no Deezer link at all.",
     );
     expect(html).toContain(
       "Fluncle has no way in to Tidal, so he has nothing to tell you about it.",
