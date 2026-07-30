@@ -806,10 +806,9 @@ describe("noteBotChallenge — the count", () => {
 
 describe("what the sweep's challenge logs say to the /status strain detector", () => {
   test("a RE-ROLLED challenge reads as ZERO strain — recoverable friction on a healthy tick", () => {
-    // ~12% of runs hit one. If this line scored, capture would sit at roughly 76 points in
-    // every 6h window against a 12-point threshold: `degraded` forever, with no condition
-    // anyone could fix. The hyphen is the whole mechanism — "bot challenge", never the
-    // STRAIN_PHRASES entry "bot-challenged".
+    // ~12% of runs hit one. If this line scored, capture would sit at roughly 76 noisy points
+    // every 6h: `degraded` forever, with no condition anyone could fix. The hyphen is the whole
+    // mechanism — "bot challenge", never the STRAIN_PHRASES entry "bot-challenged".
     const { lines, strain } = withCapturedStderr(() => {
       noteBotChallenge(createBotChallengeMeter(), "search", true);
       noteBotChallenge(createBotChallengeMeter(), "download", true);
@@ -856,7 +855,7 @@ describe("what the sweep's challenge logs say to the /status strain detector", (
   test("the new summary counters are not strain counters either", () => {
     // `countSummaryStrain` scores a marker's JSON summary. Publishing the challenge RATE must
     // not be the same thing as reporting failure — the keys are deliberately outside
-    // STRAIN_COUNTER_KEYS (`errors` / `failed` / `gateSkipped` / `rejected`).
+    // STRAIN_COUNTER_KEYS (`errors` / `failed` / `gateSkipped`).
     expect(
       countSummaryStrain({
         batch: 4,

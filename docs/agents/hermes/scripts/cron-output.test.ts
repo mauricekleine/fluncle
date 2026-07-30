@@ -660,8 +660,8 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
   ].join("\n");
 
   test("FIRES: the real stuck-queue condition reaches the row and names the sweep", () => {
-    // Four ticks, each scoring 2 log lines + 2 gateSkipped = 4 → 16 points over 4 ticks,
-    // past both gates (12 points, 3 ticks).
+    // Four daily ticks, each scoring 2 log lines + 2 gateSkipped = 4 → 16 points over 4 ticks,
+    // past the cadence-relative rate gate and the 3-tick spread gate.
     const dir = runTicks(STUCK_TICK, 4);
     const result = probeSweepStrain(new Map([["cron.backup", dir]]), {});
 

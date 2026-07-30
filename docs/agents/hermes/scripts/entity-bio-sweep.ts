@@ -890,9 +890,10 @@ function deliverBio(input: {
  * THE STRAIN VOCABULARY (the /status sweep-strain detector, fluncle-healthcheck.ts).
  *
  * Since #994 this sweep's stderr is captured into its cron marker and every line is scored: a
- * line containing one of `STRAIN_PHRASES` is a point, 12 points over 3+ ticks in 6h reports the
- * cron `degraded`. That makes the WORDING of these logs load-bearing, so the rule this file
- * follows is written down once, here, and pinned by tests:
+ * line containing one of `STRAIN_PHRASES` is a point, and the healthcheck applies its
+ * cadence-relative rate plus repeated-tick gates before reporting the cron `degraded`. That makes
+ * the WORDING of these logs load-bearing, so the rule this file follows is written down once,
+ * here, and pinned by tests:
  *
  *   DISTRESS (must score) — the work did not get done and nothing here will fix it:
  *     · a transport/model failure ("retrying next tick" — and note it no longer costs the entity

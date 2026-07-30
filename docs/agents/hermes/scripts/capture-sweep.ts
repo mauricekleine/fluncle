@@ -1119,10 +1119,10 @@ function probeDurationSec(filePath: string): number {
 //   • A challenge the re-roll CLEARS is recoverable friction on a healthy tick — the run
 //     moves to a fresh residential exit and usually completes. Measured over two days of box
 //     output: 610 such runs against 5,100 attempts, ~12%. At that rate a scoring line puts
-//     roughly 76 points into every 6h window against a 12-point threshold — a `degraded` that
-//     can never clear, which is worse than no signal at all. So this line carries NO strain
-//     phrase: it says "bot challenge" (a space) and never "bot-challenged" (the hyphenated
-//     STRAIN_PHRASES entry).
+//     roughly 76 noisy points into every 6h window. The detector now ignores cleared challenges
+//     entirely and applies a cadence-relative rate to the genuinely uncleared failures. So this
+//     line carries NO strain phrase: it says "bot challenge" (a space) and never
+//     "bot-challenged" (the hyphenated STRAIN_PHRASES entry).
 //   • A challenge that arrives with the run's one re-roll already SPENT is the real thing:
 //     the exit is flagged and there is nothing left to swap onto. That line KEEPS the
 //     hyphenated "bot-challenged" and scores, exactly as before.
@@ -1575,7 +1575,7 @@ async function main(): Promise<void> {
     JSON.stringify({
       batch: batch.length,
       // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's STRAIN_COUNTER_KEYS
-      // (`errors` / `failed` / `gateSkipped` / `rejected`), so publishing the number does not
+      // (`errors` / `failed` / `gateSkipped`), so publishing the number does not
       // by itself make a steady state read as strain — the same contract the log lines keep,
       // and pinned by the same tests.
       botChallenges: botChallenges.total,

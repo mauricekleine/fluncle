@@ -1018,10 +1018,14 @@ function probeCrons(claimed: Map<string, string>): Check[] {
 //     skipping the authoring spend" on a healthy no-op), which is why the entity-bio signature
 //     is the far tighter "stays queued" — the item is still in the queue, by the sweep's own
 //     words. There is deliberately no /error/i catch-all.
-//   • STRAIN_COUNTER_KEYS / STRAIN_FLAG_KEYS — fields the sweeps ALREADY put in their JSON
-//     summaries and no one reads (`failed`, `gateSkipped`, `throttled`). Exact machine counts,
-//     zero interpretation. `skipped` and `unmatched` are deliberately absent: both are ordinary
-//     outcomes here, not failures.
+//   • STRAIN_COUNTER_KEYS + the nullable `error` field — fields the sweeps ALREADY put in their
+//     JSON summaries and no one reads (`failed`, `gateSkipped`, `errors`, `error`). Exact machine
+//     counts and one explicit error value, zero interpretation. `skipped` and `unmatched` are
+//     deliberately absent: both are ordinary outcomes here, not failures.
+//
+// Designed vendor backpressure is counted separately. A sweep that says `throttled: true`
+// stopped cleanly and will resume next tick, so it stays visible on the healthy sweep-errors
+// row but can never contribute to an alarm.
 //
 // WHY IT IS ITS OWN ROW. The sweep's `{ ok }` contract stays exactly as it was, and this
 // never edits, wraps, or overrides it: `cron.capture` still reads whatever capture said about
@@ -1083,7 +1087,6 @@ export const STRAIN_PHRASES: readonly string[] = [
   "retrying",
   "stays queued",
   "stays un-triaged",
-  "throttled",
   "timed out",
   "unable to",
   "unavailable",
@@ -1095,15 +1098,10 @@ export const STRAIN_PHRASES: readonly string[] = [
  * and `unmatched`, both of which are ordinary outcomes (an already-noted finding, a capture
  * whose fingerprint did not match) rather than failures.
  */
-export const STRAIN_COUNTER_KEYS: readonly string[] = [
-  "errors",
-  "failed",
-  "gateSkipped",
-  "rejected",
-];
+export const STRAIN_COUNTER_KEYS: readonly string[] = ["errors", "failed", "gateSkipped"];
 
-/** Summary fields that FLAG a strained tick when `true`. One point each. */
-export const STRAIN_FLAG_KEYS: readonly string[] = ["throttled"];
+/** Summary fields that record designed backpressure, not failed work. One yielded tick each. */
+export const BACKPRESSURE_FLAG_KEYS: readonly string[] = ["throttled"];
 
 /** Strain points from a marker's stderr tail: one per line matching the vocabulary. */
 export function countDistressLines(stderrRegion: string): number {
@@ -1124,7 +1122,7 @@ export function countDistressLines(stderrRegion: string): number {
   return points;
 }
 
-/** Strain points from a marker's JSON summary: its own failure counters and flags. */
+/** Strain points from a marker's JSON summary: its own failure counters and error value. */
 export function countSummaryStrain(summary: Record<string, unknown> | null): number {
   if (!summary) {
     return 0;
@@ -1135,12 +1133,29 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
   for (const key of STRAIN_COUNTER_KEYS) {
     const value = summary[key];
 
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    if (Array.isArray(value)) {
+      points += value.length;
+    } else if (typeof value === "number" && Number.isFinite(value) && value > 0) {
       points += Math.floor(value);
     }
   }
 
-  for (const key of STRAIN_FLAG_KEYS) {
+  if (typeof summary.error === "string") {
+    points += 1;
+  }
+
+  return points;
+}
+
+/** Designed-backpressure ticks from a marker summary. These are observable but never strain. */
+export function countSummaryBackpressure(summary: Record<string, unknown> | null): number {
+  if (!summary) {
+    return 0;
+  }
+
+  let points = 0;
+
+  for (const key of BACKPRESSURE_FLAG_KEYS) {
     if (summary[key] === true) {
       points += 1;
     }
@@ -1150,32 +1165,43 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
 }
 
 /**
- * The strain one marker (one tick) contributes. Both halves count, and a failure that is BOTH
- * logged and counted scores twice — that is fine and deliberate: the threshold is calibrated
- * against observed totals, not against a notion of one-point-per-incident.
+ * The two signals one marker (one tick) contributes. A real failure that is BOTH logged and
+ * counted scores twice; the rate threshold is calibrated against those observed points.
+ * Designed backpressure has its own axis and cannot leak into `strain`.
  */
+export function markerSignals(body: string): { backpressure: number; strain: number } {
+  const summary = findJsonSummary(body);
+
+  return {
+    backpressure: countSummaryBackpressure(summary),
+    strain: countDistressLines(splitMarker(body).stderr) + countSummaryStrain(summary),
+  };
+}
+
 export function markerStrain(body: string): number {
-  return countDistressLines(splitMarker(body).stderr) + countSummaryStrain(findJsonSummary(body));
+  return markerSignals(body).strain;
+}
+
+export function markerBackpressure(body: string): number {
+  return markerSignals(body).backpressure;
 }
 
 // ── THE STRAIN DIAL — the ONE place these numbers are tuned. ──────────────────
 // Every threshold is env-overridable on the box, so tuning after a day of real data needs no
 // rebake: set it in the box env, restart the timer, done.
 //
-// WINDOW (6h). Long enough that a slow cron contributes several ticks; short enough that a
-// fixed condition clears the board the same morning rather than a full day later.
+// WINDOW (max(6h, 3 × cadence)). Fast crons clear a fixed condition the same morning. Daily and
+// weekly crons get exactly the three scheduled opportunities required by the repeated-tick gate;
+// no cron in AUTOMATION_CRONS is silently too slow to be judged.
 //
-// POINTS (12). The bar for "standing condition, not a bad moment". Read against the measured
-// two-day sample: the three bio crons took ~136 rejections/day between them — comfortably over.
-// A single sweep tick cannot reach it alone on batch size (the batch caps here run 4–10 items).
-//
-// The capture half of that original calibration NO LONGER APPLIES and is left out on purpose.
-// It read capture's ~305 bot-challenges/day (~76 in a 6h window) as evidence for this bar, but
-// those lines were RECOVERED friction — a challenge that re-rolls to a fresh proxy exit and then
-// succeeds is a healthy tick, and at ~12% of runs it would have held capture at `degraded`
-// forever. #996 split the wording so only an UNCLEARED challenge scores; the surviving evidence
-// for 12 is the bio sample above. See capture-sweep.ts's meter for the two spellings and why one
-// hyphen carries the distinction.
+// FAILURE RATE (25%). The point bar scales with scheduled ticks in that cron's window instead
+// of making a fast cron buy the same 12 points as a slow one. At the fleet's fastest cadence,
+// `live` gets 360 scheduled ticks in 6h and needs 90 points: 0.25 failure points/tick. At the
+// slowest cadence, `newsletter` gets three scheduled ticks in 21d; rounding makes the rate gate
+// one point (0.33/tick), while the three-distinct-error-ticks gate below makes the effective
+// minimum three points across three ticks (1.0/tick). That stricter slow-cron result is
+// deliberate: with only three observations, all three must show failed work before this
+// standing-condition row speaks.
 //
 // TICKS (3). The spread requirement, and the reason one catastrophic tick does NOT land here:
 // that case is already `judgeCron`'s (`ok:false`, or a killed run with no summary). This row
@@ -1184,16 +1210,35 @@ export function markerStrain(body: string): number {
 // The window is measured with a per-cron rolling state (hourly buckets in the prober's state
 // file) rather than by re-reading the marker dir, because cron-output.sh prunes to ~20 markers
 // — for the 1-minute `live` cron that is 20 minutes of history, far short of any useful window.
-const STRAIN_WINDOW_MS =
+const STRAIN_WINDOW_FLOOR_MS =
   Number.parseInt(process.env.HEALTHCHECK_STRAIN_WINDOW_MS ?? "", 10) || 6 * 60 * 60_000;
-const STRAIN_MIN_POINTS = Number.parseInt(process.env.HEALTHCHECK_STRAIN_POINTS ?? "", 10) || 12;
+const STRAIN_WINDOW_CADENCES = 3;
+const STRAIN_FAILURE_RATE =
+  Number.parseFloat(process.env.HEALTHCHECK_STRAIN_FAILURE_RATE ?? "") || 0.25;
 const STRAIN_MIN_TICKS = Number.parseInt(process.env.HEALTHCHECK_STRAIN_TICKS ?? "", 10) || 3;
 
-/** Bucket granularity for the rolling window — one hour keeps the state file tiny (≤7/cron). */
+/** This cron's rolling evidence window. Every known cadence can contribute three ticks. */
+export function strainWindowMs(
+  cadenceMs: number,
+  floorMs: number = STRAIN_WINDOW_FLOOR_MS,
+): number {
+  return Math.max(floorMs, cadenceMs * STRAIN_WINDOW_CADENCES);
+}
+
+/** Rate-relative point gate for the scheduled ticks in one cron's own rolling window. */
+export function strainMinimumPoints(
+  cadenceMs: number,
+  windowMs: number = strainWindowMs(cadenceMs),
+  failureRate: number = STRAIN_FAILURE_RATE,
+): number {
+  return Math.max(1, Math.ceil((windowMs / cadenceMs) * failureRate));
+}
+
+/** Bucket granularity for the rolling window. Sparse buckets keep slow-cron windows tiny too. */
 const STRAIN_BUCKET_MS = 60 * 60_000;
 
 /** One hour of accrued strain for one cron. */
-export type StrainBucket = { points: number; ticks: number };
+export type StrainBucket = { backpressure?: number; points: number; ticks: number };
 
 /**
  * What the prober remembers about one cron's strain between ticks: the hourly buckets inside
@@ -1218,9 +1263,9 @@ type StrainMap = Record<string, StrainState>;
  */
 export function foldStrain(
   prev: StrainState | undefined,
-  samples: { atMs: number; points: number }[],
+  samples: { atMs: number; backpressure?: number; points: number }[],
   now: number,
-  windowMs: number = STRAIN_WINDOW_MS,
+  windowMs: number = STRAIN_WINDOW_FLOOR_MS,
 ): StrainState {
   const buckets: Record<string, StrainBucket> = { ...prev?.buckets };
   let watermarkMs = prev?.watermarkMs ?? 0;
@@ -1228,14 +1273,19 @@ export function foldStrain(
   for (const sample of samples) {
     watermarkMs = Math.max(watermarkMs, sample.atMs);
 
-    if (sample.points <= 0) {
-      continue; // A clean tick advances the watermark and nothing else.
+    if (sample.points <= 0 && (sample.backpressure ?? 0) <= 0) {
+      continue; // An entirely clean tick advances the watermark and nothing else.
     }
 
     const key = String(Math.floor(sample.atMs / STRAIN_BUCKET_MS) * STRAIN_BUCKET_MS);
     const bucket = buckets[key] ?? { points: 0, ticks: 0 };
+    const backpressure = (bucket.backpressure ?? 0) + (sample.backpressure ?? 0);
 
-    buckets[key] = { points: bucket.points + sample.points, ticks: bucket.ticks + 1 };
+    buckets[key] = {
+      ...(backpressure > 0 ? { backpressure } : {}),
+      points: bucket.points + Math.max(0, sample.points),
+      ticks: bucket.ticks + (sample.points > 0 ? 1 : 0),
+    };
   }
 
   const cutoff = now - windowMs;
@@ -1253,8 +1303,12 @@ export function foldStrain(
 }
 
 /** A cron's totals across the buckets still inside the window. */
-export function strainTotals(state: StrainState | undefined, now: number): StrainBucket {
-  const cutoff = now - STRAIN_WINDOW_MS;
+export function strainTotals(
+  state: StrainState | undefined,
+  now: number,
+  windowMs: number = STRAIN_WINDOW_FLOOR_MS,
+): StrainBucket {
+  const cutoff = now - windowMs;
   const totals: StrainBucket = { points: 0, ticks: 0 };
 
   for (const [key, bucket] of Object.entries(state?.buckets ?? {})) {
@@ -1269,10 +1323,30 @@ export function strainTotals(state: StrainState | undefined, now: number): Strai
   return totals;
 }
 
+/** Designed-backpressure ticks across the same cron-relative rolling window. Never an alarm. */
+export function backpressureTotal(
+  state: StrainState | undefined,
+  now: number,
+  windowMs: number = STRAIN_WINDOW_FLOOR_MS,
+): number {
+  const cutoff = now - windowMs;
+  let total = 0;
+
+  for (const [key, bucket] of Object.entries(state?.buckets ?? {})) {
+    const start = Number.parseInt(key, 10);
+
+    if (Number.isFinite(start) && start + STRAIN_BUCKET_MS > cutoff) {
+      total += bucket.backpressure ?? 0;
+    }
+  }
+
+  return total;
+}
+
 /** Both gates: enough evidence, AND spread across enough separate ticks to be standing. */
 export function isStrained(
   totals: StrainBucket,
-  minPoints = STRAIN_MIN_POINTS,
+  minPoints: number,
   minTicks = STRAIN_MIN_TICKS,
 ): boolean {
   return totals.points >= minPoints && totals.ticks >= minTicks;
@@ -1283,11 +1357,17 @@ export function isStrained(
  * reporting for itself on its own row, so calling the box down would be a lie the /status
  * headline would then repeat. The operator's loud channel is the Discord line below.
  */
-export function sweepStrainCheck(strained: string[]): Check {
+export function sweepStrainCheck(strained: string[], backpressured: string[] = []): Check {
   const service = "sweep-errors";
 
   if (strained.length === 0) {
-    return { latencyMs: null, message: msg("no repeat errors"), service, status: "ok" };
+    const names = backpressured.map((id) => id.replace(/^cron\./, "")).join(", ");
+    const message =
+      backpressured.length === 0
+        ? "no repeat errors"
+        : `no repeat errors; ${backpressured.length} sweep${backpressured.length === 1 ? "" : "s"} yielded cleanly: ${names}`;
+
+    return { latencyMs: null, message: msg(message), service, status: "ok" };
   }
 
   const names = strained.map((id) => id.replace(/^cron\./, "")).join(", ");
@@ -1314,7 +1394,7 @@ export function sweepStrainCheck(strained: string[]): Check {
 function readStrainSamples(
   dir: string | undefined,
   watermarkMs: number,
-): { atMs: number; points: number }[] {
+): { atMs: number; backpressure: number; points: number }[] {
   if (!dir) {
     return [];
   }
@@ -1325,10 +1405,15 @@ function readStrainSamples(
       .map((entry) => join(dir, entry))
       .map((path) => ({ mtimeMs: statSync(path).mtimeMs, path }))
       .filter((file) => file.mtimeMs > watermarkMs)
-      .map((file) => ({
-        atMs: file.mtimeMs,
-        points: markerStrain(readFileSync(file.path, "utf8")),
-      }));
+      .map((file) => {
+        const signals = markerSignals(readFileSync(file.path, "utf8"));
+
+        return {
+          atMs: file.mtimeMs,
+          backpressure: signals.backpressure,
+          points: signals.strain,
+        };
+      });
   } catch {
     return []; // An unreadable dir is judgeCron's problem to report, never a strain alarm.
   }
@@ -1343,17 +1428,33 @@ export function probeSweepStrain(
   claimed: Map<string, string>,
   prev: StrainMap,
   now = Date.now(),
-): { check: Check; cleared: string[]; newly: string[]; next: StrainMap; strained: string[] } {
+): {
+  backpressured: string[];
+  check: Check;
+  cleared: string[];
+  newly: string[];
+  next: StrainMap;
+  strained: string[];
+} {
   const next: StrainMap = {};
   const strained: string[] = [];
+  const backpressured: string[] = [];
   const newly: string[] = [];
   const cleared: string[] = [];
 
   for (const cron of AUTOMATION_CRONS) {
     const before = prev[cron.service];
     const samples = readStrainSamples(claimed.get(cron.service), before?.watermarkMs ?? 0);
-    const state = foldStrain(before, samples, now);
-    const nowStrained = isStrained(strainTotals(state, now));
+    const windowMs = strainWindowMs(cron.cadenceMs);
+    const state = foldStrain(before, samples, now, windowMs);
+    const nowStrained = isStrained(
+      strainTotals(state, now, windowMs),
+      strainMinimumPoints(cron.cadenceMs, windowMs),
+    );
+
+    if (backpressureTotal(state, now, windowMs) > 0) {
+      backpressured.push(cron.service);
+    }
 
     if (nowStrained) {
       strained.push(cron.service);
@@ -1368,7 +1469,14 @@ export function probeSweepStrain(
     next[cron.service] = { ...state, strained: nowStrained };
   }
 
-  return { check: sweepStrainCheck(strained), cleared, newly, next, strained };
+  return {
+    backpressured,
+    check: sweepStrainCheck(strained, backpressured),
+    cleared,
+    newly,
+    next,
+    strained,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1581,7 +1689,13 @@ export function normalizeStrain(parsed: unknown): StrainMap {
 
         const shape = bucket as Record<string, unknown>;
 
-        buckets[key] = { points: asCount(shape.points), ticks: asCount(shape.ticks) };
+        const backpressure = asCount(shape.backpressure);
+
+        buckets[key] = {
+          ...(backpressure > 0 ? { backpressure } : {}),
+          points: asCount(shape.points),
+          ticks: asCount(shape.ticks),
+        };
       }
     }
 
@@ -1843,9 +1957,10 @@ export function buildEscalationAlert(
  *
  * EDGE-TRIGGERED, exactly like `buildAlert`: it speaks when a sweep ENTERS the condition and
  * when it LEAVES, never on the ticks in between. There is no escalation ladder here on
- * purpose — the window itself is 6 hours, so "still strained" is the default state of a real
- * condition and a per-tick reminder would be the noise this detector exists to avoid. The
- * standing visibility is the /status row, which stays degraded for as long as it is true.
+ * purpose — each window spans at least three of that cron's own cadences, so "still strained"
+ * is the default state of a real condition and a per-tick reminder would be the noise this
+ * detector exists to avoid. The standing visibility is the /status row, which stays degraded
+ * for as long as it is true.
  */
 export function buildStrainAlert(newly: string[], cleared: string[]): string | null {
   if (newly.length === 0 && cleared.length === 0) {
@@ -2062,6 +2177,8 @@ async function main(): Promise<void> {
   const summary = {
     alerted: alert !== null || escalationAlert !== null || strainAlert !== null,
     at,
+    // Designed backpressure stays visible without joining `strained` or changing any status.
+    backpressured: sweepStrain.backpressured,
     down: withTransition.filter((c) => c.status === "down").map((c) => c.service),
     // The services that crossed an escalation rung this tick, with the streak that did it —
     // so a forensic read of the markers can see WHEN a sustained outage was escalated.
