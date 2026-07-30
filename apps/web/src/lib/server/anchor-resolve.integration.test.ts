@@ -23,7 +23,19 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 vi.mock("./listenbrainz", () => ({
-  lookupSpotifyIdsByMbid: (...args: unknown[]) => lookupSpotifyIdsByMbid(...args),
+  lookupSpotifyIdsByMbid: async (...args: unknown[]) => {
+    const result = await lookupSpotifyIdsByMbid(...args);
+
+    if (result === null) {
+      return { outcome: "no-map" };
+    }
+
+    if (typeof result === "object" && result !== null && "outcome" in result) {
+      return result;
+    }
+
+    return { match: result, outcome: "match" };
+  },
 }));
 
 vi.mock("./spotify", async (importOriginal) => {
@@ -138,6 +150,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "isrc",
@@ -187,6 +200,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "search",
@@ -231,6 +245,7 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "gate-rejected",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -254,6 +269,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-mbid",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -275,12 +291,41 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-map",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
     });
     expect(fetchTrackMetadata).not.toHaveBeenCalled();
     expect((await anchorState("mb_lbmiss")).attempted).toBeNull();
+  });
+
+  it("reports a mapped ListenBrainz row whose Spotify id list is empty", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({ mbid: "mbid-empty", trackId: "mb_lbempty" });
+    lookupSpotifyIdsByMbid.mockResolvedValue({ outcome: "empty-ids" });
+
+    const result = await resolveAnchorFree("mb_lbempty");
+
+    expect(result.listenbrainzOutcome).toBe("empty-ids");
+    expect(result.anchored).toBe(false);
+    expect(fetchTrackMetadata).not.toHaveBeenCalled();
+    expect((await anchorState("mb_lbempty")).attempted).toBeNull();
+  });
+
+  it("reports a ListenBrainz request/response failure separately from a clean no-map", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({ mbid: "mbid-failed", trackId: "mb_lbfailed" });
+    lookupSpotifyIdsByMbid.mockResolvedValue({ outcome: "request-threw" });
+
+    const result = await resolveAnchorFree("mb_lbfailed");
+
+    expect(result.listenbrainzOutcome).toBe("request-failed");
+    expect(result.anchored).toBe(false);
+    expect(fetchTrackMetadata).not.toHaveBeenCalled();
+    expect((await anchorState("mb_lbfailed")).attempted).toBeNull();
   });
 
   it("returns a clean miss (never throws, never stamps) when the Spotify read fails", async () => {
@@ -301,6 +346,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "metadata-failed",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -328,6 +374,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       anchored: false,
       apifyEnabled: false,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-mbid",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -354,6 +401,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-mbid",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -384,6 +432,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       anchored: true,
       apifyEnabled: false,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "isrc",
@@ -434,6 +483,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: true,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "isrc",
@@ -468,6 +518,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-map",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -534,6 +585,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "search",

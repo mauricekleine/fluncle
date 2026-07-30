@@ -649,6 +649,17 @@ export async function anchorTrack(
 /** Which rung of the free (non-Apify) resolver waterfall anchored a row, or `null` on a full miss. */
 export type AnchorResolveSource = "listenbrainz" | "spotify-isrc" | "spotify-search";
 
+/** The ListenBrainz rung's exact terminal outcome for this row. */
+export type ListenBrainzAnchorOutcome =
+  | "anchored"
+  | "empty-ids"
+  | "gate-rejected"
+  | "metadata-failed"
+  | "no-map"
+  | "no-mbid"
+  | "not-attempted"
+  | "request-failed";
+
 /**
  * The `resolve_anchor` outcome. `source` names the rung that anchored (or `null` on a miss), so the
  * box sweep can tally per-rung. `spotifySearchDone` is TRUE iff this call issued at least one Spotify
@@ -671,6 +682,7 @@ export type AnchorResolveResult = {
   anchored: boolean;
   apifyEnabled: boolean;
   isrcRecoveredByDeezer: boolean;
+  listenbrainzOutcome: ListenBrainzAnchorOutcome;
   source: AnchorResolveSource | null;
   spotifySearchDone: boolean;
   verifiedBy: AnchorGateVerification;
@@ -680,63 +692,100 @@ export type AnchorResolveResult = {
  * The free-rung outcome BEFORE the Deezer-recovery + Apify-flag fields are folded in by
  * `resolveAnchorFree` (the Spotify-search rungs never learn of Deezer or the Apify flag).
  */
-type FreeResolveOutcome = Omit<AnchorResolveResult, "apifyEnabled" | "isrcRecoveredByDeezer">;
+type FreeResolveOutcome = Omit<
+  AnchorResolveResult,
+  "apifyEnabled" | "isrcRecoveredByDeezer" | "listenbrainzOutcome"
+>;
 
 /** Fetch a Spotify track's metadata and shape it into a verifiable candidate — best-effort. */
 async function metadataCandidate(spotifyTrackId: string): Promise<AnchorCandidate | undefined> {
-  let metadata;
-
   try {
-    metadata = await fetchTrackMetadata(spotifyTrackId);
+    const metadata = await fetchTrackMetadata(spotifyTrackId);
+
+    return {
+      albumImageUrl: metadata.albumImageUrl ?? null,
+      artists: metadata.artists.map((name, index) => ({
+        id: metadata.spotifyArtistIds[index] ?? null,
+        name,
+      })),
+      durationMs: metadata.durationMs,
+      isrc: metadata.isrc ?? null,
+      spotifyTrackId,
+      title: metadata.title,
+    };
   } catch (error) {
     logEvent("warn", "anchor.metadata-fetch-failed", { error, spotifyTrackId });
 
     return undefined;
   }
-
-  return {
-    albumImageUrl: metadata.albumImageUrl ?? null,
-    artists: metadata.artists.map((name, index) => ({
-      id: metadata.spotifyArtistIds[index] ?? null,
-      name,
-    })),
-    durationMs: metadata.durationMs,
-    isrc: metadata.isrc ?? null,
-    spotifyTrackId,
-    title: metadata.title,
-  };
 }
+
+type ListenBrainzResolveResult =
+  | {
+      outcome: "anchored";
+      verifiedBy: Exclude<AnchorGateVerification, null>;
+    }
+  | {
+      outcome: Exclude<ListenBrainzAnchorOutcome, "anchored" | "not-attempted">;
+    };
 
 /**
  * THE FREE LISTENBRAINZ RUNG. Given the row's MusicBrainz recording MBID, ListenBrainz labs returns
  * the Spotify track ids for that exact recording (free, no auth). The FIRST id's metadata is fetched
  * with ONE `GET /v1/tracks/{id}` — a cheap by-id read, NEVER a search — and that single candidate runs
- * the SAME `anchorTrack` gate. Returns `null` on any pre-verify miss (no MBID, no mapping, a metadata
- * read that threw); otherwise the gate's verdict. Anchors with `stampOnMiss: false` so a miss leaves
- * the row for the later rungs. The `AnchorTrackError` rails propagate (the caller maps them to status).
+ * the SAME `anchorTrack` gate. Every outcome stays distinct (`no-mbid`, `no-map`, `empty-ids`,
+ * `request-failed`, `metadata-failed`, `gate-rejected`, or `anchored`) so the box can measure where
+ * candidates die. Anchors with `stampOnMiss: false` so a miss leaves the row for the later rungs. The
+ * `AnchorTrackError` rails propagate (the caller maps them to status).
  */
 async function resolveViaListenBrainz(
   trackId: string,
   mbid: null | string,
-): Promise<{ anchored: boolean; verifiedBy: AnchorGateVerification } | null> {
-  if (!mbid) {
-    return null;
+): Promise<ListenBrainzResolveResult> {
+  if (!mbid?.trim()) {
+    return { outcome: "no-mbid" };
   }
 
-  const match = await lookupSpotifyIdsByMbid(mbid);
-  const spotifyTrackId = match?.spotifyTrackIds[0];
+  const lookup = await lookupSpotifyIdsByMbid(mbid);
+
+  if (lookup.outcome !== "match") {
+    if (lookup.outcome === "no-map") {
+      return { outcome: "no-map" };
+    }
+
+    if (lookup.outcome === "empty-ids") {
+      return { outcome: "empty-ids" };
+    }
+
+    if (lookup.outcome === "invalid-mbid") {
+      return { outcome: "no-mbid" };
+    }
+
+    return { outcome: "request-failed" };
+  }
+
+  const spotifyTrackId = lookup.match.spotifyTrackIds[0];
 
   if (!spotifyTrackId) {
-    return null;
+    return { outcome: "empty-ids" };
   }
 
   const candidate = await metadataCandidate(spotifyTrackId);
 
   if (!candidate) {
-    return null;
+    return { outcome: "metadata-failed" };
   }
 
-  return anchorTrack(trackId, [candidate], { source: "listenbrainz", stampOnMiss: false });
+  const verdict = await anchorTrack(trackId, [candidate], {
+    source: "listenbrainz",
+    stampOnMiss: false,
+  });
+
+  if (!verdict.anchored || verdict.verifiedBy === null) {
+    return { outcome: "gate-rejected" };
+  }
+
+  return { outcome: "anchored", verifiedBy: verdict.verifiedBy };
 }
 
 /**
@@ -1051,9 +1100,10 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
  * The read is reported as `apifyEnabled` so the box can skip the whole Apify actor loop for the tick.
  *
  * Best-effort throughout — a missing MBID, a Deezer outage, a ListenBrainz miss, a throttle, or a
- * Spotify read that throws all resolve to a clean miss. The `AnchorTrackError` rails (not_found /
- * certified / already_anchored) still propagate, so the op maps them to the same honest status the
- * Apify path does. `now` is injected for deterministic tests.
+ * Spotify read that throws all fall through to the later rungs without stamping, but the
+ * `listenbrainzOutcome` field keeps those cases distinguishable. The `AnchorTrackError` rails
+ * (not_found / certified / already_anchored) still propagate, so the op maps them to the same honest
+ * status the Apify path does. `now` is injected for deterministic tests.
  *
  * `options.deezerCandidates` are the Deezer hits the BOX fetched for this row from its own IP (see
  * `recoverIsrcViaDeezer` — only the fetch moved; the gate and the write did not). Present ⇒ rung 0
@@ -1089,6 +1139,7 @@ export async function resolveAnchorFree(
       anchored: false,
       apifyEnabled,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "not-attempted",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -1125,12 +1176,13 @@ export async function resolveAnchorFree(
   // RUNG 1 — the FREE ListenBrainz rung.
   const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id);
 
-  if (listenbrainz?.anchored) {
+  if (listenbrainz.outcome === "anchored") {
     // A HIT already wrote the anchor + stamped the attempt — never re-stamp, regardless of the flag.
     return {
       anchored: true,
       apifyEnabled,
       isrcRecoveredByDeezer,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: listenbrainz.verifiedBy,
@@ -1151,6 +1203,7 @@ export async function resolveAnchorFree(
       anchored: false,
       apifyEnabled,
       isrcRecoveredByDeezer,
+      listenbrainzOutcome: listenbrainz.outcome,
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -1167,7 +1220,12 @@ export async function resolveAnchorFree(
     await stampAnchorAttempt(db, trackId, now);
   }
 
-  return { ...searchOutcome, apifyEnabled, isrcRecoveredByDeezer };
+  return {
+    ...searchOutcome,
+    apifyEnabled,
+    isrcRecoveredByDeezer,
+    listenbrainzOutcome: listenbrainz.outcome,
+  };
 }
 
 // ── THE ANCHOR REVIEW: a miss the operator can read ──────────────────────────────────────────

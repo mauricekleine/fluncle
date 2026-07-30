@@ -2,10 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 
-// The ListenBrainz labs client is a pure network→shape mapper that must NEVER throw — every
-// unhappy path (a bad MBID, an empty map, a non-2xx, a malformed body, a thrown fetch) resolves to
-// `null`, because to the anchor waterfall they are all the same answer: "no free candidate, try
-// Apify". These pin that contract against the real response shape (verified live 2026-07-21).
+// The ListenBrainz labs client is a pure network→shape mapper that must NEVER throw. Every unhappy
+// path remains a fall-through to Apify, but its discriminator is the evidence the anchor summary
+// needs to tell "ListenBrainz had nothing" apart from "the free rung itself failed".
 
 // One entry of the labs response, in the exact shape the endpoint returns — note it carries NO ISRC
 // and NO duration, which is why an id it returns is only a CANDIDATE the caller must verify.
@@ -31,10 +30,13 @@ describe("lookupSpotifyIdsByMbid", () => {
     const match = await lookupSpotifyIdsByMbid("8f3471b5-7e6a-48da-86a9-c1c07a0f47ae");
 
     expect(match).toEqual({
-      artistName: "Rick Astley",
-      recordingMbid: "8f3471b5-7e6a-48da-86a9-c1c07a0f47ae",
-      spotifyTrackIds: ["6bnZlZvEmocCLdp0622Idi", "0y8ngXGlfJ8kLa8h1d2MPr"],
-      trackName: "Never Gonna Give You Up",
+      match: {
+        artistName: "Rick Astley",
+        recordingMbid: "8f3471b5-7e6a-48da-86a9-c1c07a0f47ae",
+        spotifyTrackIds: ["6bnZlZvEmocCLdp0622Idi", "0y8ngXGlfJ8kLa8h1d2MPr"],
+        trackName: "Never Gonna Give You Up",
+      },
+      outcome: "match",
     });
 
     // It POSTs the identified User-Agent + the single-MBID body to the `/json` endpoint.
@@ -49,19 +51,21 @@ describe("lookupSpotifyIdsByMbid", () => {
     ]);
   });
 
-  it("returns null for a clean miss (the endpoint answers [])", async () => {
+  it("distinguishes a clean no-map (the endpoint answers [])", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json([])));
 
-    expect(await lookupSpotifyIdsByMbid("00000000-0000-0000-0000-000000000000")).toBeNull();
+    expect(await lookupSpotifyIdsByMbid("00000000-0000-0000-0000-000000000000")).toEqual({
+      outcome: "no-map",
+    });
   });
 
-  it("returns null when the entry carries an empty spotify_track_ids list", async () => {
+  it("distinguishes a mapped entry whose spotify_track_ids list is empty", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(Response.json([{ recording_mbid: "abc", spotify_track_ids: [] }])),
     );
 
-    expect(await lookupSpotifyIdsByMbid("abc")).toBeNull();
+    expect(await lookupSpotifyIdsByMbid("abc")).toEqual({ outcome: "empty-ids" });
   });
 
   it("trims + drops blank/non-string ids, keeping only real ones", async () => {
@@ -74,32 +78,41 @@ describe("lookupSpotifyIdsByMbid", () => {
         ),
     );
 
-    expect((await lookupSpotifyIdsByMbid("abc"))?.spotifyTrackIds).toEqual(["keep"]);
+    expect(await lookupSpotifyIdsByMbid("abc")).toMatchObject({
+      match: { spotifyTrackIds: ["keep"] },
+      outcome: "match",
+    });
   });
 
-  it("returns null for a malformed body (not the expected array)", async () => {
+  it("distinguishes valid JSON with a non-array body", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ oops: true })));
 
-    expect(await lookupSpotifyIdsByMbid("abc")).toBeNull();
+    expect(await lookupSpotifyIdsByMbid("abc")).toEqual({ outcome: "non-array-body" });
   });
 
-  it("returns null on a non-2xx response (never throws)", async () => {
+  it("distinguishes a non-2xx response (never throws)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 500 })));
 
-    expect(await lookupSpotifyIdsByMbid("abc")).toBeNull();
+    expect(await lookupSpotifyIdsByMbid("abc")).toEqual({ outcome: "request-failed" });
   });
 
-  it("returns null when fetch itself throws (a network error / a timeout abort)", async () => {
+  it("distinguishes fetch throwing (a network error / a timeout abort)", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 
-    expect(await lookupSpotifyIdsByMbid("abc")).toBeNull();
+    expect(await lookupSpotifyIdsByMbid("abc")).toEqual({ outcome: "request-threw" });
   });
 
-  it("returns null for a blank MBID without touching the network", async () => {
+  it("distinguishes malformed JSON from the other response failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>", { status: 200 })));
+
+    expect(await lookupSpotifyIdsByMbid("abc")).toEqual({ outcome: "malformed-body" });
+  });
+
+  it("distinguishes a blank MBID without touching the network", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    expect(await lookupSpotifyIdsByMbid("   ")).toBeNull();
+    expect(await lookupSpotifyIdsByMbid("   ")).toEqual({ outcome: "invalid-mbid" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

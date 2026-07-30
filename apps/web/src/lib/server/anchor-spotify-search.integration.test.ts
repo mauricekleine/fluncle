@@ -27,7 +27,19 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 vi.mock("./listenbrainz", () => ({
-  lookupSpotifyIdsByMbid: (...args: unknown[]) => lookupSpotifyIdsByMbid(...args),
+  lookupSpotifyIdsByMbid: async (...args: unknown[]) => {
+    const result = await lookupSpotifyIdsByMbid(...args);
+
+    if (result === null) {
+      return { outcome: "no-map" };
+    }
+
+    if (typeof result === "object" && result !== null && "outcome" in result) {
+      return result;
+    }
+
+    return { match: result, outcome: "match" };
+  },
 }));
 
 vi.mock("./spotify", async (importOriginal) => {
@@ -150,6 +162,7 @@ describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-map",
       source: null,
       spotifySearchDone: false,
       verifiedBy: null,
@@ -208,6 +221,7 @@ describe("resolveAnchorFree — the Spotify ISRC rung (flag on, outside the wind
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-map",
       source: "spotify-isrc",
       spotifySearchDone: true,
       verifiedBy: "isrc",
@@ -256,6 +270,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-map",
       source: "spotify-search",
       spotifySearchDone: true,
       verifiedBy: "search",
@@ -311,6 +326,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
       anchored: false,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "no-map",
       source: null,
       spotifySearchDone: true,
       verifiedBy: null,
@@ -345,6 +361,7 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
       anchored: true,
       apifyEnabled: true,
       isrcRecoveredByDeezer: false,
+      listenbrainzOutcome: "anchored",
       source: "listenbrainz",
       spotifySearchDone: false,
       verifiedBy: "isrc",

@@ -965,6 +965,17 @@ export const resolveAnchor = oc
       apifyEnabled: z.boolean(),
       /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
       isrcRecoveredByDeezer: z.boolean(),
+      /** The ListenBrainz rung's exact terminal outcome, preserved so the box can count where candidates die. */
+      listenbrainzOutcome: z.enum([
+        "anchored",
+        "empty-ids",
+        "gate-rejected",
+        "metadata-failed",
+        "no-map",
+        "no-mbid",
+        "not-attempted",
+        "request-failed",
+      ]),
       ok: z.literal(true),
       /** Which rung anchored, or null on a miss. `spotify-*` only ever when the dark flag is on. */
       source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),

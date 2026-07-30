@@ -59,9 +59,10 @@
 // new timer: the free rung rides the same agent token, base URL, and host timer as the Apify rung.
 //
 // COST. ~$0.005 per Apify result item → ~$0.015/row at searchKeywordLimit 3 — but ONLY on the rows
-// the free rung misses. ListenBrainz is free, so the ~30% of rows it resolves cost nothing (bar one
-// cheap by-id Spotify read each, no search), cutting the Apify bill by roughly a third. Pause = stop
-// the timer. Attended burn = `--limit N`. Full cost math: ../anchor-timer/README.md.
+// the free rung misses. A 2026-07-30 sample of 20 REAL anchor-worklist MBIDs found 11 mapping rows and
+// 4 non-empty Spotify id lists: ~20% carried a free candidate. The realised anchor rate is measured,
+// never assumed, by the per-outcome `lb*` counters below. Pause = stop the timer. Attended burn =
+// `--limit N`. Full cost math: ../anchor-timer/README.md.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -90,6 +91,9 @@ const APIFY_QUERY_CHUNK = Number(process.env.FLUNCLE_ANCHOR_APIFY_CHUNK ?? "15")
 
 /** The actor's per-query candidate cap — the pilot-verified value; more candidates = more spend. */
 const SEARCH_KEYWORD_LIMIT = Number(process.env.FLUNCLE_ANCHOR_KEYWORD_LIMIT ?? "3");
+
+/** This host timer runs hourly. Emitted so the run ledger judges freshness against the real cadence. */
+const ANCHOR_EXPECTED_INTERVAL_MS = 60 * 60 * 1000;
 
 const log = (message: string) => console.error(`[anchor-sweep] ${message}`);
 
@@ -170,6 +174,16 @@ export type AnchorVerdict = {
   apifyEnabled?: boolean;
   /** True iff `resolve_anchor` recovered a verified ISRC from Deezer into an ISRC-less row this call. */
   isrcRecoveredByDeezer?: boolean;
+  /** The free ListenBrainz rung's terminal outcome — optional only for an older server during rollout. */
+  listenbrainzOutcome?:
+    | "anchored"
+    | "empty-ids"
+    | "gate-rejected"
+    | "metadata-failed"
+    | "no-map"
+    | "no-mbid"
+    | "not-attempted"
+    | "request-failed";
   /** Which free rung anchored (`resolve_anchor` only) — drives the per-rung tally. Null on the Apify path. */
   source?: "listenbrainz" | "spotify-isrc" | "spotify-search" | null;
   /** True iff `resolve_anchor` issued a Spotify SEARCH this call — the box's pacer signal (slice 2). */
@@ -177,8 +191,16 @@ export type AnchorVerdict = {
   verifiedBy: "isrc" | "search" | null;
 };
 
+/** One counted worklist read: the page itself plus the real whole-queue depth before the page runs. */
+export type AnchorQueuePage = {
+  queueDepth: number;
+  rows: AnchorWorkItem[];
+};
+
 /** One tick's honest tally — the JSON summary line. */
 export type AnchorSummary = {
+  /** Failed Apify actor CHUNKS — the paid rung's failure denominator, never last-write-wins. */
+  apifyActorErrors: number;
   /** Rows anchored by the Apify FALLBACK via the exact-ISRC gate. */
   anchoredByIsrc: number;
   /** Rows anchored by the FREE ListenBrainz rung — the waterfall's cheapest win (no Apify spent). */
@@ -189,6 +211,8 @@ export type AnchorSummary = {
   anchoredBySpotifyIsrc: number;
   /** Rows anchored by the DARK Spotify fuzzy-search rung (slice 2 — free of Apify, flag-gated). */
   anchoredBySpotifySearch: number;
+  /** Canonical run-ledger denominator: worklist rows this tick actually inspected. */
+  checked: number;
   /**
    * Rows whose BOX-SIDE Deezer search failed outright — a network error, a non-2xx, a malformed body,
    * or a quota answer that outlasted the retries. Reported because the fetch now lives HERE: the
@@ -197,7 +221,12 @@ export type AnchorSummary = {
    * of. Those rows resolve normally, just unhelped (no ISRC recovered).
    */
   deezerSearchFailed: number;
+  /** The first failure message for diagnosis; `errors` is the permanent, lossless count. */
   error: null | string;
+  /** Canonical run-ledger failure count across every rung and write edge. */
+  errors: number;
+  /** The timer's real hourly cadence, for run-ledger freshness. */
+  expectedIntervalMs: number;
   /**
    * Free-rung (`resolve_anchor`) calls that THREW. Counted UNCONDITIONALLY, because it is the tell
    * that a rung is broken: with Apify enabled these rows fall silently through to the paid fallback
@@ -207,16 +236,34 @@ export type AnchorSummary = {
   freeRungErrors: number;
   /** Rows whose ISRC was recovered from Deezer's free oracle before anchoring (the recovery rate). */
   isrcRecoveredByDeezer: number;
+  /** ListenBrainz returned a mapped row, but its Spotify id list had no usable ids. */
+  lbEmptyIds: number;
+  /** ListenBrainz supplied a Spotify candidate that the shared identity gate rejected. */
+  lbGateRejected: number;
+  /** ListenBrainz supplied a candidate, but the required Spotify by-id metadata read failed. */
+  lbMetadataFailed: number;
+  /** The row had no usable recording MBID, so the ListenBrainz request was not made. */
+  lbNoMbid: number;
+  /** ListenBrainz had no mapping row for the recording MBID. */
+  lbNoMap: number;
+  /** The ListenBrainz rung could not run because the track itself was not available to resolve. */
+  lbNotAttempted: number;
+  /** ListenBrainz request/response failures (throw, non-2xx, malformed JSON, or non-array body). */
+  lbRequestFailed: number;
   /** Rows that verified nothing on ANY rung (a clean full miss — stamped, backed off). */
   missed: number;
   ok: boolean;
+  /** Canonical run-ledger numerator: rows whose Spotify anchor was actually written. */
+  produced: number;
+  /** Canonical real backlog left after this tick; null only when the queue read itself failed. */
+  queueDepth: null | number;
   /** Rows this tick could not settle (a bad worklist row, or an anchor POST that threw). */
   skipped: number;
 };
 
 /** The injected effects — so the tick's mapping + routing are provable with stubs (no network). */
 export type AnchorDeps = {
-  fetchQueue: (limit: number) => Promise<AnchorWorkItem[]>;
+  fetchQueue: (limit: number) => Promise<AnchorQueuePage | AnchorWorkItem[]>;
   log: (message: string) => void;
   /** A monotonic clock (ms). Injected so the Spotify-search pacer is deterministic in tests. */
   now: () => number;
@@ -240,6 +287,54 @@ export type AnchorDeps = {
   /** Pause for `ms`. Injected so the Spotify-search pacer can be driven by a fake clock in tests. */
   sleep: (ms: number) => Promise<void>;
 };
+
+/** Count a failure without letting a later one overwrite the first useful diagnostic. */
+function recordError(summary: AnchorSummary, message?: string): void {
+  summary.errors += 1;
+
+  if (summary.error === null && message) {
+    summary.error = message;
+  }
+}
+
+/** One anchored or conclusively missed row has left the derived worklist. */
+function settleQueueRow(summary: AnchorSummary): void {
+  if (summary.queueDepth !== null && summary.queueDepth > 0) {
+    summary.queueDepth -= 1;
+  }
+}
+
+/** Preserve the server's per-row ListenBrainz outcome as tick-level counters. */
+function tallyListenBrainzOutcome(summary: AnchorSummary, verdict: AnchorVerdict): void {
+  switch (verdict.listenbrainzOutcome) {
+    case "empty-ids":
+      summary.lbEmptyIds += 1;
+      break;
+    case "gate-rejected":
+      summary.lbGateRejected += 1;
+      break;
+    case "metadata-failed":
+      summary.lbMetadataFailed += 1;
+      recordError(summary);
+      break;
+    case "no-mbid":
+      summary.lbNoMbid += 1;
+      break;
+    case "no-map":
+      summary.lbNoMap += 1;
+      break;
+    case "not-attempted":
+      summary.lbNotAttempted += 1;
+      break;
+    case "request-failed":
+      summary.lbRequestFailed += 1;
+      recordError(summary);
+      break;
+    case "anchored":
+    case undefined:
+      break;
+  }
+}
 
 /**
  * THE 60/min SPOTIFY-SEARCH CEILING (slice 2). The dark Spotify search rungs share the ONE official
@@ -350,29 +445,49 @@ export function groupCandidatesByTarget(
 
 // ── One tick, with injected effects ──────────────────────────────────────────
 
-export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<AnchorSummary> {
+export async function runAnchorTick(
+  limit: number,
+  deps: AnchorDeps,
+  actorChunkSize: number = APIFY_QUERY_CHUNK,
+): Promise<AnchorSummary> {
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
     anchoredByListenbrainz: 0,
     anchoredBySearch: 0,
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
+    apifyActorErrors: 0,
+    checked: 0,
     deezerSearchFailed: 0,
     error: null,
+    errors: 0,
+    expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
     freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
+    lbEmptyIds: 0,
+    lbGateRejected: 0,
+    lbMetadataFailed: 0,
+    lbNoMap: 0,
+    lbNoMbid: 0,
+    lbNotAttempted: 0,
+    lbRequestFailed: 0,
     missed: 0,
     ok: true,
+    produced: 0,
+    queueDepth: null,
     skipped: 0,
   };
 
   let queue: AnchorWorkItem[];
 
   try {
-    queue = await deps.fetchQueue(limit);
+    const fetched = await deps.fetchQueue(limit);
+    queue = Array.isArray(fetched) ? fetched : fetched.rows;
+    summary.queueDepth = Array.isArray(fetched) ? fetched.length : fetched.queueDepth;
+    summary.checked = queue.length;
   } catch (error) {
     summary.ok = false;
-    summary.error = error instanceof Error ? error.message : String(error);
+    recordError(summary, error instanceof Error ? error.message : String(error));
 
     return summary;
   }
@@ -382,7 +497,9 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
     (row): row is AnchorWorkItem & { anchorQuery: string; trackId: string } =>
       Boolean(row.trackId) && Boolean(row.anchorQuery),
   );
-  summary.skipped += queue.length - rows.length;
+  const invalidRows = queue.length - rows.length;
+  summary.skipped += invalidRows;
+  summary.errors += invalidRows;
 
   if (rows.length === 0) {
     return summary;
@@ -427,6 +544,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
       if (hits === null) {
         summary.deezerSearchFailed += 1;
+        recordError(summary);
       }
 
       deezerCandidates = hits ?? [];
@@ -458,6 +576,8 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
         summary.isrcRecoveredByDeezer += 1;
       }
 
+      tallyListenBrainzOutcome(summary, verdict);
+
       if (verdict.anchored) {
         if (verdict.source === "spotify-isrc") {
           summary.anchoredBySpotifyIsrc += 1;
@@ -468,6 +588,8 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
           summary.anchoredByListenbrainz += 1;
         }
 
+        summary.produced += 1;
+        settleQueueRow(summary);
         continue;
       }
     } catch (error) {
@@ -476,6 +598,7 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
       );
       freeRungThrew += 1;
       summary.freeRungErrors += 1;
+      recordError(summary, error instanceof Error ? error.message : String(error));
     }
 
     apifyRows.push(row);
@@ -492,15 +615,20 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
   // stamped misses HONESTLY as `missed` (terminal, backed off), not skipped-for-retry. Rows whose free
   // rung THREW got no verdict and no stamp, so they stay `skipped` (they retry next tick).
   if (!apifyEnabled) {
-    summary.missed += apifyRows.length - freeRungThrew;
+    const settledMisses = apifyRows.length - freeRungThrew;
+    summary.missed += settledMisses;
     summary.skipped += freeRungThrew;
+
+    for (let index = 0; index < settledMisses; index += 1) {
+      settleQueueRow(summary);
+    }
 
     return summary;
   }
 
   // ── RUNG 2: THE APIFY FALLBACK, over the free-rung misses only. Run the actor in bounded chunks so
   // a big `--limit` burn never one-shots a giant run-sync call.
-  for (const batch of chunk(apifyRows, APIFY_QUERY_CHUNK)) {
+  for (const batch of chunk(apifyRows, actorChunkSize)) {
     let byTarget: Map<string, AnchorCandidatePayload[]>;
 
     try {
@@ -510,7 +638,8 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
       // (the worklist is derived + the un-attempted rows carry no stamp, so nothing is lost).
       deps.log(`actor run failed: ${error instanceof Error ? error.message : String(error)}`);
       summary.ok = false;
-      summary.error = error instanceof Error ? error.message : String(error);
+      summary.apifyActorErrors += 1;
+      recordError(summary, error instanceof Error ? error.message : String(error));
       summary.skipped += batch.length;
       continue;
     }
@@ -523,15 +652,21 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
         if (verdict.anchored && verdict.verifiedBy === "isrc") {
           summary.anchoredByIsrc += 1;
+          summary.produced += 1;
+          settleQueueRow(summary);
         } else if (verdict.anchored) {
           summary.anchoredBySearch += 1;
+          summary.produced += 1;
+          settleQueueRow(summary);
         } else {
           summary.missed += 1;
+          settleQueueRow(summary);
         }
       } catch (error) {
         // One row's anchor POST failing never aborts the tick (the capture-sweep discipline).
         deps.log(`${row.trackId}: ${error instanceof Error ? error.message : String(error)}`);
         summary.skipped += 1;
+        recordError(summary, error instanceof Error ? error.message : String(error));
       }
     }
   }
@@ -541,13 +676,13 @@ export async function runAnchorTick(limit: number, deps: AnchorDeps): Promise<An
 
 // ── The real (box-side) effects ───────────────────────────────────────────────
 
-async function fetchAnchorQueue(limit: number): Promise<AnchorWorkItem[]> {
+async function fetchAnchorQueue(limit: number): Promise<AnchorQueuePage> {
   // ONE bounded retry: the queue read sees a transient non-OK (a rolling Worker deploy
   // window) every few hours; without the retry a lone blip exits the tick 1 and fires a
   // Discord alert the on-failure restart then self-heals — pure noise. A PERSISTENT
   // failure still throws (and alerts) on the second miss.
   const attempt = () =>
-    fetch(`${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}`, {
+    fetch(`${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}&count=true`, {
       headers: { Authorization: `Bearer ${API_TOKEN}` },
       signal: AbortSignal.timeout(30_000),
     });
@@ -564,12 +699,24 @@ async function fetchAnchorQueue(limit: number): Promise<AnchorWorkItem[]> {
     );
   }
 
-  const body = (await res.json()) as { tracks?: AnchorWorkItem[] };
+  const body = (await res.json()) as { queued?: unknown; tracks?: unknown };
 
-  return Array.isArray(body.tracks) ? body.tracks : [];
+  if (!Array.isArray(body.tracks)) {
+    throw new Error("anchor queue read returned a non-array tracks body");
+  }
+
+  if (
+    typeof body.queued !== "number" ||
+    !Number.isInteger(body.queued) ||
+    body.queued < body.tracks.length
+  ) {
+    throw new Error("anchor queue read returned an invalid whole-queue count");
+  }
+
+  return { queueDepth: body.queued, rows: body.tracks as AnchorWorkItem[] };
 }
 
-async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
+export async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${APIFY_API_TOKEN}`;
   const res = await fetch(url, {
     body: JSON.stringify({
@@ -592,7 +739,15 @@ async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
 
   const body = (await res.json()) as unknown;
 
-  return Array.isArray(body) ? (body as ApifyResultItem[]) : [];
+  if (!Array.isArray(body)) {
+    const preview = JSON.stringify(body) ?? String(body);
+
+    throw new Error(
+      `apify actor run failed (200): expected an array, got ${preview.slice(0, 200)}`,
+    );
+  }
+
+  return body as ApifyResultItem[];
 }
 
 // ── THE BOX-SIDE DEEZER SEARCH (rung 0's fetch) ───────────────────────────────
@@ -822,6 +977,7 @@ async function resolveAnchorFree(
     // Default true when a pre-slice-3 server omits it — the current Apify-runs behaviour.
     apifyEnabled: body.apifyEnabled === undefined ? true : Boolean(body.apifyEnabled),
     isrcRecoveredByDeezer: Boolean(body.isrcRecoveredByDeezer),
+    listenbrainzOutcome: body.listenbrainzOutcome,
     source: body.source ?? null,
     spotifySearchDone: Boolean(body.spotifySearchDone),
     verifiedBy: body.verifiedBy ?? null,
@@ -844,14 +1000,27 @@ export async function runAnchorSweep(
     anchoredBySearch: 0,
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
+    apifyActorErrors: 0,
+    checked: 0,
     deezerSearchFailed: 0,
     error: null as null | string,
+    errors: 0,
+    expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
     freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
+    lbEmptyIds: 0,
+    lbGateRejected: 0,
+    lbMetadataFailed: 0,
+    lbNoMap: 0,
+    lbNoMbid: 0,
+    lbNotAttempted: 0,
+    lbRequestFailed: 0,
     missed: 0,
     ok: true,
     pages: 0,
+    produced: 0,
     pulled: 0,
+    queueDepth: null as null | number,
     skipped: 0,
   };
 
@@ -860,34 +1029,39 @@ export async function runAnchorSweep(
   while (remaining > 0) {
     const ask = Math.min(pageLimit, remaining);
     const page = await runAnchorTick(ask, deps);
-    const pulled =
-      page.anchoredByIsrc +
-      page.anchoredByListenbrainz +
-      page.anchoredBySearch +
-      page.anchoredBySpotifyIsrc +
-      page.anchoredBySpotifySearch +
-      page.missed +
-      page.skipped;
+    const pulled = page.checked;
 
     merged.pages += 1;
     merged.pulled += pulled;
+    merged.checked += page.checked;
+    merged.produced += page.produced;
+    merged.queueDepth = page.queueDepth;
+    merged.apifyActorErrors += page.apifyActorErrors;
     merged.anchoredByIsrc += page.anchoredByIsrc;
     merged.anchoredByListenbrainz += page.anchoredByListenbrainz;
     merged.anchoredBySearch += page.anchoredBySearch;
     merged.anchoredBySpotifyIsrc += page.anchoredBySpotifyIsrc;
     merged.anchoredBySpotifySearch += page.anchoredBySpotifySearch;
     merged.isrcRecoveredByDeezer += page.isrcRecoveredByDeezer;
+    merged.lbEmptyIds += page.lbEmptyIds;
+    merged.lbGateRejected += page.lbGateRejected;
+    merged.lbMetadataFailed += page.lbMetadataFailed;
+    merged.lbNoMbid += page.lbNoMbid;
+    merged.lbNoMap += page.lbNoMap;
+    merged.lbNotAttempted += page.lbNotAttempted;
+    merged.lbRequestFailed += page.lbRequestFailed;
     // The two diagnostics ride along field-wise but stay OUT of `pulled` — neither is a row outcome:
     // a failed Deezer search still resolves its row, and a thrown free rung is already counted by
     // whatever that row ends up as (an Apify verdict, or `skipped` when Apify is off).
     merged.deezerSearchFailed += page.deezerSearchFailed;
     merged.freeRungErrors += page.freeRungErrors;
+    merged.errors += page.errors;
     merged.missed += page.missed;
     merged.skipped += page.skipped;
 
     if (!page.ok) {
       merged.ok = false;
-      merged.error = page.error;
+      merged.error ??= page.error;
       break;
     }
 
@@ -916,12 +1090,32 @@ async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        errors: 1,
+        expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
+        ok: false,
+        produced: 0,
+        queueDepth: null,
+        reason: "missing_api_token",
+      }),
+    );
     process.exit(1);
   }
 
   if (!APIFY_API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_apify_token" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        errors: 1,
+        expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
+        ok: false,
+        produced: 0,
+        queueDepth: null,
+        reason: "missing_apify_token",
+      }),
+    );
     process.exit(1);
   }
 
@@ -952,7 +1146,18 @@ if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`anchor-sweep failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "anchor_failed" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        error: message,
+        errors: 1,
+        expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
+        ok: false,
+        produced: 0,
+        queueDepth: null,
+        reason: "anchor_failed",
+      }),
+    );
     process.exit(1);
   });
 }

@@ -16,6 +16,7 @@ import {
   groupCandidatesByTarget,
   itemToCandidate,
   parseLimitArg,
+  runApifyActor,
   runAnchorSweep,
   runAnchorTick,
   searchDeezerOnBox,
@@ -190,8 +191,28 @@ describe("runAnchorTick", () => {
     expect(summary.anchoredByIsrc).toBe(1);
     expect(summary.anchoredBySearch).toBe(1);
     expect(summary.missed).toBe(1);
+    expect(summary).toMatchObject({ checked: 3, errors: 0, produced: 2, queueDepth: 0 });
     // The grouping routed the two Hold-Tight candidates to that row, one to FAU, none to mb_none.
     expect(posted).toEqual({ mb_fau: 1, mb_hold: 2, mb_none: 0 });
+  });
+
+  test("queueDepth is the real whole backlog left behind, not the page size", async () => {
+    const summary = await runAnchorTick(
+      3,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve({
+            queueDepth: 10,
+            rows: [
+              { anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" },
+              { anchorQuery: "Technimatic For All of Us", trackId: "mb_fau" },
+              { anchorQuery: "No Candidates Here", trackId: "mb_none" },
+            ],
+          }),
+      }),
+    );
+
+    expect(summary).toMatchObject({ checked: 3, produced: 2, queueDepth: 7 });
   });
 
   test("slice 2: the dark Spotify search rungs tally separately and never spend Apify", async () => {
@@ -360,6 +381,54 @@ describe("runAnchorTick", () => {
     expect(actorQueries.flat()).toEqual(["Technimatic For All of Us", "No Candidates Here"]);
     // And mb_hold was never POSTed to the paid anchor_track path.
     expect(reported).not.toContain("mb_hold");
+  });
+
+  test("ListenBrainz outcomes stay distinguishable in one tick's summary", async () => {
+    const outcomeCounts = [
+      ["no-mbid", 1],
+      ["no-map", 2],
+      ["empty-ids", 3],
+      ["request-failed", 4],
+      ["metadata-failed", 5],
+      ["gate-rejected", 6],
+      ["not-attempted", 7],
+    ] as const;
+    const work = outcomeCounts.flatMap(([outcome, count]) =>
+      Array.from({ length: count }, (_, index) => ({
+        anchorQuery: `${outcome}-${index}`,
+        trackId: `mb_${outcome}-${index}`,
+      })),
+    );
+    const summary = await runAnchorTick(
+      work.length,
+      deps({
+        fetchQueue: () => Promise.resolve(work),
+        report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+        resolveFree: (trackId) =>
+          Promise.resolve({
+            anchored: false,
+            listenbrainzOutcome: trackId
+              .slice("mb_".length)
+              .replace(/-\d+$/, "") as (typeof outcomeCounts)[number][0],
+            verifiedBy: null,
+          }),
+        runActor: () => Promise.resolve([]),
+      }),
+    );
+
+    expect(summary).toMatchObject({
+      checked: 28,
+      errors: 9,
+      lbEmptyIds: 3,
+      lbGateRejected: 6,
+      lbMetadataFailed: 5,
+      lbNoMap: 2,
+      lbNoMbid: 1,
+      lbNotAttempted: 7,
+      lbRequestFailed: 4,
+      produced: 0,
+      queueDepth: 0,
+    });
   });
 
   test("a free rung that THROWS still lets the row spend Apify (never starves anchoring)", async () => {
@@ -582,7 +651,66 @@ describe("runAnchorTick", () => {
 
     expect(summary.ok).toBe(false);
     expect(summary.skipped).toBe(3);
+    expect(summary.apifyActorErrors).toBe(1);
+    expect(summary.errors).toBe(1);
     expect(summary.error).toContain("apify 500");
+  });
+
+  test("N failed Apify chunks report N failures, never only the last one", async () => {
+    const work = Array.from({ length: 5 }, (_, index) => ({
+      anchorQuery: `query ${index}`,
+      trackId: `mb_${index}`,
+    }));
+    let actorCalls = 0;
+    const summary = await runAnchorTick(
+      5,
+      deps({
+        fetchQueue: () => Promise.resolve(work),
+        runActor: () => {
+          actorCalls += 1;
+
+          return Promise.reject(new Error(`apify failed chunk ${actorCalls}`));
+        },
+      }),
+      2,
+    );
+
+    expect(actorCalls).toBe(3);
+    expect(summary.apifyActorErrors).toBe(3);
+    expect(summary.errors).toBe(3);
+    expect(summary.skipped).toBe(5);
+    // The diagnostic is stable instead of last-write-wins; the numeric counters carry all N failures.
+    expect(summary.error).toBe("apify failed chunk 1");
+  });
+
+  test("a 200 with Deezer's real non-array error shape is an Apify ERROR, never an empty result", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        Response.json({
+          error: { code: 4, message: "Quota limit exceeded", type: "Exception" },
+        }),
+      )) as typeof globalThis.fetch;
+
+    try {
+      const summary = await runAnchorTick(
+        1,
+        deps({
+          fetchQueue: () =>
+            Promise.resolve([{ anchorQuery: "Calibre Mr Right On", trackId: "mb_non_array" }]),
+          runActor: runApifyActor,
+        }),
+      );
+
+      expect(summary.apifyActorErrors).toBe(1);
+      expect(summary.errors).toBe(1);
+      expect(summary.missed).toBe(0);
+      expect(summary.skipped).toBe(1);
+      expect(summary.error).toContain("expected an array");
+      expect(summary.error).toContain("Quota limit exceeded");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("a failed worklist fetch reports ok:false, not a throw", async () => {
@@ -803,6 +931,28 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.isrcRecoveredByDeezer).toBe(4);
     // No page's row carried a `deezerQuery`, so no search ran and nothing failed.
     expect(summary.deezerSearchFailed).toBe(0);
+  });
+
+  test("carries the ListenBrainz failure counters across pages", async () => {
+    const base = pagedDeps([rows("a", 2), rows("b", 2)]);
+    const summary = await runAnchorSweep(
+      4,
+      {
+        ...base,
+        resolveFree: (trackId) =>
+          Promise.resolve({
+            anchored: false,
+            listenbrainzOutcome: trackId.endsWith("_0") ? "no-map" : "metadata-failed",
+            verifiedBy: null,
+          }),
+      },
+      2,
+    );
+
+    expect(summary.pages).toBe(2);
+    expect(summary.lbNoMap).toBe(2);
+    expect(summary.lbMetadataFailed).toBe(2);
+    expect(summary.errors).toBe(2);
   });
 
   test("a failing page stops the sweep and carries the error", async () => {

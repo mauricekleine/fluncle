@@ -22,8 +22,10 @@
 // ── POLITENESS, and why there is no module-level pacing gate here ─────────────────────────────────
 // This is IDENTIFIED (the same `Fluncle/1.0 (+…)` User-Agent the MusicBrainz client sends — one
 // honest identity across the MetaBrainz services) and BOUNDED (a per-request wall-clock deadline).
-// It never throws: a network error, a timeout, a non-2xx, a malformed body, or a clean no-map all
-// resolve to `null` — a miss is fine, and the caller falls through to the Apify rung.
+// It never throws, but it DOES preserve the outcome: a network error, a timeout, a non-2xx, a
+// malformed body, a non-array body, a clean no-map, and an empty id list are operationally different.
+// The anchor waterfall still falls through to Apify on every non-match, while its tick summary can
+// finally say whether ListenBrainz had no candidate or a candidate died later.
 //
 // It deliberately does NOT carry the musicbrainz.ts serialized pacing gate, because that gate paces
 // a LOOP of calls made WITHIN one request (the backfill sweep resolves 25 ISRCs per request), and it
@@ -67,20 +69,35 @@ export type ListenBrainzMatch = {
   trackName: null | string;
 };
 
+/** One lookup's exact outcome. Non-matches stay distinguishable all the way to the sweep summary. */
+export type ListenBrainzLookupResult =
+  | {
+      match: ListenBrainzMatch;
+      outcome: "match";
+    }
+  | {
+      outcome:
+        | "empty-ids"
+        | "invalid-mbid"
+        | "malformed-body"
+        | "no-map"
+        | "non-array-body"
+        | "request-failed"
+        | "request-threw";
+    };
+
 /**
- * Resolve one MusicBrainz recording MBID to its Spotify track ids via ListenBrainz labs. Returns
- * `null` on ANY unsuccessful outcome — a bad MBID (absent from the response), an empty id list, a
- * network error, a timeout, a non-2xx, or a body that is not the expected array — because to the
- * anchor waterfall every one of those is the same thing: "no free candidate, try Apify". It never
- * throws; a miss is a first-class, unremarkable answer.
+ * Resolve one MusicBrainz recording MBID to its Spotify track ids via ListenBrainz labs. It never
+ * throws, and every unsuccessful outcome carries its own discriminator so the caller can count a
+ * clean no-map separately from an empty mapped id list and from a broken request/response.
  */
 export async function lookupSpotifyIdsByMbid(
   recordingMbid: string,
-): Promise<ListenBrainzMatch | null> {
+): Promise<ListenBrainzLookupResult> {
   const clean = recordingMbid.trim();
 
   if (!clean) {
-    return null;
+    return { outcome: "invalid-mbid" };
   }
 
   let response: Response;
@@ -99,7 +116,7 @@ export async function lookupSpotifyIdsByMbid(
     // A network error OR a timeout abort — both mean this lookup yielded nothing.
     logEvent("warn", "listenbrainz.request-threw", { error, recordingMbid: clean });
 
-    return null;
+    return { outcome: "request-threw" };
   }
 
   if (!response.ok) {
@@ -108,7 +125,7 @@ export async function lookupSpotifyIdsByMbid(
       status: response.status,
     });
 
-    return null;
+    return { outcome: "request-failed" };
   }
 
   let body: unknown;
@@ -118,32 +135,48 @@ export async function lookupSpotifyIdsByMbid(
   } catch (error) {
     logEvent("warn", "listenbrainz.malformed-body", { error, recordingMbid: clean });
 
-    return null;
+    return { outcome: "malformed-body" };
   }
 
   if (!Array.isArray(body)) {
-    return null;
+    logEvent("warn", "listenbrainz.non-array-body", { recordingMbid: clean });
+
+    return { outcome: "non-array-body" };
   }
 
   // The endpoint echoes one entry per input MBID; a recording it cannot map is simply absent, so an
   // empty array is a clean miss. Read the entry for OUR MBID (the response order matches the input,
   // but match on the id to be exact) and keep only real, non-blank Spotify ids.
-  const item = (body as ListenBrainzResponseItem[]).find(
-    (entry) => (entry.recording_mbid ?? clean) === clean,
-  );
-  const spotifyTrackIds = (item?.spotify_track_ids ?? [])
+  const item = body.find((entry): entry is ListenBrainzResponseItem => {
+    if (typeof entry !== "object" || entry === null) {
+      return false;
+    }
+
+    const candidate = entry as ListenBrainzResponseItem;
+
+    return (candidate.recording_mbid ?? clean) === clean;
+  });
+
+  if (!item) {
+    return { outcome: "no-map" };
+  }
+
+  const spotifyTrackIds = (Array.isArray(item.spotify_track_ids) ? item.spotify_track_ids : [])
     .filter((id): id is string => typeof id === "string")
     .map((id) => id.trim())
     .filter((id) => id.length > 0);
 
   if (spotifyTrackIds.length === 0) {
-    return null;
+    return { outcome: "empty-ids" };
   }
 
   return {
-    artistName: item?.artist_name ?? null,
-    recordingMbid: clean,
-    spotifyTrackIds,
-    trackName: item?.track_name ?? null,
+    match: {
+      artistName: item.artist_name ?? null,
+      recordingMbid: clean,
+      spotifyTrackIds,
+      trackName: item.track_name ?? null,
+    },
+    outcome: "match",
   };
 }
