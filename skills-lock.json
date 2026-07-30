@@ -4,7 +4,7 @@
     "agent-orchestration": {
       "source": "packages/skills/agent-orchestration",
       "sourceType": "local",
-      "computedHash": "f13f0edf32be3d707d68cf2558e1bb26f959a20b2752a318db12ee83f51a28a0"
+      "computedHash": "01fddedb37afe5eb83baab9f18b6cf487a2e85eb41782cf73805df0bb2394caf"
     },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
@@ -57,6 +57,11 @@
       "source": "packages/skills/fluncle-label-triage",
       "sourceType": "local",
       "computedHash": "5e67965dd09700ed00fc6f06636ad0def2f73a101baa0dcbb9fa14512877df66"
+    },
+    "fluncle-ledger": {
+      "source": "packages/skills/fluncle-ledger",
+      "sourceType": "local",
+      "computedHash": "b76c328b684895c8153bbf799eafd6021cd6e73869eb7e8f89df2915d04876f2"
     },
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",

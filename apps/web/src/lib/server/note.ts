@@ -44,7 +44,7 @@
 // that evidence can change them — which requires keeping it.
 
 import { NOTE_MAX_LENGTH } from "../log-prose";
-import { scanObservationScript } from "./observation";
+import { maskSubjectNames, scanObservationScript } from "./observation";
 import { ApiError } from "./spotify";
 
 // A note is a single editorial line, not a paragraph. Floor it well below the
@@ -62,8 +62,18 @@ const NOTE_MAX_CHARS = NOTE_MAX_LENGTH;
  * exclamation / "we"-as-company scan (one source of truth), with the WRITTEN note's
  * own length bounds. The note is a public `/log` surface, so a violation hard-fails
  * the store before the note is ever shown.
+ *
+ * `subjectNames` are the names this note is ABOUT — the finding's artists and its title. Their
+ * occurrences are masked out before the scan (THE NAME EXEMPTION, `maskSubjectNames` in
+ * ./observation.ts), because the authoring prompt explicitly invites naming the artist or the
+ * title and an unmasked scan would then reject the very name it asked for: a finding by "Future
+ * Signal" could not be noted AT ALL, at the head of a cap-1 oldest-first queue. It is REQUIRED
+ * rather than optional so a new call site cannot silently forget the exemption; pass `[]` when
+ * there is genuinely no subject to exempt. The LENGTH bounds are measured on the WHOLE note,
+ * names included — the exemption is about what Fluncle is judged for SAYING, not about the public
+ * 280-char budget, which an artist's name spends exactly like any other word.
  */
-export function gateNoteText(text: unknown): string {
+export function gateNoteText(text: unknown, subjectNames: readonly string[]): string {
   if (typeof text !== "string" || !text.trim()) {
     throw new ApiError("no_note", "A `note` (the finding's editorial line) is required", 400);
   }
@@ -86,7 +96,7 @@ export function gateNoteText(text: unknown): string {
     );
   }
 
-  const violations = scanObservationScript(trimmed);
+  const violations = scanObservationScript(maskSubjectNames(trimmed, subjectNames));
 
   if (violations.length > 0) {
     throw new ApiError(

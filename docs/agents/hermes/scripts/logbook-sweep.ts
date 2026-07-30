@@ -47,6 +47,19 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  type AttemptLedger,
+  attemptLedgerPath,
+  clearAttempts,
+  defaultStateDir,
+  exhaustedRecapLine,
+  planAttempt,
+  readAttemptLedger,
+  recordAttempt,
+  remainingQueueDepth,
+  selectWork,
+  writeAttemptLedger,
+} from "./attempt-ledger";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
 // One day per tick: a single long-form authoring pass sits comfortably inside the
@@ -61,6 +74,37 @@ const GAP_LIMIT = 10; // hard ceiling on the gap read (we only act on BATCH_CAP)
 // nothing fresh for this day — leave it a gap (silence beats a repeated day) and let the
 // next tick try. Mirrors note-sweep's ECHO_RETRIES.
 const ECHO_RETRIES = 1;
+
+// ---------------------------------------------------------------------------
+// THE ATTEMPT BUDGET — the end of the retry-forever loop.
+//
+// A sector-day gets THREE REFUSED PASSES at an entry, ever, and then this sweep never authors for
+// it again. A "pass" is one trip through `authorOne`: an authoring, a delivery, and (on an echo or
+// a title collision) the one in-tick re-author `ECHO_RETRIES` already allows. What spends the
+// budget is the WORKER REFUSING the draft — the voice gate, the length bounds, the title-collision
+// guard, or the body echo gate. A transport or model failure spends nothing: there is no draft to
+// have judged (see `recordAttempt` in ./attempt-ledger.ts).
+//
+// WHY. A rejection was a plain skip that left the day in the gap list with nothing counting the
+// tries, so "retry" meant "forever" — and the list is BATCH_CAP=1 OLDEST FIRST, so an unwritable
+// day blocked every later day behind it and the logbook simply stopped backfilling. The gate could
+// genuinely be UNSATISFIABLE: the sweep hands the author each finding's artist and title as its
+// material, and the scan read those names too, so a day that logged a track by "Future Signal"
+// could never be written up however it was rewritten. THE NAME EXEMPTION
+// (apps/web/src/lib/server/observation.ts) fixes that at the source; this bounds whatever is next.
+//
+// NO BYPASS. The operator's ruling (2026-07-30): an entry is optional editorial and a gap is a good
+// state, so an exhausted day simply STAYS A GAP. Gate-failed copy is never published to close a
+// queue.
+//
+// A hard constant, not an env knob: the number is a product decision, and a box env that could
+// quietly raise it is how a bounded loop becomes an unbounded one again.
+// ---------------------------------------------------------------------------
+
+export const MAX_LOGBOOK_ATTEMPTS = 3;
+
+// `LOGBOOK_STATE_DIR` overrides the ledger's home for tests and for an operator move.
+const STATE_DIR = process.env.LOGBOOK_STATE_DIR ?? defaultStateDir("logbook-sweep");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
@@ -112,11 +156,65 @@ type ClaudeEnvelope = {
   subtype?: string;
 };
 
-type Outcome = "authored" | "alreadyAuthored" | "echoSkipped" | "gateSkipped" | "skipped";
+// `exhausted` is the ONE terminal outcome: the day spent all `MAX_LOGBOOK_ATTEMPTS` refused passes
+// and this sweep will never author for it again. Distinct from `gateSkipped`/`echoSkipped`, which
+// are refusals with budget left. An exhausted day STAYS A GAP — it never carries refused copy.
+type Outcome =
+  | "authored"
+  | "alreadyAuthored"
+  | "echoSkipped"
+  | "exhausted"
+  | "gateSkipped"
+  | "skipped";
+
+/** The ledger key for one gap: its sector number, the day's stable identity. */
+export function logbookKey(gap: Gap): string | null {
+  return typeof gap.sector === "number" ? String(gap.sector) : null;
+}
+
+/** The budget's read/write handle for one tick. */
+type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
 // What the Worker made of a delivered entry. `echoedMove` carries the offending title or
 // lifted phrase the anti-sameness rails caught, so the re-author pass can route around it.
-type Delivery = { echoedMove?: string; outcome: Outcome };
+//
+// `charged` is the ONE input to the attempt budget, and it is deliberately NOT the same question as
+// the outcome. See `WORKER_REJECTION_CODES`.
+type Delivery = { charged: boolean; echoedMove?: string; outcome: Outcome };
+
+// ---------------------------------------------------------------------------
+// WHAT MAY SPEND THE BUDGET — an EXACT Worker rejection code, never a loose HTTP substring.
+//
+// The skip CLASSIFIER below is deliberately loose: a bare "403"/"422"/"forbidden" anywhere in the
+// output means "do not treat this as a hard error, leave the item queued", and that behaviour is
+// exactly right and unchanged. But CHARGING the budget on the same loose match would be a bug with
+// teeth: an expired or re-scoped agent token returns 403 on EVERY call, so a healthy draft the
+// Worker never even read would be classified as a gate rejection and cost the item an attempt.
+// With BATCH_CAP=1 and exhausted rows filtered out before the cap, a sustained 403 would march down
+// the queue writing off one item per few ticks — each needing a hand-edit of the box's attempts
+// file to recover.
+//
+// That is precisely what ./attempt-ledger.ts's `recordAttempt` promises cannot happen ("if flaky
+// infrastructure could spend the budget, three bad minutes would write an item off permanently").
+// So the budget keys on these EXACT codes — every one of them a verdict the Worker reached by
+// READING THE DRAFT — and on nothing else.
+// ---------------------------------------------------------------------------
+
+const WORKER_REJECTION_CODES = [
+  "voice_gate", // the banned-word / geography / Dry-Rule scan refused the prose
+  "title_echoes_logbook", // the deterministic title-collision guard
+  "body_echoes_logbook", // the scored body echo gate
+  "no_title",
+  "no_body",
+  "title_too_long",
+  "body_too_short",
+  "body_too_long",
+] as const;
+
+/** True only when the CLI output carries a code the Worker emits after judging the draft itself. */
+function isWorkerRejection(detail: string): boolean {
+  return WORKER_REJECTION_CODES.some((code) => detail.includes(code));
+}
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -562,29 +660,34 @@ function deliverEntry(
           }`,
         );
 
-        return { echoedMove, outcome: "echoSkipped" };
+        return { charged: true, echoedMove, outcome: "echoSkipped" };
       }
 
+      // The loose HTTP substrings stay in the SKIP test — an infra 4xx must still leave the day in
+      // the gap list rather than read as a hard error — but only an EXACT Worker code charges the
+      // budget. `invalid_sector` is deliberately absent from the charged set: it is a bad path
+      // param, not a verdict on the draft.
       if (
-        detail.includes("voice_gate") ||
-        detail.includes("body_too_short") ||
-        detail.includes("body_too_long") ||
-        detail.includes("title_too_long") ||
-        detail.includes("no_title") ||
-        detail.includes("no_body") ||
+        isWorkerRejection(detail) ||
         detail.includes("422") ||
-        detail.includes("400")
+        detail.includes("400") ||
+        detail.includes("403") ||
+        detail.includes("forbidden")
       ) {
+        const charged = isWorkerRejection(detail);
+
         log(
-          `sector ${sector}: voice gate / validation rejected the entry — skipping (stays queued)`,
+          charged
+            ? `sector ${sector}: voice gate / validation rejected the entry — skipping (stays queued)`
+            : `sector ${sector}: the create POST was refused without a gate verdict — skipping (stays queued, no attempt spent)`,
         );
 
-        return { outcome: "gateSkipped" };
+        return { charged, outcome: "gateSkipped" };
       }
 
       log(`sector ${sector}: create exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return { outcome: "skipped" };
+      return { charged: false, outcome: "skipped" };
     }
 
     try {
@@ -593,7 +696,7 @@ function deliverEntry(
       if (parsed.skipped) {
         log(`sector ${sector}: an entry already stands — no-op`);
 
-        return { outcome: "alreadyAuthored" };
+        return { charged: false, outcome: "alreadyAuthored" };
       }
     } catch {
       // Non-JSON success is unexpected but harmless; treat as an authored fill.
@@ -601,7 +704,7 @@ function deliverEntry(
 
     log(`sector ${sector}: entry authored`);
 
-    return { outcome: "authored" };
+    return { charged: false, outcome: "authored" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -611,7 +714,72 @@ function deliverEntry(
 // Per-day: author → deliver.
 // ---------------------------------------------------------------------------
 
-async function authorOne(gap: Gap, spent: Spent[]): Promise<Outcome> {
+/**
+ * THE STRAIN VOCABULARY (the /status sweep-strain detector, fluncle-healthcheck.ts). This sweep's
+ * stderr is captured into its cron marker and scored, so the WORDING here is load-bearing:
+ * exhausting a day is a permanent write-off and must read as distress ("giving up"), said ONCE on
+ * the tick it happens — the per-tick recap (`exhaustedRecapLine`) deliberately does not.
+ */
+function logExhausted(sector: number): void {
+  log(
+    `sector ${sector}: EXHAUSTED — ${MAX_LOGBOOK_ATTEMPTS} drafts were refused by the gates, giving up on this day; it stays a gap (delete its line from ${attemptLedgerPath(STATE_DIR)} to re-arm)`,
+  );
+}
+
+/**
+ * Charge or clear one day's budget after a pass, and report the ONE outcome that overrides what the
+ * delivery said: a refusal that spent the last attempt becomes `exhausted`, because the day is now
+ * permanently out of this sweep's reach and the summary has to say so. Returns null when the caller
+ * should keep the delivery's own outcome.
+ *
+ * There is no publish-anyway branch here, on purpose (the operator's 2026-07-30 ruling). The last
+ * refused draft is discarded exactly like the first two: a gate-failed entry never reaches
+ * /logbook.
+ */
+function settleBudget(
+  sector: number,
+  outcome: Outcome,
+  charged: boolean,
+  budget?: Budget,
+): Outcome | null {
+  if (!budget) {
+    return null;
+  }
+
+  const key = String(sector);
+
+  if (outcome === "authored" || outcome === "alreadyAuthored") {
+    clearAttempts(budget.ledger, key);
+    writeAttemptLedger(budget.ledgerPath, budget.ledger, log);
+
+    return null;
+  }
+
+  // The budget keys on `charged`, NOT on the outcome: a `gateSkipped` caused by an infra 4xx (an
+  // expired token, a re-scoped one) never had a draft judged, so it costs nothing. Only a verdict
+  // the Worker reached by reading the prose spends an attempt.
+  if (!charged) {
+    return null;
+  }
+
+  recordAttempt(budget.ledger, key, Math.floor(Date.now() / 1000));
+  writeAttemptLedger(budget.ledgerPath, budget.ledger, log);
+
+  if (!planAttempt(budget.ledger, key, MAX_LOGBOOK_ATTEMPTS).exhausted) {
+    return null;
+  }
+
+  logExhausted(sector);
+
+  return "exhausted";
+}
+
+/**
+ * Exported so the unit test can drive the REAL loop against stub `fluncle`/`claude` binaries rather
+ * than re-implementing the budget arithmetic beside it — "authored for at most three refused
+ * passes, ever, and never published against the gate" is a claim about the code that runs.
+ */
+export async function authorOne(gap: Gap, spent: Spent[], budget?: Budget): Promise<Outcome> {
   const sector = gap.sector;
 
   if (typeof sector !== "number" || !gap.findings?.length) {
@@ -620,11 +788,20 @@ async function authorOne(gap: Gap, spent: Spent[]): Promise<Outcome> {
     return "skipped";
   }
 
+  // Belt-and-braces: `selectWork` already keeps exhausted days out of the batch, so reaching here
+  // means the budget ran out mid-tick. Either way no model is called — an exhausted day costs
+  // nothing at all.
+  if (budget && planAttempt(budget.ledger, String(sector), MAX_LOGBOOK_ATTEMPTS).exhausted) {
+    logExhausted(sector);
+
+    return "exhausted";
+  }
+
   // Author → deliver, with ONE re-author if the Worker's anti-sameness rails reject the
   // entry (a title collision or a body echo). The retry is handed the offending title/phrase,
   // so the second pass knows exactly which move is spent. Two echoes and we stop: the day
   // stays a gap, because a day that reads like one already in the log is worse than a gap.
-  let delivery: Delivery = { outcome: "skipped" };
+  let delivery: Delivery = { charged: false, outcome: "skipped" };
   let echoedMove: string | undefined;
 
   for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
@@ -649,7 +826,11 @@ async function authorOne(gap: Gap, spent: Spent[]): Promise<Outcome> {
     }
   }
 
-  return delivery.outcome;
+  // SETTLE THE BUDGET. A pass the Worker REFUSED (voice/length, the title guard, or the body echo
+  // gate after its one in-tick re-author) burns one; an entry that landed — or one that already
+  // stood — clears the day's line so a future re-queue starts fresh. A transport/model failure
+  // returned above and reaches neither branch: no draft was judged, so nothing is charged.
+  return settleBudget(sector, delivery.outcome, delivery.charged, budget) ?? delivery.outcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -713,6 +894,9 @@ async function main(): Promise<void> {
     // The entry echoed the logbook twice over and was left a gap — the anti-sameness rail
     // firing. The day stays in the gap list for a later, colder pass.
     echoSkipped: 0,
+    // Days that have spent all `MAX_LOGBOOK_ATTEMPTS` refused passes and will never be authored for
+    // again. They stay gaps, and never carry copy the gate refused.
+    exhausted: 0,
     failed: 0,
     gapsRemaining: gaps.length,
     gateSkipped: 0,
@@ -724,9 +908,34 @@ async function main(): Promise<void> {
     return; // fast no-op
   }
 
-  for (const gap of gaps.slice(0, BATCH_CAP)) {
+  // The attempt budgets, loaded once per tick and written through as they are spent.
+  const ledgerPath = attemptLedgerPath(STATE_DIR);
+  const ledger = readAttemptLedger(ledgerPath);
+  const budget: Budget = { ledger, ledgerPath };
+
+  // Exhausted days are dropped BEFORE the cap: the gap list is OLDEST FIRST at BATCH_CAP=1, so one
+  // unwritable day would otherwise stop the logbook backfilling anything newer, forever.
+  const { exhausted, work } = selectWork(gaps, ledger, logbookKey, BATCH_CAP, MAX_LOGBOOK_ATTEMPTS);
+
+  summary.exhausted = exhausted.length;
+
+  if (exhausted.length > 0) {
+    log(
+      exhaustedRecapLine(
+        "day",
+        exhausted.flatMap((gap) => {
+          const key = logbookKey(gap);
+
+          return key ? [`sector ${key}`] : [];
+        }),
+        MAX_LOGBOOK_ATTEMPTS,
+      ),
+    );
+  }
+
+  for (const gap of work) {
     try {
-      const outcome = await authorOne(gap, spent);
+      const outcome = await authorOne(gap, spent, budget);
 
       if (outcome === "authored") {
         summary.authored += 1;
@@ -736,6 +945,8 @@ async function main(): Promise<void> {
         summary.echoSkipped += 1;
       } else if (outcome === "gateSkipped") {
         summary.gateSkipped += 1;
+      } else if (outcome === "exhausted") {
+        summary.exhausted += 1;
       } else {
         summary.failed += 1;
       }
@@ -754,9 +965,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // gapsRemaining = the gap depth at read time minus what we authored/no-op'd this
-  // tick (gate-skips + failures stay queued); the next tick re-reads the live list.
-  summary.gapsRemaining = Math.max(0, gaps.length - summary.authored - summary.alreadyAuthored);
+  // gapsRemaining = the WORKABLE gap depth at read time minus what we authored/no-op'd this tick
+  // and minus the EXHAUSTED days, which are still gaps but are no longer work this sweep will ever
+  // do. Gate-skips + failures keep their remaining budget and stay counted.
+  summary.gapsRemaining = remainingQueueDepth(
+    gaps.length,
+    summary.authored + summary.alreadyAuthored,
+    summary.exhausted,
+  );
 
   console.log(JSON.stringify({ ok: true, ...summary }));
 }

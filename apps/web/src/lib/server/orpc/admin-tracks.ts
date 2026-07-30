@@ -568,8 +568,11 @@ export function adminTracksHandlers(os: Implementer) {
       }
 
       // The agent authors + voice-gates the script; the Worker re-runs the
-      // mechanical scan (defence in depth) and hard-fails on any violation.
-      const script = gateObservationScript(body.script);
+      // mechanical scan (defence in depth) and hard-fails on any violation. The finding's own
+      // artists + title are exempt from that scan (THE NAME EXEMPTION, lib/server/observation.ts):
+      // the read is ABOUT this record, so it must be able to name it — otherwise a finding by an
+      // artist called "Future Signal" can never be voiced at all, however it is rewritten.
+      const script = gateObservationScript(body.script, [...track.artists, track.title]);
       const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
       let promptVersion = typeof body.promptVersion === "number" ? body.promptVersion : null;
 
@@ -811,8 +814,11 @@ export function adminTracksHandlers(os: Implementer) {
 
       // Voice-gate the agent-authored note (defence in depth: the agent gates as it
       // writes; the Worker re-scans and hard-fails any violation before it is stored
-      // — the note lands straight on the public /log surface).
-      const note = gateNoteText(body.note);
+      // — the note lands straight on the public /log surface). The finding's own artists + title
+      // are exempt from that scan (THE NAME EXEMPTION, lib/server/observation.ts): the authoring
+      // prompt invites naming the artist or the title, so scanning them would reject the very
+      // name it asked for and leave a finding by "Future Signal" permanently un-noteable.
+      const note = gateNoteText(body.note, [...track.artists, track.title]);
 
       // Echo-gate it against the finding's sonic neighbourhood — the SAME notes the
       // authoring prompt showed the agent (`list_similar_tracks`, the MuQ nearest

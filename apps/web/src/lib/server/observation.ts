@@ -177,6 +177,144 @@ const BANNED_GEOGRAPHY_MATCHERS: { place: string; regex: RegExp }[] = BANNED_GEO
 
 export type VoiceGateViolation = { reason: string; word?: string };
 
+// ── THE NAME EXEMPTION — what the gate is allowed to police ──────────────────────────
+//
+// THE OPERATOR'S RULING (2026-07-29, extended to every voiced family 2026-07-30): the voice gate
+// polices every word FLUNCLE WROTE, and stops policing words it did not choose. A real-world
+// proper name is not Fluncle's prose. "Future Signal" is an artist; "Invaderz Transmissions" is a
+// label; "Jungle Sound: The Bassline Strikes Back!" is an album. A note, an observation, a bio, or
+// a logbook entry ABOUT one of them must be allowed to say its name.
+//
+// WHY IT IS NOT A STYLE NICETY. Without it the gate is UNSATISFIABLE, not merely strict: the
+// authoring prompt invites naming the artist, and the scan then rejects that very name, so NO
+// rewrite can ever pass. That is not hypothetical — the three entity-bio crons re-authored three
+// slugs ~90 times each over two days (~270 model calls) chasing a gate that could not be cleared.
+// The same shape was live and uninstrumented in the note / observation / logbook gates, whose
+// queues are worse: BATCH_CAP=1, oldest-first, so one unwritable head blocks everything behind it.
+//
+// THE MECHANISM is deliberately the narrowest one that works: mask EXACT, case-insensitive
+// occurrences of the FULL name out of the text, then scan what is left. Nothing about the bans
+// changes — `BANNED_WORDS`, the geography list, the Dry Rule, the "we" ban, and every length bound
+// are untouched; only WHAT TEXT reaches the scanner changes.
+//
+// Three properties, all pinned by tests (bio.test.ts, note.test.ts, observation.test.ts,
+// logbook-voice-gate.test.ts):
+//   - It does NOT blanket-allow the banned word. A note about "Future Signal" may name the artist
+//     and still fails if it uses "signal" as a generic word elsewhere in the line — which is what
+//     keeps the gate meaningful rather than a per-subject amnesty.
+//   - Masking the full name removes the punctuation INSIDE it, which is how an album called
+//     "Jungle Sound: The Bassline Strikes Back!" clears the Dry Rule's exclamation ban without
+//     that ban being weakened for anything Fluncle actually wrote.
+//   - THE MATCH IS WORD-BOUNDED, and it has to be. An unanchored replace fires INSIDE longer
+//     words, so an artist called "Sign" would mask the middle out of "signal" (leaving " al",
+//     which scans clean) and "Mission:" would eat the tail of "transmission:" — silently
+//     amnestying the exact banned words the first property promises to keep. The boundaries are
+//     CONDITIONAL on the name's own edges, because a name may legitimately start or end in
+//     punctuation: `(?<!\w)` only when the name starts with a word character, `(?!\w)` only when
+//     it ends with one. That is what lets "…Strikes Back!" still mask while "Sign" stops being a
+//     substring wildcard.
+//
+// A PARTIAL reference is still rejected: prose about "Future Signal" that says only "Signal" trips
+// the ban. That is intended — conservative, and the rewrite can simply use the full name.
+//
+// THE DEGENERATE CASE — a name that is EXACTLY one banned token — is the one place this stops being
+// a narrow exemption. Masking the artist "Signal" deletes every occurrence of the word, so the gate
+// stops policing it for the whole piece; there is no way to tell "the artist Signal" from the noun
+// in "a signal", because they are the same token. The two families answer it DIFFERENTLY, and the
+// split is deliberate:
+//
+//   · `maskSubjectNames` (note / observation / logbook) REFUSES those names — see
+//     `UNSAYABLE_NAMES`. Naming is optional on those surfaces and there is no final-attempt bypass,
+//     so the honest trade is a piece that doesn't say the name. It also matters more there: the
+//     exempt set is bigger (every artist AND the title, or a whole sector-day's worth), and the
+//     EARTHLY-GEOGRAPHY ban is in scope, so a finding titled "London" would otherwise license
+//     "the London air" three sentences later.
+//   · `maskEntityName` (the bio) ACCEPTS the cost, unchanged. A dossier's whole job is to introduce
+//     its subject, it scans with `allowGeography: true` so the geography half never applied, and it
+//     has the final-attempt acceptance to land a draft. Production carries at least three such
+//     entities (`/artist/signal`, `/album/anomaly`, `/album/content`) and the alternative is that
+//     their pages cannot have a bio at all.
+//
+// Every name reaching here is a trusted identity string from Fluncle's own DB (an artist name, a
+// track title, an entity name), never free web content, so regex-escaping it is the whole of the
+// input handling it needs.
+
+/**
+ * Mask every whole-word occurrence of ONE subject name out of `text`, so the voice scan judges
+ * only the prose around it. See THE NAME EXEMPTION above for why this exists and what it costs.
+ */
+export function maskEntityName(text: string, entityName: string): string {
+  const name = entityName.trim();
+
+  // Nothing to exempt — scan the text exactly as before. The `\w` guard is not cosmetic: with no
+  // word character anywhere in the name BOTH boundary lookarounds below collapse to "", and the
+  // replace runs completely unanchored. A subject named `!` would then strip every exclamation mark
+  // in the piece and hand the Dry Rule a clean scan.
+  if (!name || !/\w/.test(name)) {
+    return text;
+  }
+
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Only guard an edge the name actually presents to one: a name ending in `!` or `:` must still
+  // match when the next character is a letter.
+  const lead = /^\w/.test(name) ? "(?<!\\w)" : "";
+  const tail = /\w$/.test(name) ? "(?!\\w)" : "";
+
+  // A single space, not an empty string: the masked span still separates the words around it, so
+  // masking can never weld two neighbours into a token the scanner would read differently.
+  return text.replace(new RegExp(`${lead}${escaped}${tail}`, "gi"), " ");
+}
+
+/**
+ * THE UNSAYABLE NAMES — the one class of name this exemption refuses to grant.
+ *
+ * A name of TWO OR MORE words carries its own context: masking "Future Signal" removes a specific
+ * proper noun and leaves every generic "signal" in the piece exposed. A name that is EXACTLY one
+ * banned token carries none: masking the artist "Signal" deletes every occurrence of the word, and
+ * the gate stops policing it for the whole piece. That is not a narrow exemption, it is a total
+ * amnesty — and on these surfaces it also lifts the EARTHLY-GEOGRAPHY ban, which the bio's version
+ * of this masking never touched (`gateBioText` scans with `allowGeography: true`, so a bio was
+ * never policing "london" in the first place; the note, observation and logbook gates are).
+ * A finding titled "London" would otherwise license "the London air" three sentences later.
+ *
+ * So a name whose whole trimmed form IS a banned identity word or a banned place is dropped from
+ * the exempt set, and the scan sees the prose exactly as it always did.
+ *
+ * WHY THAT IS SATISFIABLE, and this is the asymmetry the whole ruling turns on. On these three
+ * surfaces naming is OPTIONAL — the note prompt says naming the artist or the title is fine "if it
+ * helps", the observation prompt says name the artist "only if it sharpens the read" — and there is
+ * NO final-attempt bypass, so an unclearable draft would be a permanent write-off. A note about the
+ * artist Signal simply does not say "Signal", and it is still a good note. A BIO cannot make that
+ * trade: it is a dossier whose entire job is to introduce its subject, and it has the final-attempt
+ * acceptance to land one. That is why `maskEntityName` is deliberately left alone — the accepted
+ * cost belongs to the bio and nowhere else.
+ */
+const UNSAYABLE_NAMES = new Set<string>([...BANNED_WORDS, ...BANNED_GEOGRAPHY]);
+
+/**
+ * Mask EVERY name a piece of prose is allowed to say — the multi-name form of `maskEntityName`,
+ * and the one the finding-shaped gates use. A note or an observation is about a FINDING, whose
+ * sayable names are its artists AND its title; a logbook entry is about a whole sector-day, so its
+ * list is every finding it may name. A bio is about ONE entity and calls `maskEntityName` directly.
+ *
+ * LONGEST FIRST, and that ordering is load-bearing: masking the artist "Signal" before the title
+ * "Signal Chain" would eat the head of the title and leave " Chain" standing, so the longer name
+ * would never match. Masking the longest name first means each name is removed at its full extent.
+ *
+ * A blank/whitespace entry is skipped, so an unknown artist or a title-less row costs nothing. A
+ * name that is ITSELF a banned word or place is skipped too — see `UNSAYABLE_NAMES` above; that is
+ * the difference between a narrow exemption and a total amnesty, and it matters more here than in
+ * the bio because the exempt set is bigger (every artist AND the title, or a whole sector-day's
+ * worth) and the geography ban is in scope.
+ */
+export function maskSubjectNames(text: string, names: readonly string[]): string {
+  return [...names]
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0 && !UNSAYABLE_NAMES.has(name.toLowerCase()))
+    .sort((a, b) => b.length - a.length)
+    .reduce((masked, name) => maskEntityName(masked, name), text);
+}
+
 /**
  * Scan a spoken observation script for the automatable voice-gate failures.
  * Returns the violations (empty = clean). The endpoint hard-fails on any.
@@ -231,8 +369,16 @@ const SCRIPT_MAX_CHARS = 1200; // ~45s of speech at a measured pace; v2 SSML is 
 /**
  * Validate + voice-gate an agent-authored script, throwing a clean ApiError on any
  * failure (the catch turns it into a 4xx). Returns the trimmed text on success.
+ *
+ * `subjectNames` are the names this observation is ABOUT — the finding's artists and its title.
+ * Their occurrences are masked out before the scan (THE NAME EXEMPTION, `maskSubjectNames`), so a
+ * read about an artist called "Future Signal" can be written at all. It is REQUIRED rather than
+ * optional so a new call site cannot silently forget the exemption and re-create an unsatisfiable
+ * gate; pass `[]` when there is genuinely no subject to exempt. The LENGTH bounds are measured on
+ * the WHOLE script, names included — the exemption is about what Fluncle is judged for SAYING,
+ * not about how long the read is.
  */
-export function gateObservationScript(text: unknown): string {
+export function gateObservationScript(text: unknown, subjectNames: readonly string[]): string {
   if (typeof text !== "string" || !text.trim()) {
     throw new ApiError("no_script", "An observation `script` (the spoken text) is required", 400);
   }
@@ -255,7 +401,7 @@ export function gateObservationScript(text: unknown): string {
     );
   }
 
-  const violations = scanObservationScript(trimmed);
+  const violations = scanObservationScript(maskSubjectNames(trimmed, subjectNames));
 
   if (violations.length > 0) {
     throw new ApiError(

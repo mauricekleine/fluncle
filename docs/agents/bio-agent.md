@@ -47,7 +47,7 @@ The bio is a live, **public** Fluncle surface. `gateBioText` (`lib/server/bio.ts
 
 ### The name exemption: the gate polices what FLUNCLE wrote
 
-The scan runs over the bio **with the entity's own name masked out** (`maskEntityName`, `lib/server/bio.ts`) — exact, case-insensitive occurrences of the full name, nothing else. An entity's name is not Fluncle's prose: "Future Signal", "Invaderz Transmissions", and "Jungle Sound: The Bassline Strikes Back!" are real-world names, and a bio about them must be able to name them.
+The scan runs over the bio **with the entity's own name masked out** (`maskEntityName` — implemented beside the shared scan in `lib/server/observation.ts`, re-exported by `lib/server/bio.ts`; every voiced family now uses it) — exact, case-insensitive occurrences of the full name, nothing else. An entity's name is not Fluncle's prose: "Future Signal", "Invaderz Transmissions", and "Jungle Sound: The Bassline Strikes Back!" are real-world names, and a bio about them must be able to name them.
 
 The scan applies `BANNED_WORDS`, the Dry Rule, the "we" ban, and both length bounds after masking exact occurrences of the entity's full name. Two properties follow, and both are pinned by tests:
 

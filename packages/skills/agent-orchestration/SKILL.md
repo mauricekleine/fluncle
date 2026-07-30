@@ -41,7 +41,16 @@ Sol runs through the `codex` CLI's non-interactive `codex exec` — invoked from
 3. **The brief still carries the slice contract.** Codex reads `AGENTS.md` natively (that is why `CLAUDE.md` is just `@AGENTS.md`), so repo doctrine loads free — but scope, recon facts, constraints, verification steps, and what-to-report are yours to state, exactly as for an Opus brief.
 4. **Sol edits and verifies inside the worktree**; its final message lands in the `-o` report file. It never needs network or git credentials.
 5. **You own the git leg.** Review the diff in the worktree, then commit, push, and open the PR yourself — signing, credentials, and merge authority stay in one seat.
-6. **Ping-pong via resume.** `codex exec resume --last -C <worktree> "<findings>"` continues the session with its context intact (resume filters sessions by cwd; pass the session id when juggling several).
+6. **Ping-pong via resume — and mind the flag ORDER.** Every option must come BEFORE the `resume` subcommand, and `-C` is not accepted on it at all, so `cd` into the worktree instead (resume filters sessions by cwd; pass the session id when juggling several). Verified against codex-cli 0.146.0, where the documented-looking form fails with `error: unexpected argument '-C' found`:
+
+   ```bash
+   cd <worktree> && codex exec --sandbox workspace-write \
+     -m gpt-5.6-sol -c model_reasoning_effort="xhigh" -o <report-file> \
+     resume --last "<findings>"
+   ```
+
+   The failure is quiet in a backgrounded run: the launcher exits 0, no report file appears, and the slice looks like it is still working. **Confirm the process is actually alive after launching** (`pgrep -f "codex exec.*<worktree>"`) rather than assuming the `nohup` took.
+
 7. **Research mode is `--sandbox read-only`.** For codebase-wide audits, best-practice sweeps, and doc gathering, the read-only sandbox makes the run safe by construction — no worktree needed, point it at the main checkout.
 8. **Box-config slices are Sol's alone.** Remote box configuration on the Tailscale-only boxes — timer units, cron schedules, script deploys, service restarts — may be delegated to Sol with a permissive sandbox; it is the ONE executor allowed to touch a live box (Claude sub-agents stay blocked, see "Keep the human in the loop"). The standing rails still bind: destructive ops (box delete/rebuild, data-bearing changes), secrets, and paid actions stay operator/Fable-gated, and you verify the box state yourself after.
 9. **Fallback is Opus, never a weaker tier.** If codex is unavailable or a run dies unrecoverably, reassign the slice to an Opus worktree agent.

@@ -143,24 +143,29 @@ describe("scanObservationScript", () => {
   });
 });
 
+// The exempt set for a finding whose artist and title carry nothing banned — so these cases
+// exercise the gate exactly as they did before the name exemption existed.
+const NO_NAMES: readonly string[] = [];
+
 describe("gateObservationScript", () => {
   it("returns the trimmed text for a clean script", () => {
-    expect(gateObservationScript(`  ${CLEAN}  `)).toBe(CLEAN);
+    expect(gateObservationScript(`  ${CLEAN}  `, NO_NAMES)).toBe(CLEAN);
   });
 
   it("throws no_script for a non-string or empty script", () => {
-    expect(() => gateObservationScript(undefined)).toThrowError(/required/);
-    expect(() => gateObservationScript("   ")).toThrowError(/required/);
+    expect(() => gateObservationScript(undefined, NO_NAMES)).toThrowError(/required/);
+    expect(() => gateObservationScript("   ", NO_NAMES)).toThrowError(/required/);
   });
 
   it("throws script_too_short below the floor", () => {
-    expect(() => gateObservationScript("Oof, banger.")).toThrowError(/too short/);
+    expect(() => gateObservationScript("Oof, banger.", NO_NAMES)).toThrowError(/too short/);
   });
 
   it("throws voice_gate on a banned word", () => {
     expect(() =>
       gateObservationScript(
         "The signal carried a clean, even pace and the knees went up before I clocked the coordinate, fam.",
+        NO_NAMES,
       ),
     ).toThrowError(/voice gate/);
   });
@@ -169,8 +174,85 @@ describe("gateObservationScript", () => {
     expect(() =>
       gateObservationScript(
         "This one flies the flag for the American side of the map and the knees went up before I clocked the coordinate, fam.",
+        NO_NAMES,
       ),
     ).toThrowError(/geography/);
+  });
+});
+
+// ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
+//
+// A spoken read is ABOUT a finding, so it must be able to say that finding's artist and title.
+// Scanning them made the gate unsatisfiable for a record by "Future Signal": no rewrite could
+// clear it, and it sat at the head of a cap-1 oldest-first queue blocking everything behind it.
+
+describe("gateObservationScript — the name exemption", () => {
+  const FUTURE_SIGNAL = ["Future Signal", "Fractals"];
+  const READ =
+    "Future Signal built this one out of patience, and the knees went up before I clocked the coordinate, fam.";
+
+  it("lets a read NAME an artist whose name carries a banned word", () => {
+    // Before the exemption this threw voice_gate on "signal" and could never be rewritten past it.
+    expect(gateObservationScript(READ, FUTURE_SIGNAL)).toBe(READ);
+  });
+
+  // The masking must not become a hole. Everything OUTSIDE the name is still Fluncle's prose.
+  it("STILL rejects the same banned word used generically in the body", () => {
+    expect(() =>
+      gateObservationScript(
+        "Future Signal built this one out of patience, and the signal underneath never lets up before I clocked the coordinate, fam.",
+        FUTURE_SIGNAL,
+      ),
+    ).toThrowError(/voice gate/);
+  });
+
+  it("STILL rejects geography with the name exempt", () => {
+    expect(() =>
+      gateObservationScript(
+        "Future Signal built this one out of patience, the American side of the map, and the knees went up before I clocked it, fam.",
+        FUTURE_SIGNAL,
+      ),
+    ).toThrowError(/geography/);
+  });
+
+  // THE DEGENERATE CASE. A two-word name carries its own context; a name that IS the banned token
+  // carries none, so masking it would stop the gate policing that word for the whole read. Naming
+  // is optional here ("only if it sharpens the read") and there is no final-attempt bypass, so the
+  // honest trade is a read that doesn't say the name.
+  it("REFUSES a name that is EXACTLY a banned word — that would be a total amnesty", () => {
+    expect(() =>
+      gateObservationScript(
+        "Signal built this one out of patience, and the signal underneath never lets up before I clocked it, fam.",
+        ["Signal"],
+      ),
+    ).toThrowError(/voice gate/);
+  });
+
+  // …and the geography half, which the BIO's masking never had to answer: `gateBioText` scans with
+  // `allowGeography: true`, so a bio was never policing "london". This gate is.
+  it("REFUSES a name that is EXACTLY a banned PLACE — the cosmos still replaces the map", () => {
+    expect(() =>
+      gateObservationScript(
+        "London built this one out of patience, and the London air is all over it before I clocked the coordinate, fam.",
+        ["London"],
+      ),
+    ).toThrowError(/geography/);
+  });
+
+  it("ignores a name with no word characters at all (it must not strip punctuation wholesale)", () => {
+    // With no `\w` in the name both boundary lookarounds collapse and the replace runs unanchored,
+    // so a subject named `!` would delete every exclamation mark and walk through the Dry Rule.
+    expect(() => gateObservationScript(`${READ.slice(0, -1)}!`, ["!"])).toThrowError(/voice gate/);
+  });
+
+  it("does not let a SHORT name amnesty a longer banned word it sits inside", () => {
+    // The word-boundary rule: an artist called "Sign" must not mask the middle out of "signal".
+    expect(() =>
+      gateObservationScript(
+        "Sign built this one out of patience, and the signal underneath never lets up before I clocked the coordinate, fam.",
+        ["Sign"],
+      ),
+    ).toThrowError(/voice gate/);
   });
 });
 

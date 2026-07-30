@@ -116,6 +116,8 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
           return [];
         },
       },
+      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       // The title-collision guard's read — no stored titles, so no collision.
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
       // The body echo gate's neighbour read — no recent entries, so nothing to echo.
@@ -142,7 +144,10 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
   });
 
   it("voice-gates the body on an empty sector (a banned word hard-fails the store)", async () => {
-    setRoutes([{ match: /from logbook_entries where sector/, rows: () => [] }]);
+    setRoutes([
+      { match: /from logbook_entries where sector/, rows: () => [] },
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
+    ]);
     const { createLogbookEntry } = await import("./logbook");
     const { ApiError } = await import("./spotify");
 
@@ -157,13 +162,100 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
   });
 
   it("rejects a body that is only figure tokens (the prose floor)", async () => {
-    setRoutes([{ match: /from logbook_entries where sector/, rows: () => [] }]);
+    setRoutes([
+      { match: /from logbook_entries where sector/, rows: () => [] },
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
+    ]);
     const { createLogbookEntry } = await import("./logbook");
     const { ApiError } = await import("./spotify");
 
     await expect(
       createLogbookEntry(36, { body: "[[036.7.2I]]\n\n[[037.1.9A]]", title: "Sector 036" }),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+// ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
+//
+// A logbook entry is the write-up of a DAY, and the sweep hands the author every finding's artist
+// and title as its material. Scanning those names made the gate unsatisfiable for any day that
+// logged a track by "Future Signal": the entry names what it was given, the scan rejects it, and
+// no rewrite can converge. The day then sits at the head of a cap-1 oldest-first gap list forever.
+// The exempt set comes from the DB (`sectorSubjectNames`), so it is what was actually logged that
+// day — never widened by whoever is posting.
+
+describe("createLogbookEntry — the name exemption", () => {
+  // The day logged one finding, by an artist whose name carries a banned word.
+  const DAY_ROSTER = [{ artists_json: JSON.stringify(["Future Signal"]), title: "Fractals" }];
+
+  function routesForDay(inserted: Record<string, unknown>[]): void {
+    setRoutes([
+      {
+        match: /insert into logbook_entries/,
+        rows: (args) => {
+          inserted.push({
+            body: args[2],
+            generated_at: args[5],
+            generated_by: args[3],
+            sector: args[0],
+            title: args[1],
+          });
+
+          return [];
+        },
+      },
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => DAY_ROSTER },
+      { match: /select sector, title from logbook_entries$/, rows: () => [] },
+      { match: /where sector != \?/, rows: () => [] },
+      { match: /where sector = \?/, rows: () => (inserted.length === 0 ? [] : inserted) },
+    ]);
+  }
+
+  it("lets an entry NAME the day's artist, in both the title and the body", async () => {
+    const inserted: Record<string, unknown>[] = [];
+
+    routesForDay(inserted);
+
+    const { createLogbookEntry } = await import("./logbook");
+    const title = "Future Signal, twice over";
+    const body =
+      "Future Signal opened the day with something patient, and I let it run twice before the crew looked up.\n\n[[036.7.2I]]\n\nBy the time it landed I had already logged it and moved on.";
+
+    // Before the exemption BOTH gates threw voice_gate on "signal", and the day could never be
+    // written up at all — it stayed a gap forever, blocking every older day behind it.
+    const result = await createLogbookEntry(36, { body, title });
+
+    expect(result.skipped).toBe(false);
+    expect(result.entry.title).toBe(title);
+    expect(result.entry.body).toContain("Future Signal");
+  });
+
+  // The masking must not become a hole. Everything OUTSIDE the day's names is Fluncle's prose.
+  it("STILL rejects the same banned word used generically in the body", async () => {
+    routesForDay([]);
+
+    const { createLogbookEntry } = await import("./logbook");
+
+    await expect(
+      createLogbookEntry(36, {
+        body: "Future Signal opened the day, and the signal underneath never let up across the whole stretch of it.\n\n[[036.7.2I]]",
+        title: "A patient day",
+      }),
+    ).rejects.toMatchObject({ code: "voice_gate" });
+    expect(executeCalls.every((call) => !/insert/i.test(call.sql))).toBe(true);
+  });
+
+  it("STILL rejects the same banned word in the TITLE", async () => {
+    routesForDay([]);
+
+    const { createLogbookEntry } = await import("./logbook");
+
+    await expect(
+      createLogbookEntry(36, {
+        body: "Future Signal opened the day with something patient, and I let it run twice before the crew looked up.\n\n[[036.7.2I]]",
+        title: "A clean signal all day",
+      }),
+    ).rejects.toMatchObject({ code: "voice_gate" });
   });
 });
 
@@ -180,6 +272,8 @@ describe("updateLogbookEntry — the operator overwrite", () => {
           return [];
         },
       },
+      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       // The operator path still runs the title-collision guard (against OTHER sectors) —
       // no other titles here, so it passes.
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
@@ -206,6 +300,7 @@ describe("updateLogbookEntry — the operator overwrite", () => {
 
     setRoutes([
       { match: /insert into logbook_entries/, rows: () => [] },
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       { match: /select sector, title from logbook_entries$/, rows: () => STORED },
       { match: /where sector = \?/, rows: () => [{ ...EXISTING_ROW, title: "A slow drift" }] },
     ]);
@@ -295,6 +390,8 @@ const NEIGHBOR_BODY =
 describe("createLogbookEntry — the title-collision guard (Layer A, deterministic)", () => {
   it("rejects a title that NORMALIZED-matches a stored title (case + punctuation insensitive)", async () => {
     setRoutes([
+      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       // Empty sector (create is fill-empty-only), so the guard is reached.
       { match: /where sector = \?/, rows: () => [] },
       // Sector 018 already holds "Shoulders Down".
@@ -317,6 +414,8 @@ describe("createLogbookEntry — the title-collision guard (Layer A, determinist
 describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
   function echoRoutes(neighborBody: string) {
     return [
+      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       { match: /insert into logbook_entries/, rows: () => [] },
       { match: /where sector = \?/, rows: () => [] },
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
@@ -359,6 +458,8 @@ describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
     const inserted: Record<string, unknown>[] = [];
 
     setRoutes([
+      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+      { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       {
         match: /insert into logbook_entries/,
         rows: (args) => {

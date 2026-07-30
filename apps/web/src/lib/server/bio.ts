@@ -38,6 +38,7 @@ import { readOptionalEnv } from "./env";
 import {
   FIRECRAWL_SEARCH_URL,
   isLyricDomain,
+  maskEntityName,
   scanObservationScript,
   type VoiceGateViolation,
 } from "./observation";
@@ -56,62 +57,13 @@ const BIO_MIN_CHARS = 40;
 const BIO_MAX_CHARS = 500;
 
 /**
- * THE NAME EXEMPTION (the operator's ruling, 2026-07-29): the voice gate polices every word
- * FLUNCLE wrote, and stops policing words it did not choose. An entity's own name is not
- * Fluncle's prose — "Future Signal", "Invaderz Transmissions", and "Jungle Sound: The Bassline
- * Strikes Back!" are real-world names, and a bio about them must be allowed to name them.
- *
- * The mechanism is deliberately the narrowest one that works: mask EXACT, case-insensitive
- * occurrences of the FULL name out of the text, then scan what is left. Nothing about the bans
- * changes — `BANNED_WORDS`, the Dry Rule, the "we" ban, and the length bounds are untouched; only
- * WHAT TEXT is handed to the scanner changes.
- *
- * Two properties this shape buys, both pinned by tests in ./bio.test.ts:
- *   - It does NOT blanket-allow the banned word. A bio about "Future Signal" may name the artist
- *     and still fails if it uses "signal" as a generic word anywhere else in the paragraph — which
- *     is what keeps the gate meaningful rather than a per-entity amnesty.
- *   - Masking the full name removes the punctuation INSIDE it, which is how the album "Jungle
- *     Sound: The Bassline Strikes Back!" clears the Dry Rule's exclamation ban without that ban
- *     being weakened for anything Fluncle actually wrote.
- *
- * THE MATCH IS WORD-BOUNDED, and it has to be. An unanchored replace fires INSIDE longer words, so
- * the artist "Sign" would mask the middle out of "signal" (leaving " al", which scans clean) and
- * "Mission:" would eat the tail of "transmission:" — silently amnestying the exact banned words the
- * first property promises to keep. The boundaries are CONDITIONAL on the name's own edges, because
- * a name may legitimately start or end in punctuation: `(?<!\w)` only when the name starts with a
- * word character, `(?!\w)` only when it ends with one. That is what lets "…Strikes Back!" still
- * mask while "Sign" stops being a substring wildcard.
- *
- * A PARTIAL reference is still rejected: a bio about "Future Signal" that says only "Signal" trips
- * the ban. That is intended — conservative, and the rewrite can simply use the full name.
- *
- * THE ONE UNAVOIDABLE COST: when an entity's WHOLE name IS a banned word, masking it deletes every
- * occurrence, so that word is amnestied in that entity's bio entirely — there is no way to tell
- * "the artist Signal" from the noun in "a signal", because they are the same token. Production
- * carries at least three such entities (`/artist/signal`, `/album/anomaly`, `/album/content`). It
- * is the accepted cost of letting those pages have a bio at all; the alternative is that they
- * cannot be written.
- *
- * The name is a trusted identity string from Fluncle's own DB, never free web content, so
- * regex-escaping it is the whole of the input handling it needs.
+ * THE NAME EXEMPTION. The bio was the first family to get it (the operator's 2026-07-29 ruling on
+ * the runaway rewrite loop); it now belongs to every voiced family, so the implementation, the
+ * full rationale, and its one accepted cost live beside the shared scan in ./observation.ts. It is
+ * re-exported here because this module is where the exemption was born and where its tests read
+ * it from — the bio's own gate is the single-name case, `maskEntityName(bio, entityName)`.
  */
-export function maskEntityName(text: string, entityName: string): string {
-  const name = entityName.trim();
-
-  if (!name) {
-    return text; // no name to exempt — scan the text exactly as before
-  }
-
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Only guard an edge the name actually presents to one: a name ending in `!` or `:` must still
-  // match when the next character is a letter.
-  const lead = /^\w/.test(name) ? "(?<!\\w)" : "";
-  const tail = /\w$/.test(name) ? "(?!\\w)" : "";
-
-  // A single space, not an empty string: the masked span still separates the words around it, so
-  // masking can never weld two neighbours into a token the scanner would read differently.
-  return text.replace(new RegExp(`${lead}${escaped}${tail}`, "gi"), " ");
-}
+export { maskEntityName } from "./observation";
 
 /**
  * Validate + voice-gate an agent-authored entity bio, throwing a clean ApiError on any
