@@ -533,7 +533,10 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
         (row) => row.checked === null && row.produced === null && row.queueDepth === null,
       ),
     ).toMatchObject({
-      missingFields: ["checked", "errors", "expected_interval_ms", "produced", "queue_depth"],
+      // `expected_interval_ms` is NOT here: it is filled server-side from the derived
+      // roster, so a unit on the roster never reports it missing. The remaining four are
+      // the sweep's own upgrade queue.
+      missingFields: ["checked", "errors", "produced", "queue_depth"],
       unit: "fluncle-sentry-triage",
     });
   });
