@@ -14,7 +14,16 @@
 //   bun test docs/agents/hermes/scripts/cron-output.test.ts
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -445,15 +454,69 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(code).toBe(0);
   });
 
-  test("an empty base URL ⇒ NO request either", async () => {
+  // ── WHERE THE POST ACTUALLY WENT ────────────────────────────────────────────
+  // A loopback fixture can only report what it RECEIVED, and "received nothing" has two very
+  // different causes: the wrapper posted nowhere, or it posted somewhere else. That ambiguity
+  // hid a live defect — `${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}` made an EMPTY base
+  // fall back to the production URL, so the guard below it was unreachable and every CI run of
+  // `bun run test:scripts` fired a real POST at www.fluncle.com while this very test passed.
+  //
+  // So these two drive the wrapper with `curl` itself replaced by a recorder, and assert on the
+  // URL the box would really have dialled.
+  function withCurlRecorder(): { bin: string; log: string; urls: () => string[] } {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-curl-recorder-"));
+    const bin = join(root, "bin");
+    const log = join(root, "urls.txt");
+
+    mkdirSync(bin, { recursive: true });
+    // The URL is the LAST argument the emitter passes; everything else is headers and flags.
+    writeFileSync(
+      join(bin, "curl"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "\${@: -1}" >>${JSON.stringify(log)}\nexit 0\n`,
+      "utf8",
+    );
+    chmodSync(join(bin, "curl"), 0o755);
+
+    return {
+      bin,
+      log,
+      urls: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []),
+    };
+  }
+
+  test("the URL it dials is the base plus the CONTRACT's path, verbatim", async () => {
+    const recorder = withCurlRecorder();
+
+    await emitAsync("backup", `echo '{"ok":true}'`, {
+      env: {
+        FLUNCLE_API_BASE_URL: "https://ledger.invalid",
+        FLUNCLE_API_TOKEN: "fixture-agent-token",
+        PATH: `${recorder.bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+      },
+    });
+
+    expect(recorder.urls()).toEqual([`https://ledger.invalid${RUN_EVENT_ENDPOINT}`]);
+  });
+
+  test("an empty base URL ⇒ NO request either — and above all, none at PRODUCTION", async () => {
+    const recorder = withCurlRecorder();
     const { calls } = await withLedger("accepts", async (base, calls) => {
       await emitAsync("backup", `echo '{"ok":true}'`, {
-        env: { FLUNCLE_API_BASE_URL: "", FLUNCLE_API_TOKEN: "fixture-agent-token" },
+        env: {
+          FLUNCLE_API_BASE_URL: "",
+          FLUNCLE_API_TOKEN: "fixture-agent-token",
+          PATH: `${recorder.bin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+        },
       });
 
       return { base, calls };
     });
 
+    // `curl` was never reached at all — the honest form of "posted nowhere".
+    expect(recorder.urls()).toEqual([]);
+    // Stated separately because it is the consequence that mattered: the fallback URL is the
+    // live archive, and `bun run test:scripts` runs inside the deploy gate.
+    expect(recorder.urls().join("\n")).not.toContain("fluncle.com");
     expect(calls).toHaveLength(0);
   });
 
@@ -480,6 +543,50 @@ describe("emit_cron_output — the run-ledger POST", () => {
 
     expect(code).toBe(3);
     expect(findJsonSummary(marker)).toEqual({ ok: true });
+  });
+
+  // The fourth way a POST can fail, and the only one no fixture above reaches: `curl` simply is
+  // not there. The emitter guards on `command -v curl`, and a sweep must not care.
+  test("no curl on PATH ⇒ the sweep runs, the marker lands, the exit code stands", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-no-curl-"));
+    const bin = join(root, "bin");
+
+    mkdirSync(bin, { recursive: true });
+
+    // A PATH the wrapper can still work in, with curl deliberately absent: symlink exactly the
+    // tools cron-output.sh and the harness reach for, and nothing else. `Bun.which` resolves each
+    // from the real PATH, so the set is honest rather than guessed at a fixed prefix.
+    for (const tool of [
+      "bash",
+      "cat",
+      "date",
+      "dirname",
+      "find",
+      "grep",
+      "ls",
+      "mkdir",
+      "mktemp",
+      "rm",
+      "sed",
+      "tail",
+      "tee",
+      "tr",
+    ]) {
+      const real = Bun.which(tool);
+
+      expect(real).toBeTruthy();
+      symlinkSync(real ?? "", join(bin, tool));
+    }
+
+    expect(Bun.which("curl", { PATH: bin })).toBeNull();
+
+    const { code, marker, stdout } = await emitAsync("crawl", `echo '{"ok":true}'; exit 4`, {
+      env: { FLUNCLE_API_BASE_URL: "https://ledger.invalid", FLUNCLE_API_TOKEN: "t", PATH: bin },
+    });
+
+    expect(code).toBe(4);
+    expect(findJsonSummary(marker)).toEqual({ ok: true });
+    expect(stdout).toContain('{"ok":true}');
   });
 
   test("a ledger that never answers is cut off by the POST's own timeout", async () => {

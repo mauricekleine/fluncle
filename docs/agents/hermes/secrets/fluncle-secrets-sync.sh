@@ -12,7 +12,8 @@
 # keeps reporting its own cheerful `ok` until a token expires. So every pass now ends with a
 # JSON summary line — `checked` (secret targets attempted), `produced` (files actually
 # installed), `errors`, `queueDepth` (targets left unwritten) — and POSTs that line to the
-# run ledger. `ok` is DERIVED from the exit code and the error count, never a literal.
+# run ledger. The line states NO `ok`: the Worker derives the verdict from the exit code and the
+# error count, and a summary that grades itself is rejected at the edge.
 set -euo pipefail
 
 # Every path is overridable so the whole script can be driven end to end by its test against
@@ -143,17 +144,19 @@ read_secret_token() {
 # here — including the `set -e` aborts, which is where the interesting failures are. The
 # summary LINE uses the fleet's camelCase counter names (every other sweep prints them that
 # way); the POST BODY uses the ledger contract's snake_case fields.
+#
+# THE LINE CARRIES NO `ok`, deliberately: the Worker derives the verdict from the exit code and
+# the error count, and rejects a summary that states one. The two facts are what this prints.
 emit_run_summary() {
-  local rc="${1:-0}" ok="false" queue=0 ended summary
+  local rc="${1:-0}" queue=0 ended summary
   if [ "$SUMMARY_EMITTED" = "1" ]; then return 0; fi
   SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
-  if [ "$rc" -eq 0 ] && [ "$ERRORS" -eq 0 ]; then ok="true"; fi
   queue=$((CHECKED - PRODUCED))
   [ "$queue" -ge 0 ] || queue=0
   ended="$(run_event_now)"
-  summary="$(printf '{"ok":%s,"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
-    "$ok" "$CHECKED" "$PRODUCED" "$ERRORS" "$queue" "$RUN_EVENT_INTERVAL_MS")"
+  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
+    "$CHECKED" "$PRODUCED" "$ERRORS" "$queue" "$RUN_EVENT_INTERVAL_MS")"
   printf '%s\n' "$summary"
   if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
     FLUNCLE_API_TOKEN="$(read_secret_token)"

@@ -24,7 +24,7 @@
 // workspace side (`orpc-coverage`, `orpc-admin-coverage`, `orpc-auth-coverage`). This closes the
 // one gap none of them can see: a path that exists only in bash.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** Repo root, from this file's location (docs/agents/hermes/scripts). */
@@ -78,6 +78,56 @@ export const PENDING_WORKSPACE_PATHS = new Map<string, string>([
   // entry can go.
   [RUN_EVENT_ENDPOINT, "PR #1006 — the record_run contract (admin-telemetry.ts)"],
 ]);
+
+/**
+ * The ledger's CLOSED gate vocabulary, as the box scripts must speak it.
+ *
+ * Kept here because a box script cannot import the Worker, and cross-checked against the Worker
+ * by `workspaceGateStates()` below — the same bargain as the endpoint path. A gate word of a
+ * script's own invention (`"locked"`, `"dry-run"`) is rejected at the edge, and a rejected POST
+ * leaves NO ROW: the silent-empty-ledger failure again, one field further in.
+ */
+export const LEDGER_GATE_STATES = ["active", "disabled", "paused"] as const;
+
+/** The Worker's own `GATE_STATES`, or `null` when the run-ledger server half is not here yet. */
+export function workspaceGateStates(): null | string[] {
+  const module = join(REPO_ROOT, "apps/web/src/lib/server/run-events.ts");
+
+  if (!existsSync(module)) {
+    return null;
+  }
+
+  const match = /const GATE_STATES = new Set<string>\(\[([^\]]*)\]\)/.exec(
+    readFileSync(module, "utf8"),
+  );
+
+  if (!match?.[1]) {
+    throw new Error(`run-events.ts exists but declares no GATE_STATES set — ${module}`);
+  }
+
+  return [...match[1].matchAll(/"([^"]+)"/g)].map(([, state]) => state ?? "").sort();
+}
+
+/** Every `gateState` string literal the three host emitters can put on the wire. */
+export function emittedGateStates(scripts: string[]): string[] {
+  const found = new Set<string>();
+
+  for (const script of scripts) {
+    for (const line of readFileSync(script, "utf8").split("\n")) {
+      if (/^\s*#/.test(line)) {
+        continue;
+      }
+
+      for (const match of line.matchAll(/^\s*\w*GATE\w*='"([^"]+)"'/g)) {
+        if (match[1]) {
+          found.add(match[1]);
+        }
+      }
+    }
+  }
+
+  return [...found].sort();
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {

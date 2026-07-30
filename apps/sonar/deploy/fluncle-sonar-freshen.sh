@@ -46,10 +46,13 @@
 # `checked` is the denominator (0 until the feed actually resolves a commit, so a blind tick
 # is legible AS blind), `produced` counts a swap actually made, `queueDepth` a published build
 # not yet on the box — the pair the ledger's `produced == 0 AND queueDepth > 0` alarm reads.
-# `gateState` carries the third state that is neither ok nor down: a tick that skipped on the
-# lock, or an operator's `--force` / `--dry-run`, so an operator act never trips the alarm.
-# Counters report `null` when this run never got to try and `0` when it tried and found
-# nothing — the two are different facts and the ledger keeps them apart.
+# `gateState` carries the third state that is neither ok nor down — a tick that skipped on the
+# lock, or an operator's `--dry-run` — so a tick that deliberately did not deploy never trips
+# the alarm. It speaks the ledger's own CLOSED vocabulary (`active`/`disabled`/`paused`, the
+# `run_events.gate_state` enum); a word of this script's own invention is rejected at the edge
+# and the row goes missing, which is the failure the ledger exists to end. Counters report
+# `null` when this run never got to try and `0` when it tried and found nothing — the two are
+# different facts and the ledger keeps them apart.
 #
 # Doctrine: apps/sonar/deploy/README.md.
 set -euo pipefail
@@ -109,7 +112,10 @@ SF_CHECKED="null"
 SF_PRODUCED="null"
 SF_QUEUE="null"
 SF_ERRORS=0
-SF_GATE="null" # a JSON string once this tick is an operator act or a lock skip
+# `gateState` speaks the ledger's CLOSED enum — `active` / `disabled` / `paused`, mirroring the
+# `run_events.gate_state` column. A tick that did not look reports `paused`; anything else is
+# rejected by the Worker, and a rejected POST leaves no row at all.
+SF_GATE="null" # `"paused"` once this tick has decided not to look
 SF_SUMMARY_EMITTED=0
 SF_STARTED_AT=""
 
@@ -206,20 +212,24 @@ run_event_now() {
 # Print the run's summary line and POST its envelope, exactly once, from whichever of this
 # script's many exit paths got here — the `die`s included, which is where the interesting
 # failures are. The summary LINE uses the fleet's camelCase counter names; the POST BODY uses
-# the ledger contract's snake_case fields. `ok` is DERIVED, never a literal.
+# the ledger contract's snake_case fields.
+#
+# THE LINE STATES NO `ok`. It has every fact needed to compute one and deliberately computes
+# none: the verdict is `exit_code == 0 && errors == 0`, the Worker owns it, and a summary that
+# grades itself is rejected at the edge. This script exits 0 on a dead release feed BY DESIGN,
+# which is exactly the shape a self-reported `ok` would have painted green.
 #
 # It goes to STDOUT while every other line here goes to stderr, deliberately: the ledger reads
 # the last non-empty STDOUT line, so the script's own chatter can never be mistaken for its
 # verdict.
 emit_run_summary() {
-  local rc="${1:-0}" ok="false" ended summary
+  local rc="${1:-0}" ended summary
   if [ "$SF_SUMMARY_EMITTED" = "1" ]; then return 0; fi
   SF_SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
-  if [ "$rc" -eq 0 ] && [ "$SF_ERRORS" -eq 0 ]; then ok="true"; fi
   ended="$(run_event_now)"
-  summary="$(printf '{"ok":%s,"checked":%s,"produced":%s,"errors":%d,"queueDepth":%s,"gateState":%s,"expectedIntervalMs":%d}' \
-    "$ok" "$SF_CHECKED" "$SF_PRODUCED" "$SF_ERRORS" "$SF_QUEUE" "$SF_GATE" "$RUN_EVENT_INTERVAL_MS")"
+  summary="$(printf '{"checked":%s,"produced":%s,"errors":%d,"queueDepth":%s,"gateState":%s,"expectedIntervalMs":%d}' \
+    "$SF_CHECKED" "$SF_PRODUCED" "$SF_ERRORS" "$SF_QUEUE" "$SF_GATE" "$RUN_EVENT_INTERVAL_MS")"
   printf '%s\n' "$summary"
   record_run_event "$RUN_EVENT_UNIT" "$SF_STARTED_AT" "$ended" "$rc" "$summary" || true
   return 0
@@ -244,7 +254,8 @@ trap 'on_exit' EXIT
 exec 9>"$LOCK"
 flock -n 9 || {
   log "another run holds the lock; exiting"
-  SF_GATE='"locked"'
+  # This tick looked at nothing, so its counters stay `null` and the gate says it did not run.
+  SF_GATE='"paused"'
   exit 0
 }
 
@@ -334,11 +345,15 @@ OLD_SHA="$(cat "$SHA_FILE" 2>/dev/null || true)"
 # --dry-run deliberately skips the already-current short-circuit: it never touches the
 # live service, so "preview the current release" should stay useful on a current box.
 if [ "$MODE" = "--force" ]; then
+  # NO gate on a force. It is a real deploy that really swaps, and the ledger NULLS a gated
+  # run's work counters — gating this would erase the `produced:1` that proves it happened.
+  # It cannot raise a false alarm either: a forced swap ends `produced:1, queueDepth:0`.
   reason="forced"
-  SF_GATE='"forced"'
 elif [ "$MODE" = "--dry-run" ]; then
+  # Gated: it verifies and pre-smokes and then deliberately leaves the build undeployed, so
+  # `produced:0` beside `queueDepth:1` is the operator's choice rather than a stalled box.
   reason="dry run"
-  SF_GATE='"dry-run"'
+  SF_GATE='"paused"'
 elif [ -z "$OLD_SHA" ]; then
   reason="no baseline (first run)"
 elif [ "$OLD_SHA" = "$NEW_SHA" ]; then
@@ -352,7 +367,8 @@ else
 fi
 # There is work on the table from here down. Until the swap lands it is BACKLOG, so an
 # abandoned deploy leaves `produced:0` beside `queueDepth:1` — the pair that alarms.
-# The two operator modes carry a `gateState`, so a pilot or a preview never trips it.
+# A `--dry-run` carries a `gateState`, so a preview that leaves the backlog standing is never
+# read as a stalled deploy.
 SF_QUEUE=1
 log "${OLD_SHA:-<none>} -> $NEW_SHA | $reason"
 

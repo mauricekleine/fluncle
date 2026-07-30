@@ -21,10 +21,13 @@ import { dirname, join } from "node:path";
 
 import {
   boxScriptApiPaths,
+  emittedGateStates,
+  LEDGER_GATE_STATES,
   PENDING_WORKSPACE_PATHS,
   resolveApiPath,
   RUN_EVENT_ENDPOINT,
   runLedgerContractPaths,
+  workspaceGateStates,
 } from "./api-surface";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
@@ -177,6 +180,71 @@ describe("every path a box script hardcodes is a path the Worker serves", () => 
 });
 
 // ---------------------------------------------------------------------------
+// THE SUMMARY LINE STATES FACTS, NOT A VERDICT.
+//
+// Same failure class as the endpoint, one field in: the summary is bash's half of a contract the
+// Worker owns, and a value only bash knows about is REJECTED at the edge — leaving no row, which
+// reads as a missed run. Two vocabularies are pinned here: `ok` (which the emitter must not
+// state at all) and `gateState` (which must be one of the ledger's three words).
+// ---------------------------------------------------------------------------
+
+const EMITTERS: [string, string][] = [
+  ["timer-watchdog.sh", WATCHDOG],
+  ["fluncle-secrets-sync.sh", SECRETS_SYNC],
+  ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
+];
+
+/** The literal JSON format string a script builds its summary line from. */
+function summaryFormat(path: string): string {
+  const match = /summary="\$\(printf '(\{[^']*})'/.exec(readFileSync(path, "utf8"));
+
+  if (!match?.[1]) {
+    throw new Error(`no summary printf format found in ${path}`);
+  }
+
+  return match[1];
+}
+
+describe("the summary line states facts, never a verdict", () => {
+  test.each(EMITTERS)("%s prints no `ok` of its own", (_name, path) => {
+    // Asserted on the FORMAT STRING rather than on a run's output, so it holds for every exit
+    // path at once — including the ones no fixture reaches — and cannot be loosened by a test
+    // that swaps an exact `toEqual` for a forgiving `toMatchObject`.
+    expect(summaryFormat(path)).not.toContain('"ok"');
+    // The counters it does print are the ledger's mandatory set, so `missing_fields` comes back
+    // empty for these three and the upgrade queue names only sweeps that really owe something.
+    for (const field of ["checked", "produced", "errors", "queueDepth"]) {
+      expect(summaryFormat(path)).toContain(`"${field}"`);
+    }
+  });
+
+  test("every gate value a script can emit is one of the ledger's three words", () => {
+    const emitted = emittedGateStates(EMITTERS.map(([, path]) => path));
+
+    // Non-empty, or this proves nothing: the extractor has to be finding the assignments.
+    expect(emitted.length).toBeGreaterThan(0);
+
+    for (const state of emitted) {
+      expect(LEDGER_GATE_STATES).toContain(state);
+    }
+  });
+
+  // And the vocabulary itself is checked against the Worker, the same way the endpoint is —
+  // otherwise `LEDGER_GATE_STATES` is one more constant agreeing only with itself.
+  test("that vocabulary is the Worker's own, whenever the Worker is here to ask", () => {
+    const declared = workspaceGateStates();
+
+    if (declared === null) {
+      expect(PENDING_WORKSPACE_PATHS.has(RUN_EVENT_ENDPOINT)).toBe(true);
+
+      return;
+    }
+
+    expect(declared).toEqual([...LEDGER_GATE_STATES].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
 // THE DECLARED CADENCE.
 //
 // `expected_interval_ms` exists so freshness is judged against what actually runs. A constant
@@ -311,6 +379,18 @@ async function runScript(
   return { code, stderr, stdout };
 }
 
+/**
+ * THE VERDICT, DERIVED — never read off the line.
+ *
+ * None of these three units prints `ok`, and that is the point: the rule is the WORKER's
+ * (`exit_code === 0 && (errors ?? 0) === 0`) and a summary that grades itself is rejected at the
+ * edge. So a test that wants to assert a run's health asserts it from the two facts the run
+ * actually reports, which is exactly what the ledger will do with them.
+ */
+function derivedOk(exitCode: number, errors: Summary[string] | undefined): boolean {
+  return exitCode === 0 && (errors ?? 0) === 0;
+}
+
 /** The LAST non-empty stdout line, parsed — the same line the wrapper sends as summary_raw. */
 function lastJsonLine(stdout: string): Summary {
   const line = stdout
@@ -426,15 +506,17 @@ describe("timer-watchdog reports a run", () => {
     const { code, summary } = await runWatchdog({ timers: HEALTHY });
 
     expect(code).toBe(0);
+    // An EXACT shape, so a stray key cannot creep in: the ledger rejects a summary carrying
+    // `ok`, and `toMatchObject` would have let one ride along unnoticed.
     expect(summary).toEqual({
       checked: 3,
       errors: 0,
       expectedIntervalMs: 900_000,
       gateState: null,
-      ok: true,
       produced: 0,
       queueDepth: 0,
     });
+    expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
   // THE ONE THIS UNIT EXISTS FOR. A watchdog that enumerates nothing exits 0 and reports a
@@ -448,9 +530,9 @@ describe("timer-watchdog reports a run", () => {
     expect(summary.checked).toBe(0);
     expect(summary.produced).toBe(0);
     expect(summary.queueDepth).toBe(0);
-    // It genuinely did not fail, and it must not claim it did — the row is not `ok:false`,
-    // it is `ok:true` with a zero denominator, and the READER is what catches it.
-    expect(summary.ok).toBe(true);
+    // It genuinely did not fail, and nothing here claims it did — the row is not `ok:false`,
+    // it is a DERIVED ok with a zero denominator, and the READER is what catches it.
+    expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
   test("a stranded timer shows up as backlog cleared, not as backlog hidden", async () => {
@@ -460,18 +542,13 @@ describe("timer-watchdog reports a run", () => {
     });
 
     expect(code).toBe(0);
-    expect(summary).toMatchObject({
-      checked: 4,
-      errors: 0,
-      ok: true,
-      produced: 1,
-      queueDepth: 1,
-    });
+    expect(summary).toMatchObject({ checked: 4, errors: 0, produced: 1, queueDepth: 1 });
+    expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
   // The ledger's alarm conjunction, from the real script: stranded timers found, none
-  // re-armed. `produced == 0 AND queueDepth > 0` — and `ok` is false because the errors are
-  // counted, not because the exit code alone said so.
+  // re-armed. `produced == 0 AND queueDepth > 0` — and the derived verdict is false because the
+  // errors are COUNTED, which is what makes it hold even on a sweep that exits 0.
   test("ALARM SHAPE: found stranded, re-armed none", async () => {
     const { code, summary } = await runWatchdog({
       infinity: ["fluncle-anchor.timer", "fluncle-rank.timer"],
@@ -480,13 +557,8 @@ describe("timer-watchdog reports a run", () => {
     });
 
     expect(code).toBe(1);
-    expect(summary).toMatchObject({
-      checked: 5,
-      errors: 2,
-      ok: false,
-      produced: 0,
-      queueDepth: 2,
-    });
+    expect(summary).toMatchObject({ checked: 5, errors: 2, produced: 0, queueDepth: 2 });
+    expect(derivedOk(code, summary.errors)).toBe(false);
   });
 
   test("a busy oneshot is examined but never counted as stranded", async () => {
@@ -633,10 +705,10 @@ describe("secrets-sync reports a run", () => {
       errors: 0,
       expectedIntervalMs: 900_000,
       gateState: null,
-      ok: true,
       produced: 2,
       queueDepth: 0,
     });
+    expect(derivedOk(code, summary.errors)).toBe(true);
     // The real work still happened — the summary is a report, not a replacement.
     expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
     expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
@@ -656,7 +728,8 @@ describe("secrets-sync reports a run", () => {
     const { envelope, summary } = received(calls);
 
     expect(envelope.unit).toBe("fluncle-secrets-sync");
-    expect(summary).toMatchObject({ ok: true, produced: 2 });
+    expect(summary).toMatchObject({ errors: 0, produced: 2 });
+    expect("ok" in summary).toBe(false);
   });
 
   // The whole reason the token is read BEFORE the rewrite: an op outage is exactly when this
@@ -677,8 +750,10 @@ describe("secrets-sync reports a run", () => {
     const { envelope, summary } = received(calls);
 
     expect(envelope.exit_code).not.toBe(0);
-    // Two targets promised, none written: the shortfall is the backlog, and `ok` is false.
-    expect(summary).toMatchObject({ checked: 2, ok: false, produced: 0, queueDepth: 2 });
+    // Two targets promised, none written: the shortfall is the backlog, and the exit code the
+    // envelope carries is what the ledger derives a false verdict from.
+    expect(summary).toMatchObject({ checked: 2, produced: 0, queueDepth: 2 });
+    expect(derivedOk(envelope.exit_code, summary.errors)).toBe(false);
   });
 
   test("a missing bootstrap env reports the failure rather than dying quiet", async () => {
@@ -697,27 +772,26 @@ describe("secrets-sync reports a run", () => {
     );
 
     expect(code).toBe(1);
-    expect(summary).toMatchObject({ checked: 0, errors: 1, ok: false, produced: 0 });
+    expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0 });
+    expect(derivedOk(code, summary.errors)).toBe(false);
   });
 
   test("the optional GSC key counts as a target — success and failure both land", async () => {
     const clean = await runSecretsSync({ gsc: "ok" });
 
     expect(clean.code).toBe(0);
-    expect(clean.summary).toMatchObject({ checked: 3, errors: 0, ok: true, produced: 3 });
+    expect(clean.summary).toMatchObject({ checked: 3, errors: 0, produced: 3 });
+    expect(derivedOk(clean.code, clean.summary.errors)).toBe(true);
 
     // Exits 0 on purpose (the audit degrades), which is exactly why the error is COUNTED:
     // a green exit code beside a nonzero error count must not read green.
     const degraded = await runSecretsSync({ gsc: "fails" });
 
     expect(degraded.code).toBe(0);
-    expect(degraded.summary).toMatchObject({
-      checked: 3,
-      errors: 1,
-      ok: false,
-      produced: 2,
-      queueDepth: 1,
-    });
+    expect(degraded.summary).toMatchObject({ checked: 3, errors: 1, produced: 2, queueDepth: 1 });
+    // Exit code 0, one counted error — so the DERIVED verdict is false where a self-reported one
+    // would have been true. This single line is the whole argument for deriving it.
+    expect(derivedOk(degraded.code, degraded.summary.errors)).toBe(false);
   });
 });
 
@@ -850,10 +924,10 @@ describe("sonar-freshen reports a run", () => {
       errors: 0,
       expectedIntervalMs: 3_600_000,
       gateState: null,
-      ok: true,
       produced: 0,
       queueDepth: 0,
     });
+    expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
   // A dead release feed exits 0 BY DESIGN (leave the box alone). Before this, that was
@@ -864,19 +938,26 @@ describe("sonar-freshen reports a run", () => {
     const { code, summary } = await runSonar({ unreachable: true }, undefined);
 
     expect(code).toBe(0);
-    expect(summary).toMatchObject({ checked: 0, errors: 1, ok: false, queueDepth: 0 });
+    expect(summary).toMatchObject({ checked: 0, errors: 1, queueDepth: 0 });
+    expect(derivedOk(code, summary.errors)).toBe(false);
   });
 
   test("a malformed sonar.commit is the same shape — it resolved nothing", async () => {
     const { code, summary } = await runSonar({ commit: "<html>not a sha</html>" }, undefined);
 
     expect(code).toBe(0);
-    expect(summary).toMatchObject({ checked: 0, errors: 1, ok: false });
+    expect(summary).toMatchObject({ checked: 0, errors: 1 });
+    expect(derivedOk(code, summary.errors)).toBe(false);
   });
 
   // The third state. A lock-skipped tick measured NOTHING, so its counters are `null` rather
   // than `0` — `0` is reserved for "I tried and found nothing", and conflating the two would
   // make a wedged predecessor look like a healthy idle box forever.
+  //
+  // `paused` is the ledger's OWN word (the `run_events.gate_state` enum is active/disabled/
+  // paused). A gate value of this script's invention — `"locked"` reads better and was the
+  // first draft — is rejected by the Worker, and a rejected POST leaves NO ROW: the same
+  // silent-empty-ledger failure as a wrong endpoint, one field further in.
   test("GATED: a lock-held tick reports null counters, not zeros", async () => {
     const { code, summary } = await runSonar({ commit: SHA_A, locked: true }, undefined);
 
@@ -885,8 +966,7 @@ describe("sonar-freshen reports a run", () => {
       checked: null,
       errors: 0,
       expectedIntervalMs: 3_600_000,
-      gateState: "locked",
-      ok: true,
+      gateState: "paused",
       produced: null,
       queueDepth: null,
     });
@@ -900,14 +980,16 @@ describe("sonar-freshen reports a run", () => {
     });
 
     expect(code).toBe(0);
+    // NO gate on a real deploy, forced or not: the ledger nulls a gated run's work counters, so
+    // gating this would erase the `produced:1` that proves the swap happened.
     expect(summary).toMatchObject({
       checked: 1,
       errors: 0,
       gateState: null,
-      ok: true,
       produced: 1,
       queueDepth: 0,
     });
+    expect(derivedOk(code, summary.errors)).toBe(true);
 
     expect(runEvents(calls)[0]?.auth).toBe("Bearer sonar-agent-token");
 
@@ -929,10 +1011,10 @@ describe("sonar-freshen reports a run", () => {
     expect(summary).toMatchObject({
       checked: 1,
       errors: 0,
-      gateState: "dry-run",
-      ok: true,
+      gateState: "paused",
       produced: 0,
       queueDepth: 1,
     });
+    expect(derivedOk(code, summary.errors)).toBe(true);
   }, 60_000);
 });

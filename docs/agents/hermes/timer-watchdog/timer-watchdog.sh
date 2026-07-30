@@ -35,8 +35,9 @@
 # incident on the other box — 897 consecutive runs, zero checks, green the whole way. So
 # every pass now ends with a JSON summary line carrying `checked` (timers examined) beside
 # `produced` (re-arms), `errors`, and `queueDepth` (stranded timers found), and POSTs that
-# line to the run ledger. `ok` is DERIVED from the exit code and the error count — never a
-# literal, which is the bug this ledger was built to make impossible.
+# line to the run ledger. The line states NO `ok`: the Worker derives the verdict from the exit
+# code and the error count, and a summary that grades itself is rejected outright — a sweep
+# printing `{"errors":2,"ok":true}` for eleven nights is the bug this ledger exists to end.
 set -uo pipefail
 
 SELF_TIMER="fluncle-timer-watchdog.timer"
@@ -170,18 +171,20 @@ run_event_now() {
 #
 # NOTE THE TWO CASINGS, both deliberate. The summary LINE uses the fleet's camelCase counter
 # names (every other sweep prints `queueRemaining`, `gateSkipped`, `totalUnresolved`), because
-# it is the sweep's own line and the /status prober reads the same shape. The POST BODY uses
-# the ledger contract's snake_case field names. The Worker normalizes the former and owns the
-# latter.
+# it is the sweep's own line. The POST BODY uses the ledger contract's snake_case field names.
+# The Worker normalizes the former and owns the latter.
+#
+# THE LINE CARRIES NO `ok`. This unit was written fresh with the ledger, so it never inherits
+# the fleet's habit of grading itself: the verdict is `exit_code == 0 && errors == 0` and the
+# Worker computes it from the two facts below. A self-reported one is rejected at the edge.
 emit_run_summary() {
-  local rc="${1:-0}" ok="false" ended summary
+  local rc="${1:-0}" ended summary
   if [ "$SUMMARY_EMITTED" = "1" ]; then return 0; fi
   SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
-  if [ "$rc" -eq 0 ] && [ "$ERRORS" -eq 0 ]; then ok="true"; fi
   ended="$(run_event_now)"
-  summary="$(printf '{"ok":%s,"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
-    "$ok" "$CHECKED" "$REARMED" "$ERRORS" "$STRANDED" "$RUN_EVENT_INTERVAL_MS")"
+  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
+    "$CHECKED" "$REARMED" "$ERRORS" "$STRANDED" "$RUN_EVENT_INTERVAL_MS")"
   printf '%s\n' "$summary"
   if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
     FLUNCLE_API_TOKEN="$(container_env FLUNCLE_API_TOKEN)"

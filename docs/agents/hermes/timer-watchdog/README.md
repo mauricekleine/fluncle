@@ -53,7 +53,6 @@ So every pass ends with a JSON summary line on stdout and POSTs it to the run le
 
 ```json
 {
-  "ok": true,
   "checked": 43,
   "produced": 0,
   "errors": 0,
@@ -63,7 +62,9 @@ So every pass ends with a JSON summary line on stdout and POSTs it to the run le
 }
 ```
 
-`checked` is the DENOMINATOR — timers examined, counted before any filter — and it is the only field that separates a healthy idle pass from a blind one. `produced` is re-arms performed, `errors` failed re-arms, `queueDepth` the stranded timers this pass found; the ledger alarms on `produced == 0 AND queueDepth > 0`, so finding nothing to do stays silent forever while finding stranded timers and re-arming none does not. `ok` is DERIVED from the exit code and the error count, never a literal. `expectedIntervalMs` mirrors this unit's own `OnCalendar`, and `run-events.test.ts` pins the pair against the `.timer` file so a cadence change cannot quietly teach the ledger the wrong freshness budget.
+`checked` is the DENOMINATOR — timers examined, counted before any filter — and it is the only field that separates a healthy idle pass from a blind one. `produced` is re-arms performed, `errors` failed re-arms, `queueDepth` the stranded timers this pass found; the ledger alarms on `produced == 0 AND queueDepth > 0`, so finding nothing to do stays silent forever while finding stranded timers and re-arming none does not. `expectedIntervalMs` mirrors this unit's own `OnCalendar`, and `run-events.test.ts` pins the pair against the `.timer` file so a cadence change cannot quietly teach the ledger the wrong freshness budget.
+
+**There is no `ok` in that line, deliberately.** The verdict is `exit_code == 0 && errors == 0` and the Worker computes it from the two facts above; a summary that grades itself is rejected at the edge, because the nightly Sentry sweep exited 0 for eleven nights while printing `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that contradicted it.
 
 The agent token for the POST is read off the LIVE container's env via `docker inspect` — the same credential-free read the Discord webhook uses, so this unit still holds no config file and reads nothing from `op`. No token, or the container down, means no POST: absence of a row reads as a missed run, which is the alarm.
 
