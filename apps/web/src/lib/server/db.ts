@@ -68,11 +68,12 @@ export const DB_RETRY_BACKOFF_MS = [50, 150];
 export const DB_MAX_RETRIES = DB_RETRY_BACKOFF_MS.length;
 const DB_RETRY_JITTER_MS = 50;
 
-// Only a transient gateway status. 4xx is our fault and will fail identically.
-// 524 is EXCLUDED ON PURPOSE: it means the gateway already timed out waiting on
-// this query, so re-running it just doubles the load for a near-certain second
-// timeout. Do not "fix" that omission.
-const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504]);
+// Only transient gateway statuses. 520/522/525 are connection-level failures
+// where the request demonstrably did not complete. 524 is EXCLUDED ON PURPOSE:
+// it is an origin timeout, so the query may well have executed. Retrying is not
+// provably idempotent even for a read: it may be expensive, and the retry doubles
+// the load on an origin already timing out.
+const RETRYABLE_GATEWAY_STATUSES = new Set([502, 503, 504, 520, 522, 525]);
 
 // `mapHranaError` wraps the hrana `HttpServerError` (which carries the numeric
 // `status`) as the `LibsqlError`'s `cause`, and a closed stream can wrap it one

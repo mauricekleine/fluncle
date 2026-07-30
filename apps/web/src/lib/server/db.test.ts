@@ -221,6 +221,42 @@ describe("getDb transient-gateway retry", () => {
     expect(spanAttributes[0]).toEqual({ "db.retry.attempts": 1 });
   });
 
+  it("retries a read that fails once with a 520 connection error", async () => {
+    const result = { rows: [] };
+    execute.mockRejectedValueOnce(gatewayError(520)).mockResolvedValue(result);
+
+    const db = await getDb();
+    const pending = db.execute("select 1");
+    await flushBackoff();
+
+    await expect(pending).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a read that fails once with a 522 connection error", async () => {
+    const result = { rows: [] };
+    execute.mockRejectedValueOnce(gatewayError(522)).mockResolvedValue(result);
+
+    const db = await getDb();
+    const pending = db.execute("select 1");
+    await flushBackoff();
+
+    await expect(pending).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a read that fails once with a 525 connection error", async () => {
+    const result = { rows: [] };
+    execute.mockRejectedValueOnce(gatewayError(525)).mockResolvedValue(result);
+
+    const db = await getDb();
+    const pending = db.execute("select 1");
+    await flushBackoff();
+
+    await expect(pending).resolves.toBe(result);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves the retry attribute off a query that never retried", async () => {
     execute.mockResolvedValue({ rows: [] });
 
