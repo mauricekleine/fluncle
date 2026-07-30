@@ -214,9 +214,12 @@ describe("isCatalogueCaptureOpen — the brake asks the cheap question first", (
   });
 
   it("reads the spend once it is un-paused, and agrees with the readout", async () => {
-    const { getCatalogueCaptureState, isCatalogueCaptureOpen, setCatalogueCaptureBudget } =
-      await import("./capture-budget");
-    const { setCatalogueCapturePaused } = await import("./capture-budget");
+    const {
+      getCatalogueCaptureState,
+      isCatalogueCaptureOpen,
+      setCatalogueCaptureBudget,
+      setCatalogueCapturePaused,
+    } = await import("./capture-budget");
 
     await setCatalogueCapturePaused(false);
     await setCatalogueCaptureBudget({ dailyBytes: 10_000_000, dailyTracks: 1 });
