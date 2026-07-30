@@ -15,7 +15,14 @@
 // and `flock` are PATH stubs; nothing touches the network.
 
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -241,6 +248,90 @@ describe("the summary line states facts, never a verdict", () => {
     }
 
     expect(declared).toEqual([...LEDGER_GATE_STATES].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AND NOBODY GETS TO CALL THEM SILENT.
+//
+// Third face of the same failure: two committed statements that contradict each other. These
+// three units used to report nothing, several docs said so, and the sentence outlives the fact
+// the moment they start reporting — a reader (or an agent) trusting the prose then "knows" the
+// watchdog is invisible on /status while it is posting every 15 minutes.
+//
+// So the claim is derived from the SCRIPTS: a unit that carries the emitter and calls it is a
+// reporting unit, and no doc beside it may say otherwise. Prose cannot go stale against a build.
+// ---------------------------------------------------------------------------
+
+/** The systemd unit each host emitter reports as — read from the script, never listed here. */
+function reportingUnits(): string[] {
+  return EMITTERS.map(([name, path]) => {
+    const match = /^RUN_EVENT_UNIT="([^"]+)"$/m.exec(readFileSync(path, "utf8"));
+
+    if (!match?.[1]) {
+      throw new Error(`no RUN_EVENT_UNIT in ${name}`);
+    }
+
+    return match[1];
+  });
+}
+
+/** The claims that were TRUE before the ledger and are false for a reporting unit now. */
+const SILENCE_CLAIMS = [
+  /reports nowhere/i,
+  /reports to nothing/i,
+  /posts nothing either/i,
+  /appears on `\/status` \*\*not at all\*\*/i,
+];
+
+describe("no doc calls a reporting unit silent", () => {
+  test("the three units really are reporting units", () => {
+    // The premise, checked first: without this the assertions below are about nothing.
+    expect(reportingUnits().sort()).toEqual([
+      "fluncle-secrets-sync",
+      "fluncle-sonar-freshen",
+      "fluncle-timer-watchdog",
+    ]);
+  });
+
+  test.each([
+    ["timer-watchdog/README.md", join(REPO, "docs/agents/hermes/timer-watchdog/README.md")],
+    ["cron/README.md", join(REPO, "docs/agents/hermes/cron/README.md")],
+    ["apps/sonar/deploy/README.md", join(REPO, "apps/sonar/deploy/README.md")],
+  ])("%s does not still say they report nowhere", (_name, path) => {
+    const body = readFileSync(path, "utf8");
+
+    for (const claim of SILENCE_CLAIMS) {
+      expect(body).not.toMatch(claim);
+    }
+  });
+
+  // The expected-writers roster (PR #1005) declares the units it does NOT expect a /status
+  // marker from, with a reason each. A missing MARKER is still true for these three — they run
+  // outside the container. "And reports nowhere" is not: they POST to the run ledger. When that
+  // file arrives, its reasons are held to the same rule as the prose above.
+  test("the expected-writers roster does not call them silent either", () => {
+    const roster = join(REPO, "docs/agents/hermes/scripts/cron-roster.ts");
+
+    if (!existsSync(roster)) {
+      // Nothing to contradict yet. Recorded rather than skipped silently: the file lands with
+      // PR #1005, the same slice as this one, and the check arms itself the moment it does.
+      expect(PENDING_WORKSPACE_PATHS.has(RUN_EVENT_ENDPOINT)).toBe(true);
+
+      return;
+    }
+
+    const body = readFileSync(roster, "utf8");
+    const declarations = [...body.matchAll(/"(fluncle-[a-z-]+)\.timer":\s*\n?\s*"([^"]+)"/g)];
+    const offenders = declarations
+      .filter(([, unit, reason]) =>
+        reportingUnits().includes(unit ?? "")
+          ? SILENCE_CLAIMS.some((claim) => claim.test(reason ?? ""))
+          : false,
+      )
+      .map(([, unit]) => unit);
+
+    expect(offenders).toEqual([]);
   });
 });
 

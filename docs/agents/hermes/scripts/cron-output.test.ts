@@ -255,7 +255,7 @@ type LedgerEnvelope = {
   unit: string;
 };
 
-type LedgerMode = "accepts" | "rejects" | "hangs";
+type LedgerMode = "accepts" | "hangs" | "notFound" | "rejects";
 
 /** Run `body` against a loopback ledger; hand back everything the ledger actually received. */
 async function withLedger<T>(
@@ -278,9 +278,16 @@ async function withLedger<T>(
         await new Promise(() => {});
       }
 
-      return mode === "rejects"
-        ? Response.json({ error: "nope" }, { status: 500 })
-        : Response.json({ inserted: 1, ok: true });
+      if (mode === "rejects") {
+        return Response.json({ error: "nope" }, { status: 500 });
+      }
+
+      // What a wrong endpoint really looked like: the Worker answers, and answers 404.
+      if (mode === "notFound") {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+
+      return Response.json({ inserted: 1, ok: true });
     },
     port: 0,
   });
@@ -528,6 +535,19 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(code).toBe(9);
     expect(findJsonSummary(marker)).toEqual({ crawled: 1, ok: true });
     expect(stdout).toContain('{"ok":true,"crawled":1}');
+  });
+
+  // The shipped bug's own failure mode, kept as a test: a 404 is swallowed exactly like a 500,
+  // which is WHY the wrong endpoint was invisible. The wrapper is right to swallow it (a sweep
+  // must not fail over telemetry) — so the guard has to be the path assertion above, not this.
+  test("a 404 changes nothing about the run either — which is the whole reason it hid", async () => {
+    const { code, marker, stdout } = await withLedger("notFound", async (base) =>
+      emitAsync("crawl", `echo '{"ok":true,"crawled":2}'; exit 8`, { env: ledgerEnv(base) }),
+    );
+
+    expect(code).toBe(8);
+    expect(findJsonSummary(marker)).toEqual({ crawled: 2, ok: true });
+    expect(stdout).toContain('{"ok":true,"crawled":2}');
   });
 
   test("an unreachable ledger changes nothing either", async () => {
