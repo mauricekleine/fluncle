@@ -34,7 +34,7 @@
 # enumerates ZERO timers and reports a clean pass is the precise shape of a real past
 # incident on the other box — 897 consecutive runs, zero checks, green the whole way. So
 # every pass now ends with a JSON summary line carrying `checked` (timers examined) beside
-# `produced` (re-arms), `errors`, and `queueDepth` (stranded timers found), and POSTs that
+# `produced` (re-arms), `errors`, and `queue_depth` (stranded timers found), and POSTs that
 # line to the run ledger. The line states NO `ok`: the Worker derives the verdict from the exit
 # code and the error count, and a summary that grades itself is rejected outright — a sweep
 # printing `{"errors":2,"ok":true}` for eleven nights is the bug this ledger exists to end.
@@ -57,7 +57,7 @@ RUN_EVENT_INTERVAL_MS=900000
 
 # The run's tally. `CHECKED` is the denominator that separates health from blindness;
 # `REARMED` is work actually done; `STRANDED` is the backlog this pass was asked to clear
-# (so `produced == 0 AND queueDepth > 0` is a real alarm, while an empty worklist is not).
+# (so `produced == 0 AND queue_depth > 0` is a real alarm, while an empty worklist is not).
 CHECKED=0
 REARMED=0
 ERRORS=0
@@ -169,10 +169,8 @@ run_event_now() {
 # here. Runs from an EXIT trap so a `return 1` deep in the script cannot skip it — the shape
 # that leaves a ledger row missing is the shape that reads as a missed run.
 #
-# NOTE THE TWO CASINGS, both deliberate. The summary LINE uses the fleet's camelCase counter
-# names (every other sweep prints `queueRemaining`, `gateSkipped`, `totalUnresolved`), because
-# it is the sweep's own line. The POST BODY uses the ledger contract's snake_case field names.
-# The Worker normalizes the former and owns the latter.
+# The summary line uses the ledger's canonical counter names. The POST envelope has its own
+# snake_case contract fields; `summary_raw` carries this line unchanged.
 #
 # THE LINE CARRIES NO `ok`. This unit was written fresh with the ledger, so it never inherits
 # the fleet's habit of grading itself: the verdict is `exit_code == 0 && errors == 0` and the
@@ -183,7 +181,7 @@ emit_run_summary() {
   SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
   ended="$(run_event_now)"
-  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
+  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queue_depth":%d,"gateState":null,"expectedIntervalMs":%d}' \
     "$CHECKED" "$REARMED" "$ERRORS" "$STRANDED" "$RUN_EVENT_INTERVAL_MS")"
   printf '%s\n' "$summary"
   if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
@@ -194,7 +192,18 @@ emit_run_summary() {
 }
 
 STARTED_AT="$(run_event_now)"
-trap 'emit_run_summary "$?"' EXIT
+on_exit() {
+  local rc=$?
+  if [ "$CHECKED" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    ERRORS=$((ERRORS + 1))
+    log "FAILED — watchdog examined zero timers"
+    rc=1
+  fi
+  emit_run_summary "$rc" || true
+  trap - EXIT
+  exit "$rc"
+}
+trap 'on_exit' EXIT
 
 # No armed trigger: monotonic elapse `infinity` AND no realtime elapse at all. A calendar
 # timer always reports a realtime elapse, so this stays false for a healthy one.
@@ -235,6 +244,12 @@ while IFS= read -r timer; do
   suspects+=("$timer")
 done < <(list_timers)
 
+if [ "$CHECKED" -eq 0 ]; then
+  ERRORS=$((ERRORS + 1))
+  log "FAILED — watchdog examined zero timers"
+  exit 1
+fi
+
 if [ "${#suspects[@]}" -eq 0 ]; then
   log "ok — every active timer has a next elapse"
   exit 0
@@ -257,8 +272,8 @@ if [ "${#stranded[@]}" -eq 0 ]; then
   exit 0
 fi
 
-# The backlog this pass is asked to clear. Reported as `queueDepth` so the ledger's alarm
-# conjunction (`produced == 0 AND queueDepth > 0`) fires on a watchdog that finds stranded
+# The backlog this pass is asked to clear. Reported as `queue_depth` so the ledger's alarm
+# conjunction (`produced == 0 AND queue_depth > 0`) fires on a watchdog that finds stranded
 # timers and re-arms none of them, while an empty worklist stays silent forever.
 STRANDED="${#stranded[@]}"
 
@@ -278,19 +293,21 @@ for timer in "${stranded[@]}"; do
   fi
 done
 
-[ "${#healed[@]}" -gt 0 ] || exit 1
-
 # Alert regardless of the self-heal: a stranded timer means something stopped it outside
 # the paths that know to restore it, and that cause deserves eyes even once the sweep is
-# running again. The webhook is read off the live container's env — never stored here.
+# running again. This attempt deliberately happens BEFORE the all-rearms-failed exit below:
+# that exit is the most important discovery this detector can make. The webhook is read off
+# the live container's env — never stored here.
 webhook="$(container_env DISCORD_ALERT_WEBHOOK)"
 if [ -n "$webhook" ]; then
   names="$(
     IFS=', '
-    echo "${healed[*]}"
+    echo "${stranded[*]}"
   )"
-  payload="$(printf '{"content": "\\u23f0 timer-watchdog: re-armed %d stranded sweep(s) — %s. They were `active` with no next elapse, so they would never have fired again."}' "${#healed[@]}" "$names")"
+  payload="$(printf '{"content": "\\u23f0 timer-watchdog: found %d stranded sweep(s); re-armed %d, failed %d — %s. They were `active` with no next elapse, so they would never have fired again."}' "${#stranded[@]}" "${#healed[@]}" "$ERRORS" "$names")"
   curl -sS --max-time 20 -H "Content-Type: application/json" -d "$payload" "$webhook" >/dev/null 2>&1 || true
 fi
+
+[ "${#healed[@]}" -gt 0 ] || exit 1
 
 log "re-armed ${#healed[@]} stranded timer(s)"

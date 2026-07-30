@@ -11,7 +11,7 @@
 # break loudly — it leaves the box holding STALE credentials, and every sweep downstream
 # keeps reporting its own cheerful `ok` until a token expires. So every pass now ends with a
 # JSON summary line — `checked` (secret targets attempted), `produced` (files actually
-# installed), `errors`, `queueDepth` (targets left unwritten) — and POSTs that line to the
+# installed), `errors`, `queue_depth` (targets left unwritten) — and POSTs that line to the
 # run ledger. The line states NO `ok`: the Worker derives the verdict from the exit code and the
 # error count, and a summary that grades itself is rejected at the edge.
 set -euo pipefail
@@ -142,8 +142,8 @@ read_secret_token() {
 
 # Print the run's summary line and POST its envelope, exactly once, whatever exit path got
 # here — including the `set -e` aborts, which is where the interesting failures are. The
-# summary LINE uses the fleet's camelCase counter names (every other sweep prints them that
-# way); the POST BODY uses the ledger contract's snake_case fields.
+# summary line uses the ledger's canonical counter names; the POST envelope has its own
+# snake_case contract fields.
 #
 # THE LINE CARRIES NO `ok`, deliberately: the Worker derives the verdict from the exit code and
 # the error count, and rejects a summary that states one. The two facts are what this prints.
@@ -155,7 +155,7 @@ emit_run_summary() {
   queue=$((CHECKED - PRODUCED))
   [ "$queue" -ge 0 ] || queue=0
   ended="$(run_event_now)"
-  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queueDepth":%d,"gateState":null,"expectedIntervalMs":%d}' \
+  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queue_depth":%d,"gateState":null,"expectedIntervalMs":%d}' \
     "$CHECKED" "$PRODUCED" "$ERRORS" "$queue" "$RUN_EVENT_INTERVAL_MS")"
   printf '%s\n' "$summary"
   if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
@@ -170,8 +170,15 @@ emit_run_summary() {
 _cleanup() { :; }
 on_exit() {
   local rc=$?
+  if [ "$CHECKED" -eq 0 ] && [ "$rc" -eq 0 ]; then
+    ERRORS=$((ERRORS + 1))
+    echo "fluncle-secrets-sync: checked zero secret targets" >&2
+    rc=1
+  fi
   emit_run_summary "$rc" || true
   _cleanup || true
+  trap - EXIT
+  exit "$rc"
 }
 STARTED_AT="$(run_event_now)"
 trap 'on_exit' EXIT
@@ -203,7 +210,7 @@ else
 fi
 
 # Two mandatory targets this run is committing to write. Counted BEFORE the work, so a run
-# that dies part-way reports the shortfall as `queueDepth` instead of a tidy zero.
+# that dies part-way reports the shortfall as `queue_depth` instead of a tidy zero.
 CHECKED=2
 
 tg="$(mktemp)"

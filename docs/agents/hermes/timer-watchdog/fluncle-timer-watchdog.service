@@ -3,6 +3,7 @@ Description=fluncle-timer-watchdog — re-arm rave-02 sweep timers left `active`
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/timer-watchdog/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
+OnFailure=fluncle-sweep-failure@%n.service
 
 [Service]
 Type=oneshot

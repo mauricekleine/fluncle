@@ -152,6 +152,15 @@ const unitDirs = walkUnitDirs();
 const result = runInstaller(HERMES_DIR, INSTALLER);
 const plan = parsePlan(result.stdout);
 
+// Two explicit current exceptions to the fleet-wide failure hook:
+// - the notifier template must not recurse when notification itself fails;
+// - pin-watch is a pre-existing gap outside this slice, kept visible here rather than silently
+//   treated as compliant. Removing its exemption is part of fixing that unit, not this one.
+const ON_FAILURE_EXEMPTIONS = new Set([
+  "pin-watch/pin-watch.service",
+  "sweep-failure/fluncle-sweep-failure@.service",
+]);
+
 describe("install-host-timers.sh --dry-run", () => {
   test("succeeds and produces a plan", () => {
     expect(result.stderr).toBe("");
@@ -199,6 +208,33 @@ describe("the installer covers every unit directory in the repo", () => {
       expect(entry?.services ?? []).toEqual([]);
       expect(entry?.timers ?? []).toEqual([]);
     }
+  });
+});
+
+describe("every installed service has a failure-reporting path", () => {
+  test("unit_files_carry_onfailure", () => {
+    const missing: string[] = [];
+
+    for (const entry of unitDirs) {
+      for (const service of entry.services) {
+        const relativePath = `${entry.dir}/${service}`;
+        const body = readFileSync(join(HERMES_DIR, relativePath), "utf8");
+
+        if (!body.split("\n").includes("OnFailure=fluncle-sweep-failure@%n.service")) {
+          missing.push(relativePath);
+        }
+      }
+    }
+
+    const unexpectedMissing = missing.filter((path) => !ON_FAILURE_EXEMPTIONS.has(path)).sort();
+    const staleExemptions = [...ON_FAILURE_EXEMPTIONS]
+      .filter((path) => !missing.includes(path))
+      .sort();
+
+    expect({ staleExemptions, unexpectedMissing }).toEqual({
+      staleExemptions: [],
+      unexpectedMissing: [],
+    });
   });
 });
 

@@ -245,9 +245,12 @@ describe("the summary line states facts, never a verdict", () => {
     expect(summaryFormat(path)).not.toContain('"ok"');
     // The counters it does print are the ledger's mandatory set, so `missing_fields` comes back
     // empty for these three and the upgrade queue names only sweeps that really owe something.
-    for (const field of ["checked", "produced", "errors", "queueDepth"]) {
+    for (const field of ["checked", "produced", "errors"]) {
       expect(summaryFormat(path)).toContain(`"${field}"`);
     }
+    expect(
+      summaryFormat(path).includes('"queueDepth"') || summaryFormat(path).includes('"queue_depth"'),
+    ).toBe(true);
   });
 
   test("every gate value a script can emit is one of the ledger's six words", () => {
@@ -718,25 +721,23 @@ describe("timer-watchdog reports a run", () => {
       expectedIntervalMs: 900_000,
       gateState: null,
       produced: 0,
-      queueDepth: 0,
+      queue_depth: 0,
     });
     expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
-  // THE ONE THIS UNIT EXISTS FOR. A watchdog that enumerates nothing exits 0 and reports a
-  // clean pass — truthfully, in its own terms — and is blind. `produced:0` and `queueDepth:0`
-  // look identical to the healthy run above. ONLY `checked` tells the two apart, which is why
-  // the ledger treats `checked == 0` on a detector as a FAILURE rather than a pass.
-  test("BLINDNESS: an empty enumeration is legible ONLY through `checked`", async () => {
+  // THE ONE THIS UNIT EXISTS FOR. A watchdog that enumerates nothing must fail locally rather
+  // than rely on a future reader to notice the denominator. `produced:0` and `queue_depth:0`
+  // otherwise look identical to the healthy run above.
+  test("checked == 0 exits non-zero", async () => {
     const { code, summary } = await runWatchdog({ timers: [] });
 
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(summary.checked).toBe(0);
+    expect(summary.errors).toBe(1);
     expect(summary.produced).toBe(0);
-    expect(summary.queueDepth).toBe(0);
-    // It genuinely did not fail, and nothing here claims it did — the row is not `ok:false`,
-    // it is a DERIVED ok with a zero denominator, and the READER is what catches it.
-    expect(derivedOk(code, summary.errors)).toBe(true);
+    expect(summary.queue_depth).toBe(0);
+    expect(derivedOk(code, summary.errors)).toBe(false);
   });
 
   test("a stranded timer shows up as backlog cleared, not as backlog hidden", async () => {
@@ -746,13 +747,13 @@ describe("timer-watchdog reports a run", () => {
     });
 
     expect(code).toBe(0);
-    expect(summary).toMatchObject({ checked: 4, errors: 0, produced: 1, queueDepth: 1 });
+    expect(summary).toMatchObject({ checked: 4, errors: 0, produced: 1, queue_depth: 1 });
     expect(derivedOk(code, summary.errors)).toBe(true);
   });
 
   // The ledger's alarm conjunction, from the real script: stranded timers found, none
-  // re-armed. `produced == 0 AND queueDepth > 0` — and the derived verdict is false because the
-  // errors are COUNTED, which is what makes it hold even on a sweep that exits 0.
+  // re-armed. `produced == 0 AND queue_depth > 0` — and the derived verdict is false because
+  // the errors are COUNTED.
   test("ALARM SHAPE: found stranded, re-armed none", async () => {
     const { code, summary } = await runWatchdog({
       infinity: ["fluncle-anchor.timer", "fluncle-rank.timer"],
@@ -761,8 +762,19 @@ describe("timer-watchdog reports a run", () => {
     });
 
     expect(code).toBe(1);
-    expect(summary).toMatchObject({ checked: 5, errors: 2, produced: 0, queueDepth: 2 });
+    expect(summary).toMatchObject({ checked: 5, errors: 2, produced: 0, queue_depth: 2 });
     expect(derivedOk(code, summary.errors)).toBe(false);
+  });
+
+  test("the alert attempt happens before the failed-rearm exit", () => {
+    const body = readFileSync(WATCHDOG, "utf8");
+    const alertAttempt = body.indexOf('webhook="$(container_env DISCORD_ALERT_WEBHOOK)"');
+    const failedRearmExit = body.indexOf('[ "${#healed[@]}" -gt 0 ] || exit 1');
+
+    // Assert both markers first so two missing lines cannot satisfy the ordering by accident.
+    expect(alertAttempt).toBeGreaterThan(-1);
+    expect(failedRearmExit).toBeGreaterThan(-1);
+    expect(alertAttempt).toBeLessThan(failedRearmExit);
   });
 
   test("a busy oneshot is examined but never counted as stranded", async () => {
@@ -772,7 +784,7 @@ describe("timer-watchdog reports a run", () => {
       timers: [...HEALTHY, "fluncle-anchor.timer"],
     });
 
-    expect(summary).toMatchObject({ checked: 4, produced: 0, queueDepth: 0 });
+    expect(summary).toMatchObject({ checked: 4, produced: 0, queue_depth: 0 });
   });
 
   test("posts the envelope, with the token read off the live container", async () => {
@@ -917,7 +929,7 @@ describe("secrets-sync reports a run", () => {
       expectedIntervalMs: 900_000,
       gateState: null,
       produced: 2,
-      queueDepth: 0,
+      queue_depth: 0,
     });
     expect(derivedOk(code, summary.errors)).toBe(true);
     // The real work still happened — the summary is a report, not a replacement.
@@ -963,7 +975,7 @@ describe("secrets-sync reports a run", () => {
     expect(envelope.exit_code).not.toBe(0);
     // Two targets promised, none written: the shortfall is the backlog, and the exit code the
     // envelope carries is what the ledger derives a false verdict from.
-    expect(summary).toMatchObject({ checked: 2, produced: 0, queueDepth: 2 });
+    expect(summary).toMatchObject({ checked: 2, produced: 0, queue_depth: 2 });
     expect(derivedOk(envelope.exit_code, summary.errors)).toBe(false);
   });
 
@@ -1000,7 +1012,12 @@ describe("secrets-sync reports a run", () => {
     const degraded = await runSecretsSync({ gsc: "fails" });
 
     expect(degraded.code).toBe(0);
-    expect(degraded.summary).toMatchObject({ checked: 3, errors: 1, produced: 2, queueDepth: 1 });
+    expect(degraded.summary).toMatchObject({
+      checked: 3,
+      errors: 1,
+      produced: 2,
+      queue_depth: 1,
+    });
     // Exit code 0, one counted error — so the DERIVED verdict is false where a self-reported one
     // would have been true. This single line is the whole argument for deriving it.
     expect(derivedOk(degraded.code, degraded.summary.errors)).toBe(false);
