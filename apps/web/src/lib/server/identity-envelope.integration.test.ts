@@ -504,7 +504,7 @@ describe("the identifiers and the other platforms", () => {
     expect(verificationOf(state).atMeaning).toBe("verified");
   });
 
-  it("serves Apple Music and Tidal and Deezer as unsupported", async () => {
+  it("serves Apple Music unsupported to a machine, and Tidal and Deezer to everyone", async () => {
     // Apple: ADPLA §3.3.6(D) (MusicKit) does not permit serving these links to a third party, read
     // verbatim 2026-07-29. Deezer: Fluncle holds no Deezer link at all. Tidal: no integration.
     // A row carrying a real Apple link still reads `unsupported`, which is the point of the gate.
@@ -519,6 +519,65 @@ describe("the identifiers and the other platforms", () => {
     expect(links.appleMusic).toEqual({ state: "unsupported" });
     expect(links.deezer).toEqual({ state: "unsupported" });
     expect(links.tidal).toEqual({ state: "unsupported" });
+  });
+
+  // ── THE AUDIENCE SPLIT ──────────────────────────────────────────────────────────────────────
+  // One row, two readers, and Apple is the ONLY field they may disagree about. The clause bars
+  // handing the link to a third party (the `machine` read), not rendering it on Fluncle's own page
+  // (the `first-party` read, which is what `/log` has always done). A regression in either
+  // direction is silent — an over-serving API breaks a licence, an under-serving page hides a link
+  // Fluncle is free to show — so both halves are pinned here against the SAME fixture row.
+  it("shows the page an Apple link it withholds from the API, and nothing else differs", async () => {
+    await insertTrack("ap-split", {
+      appleDoneAt: "2026-05-01T00:00:00.000Z",
+      appleUrl: "https://music.apple.com/us/album/x/1?i=2",
+      isrc: "GBABC1234567",
+    });
+
+    const key = { idOrLogId: "ap-split", kind: "idOrLogId" } as const;
+    const machine = (await readIdentity(key))?.recordings[0];
+    const page = (await readIdentity(key, "first-party"))?.recordings[0];
+
+    expect(machine?.links.appleMusic).toEqual({ state: "unsupported" });
+    expect(page?.links.appleMusic).toEqual({
+      state: "verified",
+      url: "https://music.apple.com/us/album/x/1?i=2",
+      value: "https://music.apple.com/us/album/x/1?i=2",
+      verification: {
+        at: "2026-05-01T00:00:00.000Z",
+        atMeaning: "verified",
+        method: "isrc",
+        source: null,
+      },
+    });
+    // Everything else is one answer. Two readers who disagreed about more than Apple's licence
+    // would make the "page and API cannot answer differently" claim a lie.
+    expect({ ...page, links: undefined }).toEqual({ ...machine, links: undefined });
+    expect({ ...page?.links, appleMusic: undefined }).toEqual({
+      ...machine?.links,
+      appleMusic: undefined,
+    });
+  });
+
+  it("says the page's honest Apple negative rather than hiding the look behind the gate", async () => {
+    await insertTrack("ap-missed", {
+      appleAttemptedAt: "2026-06-02T00:00:00.000Z",
+      appleAttempts: 2,
+    });
+
+    const key = { idOrLogId: "ap-missed", kind: "idOrLogId" } as const;
+
+    expect((await readIdentity(key, "first-party"))?.recordings[0]?.links.appleMusic).toEqual({
+      attempts: 2,
+      cap: null,
+      lastAttemptedAt: "2026-06-02T00:00:00.000Z",
+      retry: "recheckable",
+      state: "absent",
+      terminal: false,
+    });
+    expect((await readIdentity(key))?.recordings[0]?.links.appleMusic).toEqual({
+      state: "unsupported",
+    });
   });
 });
 

@@ -5,12 +5,15 @@
 // only prints what it holds leaves a reader unable to tell "we never looked" from "we looked and it
 // is genuinely not there", and those are opposite facts. Every line below is computed from a real
 // column in the envelope (lib/server/identity-envelope.ts holds the discipline); where no column
-// backs a claim, the copy says Fluncle keeps no record rather than inventing one.
+// backs a claim, the copy says he never wrote it down rather than inventing one.
 //
 // ── THE REGISTER ──────────────────────────────────────────────────────────────────────────────
 // A catalogue page (VOICE.md §5, the Three Areas): the page states what the thing is, plainly.
 // Fluncle appears in the third person as the one who did the looking, never as narrator, and there
-// is no nameplate and no first-person intro.
+// is no nameplate and no first-person intro. The catalogue register bans first-person NARRATION, not
+// the DOER: every sentence here has Fluncle doing an active verb (he looked, he matched it, he
+// brought it home), because an agentless line ("it came in with the find") is the ghost VOICE.md §4
+// exists to catch. No line describes the archive doing something on his behalf either.
 //
 // ── THE UNLIT RULE (DESIGN.md) ────────────────────────────────────────────────────────────────
 // A recording Fluncle has certified reads LIT: cream ink and its coordinate, linking home to its
@@ -54,30 +57,33 @@ const OPEN_LABEL: Record<string, string> = {
 
 /**
  * How a link or identifier came to be trusted, in words a reader already has. The enum values are
- * the machine's; these are the deeds behind them.
+ * the machine's; these are the deeds behind them, each with Fluncle doing the verb.
+ *
+ * `unknown-legacy` says he never wrote down where it came from, and says nothing about the check
+ * itself: it is not a claim that the link is old, because the ISRC leg records no rung on any row.
  */
 function methodPhrase(method: IdentityMethod): string {
   switch (method) {
     case "isrc":
-      return "Matched on the recording's own ISRC";
+      return "Fluncle matched this on the recording's own ISRC";
 
     case "operator":
-      return "Checked by hand";
+      return "Fluncle checked this one himself";
 
     case "pk-derived":
-      return "This is the id the recording came into the archive under";
+      return "Fluncle first met this recording under this id";
 
     case "publish":
-      return "It came in with the find, read back from the platform itself";
+      return "Fluncle brought this home with the find, straight from the platform's own record";
 
     case "search":
-      return "Matched on artist, title, and length";
+      return "Fluncle matched it on artist, title, and length";
 
     case "search-subset":
-      return "Matched on title and length, with a partial artist match";
+      return "Fluncle matched it on title and length, with only part of the artist name to go on";
 
     default:
-      return "Fluncle keeps no record of how";
+      return "Fluncle never wrote down how he came by this one";
   }
 }
 
@@ -92,17 +98,21 @@ function whenPhrase(at: null | string, atMeaning: "attempted" | "verified" | nul
     : `, last checked ${formatDateLong(at)}`;
 }
 
-/** What happens after a miss, off the retry class the acquisition queue itself is built on. */
+/**
+ * What happens after a miss, off the retry class the acquisition queue itself is built on.
+ * `recheckable` earns the reason out loud: the catalogues out there keep growing, which is the whole
+ * argument for asking the same question again.
+ */
 function retryPhrase(retry: IdentityRetry, cap: null | number): string {
   if (retry === "single-shot") {
     return "He asked once and will not ask again.";
   }
 
-  if (retry === "capped") {
-    return cap ? `He will look again, up to ${cap} times in all.` : "He will look again.";
+  if (retry === "recheckable") {
+    return "He will keep looking. A miss today is not a miss forever.";
   }
 
-  return "He will look again.";
+  return cap ? `He will look again, up to ${cap} times in all.` : "He will look again.";
 }
 
 /** Which condition of this recording's own row stops Fluncle looking. A closed set. */
@@ -112,7 +122,7 @@ function refusalPhrase(reason: AnchorRefusalReason): string {
       return "He has looked as many times as he allows himself.";
 
     case "credit-not-an-identity":
-      return "The recording is billed to no real name, so a search has nothing to go on.";
+      return "He has no real artist name to search on here.";
 
     case "dismissed":
       return "He set this recording aside.";
@@ -121,19 +131,39 @@ function refusalPhrase(reason: AnchorRefusalReason): string {
       return "He already has this recording down as a duplicate of another.";
 
     default:
-      return "He holds no length for this recording, and the search needs one.";
+      return "He never got a length for this recording, and a search needs one.";
   }
 }
+
+/**
+ * Why Fluncle hands out no link of a given kind. Per platform, because the three reasons are three
+ * different facts and one shared sentence flattened them into an error table: Deezer he reads to
+ * CHECK an identity and never to send a reader anywhere, and Tidal he has no way in to at all. The
+ * fallback covers a platform added later before someone has written its own truth here.
+ *
+ * APPLE is carried but not reached from this page today: the page reads the envelope `first-party`,
+ * which computes Apple's real state (a link, or an honest negative), so `unsupported` for Apple is a
+ * MACHINE answer. Its sentence stays here because the audience gate is one constant either way
+ * (lib/server/identity-envelope.ts), and a posture re-ruled toward Apple must not fall back to the
+ * generic line.
+ */
+const NO_LINK_REASON: Record<string, string> = {
+  "Apple Music":
+    "Apple's rules keep these links with the playback they came from, so Fluncle hands none of them out here.",
+  Deezer:
+    "Fluncle uses Deezer to check a recording's identity, never to send you there, so he keeps no Deezer link at all.",
+  Tidal: "Fluncle has no way in to Tidal, so he has nothing to tell you about it.",
+};
 
 /**
  * One row's answer: the state in plain words, plus the link where there is one.
  *
  * The five states, and what each of them is honestly claiming:
- *   · verified    — Fluncle holds it, and here is how and when he came to trust it.
- *   · absent      — he looked, it was not there, and here is whether he will look again.
+ *   · verified    — Fluncle found it, and here is how and when he came to trust it.
+ *   · absent      — he looked, came back empty-handed, and here is whether he will look again.
  *   · refused     — he will not look, and here is which condition of the row stops him.
- *   · unattempted — nobody has looked.
- *   · unsupported — he serves no link of that kind at all.
+ *   · unattempted — nobody has gone looking.
+ *   · unsupported — he hands out no link of that kind, and here is why for this platform.
  */
 function StateLine({ label, state }: { label: string; state: IdentityState }) {
   if (state.state === "verified") {
@@ -176,7 +206,7 @@ function StateLine({ label, state }: { label: string; state: IdentityState }) {
 
     return (
       <span className="identity-provenance">
-        {`${looked}${when}, and it was not there. ${retryPhrase(state.retry, state.cap)}`}
+        {`${looked}${when}, and came back empty-handed. ${retryPhrase(state.retry, state.cap)}`}
       </span>
     );
   }
@@ -190,10 +220,14 @@ function StateLine({ label, state }: { label: string; state: IdentityState }) {
   }
 
   if (state.state === "unattempted") {
-    return <span className="identity-provenance">Nobody has looked yet.</span>;
+    return <span className="identity-provenance">Nobody has gone looking yet.</span>;
   }
 
-  return <span className="identity-provenance">{`Fluncle serves no ${label} link here.`}</span>;
+  return (
+    <span className="identity-provenance">
+      {NO_LINK_REASON[label] ?? `Fluncle hands out no ${label} link here.`}
+    </span>
+  );
 }
 
 /** One definition row: the platform or identifier, then its answer. */

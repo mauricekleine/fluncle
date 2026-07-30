@@ -86,7 +86,11 @@ export async function resolveIdentityPageData(raw: string): Promise<IdentityPage
     return { status: "limited" };
   }
 
-  const envelope = await readIdentity(key);
+  // FIRST-PARTY, and that is the one thing the page reads differently from the API: an Apple Music
+  // link renders here exactly as it renders on the recording's own `/log` page. The API's `machine`
+  // read still answers `unsupported` for Apple, because passing those links to a third party is what
+  // Apple's terms bar (identity-envelope.ts holds the clause and the split).
+  const envelope = await readIdentity(key, "first-party");
 
   return envelope
     ? { envelope, key: canonical, kind, status: "found" }

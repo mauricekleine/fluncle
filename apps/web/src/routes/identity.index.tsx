@@ -50,7 +50,7 @@ const title = "Identity · Fluncle";
 // Machine-facing, so honestly-plain third person (VOICE.md's Narrator rule), and inside the
 // ~155-character SERP cap.
 const description =
-  "Look up a drum & bass recording by ISRC, MusicBrainz id, or Log ID: the links Fluncle holds, and where he looked and found nothing.";
+  "Look up a drum & bass recording by ISRC, MusicBrainz id, or Log ID: the links Fluncle found, and where he looked and found nothing.";
 
 function identityDoorHead() {
   const pageUrl = `${siteUrl}/identity`;
@@ -75,8 +75,8 @@ function IdentityDoorPage() {
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Identity</h1>
           <p className="log-index-intro">
-            Every recording in the archive carries identifiers and links out. Name one and Fluncle
-            answers with what he holds for it.
+            Name a recording by an ISRC, a MusicBrainz id, or a Log ID, and Fluncle answers with
+            every link he found for it.
           </p>
         </header>
 
@@ -84,29 +84,30 @@ function IdentityDoorPage() {
 
         <section aria-label="What a lookup answers" className="log-about-definitions">
           <p className="log-privacy-intro">
-            The answer names what Fluncle has and, just as plainly, what he does not.
+            Fluncle is just as plain about the looks that came back empty. A blank is the one answer
+            he will not give.
           </p>
           <dl>
             <div className="log-about-definition">
               <dt>What you can look a recording up by</dt>
               <dd>
                 A recording&rsquo;s ISRC, its MusicBrainz recording id, or its Log ID coordinate if
-                Fluncle has certified it. One identifier can name more than one recording here, so
-                an answer is a list.
+                Fluncle has certified it. One identifier can name more than one recording, so an
+                answer is a list.
               </dd>
             </div>
             <div className="log-about-definition">
-              <dt>The links he holds</dt>
+              <dt>The links he found</dt>
               <dd>
-                Each one comes with how he came to trust it and when he last checked, so you can
+                Each link comes with how he came to trust it and when he last checked, so you can
                 weigh it rather than take it on faith.
               </dd>
             </div>
             <div className="log-about-definition">
               <dt>The looks that came back empty</dt>
               <dd>
-                Where Fluncle went looking and found nothing, he says so, along with when he last
-                looked and whether he will look again. A blank is the one answer he will not give.
+                Where Fluncle went looking and found nothing, he says so, with when he last looked
+                and whether he will go again.
               </dd>
             </div>
             <div className="log-about-definition">

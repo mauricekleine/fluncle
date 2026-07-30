@@ -10,7 +10,12 @@
 //                     will look again;
 //   · `refused`     — we will not look, and here is which of the row's own conditions stops us;
 //   · `unattempted` — nobody has looked yet;
-//   · `unsupported` — Fluncle does not serve links for that platform at all.
+//   · `unsupported` — Fluncle hands out no link of that kind at all.
+//
+// ONE field answers by AUDIENCE, and only one: Apple Music. A machine caller reads `unsupported`
+// (the ADPLA clause below bars passing those links on), while Fluncle's own `/identity` page reads
+// the real state, exactly as that recording's `/log` page already renders it. See
+// `IdentityAudience`; nothing else in the answer differs between the two readers.
 //
 // Nobody says the middle three, and Fluncle can because the acquisition machinery has counted its
 // attempts all along. Every state below is computed from a real column. Where no column backs a
@@ -60,12 +65,29 @@ export const IDENTITY_ATTRIBUTION =
  * (the exact-ISRC `filter[isrc]` backfill), and handing them to an arbitrary machine caller is
  * neither of those permitted purposes.
  *
- * So the envelope answers `unsupported` for Apple, honestly: Fluncle does not serve Apple links
- * here. First-party rendering on Fluncle's own pages is untouched and continues exactly as before.
- * The full Apple state is still COMPUTED below off its real columns, so if the posture is ever
- * re-ruled this constant is the only line that moves.
+ * WHAT IT DOES NOT REACH: Fluncle's own pages. The clause bars REDISTRIBUTION, and rendering an
+ * Apple link on `/identity/<key>` is the same first-party act as rendering it on that recording's
+ * `/log` page, which has always done so. So the gate is keyed on the AUDIENCE
+ * ({@link IdentityAudience}) rather than on the envelope: a machine caller reads `unsupported`, the
+ * page reads the real state. If the posture is ever re-ruled, this constant is the only line that
+ * moves.
  */
 export const APPLE_LINKS_MACHINE_SERVED = false;
+
+/**
+ * WHO IS ASKING. It changes exactly one field in the whole envelope — Apple Music — and the default
+ * is the cautious one.
+ *
+ *   · `machine`     — a third party through `get_track`'s identity projection. Apple answers
+ *                     `unsupported` while {@link APPLE_LINKS_MACHINE_SERVED} is false.
+ *   · `first-party` — Fluncle's own `/identity` page, rendering the Apple link exactly as `/log`
+ *                     already renders it, honest negatives included.
+ *
+ * Nothing else in the answer differs by audience: same rows, same identifiers, same tier discipline,
+ * same meter. A reader and a machine that disagreed about anything more than Apple's licence would
+ * make this surface's whole "the page and the API cannot answer differently" claim a lie.
+ */
+export type IdentityAudience = "first-party" | "machine";
 
 /**
  * How a link or identifier came to be trusted. CLOSED; every value is backed by a stored column or
@@ -433,18 +455,18 @@ function discogsState(row: IdentityRow): IdentityState {
 }
 
 /**
- * THE APPLE MUSIC ANSWER, computed in full off its real columns and then GATED by
- * {@link APPLE_LINKS_MACHINE_SERVED}. The computation stays here so the posture is one constant to
- * flip rather than a feature to rebuild; today it is `unsupported` on the clause read at the top of
- * this file.
+ * THE APPLE MUSIC ANSWER, computed in full off its real columns and then gated for a MACHINE caller
+ * by {@link APPLE_LINKS_MACHINE_SERVED}. A `first-party` read (the `/identity` page) gets the real
+ * state, because rendering an Apple link on Fluncle's own page is what `/log` has always done and is
+ * not the redistribution the clause bars.
  *
- * The state it would serve: `verified` with `method: "isrc"` (the Apple leg is exact-ISRC or
- * nothing, by the column's own contract, so a wrong link cannot render) and `at` the moment the
- * ISRC resolved to a URL; a miss is `recheckable` and never terminal, because Apple's catalogue
- * grows and a clean no-match today is not a no-match forever.
+ * The state: `verified` with `method: "isrc"` (the Apple leg is exact-ISRC or nothing, by the
+ * column's own contract, so a wrong link cannot render) and `at` the moment the ISRC resolved to a
+ * URL; a miss is `recheckable` and never terminal, because Apple's catalogue grows and a clean
+ * no-match today is not a no-match forever.
  */
-function appleMusicState(row: IdentityRow): IdentityState {
-  if (!APPLE_LINKS_MACHINE_SERVED) {
+function appleMusicState(row: IdentityRow, audience: IdentityAudience): IdentityState {
+  if (audience === "machine" && !APPLE_LINKS_MACHINE_SERVED) {
     return { state: "unsupported" };
   }
 
@@ -497,7 +519,11 @@ function relationsFor(rows: IdentityRow[]): Map<string, IdentityRelation> {
 }
 
 /** One row → one served recording. */
-function toRecording(row: IdentityRow, relation: IdentityRelation): IdentityRecording {
+function toRecording(
+  row: IdentityRow,
+  relation: IdentityRelation,
+  audience: IdentityAudience,
+): IdentityRecording {
   return {
     artists: parseArtistsJson(row.artists_json ?? "[]"),
     // The STRONG sense: a findings row that carries a Log ID. A straggler mid-publish has the row
@@ -506,7 +532,7 @@ function toRecording(row: IdentityRow, relation: IdentityRelation): IdentityReco
     certified: Number(row.has_finding) === 1 && Boolean(row.log_id),
     identifiers: { isrc: isrcState(row), mbRecordingId: musicbrainzState(row) },
     links: {
-      appleMusic: appleMusicState(row),
+      appleMusic: appleMusicState(row, audience),
       // Fluncle holds no Deezer link and no recording-grain Deezer attempt record, so there is no
       // honest state to compute. Deezer is used INTERNALLY (the ISRC-recovery rung, preview audio)
       // and no link is served from it, which is exactly what `unsupported` means here.
@@ -524,7 +550,7 @@ function toRecording(row: IdentityRow, relation: IdentityRelation): IdentityReco
 }
 
 /** Wrap rows in the envelope, newest metadata first. */
-function toEnvelope(rows: IdentityRow[]): IdentityEnvelope {
+function toEnvelope(rows: IdentityRow[], audience: IdentityAudience): IdentityEnvelope {
   const relations = relationsFor(rows);
 
   return {
@@ -533,7 +559,9 @@ function toEnvelope(rows: IdentityRow[]): IdentityEnvelope {
       attribution: IDENTITY_ATTRIBUTION,
       contact: IDENTITY_CONTACT,
     },
-    recordings: rows.map((row) => toRecording(row, relations.get(row.track_id) ?? "canonical")),
+    recordings: rows.map((row) =>
+      toRecording(row, relations.get(row.track_id) ?? "canonical", audience),
+    ),
   };
 }
 
@@ -549,12 +577,18 @@ const IDENTITY_MAX_ROWS = 25;
  * matched nothing — the op turns that into a 404 with no submission affordance, because a machine
  * caller must never be invited to file into the crew's triage queue.
  *
+ * `audience` defaults to `machine`, the cautious side: a new caller has to ASK for the first-party
+ * Apple state rather than inherit it by forgetting the argument.
+ *
  * Each branch is ONE indexed statement: the PK / `findings.log_id` for the path key, `tracks_isrc_idx`
  * for an ISRC, and `tracks_mb_recording_id_idx` for an MBID. Only the named columns come back — no
  * embedding blob is ever dragged across this read, which over a table this shape is the whole cost
  * question.
  */
-export async function readIdentity(key: IdentityKey): Promise<IdentityEnvelope | undefined> {
+export async function readIdentity(
+  key: IdentityKey,
+  audience: IdentityAudience = "machine",
+): Promise<IdentityEnvelope | undefined> {
   const db = await getDb();
 
   const query =
@@ -579,7 +613,7 @@ export async function readIdentity(key: IdentityKey): Promise<IdentityEnvelope |
 
   const rows = typedRows<IdentityRow>(result.rows);
 
-  return rows.length === 0 ? undefined : toEnvelope(rows);
+  return rows.length === 0 ? undefined : toEnvelope(rows, audience);
 }
 
 /**

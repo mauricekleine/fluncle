@@ -10,10 +10,12 @@ import { type IdentityPageData } from "./-identity-page-data";
 //
 // The answer page. A reader (or a crawler, or an agent) arrives with an ISRC, a MusicBrainz
 // recording id, or a Log ID, and leaves knowing four things Fluncle can say and most link
-// resolvers cannot: which links he holds and how he came to trust them, where he looked and found
-// nothing, where he will not look and why, and where he serves no link at all. The machine twin of
-// this page is `get_track`'s identity projection; both read the same envelope module, so the page
-// and the API can never answer differently.
+// resolvers cannot: which links he found and how he came to trust them, where he looked and came
+// back empty-handed, where he will not look and why, and where he hands out no link at all. The
+// machine twin of this page is `get_track`'s identity projection; both read the same envelope
+// module, so the page and the API can never answer differently. ONE field is audience-scoped: this
+// page reads `first-party`, so an Apple Music link renders here as it does on `/log`, while the API
+// answers Apple `unsupported` (identity-envelope.ts holds the clause and the reasoning).
 //
 // A CATALOGUE PAGE (VOICE.md §5, the Three Areas): reference register throughout — it states what
 // the thing is, plainly, with Fluncle in the third person as the one who did the looking. No
@@ -30,7 +32,7 @@ import { type IdentityPageData } from "./-identity-page-data";
 //
 // ── AN UNKNOWN KEY IS A 200, NOT A 404 ────────────────────────────────────────────────────────
 // Unlike `/artist/<slug>`, where an unknown slug means the page does not exist, an unknown
-// identifier here is a real question with a real answer: Fluncle holds nothing under it. Saying so
+// identifier here is a real question with a real answer: nothing Fluncle has answers to it. Saying so
 // at 200 is the honest negative this whole surface is built to say out loud; a 404 would claim the
 // question was never asked. Nothing is invited from that state — no submission affordance, on the
 // same reasoning the op carries (a wrong guess must never seed the crew's triage queue).
@@ -56,7 +58,7 @@ function identityHead(rawKey: string) {
   const pageUrl = `${siteUrl}/identity/${encodeURIComponent(key)}`;
   const title = `${key} · Identity · Fluncle`;
   // Machine-facing, so honestly-plain third person (VOICE.md's Narrator rule).
-  const description = `What Fluncle holds for ${key}: the recording's identifiers, the links he has, and where a look came back empty.`;
+  const description = `${key}: the recording's identifiers, the links Fluncle found, and where he looked and found nothing.`;
 
   return {
     links: [{ href: pageUrl, rel: "canonical" }],
@@ -132,13 +134,13 @@ function introLine(data: IdentityPageData): string {
   }
 
   if (data.status === "missing") {
-    return "Fluncle holds no recording under this identifier.";
+    return "Fluncle has nothing that answers to this identifier.";
   }
 
   const count = data.envelope.recordings.length;
 
   if (count === 1) {
-    return "One recording in the archive carries this identifier.";
+    return "One recording answers to this identifier.";
   }
 
   // Ambiguity belongs to the ANSWER, not to any one block in it, so it is said here once rather
@@ -146,6 +148,6 @@ function introLine(data: IdentityPageData): string {
   const unruled = data.envelope.recordings.some((recording) => recording.relation === "ambiguous");
 
   return unruled
-    ? `${count} recordings in the archive carry this identifier, and Fluncle has not ruled between them.`
-    : `${count} recordings in the archive carry this identifier.`;
+    ? `${count} recordings answer to this identifier, and Fluncle has not ruled between them.`
+    : `${count} recordings answer to this identifier.`;
 }

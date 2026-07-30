@@ -465,12 +465,12 @@ export const SURFACES: readonly Surface[] = [
     discoveryUrl: `${SITE}/llms.txt`,
     exposedContent: [
       "/identity — look a recording up by ISRC, MusicBrainz recording id, or Log ID",
-      "/identity/:key — one recording's identifiers and platform links, each carrying whether Fluncle holds it, looked and found nothing, will not look, or serves no such link",
+      "/identity/:key — one recording's identifiers and platform links, each carrying whether Fluncle found it, looked and found nothing, will not look, or hands out no such link",
     ],
     kind: "web_route",
     name: "web.identity",
     operatorNotes:
-      "The public face of the identity envelope (lib/server/identity-envelope.ts); the machine twin is `get_track`'s identity projection (?identity= / ?isrc= / ?mbid=), and both read the same module so page and API cannot diverge. The DOOR is probeable (always 200, and a bare GET with no ?key= renders the explainer); the keyed page is not, and it renders `noindex, follow` on purpose — one recording is reachable under up to three identifiers, so indexing them would put three near-identical URLs in front of one answer at catalogue scale. Only the door is in the sitemap. Both the page's server fn and the op charge the SAME two dials (identity-dials.ts: 30/min + 1,000/day per caller), so the meter cannot be dodged by switching doors; a spent dial renders as a calm page state, never a fault. The keyed page answers 200 with an honest 'nothing under this identifier' rather than 404ing, because an unknown key is a real question with a real answer.",
+      "The public face of the identity envelope (lib/server/identity-envelope.ts); the machine twin is `get_track`'s identity projection (?identity= / ?isrc= / ?mbid=), and both read the same module so page and API cannot diverge — except on Apple Music, the one audience-scoped field: the page reads `first-party` and renders an Apple link as /log does, the API answers `unsupported` because Apple's terms bar passing those links on. The DOOR is probeable (always 200, and a bare GET with no ?key= renders the explainer); the keyed page is not, and it renders `noindex, follow` on purpose — one recording is reachable under up to three identifiers, so indexing them would put three near-identical URLs in front of one answer at catalogue scale. Only the door is in the sitemap. Both the page's server fn and the op charge the SAME two dials (identity-dials.ts: 30/min + 1,000/day per caller), so the meter cannot be dodged by switching doors; a spent dial renders as a calm page state, never a fault. The keyed page answers 200 with an honest 'nothing under this identifier' rather than 404ing, because an unknown key is a real question with a real answer.",
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/identity",
     url: `${SITE}/identity`,
