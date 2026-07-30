@@ -47,11 +47,14 @@
 # is legible AS blind), `produced` counts a swap actually made, `queueDepth` a published build
 # not yet on the box — the pair the ledger's `produced == 0 AND queueDepth > 0` alarm reads.
 # `gateState` carries the third state that is neither ok nor down — a tick that skipped on the
-# lock, or an operator's `--dry-run` — so a tick that deliberately did not deploy never trips
-# the alarm. It speaks the ledger's own CLOSED vocabulary (`active`/`disabled`/`paused`, the
-# `run_events.gate_state` enum); a word of this script's own invention is rejected at the edge
-# and the row goes missing, which is the failure the ledger exists to end. Counters report
-# `null` when this run never got to try and `0` when it tried and found nothing — the two are
+# lock (`locked`), or an operator's `--dry-run` (`dry-run`) — so a tick that deliberately did not
+# deploy never trips the alarm. It speaks the ledger's own CLOSED vocabulary (the six words of
+# the `run_events.gate_state` enum); a word of this script's own invention is rejected at the
+# edge and the row goes missing, which is the failure the ledger exists to end. The two words
+# are not interchangeable: the Worker suppresses a gated run's work counters to `null` only for
+# the gates that NEVER LOOKED, and `dry-run` is deliberately NOT one of them, so calling a dry
+# run `paused` would erase the `checked:1` that proves it read the feed. Counters report `null`
+# when this run never got to try and `0` when it tried and found nothing — the two are
 # different facts and the ledger keeps them apart.
 #
 # Doctrine: apps/sonar/deploy/README.md.
@@ -112,10 +115,13 @@ SF_CHECKED="null"
 SF_PRODUCED="null"
 SF_QUEUE="null"
 SF_ERRORS=0
-# `gateState` speaks the ledger's CLOSED enum — `active` / `disabled` / `paused`, mirroring the
-# `run_events.gate_state` column. A tick that did not look reports `paused`; anything else is
-# rejected by the Worker, and a rejected POST leaves no row at all.
-SF_GATE="null" # `"paused"` once this tick has decided not to look
+# `gateState` speaks the ledger's CLOSED enum — `active` / `disabled` / `dry-run` / `forced` /
+# `locked` / `paused`, mirroring the `run_events.gate_state` column. A word outside that set is
+# rejected by the Worker, and a rejected POST leaves no row at all. This script reaches for two
+# of them: `locked` (the lock-held tick, which looked at nothing) and `dry-run` (which looked and
+# then declined to write). Use the PRECISE one — the Worker nulls the work counters of the
+# never-looked gates only, so the choice decides whether this tick's `checked` survives.
+SF_GATE="null" # `"locked"` or `"dry-run"` once this tick has decided not to deploy
 SF_SUMMARY_EMITTED=0
 SF_STARTED_AT=""
 
@@ -255,7 +261,10 @@ exec 9>"$LOCK"
 flock -n 9 || {
   log "another run holds the lock; exiting"
   # This tick looked at nothing, so its counters stay `null` and the gate says it did not run.
-  SF_GATE='"paused"'
+  # `locked` is the ledger's word for exactly this tick, and it is one of the gates the Worker
+  # treats as NEVER LOOKED — which is what makes the `null` counters above correct rather than
+  # laundered.
+  SF_GATE='"locked"'
   exit 0
 }
 
@@ -352,8 +361,10 @@ if [ "$MODE" = "--force" ]; then
 elif [ "$MODE" = "--dry-run" ]; then
   # Gated: it verifies and pre-smokes and then deliberately leaves the build undeployed, so
   # `produced:0` beside `queueDepth:1` is the operator's choice rather than a stalled box.
+  # `dry-run`, NOT `paused`: this tick DID look, and the Worker keeps a looking gate's counters
+  # while nulling a never-looked one's. `paused` here would erase the `checked:1` below.
   reason="dry run"
-  SF_GATE='"paused"'
+  SF_GATE='"dry-run"'
 elif [ -z "$OLD_SHA" ]; then
   reason="no baseline (first run)"
 elif [ "$OLD_SHA" = "$NEW_SHA" ]; then

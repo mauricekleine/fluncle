@@ -35,6 +35,7 @@ import {
   RUN_EVENT_ENDPOINT,
   runLedgerContractPaths,
   workspaceGateStates,
+  workspaceNeverLookedGateStates,
 } from "./api-surface";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
@@ -192,7 +193,7 @@ describe("every path a box script hardcodes is a path the Worker serves", () => 
 // Same failure class as the endpoint, one field in: the summary is bash's half of a contract the
 // Worker owns, and a value only bash knows about is REJECTED at the edge — leaving no row, which
 // reads as a missed run. Two vocabularies are pinned here: `ok` (which the emitter must not
-// state at all) and `gateState` (which must be one of the ledger's three words).
+// state at all) and `gateState` (which must be one of the ledger's six words).
 // ---------------------------------------------------------------------------
 
 const EMITTERS: [string, string][] = [
@@ -200,6 +201,28 @@ const EMITTERS: [string, string][] = [
   ["fluncle-secrets-sync.sh", SECRETS_SYNC],
   ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
 ];
+
+/**
+ * The gate word a script assigns inside its `--dry-run` branch, read out of the branch itself
+ * rather than named here — the point being to catch the script reaching for the wrong word, which
+ * a constant repeated in this file could not see.
+ */
+function dryRunGateState(path: string): string {
+  const body = readFileSync(path, "utf8");
+  const branch = /^\s*elif \[ "\$MODE" = "--dry-run" \]; then\n([\s\S]*?)^\s*elif /m.exec(body);
+
+  if (!branch?.[1]) {
+    throw new Error(`no --dry-run branch found in ${path}`);
+  }
+
+  const gate = /^\s*\w*GATE\w*='"([^"]+)"'/m.exec(branch[1]);
+
+  if (!gate?.[1]) {
+    throw new Error(`the --dry-run branch of ${path} assigns no gate state`);
+  }
+
+  return gate[1];
+}
 
 /** The literal JSON format string a script builds its summary line from. */
 function summaryFormat(path: string): string {
@@ -225,7 +248,7 @@ describe("the summary line states facts, never a verdict", () => {
     }
   });
 
-  test("every gate value a script can emit is one of the ledger's three words", () => {
+  test("every gate value a script can emit is one of the ledger's six words", () => {
     const emitted = emittedGateStates(EMITTERS.map(([, path]) => path));
 
     // Non-empty, or this proves nothing: the extractor has to be finding the assignments.
@@ -234,6 +257,30 @@ describe("the summary line states facts, never a verdict", () => {
     for (const state of emitted) {
       expect(LEDGER_GATE_STATES).toContain(state);
     }
+  });
+
+  // MEMBERSHIP IS NOT ENOUGH, and this is the failure the six-word vocabulary actually cost.
+  // `paused` and `dry-run` are both legal words, so the assertion above is green either way —
+  // but the Worker nulls a `paused` run's work counters and keeps a `dry-run`'s, so a script
+  // that reaches for the wrong legal word silently destroys its own `checked`. The rule is the
+  // Worker's, read from the Worker: a gate a script uses for a tick that LOOKED must not be one
+  // of the never-looked words.
+  test("a gate a looking tick emits is not one of the Worker's never-looked words", () => {
+    const neverLooked = workspaceNeverLookedGateStates();
+
+    if (neverLooked === null) {
+      expect(PENDING_WORKSPACE_PATHS.has(RUN_EVENT_ENDPOINT)).toBe(true);
+
+      return;
+    }
+
+    // The premise: the Worker really does suppress for some words and not others.
+    expect(neverLooked.length).toBeGreaterThan(0);
+    expect(neverLooked).not.toContain("dry-run");
+
+    // The sonar freshen is the one emitter with a gate, and its `--dry-run` tick reads the
+    // release feed before declining to deploy — so its word has to be a keeping one.
+    expect(neverLooked).not.toContain(dryRunGateState(SONAR_FRESHEN));
   });
 
   // And the vocabulary itself is checked against the Worker, the same way the endpoint is —
@@ -1045,10 +1092,10 @@ describe("sonar-freshen reports a run", () => {
   // than `0` — `0` is reserved for "I tried and found nothing", and conflating the two would
   // make a wedged predecessor look like a healthy idle box forever.
   //
-  // `paused` is the ledger's OWN word (the `run_events.gate_state` enum is active/disabled/
-  // paused). A gate value of this script's invention — `"locked"` reads better and was the
-  // first draft — is rejected by the Worker, and a rejected POST leaves NO ROW: the same
-  // silent-empty-ledger failure as a wrong endpoint, one field further in.
+  // `locked` is the ledger's OWN word for precisely this tick, and it is one of the Worker's
+  // never-looked gates — which is what makes the `null` counters correct rather than laundered.
+  // A gate value of this script's invention is rejected by the Worker, and a rejected POST leaves
+  // NO ROW: the same silent-empty-ledger failure as a wrong endpoint, one field further in.
   test("GATED: a lock-held tick reports null counters, not zeros", async () => {
     const { code, summary } = await runSonar({ commit: SHA_A, locked: true }, undefined);
 
@@ -1057,7 +1104,7 @@ describe("sonar-freshen reports a run", () => {
       checked: null,
       errors: 0,
       expectedIntervalMs: 3_600_000,
-      gateState: "paused",
+      gateState: "locked",
       produced: null,
       queueDepth: null,
     });
@@ -1093,6 +1140,11 @@ describe("sonar-freshen reports a run", () => {
   // The ledger's alarm conjunction on this unit: a build is published, the box did not take
   // it. `--dry-run` produces the same counters on purpose, and carries a `gateState` so an
   // operator preview is never mistaken for a stalled deploy.
+  //
+  // AND THE WORD IS `dry-run`, NOT `paused` — the two are both legal and they are not
+  // interchangeable. `paused` is one of the Worker's never-looked gates, so it would null the
+  // `checked: 1` asserted here: the reading that proves this tick really read the release feed
+  // before declining to deploy. That is the whole reason the ledger's vocabulary is six words.
   test("GATED: a dry run leaves the backlog standing but flags itself", async () => {
     const { code, summary } = await runSonar({ commit: SHA_B, deployed: SHA_A }, undefined, [
       "--dry-run",
@@ -1102,7 +1154,7 @@ describe("sonar-freshen reports a run", () => {
     expect(summary).toMatchObject({
       checked: 1,
       errors: 0,
-      gateState: "paused",
+      gateState: "dry-run",
       produced: 0,
       queueDepth: 1,
     });

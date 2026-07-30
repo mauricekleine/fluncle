@@ -84,28 +84,60 @@ export const PENDING_WORKSPACE_PATHS = new Map<string, string>([
  *
  * Kept here because a box script cannot import the Worker, and cross-checked against the Worker
  * by `workspaceGateStates()` below — the same bargain as the endpoint path. A gate word of a
- * script's own invention (`"locked"`, `"dry-run"`) is rejected at the edge, and a rejected POST
- * leaves NO ROW: the silent-empty-ledger failure again, one field further in.
+ * script's own invention is rejected at the edge, and a rejected POST leaves NO ROW: the
+ * silent-empty-ledger failure again, one field further in.
+ *
+ * SIX WORDS, and the three beyond `active`/`disabled`/`paused` are not decoration — they are
+ * the difference between a suppressed counter and a kept one. The Worker nulls a gated run's
+ * work counters only for the gates that NEVER LOOKED (`disabled`/`locked`/`paused`); `forced`
+ * and `dry-run` both LOOKED, so their `checked` survives. Spelling a `--dry-run` tick `paused`
+ * therefore erases the very reading that makes it legible.
  */
-export const LEDGER_GATE_STATES = ["active", "disabled", "paused"] as const;
+export const LEDGER_GATE_STATES = [
+  "active",
+  "disabled",
+  "dry-run",
+  "forced",
+  "locked",
+  "paused",
+] as const;
 
-/** The Worker's own `GATE_STATES`, or `null` when the run-ledger server half is not here yet. */
-export function workspaceGateStates(): null | string[] {
-  const module = join(REPO_ROOT, "apps/web/src/lib/server/run-events.ts");
+/** The Worker module that owns the ledger's gate vocabulary. */
+const RUN_EVENTS_MODULE = join(REPO_ROOT, "apps/web/src/lib/server/run-events.ts");
 
-  if (!existsSync(module)) {
+/** One `new Set<string>([…])` literal out of the Worker, sorted, or `null` when it is not here. */
+function workspaceStringSet(name: string): null | string[] {
+  if (!existsSync(RUN_EVENTS_MODULE)) {
     return null;
   }
 
-  const match = /const GATE_STATES = new Set<string>\(\[([^\]]*)\]\)/.exec(
-    readFileSync(module, "utf8"),
+  const match = new RegExp(`const ${name} = new Set<string>\\(\\[([^\\]]*)\\]\\)`).exec(
+    readFileSync(RUN_EVENTS_MODULE, "utf8"),
   );
 
   if (!match?.[1]) {
-    throw new Error(`run-events.ts exists but declares no GATE_STATES set — ${module}`);
+    throw new Error(`run-events.ts exists but declares no ${name} set — ${RUN_EVENTS_MODULE}`);
   }
 
   return [...match[1].matchAll(/"([^"]+)"/g)].map(([, state]) => state ?? "").sort();
+}
+
+/** The Worker's own `GATE_STATES`, or `null` when the run-ledger server half is not here yet. */
+export function workspaceGateStates(): null | string[] {
+  return workspaceStringSet("GATE_STATES");
+}
+
+/**
+ * The Worker's `GATE_STATES_THAT_NEVER_LOOKED` — the subset whose work counters it suppresses to
+ * NULL — or `null` when the server half is not here yet.
+ *
+ * Membership in `GATE_STATES` is not the whole contract. Every one of the six words is accepted,
+ * so a script that gates a tick with the WRONG legal word passes every path/vocabulary check and
+ * still has its `checked` erased at the edge. This is the half of the Worker's rule that says
+ * which word costs a reading, read from the Worker rather than re-derived here.
+ */
+export function workspaceNeverLookedGateStates(): null | string[] {
+  return workspaceStringSet("GATE_STATES_THAT_NEVER_LOOKED");
 }
 
 /** Every `gateState` string literal the three host emitters can put on the wire. */
