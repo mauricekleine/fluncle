@@ -177,7 +177,44 @@ type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
 // What the Worker made of a delivered entry. `echoedMove` carries the offending title or
 // lifted phrase the anti-sameness rails caught, so the re-author pass can route around it.
-type Delivery = { echoedMove?: string; outcome: Outcome };
+//
+// `charged` is the ONE input to the attempt budget, and it is deliberately NOT the same question as
+// the outcome. See `WORKER_REJECTION_CODES`.
+type Delivery = { charged: boolean; echoedMove?: string; outcome: Outcome };
+
+// ---------------------------------------------------------------------------
+// WHAT MAY SPEND THE BUDGET — an EXACT Worker rejection code, never a loose HTTP substring.
+//
+// The skip CLASSIFIER below is deliberately loose: a bare "403"/"422"/"forbidden" anywhere in the
+// output means "do not treat this as a hard error, leave the item queued", and that behaviour is
+// exactly right and unchanged. But CHARGING the budget on the same loose match would be a bug with
+// teeth: an expired or re-scoped agent token returns 403 on EVERY call, so a healthy draft the
+// Worker never even read would be classified as a gate rejection and cost the item an attempt.
+// With BATCH_CAP=1 and exhausted rows filtered out before the cap, a sustained 403 would march down
+// the queue writing off one item per few ticks — each needing a hand-edit of the box's attempts
+// file to recover.
+//
+// That is precisely what ./attempt-ledger.ts's `recordAttempt` promises cannot happen ("if flaky
+// infrastructure could spend the budget, three bad minutes would write an item off permanently").
+// So the budget keys on these EXACT codes — every one of them a verdict the Worker reached by
+// READING THE DRAFT — and on nothing else.
+// ---------------------------------------------------------------------------
+
+const WORKER_REJECTION_CODES = [
+  "voice_gate", // the banned-word / geography / Dry-Rule scan refused the prose
+  "title_echoes_logbook", // the deterministic title-collision guard
+  "body_echoes_logbook", // the scored body echo gate
+  "no_title",
+  "no_body",
+  "title_too_long",
+  "body_too_short",
+  "body_too_long",
+] as const;
+
+/** True only when the CLI output carries a code the Worker emits after judging the draft itself. */
+function isWorkerRejection(detail: string): boolean {
+  return WORKER_REJECTION_CODES.some((code) => detail.includes(code));
+}
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -623,29 +660,34 @@ function deliverEntry(
           }`,
         );
 
-        return { echoedMove, outcome: "echoSkipped" };
+        return { charged: true, echoedMove, outcome: "echoSkipped" };
       }
 
+      // The loose HTTP substrings stay in the SKIP test — an infra 4xx must still leave the day in
+      // the gap list rather than read as a hard error — but only an EXACT Worker code charges the
+      // budget. `invalid_sector` is deliberately absent from the charged set: it is a bad path
+      // param, not a verdict on the draft.
       if (
-        detail.includes("voice_gate") ||
-        detail.includes("body_too_short") ||
-        detail.includes("body_too_long") ||
-        detail.includes("title_too_long") ||
-        detail.includes("no_title") ||
-        detail.includes("no_body") ||
+        isWorkerRejection(detail) ||
         detail.includes("422") ||
-        detail.includes("400")
+        detail.includes("400") ||
+        detail.includes("403") ||
+        detail.includes("forbidden")
       ) {
+        const charged = isWorkerRejection(detail);
+
         log(
-          `sector ${sector}: voice gate / validation rejected the entry — skipping (stays queued)`,
+          charged
+            ? `sector ${sector}: voice gate / validation rejected the entry — skipping (stays queued)`
+            : `sector ${sector}: the create POST was refused without a gate verdict — skipping (stays queued, no attempt spent)`,
         );
 
-        return { outcome: "gateSkipped" };
+        return { charged, outcome: "gateSkipped" };
       }
 
       log(`sector ${sector}: create exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return { outcome: "skipped" };
+      return { charged: false, outcome: "skipped" };
     }
 
     try {
@@ -654,7 +696,7 @@ function deliverEntry(
       if (parsed.skipped) {
         log(`sector ${sector}: an entry already stands — no-op`);
 
-        return { outcome: "alreadyAuthored" };
+        return { charged: false, outcome: "alreadyAuthored" };
       }
     } catch {
       // Non-JSON success is unexpected but harmless; treat as an authored fill.
@@ -662,7 +704,7 @@ function deliverEntry(
 
     log(`sector ${sector}: entry authored`);
 
-    return { outcome: "authored" };
+    return { charged: false, outcome: "authored" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -694,7 +736,12 @@ function logExhausted(sector: number): void {
  * refused draft is discarded exactly like the first two: a gate-failed entry never reaches
  * /logbook.
  */
-function settleBudget(sector: number, outcome: Outcome, budget?: Budget): Outcome | null {
+function settleBudget(
+  sector: number,
+  outcome: Outcome,
+  charged: boolean,
+  budget?: Budget,
+): Outcome | null {
   if (!budget) {
     return null;
   }
@@ -708,8 +755,11 @@ function settleBudget(sector: number, outcome: Outcome, budget?: Budget): Outcom
     return null;
   }
 
-  if (outcome !== "gateSkipped" && outcome !== "echoSkipped") {
-    return null; // a transport/model failure is no evidence about the draft — it costs nothing
+  // The budget keys on `charged`, NOT on the outcome: a `gateSkipped` caused by an infra 4xx (an
+  // expired token, a re-scoped one) never had a draft judged, so it costs nothing. Only a verdict
+  // the Worker reached by reading the prose spends an attempt.
+  if (!charged) {
+    return null;
   }
 
   recordAttempt(budget.ledger, key, Math.floor(Date.now() / 1000));
@@ -751,7 +801,7 @@ export async function authorOne(gap: Gap, spent: Spent[], budget?: Budget): Prom
   // entry (a title collision or a body echo). The retry is handed the offending title/phrase,
   // so the second pass knows exactly which move is spent. Two echoes and we stop: the day
   // stays a gap, because a day that reads like one already in the log is worse than a gap.
-  let delivery: Delivery = { outcome: "skipped" };
+  let delivery: Delivery = { charged: false, outcome: "skipped" };
   let echoedMove: string | undefined;
 
   for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
@@ -780,7 +830,7 @@ export async function authorOne(gap: Gap, spent: Spent[], budget?: Budget): Prom
   // gate after its one in-tick re-author) burns one; an entry that landed — or one that already
   // stood — clears the day's line so a future re-queue starts fresh. A transport/model failure
   // returned above and reaches neither branch: no draft was judged, so nothing is charged.
-  return settleBudget(sector, delivery.outcome, budget) ?? delivery.outcome;
+  return settleBudget(sector, delivery.outcome, delivery.charged, budget) ?? delivery.outcome;
 }
 
 // ---------------------------------------------------------------------------

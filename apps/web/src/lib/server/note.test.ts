@@ -179,6 +179,51 @@ describe("gateNoteText — the name exemption", () => {
     ).toBe("voice_gate");
   });
 
+  // THE DEGENERATE CASE. A two-word name carries its own context, so masking it exposes every
+  // generic use of the word. A name that IS the banned token carries none — masking it would stop
+  // the gate policing that word for the whole note. That is a total amnesty, not an exemption, and
+  // on this surface naming is optional ("if it helps") with no final-attempt bypass, so the honest
+  // trade is a note that doesn't say the name.
+  it("REFUSES a name that is EXACTLY a banned word — that would be a total amnesty", () => {
+    expect(
+      codeOf(() =>
+        gateNoteText("Signal made this one, and the signal underneath never lets up.", ["Signal"]),
+      ),
+    ).toBe("voice_gate");
+    expect(
+      codeOf(() =>
+        gateNoteText("Every transmission after it sounds thinner than this one does.", [
+          "Transmission",
+        ]),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  // …and the geography half, which the BIO's masking never had to answer: `gateBioText` scans with
+  // `allowGeography: true`, so a bio was never policing "london". This gate is.
+  it("REFUSES a name that is EXACTLY a banned PLACE — the cosmos still replaces the map", () => {
+    expect(
+      codeOf(() =>
+        gateNoteText("London is the tune, and the London air is all over the break.", ["London"]),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("still exempts the multi-word names that carry their own context", () => {
+    // The control for the two above: dropping single-token names must not narrow the real fix.
+    const note = "Future Signal made this one, and it still lands late enough to hurt.";
+
+    expect(gateNoteText(note, ["Future Signal"])).toBe(note);
+  });
+
+  it("ignores a name with no word characters at all (it must not strip punctuation wholesale)", () => {
+    // With no `\w` in the name both boundary lookarounds collapse and the replace runs unanchored,
+    // so a subject named `!` would delete every exclamation mark and walk through the Dry Rule.
+    expect(
+      codeOf(() => gateNoteText("Pure rolling menace, half-step and patient. Banger!", ["!"])),
+    ).toBe("voice_gate");
+  });
+
   it("measures the LENGTH bounds on the whole note, name included", () => {
     // The exemption is about what Fluncle is judged for SAYING; a long artist name still spends
     // the public 280-char budget like any other word.

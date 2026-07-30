@@ -119,15 +119,38 @@ export function planAttempt(
 }
 
 /**
- * Burn one attempt — called ONLY when the Worker has judged a draft and REFUSED it (a voice-gate
- * or length rejection, or an echo-gate rejection), never on a transport or model failure.
+ * Burn one attempt — called ONLY when the Worker has judged a draft and REFUSED it, never on a
+ * transport or model failure.
  *
- * THE DISTINCTION THE WHOLE BUDGET RESTS ON. A gate rejection is deterministic evidence that THIS
- * DRAFT was bad — the Worker read it and refused it. A `claude -p` that exits non-zero, returns
- * `is_error`, or returns nothing says something about the infrastructure and NOTHING about the
- * item; there is no draft to have judged. If flaky infrastructure could spend the budget, three bad
- * minutes would write an item off permanently through no fault of its own. Those failures already
- * log a line the `/status` sweep-strain detector scores, so they are not unwatched.
+ * THE DISTINCTION THE WHOLE BUDGET RESTS ON. A gate rejection is a verdict the Worker reached by
+ * READING THE DRAFT. A `claude -p` that exits non-zero, returns `is_error`, or returns nothing says
+ * something about the infrastructure and NOTHING about the item; there is no draft to have judged.
+ * If flaky infrastructure could spend the budget, three bad minutes would write an item off
+ * permanently through no fault of its own. Those failures already log a line the `/status`
+ * sweep-strain detector scores, so they are not unwatched.
+ *
+ * That distinction is why the callers key on an EXACT Worker rejection code and never on a loose
+ * HTTP substring: an expired agent token 4xxs every delivery, and charging for it would be exactly
+ * the write-off this paragraph promises cannot happen. See each sweep's `WORKER_REJECTION_CODES`.
+ *
+ * TWO KINDS OF REFUSAL REACH HERE, AND THEY ARE NOT EQUALLY DAMNING — the deliberate trade:
+ *
+ *   · ABSOLUTE (the voice gate, the length bounds, the logbook's title-collision guard). A property
+ *     of the draft ALONE. Three of these really is evidence the model is not going to get there.
+ *   · RELATIONAL (the echo gates). Scored against the item's NEIGHBOURHOOD — the notes or scripts
+ *     already standing near it — so it is a property of the draft AND the corpus around it, and it
+ *     gets harder as the archive fills. Three echo refusals are NOT proof the draft was bad; the
+ *     same line might clear next month, and `note.ts`'s own rejection message says the draft "is
+ *     held for the operator's eye, not thrown away".
+ *
+ * An echo refusal is charged ANYWAY, on purpose. The alternative is that an item which always
+ * echoes sits at the head of a cap-1 oldest-first queue burning two authorings every tick forever —
+ * the precise unbounded loop this module exists to end, and it would block every item behind it.
+ * Bounding it is worth more than the fairness, and the cost is both visible and reversible: on the
+ * note and observation paths a rejected draft is HELD in its rejections ledger and raised in the
+ * `/admin` attention queue, so the work is in front of the operator rather than lost; on all three
+ * paths deleting the item's line from this ledger re-arms it, which is the intended move once the
+ * neighbourhood has moved on.
  */
 export function recordAttempt(ledger: AttemptLedger, key: string, nowEpoch: number): AttemptLedger {
   ledger.set(key, {
@@ -226,7 +249,7 @@ export function exhaustedRecapLine(
   keys: readonly string[],
   maxAttempts: number,
 ): string {
-  return `not working ${keys.length} exhausted ${noun}(s) — ${maxAttempts} drafts spent each (${keys.slice(0, 10).join(", ")})`;
+  return `not working ${keys.length} exhausted ${noun}${keys.length === 1 ? "" : "s"} — ${maxAttempts} drafts spent each (${keys.slice(0, 10).join(", ")})`;
 }
 
 /**

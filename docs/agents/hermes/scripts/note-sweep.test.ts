@@ -71,6 +71,10 @@ if [ "\${1:-}" = "admin" ] && [ "\${3:-}" = "context" ]; then
 fi
 printf '%s\\n' "\${4:-?}" >> "${CONTROL}/deliveries"
 verdict="$(cat "${CONTROL}/verdict" 2>/dev/null || printf 'pass')"
+if [ "$verdict" = "infra403" ]; then
+  printf 'error: request failed with 403 forbidden\\n' >&2
+  exit 1
+fi
 if [ "$verdict" = "voice" ]; then
   printf 'error: The note fails the voice gate: banned identity word "signal" [voice_gate 422]\\n' >&2
   exit 1
@@ -214,7 +218,7 @@ describe("readEchoedPhrase", () => {
 // finding's own artist name while the prompt invited naming it. THE NAME EXEMPTION fixes that
 // case; this budget bounds every other one.
 
-function verdict(value: "pass" | "voice" | "echo"): void {
+function verdict(value: "pass" | "voice" | "echo" | "infra403"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
 }
 
@@ -367,6 +371,26 @@ describe("the transport/model failure never spends an attempt", () => {
     rmSync(CONTROL, { force: true, recursive: true });
     rmSync(STATE_DIR, { force: true, recursive: true });
     mkdirSync(CONTROL, { recursive: true });
+  });
+
+  // THE 403 CASE, and it is the one that would actually have bitten. An expired or re-scoped agent
+  // token returns 403 on EVERY delivery. The skip classifier matches a bare "403"/"forbidden" so the
+  // finding correctly stays queued — but if that also CHARGED the budget, a sustained token outage
+  // would march down a cap-1 queue writing off one healthy finding per few ticks, each recoverable
+  // only by hand-editing the box's attempts file. The Worker never read these drafts.
+  test("an infra 403 leaves the finding queued and spends NOTHING — no draft was ever judged", async () => {
+    verdict("infra403");
+
+    for (let i = 0; i < 6; i += 1) {
+      expect((await tick("t-1")).outcome).toBe("gateSkipped");
+    }
+
+    // Six refused deliveries, and the finding has not spent a single attempt.
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+
+    // …so it still gets its FULL budget once the token is fixed.
+    verdict("pass");
+    expect((await tick("t-1")).outcome).toBe("noted");
   });
 
   test("a failing `claude -p` leaves the budget untouched, however many ticks it fails for", async () => {

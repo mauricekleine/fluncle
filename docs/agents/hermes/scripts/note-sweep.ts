@@ -244,7 +244,41 @@ type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
 // What the Worker made of a delivered note. `echoed` carries the phrase the echo gate
 // caught, so the re-author pass can hand the model its own echo back.
-type Delivery = { echoedPhrase?: string; outcome: Outcome };
+//
+// `charged` is the ONE input to the attempt budget, and it is deliberately NOT the same question as
+// the outcome. See `WORKER_REJECTION_CODES`.
+type Delivery = { charged: boolean; echoedPhrase?: string; outcome: Outcome };
+
+// ---------------------------------------------------------------------------
+// WHAT MAY SPEND THE BUDGET — an EXACT Worker rejection code, never a loose HTTP substring.
+//
+// The skip CLASSIFIER below is deliberately loose: a bare "403"/"422"/"forbidden" anywhere in the
+// output means "do not treat this as a hard error, leave the finding queued", and that behaviour is
+// exactly right and unchanged. But CHARGING the budget on the same loose match would be a bug with
+// teeth: an expired or re-scoped agent token returns 403 on EVERY call, so a healthy draft the
+// Worker never even read would be classified as a gate rejection and cost the finding an attempt.
+// With the timer at ~10-minute intervals, BATCH_CAP=1, and exhausted rows filtered out before the
+// cap, a sustained 403 would march down the queue writing off one finding per ~30 minutes — each
+// needing a hand-edit of the box's attempts file to recover.
+//
+// That is precisely what ./attempt-ledger.ts's `recordAttempt` promises cannot happen ("if flaky
+// infrastructure could spend the budget, three bad minutes would write an item off permanently").
+// So the budget keys on these EXACT codes — every one of them a verdict the Worker reached by
+// READING THE DRAFT — and on nothing else.
+// ---------------------------------------------------------------------------
+
+const WORKER_REJECTION_CODES = [
+  "voice_gate", // the banned-word / geography / Dry-Rule scan refused the prose
+  "note_echoes_neighbours", // the anti-sameness rail refused it against its neighbourhood
+  "no_note", // the draft was empty / not a string
+  "note_too_short",
+  "note_too_long",
+] as const;
+
+/** True only when the CLI output carries a code the Worker emits after judging the draft itself. */
+function isWorkerRejection(detail: string): boolean {
+  return WORKER_REJECTION_CODES.some((code) => detail.includes(code));
+}
 
 // The authored note plus its MEASURED authoring spend (the COST-01 §5 `note` row):
 // the total_cost_usd the CLI computed, the model, and the token count. `usd` is null
@@ -632,27 +666,33 @@ function deliverNote(
           }`,
         );
 
-        return { echoedPhrase, outcome: "echoSkipped" };
+        return { charged: true, echoedPhrase, outcome: "echoSkipped" };
       }
 
-      // The voice gate / length bounds reject with a 403/422 + a signature. Treat
-      // that as a skip (the finding stays queued), not a hard error.
+      // The voice gate / length bounds reject with a 403/422 + a signature. Treat that as a skip
+      // (the finding stays queued), not a hard error. The loose HTTP substrings stay in the SKIP
+      // test — an infra 403 must still leave the finding queued rather than read as a hard error —
+      // but only an EXACT Worker code charges the budget.
       if (
-        detail.includes("voice_gate") ||
-        detail.includes("note_too_short") ||
-        detail.includes("note_too_long") ||
+        isWorkerRejection(detail) ||
         detail.includes("403") ||
         detail.includes("422") ||
         detail.includes("forbidden")
       ) {
-        log(`${id}: voice gate / length rejected the note — skipping (stays queued)`);
+        const charged = isWorkerRejection(detail);
 
-        return { outcome: "gateSkipped" };
+        log(
+          charged
+            ? `${id}: voice gate / length rejected the note — skipping (stays queued)`
+            : `${id}: the note POST was refused without a gate verdict — skipping (stays queued, no attempt spent)`,
+        );
+
+        return { charged, outcome: "gateSkipped" };
       }
 
       log(`${id}: note exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return { outcome: "skipped" };
+      return { charged: false, outcome: "skipped" };
     }
 
     // The fill-empty-only guard returns `skipped:true` when an operator note already
@@ -663,7 +703,7 @@ function deliverNote(
       if (parsed.skipped) {
         log(`${id}: a note is already on file — operator note stands, no-op`);
 
-        return { outcome: "alreadyNoted" };
+        return { charged: false, outcome: "alreadyNoted" };
       }
     } catch {
       // Non-JSON success is unexpected but harmless; treat as a fill.
@@ -671,7 +711,7 @@ function deliverNote(
 
     log(`${id}: note ${dryRun ? "cleared both gates (dry run, nothing stored)" : "authored"}`);
 
-    return { outcome: "noted" };
+    return { charged: false, outcome: "noted" };
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -787,7 +827,12 @@ function logExhausted(id: string): void {
  * There is no publish-anyway branch here, on purpose (the operator's 2026-07-30 ruling). The last
  * refused draft is discarded exactly like the first two: a gate-failed note never reaches /log.
  */
-function settleBudget(id: string, outcome: Outcome, budget?: Budget): NoteResult | null {
+function settleBudget(
+  id: string,
+  outcome: Outcome,
+  charged: boolean,
+  budget?: Budget,
+): NoteResult | null {
   if (!budget) {
     return null; // a dry run spends nothing and clears nothing
   }
@@ -799,8 +844,11 @@ function settleBudget(id: string, outcome: Outcome, budget?: Budget): NoteResult
     return null;
   }
 
-  if (outcome !== "gateSkipped" && outcome !== "echoSkipped") {
-    return null; // a transport/model failure is no evidence about the draft — it costs nothing
+  // The budget keys on `charged`, NOT on the outcome: a `gateSkipped` caused by an infra 403 (an
+  // expired token, a re-scoped one) never had a draft judged, so it costs nothing. Only a verdict
+  // the Worker reached by reading the prose spends an attempt.
+  if (!charged) {
+    return null;
   }
 
   recordAttempt(budget.ledger, id, Math.floor(Date.now() / 1000));
@@ -887,7 +935,7 @@ export async function noteOne(
   // note-less and queued, because a note that reads like every other note in its region
   // is worth less than no note at all.
   let authored: AuthoredNote | null = null;
-  let delivery: Delivery = { outcome: "skipped" };
+  let delivery: Delivery = { charged: false, outcome: "skipped" };
   let echoedPhrase: string | undefined;
 
   for (let attempt = 0; attempt <= ECHO_RETRIES; attempt += 1) {
@@ -922,7 +970,7 @@ export async function noteOne(
   // in-tick re-author) burns one; a note that landed — or an operator's that already stood — clears
   // the finding's line so a future re-queue starts fresh. A transport/model failure returned above
   // and reaches neither branch: no draft was judged, so there is nothing to charge for.
-  const settled = settleBudget(id, outcome, budget);
+  const settled = settleBudget(id, outcome, delivery.charged, budget);
 
   if (settled) {
     return settled;

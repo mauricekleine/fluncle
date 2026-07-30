@@ -208,7 +208,16 @@ describe("the summary arithmetic", () => {
     // accrue a point per tick forever for a known steady state — a `degraded` that can never clear.
     const recap = exhaustedRecapLine("finding", ["011.5.9D", "012.1.0A"], MAX);
 
-    expect(recap).toContain("2 exhausted finding(s)");
+    expect(recap).toContain("2 exhausted findings");
     expect(countDistressLines(recap)).toBe(0);
+  });
+
+  test("…and pluralises the way the rest of the box's operator lines do", () => {
+    // `fluncle-healthcheck.ts` writes `${n === 1 ? "" : "s"}`; the repo's operator register has no
+    // `(s)` parenthetical anywhere, and this line is read by a human at 01:00.
+    expect(exhaustedRecapLine("finding", ["011.5.9D"], MAX)).toContain("1 exhausted finding —");
+    expect(exhaustedRecapLine("day", ["sector 12", "sector 13"], MAX)).toContain(
+      "2 exhausted days",
+    );
   });
 });

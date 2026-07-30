@@ -217,12 +217,23 @@ export type VoiceGateViolation = { reason: string; word?: string };
 // A PARTIAL reference is still rejected: prose about "Future Signal" that says only "Signal" trips
 // the ban. That is intended — conservative, and the rewrite can simply use the full name.
 //
-// THE ONE UNAVOIDABLE COST: when a subject's WHOLE name IS a banned word, masking it deletes every
-// occurrence, so that word is amnestied in that subject's prose entirely — there is no way to tell
-// "the artist Signal" from the noun in "a signal", because they are the same token. Production
-// carries at least three such entities (`/artist/signal`, `/album/anomaly`, `/album/content`). It
-// is the accepted cost of letting those subjects be written about at all; the alternative is that
-// they cannot be.
+// THE DEGENERATE CASE — a name that is EXACTLY one banned token — is the one place this stops being
+// a narrow exemption. Masking the artist "Signal" deletes every occurrence of the word, so the gate
+// stops policing it for the whole piece; there is no way to tell "the artist Signal" from the noun
+// in "a signal", because they are the same token. The two families answer it DIFFERENTLY, and the
+// split is deliberate:
+//
+//   · `maskSubjectNames` (note / observation / logbook) REFUSES those names — see
+//     `UNSAYABLE_NAMES`. Naming is optional on those surfaces and there is no final-attempt bypass,
+//     so the honest trade is a piece that doesn't say the name. It also matters more there: the
+//     exempt set is bigger (every artist AND the title, or a whole sector-day's worth), and the
+//     EARTHLY-GEOGRAPHY ban is in scope, so a finding titled "London" would otherwise license
+//     "the London air" three sentences later.
+//   · `maskEntityName` (the bio) ACCEPTS the cost, unchanged. A dossier's whole job is to introduce
+//     its subject, it scans with `allowGeography: true` so the geography half never applied, and it
+//     has the final-attempt acceptance to land a draft. Production carries at least three such
+//     entities (`/artist/signal`, `/album/anomaly`, `/album/content`) and the alternative is that
+//     their pages cannot have a bio at all.
 //
 // Every name reaching here is a trusted identity string from Fluncle's own DB (an artist name, a
 // track title, an entity name), never free web content, so regex-escaping it is the whole of the
@@ -235,8 +246,12 @@ export type VoiceGateViolation = { reason: string; word?: string };
 export function maskEntityName(text: string, entityName: string): string {
   const name = entityName.trim();
 
-  if (!name) {
-    return text; // no name to exempt — scan the text exactly as before
+  // Nothing to exempt — scan the text exactly as before. The `\w` guard is not cosmetic: with no
+  // word character anywhere in the name BOTH boundary lookarounds below collapse to "", and the
+  // replace runs completely unanchored. A subject named `!` would then strip every exclamation mark
+  // in the piece and hand the Dry Rule a clean scan.
+  if (!name || !/\w/.test(name)) {
+    return text;
   }
 
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -251,6 +266,32 @@ export function maskEntityName(text: string, entityName: string): string {
 }
 
 /**
+ * THE UNSAYABLE NAMES — the one class of name this exemption refuses to grant.
+ *
+ * A name of TWO OR MORE words carries its own context: masking "Future Signal" removes a specific
+ * proper noun and leaves every generic "signal" in the piece exposed. A name that is EXACTLY one
+ * banned token carries none: masking the artist "Signal" deletes every occurrence of the word, and
+ * the gate stops policing it for the whole piece. That is not a narrow exemption, it is a total
+ * amnesty — and on these surfaces it also lifts the EARTHLY-GEOGRAPHY ban, which the bio's version
+ * of this masking never touched (`gateBioText` scans with `allowGeography: true`, so a bio was
+ * never policing "london" in the first place; the note, observation and logbook gates are).
+ * A finding titled "London" would otherwise license "the London air" three sentences later.
+ *
+ * So a name whose whole trimmed form IS a banned identity word or a banned place is dropped from
+ * the exempt set, and the scan sees the prose exactly as it always did.
+ *
+ * WHY THAT IS SATISFIABLE, and this is the asymmetry the whole ruling turns on. On these three
+ * surfaces naming is OPTIONAL — the note prompt says naming the artist or the title is fine "if it
+ * helps", the observation prompt says name the artist "only if it sharpens the read" — and there is
+ * NO final-attempt bypass, so an unclearable draft would be a permanent write-off. A note about the
+ * artist Signal simply does not say "Signal", and it is still a good note. A BIO cannot make that
+ * trade: it is a dossier whose entire job is to introduce its subject, and it has the final-attempt
+ * acceptance to land one. That is why `maskEntityName` is deliberately left alone — the accepted
+ * cost belongs to the bio and nowhere else.
+ */
+const UNSAYABLE_NAMES = new Set<string>([...BANNED_WORDS, ...BANNED_GEOGRAPHY]);
+
+/**
  * Mask EVERY name a piece of prose is allowed to say — the multi-name form of `maskEntityName`,
  * and the one the finding-shaped gates use. A note or an observation is about a FINDING, whose
  * sayable names are its artists AND its title; a logbook entry is about a whole sector-day, so its
@@ -260,12 +301,16 @@ export function maskEntityName(text: string, entityName: string): string {
  * "Signal Chain" would eat the head of the title and leave " Chain" standing, so the longer name
  * would never match. Masking the longest name first means each name is removed at its full extent.
  *
- * A blank/whitespace entry is skipped, so an unknown artist or a title-less row costs nothing.
+ * A blank/whitespace entry is skipped, so an unknown artist or a title-less row costs nothing. A
+ * name that is ITSELF a banned word or place is skipped too — see `UNSAYABLE_NAMES` above; that is
+ * the difference between a narrow exemption and a total amnesty, and it matters more here than in
+ * the bio because the exempt set is bigger (every artist AND the title, or a whole sector-day's
+ * worth) and the geography ban is in scope.
  */
 export function maskSubjectNames(text: string, names: readonly string[]): string {
   return [...names]
     .map((name) => name.trim())
-    .filter(Boolean)
+    .filter((name) => name.length > 0 && !UNSAYABLE_NAMES.has(name.toLowerCase()))
     .sort((a, b) => b.length - a.length)
     .reduce((masked, name) => maskEntityName(masked, name), text);
 }

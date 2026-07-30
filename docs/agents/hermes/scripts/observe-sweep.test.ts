@@ -60,6 +60,10 @@ if [ "\${1:-}" = "admin" ] && [ "\${3:-}" = "context" ]; then
   exit 0
 fi
 verdict="$(cat "${CONTROL}/verdict" 2>/dev/null || printf 'pass')"
+if [ "$verdict" = "infra403" ]; then
+  printf 'error: request failed with 403 forbidden\\n' >&2
+  exit 1
+fi
 if [ "$verdict" = "voice" ]; then
   printf 'error: The observation script fails the voice gate: banned identity word "signal" [voice_gate 422]\\n' >&2
   exit 1
@@ -190,7 +194,7 @@ describe("readEchoedMove", () => {
 // "retry" meant "forever", and the rejection could be UNSATISFIABLE because the scan read the
 // finding's own artist name. THE NAME EXEMPTION fixes that case; this bounds every other one.
 
-function verdict(value: "pass" | "voice" | "echo"): void {
+function verdict(value: "pass" | "voice" | "echo" | "infra403"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
 }
 
@@ -267,6 +271,21 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
 
     expect((await tick("t-1")).outcome).toBe("echoSkipped");
     expect(readAttemptLedger(ledgerPath()).get("t-1")?.attempts).toBe(1);
+  });
+
+  // An expired agent token returns 403 on every delivery. It must leave the finding queued (it
+  // does) WITHOUT charging the budget — the Worker never read these drafts.
+  test("an infra 403 leaves the finding queued and spends NOTHING", async () => {
+    verdict("infra403");
+
+    for (let i = 0; i < 6; i += 1) {
+      expect((await tick("t-1")).outcome).toBe("gateSkipped");
+    }
+
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+
+    verdict("pass");
+    expect((await tick("t-1")).outcome).toBe("rendered");
   });
 
   test("a transport/model failure never spends an attempt", async () => {

@@ -51,6 +51,10 @@ writeFileSync(
   `#!/usr/bin/env bash
 set -euo pipefail
 verdict="$(cat "${CONTROL}/verdict" 2>/dev/null || printf 'pass')"
+if [ "$verdict" = "infra403" ]; then
+  printf 'error: request failed with 403 forbidden\\n' >&2
+  exit 1
+fi
 if [ "$verdict" = "voice" ]; then
   printf 'error: The body fails the voice gate: banned identity word "signal" [voice_gate 422]\\n' >&2
   exit 1
@@ -191,7 +195,7 @@ describe("readEchoedMove", () => {
 // genuinely unwritable: the sweep hands the author each finding's artist and title as its material
 // while the gate scanned those same names. THE NAME EXEMPTION fixes that; this bounds the rest.
 
-function verdict(value: "pass" | "voice" | "echo"): void {
+function verdict(value: "pass" | "voice" | "echo" | "infra403"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
 }
 
@@ -279,6 +283,21 @@ describe("authorOne (the bounded re-author, across ticks)", () => {
     expect(await tick(36)).toBe("echoSkipped");
     expect(authorings()).toBe(2);
     expect(readAttemptLedger(ledgerPath()).get("36")?.attempts).toBe(1);
+  });
+
+  // An expired agent token returns 403 on every delivery. It must leave the day in the gap list (it
+  // does) WITHOUT charging the budget — the Worker never read these drafts.
+  test("an infra 403 leaves the day a gap and spends NOTHING", async () => {
+    verdict("infra403");
+
+    for (let i = 0; i < 6; i += 1) {
+      expect(await tick(36)).toBe("gateSkipped");
+    }
+
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+
+    verdict("pass");
+    expect(await tick(36)).toBe("authored");
   });
 
   test("a transport/model failure never spends an attempt", async () => {

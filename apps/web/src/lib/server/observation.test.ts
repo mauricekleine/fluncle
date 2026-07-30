@@ -215,6 +215,36 @@ describe("gateObservationScript — the name exemption", () => {
     ).toThrowError(/geography/);
   });
 
+  // THE DEGENERATE CASE. A two-word name carries its own context; a name that IS the banned token
+  // carries none, so masking it would stop the gate policing that word for the whole read. Naming
+  // is optional here ("only if it sharpens the read") and there is no final-attempt bypass, so the
+  // honest trade is a read that doesn't say the name.
+  it("REFUSES a name that is EXACTLY a banned word — that would be a total amnesty", () => {
+    expect(() =>
+      gateObservationScript(
+        "Signal built this one out of patience, and the signal underneath never lets up before I clocked it, fam.",
+        ["Signal"],
+      ),
+    ).toThrowError(/voice gate/);
+  });
+
+  // …and the geography half, which the BIO's masking never had to answer: `gateBioText` scans with
+  // `allowGeography: true`, so a bio was never policing "london". This gate is.
+  it("REFUSES a name that is EXACTLY a banned PLACE — the cosmos still replaces the map", () => {
+    expect(() =>
+      gateObservationScript(
+        "London built this one out of patience, and the London air is all over it before I clocked the coordinate, fam.",
+        ["London"],
+      ),
+    ).toThrowError(/geography/);
+  });
+
+  it("ignores a name with no word characters at all (it must not strip punctuation wholesale)", () => {
+    // With no `\w` in the name both boundary lookarounds collapse and the replace runs unanchored,
+    // so a subject named `!` would delete every exclamation mark and walk through the Dry Rule.
+    expect(() => gateObservationScript(`${READ.slice(0, -1)}!`, ["!"])).toThrowError(/voice gate/);
+  });
+
   it("does not let a SHORT name amnesty a longer banned word it sits inside", () => {
     // The word-boundary rule: an artist called "Sign" must not mask the middle out of "signal".
     expect(() =>
