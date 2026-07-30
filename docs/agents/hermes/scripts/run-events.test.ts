@@ -11,8 +11,10 @@
 // pass is not hypothetical: 897 consecutive runs, zero checks, green throughout.
 //
 // So every test here drives the REAL script — real bash, real exit paths, a real loopback
-// ledger — and asserts on the bytes that actually left the box. `systemctl`, `docker`, `op`
-// and `flock` are PATH stubs; nothing touches the network.
+// ledger — and asserts on the bytes that actually left the box. `systemctl`, `docker`, `op` and
+// `flock` are PATH stubs, and so is `curl`: `loopbackCurlRail` passes a loopback URL through to
+// the real binary and REFUSES anything else, so "nothing touches the network" is enforced here
+// rather than merely asserted. It had to be — that sentence was false until the rail existed.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -495,24 +497,86 @@ function writeStub(dir: string, name: string, body: string): void {
 }
 
 /**
+ * THE LOOPBACK RAIL — `curl` is a PATH stub, exactly like `systemctl`, `docker` and `flock`.
+ *
+ * The header of this file says nothing here touches the network. Until this existed that was a
+ * CLAIM, not a mechanism, and it was false: the secrets-sync fixtures below omit
+ * `FLUNCLE_API_BASE_URL`, an unset base is documented to fall back to the emitter's box default
+ * — production — and the run reads its own agent token off the secrets file it just wrote, so
+ * every no-ledger secrets-sync run fired a real POST at www.fluncle.com. It cost the suite a
+ * timeout, because a POST that cannot connect burns its full 5s `--max-time` and the GSC test
+ * makes two of them.
+ *
+ * So the rail: a loopback URL passes through to the real binary, anything else is REFUSED and
+ * recorded, and `runScript` throws on a recorded refusal. Refusing is not enough on its own —
+ * `record_run_event` swallows every curl failure with `|| true` by design — so the recording is
+ * what turns a leak into a named test failure instead of a silent one.
+ */
+function loopbackCurlRail(): { dir: string; refusals: string } {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-loopback-rail-"));
+  const refusals = join(dir, "refused.log");
+  const real = Bun.which("curl");
+
+  if (real === null) {
+    throw new Error("no curl on PATH — the loopback rail has nothing to pass through to");
+  }
+
+  // Only args that START with a scheme are inspected: a `--data-binary '{…}'` body is not a URL
+  // and must never be read as one.
+  writeStub(
+    dir,
+    "curl",
+    [
+      'for arg in "$@"; do',
+      '  case "$arg" in',
+      "    http://127.0.0.1|http://127.0.0.1[:/]*|http://localhost|http://localhost[:/]*) ;;",
+      "    http://*|https://*)",
+      `      printf '%s\\n' "$arg" >>${JSON.stringify(refusals)}`,
+      "      exit 7",
+      "      ;;",
+      "  esac",
+      "done",
+      `exec ${JSON.stringify(real)} "$@"`,
+    ].join("\n"),
+  );
+
+  return { dir, refusals };
+}
+
+/**
  * Run a host script with an EXPLICIT env — never the ambient one. Two reasons, both
  * load-bearing: the ledger POST is a `curl` in a child process, so the repo's no-network rail
  * (which wraps `globalThis.fetch`) cannot see it, and an operator's real FLUNCLE_API_TOKEN
- * sitting in the environment is the one way this suite could reach production.
+ * sitting in the environment is the one way this suite could reach production. The caller's PATH
+ * is prefixed with the loopback rail above, which closes the other way in: a token the SCRIPT
+ * itself materializes, which no amount of env hygiene here can withhold.
  */
 async function runScript(
   script: string,
   env: Record<string, string>,
   args: string[] = [],
 ): Promise<{ code: number; stderr: string; stdout: string }> {
+  const rail = loopbackCurlRail();
+  const merged = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ...env };
   const proc = Bun.spawn(["bash", script, ...args], {
-    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ...env },
+    // The rail goes on LAST and FIRST: after the spread so a fixture's own PATH cannot displace
+    // it, and at the head of the list so its `curl` is the one every run finds.
+    env: { ...merged, PATH: `${rail.dir}:${merged.PATH}` },
     stderr: "pipe",
     stdout: "pipe",
   });
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
   const code = await proc.exited;
+
+  if (existsSync(rail.refusals)) {
+    throw new Error(
+      `a run reached off-loopback — the fixture is missing its ledger base:\n${readFileSync(
+        rail.refusals,
+        "utf8",
+      )}`,
+    );
+  }
 
   return { code, stderr, stdout };
 }
@@ -623,6 +687,9 @@ async function runWatchdog(
   const root = mkdtempSync(join(tmpdir(), "fluncle-watchdog-"));
   const bin = watchdogStubs(root, fixture);
   const run = await runScript(WATCHDOG, {
+    // Empty, not absent, with no ledger fixture — see runSecretsSync below for what an absent
+    // base costs. This unit is token-gated as well, so it is belt and braces here.
+    FLUNCLE_API_BASE_URL: base ?? "",
     HOME: root,
     PATH: `${bin}:/usr/bin:/bin`,
     // No re-check pause: the confirming sample is behavioural, not temporal.
@@ -631,7 +698,6 @@ async function runWatchdog(
     WD_INFINITY: (fixture.infinity ?? []).join(" "),
     WD_START_FAIL: (fixture.startFails ?? []).join(" "),
     WD_TIMERS: fixture.timers.join(" "),
-    ...(base === undefined ? {} : { FLUNCLE_API_BASE_URL: base }),
   });
 
   return { code: run.code, stdout: run.stdout, summary: lastJsonLine(run.stdout) };
@@ -817,6 +883,14 @@ async function runSecretsSync(
   );
 
   const run = await runScript(SECRETS_SYNC, {
+    // EXPLICITLY EMPTY, never absent, when there is no ledger fixture. This unit is the one
+    // whose token it materializes ITSELF — `read_secret_token` off the secrets file it just
+    // wrote — so unlike the watchdog and the sonar freshen it cannot be kept off the wire by
+    // withholding a token. An ABSENT base is documented to fall back to the box's production
+    // default; an empty one means THERE IS NO LEDGER HERE and reaches the emitter's own guard,
+    // which is the line that says so. Getting this wrong sent four live POSTs at
+    // www.fluncle.com per suite run and timed the GSC test out on a network-restricted runner.
+    FLUNCLE_API_BASE_URL: base ?? "",
     HOME: root,
     OP_GSC: fixture.gsc === "fails" ? "fails" : "ok",
     OP_INJECT_SWEEP: fixture.injectFails ? "fails" : "ok",
@@ -827,7 +901,6 @@ async function runSecretsSync(
     SECRETS_SYNC_GSC_OUT: join(root, "state/home/.fluncle-gsc.json"),
     SECRETS_SYNC_SWEEP_OUT: sweepOut,
     SECRETS_SYNC_TPL_DIR: tpl,
-    ...(base === undefined ? {} : { FLUNCLE_API_BASE_URL: base }),
   });
 
   return { code: run.code, root, stdout: run.stdout, summary: lastJsonLine(run.stdout) };
@@ -899,6 +972,7 @@ describe("secrets-sync reports a run", () => {
       async () => {
         const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
         const run = await runScript(SECRETS_SYNC, {
+          FLUNCLE_API_BASE_URL: "",
           HOME: root,
           PATH: "/usr/bin:/bin",
           SECRETS_SYNC_BOOTSTRAP: join(root, "does-not-exist.env"),

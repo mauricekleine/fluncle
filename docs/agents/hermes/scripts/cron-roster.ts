@@ -108,16 +108,16 @@ export const NON_WRITER_TIMERS: Record<string, string> = {
   "fluncle-healthcheck.timer":
     "the prober itself — it self-emits cron.healthcheck; a self-read would be circular",
   // Runs on the HOST as a root oneshot outside the container, so it never sources
-  // cron-output.sh. GAP, deliberately recorded: it posts to nothing at all, so a secrets sync
-  // that has been failing for a week is invisible on /status. Closing it needs a
-  // `@fluncle/registry` cron surface (packages/), which is outside this slice.
+  // cron-output.sh and there is no marker for a prober to read. NOT invisible, though: it POSTs
+  // its own row to the run ledger (`record_run`), where a missing row reads as a missed run —
+  // which is what closed the gap this entry used to record.
   "fluncle-secrets-sync.timer":
-    "a host-side oneshot outside the container — writes no marker, and today reports nowhere",
-  // Same shape as secrets-sync: a root host oneshot. GAP, deliberately recorded — and a
-  // sharper one, because a watchdog that reports nothing is the blind-detector case this whole
-  // roster exists to stop. Same blocker: a new row needs a registry surface.
+    "a host-side oneshot outside the container — writes no marker; POSTs its own run-ledger row",
+  // Same shape as secrets-sync: a root host oneshot with no marker, reporting itself to the run
+  // ledger instead. It matters most here — a watchdog that reported nothing was the
+  // blind-detector case this whole roster exists to stop, turned on the detector itself.
   "fluncle-timer-watchdog.timer":
-    "a host-side oneshot outside the container — writes no marker, and today reports nowhere",
+    "a host-side oneshot outside the container — writes no marker; POSTs its own run-ledger row",
   // The box's self-deploy. Writes no marker, but is NOT invisible: rebuild-hermes.sh POSTs the
   // `self-deploy` row to record_health directly, which is why /status carries it.
   "pin-watch.timer": "self-posts the `self-deploy` /status row via record_health, not a marker",
