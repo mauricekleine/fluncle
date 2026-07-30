@@ -1,11 +1,15 @@
 import { cronSurfaces } from "@fluncle/registry";
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   CRON_ORDER,
   INFRA_SERVICE_LABELS,
   INFRA_SERVICE_SUBTITLES,
+  ServiceRow,
   SELF_POSTED_AUTOMATION_ORDER,
   SERVICE_ORDER,
+  serviceCheckedAtLabel,
   serviceLabel,
   serviceSubtitle,
 } from "./status";
@@ -68,5 +72,30 @@ describe("/status label coverage", () => {
     for (const id of Object.keys(INFRA_SERVICE_LABELS)) {
       expect(cronNames.has(id), `${id}: a registry cron must not be in the infra map`).toBe(false);
     }
+  });
+});
+
+describe("/status report age", () => {
+  it("renders a never-reported row without inventing a report timestamp", () => {
+    const now = "2026-07-30T12:00:00.000Z";
+    const html = renderToStaticMarkup(
+      createElement(ServiceRow, {
+        now,
+        samples: [],
+        service: {
+          checked_at: null,
+          latency_ms: null,
+          message: "never reported",
+          service: "self-deploy-sonar",
+          since: null,
+          status: "degraded",
+        },
+      }),
+    );
+
+    expect(html).toContain("never reported");
+    expect(html).toContain(serviceCheckedAtLabel(null));
+    expect(serviceCheckedAtLabel(null)).toBe("as of never");
+    expect(serviceCheckedAtLabel(now)).toBe("as of Jul 30, 12:00 UTC");
   });
 });

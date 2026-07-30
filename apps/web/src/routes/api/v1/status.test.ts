@@ -51,3 +51,30 @@ describe("/api/v1/status dbProbe", () => {
     expect(body).toHaveProperty("generatedAt");
   });
 });
+
+describe("/api/v1/status report freshness", () => {
+  it("does not count a synthesized never-reported row as a fresh report", async () => {
+    getServiceStatuses.mockResolvedValue([
+      {
+        checked_at: null,
+        latency_ms: null,
+        message: "never reported",
+        service: "self-deploy-sonar",
+        since: null,
+        status: "degraded",
+      },
+      {
+        checked_at: "2026-07-30T11:30:00.000Z",
+        latency_ms: null,
+        message: "last report is stale",
+        service: "web",
+        since: "2026-07-30T10:00:00.000Z",
+        status: "degraded",
+      },
+    ]);
+
+    const body = await readJson();
+
+    expect(body["freshestReportAt"]).toBe("2026-07-30T11:30:00.000Z");
+  });
+});

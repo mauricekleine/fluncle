@@ -20,6 +20,7 @@ import {
   type ServiceStatusRow,
   type StatusEventRow,
 } from "@/lib/server/status";
+import { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
 
 // The PUBLIC service-health status dashboard. No admin guard — anyone can read
 // the current state of Fluncle's services. A Hermes cron probes each service and
@@ -76,14 +77,9 @@ for (const surface of CRON_SURFACES) {
 }
 
 // Self-posted automations that belong under the automation headings but are NOT registry
-// crons: `self-deploy` (rave-02's pin-watch, the Hermes image), `self-deploy-ssh`
-// (rave-01's fluncle-ssh-freshen, the public SSH terminal) and `self-deploy-sonar` (the
-// similarity engine's freshen timer, which pulls a new build when apps/sonar changes) are
-// host systemd timers reporting their own health via record_health, not healthcheck-probed
-// Hermes crons — so they never enter the registry cron catalog, yet they are humming
-// scheduled systems like the rest. All three are OPS automations and LEAD that group
-// (foundational), ahead of the ops crons.
-export const SELF_POSTED_AUTOMATION_ORDER = ["self-deploy", "self-deploy-ssh", "self-deploy-sonar"];
+// crons. The shared server read owns this explicit non-registry roster too, so the page cannot
+// expect a writer that absence detection forgot (the original `self-deploy-sonar` hole).
+export { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
 const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
 const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 
@@ -319,7 +315,15 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
 // "up 3d" / "down 12m" / "ok 5h" — the elapsed time since the CURRENT status
 // began, with the verb tuned to the status. Whole-unit and quiet (VOICE.md keeps
 // the tabular register terse); a fresh transition reads "just now".
-function humanizeSince(sinceIso: string, nowIso: string, status: ServiceHealthStatus): string {
+function humanizeSince(
+  sinceIso: string | null,
+  nowIso: string,
+  status: ServiceHealthStatus,
+): string {
+  if (sinceIso === null) {
+    return "never reported";
+  }
+
   const verb = status === "down" ? "down" : status === "degraded" ? "degraded" : "up";
   const elapsedMs = new Date(nowIso).getTime() - new Date(sinceIso).getTime();
 
@@ -357,6 +361,10 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
 
 function formatCheckedAt(value: string): string {
   return `${timeFormatter.format(new Date(value))} UTC`;
+}
+
+export function serviceCheckedAtLabel(value: string | null): string {
+  return `as of ${value === null ? "never" : formatCheckedAt(value)}`;
 }
 
 // The recent-uptime bar holds this many fixed ticks; real samples are right-aligned
@@ -518,7 +526,7 @@ function overallHeadline(services: ServiceStatusRow[]): string {
 // One service row — the masthead (label + indicator), the subtitle/message line, the
 // uptime bar, and the footer (history span · uptime% · now). Shared by the core list
 // and the Automation (per-cron) group so both render identically.
-function ServiceRow({
+export function ServiceRow({
   now,
   samples,
   service,
@@ -540,7 +548,9 @@ function ServiceRow({
   const schedule = CRON_SCHEDULE[service.service];
   const nextRun =
     (schedule ? nextScheduledRun(schedule, now) : null) ??
-    (cadence === undefined ? null : estimateNextRun(service.checked_at, cadence, now));
+    (cadence === undefined || service.checked_at === null
+      ? null
+      : estimateNextRun(service.checked_at, cadence, now));
 
   return (
     <article className="py-6 first:pt-0">
@@ -556,6 +566,12 @@ function ServiceRow({
           {service.message}
         </p>
       ) : undefined}
+
+      <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+        <time dateTime={service.checked_at ?? undefined}>
+          {serviceCheckedAtLabel(service.checked_at)}
+        </time>
+      </p>
 
       {nextRun && cadence !== undefined ? (
         <p className="mt-1 text-xs text-muted-foreground tabular-nums">

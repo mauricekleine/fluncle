@@ -14,6 +14,8 @@
 // address or raw error body (the probe is responsible for keeping `message` clean).
 
 import { randomUUID } from "node:crypto";
+import { cronSurfaces } from "@fluncle/registry";
+import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
 import { pruneRateLimitCounters } from "./rate-limit";
@@ -21,13 +23,13 @@ import { pruneRateLimitCounters } from "./rate-limit";
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
 export type ServiceHealthStatus = "ok" | "degraded" | "down";
 
-/** A current-state row as `service_status` stores it (the page grid). */
+/** A current-state row, including a synthetic never-reported expected writer (the page grid). */
 export type ServiceStatusRow = {
-  checked_at: string;
+  checked_at: string | null;
   latency_ms: number | null;
   message: string | null;
   service: string;
-  since: string;
+  since: string | null;
   status: ServiceHealthStatus;
 };
 
@@ -65,6 +67,38 @@ const STATUS_EVENTS_KEEP = 200;
 // every write — the uptime bar shows the last N checks (≈ N × the 10m cadence),
 // bounded without a cron. It fills in over time, then rolls.
 const SERVICE_CHECK_SAMPLES_KEEP = 90;
+
+// The SHARED expected-writers roster. Registry cron ids are build-bound to the
+// committed timer units by docs/agents/hermes/scripts/cron-roster.test.ts, so the
+// read reuses that derived truth instead of keeping another list of 40+ cron ids.
+// The three self-posted ids already form /status's explicit non-registry roster;
+// their client-safe module keeps the page and absence detection on one list.
+const CRON_SURFACES = cronSurfaces();
+const STATUS_STALE_CYCLES = 3;
+const STATUS_STALE_FLOOR_MS = 90_000;
+const SELF_POSTED_CADENCE_MS = 60 * 60_000;
+
+function statusProberCadenceMs(): number {
+  const cadenceMs = CRON_SURFACES.find((surface) => surface.name === "cron.healthcheck")
+    ?.probeConfig?.cadenceMs;
+
+  if (cadenceMs === undefined) {
+    throw new Error("cron.healthcheck must declare the status prober cadence");
+  }
+
+  return cadenceMs;
+}
+
+// `checked_at` records when a row WRITER last posted, not when the underlying cron
+// last ran. The healthcheck prober owns every registry-cron row and reports all of
+// them on its own 10m cadence; applying (say) cron.live's 1m marker cadence to this
+// timestamp would falsely age that row out between ordinary prober ticks. The three
+// self-deploy rows own their hourly POSTs.
+const STATUS_PROBER_CADENCE_MS = statusProberCadenceMs();
+const EXPECTED_STATUS_WRITER_CADENCE_MS = new Map<string, number>([
+  ...CRON_SURFACES.map((surface) => [surface.name, STATUS_PROBER_CADENCE_MS] as const),
+  ...SELF_POSTED_AUTOMATION_ORDER.map((service) => [service, SELF_POSTED_CADENCE_MS] as const),
+]);
 
 // Service ids no current prober writes — orphaned `service_status` rows left over
 // from a probe that was retired or renamed. The healthcheck cron upserts but never
@@ -117,6 +151,10 @@ function honestNoRuns(row: ServiceStatusRow, now: number): ServiceStatusRow {
     return row;
   }
 
+  if (row.since === null) {
+    return row;
+  }
+
   const since = Date.parse(row.since);
 
   if (Number.isNaN(since) || now - since <= NO_RUNS_GRACE_MS) {
@@ -131,11 +169,56 @@ function honestNoRuns(row: ServiceStatusRow, now: number): ServiceStatusRow {
 }
 
 /**
+ * A green row older than three of its writer's reporting cycles is no longer evidence
+ * of health. Match `judgeCron`'s 3× cadence rule (including its 90s jitter floor) at
+ * the shared read so a dead writer cannot leave every consumer permanently green.
+ */
+function honestFreshness(row: ServiceStatusRow, now: number): ServiceStatusRow {
+  if (row.status !== "ok") {
+    return row;
+  }
+
+  if (row.checked_at === null) {
+    return row;
+  }
+
+  const checkedAt = Date.parse(row.checked_at);
+  const cadenceMs = EXPECTED_STATUS_WRITER_CADENCE_MS.get(row.service) ?? STATUS_PROBER_CADENCE_MS;
+  const staleBudgetMs = Math.max(cadenceMs * STATUS_STALE_CYCLES, STATUS_STALE_FLOOR_MS);
+
+  if (Number.isNaN(checkedAt) || now - checkedAt <= staleBudgetMs) {
+    return row;
+  }
+
+  return {
+    ...row,
+    message: "last report is stale",
+    status: "degraded",
+  };
+}
+
+/** Expected writer ids that have never produced a row must be visible, never absent-green. */
+function neverReportedStatuses(rows: ServiceStatusRow[]): ServiceStatusRow[] {
+  const reported = new Set(rows.map((row) => row.service));
+
+  return [...EXPECTED_STATUS_WRITER_CADENCE_MS.keys()]
+    .filter((service) => !reported.has(service))
+    .map((service) => ({
+      checked_at: null,
+      latency_ms: null,
+      message: "never reported",
+      service,
+      since: null,
+      status: "degraded",
+    }));
+}
+
+/**
  * Every CURRENT `service_status` row, newest-checked first — the page's service grid.
  * Retired/orphaned ids (`RETIRED_SERVICE_IDS`) are filtered out at this shared read so
  * a stale row never surfaces on any consumer (page, /api/status, CLI, MCP) — and a cron
- * stuck on "no runs yet" past the grace window is downgraded here too, for the same reason:
- * one read, so every consumer tells the same truth.
+ * stuck on "no runs yet", a stale-green report, or an expected writer with no row is
+ * downgraded here too, for the same reason: one read, so every consumer tells the same truth.
  */
 export async function getServiceStatuses(now = Date.now()): Promise<ServiceStatusRow[]> {
   const db = await getDb();
@@ -145,9 +228,11 @@ export async function getServiceStatuses(now = Date.now()): Promise<ServiceStatu
        order by checked_at desc`,
   );
 
-  return typedRows<ServiceStatusRow>(result.rows)
+  const rows = typedRows<ServiceStatusRow>(result.rows)
     .filter((row) => !RETIRED_SERVICE_IDS.has(row.service))
-    .map((row) => honestNoRuns(row, now));
+    .map((row) => honestFreshness(honestNoRuns(row, now), now));
+
+  return [...rows, ...neverReportedStatuses(rows)];
 }
 
 /** The most-recent `limit` transition rows, newest first — the page's events feed. */

@@ -18,7 +18,7 @@ vi.mock("./db", () => ({
 
 const { getServiceStatuses } = await import("./status");
 
-function row(service: string): ServiceStatusRow {
+function row(service: string, overrides: Partial<ServiceStatusRow> = {}): ServiceStatusRow {
   return {
     checked_at: "2026-06-25T00:00:00.000Z",
     latency_ms: 42,
@@ -26,10 +26,13 @@ function row(service: string): ServiceStatusRow {
     service,
     since: "2026-06-25T00:00:00.000Z",
     status: "ok",
+    ...overrides,
   };
 }
 
 describe("getServiceStatuses retired-row filter", () => {
+  const NOW = Date.parse("2026-06-25T00:05:00.000Z");
+
   beforeEach(() => {
     execute.mockReset();
   });
@@ -39,12 +42,16 @@ describe("getServiceStatuses retired-row filter", () => {
       rows: [row("web"), row("automation"), row("cron.render"), row("render-box")],
     });
 
-    const services = await getServiceStatuses();
+    const services = await getServiceStatuses(NOW);
     const ids = services.map((service) => service.service);
 
     expect(ids).not.toContain("automation");
     // Every CURRENT service still passes through, including both render probes.
-    expect(ids).toEqual(["web", "cron.render", "render-box"]);
+    expect(ids.filter((id) => ["web", "cron.render", "render-box"].includes(id))).toEqual([
+      "web",
+      "cron.render",
+      "render-box",
+    ]);
   });
 
   it("drops the retired `cron.artist-follow` row (the removed auto-follow cron)", async () => {
@@ -52,20 +59,97 @@ describe("getServiceStatuses retired-row filter", () => {
       rows: [row("cron.artist-sweep"), row("cron.artist-follow"), row("cron.enrich")],
     });
 
-    const services = await getServiceStatuses();
+    const services = await getServiceStatuses(NOW);
     const ids = services.map((service) => service.service);
 
     expect(ids).not.toContain("cron.artist-follow");
     // The kept resolution cron (cron.artist-sweep) still passes through.
-    expect(ids).toEqual(["cron.artist-sweep", "cron.enrich"]);
+    expect(ids.filter((id) => ["cron.artist-sweep", "cron.enrich"].includes(id))).toEqual([
+      "cron.artist-sweep",
+      "cron.enrich",
+    ]);
   });
 
-  it("returns every row unchanged when no retired id is present", async () => {
-    execute.mockResolvedValue({ rows: [row("web"), row("db"), row("hermes")] });
+  it("leaves every reported row unchanged when no retired id is present", async () => {
+    const reported = [row("web"), row("db"), row("hermes")];
+    execute.mockResolvedValue({ rows: reported });
 
-    const services = await getServiceStatuses();
+    const services = await getServiceStatuses(NOW);
 
-    expect(services.map((service) => service.service)).toEqual(["web", "db", "hermes"]);
+    expect(
+      services.filter((service) => reported.some((row) => row.service === service.service)),
+    ).toEqual(reported);
+  });
+});
+
+describe("getServiceStatuses report freshness", () => {
+  const NOW = Date.parse("2026-07-30T12:00:00.000Z");
+
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
+  it("degrades a green prober-owned row older than three 10m report cycles", async () => {
+    execute.mockResolvedValue({
+      rows: [
+        row("cron.live", {
+          checked_at: "2026-07-30T11:29:00.000Z",
+          message: "fresh",
+          since: "2026-07-30T10:00:00.000Z",
+        }),
+      ],
+    });
+
+    const services = await getServiceStatuses(NOW);
+    const service = services.find((row) => row.service === "cron.live");
+
+    expect(service?.status).toBe("degraded");
+    expect(service?.message).toBe("last report is stale");
+    expect(service?.checked_at).toBe("2026-07-30T11:29:00.000Z");
+  });
+
+  it("keeps a green prober-owned row fresh inside three 10m report cycles", async () => {
+    // `cron.live` itself runs every minute. Its service_status row is nevertheless
+    // refreshed by the 10m prober, so 29m is fresh and must not use the marker cadence.
+    execute.mockResolvedValue({
+      rows: [
+        row("cron.live", {
+          checked_at: "2026-07-30T11:31:00.000Z",
+          message: "fresh",
+          since: "2026-07-30T10:00:00.000Z",
+        }),
+      ],
+    });
+
+    const services = await getServiceStatuses(NOW);
+    const service = services.find((row) => row.service === "cron.live");
+
+    expect(service?.status).toBe("ok");
+    expect(service?.message).toBe("fresh");
+  });
+});
+
+describe("getServiceStatuses expected-writer absence", () => {
+  const NOW = Date.parse("2026-07-30T12:00:00.000Z");
+
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
+  it("synthesizes self-deploy-sonar as never reported when the roster id has no row", async () => {
+    execute.mockResolvedValue({ rows: [row("web", { checked_at: "2026-07-30T11:55:00.000Z" })] });
+
+    const services = await getServiceStatuses(NOW);
+    const service = services.find((row) => row.service === "self-deploy-sonar");
+
+    expect(service).toEqual({
+      checked_at: null,
+      latency_ms: null,
+      message: "never reported",
+      service: "self-deploy-sonar",
+      since: null,
+      status: "degraded",
+    });
   });
 });
 
@@ -78,7 +162,13 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
   const NOW = Date.parse("2026-07-11T00:00:00.000Z");
 
   function noRuns(service: string, since: string): ServiceStatusRow {
-    return { ...row(service), message: "no runs yet", since, status: "ok" };
+    return {
+      ...row(service),
+      checked_at: "2026-07-10T23:55:00.000Z",
+      message: "no runs yet",
+      since,
+      status: "ok",
+    };
   }
 
   beforeEach(() => {
@@ -108,7 +198,15 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
   });
 
   it("leaves a healthy running cron untouched", async () => {
-    execute.mockResolvedValue({ rows: [{ ...row("cron.enrich"), message: "fresh" }] });
+    execute.mockResolvedValue({
+      rows: [
+        {
+          ...row("cron.enrich"),
+          checked_at: "2026-07-10T23:55:00.000Z",
+          message: "fresh",
+        },
+      ],
+    });
 
     const [service] = await getServiceStatuses(NOW);
 

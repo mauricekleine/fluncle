@@ -73,6 +73,10 @@ export const serverHandlers = {
     // The freshest report instant across all services = the last cron tick. Null
     // when there are no services yet (a brand-new store the cron hasn't written).
     const freshestReportMs = services.reduce<number | null>((max, service) => {
+      if (service.checked_at === null) {
+        return max;
+      }
+
       const ms = Date.parse(service.checked_at);
 
       if (Number.isNaN(ms)) {
@@ -95,7 +99,7 @@ export const serverHandlers = {
     // `secondsSinceFreshestReport` fresh and mask rave-02 going dark. `hermes` is
     // untouched by rave-01, so its staleness is the true "rave-02 prober dark" signal.
     const hermes = services.find((service) => service.service === "hermes");
-    const proberReportMs = hermes ? Date.parse(hermes.checked_at) : Number.NaN;
+    const proberReportMs = hermes?.checked_at ? Date.parse(hermes.checked_at) : Number.NaN;
     const secondsSinceProberReport = Number.isNaN(proberReportMs)
       ? null
       : Math.max(0, Math.round((now - proberReportMs) / 1000));

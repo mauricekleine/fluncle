@@ -118,7 +118,7 @@ const fetchRenders = createServerFn({ method: "GET" }).handler(async (): Promise
   const pick = (service: string): BoxService => {
     const row = services.find((entry) => entry.service === service);
 
-    return row
+    return row?.checked_at && row.since
       ? { checkedAt: row.checked_at, message: row.message, since: row.since, status: row.status }
       : null;
   };
