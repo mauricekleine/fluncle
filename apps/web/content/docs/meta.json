@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "log-id",
+    "identity",
     "api-overview",
     "[API reference](/docs/api)",
     "cli",

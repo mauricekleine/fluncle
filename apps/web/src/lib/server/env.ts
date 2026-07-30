@@ -171,6 +171,14 @@ const envKeys = [
   "BLUESKY_APP_PASSWORD",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
+  // The SECOND database — `fluncle-telemetry`, the run ledger (`src/db/telemetry-schema.ts`,
+  // `getTelemetryDb` in ./db.ts). A separate store because libSQL has a single writer and a
+  // ledger sitting behind the primary's writer goes dark exactly when the stall it should be
+  // diagnosing happens. BOTH read via readOptionalEnv, so an unprovisioned checkout (local
+  // dev, the test suite, a preview) turns the ledger write into a clean no-op instead of a
+  // throw — diagnostics must never break the product path they observe.
+  "TURSO_TELEMETRY_DATABASE_URL",
+  "TURSO_TELEMETRY_AUTH_TOKEN",
   // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is
   // published or updated, the Worker drops its `/log/<id>` page + the `/log` index
   // from the edge cache globally. Both OPTIONAL — absent, the purge degrades to a

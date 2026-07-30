@@ -15,7 +15,7 @@ const description =
 
 // Static so it is identical on the server and the client; bump by hand when the terms
 // text below changes.
-const lastUpdated = "July 20, 2026";
+const lastUpdated = "July 29, 2026";
 
 function termsHead() {
   const pageUrl = `${siteUrl}/terms`;
@@ -62,7 +62,10 @@ function TermsPage() {
               <dt>It is free and for people</dt>
               <dd>
                 You can read the archive, listen to the previews, follow the links, share what you
-                find, and make an account, all for your own personal, non-commercial use.
+                find, and make an account, all for your own personal, non-commercial use. The public
+                API is the one exception, and a deliberate one: you can call it from a commercial
+                product. What it hands back is still the archive, so the writing and the music stay
+                under the rest of these terms wherever you put them.
               </dd>
             </div>
             <div className="log-about-definition">
@@ -70,7 +73,18 @@ function TermsPage() {
               <dd>
                 Do not use the site to break the law, to harm or harass anyone, or to attack,
                 overload, or scrape it in ways that degrade it for everyone else. The API and feeds
-                are there for reasonable use.
+                are there for reasonable use, and where that needs a number it is 30 requests a
+                minute and 1,000 a day from one place. The identifier lookups hold you to it; the
+                rest runs on good faith.
+              </dd>
+            </div>
+            <div className="log-about-definition">
+              <dt>If you build on the API</dt>
+              <dd>
+                Two things come with it. Say the data came from Fluncle and link back to
+                fluncle.com. And wherever you show a link to Spotify or another platform, name that
+                platform and link to it the way its own rules ask. Fluncle passes that duty on
+                because it was passed to him.
               </dd>
             </div>
             <div className="log-about-definition">

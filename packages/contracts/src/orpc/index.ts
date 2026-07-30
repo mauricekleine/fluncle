@@ -53,6 +53,7 @@ import { adminSubmissionsContract } from "./admin-submissions";
 import { adminSubscriptionsContract } from "./admin-subscriptions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
+import { adminTelemetryContract } from "./admin-telemetry";
 import { adminTwitchContract } from "./admin-twitch";
 import { adminUsersContract } from "./admin-users";
 import { devicesContract } from "./devices";
@@ -201,6 +202,13 @@ export {
   updateObservationGate,
 } from "./admin-observations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
+export {
+  adminTelemetryContract,
+  MAX_SUMMARY_RAW_CHARS,
+  recordRun,
+  type RunEventInput,
+  RunEventInputSchema,
+} from "./admin-telemetry";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export { adminReachContract, recordPlatformStats } from "./admin-reach";
 export { listPlatformStats, reachContract } from "./reach";
@@ -451,6 +459,7 @@ export const contract = {
   ...adminSubscriptionsContract,
   ...adminTokensContract,
   ...adminTracksContract,
+  ...adminTelemetryContract,
   ...adminTwitchContract,
   ...adminUsersContract,
   ...devicesContract,

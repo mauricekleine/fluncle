@@ -129,6 +129,7 @@ Run alongside the 1.0 "Before you submit" checklist above; these are the 1.1-spe
 - [ ] App Privacy labels re-pasted per the changes above (Email Address added; User Content and Identifiers set to Linked; tracking still No).
 - [ ] Review-notes addendum appended to the ASC "Notes" field.
 - [ ] On the exact store build: verify sign-up, sign-in, sign-out, **in-app account deletion** (behind the confirm), data export, and password-reset email — all before submitting.
+- [ ] On the device build, verify a `https://www.fluncle.com/out/spotify/<trackId>` hop link opens the **Spotify app** and not Safari — the resolver (`apps/mobile/src/lib/external-link.ts`) follows the 302 and hands iOS the final url. It rides `response.url` under RN's native networking, which is verify-on-device: a Safari bounce means the fallback fired and the `Location`-header path is the fix. The API serves hops only after the server flip, so until then tap a hop url pasted into a deep link rather than waiting on the feed.
 
 ## The cold-open requirement
 

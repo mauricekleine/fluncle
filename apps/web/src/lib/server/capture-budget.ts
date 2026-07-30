@@ -307,10 +307,31 @@ export async function getCatalogueCaptureState(
 /**
  * THE BRAKE, as one boolean: may the capture queue hand out a CATALOGUE row right now?
  *
- * This is what `listTrackWork` calls (track-work.ts). It is deliberately the same code path
- * the `/admin` readout renders, so what the operator sees and what the machine obeys cannot
- * drift — a budget display that disagrees with the budget is worse than no display.
+ * This is what `listTrackWork` / `countTrackWork` call (track-work.ts), so it fires on every
+ * capture tick — 288 times a day — while `/admin`'s readout fires when someone looks. The verdict
+ * is still `catalogueCaptureVerdict`, the same pure function the readout renders, so the two
+ * cannot drift about whether the queue is open.
+ *
+ * What it does NOT do is read the spend on the paused path. The kill switch WINS over both caps
+ * in that verdict (`paused ? "paused" : …`), so while catalogue capture is shut — which is its
+ * default-deny resting state — the spend the brake asked for could never change the answer. And
+ * the spend read is not free: it is a range seek down `tracks_source_audio_attempted_at_idx` with
+ * the catalogue anti-join as a residual, i.e. the one query in this module whose cost tracks how
+ * much the archive has been spending. Asking the cheap boolean first is the same short-circuit
+ * Wave 1 applied to the rank sweep's drain signal (docs/db-scale-backlog "Shipped (live)" #1).
+ *
+ * `/admin` keeps calling `getCatalogueCaptureState`, which always reads the spend — a paused
+ * meter that showed no spend would be a worse lie than a slow one.
  */
 export async function isCatalogueCaptureOpen(nowMs: number = Date.now()): Promise<boolean> {
-  return (await getCatalogueCaptureState(nowMs)).open;
+  if (await isCatalogueCapturePaused()) {
+    return false;
+  }
+
+  const [budget, spend] = await Promise.all([
+    getCatalogueCaptureBudget(),
+    readCatalogueCaptureSpend(nowMs),
+  ]);
+
+  return catalogueCaptureVerdict({ budget, paused: false, spend }).open;
 }

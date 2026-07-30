@@ -6,7 +6,7 @@
 // ~1.5GB range-streamed object and the set lives, finished, on YouTube + Mixcloud — so
 // the honest v1 sends the crew there (the "Watch the set" / "Listen" buttons) rather
 // than streaming a multi-GB video over cellular. The cover is the hero here.
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -16,6 +16,7 @@ import { useMixtapes } from "@/api/hooks";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { HeatButton } from "@/components/heat-button";
 import { mixtapeCoverUrl } from "@/lib/media";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { color, font, radius } from "@/theme/tokens";
 
 type Member = MixtapeDTO["members"][number];
@@ -110,7 +111,7 @@ function MixtapeDetail({ mixtape }: { mixtape: MixtapeDTO }) {
               <HeatButton
                 icon={<MaterialCommunityIcons color={color.inkOnGold} name="youtube" size={18} />}
                 label="Watch the set"
-                onPress={() => Linking.openURL(youtube)}
+                onPress={() => openExternalUrl(youtube)}
               />
             </View>
           ) : null}
@@ -119,7 +120,7 @@ function MixtapeDetail({ mixtape }: { mixtape: MixtapeDTO }) {
               <HeatButton
                 icon={<Ionicons color={color.starlightCream} name="musical-notes" size={16} />}
                 label="Mixcloud"
-                onPress={() => Linking.openURL(mixcloud)}
+                onPress={() => openExternalUrl(mixcloud)}
                 variant="outline"
               />
             </View>

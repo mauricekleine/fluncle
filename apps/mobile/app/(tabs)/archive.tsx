@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   FlatList,
-  Linking,
   type ListRenderItem,
   Pressable,
   RefreshControl,
@@ -20,6 +19,7 @@ import { ArchiveRow } from "@/components/archive-row";
 import { EntityRow } from "@/components/entity-row";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { archiveCopy, archiveView } from "@/lib/archive-state";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { type SavedFinding } from "@/lib/saved-store";
 import { useSavedFindings } from "@/lib/saved";
 import { partitionEntities, partitionTracks, searchView } from "@/lib/search-state";
@@ -201,7 +201,7 @@ function pickHit(hit: SearchHit, router: ReturnType<typeof useRouter>): void {
     return;
   }
   if (hit.spotifyUrl) {
-    void Linking.openURL(hit.spotifyUrl);
+    openExternalUrl(hit.spotifyUrl);
   }
 }
 

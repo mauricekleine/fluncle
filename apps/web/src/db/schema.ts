@@ -3134,16 +3134,25 @@ export const artistSocials = sqliteTable(
   },
   (table) => [
     uniqueIndex("artist_socials_artist_platform_idx").on(table.artistId, table.platform),
-    // The fresh-links queue + the board's fresh-links section both scan for the unreviewed
-    // links (`reviewed_at IS NULL`); a partial index keeps that scan bounded as socials grow.
+    // The fresh-links queue + the board's fresh-links section both look for the unreviewed links
+    // (`reviewed_at IS NULL`). This is a FULL index on the column, not a partial one: NULLs sort
+    // first in an ASC index, so the unreviewed slice is a seek at its head — but every reviewed row
+    // is indexed and paid for on write too, and the NULL slice itself grows with every
+    // resolver-minted link (nothing stamps them in bulk). So it bounds the SEEK, not the SET, and
+    // the aggregate reads over it (`listFreshLinks`, `listArtistReviewRows` in lib/server/artists.ts)
+    // still group the whole unreviewed partition before their LIMIT — docs/db-scale-backlog Wave 1
+    // item 17, DEFERRED: the index alone cannot bound that GROUP BY. Narrowing this to a partial
+    // `where reviewed_at is null` is a schema change and therefore a hosted-Turso question, not a
+    // local one.
     index("artist_socials_unreviewed_idx").on(table.reviewedAt),
     index("artist_socials_artist_id_idx").on(table.artistId),
     index("artist_socials_platform_idx").on(table.platform),
     // The candidate-links read per artist (`where artist_id = ? and status = 'candidate'`).
     // A PARTIAL index over just the rare `candidate` slice — most links are `auto`/`confirmed`,
     // so the index scans only the handful awaiting a ruling instead of every link on the
-    // artist (proven: it scans only the candidate slice on the 150k scratch DB). The
-    // `artist_socials_unreviewed_idx` shrinking-partial precedent.
+    // artist (proven: it scans only the candidate slice on the 150k scratch DB). The shrinking-
+    // partial precedent is `tracks_embed_queue_idx` / `crawl_frontier`'s demand-rank clear — NOT
+    // `artist_socials_unreviewed_idx` above, which despite its name carries no `where` at all.
     index("artist_socials_candidate_idx")
       .on(table.artistId)
       .where(sql`${table.status} = 'candidate'`),

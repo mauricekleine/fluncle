@@ -234,30 +234,14 @@ export type IdentityKey =
   | { isrc: string; kind: "isrc" }
   | { kind: "mbid"; mbid: string };
 
-/** ISRC canonical form: two-letter country, three-character registrant, five digits of year+serial. */
-const ISRC_PATTERN = /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/;
-
-/** MusicBrainz ids are UUIDs. Stored bare (no `mb_` prefix) — the PK carries that, the column does not. */
-const MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
 /**
- * Normalize a caller's ISRC to the form the column stores, or `undefined` when it is not an ISRC at
- * all. Hyphens and spaces are the common human spelling (`GB-ABC-12-34567`) and are stripped; the
- * result is upper-cased so the lookup can be a bare `isrc = ?` equality that rides `tracks_isrc_idx`
- * (wrapping the column in `upper()` would forfeit the index over a growing table).
+ * The key grammar itself lives in the CLIENT-SAFE `lib/identity-key.ts` — pure string work with no
+ * imports — and is re-exported here so every server caller keeps this one entrypoint. The split
+ * exists so `/identity`'s route can canonicalize a submitted key inside its eagerly-bundled
+ * `loader` without dragging the `getDb` chain into the browser's entry chunk
+ * (docs/client-bundle.md rule 1).
  */
-export function normalizeIsrcKey(raw: string): string | undefined {
-  const compact = raw.replace(/[\s-]/g, "").toUpperCase();
-
-  return ISRC_PATTERN.test(compact) ? compact : undefined;
-}
-
-/** Normalize a caller's MusicBrainz recording id, or `undefined` when it is not a UUID. */
-export function normalizeMbidKey(raw: string): string | undefined {
-  const compact = raw.trim().toLowerCase().replace(/^mb_/, "");
-
-  return MBID_PATTERN.test(compact) ? compact : undefined;
-}
+export { normalizeIsrcKey, normalizeMbidKey } from "../identity-key";
 
 /** The bare Spotify track id behind a stored `spotify:track:<id>` URI. */
 function spotifyTrackId(uri: null | string): string | undefined {

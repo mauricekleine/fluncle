@@ -402,6 +402,12 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/docs`),
         staticEntry(`${siteUrl}/reach`),
         staticEntry(`${siteUrl}/status`),
+        // The identity DOOR — the indexable page that stands for the lookup surface. Its per-key
+        // answers (`/identity/<key>`) are deliberately absent: one recording is reachable under up
+        // to three identifiers, so listing them would put three near-identical URLs in front of
+        // one answer, tens of thousands of times over. Those pages render `noindex, follow`, so
+        // they stay crawlable and citable while only the door is a URL here.
+        staticEntry(`${siteUrl}/identity`),
         // The `/mix` tool — listed only while its self-lifting gate is open (the same
         // `getMixChainDepth().open` the route checks). Closed, the tool is private (operator
         // + strangers sent home), so it stays out of the sitemap; the day the archive is deep

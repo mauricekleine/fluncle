@@ -45,11 +45,21 @@ async function serverHtml(page: Page, path: string): Promise<string> {
 /**
  * An EDGE of the graph, proven end to end: the link is in the server HTML (a crawler follows
  * it), it renders on the page, and the URL behind it resolves. All three, or the edge is dead.
+ *
+ * THE THIRD CHECK RETRIES, and only the third. `page.request.get` against the local dev server
+ * intermittently THROWS on the transport rather than answering — `ECONNRESET` / `socket hang up`,
+ * seen three times on 2026-07-29 across otherwise-clean runs — which failed the test with a
+ * network error rather than a status code. A dropped socket says nothing about whether the edge
+ * resolves, so `toPass` re-asks until it gets an actual answer; a genuinely dead edge answers 404
+ * every time and still fails, just a few seconds later. The first two checks are pure assertions
+ * over already-fetched HTML and a rendered locator, so neither can flake this way.
  */
 async function expectEdge(page: Page, html: string, href: string): Promise<void> {
   expect(html, `SSR HTML should link to ${href}`).toContain(`href="${href}"`);
   await expect(page.locator(`a[href="${href}"]`).first()).toBeVisible();
-  expect((await page.request.get(href)).status(), `${href} should resolve`).toBe(200);
+  await expect(async () => {
+    expect((await page.request.get(href)).status(), `${href} should resolve`).toBe(200);
+  }).toPass({ intervals: [250, 500, 1000], timeout: 10_000 });
 }
 
 test("the artist page SSRs its findings and walks the edge to the log", async ({ page }) => {

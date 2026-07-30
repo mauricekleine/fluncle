@@ -28,6 +28,13 @@ POSTIZ_API_URL=
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
 
+# The SECOND database -- fluncle-telemetry, the run ledger (one table, run_events).
+# Both OPTIONAL: unset, `getTelemetryDb()` returns undefined and the record_run write
+# is a clean no-op, so local dev and the test suite run unprovisioned. Fill them from
+# 1Password only to exercise the ledger against the real telemetry database.
+# TURSO_TELEMETRY_DATABASE_URL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TURSO_TELEMETRY_DATABASE_URL
+# TURSO_TELEMETRY_AUTH_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TURSO_TELEMETRY_AUTH_TOKEN
+
 SPOTIFY_CLIENT_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPOTIFY_CLIENT_ID
 SPOTIFY_CLIENT_SECRET=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SPOTIFY_CLIENT_SECRET
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:3000/api/admin/spotify/auth/callback

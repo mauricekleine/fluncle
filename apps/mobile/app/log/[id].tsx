@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Linking, Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -8,6 +8,7 @@ import { useFinding } from "@/api/hooks";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { HeatButton } from "@/components/heat-button";
 import { SaveButton } from "@/components/save-button";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { type SavableFinding } from "@/lib/saved-store";
 import { useSavedFindings } from "@/lib/saved";
 import { color, font, radius } from "@/theme/tokens";
@@ -134,7 +135,7 @@ export default function LogScreen() {
             <View style={{ gap: 8, paddingBottom: 4, paddingHorizontal: 16, paddingTop: 12 }}>
               <HeatButton
                 label="Listen on Spotify"
-                onPress={() => Linking.openURL(finding.spotifyUrl)}
+                onPress={() => openExternalUrl(finding.spotifyUrl)}
               />
               {/* The second listen destination, present only once the exact-ISRC resolve
                   landed one. Outline (Spotify stays the single primary), text-only — the
@@ -144,7 +145,7 @@ export default function LogScreen() {
                 <HeatButton
                   label="Listen on Apple Music"
                   variant="outline"
-                  onPress={() => finding.appleMusicUrl && Linking.openURL(finding.appleMusicUrl)}
+                  onPress={() => finding.appleMusicUrl && openExternalUrl(finding.appleMusicUrl)}
                 />
               ) : null}
             </View>
@@ -163,7 +164,7 @@ export default function LogScreen() {
               <HeatButton
                 label="Open on fluncle.com"
                 onPress={() =>
-                  Linking.openURL(
+                  openExternalUrl(
                     resolution.logId
                       ? `${MIXTAPE_WEB_BASE}/${encodeURIComponent(resolution.logId)}`
                       : MIXTAPE_WEB_BASE,

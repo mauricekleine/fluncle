@@ -1349,6 +1349,52 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     expect(state.source_audio_key).toBe("catalogue/cat-fyl/badbeef.webm");
   });
 
+  it("reads the archive's TITLE+ARTIST identity ONCE per tick, both directions off one statement", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // The near-1.0 path is the one that needs BOTH folds of the same rows: `matchKey → finding`
+    // (the duplicate detector, wanted on every tick) and `finding → matchKey` (the wrong-audio
+    // discriminator, wanted here). They used to be two functions issuing the byte-identical
+    // `findings join tracks` statement, so a tick like this one read the archive twice — the shape
+    // Wave 1 retired for `readArchiveAffinity` (docs/db-scale-backlog "Shipped (live)" #4).
+    await seedArtistRow("art-flowidus", "Flowidus", "flowidus");
+    await seedFinding("finding-shelter", {
+      artists: ["Flowidus"],
+      title: "Shelter",
+      vector: axis(0),
+    });
+    await edge("finding-shelter", "art-flowidus");
+    await seedCatalogue("cat-fyl", {
+      artists: ["Flowidus"],
+      title: "Find Your Love",
+      vector: axis(0),
+    });
+    await edge("cat-fyl", "art-flowidus");
+    await withSourceKey("cat-fyl", "catalogue/cat-fyl/badbeef.webm");
+
+    const spy = vi.spyOn(db, "execute");
+    const summary = await rankCatalogue();
+
+    // The tick really did take the near-1.0 branch — otherwise this pins nothing.
+    expect(summary.quarantined).toBe(1);
+
+    const identityReads = spy.mock.calls.filter((call) => {
+      const sql = String((call[0] as { sql?: string })?.sql ?? "");
+
+      // The identity read's own projection — title AND credits keyed by the finding, which is what
+      // distinguishes it from the affinity/ISRC reads over the same join.
+      return (
+        sql.includes("findings.track_id as track_id") &&
+        sql.includes("tracks.title as title") &&
+        sql.includes("tracks.artists_json as artists_json")
+      );
+    });
+
+    expect(identityReads.length).toBe(1);
+
+    spy.mockRestore();
+  });
+
   it("does NOT quarantine a SAME-TITLE near-1.0 row — it is a true duplicate (tier −2, finding stored, vector kept)", async () => {
     const { DUPLICATE_CAPTURE_TIER, rankCatalogue } = await import("./catalogue");
 

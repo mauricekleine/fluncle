@@ -237,7 +237,9 @@ export type MixChainDepth = {
  * An unparseable key is not rankable and is not counted (`scoreMix` would drop it anyway),
  * so the histogram may be fed the raw column verbatim.
  */
-export function mixChainDepth(histogram: { count: number; key: string | null }[]): MixChainDepth {
+export function mixChainDepth(
+  histogram: readonly { count: number; key: string | null }[],
+): MixChainDepth {
   // Fold the raw spellings onto the wheel: 24 classes, however the archive spells them.
   const classes = new Map<string, { camelot: Camelot; count: number }>();
 

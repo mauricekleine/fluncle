@@ -193,10 +193,13 @@ describe("a child sitemap", () => {
     expect(xml).toContain(`<loc>${siteUrl}/docs</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/reach</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
-    // 18 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
+    // The identity DOOR is listed; its per-key answers never are (they render `noindex, follow` —
+    // one recording is reachable under up to three identifiers).
+    expect(xml).toContain(`<loc>${siteUrl}/identity</loc>`);
+    // 19 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
     // named) are both dark here.
     expect(xml).not.toContain(`<loc>${siteUrl}/mix</loc>`);
-    expect(xml.match(/<loc>/g)).toHaveLength(18);
+    expect(xml.match(/<loc>/g)).toHaveLength(19);
   });
 
   it("puts one <loc> per /log page in `findings`, and nothing else", () => {
@@ -512,6 +515,7 @@ describe("the URL set is preserved across the split", () => {
       `${siteUrl}/docs`,
       `${siteUrl}/reach`,
       `${siteUrl}/status`,
+      `${siteUrl}/identity`,
       `${siteUrl}/mix`,
       `${siteUrl}/galaxies`,
       // findings

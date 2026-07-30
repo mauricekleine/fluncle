@@ -18,6 +18,7 @@ import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { discogsReleaseUrl } from "./discogs";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
+import { readKeyHistogram } from "./key-histogram";
 import { logEvent } from "./log";
 import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { isLogId } from "../log-id";
@@ -1664,39 +1665,17 @@ type MixCandidateRow = Omit<MixRow, "embedding_blob"> & {
 
 // ── The depth gate ───────────────────────────────────────────────────────────
 
-// The gate is a property of the whole archive, so it is the same answer for every reader,
-// and it moves only when a track is keyed. Memoized per isolate for a minute: `/mix` asks
-// on every load, and the honest cost of a cache miss is one index-only `group by`.
-const DEPTH_TTL_MS = 60_000;
-let depthCache: { at: number; value: MixChainDepth } | null = null;
-
 /**
  * Measure whether the archive is deep enough for `/mix` to be worth opening to a stranger
  * (`mixChainDepth` — the median track's named-move neighbourhood against a floor of one of
  * Fluncle's own sets plus a full rail).
  *
- * ONE `group by key` over `tracks_key_idx` — 24-ish distinct values, answered from the
- * index without touching the table. Every keyed track counts, certified or not: a catalogue
- * track is rankable the moment it has a key, so it is depth, which is exactly the claim the
- * gate exists to test.
+ * Reads the memoized archive key histogram (key-histogram.ts) — the same read `namedMoveKeys`
+ * below makes. The fold over two dozen buckets is free, so the memo lives on the READ rather than
+ * on this answer, and the rail no longer pays a second walk of `tracks_key_idx` for the same fact.
  */
 export async function getMixChainDepth(): Promise<MixChainDepth> {
-  const now = Date.now();
-
-  if (depthCache && now - depthCache.at < DEPTH_TTL_MS) {
-    return depthCache.value;
-  }
-
-  const db = await getDb();
-  const result = await db.execute(
-    `select key, count(*) as count from tracks where key is not null group by key`,
-  );
-  const rows = typedRows<{ count: number; key: string | null }>(result.rows);
-  const value = mixChainDepth(rows);
-
-  depthCache = { at: now, value };
-
-  return value;
+  return mixChainDepth(await readKeyHistogram());
 }
 
 // ── The candidate pre-filter ─────────────────────────────────────────────────
@@ -1709,8 +1688,12 @@ export async function getMixChainDepth(): Promise<MixChainDepth> {
  * `tracks.key` is scale text written by several hands (the DSP writes sharps, Rekordbox may
  * not, an operator may type a flat), and a hand-built reverse map would silently drop every
  * spelling it failed to predict. Folding the DISTINCT keys the archive actually holds
- * through the same tolerant `parseKey` the engine uses cannot drift from it. The distinct
- * list is 24-ish rows off `tracks_key_idx`, and it is the same read the depth gate makes.
+ * through the same tolerant `parseKey` the engine uses cannot drift from it. The spelling list
+ * is 24-ish values off `tracks_key_idx`, and it is now LITERALLY the same read the depth gate
+ * makes — `readKeyHistogram`, memoized for a minute — rather than a second walk of the same
+ * index issued on every rail. The two answers were always the same fact about the archive; only
+ * the gate remembered it, so a `/mix` load paid a fresh full index walk (O(keyed tracks), and the
+ * catalogue crawler grows that set) to rebuild two dozen strings that had not moved.
  *
  * THIS IS A SCORING DECISION, not a performance fix, and it is made deliberately. The old
  * scan ranked EVERY keyed row and let distant keys surface when the archive was too sparse
@@ -1721,11 +1704,10 @@ export async function getMixChainDepth(): Promise<MixChainDepth> {
  * neighbourhood the gate measured. One definition of "what can follow this", used by both.
  */
 async function namedMoveKeys(from: Camelot): Promise<string[]> {
-  const db = await getDb();
-  const result = await db.execute(`select distinct key from tracks where key is not null`);
+  const histogram = await readKeyHistogram();
   const wanted = new Set(namedMoveClasses(from).map(({ letter, number }) => `${number}${letter}`));
 
-  return typedRows<{ key: string | null }>(result.rows).flatMap((row) => {
+  return histogram.flatMap((row) => {
     const code = keyToCamelotCode(row.key);
 
     return row.key && code && wanted.has(code) ? [row.key] : [];

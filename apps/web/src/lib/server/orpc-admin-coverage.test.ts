@@ -508,6 +508,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/submissions/{submissionId}/triage": "triage_submission",
   // The cost-ledger create (COST-02) — contract-only oRPC (no TanStack route file). Operator tier.
   "POST /admin/subscriptions": "create_subscription",
+  // record_run (the run ledger's write) is contract-only oRPC — no TanStack route file;
+  // oRPC owns the path directly, like record_health. Admin tier (agent-allowed): the box's
+  // `emit_cron_output` wrapper POSTs one envelope per sweep tick with its agent token, and
+  // the Worker DERIVES `ok` and appends to `run_events` in the second telemetry database.
+  "POST /admin/telemetry/runs": "record_run",
   "POST /admin/tracks": "publish_track",
   // context_track is served by oRPC at its own path; it has no TanStack route FILE
   // (oRPC owns the path directly), so it lives here as a path→op entry without a
