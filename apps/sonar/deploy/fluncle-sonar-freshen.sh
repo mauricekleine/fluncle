@@ -82,8 +82,10 @@ BOOT_TIMEOUT_SECS="${SONARFRESHEN_BOOT_TIMEOUT_SECS:-180}"
 WORKER_URL="${SONARFRESHEN_WORKER_URL:-https://www.fluncle.com}"
 # The run ledger reads the Worker base from the name every other box script uses. Point it at
 # the SAME Worker the /status post already targets, so an operator override moves both at once
-# and the two can never disagree about which Worker this box is talking to.
-FLUNCLE_API_BASE_URL="${FLUNCLE_API_BASE_URL:-$WORKER_URL}"
+# and the two can never disagree about which Worker this box is talking to. `-` NOT `:-`, for
+# the reason spelled out in the mirrored block below: an EXPLICITLY EMPTY base has to survive
+# to the emitter's guard as empty, or "post nowhere" silently becomes "post at production".
+FLUNCLE_API_BASE_URL="${FLUNCLE_API_BASE_URL-$WORKER_URL}"
 
 MODE="--if-changed"
 case "${1:-}" in
@@ -121,10 +123,16 @@ SF_STARTED_AT=""
 # uses for the cost ledger.
 #
 # THE CONTRACT is owned by the agent-tier `record_run` oRPC op in
-# packages/contracts/src/orpc/, which a box script cannot import. Mirrored here: the endpoint
-# path, the five body fields, and the Bearer auth. If any of them changes in the workspace,
-# change it in all four copies (the drift test keeps them equal; only the workspace can tell
-# you they are RIGHT).
+# packages/contracts/src/orpc/admin-telemetry.ts, which a box script cannot import. Mirrored
+# here: the endpoint path, the five body fields, and the Bearer auth. If any of them changes in
+# the workspace, change it in all four copies.
+#
+# THE DRIFT TEST IS NOT ENOUGH ON ITS OWN, and this cost a shipped bug: the four copies once
+# agreed with EACH OTHER on `/api/v1/admin/runs/events` while the contract declared
+# `/admin/telemetry/runs`, so every POST 404'd, the `|| true` swallowed it, the ledger stayed
+# empty, and both test suites were green. Byte-equality is a closed loop. So run-events.test.ts
+# now RESOLVES this path against the workspace's own surfaces (the contract op paths + the
+# `apps/web/src/routes/api/**` file routes) — the assertion that crosses the boundary.
 #
 # THE BODY CARRIES FACTS ONLY. There is no `ok` field, deliberately: the Worker derives it as
 # `exit_code === 0 && (summary.errors ?? 0) === 0`. The nightly Sentry sweep exited 0 for
@@ -138,7 +146,7 @@ SF_STARTED_AT=""
 # the marker's stderr tail and score against the strain detector. A dropped POST leaves a
 # missing row, a missing row reads as a missed run, and the roster alarms on that. Absence
 # being loud is why delivery need not be guaranteed.
-RUN_EVENT_PATH='/api/v1/admin/runs/events'
+RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
 # 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
 # measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
 # `fluncle-telemetry` database, which exists precisely so it never queues behind the primary's
@@ -163,7 +171,11 @@ _run_event_json_string() {
 record_run_event() {
   local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
   local base token body
-  base="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
+  # `-` NOT `:-`, deliberately. With the colon an EMPTY base fell back to the production
+  # URL, which made the guard two lines down unreachable and fired a real POST at
+  # www.fluncle.com from every `bun run test:scripts` — in CI and in the deploy gate. An
+  # empty base means THERE IS NO LEDGER HERE, and the guard is the line that says so.
+  base="${FLUNCLE_API_BASE_URL-https://www.fluncle.com}"
   base="${base%/}"
   token="${FLUNCLE_API_TOKEN:-}"
   [ -n "$token" ] || return 0

@@ -18,6 +18,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { RUN_EVENT_ENDPOINT } from "./api-surface";
 import {
   cronCheck,
   findJsonSummary,
@@ -311,7 +312,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(code).toBe(0);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("POST");
-    expect(calls[0]?.path).toBe("/api/v1/admin/runs/events");
+    expect(calls[0]?.path).toBe(RUN_EVENT_ENDPOINT);
     expect(calls[0]?.auth).toBe("Bearer fixture-agent-token");
 
     const envelope = envelopeOf(calls);

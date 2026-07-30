@@ -19,6 +19,14 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import {
+  boxScriptApiPaths,
+  PENDING_WORKSPACE_PATHS,
+  resolveApiPath,
+  RUN_EVENT_ENDPOINT,
+  runLedgerContractPaths,
+} from "./api-surface";
+
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
 const CRON_OUTPUT = join(import.meta.dir, "cron-output.sh");
 const WATCHDOG = join(REPO, "docs/agents/hermes/timer-watchdog/timer-watchdog.sh");
@@ -64,8 +72,11 @@ describe("record_run_event is mirrored, not re-implemented", () => {
 
   test("the block pins the endpoint and the five body fields", () => {
     // The contract the parallel `record_run` oRPC op owns. A change on either side has to be
-    // made on both, and this is the line that says so out loud.
-    expect(canonical).toContain("RUN_EVENT_PATH='/api/v1/admin/runs/events'");
+    // made on both, and this is the line that says so out loud. The constant is shared with
+    // cron-output.test.ts and CHECKED AGAINST THE WORKSPACE below — on its own, a pin here is
+    // the same closed loop that let `/api/v1/admin/runs/events` ship against a Worker serving
+    // `/api/v1/admin/telemetry/runs`.
+    expect(canonical).toContain(`RUN_EVENT_PATH='${RUN_EVENT_ENDPOINT}'`);
     expect(canonical).toContain(
       '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}',
     );
@@ -93,6 +104,75 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     const [, afterBlock = ""] = body.split(END);
 
     expect(afterBlock).toContain('record_run_event "$RUN_EVENT_UNIT"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OTHER SIDE OF THE WIRE.
+//
+// The mirror test above is a CLOSED LOOP and this is what it cost: all four copies agreed on
+// `/api/v1/admin/runs/events`, the contract declared `/admin/telemetry/runs`, so every POST
+// 404'd, the `|| true` swallowed it, the ledger would have stayed permanently empty — and both
+// suites were green, because each only ever tested its own half.
+//
+// Byte-equality between four copies of a constant says nothing about whether the constant is
+// RIGHT. So these resolve what the box puts on the wire against what the workspace declares —
+// the assertion that crosses the boundary.
+// ---------------------------------------------------------------------------
+
+describe("every path a box script hardcodes is a path the Worker serves", () => {
+  const literals = boxScriptApiPaths();
+
+  // The mechanism's own tripwire. A resolver that silently stopped finding anything would make
+  // every assertion below pass vacuously, which is the failure mode of this whole file's
+  // subject matter. Ten-odd real literals resolve today; this fails the moment none do.
+  test("the resolver is not a no-op — real paths really resolve", () => {
+    const resolved = literals.filter(({ literal }) => resolveApiPath(literal).kind === "contract");
+
+    expect(resolved.length).toBeGreaterThan(4);
+    // The cost ledger's emitter — the same mirror-a-constant pattern this one copied, and proof
+    // the resolver reaches oRPC contract ops rather than only file routes.
+    expect(resolveApiPath("/api/v1/admin/costs/events")).toEqual({
+      kind: "contract",
+      source: "packages/contracts/src/orpc/admin-costs.ts",
+    });
+    // And a file-route carve-out, so the second half of the resolver is proven too.
+    expect(resolveApiPath("/api/v1/status").kind).toBe("file-route");
+  });
+
+  test("no script POSTs at a path nothing in the workspace declares", () => {
+    const orphans = literals
+      .filter(({ literal }) => resolveApiPath(literal).kind === "unresolved")
+      .map(({ file, line, literal }) => `${file}:${line} → ${literal}`);
+
+    expect(orphans).toEqual([]);
+  });
+
+  // The one hand-kept list in api-surface.ts, held to its own rule: an entry is a DATED absence
+  // (a sibling PR's contract), never a standing exemption, so it names the PR that closes it.
+  test("every pending path names the PR that closes it", () => {
+    expect(PENDING_WORKSPACE_PATHS.size).toBeLessThanOrEqual(1);
+
+    for (const [path, reason] of PENDING_WORKSPACE_PATHS) {
+      expect(path.startsWith("/api/v1/")).toBe(true);
+      expect(reason).toMatch(/PR #\d+/);
+    }
+  });
+
+  // THE ASSERTION THAT WOULD HAVE CAUGHT IT. The run-ledger contract module is found BY FILENAME
+  // — never by the path under test, which would prove nothing — and the four bash copies must
+  // POST at one of the paths it declares. Until that module is on this branch there is nothing to
+  // compare against, and the pending entry is the visible record of why.
+  test("the run-ledger endpoint is the contract's own path, not a guess", () => {
+    const declared = runLedgerContractPaths();
+
+    if (declared.size === 0) {
+      expect(PENDING_WORKSPACE_PATHS.has(RUN_EVENT_ENDPOINT)).toBe(true);
+
+      return;
+    }
+
+    expect([...declared]).toContain(RUN_EVENT_ENDPOINT);
   });
 });
 
@@ -178,13 +258,15 @@ async function withLedger<T>(body: (base: string, calls: LedgerCall[]) => Promis
   }
 }
 
-const RUN_EVENTS_PATH = "/api/v1/admin/runs/events";
-
 /**
  * Just the ledger POSTs. The fixture stands in for the whole Worker, and sonar-freshen also
  * posts its /status row there, so filtering by path is what keeps the two apart.
+ *
+ * It filters on the SHARED endpoint constant, so a wrong path is not merely mismatched here —
+ * every assertion below stops seeing any call at all, which is exactly what a 404 in production
+ * would have looked like if anything had been watching.
  */
-const runEvents = (calls: LedgerCall[]) => calls.filter((call) => call.path === RUN_EVENTS_PATH);
+const runEvents = (calls: LedgerCall[]) => calls.filter((call) => call.path === RUN_EVENT_ENDPOINT);
 
 /** The one envelope the ledger received, plus its `summary_raw` parsed back into an object. */
 function received(calls: LedgerCall[]): { envelope: Envelope; summary: Summary } {
