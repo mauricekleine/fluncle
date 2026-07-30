@@ -1,3 +1,4 @@
+import { colors } from "@fluncle/tokens";
 import frontierBg from "./frontier-cover-bg.jpg?inline";
 import { BRAND } from "./satori-render";
 
@@ -39,13 +40,16 @@ export const FRONTIER_COVER_PX = 640;
  */
 export const FRONTIER_COVER_MAX_JPEG_BYTES = 192 * 1024;
 
-// The one-sun palette (packages/tokens), inlined as hex — a rendered card has no CSS vars.
-// Kept verbatim in sync with `colors` in the Remotion master.
+// The one-sun palette. A rendered card has no CSS vars, so the hex is interpolated
+// straight into the markup — but it is READ from `@fluncle/tokens` (the generated
+// mirror of DESIGN.md), never hand-copied: the Remotion master this card must match
+// (`packages/media/src/remotion/frontier-cover.tsx`) reads the same object, so the two
+// cannot drift apart and there is no "keep in sync" obligation to forget.
 const COLOR = {
-  deepField: "#090a0b",
-  dustLine: "#d0b99029",
-  starlightCream: "#f4ead7",
-  tapeBlack: "#171611",
+  deepField: colors.deepField,
+  dustLine: colors.dustLine,
+  starlightCream: colors.starlightCream,
+  tapeBlack: colors.tapeBlack,
 } as const;
 
 /**

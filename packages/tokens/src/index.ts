@@ -5,8 +5,14 @@
 /**
  * Night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a
  * single committed gold. Camel-cased mirrors of DESIGN.md's kebab-cased keys.
- * `ruleDark` is the separator/non-focus border hex used by the SSH app
- * (DESIGN.md prose: Dust Line over Deep Field resolves to #3a342a).
+ * `ruleDark` is the OPAQUE separator/non-focus border hex, for the surfaces that
+ * cannot composite a translucent rule: the SSH TTY, the extension's injected CSS,
+ * the mobile theme, the Remotion/Satori renders, the oEmbed card. It is NOT a
+ * derived value and the arithmetic once claimed for it does not hold — Dust Line
+ * (#d0b990 at 16%) over Deep Field composites to #292620, a visibly darker rule.
+ * #3a342a is a hand-picked step brighter (~24% dust over Deep Field). It has no
+ * entry in DESIGN.md's palette, so this file is currently its only definition; see
+ * docs/audit-backlog.md for the open canon question.
  */
 export const colors = {
   deepField: "#090a0b",

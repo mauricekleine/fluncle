@@ -1,3 +1,4 @@
+import { colors } from "@fluncle/tokens";
 import { createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
 import { formatDateLong } from "@/lib/format";
@@ -29,14 +30,17 @@ const EMBED_HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
 } as const;
 
+// Read from `@fluncle/tokens` (the generated mirror of DESIGN.md) rather than
+// hand-copied: a standalone document has no CSS vars to inherit, but it can still
+// import the canon, so the card cannot drift off-palette.
 const COLOR = {
-  bg: "#090a0b",
-  cream: "#f4ead7",
-  gold: "#f5b800",
-  ink: "#151006",
-  rule: "#3a342a",
-  stardust: "#b7ab95",
-  tape: "#171611",
+  bg: colors.deepField,
+  cream: colors.starlightCream,
+  gold: colors.eclipseGold,
+  ink: colors.inkOnGold,
+  rule: colors.ruleDark,
+  stardust: colors.stardust,
+  tape: colors.tapeBlack,
 } as const;
 
 const escapeHtml = (value: string): string =>

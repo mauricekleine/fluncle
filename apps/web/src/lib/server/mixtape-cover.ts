@@ -1,3 +1,4 @@
+import { colors } from "@fluncle/tokens";
 import { ImageResponse } from "workers-og";
 import { FOUND_BASE } from "@/lib/media";
 import { getMixtapeForRender } from "@/lib/server/mixtapes";
@@ -37,10 +38,12 @@ export function resolveCoverSize(requested: string | null | undefined): MixtapeC
   return (requested && requested in SIZES ? requested : "square") as MixtapeCoverSizeKey;
 }
 
-// One-sun palette (packages/tokens), inlined — the rendered card has no CSS vars.
+// One-sun palette. The rendered card has no CSS vars, so the hex is interpolated into
+// the markup — but READ from `@fluncle/tokens` (the generated mirror of DESIGN.md),
+// never hand-copied, so a palette change reaches the card without a manual sweep.
 const COLOR = {
-  bg: "#090a0b",
-  cream: "#f4ead7",
+  bg: colors.deepField,
+  cream: colors.starlightCream,
 } as const;
 
 // Inline an image as a base64 data-URI (Satori doesn't fetch remote <img>).

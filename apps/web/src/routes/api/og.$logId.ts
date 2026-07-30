@@ -1,3 +1,4 @@
+import { colors } from "@fluncle/tokens";
 import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
 import { formatDateLong } from "@/lib/format";
@@ -30,13 +31,14 @@ import { type ApiHandlers, aliasHandlers } from "./-alias";
 const WIDTH = 1200;
 const HEIGHT = 630;
 
-// The one-sun palette (packages/tokens), inlined as hex — the rendered card has
-// no CSS variables.
+// The one-sun palette. The rendered card has no CSS variables, so the hex is
+// interpolated into the markup — but READ from `@fluncle/tokens` (the generated
+// mirror of DESIGN.md), never hand-copied, so a palette change reaches the card.
 const COLOR = {
-  bg: "#090a0b",
-  cream: "#f4ead7",
-  gold: "#f5b800",
-  stardust: "#b7ab95",
+  bg: colors.deepField,
+  cream: colors.starlightCream,
+  gold: colors.eclipseGold,
+  stardust: colors.stardust,
 } as const;
 
 // Fetch an image and inline it as a base64 data-URI (nodejs_compat gives us

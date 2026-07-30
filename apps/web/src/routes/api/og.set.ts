@@ -1,3 +1,4 @@
+import { colors } from "@fluncle/tokens";
 import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
 import { albumCoverAtSize } from "@/lib/media";
@@ -21,10 +22,10 @@ const WIDTH = 1200;
 const HEIGHT = 630;
 
 const COLOR = {
-  bg: "#090a0b",
-  cream: "#f4ead7",
-  gold: "#f5b800",
-  stardust: "#b7ab95",
+  bg: colors.deepField,
+  cream: colors.starlightCream,
+  gold: colors.eclipseGold,
+  stardust: colors.stardust,
 } as const;
 
 async function fetchImageDataUri(url: string): Promise<string | undefined> {
