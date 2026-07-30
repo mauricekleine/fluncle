@@ -107,6 +107,8 @@ export function adminArtistsHandlers(os: Implementer) {
         );
 
         return {
+          budgetLimited: result.budgetLimited,
+          checkedCount: result.checkedCount,
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,
@@ -114,6 +116,8 @@ export function adminArtistsHandlers(os: Implementer) {
           filledCount: result.filledCount,
           nextCursor: result.nextCursor,
           ok: true as const,
+          queueDepth: result.queueDepth,
+          rateLimited: result.rateLimited,
           skipped: result.skipped,
           skippedCount: result.skippedCount,
         };

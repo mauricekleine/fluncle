@@ -7,6 +7,7 @@ import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { logEvent } from "./log";
 import { recordSpotifyThrottle } from "./spotify-anchor-breaker";
+import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
@@ -250,45 +251,98 @@ type SpotifyArtistResponse = {
   images?: SpotifyImage[];
 };
 
+export type ArtistImagesFetchResult = {
+  budgetLimited: boolean;
+  checkedCount: number;
+  checkedIds: string[];
+  failures: Map<string, string>;
+  images: Map<string, string>;
+  missingIds: Set<string>;
+  rateLimited: boolean;
+};
+
 /**
  * Fetch each artist's largest Spotify profile image, keyed by Spotify artist id.
  * One `/v1/artists/{id}` call per artist: the batch endpoint (`/v1/artists?ids=`)
  * returns a bare 403 for this app's tier (verified 2026-07-10 — same token, batch
- * 403s, single 200s), so per-id is the only allowed path. A failing id (unknown to
- * Spotify, or a transient error) is skipped, never fatal — absent ids simply don't
- * appear in the map. The image is an `i.scdn.co` URL — the same host/precedent as
- * `tracks.album_image_url`, served attribution-by-link.
+ * 403s, single 200s), so per-id is the only allowed path. The result keeps a genuine
+ * 200-without-an-image separate from malformed responses, per-id failures, exhausted
+ * 429 backoff, and proactive shared-budget deferral. The image is an `i.scdn.co` URL
+ * — the same host/precedent as `tracks.album_image_url`, served attribution-by-link.
  */
-export async function fetchArtistImages(spotifyArtistIds: string[]): Promise<Map<string, string>> {
+export async function fetchArtistImages(
+  spotifyArtistIds: string[],
+): Promise<ArtistImagesFetchResult> {
   const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
-  const map = new Map<string, string>();
+  const result: ArtistImagesFetchResult = {
+    budgetLimited: false,
+    checkedCount: 0,
+    checkedIds: [],
+    failures: new Map(),
+    images: new Map(),
+    missingIds: new Set(),
+    rateLimited: false,
+  };
 
   if (ids.length === 0) {
-    return map;
+    return result;
   }
 
   const accessToken = await getSpotifyAccessToken();
 
   for (const id of ids) {
+    if (!(await isSpotifyCallBudgetAvailable())) {
+      result.budgetLimited = true;
+      break;
+    }
+
+    result.checkedIds.push(id);
+    result.checkedCount += 1;
+
     try {
       const response = await spotifyFetch(`/artists/${encodeURIComponent(id)}`, accessToken);
       const artist = (await response.json()) as SpotifyArtistResponse | null;
 
-      if (!artist?.id) {
+      if (
+        !artist ||
+        artist.id !== id ||
+        (artist.images !== undefined && !Array.isArray(artist.images))
+      ) {
+        result.failures.set(id, "Spotify artist response did not match the requested artist");
         continue;
       }
 
       const url = selectLargestImageUrl(artist.images);
 
       if (url) {
-        map.set(artist.id, url);
+        result.images.set(id, url);
+      } else {
+        result.missingIds.add(id);
       }
     } catch (error) {
-      logEvent("warn", "spotify.artist-image-skipped", { artistId: id, error });
+      const message = error instanceof Error ? error.message : String(error);
+
+      if (message.includes("429")) {
+        result.rateLimited = true;
+        logEvent("warn", "spotify.artist-image-rate-limited", { artistId: id, error });
+        break;
+      }
+
+      result.failures.set(id, message);
+      logEvent("warn", "spotify.artist-image-failed", { artistId: id, error });
+    } finally {
+      try {
+        await recordSpotifyCall();
+      } catch (error) {
+        logEvent("warn", "spotify.call-meter-record-failed", {
+          endpoint: "/artists/:id",
+          error,
+        });
+      }
     }
   }
 
-  return map;
+  return result;
 }
 
 export async function searchTrackCandidates(query: string): Promise<TrackSearchResult[]> {
@@ -501,10 +555,15 @@ function selectLargestImageUrl(images: SpotifyImage[] | undefined): string | und
     return undefined;
   }
 
-  return (
-    [...images].sort((left, right) => (right.width ?? 0) - (left.width ?? 0))[0]?.url ??
-    images[0]?.url
-  );
+  return [...images]
+    .filter(
+      (image): image is SpotifyImage =>
+        typeof image === "object" &&
+        image !== null &&
+        typeof image.url === "string" &&
+        image.url.trim().length > 0,
+    )
+    .sort((left, right) => (right.width ?? 0) - (left.width ?? 0))[0]?.url;
 }
 
 function toSearchResult(track: TrackMetadata): TrackSearchResult {

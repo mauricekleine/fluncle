@@ -22,11 +22,24 @@ case "$1" in
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
   not-json) printf 'plain text\\n' ;;
+  admin)
+    if [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "--queue" ]]; then
+      printf '{"artists":[{"artistId":"social-1","name":"One"},{"artistId":"social-2","name":"Two"}]}\\n'
+    elif [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "social-1" ]]; then
+      printf '{"artistId":"social-1","mbid":"mbid-1","ok":true,"rateLimited":false,"socialsCount":2}\\n'
+    elif [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "social-2" ]]; then
+      printf '{"artistId":"social-2","mbid":"mbid-2","ok":true,"rateLimited":false,"socialsCount":0}\\n'
+    elif [[ "$2" == "backfills" && "$3" == "artist-images" ]]; then
+      printf '{"budgetLimited":true,"checkedCount":9,"dryRun":false,"failed":[{"artistId":"image-fail-1","error":"spotify 500"},{"artistId":"image-fail-2","error":"spotify 502"}],"failedCount":2,"filled":["image-1","image-2","image-3"],"filledCount":3,"nextCursor":"image-9","ok":false,"queueDepth":12,"rateLimited":true,"skipped":["skip-1","skip-2","skip-3","skip-4"],"skippedCount":4}\\n'
+      exit 1
+    fi
+    ;;
 esac
 `;
 
 let fluncleJson: <T>(args: string[]) => T;
 let stubDir: string;
+const sweepPath = new URL("./artist-sweep.ts", import.meta.url).pathname;
 
 beforeAll(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "fluncle-stub-"));
@@ -72,5 +85,47 @@ describe("fluncleJson parse-first contract (artist-sweep copy)", () => {
 
   test("exit 0 with unparseable stdout throws the not-JSON error", () => {
     expect(() => fluncleJson(["not-json"])).toThrow("fluncle not-json did not return JSON");
+  });
+});
+
+test("main preserves image failures, skips, throttle state, and canonical run counters", async () => {
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: {
+      ...process.env,
+      FLUNCLE_BIN: join(stubDir, "fluncle"),
+      NODE_ENV: "test",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  expect(exitCode).toBe(0);
+
+  const summary = JSON.parse(stdout) as Record<string, unknown>;
+  expect(summary).toMatchObject({
+    batch: 2,
+    checked: 11,
+    errors: 2,
+    expected_interval_ms: 3_600_000,
+    failed: 0,
+    imagesBudgetLimited: true,
+    imagesChecked: 9,
+    imagesFailed: 2,
+    imagesFilled: 3,
+    imagesRateLimited: true,
+    imagesSkipped: 4,
+    noop: 1,
+    ok: true,
+    processed: 2,
+    produced: 9,
+    queueRemaining: 0,
+    queue_depth: 12,
+    resolved: 1,
+    throttled: true,
   });
 });

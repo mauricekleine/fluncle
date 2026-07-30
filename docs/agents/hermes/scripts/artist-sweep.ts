@@ -39,7 +39,10 @@ import { spawnSync } from "node:child_process";
 
 const BATCH_CAP = 5; // artists resolved per tick (MB is 1 req/s; 5 artists ≈ ~30s)
 const QUEUE_LIMIT = 50;
-const IMAGE_BACKFILL_LIMIT = 50; // one Spotify /v1/artists batch per tick
+// Target up to 50 successful fills; the Worker stops the per-ID reads sooner when the shared
+// Spotify window is spent or the vendor throttles.
+const IMAGE_BACKFILL_LIMIT = 50;
+const EXPECTED_INTERVAL_MS = 60 * 60_000;
 
 // Per-CLI-call wall-clock ceiling. The Worker's `resolve_artist` is itself bounded now
 // (the MB client and every gap-fill fetch carry a deadline), but this is the box-side
@@ -72,6 +75,16 @@ type ResolveResult = {
 };
 
 type Outcome = "resolved" | "noop" | "failed" | "rateLimited";
+
+type ArtistImagesOutcome = {
+  budgetLimited: boolean;
+  checked: number;
+  failed: number;
+  filled: number;
+  queueDepth: number | null;
+  rateLimited: boolean;
+  skipped: number;
+};
 
 // ---------------------------------------------------------------------------
 // Shell helper
@@ -169,35 +182,53 @@ function resolveOne(artist: QueueArtist): Outcome {
 // Artist-avatar backfill drain (best-effort; never aborts the sweep).
 // ---------------------------------------------------------------------------
 
-function drainArtistImages(): number {
+function drainArtistImages(): ArtistImagesOutcome {
   try {
     const result = fluncleJson<{
+      budgetLimited?: boolean;
+      checkedCount?: number;
       failedCount?: number;
       filledCount?: number;
       ok?: boolean;
+      queueDepth?: number;
+      rateLimited?: boolean;
       skippedCount?: number;
     }>(["admin", "backfills", "artist-images", "--limit", String(IMAGE_BACKFILL_LIMIT)]);
 
+    const budgetLimited = result.budgetLimited ?? false;
+    const checked = result.checkedCount ?? 0;
+    const failed = result.failedCount ?? 0;
     const filled = result.filledCount ?? 0;
+    const queueDepth = result.queueDepth ?? null;
+    const rateLimited = result.rateLimited ?? false;
+    const skipped = result.skippedCount ?? 0;
 
     if (result.ok === false) {
       // A partial-failure batch (`ok: false`, exit 1): keep the honest counts —
       // some filled, some failed — instead of mislabeling the tick as a skipped
       // drain. The failed artists stay queued and self-heal next tick.
       log(
-        `artist-images: partial — filled ${filled}, ${result.failedCount ?? 0} failed, ${result.skippedCount ?? 0} without an image`,
+        `artist-images: partial — checked ${checked}, filled ${filled}, ${failed} failed, ${skipped} without an image`,
       );
     } else {
-      log(`artist-images: filled ${filled}, ${result.skippedCount ?? 0} without an image`);
+      log(`artist-images: checked ${checked}, filled ${filled}, ${skipped} without an image`);
     }
 
-    return filled;
+    return { budgetLimited, checked, failed, filled, queueDepth, rateLimited, skipped };
   } catch (error) {
     // A pinned box CLI predating the subcommand — or any transient failure — must
     // never fail the sweep; the backfill self-heals next tick / after the re-bake.
     log(`artist-images drain skipped: ${error instanceof Error ? error.message : String(error)}`);
 
-    return 0;
+    return {
+      budgetLimited: false,
+      checked: 0,
+      failed: 1,
+      filled: 0,
+      queueDepth: null,
+      rateLimited: false,
+      skipped: 0,
+    };
   }
 }
 
@@ -219,47 +250,76 @@ function main(): void {
   const summary = {
     batch: 0,
     failed: 0,
+    imagesBudgetLimited: false,
+    imagesChecked: 0,
+    imagesFailed: 0,
     imagesFilled: 0,
+    imagesRateLimited: false,
+    imagesSkipped: 0,
     noop: 0,
     queueRemaining: queue.length,
     resolved: 0,
+    throttled: false,
   };
 
-  if (queue.length === 0) {
-    summary.imagesFilled = drainArtistImages();
-    console.log(JSON.stringify({ ok: true, processed: 0, ...summary }));
-    return;
-  }
+  if (queue.length > 0) {
+    for (const artist of queue.slice(0, BATCH_CAP)) {
+      summary.batch += 1;
 
-  for (const artist of queue.slice(0, BATCH_CAP)) {
-    summary.batch += 1;
+      try {
+        const outcome = resolveOne(artist);
 
-    try {
-      const outcome = resolveOne(artist);
-
-      if (outcome === "resolved") {
-        summary.resolved += 1;
-      } else if (outcome === "noop") {
-        summary.noop += 1;
-      } else if (outcome === "rateLimited") {
+        if (outcome === "resolved") {
+          summary.resolved += 1;
+        } else if (outcome === "noop") {
+          summary.noop += 1;
+        } else if (outcome === "rateLimited") {
+          summary.failed += 1;
+          summary.throttled = true;
+          break; // MB is throttling — stop hammering, let remaining artists stay queued
+        } else {
+          summary.failed += 1;
+        }
+      } catch (error) {
         summary.failed += 1;
-        break; // MB is throttling — stop hammering, let remaining artists stay queued
-      } else {
-        summary.failed += 1;
+        log(
+          `error on ${artist.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-    } catch (error) {
-      summary.failed += 1;
-      log(
-        `error on ${artist.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`,
-      );
     }
   }
 
   summary.queueRemaining = Math.max(0, queue.length - summary.resolved - summary.noop);
-  summary.imagesFilled = drainArtistImages();
-  const processed = summary.resolved + summary.noop;
+  const images = drainArtistImages();
+  summary.imagesBudgetLimited = images.budgetLimited;
+  summary.imagesChecked = images.checked;
+  summary.imagesFailed = images.failed;
+  summary.imagesFilled = images.filled;
+  summary.imagesRateLimited = images.rateLimited;
+  summary.imagesSkipped = images.skipped;
+  summary.throttled ||= images.rateLimited;
 
-  console.log(JSON.stringify({ ok: true, processed, ...summary }));
+  const processed = summary.resolved + summary.noop;
+  const checked = summary.batch + summary.imagesChecked;
+  const produced = processed + summary.imagesFilled + summary.imagesSkipped;
+  const errors = summary.failed + summary.imagesFailed;
+  const queueDepth =
+    queue.length < QUEUE_LIMIT && images.queueDepth !== null
+      ? summary.queueRemaining + images.queueDepth
+      : null;
+
+  console.log(
+    JSON.stringify({
+      ...summary,
+      checked,
+      errors,
+      expected_interval_ms: EXPECTED_INTERVAL_MS,
+      ok: true,
+      processed,
+      produced,
+      queue_depth: queueDepth,
+    }),
+  );
 }
 
 // The cron runs this file directly; the guard keeps importing `fluncleJson` for

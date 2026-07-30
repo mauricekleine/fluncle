@@ -82,11 +82,11 @@ const ArtistImagesBackfillFailedSchema = z
  * `backfillArtistImages`).
  *
  * Agent tier (`adminAuth`). One bounded, cursor-resumable pass over artists still
- * missing a Spotify avatar (`image_url IS NULL` and a Spotify id to look up). Each
- * pass batch-fetches the largest Spotify profile image (one `/v1/artists` call) and
- * stamps `artists.image_url`. Idempotent + self-draining (an imaged artist drops out
- * of the queue). Returns `{ ok, dryRun, filled, filledCount, skipped, skippedCount,
- * failed, failedCount, nextCursor }` — `skipped` = artists Spotify has no image for.
+ * missing a Spotify avatar (`image_url IS NULL`, `image_state='pending'`, and a
+ * Spotify id to look up). Each pass fetches the largest Spotify profile image via
+ * the per-id endpoint. A matching 200 with no usable image is terminal `none`;
+ * transient failures and shared-budget deferrals remain pending. `queueDepth` is
+ * the exact eligible count after the pass.
  */
 export const backfillArtistImages = oc
   .route({
@@ -94,7 +94,7 @@ export const backfillArtistImages = oc
     method: "POST",
     operationId: "backfillArtistImages",
     path: "/admin/backfill/artist-images",
-    summary: "Back-fill artist Spotify avatars (image_url) for existing artists (batched)",
+    summary: "Back-fill artist Spotify avatars (image_url) for existing artists (bounded)",
     tags: ["Admin"],
   })
   .input(
@@ -108,6 +108,8 @@ export const backfillArtistImages = oc
   )
   .output(
     z.object({
+      budgetLimited: z.boolean(),
+      checkedCount: z.number(),
       dryRun: z.boolean(),
       failed: z.array(ArtistImagesBackfillFailedSchema),
       failedCount: z.number(),
@@ -115,6 +117,8 @@ export const backfillArtistImages = oc
       filledCount: z.number(),
       nextCursor: z.string().nullable(),
       ok: z.literal(true),
+      queueDepth: z.number(),
+      rateLimited: z.boolean(),
       skipped: z.array(z.string()),
       skippedCount: z.number(),
     }),

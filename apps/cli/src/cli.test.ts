@@ -617,12 +617,16 @@ describe("sweep commands surface partial failure", () => {
       (req, url) => {
         if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
           return Response.json({
+            budgetLimited: false,
+            checkedCount: 2,
             dryRun: false,
             failed: [{ artistId: "a1", error: "spotify 500" }],
             failedCount: 1,
             filled: ["a2"],
             filledCount: 1,
             nextCursor: null,
+            queueDepth: 1,
+            rateLimited: false,
             skipped: [],
             skippedCount: 0,
           });
@@ -645,8 +649,140 @@ describe("sweep commands surface partial failure", () => {
         expect(payload.failedCount).toBe(1);
         expect(payload.failed).toEqual([{ artistId: "a1", error: "spotify 500" }]);
         expect(payload.filled).toEqual(["a2"]);
+        expect(payload.checkedCount).toBe(2);
+        expect(payload.queueDepth).toBe(1);
+        expect(payload.rateLimited).toBe(false);
+        expect(payload.budgetLimited).toBe(false);
       },
     );
+  });
+
+  test("backfills artist-images counts only fills toward --limit and follows skip-only pages", async () => {
+    const calls: Array<{ cursor: string | null; limit: string | null }> = [];
+    const skipped = Array.from({ length: 50 }, (_, index) => `skip-${index}`);
+    const filled = Array.from({ length: 50 }, (_, index) => `fill-${index}`);
+
+    await withStubApi(
+      (req, url) => {
+        if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
+          calls.push({
+            cursor: url.searchParams.get("cursor"),
+            limit: url.searchParams.get("limit"),
+          });
+
+          if (calls.length === 1) {
+            return Response.json({
+              budgetLimited: false,
+              checkedCount: 50,
+              dryRun: false,
+              failed: [],
+              failedCount: 0,
+              filled: [],
+              filledCount: 0,
+              nextCursor: "a49",
+              ok: true,
+              queueDepth: 50,
+              rateLimited: false,
+              skipped,
+              skippedCount: 50,
+            });
+          }
+
+          return Response.json({
+            budgetLimited: false,
+            checkedCount: 50,
+            dryRun: false,
+            failed: [],
+            failedCount: 0,
+            filled,
+            filledCount: 50,
+            nextCursor: "a99",
+            ok: true,
+            queueDepth: 12,
+            rateLimited: false,
+            skipped: [],
+            skippedCount: 0,
+          });
+        }
+
+        return Response.json(
+          { code: "not_found", message: url.pathname, ok: false },
+          { status: 404 },
+        );
+      },
+      async (baseUrl) => {
+        const result = await runCli(
+          ["admin", "backfills", "artist-images", "--limit", "50", "--json"],
+          {
+            FLUNCLE_API_BASE_URL: baseUrl,
+            FLUNCLE_API_TOKEN: "test-token",
+          },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(calls).toEqual([
+          { cursor: null, limit: "50" },
+          { cursor: "a49", limit: "50" },
+        ]);
+
+        const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(payload.filledCount).toBe(50);
+        expect(payload.skippedCount).toBe(50);
+        expect(payload.checkedCount).toBe(100);
+        expect(payload.queueDepth).toBe(12);
+        expect(payload.filled).toEqual(filled);
+        expect(payload.skipped).toEqual(skipped);
+      },
+    );
+  });
+
+  test("backfills artist-images stops paging on throttle or budget exhaustion", async () => {
+    for (const stopField of ["rateLimited", "budgetLimited"] as const) {
+      let calls = 0;
+
+      await withStubApi(
+        (req, url) => {
+          if (req.method === "POST" && url.pathname === "/api/v1/admin/backfill/artist-images") {
+            calls += 1;
+
+            return Response.json({
+              budgetLimited: stopField === "budgetLimited",
+              checkedCount: 1,
+              dryRun: false,
+              failed: [],
+              failedCount: 0,
+              filled: [],
+              filledCount: 0,
+              nextCursor: "still-more",
+              ok: true,
+              queueDepth: 9,
+              rateLimited: stopField === "rateLimited",
+              skipped: ["terminal-skip"],
+              skippedCount: 1,
+            });
+          }
+
+          return Response.json(
+            { code: "not_found", message: url.pathname, ok: false },
+            { status: 404 },
+          );
+        },
+        async (baseUrl) => {
+          const result = await runCli(["admin", "backfills", "artist-images", "--json"], {
+            FLUNCLE_API_BASE_URL: baseUrl,
+            FLUNCLE_API_TOKEN: "test-token",
+          });
+
+          expect(result.exitCode).toBe(0);
+          expect(calls).toBe(1);
+
+          const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+          expect(payload[stopField]).toBe(true);
+          expect(payload.skipped).toEqual(["terminal-skip"]);
+          expect(payload.queueDepth).toBe(9);
+        },
+      );
+    }
   });
 });
 

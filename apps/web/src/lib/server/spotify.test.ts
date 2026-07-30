@@ -16,6 +16,16 @@ vi.mock("./env", () => ({
   readOptionalEnv: async () => undefined,
 }));
 
+const spotifyBudget = vi.hoisted(() => ({
+  isAvailable: vi.fn<() => Promise<boolean>>(),
+  record: vi.fn<() => Promise<void>>(),
+}));
+
+vi.mock("./spotify-budget", () => ({
+  isSpotifyCallBudgetAvailable: spotifyBudget.isAvailable,
+  recordSpotifyCall: spotifyBudget.record,
+}));
+
 type AuthRow = {
   access_token: string;
   refresh_token: string;
@@ -56,9 +66,10 @@ vi.mock("./db", () => ({
   typedRows: <T>(rows: T[]): T[] => rows,
 }));
 
-import { searchTrackCandidates } from "./spotify";
+import { fetchArtistImages, searchTrackCandidates } from "./spotify";
 
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
+const ARTIST_PREFIX = "https://api.spotify.com/v1/artists/";
 const SEARCH_PREFIX = "https://api.spotify.com/v1/search";
 
 const future = () => new Date(Date.now() + 3_600_000).toISOString();
@@ -108,6 +119,10 @@ beforeEach(() => {
   deleteCount = 0;
   upsertCount = 0;
   execute.mockClear();
+  spotifyBudget.isAvailable.mockReset();
+  spotifyBudget.isAvailable.mockResolvedValue(true);
+  spotifyBudget.record.mockReset();
+  spotifyBudget.record.mockResolvedValue();
 });
 
 afterEach(() => {
@@ -266,6 +281,97 @@ describe("spotifyFetch 429 backoff", () => {
 
     // One shot, no replay — a 429'd add must not fire twice and risk a duplicate.
     expect(addCalls).toBe(1);
+  });
+});
+
+describe("fetchArtistImages classifications and shared budget", () => {
+  it("signals an exhausted real spotifyFetch 429 and stops immediately", async () => {
+    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.startsWith(ARTIST_PREFIX)) {
+        // This exceeds spotifyFetch's total wait budget, so the helper sees the
+        // exhausted 429 immediately and must not try the next artist.
+        return new Response("rate limited", {
+          headers: { "Retry-After": "20" },
+          status: 429,
+        });
+      }
+
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchArtistImages(["artist-1", "artist-2"]);
+
+    expect(result.rateLimited).toBe(true);
+    expect(result.budgetLimited).toBe(false);
+    expect(result.checkedIds).toEqual(["artist-1"]);
+    expect(result.checkedCount).toBe(1);
+    expect(result.missingIds.size).toBe(0);
+    expect(result.images.size).toBe(0);
+    expect(result.failures.size).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(spotifyBudget.record).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a matching 200 no-image response distinct from malformed identity", async () => {
+    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
+
+    const fetchMock = vi.fn(async (url: string) => {
+      const id = decodeURIComponent(url.slice(ARTIST_PREFIX.length));
+
+      return new Response(
+        JSON.stringify(id === "artist-1" ? { id, images: [] } : { id: "wrong-artist", images: [] }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchArtistImages(["artist-1", "artist-2"]);
+
+    expect(result.missingIds).toEqual(new Set(["artist-1"]));
+    expect(result.failures.get("artist-2")).toMatch(/did not match/);
+    expect(result.checkedCount).toBe(2);
+    expect(result.rateLimited).toBe(false);
+  });
+
+  it("stops before a lookup when the proactive shared budget is spent", async () => {
+    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
+    spotifyBudget.isAvailable.mockResolvedValue(false);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchArtistImages(["artist-1"]);
+
+    expect(result.budgetLimited).toBe(true);
+    expect(result.checkedCount).toBe(0);
+    expect(result.failures.size).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(spotifyBudget.record).not.toHaveBeenCalled();
+  });
+
+  it("swallows advisory meter write failures after a successful lookup", async () => {
+    selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
+    spotifyBudget.record.mockRejectedValue(new Error("settings unavailable"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: "artist-1",
+              images: [{ url: "https://i.scdn.co/image/artist-1", width: 640 }],
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+
+    const result = await fetchArtistImages(["artist-1"]);
+
+    expect(result.images.get("artist-1")).toBe("https://i.scdn.co/image/artist-1");
+    expect(result.failures.size).toBe(0);
   });
 });
 

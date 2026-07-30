@@ -209,16 +209,21 @@ export type ArtistsBackfillResult = {
 };
 
 export type ArtistImagesBackfillResult = {
+  budgetLimited: boolean;
+  checkedCount: number;
   dryRun: boolean;
   failed: Array<{ artistId: string; error: string }>;
   failedCount: number;
   filled: string[];
   filledCount: number;
   // The feed cursor to resume from on the next pass, or null when the queue is
-  // drained. Each pass batch-fetches one Spotify `/v1/artists` page, so the CLI
-  // loops this until null.
+  // drained. Each pass resolves a bounded set through per-ID Spotify artist
+  // calls, so the CLI loops this until null.
   nextCursor: string | null;
   ok: boolean;
+  // Exact eligible backlog remaining after this pass.
+  queueDepth: number;
+  rateLimited: boolean;
   // Artists Spotify has no image for — left null (a monogram tile renders), not failed.
   skipped: string[];
   skippedCount: number;

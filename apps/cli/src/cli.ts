@@ -4112,14 +4112,22 @@ async function runBackfillArtistImages(
   const failed: Array<{ artistId: string; error: string }> = [];
   const skipped: string[] = [];
   let cursor: string | undefined;
+  let budgetLimited = false;
+  let checkedCount = 0;
   let dryRun = options.dryRun;
+  let queueDepth = 0;
+  let rateLimited = false;
 
-  while (filled.length + failed.length + skipped.length < limit) {
-    const remaining = limit - (filled.length + failed.length + skipped.length);
+  while (filled.length < limit) {
+    const remaining = limit - filled.length;
     const result = await backfillArtistImagesCommand(remaining, options.dryRun, cursor);
+    budgetLimited ||= result.budgetLimited;
+    checkedCount += result.checkedCount;
     dryRun = result.dryRun;
     filled.push(...result.filled);
     failed.push(...result.failed);
+    queueDepth = result.queueDepth;
+    rateLimited ||= result.rateLimited;
     skipped.push(...result.skipped);
 
     if (!options.json) {
@@ -4129,7 +4137,7 @@ async function runBackfillArtistImages(
       );
     }
 
-    if (result.nextCursor === null) {
+    if (result.nextCursor === null || result.rateLimited || result.budgetLimited) {
       break;
     }
 
@@ -4139,10 +4147,14 @@ async function runBackfillArtistImages(
   if (options.json) {
     printSweepJson(
       {
+        budgetLimited,
+        checkedCount,
         dryRun,
         failed,
         filled,
         filledCount: filled.length,
+        queueDepth,
+        rateLimited,
         skipped,
         skippedCount: skipped.length,
       },
@@ -4153,7 +4165,7 @@ async function runBackfillArtistImages(
 
   const verb = dryRun ? "Would fill" : "Filled";
   console.log(
-    `${verb} ${filled.length} artist avatar(s); ${failed.length} failed; ${skipped.length} without a Spotify image.`,
+    `${verb} ${filled.length} artist avatar(s); checked ${checkedCount}; ${failed.length} failed; ${skipped.length} without a Spotify image; ${queueDepth} queued.`,
   );
 
   for (const artistId of filled) {

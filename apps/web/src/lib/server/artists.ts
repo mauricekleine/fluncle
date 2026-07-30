@@ -1355,10 +1355,10 @@ export async function adoptArtistMbid(artistId: string, mbid: string): Promise<v
 
 /**
  * Fill `artists.image_url` for the given Spotify artist ids that still lack an image.
- * Only the null-image rows are fetched (one batched Spotify `/v1/artists` call), so a
+ * Only pending null-image rows are fetched (one Spotify `/v1/artists/{id}` call each), so a
  * repeat over already-imaged artists costs a single indexed read and no API call —
- * the shared idempotent core of the create-time fill and the image backfill. Returns
- * how many rows were newly filled.
+ * and a terminal `image_state='none'` verdict is never reopened by a later track
+ * upsert. Returns how many rows were newly filled.
  */
 export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promise<number> {
   const ids = [...new Set(spotifyArtistIds.filter((id): id is string => Boolean(id)))];
@@ -1374,7 +1374,9 @@ export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promi
       await db.execute({
         args: ids,
         sql: `select id, spotify_artist_id from artists
-              where spotify_artist_id in (${placeholders}) and image_url is null`,
+              where spotify_artist_id in (${placeholders})
+                and image_url is null
+                and image_state = 'pending'`,
       })
     ).rows,
   );
@@ -1383,12 +1385,12 @@ export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promi
     return 0;
   }
 
-  const images = await fetchArtistImages(missing.map((row) => row.spotify_artist_id));
+  const result = await fetchArtistImages(missing.map((row) => row.spotify_artist_id));
   const nowIso = new Date().toISOString();
   let filled = 0;
 
   for (const row of missing) {
-    const url = images.get(row.spotify_artist_id);
+    const url = result.images.get(row.spotify_artist_id);
 
     if (!url) {
       continue;
