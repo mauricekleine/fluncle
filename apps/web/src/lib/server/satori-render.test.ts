@@ -23,7 +23,11 @@ const REGISTERED: Record<string, number[]> = {
 // (Reading the tables back, not trusting the cutting script's own word for it.)
 
 function tables(dataUri: string): DataView {
-  return new DataView(Buffer.from(dataUri.slice(dataUri.indexOf(",") + 1), "base64").buffer);
+  const buffer = Buffer.from(dataUri.slice(dataUri.indexOf(",") + 1), "base64");
+
+  // A Buffer may be a view into a shared allocation. Scope the DataView to the decoded font
+  // rather than parsing unrelated bytes at the start of its backing ArrayBuffer.
+  return new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
 function table(view: DataView, tag: string): number {
