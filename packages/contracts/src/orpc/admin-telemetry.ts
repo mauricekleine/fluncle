@@ -1,10 +1,13 @@
-// The `admin-telemetry` domain contract module — the agent-tier WRITE into the run
-// ledger, `run_events`, which lives in the SECOND database (`fluncle-telemetry`).
+// The `admin-telemetry` domain contract module — the run ledger, `run_events`, which
+// lives in the SECOND database (`fluncle-telemetry`).
 //
 //   - `record_run` — POST /admin/telemetry/runs. Body: ONE envelope per sweep tick,
 //     posted by `emit_cron_output` (the shared bash wrapper every host-timer sweep
 //     already goes through). Bash stays dumb; the WORKER owns the schema, so no
 //     per-sweep code change is required for v1.
+//   - `read_run_ledger` — GET /admin/telemetry/runs. Operator-only rows plus cheap
+//     per-unit aggregates over the requested unit/time/derived-ok window. It returns
+//     evidence, never a fixed "broken sweep" verdict.
 //
 // AGENT tier (`adminAuth`, NOT `operatorGuard`) — the `record_cost` / `record_health`
 // precedent: the box holds the agent token and this writes only an internal diagnostics
@@ -35,6 +38,12 @@ const MAX_UNIT_CHARS = 128;
  * form without letting a broken emitter push arbitrary text into a time column.
  */
 const MAX_TIMESTAMP_CHARS = 64;
+
+/** A read page is deliberately bounded even behind the operator token. */
+export const MAX_RUN_LEDGER_PAGE_SIZE = 100;
+
+/** The opaque keyset cursor is two already-bounded strings encoded as base64url JSON. */
+const MAX_RUN_LEDGER_CURSOR_CHARS = 512;
 
 /**
  * The raw-summary cap. A tick summary is ONE line of JSON — the widest real one measured
@@ -115,6 +124,103 @@ export const RunEventInputSchema = z
 /** The envelope `emit_cron_output` POSTs, one per sweep tick. */
 export type RunEventInput = z.infer<typeof RunEventInputSchema>;
 
+const RunLedgerTimestampSchema = z.iso
+  .datetime({ offset: true })
+  .max(MAX_TIMESTAMP_CHARS)
+  .describe("ISO-8601 bound on occurredAt (box time)");
+
+/** One raw ledger row, projected losslessly apart from JSON/boolean decoding. */
+export const RunLedgerRowSchema = z.object({
+  checked: z.number().int().nullable(),
+  createdAt: z.string(),
+  endedAt: z.string(),
+  errors: z.number().int().nullable(),
+  exitCode: z.number().int(),
+  expectedIntervalMs: z.number().int().nullable(),
+  gateState: z.enum(["active", "disabled", "dry-run", "forced", "locked", "paused"]).nullable(),
+  id: z.string(),
+  missingFields: z.array(z.string()),
+  occurredAt: z.string(),
+  ok: z.boolean(),
+  produced: z.number().int().nullable(),
+  queueDepth: z.number().int().nullable(),
+  runDurationMs: z.number().int().nullable(),
+  selfAssertedOk: z.boolean().nullable(),
+  summaryRaw: z.string().nullable(),
+  summaryStatus: z.enum(["absent", "malformed", "not_object", "parsed"]),
+  unit: z.string(),
+  unrecognisedFields: z.array(z.string()),
+  vendorCalls: z.number().int().nullable(),
+});
+
+/** Cheap facts for one unit over the full filtered window, independent of row pagination. */
+export const RunLedgerUnitRollupSchema = z.object({
+  blindCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  lastOccurredAt: z.string(),
+  liarCount: z.number().int().nonnegative(),
+  runCount: z.number().int().nonnegative(),
+  unit: z.string(),
+});
+
+/**
+ * The read's query input. `ok` is the DERIVED ledger column, not the sweep's claim.
+ * `since`/`until` are normalized to canonical ISO strings in the reader before their
+ * lexical SQLite comparison, keeping `T` on both sides of the comparison.
+ */
+export const ReadRunLedgerInputSchema = z
+  .object({
+    cursor: z.string().min(1).max(MAX_RUN_LEDGER_CURSOR_CHARS).optional(),
+    limit: z.coerce.number().int().min(1).max(MAX_RUN_LEDGER_PAGE_SIZE).default(50),
+    ok: z.enum(["true", "false"]).optional(),
+    since: RunLedgerTimestampSchema.optional(),
+    unit: z.string().min(1).max(MAX_UNIT_CHARS).optional(),
+    until: RunLedgerTimestampSchema.optional(),
+  })
+  .refine(
+    (input) =>
+      input.since === undefined ||
+      input.until === undefined ||
+      Date.parse(input.since) <= Date.parse(input.until),
+    {
+      message: "since must be before or equal to until",
+      path: ["until"],
+    },
+  );
+
+export type ReadRunLedgerInput = z.infer<typeof ReadRunLedgerInputSchema>;
+export type RunLedgerRow = z.infer<typeof RunLedgerRowSchema>;
+export type RunLedgerUnitRollup = z.infer<typeof RunLedgerUnitRollupSchema>;
+
+export const RunLedgerPageSchema = z.object({
+  available: z.boolean(),
+  nextCursor: z.string().nullable(),
+  rollups: z.array(RunLedgerUnitRollupSchema),
+  rows: z.array(RunLedgerRowSchema),
+  totalCount: z.number().int().nonnegative(),
+});
+
+export type RunLedgerPage = z.infer<typeof RunLedgerPageSchema>;
+
+/**
+ * `read_run_ledger` → `GET /admin/telemetry/runs` (operationId `readRunLedger`).
+ *
+ * OPERATOR tier: the rows contain internal host-unit names and raw sweep summaries.
+ * This read returns the raw page plus per-unit counts over the whole filtered window.
+ * The counts name only stored shapes (`ok = 0`, claim-vs-derived contradiction, and
+ * three NULL work counters); deciding what those facts mean belongs to the reader.
+ */
+export const readRunLedger = oc
+  .route({
+    method: "GET",
+    operationId: "readRunLedger",
+    path: "/admin/telemetry/runs",
+    summary: "Read run-ledger rows and per-unit aggregates",
+    tags: ["Admin"],
+  })
+  .input(ReadRunLedgerInputSchema)
+  .output(RunLedgerPageSchema);
+
 /**
  * `record_run` → `POST /admin/telemetry/runs` (operationId `recordRun`).
  *
@@ -162,5 +268,6 @@ export const recordRun = oc
 
 /** The `admin-telemetry` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTelemetryContract = {
+  read_run_ledger: readRunLedger,
   record_run: recordRun,
 };

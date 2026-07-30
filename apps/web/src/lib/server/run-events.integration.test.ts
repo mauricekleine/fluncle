@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { insertRunEvent } from "./run-events";
+import { insertRunEvent, readRunLedger } from "./run-events";
 import { createTelemetryIntegrationDb } from "./telemetry-integration-db";
 
 // The run ledger's SQL half — the REAL parameterized insert against the REAL generated
@@ -389,6 +389,18 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
 
     expect(recorded).toMatchObject({ runOk: false, selfAssertedOk: true, stored: false });
   });
+
+  it("distinguishes an unavailable reader from a configured empty window", async () => {
+    const page = await readRunLedger({ limit: 50 });
+
+    expect(page).toEqual({
+      available: false,
+      nextCursor: null,
+      rollups: [],
+      rows: [],
+      totalCount: 0,
+    });
+  });
 });
 
 describe("run_events — the three reads the ledger was indexed for", () => {
@@ -456,5 +468,130 @@ describe("run_events — the three reads the ledger was indexed for", () => {
     });
 
     expect(result?.rows.map((row) => row.unit)).toEqual(["fluncle-note"]);
+  });
+});
+
+describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
+  it("counts the liar and blind shapes per unit against real fixture rows", async () => {
+    await insertRunEvent(
+      envelope({
+        ended_at: "2026-07-30T19:00:05.000Z",
+        started_at: "2026-07-30T19:00:00.000Z",
+        summary_raw: '{"checked":4,"errors":2,"ok":true,"produced":0,"queueDepth":9}',
+        unit: "fluncle-sentry-triage",
+      }),
+    );
+    await insertRunEvent(
+      envelope({
+        ended_at: "2026-07-30T19:10:05.000Z",
+        started_at: "2026-07-30T19:10:00.000Z",
+        summary_raw: "{}",
+        unit: "fluncle-sentry-triage",
+      }),
+    );
+    await insertRunEvent(
+      envelope({
+        ended_at: "2026-07-30T19:20:05.000Z",
+        started_at: "2026-07-30T19:20:00.000Z",
+        summary_raw: '{"checked":8,"errors":0,"produced":2,"queueDepth":0}',
+        unit: "fluncle-note",
+      }),
+    );
+
+    const page = await readRunLedger({
+      limit: 100,
+      since: "2026-07-30T18:00:00.000Z",
+    });
+
+    expect(page.available).toBe(true);
+    expect(page.rows).toHaveLength(3);
+    expect(page.rollups).toEqual([
+      {
+        blindCount: 0,
+        failedCount: 0,
+        lastOccurredAt: "2026-07-30T19:20:00.000Z",
+        liarCount: 0,
+        runCount: 1,
+        unit: "fluncle-note",
+      },
+      {
+        blindCount: 1,
+        failedCount: 1,
+        lastOccurredAt: "2026-07-30T19:10:00.000Z",
+        liarCount: 1,
+        runCount: 2,
+        unit: "fluncle-sentry-triage",
+      },
+    ]);
+    expect(page.rows.find((row) => row.selfAssertedOk === true)).toMatchObject({
+      errors: 2,
+      ok: false,
+      unit: "fluncle-sentry-triage",
+    });
+    expect(
+      page.rows.find(
+        (row) => row.checked === null && row.produced === null && row.queueDepth === null,
+      ),
+    ).toMatchObject({
+      missingFields: ["checked", "errors", "expected_interval_ms", "produced", "queue_depth"],
+      unit: "fluncle-sentry-triage",
+    });
+  });
+
+  it("makes a narrow ISO window return fewer rows than a wide one", async () => {
+    for (const minute of ["00", "10", "20"]) {
+      await insertRunEvent(
+        envelope({
+          ended_at: `2026-07-30T19:${minute}:05.000Z`,
+          started_at: `2026-07-30T19:${minute}:00.000Z`,
+          unit: "fluncle-enrich",
+        }),
+      );
+    }
+
+    const wide = await readRunLedger({
+      limit: 100,
+      since: "2026-07-30T18:59:00.000Z",
+    });
+    const narrow = await readRunLedger({
+      limit: 100,
+      since: "2026-07-30T19:15:00.000Z",
+    });
+
+    expect(wide.totalCount).toBe(3);
+    expect(narrow.totalCount).toBe(1);
+    expect(narrow.rows.length).toBeLessThan(wide.rows.length);
+    expect(narrow.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T19:20:00.000Z"]);
+  });
+
+  it("keyset-pages raw rows while keeping whole-window rollups stable", async () => {
+    for (const hour of ["01", "02", "03"]) {
+      await insertRunEvent(
+        envelope({
+          ended_at: `2026-07-30T${hour}:00:05.000Z`,
+          started_at: `2026-07-30T${hour}:00:00.000Z`,
+          unit: "fluncle-note",
+        }),
+      );
+    }
+
+    const first = await readRunLedger({ limit: 2 });
+    const cursor = first.nextCursor;
+
+    if (cursor === null) {
+      throw new Error("expected a second run-ledger page");
+    }
+
+    const second = await readRunLedger({ cursor, limit: 2 });
+
+    expect(first.rows.map((row) => row.occurredAt)).toEqual([
+      "2026-07-30T03:00:00.000Z",
+      "2026-07-30T02:00:00.000Z",
+    ]);
+    expect(second.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T01:00:00.000Z"]);
+    expect(second.nextCursor).toBeNull();
+    expect(first.totalCount).toBe(3);
+    expect(second.totalCount).toBe(3);
+    expect(second.rollups).toEqual(first.rollups);
   });
 });

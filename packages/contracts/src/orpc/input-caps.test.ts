@@ -1,15 +1,21 @@
-// Self-running check for the INPUT caps on the batch-shaped admin writes — no framework, the
-// `devices.test.ts` style. Every op here is AGENT tier: the box's token drives them, so the threat is
-// a buggy or compromised sweep posting an unbounded payload, not a stranger. Each cap is asserted at
-// the cap (accepted — the real sizes are far below it) and one past it (REJECTED at the edge, never
-// trimmed: a dropped cost row is a wrong ledger, a dropped cluster is a broken map).
+// Self-running check for INPUT caps on bounded admin operations — no framework, the
+// `devices.test.ts` style. The writes here are AGENT tier (the box's token drives them, so the
+// threat is a buggy or compromised sweep posting an unbounded payload, not a stranger);
+// `read_run_ledger` is the operator-tier read. Each cap is asserted at the cap (accepted — the
+// real sizes are far below it) and one past it (REJECTED at the edge, never trimmed: a dropped
+// cost row is a wrong ledger, a dropped cluster is a broken map).
 // Run: `bun src/orpc/input-caps.test.ts`.
 
 import assert from "node:assert/strict";
 
 import { DEEZER_CANDIDATE_LIMIT, resolveAnchor } from "./admin-catalogue";
 import { recordCost } from "./admin-costs";
-import { MAX_SUMMARY_RAW_CHARS, recordRun } from "./admin-telemetry";
+import {
+  MAX_RUN_LEDGER_PAGE_SIZE,
+  MAX_SUMMARY_RAW_CHARS,
+  readRunLedger,
+  recordRun,
+} from "./admin-telemetry";
 import { updateGalaxyMap } from "./admin-galaxies";
 
 /**
@@ -297,6 +303,38 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(recordRun, run({ summary_raw: "s".repeat(MAX_SUMMARY_RAW_CHARS + 1) })),
     false,
     "one character past the summary cap is rejected",
+  );
+}
+
+// ── read_run_ledger: one bounded page, with closed boolean/time filters ──────────────────
+{
+  assert.equal(
+    accepts(readRunLedger, { limit: MAX_RUN_LEDGER_PAGE_SIZE }),
+    true,
+    "a run-ledger page AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(readRunLedger, { limit: MAX_RUN_LEDGER_PAGE_SIZE + 1 }),
+    false,
+    "one row past the run-ledger page cap is rejected",
+  );
+  assert.equal(
+    accepts(readRunLedger, { ok: "false", since: "2026-07-30T19:00:00.000Z" }),
+    true,
+    "the derived-ok and ISO time filters are accepted",
+  );
+  assert.equal(
+    accepts(readRunLedger, { ok: "yes" }),
+    false,
+    "the derived-ok filter is a closed true/false string",
+  );
+  assert.equal(
+    accepts(readRunLedger, {
+      since: "2026-07-30T20:00:00.000Z",
+      until: "2026-07-30T19:00:00.000Z",
+    }),
+    false,
+    "an inverted time window is rejected",
   );
 }
 

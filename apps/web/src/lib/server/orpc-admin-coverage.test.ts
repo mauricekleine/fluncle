@@ -181,6 +181,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The cost-ledger read (COST-02) — contract-only oRPC (no TanStack route file).
   // Admin tier.
   "GET /admin/subscriptions": "list_subscriptions",
+  // The run ledger's operator reader — contract-only oRPC, paired with the agent-tier POST on
+  // the same resource. It returns filtered evidence plus per-unit aggregates from the second DB.
+  "GET /admin/telemetry/runs": "read_run_ledger",
   "GET /admin/tracks": "list_tracks_admin",
   // The embedded corpus (browse-by-feel RFC) — contract-only oRPC (no TanStack route
   // file; oRPC owns the path directly). Admin tier (agent-allowed): the `fluncle-cluster`

@@ -204,10 +204,20 @@ export {
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export {
   adminTelemetryContract,
+  MAX_RUN_LEDGER_PAGE_SIZE,
   MAX_SUMMARY_RAW_CHARS,
+  type ReadRunLedgerInput,
+  ReadRunLedgerInputSchema,
+  readRunLedger,
   recordRun,
   type RunEventInput,
   RunEventInputSchema,
+  type RunLedgerPage,
+  RunLedgerPageSchema,
+  type RunLedgerRow,
+  RunLedgerRowSchema,
+  type RunLedgerUnitRollup,
+  RunLedgerUnitRollupSchema,
 } from "./admin-telemetry";
 export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
 export { adminReachContract, recordPlatformStats } from "./admin-reach";

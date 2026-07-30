@@ -59,6 +59,50 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
+  test("admin telemetry validates its page cap before fetching", async () => {
+    const result = await runCli(["admin", "telemetry", "read", "--limit", "101", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin telemetry keeps derived --ok a closed true/false filter", async () => {
+    const result = await runCli(["admin", "telemetry", "read", "--ok", "yes", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--ok must be true or false");
+  });
+
+  test("admin telemetry rejects an inverted time window before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "telemetry",
+      "read",
+      "--since",
+      "2026-07-30T20:00:00.000Z",
+      "--until",
+      "2026-07-30T19:00:00.000Z",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--since must be before or equal to --until");
+  });
+
+  test("admin telemetry exposes every read filter and pagination control", async () => {
+    const result = await runCli(["admin", "telemetry", "read", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("--unit <unit>");
+    expect(result.stdout).toContain("--since <iso>");
+    expect(result.stdout).toContain("--until <iso>");
+    expect(result.stdout).toContain("--ok <true|false>");
+    expect(result.stdout).toContain("--cursor <cursor>");
+  });
+
   test("admin tracks enrich --queue validates --limit before fetching", async () => {
     const result = await runCli(["admin", "tracks", "enrich", "--queue", "--limit", "0", "--json"]);
 

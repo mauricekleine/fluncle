@@ -576,6 +576,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // nothing, so the box's agent-token cron drives it.
   rank_artists: "admin",
   rank_catalogue: "admin",
+  // Raw host-unit summaries are operator-only internal diagnostics. The read returns evidence
+  // plus aggregates, never mutates the ledger and never grants the box agent a way to enumerate it.
+  read_run_ledger: "operator",
   // The hub-counts drift backstop (docs/db-scale-backlog Wave 2 keystone 2, slice C) — AGENT tier
   // (adminAuth only, no operatorGuard), the rank_catalogue / record_catalogue_snapshot precedent.
   // It rewrites only the DERIVED bookkeeping integers on labels/albums/artists, and only the rows

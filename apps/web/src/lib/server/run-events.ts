@@ -1,7 +1,7 @@
 // THE RUN LEDGER's server half — the normalization + the idempotent append into
 // `run_events`, the one table of the SECOND database (`fluncle-telemetry`).
 //
-// Three seams live here, mirroring `costs.ts`:
+// Four seams live here, mirroring `costs.ts`:
 //
 //   - `normalizeRunSummary(summaryRaw)` — the pure parse/validate/derive step. It is
 //     where every rule the design earned actually lives, and it is pure so a test can
@@ -9,6 +9,8 @@
 //   - `runEventId({ startedAt, unit })` — the deterministic idempotency key.
 //   - `insertRunEvent(input)` — the idempotent APPEND
 //     (`insert … on conflict(id) do nothing`), returning what was actually written.
+//   - `readRunLedger(input)` — the operator read: filtered raw rows plus cheap
+//     whole-window per-unit aggregates, keyset-paginated without inventing verdicts.
 //
 // WHAT THE RULES ARE FOR — each one was earned by a measured defect, not imagined:
 //
@@ -53,7 +55,13 @@
 // precisely why delivery does not have to be guaranteed — and it is also why the set of
 // things that produce a 400 is kept as small as the honesty rules allow.
 
-import { type RunEventInput } from "@fluncle/contracts/orpc";
+import {
+  type ReadRunLedgerInput,
+  type RunEventInput,
+  type RunLedgerPage,
+  type RunLedgerRow,
+  type RunLedgerUnitRollup,
+} from "@fluncle/contracts/orpc";
 import { cronSurfaces } from "@fluncle/registry";
 import { getTelemetryDb } from "./db";
 import { logEvent } from "./log";
@@ -730,5 +738,297 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
     runOk,
     selfAssertedOk: summary.selfAssertedOk,
     stored: true,
+  };
+}
+
+type RunLedgerCursor = {
+  id: string;
+  occurredAt: string;
+};
+
+type RunLedgerDbRow = {
+  checked: unknown;
+  created_at: unknown;
+  ended_at: unknown;
+  errors: unknown;
+  exit_code: unknown;
+  expected_interval_ms: unknown;
+  gate_state: unknown;
+  id: unknown;
+  missing_fields: unknown;
+  occurred_at: unknown;
+  ok: unknown;
+  produced: unknown;
+  queue_depth: unknown;
+  run_duration_ms: unknown;
+  self_asserted_ok: unknown;
+  summary_raw: unknown;
+  summary_status: unknown;
+  unit: unknown;
+  unrecognised_fields: unknown;
+  vendor_calls: unknown;
+};
+
+type RunLedgerRollupDbRow = {
+  blind_count: unknown;
+  failed_count: unknown;
+  last_occurred_at: unknown;
+  liar_count: unknown;
+  run_count: unknown;
+  unit: unknown;
+};
+
+function ledgerText(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`run_events.${field} was not text`);
+  }
+
+  return value;
+}
+
+function ledgerNumber(value: unknown, field: string): number {
+  if (typeof value !== "number" && typeof value !== "bigint") {
+    throw new Error(`run_events.${field} was not numeric`);
+  }
+
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    throw new Error(`run_events.${field} was not numeric`);
+  }
+
+  return number;
+}
+
+function nullableLedgerNumber(value: unknown, field: string): number | null {
+  return value === null ? null : ledgerNumber(value, field);
+}
+
+function nullableLedgerBoolean(value: unknown, field: string): boolean | null {
+  if (value === null) {
+    return null;
+  }
+
+  const number = ledgerNumber(value, field);
+
+  if (number !== 0 && number !== 1) {
+    throw new Error(`run_events.${field} was not 0 or 1`);
+  }
+
+  return number === 1;
+}
+
+function ledgerBoolean(value: unknown, field: string): boolean {
+  const boolean = nullableLedgerBoolean(value, field);
+
+  if (boolean === null) {
+    throw new Error(`run_events.${field} was null`);
+  }
+
+  return boolean;
+}
+
+function ledgerStringArray(value: unknown, field: string): string[] {
+  const text = ledgerText(value, field);
+  const parsed = JSON.parse(text) as unknown;
+
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    throw new Error(`run_events.${field} was not a JSON string array`);
+  }
+
+  return parsed;
+}
+
+function ledgerGateState(value: unknown): RunGateState | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== "string" || !GATE_STATES.has(value)) {
+    throw new Error("run_events.gate_state was not a known gate state");
+  }
+
+  return value as RunGateState;
+}
+
+function ledgerSummaryStatus(value: unknown): RunSummaryStatus {
+  if (value !== "absent" && value !== "malformed" && value !== "not_object" && value !== "parsed") {
+    throw new Error("run_events.summary_status was not a known summary status");
+  }
+
+  return value;
+}
+
+function toRunLedgerRow(row: RunLedgerDbRow): RunLedgerRow {
+  return {
+    checked: nullableLedgerNumber(row.checked, "checked"),
+    createdAt: ledgerText(row.created_at, "created_at"),
+    endedAt: ledgerText(row.ended_at, "ended_at"),
+    errors: nullableLedgerNumber(row.errors, "errors"),
+    exitCode: ledgerNumber(row.exit_code, "exit_code"),
+    expectedIntervalMs: nullableLedgerNumber(row.expected_interval_ms, "expected_interval_ms"),
+    gateState: ledgerGateState(row.gate_state),
+    id: ledgerText(row.id, "id"),
+    missingFields: ledgerStringArray(row.missing_fields, "missing_fields"),
+    occurredAt: ledgerText(row.occurred_at, "occurred_at"),
+    ok: ledgerBoolean(row.ok, "ok"),
+    produced: nullableLedgerNumber(row.produced, "produced"),
+    queueDepth: nullableLedgerNumber(row.queue_depth, "queue_depth"),
+    runDurationMs: nullableLedgerNumber(row.run_duration_ms, "run_duration_ms"),
+    selfAssertedOk: nullableLedgerBoolean(row.self_asserted_ok, "self_asserted_ok"),
+    summaryRaw: row.summary_raw === null ? null : ledgerText(row.summary_raw, "summary_raw"),
+    summaryStatus: ledgerSummaryStatus(row.summary_status),
+    unit: ledgerText(row.unit, "unit"),
+    unrecognisedFields: ledgerStringArray(row.unrecognised_fields, "unrecognised_fields"),
+    vendorCalls: nullableLedgerNumber(row.vendor_calls, "vendor_calls"),
+  };
+}
+
+function toRunLedgerRollup(row: RunLedgerRollupDbRow): RunLedgerUnitRollup {
+  return {
+    blindCount: ledgerNumber(row.blind_count, "blind_count"),
+    failedCount: ledgerNumber(row.failed_count, "failed_count"),
+    lastOccurredAt: ledgerText(row.last_occurred_at, "last_occurred_at"),
+    liarCount: ledgerNumber(row.liar_count, "liar_count"),
+    runCount: ledgerNumber(row.run_count, "run_count"),
+    unit: ledgerText(row.unit, "unit"),
+  };
+}
+
+export function encodeRunLedgerCursor(cursor: RunLedgerCursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
+function decodeRunLedgerCursor(value: string | undefined): RunLedgerCursor | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as RunLedgerCursor).id === "string" &&
+      typeof (parsed as RunLedgerCursor).occurredAt === "string"
+    ) {
+      return parsed as RunLedgerCursor;
+    }
+  } catch {
+    // Fall through to the one client-facing error below.
+  }
+
+  throw new ApiError("invalid_cursor", "Invalid run-ledger cursor", 400);
+}
+
+function normalizedRunLedgerBound(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : new Date(value).toISOString();
+}
+
+/**
+ * Read one newest-first page plus whole-window per-unit aggregates.
+ *
+ * The unit/time/derived-ok filters apply to BOTH queries. The keyset cursor applies only
+ * to the raw page, so pagination never changes the rollups. All time comparisons are
+ * against normalized ISO strings with a `T` separator; SQLite's space-shaped
+ * `datetime('now', …)` output never enters the query.
+ */
+export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedgerPage> {
+  const db = await getTelemetryDb();
+
+  if (!db) {
+    return {
+      available: false,
+      nextCursor: null,
+      rollups: [],
+      rows: [],
+      totalCount: 0,
+    };
+  }
+
+  const clauses: string[] = [];
+  const args: (number | string)[] = [];
+  const since = normalizedRunLedgerBound(input.since);
+  const until = normalizedRunLedgerBound(input.until);
+
+  if (input.unit !== undefined) {
+    clauses.push("unit = ?");
+    args.push(input.unit);
+  }
+
+  if (since !== undefined) {
+    clauses.push("occurred_at >= ?");
+    args.push(since);
+  }
+
+  if (until !== undefined) {
+    clauses.push("occurred_at <= ?");
+    args.push(until);
+  }
+
+  if (input.ok !== undefined) {
+    clauses.push("ok = ?");
+    args.push(input.ok === "true" ? 1 : 0);
+  }
+
+  const baseWhere = clauses.length === 0 ? "" : `where ${clauses.join(" and ")}`;
+  const cursor = decodeRunLedgerCursor(input.cursor);
+  const pageClauses = [...clauses];
+  const pageArgs = [...args];
+
+  if (cursor !== undefined) {
+    pageClauses.push("(occurred_at < ? or (occurred_at = ? and id < ?))");
+    pageArgs.push(cursor.occurredAt, cursor.occurredAt, cursor.id);
+  }
+
+  const pageWhere = pageClauses.length === 0 ? "" : `where ${pageClauses.join(" and ")}`;
+  pageArgs.push(input.limit + 1);
+
+  const [pageResult, rollupResult] = await Promise.all([
+    db.execute({
+      args: pageArgs,
+      sql: `select checked, created_at, ended_at, errors, exit_code,
+                   expected_interval_ms, gate_state, id, missing_fields, occurred_at,
+                   ok, produced, queue_depth, run_duration_ms, self_asserted_ok,
+                   summary_raw, summary_status, unit, unrecognised_fields, vendor_calls
+            from run_events
+            ${pageWhere}
+            order by occurred_at desc, id desc
+            limit ?`,
+    }),
+    db.execute({
+      args,
+      sql: `select unit,
+                   count(*) as run_count,
+                   max(occurred_at) as last_occurred_at,
+                   sum(case when ok = 0 then 1 else 0 end) as failed_count,
+                   sum(case when self_asserted_ok = 1 and ok = 0 then 1 else 0 end)
+                     as liar_count,
+                   sum(case when checked is null and produced is null and queue_depth is null
+                       then 1 else 0 end) as blind_count
+            from run_events
+            ${baseWhere}
+            group by unit
+            order by last_occurred_at desc, unit asc`,
+    }),
+  ]);
+
+  const allRows = (pageResult.rows as unknown as RunLedgerDbRow[]).map(toRunLedgerRow);
+  const hasMore = allRows.length > input.limit;
+  const rows = allRows.slice(0, input.limit);
+  const lastRow = rows.at(-1);
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeRunLedgerCursor({ id: lastRow.id, occurredAt: lastRow.occurredAt })
+      : null;
+  const rollups = (rollupResult.rows as unknown as RunLedgerRollupDbRow[]).map(toRunLedgerRollup);
+
+  return {
+    available: true,
+    nextCursor,
+    rollups,
+    rows,
+    totalCount: rollups.reduce((sum, rollup) => sum + rollup.runCount, 0),
   };
 }

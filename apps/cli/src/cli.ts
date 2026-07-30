@@ -41,6 +41,14 @@ type AdminQueueOptions = AdminListOptions & {
   hasObservation?: boolean;
 };
 
+type AdminTelemetryOptions = AdminListOptions & {
+  cursor?: string;
+  ok?: string;
+  since?: string;
+  unit?: string;
+  until?: string;
+};
+
 // `admin tracks requeue-analysis` — the archive-wide BPM/key provenance repair. Dry-run
 // unless `--apply`; `--limit` caps the archive walk (absent ⇒ the whole archive).
 type AdminRequeueAnalysisOptions = {
@@ -696,6 +704,31 @@ function addAdminCommands(program: Command): void {
     .action(async (options: JsonOptions) => {
       const { attentionQueueCommand } = await import("./commands/admin-attention");
       await runAdminAttention(options, attentionQueueCommand);
+    });
+
+  // `read_run_ledger` → `admin telemetry read` (Convention B: group noun-verb).
+  // Raw run rows plus per-unit rollups, operator-only.
+  const adminTelemetry = configureCommand(
+    admin.command("telemetry").description("Run-ledger telemetry"),
+  );
+
+  adminTelemetry.action(() => {
+    adminTelemetry.outputHelp();
+  });
+
+  adminTelemetry
+    .command("read")
+    .description("Run-ledger rows plus per-unit rollups")
+    .option("--unit <unit>", "Only this systemd unit")
+    .option("--since <iso>", "Only runs at or after this occurred-at instant")
+    .option("--until <iso>", "Only runs at or before this occurred-at instant")
+    .option("--ok <true|false>", "Filter by the Worker's derived run verdict")
+    .option("--limit <limit>", "Rows to show (1-100)", "50")
+    .option("--cursor <cursor>", "Opaque cursor from the previous page")
+    .option("--json", "Print the lossless 20-column rows as JSON", false)
+    .action(async (options: AdminTelemetryOptions) => {
+      const { telemetryCommand } = await import("./commands/admin-telemetry");
+      await runAdminTelemetry(options, telemetryCommand);
     });
 
   // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
@@ -6494,6 +6527,42 @@ function parseListLimit(value: string | undefined): number {
   return limit;
 }
 
+function parseTelemetryLimit(value: string | undefined): number {
+  const limit = Number.parseInt(value ?? "50", 10);
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("Limit must be an integer between 1 and 100");
+  }
+
+  return limit;
+}
+
+function parseTelemetryOk(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value !== "true" && value !== "false") {
+    throw new Error("--ok must be true or false");
+  }
+
+  return value === "true";
+}
+
+function parseTelemetryTimestamp(value: string | undefined, flag: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const timestamp = new Date(value);
+
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new Error(`${flag} must be an ISO-8601 timestamp`);
+  }
+
+  return timestamp.toISOString();
+}
+
 // The 1-based `--page` cursor for the catalogue-index commands. Absent ⇒ page 1;
 // the server clamps a page past the end (an empty page renders its own line).
 function parsePage(value: string | undefined): number {
@@ -6596,6 +6665,35 @@ async function runAdminAttention(
 
   const { attentionQueueLines } = await import("./commands/admin-attention");
   console.log(attentionQueueLines(queue).join("\n"));
+}
+
+async function runAdminTelemetry(
+  options: AdminTelemetryOptions,
+  telemetryCommand: typeof import("./commands/admin-telemetry").telemetryCommand,
+): Promise<void> {
+  const since = parseTelemetryTimestamp(options.since, "--since");
+  const until = parseTelemetryTimestamp(options.until, "--until");
+
+  if (since !== undefined && until !== undefined && since > until) {
+    throw new Error("--since must be before or equal to --until");
+  }
+
+  const page = await telemetryCommand({
+    cursor: options.cursor,
+    limit: parseTelemetryLimit(options.limit),
+    ok: parseTelemetryOk(options.ok),
+    since,
+    unit: options.unit,
+    until,
+  });
+
+  if (options.json) {
+    printJson({ ok: true, ...page });
+    return;
+  }
+
+  const { telemetryLines } = await import("./commands/admin-telemetry");
+  console.log(telemetryLines(page).join("\n"));
 }
 
 async function runAdminQueue(
@@ -7270,6 +7368,7 @@ const stringOptions = new Set([
   "--min-phrase-words",
   "--model",
   "--note",
+  "--ok",
   "--order",
   "--page",
   "--parent-id",
@@ -7293,6 +7392,7 @@ const stringOptions = new Set([
   "--script-file",
   "--seed",
   "--seed-state",
+  "--since",
   "--soundcloud-url",
   "--source",
   "--status",
@@ -7301,6 +7401,8 @@ const stringOptions = new Set([
   "--token",
   "--tracklist-file",
   "--tracks",
+  "--unit",
+  "--until",
   "--url",
   "--verdict",
   "--verdict-file",

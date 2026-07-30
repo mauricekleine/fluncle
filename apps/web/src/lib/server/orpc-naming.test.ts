@@ -40,6 +40,11 @@ const APPROVED_VERBS = new Set<string>([
   "get",
   "list",
   "publish",
+  // `read` (return a composite diagnostic view rather than enumerate one entity kind) — added
+  // deliberately with `read_run_ledger`, whose response pairs raw run rows with whole-window
+  // per-unit aggregates. `list` would name only the paged rows and hide the second half of the
+  // operation; `get` would imply one ledger entity. The verb says the resource is evidence.
+  "read",
   "search",
   "submit",
   "subscribe",

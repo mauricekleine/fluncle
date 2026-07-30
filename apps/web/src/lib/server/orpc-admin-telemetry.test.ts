@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // `record_run` driven end-to-end through `handleOrpc` against the SERVED path
 // `/api/v1/admin/telemetry/runs`, so the REAL admin auth spine runs and only the telemetry
@@ -41,6 +41,50 @@ beforeEach(() => {
       rows.push(query.args ?? []);
 
       return Promise.resolve({ rowsAffected: 1 });
+    }
+
+    if (query.sql.includes("count(*) as run_count")) {
+      return Promise.resolve({
+        rows: [
+          {
+            blind_count: 1,
+            failed_count: 1,
+            last_occurred_at: "2026-07-30T19:00:00.000Z",
+            liar_count: 1,
+            run_count: 1,
+            unit: "fluncle-sentry-triage",
+          },
+        ],
+      });
+    }
+
+    if (query.sql.includes("from run_events")) {
+      return Promise.resolve({
+        rows: [
+          {
+            checked: null,
+            created_at: "2026-07-30T19:00:00.100Z",
+            ended_at: "2026-07-30T19:00:05.000Z",
+            errors: 2,
+            exit_code: 0,
+            expected_interval_ms: null,
+            gate_state: null,
+            id: "fluncle-sentry-triage:2026-07-30T19:00:00.000Z",
+            missing_fields: '["checked","expected_interval_ms","produced","queue_depth"]',
+            occurred_at: "2026-07-30T19:00:00.000Z",
+            ok: 0,
+            produced: null,
+            queue_depth: null,
+            run_duration_ms: 5000,
+            self_asserted_ok: 1,
+            summary_raw: '{"errors":2,"ok":true}',
+            summary_status: "parsed",
+            unit: "fluncle-sentry-triage",
+            unrecognised_fields: "[]",
+            vendor_calls: null,
+          },
+        ],
+      });
     }
 
     return Promise.resolve({ rows: [] });
@@ -136,5 +180,88 @@ describe(`record_run — POST ${RUN_EVENT_PATH}`, () => {
 
     expect(response?.status).toBe(400);
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
+  it("returns rows plus whole-window aggregates to the operator", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(
+        `${RUN_EVENT_PATH}?unit=fluncle-sentry-triage&since=2026-07-30T18%3A00%3A00.000Z&ok=false&limit=1`,
+        "GET",
+        OPERATOR_TOKEN,
+      ),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      available: true,
+      nextCursor: null,
+      rollups: [
+        {
+          blindCount: 1,
+          failedCount: 1,
+          lastOccurredAt: "2026-07-30T19:00:00.000Z",
+          liarCount: 1,
+          runCount: 1,
+          unit: "fluncle-sentry-triage",
+        },
+      ],
+      rows: [
+        {
+          checked: null,
+          createdAt: "2026-07-30T19:00:00.100Z",
+          endedAt: "2026-07-30T19:00:05.000Z",
+          errors: 2,
+          exitCode: 0,
+          expectedIntervalMs: null,
+          gateState: null,
+          id: "fluncle-sentry-triage:2026-07-30T19:00:00.000Z",
+          missingFields: ["checked", "expected_interval_ms", "produced", "queue_depth"],
+          occurredAt: "2026-07-30T19:00:00.000Z",
+          ok: false,
+          produced: null,
+          queueDepth: null,
+          runDurationMs: 5000,
+          selfAssertedOk: true,
+          summaryRaw: '{"errors":2,"ok":true}',
+          summaryStatus: "parsed",
+          unit: "fluncle-sentry-triage",
+          unrecognisedFields: [],
+          vendorCalls: null,
+        },
+      ],
+      totalCount: 1,
+    });
+
+    const selectCalls = execute.mock.calls
+      .map(([query]) => query as { args?: unknown[]; sql: string })
+      .filter((query) => query.sql.includes("from run_events"));
+
+    expect(selectCalls).toHaveLength(2);
+    expect(selectCalls.every((query) => query.sql.includes("occurred_at >= ?"))).toBe(true);
+    expect(selectCalls.every((query) => query.sql.includes("ok = ?"))).toBe(true);
+    expect(selectCalls.every((query) => query.args?.includes("2026-07-30T18:00:00.000Z"))).toBe(
+      true,
+    );
+  });
+
+  it("403s the box agent and 401s an anonymous reader", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const agentResponse = await handleOrpc(req(RUN_EVENT_PATH, "GET", AGENT_TOKEN));
+    const anonymousResponse = await handleOrpc(req(RUN_EVENT_PATH, "GET", undefined));
+
+    expect(agentResponse?.status).toBe(403);
+    expect(anonymousResponse?.status).toBe(401);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("400s an invalid derived-ok filter before querying the ledger", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req(`${RUN_EVENT_PATH}?ok=yes`, "GET", OPERATOR_TOKEN));
+
+    expect(response?.status).toBe(400);
+    expect(execute).not.toHaveBeenCalled();
   });
 });
