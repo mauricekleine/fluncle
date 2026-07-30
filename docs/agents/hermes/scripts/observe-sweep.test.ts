@@ -11,8 +11,91 @@
 // apps/web/src/lib/server/observation-echo.test.ts). The registry-default lockstep is
 // pinned separately by prompt-drift.test.ts.
 
-import { describe, expect, test } from "bun:test";
-import { buildAuthoringPrompt, type Neighbor, readEchoedMove } from "./observe-sweep";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readAttemptLedger, selectWork } from "./attempt-ledger";
+
+// ── THE STUB RIG ───────────────────────────────────────────────────────────────────────
+//
+// On disk and pointed at by env BEFORE the sweep module is evaluated: FLUNCLE_BIN / CLAUDE_BIN /
+// OBSERVE_STATE_DIR are read at module load, which is why the sweep is imported dynamically below.
+
+const RIG = mkdtempSync(join(tmpdir(), "observe-sweep-test-"));
+const STATE_DIR = join(RIG, "state");
+const CONTROL = join(RIG, "control");
+const FLUNCLE_STUB = join(RIG, "fluncle");
+const CLAUDE_STUB = join(RIG, "claude");
+
+mkdirSync(CONTROL, { recursive: true });
+
+writeFileSync(
+  CLAUDE_STUB,
+  `#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf 'x\\n' >> "${CONTROL}/authorings"
+if [ "$(cat "${CONTROL}/claude-verdict" 2>/dev/null || printf 'up')" = "down" ]; then
+  printf 'API Error: 529 overloaded_error\\n' >&2
+  exit 1
+fi
+printf '{"result":"Future Signal built this one out of patience, fam.","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":20},"modelUsage":{}}'
+`,
+  { mode: 0o755 },
+);
+
+// `stores` records only the deliveries the Worker ACCEPTED — i.e. the reads that were actually
+// rendered. It must stay EMPTY for a finding whose drafts the gate refused.
+writeFileSync(
+  FLUNCLE_STUB,
+  `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "tracks" ] && [ "\${2:-}" = "get" ]; then
+  printf '{"track":{"artists":["Future Signal"],"title":"Fractals","logId":"011.5.9D","trackId":"t-1"}}'
+  exit 0
+fi
+if [ "\${1:-}" = "admin" ] && [ "\${3:-}" = "context" ]; then
+  printf '{"contextNote":"A 2016 single."}'
+  exit 0
+fi
+verdict="$(cat "${CONTROL}/verdict" 2>/dev/null || printf 'pass')"
+if [ "$verdict" = "voice" ]; then
+  printf 'error: The observation script fails the voice gate: banned identity word "signal" [voice_gate 422]\\n' >&2
+  exit 1
+fi
+if [ "$verdict" = "echo" ]; then
+  printf 'error: observation_echoes_neighbours: it lifts "out of patience fam" straight from 012.1.0A [422]\\n' >&2
+  exit 1
+fi
+printf '%s\\n' "\${4:-?}" >> "${CONTROL}/stores"
+printf '{"ok":true,"logId":"011.5.9D"}'
+`,
+  { mode: 0o755 },
+);
+
+chmodSync(CLAUDE_STUB, 0o755);
+chmodSync(FLUNCLE_STUB, 0o755);
+
+process.env["CLAUDE_BIN"] = CLAUDE_STUB;
+process.env["FLUNCLE_BIN"] = FLUNCLE_STUB;
+process.env["OBSERVE_STATE_DIR"] = STATE_DIR;
+// No agent token, so the prompt fetch AND the neighbourhood read both fall back without a network.
+delete process.env["FLUNCLE_API_TOKEN"];
+
+const {
+  buildAuthoringPrompt,
+  MAX_OBSERVE_ATTEMPTS,
+  observeKey,
+  observeOne,
+  readEchoedMove,
+}: typeof import("./observe-sweep") = await import("./observe-sweep");
+
+type Neighbor = import("./observe-sweep").Neighbor;
+
+afterAll(() => {
+  rmSync(RIG, { force: true, recursive: true });
+});
 
 const FINDING = {
   artists: ["Calibre"],
@@ -95,5 +178,128 @@ describe("readEchoedMove", () => {
 
   test("returns undefined for an overlap-only rejection (no lifted phrase to name)", () => {
     expect(readEchoedMove("it reuses 42% of 012.1.0A's words")).toBeUndefined();
+  });
+});
+
+// ── THE ATTEMPT BUDGET, END TO END ─────────────────────────────────────────────────────
+//
+// `observeOne` driven against the stub binaries, with the ledger on disk. Each `tick()` is a
+// separate call that reads the ledger back off disk — what a real cron tick is.
+//
+// The bug: a voice-gate rejection left the finding queued with nothing counting the tries, so
+// "retry" meant "forever", and the rejection could be UNSATISFIABLE because the scan read the
+// finding's own artist name. THE NAME EXEMPTION fixes that case; this bounds every other one.
+
+function verdict(value: "pass" | "voice" | "echo"): void {
+  writeFileSync(join(CONTROL, "verdict"), value, "utf8");
+}
+
+function claudeVerdict(value: "up" | "down"): void {
+  writeFileSync(join(CONTROL, "claude-verdict"), value, "utf8");
+}
+
+function readLines(file: string): string[] {
+  try {
+    return readFileSync(join(CONTROL, file), "utf8").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+const authorings = () => readLines("authorings").length;
+/** The reads that were actually RENDERED — must stay empty for a refused finding. */
+const stores = () => readLines("stores");
+const ledgerPath = () => join(STATE_DIR, "attempts");
+
+async function tick(id: string) {
+  const ledger = readAttemptLedger(ledgerPath());
+
+  return observeOne({ trackId: id }, { ledger, ledgerPath: ledgerPath() });
+}
+
+describe("observeOne (the bounded re-author, across ticks)", () => {
+  beforeEach(() => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    claudeVerdict("up");
+  });
+
+  test("a gate-PASSING finding is authored once and leaves no budget behind", async () => {
+    verdict("pass");
+
+    expect((await tick("t-1")).outcome).toBe("rendered");
+    expect(authorings()).toBe(1);
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+  });
+
+  test("a gate-REFUSING finding is authored for at most three passes, then never again", async () => {
+    verdict("voice");
+
+    for (let i = 1; i < MAX_OBSERVE_ATTEMPTS; i += 1) {
+      expect((await tick("t-1")).outcome).toBe("gateSkipped");
+    }
+
+    expect((await tick("t-1")).outcome).toBe("exhausted");
+    expect(authorings()).toBe(MAX_OBSERVE_ATTEMPTS);
+
+    for (let i = 0; i < 5; i += 1) {
+      expect((await tick("t-1")).outcome).toBe("exhausted");
+    }
+
+    expect(authorings()).toBe(MAX_OBSERVE_ATTEMPTS);
+  });
+
+  // THE OPERATOR'S RULING (2026-07-30): no final-attempt bypass. An observation is optional
+  // editorial, and rendering gate-failed copy would also spend Cartesia credits to publish it.
+  test("NOTHING is ever rendered for a finding whose drafts the gate refused", async () => {
+    verdict("voice");
+
+    for (let i = 0; i < MAX_OBSERVE_ATTEMPTS + 3; i += 1) {
+      await tick("t-1");
+    }
+
+    expect(stores()).toEqual([]);
+  });
+
+  test("an ECHO refusal spends the budget too", async () => {
+    verdict("echo");
+
+    expect((await tick("t-1")).outcome).toBe("echoSkipped");
+    expect(readAttemptLedger(ledgerPath()).get("t-1")?.attempts).toBe(1);
+  });
+
+  test("a transport/model failure never spends an attempt", async () => {
+    verdict("pass");
+    claudeVerdict("down");
+
+    for (let i = 0; i < 4; i += 1) {
+      expect((await tick("t-1")).outcome).toBe("skipped");
+    }
+
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+
+    claudeVerdict("up");
+    expect((await tick("t-1")).outcome).toBe("rendered");
+  });
+
+  test("an exhausted finding does not block the cap-1 queue behind it", async () => {
+    verdict("voice");
+
+    for (let i = 0; i < MAX_OBSERVE_ATTEMPTS; i += 1) {
+      await tick("t-dead");
+    }
+
+    const ledger = readAttemptLedger(ledgerPath());
+    const queue = [{ trackId: "t-dead" }, { trackId: "t-live" }];
+    const { exhausted, work } = selectWork(queue, ledger, observeKey, 1, MAX_OBSERVE_ATTEMPTS);
+
+    expect(exhausted.map((row) => row.trackId)).toEqual(["t-dead"]);
+    expect(work.map((row) => row.trackId)).toEqual(["t-live"]);
+
+    verdict("pass");
+    const result = await observeOne(work[0] ?? {}, { ledger, ledgerPath: ledgerPath() });
+
+    expect(result.outcome).toBe("rendered");
   });
 });

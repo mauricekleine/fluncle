@@ -49,11 +49,23 @@ Use `measure-artifact-diversity.ts` to inspect openers, closers, opening-word di
 
 ## The voice gate (a hard ship requirement)
 
-The script is a live Fluncle voice surface, **heard** in a synthetic voice — a wrong word can't be skimmed past, so it costs more heard than read. Three layers:
+The script is a live Fluncle voice surface, **heard** in a synthetic voice — a wrong word can't be skimmed past, so it costs more heard than read. Four layers:
 
 1. **Author through `copywriting-fluncle`** in the recovered-audio register. Lead with the **bodily reaction** (the Oof Test), turn to the crew (the Selector's Rule), stay dry (no exclamation marks), say "I" never "we"-as-company.
 2. **The mechanical scan** (the Worker re-runs it, defence in depth): **zero** banned identity words (`signal`, `transmission`, and the rest of the VOICE.md §3 list), zero `!`, no "we"-as-company. A violation hard-fails the render before any money is spent.
-3. **The North Star sign-off (human):** _"would the uncle say this out loud over a tune?"_ — judged on the **rendered audio** (delivery is half the voice on a spoken surface). The first batch is heard and signed off before the radio surface amplifies it.
+3. **The name exemption** — the gate polices what Fluncle WROTE, not the names he was given. Before the scan runs, every name the artifact is about is masked out of the text (`maskSubjectNames` in `observation.ts`); everything around it is scanned exactly as before. Without it the gate is UNSATISFIABLE rather than strict: the read is ABOUT a record and the scan read that record's own artist and title, so a finding by "Future Signal" could never be voiced, however many times it was rewritten — at the head of a cap-1 oldest-first queue. The masking is the full name, word-bounded, so a partial reference ("Signal" for "Future Signal") still trips the ban and a short name ("Sign") can never amnesty a longer word it sits inside. The one accepted cost: when a subject's whole name IS a banned word (`/artist/signal`, `/album/anomaly`), that word is amnestied in its prose entirely — the alternative is that those subjects cannot be written about at all.
+4. **The North Star sign-off (human):** _"would the uncle say this out loud over a tune?"_ — judged on the **rendered audio** (delivery is half the voice on a spoken surface). The first batch is heard and signed off before the radio surface amplifies it.
+
+## The attempt budget (the end of the retry-forever loop)
+
+A gate rejection used to be a plain skip that left the item queued with **nothing counting the tries**, so "retry" meant "forever". The queue is `BATCH_CAP=1` over an oldest-first worklist, so an unvoiceable finding did not merely waste its own tokens, it blocked every finding behind it. The sibling of this bug, in the entity-bio crons, re-authored three slugs ~90 times each over two days.
+
+So the sweep now keeps a per-item **attempt ledger** (`docs/agents/hermes/scripts/attempt-ledger.ts`, a flat TSV under `$HOME/.observe-sweep/attempts` that survives a tick, a container swap, and a rebake). A finding gets **three refused passes, ever**, and then this sweep never authors for it again.
+
+- **Only a REFUSAL spends it.** A voice/length rejection or an echo rejection is deterministic evidence that _this draft_ was bad. A `claude -p` that exits non-zero, returns `is_error`, or returns nothing is no evidence about the item at all — there is no draft — so it costs nothing, and the `/status` sweep-strain detector watches it instead.
+- **NO final-attempt bypass** (the operator's ruling, 2026-07-30). The bio sweep stores its third draft even when the gate refused it, because an empty bio slot leaves an entity page half-built. An observation is optional editorial and an unvoiced finding is a perfectly good state — and rendering a refused draft would spend Cartesia credits to publish it — so gate-failed copy is **never** published to close a queue. An exhausted item is simply skipped, counted in the tick's `exhausted` summary field, and reported once in the sweep's stderr.
+- **An exhausted item never blocks the queue.** Exhausted rows are filtered out **before** the `BATCH_CAP` is applied, so a spent budget only ever costs the item that spent it — otherwise the fix would trade an unbounded retry loop for a permanent stall, which is worse.
+- **A landed artifact clears the budget**, so a re-queued item starts fresh; deleting an item's line from the ledger is how the operator re-arms it after the gate or the prompt changes.
 
 ## Synced captions (the `observation_alignment_json` column)
 

@@ -10,6 +10,10 @@ import { gateNoteEcho, gateNoteText, scoreNoteEcho } from "./note";
 
 const GOOD = "Pure rolling menace, half-step and patient. That is why it is here.";
 
+// The exempt set for a finding whose artist and title carry nothing banned — so these cases
+// exercise the gate exactly as they did before the name exemption existed.
+const NO_NAMES: readonly string[] = [];
+
 // gateNoteText throws an ApiError carrying the wire `code` on `.code` (the human
 // message is separate). Capture the code so the assertions read against the same
 // codes the handler reproduces.
@@ -25,62 +29,162 @@ function codeOf(run: () => unknown): string {
 
 describe("gateNoteText", () => {
   it("passes a clean, dry editorial note", () => {
-    expect(gateNoteText(GOOD)).toBe(GOOD);
+    expect(gateNoteText(GOOD, NO_NAMES)).toBe(GOOD);
   });
 
   it("trims surrounding whitespace", () => {
-    expect(gateNoteText(`  ${GOOD}  `)).toBe(GOOD);
+    expect(gateNoteText(`  ${GOOD}  `, NO_NAMES)).toBe(GOOD);
   });
 
   it("throws no_note for a non-string", () => {
-    expect(codeOf(() => gateNoteText(undefined))).toBe("no_note");
-    expect(codeOf(() => gateNoteText(42))).toBe("no_note");
+    expect(codeOf(() => gateNoteText(undefined, NO_NAMES))).toBe("no_note");
+    expect(codeOf(() => gateNoteText(42, NO_NAMES))).toBe("no_note");
   });
 
   it("throws no_note for an empty / whitespace note", () => {
-    expect(codeOf(() => gateNoteText(""))).toBe("no_note");
-    expect(codeOf(() => gateNoteText("   "))).toBe("no_note");
+    expect(codeOf(() => gateNoteText("", NO_NAMES))).toBe("no_note");
+    expect(codeOf(() => gateNoteText("   ", NO_NAMES))).toBe("no_note");
   });
 
   it("throws note_too_short below the floor", () => {
-    expect(codeOf(() => gateNoteText("Banger."))).toBe("note_too_short");
+    expect(codeOf(() => gateNoteText("Banger.", NO_NAMES))).toBe("note_too_short");
   });
 
   it("throws note_too_long over the public budget", () => {
-    expect(codeOf(() => gateNoteText("a ".repeat(200)))).toBe("note_too_long");
+    expect(codeOf(() => gateNoteText("a ".repeat(200), NO_NAMES))).toBe("note_too_long");
   });
 
   it("rejects a banned identity word (voice_gate)", () => {
     expect(
-      codeOf(() => gateNoteText("A clean transmission of rolling menace. That is why it is here.")),
+      codeOf(() =>
+        gateNoteText("A clean transmission of rolling menace. That is why it is here.", NO_NAMES),
+      ),
     ).toBe("voice_gate");
   });
 
   it("rejects earthly geography — the cosmos replaces the map (voice_gate)", () => {
     expect(
       codeOf(() =>
-        gateNoteText("A proper British roller, all menace and patience. That is why it is here."),
+        gateNoteText(
+          "A proper British roller, all menace and patience. That is why it is here.",
+          NO_NAMES,
+        ),
       ),
     ).toBe("voice_gate");
   });
 
   it("rejects an exclamation mark — the Dry Rule (voice_gate)", () => {
-    expect(codeOf(() => gateNoteText("Pure rolling menace, half-step and patient. Banger!"))).toBe(
-      "voice_gate",
-    );
+    expect(
+      codeOf(() => gateNoteText("Pure rolling menace, half-step and patient. Banger!", NO_NAMES)),
+    ).toBe("voice_gate");
   });
 
   it('rejects "we"-as-company (voice_gate)', () => {
     expect(
       codeOf(() =>
-        gateNoteText("We logged this one because the half-step menace is undeniable here."),
+        gateNoteText(
+          "We logged this one because the half-step menace is undeniable here.",
+          NO_NAMES,
+        ),
       ),
     ).toBe("voice_gate");
   });
 
   it("does not false-positive on 'signature' (whole-word match)", () => {
     const note = "Pure Calibre, the Signature sound, patient and rolling all the way down.";
-    expect(gateNoteText(note)).toBe(note);
+    expect(gateNoteText(note, NO_NAMES)).toBe(note);
+  });
+});
+
+// ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
+//
+// The gate used to scan the finding's OWN artist and title along with everything else, while the
+// authoring prompt told the model that "naming the artist OR the title is fine". For a finding by
+// an artist called "Future Signal" those two rules cannot both hold: the note names the artist,
+// the scan sees "signal", and NO rewrite can ever clear it. That is an unsatisfiable gate, not a
+// strict one, and it sits at the head of a cap-1 oldest-first queue where it blocks every finding
+// behind it. The exemption masks the subject's names before the scan and nothing else.
+
+describe("gateNoteText — the name exemption", () => {
+  const FUTURE_SIGNAL = ["Future Signal", "Fractals"];
+
+  it("lets a note NAME an artist whose name carries a banned word", () => {
+    const note = "Future Signal at their most patient, and the break still lands late enough.";
+
+    // Before the exemption this threw voice_gate on "signal" and could never be rewritten past it.
+    expect(gateNoteText(note, FUTURE_SIGNAL)).toBe(note);
+  });
+
+  it("lets a note NAME a title whose name carries a banned word", () => {
+    const note = "Anomaly Detected is the one that stuck; the drums arrive already sure of it.";
+
+    expect(gateNoteText(note, ["Rockwell", "Anomaly Detected"])).toBe(note);
+  });
+
+  // The masking must not become a hole. Everything OUTSIDE the name is still Fluncle's prose.
+  it("STILL rejects the same banned word used generically in the body", () => {
+    expect(
+      codeOf(() =>
+        gateNoteText(
+          "Future Signal at their most patient, and the signal underneath never lets up.",
+          FUTURE_SIGNAL,
+        ),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("STILL rejects every other ban with the name exempt (geography, the Dry Rule, 'we')", () => {
+    expect(
+      codeOf(() =>
+        gateNoteText("Future Signal doing what British rollers do, patient all the way.", [
+          "Future Signal",
+        ]),
+      ),
+    ).toBe("voice_gate");
+    expect(
+      codeOf(() =>
+        gateNoteText("Future Signal at their most patient and it still knocks me sideways!", [
+          "Future Signal",
+        ]),
+      ),
+    ).toBe("voice_gate");
+    expect(
+      codeOf(() =>
+        gateNoteText("We keep Future Signal close because the break lands late every time.", [
+          "Future Signal",
+        ]),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("rejects a PARTIAL reference — the exemption is the FULL name, not the word in it", () => {
+    // Conservative on purpose: the rewrite can simply use the whole name.
+    expect(
+      codeOf(() =>
+        gateNoteText("Signal at their most patient, and the break still lands late enough.", [
+          "Future Signal",
+        ]),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("does not let a SHORT name amnesty a longer banned word it sits inside", () => {
+    // The word-boundary rule: an artist called "Sign" must not mask the middle out of "signal".
+    expect(
+      codeOf(() =>
+        gateNoteText("Sign made this, and the signal underneath never lets up all the way.", [
+          "Sign",
+        ]),
+      ),
+    ).toBe("voice_gate");
+  });
+
+  it("measures the LENGTH bounds on the whole note, name included", () => {
+    // The exemption is about what Fluncle is judged for SAYING; a long artist name still spends
+    // the public 280-char budget like any other word.
+    expect(codeOf(() => gateNoteText(`${"a ".repeat(200)}Future Signal`, FUTURE_SIGNAL))).toBe(
+      "note_too_long",
+    );
   });
 });
 

@@ -10,8 +10,83 @@
 // for real by the Worker's title/body gates (logbook.ts + logbook-echo.ts, their own tests
 // in apps/web/src/lib/server/logbook.server.test.ts).
 
-import { describe, expect, test } from "bun:test";
-import { buildAuthoringPrompt, readEchoedMove, type Spent } from "./logbook-sweep";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { readAttemptLedger, selectWork } from "./attempt-ledger";
+
+// ── THE STUB RIG ───────────────────────────────────────────────────────────────────────
+//
+// On disk and pointed at by env BEFORE the sweep module is evaluated: FLUNCLE_BIN / CLAUDE_BIN /
+// LOGBOOK_STATE_DIR are read at module load, which is why the sweep is imported dynamically below.
+
+const RIG = mkdtempSync(join(tmpdir(), "logbook-sweep-test-"));
+const STATE_DIR = join(RIG, "state");
+const CONTROL = join(RIG, "control");
+const FLUNCLE_STUB = join(RIG, "fluncle");
+const CLAUDE_STUB = join(RIG, "claude");
+
+mkdirSync(CONTROL, { recursive: true });
+
+writeFileSync(
+  CLAUDE_STUB,
+  `#!/usr/bin/env bash
+set -euo pipefail
+cat > /dev/null
+printf 'x\\n' >> "${CONTROL}/authorings"
+if [ "$(cat "${CONTROL}/claude-verdict" 2>/dev/null || printf 'up')" = "down" ]; then
+  printf 'API Error: 529 overloaded_error\\n' >&2
+  exit 1
+fi
+printf '{"result":"TITLE: Future Signal, twice over\\\\n\\\\nThe day opened patient and stayed that way."}'
+`,
+  { mode: 0o755 },
+);
+
+// `stores` records only the entries the Worker ACCEPTED. It must stay EMPTY for a day whose
+// drafts the gates refused.
+writeFileSync(
+  FLUNCLE_STUB,
+  `#!/usr/bin/env bash
+set -euo pipefail
+verdict="$(cat "${CONTROL}/verdict" 2>/dev/null || printf 'pass')"
+if [ "$verdict" = "voice" ]; then
+  printf 'error: The body fails the voice gate: banned identity word "signal" [voice_gate 422]\\n' >&2
+  exit 1
+fi
+if [ "$verdict" = "echo" ]; then
+  printf 'error: body_echoes_logbook: it lifts "the day opened patient and" straight from sector 12 [422]\\n' >&2
+  exit 1
+fi
+printf '%s\\n' "\${4:-?}" >> "${CONTROL}/stores"
+printf '{"ok":true}'
+`,
+  { mode: 0o755 },
+);
+
+chmodSync(CLAUDE_STUB, 0o755);
+chmodSync(FLUNCLE_STUB, 0o755);
+
+process.env["CLAUDE_BIN"] = CLAUDE_STUB;
+process.env["FLUNCLE_BIN"] = FLUNCLE_STUB;
+process.env["LOGBOOK_STATE_DIR"] = STATE_DIR;
+// No agent token, so `resolveSweepPrompt` falls back to the baked builder and reaches no network.
+delete process.env["FLUNCLE_API_TOKEN"];
+
+const {
+  authorOne,
+  buildAuthoringPrompt,
+  logbookKey,
+  MAX_LOGBOOK_ATTEMPTS,
+  readEchoedMove,
+}: typeof import("./logbook-sweep") = await import("./logbook-sweep");
+
+type Spent = import("./logbook-sweep").Spent;
+
+afterAll(() => {
+  rmSync(RIG, { force: true, recursive: true });
+});
 
 const GAP = {
   date: "2026-07-05",
@@ -103,5 +178,140 @@ describe("readEchoedMove", () => {
     const message = "body_echoes_logbook: it reuses 42% of sector 12's words";
 
     expect(readEchoedMove(message)).toBeUndefined();
+  });
+});
+
+// ── THE ATTEMPT BUDGET, END TO END ─────────────────────────────────────────────────────
+//
+// `authorOne` driven against the stub binaries, with the ledger on disk. Each `tick()` is a
+// separate call that reads the ledger back off disk — what a real cron tick is.
+//
+// This sweep's queue is the worst of the three: the gap list is OLDEST FIRST at BATCH_CAP=1, so one
+// unwritable day stopped the logbook backfilling ANYTHING newer, forever. And the day could be
+// genuinely unwritable: the sweep hands the author each finding's artist and title as its material
+// while the gate scanned those same names. THE NAME EXEMPTION fixes that; this bounds the rest.
+
+function verdict(value: "pass" | "voice" | "echo"): void {
+  writeFileSync(join(CONTROL, "verdict"), value, "utf8");
+}
+
+function claudeVerdict(value: "up" | "down"): void {
+  writeFileSync(join(CONTROL, "claude-verdict"), value, "utf8");
+}
+
+function readLines(file: string): string[] {
+  try {
+    return readFileSync(join(CONTROL, file), "utf8").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+const authorings = () => readLines("authorings").length;
+/** The entries that were actually STORED — must stay empty for a refused day. */
+const stores = () => readLines("stores");
+const ledgerPath = () => join(STATE_DIR, "attempts");
+
+function gapFor(sector: number) {
+  return {
+    date: "2026-07-05",
+    findings: [
+      { artists: ["Future Signal"], logId: "036.7.2I", posterUrl: "x", title: "Fractals" },
+    ],
+    sector,
+  };
+}
+
+async function tick(sector: number) {
+  const ledger = readAttemptLedger(ledgerPath());
+
+  return authorOne(gapFor(sector), [], { ledger, ledgerPath: ledgerPath() });
+}
+
+describe("authorOne (the bounded re-author, across ticks)", () => {
+  beforeEach(() => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    claudeVerdict("up");
+  });
+
+  test("a gate-PASSING day is authored once and leaves no budget behind", async () => {
+    verdict("pass");
+
+    expect(await tick(36)).toBe("authored");
+    expect(authorings()).toBe(1);
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+  });
+
+  test("a gate-REFUSING day is authored for at most three passes, then never again", async () => {
+    verdict("voice");
+
+    for (let i = 1; i < MAX_LOGBOOK_ATTEMPTS; i += 1) {
+      expect(await tick(36)).toBe("gateSkipped");
+    }
+
+    expect(await tick(36)).toBe("exhausted");
+    expect(authorings()).toBe(MAX_LOGBOOK_ATTEMPTS);
+
+    for (let i = 0; i < 5; i += 1) {
+      expect(await tick(36)).toBe("exhausted");
+    }
+
+    expect(authorings()).toBe(MAX_LOGBOOK_ATTEMPTS);
+  });
+
+  // THE OPERATOR'S RULING (2026-07-30): no final-attempt bypass. A gap is a perfectly good state,
+  // so an exhausted day simply stays one rather than publishing copy the gates refused.
+  test("NOTHING is ever stored for a day whose drafts the gates refused", async () => {
+    verdict("voice");
+
+    for (let i = 0; i < MAX_LOGBOOK_ATTEMPTS + 3; i += 1) {
+      await tick(36);
+    }
+
+    expect(stores()).toEqual([]);
+  });
+
+  test("an ECHO refusal spends the budget too — its in-tick retry is ONE pass", async () => {
+    verdict("echo");
+
+    expect(await tick(36)).toBe("echoSkipped");
+    expect(authorings()).toBe(2);
+    expect(readAttemptLedger(ledgerPath()).get("36")?.attempts).toBe(1);
+  });
+
+  test("a transport/model failure never spends an attempt", async () => {
+    verdict("pass");
+    claudeVerdict("down");
+
+    for (let i = 0; i < 4; i += 1) {
+      expect(await tick(36)).toBe("skipped");
+    }
+
+    expect(readAttemptLedger(ledgerPath()).size).toBe(0);
+
+    claudeVerdict("up");
+    expect(await tick(36)).toBe("authored");
+  });
+
+  test("an exhausted day does not block the OLDEST-FIRST gap list behind it", async () => {
+    verdict("voice");
+
+    for (let i = 0; i < MAX_LOGBOOK_ATTEMPTS; i += 1) {
+      await tick(12);
+    }
+
+    const ledger = readAttemptLedger(ledgerPath());
+    const gaps = [gapFor(12), gapFor(13)];
+    const { exhausted, work } = selectWork(gaps, ledger, logbookKey, 1, MAX_LOGBOOK_ATTEMPTS);
+
+    expect(exhausted.map((gap) => gap.sector)).toEqual([12]);
+    // Without this the logbook would stall on sector 12 forever and never backfill a later day.
+    expect(work.map((gap) => gap.sector)).toEqual([13]);
+
+    verdict("pass");
+    expect(await authorOne(gapFor(13), [], { ledger, ledgerPath: ledgerPath() })).toBe("authored");
+    expect(stores()).toHaveLength(1);
   });
 });

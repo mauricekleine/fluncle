@@ -16,7 +16,7 @@ import {
   logbookBodyEchoError,
   scoreLogbookEcho,
 } from "./logbook-echo";
-import { scanObservationScript } from "./observation";
+import { maskSubjectNames, scanObservationScript } from "./observation";
 import { ApiError } from "./spotify";
 
 // A logbook body is LONG-FORM (a day's travelogue), not the note's one line — so the
@@ -77,12 +77,52 @@ function stripFigureTokens(body: string): string {
   return body.replace(FIGURE_TOKEN_GLOBAL_RE, " ");
 }
 
+// ── THE NAME EXEMPTION, in the logbook's shape ────────────────────────────────
+//
+// An entry is about a DAY, and the day's findings are what it may name — the sweep hands the
+// author every finding's artists + title as its material and asks it to write them up. So the
+// exempt set is that whole day's names, not one subject's. Without it a day that logged a track by
+// "Future Signal" is unwritable: the scan rejects the name the prompt supplied, the entry is never
+// stored, the day stays a gap at the head of a cap-1 oldest-first list, and every night's tick
+// burns two authorings on the same impossible day. See THE NAME EXEMPTION in ./observation.ts.
+//
+// The names come from the DB (`sectorSubjectNames`), never from the caller: an entry's right to
+// say a name follows from a finding actually being logged that day, so it cannot be widened by
+// whoever is posting.
+
+/**
+ * Every name the entries for one sector-day are allowed to say: each of that day's findings'
+ * artists and its title. One lean indexed range read (no notes, no observations — the gate needs
+ * identity only), shared by the agent create and the operator overwrite so the two can never
+ * disagree about what an entry may name.
+ */
+export async function sectorSubjectNames(sector: number): Promise<string[]> {
+  const { endMs, startMs } = sectorRange(sector);
+  const db = await getDb();
+  const result = await db.execute({
+    args: [new Date(startMs).toISOString(), new Date(endMs).toISOString()],
+    sql: `select tracks.title, tracks.artists_json
+          from findings join tracks on tracks.track_id = findings.track_id
+          where findings.log_id is not null
+            and findings.added_at >= ? and findings.added_at < ?`,
+  });
+
+  return typedRows<{ artists_json: string; title: string }>(result.rows).flatMap((row) => [
+    row.title,
+    ...parseArtistsJson(row.artists_json),
+  ]);
+}
+
 /**
  * Validate + voice-gate an agent/operator-authored entry TITLE, returning the trimmed
  * title. The title is a public Fluncle-voice line, so it clears the same shared
  * banned-word / earthly-geography / exclamation / "we"-as-company scan the body does.
+ *
+ * `subjectNames` are the day's sayable names (`sectorSubjectNames`), masked out before the scan.
+ * REQUIRED rather than optional so a new call site cannot silently forget the exemption; pass `[]`
+ * when there is genuinely nothing to exempt. The length cap is measured on the WHOLE title.
  */
-export function gateLogbookTitle(value: unknown): string {
+export function gateLogbookTitle(value: unknown, subjectNames: readonly string[]): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new ApiError("no_title", "A logbook entry `title` is required", 400);
   }
@@ -97,7 +137,7 @@ export function gateLogbookTitle(value: unknown): string {
     );
   }
 
-  gateVoice(stripFigureTokens(trimmed), "title");
+  gateVoice(stripFigureTokens(trimmed), "title", subjectNames);
 
   return trimmed;
 }
@@ -108,8 +148,13 @@ export function gateLogbookTitle(value: unknown): string {
  * voice scan and the min-length floor; the whole body is capped at BODY_MAX_CHARS.
  * The body lands straight on the public /logbook surface, so a violation hard-fails
  * the store before it is ever shown.
+ *
+ * `subjectNames` are the day's sayable names (`sectorSubjectNames`), masked out of the PROSE
+ * before the scan — after the figure tokens are stripped, so the two exemptions compose. The
+ * min-prose floor is measured BEFORE masking: masking must not be able to shrink a body under the
+ * floor and turn a long, name-heavy entry into a `body_too_short`.
  */
-export function gateLogbookBody(value: unknown): string {
+export function gateLogbookBody(value: unknown, subjectNames: readonly string[]): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new ApiError("no_body", "A logbook entry `body` is required", 400);
   }
@@ -134,13 +179,13 @@ export function gateLogbookBody(value: unknown): string {
     );
   }
 
-  gateVoice(prose, "body");
+  gateVoice(prose, "body", subjectNames);
 
   return trimmed;
 }
 
-function gateVoice(prose: string, field: "body" | "title"): void {
-  const violations = scanObservationScript(prose);
+function gateVoice(prose: string, field: "body" | "title", subjectNames: readonly string[]): void {
+  const violations = scanObservationScript(maskSubjectNames(prose, subjectNames));
 
   if (violations.length > 0) {
     throw new ApiError(
@@ -377,8 +422,11 @@ export async function createLogbookEntry(
     return { entry: existing, skipped: true };
   }
 
-  const title = gateLogbookTitle(input.title);
-  const body = gateLogbookBody(input.body);
+  // The day's findings are what this entry may name (THE NAME EXEMPTION) — read from the DB, so
+  // the right to say a name follows from the finding being logged that day, not from the caller.
+  const subjectNames = await sectorSubjectNames(sector);
+  const title = gateLogbookTitle(input.title, subjectNames);
+  const body = gateLogbookBody(input.body, subjectNames);
 
   // THE ANTI-SAMENESS RAILS (agent create). The title-collision guard is DETERMINISTIC (a
   // title is enumerable — an exact normalized match against every stored title, no scoring);
@@ -425,8 +473,11 @@ export async function updateLogbookEntry(
   sector: number,
   input: LogbookInput,
 ): Promise<LogbookEntryDTO> {
-  const title = gateLogbookTitle(input.title);
-  const body = gateLogbookBody(input.body);
+  // The same day-scoped exemption the agent create gets: an operator hand-typing the day up is
+  // no less entitled to name the tracks he logged (and no more — the list is the DB's, not his).
+  const subjectNames = await sectorSubjectNames(sector);
+  const title = gateLogbookTitle(input.title, subjectNames);
+  const body = gateLogbookBody(input.body, subjectNames);
 
   // The operator overwrite is a deliberate act, so it stays UNGATED beyond voice — EXCEPT
   // the title-collision guard, which still applies: even a hand-typed title must not collide

@@ -81,6 +81,19 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  type AttemptLedger,
+  attemptLedgerPath,
+  clearAttempts,
+  defaultStateDir,
+  exhaustedRecapLine,
+  planAttempt,
+  readAttemptLedger,
+  recordAttempt,
+  remainingQueueDepth,
+  selectWork,
+  writeAttemptLedger,
+} from "./attempt-ledger";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
@@ -109,6 +122,36 @@ const NEIGHBOR_LIMIT = 6;
 // finding — leave it note-less (silence beats a generic line) and let the next tick try
 // with a cold context.
 const ECHO_RETRIES = 1;
+
+// ---------------------------------------------------------------------------
+// THE ATTEMPT BUDGET — the end of the retry-forever loop.
+//
+// A finding gets THREE REFUSED PASSES at a note, ever, and then this sweep never authors for it
+// again. A "pass" is one trip through `noteOne`: an authoring, a delivery, and (on an echo) the one
+// in-tick re-author `ECHO_RETRIES` already allows. What spends the budget is the WORKER REFUSING
+// the draft — the voice gate, the length bounds, or the echo gate. A transport or model failure
+// spends nothing: there is no draft to have judged (see `recordAttempt` in ./attempt-ledger.ts).
+//
+// WHY. A rejection was a plain skip that left the finding queued with nothing counting the tries,
+// so "retry" meant "forever" — and the queue is BATCH_CAP=1 oldest-first, so an unwritable head
+// blocked every finding behind it. The gate could genuinely be UNSATISFIABLE: the prompt says
+// "naming the artist OR the title is fine" while the scan read those names too, so a finding by
+// "Future Signal" could never be noted however it was rewritten. THE NAME EXEMPTION
+// (apps/web/src/lib/server/observation.ts) fixes that at the source; this bounds whatever is next.
+//
+// NO BYPASS. The operator's ruling (2026-07-30): a note is optional editorial and an absent one is
+// a good state, so an exhausted finding is simply left NOTE-LESS. Gate-failed copy is never stored
+// on a public surface to close a queue — the bio's final-attempt acceptance exists because an empty
+// bio slot leaves a page half-built, and a note has no such hole to fill.
+//
+// A hard constant, not an env knob: the number is a product decision, and a box env that could
+// quietly raise it is how a bounded loop becomes an unbounded one again.
+// ---------------------------------------------------------------------------
+
+export const MAX_NOTE_ATTEMPTS = 3;
+
+// `NOTE_STATE_DIR` overrides the ledger's home for tests and for an operator move.
+const STATE_DIR = process.env.NOTE_STATE_DIR ?? defaultStateDir("note-sweep");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
@@ -186,7 +229,18 @@ type ClaudeEnvelope = {
   usage?: ClaudeUsage;
 };
 
-type Outcome = "noted" | "alreadyNoted" | "gateSkipped" | "echoSkipped" | "skipped";
+// `exhausted` is the ONE terminal outcome: the finding spent all `MAX_NOTE_ATTEMPTS` refused passes
+// and this sweep will never author for it again. Distinct from `gateSkipped`/`echoSkipped`, which
+// are refusals with budget left. An exhausted finding is left NOTE-LESS — never published anyway.
+type Outcome = "noted" | "alreadyNoted" | "exhausted" | "gateSkipped" | "echoSkipped" | "skipped";
+
+/** The ledger key for one queued finding: whichever id the queue row carries. */
+export function noteKey(queued: QueueFinding): string | null {
+  return queued.trackId ?? queued.logId ?? null;
+}
+
+/** The budget's read/write handle for one tick — absent on a dry run, which spends nothing. */
+type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
 // What the Worker made of a delivered note. `echoed` carries the phrase the echo gate
 // caught, so the re-author pass can hand the model its own echo back.
@@ -712,13 +766,83 @@ function readContextNote(id: string): string {
 // authored AND delivered (so a no-op / gate-skip / failure never records spend).
 type NoteResult = { cost: BoxCostEvent | null; outcome: Outcome };
 
-async function noteOne(queued: QueueFinding, dryRun = false): Promise<NoteResult> {
+/**
+ * THE STRAIN VOCABULARY (the /status sweep-strain detector, fluncle-healthcheck.ts). This sweep's
+ * stderr is captured into its cron marker and scored, so the WORDING here is load-bearing:
+ * exhausting a finding is a permanent write-off and must read as distress ("giving up"), said ONCE
+ * on the tick it happens — the per-tick recap (`exhaustedRecapLine`) deliberately does not.
+ */
+function logExhausted(id: string): void {
+  log(
+    `${id}: EXHAUSTED — ${MAX_NOTE_ATTEMPTS} drafts were refused by the gates, giving up on this finding; it stays note-less (delete its line from ${attemptLedgerPath(STATE_DIR)} to re-arm)`,
+  );
+}
+
+/**
+ * Charge or clear one finding's budget after a pass, and report the ONE outcome that overrides what
+ * the delivery said: a refusal that spent the last attempt becomes `exhausted`, because the finding
+ * is now permanently out of this sweep's reach and the summary has to say so. Returns null when the
+ * caller should keep the delivery's own outcome.
+ *
+ * There is no publish-anyway branch here, on purpose (the operator's 2026-07-30 ruling). The last
+ * refused draft is discarded exactly like the first two: a gate-failed note never reaches /log.
+ */
+function settleBudget(id: string, outcome: Outcome, budget?: Budget): NoteResult | null {
+  if (!budget) {
+    return null; // a dry run spends nothing and clears nothing
+  }
+
+  if (outcome === "noted" || outcome === "alreadyNoted") {
+    clearAttempts(budget.ledger, id);
+    writeAttemptLedger(budget.ledgerPath, budget.ledger, log);
+
+    return null;
+  }
+
+  if (outcome !== "gateSkipped" && outcome !== "echoSkipped") {
+    return null; // a transport/model failure is no evidence about the draft — it costs nothing
+  }
+
+  recordAttempt(budget.ledger, id, Math.floor(Date.now() / 1000));
+  writeAttemptLedger(budget.ledgerPath, budget.ledger, log);
+
+  if (!planAttempt(budget.ledger, id, MAX_NOTE_ATTEMPTS).exhausted) {
+    return null;
+  }
+
+  logExhausted(id);
+
+  return { cost: null, outcome: "exhausted" };
+}
+
+/**
+ * Exported so the unit test can drive the REAL loop against stub `fluncle`/`claude` binaries rather
+ * than re-implementing the budget arithmetic beside it — "authored for at most three refused passes,
+ * ever, and never published against the gate" is a claim about the code that runs.
+ *
+ * `budget` is absent on a DRY RUN: a pre-flight stores nothing, so it must not consume a finding's
+ * real attempts.
+ */
+export async function noteOne(
+  queued: QueueFinding,
+  dryRun = false,
+  budget?: Budget,
+): Promise<NoteResult> {
   const id = queued.trackId ?? queued.logId;
 
   if (!id) {
     log("queue item without a trackId/logId — skipping");
 
     return { cost: null, outcome: "skipped" };
+  }
+
+  // Belt-and-braces: `selectWork` already keeps exhausted findings out of the batch, so reaching
+  // here means the budget ran out mid-tick. Either way NOTHING is fetched and no model is called —
+  // an exhausted finding costs nothing at all.
+  if (budget && planAttempt(budget.ledger, id, MAX_NOTE_ATTEMPTS).exhausted) {
+    logExhausted(id);
+
+    return { cost: null, outcome: "exhausted" };
   }
 
   // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
@@ -793,6 +917,16 @@ async function noteOne(queued: QueueFinding, dryRun = false): Promise<NoteResult
   }
 
   const outcome = delivery.outcome;
+
+  // (d2) SETTLE THE BUDGET. A pass the Worker REFUSED (voice/length, or the echo gate after its one
+  // in-tick re-author) burns one; a note that landed — or an operator's that already stood — clears
+  // the finding's line so a future re-queue starts fresh. A transport/model failure returned above
+  // and reaches neither branch: no draft was judged, so there is nothing to charge for.
+  const settled = settleBudget(id, outcome, budget);
+
+  if (settled) {
+    return settled;
+  }
 
   // (e) Record the authoring spend ONLY when the note actually landed (`noted`). A
   // gate-skip / operator-note no-op / failure spent the tokens too, but attributing a
@@ -942,6 +1076,9 @@ async function main(): Promise<void> {
     // anti-sameness rail firing. A finding here stays queued for a later, colder pass.
     echoSkipped: 0,
     errors: 0,
+    // Findings that have spent all `MAX_NOTE_ATTEMPTS` refused passes and will never be authored
+    // for again. They stay note-less, and never carry copy the gate refused.
+    exhausted: 0,
     failed: 0,
     gateSkipped: 0,
     noted: 0,
@@ -955,15 +1092,43 @@ async function main(): Promise<void> {
     return; // fast no-op
   }
 
+  // The attempt budgets, loaded once per tick and written through as they are spent.
+  const ledgerPath = attemptLedgerPath(STATE_DIR);
+  const ledger = readAttemptLedger(ledgerPath);
+  const budget: Budget = { ledger, ledgerPath };
+
+  // Exhausted findings are dropped BEFORE the cap: with BATCH_CAP=1 over an oldest-first queue, an
+  // exhausted head would otherwise block every finding behind it forever.
+  const { exhausted, work } = selectWork(queue, ledger, noteKey, BATCH_CAP, MAX_NOTE_ATTEMPTS);
+
+  summary.exhausted = exhausted.length;
+
+  if (exhausted.length > 0) {
+    log(
+      exhaustedRecapLine(
+        "finding",
+        exhausted.flatMap((row) => {
+          const key = noteKey(row);
+
+          return key ? [key] : [];
+        }),
+        MAX_NOTE_ATTEMPTS,
+      ),
+    );
+  }
+
   // The tick's authoring-spend rows, POSTed once at the end (best-effort, after the
   // notes are already durable — a dropped POST only understates the ledger).
   const costs: BoxCostEvent[] = [];
 
-  for (const queued of queue.slice(0, BATCH_CAP)) {
+  // `work` is the queue with the EXHAUSTED rows already dropped and the cap applied, so a spent
+  // head never blocks the findings behind it. An exhausted row was not checked — it was skipped
+  // without a single call — so it is counted in `exhausted`, never in `checked`.
+  for (const queued of work) {
     summary.checked += 1;
 
     try {
-      const { cost, outcome } = await noteOne(queued);
+      const { cost, outcome } = await noteOne(queued, false, budget);
 
       if (cost) {
         costs.push(cost);
@@ -978,6 +1143,8 @@ async function main(): Promise<void> {
         summary.gateSkipped += 1;
       } else if (outcome === "echoSkipped") {
         summary.echoSkipped += 1;
+      } else if (outcome === "exhausted") {
+        summary.exhausted += 1;
       } else {
         summary.failed += 1;
         summary.errors += 1;
@@ -994,7 +1161,11 @@ async function main(): Promise<void> {
             ok: false,
             reason: "claude_auth",
             ...summary,
-            queueRemaining: Math.max(0, queue.length - summary.noted - summary.alreadyNoted),
+            queueRemaining: remainingQueueDepth(
+              queue.length,
+              summary.noted + summary.alreadyNoted,
+              summary.exhausted,
+            ),
           }),
         );
         process.exit(1);
@@ -1011,9 +1182,15 @@ async function main(): Promise<void> {
     }
   }
 
-  // queueRemaining is the queue depth AT READ TIME minus what we noted/no-op'd this
-  // tick (gate-skips + failures stay queued); the next tick re-reads the live queue.
-  summary.queueRemaining = Math.max(0, queue.length - summary.noted - summary.alreadyNoted);
+  // queueRemaining is the WORKABLE depth at read time minus what we noted/no-op'd this tick and
+  // minus the EXHAUSTED findings, which stay queued server-side but are no longer work this sweep
+  // will ever do. Gate-skips + failures keep their remaining budget and stay counted; the next tick
+  // re-reads the live queue.
+  summary.queueRemaining = remainingQueueDepth(
+    queue.length,
+    summary.noted + summary.alreadyNoted,
+    summary.exhausted,
+  );
 
   // Record the tick's authoring spend best-effort. It cannot throw or outlive its
   // 15s budget; rejected rows remain visible in the final status reading.
