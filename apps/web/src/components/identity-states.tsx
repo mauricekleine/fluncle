@@ -46,7 +46,8 @@ const IDENTIFIER_ROWS = [
   { key: "mbRecordingId", label: "MusicBrainz" },
 ] as const;
 
-/** The covered platforms, and only those — see the coverage-set note in the file header. */
+/** The covered platforms, and only those, in reading order — where you listen, then where you look
+ *  it up. See the coverage-set note in the file header. */
 const LINK_ROWS = [
   { key: "spotify", label: "Spotify" },
   { key: "appleMusic", label: "Apple Music" },
