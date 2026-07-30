@@ -662,8 +662,11 @@ async function main(): Promise<void> {
     batch: 0,
     catalogueDone: 0,
     catalogueQueued: 0,
+    checked: 0,
     done: 0,
+    errors: 0,
     failed: 0,
+    produced: 0,
     queued: queue.length,
     skipped: 0,
   };
@@ -677,6 +680,7 @@ async function main(): Promise<void> {
   // delays a track Fluncle has already said yes to.
   for (const finding of queue.slice(0, BATCH_CAP)) {
     summary.batch += 1;
+    summary.checked += 1;
 
     try {
       const { cost, outcome } = await enrichOne(finding);
@@ -686,10 +690,14 @@ async function main(): Promise<void> {
       }
 
       summary[outcome] += 1;
+      if (outcome === "done") {
+        summary.produced += 1;
+      }
     } catch (error) {
       // One finding's failure must not abort the sweep — log it and move on; it
       // stays in the queue for the next tick.
       summary.skipped += 1;
+      summary.errors += 1;
       log(
         `error on ${finding.trackId ?? finding.logId ?? "?"}: ${
           error instanceof Error ? error.message : String(error)
@@ -708,6 +716,8 @@ async function main(): Promise<void> {
       summary.catalogueQueued = catalogueQueue.length;
 
       for (const item of catalogueQueue.slice(0, CATALOGUE_BATCH_CAP)) {
+        summary.checked += 1;
+
         try {
           const { cost, outcome } = await analyzeCatalogueOne(item);
 
@@ -717,11 +727,13 @@ async function main(): Promise<void> {
 
           if (outcome === "done") {
             summary.catalogueDone += 1;
+            summary.produced += 1;
           } else {
             summary.skipped += 1;
           }
         } catch (error) {
           summary.skipped += 1;
+          summary.errors += 1;
           log(
             `error on catalogue ${item.trackId ?? "?"}: ${
               error instanceof Error ? error.message : String(error)
@@ -732,6 +744,7 @@ async function main(): Promise<void> {
     } catch (error) {
       // The catalogue arm is best-effort. A queue read that fails (an older Worker without the
       // op, a transient 5xx) must not fail the tick — the findings arm already did its work.
+      summary.errors += 1;
       log(`catalogue arm skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -752,7 +765,7 @@ if (import.meta.main) {
     log(`enrich sweep failed: ${message}`);
     // Emit the `{ ok: false }` summary line to STDOUT so the /status marker (cron-output.sh
     // captures stdout only) sees the failure — parity with the sibling sweeps' catch.
-    console.log(JSON.stringify({ error: message, ok: false, reason: "enrich_failed" }));
+    console.log(JSON.stringify({ error: message, errors: 1, ok: false, reason: "enrich_failed" }));
     process.exit(1);
   });
 }

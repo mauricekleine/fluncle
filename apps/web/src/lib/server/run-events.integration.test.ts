@@ -79,7 +79,8 @@ describe("insertRunEvent — the round trip", () => {
       ended_at: "2026-07-29T03:00:12.500Z",
       errors: 0,
       exit_code: 0,
-      expected_interval_ms: 3_600_000,
+      // Registry cadence wins over the summary's fake one-hour value.
+      expected_interval_ms: 300_000,
       gate_state: null,
       id: "fluncle-enrich:2026-07-29T03:00:00.000Z",
       missing_fields: "[]",
@@ -110,9 +111,8 @@ describe("insertRunEvent — the round trip", () => {
     expect(row.summary_raw).toBe("Killed (OOM)");
     expect(row.summary_status).toBe("malformed");
     expect(row.ok).toBe(0);
-    expect(row.missing_fields).toBe(
-      '["checked","errors","expected_interval_ms","produced","queue_depth"]',
-    );
+    expect(row.expected_interval_ms).toBe(300_000);
+    expect(row.missing_fields).toBe('["checked","errors","produced","queue_depth"]');
   });
 });
 

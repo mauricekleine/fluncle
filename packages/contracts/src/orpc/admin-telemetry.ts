@@ -57,6 +57,21 @@ export const MAX_SUMMARY_RAW_CHARS = 4096;
  * emitter naturally writes keeps the bash side dumb, which is the whole point of the
  * design — the Worker owns the schema so no sweep has to.
  *
+ * SUMMARY COUNTER CONVENTION. A sweep emits these canonical fields alongside its
+ * existing domain counters; the domain counters remain useful forensic detail:
+ *   - `checked` is the denominator: units the tick actually looked at.
+ *   - `produced` is the numerator: units the tick successfully acted on.
+ *   - `queue_depth` is the real outstanding backlog remaining after the tick. It is
+ *     NEVER a batch limit, page size, or fetched-page cap; omit it when the emitter
+ *     cannot obtain a real outstanding count.
+ *   - `errors` is an integer count of errors/failures reported by the tick.
+ *
+ * NULL IS NOT ZERO. `0` is a measured answer ("looked and found none", "no failures");
+ * `null` explicitly says the emitter cannot know, and absence says it did not report the
+ * counter. The ledger preserves all three states. `expected_interval_ms` is schedule
+ * metadata derived server-side from `@fluncle/registry` for roster-known units; only
+ * unregistered legacy units retain an emitted fallback.
+ *
  * `z.strictObject` — an UNKNOWN envelope key is REJECTED, never ignored. This is the
  * posture `docs/vector-serving.md` already ratified for the sonar filter: a version skew
  * between the wrapper and the Worker must DEGRADE LOUDLY rather than silently widen into

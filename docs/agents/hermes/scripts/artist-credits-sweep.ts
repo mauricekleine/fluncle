@@ -121,11 +121,14 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 export function main(): void {
   const summary = {
     adoptedArtists: 0,
+    checked: 0,
     edgesWritten: 0,
     error: null as string | null,
+    errors: 0,
     matchedArtists: 0,
     mintedArtists: 0,
     ok: true,
+    produced: 0,
     rateLimited: false,
     scanned: 0,
     skippedNoIdentity: 0,
@@ -141,6 +144,10 @@ export function main(): void {
     ]);
 
     summary.scanned = pass.scanned ?? 0;
+    // A visited row is durably handled either by writing its artist edges or by stamping a
+    // terminal no-identity skip, so every scanned row is also a produced work unit.
+    summary.checked = summary.scanned;
+    summary.produced = summary.scanned;
     summary.mintedArtists = pass.mintedArtists ?? 0;
     summary.adoptedArtists = pass.adoptedArtists ?? 0;
     summary.matchedArtists = pass.matchedArtists ?? 0;
@@ -149,6 +156,7 @@ export function main(): void {
     summary.rateLimited = pass.rateLimited ?? false;
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`MB credit-sweep pass failed: ${summary.error}`);
   }

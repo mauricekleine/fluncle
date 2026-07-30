@@ -156,7 +156,9 @@ export function crawlPassWithRetry(): CrawlSummary {
 
 export function main(): void {
   const summary = {
+    checked: 0,
     error: null as string | null,
+    errors: 0,
     expanded: 0,
     failed: 0,
     // Labels the walk DISCOVERED and minted as `undecided`. They are NOT crawled — they
@@ -164,6 +166,8 @@ export function main(): void {
     labelsDiscovered: [] as string[],
     ok: true,
     pending: 0,
+    produced: 0,
+    queueDepth: undefined as number | undefined,
     throttled: false,
     tracksFound: 0,
     tracksSkipped: 0,
@@ -175,8 +179,12 @@ export function main(): void {
 
     summary.expanded = pass.expanded ?? 0;
     summary.failed = pass.failed ?? 0;
+    summary.checked = summary.expanded + summary.failed;
+    summary.produced = summary.expanded;
+    summary.errors = summary.failed;
     summary.labelsDiscovered = pass.labelsDiscovered ?? [];
     summary.pending = pass.frontierPending ?? 0;
+    summary.queueDepth = summary.pending;
     summary.throttled = pass.rateLimited ?? false;
     summary.tracksFound = pass.tracksFound ?? 0;
     summary.tracksWritten = pass.tracksWritten ?? 0;
@@ -191,6 +199,7 @@ export function main(): void {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`crawl pass failed: ${summary.error}`);
   }

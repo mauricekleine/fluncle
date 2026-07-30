@@ -28,10 +28,10 @@
 //      means "a count of work", and `ok` is derived from one of these numbers. A `null`,
 //      though, is the emitter SAYING it does not know (the sonar freshen prints
 //      `"checked":null` on a lock-skipped tick); that is stored as SQL NULL and is not a
-//      validation failure. The adjacent real shape is a sweep reporting its failures as
-//      `"failed":[]` — a different KEY, not a wrong type: rules 3 and 4 catch that one, by
-//      putting `errors` on the upgrade queue and `failed` in `unrecognised_fields` instead
-//      of letting the count vanish into a silent NULL.
+//      validation failure. Error reporting has two measured legacy shapes that normalize
+//      without losing their signal: `failed` is a number or an array (counted by length),
+//      while nullable `error` means zero for null and one for a message. Canonical
+//      `errors` wins when a migrating emitter sends both canonical and domain counters.
 //   3. MISSING FIELDS ARE RECORDED, NOT GUESSED. The mandatory counters a summary did
 //      not carry are listed in `missing_fields`, and THAT LIST IS THE UPGRADE QUEUE.
 //      A counter the Worker invented is a counter nobody can trust. "Did not carry" means
@@ -54,6 +54,7 @@
 // things that produce a 400 is kept as small as the honesty rules allow.
 
 import { type RunEventInput } from "@fluncle/contracts/orpc";
+import { cronSurfaces } from "@fluncle/registry";
 import { getTelemetryDb } from "./db";
 import { logEvent } from "./log";
 import { ApiError } from "./spotify";
@@ -136,13 +137,15 @@ const GATE_STATES_THAT_NEVER_LOOKED = new Set<string>(["disabled", "locked", "pa
  */
 const COUNTER_FIELDS: { canonical: string; spellings: string[] }[] = [
   { canonical: "checked", spellings: ["checked"] },
-  { canonical: "errors", spellings: ["errors"] },
   { canonical: "expected_interval_ms", spellings: ["expectedIntervalMs", "expected_interval_ms"] },
   { canonical: "produced", spellings: ["produced"] },
   { canonical: "queue_depth", spellings: ["queueDepth", "queue_depth"] },
   { canonical: "vendor_calls", spellings: ["vendorCalls", "vendor_calls"] },
 ];
 
+const CANONICAL_ERROR_SPELLINGS = ["errors"];
+const LEGACY_FAILED_SPELLINGS = ["failed"];
+const LEGACY_ERROR_SPELLINGS = ["error"];
 const GATE_STATE_SPELLINGS = ["gateState", "gate_state"];
 const PAUSED_SPELLINGS = ["paused"];
 const OK_SPELLINGS = ["ok"];
@@ -158,6 +161,9 @@ const GATE_STATES = new Set<string>([
 /** Every summary key the Worker recognises — anything else is `unrecognised_fields`. */
 const RECOGNISED_KEYS = new Set<string>([
   ...COUNTER_FIELDS.flatMap((field) => field.spellings),
+  ...CANONICAL_ERROR_SPELLINGS,
+  ...LEGACY_FAILED_SPELLINGS,
+  ...LEGACY_ERROR_SPELLINGS,
   ...GATE_STATE_SPELLINGS,
   ...PAUSED_SPELLINGS,
   ...OK_SPELLINGS,
@@ -266,6 +272,71 @@ function readField(
   return presentKey === undefined
     ? { kind: "absent" }
     : { key: presentKey, kind: "declared-unknown" };
+}
+
+/**
+ * Normalize the three error shapes already present in the fleet.
+ *
+ * `errors` is the canonical integer and wins whenever it is present. The two legacy
+ * domain shapes are still validated even beside it: `failed` is either an integer count
+ * or an array whose length is the count, while `error` is a nullable message (`null`
+ * explicitly means zero, any string means one). Precedence is canonical `errors`, then
+ * `failed`, then `error`; that lets the crawl line keep both of its legacy fields without
+ * manufacturing a contradiction. Only total absence is MISSING — none of these explicit
+ * zero shapes may collapse into "not reported".
+ */
+function readErrors(summary: Record<string, unknown>): SummaryField {
+  const canonical = readField(summary, "errors", CANONICAL_ERROR_SPELLINGS);
+  const failed = readField(summary, "failed", LEGACY_FAILED_SPELLINGS);
+  const error = readField(summary, "error", LEGACY_ERROR_SPELLINGS);
+
+  let normalizedFailed: SummaryField = failed;
+
+  if (failed.kind === "value") {
+    normalizedFailed = {
+      key: failed.key,
+      kind: "value",
+      value: Array.isArray(failed.value)
+        ? failed.value.length
+        : requireCount(failed.key, failed.value),
+    };
+  }
+
+  let normalizedError: SummaryField = error;
+
+  if (error.kind === "declared-unknown") {
+    normalizedError = { key: error.key, kind: "value", value: 0 };
+  } else if (error.kind === "value") {
+    if (typeof error.value !== "string") {
+      reject(
+        `run summary field "${error.key}" must be a string or null, got ${JSON.stringify(error.value)}`,
+      );
+    }
+
+    normalizedError = { key: error.key, kind: "value", value: 1 };
+  }
+
+  // Validate canonical errors even though requireCount is normally called by the generic
+  // counter loop below. It is deliberately separate so the legacy domain fields can
+  // coexist with it without being treated as contradictory spellings.
+  const normalizedCanonical =
+    canonical.kind === "value"
+      ? {
+          key: canonical.key,
+          kind: "value" as const,
+          value: requireCount(canonical.key, canonical.value),
+        }
+      : canonical;
+
+  if (normalizedCanonical.kind !== "absent") {
+    return normalizedCanonical;
+  }
+
+  if (normalizedFailed.kind !== "absent") {
+    return normalizedFailed;
+  }
+
+  return normalizedError;
 }
 
 /** The gate, from either `paused` (boolean) or `gateState` (the closed enum). */
@@ -417,6 +488,17 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
   const values = new Map<string, null | number>();
   const missingFields: string[] = [];
 
+  const errors = readErrors(summary);
+
+  if (errors.kind === "absent") {
+    values.set("errors", null);
+    missingFields.push("errors");
+  } else if (errors.kind === "declared-unknown") {
+    values.set("errors", null);
+  } else {
+    values.set("errors", requireCount(errors.key, errors.value));
+  }
+
   for (const { canonical, spellings } of COUNTER_FIELDS) {
     const field = readField(summary, canonical, spellings);
     const suppressed = gated && GATE_SUPPRESSED_FIELDS.has(canonical);
@@ -445,18 +527,62 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
     values.set(canonical, suppressed ? null : count);
   }
 
+  const orderedMissingFields = MANDATORY_SUMMARY_FIELDS.filter((field) =>
+    missingFields.includes(field),
+  );
+
   return {
     checked: values.get("checked") ?? null,
     errors: values.get("errors") ?? null,
     expectedIntervalMs: values.get("expected_interval_ms") ?? null,
     gateState,
-    missingFields,
+    missingFields: orderedMissingFields,
     produced: values.get("produced") ?? null,
     queueDepth: values.get("queue_depth") ?? null,
     selfAssertedOk,
     summaryStatus: "parsed",
     unrecognisedFields: collectUnrecognised(summary, unreadableKey ? [unreadableKey] : []),
     vendorCalls: values.get("vendor_calls") ?? null,
+  };
+}
+
+const REGISTERED_CRON_CADENCE_MS = new Map<string, number>();
+
+for (const surface of cronSurfaces()) {
+  const probe = surface.probeConfig;
+
+  if (
+    probe?.kind === "cron" &&
+    typeof probe.cronName === "string" &&
+    typeof probe.cadenceMs === "number"
+  ) {
+    REGISTERED_CRON_CADENCE_MS.set(probe.cronName, probe.cadenceMs);
+  }
+}
+
+/**
+ * Apply the roster's authoritative cadence to a normalized summary.
+ *
+ * The unit name in the strict envelope is the join key to `cronSurfaces()`. A registered
+ * cron's cadence is schedule data, not something its work summary gets to redefine, so
+ * the registry value replaces any emitted fallback and satisfies the mandatory field
+ * even when the summary was absent or malformed. Unregistered legacy units keep their
+ * emitted value (or their missing-field item) for backwards compatibility.
+ */
+export function withRegisteredCronCadence(
+  unit: string,
+  summary: NormalizedRunSummary,
+): NormalizedRunSummary {
+  const cadenceMs = REGISTERED_CRON_CADENCE_MS.get(unit);
+
+  if (cadenceMs === undefined) {
+    return summary;
+  }
+
+  return {
+    ...summary,
+    expectedIntervalMs: cadenceMs,
+    missingFields: summary.missingFields.filter((field) => field !== "expected_interval_ms"),
   };
 }
 
@@ -551,7 +677,7 @@ export type RecordedRun = {
  * missing telemetry database can never break the product path it observes.
  */
 export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun> {
-  const summary = normalizeRunSummary(input.summary_raw);
+  const summary = withRegisteredCronCadence(input.unit, normalizeRunSummary(input.summary_raw));
   const runOk = deriveRunOk(input.exit_code, summary.errors);
   const id = runEventId({ startedAt: input.started_at, unit: input.unit });
   const db = await getTelemetryDb();

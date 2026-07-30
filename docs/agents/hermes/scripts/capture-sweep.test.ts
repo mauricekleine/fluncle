@@ -8,6 +8,7 @@
 // side-effect free (no yt-dlp spawn, no R2, no network). Keep this green when touching
 // the sticky-proxy builder, the duration guard, the key builder, or the candidate ranker.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   bpmIsMissing,
   captureSessionSeed,
@@ -40,6 +41,21 @@ import {
 // sweep's stderr is teed into the marker and scored by these two functions, so the only
 // honest way to pin the wording contract is to run the real lines through them.
 import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
+
+describe("capture sweep queueDepth source contract", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+
+  test("uses a real post-action backlog count, never the bounded page length or limit", () => {
+    expect(source).not.toMatch(/queueDepth\s*:\s*(?:queue\.length|QUEUE_LIMIT)\b/);
+    expect(source).toContain("/api/v1/admin/tracks/work?kind=capture&scope=all&count=true&limit=1");
+
+    const workCompleted = source.indexOf("await Promise.all(");
+    const postActionCount = source.indexOf("await fetchCaptureQueueDepth()", workCompleted);
+
+    expect(workCompleted).toBeGreaterThan(-1);
+    expect(postActionCount).toBeGreaterThan(workCompleted);
+  });
+});
 
 describe("buildStickyProxyUrl", () => {
   test("appends __sessid.<sessionId> to the username and url-encodes user + pass", () => {

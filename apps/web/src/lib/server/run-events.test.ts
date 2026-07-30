@@ -6,6 +6,7 @@ import {
   normalizeRunSummary,
   runDurationMs,
   runEventId,
+  withRegisteredCronCadence,
 } from "./run-events";
 
 // The PURE half of the run ledger — every rule the design earned, each pinned by the
@@ -131,20 +132,33 @@ describe("normalizeRunSummary — a counter is a validated integer or a 400", ()
     expect(normalizeRunSummary("{}").missingFields).toContain("produced");
   });
 
-  it("surfaces the real `failed: []` shape instead of silently nulling it", () => {
-    // THE MEASURED DEFECT. A real sweep reports its failures under `failed`, not `errors`.
-    // An implementation that just reads `errors` finds nothing, stores NULL, and lets `ok`
-    // fall back to the exit code alone — the sweep reports failures and reads healthy, with
-    // nothing anywhere saying why. Here it lands on BOTH halves of the upgrade queue: the
-    // counter that is owing, and the key that should be renamed.
-    const result = normalizeRunSummary('{"failed":[],"produced":0}');
+  it("counts the fleet's legacy `failed` number/array and nullable `error` shapes", () => {
+    expect(normalizeRunSummary('{"failed":[],"advanced":0}')).toMatchObject({
+      errors: 0,
+      missingFields: expect.not.arrayContaining(["errors"]),
+      unrecognisedFields: ["advanced"],
+    });
+    expect(normalizeRunSummary('{"failed":3}').errors).toBe(3);
+    expect(normalizeRunSummary('{"error":"boom","scanned":0}').errors).toBe(1);
+    expect(normalizeRunSummary('{"error":null,"scanned":0}').errors).toBe(0);
+  });
+
+  it("lets canonical `errors` win while still validating coexisting domain shapes", () => {
+    expect(normalizeRunSummary('{"errors":4,"failed":[],"error":"boom"}')).toMatchObject({
+      errors: 4,
+      unrecognisedFields: [],
+    });
+    expect(() => normalizeRunSummary('{"errors":0,"failed":"none"}')).toThrow(
+      /non-negative integer/,
+    );
+    expect(() => normalizeRunSummary('{"errors":0,"error":7}')).toThrow(/string or null/);
+  });
+
+  it("keeps a genuinely absent error counter missing instead of inventing zero", () => {
+    const result = normalizeRunSummary('{"advanced":0}');
 
     expect(result.errors).toBeNull();
     expect(result.missingFields).toContain("errors");
-    expect(result.unrecognisedFields).toContain("failed");
-    // And the derived verdict is honest about what it does NOT know.
-    expect(deriveRunOk(0, result.errors)).toBe(true);
-    expect(deriveRunOk(1, result.errors)).toBe(false);
   });
 
   it("accepts 0 as a real reading, distinct from absent", () => {
@@ -188,6 +202,98 @@ describe("normalizeRunSummary — missing fields are recorded, never guessed", (
       queueDepth: 17,
       vendorCalls: 9,
     });
+  });
+});
+
+describe("normalizeRunSummary — canonical pilot counters coexist with domain detail", () => {
+  it("parses the artist-credits pilot line", () => {
+    const result = normalizeRunSummary(
+      '{"adoptedArtists":3,"checked":5,"edgesWritten":7,"error":null,"errors":0,"matchedArtists":2,"mintedArtists":4,"ok":true,"produced":5,"rateLimited":false,"scanned":5,"skippedNoIdentity":1}',
+    );
+
+    expect(result).toMatchObject({ checked: 5, errors: 0, produced: 5 });
+    expect(result.unrecognisedFields).toEqual([
+      "adoptedArtists",
+      "edgesWritten",
+      "matchedArtists",
+      "mintedArtists",
+      "rateLimited",
+      "scanned",
+      "skippedNoIdentity",
+    ]);
+  });
+
+  it("parses the crawl pilot line without rejecting canonical + legacy errors", () => {
+    const result = normalizeRunSummary(
+      '{"checked":8,"error":null,"errors":1,"expanded":7,"failed":1,"labelsDiscovered":["Hospital Records"],"ok":true,"pending":42,"produced":7,"queueDepth":42,"throttled":false,"tracksFound":63,"tracksSkipped":2,"tracksWritten":61}',
+    );
+
+    expect(result).toMatchObject({
+      checked: 8,
+      errors: 1,
+      produced: 7,
+      queueDepth: 42,
+    });
+  });
+
+  it("parses the enrich pilot line and leaves its unknown backlog absent", () => {
+    const result = normalizeRunSummary(
+      '{"ok":true,"batch":4,"catalogueDone":1,"catalogueQueued":2,"checked":6,"done":3,"errors":1,"failed":0,"produced":4,"queued":50,"skipped":1}',
+    );
+
+    expect(result).toMatchObject({
+      checked: 6,
+      errors: 1,
+      produced: 4,
+      queueDepth: null,
+    });
+    expect(result.missingFields).toContain("queue_depth");
+    expect(result.unrecognisedFields).toContain("queued");
+  });
+
+  it("parses the note pilot line and never launders queueRemaining into queue_depth", () => {
+    const result = normalizeRunSummary(
+      '{"ok":true,"alreadyNoted":1,"checked":4,"echoSkipped":1,"errors":1,"failed":1,"gateSkipped":0,"noted":1,"produced":1,"queueRemaining":47}',
+    );
+
+    expect(result).toMatchObject({
+      checked: 4,
+      errors: 1,
+      produced: 1,
+      queueDepth: null,
+    });
+    expect(result.missingFields).toContain("queue_depth");
+    expect(result.unrecognisedFields).toContain("queueRemaining");
+  });
+});
+
+describe("withRegisteredCronCadence — the roster owns schedule metadata", () => {
+  it("pins fluncle-enrich to five minutes even when its summary claims otherwise", () => {
+    const result = withRegisteredCronCadence(
+      "fluncle-enrich",
+      normalizeRunSummary('{"expectedIntervalMs":999999}'),
+    );
+
+    expect(result.expectedIntervalMs).toBe(300_000);
+    expect(result.missingFields).not.toContain("expected_interval_ms");
+  });
+
+  it("fills cadence for absent and malformed registered summaries", () => {
+    for (const raw of [undefined, "Killed (OOM)"]) {
+      const result = withRegisteredCronCadence("fluncle-enrich", normalizeRunSummary(raw));
+
+      expect(result.expectedIntervalMs).toBe(300_000);
+      expect(result.missingFields).not.toContain("expected_interval_ms");
+    }
+  });
+
+  it("retains an emitted fallback for an unregistered legacy unit", () => {
+    const result = withRegisteredCronCadence(
+      "fluncle-legacy",
+      normalizeRunSummary('{"expected_interval_ms":123456}'),
+    );
+
+    expect(result.expectedIntervalMs).toBe(123_456);
   });
 });
 

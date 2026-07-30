@@ -896,6 +896,7 @@ async function main(): Promise<void> {
     );
 
     const outcomes: Record<string, string> = {};
+    let errors = 0;
 
     for (const id of dryRunIds) {
       try {
@@ -903,11 +904,22 @@ async function main(): Promise<void> {
         outcomes[id] = outcome;
       } catch (error) {
         outcomes[id] = "failed";
+        errors += 1;
         log(`error on ${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    console.log(JSON.stringify({ dryRun: true, neighbors: NEIGHBORS_ENABLED, ok: true, outcomes }));
+    console.log(
+      JSON.stringify({
+        checked: dryRunIds.length,
+        dryRun: true,
+        errors,
+        neighbors: NEIGHBORS_ENABLED,
+        ok: true,
+        outcomes,
+        produced: 0,
+      }),
+    );
 
     return;
   }
@@ -925,12 +937,15 @@ async function main(): Promise<void> {
 
   const summary = {
     alreadyNoted: 0,
+    checked: 0,
     // The note echoed its sonic neighbourhood twice over and was left unwritten — the
     // anti-sameness rail firing. A finding here stays queued for a later, colder pass.
     echoSkipped: 0,
+    errors: 0,
     failed: 0,
     gateSkipped: 0,
     noted: 0,
+    produced: 0,
     queueRemaining: queue.length,
   };
 
@@ -945,6 +960,8 @@ async function main(): Promise<void> {
   const costs: BoxCostEvent[] = [];
 
   for (const queued of queue.slice(0, BATCH_CAP)) {
+    summary.checked += 1;
+
     try {
       const { cost, outcome } = await noteOne(queued);
 
@@ -954,6 +971,7 @@ async function main(): Promise<void> {
 
       if (outcome === "noted") {
         summary.noted += 1;
+        summary.produced += 1;
       } else if (outcome === "alreadyNoted") {
         summary.alreadyNoted += 1;
       } else if (outcome === "gateSkipped") {
@@ -962,8 +980,11 @@ async function main(): Promise<void> {
         summary.echoSkipped += 1;
       } else {
         summary.failed += 1;
+        summary.errors += 1;
       }
     } catch (error) {
+      summary.errors += 1;
+
       if (error instanceof ClaudeAuthError) {
         // Auth failure: STOP the batch, leave the queue intact, alert loudly.
         log("claude auth failed — aborting the batch, the queue is untouched");
@@ -1007,7 +1028,7 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    console.log(JSON.stringify({ errors: 1, ok: false, reason: "sweep_error" }));
     process.exit(1);
   });
 }
