@@ -12,20 +12,31 @@
 //
 // WHAT THE RULES ARE FOR — each one was earned by a measured defect, not imagined:
 //
-//   1. `ok` IS DERIVED, NEVER ACCEPTED. `exit_code === 0 && (errors ?? 0) === 0`. The
-//      nightly Sentry sweep exited 0 for ELEVEN nights while printing
-//      `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that
-//      contradicted it. A summary that carries `ok` at all is REJECTED, so the emitter
-//      is forced to stop asserting its own health rather than merely being overruled.
-//   2. A COUNTER IS A VALIDATED INTEGER OR A 400. `typeof === "number"` alone lets a
-//      float and a negative through into a column that means "a count of work", and
-//      `ok` is derived from one of these numbers. The adjacent real shape is a sweep
-//      reporting its failures as `"failed":[]` — a different KEY, not a wrong type: rules
-//      3 and 4 catch that one, by putting `errors` on the upgrade queue and `failed` in
-//      `unrecognised_fields` instead of letting the count vanish into a silent NULL.
+//   1. `ok` IS AN AUTHORITY, NOT A ROW. The verdict is DERIVED —
+//      `exit_code === 0 && (errors ?? 0) === 0` — and a caller's `ok` never sets it. But
+//      a summary that carries one is RECORDED, not rejected: 25 of the fleet's sweeps print
+//      `ok` in their summary line today, the nightly Sentry sweep's
+//      `{"candidates":N,"ok":true,"resolved":N}` among them — the very self-asserted lie
+//      this ledger was built to catch. Rejecting it would produce NO ROW for exactly those
+//      sweeps (plus the four shell ones and the three new host units), and a missing row reads as
+//      a dead sweep, so the founding case would have been the one case the ledger could
+//      not see. The claim lands in `self_asserted_ok` instead, beside the derived truth,
+//      which makes `where self_asserted_ok = 1 and errors > 0` a one-line query for every
+//      sweep lying about its own health.
+//   2. A COUNTER IS A VALIDATED INTEGER OR A 400 — but an explicit `null` is neither.
+//      `typeof === "number"` alone lets a float and a negative through into a column that
+//      means "a count of work", and `ok` is derived from one of these numbers. A `null`,
+//      though, is the emitter SAYING it does not know (the sonar freshen prints
+//      `"checked":null` on a lock-skipped tick); that is stored as SQL NULL and is not a
+//      validation failure. The adjacent real shape is a sweep reporting its failures as
+//      `"failed":[]` — a different KEY, not a wrong type: rules 3 and 4 catch that one, by
+//      putting `errors` on the upgrade queue and `failed` in `unrecognised_fields` instead
+//      of letting the count vanish into a silent NULL.
 //   3. MISSING FIELDS ARE RECORDED, NOT GUESSED. The mandatory counters a summary did
 //      not carry are listed in `missing_fields`, and THAT LIST IS THE UPGRADE QUEUE.
-//      A counter the Worker invented is a counter nobody can trust.
+//      A counter the Worker invented is a counter nobody can trust. "Did not carry" means
+//      ABSENT — a field present as `null` is the sweep telling us it does not know, which
+//      is not a gap in the sweep and does not belong on its worklist.
 //   4. NO ALIASING A PAGE CAP INTO A DEPTH. `queueDepth:24` was measured to be
 //      `QUEUE_LIMIT`; `queued:50` and `queueRemaining:200` are the same illusion. Only
 //      the canonical spellings feed `queue_depth`; `queued`/`queueRemaining` land in
@@ -39,15 +50,24 @@
 // Nothing here is best-effort-swallowing: a validation failure is a 400 the wrapper
 // ignores, and a database failure is a 500. Both leave the row missing, and a missing
 // row looks like a missed run, which the roster alarms on. Absence being loud is
-// precisely why delivery does not have to be guaranteed.
+// precisely why delivery does not have to be guaranteed — and it is also why the set of
+// things that produce a 400 is kept as small as the honesty rules allow.
 
 import { type RunEventInput } from "@fluncle/contracts/orpc";
 import { getTelemetryDb } from "./db";
 import { logEvent } from "./log";
 import { ApiError } from "./spotify";
 
-/** The closed gate vocabulary, mirroring the `run_events.gate_state` enum. */
-export type RunGateState = "active" | "disabled" | "paused";
+/**
+ * The closed gate vocabulary, mirroring the `run_events.gate_state` enum.
+ *
+ * SIX STATES, not three, because the fleet reports six. `active`/`paused`/`disabled` are a
+ * sweep's own kill switch; `locked`, `forced`, and `dry-run` come from the sonar freshen —
+ * a tick that found the single-flight lock held, and the operator's two manual modes. Each
+ * of those is a tick that is NEITHER ok nor down, which is precisely what this column is
+ * for, and each was a 400 (so: no row, reading as a missed run) before it was listed here.
+ */
+export type RunGateState = "active" | "disabled" | "dry-run" | "forced" | "locked" | "paused";
 
 /** Why the summary yielded what it yielded — mirrors `run_events.summary_status`. */
 export type RunSummaryStatus = "absent" | "malformed" | "not_object" | "parsed";
@@ -80,6 +100,21 @@ export const MANDATORY_SUMMARY_FIELDS = [
 const GATE_SUPPRESSED_FIELDS = new Set<string>(["checked", "produced", "queue_depth"]);
 
 /**
+ * THE GATES THAT MEAN "THIS TICK NEVER LOOKED" — the only ones whose work counters are
+ * suppressed to NULL (rule 5). A sweep that is paused, disabled, or skipped on a held
+ * single-flight lock did not try, so its zeros are not readings.
+ *
+ * `forced` and `dry-run` are deliberately NOT here: both LOOKED. A forced run's counters
+ * are real measurements and suppressing them would destroy the operator's own evidence; a
+ * dry-run genuinely checked its worklist and then declined to write, so `produced: 0` is
+ * the truth about it. The false `produced == 0 AND queue_depth > 0` alarm those two could
+ * otherwise raise is the READER's to exclude — `gate_state` is on the row for exactly that
+ * — and excluding a non-active gate at read time is strictly safer than laundering a
+ * measured number at write time.
+ */
+const GATE_STATES_THAT_NEVER_LOOKED = new Set<string>(["disabled", "locked", "paused"]);
+
+/**
  * The recognised counters and the spellings that reach each one. Two spellings are
  * allowed for the compound names because the emitters are a mix of bash (snake_case, its
  * native vocabulary) and the repo's JS sweeps (camelCase) — the SAME semantic under two
@@ -102,13 +137,22 @@ const COUNTER_FIELDS: { canonical: string; spellings: string[] }[] = [
 
 const GATE_STATE_SPELLINGS = ["gateState", "gate_state"];
 const PAUSED_SPELLINGS = ["paused"];
-const GATE_STATES = new Set<string>(["active", "disabled", "paused"]);
+const OK_SPELLINGS = ["ok"];
+const GATE_STATES = new Set<string>([
+  "active",
+  "disabled",
+  "dry-run",
+  "forced",
+  "locked",
+  "paused",
+]);
 
 /** Every summary key the Worker recognises — anything else is `unrecognised_fields`. */
 const RECOGNISED_KEYS = new Set<string>([
   ...COUNTER_FIELDS.flatMap((field) => field.spellings),
   ...GATE_STATE_SPELLINGS,
   ...PAUSED_SPELLINGS,
+  ...OK_SPELLINGS,
 ]);
 
 /**
@@ -131,6 +175,12 @@ export type NormalizedRunSummary = {
   missingFields: string[];
   produced: null | number;
   queueDepth: null | number;
+  /**
+   * The health the emitter CLAIMED, when it claimed one — recorded, never obeyed. NULL
+   * means the summary made no readable claim. Its whole purpose is to sit beside the
+   * derived verdict so the contradiction is queryable rather than argued about.
+   */
+  selfAssertedOk: boolean | null;
   summaryStatus: RunSummaryStatus;
   unrecognisedFields: string[];
   vendorCalls: null | number;
@@ -144,7 +194,8 @@ function reject(message: string): never {
  * A counter must be a finite, non-negative INTEGER — rule 2. `Number.isInteger` is doing
  * the work a bare `typeof` check cannot: it rejects a float, an infinity, and a NaN, and
  * the `< 0` rejects a negative. A present-but-wrong-typed counter is a 400 rather than a
- * silent NULL, because `ok` is derived from one of these numbers.
+ * silent NULL, because `ok` is derived from one of these numbers. (An explicit `null` never
+ * reaches here — `readField` classifies it as `declared-unknown` first.)
  */
 function requireCount(field: string, value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
@@ -156,56 +207,90 @@ function requireCount(field: string, value: unknown): number {
   return value;
 }
 
-/** The one spelling of a field this summary used, or `undefined` when it used none. */
-function singleSpelling(
+/**
+ * THREE STATES, not two — the distinction that decides whether a real sweep gets a row.
+ *
+ *   - `absent` — the summary never mentioned the field. A gap in the SWEEP, so a mandatory
+ *     one lands on the upgrade queue.
+ *   - `declared-unknown` — the field is there, holding `null`. The sweep is TELLING us it
+ *     does not know (the sonar freshen prints `"checked":null` on a lock-skipped tick, and
+ *     `"gateState":null` on every ordinary one). Stored as SQL NULL, and pointedly NOT on
+ *     the upgrade queue: `missing_fields` means "the sweep never told us", not "the sweep
+ *     told us it does not know". Filing it would manufacture a worklist item against a
+ *     sweep that is already doing the right thing.
+ *   - `value` — a real reading, to be validated.
+ */
+type SummaryField =
+  | { key: string; kind: "declared-unknown" }
+  | { key: string; kind: "value"; value: unknown }
+  | { kind: "absent" };
+
+/**
+ * Read one logical field across its allowed spellings.
+ *
+ * A `null` IS NOT A SIGNAL, which is what makes the two contradiction rules behave: a
+ * summary carrying `queueDepth: 5` alongside `queue_depth: null` is not a contradiction,
+ * and `gateState: null` alongside `paused: true` is one gate signal, not two. Only VALUES
+ * can contradict each other.
+ */
+function readField(
   summary: Record<string, unknown>,
   canonical: string,
   spellings: string[],
-): string | undefined {
+): SummaryField {
   const present = spellings.filter((spelling) => Object.hasOwn(summary, spelling));
+  const valued = present.filter((spelling) => summary[spelling] !== null);
 
-  if (present.length > 1) {
+  if (valued.length > 1) {
     reject(
-      `run summary carries "${canonical}" under more than one spelling (${present.join(", ")}) — send exactly one`,
+      `run summary carries "${canonical}" under more than one spelling (${valued.join(", ")}) — send exactly one`,
     );
   }
 
-  return present[0];
+  const [valuedKey] = valued;
+
+  if (valuedKey !== undefined) {
+    return { key: valuedKey, kind: "value", value: summary[valuedKey] };
+  }
+
+  const [presentKey] = present;
+
+  return presentKey === undefined
+    ? { kind: "absent" }
+    : { key: presentKey, kind: "declared-unknown" };
 }
 
 /** The gate, from either `paused` (boolean) or `gateState` (the closed enum). */
 function readGateState(summary: Record<string, unknown>): null | RunGateState {
-  const gateKey = singleSpelling(summary, "gate_state", GATE_STATE_SPELLINGS);
-  const pausedKey = singleSpelling(summary, "paused", PAUSED_SPELLINGS);
+  const gate = readField(summary, "gate_state", GATE_STATE_SPELLINGS);
+  const paused = readField(summary, "paused", PAUSED_SPELLINGS);
 
-  if (gateKey !== undefined && pausedKey !== undefined) {
+  if (gate.kind === "value" && paused.kind === "value") {
     // One gate signal per summary. Two can disagree, and a ledger that exists to catch
     // a self-contradicting summary cannot begin by reconciling one.
     reject(
-      `run summary carries both "${gateKey}" and "${pausedKey}" — send exactly one gate signal`,
+      `run summary carries both "${gate.key}" and "${paused.key}" — send exactly one gate signal`,
     );
   }
 
-  if (gateKey !== undefined) {
-    const value = summary[gateKey];
-
-    if (typeof value !== "string" || !GATE_STATES.has(value)) {
+  if (gate.kind === "value") {
+    if (typeof gate.value !== "string" || !GATE_STATES.has(gate.value)) {
       reject(
-        `run summary field "${gateKey}" must be one of active/disabled/paused, got ${JSON.stringify(value)}`,
+        `run summary field "${gate.key}" must be one of ${[...GATE_STATES].sort().join("/")}, got ${JSON.stringify(gate.value)}`,
       );
     }
 
-    return value as RunGateState;
+    return gate.value as RunGateState;
   }
 
-  if (pausedKey !== undefined) {
-    const value = summary[pausedKey];
-
-    if (typeof value !== "boolean") {
-      reject(`run summary field "${pausedKey}" must be a boolean, got ${JSON.stringify(value)}`);
+  if (paused.kind === "value") {
+    if (typeof paused.value !== "boolean") {
+      reject(
+        `run summary field "${paused.key}" must be a boolean, got ${JSON.stringify(paused.value)}`,
+      );
     }
 
-    return value ? "paused" : "active";
+    return paused.value ? "paused" : "active";
   }
 
   return null;
@@ -215,10 +300,35 @@ function truncateName(name: string): string {
   return name.length > MAX_FIELD_NAME_CHARS ? `${name.slice(0, MAX_FIELD_NAME_CHARS - 1)}…` : name;
 }
 
+/**
+ * THE CLAIM, recorded and never obeyed (rule 1). A boolean `ok` becomes
+ * `self_asserted_ok`; anything else — a present-but-unreadable claim — yields NULL and is
+ * reported back so it lands in `unrecognised_fields`, because a self-assessment the Worker
+ * could not read must not vanish silently either.
+ */
+function readSelfAssertedOk(summary: Record<string, unknown>): {
+  selfAssertedOk: boolean | null;
+  unreadableKey: string | undefined;
+} {
+  const claim = readField(summary, "ok", OK_SPELLINGS);
+
+  if (claim.kind !== "value") {
+    return { selfAssertedOk: null, unreadableKey: undefined };
+  }
+
+  if (typeof claim.value !== "boolean") {
+    return { selfAssertedOk: null, unreadableKey: claim.key };
+  }
+
+  return { selfAssertedOk: claim.value, unreadableKey: undefined };
+}
+
 /** The unrecognised keys, sorted, bounded, with the overflow COUNTED rather than dropped. */
-function collectUnrecognised(summary: Record<string, unknown>): string[] {
-  const unknown = Object.keys(summary)
-    .filter((key) => !RECOGNISED_KEYS.has(key))
+function collectUnrecognised(summary: Record<string, unknown>, alsoUnknown: string[]): string[] {
+  const unknown = [
+    ...Object.keys(summary).filter((key) => !RECOGNISED_KEYS.has(key)),
+    ...alsoUnknown,
+  ]
     .sort()
     .map(truncateName);
 
@@ -242,6 +352,7 @@ function emptySummary(summaryStatus: RunSummaryStatus): NormalizedRunSummary {
     missingFields: [...MANDATORY_SUMMARY_FIELDS],
     produced: null,
     queueDepth: null,
+    selfAssertedOk: null,
     summaryStatus,
     unrecognisedFields: [],
     vendorCalls: null,
@@ -256,9 +367,14 @@ function emptySummary(summaryStatus: RunSummaryStatus): NormalizedRunSummary {
  * crashed before printing anything is exactly the case the ledger must capture — choking
  * on it would blind the ledger precisely where the failure is worst.
  *
- * It DOES throw (a 400) for a summary that is well-formed but LIES or CONTRADICTS: a
- * self-asserted `ok`, a wrong-typed counter, a field sent under two spellings, two gate
- * signals. Those are emitter bugs the ledger must not absorb.
+ * It DOES throw (a 400) for a summary that CONTRADICTS ITSELF or is structurally
+ * untrustworthy: a wrong-typed counter, one field under two spellings, two gate signals, a
+ * gate outside the vocabulary. Those are emitter bugs the ledger must not absorb.
+ *
+ * A SELF-ASSERTED `ok` IS NOT ONE OF THEM. It is recorded in `selfAssertedOk` and
+ * overruled by the derivation — see rule 1 in the file header. Rejecting it would have
+ * produced no row for the 25 sweeps that print `ok`, the founding Sentry case included,
+ * and a missing row reads as a dead sweep.
  */
 export function normalizeRunSummary(summaryRaw: null | string | undefined): NormalizedRunSummary {
   const trimmed = summaryRaw?.trim();
@@ -281,28 +397,33 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
 
   const summary = parsed as Record<string, unknown>;
 
-  // Rule 1, first and hardest: the emitter does not get to grade itself.
-  if (Object.hasOwn(summary, "ok")) {
-    reject('run summary must not carry "ok" — the ledger derives it from exit_code and errors');
-  }
-
+  // Rule 1: the emitter's claim is RECORDED here and overruled by `deriveRunOk` below. It
+  // is never obeyed, and it never costs the sweep its row.
+  const { selfAssertedOk, unreadableKey } = readSelfAssertedOk(summary);
   const gateState = readGateState(summary);
-  // A gated sweep did not run, so it owes no work counters and must not report 0 for
-  // them (rule 5). `errors` and `expected_interval_ms` stay owing: one is a failure
-  // signal, the other describes the schedule rather than the run.
-  const gated = gateState === "paused" || gateState === "disabled";
+  // A sweep behind a closed gate never looked, so it owes no work counters and must not
+  // report 0 for them (rule 5). `errors` and `expected_interval_ms` stay owing: one is a
+  // failure signal, the other describes the schedule rather than the run.
+  const gated = GATE_STATES_THAT_NEVER_LOOKED.has(gateState ?? "");
 
   const values = new Map<string, null | number>();
   const missingFields: string[] = [];
 
   for (const { canonical, spellings } of COUNTER_FIELDS) {
-    const key = singleSpelling(summary, canonical, spellings);
+    const field = readField(summary, canonical, spellings);
     const suppressed = gated && GATE_SUPPRESSED_FIELDS.has(canonical);
 
-    if (key === undefined) {
+    if (field.kind !== "value") {
       values.set(canonical, null);
 
-      if (!suppressed && (MANDATORY_SUMMARY_FIELDS as readonly string[]).includes(canonical)) {
+      // ABSENT files an upgrade-queue item; DECLARED-UNKNOWN does not. The sweep that
+      // prints `"checked":null` on a gated tick is behaving correctly and must not be
+      // handed a worklist item for saying so.
+      if (
+        field.kind === "absent" &&
+        !suppressed &&
+        (MANDATORY_SUMMARY_FIELDS as readonly string[]).includes(canonical)
+      ) {
         missingFields.push(canonical);
       }
 
@@ -311,7 +432,7 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
 
     // Validate BEFORE suppressing, so a gated sweep sending `produced: "lots"` is still
     // a 400. Suppression is about not laundering a number, not about skipping the check.
-    const count = requireCount(key, summary[key]);
+    const count = requireCount(field.key, field.value);
 
     values.set(canonical, suppressed ? null : count);
   }
@@ -324,8 +445,9 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
     missingFields,
     produced: values.get("produced") ?? null,
     queueDepth: values.get("queue_depth") ?? null,
+    selfAssertedOk,
     summaryStatus: "parsed",
-    unrecognisedFields: collectUnrecognised(summary),
+    unrecognisedFields: collectUnrecognised(summary, unreadableKey ? [unreadableKey] : []),
     vendorCalls: values.get("vendor_calls") ?? null,
   };
 }
@@ -384,6 +506,7 @@ const INSERT_COLUMNS = [
   "produced",
   "queue_depth",
   "run_duration_ms",
+  "self_asserted_ok",
   "summary_raw",
   "summary_status",
   "unit",
@@ -397,6 +520,11 @@ export type RecordedRun = {
   inserted: number;
   missingFields: string[];
   runOk: boolean;
+  /**
+   * The health the summary CLAIMED, when it made a readable claim — handed back so a curl
+   * against the op shows the claim and the verdict side by side. NULL means no claim.
+   */
+  selfAssertedOk: boolean | null;
   /**
    * Whether a telemetry database existed and the write ran at all. Without this,
    * `inserted: 0` would mean BOTH "this was a retry" and "there is no ledger" — the
@@ -423,7 +551,14 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
   if (!db) {
     logEvent("warn", "telemetry.run-event-unprovisioned", { id, unit: input.unit });
 
-    return { id, inserted: 0, missingFields: summary.missingFields, runOk, stored: false };
+    return {
+      id,
+      inserted: 0,
+      missingFields: summary.missingFields,
+      runOk,
+      selfAssertedOk: summary.selfAssertedOk,
+      stored: false,
+    };
   }
 
   const result = await db.execute({
@@ -442,6 +577,7 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
       summary.produced,
       summary.queueDepth,
       runDurationMs(input.started_at, input.ended_at),
+      summary.selfAssertedOk === null ? null : Number(summary.selfAssertedOk),
       input.summary_raw ?? null,
       summary.summaryStatus,
       input.unit,
@@ -458,6 +594,7 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
     inserted: result.rowsAffected,
     missingFields: summary.missingFields,
     runOk,
+    selfAssertedOk: summary.selfAssertedOk,
     stored: true,
   };
 }

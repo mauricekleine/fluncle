@@ -68,6 +68,7 @@ describe("insertRunEvent — the round trip", () => {
       inserted: 1,
       missingFields: [],
       runOk: true,
+      selfAssertedOk: null,
       stored: true,
     });
 
@@ -87,6 +88,7 @@ describe("insertRunEvent — the round trip", () => {
       produced: 4,
       queue_depth: 17,
       run_duration_ms: 12_500,
+      self_asserted_ok: null,
       summary_status: "parsed",
       unit: "fluncle-enrich",
       unrecognised_fields: "[]",
@@ -165,15 +167,53 @@ describe("insertRunEvent — the derived verdict reaches the column", () => {
     expect(row.ok).toBe(0);
   });
 
-  it("REJECTS an envelope whose summary claims its own ok, writing nothing", async () => {
-    await expect(
-      insertRunEvent(envelope({ summary_raw: '{"errors":2,"ok":true}' })),
-    ).rejects.toThrow(/must not carry "ok"/);
+  it("WRITES the row for the real Sentry-sweep summary, and files its claim beside the verdict", async () => {
+    // THE FOUNDING CASE, with the real fixture:
+    // docs/agents/hermes/scripts/sentry-triage-sweep.ts:489 prints
+    // `{"candidates":N,"ok":true,"resolved":N}` — the self-asserted lie this whole ledger
+    // exists to catch. A hard 400 on a summary carrying `ok` meant NO ROW for it, so the
+    // founding case would have been the one case the ledger could not see, and a rowless
+    // sweep reads as a dead one.
+    const recorded = await insertRunEvent(
+      envelope({ exit_code: 1, summary_raw: '{"candidates":3,"ok":true,"resolved":3}' }),
+    );
+
+    expect(recorded.stored).toBe(true);
+    expect(recorded.inserted).toBe(1);
+
+    const row = await onlyRow();
+
+    // The row exists, the DERIVED verdict is false, and the CLAIM is on the row as `true`.
+    expect(row.ok).toBe(0);
+    expect(row.self_asserted_ok).toBe(1);
+    expect(row.summary_raw).toBe('{"candidates":3,"ok":true,"resolved":3}');
+    expect(row.summary_status).toBe("parsed");
+    // And the un-actioned numbers land on the rename queue instead of vanishing.
+    expect(row.unrecognised_fields).toBe('["candidates","resolved"]');
+  });
+
+  it("makes 'the sweep is lying about itself' a one-line query", async () => {
+    // The eleven-night defect end to end: exit 0, `errors:2`, and a hardcoded `ok:true`.
+    // This is the read the column was added for.
+    await insertRunEvent(envelope({ exit_code: 0, summary_raw: '{"errors":2,"ok":true}' }));
+    // A control row: honest, and it must NOT appear.
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-29T04:00:00.000Z",
+        summary_raw: '{"errors":0,"ok":true,"produced":4}',
+        unit: "fluncle-note",
+      }),
+    );
 
     const client = telemetryDb;
-    const result = await client?.execute("select count(*) as n from run_events");
+    const liars = await client?.execute(
+      "select unit, ok, errors from run_events where self_asserted_ok = 1 and errors > 0",
+    );
 
-    expect(Number(result?.rows[0]?.n)).toBe(0);
+    expect(liars?.rows).toHaveLength(1);
+    expect(liars?.rows[0]?.unit).toBe("fluncle-enrich");
+    expect(liars?.rows[0]?.ok).toBe(0);
+    expect(liars?.rows[0]?.errors).toBe(2);
   });
 });
 
@@ -194,6 +234,81 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
     const client = telemetryDb;
     const alarmed = await client?.execute(
       "select id from run_events where produced = 0 and queue_depth > 0",
+    );
+
+    expect(alarmed?.rows).toHaveLength(0);
+  });
+
+  it("stores the REAL lock-skipped sonar-freshen line, nulls and all", async () => {
+    // Copied from apps/sonar/deploy/fluncle-sonar-freshen.sh: on a held single-flight lock
+    // it prints its counters as literal `null`. Every field of this line was a 400 —
+    // `checked:null` failed the integer check and `gateState:"locked"` was outside the
+    // vocabulary — so a correctly-behaving unit wrote nothing and read as a missed run.
+    const recorded = await insertRunEvent(
+      envelope({
+        summary_raw:
+          '{"ok":false,"checked":null,"produced":null,"errors":0,"queueDepth":null,"gateState":"locked","expectedIntervalMs":3600000}',
+        unit: "fluncle-sonar-freshen",
+      }),
+    );
+
+    expect(recorded.stored).toBe(true);
+    expect(recorded.inserted).toBe(1);
+
+    const row = await onlyRow();
+
+    expect(row).toMatchObject({
+      checked: null,
+      errors: 0,
+      expected_interval_ms: 3_600_000,
+      gate_state: "locked",
+      // NOT an upgrade-queue item: the sweep told us it does not know, which is not a gap.
+      missing_fields: "[]",
+      produced: null,
+      queue_depth: null,
+      self_asserted_ok: 0,
+      summary_status: "parsed",
+      unit: "fluncle-sonar-freshen",
+      unrecognised_fields: "[]",
+    });
+    // Exit 0 and zero errors: a lock-skip is not a failure, and the derived verdict says so.
+    expect(row.ok).toBe(1);
+  });
+
+  it("keeps an operator's forced run's measurements, and lets the reader exclude the gate", async () => {
+    // `forced` and `dry-run` LOOKED, so their numbers are real and must survive. The false
+    // `produced == 0 AND queue_depth > 0` reading a dry-run could raise is the READER's to
+    // exclude — that is what `gate_state` is on the row for, and excluding a gate at read
+    // time is strictly safer than laundering a measured number at write time.
+    await insertRunEvent(
+      envelope({
+        summary_raw: '{"gateState":"forced","checked":1,"errors":0,"produced":1,"queueDepth":0}',
+        unit: "fluncle-sonar-freshen",
+      }),
+    );
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-29T04:00:00.000Z",
+        summary_raw: '{"gateState":"dry-run","checked":1,"errors":0,"produced":0,"queueDepth":7}',
+        unit: "fluncle-sonar-freshen",
+      }),
+    );
+
+    const client = telemetryDb;
+    const rows = await client?.execute(
+      "select gate_state, produced, queue_depth from run_events order by occurred_at",
+    );
+
+    expect(rows?.rows.map((row) => [row.gate_state, row.produced, row.queue_depth])).toEqual([
+      ["forced", 1, 0],
+      ["dry-run", 0, 7],
+    ]);
+
+    // The alarm, written as it must be written: scheduled ticks only.
+    const alarmed = await client?.execute(
+      `select id from run_events
+       where produced = 0 and queue_depth > 0
+         and (gate_state is null or gate_state = 'active')`,
     );
 
     expect(alarmed?.rows).toHaveLength(0);
@@ -229,15 +344,25 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
     expect(retry).toMatchObject({ inserted: 0, stored: true });
   });
 
-  it("STILL rejects a lying summary with no database present", async () => {
+  it("STILL rejects a self-contradicting summary with no database present", async () => {
     // An unprovisioned deployment must not become the place where bad emitters go
     // unnoticed — validation is not a side effect of having somewhere to write.
-    await expect(insertRunEvent(envelope({ summary_raw: '{"ok":true}' }))).rejects.toThrow(
-      /must not carry "ok"/,
-    );
     await expect(insertRunEvent(envelope({ summary_raw: '{"errors":[]}' }))).rejects.toThrow(
       /non-negative integer/,
     );
+    await expect(
+      insertRunEvent(envelope({ summary_raw: '{"queueDepth":5,"queue_depth":9}' })),
+    ).rejects.toThrow(/more than one spelling/);
+  });
+
+  it("still hands back the derived verdict AND the claim with no ledger to write to", async () => {
+    // The ack is the fastest way to see the Worker's judgement of a run, and it must not
+    // go quiet just because there is nowhere to store it.
+    const recorded = await insertRunEvent(
+      envelope({ exit_code: 0, summary_raw: '{"errors":2,"ok":true}' }),
+    );
+
+    expect(recorded).toMatchObject({ runOk: false, selfAssertedOk: true, stored: false });
   });
 });
 

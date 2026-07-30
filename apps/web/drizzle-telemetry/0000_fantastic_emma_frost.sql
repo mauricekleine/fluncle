@@ -13,6 +13,7 @@ CREATE TABLE `run_events` (
 	`produced` integer,
 	`queue_depth` integer,
 	`run_duration_ms` integer,
+	`self_asserted_ok` integer,
 	`summary_raw` text,
 	`summary_status` text NOT NULL,
 	`unit` text NOT NULL,

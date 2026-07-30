@@ -30,7 +30,9 @@ import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
  *     `isrcRecoveredByDeezer: 0` was printed in every tick summary and read by nobody.
  *   - The nightly Sentry sweep exited 0 for ELEVEN nights while printing
  *     `{"errors":2,"ok":true}` — a hardcoded literal sitting beside the number that
- *     contradicted it. Hence `ok` is DERIVED here and a caller-supplied one is REJECTED.
+ *     contradicted it. Hence `ok` is DERIVED here, and the caller's claim is filed beside
+ *     it in `self_asserted_ok` rather than obeyed OR rejected: 25 sweep scripts print `ok`
+ *     today, so rejecting the summary would have left the founding case with no row at all.
  *   - Several sweeps report a PAGE CAP dressed as a backlog (`queueDepth:24` was
  *     `QUEUE_LIMIT`), so `produced == 0 AND queue_depth > 0` is the alarm CONJUNCTION —
  *     a sweep with a genuinely empty worklist legitimately produces nothing forever.
@@ -70,7 +72,16 @@ export const runEvents = sqliteTable(
     // here: a paused run's counters are stored NULL, never 0, because 0 is reserved for
     // "I tried and found nothing" (the `cost_events` posture — a rate-miss surfaces as
     // unpriced, never laundered to $0).
-    gateState: text("gate_state", { enum: ["active", "disabled", "paused"] }),
+    //
+    // SIX VALUES, because the fleet reports six. Three are a sweep's own kill switch;
+    // `locked` (a tick that found the single-flight lock held), `forced`, and `dry-run`
+    // come from the sonar freshen — an operator act, or a skip, must never read as a
+    // failure. Only `disabled` / `locked` / `paused` suppress the work counters: those
+    // three never looked, while `forced` and `dry-run` did, and their numbers are real
+    // (see GATE_STATES_THAT_NEVER_LOOKED in lib/server/run-events.ts).
+    gateState: text("gate_state", {
+      enum: ["active", "disabled", "dry-run", "forced", "locked", "paused"],
+    }),
     // The deterministic idempotency key: `${unit}:${startedAt}`, derived by the Worker
     // from the envelope (see lib/server/run-events.ts `runEventId`). Inserted
     // `ON CONFLICT(id) DO NOTHING`, so a retried best-effort POST collapses to ONE row
@@ -84,10 +95,9 @@ export const runEvents = sqliteTable(
     // ISO box time the run STARTED. The ledger's time axis (every read windows on it).
     occurredAt: text("occurred_at").notNull(),
     // 0/1, DERIVED by the Worker as `exit_code === 0 && (errors ?? 0) === 0` and NEVER
-    // accepted from the caller. This is the single most important column in the table:
-    // the schema REJECTS a caller-supplied `ok` outright, because the defect that
-    // motivated this ledger was a sweep asserting its own health next to the number
-    // that disproved it.
+    // accepted from the caller. This is the single most important column in the table,
+    // because the defect that motivated this ledger was a sweep asserting its own health
+    // next to the number that disproved it.
     ok: integer("ok").notNull(),
     // Units of work actually WRITTEN this run — not rows visited (that is `checked`).
     // The numerator of the alarm conjunction.
@@ -101,6 +111,17 @@ export const runEvents = sqliteTable(
     // ended_at − started_at in ms, derived by the Worker. NULL when either timestamp is
     // not parseable — recorded as unknown rather than as 0.
     runDurationMs: integer("run_duration_ms"),
+    // 0/1, THE CLAIM — what the sweep said about itself, when it said anything (NULL
+    // otherwise). It is recorded and never obeyed; `ok` above is the authority.
+    //
+    // THIS COLUMN IS THE LIE DETECTOR, and it exists because rejecting a self-asserted
+    // `ok` would have been self-defeating: 25 sweep scripts print one today, the nightly
+    // Sentry sweep's `{"candidates":N,"ok":true,"resolved":N}` among them, so a hard
+    // rejection produced NO ROW for precisely the sweeps this table was built to catch —
+    // and a missing row reads as a dead sweep. With the claim stored beside the verdict,
+    // `where self_asserted_ok = 1 and errors > 0` is a one-line query that finds every
+    // sweep lying about its own health.
+    selfAssertedOk: integer("self_asserted_ok"),
     // The tick's summary line, verbatim and bounded. Kept even when it did not parse:
     // a sweep that crashed before printing a usable summary is exactly the case this
     // ledger exists to capture, so the unparseable text is evidence, not garbage.

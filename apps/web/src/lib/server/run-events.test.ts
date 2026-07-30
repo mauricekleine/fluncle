@@ -17,19 +17,79 @@ import {
 // nobody" is precisely the failure this ledger exists to end — and a test that passes
 // before and after a fix would repeat it.
 
-describe("normalizeRunSummary — the emitter never grades itself", () => {
-  it("REJECTS a summary carrying its own `ok`", () => {
+describe("normalizeRunSummary — the emitter never grades itself, but it is always recorded", () => {
+  it("RECORDS a self-asserted `ok` instead of rejecting the row", () => {
     // THE ELEVEN-NIGHT DEFECT, verbatim: the nightly Sentry sweep exited 0 while printing
-    // a hardcoded `ok:true` next to the `errors:2` that contradicted it. Merely ignoring
-    // `ok` would derive the right verdict and leave the lie in place to mislead the next
-    // reader of the raw log; rejecting it forces the emitter to stop claiming.
-    expect(() => normalizeRunSummary('{"errors":2,"ok":true}')).toThrow(/must not carry "ok"/);
+    // a hardcoded `ok:true` next to the `errors:2` that contradicted it.
+    //
+    // A hard 400 on a summary carrying `ok` looked like the strong move and was the exact
+    // opposite: 25 sweep scripts print `ok` today, this one included, so the rejection
+    // produced NO ROW for precisely the sweeps the ledger was built to catch — and a
+    // missing row reads as a dead sweep. The claim is filed, not obeyed.
+    const result = normalizeRunSummary('{"errors":2,"ok":true}');
+
+    expect(result.selfAssertedOk).toBe(true);
+    expect(result.errors).toBe(2);
+    // The derived verdict is untouched by the claim. That is the whole authority rule.
+    expect(deriveRunOk(0, result.errors)).toBe(false);
   });
 
-  it("REJECTS `ok` even when it agrees with the numbers", () => {
+  it("records the claim even when it agrees with the numbers", () => {
     // The rule is about AUTHORITY, not about catching disagreement. An `ok` that happens
-    // to be right today is an `ok` that can go stale tomorrow without anything noticing.
-    expect(() => normalizeRunSummary('{"errors":0,"ok":true}')).toThrow(/must not carry "ok"/);
+    // to be right today is an `ok` that can go stale tomorrow without anything noticing —
+    // which is why it is stored as a CLAIM and never consulted.
+    expect(normalizeRunSummary('{"errors":0,"ok":true}').selfAssertedOk).toBe(true);
+    expect(normalizeRunSummary('{"errors":0,"ok":false}').selfAssertedOk).toBe(false);
+  });
+
+  it("keeps `ok` off the rename queue, but not an unreadable one", () => {
+    // `ok` is a key the Worker recognises (as a claim it distrusts), so it must not pad
+    // every one of those 25 sweeps' `unrecognised_fields` with an item nobody can action.
+    // A claim it could NOT read is different — that one lands there, so no self-assessment
+    // is ever fully invisible.
+    expect(normalizeRunSummary('{"ok":true}').unrecognisedFields).toEqual([]);
+    expect(normalizeRunSummary('{"ok":"yes"}')).toMatchObject({
+      selfAssertedOk: null,
+      unrecognisedFields: ["ok"],
+    });
+  });
+
+  it("leaves selfAssertedOk NULL when the sweep claimed nothing", () => {
+    expect(normalizeRunSummary('{"produced":1}').selfAssertedOk).toBeNull();
+    expect(normalizeRunSummary('{"ok":null}').selfAssertedOk).toBeNull();
+    expect(normalizeRunSummary(undefined).selfAssertedOk).toBeNull();
+  });
+
+  it("records the REAL nightly Sentry sweep summaries, verbatim", () => {
+    // Two real lines, copied from the sweep. Neither may cost its sweep a row.
+    //
+    // docs/agents/hermes/scripts/sentry-triage-sweep.ts:489 — the reconcile helper:
+    const helper = normalizeRunSummary('{"candidates":3,"ok":true,"resolved":3}');
+
+    expect(helper.summaryStatus).toBe("parsed");
+    expect(helper.selfAssertedOk).toBe(true);
+    expect(helper.unrecognisedFields).toEqual(["candidates", "resolved"]);
+    // It reports no `errors` at all, so that goes on the upgrade queue — the honest
+    // outcome, and the reason the derived verdict falls back to the exit code.
+    expect(helper.missingFields).toContain("errors");
+
+    // sentry-triage-sweep.sh:229 — the driver's own line, the one the wrapper actually
+    // sends. `fetchErrors` is a real error count under a NON-canonical key, and
+    // `reconcile` is a nested object; both land on the rename queue rather than vanishing.
+    const driver = normalizeRunSummary(
+      '{"ok":true,"action":"triaged","triaged":4,"prs":2,"fetchErrors":1,"reconcile":{"candidates":3,"ok":true,"resolved":3},"comment":0}',
+    );
+
+    expect(driver.selfAssertedOk).toBe(true);
+    expect(driver.errors).toBeNull();
+    expect(driver.unrecognisedFields).toEqual([
+      "action",
+      "comment",
+      "fetchErrors",
+      "prs",
+      "reconcile",
+      "triaged",
+    ]);
   });
 });
 
@@ -43,13 +103,32 @@ describe("normalizeRunSummary — a counter is a validated integer or a 400", ()
     );
   });
 
-  it("REJECTS a counter sent as a string, a float, a negative, or null", () => {
-    // `typeof value === "number"` alone catches only the first and last of these — a float
-    // and a negative slide straight through it into a column that means "a count of work".
+  it("REJECTS a counter sent as a string, a float, or a negative", () => {
+    // `typeof value === "number"` alone catches only the first of these — a float and a
+    // negative slide straight through it into a column that means "a count of work".
     expect(() => normalizeRunSummary('{"produced":"7"}')).toThrow(/non-negative integer/);
     expect(() => normalizeRunSummary('{"produced":1.5}')).toThrow(/non-negative integer/);
     expect(() => normalizeRunSummary('{"produced":-1}')).toThrow(/non-negative integer/);
-    expect(() => normalizeRunSummary('{"produced":null}')).toThrow(/non-negative integer/);
+  });
+
+  it("reads an explicit `null` as DECLARED-UNKNOWN, never as a violation", () => {
+    // THE MEASURED SHAPE: the sonar freshen prints `"checked":null,"produced":null,
+    // "queueDepth":null` on a lock-skipped tick (apps/sonar/deploy/fluncle-sonar-freshen.sh
+    // — SF_CHECKED and friends start at the string "null"). A 400 there meant a
+    // correctly-behaving sweep got NO ROW and read as a missed run.
+    const result = normalizeRunSummary('{"checked":null,"errors":0,"produced":null}');
+
+    expect(result.checked).toBeNull();
+    expect(result.produced).toBeNull();
+    expect(result.errors).toBe(0);
+  });
+
+  it("keeps a declared-unknown OFF the upgrade queue, unlike an absent field", () => {
+    // `missing_fields` is the worklist "this sweep never told us". A sweep that says
+    // `null` DID tell us — it told us it does not know — so filing an item against it
+    // would manufacture work out of correct behaviour. Absence still files.
+    expect(normalizeRunSummary('{"produced":null}').missingFields).not.toContain("produced");
+    expect(normalizeRunSummary("{}").missingFields).toContain("produced");
   });
 
   it("surfaces the real `failed: []` shape instead of silently nulling it", () => {
@@ -141,6 +220,15 @@ describe("normalizeRunSummary — a page cap never becomes a backlog", () => {
       /more than one spelling/,
     );
   });
+
+  it("does not call a value and a NULL a contradiction", () => {
+    // Only VALUES can contradict each other. A null is the sweep declining to answer under
+    // one spelling while answering under the other — annoying, not a lie, and rejecting it
+    // would cost a row over a formatting quirk.
+    expect(normalizeRunSummary('{"queueDepth":5,"queue_depth":null}').queueDepth).toBe(5);
+    expect(normalizeRunSummary('{"queueDepth":null,"queue_depth":9}').queueDepth).toBe(9);
+    expect(normalizeRunSummary('{"queueDepth":null,"queue_depth":null}').queueDepth).toBeNull();
+  });
 });
 
 describe("normalizeRunSummary — the third state", () => {
@@ -186,13 +274,33 @@ describe("normalizeRunSummary — the third state", () => {
     expect(result.queueDepth).toBe(40);
   });
 
-  it("accepts the explicit gate vocabulary and REJECTS anything outside it", () => {
+  it("accepts every gate the fleet actually reports, and REJECTS anything outside it", () => {
+    // The three the sonar freshen sends were each a 400 — so a lock-skipped tick and both
+    // of the operator's manual modes produced no row and read as missed runs.
     expect(normalizeRunSummary('{"gateState":"disabled"}').gateState).toBe("disabled");
     expect(normalizeRunSummary('{"gate_state":"active"}').gateState).toBe("active");
-    expect(() => normalizeRunSummary('{"gateState":"halted"}')).toThrow(
-      /one of active\/disabled\/paused/,
-    );
+    expect(normalizeRunSummary('{"gateState":"locked"}').gateState).toBe("locked");
+    expect(normalizeRunSummary('{"gateState":"forced"}').gateState).toBe("forced");
+    expect(normalizeRunSummary('{"gateState":"dry-run"}').gateState).toBe("dry-run");
+    // The vocabulary is still CLOSED — an unlisted gate is a version skew that must
+    // degrade loudly, not widen silently into a column nobody validated.
+    expect(() => normalizeRunSummary('{"gateState":"halted"}')).toThrow(/must be one of/);
     expect(() => normalizeRunSummary('{"paused":"yes"}')).toThrow(/must be a boolean/);
+  });
+
+  it("suppresses counters only for the gates that never LOOKED", () => {
+    // `locked` did not look — its zeros are not readings. `forced` and `dry-run` DID look,
+    // and destroying an operator-forced run's measurements would delete the very evidence
+    // he forced the run to get. A dry-run's `produced: 0` is likewise the truth about it.
+    expect(
+      normalizeRunSummary('{"gateState":"locked","produced":0,"queueDepth":40}'),
+    ).toMatchObject({ produced: null, queueDepth: null });
+    expect(
+      normalizeRunSummary('{"gateState":"forced","produced":3,"queueDepth":40}'),
+    ).toMatchObject({ produced: 3, queueDepth: 40 });
+    expect(
+      normalizeRunSummary('{"gateState":"dry-run","produced":0,"queueDepth":7}'),
+    ).toMatchObject({ produced: 0, queueDepth: 7 });
   });
 
   it("REJECTS two gate signals at once", () => {
@@ -201,9 +309,56 @@ describe("normalizeRunSummary — the third state", () => {
     );
   });
 
-  it("leaves gateState NULL when no gate was reported", () => {
+  it("leaves gateState NULL when no gate was reported — absent or explicitly null", () => {
     // Most sweeps have no kill switch; a NULL gate says "not reported", which is honest.
+    // The timer watchdog and the sonar freshen both print `"gateState":null` on an ordinary
+    // tick, which was a 400 — every healthy run of both units, rowless.
     expect(normalizeRunSummary('{"produced":1}').gateState).toBeNull();
+    expect(normalizeRunSummary('{"gateState":null,"produced":1}').gateState).toBeNull();
+    expect(normalizeRunSummary('{"paused":null,"produced":1}').gateState).toBeNull();
+    // A null under one signal leaves the OTHER free to speak — that is one signal, not two.
+    expect(normalizeRunSummary('{"gateState":null,"paused":true}').gateState).toBe("paused");
+  });
+
+  it("records the REAL sonar-freshen and timer-watchdog lines", () => {
+    // Copied from apps/sonar/deploy/fluncle-sonar-freshen.sh and
+    // docs/agents/hermes/timer-watchdog/timer-watchdog.sh. Every one of these four was a
+    // 400 before this fix — the three invisible units would have stayed invisible.
+    const locked = normalizeRunSummary(
+      '{"ok":false,"checked":null,"produced":null,"errors":0,"queueDepth":null,"gateState":"locked","expectedIntervalMs":3600000}',
+    );
+
+    expect(locked).toMatchObject({
+      checked: null,
+      errors: 0,
+      gateState: "locked",
+      // Nothing owing: it told us about every field, including the ones it cannot know.
+      missingFields: [],
+      selfAssertedOk: false,
+      summaryStatus: "parsed",
+    });
+
+    const healthy = normalizeRunSummary(
+      '{"ok":true,"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":null,"expectedIntervalMs":3600000}',
+    );
+
+    expect(healthy).toMatchObject({
+      checked: 1,
+      gateState: null,
+      missingFields: [],
+      produced: 1,
+      queueDepth: 0,
+      selfAssertedOk: true,
+    });
+
+    for (const gate of ['"forced"', '"dry-run"']) {
+      const operatorAct = normalizeRunSummary(
+        `{"ok":true,"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":${gate},"expectedIntervalMs":3600000}`,
+      );
+
+      expect(operatorAct.gateState).toBe(gate.replaceAll('"', ""));
+      expect(operatorAct.produced).toBe(1);
+    }
   });
 });
 

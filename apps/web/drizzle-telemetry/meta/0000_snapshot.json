@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d984c6ba-bfdb-4a7c-87c2-23448cec85fb",
+  "id": "45204c5a-2ecd-4226-8d79-6f2031321905",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "run_events": {
@@ -100,6 +100,13 @@
         },
         "run_duration_ms": {
           "name": "run_duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "self_asserted_ok": {
+          "name": "self_asserted_ok",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

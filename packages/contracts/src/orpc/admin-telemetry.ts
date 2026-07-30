@@ -64,11 +64,17 @@ export const MAX_SUMMARY_RAW_CHARS = 4096;
  * looks like a missed run, which the roster alarms on — so even the failure is visible.
  *
  * NOTE WHAT IS ABSENT: there is no `ok`, and there is no `id`.
- *   - `ok` is DERIVED by the Worker (`exit_code === 0 && (errors ?? 0) === 0`) and a
- *     caller-supplied one is rejected outright — inside `summary_raw` as much as here.
+ *   - `ok` is DERIVED by the Worker (`exit_code === 0 && (errors ?? 0) === 0`), so the
+ *     ENVELOPE has no slot for one and `z.strictObject` rejects a caller that invents it.
  *     The nightly Sentry sweep exited 0 for ELEVEN nights while printing
  *     `{"errors":2,"ok":true}`: a hardcoded literal sitting beside the number that
  *     contradicted it. A ledger that accepts a self-assessment inherits the lie.
+ *
+ *     An `ok` INSIDE `summary_raw` is a different matter and is deliberately NOT rejected:
+ *     25 sweep scripts print one today, so a rejection would leave exactly those sweeps —
+ *     the founding case among them — with no row, and a missing row reads as a dead sweep.
+ *     The Worker records that claim in `self_asserted_ok` and overrules it, which turns
+ *     `where self_asserted_ok = 1 and errors > 0` into the query that finds the liars.
  *   - `id` is derived from `${unit}:${started_at}`, which this envelope already pins, so
  *     the idempotency key is deterministic without the wrapper having to construct one.
  */
@@ -107,6 +113,8 @@ export type RunEventInput = z.infer<typeof RunEventInputSchema>;
  *   - `ok` is the request ACK (the repo-wide convention), NOT the run's health.
  *   - `runOk` is the DERIVED verdict on the run — the number `ok` in the summary was
  *     never allowed to set.
+ *   - `selfAssertedOk` is what the summary CLAIMED, or `null` if it claimed nothing. Next
+ *     to `runOk` it makes one curl enough to see a sweep contradicting itself.
  *   - `missingFields` is that run's contribution to the upgrade queue: the mandatory
  *     counters its summary did not carry, so the operator improving sweeps one at a time
  *     can read the worklist straight off the response.
@@ -132,6 +140,7 @@ export const recordRun = oc
       missingFields: z.array(z.string()),
       ok: z.literal(true),
       runOk: z.boolean(),
+      selfAssertedOk: z.boolean().nullable(),
       stored: z.boolean(),
     }),
   );

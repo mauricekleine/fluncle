@@ -205,6 +205,12 @@ function accepts(op: unknown, input: unknown): boolean {
 // widening into a field nobody validated. Two keys can never appear: `ok`, because the ledger
 // derives it and a sweep asserting its own health is the defect that motivated the whole design,
 // and `id`, because it is derived from `unit` + `started_at`.
+//
+// MIND THE LAYER. That prohibition is on the ENVELOPE only. An `ok` INSIDE `summary_raw` is a
+// string this schema does not read, and it must stay accepted: 25 sweep scripts print one, so
+// rejecting it here would have left exactly those sweeps rowless — a missing row reads as a dead
+// sweep, and the founding case would have been the one case the ledger could not see. The Worker
+// records that claim in `self_asserted_ok` and overrules it (lib/server/run-events.ts, rule 1).
 {
   const run = (over: Record<string, unknown> = {}) => ({
     ended_at: "2026-07-29T03:00:12.500Z",
@@ -225,6 +231,14 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(recordRun, run({ summary_raw: null })),
     true,
     "an explicitly null summary is still recordable",
+  );
+
+  // The real nightly Sentry sweep line (sentry-triage-sweep.ts:489) — a summary carrying its
+  // own `ok`. It MUST reach the Worker, which records the claim rather than obeying it.
+  assert.equal(
+    accepts(recordRun, run({ summary_raw: '{"candidates":3,"ok":true,"resolved":3}' })),
+    true,
+    "a summary carrying its own `ok` is accepted — the claim is recorded, not rejected",
   );
 
   // STRICT: an unknown envelope key is rejected, never ignored.
