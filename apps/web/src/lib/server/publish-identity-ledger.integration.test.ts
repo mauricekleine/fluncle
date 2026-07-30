@@ -2,8 +2,9 @@
 // against the REAL migrated schema on an in-memory libSQL engine.
 //
 // A finding is born from two concluded looks — Spotify's `external_ids` (with the Deezer fallback
-// behind it) for the ISRC, and a Discogs release resolve — and both must be written down in the
-// SAME insert that records their answers. This is an INTEGRATION test because the thing that can
+// behind it) for the ISRC, and a Discogs release resolve — plus the Deezer link those Deezer reads
+// were already standing on, and all of it must be written down in the SAME insert that records
+// their answers. This is an INTEGRATION test because the thing that can
 // break is the insert itself: `publishTrack`'s tracks statement is a positional column/arg list,
 // and nothing else in the suite executes it, so a misaligned stamp would ship silently and only
 // surface the next time the operator added a banger.
@@ -105,7 +106,8 @@ async function publishAndRead(): Promise<Record<string, unknown>> {
                  backfill_discogs_attempted_at, backfill_discogs_attempts,
                  backfill_discogs_done_at, backfill_discogs_failures,
                  spotify_anchored_at, spotify_anchor_attempted_at,
-                 spotify_anchor_source, spotify_anchor_verified_by
+                 spotify_anchor_source, spotify_anchor_verified_by,
+                 deezer_track_id, deezer_verified_at, deezer_verified_by
           from tracks where track_id = ?`,
   });
   const row = result.rows[0];
@@ -163,6 +165,92 @@ describe("publishTrack — the identity-ledger stamps", () => {
     expect(vendors.lookupIsrcFromDeezer).toHaveBeenCalledTimes(1);
     expect(row.isrc).toBeNull();
     expect(row.isrc_attempted_at).not.toBeNull();
+  });
+
+  // ── THE DEEZER LINK (schema.ts § `deezer_track_id`) ─────────────────────────────────────────
+  // Publish reads Deezer twice and both reads have always carried Deezer's own track id: the
+  // by-name ISRC fallback, and the by-ISRC label/preview enrichment. Keeping the id is free; keeping
+  // an UNVERIFIED one would put a wrong link on a public page under a recording's name, so each read
+  // has its own gate and the row records which one cleared.
+  it("keeps the by-ISRC enrichment's Deezer id once the duration confirms it", async () => {
+    vendors.enrichFromDeezer.mockResolvedValue({ deezerTrackId: "3135556", label: "Med School" });
+
+    const row = await publishAndRead();
+
+    expect(row.deezer_track_id).toBe("3135556");
+    expect(row.deezer_verified_by).toBe("isrc");
+    expect(row.deezer_verified_at).not.toBeNull();
+    // The guard lives in the client, and publish is what hands it the duration to guard with.
+    expect(vendors.enrichFromDeezer).toHaveBeenCalledWith("GBCJY1300173", 300_000);
+  });
+
+  it("keeps nothing when neither read produced a gated id", async () => {
+    // The default fixture: Spotify carried the ISRC (so the by-name rung never ran) and the
+    // enrichment came back without an id (its duration guard did not clear). A row with no link is
+    // the honest answer, and the provenance columns stay null WITH it rather than half-written.
+    const row = await publishAndRead();
+
+    expect(row.deezer_track_id).toBeNull();
+    expect(row.deezer_verified_at).toBeNull();
+    expect(row.deezer_verified_by).toBeNull();
+  });
+
+  it("prefers the by-name hit that cleared artist, title, AND length", async () => {
+    // Spotify omits the ISRC, so the by-name rung runs and its hit clears the anchor's own identity
+    // fold. That is a stronger check than the by-ISRC endpoint's duration confirm, so it wins the
+    // tie and the row says `search` rather than `isrc`.
+    vendors.fetchTrackMetadata.mockResolvedValue({
+      artists: ["Etherwood"],
+      durationMs: 300_000,
+      spotifyArtistIds: ["artist-1"],
+      spotifyUri: `spotify:track:${TRACK_ID}`,
+      spotifyUrl: SPOTIFY_URL,
+      title: "Weightless",
+      trackId: TRACK_ID,
+    });
+    vendors.lookupIsrcFromDeezer.mockResolvedValue({
+      artistName: "Etherwood",
+      deezerTrackId: "916424",
+      durationMs: 300_000,
+      isrc: "GBCJY1300173",
+      title: "Weightless",
+    });
+    vendors.enrichFromDeezer.mockResolvedValue({ deezerTrackId: "3135556" });
+
+    const row = await publishAndRead();
+
+    expect(row.isrc).toBe("GBCJY1300173");
+    expect(row.deezer_track_id).toBe("916424");
+    expect(row.deezer_verified_by).toBe("search");
+  });
+
+  it("refuses a by-name hit that is a different recording, and still takes its ISRC", async () => {
+    // Deezer's search is fuzzy and will lead with a remix. The ISRC still lands (it gets re-checked
+    // downstream by ISRC equality), but no link is kept off a hit that failed the fold — a miss is
+    // always preferred to a wrong link.
+    vendors.fetchTrackMetadata.mockResolvedValue({
+      artists: ["Etherwood"],
+      durationMs: 300_000,
+      spotifyArtistIds: ["artist-1"],
+      spotifyUri: `spotify:track:${TRACK_ID}`,
+      spotifyUrl: SPOTIFY_URL,
+      title: "Weightless",
+      trackId: TRACK_ID,
+    });
+    vendors.lookupIsrcFromDeezer.mockResolvedValue({
+      artistName: "Etherwood",
+      deezerTrackId: "916424",
+      durationMs: 300_000,
+      isrc: "GBCJY1300173",
+      title: "Weightless (Lung Remix)",
+    });
+    vendors.enrichFromDeezer.mockResolvedValue({});
+
+    const row = await publishAndRead();
+
+    expect(row.isrc).toBe("GBCJY1300173");
+    expect(row.deezer_track_id).toBeNull();
+    expect(row.deezer_verified_by).toBeNull();
   });
 
   it("records a Discogs look that found nothing as attempted-but-not-done", async () => {

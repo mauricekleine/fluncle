@@ -21,9 +21,11 @@ One key, one page: `https://www.fluncle.com/identity/<key>`.
 
 ## What is covered
 
-Five rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and three links out, **Spotify**, **Apple Music**, and **Discogs**. Apple Music is page-only, for the licence reason below.
+Six rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and four links out, **Spotify**, **Apple Music**, **Deezer**, and **Discogs**. Apple Music is page-only, for the licence reason below.
 
-**Deezer and Tidal are not covered.** Fluncle reads Deezer for his own work and serves no link from it, and there is no Tidal integration here at all. Neither gets a row on the page. The API still answers both, `unsupported`, so a machine caller reads the scope from the response instead of guessing at it.
+**Tidal is not covered.** There is no Tidal integration here at all, so it gets no row on the page. The API still answers it, `unsupported`, so a machine caller reads the scope from the response instead of guessing at it.
+
+**Deezer fills in slowly, and only forward.** Fluncle keeps a Deezer link when one turns up in work he is already doing on a recording, and he never keeps one he could not confirm belongs to it. A recording that work has not reached yet reads `Not checked yet`, and nothing sweeps back over the archive to fill the rest in.
 
 ## The five answers
 

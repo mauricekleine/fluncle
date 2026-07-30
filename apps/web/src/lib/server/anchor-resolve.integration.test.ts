@@ -68,16 +68,26 @@ async function seedCatalogue(row: {
 }
 
 /** The anchor + attempt-stamp state of a row, for the assertions. */
-async function anchorState(
-  trackId: string,
-): Promise<{ attempted: unknown; isrc: unknown; uri: unknown }> {
+async function anchorState(trackId: string): Promise<{
+  attempted: unknown;
+  deezerTrackId: unknown;
+  deezerVerifiedAt: unknown;
+  deezerVerifiedBy: unknown;
+  isrc: unknown;
+  uri: unknown;
+}> {
   const row = await db.execute({
     args: [trackId],
-    sql: "select spotify_uri, spotify_anchor_attempted_at, isrc from tracks where track_id = ?",
+    sql: `select spotify_uri, spotify_anchor_attempted_at, isrc,
+                 deezer_track_id, deezer_verified_at, deezer_verified_by
+          from tracks where track_id = ?`,
   });
 
   return {
     attempted: row.rows[0]?.spotify_anchor_attempted_at,
+    deezerTrackId: row.rows[0]?.deezer_track_id,
+    deezerVerifiedAt: row.rows[0]?.deezer_verified_at,
+    deezerVerifiedBy: row.rows[0]?.deezer_verified_by,
     isrc: row.rows[0]?.isrc,
     uri: row.rows[0]?.spotify_uri,
   };
@@ -563,6 +573,104 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(text((await anchorState("mb_box_ok")).isrc)).toBe("GBBOXDZ00001");
     // The Worker issued NO Deezer request of its own — the whole point of moving the fetch.
     expect(searchDeezerCandidates).not.toHaveBeenCalled();
+  });
+
+  // ── THE DEEZER LINK, KEPT (schema.ts § `deezer_track_id`) ────────────────────────────────────
+  // The hits this rung already fetches carry Deezer's own track id, and it used to be dropped. A hit
+  // that CLEARS the gate is this recording on Deezer, so its id is kept — in the same statement as
+  // the ISRC, with the rung that cleared as its provenance. No extra request is made for it.
+  it("keeps the verified hit's Deezer id with the rung that cleared", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_dzid",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    await resolveAnchorFree("mb_box_dzid", new Date(), {
+      deezerCandidates: [
+        {
+          artistName: "Muffler",
+          deezerTrackId: "3135556",
+          durationMs: 201_000,
+          isrc: "GBBOXDZ00003",
+          title: "Dribble",
+        },
+      ],
+    });
+
+    const state = await anchorState("mb_box_dzid");
+
+    expect(text(state.deezerTrackId)).toBe("3135556");
+    expect(text(state.deezerVerifiedBy)).toBe("search");
+    expect(state.deezerVerifiedAt).not.toBeNull();
+  });
+
+  it("keeps NO Deezer id off a hit that failed the gate", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_dzbad",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    // A remix, carrying a perfectly real Deezer id. The fold refuses it, and refusing the ISRC and
+    // refusing the link is the same act — a wrong link on a public page is the worse of the two.
+    await resolveAnchorFree("mb_box_dzbad", new Date(), {
+      deezerCandidates: [
+        {
+          artistName: "Muffler",
+          deezerTrackId: "3135557",
+          durationMs: 200_000,
+          isrc: "GBWRONGVER02",
+          title: "Dribble (Calibre Remix)",
+        },
+      ],
+    });
+
+    const state = await anchorState("mb_box_dzbad");
+
+    expect(state.deezerTrackId).toBeNull();
+    expect(state.deezerVerifiedBy).toBeNull();
+    expect(state.deezerVerifiedAt).toBeNull();
+  });
+
+  it("recovers the ISRC from a hit an older box sent without an id, and keeps no link", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_dznone",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    // The id is not evidence the gate reads, so a box on a build that predates the field degrades to
+    // "no link kept" and never to a refused recovery.
+    const result = await resolveAnchorFree("mb_box_dznone", new Date(), {
+      deezerCandidates: [
+        { artistName: "Muffler", durationMs: 200_000, isrc: "GBBOXDZ00004", title: "Dribble" },
+      ],
+    });
+
+    const state = await anchorState("mb_box_dznone");
+
+    expect(result.isrcRecoveredByDeezer).toBe(true);
+    expect(text(state.isrc)).toBe("GBBOXDZ00004");
+    expect(state.deezerTrackId).toBeNull();
   });
 
   it("refuses a box-supplied hit that fails the gate — the box cannot bypass verification", async () => {

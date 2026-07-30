@@ -858,6 +858,11 @@ async function resolveViaSpotifySearch(
  * nothing" and for a quota/network failure; the row stays honestly unattempted rather than wearing
  * a stamp we cannot stand behind.
  *
+ * AND THE HIT'S DEEZER ID RIDES ALONG (`tracks.deezer_track_id`, schema.ts). A hit that cleared this
+ * gate IS this recording on Deezer, so its id is kept in the same statement with the rung that
+ * cleared as its provenance, and `/identity` serves a Deezer link off it. It is free — the id came
+ * in the search response that was already read — and it is never kept off an ungated answer.
+ *
  * A verified hit's ISRC is written FILL-EMPTY-ONLY (`coalesce(isrc, ?)`, mirroring the anchor-hit
  * write) — a real ISRC is never overwritten (defensive; we only reach here for an ISRC-less row) — and
  * returned so the SAME resolve call carries it forward in memory to the exact-ISRC rungs. Returns
@@ -900,19 +905,25 @@ export async function recoverIsrcViaDeezer(
   // The SAME gate an anchor candidate clears: folded artist-set + base-title identity AND a duration
   // within ±ANCHOR_DURATION_TOLERANCE_MS. Deezer's fuzzy search may lead with a remix — the fold keeps
   // its version descriptor distinct, so the original never recovers a remix's ISRC (and vice-versa).
-  const verified = pickVerifiedCandidate(
+  //
+  // `verifySearchCandidate` rather than `pickVerifiedCandidate` because the Deezer ID kept below
+  // has to say WHICH rung agreed (`search` vs the looser `search-subset`), the same distinction the
+  // anchor persists. The ISRC decision is byte-for-byte the one it always was: same gate, same
+  // candidate, same tiebreak.
+  const verified = verifySearchCandidate(
     rowArtists,
     rowTitle,
     rowDurationMs,
     candidates.map((candidate) => ({
       artists: [candidate.artistName],
+      deezerTrackId: candidate.deezerTrackId,
       durationMs: candidate.durationMs,
       isrc: candidate.isrc,
       title: candidate.title,
     })),
   );
 
-  const recovered = verified?.isrc.trim();
+  const recovered = verified?.candidate.isrc.trim();
 
   if (!recovered) {
     // A GATE-CLEAN MISS, and therefore a concluded attempt: Deezer answered with candidates and not
@@ -933,9 +944,32 @@ export async function recoverIsrcViaDeezer(
   // never clobbered. Persisted whether or not a rung then anchors, so the next tick's exact-ISRC rung
   // and the ISRC-equality dedup both benefit even on a full miss this tick. The attempt stamp rides
   // the SAME statement — a recovery is a concluded attempt too, and the pair cannot be written apart.
+  //
+  // AND THE DEEZER LINK (schema.ts § `deezer_track_id`). The hit that just cleared the anchor's own
+  // identity gate is, by that fact, this recording on Deezer — so its id is KEPT rather than dropped,
+  // in this same statement, with the rung that cleared as its provenance. Free: no extra request was
+  // made for it. The trio is first-write-wins through `coalesce` and moves together, so a row can
+  // never wear an id with another id's provenance. Null id (an older box's payload, or a hit Deezer
+  // sent without one) binds three nulls and changes nothing.
+  const now = new Date().toISOString();
+  const deezerTrackId = verified?.candidate.deezerTrackId ?? null;
+
   await db.execute({
-    args: [recovered, new Date().toISOString(), trackId],
-    sql: `update tracks set isrc = coalesce(isrc, ?), isrc_attempted_at = ? where track_id = ?`,
+    args: [
+      recovered,
+      now,
+      deezerTrackId,
+      deezerTrackId === null ? null : (verified?.via ?? null),
+      deezerTrackId === null ? null : now,
+      trackId,
+    ],
+    sql: `update tracks
+          set isrc = coalesce(isrc, ?),
+              isrc_attempted_at = ?,
+              deezer_track_id = coalesce(deezer_track_id, ?),
+              deezer_verified_by = coalesce(deezer_verified_by, ?),
+              deezer_verified_at = coalesce(deezer_verified_at, ?)
+          where track_id = ?`,
   });
 
   return recovered;

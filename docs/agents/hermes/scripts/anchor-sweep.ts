@@ -116,6 +116,12 @@ export type AnchorWorkItem = {
 export type DeezerCandidatePayload = {
   /** Deezer's BILLED artist string (e.g. `"Fred V & Grafix"`) — the Worker folds it into a set. */
   artistName: string;
+  /**
+   * Deezer's own track id for the hit, when the response carried one. Passed through, never judged:
+   * the gate does not read it, and the Worker keeps it only for a hit that CLEARS the gate, as that
+   * recording's Deezer link. A hit without one still recovers its ISRC.
+   */
+  deezerTrackId?: string;
   /** Deezer bills seconds; promoted here so the Worker's ms window compares in one unit. */
   durationMs: number;
   isrc: string;
@@ -665,7 +671,13 @@ async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
   }
 
   const parsed = body as {
-    data?: { artist?: { name?: string }; duration?: number; isrc?: string; title?: string }[];
+    data?: {
+      artist?: { name?: string };
+      duration?: number;
+      id?: number;
+      isrc?: string;
+      title?: string;
+    }[];
     error?: { code?: unknown };
   };
 
@@ -694,7 +706,15 @@ async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
       continue;
     }
 
-    candidates.push({ artistName, durationMs: Math.round(hit.duration * 1000), isrc, title });
+    candidates.push({
+      artistName,
+      // Kept when present, never required: the id is not one of the four signals the gate reads, so
+      // a hit without one is still a good ISRC recovery.
+      ...(typeof hit.id === "number" ? { deezerTrackId: String(hit.id) } : {}),
+      durationMs: Math.round(hit.duration * 1000),
+      isrc,
+      title,
+    });
   }
 
   return { candidates, outcome: "ok" };

@@ -5,7 +5,7 @@ export type { PublishTrackResult };
 
 import { logPageUrl } from "../fluncle-links";
 import { formatDuration } from "../format";
-import { recoverIsrcViaDeezer } from "./anchor";
+import { recoverIsrcViaDeezer, verifySearchCandidate } from "./anchor";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { postToBluesky } from "./bluesky";
 import { getDb, typedRow } from "./db";
@@ -151,8 +151,10 @@ ${existing.posted_to_telegram ? "Posted to Telegram" : "Not posted to Telegram"}
   // omits the ISRC; Deezer usually carries it. Looked up BEFORE the Log ID is
   // computed so the coordinate hashes from the recording's real identity, and
   // the Deezer enrichment below (label + preview, keyed by ISRC) works too.
-  if (!track.isrc?.trim()) {
-    track.isrc = await lookupIsrcFromDeezer(track);
+  const deezerByName = track.isrc?.trim() ? undefined : await lookupIsrcFromDeezer(track);
+
+  if (deezerByName) {
+    track.isrc = deezerByName.isrc;
   }
 
   // The permanent Galaxy coordinate: deterministic from the found date + the
@@ -197,7 +199,39 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // video) are filled later by the async enrichment agent; the finding's galaxy is
   // assigned later still by the nightly `fluncle-cluster` sweep, k-means over the MuQ
   // embedding (the manual tagging tool that once placed it by hand is retired).
-  const deezer = await enrichFromDeezer(track.isrc);
+  const deezer = await enrichFromDeezer(track.isrc, track.durationMs);
+
+  // THE DEEZER LINK, off whichever of the two reads above earned it (schema.ts § `deezer_track_id`).
+  // Both already had Deezer's track id in hand and both used to drop it; keeping it costs no extra
+  // request and gives `/identity` a Deezer row. Neither is trusted bare:
+  //
+  //   · the BY-NAME hit is re-run through the anchor's own identity fold (same artist set, same base
+  //     title, same version descriptor, inside the ratified duration window), and the rung that
+  //     clears — `search` or the looser `search-subset` — is what gets recorded. Its own ±4s
+  //     duration confirm is the right bar for an ISRC that ISRC-equality re-checks downstream; a
+  //     link on a public page is a stronger claim and gets the stronger check.
+  //   · the BY-ISRC read is kept only when Deezer's returned duration agreed with the row's
+  //     (deezer.ts § the id guard), because that endpoint PICKS and picks wrong ~7% of the time.
+  //
+  // The by-name hit wins the tie: it cleared artist, title, AND length, where the by-ISRC pick
+  // cleared length alone. Neither gate clearing means no link, which is the honest answer.
+  const deezerByNameVerified = deezerByName
+    ? verifySearchCandidate(track.artists, track.title, track.durationMs, [
+        {
+          // Deezer's BILLED artist string, folded into a set by the gate's `matchKey` — the same
+          // mapping the ISRC-recovery rung does with the same hits.
+          artists: [deezerByName.artistName],
+          deezerTrackId: deezerByName.deezerTrackId,
+          durationMs: deezerByName.durationMs,
+          title: deezerByName.title,
+        },
+      ])
+    : undefined;
+  const deezerLink = deezerByNameVerified?.candidate.deezerTrackId
+    ? { trackId: deezerByNameVerified.candidate.deezerTrackId, via: deezerByNameVerified.via }
+    : deezer.deezerTrackId
+      ? { trackId: deezer.deezerTrackId, via: "isrc" as const }
+      : undefined;
 
   // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
   // label/preview it most resembles — both cheap HTTP, Worker-safe). A scored
@@ -266,6 +300,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           // and inventing a last-attempt time would put a publish-born finding into the re-ask
           // backoff's reading.
           nowIso,
+          // THE DEEZER LINK + ITS PROVENANCE (schema.ts § `deezer_track_id`), written in the same
+          // insert as the reads that produced it. All three are null together when neither gate
+          // above cleared, so the row never carries an id without the record of how it was won.
+          deezerLink?.trackId ?? null,
+          deezerLink ? nowIso : null,
+          deezerLink?.via ?? null,
           // is_catalogue = 0: born CERTIFIED. The certification half is minted in the SAME batch
           // (findingInsertStatement below), so the maintained invariant (a track with a findings
           // row is is_catalogue = 0) holds from the very first write, never a moment as `1`.
@@ -295,8 +335,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             spotify_anchored_at,
             spotify_anchor_source,
             spotify_anchor_verified_by,
+            deezer_track_id,
+            deezer_verified_at,
+            deezer_verified_by,
             is_catalogue
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publish', 'publish', ?)`,
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publish', 'publish', ?, ?, ?, ?)`,
       },
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.

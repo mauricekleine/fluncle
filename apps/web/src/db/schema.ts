@@ -306,6 +306,45 @@ export const tracks = sqliteTable(
     captureVerifiedAt: text("capture_verified_at"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
+    // THE DEEZER LINK, AND HOW IT WAS WON — the "keep what we already fetch" leg (operator ruling
+    // 2026-07-30). Fluncle receives a Deezer track id on three paths and threw all three away: the
+    // anchor rung's ISRC-recovery search (anchor.ts § recoverIsrcViaDeezer), the add flow's
+    // ISRC fallback (deezer.ts § lookupIsrcFromDeezer), and the add flow's label/preview enrichment
+    // by ISRC (deezer.ts § enrichFromDeezer, which needed the id to read the album at all). Keeping
+    // it costs NOTHING: not one extra Deezer request is made for these columns, which is the whole
+    // shape of the slice. FORWARD-ONLY — there is no sweep and no backfill, so a row only fills when
+    // one of those three paths next runs over it.
+    //
+    // `deezer_track_id` is Deezer's own track id, stored as TEXT because it is an opaque external
+    // identifier that only ever gets pasted into `https://www.deezer.com/track/<id>` — never
+    // arithmetic, never a range scan, and text cannot lose a digit the way a JS number can.
+    //
+    // `deezer_verified_by` is the SIGNAL that made the link trustworthy, the `spotify_anchor_
+    // verified_by` domain narrowed to the three values these paths can actually produce:
+    //   · "isrc"          — the id came back from Deezer's `/track/isrc:<isrc>` endpoint, keyed on
+    //                       the recording's real identity. That endpoint PICKS, with a measured ~7%
+    //                       silent title mismatch, so the caller confirms the returned track's
+    //                       duration against the row's before this is written.
+    //   · "search"        — the full verified triple cleared (same artist SET, same base title, same
+    //                       version descriptor, inside the ratified duration window).
+    //   · "search-subset" — the tighter proper-subset fallback cleared. A DISTINCT confidence from
+    //                       "search" for the same reason the anchor keeps them apart.
+    //
+    // `deezer_verified_at` is when the link was WRITTEN, so the identity envelope serves it with
+    // `atMeaning: "verified"` rather than passing an attempt time off as a verification.
+    //
+    // THE FILL RULE: first write wins. All three columns are written by the SAME statement on every
+    // path, each through a `coalesce`, so a row can never carry an id with someone else's provenance
+    // and a later path never clobbers an earlier one's answer.
+    //
+    // NULLABLE with NO `.default()`, deliberately — the `spotify_anchor_attempts` rule below: a
+    // `.default()` on a `tracks` column makes drizzle regenerate the whole table and drop+recreate
+    // all ~125 indexes in the migration, a production stall. NOT INDEXED: nothing queries by them.
+    // PUBLIC (the identity envelope serves them, and `/identity` renders a Deezer row off them), but
+    // no lastmod bump — a link on an existing recording moves no finding.
+    deezerTrackId: text("deezer_track_id"),
+    deezerVerifiedAt: text("deezer_verified_at"),
+    deezerVerifiedBy: text("deezer_verified_by"),
     // THE DEMAND SIGNAL (docs/catalogue-crawler.md § Demand). The summed Simple Analytics
     // pageviews of the DEMANDED entities this track hangs off — an artist on it (via
     // `track_artists`) or its `label_id` — that real visitors looked at over the trailing

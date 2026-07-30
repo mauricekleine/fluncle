@@ -5,6 +5,14 @@
 // Best-effort: any failure resolves to an empty result so it never blocks a
 // publish. The backfill can retry later.
 //
+// ── WHAT WE KEEP (operator ruling 2026-07-30) ────────────────────────────────────────────────────
+// All three of this file's Deezer reads have always come back carrying Deezer's own TRACK ID, and
+// all three used to drop it on the floor. They keep it now (`tracks.deezer_track_id`, schema.ts), so
+// `/identity` can serve `https://www.deezer.com/track/<id>` and Deezer joins the covered set. This
+// costs no extra request anywhere: the id was already in the response that was already being read.
+// Every one of them is GATED — an id is only ever handed back off an answer that passed a match
+// check, because an unverified id becomes a wrong link on a public page under a recording's name.
+//
 // ── THE ISRC-RECOVERY RUNG (`searchDeezerCandidates`, verified live 2026-07-22) ──────────────────
 // Deezer is a FREE, no-auth ISRC ORACLE. Its `GET /search/track?q=…` returns each hit already
 // carrying the recording's real `isrc`, its `duration`, its `title`, and its billed `artist.name` —
@@ -38,9 +46,12 @@ import { canonicalizeSearchTitle } from "./track-match";
 
 type DeezerTrack = {
   album?: { id?: number };
+  /** Deezer bills a track's length in SECONDS — the guard below promotes it to ms to compare. */
+  duration?: number;
   error?: unknown;
   id?: number;
   preview?: string;
+  title?: string;
 };
 
 type DeezerAlbum = {
@@ -49,6 +60,13 @@ type DeezerAlbum = {
 };
 
 export type DeezerEnrichment = {
+  /**
+   * Deezer's own track id for this ISRC — kept ONLY when the returned track's duration confirms it
+   * (see {@link enrichFromDeezer}). Absent when the caller supplied no duration to check against or
+   * the check failed: `/track/isrc:` PICKS a recording, with a measured ~7% silent title mismatch,
+   * and an unconfirmed id would become a link on a public page. Nothing is the honest answer.
+   */
+  deezerTrackId?: string;
   label?: string;
   previewUrl?: string;
 };
@@ -75,6 +93,14 @@ type DeezerSearchResult = {
  */
 export type DeezerIsrcCandidate = {
   artistName: string;
+  /**
+   * Deezer's own track id for the hit, when it carried one. OPTIONAL on purpose: it is NOT part of
+   * the ISRC-recovery gate, and a hit without it still recovers its ISRC exactly as before. It rides
+   * along so the verified hit's id can be kept (`tracks.deezer_track_id`) instead of thrown away,
+   * and so a box running a build that predates the field degrades to "no id kept", never to a
+   * refused recovery.
+   */
+  deezerTrackId?: string;
   durationMs: number;
   isrc: string;
   title: string;
@@ -303,6 +329,9 @@ async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> 
 
     candidates.push({
       artistName,
+      // Kept, not required: a hit with no id is still a perfectly good ISRC recovery, so the id
+      // rides along as evidence for the id-write and never as a reason to drop the hit.
+      ...(typeof hit.id === "number" ? { deezerTrackId: String(hit.id) } : {}),
       durationMs: Math.round(hit.duration * 1000),
       isrc,
       title: hitTitle,
@@ -317,9 +346,10 @@ type DeezerTrackDetail = {
   isrc?: string;
 };
 
-// Accept a search hit as "the same recording" only when its duration agrees
-// with Spotify's within a few seconds; a wrong ISRC would seed a wrong (and
-// permanent) Log ID, so a miss is better than a guess.
+// Accept a Deezer answer as "the same recording" only when its duration agrees
+// with the row's within a few seconds; a wrong ISRC would seed a wrong (and
+// permanent) Log ID, so a miss is better than a guess. The same window guards
+// the id kept off the by-ISRC endpoint, whose pick is right about 93% of the time.
 const DURATION_TOLERANCE_S = 4;
 
 /**
@@ -327,12 +357,20 @@ const DURATION_TOLERANCE_S = 4;
  * ISRC fallback): search by artist + title, take the first
  * duration-confirmed hit, and read the ISRC from its track detail. Best-effort:
  * any failure resolves to undefined and the Log ID falls back to the Spotify id.
+ *
+ * RETURNS THE WHOLE HIT, not just the ISRC — the ISRC behaviour is unchanged (read `.isrc`), and
+ * the rest is what the caller needs to decide whether the hit's Deezer id is worth KEEPING. This
+ * function's own bar is a ±{@link DURATION_TOLERANCE_S}s duration confirm, which is the right bar
+ * for an ISRC that then gets re-verified downstream by ISRC EQUALITY; a public link is a stronger
+ * claim, so `publish.ts` runs the hit through the anchor's full identity fold before persisting the
+ * id, and records which rung cleared. A hit whose billing or title Deezer withheld comes back with
+ * those fields empty, which simply fails that fold — the ISRC still lands.
  */
 export async function lookupIsrcFromDeezer(input: {
   artists: string[];
   durationMs: number;
   title: string;
-}): Promise<string | undefined> {
+}): Promise<DeezerIsrcCandidate | undefined> {
   const artist = input.artists[0]?.trim();
 
   if (!artist || !input.title.trim()) {
@@ -379,13 +417,36 @@ export async function lookupIsrcFromDeezer(input: {
       return undefined;
     }
 
-    return detail.isrc.trim();
+    return {
+      artistName: match.artist?.name?.trim() ?? "",
+      deezerTrackId: String(match.id),
+      durationMs: Math.round((match.duration ?? 0) * 1000),
+      isrc: detail.isrc.trim(),
+      title: match.title?.trim() ?? "",
+    };
   } catch {
     return undefined;
   }
 }
 
-export async function enrichFromDeezer(isrc: string | null | undefined): Promise<DeezerEnrichment> {
+/**
+ * The label + preview enrichment, keyed by ISRC — and, when the caller can vouch for it, the Deezer
+ * track id that read was already standing on.
+ *
+ * THE ID GUARD. `/track/isrc:<isrc>` does not answer "here are the recordings under this ISRC"; it
+ * PICKS one, and it picks wrong about 7% of the time (measured — the same vendor behaviour the
+ * identity envelope's `ambiguous` relation exists to not repeat). The label and the preview have
+ * always ridden that pick, and a mismatched 30s clip is a small wrong; a Deezer LINK rendered on a
+ * public page under a recording's name is a bigger one. So the id is kept only when
+ * `expectedDurationMs` is supplied AND Deezer's returned duration agrees within
+ * {@link DURATION_TOLERANCE_S}s — the same window the sibling by-name lookup above confirms with.
+ * No duration to check against, or a disagreement, and no id comes back. The label and preview are
+ * untouched by the guard: their behaviour is exactly what it was.
+ */
+export async function enrichFromDeezer(
+  isrc: string | null | undefined,
+  expectedDurationMs?: number,
+): Promise<DeezerEnrichment> {
   if (!isrc?.trim()) {
     return {};
   }
@@ -406,6 +467,11 @@ export async function enrichFromDeezer(isrc: string | null | undefined): Promise
     }
 
     const previewUrl = track.preview?.trim() ? track.preview : undefined;
+    const durationConfirmed =
+      typeof expectedDurationMs === "number" &&
+      expectedDurationMs > 0 &&
+      typeof track.duration === "number" &&
+      Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
     let label: string | undefined;
 
     if (track.album?.id) {
@@ -420,7 +486,7 @@ export async function enrichFromDeezer(isrc: string | null | undefined): Promise
       }
     }
 
-    return { label, previewUrl };
+    return { ...(durationConfirmed ? { deezerTrackId: String(track.id) } : {}), label, previewUrl };
   } catch {
     return {};
   }

@@ -4,8 +4,9 @@
 // It is an INTEGRATION test because every claim in the envelope is a claim about a COLUMN, and a
 // mocked-DB test would pass while any of it was broken:
 //
-//   - THE MIGRATION ITSELF — `tracks.spotify_anchor_source` / `_verified_by` / `spotify_anchored_at`
-//     and the `tracks_mb_recording_id_idx` value index. If the migration did not apply, the first
+//   - THE MIGRATION ITSELF — `tracks.spotify_anchor_source` / `_verified_by` / `spotify_anchored_at`,
+//     the `deezer_track_id` / `deezer_verified_at` / `deezer_verified_by` trio, and the
+//     `tracks_mb_recording_id_idx` value index. If the migration did not apply, the first
 //     statement naming them throws here, which is the guard we want since `deploy:gate` runs this;
 //   - EVERY STATE OFF ITS REAL COLUMNS — each `method`, each `retry` class, the `terminal: null`
 //     cases, `unsupported`, and the honest negatives. These are wire claims, and a wrong one is
@@ -60,6 +61,9 @@ type TrackFixture = {
   discogsAttemptedAt?: string;
   discogsAttempts?: number;
   discogsDoneAt?: string;
+  deezerTrackId?: string;
+  deezerVerifiedAt?: string;
+  deezerVerifiedBy?: string;
   discogsRelease?: number;
   dismissedAt?: string;
   duplicateOf?: string;
@@ -105,6 +109,9 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
       fields.discogsDoneAt ?? null,
       fields.dismissedAt ?? null,
       fields.duplicateOf ?? null,
+      fields.deezerTrackId ?? null,
+      fields.deezerVerifiedAt ?? null,
+      fields.deezerVerifiedBy ?? null,
     ],
     sql: `insert into tracks (
             track_id, title, artists_json, duration_ms,
@@ -116,8 +123,9 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
             backfill_apple_music_done_at,
             in_release_id, backfill_discogs_attempted_at, backfill_discogs_attempts,
             backfill_discogs_done_at,
-            dismissed_at, duplicate_of_track_id
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            dismissed_at, duplicate_of_track_id,
+            deezer_track_id, deezer_verified_at, deezer_verified_by
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -504,10 +512,10 @@ describe("the identifiers and the other platforms", () => {
     expect(verificationOf(state).atMeaning).toBe("verified");
   });
 
-  it("serves Apple Music unsupported to a machine, and Tidal and Deezer to everyone", async () => {
+  it("serves Apple Music unsupported to a machine, and Tidal to everyone", async () => {
     // Apple: ADPLA §3.3.6(D) (MusicKit) does not permit serving these links to a third party, read
-    // verbatim 2026-07-29. Deezer: Fluncle holds no Deezer link at all. Tidal: no integration.
-    // A row carrying a real Apple link still reads `unsupported`, which is the point of the gate.
+    // verbatim 2026-07-29. Tidal: no integration exists at all. A row carrying a real Apple link
+    // still reads `unsupported`, which is the point of the gate.
     await insertTrack("ap-held", {
       appleDoneAt: "2026-05-01T00:00:00.000Z",
       appleUrl: "https://music.apple.com/us/album/x/1?i=2",
@@ -517,8 +525,81 @@ describe("the identifiers and the other platforms", () => {
 
     expect(APPLE_LINKS_MACHINE_SERVED).toBe(false);
     expect(links.appleMusic).toEqual({ state: "unsupported" });
-    expect(links.deezer).toEqual({ state: "unsupported" });
     expect(links.tidal).toEqual({ state: "unsupported" });
+  });
+
+  // ── DEEZER ──────────────────────────────────────────────────────────────────────────────────
+  // The one covered platform with TWO states and no third. Fluncle keeps a Deezer id as a
+  // by-product of reads run for other reasons, so there is no Deezer LOOK that could conclude and
+  // therefore nothing that could honestly read `absent` or `refused` here. A row either has the id
+  // or nobody has gone looking.
+  it("serves the Deezer link off the kept id, with the rung that won it", async () => {
+    await insertTrack("dz-held", {
+      deezerTrackId: "3135556",
+      deezerVerifiedAt: "2026-07-30T00:00:00.000Z",
+      deezerVerifiedBy: "search",
+    });
+
+    expect((await only({ idOrLogId: "dz-held", kind: "idOrLogId" })).links.deezer).toEqual({
+      state: "verified",
+      url: "https://www.deezer.com/track/3135556",
+      value: "3135556",
+      verification: {
+        at: "2026-07-30T00:00:00.000Z",
+        // The stamp is the moment the link was WRITTEN, never an attempt time.
+        atMeaning: "verified",
+        method: "search",
+        // No column records WHICH rung fetched the candidate for Deezer, so the envelope says so
+        // rather than inventing one.
+        source: null,
+      },
+    });
+  });
+
+  it("says nobody has looked at Deezer rather than claiming a look came back empty", async () => {
+    await insertTrack("dz-none");
+
+    expect((await only({ idOrLogId: "dz-none", kind: "idOrLogId" })).links.deezer).toEqual({
+      state: "unattempted",
+    });
+  });
+
+  it("serves the by-ISRC rung's Deezer link as `isrc`, not as a search", async () => {
+    // The three methods a Deezer id can be won by are genuinely different checks, and flattening
+    // them would overstate the weakest one. The by-ISRC endpoint's pick is duration-confirmed at
+    // the write; the envelope reports it as what it is.
+    await insertTrack("dz-isrc", {
+      deezerTrackId: "916424",
+      deezerVerifiedAt: "2026-07-30T00:00:00.000Z",
+      deezerVerifiedBy: "isrc",
+    });
+    await insertTrack("dz-subset", {
+      deezerTrackId: "916425",
+      deezerVerifiedAt: "2026-07-30T00:00:00.000Z",
+      deezerVerifiedBy: "search-subset",
+    });
+
+    const isrcRung = (await only({ idOrLogId: "dz-isrc", kind: "idOrLogId" })).links.deezer;
+    const subsetRung = (await only({ idOrLogId: "dz-subset", kind: "idOrLogId" })).links.deezer;
+
+    expect(verificationOf(isrcRung).method).toBe("isrc");
+    expect(verificationOf(subsetRung).method).toBe("search-subset");
+  });
+
+  it("shows the page and the API the same Deezer answer — no licence splits this one", async () => {
+    // Apple is the ONLY field the two readers may disagree about (the ADPLA clause). Deezer carries
+    // no such clause, so a gate creeping onto it would be a silent under-serve of the API.
+    await insertTrack("dz-both", {
+      deezerTrackId: "3135556",
+      deezerVerifiedAt: "2026-07-30T00:00:00.000Z",
+      deezerVerifiedBy: "search",
+    });
+
+    const key = { idOrLogId: "dz-both", kind: "idOrLogId" } as const;
+
+    expect((await readIdentity(key))?.recordings[0]?.links.deezer).toEqual(
+      (await readIdentity(key, "first-party"))?.recordings[0]?.links.deezer,
+    );
   });
 
   // ── THE AUDIENCE SPLIT ──────────────────────────────────────────────────────────────────────

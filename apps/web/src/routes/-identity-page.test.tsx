@@ -26,9 +26,10 @@ import { type IdentityPageData } from "./-identity-page-data";
 //      checked yet, retired. A blank is the one answer this surface exists not to give, so a state
 //      rendering as nothing is a regression, and so is a fragment that upgrades an attempt stamp
 //      ("checked") into a verification ("confirmed").
-//   3. THE COVERAGE SET IS THE PAGE'S SCOPE. Deezer and Tidal never render here: a "not covered"
-//      row is the API contract leaking into a human surface. The API still answers both
+//   3. THE COVERAGE SET IS THE PAGE'S SCOPE. Tidal never renders here: a "not covered"
+//      row is the API contract leaking into a human surface. The API still answers it
 //      `unsupported` — that half is pinned in lib/server/identity-envelope.integration.test.ts.
+//      Deezer joined the covered set on 2026-07-30 and now renders like any other link row.
 //   4. NEITHER DEGRADED STATE IS A FAULT. A key that matches nothing and a caller who has spent
 //      the dials both render as a calm page with a way back, never an error boundary.
 
@@ -54,8 +55,9 @@ async function renderPage(data: IdentityPageData): Promise<string> {
  *
  * Apple sits at `unattempted` rather than `unsupported` because the PAGE reads the envelope
  * first-party, and that read computes Apple's real state; `unsupported` for Apple is a machine-only
- * answer. Deezer and Tidal keep the `unsupported` the envelope really serves them, so the
- * coverage-set assertions below run against the true shape rather than a doctored one.
+ * answer. Deezer sits at `unattempted` for the same kind of reason — it is a covered platform whose
+ * quietest state is "nobody has looked". Tidal keeps the `unsupported` the envelope really serves
+ * it, so the coverage-set assertions below run against the true shape rather than a doctored one.
  */
 function recording(overrides: Partial<IdentityRecording> = {}): IdentityRecording {
   return {
@@ -67,7 +69,7 @@ function recording(overrides: Partial<IdentityRecording> = {}): IdentityRecordin
     },
     links: {
       appleMusic: { state: "unattempted" },
-      deezer: { state: "unsupported" },
+      deezer: { state: "unattempted" },
       discogs: { state: "unattempted" },
       spotify: { state: "unattempted" },
       tidal: { state: "unsupported" },
@@ -103,7 +105,7 @@ describe("the identity answer", () => {
           certified: true,
           links: {
             appleMusic: { state: "unattempted" },
-            deezer: { state: "unsupported" },
+            deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: {
               state: "verified",
@@ -153,18 +155,50 @@ describe("the identity answer", () => {
   });
 
   it("renders only the covered platforms, never a not-covered row", async () => {
-    // Deezer and Tidal are `unsupported` on the wire and ABSENT from the page: a row saying Fluncle
-    // covers neither is the API contract leaking into a human surface, and it reads as a promise to
-    // add them. Scope is stated once in /docs/identity instead.
+    // Tidal is `unsupported` on the wire and ABSENT from the page: a row saying Fluncle does not
+    // cover it is the API contract leaking into a human surface, and it reads as a promise to add
+    // it. Scope is stated once in /docs/identity instead.
     const html = await renderPage(found([recording()]));
 
-    expect(html).not.toContain("Deezer");
     expect(html).not.toContain("Tidal");
     expect(html).not.toContain("Not covered");
-    // The five rows that ARE the coverage set.
-    for (const label of ["ISRC", "MusicBrainz", "Spotify", "Apple Music", "Discogs"]) {
+    // The six rows that ARE the coverage set. Deezer earns its row off a real column
+    // (`tracks.deezer_track_id`), so it renders its honest state like every other one.
+    for (const label of ["ISRC", "MusicBrainz", "Spotify", "Apple Music", "Deezer", "Discogs"]) {
       expect(html).toContain(`<dt>${label}</dt>`);
     }
+  });
+
+  it("carries a held Deezer link out, with the rung that won it", async () => {
+    // The link is the whole point of keeping the id, and the fragment beside it must say which gate
+    // cleared rather than flattening a full-triple match into the same word as a looser one.
+    const html = await renderPage(
+      found([
+        recording({
+          links: {
+            appleMusic: { state: "unattempted" },
+            deezer: {
+              state: "verified",
+              url: "https://www.deezer.com/track/3135556",
+              value: "3135556",
+              verification: {
+                at: "2026-07-30T00:00:00.000Z",
+                atMeaning: "verified",
+                method: "search",
+                source: null,
+              },
+            },
+            discogs: { state: "unattempted" },
+            spotify: { state: "unattempted" },
+            tidal: { state: "unsupported" },
+          },
+        }),
+      ]),
+    );
+
+    expect(html).toContain('href="https://www.deezer.com/track/3135556"');
+    expect(html).toContain("Listen on Deezer");
+    expect(html).toContain("matched by artist, title, and length · confirmed Jul 30, 2026");
   });
 
   it("says every negative out loud rather than leaving a gap", async () => {
@@ -189,7 +223,7 @@ describe("the identity answer", () => {
           },
           links: {
             appleMusic: { state: "unattempted" },
-            deezer: { state: "unsupported" },
+            deezer: { state: "unattempted" },
             discogs: {
               attempts: 2,
               cap: null,
@@ -226,7 +260,7 @@ describe("the identity answer", () => {
         recording({
           links: {
             appleMusic: { state: "unattempted" },
-            deezer: { state: "unsupported" },
+            deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: {
               cap: 6,
@@ -271,7 +305,7 @@ describe("the identity answer", () => {
           },
           links: {
             appleMusic: { state: "unattempted" },
-            deezer: { state: "unsupported" },
+            deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: {
               state: "verified",
@@ -320,7 +354,7 @@ describe("the identity answer", () => {
           },
           links: {
             appleMusic: { state: "unattempted" },
-            deezer: { state: "unsupported" },
+            deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: { reason: "credit-not-an-identity", state: "refused" },
             tidal: { state: "unsupported" },
@@ -355,7 +389,7 @@ describe("the identity answer", () => {
                 source: null,
               },
             },
-            deezer: { state: "unsupported" },
+            deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },
             tidal: { state: "unsupported" },

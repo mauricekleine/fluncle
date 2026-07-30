@@ -216,6 +216,7 @@ const IDENTITY_SELECT = `t.track_id, t.title, t.artists_json, t.duration_ms,
     t.backfill_apple_music_done_at,
     t.in_release_id, t.backfill_discogs_attempted_at, t.backfill_discogs_attempts,
     t.backfill_discogs_done_at,
+    t.deezer_track_id, t.deezer_verified_at, t.deezer_verified_by,
     t.dismissed_at, t.duplicate_of_track_id,
     f.log_id as log_id, (f.track_id is not null) as has_finding`;
 
@@ -230,6 +231,9 @@ type IdentityRow = {
   backfill_discogs_attempted_at: null | string;
   backfill_discogs_attempts: null | number;
   backfill_discogs_done_at: null | string;
+  deezer_track_id: null | string;
+  deezer_verified_at: null | string;
+  deezer_verified_by: null | string;
   dismissed_at: null | string;
   duplicate_of_track_id: null | string;
   duration_ms: null | number;
@@ -455,6 +459,39 @@ function discogsState(row: IdentityRow): IdentityState {
 }
 
 /**
+ * THE DEEZER ANSWER, off the id Fluncle keeps for a recording (`tracks.deezer_track_id`).
+ *
+ * TWO STATES, and only two, because only two are backed by a column. Fluncle holds a Deezer id or he
+ * does not, and there is NO attempt record here at all: the id is kept as a by-product of reads run
+ * for other reasons (the anchor rung's ISRC recovery, the add flow's ISRC fallback and its
+ * label/preview enrichment), and none of those is a Deezer LOOK that could conclude. So a row with
+ * no id reads `unattempted` — nobody has gone looking, which is exactly true — and never `absent`,
+ * which would claim a search ran and came back empty. There is likewise nothing to `refuse`.
+ *
+ * A held id is `verified` with the rung that won it (`isrc` | `search` | `search-subset`, all three
+ * gated at the write) and `atMeaning: "verified"`, since the stamp beside it is the moment the link
+ * was WRITTEN rather than a look concluding. A NULL method reads `unknown-legacy` — the same honest
+ * "we hold no record of how" the Spotify answer serves, though no write path can produce one here.
+ *
+ * SERVED TO BOTH AUDIENCES. Unlike Apple, no licence clause bars passing a Deezer link on, so the
+ * page and the API answer identically and this function takes no audience.
+ */
+function deezerState(row: IdentityRow): IdentityState {
+  const id = row.deezer_track_id?.trim();
+
+  if (id) {
+    return verified(
+      (row.deezer_verified_by as IdentityMethod | null) ?? "unknown-legacy",
+      row.deezer_verified_at,
+      "verified",
+      { url: `https://www.deezer.com/track/${encodeURIComponent(id)}`, value: id },
+    );
+  }
+
+  return { state: "unattempted" };
+}
+
+/**
  * THE APPLE MUSIC ANSWER, computed in full off its real columns and then gated for a MACHINE caller
  * by {@link APPLE_LINKS_MACHINE_SERVED}. A `first-party` read (the `/identity` page) gets the real
  * state, because rendering an Apple link on Fluncle's own page is what `/log` has always done and is
@@ -533,10 +570,7 @@ function toRecording(
     identifiers: { isrc: isrcState(row), mbRecordingId: musicbrainzState(row) },
     links: {
       appleMusic: appleMusicState(row, audience),
-      // Fluncle holds no Deezer link and no recording-grain Deezer attempt record, so there is no
-      // honest state to compute. Deezer is used INTERNALLY (the ISRC-recovery rung, preview audio)
-      // and no link is served from it, which is exactly what `unsupported` means here.
-      deezer: { state: "unsupported" },
+      deezer: deezerState(row),
       discogs: discogsState(row),
       spotify: spotifyState(row),
       // No Tidal integration exists at all. Honest, and cheaper than pretending.

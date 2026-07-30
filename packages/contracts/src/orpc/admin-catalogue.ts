@@ -824,6 +824,12 @@ const DEEZER_TEXT_MAX = 300;
 const DEEZER_ISRC_MAX = 64;
 
 /**
+ * A Deezer track id is a decimal integer, ten digits at today's catalogue size. The cap is room for
+ * that to keep growing and nothing else: this string is pasted into a URL Fluncle serves publicly.
+ */
+const DEEZER_TRACK_ID_MAX = 32;
+
+/**
  * One Deezer search hit the BOX fetched for an ISRC-less catalogue row (rung 0 of `resolve_anchor`).
  *
  * WHY THE BOX FETCHES IT. Deezer's public search takes no token, so its quota is purely PER-IP — and
@@ -852,6 +858,15 @@ export const DeezerIsrcCandidateSchema = z
   .object({
     /** Deezer's billed artist string for the hit — folded into an artist set by the gate. */
     artistName: z.string().max(DEEZER_TEXT_MAX),
+    /**
+     * Deezer's own track id for the hit. OPTIONAL, and it is not evidence the gate reads: the ISRC
+     * decision does not consult it, so a box on a build that predates this field still recovers
+     * ISRCs exactly as before. What it buys is the link — a hit that CLEARS the gate is this
+     * recording on Deezer, so the server keeps the id (`tracks.deezer_track_id`) and `/identity`
+     * serves `https://www.deezer.com/track/<id>` off it. Bounded like every other field here,
+     * because it reaches a public page: the box remains a source that is checked, not trusted.
+     */
+    deezerTrackId: z.string().max(DEEZER_TRACK_ID_MAX).optional(),
     /**
      * The hit's duration in MILLISECONDS (Deezer bills seconds; the box promotes them). POSITIVE and
      * FINITE: a zero, negative, or non-finite duration is not a recording length, and the gate's

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { deezerSearchQuery, searchDeezerCandidates } from "./deezer";
+import {
+  deezerSearchQuery,
+  enrichFromDeezer,
+  lookupIsrcFromDeezer,
+  searchDeezerCandidates,
+} from "./deezer";
 
 // The Deezer search client is a pure network→shape mapper for the pre-anchor ISRC-recovery rung. It
 // must NEVER throw: every unhappy path (a blank query, a non-2xx, an error body, a malformed shape, a
@@ -75,7 +80,13 @@ describe("searchDeezerCandidates", () => {
     });
 
     expect(candidates).toEqual([
-      { artistName: "Calibre", durationMs: 132_000, isrc: "GBEXH1900314", title: "Mr Right On" },
+      {
+        artistName: "Calibre",
+        deezerTrackId: "3263968181",
+        durationMs: 132_000,
+        isrc: "GBEXH1900314",
+        title: "Mr Right On",
+      },
     ]);
 
     // It GETs the identified User-Agent to Deezer's `/search/track` with the `artist:"…" track:"…"`
@@ -204,7 +215,13 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
 
     // Before the fix this was `[]` — the ISRC was on the wire and thrown away.
     expect(candidates).toEqual([
-      { artistName: "Calibre", durationMs: 132_000, isrc: "GBEXH1900314", title: "Mr Right On" },
+      {
+        artistName: "Calibre",
+        deezerTrackId: "3263968181",
+        durationMs: 132_000,
+        isrc: "GBEXH1900314",
+        title: "Mr Right On",
+      },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -257,5 +274,106 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
       await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" }, [0, 0]),
     ).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── THE TRACK ID, AND THE GATES ON KEEPING IT ────────────────────────────────────────────────────
+// Deezer's own track id has always been in these responses and was always dropped. It is kept now,
+// because a verified id becomes `https://www.deezer.com/track/<id>` on `/identity`. Which is exactly
+// why neither read hands one back bare: an unverified id is a wrong link on a public page under a
+// recording's name, and the honest answer to "not sure" is nothing at all.
+describe("lookupIsrcFromDeezer — the by-name ISRC fallback, and the hit it returns", () => {
+  it("returns the duration-confirmed hit whole, id included, with the detail read's ISRC", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(body([HIT]))
+      .mockResolvedValueOnce(Response.json({ isrc: "GBEXH1900314" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await lookupIsrcFromDeezer({
+        artists: ["Calibre"],
+        durationMs: 132_000,
+        title: "Mr Right On",
+      }),
+    ).toEqual({
+      artistName: "Calibre",
+      deezerTrackId: "3263968181",
+      durationMs: 132_000,
+      isrc: "GBEXH1900314",
+      title: "Mr Right On",
+    });
+
+    // Unchanged: the search, then the by-id detail read that carries the ISRC.
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://api.deezer.com/track/3263968181");
+  });
+
+  it("still refuses a hit whose duration disagrees — a wrong ISRC seeds a permanent wrong Log ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(body([{ ...HIT, duration: 300 }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(
+      await lookupIsrcFromDeezer({
+        artists: ["Calibre"],
+        durationMs: 132_000,
+        title: "Mr Right On",
+      }),
+    ).toBeUndefined();
+    // No detail read was even made.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("enrichFromDeezer — the by-ISRC read, and the duration guard on its id", () => {
+  const isrcTrack = (over: Record<string, unknown> = {}) =>
+    Response.json({
+      duration: 132,
+      id: 3263968181,
+      preview: "https://cdn.deezer.com/p.mp3",
+      ...over,
+    });
+
+  it("keeps the id when the returned track's duration confirms the row's", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(isrcTrack()).mockResolvedValue(Response.json({})),
+    );
+
+    expect(await enrichFromDeezer("GBEXH1900314", 132_000)).toEqual({
+      deezerTrackId: "3263968181",
+      label: undefined,
+      previewUrl: "https://cdn.deezer.com/p.mp3",
+    });
+  });
+
+  it("keeps NO id when the caller has no duration to vouch with", async () => {
+    // `/track/isrc:` PICKS a recording and picks wrong ~7% of the time. With nothing to check the
+    // pick against, the label and the preview still ride it (a mismatched 30s clip is a small
+    // wrong) and the LINK does not (a wrong link under a recording's name is not).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(isrcTrack()).mockResolvedValue(Response.json({})),
+    );
+
+    const enrichment = await enrichFromDeezer("GBEXH1900314");
+
+    expect(enrichment.deezerTrackId).toBeUndefined();
+    expect(enrichment.previewUrl).toBe("https://cdn.deezer.com/p.mp3");
+  });
+
+  it("keeps NO id when the durations disagree — that is the ~7% mispick, caught", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(isrcTrack({ duration: 300 }))
+        .mockResolvedValue(Response.json({})),
+    );
+
+    const enrichment = await enrichFromDeezer("GBEXH1900314", 132_000);
+
+    expect(enrichment.deezerTrackId).toBeUndefined();
+    // The label/preview behaviour is untouched by the guard — only the link is gated.
+    expect(enrichment.previewUrl).toBe("https://cdn.deezer.com/p.mp3");
   });
 });
