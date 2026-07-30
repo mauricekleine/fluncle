@@ -2,15 +2,7 @@
 // native overlay (a right action rail + bottom caption), the cover-card eclipse
 // drift, and the background-pause rule. The de-risk spike target.
 import { memo, type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
-import {
-  Linking,
-  Pressable,
-  Share,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
-} from "react-native";
+import { Pressable, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -28,6 +20,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { LinearGradient } from "expo-linear-gradient";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { type TrackListItem } from "@fluncle/contracts";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { resolveCardMedia } from "@/lib/media";
 import { soundRail } from "@/lib/feed-rail";
 import { useBackgroundPause } from "@/audio/session";
@@ -350,7 +343,7 @@ export const FeedCard = memo(function FeedCard({ finding, active, soundOn, onTog
             />
           }
           label="Spotify"
-          onPress={() => Linking.openURL(finding.spotifyUrl)}
+          onPress={() => openExternalUrl(finding.spotifyUrl)}
         />
         <RailAction
           icon={

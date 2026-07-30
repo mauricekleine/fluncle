@@ -1,8 +1,9 @@
 import { type ReactNode } from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import { type SearchEntity } from "@fluncle/contracts/orpc";
+import { openExternalUrl } from "@/lib/open-external-url";
 import { entityWebPath } from "@/lib/search-state";
 import { API_BASE } from "@/config";
 import { color, font, radius } from "@/theme/tokens";
@@ -37,7 +38,7 @@ export function EntityRow({
       accessible
       accessibilityRole="button"
       accessibilityLabel={`Open the ${noun} ${entity.name} on the web`}
-      onPress={() => void Linking.openURL(`${API_BASE}${entityWebPath(entity)}`)}
+      onPress={() => openExternalUrl(`${API_BASE}${entityWebPath(entity)}`)}
     >
       {({ pressed }) => (
         <View style={[styles.row, isLast ? styles.lastRow : null, pressed ? styles.pressed : null]}>
