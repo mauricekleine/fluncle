@@ -149,9 +149,9 @@ function refusalPhrase(reason: AnchorRefusalReason): string {
  */
 const NO_LINK_REASON: Record<string, string> = {
   "Apple Music":
-    "Apple's rules keep these links with the playback they came from, so Fluncle hands none of them out here.",
+    "Apple's rules keep these links tied to playback, so Fluncle hands none of them out here.",
   Deezer:
-    "Fluncle uses Deezer to check a recording's identity, never to send you there, so he keeps no Deezer link at all.",
+    "Fluncle reads Deezer for his own work, never to send you there, so he keeps no Deezer link at all.",
   Tidal: "Fluncle has no way in to Tidal, so he has nothing to tell you about it.",
 };
 

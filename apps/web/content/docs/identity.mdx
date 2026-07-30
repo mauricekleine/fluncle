@@ -1,11 +1,11 @@
 ---
 title: Identity
-description: Look a recording up by ISRC, MusicBrainz id, or Log ID, and get the links Fluncle found plus the looks that came back empty.
+description: Look a recording up by ISRC, MusicBrainz id, or Log ID, and get the links Fluncle found plus where he looked and found nothing.
 ---
 
 Fluncle knows, for tens of thousands of recordings, that _this recording_ is _this Spotify link_ is _this MusicBrainz id_ is _this ISRC_. This is how you ask.
 
-Ask on the web at [`/identity`](/identity), or from a machine through the track endpoint. Both read the same answer, so the page and the API can never disagree. Apple Music is the one exception, for a licence reason spelled out below.
+Ask on the web at [`/identity`](/identity), or from a machine through the track endpoint. Both read the same answer, so the page and the API tell you the same thing, with one exception: Apple Music, for a licence reason spelled out below.
 
 ## The three keys
 
@@ -26,16 +26,16 @@ Per platform and per identifier, the answer is one of five. Three of them are th
 | Answer                            | What it means                                                                                                                                                                               |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Fluncle found it                  | He has the link or the identifier, with how he came to trust it and when he last checked.                                                                                                   |
-| He looked and came back empty     | A real look concluded and found nothing, with the date and whether he will go again.                                                                                                        |
+| He looked and came back empty     | He ran a real look to the end and found nothing, with the date and whether he will go again.                                                                                                |
 | He is not looking                 | Something about the recording itself stops him: no length on file, no real artist credit, already down as a duplicate of another recording, set aside, or asked as many times as he allows. |
-| Nobody has gone looking yet       | No look has ever run. Different from the one above, and the difference matters.                                                                                                             |
+| Nobody has gone looking yet       | Nobody has ever gone looking. Different from the one above, and the difference matters.                                                                                                     |
 | He hands out no link of that kind | Sometimes a platform's own rules say so, sometimes he simply has no way in. The answer names which.                                                                                         |
 
 A lookup that answers only the first leaves you to read silence for the rest. Fluncle can name all five because the machinery that goes looking has counted its attempts all along.
 
-**Apple Music is the one place the page and the API differ.** The page shows an Apple link the way any of Fluncle's own pages show one, honest negatives included. The API leaves Apple out: Apple's rules cover showing a link on his pages, not handing it on for someone else to show. Deezer and Tidal are absent for both, and for their own reasons: he keeps no Deezer link at all, and he has no way in to Tidal.
+**Apple Music is the one place the page and the API differ.** The page shows an Apple link the way any of Fluncle's own pages show one, honest negatives included. The API answers `unsupported` for Apple: Apple's rules let him show a link on his own pages, not hand it on for someone else to show. Deezer and Tidal give the same answer to both readers, and for their own reasons: he keeps no Deezer link at all, and he has no way in to Tidal.
 
-Two rules hold the honesty in place. **Every answer is computed from something stored**: where nothing on file settles a question, the answer says he never wrote it down rather than guessing in either direction. And **a date says what it marks**. The moment he wrote a link down and the moment a look concluded are close but not the same claim, so the answer tells you which one you are reading.
+Two rules hold the honesty in place. **Every answer is computed from something stored**: where nothing on file settles a question, the answer says he never wrote it down rather than guessing in either direction. And **a date says what it marks**. The moment he wrote a link down and the moment he finished a look are close but not the same claim, so the answer tells you which one you are reading.
 
 ## What it will not tell you
 
