@@ -706,8 +706,9 @@ function listNames(services: StatusService[]): string {
 }
 
 /**
- * The MCP get_status summary — every service labelled from the registry, `ok` true only when all
- * are `ok`, an empty store reported as unknown (never a false all-clear).
+ * The MCP get_status summary — every service labelled from the registry, with synthesized
+ * never-reported rows kept visible while only reported rows drive the headline and `ok`.
+ * An empty store remains unknown (never a false all-clear).
  */
 async function summarizeStatusMcp(): Promise<{
   headline: string;
@@ -721,31 +722,38 @@ async function summarizeStatusMcp(): Promise<{
     name: row.service,
     status: row.status,
   }));
+  const reportedServices = services.filter((_, index) => rows[index]?.checked_at !== null);
 
-  if (services.length === 0) {
+  if (reportedServices.length === 0) {
     return { headline: "No service has reported its health yet.", ok: false, services };
   }
 
-  const down = services.filter((service) => service.status === "down");
-  const degraded = services.filter((service) => service.status === "degraded");
+  const down = reportedServices.filter((service) => service.status === "down");
+  const degraded = reportedServices.filter((service) => service.status === "degraded");
   const ok = down.length === 0 && degraded.length === 0;
 
-  return { headline: statusHeadline(services.length, down, degraded), ok, services };
+  return { headline: statusHeadline(reportedServices.length, down, degraded), ok, services };
 }
 
-/** The chat get_status summary — a one-line, model-facing headline + ok, nothing else. */
+/**
+ * The chat get_status summary — a one-line, model-facing headline + ok, nothing else.
+ * Never-reported roster entries are not reclassified as ordinary degraded reports.
+ */
 async function summarizeStatusChat(): Promise<{ headline: string; ok: boolean }> {
   const rows = await getServiceStatuses();
+  const reportedRows = rows.filter((row) => row.checked_at !== null);
 
-  if (rows.length === 0) {
+  if (reportedRows.length === 0) {
     return { headline: "No system has reported in yet.", ok: false };
   }
 
-  const down = rows.filter((row) => row.status === "down").map((row) => row.service);
-  const degraded = rows.filter((row) => row.status === "degraded").map((row) => row.service);
+  const down = reportedRows.filter((row) => row.status === "down").map((row) => row.service);
+  const degraded = reportedRows
+    .filter((row) => row.status === "degraded")
+    .map((row) => row.service);
 
   if (down.length === 0 && degraded.length === 0) {
-    return { headline: `All ${rows.length} systems are up.`, ok: true };
+    return { headline: `All ${reportedRows.length} systems are up.`, ok: true };
   }
 
   const parts = [

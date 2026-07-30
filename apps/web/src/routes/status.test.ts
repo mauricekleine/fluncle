@@ -76,7 +76,7 @@ describe("/status label coverage", () => {
 });
 
 describe("/status report age", () => {
-  it("renders a never-reported row without inventing a report timestamp", () => {
+  it("renders a never-reported row's absence once without inventing a timestamp", () => {
     const now = "2026-07-30T12:00:00.000Z";
     const html = renderToStaticMarkup(
       createElement(ServiceRow, {
@@ -93,9 +93,10 @@ describe("/status report age", () => {
       }),
     );
 
-    expect(html).toContain("never reported");
-    expect(html).toContain(serviceCheckedAtLabel(null));
-    expect(serviceCheckedAtLabel(null)).toBe("as of never");
+    expect(html.match(/never reported/g)).toHaveLength(1);
+    expect(html).toContain("no history yet");
+    expect(html).not.toContain("as of");
+    expect(html).not.toContain("<time");
     expect(serviceCheckedAtLabel(now)).toBe("as of Jul 30, 12:00 UTC");
   });
 });

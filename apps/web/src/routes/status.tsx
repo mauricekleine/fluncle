@@ -315,15 +315,7 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus }) {
 // "up 3d" / "down 12m" / "ok 5h" — the elapsed time since the CURRENT status
 // began, with the verb tuned to the status. Whole-unit and quiet (VOICE.md keeps
 // the tabular register terse); a fresh transition reads "just now".
-function humanizeSince(
-  sinceIso: string | null,
-  nowIso: string,
-  status: ServiceHealthStatus,
-): string {
-  if (sinceIso === null) {
-    return "never reported";
-  }
-
+function humanizeSince(sinceIso: string, nowIso: string, status: ServiceHealthStatus): string {
   const verb = status === "down" ? "down" : status === "degraded" ? "degraded" : "up";
   const elapsedMs = new Date(nowIso).getTime() - new Date(sinceIso).getTime();
 
@@ -363,8 +355,8 @@ function formatCheckedAt(value: string): string {
   return `${timeFormatter.format(new Date(value))} UTC`;
 }
 
-export function serviceCheckedAtLabel(value: string | null): string {
-  return `as of ${value === null ? "never" : formatCheckedAt(value)}`;
+export function serviceCheckedAtLabel(value: string): string {
+  return `as of ${formatCheckedAt(value)}`;
 }
 
 // The recent-uptime bar holds this many fixed ticks; real samples are right-aligned
@@ -538,6 +530,12 @@ export function ServiceRow({
   const pct = uptimePercent(samples);
   const subtitle = serviceSubtitle(service.service);
   const oldest = samples[0];
+  const statusAge =
+    pct !== null
+      ? `${pct}% uptime`
+      : service.since === null
+        ? null
+        : humanizeSince(service.since, now, service.status);
 
   // Scheduled automations (the registry crons) show their next run so the operator can see
   // when each fires without SSHing the box. A cron with a fixed wall-clock `schedule` (the
@@ -567,11 +565,11 @@ export function ServiceRow({
         </p>
       ) : undefined}
 
-      <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-        <time dateTime={service.checked_at ?? undefined}>
-          {serviceCheckedAtLabel(service.checked_at)}
-        </time>
-      </p>
+      {service.checked_at !== null ? (
+        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+          <time dateTime={service.checked_at}>{serviceCheckedAtLabel(service.checked_at)}</time>
+        </p>
+      ) : undefined}
 
       {nextRun && cadence !== undefined ? (
         <p className="mt-1 text-xs text-muted-foreground tabular-nums">
@@ -590,9 +588,7 @@ export function ServiceRow({
 
       <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>{oldest ? `${elapsedShort(oldest.at, now)} ago` : "no history yet"}</span>
-        <span className="text-foreground/80">
-          {pct === null ? humanizeSince(service.since, now, service.status) : `${pct}% uptime`}
-        </span>
+        {statusAge !== null ? <span className="text-foreground/80">{statusAge}</span> : undefined}
         <span>now</span>
       </div>
     </article>

@@ -106,6 +106,7 @@ const EXPECTED_STATUS_WRITER_CADENCE_MS = new Map<string, number>([
 // hand. Filtering them here (the SHARED read) makes them vanish from EVERY surface
 // at once — the /status page, /api/status, the CLI `status` command, and the MCP
 // `get_status` tool — so none of them shows a permanently-stale row.
+// Remove an id's registry surface before adding it here, or absence synthesis will resurrect it.
 //
 // `automation` is the known orphan: PR #177 split the single aggregate probe into one
 // row per Hermes cron (`cron.enrich`, `cron.render`, …), so the old `automation`
@@ -228,11 +229,12 @@ export async function getServiceStatuses(now = Date.now()): Promise<ServiceStatu
        order by checked_at desc`,
   );
 
-  const rows = typedRows<ServiceStatusRow>(result.rows)
+  const storedRows = typedRows<ServiceStatusRow>(result.rows);
+  const rows = storedRows
     .filter((row) => !RETIRED_SERVICE_IDS.has(row.service))
     .map((row) => honestFreshness(honestNoRuns(row, now), now));
 
-  return [...rows, ...neverReportedStatuses(rows)];
+  return storedRows.length === 0 ? [] : [...rows, ...neverReportedStatuses(rows)];
 }
 
 /** The most-recent `limit` transition rows, newest first — the page's events feed. */

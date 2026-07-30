@@ -136,6 +136,12 @@ describe("getServiceStatuses expected-writer absence", () => {
     execute.mockReset();
   });
 
+  it("keeps an empty status store as a cold start without synthesizing rows", async () => {
+    execute.mockResolvedValue({ rows: [] });
+
+    await expect(getServiceStatuses(NOW)).resolves.toEqual([]);
+  });
+
   it("synthesizes self-deploy-sonar as never reported when the roster id has no row", async () => {
     execute.mockResolvedValue({ rows: [row("web", { checked_at: "2026-07-30T11:55:00.000Z" })] });
 

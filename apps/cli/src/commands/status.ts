@@ -12,11 +12,11 @@ import { publicApiGet } from "../api";
 // read (carved out of the contract-coverage net), so there is no generated
 // response type to import; the wire shape is mirrored here.
 export type StatusService = {
-  checkedAt: string;
+  checkedAt: string | null;
   latencyMs: number | null;
   message: string | null;
   service: string;
-  since: string;
+  since: string | null;
   status: ServiceHealthStatus;
 };
 

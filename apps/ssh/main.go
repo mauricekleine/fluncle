@@ -542,11 +542,11 @@ type liveState struct {
 // serviceStatus is one probed service in the report. `Status` is the three-state
 // health enum ("ok"/"degraded"/"down"); `Since` is when the current state began.
 type serviceStatus struct {
-	CheckedAt string `json:"checkedAt"`
+	CheckedAt string `json:"checkedAt"` // JSON null becomes "" for a never-reported row.
 	LatencyMs *int   `json:"latencyMs"`
 	Message   string `json:"message,omitempty"`
 	Service   string `json:"service"`
-	Since     string `json:"since"`
+	Since     string `json:"since"` // JSON null becomes "" for a never-reported row.
 	Status    string `json:"status"`
 }
 
@@ -1820,8 +1820,10 @@ func (m model) statusBodyLines() []string {
 		// recovered field, and how long it's held there.
 		header := rowTitleStyle.Render(serviceStatusLabel(service.Service)) +
 			labelStyle.Render(" · ") +
-			statusWordStyle(service.Status).Render(serviceStatusWord(service.Status)) +
-			labelStyle.Render(" · "+humanizeServiceSince(service.Since, m.status.GeneratedAt, service.Status))
+			statusWordStyle(service.Status).Render(serviceStatusWord(service.Status))
+		if since := humanizeServiceSince(service.Since, m.status.GeneratedAt, service.Status); since != "" {
+			header += labelStyle.Render(" · " + since)
+		}
 		body = append(body, header)
 		// The probe's short message (already public-safe at the write); the
 		// subtitle names what the service is, in plain words.
@@ -2601,6 +2603,10 @@ func statusWordStyle(status string) lipgloss.Style {
 // time since the CURRENT status began, the verb tuned to the status (mirrors the
 // web humanizeSince). Whole-unit and terse; a fresh transition reads "just now".
 func humanizeServiceSince(sinceISO, nowISO, status string) string {
+	if strings.TrimSpace(sinceISO) == "" {
+		return ""
+	}
+
 	verb := "up"
 	switch status {
 	case "down":

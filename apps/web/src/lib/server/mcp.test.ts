@@ -248,6 +248,36 @@ describe("MCP get_status tool", () => {
     expect(data.services).toHaveLength(2);
   });
 
+  it("keeps a never-reported writer visible without counting it as a plain degradation", async () => {
+    statuses.mockResolvedValue([
+      row({ service: "web", status: "ok" }),
+      row({
+        checked_at: null,
+        latency_ms: null,
+        message: "never reported",
+        service: "self-deploy-sonar",
+        since: null,
+        status: "degraded",
+      }),
+    ]);
+
+    const { data } = await callTool("get_status");
+
+    expect(data.ok).toBe(true);
+    expect(data.headline).toBe("All 1 Fluncle systems are operational.");
+    expect(data.services).toHaveLength(2);
+    const services = data.services as Array<{
+      message: string | null;
+      name: string;
+      status: ServiceStatusRow["status"];
+    }>;
+    expect(services[1]).toMatchObject({
+      message: "never reported",
+      name: "self-deploy-sonar",
+      status: "degraded",
+    });
+  });
+
   it("flips ok false and names the failing service when one is down", async () => {
     statuses.mockResolvedValue([
       row({ message: "502 from origin", service: "web", status: "down" }),

@@ -91,6 +91,29 @@ func TestRenderStatusEmpty(t *testing.T) {
 	}
 }
 
+// A synthesized never-reported row has no `since` timestamp. Its header states
+// the status once; the detail line carries the absence.
+func TestRenderStatusNeverReported(t *testing.T) {
+	m := newModel(&app{}, 80, 24)
+	m.status = &statusReport{
+		GeneratedAt: "2026-07-30T12:00:00Z",
+		Services: []serviceStatus{
+			{Service: "self-deploy-sonar", Status: "degraded", Message: "never reported"},
+		},
+	}
+
+	body := stripANSI(strings.Join(m.statusBodyLines(), "\n"))
+	if !strings.Contains(body, "self-deploy-sonar · degraded") {
+		t.Errorf("never-reported row missing its status header\n%s", body)
+	}
+	if strings.Contains(body, "degraded · degraded") {
+		t.Errorf("never-reported row repeated its status\n%s", body)
+	}
+	if strings.Count(body, "never reported") != 1 {
+		t.Errorf("never-reported row must state its absence once\n%s", body)
+	}
+}
+
 // Services sort by the fixed order (web leads, render-box trails); an unknown
 // service falls in after the ranked ones.
 func TestSortServiceStatuses(t *testing.T) {
@@ -122,6 +145,7 @@ func TestHumanizeServiceSince(t *testing.T) {
 		{since: "2026-06-25T11:00:00Z", status: "down", want: "down 1h"},
 		{since: "2026-06-25T11:45:00Z", status: "degraded", want: "degraded 15m"},
 		{since: "2026-06-25T11:59:40Z", status: "ok", want: "up just now"},
+		{since: "", status: "degraded", want: ""},
 	}
 	for _, tc := range cases {
 		if got := humanizeServiceSince(tc.since, now, tc.status); got != tc.want {
