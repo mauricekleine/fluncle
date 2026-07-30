@@ -23,7 +23,9 @@
 // quietly opens a PLAIN LOCAL FILE and the first `syncLibSQL()` throws "syncLibSQL is
 // not supported in the current environment" — which this screen recognises and explains
 // on the glass rather than leaving as a bare native message.
-// (That prop is NOT set in app.config.js as of this commit — see the PR body.)
+// app.config.js gates the prop behind SPIKE_LIBSQL=1 (spike/dev builds only — it is an
+// ENGINE SWAP for the whole app's SQLite, kv-store included, so store builds stay on
+// the default engine); eas.json pins the flag on the `development` build profile.
 //
 // ── RUN RECIPE ───────────────────────────────────────────────────────────────
 // 1. Seed the remote (server-side, once) with the table the spike reads:
@@ -33,9 +35,10 @@
 //    BUNDLE time, so exporting mid-session does nothing until the bundler restarts:
 //      export EXPO_PUBLIC_SPIKE_SYNC_URL='libsql://<db>.turso.io'
 //      export EXPO_PUBLIC_SPIKE_TOKEN='<token>'
-// 3. Build and start the dev client (a prebuild is required by the prop above):
-//      bun run --cwd apps/mobile prebuild
-//      bun run --cwd apps/mobile ios          # or: android
+// 3. Build and start the dev client (a prebuild is required by the prop above, and the
+//    SPIKE_LIBSQL flag is what makes the prebuild write it):
+//      SPIKE_LIBSQL=1 bun run --cwd apps/mobile prebuild
+//      SPIKE_LIBSQL=1 bun run --cwd apps/mobile ios          # or: android
 // 4. Open the screen — either navigate to `/dev/sync-spike` in the dev client, or deep
 //    link it (the app's scheme is `fluncle`, per app.config.js):
 //      npx uri-scheme open 'fluncle://dev/sync-spike' --ios
