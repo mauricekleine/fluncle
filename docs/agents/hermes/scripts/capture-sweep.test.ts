@@ -45,15 +45,18 @@ import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
 describe("capture sweep queueDepth source contract", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
-  test("uses a real post-action backlog count, never the bounded page length or limit", () => {
+  test("never launders the bounded page length or limit into queueDepth", () => {
     expect(source).not.toMatch(/queueDepth\s*:\s*(?:queue\.length|QUEUE_LIMIT)\b/);
-    expect(source).toContain("/api/v1/admin/tracks/work?kind=capture&scope=all&count=true&limit=1");
+  });
 
-    const workCompleted = source.indexOf("await Promise.all(");
-    const postActionCount = source.indexOf("await fetchCaptureQueueDepth()", workCompleted);
-
-    expect(workCompleted).toBeGreaterThan(-1);
-    expect(postActionCount).toBeGreaterThan(workCompleted);
+  test("omits queueDepth rather than scanning the unindexed capture predicate every tick", () => {
+    // `countTrackWork(kind=capture)` scans the growing tracks table and pulls in findings via
+    // `f.log_id`; unlike embed, capture has no covering partial queue index. A hot-path scan is
+    // not an acceptable price for this gauge, so absence is the contract until an operator-owned
+    // index is proven on hosted Turso.
+    expect(source).not.toMatch(/\bqueueDepth\s*:/);
+    expect(source).not.toContain("fetchCaptureQueueDepth");
+    expect(source).not.toContain("kind=capture&scope=all&count=true");
   });
 });
 

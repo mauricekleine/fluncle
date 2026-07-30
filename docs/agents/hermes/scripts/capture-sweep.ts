@@ -942,27 +942,6 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
   return Array.isArray(body.tracks) ? body.tracks : [];
 }
 
-// A separate POST-ACTION count supplies the canonical backlog gauge. The bounded queue page above
-// cannot: its length tops out at QUEUE_LIMIT. Keep this read best-effort so telemetry can never
-// turn already-completed capture work into a failed sweep.
-async function fetchCaptureQueueDepth(): Promise<number | undefined> {
-  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=capture&scope=all&count=true&limit=1`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${API_TOKEN}` },
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `capture queue count failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
-  }
-  const body = (await res.json()) as { queued?: unknown };
-
-  return typeof body.queued === "number" && Number.isFinite(body.queued) && body.queued >= 0
-    ? body.queued
-    : undefined;
-}
-
 async function patchTrack(trackId: string, update: Record<string, unknown>): Promise<void> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(trackId)}`;
   const res = await fetch(url, {
@@ -1592,15 +1571,6 @@ async function main(): Promise<void> {
 
   logBotChallengeRecap(botChallenges);
 
-  let queueDepth: number | undefined;
-  try {
-    queueDepth = await fetchCaptureQueueDepth();
-  } catch (error) {
-    log(
-      `post-action queue count omitted: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
   console.log(
     JSON.stringify({
       batch: batch.length,
@@ -1614,7 +1584,10 @@ async function main(): Promise<void> {
       elapsedMs: Date.now() - started,
       failed: counts.failed,
       ok: true,
-      ...(queueDepth === undefined ? {} : { queueDepth }),
+      // Deliberately NO `queueDepth`. `queue.length` is only the bounded page, while the honest
+      // `count=true` capture predicate scans the growing tracks table plus its findings join on
+      // every hot-path tick (capture has no covering queue index). Until an operator-approved,
+      // hosted-Turso-proven index exists, omission is the only honest and affordable gauge.
       skipped: counts.skipped,
       unmatched: counts.unmatched,
     }),
