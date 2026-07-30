@@ -220,7 +220,7 @@ export async function trackWorkCommand(options: {
   // `--count` asks for the backlog SIZE alongside the page. Opt-in: a page read is capped at
   // 200 rows, so counting rows in the page answers "how many did I get", never "how much is
   // left" — and at catalogue scale those differ by orders of magnitude. Emitted only when set,
-  // so the box sweeps' queue reads stay byte-identical (and never pay for the count).
+  // so page-only readers stay byte-identical and never pay for the count.
   if (options.count) {
     params.set("count", "true");
   }
@@ -415,6 +415,9 @@ export type DiscogsBackfillResult = {
   // must stop looping the cursor (the next tick resumes with a fresh window) rather
   // than re-firing into the same 429 wall until the cron's 120s timeout kills it.
   rateLimited: boolean;
+  // The resolver calls MusicBrainz before Discogs; this names the actual vendor
+  // whose rate-limit brake stopped the pass.
+  rateLimitedBy: "discogs" | "musicbrainz" | null;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
   // Findings the per-finding reliability gate held back this pass (already

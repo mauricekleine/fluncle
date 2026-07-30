@@ -10,6 +10,8 @@
 // guarantee — `emitCost` never throws and returns a `{ posted: false, reason }` on
 // every failure path, so a ledger hiccup can't break the sweep's real work.
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import {
   type BoxCostEvent,
@@ -146,6 +148,7 @@ describe("emitCost best-effort contract", () => {
   test("empty batch is a no-op (no fetch)", async () => {
     const { calls, fetchImpl } = stubFetch({ ok: true });
     expect(await emitCost([], { fetchImpl, token: "t" })).toEqual({
+      failed: 0,
       posted: false,
       reason: "no-events",
     });
@@ -155,6 +158,7 @@ describe("emitCost best-effort contract", () => {
   test("no token skips (no fetch)", async () => {
     const { calls, fetchImpl } = stubFetch({ ok: true });
     expect(await emitCost([anthropicRow], { fetchImpl, token: "" })).toEqual({
+      failed: 1,
       posted: false,
       reason: "no-token",
     });
@@ -172,7 +176,7 @@ describe("emitCost best-effort contract", () => {
       token: "agent-tok",
     });
 
-    expect(result).toEqual({ inserted: 1, posted: true });
+    expect(result).toEqual({ failed: 0, inserted: 1, posted: true });
     expect(calls.length).toBe(1);
 
     const call = calls[0];
@@ -191,6 +195,7 @@ describe("emitCost best-effort contract", () => {
   test("a non-2xx is swallowed to a reason, never thrown", async () => {
     const { fetchImpl } = stubFetch({ ok: false, status: 422 });
     expect(await emitCost([anthropicRow], { fetchImpl, token: "t" })).toEqual({
+      failed: 1,
       posted: false,
       reason: "http-422",
     });
@@ -199,8 +204,38 @@ describe("emitCost best-effort contract", () => {
   test("a network throw is swallowed to a reason, never thrown", async () => {
     const fetchImpl = (() => Promise.reject(new Error("boom"))) as unknown as typeof fetch;
     expect(await emitCost([anthropicRow], { fetchImpl, token: "t" })).toEqual({
+      failed: 1,
       posted: false,
       reason: "error",
     });
+  });
+
+  test("every sweep exposes failed ledger rows in its final summary", () => {
+    const scriptsDir = dirname(import.meta.path);
+    const callers = readdirSync(scriptsDir)
+      .filter((name) => name.endsWith("-sweep.ts") && !name.endsWith(".test.ts"))
+      .map((name) => ({ name, source: readFileSync(join(scriptsDir, name), "utf8") }))
+      .filter(({ source }) => source.includes("await emitCost("));
+
+    expect(callers.map(({ name }) => name).sort()).toEqual([
+      "clip-sweep.ts",
+      "cluster-sweep.ts",
+      "embed-sweep.ts",
+      "enrich-sweep.ts",
+      "entity-bio-sweep.ts",
+      "newsletter-sweep.ts",
+      "note-sweep.ts",
+      "observe-sweep.ts",
+    ]);
+
+    for (const { name, source } of callers) {
+      const calls = source.match(/await emitCost\(/g) ?? [];
+      const observed = source.match(/const costWriteFailures = \(await emitCost\(/g) ?? [];
+
+      expect(observed.length, `${name} discards an emitCost result`).toBe(calls.length);
+      expect(source, `${name} does not put costWriteFailures in its summary`).toContain(
+        "costWriteFailures,",
+      );
+    }
   });
 });

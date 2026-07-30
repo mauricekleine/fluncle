@@ -682,11 +682,8 @@ async function main(): Promise<void> {
   };
   summary.galaxies = survivingIds.length;
 
-  // The summary line the /status prober reads is the LAST stdout line.
-  console.log(JSON.stringify(summary));
-
   // The tick's compute spend — one `self`/`seconds` row (global scope; not per-finding),
-  // best-effort, AFTER the summary is printed (emitCost is stderr-only, never throws).
+  // best-effort and non-fatal, but any rejected rows remain visible in the summary.
   const costs: BoxCostEvent[] = [
     selfSecondsCost({
       occurredAt: new Date().toISOString(),
@@ -694,7 +691,10 @@ async function main(): Promise<void> {
       step: "cluster",
     }),
   ];
-  await emitCost(costs);
+  const costWriteFailures = (await emitCost(costs)).failed;
+
+  // The summary line the /status prober reads is the LAST stdout line.
+  console.log(JSON.stringify({ costWriteFailures, ...summary }));
 }
 
 if (import.meta.main) {

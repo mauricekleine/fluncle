@@ -126,7 +126,7 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // the timer is the loop. A tick that finds every label already resolved/none is a cheap no-op.
 // ---------------------------------------------------------------------------
 
-export function main(): void {
+export function runLabelImagesSweep() {
   const summary = {
     error: null as string | null,
     failed: 0,
@@ -150,6 +150,7 @@ export function main(): void {
     summary.none = pass.noneCount ?? 0;
     summary.failed = pass.failedCount ?? 0;
     summary.throttled = pass.rateLimited ?? false;
+    summary.ok = pass.ok !== false && summary.failed === 0;
 
     if (summary.throttled) {
       log("a vendor throttled the pass — stopped clean; the next tick resumes.");
@@ -159,6 +160,12 @@ export function main(): void {
     summary.error = error instanceof Error ? error.message : String(error);
     log(`label-image resolve pass failed: ${summary.error}`);
   }
+
+  return summary;
+}
+
+export function main(): void {
+  const summary = runLabelImagesSweep();
 
   console.log(JSON.stringify(summary));
 

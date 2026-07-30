@@ -5,7 +5,7 @@ import { createIntegrationDb } from "./integration-db";
 
 // THE KV EVERY KILL SWITCH RIDES, PROVEN AGAINST THE REAL SCHEMA.
 //
-// `settings` is three statements holding 31 keys across 14 modules — every operator flip, the
+// `settings` is three statements holding 36 keys across 16 modules — every operator flip, the
 // six sonar dark flags, the capture budget, the voice-gate dials, the rate-limit windows, and
 // the two catalogue JSON caches (see the module header). All of that rests on the upsert being
 // an upsert and the read being a read, so the primitives get a real-libSQL test rather than

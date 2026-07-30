@@ -64,8 +64,9 @@ const AppleMusicFailedSchema = z
  * Agent tier (`adminAuth`). One bounded, reliability-gated pass over
  * published findings missing a Discogs release id; on a confident match the ids are
  * written server-side. Returns `{ ok, dryRun, resolved, resolvedCount, unresolved,
- * unresolvedCount, skipped, skippedCount, nextCursor }` — `skipped` is the findings
- * the per-finding cooldown/done gate held back this pass.
+ * unresolvedCount, skipped, skippedCount, nextCursor, rateLimited, rateLimitedBy }`
+ * — `skipped` is the findings the per-finding cooldown/done gate held back this
+ * pass, and `rateLimitedBy` names the actual vendor behind a throttle.
  */
 export const backfillDiscogs = oc
   .route({
@@ -93,6 +94,9 @@ export const backfillDiscogs = oc
       // True when the pass STOPPED on the Discogs rate-limit circuit breaker — the
       // CLI stops looping the cursor and the next tick resumes with a fresh window.
       rateLimited: z.boolean(),
+      // The resolver walks MusicBrainz before Discogs. Name the actual brake rather
+      // than attributing every throttle to the command's Discogs label.
+      rateLimitedBy: z.enum(["discogs", "musicbrainz"]).nullable(),
       resolved: z.array(DiscogsResolvedSchema),
       resolvedCount: z.number(),
       // Findings the reliability gate skipped this pass (already resolved, or

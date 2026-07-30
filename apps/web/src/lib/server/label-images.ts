@@ -20,9 +20,9 @@
 // report `rateLimited` honestly, and this sweep trips a circuit breaker on it — it STOPS the pass
 // rather than marching the next label into the same wall. Per-label reliability lives on the row
 // (`image_state` / `image_attempted_at` / `image_failures`): a resolved/none label is terminal
-// and skipped forever; a transient failure backs off on a cooldown and is retried; a persistent
-// one gives up (→ `none`) so it is never retried forever. Idempotent by construction — a second
-// run over a fully-resolved archive fetches nothing.
+// and skipped forever; a transient failure backs off on a cooldown and is retried. `none` is
+// reserved for a trustworthy absence verdict — a vendor outage must never masquerade as one.
+// Idempotent by construction — a second run over a fully-resolved archive fetches nothing.
 
 import { type DiscogsLabelImage, fetchDiscogsLabelImage, parseDiscogsLabelUrl } from "./discogs";
 import { getDb, typedRows } from "./db";
@@ -41,10 +41,6 @@ const MAX_BATCH = 4;
 // `pending` labels that hit a transient failure ever carry a recent `image_attempted_at`; a
 // resolved/none label is terminal and excluded regardless.
 const COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
-
-// After this many consecutive failures a label GIVES UP (→ `image_state='none'`, the cover
-// floor), so a persistently-failing label is never retried forever.
-const MAX_FAILURES = 5;
 
 // The stored logo is stable (a label's logo rarely changes and a re-resolve only happens on an
 // operator's deliberate reset), so it caches hard at the edge like the other found assets.
@@ -191,40 +187,76 @@ type WikidataEntityData = {
   >;
 };
 
-/** Download an image URL → its bytes + mime, or undefined (non-image, empty, oversized, error). */
+type WikidataImageOutcome =
+  | { kind: "failed"; error: string }
+  | { kind: "image"; image: DiscogsLabelImage }
+  | { kind: "none" }
+  | { kind: "rate-limited" };
+
+function failedHttpOutcome(source: string, response: Response): WikidataImageOutcome {
+  if (response.status === 429 || response.status === 503) {
+    return { kind: "rate-limited" };
+  }
+
+  if (response.status === 404 || response.status === 410) {
+    return { kind: "none" };
+  }
+
+  return {
+    error: `${source} failed (${response.status} ${response.statusText || "unknown"})`,
+    kind: "failed",
+  };
+}
+
+/** Download a Commons image URL, preserving transient failure vs trustworthy absence. */
 async function downloadImage(
   url: string,
   headers: Record<string, string>,
-): Promise<DiscogsLabelImage | undefined> {
-  const response = await fetch(url, { headers });
+): Promise<WikidataImageOutcome> {
+  try {
+    const response = await fetch(url, { headers });
 
-  if (!response.ok) {
-    return undefined;
+    if (!response.ok) {
+      return failedHttpOutcome("Wikimedia image request", response);
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (!contentType.startsWith("image/")) {
+      return { kind: "none" };
+    }
+
+    const bytes = await response.arrayBuffer();
+
+    if (bytes.byteLength === 0) {
+      return { error: "Wikimedia image response was empty", kind: "failed" };
+    }
+
+    if (bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
+      return { kind: "none" };
+    }
+
+    return {
+      image: { bytes, mime: contentType.split(";")[0]?.trim() || "image/jpeg" },
+      kind: "image",
+    };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error),
+      kind: "failed",
+    };
   }
-
-  const contentType = response.headers.get("content-type") ?? "";
-
-  if (!contentType.startsWith("image/")) {
-    return undefined;
-  }
-
-  const bytes = await response.arrayBuffer();
-
-  if (bytes.byteLength === 0 || bytes.byteLength > MAX_LABEL_IMAGE_BYTES) {
-    return undefined;
-  }
-
-  return { bytes, mime: contentType.split(";")[0]?.trim() || "image/jpeg" };
 }
 
 /**
  * Fetch a label's logo via its Wikidata entity's P154 (logo image) claim → a Commons file,
  * served through Special:FilePath (bounded with `?width` so a huge original doesn't blow the
- * ceiling). Best-effort → undefined on any miss. Wikimedia asks for an identifiable UA (we reuse
- * the MB one). Commons needs no auth, so — unlike Discogs — this could technically be hotlinked;
- * we still re-host it for one consistent, self-owned serving path across the ladder.
+ * ceiling). Its result preserves four distinct facts: image, trustworthy absence, transient
+ * failure, or active throttling. Wikimedia asks for an identifiable UA (we reuse the MB one).
+ * Commons needs no auth, so — unlike Discogs — this could technically be hotlinked; we still
+ * re-host it for one consistent, self-owned serving path across the ladder.
  */
-async function fetchWikidataLogoImage(qid: string): Promise<DiscogsLabelImage | undefined> {
+async function fetchWikidataLogoImage(qid: string): Promise<WikidataImageOutcome> {
   try {
     const response = await fetch(
       `https://www.wikidata.org/wiki/Special:EntityData/${encodeURIComponent(qid)}.json`,
@@ -232,14 +264,14 @@ async function fetchWikidataLogoImage(qid: string): Promise<DiscogsLabelImage | 
     );
 
     if (!response.ok) {
-      return undefined;
+      return failedHttpOutcome("Wikidata entity request", response);
     }
 
     const data = (await response.json()) as WikidataEntityData;
     const filename = data.entities?.[qid]?.claims?.P154?.[0]?.mainsnak?.datavalue?.value;
 
     if (typeof filename !== "string" || !filename.trim()) {
-      return undefined;
+      return { kind: "none" };
     }
 
     const commonsUrl = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(
@@ -250,7 +282,10 @@ async function fetchWikidataLogoImage(qid: string): Promise<DiscogsLabelImage | 
   } catch (error) {
     logEvent("warn", "label-images.wikidata-failed", { error, qid });
 
-    return undefined;
+    return {
+      error: error instanceof Error ? error.message : String(error),
+      kind: "failed",
+    };
   }
 }
 
@@ -358,18 +393,18 @@ async function markNone(slug: string): Promise<void> {
 
 /**
  * Record a failed attempt: bump the failure streak + the attempt stamp (drives the cooldown
- * backoff). Past `MAX_FAILURES` the label GIVES UP (→ `none`), so it is never retried forever.
- * Touches only the reliability columns — no `updated_at`, no fan-out.
+ * backoff). A failure never becomes an absence verdict: the row stays pending until a later
+ * attempt resolves it or obtains a trustworthy `none`. Touches only the reliability columns —
+ * no `updated_at`, no fan-out.
  */
 async function recordFailure(slug: string, priorFailures: number): Promise<void> {
   const db = await getDb();
   const failures = priorFailures + 1;
-  const giveUp = failures >= MAX_FAILURES;
 
   await db.execute({
-    args: [failures, giveUp ? "none" : "pending", new Date().toISOString(), slug],
+    args: [failures, new Date().toISOString(), slug],
     sql: `update labels
-          set image_failures = ?, image_state = ?, image_attempted_at = ?
+          set image_failures = ?, image_state = 'pending', image_attempted_at = ?
           where slug = ?`,
   });
 }
@@ -457,10 +492,18 @@ async function resolveOneLabel(
 
     // 4. Wikidata P154 — the second rung.
     if (wikidataQid) {
-      const image = await fetchWikidataLogoImage(wikidataQid);
+      const wikidata = await fetchWikidataLogoImage(wikidataQid);
 
-      if (image) {
-        const imageKey = await storeLogo(bucket, row.slug, image);
+      if (wikidata.kind === "rate-limited") {
+        return { kind: "rate-limited" };
+      }
+
+      if (wikidata.kind === "failed") {
+        return wikidata;
+      }
+
+      if (wikidata.kind === "image") {
+        const imageKey = await storeLogo(bucket, row.slug, wikidata.image);
 
         return { imageKey, kind: "resolved", source: "wikidata" };
       }
@@ -531,7 +574,7 @@ export async function resolveLabelImages(
         continue;
       }
 
-      // failed — back off (streak + cooldown), give up past MAX_FAILURES.
+      // Failed — back off (streak + cooldown), preserving pending for a later retry.
       await recordFailure(row.slug, row.image_failures);
       failed.push({ error: outcome.error, slug: row.slug });
     }

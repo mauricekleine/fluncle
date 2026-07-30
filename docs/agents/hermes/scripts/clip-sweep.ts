@@ -186,11 +186,10 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(JSON.stringify({ ok: true, ...summary }));
-
-  // Record the tick's compute spend, best-effort, AFTER the summary is printed (the
-  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
-  await emitCost(costs);
+  // Record the tick's compute spend best-effort. A ledger failure cannot kill the
+  // sweep, but its rejected row count belongs in the final status reading.
+  const costWriteFailures = (await emitCost(costs)).failed;
+  console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
 }
 
 main().catch((error) => {

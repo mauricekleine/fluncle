@@ -661,7 +661,6 @@ async function main(): Promise<void> {
   const summary = {
     batch: 0,
     catalogueDone: 0,
-    catalogueQueued: 0,
     checked: 0,
     done: 0,
     errors: 0,
@@ -713,7 +712,6 @@ async function main(): Promise<void> {
   if (API_TOKEN) {
     try {
       const catalogueQueue = await fetchCatalogueAnalyzeQueue();
-      summary.catalogueQueued = catalogueQueue.length;
 
       for (const item of catalogueQueue.slice(0, CATALOGUE_BATCH_CAP)) {
         summary.checked += 1;
@@ -749,11 +747,10 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(JSON.stringify({ ok: true, ...summary }));
-
-  // Record the tick's compute spend, best-effort, AFTER the summary is printed (the
-  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
-  await emitCost(costs);
+  // Record the tick's compute spend best-effort. A ledger failure cannot kill the
+  // sweep, but its rejected row count belongs in the final status reading.
+  const costWriteFailures = (await emitCost(costs)).failed;
+  console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
 }
 
 // Guard the entrypoint so importing this module for tests is side-effect free (no

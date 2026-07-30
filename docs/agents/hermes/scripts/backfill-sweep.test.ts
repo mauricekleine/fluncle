@@ -43,7 +43,7 @@ case "$1" in
   admin)
     printf '%s\\n' "$*" >> ${JSON.stringify(callsFile)}
     case "$3" in
-      discogs) printf '{"ok":true,"resolvedCount":1,"unresolvedCount":2,"skippedCount":3,"rateLimited":false}\\n' ;;
+      discogs) printf '{"ok":true,"resolvedCount":1,"unresolvedCount":2,"skippedCount":3,"rateLimited":true,"rateLimitedBy":"musicbrainz"}\\n' ;;
       lastfm) printf '{"ok":true,"lovedCount":4,"failedCount":0,"skippedCount":5,"rateLimited":false}\\n' ;;
       apple-music) printf '{"ok":true,"configured":true,"resolvedCount":6,"unresolvedCount":7,"failedCount":0,"skippedCount":8,"rateLimited":false}\\n' ;;
       apple-catalogue)
@@ -63,6 +63,7 @@ esac
 
 let fluncleJson: <T>(args: string[]) => T;
 let runBackfillSweep: () => Record<string, unknown>;
+let backfillSweepExitCode: (summary: { ok: boolean }) => 0 | 1;
 let stubDir: string;
 let callsFile: string;
 let modeFile: string;
@@ -75,10 +76,12 @@ beforeAll(async () => {
   writeFileSync(stub, stubSource(callsFile, modeFile));
   chmodSync(stub, 0o755);
   process.env.FLUNCLE_BIN = stub;
-  ({ fluncleJson, runBackfillSweep } = (await import("./backfill-sweep")) as unknown as {
-    fluncleJson: <T>(args: string[]) => T;
-    runBackfillSweep: () => Record<string, unknown>;
-  });
+  ({ backfillSweepExitCode, fluncleJson, runBackfillSweep } =
+    (await import("./backfill-sweep")) as unknown as {
+      backfillSweepExitCode: (summary: { ok: boolean }) => 0 | 1;
+      fluncleJson: <T>(args: string[]) => T;
+      runBackfillSweep: () => Record<string, unknown>;
+    });
 });
 
 afterEach(() => {
@@ -175,6 +178,7 @@ describe("the tick's legs", () => {
       throttled: false,
       unresolved: 2,
     });
+    expect(summary.musicbrainz).toEqual({ throttled: true });
     expect(summary.lastfm).toEqual({
       error: null,
       failed: 0,
@@ -213,12 +217,14 @@ describe("the tick's legs", () => {
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
   });
 
-  test("a catalogue leg that crashes records its error and leaves the tick intact", () => {
+  test("a catalogue leg that crashes records its error and makes the tick report failure", () => {
     writeFileSync(modeFile, "crash");
 
     const summary = runBackfillSweep();
 
     expect((summary["apple-catalogue"] as { error: null | string }).error).toContain("apple boom");
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
+    expect(summary.ok).toBe(false);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
   });
 });

@@ -123,6 +123,10 @@ const throttleDiscogs = makeRateLimiter();
 
 export type DiscogsEnrichment = {
   masterId?: number;
+  // The vendor whose brake actually tripped. A backfill driven through the
+  // Discogs resolver also calls MusicBrainz first, so `rateLimited` alone cannot
+  // honestly name the throttling service.
+  rateLimitedBy?: DiscogsThrottleVendor;
   releaseId?: number;
   // True when a Discogs (429) or MusicBrainz (503) call EXHAUSTED its in-slot
   // retries during this resolution — i.e. the vendor is actively rate-limiting us.
@@ -132,11 +136,17 @@ export type DiscogsEnrichment = {
   rateLimited?: boolean;
 };
 
+export type DiscogsThrottleVendor = "discogs" | "musicbrainz";
+
 // A mutable per-resolution flag threaded through the rate-limited fetch helpers so
 // `discogsResolveRelease` can report whether the vendor throttled us this pass
 // (vs the call genuinely finding nothing). Module-level fetchers can't return it
 // out-of-band, so they flip it on a flag the caller owns for the duration.
-type RateLimitSignal = { hit: boolean };
+type RateLimitSignal = { hit: boolean; vendor?: DiscogsThrottleVendor };
+
+function rateLimitedOutcome(signal: RateLimitSignal): DiscogsEnrichment {
+  return signal.hit && signal.vendor ? { rateLimited: true, rateLimitedBy: signal.vendor } : {};
+}
 
 // The richer signal the publish path already holds. All optional except title so
 // the resolver degrades gracefully (e.g. no ISRC → skip the MB bridge).
@@ -303,6 +313,7 @@ async function mbFetch<T>(path: string, signal?: RateLimitSignal): Promise<T | u
 
   if (rateLimited && signal) {
     signal.hit = true;
+    signal.vendor = "musicbrainz";
   }
 
   return data ?? undefined;
@@ -489,6 +500,7 @@ function discogsFetch<T>(
 
       if (signal && Number.isFinite(remaining) && remaining <= 1) {
         signal.hit = true;
+        signal.vendor = "discogs";
       }
 
       // 429 = Discogs is rate-limiting. Do NOT retry within the request: once the
@@ -498,6 +510,7 @@ function discogsFetch<T>(
       // the next 30-min tick retries with a fresh window. One call, not a wall.
       if (response.status === 429 && signal) {
         signal.hit = true;
+        signal.vendor = "discogs";
       }
 
       if (!response.ok) {
@@ -752,14 +765,14 @@ export async function discogsResolveRelease(
     // MusicBrainz already exhausted a 503 — don't march into Discogs and storm a
     // second vendor; report throttled so the backfill's circuit breaker trips.
     if (signal.hit) {
-      return { rateLimited: true };
+      return rateLimitedOutcome(signal);
     }
 
     // 2. Discogs scored search — needs the token. No token → no-op (stays inert).
     const token = await readOptionalEnv("DISCOGS_USER_TOKEN");
 
     if (!token) {
-      return signal.hit ? { rateLimited: true } : {};
+      return rateLimitedOutcome(signal);
     }
 
     const best = await resolveViaDiscogsSearch(input, token, signal);
@@ -767,7 +780,7 @@ export async function discogsResolveRelease(
     // 3. The gate: store NOTHING below the threshold. "Unresolved" is correct —
     // but distinguish "unresolved because throttled" so the backfill backs off.
     if (!best || best.score < CONFIDENCE_THRESHOLD) {
-      return signal.hit ? { rateLimited: true } : {};
+      return rateLimitedOutcome(signal);
     }
 
     const { release } = best;
@@ -786,7 +799,7 @@ export async function discogsResolveRelease(
     // the add must never fail on a Discogs/MB miss.
     logEvent("error", "discogs.resolve-failed", { artist: cleanArtist, error, title: cleanTitle });
 
-    return signal.hit ? { rateLimited: true } : {};
+    return rateLimitedOutcome(signal);
   }
 }
 
@@ -879,6 +892,7 @@ export async function fetchDiscogsLabelImage(
 
       if (response.status === 429) {
         signal.hit = true;
+        signal.vendor = "discogs";
 
         return undefined;
       }

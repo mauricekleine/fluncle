@@ -192,6 +192,55 @@ describe("resolveLabelImages — the fallback ladder", () => {
     expect(writtenSql().some((sql) => sql.includes("image_state = 'none'"))).toBe(true);
   });
 
+  it("keeps a Wikimedia failure retryable even after repeated attempts", async () => {
+    seedWorklist([{ ...HOSPITAL, image_failures: 4, mb_label_id: "mbid-hospital" }]);
+    mbFetch.mockResolvedValueOnce({
+      data: {
+        relations: [{ type: "wikidata", url: { resource: "https://www.wikidata.org/wiki/Q123" } }],
+      },
+      rateLimited: false,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("Wikimedia unavailable");
+      }),
+    );
+
+    const { bucket } = fakeBucket();
+    const result = await resolveLabelImages(bucket, 50, false);
+
+    expect(result.failed).toEqual([{ error: "Wikimedia unavailable", slug: "hospital-records" }]);
+    expect(result.none).toEqual([]);
+    const failureWrite = execute.mock.calls
+      .slice(1)
+      .find((call) => String(call[0]?.sql ?? "").includes("image_failures"));
+    expect(String(failureWrite?.[0]?.sql ?? "")).toContain("image_state = 'pending'");
+    expect(failureWrite?.[0]?.args?.[0]).toBe(5);
+  });
+
+  it("distinguishes a Wikimedia throttle from a genuine no-logo verdict", async () => {
+    seedWorklist([{ ...HOSPITAL, mb_label_id: "mbid-hospital" }]);
+    mbFetch.mockResolvedValueOnce({
+      data: {
+        relations: [{ type: "wikidata", url: { resource: "https://www.wikidata.org/wiki/Q123" } }],
+      },
+      rateLimited: false,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("slow down", { status: 429 })),
+    );
+
+    const { bucket } = fakeBucket();
+    const result = await resolveLabelImages(bucket, 50, false);
+
+    expect(result.rateLimited).toBe(true);
+    expect(result.none).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("stops the pass (circuit breaker) when a vendor rate-limits, storing nothing", async () => {
     seedWorklist([HOSPITAL]);
     mbFetch.mockResolvedValueOnce({ data: null, rateLimited: true });

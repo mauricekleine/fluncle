@@ -171,13 +171,17 @@ describe("backfillDiscogsIds — reliability gate", () => {
     // the second finding (no march into the same 429 wall — the storm #119 missed),
     // and the throttled finding is NOT recorded (no cooldown) so the next tick
     // retries it with a fresh rate-limit window.
-    discogsResolveRelease.mockResolvedValueOnce({ rateLimited: true });
+    discogsResolveRelease.mockResolvedValueOnce({
+      rateLimited: true,
+      rateLimitedBy: "musicbrainz",
+    });
     singlePage([finding("1"), finding("2")]);
     const { backfillDiscogsIds } = await import("./backfill");
     const throttled = await backfillDiscogsIds(10, false);
     expect(throttled.rateLimited, "the result flags the throttle so the CLI stops looping").toBe(
       true,
     );
+    expect(throttled.rateLimitedBy).toBe("musicbrainz");
     expect(
       throttled.nextCursor,
       "a throttle-stop nulls the cursor so even the deployed CLI (null-only break) stops looping",

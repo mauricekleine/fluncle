@@ -717,7 +717,8 @@ export const TrackWorkItemSchema = z
  * The page is capped at 250, so `tracks.length` can never answer "how much is left", and at
  * catalogue scale that is the only number the operator actually wants: it is what tells the GPU
  * batch whether to rent another hour. Tolerant string ("true"; anything else is false), and
- * OPT-IN because the 5-minute box sweeps do not need it and should not pay for the count.
+ * OPT-IN so page-only consumers do not pay for it; a consumer that publishes a backlog gauge
+ * asks for the authoritative count explicitly.
  */
 export const listTrackWork = oc
   .route({

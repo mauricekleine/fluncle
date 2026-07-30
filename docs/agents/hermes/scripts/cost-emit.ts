@@ -97,7 +97,9 @@ export type EmitCostOptions = {
   token?: string;
 };
 
-export type EmitCostResult = { inserted: number; posted: true } | { posted: false; reason: string };
+export type EmitCostResult =
+  | { failed: 0; inserted: number; posted: true }
+  | { failed: number; posted: false; reason: string };
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_BASE_URL = "https://www.fluncle.com";
@@ -179,16 +181,17 @@ export function costEventId(event: BoxCostEvent): string {
  * POST a tick's cost rows to the agent-tier ledger endpoint, BEST-EFFORT. Builds
  * each row's stable `id`, sends the batch with the agent bearer under a hard
  * timeout, and NEVER throws — every failure path (no token, non-2xx, network error,
- * timeout, malformed response) returns a `{ posted: false, reason }` and is logged
- * to stderr, so a ledger hiccup is invisible to the sweep's real work. An empty
- * batch is a no-op. No retries by design.
+ * timeout, malformed response) returns a `{ failed, posted: false, reason }` and is
+ * logged to stderr. `failed` is the number of rows the caller must expose in its
+ * sweep summary; the ledger hiccup remains non-fatal, but it is no longer silent.
+ * An empty batch is a no-op. No retries by design.
  */
 export async function emitCost(
   events: BoxCostEvent[],
   options: EmitCostOptions = {},
 ): Promise<EmitCostResult> {
   if (events.length === 0) {
-    return { posted: false, reason: "no-events" };
+    return { failed: 0, posted: false, reason: "no-events" };
   }
 
   const baseUrl = (options.baseUrl ?? process.env.FLUNCLE_API_BASE_URL ?? DEFAULT_BASE_URL).replace(
@@ -200,7 +203,7 @@ export async function emitCost(
   if (!token) {
     log("no FLUNCLE_API_TOKEN — skipping the cost emit");
 
-    return { posted: false, reason: "no-token" };
+    return { failed: events.length, posted: false, reason: "no-token" };
   }
 
   const doFetch = options.fetchImpl ?? fetch;
@@ -220,7 +223,7 @@ export async function emitCost(
     if (!response.ok) {
       log(`record_cost POST returned HTTP ${response.status} (best-effort, ignored)`);
 
-      return { posted: false, reason: `http-${response.status}` };
+      return { failed: events.length, posted: false, reason: `http-${response.status}` };
     }
 
     // The endpoint returns `{ ok: true, inserted }`; surface the count so a caller
@@ -238,11 +241,11 @@ export async function emitCost(
       // Non-JSON 2xx — the write landed; keep the optimistic count.
     }
 
-    return { inserted, posted: true };
+    return { failed: 0, inserted, posted: true };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     log(`record_cost POST failed (best-effort, ignored): ${detail}`);
 
-    return { posted: false, reason: "error" };
+    return { failed: events.length, posted: false, reason: "error" };
   }
 }

@@ -316,6 +316,27 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     ]);
     expect(await discogsResolveRelease({ artists: ["Artist"], title: "Title" })).toEqual({
       rateLimited: true,
+      rateLimitedBy: "discogs",
+    });
+  });
+
+  it("names MusicBrainz when its brake stops the Discogs resolver", async () => {
+    mockFetch([
+      {
+        match: MB_ISRC,
+        response: new Response("service unavailable", { status: 503 }),
+      },
+    ]);
+
+    expect(
+      await discogsResolveRelease({
+        artists: ["Artist"],
+        isrc: "GB000ABC0001",
+        title: "Title",
+      }),
+    ).toEqual({
+      rateLimited: true,
+      rateLimitedBy: "musicbrainz",
     });
   });
 
@@ -361,7 +382,10 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     // Budget spent → reported throttled (not a clean miss), so the backfill's
     // circuit breaker stops the run instead of storming; the search is not re-fired
     // across the other query variants.
-    expect(await discogsResolveRelease("IYRE", "Glowing Embers")).toEqual({ rateLimited: true });
+    expect(await discogsResolveRelease("IYRE", "Glowing Embers")).toEqual({
+      rateLimited: true,
+      rateLimitedBy: "discogs",
+    });
     expect(calls.filter((url) => url.includes(DISCOGS_SEARCH))).toHaveLength(1);
   });
 });

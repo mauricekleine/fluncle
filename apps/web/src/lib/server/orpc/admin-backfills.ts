@@ -56,6 +56,7 @@ export function adminBackfillsHandlers(os: Implementer) {
         nextCursor: result.nextCursor,
         ok: true as const,
         rateLimited: result.rateLimited,
+        rateLimitedBy: result.rateLimitedBy,
         resolved: result.resolved,
         resolvedCount: result.resolvedCount,
         skipped: result.skipped,

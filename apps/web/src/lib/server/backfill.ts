@@ -39,7 +39,7 @@ import {
   recordAppleCall,
 } from "./apple-breaker";
 import { getDb, typedRows } from "./db";
-import { discogsResolveRelease } from "./discogs";
+import { type DiscogsThrottleVendor, discogsResolveRelease } from "./discogs";
 import { lastfmLove } from "./lastfm";
 import { decodeTrackCursor, encodeTrackCursor, listTracks, type TrackListItem } from "./tracks";
 
@@ -109,6 +109,7 @@ export type LastfmBackfillResult = BackfillPass<{
 
 export type DiscogsBackfillResult = BackfillPass<{
   dryRun: boolean;
+  rateLimitedBy: DiscogsThrottleVendor | null;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
   // Findings the sweep deliberately skipped this pass (already resolved, or cooling
@@ -534,6 +535,7 @@ export async function backfillDiscogsIds(
   const now = Date.now();
   let first = true;
   let rateLimited = false;
+  let rateLimitedBy: DiscogsThrottleVendor | null = null;
 
   const nextCursor = await runPublishedFindingPass(
     startCursor,
@@ -595,6 +597,7 @@ export async function backfillDiscogsIds(
         // The flag tells the CLI to STOP LOOPING the cursor (not just this pass) —
         // otherwise it re-fires the same throttled cursor and grinds to a timeout.
         rateLimited = true;
+        rateLimitedBy = enrichment.rateLimitedBy ?? null;
         return "stop";
       }
 
@@ -631,6 +634,7 @@ export async function backfillDiscogsIds(
     // the top and the reliability gate re-skips done/cooling findings cheaply.
     nextCursor: rateLimited ? null : nextCursor,
     rateLimited,
+    rateLimitedBy,
     resolved,
     resolvedCount: resolved.length,
     skipped,

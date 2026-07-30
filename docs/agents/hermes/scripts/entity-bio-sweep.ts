@@ -1134,12 +1134,6 @@ function parseKind(argv: string[]): EntityKind {
 }
 
 /**
- * The WORKABLE queue depth left after this tick: the depth AT READ TIME minus what we finished
- * (authored / operator-bio no-op) and minus the EXHAUSTED rows, which are still queued server-side
- * but are no longer work this sweep will ever do. Gate-skips and failures keep their remaining
- * budget and stay counted. Exported so the summary and its test cannot drift.
- */
-/**
  * The once-per-tick recap of the entities this sweep is no longer working. Deliberately OUTSIDE
  * the strain vocabulary (see the contract above `describeOne`): each of these was already
  * reported as distress on the tick it exhausted, and this line repeats every tick for as long as
@@ -1155,13 +1149,6 @@ export function exhaustedRecapLine(kind: EntityKind, exhausted: readonly QueueRo
     .join(", ");
 
   return `not working ${exhausted.length} exhausted ${kind}(s) — ${MAX_BIO_ATTEMPTS} drafts spent each (${slugs})`;
-}
-
-export function remainingQueueDepth(
-  queueLength: number,
-  summary: { alreadyBio: number; authored: number; exhausted: number },
-): number {
-  return Math.max(0, queueLength - summary.authored - summary.alreadyBio - summary.exhausted);
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,7 +1208,6 @@ async function main(): Promise<void> {
     failed: 0,
     gateSkipped: 0,
     kind,
-    queueRemaining: queue.length,
   };
 
   if (queue.length === 0) {
@@ -1281,7 +1267,6 @@ async function main(): Promise<void> {
             ok: false,
             reason: "claude_auth",
             ...summary,
-            queueRemaining: remainingQueueDepth(queue.length, summary),
           }),
         );
         process.exit(1);
@@ -1294,14 +1279,10 @@ async function main(): Promise<void> {
     }
   }
 
-  summary.queueRemaining = remainingQueueDepth(queue.length, summary);
-
-  console.log(JSON.stringify({ ok: true, ...summary }));
-
-  // Record the tick's authoring spend, best-effort, AFTER the summary is printed (the
-  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
-  // Cannot throw; a hard 2.5s cap keeps it well inside the runner budget.
-  await emitCost(costs);
+  // Record the tick's authoring spend best-effort. It cannot throw or outlive its
+  // 15s budget; rejected rows remain visible in the final status reading.
+  const costWriteFailures = (await emitCost(costs)).failed;
+  console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
 }
 
 // `import.meta.main` so the pure helpers (the fallback prompt builder) can be imported by

@@ -317,8 +317,26 @@ async function r2Get(key: string): Promise<Uint8Array> {
 // with the server's drain order (certified first, then the Ear's capture-priority ladder)
 // means the catalogue can never starve the findings' backlog.
 
-async function fetchEmbedQueue(): Promise<QueueFinding[]> {
-  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}`;
+export function parseEmbedQueue(body: unknown): {
+  queued?: number;
+  tracks: QueueFinding[];
+} {
+  if (typeof body !== "object" || body === null) {
+    return { tracks: [] };
+  }
+
+  const page = body as { queued?: unknown; tracks?: unknown };
+  const tracks = Array.isArray(page.tracks) ? (page.tracks as QueueFinding[]) : [];
+  const queued =
+    typeof page.queued === "number" && Number.isSafeInteger(page.queued) && page.queued >= 0
+      ? page.queued
+      : undefined;
+
+  return queued === undefined ? { tracks } : { queued, tracks };
+}
+
+async function fetchEmbedQueue(): Promise<{ queued?: number; tracks: QueueFinding[] }> {
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=embed&scope=all&limit=${QUEUE_LIMIT}&count=true`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
@@ -328,9 +346,7 @@ async function fetchEmbedQueue(): Promise<QueueFinding[]> {
     throw new Error(`embed queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
   }
 
-  const body = (await res.json()) as { tracks?: QueueFinding[] };
-
-  return Array.isArray(body.tracks) ? body.tracks : [];
+  return parseEmbedQueue(await res.json());
 }
 
 // ---------------------------------------------------------------------------
@@ -350,14 +366,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  const queue = await fetchEmbedQueue();
+  const queuePage = await fetchEmbedQueue();
+  const queue = queuePage.tracks;
 
   const summary = {
     done: 0,
     failed: 0,
     fetchFailed: 0,
     noSource: 0,
-    queued: queue.length,
+    ...(queuePage.queued === undefined ? {} : { queued: queuePage.queued }),
     skipped: 0,
   };
 
@@ -477,11 +494,10 @@ async function main(): Promise<void> {
       log(`${failure.id}: embed error — ${failure.error}`);
     }
 
-    console.log(JSON.stringify({ ok: true, ...summary }));
-
-    // Record the tick's compute spend, best-effort, AFTER the summary is printed (the
-    // /status prober parses the summary as the last stdout line; emitCost is stderr-only).
-    await emitCost(costs);
+    // Record the tick's compute spend best-effort. A ledger failure cannot kill the
+    // sweep, but its rejected row count belongs in the final status reading.
+    const costWriteFailures = (await emitCost(costs)).failed;
+    console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
   } finally {
     // Temp files (the captured audio + the vector JSON) are cleaned up here regardless of outcome.
     rmSync(workdir, { force: true, recursive: true });

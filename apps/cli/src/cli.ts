@@ -3772,6 +3772,7 @@ async function runBackfillDiscogs(
   let cursor: string | undefined;
   let dryRun = options.dryRun;
   let throttled = false;
+  let rateLimitedBy: "discogs" | "musicbrainz" | null = null;
 
   // The cap is on findings actually HANDLED (resolved + unresolved); skips don't
   // count, so the loop keeps draining cursors past cooling-down/done findings until
@@ -3792,10 +3793,10 @@ async function runBackfillDiscogs(
     }
 
     if (result.rateLimited) {
-      // Discogs circuit breaker tripped (active 429s). Stop looping the cursor —
-      // re-firing it just grinds into the same wall until the cron's 120s timeout;
-      // the next tick resumes from a fresh rate-limit window.
+      // The resolver walks MusicBrainz before Discogs. Stop on either brake and
+      // preserve the actual vendor for the box summary.
       throttled = true;
+      rateLimitedBy = result.rateLimitedBy;
       break;
     }
 
@@ -3811,6 +3812,7 @@ async function runBackfillDiscogs(
       dryRun,
       ok: true,
       rateLimited: throttled,
+      rateLimitedBy,
       resolved,
       resolvedCount: resolved.length,
       skipped,
@@ -4385,21 +4387,18 @@ async function runBackfillLabelImages(
   }
 
   if (options.json) {
-    printJson({
-      dryRun,
-      failed,
-      failedCount: failed.length,
-      none,
-      noneCount: none.length,
-      ok: true,
-      rateLimited: throttled,
-      resolved,
-      resolvedCount: resolved.length,
-    });
-
-    if (failed.length > 0) {
-      process.exitCode = 1;
-    }
+    printSweepJson(
+      {
+        dryRun,
+        failed,
+        none,
+        noneCount: none.length,
+        rateLimited: throttled,
+        resolved,
+        resolvedCount: resolved.length,
+      },
+      failed.length,
+    );
 
     return;
   }

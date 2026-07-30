@@ -8,7 +8,7 @@
 // side-effect free (no R2 GET, no embedder spawn, no CLI). Keep this green when touching the
 // source-selection or the temp-file extension logic.
 import { describe, expect, test } from "bun:test";
-import { chooseEmbedSource, sourceAudioExt } from "./embed-sweep";
+import { chooseEmbedSource, parseEmbedQueue, sourceAudioExt } from "./embed-sweep";
 
 describe("chooseEmbedSource", () => {
   test("embeds a finding with both a trackId and a captured key", () => {
@@ -39,6 +39,23 @@ describe("chooseEmbedSource", () => {
     const source = chooseEmbedSource({ sourceAudioKey: "", trackId: "track-1" });
 
     expect(source).toEqual({ kind: "skip", reason: "no_source_audio" });
+  });
+});
+
+describe("parseEmbedQueue", () => {
+  test("reports the server's whole-backlog count, not the capped page length", () => {
+    const tracks = Array.from({ length: 50 }, (_, index) => ({
+      sourceAudioKey: `audio/${index}.webm`,
+      trackId: `track-${index}`,
+    }));
+
+    expect(parseEmbedQueue({ queued: 913, tracks })).toEqual({ queued: 913, tracks });
+  });
+
+  test("omits the gauge when the server does not provide a trustworthy count", () => {
+    expect(parseEmbedQueue({ tracks: [{ trackId: "track-1" }] })).toEqual({
+      tracks: [{ trackId: "track-1" }],
+    });
   });
 });
 

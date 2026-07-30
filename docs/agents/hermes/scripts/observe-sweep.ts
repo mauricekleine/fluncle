@@ -862,12 +862,10 @@ async function main(): Promise<void> {
   // (gate-skips + failures stay queued); the next tick re-reads the live queue.
   summary.queueRemaining = Math.max(0, queue.length - summary.rendered);
 
-  console.log(JSON.stringify({ ok: true, ...summary }));
-
-  // Record the tick's authoring spend, best-effort, AFTER the summary is printed (the
-  // cron parses the summary as its last stdout line; emitCost only logs to stderr).
-  // Cannot throw; a hard 2.5s cap keeps it well inside the runner budget.
-  await emitCost(costs);
+  // Record the tick's authoring spend best-effort. It cannot throw or outlive its
+  // 15s budget; rejected rows remain visible in the final status reading.
+  const costWriteFailures = (await emitCost(costs)).failed;
+  console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
 }
 
 // `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported

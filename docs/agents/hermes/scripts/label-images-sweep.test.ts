@@ -25,7 +25,7 @@ import { join } from "node:path";
 const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
   throttled) printf '{"ok":true,"dryRun":false,"resolved":["hospital"],"resolvedCount":1,"none":[],"noneCount":0,"failed":[],"failedCount":0,"rateLimited":true}\\n' ;;
-  partial) printf '{"ok":true,"dryRun":false,"resolved":["hospital"],"resolvedCount":1,"none":["shogun-audio"],"noneCount":1,"failed":[{"error":"boom","slug":"critical-music"}],"failedCount":1,"rateLimited":false}\\n'; exit 1 ;;
+  partial) printf '{"ok":false,"dryRun":false,"resolved":["hospital"],"resolvedCount":1,"none":["shogun-audio"],"noneCount":1,"failed":[{"error":"boom","slug":"critical-music"}],"failedCount":1,"rateLimited":false}\\n'; exit 1 ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
   *) printf '{"ok":true,"dryRun":false,"resolved":["hospital","metalheadz"],"resolvedCount":2,"none":["shogun-audio"],"noneCount":1,"failed":[],"failedCount":0,"rateLimited":false}\\n' ;;
@@ -34,6 +34,7 @@ esac
 
 let dir: string;
 let fluncleJson: typeof import("./label-images-sweep").fluncleJson;
+let runLabelImagesSweep: typeof import("./label-images-sweep").runLabelImagesSweep;
 
 /** Point the stub at one of its canned responses. */
 function mode(name: string): void {
@@ -48,7 +49,7 @@ beforeAll(async () => {
   process.env.FLUNCLE_BIN = bin;
   mode("ok");
 
-  ({ fluncleJson } = await import("./label-images-sweep"));
+  ({ fluncleJson, runLabelImagesSweep } = await import("./label-images-sweep"));
 });
 
 afterAll(() => {
@@ -94,6 +95,20 @@ describe("label-images-sweep's fluncleJson", () => {
     expect(pass.resolvedCount).toBe(1);
     expect(pass.noneCount).toBe(1);
     expect(pass.failedCount).toBe(1);
+  });
+
+  test("reports a retryable per-label failure as failed, never as a clean absence", () => {
+    mode("partial");
+
+    const summary = runLabelImagesSweep();
+
+    expect(summary).toMatchObject({
+      failed: 1,
+      none: 1,
+      ok: false,
+      resolved: 1,
+      throttled: false,
+    });
   });
 
   test("throws on the CLI's own error payload (a failed command, not a partial pass)", () => {

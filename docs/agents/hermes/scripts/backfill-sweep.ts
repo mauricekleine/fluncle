@@ -74,10 +74,9 @@ const log = (message: string) => console.error(`[backfill-sweep] ${message}`);
 
 type DiscogsSummary = {
   ok?: boolean;
-  // True when the sweep bailed early because Discogs is actively rate-limiting (the
-  // circuit breaker) — a throttled tick, not a drained catalogue. Surfaced so the
-  // cron output reads honestly instead of looking like a silent "0 resolved" no-op.
+  // True when the resolver's Discogs OR MusicBrainz leg hit its circuit breaker.
   rateLimited?: boolean;
+  rateLimitedBy?: "discogs" | "musicbrainz" | null;
   resolvedCount?: number;
   skippedCount?: number;
   unresolvedCount?: number;
@@ -211,6 +210,7 @@ export function runBackfillSweep() {
       unresolved: 0,
     },
     lastfm: { error: null as string | null, failed: 0, loved: 0, skipped: 0, throttled: false },
+    musicbrainz: { throttled: false },
     ok: true,
   };
 
@@ -221,8 +221,16 @@ export function runBackfillSweep() {
     summary.discogs.resolved = discogs.resolvedCount ?? 0;
     summary.discogs.unresolved = discogs.unresolvedCount ?? 0;
     summary.discogs.skipped = discogs.skippedCount ?? 0;
-    summary.discogs.throttled = discogs.rateLimited ?? false;
+    summary.discogs.throttled = discogs.rateLimited === true && discogs.rateLimitedBy === "discogs";
+    summary.musicbrainz.throttled =
+      discogs.rateLimited === true && discogs.rateLimitedBy === "musicbrainz";
+
+    if (discogs.ok === false) {
+      summary.ok = false;
+      log("discogs backfill reported a failed pass");
+    }
   } catch (error) {
+    summary.ok = false;
     summary.discogs.error = error instanceof Error ? error.message : String(error);
     log(`discogs backfill failed: ${summary.discogs.error}`);
   }
@@ -235,12 +243,14 @@ export function runBackfillSweep() {
     summary.lastfm.throttled = lastfm.rateLimited ?? false;
 
     if (lastfm.ok === false) {
+      summary.ok = false;
       // A partial-failure batch (`ok: false`, exit 1): the counts above are the
       // honest summary — some loved, some failed — distinct from the catch below,
       // which is the whole source erroring with no batch summary at all.
       log(`lastfm backfill partial: ${summary.lastfm.failed} item(s) failed this tick`);
     }
   } catch (error) {
+    summary.ok = false;
     summary.lastfm.error = error instanceof Error ? error.message : String(error);
     log(`lastfm backfill failed: ${summary.lastfm.error}`);
   }
@@ -255,6 +265,7 @@ export function runBackfillSweep() {
     summary["apple-music"].throttled = apple.rateLimited ?? false;
 
     if (apple.ok === false) {
+      summary.ok = false;
       // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
       // summary — some resolved, some failed — distinct from the catch below.
       log(
@@ -262,6 +273,7 @@ export function runBackfillSweep() {
       );
     }
   } catch (error) {
+    summary.ok = false;
     summary["apple-music"].error = error instanceof Error ? error.message : String(error);
     log(`apple-music backfill failed: ${summary["apple-music"].error}`);
   }
@@ -285,6 +297,7 @@ export function runBackfillSweep() {
     summary["apple-catalogue"].breakerTripped = catalogue.breakerTripped ?? false;
 
     if (catalogue.ok === false) {
+      summary.ok = false;
       // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
       // summary — some resolved, some failed — distinct from the catch below.
       log(
@@ -296,6 +309,7 @@ export function runBackfillSweep() {
       log("apple-catalogue backfill yielded: the shared Apple breaker/budget stopped the pass");
     }
   } catch (error) {
+    summary.ok = false;
     summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
     log(`apple-catalogue backfill failed: ${summary["apple-catalogue"].error}`);
   }
@@ -303,8 +317,14 @@ export function runBackfillSweep() {
   return summary;
 }
 
+export function backfillSweepExitCode(summary: { ok: boolean }): 0 | 1 {
+  return summary.ok ? 0 : 1;
+}
+
 // The cron runs this file directly; the guard keeps importing `fluncleJson` and
 // `runBackfillSweep` for the tests (backfill-sweep.test.ts) side-effect free.
 if (import.meta.main) {
-  console.log(JSON.stringify(runBackfillSweep()));
+  const summary = runBackfillSweep();
+  console.log(JSON.stringify(summary));
+  process.exitCode = backfillSweepExitCode(summary);
 }

@@ -471,8 +471,8 @@ export function adminTracksHandlers(os: Implementer) {
 
       // `count=true` → the size of the WHOLE backlog, not the page. Opt-in: a page read is
       // capped at 200 rows, so `tracks.length` cannot answer "how much is left", and that is
-      // the number the GPU batch reports at the end (rent another hour, or not). The counts the
-      // 5-minute box sweeps never ask for are the ones they never pay for.
+      // the number the GPU batch reports at the end (rent another hour, or not). Opt-in keeps
+      // page-only readers cheap; a sweep must ask for it before publishing a backlog gauge.
       const queued =
         input.count === "true"
           ? await countTrackWork({ kind: input.kind, scope: input.scope })

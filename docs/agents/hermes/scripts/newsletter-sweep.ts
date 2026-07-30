@@ -850,7 +850,7 @@ async function main(): Promise<void> {
   // 8. COST — record the one authoring spend, best-effort, only now that the draft is
   // durable. The newsletter is a non-finding, so the row is `global`-scoped (logId +
   // trackId null); occurredAt is the window's `until` (this run). Cannot throw; a hard
-  // 2.5s cap keeps it well inside the runner budget. A dropped POST only understates.
+  // 15s cap keeps it well inside the runner budget. Rejected rows stay visible.
   const cost: BoxCostEvent = {
     costBasis: "subsidized",
     logId: null,
@@ -864,12 +864,12 @@ async function main(): Promise<void> {
     usd: authored.usd,
     vendor: "anthropic",
   };
-  await emitCost([cost]);
+  const costWriteFailures = (await emitCost([cost])).failed;
 
   // The contracted JSON summary — LAST stdout line on purpose (findJsonSummary scans
   // backwards). The failure paths already emit theirs; without this, the one path that
   // WORKED (a drafted edition) was the one reading as "died mid-flight" on /status.
-  console.log(JSON.stringify({ edition: id, finds, mixes, ok: true }));
+  console.log(JSON.stringify({ costWriteFailures, edition: id, finds, mixes, ok: true }));
 }
 
 // `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported

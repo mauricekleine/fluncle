@@ -115,7 +115,6 @@ const {
   planAttempt,
   readBioRejection,
   recordAttempt,
-  remainingQueueDepth,
   selectBioWork,
 } = await import("./entity-bio-sweep");
 
@@ -392,16 +391,6 @@ describe("readBioRejection + buildRewriteBlock (why a rewrite is aimed, not blin
 
   test("a rewrite with no recoverable reason still says it was refused", () => {
     expect(buildRewriteBlock(undefined, 3)).toContain("refused by the voice gate");
-  });
-});
-
-describe("remainingQueueDepth", () => {
-  test("subtracts finished AND exhausted rows — an exhausted row is no longer work", () => {
-    expect(remainingQueueDepth(10, { alreadyBio: 1, authored: 2, exhausted: 3 })).toBe(4);
-  });
-
-  test("never goes negative", () => {
-    expect(remainingQueueDepth(1, { alreadyBio: 1, authored: 2, exhausted: 3 })).toBe(0);
   });
 });
 
