@@ -66,7 +66,7 @@ Each entity receives at most three authoring attempts: the initial draft plus tw
 
 - **Each rejection is fed back into the next pass** as the exact reason to fix (`buildRewriteBlock` in the sweep, the logbook sweep's shape), so a rewrite is aimed rather than blind.
 - **The third draft LANDS.** The last attempt delivers `--final-attempt`, and the Worker (`acceptFinalDraftBio`) stores the draft even if the voice scan refuses it. Final-attempt acceptance is a backstop; the name exemption lets ordinary subject-name matches clear the normal voice gate.
-- **The acceptance is never silent.** The Worker logs `describe_<kind>: FINAL-ATTEMPT ACCEPTANCE`, returns `gateBypassed: true` + the accepted `voiceViolations`, the CLI prints them, and the sweep logs `FINAL-ATTEMPT ACCEPTANCE … REVIEW THIS <KIND>` and counts them as `bypassedGate` in its summary line. **Grep the cron output for `FINAL-ATTEMPT ACCEPTANCE` to find every bio that landed this way.** The acceptance bypasses the voice SCAN only: an absent, too-short, or too-long draft is still refused.
+- **The acceptance raises a queue row.** The bypass stamps the entity — `bio_gate_bypassed_at` plus the accepted reasons in `bio_voice_violations`, written in the SAME statement as the bio — which puts a **`bio-review`** row on the `/admin` attention queue (see [the review](#the-review-every-bypassed-bio-raises) below). It also still announces itself in every channel it always did: the Worker logs `describe_<kind>: FINAL-ATTEMPT ACCEPTANCE` and returns `gateBypassed: true` + the accepted `voiceViolations`, the CLI prints them, and the sweep logs `FINAL-ATTEMPT ACCEPTANCE … REVIEW THIS <KIND>` and counts them as `bypassedGate` in its summary line. The acceptance bypasses the voice SCAN only: an absent, too-short, or too-long draft is still refused.
 - **Only a gate REJECTION spends the budget.** A rejection is deterministic evidence that this draft was bad. A transport or model failure — a `claude -p` that exits non-zero, returns `is_error`, or returns nothing — is no evidence about the draft at all, because there is no draft; the entity keeps its whole budget and is retried next tick. Otherwise three flaky calls could write an entity off permanently, and a flaky THIRD call would leave it with no draft to accept and no retry. Those failures instead log a line the `/status` sweep-strain detector scores, so a sweep grinding on a broken model surfaces as `degraded`.
 - **The count persists across ticks** in a small on-box TSV at `$HOME/.entity-bio-sweep/attempts` (`<kind>:<slug><TAB>attempts<TAB>lastEpoch`), the shape of the render conductor's poison ledger and covered by the nightly box-state backup. It is written the moment a rejection lands, so a tick that dies later cannot un-spend it. The entry is dropped the moment a bio lands.
 - **The sweep's log WORDING is part of the contract.** Since the strain detector reads each sweep's captured stderr, these lines are scored: a rejected draft that is about to be rewritten reads as a step (a sweep that rewrites and then succeeds must not read as degraded), while an exhaustion, a transport failure, and a failed ledger write carry the distress vocabulary. The rule is written out above `describeOne` in the sweep and pinned by tests that score the real lines with the real detector.
@@ -74,7 +74,7 @@ Each entity receives at most three authoring attempts: the initial draft plus tw
 
 ### What the final-attempt acceptance publishes
 
-On the third attempt, a bio that **failed** the automated voice gate is stored and published. It is not quarantined, not held for approval, and not marked in the database — it renders identically to a bio that passed. Only the voice SCAN is bypassed; an absent, too-short, or too-long draft is still refused and the entity reports as `exhausted` instead.
+On the third attempt, a bio that **failed** the automated voice gate is stored and published. It is not quarantined and not held for approval — it renders identically to a bio that passed. Only the voice SCAN is bypassed; an absent, too-short, or too-long draft is still refused and the entity reports as `exhausted` instead. It **is** marked in the database, and that mark is what raises the review below.
 
 **Where such a bio is publicly readable.** The page copy is the obvious half:
 
@@ -97,6 +97,20 @@ The **machine-readable discovery layer** is the half that surprises people, beca
 It does **not** reach `llms.txt`, the sitemap, any RSS/Atom/JSON/podcast/ICS feed, oEmbed, the OG images, `GET /api/v1/artists/{slug}` (that contract carries no `bio` field — an asymmetry with labels and albums), WebMCP, mobile, the SSH terminal, DNS, Raycast, or the extension.
 
 Final-attempt acceptance is an operator-controlled policy. To disable it, follow the `SEVERABLE` recipe in `bio.ts`; rejected third drafts then take the existing `exhausted` outcome.
+
+### The review every bypassed bio raises
+
+The acceptance stands. What used to be missing was a **reader**: it announced itself only in a cron's stderr and on the write response, so the documented way to find one was to remember to grep — and nobody did. Every surface in the two tables above could therefore be carrying copy the gate refused, with nothing surfacing it.
+
+So the bypass now writes state, and the state is a queue row. It is deliberately the **`label-review` mechanism** rather than a second review channel:
+
+- **Where it lives.** `bio_gate_bypassed_at` (when) + `bio_voice_violations` (the gate's own reasons, JSON) on `artists` / `labels` / `albums`, written in the same statement as the bio. That is the exact shape of `labels.seed_state = 'undecided'`, and it makes the flag **self-clearing**: a later bio that CLEARS the gate writes NULL into both, so no clean paragraph can inherit a stale flag.
+- **What it raises.** One `bio-review` row per entity on the `/admin` attention queue, carrying the entity (kind + slug), the gate's reasons, and when it happened, oldest acceptance first. It rides the low-priority curation tier — the copy has already shipped, so it is a review, never a race — and it never carries a deadline. Each kind's arm of the read is capped at `BIO_REVIEW_QUEUE_LIMIT` (25) and served by a PARTIAL index over the lit rows only, so the source cannot drown the queue and costs nothing when it is empty.
+- **The two rulings** (`resolve_bio_review`, `POST /admin/bio-reviews/{kind}/{slug}/resolve`, **operator tier** — the agent that authored the bio may not rule on its own work):
+  - **Bio stands** (`keep`) — the gate was over-strict. Clears the flag; the page is untouched.
+  - **Send it back** (`rewrite`) — the gate was right. Clears the flag **and empties the bio** (with its prompt provenance, and `bio_status` back to `pending`), which returns the entity to the sweep's `describe --queue` worklist with a **fresh three-attempt budget**. Nothing on the box needs re-arming: the on-box attempt ledger already dropped the entity's line when the bio landed.
+  - Both are guarded in SQL by `bio_gate_bypassed_at is not null`, so a replayed or racing ruling can never empty a bio nobody flagged — it matches no row and answers 404.
+- **How many are waiting.** The row count on `/admin`, or `fluncle admin queue` (the `bio gate` source), or the Raycast menu bar. The sweep's own `bypassedGate` summary counter is unchanged and still rides the run ledger; it counts acceptances **per tick**, while the queue counts the ones still unruled.
 
 ## The prompt lives in the DATABASE, not in the image
 

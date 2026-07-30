@@ -26,6 +26,7 @@ import { adminAlbumsContract } from "./admin-albums";
 import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
 import { adminBackfillsContract } from "./admin-backfills";
+import { adminBiosContract } from "./admin-bios";
 import { adminCatalogueContract } from "./admin-catalogue";
 import { adminCostsContract } from "./admin-costs";
 import { adminGalaxiesContract } from "./admin-galaxies";
@@ -146,6 +147,7 @@ export {
   getAttention,
 } from "./admin-attention";
 export { backfillDiscogs, backfillLabelImages, backfillLastfm } from "./admin-backfills";
+export { adminBiosContract, BioEntityKindSchema, resolveBioReview } from "./admin-bios";
 export {
   adminCatalogueContract,
   CapturePriorityReasonSchema,
@@ -442,6 +444,7 @@ export const contract = {
   ...adminArtistsContract,
   ...adminAttentionContract,
   ...adminBackfillsContract,
+  ...adminBiosContract,
   ...adminCatalogueContract,
   ...adminCostsContract,
   ...adminGalaxiesContract,

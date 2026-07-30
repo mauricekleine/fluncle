@@ -17,6 +17,7 @@ import {
 import { bestAlbumCoverUrl } from "../media";
 import { listAnchorReviewRows } from "./anchor";
 import { listArtistReviewRows, parseArtistsJson } from "./artists";
+import { listBioReviewRows } from "./bio-review";
 import { listClipPosts } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
 import { listLabelReviewRows } from "./labels";
@@ -253,6 +254,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     clipPosts,
     anchorReviews,
     artistReviews,
+    bioReviews,
     captureSuspects,
     labelReviews,
     submissions,
@@ -271,6 +273,11 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     // any anchor, and either ruling, clears the note, so a row here is genuinely still open).
     listAnchorReviewRows(),
     listArtistReviewRows(),
+    // Every bio the final-attempt acceptance stored despite the voice gate refusing it, and
+    // nobody has ruled on yet (the trust rule: either ruling clears the stamp, so a row here is
+    // genuinely still open). The bypass is an operator ruling and stays; this is the reader it
+    // never had.
+    listBioReviewRows(),
     // Every finding whose captured audio failed the fingerprint check (the trust rule: a
     // ruled/flagged row leaves this read — flag_wrong_audio nulls the verdict).
     listCaptureSuspectRows(),
@@ -299,6 +306,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     {
       anchorReviews,
       artistReviews,
+      bioReviews,
       captureSuspects,
       clipPosts: clipPosts.map((post) => ({
         scheduledFor: post.scheduledFor,

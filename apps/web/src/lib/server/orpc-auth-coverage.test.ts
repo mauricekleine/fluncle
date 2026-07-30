@@ -672,6 +672,13 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // resolve_artist — the box's agent-token artist-socials resolution (MB + Firecrawl); internal
   // enrichment only, so agent-tier (adminAuth, no operatorGuard) like backfill_artists.
   resolve_artist: "admin",
+  // The operator's ruling on a bio the FINAL-ATTEMPT ACCEPTANCE let through — OPERATOR tier, the
+  // resolve_note_rejection precedent: `keep` blesses a paragraph the voice gate refused and
+  // `rewrite` empties one off a public entity page, so both directions are publish-class. The
+  // machine that authored the bio (and whose third draft triggered the bypass) is deliberately not
+  // allowed to rule on its own work, so an agent token 403s here even though `describe_artist`
+  // beside it is agent-allowed.
+  resolve_bio_review: "operator",
   // The operator's ruling on an auto-note the echo gate held back — operator tier:
   // `accepted` OVERRULES the gate and writes the line onto the finding's public /log page,
   // which is publish-class (the update_galaxy / update_label precedent), so an agent token

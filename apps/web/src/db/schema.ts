@@ -2884,6 +2884,32 @@ export const artists = sqliteTable(
     // it FILL-EMPTY-ONLY (an operator-written bio is never clobbered). Nullable until
     // authored; not surfaced anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
     bio: text("bio"),
+    // ── THE BYPASS FLAG — THE CANONICAL DEFINITION (labels + albums carry the same pair) ──
+    //
+    // WHEN IT IS SET. The entity-bio sweep gives an entity three authoring attempts, and the
+    // THIRD draft LANDS even when the voice scan refuses it (`--final-attempt` →
+    // `acceptFinalDraftBio`, lib/server/bio.ts). That is an explicit operator ruling and it
+    // stands: without it the queue spins on one entity forever. What it costs is that a
+    // paragraph the gate said NO to is live on `/artist/<slug>`, in its JSON-LD, and on the
+    // unauthenticated `/mcp` surface.
+    //
+    // WHY THE COLUMNS EXIST. The acceptance used to be visible only as a `FINAL-ATTEMPT
+    // ACCEPTANCE` line in the cron's stderr, i.e. only to a human who remembered to grep for
+    // it — a review channel with no reader. These two columns ARE the reader: they are the
+    // `labels.seed_state = 'undecided'` of the bio engine, so a bypassed bio raises a
+    // `bio-review` row on the `/admin` attention queue exactly the way an unruled label does.
+    //
+    // `bio_gate_bypassed_at` — WHEN the acceptance happened, and the queue's oldest-first
+    // anchor. NULL ⇒ nothing to review (either the bio cleared the gate, or the operator has
+    // already ruled). `bio_voice_violations` — WHAT was accepted: the gate's own reasons, a
+    // JSON array of strings, verbatim from `gateOrAcceptBio`. A reason with no timestamp is
+    // not evidence, so the two always move together.
+    //
+    // SELF-CLEARING BY CONSTRUCTION. Both are written in the SAME statement as the bio
+    // (`fillEmptyArtistBio`), so a later bio that clears the gate writes NULL into them —
+    // there is no path that stores a clean bio and leaves a stale flag behind. The operator's
+    // own ruling (`resolve_bio_review`) nulls them too.
+    bioGateBypassedAt: text("bio_gate_bypassed_at"),
     // PROVENANCE — the `describe_artist` prompt version this bio was authored under (0 =
     // the registry's baked default, N = operator override N), or NULL when no registry
     // prompt produced it (an operator-typed bio). Same contract as `note_prompt_version`.
@@ -2894,6 +2920,9 @@ export const artists = sqliteTable(
     // hopeless entity. States: pending (never attempted) · resolved (a bio is stored) ·
     // empty (no usable facts) · failed (the fetch threw). Internal reliability state.
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    // The voice-gate reasons the final-attempt acceptance ACCEPTED, as a JSON array of
+    // strings (see `bio_gate_bypassed_at` above for the whole contract).
+    bioVoiceViolations: text("bio_voice_violations"),
     // ── THE MAINTAINED HUB COUNTS (docs/db-scale-backlog Wave 2 keystone 2) ─────────────
     // THE CANONICAL DEFINITION for all three entity tables (`artists` here, `labels` and
     // `albums` carry the same pair and point back at this block).
@@ -3017,6 +3046,17 @@ export const artists = sqliteTable(
     // nullable and overwhelmingly null today, and a UNIQUE index would turn the credit sweep's
     // rare double-mint into a write error rather than a row for the operator to merge. Plain ASC.
     index("artists_mbid_idx").on(table.mbid),
+    // THE BIO-REVIEW ATTENTION READ — the canonical shape for all three entity tables.
+    // `where bio_gate_bypassed_at is not null order by bio_gate_bypassed_at asc limit 25`
+    // (listBioReviewRows, lib/server/bio-review.ts). PARTIAL, on the `labels_undecided_queue_idx`
+    // precedent and for the same reason with more force: the flag is set only by the sweep's
+    // third-attempt acceptance, so the lit slice is a handful of rows against a crawler-swollen
+    // table, and a NON-partial index would carry an entry for every artist (SQLite indexes NULLs)
+    // to serve a read that wants none of them. It also SHRINKS to nothing as the operator rules
+    // the rows out. Plain ASC (SQLite reverse-scans it); a `desc()` index poisons the snapshot.
+    index("artists_bio_review_queue_idx")
+      .on(table.bioGateBypassedAt)
+      .where(sql`${table.bioGateBypassedAt} is not null`),
   ],
 );
 
@@ -3263,6 +3303,10 @@ export const labels = sqliteTable(
     // (an operator-written bio is never clobbered). Nullable until authored; not surfaced
     // anywhere yet (the surfacing PR reads it). See lib/server/bio.ts.
     bio: text("bio"),
+    // The final-attempt bypass flag — WHEN a bio the voice scan refused was stored anyway,
+    // and the `bio-review` attention row's oldest-first anchor. The canonical explanation of
+    // the pair lives on `artists.bio_gate_bypassed_at` above.
+    bioGateBypassedAt: text("bio_gate_bypassed_at"),
     // PROVENANCE — the `describe_label` prompt version this bio was authored under (0 = the
     // registry's baked default, N = operator override N), or NULL when no registry prompt
     // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
@@ -3271,6 +3315,9 @@ export const labels = sqliteTable(
     // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
     // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    // The voice-gate reasons that acceptance ACCEPTED, a JSON array of strings. See
+    // `artists.bio_gate_bypassed_at`.
+    bioVoiceViolations: text("bio_voice_violations"),
     /**
      * Linked tracks that HAVE a `findings` row (`tracks.is_catalogue = 0`) — the maintained
      * mirror of `HUB_CERTIFIED` over `tracks.label_id`. The canonical explanation of the pair
@@ -3430,6 +3477,11 @@ export const labels = sqliteTable(
     // API/MCP list, the sitemap rows and the bio worklist all filter on it instead of grouping
     // `tracks`. Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
     index("labels_renderable_count_idx").on(table.renderableTrackCount),
+    // The bio-review attention read (`where bio_gate_bypassed_at is not null order by … asc`).
+    // PARTIAL, exactly as `artists_bio_review_queue_idx` — see the reasoning there. Plain ASC.
+    index("labels_bio_review_queue_idx")
+      .on(table.bioGateBypassedAt)
+      .where(sql`${table.bioGateBypassedAt} is not null`),
   ],
 );
 
@@ -3606,6 +3658,10 @@ export const albums = sqliteTable(
     // agent-tier `describe_album` route, which VOICE-GATES it and writes it FILL-EMPTY-ONLY
     // (an operator-written bio is never clobbered). Nullable until authored. See lib/server/bio.ts.
     bio: text("bio"),
+    // The final-attempt bypass flag — WHEN a bio the voice scan refused was stored anyway,
+    // and the `bio-review` attention row's oldest-first anchor. The canonical explanation of
+    // the pair lives on `artists.bio_gate_bypassed_at` above.
+    bioGateBypassedAt: text("bio_gate_bypassed_at"),
     // PROVENANCE — the `describe_album` prompt version this bio was authored under (0 = the
     // registry's baked default, N = operator override N), or NULL when no registry prompt
     // produced it (an operator-typed bio). Same contract as `note_prompt_version`.
@@ -3614,6 +3670,9 @@ export const albums = sqliteTable(
     // attempted) · resolved (a bio is stored) · empty (no usable facts) · failed (the fetch
     // threw). Internal reliability state; the future bio worklist picks `pending`/NULL rows.
     bioStatus: text("bio_status", { enum: ["pending", "resolved", "empty", "failed"] }),
+    // The voice-gate reasons that acceptance ACCEPTED, a JSON array of strings. See
+    // `artists.bio_gate_bypassed_at`.
+    bioVoiceViolations: text("bio_voice_violations"),
     /**
      * Linked tracks that HAVE a `findings` row (`tracks.is_catalogue = 0`) — the maintained
      * mirror of `HUB_CERTIFIED` over `tracks.album_id`. The canonical explanation of the pair
@@ -3682,6 +3741,11 @@ export const albums = sqliteTable(
     // API/MCP list, the sitemap rows and the bio worklist read it instead of grouping `tracks`.
     // Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
     index("albums_renderable_count_idx").on(table.renderableTrackCount),
+    // The bio-review attention read (`where bio_gate_bypassed_at is not null order by … asc`).
+    // PARTIAL, exactly as `artists_bio_review_queue_idx` — see the reasoning there. Plain ASC.
+    index("albums_bio_review_queue_idx")
+      .on(table.bioGateBypassedAt)
+      .where(sql`${table.bioGateBypassedAt} is not null`),
   ],
 );
 

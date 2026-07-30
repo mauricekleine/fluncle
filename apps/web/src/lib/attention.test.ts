@@ -32,6 +32,7 @@ const iso = (at: number) => new Date(at).toISOString();
 const EMPTY_INPUTS: AttentionInputs = {
   anchorReviews: [],
   artistReviews: [],
+  bioReviews: [],
   captureSuspects: [],
   clipPosts: [{ scheduledFor: iso(NOW + HOUR), status: "scheduled" }],
   clips: [],
@@ -355,6 +356,92 @@ describe("deriveAttentionItems", () => {
     });
   });
 
+  // The entity-bio sweep's FINAL-ATTEMPT ACCEPTANCE (lib/server/bio-review.ts). The voice gate
+  // refused the paragraph and the third draft was stored anyway — the operator's own ruling, kept
+  // — so the acceptance becomes a queue row instead of a line in a cron log nobody greps.
+  it("rows each bio that landed past the voice gate, carrying its entity and the accepted reasons", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        bioReviews: [
+          {
+            anchorAt: iso(NOW - 2 * DAY),
+            kind: "artist",
+            name: "Future Signal",
+            slug: "future-signal",
+            violations: ["banned identity word: signal", "the Dry Rule: an exclamation mark"],
+          },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual({
+      anchorAt: iso(NOW - 2 * DAY),
+      entity: { kind: "artist", slug: "future-signal" },
+      id: "bio-review:artist:future-signal",
+      source: "bio-review",
+      title: "Future Signal",
+      violations: ["banned identity word: signal", "the Dry Rule: an exclamation mark"],
+    });
+    // The paragraph has already shipped, so nothing is racing — a review, never a deadline.
+    expect(items[0]?.deadlineAt).toBeUndefined();
+    // Both rulings act on state the server already holds and no station owns a bio, so the
+    // decision IS the row (the anchor-review shape), not a deep-link.
+    expect(items[0]?.href).toBeUndefined();
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      kind: "keep-bio",
+      label: "Bio stands",
+    });
+  });
+
+  // THE FALSE-POSITIVE CASE, and the reason the queue is worth acting on: a bio the gate PASSED
+  // must raise nothing at all. A review source that fires on clean work is one the operator learns
+  // to ignore, which would put the bypass right back where it started.
+  it("rows nothing when no bio was bypassed", () => {
+    const items = deriveAttentionItems({ ...EMPTY_INPUTS, bioReviews: [] }, NOW);
+
+    expect(items.filter((item) => item.source === "bio-review")).toEqual([]);
+    expect(attentionBrief(items, NOW)).toBe("All clear. Quiet sector.");
+  });
+
+  it("orders bypassed bios oldest-acceptance-first and keys each row by kind and slug", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        bioReviews: [
+          {
+            anchorAt: iso(NOW - DAY),
+            kind: "label",
+            name: "Invaderz",
+            slug: "shared-slug",
+            violations: ["the Dry Rule: an exclamation mark"],
+          },
+          {
+            anchorAt: iso(NOW - 4 * DAY),
+            kind: "album",
+            name: "Jungle Sound",
+            slug: "shared-slug",
+            violations: [],
+          },
+        ],
+      },
+      NOW,
+    );
+
+    // Two kinds can carry the same slug, and the snooze/won't-do map keys on the row id — so the
+    // id has to carry the kind, or ruling on one would silently park the other.
+    expect(items.map((item) => item.id)).toEqual([
+      "bio-review:label:shared-slug",
+      "bio-review:album:shared-slug",
+    ]);
+    expect(orderQueue(items, {}, NOW).due.map((item) => item.id)).toEqual([
+      "bio-review:album:shared-slug",
+      "bio-review:label:shared-slug",
+    ]);
+  });
+
   // The anchor gate's suspected version mismatches (lib/server/anchor.ts § the anchor review).
   // The gate refused a candidate that agreed on artists, base title, and duration but named a
   // different version — the fingerprint of metadata missing the version — so the near-match becomes
@@ -541,6 +628,49 @@ describe("deriveAttentionItems", () => {
     );
 
     expect(attentionBrief(one, NOW)).toBe("A note the echo gate held back.");
+  });
+
+  it("names the mechanism when a bio landed past the voice gate", () => {
+    const one = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        bioReviews: [
+          {
+            anchorAt: iso(NOW - DAY),
+            kind: "artist",
+            name: "Future Signal",
+            slug: "future-signal",
+            violations: ["banned identity word: signal"],
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(attentionBrief(one, NOW)).toBe("A bio that landed past the voice gate.");
+
+    const two = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        bioReviews: [
+          {
+            anchorAt: iso(NOW - DAY),
+            kind: "artist",
+            name: "Future Signal",
+            slug: "future-signal",
+            violations: [],
+          },
+          {
+            anchorAt: iso(NOW - DAY),
+            kind: "label",
+            name: "Invaderz",
+            slug: "invaderz",
+            violations: [],
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(attentionBrief(two, NOW)).toBe("Two bios that landed past the voice gate.");
   });
 
   it("speaks the label queue in the dispatch", () => {

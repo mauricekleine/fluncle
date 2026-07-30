@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
 
 // The entity-bio engine driven end-to-end through `handleOrpc` against
 // `/api/v1/admin/{artists,labels}/{slug}/bio`, so the REAL admin auth spine
@@ -25,6 +25,7 @@ const buildEntityBioPrompt = vi.fn();
 const getFindingsByArtist = vi.fn();
 const getFindingsByLabel = vi.fn();
 const getFindingsByAlbum = vi.fn();
+const resolveBioReview = vi.fn();
 
 // The router graph imports `env` from cloudflare:workers at module load; stub it so the
 // import resolves in the test runtime (this suite touches no Worker binding).
@@ -79,6 +80,17 @@ vi.mock("./bio", async (importOriginal) => {
   };
 });
 
+// The ruling's data layer. `bioBypassColumns` stays REAL (the entity modules build their write
+// args with it), so only the ledger write is stubbed.
+vi.mock("./bio-review", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bio-review")>();
+
+  return {
+    ...actual,
+    resolveBioReview: (...args: unknown[]) => resolveBioReview(...args),
+  };
+});
+
 vi.mock("./tracks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tracks")>();
 
@@ -117,6 +129,7 @@ beforeEach(() => {
   getFindingsByArtist.mockReset();
   getFindingsByLabel.mockReset();
   getFindingsByAlbum.mockReset();
+  resolveBioReview.mockReset();
 });
 
 // ── describe_artist ───────────────────────────────────────────────────────────
@@ -143,7 +156,9 @@ describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
     const data = (await readJson(response)) as { bio: string; ok: boolean; slug: string };
     expect(data.slug).toBe("calibre");
     expect(data.bio).toBe(GOOD_BIO);
-    expect(fillEmptyArtistBio).toHaveBeenCalledWith("calibre", GOOD_BIO, 3);
+    // The fourth argument is the bio-review flag, and `null` is load-bearing: an ordinary bio
+    // must actively CLEAR the flag columns, not merely leave them unread (lib/server/bio-review.ts).
+    expect(fillEmptyArtistBio).toHaveBeenCalledWith("calibre", GOOD_BIO, 3, null);
   });
 
   // THE CARDINAL SAFETY GUARANTEE: an existing bio is NEVER clobbered.
@@ -237,6 +252,115 @@ describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
   });
 });
 
+// ── THE FINAL-ATTEMPT ACCEPTANCE, and the review it now raises ──────────────────
+//
+// The sweep's third and last pass sends `finalAttempt`, and the draft LANDS even when the voice
+// scan refuses it. That ruling stands. What these pin is the half that was missing: the accepted
+// reasons reach the WRITE, so the bypass stamps the entity and raises a `bio-review` queue row
+// instead of only saying so in a cron log.
+describe("the final-attempt bypass reaches the store as a review flag", () => {
+  // Trips the REAL voice gate on a banned identity word, and is structurally storable — so the
+  // acceptance has something to accept.
+  const REFUSED_BIO =
+    "A clean transmission of rolling menace, and I have logged plenty of them here.";
+
+  it("hands the accepted violations to the fill, so the bypass raises a review row", async () => {
+    getArtistBySlug.mockResolvedValueOnce(ARTIST);
+    fillEmptyArtistBio.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/artists/calibre/bio", "POST", AGENT_TOKEN, {
+        bio: REFUSED_BIO,
+        finalAttempt: true,
+        promptVersion: 2,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as {
+      gateBypassed?: boolean;
+      voiceViolations?: string[];
+    };
+    expect(data.gateBypassed).toBe(true);
+    expect(data.voiceViolations?.length ?? 0).toBeGreaterThan(0);
+
+    // The reasons the caller was told about are the SAME ones written to the row — a flag whose
+    // evidence disagreed with the response would be worse than no flag.
+    expect(fillEmptyArtistBio).toHaveBeenCalledWith(
+      "calibre",
+      REFUSED_BIO,
+      2,
+      data.voiceViolations,
+    );
+  });
+
+  it("carries the flag on a bypassed label and album bio too", async () => {
+    getLabelBySlug.mockResolvedValueOnce(LABEL);
+    fillEmptyLabelBio.mockResolvedValueOnce(true);
+    getAlbumBySlug.mockResolvedValueOnce(ALBUM);
+    fillEmptyAlbumBio.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    await handleOrpc(
+      req("/admin/labels/signature/bio", "POST", AGENT_TOKEN, {
+        bio: REFUSED_BIO,
+        finalAttempt: true,
+      }),
+    );
+    await handleOrpc(
+      req("/admin/albums/second-sun/bio", "POST", AGENT_TOKEN, {
+        bio: REFUSED_BIO,
+        finalAttempt: true,
+      }),
+    );
+
+    expect(fillEmptyLabelBio.mock.calls[0]?.[3]).toEqual(
+      expect.arrayContaining([expect.any(String)]),
+    );
+    expect(fillEmptyAlbumBio.mock.calls[0]?.[3]).toEqual(
+      expect.arrayContaining([expect.any(String)]),
+    );
+  });
+
+  // THE FALSE-POSITIVE CASE at the handler seam: a final attempt whose draft is CLEAN is an
+  // ordinary write. It must raise no review, or the queue fills with rows nobody needs to read.
+  it("raises no review when the final attempt's draft actually clears the gate", async () => {
+    getArtistBySlug.mockResolvedValueOnce(ARTIST);
+    fillEmptyArtistBio.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/artists/calibre/bio", "POST", AGENT_TOKEN, {
+        bio: GOOD_BIO,
+        finalAttempt: true,
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { gateBypassed?: boolean };
+    expect(data.gateBypassed).toBeUndefined();
+    expect(fillEmptyArtistBio).toHaveBeenCalledWith("calibre", GOOD_BIO, undefined, null);
+  });
+
+  // The acceptance is bounded to the VOICE scan. A final attempt that is not a storable paragraph
+  // still hard-fails, so the bypass can never become a way to publish a stub.
+  it("still 422s a final attempt that is too short to be a paragraph", async () => {
+    getArtistBySlug.mockResolvedValueOnce(ARTIST);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/artists/calibre/bio", "POST", AGENT_TOKEN, {
+        bio: "Too short.",
+        finalAttempt: true,
+      }),
+    );
+
+    expect(response?.status).toBe(422);
+    expect(fillEmptyArtistBio).not.toHaveBeenCalled();
+  });
+});
+
 // ── describe_label (parity) ─────────────────────────────────────────────────────
 describe("oRPC describe_label (POST /admin/labels/{slug}/bio)", () => {
   it("fills an EMPTY label bio (agent), voice-gated", async () => {
@@ -251,7 +375,7 @@ describe("oRPC describe_label (POST /admin/labels/{slug}/bio)", () => {
     expect(response?.status).toBe(200);
     const data = (await readJson(response)) as { bio: string; slug: string };
     expect(data.slug).toBe("signature");
-    expect(fillEmptyLabelBio).toHaveBeenCalledWith("signature", GOOD_BIO, undefined);
+    expect(fillEmptyLabelBio).toHaveBeenCalledWith("signature", GOOD_BIO, undefined, null);
   });
 
   it("NEVER overwrites an existing label bio — skipped no-op", async () => {
@@ -284,7 +408,7 @@ describe("oRPC describe_album (POST /admin/albums/{slug}/bio)", () => {
     expect(response?.status).toBe(200);
     const data = (await readJson(response)) as { bio: string; slug: string };
     expect(data.slug).toBe("second-sun");
-    expect(fillEmptyAlbumBio).toHaveBeenCalledWith("second-sun", GOOD_BIO, undefined);
+    expect(fillEmptyAlbumBio).toHaveBeenCalledWith("second-sun", GOOD_BIO, undefined, null);
   });
 
   it("NEVER overwrites an existing album bio — skipped no-op", async () => {
@@ -509,5 +633,101 @@ describe("draft_album_bio (GET /admin/albums/{slug}/bio-draft)", () => {
     const data = (await readJson(response)) as BioDraft;
     expect(data.found).toBe(false);
     expect(buildEntityBioPrompt).not.toHaveBeenCalled();
+  });
+});
+
+// ── resolve_bio_review (the ruling on a bypassed bio) ───────────────────────────
+//
+// The operator tier is the point: `keep` blesses a public paragraph the voice gate refused and
+// `rewrite` un-publishes one, so the box's agent token — which is the thing that AUTHORED the
+// bio — must not be able to rule on its own work.
+describe("oRPC resolve_bio_review (POST /admin/bio-reviews/{kind}/{slug}/resolve)", () => {
+  it("401s with no admin token", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/bio-reviews/artist/calibre/resolve", "POST", undefined, { resolution: "keep" }),
+    );
+
+    expect(response?.status).toBe(401);
+    expect(resolveBioReview).not.toHaveBeenCalled();
+  });
+
+  it("403s the AGENT token — the agent authors, only the operator overrules the gate", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/bio-reviews/artist/calibre/resolve", "POST", AGENT_TOKEN, {
+        resolution: "rewrite",
+      }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(resolveBioReview).not.toHaveBeenCalled();
+  });
+
+  it("keeps a bypassed bio for the operator", async () => {
+    resolveBioReview.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/bio-reviews/artist/future-signal/resolve", "POST", OPERATOR_TOKEN, {
+        resolution: "keep",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    const data = (await readJson(response)) as { ok: boolean; resolution: string; slug: string };
+    expect(data.ok).toBe(true);
+    expect(data.resolution).toBe("keep");
+    expect(data.slug).toBe("future-signal");
+    expect(resolveBioReview).toHaveBeenCalledWith({
+      kind: "artist",
+      resolution: "keep",
+      slug: "future-signal",
+    });
+  });
+
+  it("sends a label bio back for a rewrite", async () => {
+    resolveBioReview.mockResolvedValueOnce(true);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/bio-reviews/label/invaderz/resolve", "POST", OPERATOR_TOKEN, {
+        resolution: "rewrite",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(resolveBioReview).toHaveBeenCalledWith({
+      kind: "label",
+      resolution: "rewrite",
+      slug: "invaderz",
+    });
+  });
+
+  // Nothing under review must READ as nothing under review. A ruling that reports ok on a row it
+  // did not settle is exactly the kind of quiet lie this whole slice exists to remove.
+  it("404s when nothing is under review for that entity", async () => {
+    resolveBioReview.mockResolvedValueOnce(false);
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/bio-reviews/album/second-sun/resolve", "POST", OPERATOR_TOKEN, {
+        resolution: "keep",
+      }),
+    );
+
+    expect(response?.status).toBe(404);
+  });
+
+  it("rejects an unknown entity kind at the contract boundary", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/bio-reviews/mixtape/whatever/resolve", "POST", OPERATOR_TOKEN, {
+        resolution: "keep",
+      }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(resolveBioReview).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "anchor-review": "version check",
   "artist-review": "artist links",
   "attach-cues": "cues",
+  "bio-review": "bio gate",
   "capture-suspect": "capture check",
   distribute: "distribute",
   "drip-empty": "clip drip",

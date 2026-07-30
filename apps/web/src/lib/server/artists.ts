@@ -3,6 +3,7 @@ import { type ArtistListItem } from "@fluncle/contracts";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
+import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
 import {
@@ -156,17 +157,27 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
  * is undefined for an operator-typed bio and null when the sweep fell back to its baked
  * prompt — both store NULL ("no registry prompt wrote this"). The caller has already
  * voice-gated the bio (`gateBioText`).
+ *
+ * `gateBypass` carries the voice-gate reasons the FINAL-ATTEMPT ACCEPTANCE accepted, when this
+ * bio is one that landed despite the scan refusing it (./bio-review.ts). It rides the SAME
+ * statement as the bio so the review flag can never describe a different paragraph than the one
+ * it flagged — and so a later bio that CLEARS the gate wipes the flag by construction rather
+ * than by a follow-up nobody remembers to write.
  */
 export async function fillEmptyArtistBio(
   slug: string,
   bio: string,
   promptVersion?: number | null,
+  gateBypass?: readonly string[] | null,
 ): Promise<boolean> {
   const db = await getDb();
+  const now = new Date().toISOString();
+  const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
   const result = await db.execute({
-    args: [bio, promptVersion ?? null, new Date().toISOString(), slug],
+    args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
     sql: `update artists
-            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved', updated_at = ?
+            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
+                bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
           where slug = ?
             and (bio is null or trim(bio) = '')`,
   });

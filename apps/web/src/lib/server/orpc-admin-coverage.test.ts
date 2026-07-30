@@ -306,6 +306,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-recording-mbids` sweep
   // drives it with the agent token, the `backfill_label_images` precedent.
   "POST /admin/backfill/recording-mbids": "backfill_recording_mbids",
+  // The operator's ruling on a bio that landed past the voice gate — contract-only oRPC.
+  // OPERATOR tier: `keep` blesses a public paragraph the gate refused and `rewrite` un-publishes
+  // one, so the agent token that authored it 403s (lib/server/bio-review.ts).
+  "POST /admin/bio-reviews/{kind}/{slug}/resolve": "resolve_bio_review",
   // The catalogue crawler's bounded pass — contract-only oRPC (no TanStack route file).
   // ADMIN tier (agent-allowed): the on-box `fluncle-crawl` sweep drives it with the agent
   // token. It certifies nothing (no `findings` row) and captures no audio, so it needs no
