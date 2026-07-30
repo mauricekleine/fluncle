@@ -73,12 +73,14 @@ export const runEvents = sqliteTable(
     // "I tried and found nothing" (the `cost_events` posture — a rate-miss surfaces as
     // unpriced, never laundered to $0).
     //
-    // SIX VALUES, because the fleet reports six. Three are a sweep's own kill switch;
-    // `locked` (a tick that found the single-flight lock held), `forced`, and `dry-run`
-    // come from the sonar freshen — an operator act, or a skip, must never read as a
-    // failure. Only `disabled` / `locked` / `paused` suppress the work counters: those
-    // three never looked, while `forced` and `dry-run` did, and their numbers are real
-    // (see GATE_STATES_THAT_NEVER_LOOKED in lib/server/run-events.ts).
+    // SIX VALUES. Three are a sweep's own kill switch and are what the fleet sends today;
+    // `locked` (a tick that found a single-flight lock held), `forced`, and `dry-run` are
+    // the more precise words an emitter naturally reaches for, accepted so that choosing
+    // one degrades into a ROW instead of a 400 — an unknown gate is rejected, a rejected
+    // POST leaves no row, and a missing row reads as a missed run. Only
+    // `disabled` / `locked` / `paused` suppress the work counters: those three never
+    // looked, while `forced` and `dry-run` did, and their numbers are real (see
+    // GATE_STATES_THAT_NEVER_LOOKED in lib/server/run-events.ts).
     gateState: text("gate_state", {
       enum: ["active", "disabled", "dry-run", "forced", "locked", "paused"],
     }),

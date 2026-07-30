@@ -61,11 +61,18 @@ import { ApiError } from "./spotify";
 /**
  * The closed gate vocabulary, mirroring the `run_events.gate_state` enum.
  *
- * SIX STATES, not three, because the fleet reports six. `active`/`paused`/`disabled` are a
- * sweep's own kill switch; `locked`, `forced`, and `dry-run` come from the sonar freshen —
- * a tick that found the single-flight lock held, and the operator's two manual modes. Each
- * of those is a tick that is NEITHER ok nor down, which is precisely what this column is
- * for, and each was a 400 (so: no row, reading as a missed run) before it was listed here.
+ * SIX STATES, and the extra three are deliberate SLACK rather than dead weight.
+ * `active`/`paused`/`disabled` are a sweep's own kill switch, and the fleet's emitters
+ * currently spell every gated tick `paused`. `locked` (a tick that found the single-flight
+ * lock held), `forced`, and `dry-run` are the three more precise words an emitter reaches
+ * for naturally — the sonar freshen's own comments describe its ticks in exactly those
+ * terms — so they are accepted here.
+ *
+ * WHY ACCEPT A WORD NOBODY SENDS YET: the vocabulary is fail-OPEN on purpose. A gate value
+ * the Worker does not know is a 400, a 400 leaves NO ROW, and a missing row reads as a
+ * missed run — so the cost of an unlisted word is a phantom dead sweep, while the cost of
+ * an unused one is nothing. The enum stays CLOSED (an arbitrary string is still rejected);
+ * it is just closed around the words a real emitter would plausibly choose.
  */
 export type RunGateState = "active" | "disabled" | "dry-run" | "forced" | "locked" | "paused";
 
@@ -110,7 +117,8 @@ const GATE_SUPPRESSED_FIELDS = new Set<string>(["checked", "produced", "queue_de
  * the truth about it. The false `produced == 0 AND queue_depth > 0` alarm those two could
  * otherwise raise is the READER's to exclude — `gate_state` is on the row for exactly that
  * — and excluding a non-active gate at read time is strictly safer than laundering a
- * measured number at write time.
+ * measured number at write time. An emitter that wants the suppression keeps saying
+ * `paused`, which is what the fleet says today.
  */
 const GATE_STATES_THAT_NEVER_LOOKED = new Set<string>(["disabled", "locked", "paused"]);
 

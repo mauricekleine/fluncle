@@ -274,9 +274,12 @@ describe("normalizeRunSummary — the third state", () => {
     expect(result.queueDepth).toBe(40);
   });
 
-  it("accepts every gate the fleet actually reports, and REJECTS anything outside it", () => {
-    // The three the sonar freshen sends were each a 400 — so a lock-skipped tick and both
-    // of the operator's manual modes produced no row and read as missed runs.
+  it("accepts every gate an emitter would plausibly choose, and REJECTS anything outside", () => {
+    // The vocabulary is fail-OPEN by design: an unknown gate is a 400, a 400 leaves no row,
+    // and a missing row reads as a missed run — so an unlisted word costs a phantom dead
+    // sweep while an unused one costs nothing. `locked` / `forced` / `dry-run` are the words
+    // the sonar freshen's own comments use for its gated ticks; it spells them `paused` on
+    // the wire today, and either way the Worker writes a row.
     expect(normalizeRunSummary('{"gateState":"disabled"}').gateState).toBe("disabled");
     expect(normalizeRunSummary('{"gate_state":"active"}').gateState).toBe("active");
     expect(normalizeRunSummary('{"gateState":"locked"}').gateState).toBe("locked");
@@ -321,43 +324,55 @@ describe("normalizeRunSummary — the third state", () => {
   });
 
   it("records the REAL sonar-freshen and timer-watchdog lines", () => {
-    // Copied from apps/sonar/deploy/fluncle-sonar-freshen.sh and
-    // docs/agents/hermes/timer-watchdog/timer-watchdog.sh. Every one of these four was a
-    // 400 before this fix — the three invisible units would have stayed invisible.
-    const locked = normalizeRunSummary(
-      '{"ok":false,"checked":null,"produced":null,"errors":0,"queueDepth":null,"gateState":"locked","expectedIntervalMs":3600000}',
+    // Copied verbatim from the emitters as they stand:
+    // apps/sonar/deploy/fluncle-sonar-freshen.sh `emit_run_summary` and
+    // docs/agents/hermes/timer-watchdog/timer-watchdog.sh. BOTH of these were a 400 before
+    // this fix — the freshen's `null` counters failed the integer check and BOTH units'
+    // `"gateState":null` failed the enum check — so two of the three new units would have
+    // written nothing on every single tick and read as permanently dead.
+    const lockSkipped = normalizeRunSummary(
+      '{"checked":null,"produced":null,"errors":0,"queueDepth":null,"gateState":"paused","expectedIntervalMs":3600000}',
     );
 
-    expect(locked).toMatchObject({
+    expect(lockSkipped).toMatchObject({
       checked: null,
       errors: 0,
-      gateState: "locked",
+      gateState: "paused",
       // Nothing owing: it told us about every field, including the ones it cannot know.
       missingFields: [],
-      selfAssertedOk: false,
+      produced: null,
+      queueDepth: null,
+      // These emitters were also fixed to stop grading themselves, so there is no claim.
+      selfAssertedOk: null,
       summaryStatus: "parsed",
     });
 
-    const healthy = normalizeRunSummary(
-      '{"ok":true,"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":null,"expectedIntervalMs":3600000}',
+    const ordinaryTick = normalizeRunSummary(
+      '{"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":null,"expectedIntervalMs":3600000}',
     );
 
-    expect(healthy).toMatchObject({
+    expect(ordinaryTick).toMatchObject({
       checked: 1,
       gateState: null,
       missingFields: [],
       produced: 1,
       queueDepth: 0,
-      selfAssertedOk: true,
+      selfAssertedOk: null,
     });
+  });
 
-    for (const gate of ['"forced"', '"dry-run"']) {
+  it("would keep the counters if an emitter named its operator modes precisely", () => {
+    // Forward compatibility, not a live shape: the freshen sends `paused` for its dry-run
+    // today. If it ever says `forced` or `dry-run` — the words its own comments use — the
+    // row must still land AND keep its numbers, because both of those ticks LOOKED.
+    for (const gate of ["forced", "dry-run"]) {
       const operatorAct = normalizeRunSummary(
-        `{"ok":true,"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":${gate},"expectedIntervalMs":3600000}`,
+        `{"checked":1,"produced":1,"errors":0,"queueDepth":0,"gateState":"${gate}","expectedIntervalMs":3600000}`,
       );
 
-      expect(operatorAct.gateState).toBe(gate.replaceAll('"', ""));
+      expect(operatorAct.gateState).toBe(gate);
       expect(operatorAct.produced).toBe(1);
+      expect(operatorAct.queueDepth).toBe(0);
     }
   });
 });

@@ -240,14 +240,14 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
   });
 
   it("stores the REAL lock-skipped sonar-freshen line, nulls and all", async () => {
-    // Copied from apps/sonar/deploy/fluncle-sonar-freshen.sh: on a held single-flight lock
-    // it prints its counters as literal `null`. Every field of this line was a 400 —
-    // `checked:null` failed the integer check and `gateState:"locked"` was outside the
-    // vocabulary — so a correctly-behaving unit wrote nothing and read as a missed run.
+    // Copied verbatim from apps/sonar/deploy/fluncle-sonar-freshen.sh: on a held
+    // single-flight lock it prints its counters as literal `null`. Those nulls failed the
+    // integer check and the ordinary tick's `"gateState":null` failed the enum check — so
+    // this unit wrote NOTHING on every tick and would have read as permanently dead.
     const recorded = await insertRunEvent(
       envelope({
         summary_raw:
-          '{"ok":false,"checked":null,"produced":null,"errors":0,"queueDepth":null,"gateState":"locked","expectedIntervalMs":3600000}',
+          '{"checked":null,"produced":null,"errors":0,"queueDepth":null,"gateState":"paused","expectedIntervalMs":3600000}',
         unit: "fluncle-sonar-freshen",
       }),
     );
@@ -261,12 +261,12 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
       checked: null,
       errors: 0,
       expected_interval_ms: 3_600_000,
-      gate_state: "locked",
+      gate_state: "paused",
       // NOT an upgrade-queue item: the sweep told us it does not know, which is not a gap.
       missing_fields: "[]",
       produced: null,
       queue_depth: null,
-      self_asserted_ok: 0,
+      self_asserted_ok: null,
       summary_status: "parsed",
       unit: "fluncle-sonar-freshen",
       unrecognised_fields: "[]",
@@ -275,11 +275,36 @@ describe("insertRunEvent — a gated run stores NULL, never 0", () => {
     expect(row.ok).toBe(1);
   });
 
-  it("keeps an operator's forced run's measurements, and lets the reader exclude the gate", async () => {
-    // `forced` and `dry-run` LOOKED, so their numbers are real and must survive. The false
-    // `produced == 0 AND queue_depth > 0` reading a dry-run could raise is the READER's to
-    // exclude — that is what `gate_state` is on the row for, and excluding a gate at read
-    // time is strictly safer than laundering a measured number at write time.
+  it("stores the REAL ordinary timer-watchdog tick, whose only gate signal is a null", async () => {
+    // docs/agents/hermes/timer-watchdog/timer-watchdog.sh, verbatim. A healthy watchdog
+    // legitimately re-arms nothing forever, so `produced: 0` beside `checked: 9` is the
+    // shape that separates health from blindness — and it was a 400 for the `gateState`.
+    await insertRunEvent(
+      envelope({
+        summary_raw:
+          '{"checked":9,"produced":0,"errors":0,"queueDepth":0,"gateState":null,"expectedIntervalMs":900000}',
+        unit: "fluncle-timer-watchdog",
+      }),
+    );
+
+    const row = await onlyRow();
+
+    expect(row).toMatchObject({
+      checked: 9,
+      gate_state: null,
+      missing_fields: "[]",
+      ok: 1,
+      produced: 0,
+      queue_depth: 0,
+    });
+  });
+
+  it("would keep an operator mode's measurements and let the reader exclude the gate", async () => {
+    // Forward compatibility: `forced` and `dry-run` LOOKED, so their numbers must survive
+    // if an emitter ever names them. The false `produced == 0 AND queue_depth > 0` reading a
+    // dry-run would raise is the READER's to exclude — that is what `gate_state` is on the
+    // row for, and excluding a gate at read time is strictly safer than laundering a
+    // measured number at write time.
     await insertRunEvent(
       envelope({
         summary_raw: '{"gateState":"forced","checked":1,"errors":0,"produced":1,"queueDepth":0}',
