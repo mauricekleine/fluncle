@@ -111,7 +111,7 @@ const config = {
   scheme: "fluncle",
   slug: "fluncle",
   userInterfaceStyle: "dark",
-  version: "0.1.0",
+  version: "1.1.0",
 };
 
 if (FREE_TEAM) {

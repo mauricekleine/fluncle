@@ -1,53 +1,32 @@
-# Offline-first mobile — research notes (2026-07-29)
+# Offline-first mobile — research notes (updated 2026-07-30)
 
-Non-canonical planning input for the offline-first mobile RFC (ROADMAP § _Offline-first mobile_). Agent-researched 2026-07-29 against Expo SDK 56 / the app as shipped at 1.0 approval; verify versions before building. The RFC session consumes this; it decides nothing by itself.
+Non-canonical planning input for the offline-first mobile work (ROADMAP § _Offline-first mobile_). It decides nothing by itself; the operator's rulings below do. Originally agent-researched 2026-07-29 against Expo SDK 56 and the app as shipped at 1.0 approval, then trimmed 2026-07-30 to the live remainder: slices 0 and 1 have shipped, so their specs left with them (the code and its tests are the record now), and what is left here is what slice 2 still needs. Every version number in here was read on the date beside it — **verify versions before building**, since the whole point of this file is that the RN corner of this ecosystem moves under you.
 
-## The runtime path — the answer is `expo-sqlite`
+## Ruled
 
-- **`expo-sqlite` (SDK 56, `~56.0.5`) ships libSQL support natively**: `useLibSQL` ("Use libSQL rather than the default SQLite") and `syncLibSQL()` ("Synchronize the local database with the remote libSQL server"), documented in the SDK-56-versioned docs, present in `expo@56.0.17`'s `bundledNativeModules.json`. Also in SDK 56: `expo-sqlite/kv-store` (a SQLite-backed drop-in AsyncStorage replacement with sync variants + a `localStorage` polyfill), `addDatabaseChangeListener()` behind `enableChangeListener: true`, `backupDatabaseAsync()`. NOT present: `sqlite3_rsync`, custom VFS, CR-SQLite.
-- **libSQL's status makes this safe, not stale**: the `tursodatabase/libsql` README states "Turso database and libSQL are two different projects from the same team… libSQL is actively maintained, but new features are being developed in Turso." Feature-frozen in direction, maintained — the branch you want under a shipping app.
-- **`@libsql/client` cannot run on React Native.** Its exports map has no `react-native` condition; Metro resolves to the Node build, which pulls a native N-API addon Hermes cannot load. `@libsql/client/web` is hrana-over-network only (throws `URL_SCHEME_NOT_SUPPORTED` for `file:`) — no local DB, no replica, no offline.
-- **Turso's own RN bindings are undocumented**: the full `turso-docs` tree (451 files) has no `sdk/react-native/` and `docs.turso.tech/sdk/react-native` 404s; the 2026-01-29 announcement lists the Expo plugin as a ROADMAP item, beside Partial Sync and Real-time Subscriptions. Do not assume an RN capability from a Turso docs page; check the RN binding's README for that version.
-- **op-sqlite** (the fallback): libSQL/Turso are BUILD-TIME flags in the root `package.json` (`"op-sqlite": { "libsql": true }` — the sync param is `url`, not `syncUrl`), and enabling them COSTS features: multiple statements per string, update/commit/rollback hooks, **reactive queries**, extension loading, local disk-encryption, custom tokenizers; SQLCipher is mutually exclusive. A one-way door — decide before, not after. UNVERIFIED: SDK 56 compatibility (peers are `react: *`), bundle size, New-Arch support as a stated claim.
-- **The alternatives are out**: CR-SQLite (0 commits in 365 days; op-sqlite's `crsqlite` flag points at a corpse), WatermelonDB (New-Arch/SDK-54+ status issue open since 2026-06-05, zero comments), Legend-State (v3 beta 22 months, peers `expo-sqlite ^15` — five SDK generations behind), Zero (peers `react ^19.2.6`; the app is on 19.2.3), Electric (now read-path-for-Postgres only), PowerSync (Postgres/Mongo/MySQL sources only), TanStack DB (RN adapters peer stale majors; `localStorageCollectionOptions` silently degrades to in-memory on RN; no durable offline mutation queue — watch, don't build on). Also: there is no TanStack Query v6 for React — `@tanstack/react-query` latest is 5.x; the v6 packument is the Svelte adapter.
+- **2026-07-29 — `expo-sqlite` is the runtime path, and the op-sqlite door is CLOSED** unless the device spike fails.
+- **2026-07-29 — slices 0 and 1 ride the 1.1 release.** Both shipped: #998 (offline resilience — online/focus seeding, persisted query cache, paused-mutation replay) and #1000 (the device stores onto SQLite, carrying the old keys across), plus rider #1009 (the `/out/` hop resolver). The pointers are `apps/mobile/src/lib/persist-config.ts` for the persist wiring and `storage-migration.ts` / `saved.ts` / `mix.ts` for the kv-store move; their tests carry the gotchas this file used to list.
+- **2026-07-29 — the `syncLibSQL()` device spike runs on the 1.1 dev client, in the TestFlight window.** It is the gate on slice 2, not a parallel track.
+- **2026-07-29 — the shared-replica-vs-per-user-DB shape is DEFERRED until the spike reports.** Turso multi-DB cost at 2026 pricing stays unresearched on purpose: the spike may make the question moot.
+- **2026-07-30 — if the spike fails, the first fallback to evaluate is `@tursodatabase/sync-react-native`, not op-sqlite.** Verified on npm 2026-07-30: latest `0.7.1`, package modified 2026-07-29 (actively developed), peers `react >=18.0.0` and `react-native >=0.76.0` — both satisfied by the app's `react 19.2.3` / `react-native 0.85.3`. It is still 0.x and the Expo plugin is still a ROADMAP item per Turso's 2026-01-29 announcement, so it slots AHEAD of op-sqlite in the fallback order without displacing the ruled path.
+
+## The runtime path — `expo-sqlite`
+
+`expo-sqlite` (SDK 56, `~56.0.5`) ships libSQL support natively — `useLibSQL` and `syncLibSQL()` are in the SDK-56-versioned docs and the module is in `expo@56.0.17`'s `bundledNativeModules.json` — which is why nothing else was needed for slices 0 and 1 and why slice 2 has a first-party path to try. libSQL itself is feature-frozen in direction but maintained (`tursodatabase/libsql`'s README: new features go to Turso, libSQL is actively maintained), which is the branch you want under a shipping app. Every alternative failed on a hard fact rather than on taste: `@libsql/client` has no `react-native` export condition and its Node build pulls an N-API addon Hermes cannot load, while `@libsql/client/web` is hrana-over-network only (throws `URL_SCHEME_NOT_SUPPORTED` for `file:`), so no local DB and no offline; op-sqlite makes libSQL a BUILD-TIME flag that costs reactive queries, multi-statement strings, update/commit/rollback hooks, extension loading, local disk-encryption and custom tokenizers, with SQLCipher mutually exclusive — a one-way door, now ruled closed; and CR-SQLite (dead upstream), WatermelonDB (New-Arch/SDK-54+ issue open and unanswered), Legend-State (v3 beta 22 months, peers five SDK generations behind), Zero (peers a react the app is not on), Electric (read-path-for-Postgres only), PowerSync (Postgres/Mongo/MySQL sources only) and TanStack DB (RN adapters peer stale majors; `localStorageCollectionOptions` silently degrades to in-memory on RN; no durable offline mutation queue) are all out. Turso's own RN bindings remain undocumented in the `turso-docs` tree and `docs.turso.tech/sdk/react-native` 404s, so never infer an RN capability from a Turso docs page — read the RN binding's README for the version you are pinning.
 
 ## Turso sync mechanics (as of mid-2026)
 
-- Conflict posture on `pull()` with unpushed local changes is a **rebase**: roll local back to last synced state, apply remote, atomically replay local on top. Not per-field merge — the user-data union-merge law still needs app-level merge logic on top.
-- `bootstrapIfEmpty` / partial sync / checkpoints exist in the TS/Go/Python docs; their availability IN THE RN BINDING specifically is UNVERIFIED.
-- **The RFC's first de-risking spike, named:** `syncLibSQL()` against a live Turso database on a real device. Nobody has verified it; the whole architecture leans on it.
+- Conflict posture on `pull()` with unpushed local changes is a **rebase**: local rolls back to the last synced state, remote applies, local replays atomically on top. That is not a per-field merge, so the user-data union-merge law still needs app-level merge logic above it.
+- `bootstrapIfEmpty`, partial sync and checkpoints exist in the TS/Go/Python docs; their availability IN THE RN BINDING specifically is UNVERIFIED.
 
-## The offline write path (TanStack Query persist) — the spec
+## The spike — `syncLibSQL()` on a real device
 
-All four persist packages ship in lockstep at 5.101.4 (2026-07-21); `react-query-persist-client` peers `react ^18 || ^19` (19.2.3 in range). The trap that bites first: **`onlineManager` starts `online: true` and only flips on events** — without a seed the app believes it is online forever. `expo-network` is already pinned (`apps/mobile/package.json:41`) and unimported; seed via `Network.getNetworkStateAsync()` + `addNetworkStateListener`, pair `focusManager` with `AppState` (guard `Platform.OS !== "web"`).
+The one de-risking gate, and the thing the whole slice-2 architecture leans on: run `syncLibSQL()` against a live Turso database on a physical device, on the 1.1 dev client during the TestFlight window. Nobody has verified it on this stack. What it has to answer: does a replica bootstrap and pull at all under Hermes and the New Architecture; does it survive a cold start and a mid-pull network drop; how large is the on-device file and how long does the first bootstrap take; and does `useLibSQL` work in Expo Go or force a dev client. A failure here does not sink offline-first — it moves the evaluation to `@tursodatabase/sync-react-native` per the 2026-07-30 ruling.
 
-Queue-and-replay shape: `PersistQueryClientProvider` with `maxAge` ≤ query `gcTime`, `buster: BUILD_SHA`, `onSuccess: () => queryClient.resumePausedMutations()`, and `setMutationDefaults` per mutation key. The ten doc-backed gotchas:
+## Slice 2 — the synced replica
 
-1. `mutationFn` must be re-registered via `setMutationDefaults` before restore ("No mutationFn found" after hydration is a documented limitation).
-2. Mutation `variables` must be JSON-serializable (no `Date`/`File`/`FormData`).
-3. `shouldDehydrateMutation` already defaults to paused-mutations-only.
-4. Errors are redacted by default on dehydrate.
-5. The provider's `onSuccess` is the only documented "restore finished" hook — resuming earlier races the restore.
-6. Callbacks passed to `mutate(vars, {…})` never fire on replay; replay-critical effects go in `setMutationDefaults`.
-7. Replays preserve order but run in parallel — `scope: { id }` serializes.
-8. `maxAge` discards silently — a stale queue vanishes with no error.
-9. `status: 'pending'` + `fetchStatus: 'paused'` is a real state — a spinner keyed only on `isPending` spins forever offline (named regression risk against `apps/mobile`'s `archive-state.ts` four-view branch).
-10. `useIsRestoring` is exported from `@tanstack/react-query`, not the persist package.
-
-Storage: the persister's storage interface is structural, so `expo-sqlite/kv-store` fits — but the docs name only `@react-native-async-storage/async-storage` (SDK 56 pins 2.2.0, which the app has).
-
-## Slices (recommendation shape, not a decision)
-
-- **Slice 0 — offline resilience, no DB**: onlineManager/focusManager seeding + persisted query cache + paused-mutation replay. Cheapest, ships value alone.
-- **Slice 1 — device stores onto SQLite**: `saved.ts` / `mix.ts` move from AsyncStorage to `expo-sqlite/kv-store` — close to an import swap given the existing pure/wiring split.
-- **Slice 2 — the synced replica**: `useLibSQL` + `syncLibSQL()` against a public-catalogue slice (server-authoritative), user data union-merged at app level. GATED on the device spike, on the RN-binding capability verification, and on a sizing pass (the MuQ embedding blobs must never ship to devices).
-
-## Open decisions for the operator
-
-- One shared read replica vs per-user DBs (Turso multi-DB cost at 2026 pricing — unresearched).
-- The op-sqlite one-way door (reactive queries / SQLCipher lost with libSQL) if ever preferred over expo-sqlite.
-- Whether slice 0+1 ship inside the 1.1 arc or after it.
+`useLibSQL` + `syncLibSQL()` against a **public-catalogue slice only** (server-authoritative), with user data union-merged at app level on top of the rebase posture above. Gates, all three of which must clear before the slice is built: the device spike passes; the RN binding's capabilities are verified for the version being pinned (`bootstrapIfEmpty` / partial sync / checkpoints, read from that binding's README, not from the Turso docs site); and a sizing pass fixes what actually ships to a device — **the MuQ embedding blobs never leave the server**, and the slice has to stay small enough that the first bootstrap is not a cold-open cost.
 
 ## Carried-forward UNVERIFIED list
 
-op-sqlite SDK-56 compat + bundle size + New-Arch statement; `useLibSQL` in Expo Go; RN-binding availability of `bootstrapIfEmpty`/partial sync/checkpoints; TanStack DB RN adapters against current majors; Legend-State v3 on modern expo-sqlite; and the device `syncLibSQL()` spike itself.
+`useLibSQL` in Expo Go (versus requiring a dev client); RN-binding availability of `bootstrapIfEmpty` / partial sync / checkpoints; the size and duration of a device-shippable catalogue slice; the Expo integration story for `@tursodatabase/sync-react-native` (the plugin is roadmap, so a config-plugin-free path is unproven); and the device `syncLibSQL()` spike itself.
