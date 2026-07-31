@@ -215,6 +215,16 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   //
   // The by-name hit wins the tie: it cleared artist, title, AND length, where the by-ISRC pick
   // cleared length alone. Neither gate clearing means no link, which is the honest answer.
+  //
+  // AND NEITHER READ STAMPS THE DEEZER LEDGER (schema.ts § `backfill_deezer_*`), deliberately. That
+  // ledger's whole job is to let a row say "Not found · checked <date>", and neither read here can
+  // support that sentence: `lookupIsrcFromDeezer` only runs at all when the row arrived WITHOUT an
+  // ISRC, and both helpers collapse a clean miss, a non-ok response, and a thrown request into the
+  // same empty return — while `enrichFromDeezer` additionally withholds its id on a duration
+  // disagreement, which is "found it, will not vouch for it" rather than absence. A stamp written off
+  // any of those would turn an outage or a skipped read into a claim that Deezer does not carry the
+  // recording. So a publish-born row keeps reading "Not checked yet" until the anchor rung (anchor.ts
+  // § recoverIsrcViaDeezer, the ledger's one writer) concludes a real look over it.
   const deezerByNameVerified = deezerByName
     ? verifySearchCandidate(track.artists, track.title, track.durationMs, [
         {

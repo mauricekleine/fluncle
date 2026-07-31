@@ -189,6 +189,56 @@ export const tracks = sqliteTable(
     backfillBeatportAttempts: integer("backfill_beatport_attempts").notNull().default(0),
     backfillBeatportDoneAt: text("backfill_beatport_done_at"),
     backfillBeatportFailures: integer("backfill_beatport_failures").notNull().default(0),
+    // The Deezer leg's per-ROW reliability state — the HONEST-MISS LEDGER, and the reason it exists
+    // is the receipt. The `deezer_track_id` trio below records only what Fluncle WON, so a row with
+    // no id could say one thing and one thing only: "Not checked yet". True while nothing had ever
+    // looked; a lie the moment something does. These four columns are the other half — they let a
+    // concluded look that came back with nothing read "Not found · checked <date>" instead.
+    //
+    // Same four-column shape and rules as the `backfill_beatport_*` set above: *AttemptedAt is the
+    // last CONCLUDED look — a moving watermark that OVERWRITES, unlike the first-write-wins trio
+    // below (where the write guards it with a `coalesce`, that is "leave it alone unless this outcome
+    // concluded", never "keep the first one"). *Attempts is a monotone tally the identity envelope
+    // PRINTS (so it must stay honest), *DoneAt stamps when an id was actually written, and *Failures
+    // is the consecutive-failure streak.
+    //
+    // WHO STAMPS IT, and it is deliberately ONE path: the anchor rung's ISRC recovery
+    // (anchor.ts § recoverIsrcViaDeezer), on the two outcomes that SETTLE whether Deezer carries the
+    // recording — a hit that cleared the identity fold and brought an id back, and a gate-clean miss
+    // where Deezer answered with candidates and none cleared. Both stamp in the SAME statement as the
+    // write they conclude, so an attempt and its outcome cannot be recorded apart.
+    //
+    // AND WHO DELIBERATELY DOES NOT, because a stamp nobody can stand behind is worse than no stamp:
+    //   · `recoverIsrcViaDeezer`'s EMPTY-CANDIDATES exit. `searchDeezerCandidates` hands back the
+    //     same empty array for "Deezer has nothing" and for a quota/network failure, so the row
+    //     stays honestly unattempted — the identical reasoning that already keeps `isrc_attempted_at`
+    //     off that branch.
+    //   · `recoverIsrcViaDeezer`'s PRECONDITION exit (no title, no artists, or no duration to verify
+    //     against). No Deezer request is made at all; nothing was attempted.
+    //   · a cleared hit that arrived with NO id (a legacy-box-payload defence). Deezer demonstrably
+    //     carries that recording — the recovered ISRC came out of the hit — so `absent` would misstate
+    //     it while `verified` has no link to show. Neither state fits, so none is claimed.
+    //   · PUBLISH (publish.ts). Its two Deezer reads cannot report a conclusion: `lookupIsrcFromDeezer`
+    //     only runs when the row arrives WITHOUT an ISRC (so on most publishes no by-name look
+    //     happens at all), and both it and `enrichFromDeezer` collapse a clean miss, a non-ok
+    //     response, and a thrown request into the same empty return. `enrichFromDeezer` also withholds
+    //     its id when Deezer's duration disagrees — "found it, will not vouch for it", which is not
+    //     absence either. Ambiguity is not a conclusion, so publish stamps nothing and a
+    //     publish-born row keeps reading "Not checked yet" until a real look concludes.
+    //
+    // *Failures is therefore 0 by construction today: the one writer either concludes or declines to
+    // stamp, and no cooldown reads a streak here yet. It is carried so the catalogue-wide Deezer
+    // campaign has the column already in place rather than needing a second migration.
+    //
+    // Safe as NEW columns despite the `.default()` — the `deezer_track_id` note below warns that a
+    // default on an EXISTING `tracks` column makes drizzle rebuild the table and drop+recreate all
+    // ~125 indexes; an added column is a plain `ALTER TABLE … ADD COLUMN … DEFAULT 0 NOT NULL`, which
+    // is what the `backfill_beatport_*` set generated (drizzle/0140). NOT INDEXED. NULL/0 on rows
+    // that predate them. Internal reliability state with ONE public reader, the identity envelope.
+    backfillDeezerAttemptedAt: text("backfill_deezer_attempted_at"),
+    backfillDeezerAttempts: integer("backfill_deezer_attempts").notNull().default(0),
+    backfillDeezerDoneAt: text("backfill_deezer_done_at"),
+    backfillDeezerFailures: integer("backfill_deezer_failures").notNull().default(0),
     // The RECORDING-GRAIN Discogs attempt record (RFC dnb-identity-graph, Unit 1 item 2). Same
     // four-column shape and rules as the `backfill_apple_music_*` set above — and it exists for one
     // reason: without it a CATALOGUE row cannot tell `absent` from `unattempted` for Discogs. The

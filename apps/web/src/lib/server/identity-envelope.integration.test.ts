@@ -5,7 +5,8 @@
 // mocked-DB test would pass while any of it was broken:
 //
 //   - THE MIGRATION ITSELF — `tracks.spotify_anchor_source` / `_verified_by` / `spotify_anchored_at`,
-//     the `deezer_track_id` / `deezer_verified_at` / `deezer_verified_by` trio, and the
+//     the `deezer_track_id` / `deezer_verified_at` / `deezer_verified_by` trio, the
+//     `backfill_deezer_*` attempt ledger beside it, and the
 //     `tracks_mb_recording_id_idx` value index. If the migration did not apply, the first
 //     statement naming them throws here, which is the guard we want since `deploy:gate` runs this;
 //   - EVERY STATE OFF ITS REAL COLUMNS — each `method`, each `retry` class, the `terminal: null`
@@ -64,6 +65,8 @@ type TrackFixture = {
   discogsAttemptedAt?: string;
   discogsAttempts?: number;
   discogsDoneAt?: string;
+  deezerAttemptedAt?: string;
+  deezerAttempts?: number;
   deezerTrackId?: string;
   deezerVerifiedAt?: string;
   deezerVerifiedBy?: string;
@@ -119,6 +122,8 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
       fields.beatportUrl ? "2026-07-30T00:00:00.000Z" : null,
       fields.beatportAttemptedAt ?? null,
       fields.beatportAttempts ?? 0,
+      fields.deezerAttemptedAt ?? null,
+      fields.deezerAttempts ?? 0,
     ],
     sql: `insert into tracks (
             track_id, title, artists_json, duration_ms,
@@ -133,8 +138,9 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
             dismissed_at, duplicate_of_track_id,
             deezer_track_id, deezer_verified_at, deezer_verified_by,
             beatport_url, beatport_verified_at,
-            backfill_beatport_attempted_at, backfill_beatport_attempts
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            backfill_beatport_attempted_at, backfill_beatport_attempts,
+            backfill_deezer_attempted_at, backfill_deezer_attempts
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -538,10 +544,12 @@ describe("the identifiers and the other platforms", () => {
   });
 
   // ── DEEZER ──────────────────────────────────────────────────────────────────────────────────
-  // The one covered platform with TWO states and no third. Fluncle keeps a Deezer id as a
-  // by-product of reads run for other reasons, so there is no Deezer LOOK that could conclude and
-  // therefore nothing that could honestly read `absent` or `refused` here. A row either has the id
-  // or nobody has gone looking.
+  // THREE states, and the third is the honest miss. Fluncle keeps a Deezer id as a by-product of
+  // reads run for other reasons, and most of those cannot report a conclusion — so `absent` is
+  // reachable ONLY through the attempt ledger (`backfill_deezer_*`), which the anchor rung's ISRC
+  // recovery stamps when a look actually concludes. The two tests that matter here are a matched
+  // pair: a stamped row must stop saying "nobody looked", and an unstamped one must never start.
+  // There is still nothing that could read `refused` — this leg has no attempt cap to spend.
   it("serves the Deezer link off the kept id, with the rung that won it", async () => {
     await insertTrack("dz-held", {
       deezerTrackId: "3135556",
@@ -571,6 +579,63 @@ describe("the identifiers and the other platforms", () => {
     expect((await only({ idOrLogId: "dz-none", kind: "idOrLogId" })).links.deezer).toEqual({
       state: "unattempted",
     });
+  });
+
+  it("admits a Deezer look that concluded with nothing, instead of claiming nobody looked", async () => {
+    // THE WHOLE POINT OF THE LEDGER. Before it existed, a row the anchor rung had searched and come
+    // back empty on was indistinguishable from one nothing had ever touched — both read "Not checked
+    // yet", and on the checked row that is a lie. An attempt stamp with no id is `absent`: looked,
+    // not there.
+    await insertTrack("dz-missed", {
+      deezerAttemptedAt: "2026-07-30T00:00:00.000Z",
+      deezerAttempts: 1,
+    });
+
+    expect((await only({ idOrLogId: "dz-missed", kind: "idOrLogId" })).links.deezer).toEqual({
+      attempts: 1,
+      // No attempt cap on this leg, so there is no budget to report.
+      cap: null,
+      lastAttemptedAt: "2026-07-30T00:00:00.000Z",
+      // No re-check cadence is ruled for Deezer, so the receipt states the attempt and promises
+      // nothing further. `terminal: null` is "we do not know whether we will look again" — never a
+      // claim that we will not.
+      retry: "single-shot",
+      state: "absent",
+      terminal: null,
+    });
+  });
+
+  it("carries the real Deezer attempt tally rather than flattening it to one", async () => {
+    // The envelope PRINTS this number ("checked N times"), so a placeholder would be a fabricated
+    // claim about how hard Fluncle looked.
+    await insertTrack("dz-missed-thrice", {
+      deezerAttemptedAt: "2026-07-30T00:00:00.000Z",
+      deezerAttempts: 3,
+    });
+
+    const state = (await only({ idOrLogId: "dz-missed-thrice", kind: "idOrLogId" })).links.deezer;
+
+    expect(state.state).toBe("absent");
+    expect(state).toMatchObject({ attempts: 3 });
+  });
+
+  it("lets a held Deezer id outrank its own attempt stamp", async () => {
+    // The ledger's one writer stamps the attempt in the SAME statement that lands the id, so a
+    // verified row carries both. The link is the better answer and must win — reading `absent` off a
+    // row that holds a working link would be the ledger contradicting the archive.
+    await insertTrack("dz-held-and-stamped", {
+      deezerAttemptedAt: "2026-07-30T00:00:00.000Z",
+      deezerAttempts: 1,
+      deezerTrackId: "3135556",
+      deezerVerifiedAt: "2026-07-30T00:00:00.000Z",
+      deezerVerifiedBy: "search",
+    });
+
+    const state = (await only({ idOrLogId: "dz-held-and-stamped", kind: "idOrLogId" })).links
+      .deezer;
+
+    expect(state.state).toBe("verified");
+    expect(state).toMatchObject({ url: "https://www.deezer.com/track/3135556" });
   });
 
   it("serves the by-ISRC rung's Deezer link as `isrc`, not as a search", async () => {

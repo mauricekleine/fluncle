@@ -107,7 +107,9 @@ async function publishAndRead(): Promise<Record<string, unknown>> {
                  backfill_discogs_done_at, backfill_discogs_failures,
                  spotify_anchored_at, spotify_anchor_attempted_at,
                  spotify_anchor_source, spotify_anchor_verified_by,
-                 deezer_track_id, deezer_verified_at, deezer_verified_by
+                 deezer_track_id, deezer_verified_at, deezer_verified_by,
+                 backfill_deezer_attempted_at, backfill_deezer_attempts,
+                 backfill_deezer_done_at, backfill_deezer_failures
           from tracks where track_id = ?`,
   });
   const row = result.rows[0];
@@ -193,6 +195,23 @@ describe("publishTrack — the identity-ledger stamps", () => {
     expect(row.deezer_track_id).toBeNull();
     expect(row.deezer_verified_at).toBeNull();
     expect(row.deezer_verified_by).toBeNull();
+  });
+
+  it("stamps NO Deezer attempt ledger at publish — neither read can report a conclusion", async () => {
+    // Publish is deliberately NOT a writer of `backfill_deezer_*` (schema.ts), and this pins it,
+    // because the tempting wiring here would be a lie. On this fixture Spotify carried the ISRC, so
+    // `lookupIsrcFromDeezer` never ran at all — and even when it does, both helpers collapse a clean
+    // miss, a non-ok response, and a thrown request into the same empty return, while
+    // `enrichFromDeezer` additionally withholds its id on a duration disagreement ("found it, will
+    // not vouch for it", which is not absence). A stamp off any of those would turn an outage or a
+    // skipped read into a public claim that Deezer does not carry the recording. So the row keeps
+    // reading "Not checked yet" until the anchor rung concludes a real look over it.
+    const row = await publishAndRead();
+
+    expect(row.backfill_deezer_attempted_at).toBeNull();
+    expect(Number(row.backfill_deezer_attempts)).toBe(0);
+    expect(row.backfill_deezer_done_at).toBeNull();
+    expect(Number(row.backfill_deezer_failures)).toBe(0);
   });
 
   it("prefers the by-name hit that cleared artist, title, AND length", async () => {
