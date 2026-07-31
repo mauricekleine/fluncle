@@ -24,6 +24,10 @@ case "$1" in
   not-json) printf 'plain text\\n' ;;
   admin)
     if [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "--queue" ]]; then
+      if [[ "\${ARTIST_STUB_FATAL:-0}" == "1" ]]; then
+        printf 'queue unavailable\\n' >&2
+        exit 1
+      fi
       printf '{"artists":[{"artistId":"social-1","name":"One"},{"artistId":"social-2","name":"Two"}]}\\n'
     elif [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "social-1" ]]; then
       printf '{"artistId":"social-1","mbid":"mbid-1","ok":true,"rateLimited":false,"socialsCount":2}\\n'
@@ -110,9 +114,9 @@ test("main preserves image failures, skips, throttle state, and canonical run co
   expect(summary).toMatchObject({
     batch: 2,
     checked: 11,
-    errors: 2,
+    errors: 0,
     expected_interval_ms: 3_600_000,
-    failed: 0,
+    failed: 2,
     imagesBudgetLimited: true,
     imagesChecked: 9,
     imagesFailed: 2,
@@ -127,5 +131,30 @@ test("main preserves image failures, skips, throttle state, and canonical run co
     queue_depth: 12,
     resolved: 1,
     throttled: true,
+  });
+});
+
+test("a genuine artist run failure reports errors:1 and exits non-zero", async () => {
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: {
+      ...process.env,
+      ARTIST_STUB_FATAL: "1",
+      FLUNCLE_BIN: join(stubDir, "fluncle"),
+      NODE_ENV: "test",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  expect(exitCode).not.toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    errors: 1,
+    ok: false,
+    reason: "artist_failed",
   });
 });

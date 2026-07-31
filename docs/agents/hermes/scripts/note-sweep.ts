@@ -1078,7 +1078,7 @@ async function main(): Promise<void> {
     );
 
     const outcomes: Record<string, string> = {};
-    let errors = 0;
+    let failed = 0;
 
     for (const id of dryRunIds) {
       try {
@@ -1086,7 +1086,7 @@ async function main(): Promise<void> {
         outcomes[id] = outcome;
       } catch (error) {
         outcomes[id] = "failed";
-        errors += 1;
+        failed += 1;
         log(`error on ${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -1095,7 +1095,8 @@ async function main(): Promise<void> {
       JSON.stringify({
         checked: dryRunIds.length,
         dryRun: true,
-        errors,
+        errors: 0,
+        failed,
         neighbors: NEIGHBORS_ENABLED,
         ok: true,
         outcomes,
