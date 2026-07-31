@@ -22,6 +22,7 @@
 //   2. `fluncle admin backfills lastfm          --limit <N> --json`  → one paced batch.
 //   3. `fluncle admin backfills apple-music     --limit <N> --json`  → one paced batch.
 //   4. `fluncle admin backfills apple-catalogue --limit <M> --json`  → one batched pass.
+//   5. `fluncle admin backfills beatport        --limit <B> --json`  → one paced batch.
 //
 // The apple-music leg is a NO-OP until the Worker's MusicKit secrets are provisioned
 // (the summary carries `configured: false`), exactly like the lastfm leg is a no-op
@@ -33,6 +34,14 @@
 // the priority: the certified findings drain first, and whatever budget survives goes
 // to the catalogue. It carries its own larger limit because its oracle is BATCHED
 // (≤25 ISRCs per underlying request, versus one paced request per finding on leg 3).
+//
+// LEG 5 IS INDEPENDENT OF THE APPLE PAIR and runs last simply because it is newest. It shares
+// nothing with legs 3-4 — no Apple meter, no Apple breaker — and paces on the Worker's Firecrawl
+// limiter plus its own small `--limit`. One rendered scrape per finding is the slowest call in this
+// sweep, so its default limit is the smallest here (10): ~85 certified findings drain in a handful
+// of ticks, and the reliability cooldown keeps a drained archive quiet afterwards. It is a NO-OP
+// until the Worker's Firecrawl key is provisioned (`configured: false`), like leg 3 without its
+// MusicKit secrets.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -63,6 +72,12 @@ const BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_LIMIT ?? "3");
 // dedupe, the reliability gate) may cost ONE cheap follow-up pass, which the shared meter
 // bounds. 65k catalogue rows drain at ~100/tick × 48 ticks/day without ever starving leg 3.
 const CATALOGUE_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_CATALOGUE_LIMIT ?? "100");
+
+// The Beatport leg's own limit, the smallest in this sweep: each finding costs one RENDERED page
+// scrape (Beatport is Cloudflare-walled, so the read goes through Firecrawl), which is far slower
+// than an API call. 10 per 30-minute tick drains the certified archive comfortably while leaving
+// the Firecrawl budget to the artist/bio sweeps that share it.
+const BEATPORT_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_BEATPORT_LIMIT ?? "10");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -116,6 +131,18 @@ type AppleCatalogueSummary = {
   resolvedCount?: number;
   // No `skippedCount`: the catalogue worklist is a reliability-gated anti-join, so a
   // cooling-down row never enters the pass to be reported as skipped.
+  unresolvedCount?: number;
+};
+
+type BeatportSummary = {
+  // False when the Worker's Firecrawl key is unset — the leg was a no-op this tick.
+  configured?: boolean;
+  // Findings whose scrape errored (nothing learned; they back off and retry). Distinct from
+  // `unresolvedCount`, which is a concluded "Beatport does not carry this recording".
+  failedCount?: number;
+  ok?: boolean;
+  resolvedCount?: number;
+  skippedCount?: number;
   unresolvedCount?: number;
 };
 
@@ -200,6 +227,14 @@ export function runBackfillSweep() {
       resolved: 0,
       skipped: 0,
       throttled: false,
+      unresolved: 0,
+    },
+    beatport: {
+      configured: false,
+      error: null as string | null,
+      failed: 0,
+      resolved: 0,
+      skipped: 0,
       unresolved: 0,
     },
     discogs: {
@@ -312,6 +347,33 @@ export function runBackfillSweep() {
     summary.ok = false;
     summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
     log(`apple-catalogue backfill failed: ${summary["apple-catalogue"].error}`);
+  }
+
+  // The Beatport store leg. Independent of the Apple pair (its own vendor, its own limiter), so its
+  // placement last carries no priority meaning — and its failure, like every other leg's, is
+  // contained here so it can never abort the sweep.
+  try {
+    const beatport = fluncleJson<BeatportSummary>([
+      "admin",
+      "backfills",
+      "beatport",
+      "--limit",
+      String(BEATPORT_BATCH_LIMIT),
+    ]);
+    summary.beatport.configured = beatport.configured ?? false;
+    summary.beatport.resolved = beatport.resolvedCount ?? 0;
+    summary.beatport.unresolved = beatport.unresolvedCount ?? 0;
+    summary.beatport.failed = beatport.failedCount ?? 0;
+    summary.beatport.skipped = beatport.skippedCount ?? 0;
+
+    if (beatport.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
+      // some resolved, some failed — distinct from the catch below.
+      log(`beatport backfill partial: ${summary.beatport.failed} finding(s) failed this tick`);
+    }
+  } catch (error) {
+    summary.beatport.error = error instanceof Error ? error.message : String(error);
+    log(`beatport backfill failed: ${summary.beatport.error}`);
   }
 
   return summary;

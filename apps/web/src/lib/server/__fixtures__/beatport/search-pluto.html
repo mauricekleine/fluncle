@@ -1,0 +1,22 @@
+<!--
+  A trimmed capture of a live beatport.com search page (2026-07-30), kept as a test fixture.
+
+  REAL in shape and in identity: Beatport's own __NEXT_DATA__ island, its real track ids and
+  ISRCs, and the absolute <a href> links the page rendered for them. That structure is the
+  thing under test — lib/server/beatport-resolve.ts exists because it can change.
+
+  TRIMMED to a handful of results, and each result trimmed to the identity fields the resolver
+  reads. Beatport's bpm/key/genre/label/price and the rest are deliberately absent: the terms
+  rail (§F, see tracks.beatport_url in db/schema.ts) keeps that metadata out of Fluncle, and a
+  fixture in a public repo is no place to make an exception.
+-->
+<!doctype html>
+<html>
+  <body>
+    <a title="Pluto" href="https://www.beatport.com/track/pluto/19385810"></a>
+    <a title="Rizzle Rizzle Nizzle Nizzle" href="https://www.beatport.com/track/rizzle-rizzle-nizzle-nizzle/12174366"></a>
+    <a title="Pluto Walk" href="https://www.beatport.com/track/pluto-walk/21919880"></a>
+    <a title="Pluto Walk" href="https://www.beatport.com/track/pluto-walk/22175433"></a>
+    <script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"dehydratedState":{"queries":[{"queryKey":["search-all",{"q":"Rizzle Pluto","count":"15","is_approved":true,"preorder":true},"US"],"state":{"data":{"tracks":{"data":[{"isrc":"CA5KR2489434","track_id":19385810,"track_name":"Pluto","mix_name":"Original Mix"},{"isrc":"USCA20401344","track_id":12174366,"track_name":"Rizzle Rizzle Nizzle Nizzle","mix_name":"Original Mix"},{"isrc":"USUM72509518","track_id":21919880,"track_name":"Pluto Walk","mix_name":"Original Mix"},{"isrc":"USUM72509518","track_id":22175433,"track_name":"Pluto Walk","mix_name":"Original Mix"}]}}}}]}}}}</script>
+  </body>
+</html>

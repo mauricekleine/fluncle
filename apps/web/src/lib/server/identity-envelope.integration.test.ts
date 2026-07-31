@@ -58,6 +58,9 @@ type TrackFixture = {
   appleDoneAt?: string;
   appleUrl?: string;
   artistsJson?: string;
+  beatportAttemptedAt?: string;
+  beatportAttempts?: number;
+  beatportUrl?: string;
   discogsAttemptedAt?: string;
   discogsAttempts?: number;
   discogsDoneAt?: string;
@@ -112,6 +115,10 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
       fields.deezerTrackId ?? null,
       fields.deezerVerifiedAt ?? null,
       fields.deezerVerifiedBy ?? null,
+      fields.beatportUrl ?? null,
+      fields.beatportUrl ? "2026-07-30T00:00:00.000Z" : null,
+      fields.beatportAttemptedAt ?? null,
+      fields.beatportAttempts ?? 0,
     ],
     sql: `insert into tracks (
             track_id, title, artists_json, duration_ms,
@@ -124,8 +131,10 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
             in_release_id, backfill_discogs_attempted_at, backfill_discogs_attempts,
             backfill_discogs_done_at,
             dismissed_at, duplicate_of_track_id,
-            deezer_track_id, deezer_verified_at, deezer_verified_by
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            deezer_track_id, deezer_verified_at, deezer_verified_by,
+            beatport_url, beatport_verified_at,
+            backfill_beatport_attempted_at, backfill_beatport_attempts
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -599,6 +608,75 @@ describe("the identifiers and the other platforms", () => {
 
     expect((await readIdentity(key))?.recordings[0]?.links.deezer).toEqual(
       (await readIdentity(key, "first-party"))?.recordings[0]?.links.deezer,
+    );
+  });
+
+  // ── BEATPORT ────────────────────────────────────────────────────────────────────────────────
+  // The store leg, won by exact ISRC equality through the keyless public-search resolve. Three
+  // states, all backed by real columns, and one hardcoded method: ISRC equality is the only gate
+  // this leg has, so there is no `beatport_verified_by` column to read.
+  it("serves a held Beatport link as an ISRC match, stamped when it was written", async () => {
+    await insertTrack("bp-held", {
+      beatportUrl: "https://www.beatport.com/track/pluto/19385810",
+      isrc: "CA5KR2489434",
+    });
+
+    expect((await only({ idOrLogId: "bp-held", kind: "idOrLogId" })).links.beatport).toEqual({
+      state: "verified",
+      url: "https://www.beatport.com/track/pluto/19385810",
+      value: "https://www.beatport.com/track/pluto/19385810",
+      verification: {
+        at: "2026-07-30T00:00:00.000Z",
+        // The stamp is the moment the link was WRITTEN, never an attempt time.
+        atMeaning: "verified",
+        // Hardcoded rather than stored: this leg cannot match any other way.
+        method: "isrc",
+        source: null,
+      },
+    });
+  });
+
+  it("reports a concluded Beatport miss with its real tally, promising nothing", async () => {
+    // `terminal: null` and `retry: "single-shot"` TOGETHER are the honest shape while no re-check
+    // cadence is ruled: the receipt states the attempt and stops. `terminal: false` would promise a
+    // re-check nothing schedules; `terminal: true` would claim a verdict nobody reached.
+    await insertTrack("bp-miss", {
+      beatportAttemptedAt: "2026-07-30T00:00:00.000Z",
+      beatportAttempts: 2,
+      isrc: "GBABC1234567",
+    });
+
+    expect((await only({ idOrLogId: "bp-miss", kind: "idOrLogId" })).links.beatport).toEqual({
+      attempts: 2,
+      cap: null,
+      lastAttemptedAt: "2026-07-30T00:00:00.000Z",
+      retry: "single-shot",
+      state: "absent",
+      terminal: null,
+    });
+  });
+
+  it("says nobody has looked at Beatport before the sweep has run", async () => {
+    await insertTrack("bp-none");
+
+    expect((await only({ idOrLogId: "bp-none", kind: "idOrLogId" })).links.beatport).toEqual({
+      state: "unattempted",
+    });
+  });
+
+  it("shows the page and the API the same Beatport answer", async () => {
+    // Beatport's terms bar MINING its content, which this envelope honours by keeping only a URL —
+    // that is a different constraint from Apple's redistribution clause, so no audience gate
+    // belongs here and one creeping in would silently under-serve the API.
+    await insertTrack("bp-both", {
+      beatportUrl: "https://www.beatport.com/track/pluto/19385810",
+      isrc: "CA5KR2489434",
+    });
+
+    const key = { idOrLogId: "bp-both", kind: "idOrLogId" } as const;
+
+    expect((await readIdentity(key))?.recordings[0]?.links.beatport).toEqual(
+      (await readIdentity(key, "first-party"))?.recordings[0]?.links.beatport,
     );
   });
 

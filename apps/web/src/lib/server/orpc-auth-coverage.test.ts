@@ -234,6 +234,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // internal + reversible metadata enrichment (no publish), so the box's agent-token
   // `fluncle-artist-backfill` cron drives it without an operator token.
   backfill_artists: "admin",
+  // The Beatport store-link backfill — agent tier (adminAuth only): internal + reversible
+  // metadata enrichment (resolve each finding's Beatport URL by exact ISRC equality, no publish,
+  // no certification), so the box's agent-token cron drives it, the `backfill_apple_music`
+  // precedent.
+  backfill_beatport: "admin",
   // The owned-cover-master sweep (RFC U3b) — agent tier (adminAuth only): it resolves an
   // album's/artist's OWN ≤1200² cover into R2, publishes nothing, the `backfill_label_images`
   // precedent.

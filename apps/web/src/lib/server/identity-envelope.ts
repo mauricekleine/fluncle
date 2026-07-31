@@ -189,6 +189,7 @@ export type IdentityRecording = {
   identifiers: { isrc: IdentityState; mbRecordingId: IdentityState };
   links: {
     appleMusic: IdentityState;
+    beatport: IdentityState;
     deezer: IdentityState;
     discogs: IdentityState;
     spotify: IdentityState;
@@ -216,6 +217,8 @@ const IDENTITY_SELECT = `t.track_id, t.title, t.artists_json, t.duration_ms,
     t.backfill_apple_music_done_at,
     t.in_release_id, t.backfill_discogs_attempted_at, t.backfill_discogs_attempts,
     t.backfill_discogs_done_at,
+    t.beatport_url, t.beatport_verified_at, t.backfill_beatport_attempted_at,
+    t.backfill_beatport_attempts,
     t.deezer_track_id, t.deezer_verified_at, t.deezer_verified_by,
     t.dismissed_at, t.duplicate_of_track_id,
     f.log_id as log_id, (f.track_id is not null) as has_finding`;
@@ -228,9 +231,13 @@ type IdentityRow = {
   backfill_apple_music_attempted_at: null | string;
   backfill_apple_music_attempts: null | number;
   backfill_apple_music_done_at: null | string;
+  backfill_beatport_attempted_at: null | string;
+  backfill_beatport_attempts: null | number;
   backfill_discogs_attempted_at: null | string;
   backfill_discogs_attempts: null | number;
   backfill_discogs_done_at: null | string;
+  beatport_url: null | string;
+  beatport_verified_at: null | string;
   deezer_track_id: null | string;
   deezer_verified_at: null | string;
   deezer_verified_by: null | string;
@@ -492,6 +499,54 @@ function deezerState(row: IdentityRow): IdentityState {
 }
 
 /**
+ * THE BEATPORT ANSWER, off the store link Fluncle keeps for a recording (`tracks.beatport_url`).
+ *
+ * THE ONE PLACE THIS LINK IS ALLOWED TO SURFACE. `beatport_url` is a terminal artifact under
+ * Beatport's terms (the §F rail on the column in db/schema.ts): this function and the /identity page
+ * are its whole readership. It reaches no feed, no JSON-LD `sameAs`, no index, no embedding.
+ *
+ * THREE STATES, each backed by a real column:
+ *   · a held URL → `verified`, `method: "isrc"` HARDCODED rather than stored. Exact ISRC equality is
+ *     the only gate this leg has or could have — there is no looser rung to distinguish it from — so
+ *     a `beatport_verified_by` column would be one value repeated forever. `atMeaning: "verified"`,
+ *     because the stamp beside it is the moment the link was WRITTEN.
+ *   · no URL but an attempt on file → `absent`, carrying the real monotone `attempts` tally (this one
+ *     may print: unlike Spotify's, it is a count of looks, not a spend budget to be decremented).
+ *     `retry: "single-shot"` and `terminal: null` together are the honest shape: no re-check policy
+ *     is ruled for this leg yet, so the receipt reads "Not found · checked <date>" and promises
+ *     nothing. `terminal: null` is "we do not know whether we will look again", never a claim that
+ *     we will not — and when a re-check cadence is ruled, this becomes `recheckable` with no other
+ *     change needed here.
+ *   · neither → `unattempted`. Nobody has gone looking, which is exactly true of every finding until
+ *     the sweep first runs.
+ *
+ * SERVED TO BOTH AUDIENCES. The Apple gate exists because Apple's licence bars passing its links to
+ * machine callers; Beatport's terms bar MINING its content, which is a different constraint and one
+ * this envelope already honours by keeping only a URL. So the page and the API answer identically
+ * and this function takes no audience.
+ */
+function beatportState(row: IdentityRow): IdentityState {
+  const url = row.beatport_url?.trim();
+
+  if (url) {
+    return verified("isrc", row.beatport_verified_at, "verified", { url, value: url });
+  }
+
+  if (row.backfill_beatport_attempted_at) {
+    return {
+      attempts: row.backfill_beatport_attempts ?? 0,
+      cap: null,
+      lastAttemptedAt: row.backfill_beatport_attempted_at,
+      retry: "single-shot",
+      state: "absent",
+      terminal: null,
+    };
+  }
+
+  return { state: "unattempted" };
+}
+
+/**
  * THE APPLE MUSIC ANSWER, computed in full off its real columns and then gated for a MACHINE caller
  * by {@link APPLE_LINKS_MACHINE_SERVED}. A `first-party` read (the `/identity` page) gets the real
  * state, because rendering an Apple link on Fluncle's own page is what `/log` has always done and is
@@ -570,6 +625,7 @@ function toRecording(
     identifiers: { isrc: isrcState(row), mbRecordingId: musicbrainzState(row) },
     links: {
       appleMusic: appleMusicState(row, audience),
+      beatport: beatportState(row),
       deezer: deezerState(row),
       discogs: discogsState(row),
       spotify: spotifyState(row),

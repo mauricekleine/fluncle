@@ -19,10 +19,14 @@
 //
 // ── THE COVERAGE SET ──────────────────────────────────────────────────────────────────────────
 // The page renders rows ONLY for what the archive covers: ISRC, MusicBrainz, Spotify, Apple Music,
-// Deezer, Discogs. Tidal is absent by design — a "not covered" row is the API contract leaking into
-// a human surface, and it reads as a roadmap promise. The API still answers all five platforms
-// explicitly, `unsupported` included, because a machine needs the field to exist; the SCOPE of what
-// Fluncle covers is stated once in `/docs/identity` rather than once per recording.
+// Deezer, Discogs, Beatport. Tidal is absent by design — a "not covered" row is the API contract
+// leaking into a human surface, and it reads as a roadmap promise. The API still answers all six
+// platforms explicitly, `unsupported` included, because a machine needs the field to exist; the
+// SCOPE of what Fluncle covers is stated once in `/docs/identity` rather than once per recording.
+//
+// Beatport sits LAST among the links, after Discogs, because it is the only one that opens a
+// checkout — the ways to hear or look up the recording come first, and the shop is where you go once
+// you have decided you want it.
 //
 // ── THE UNLIT RULE (DESIGN.md) ────────────────────────────────────────────────────────────────
 // A recording Fluncle has certified reads LIT: cream ink and its coordinate, linking home to its
@@ -53,12 +57,20 @@ const LINK_ROWS = [
   { key: "appleMusic", label: "Apple Music" },
   { key: "deezer", label: "Deezer" },
   { key: "discogs", label: "Discogs" },
+  { key: "beatport", label: "Beatport" },
 ] as const;
 
 /** The literal label on the link a `verified` state carries. "Listen on Spotify" is the ratified
- *  string for that action across the app (VOICE.md's Chrome Rule: one action, one label). */
+ *  string for that action across the app (VOICE.md's Chrome Rule: one action, one label).
+ *
+ *  Beatport reads "Buy" rather than "Listen" because it is a STORE, not a player — the label names
+ *  what the link actually does, and promising a listen where a reader gets a checkout is the small
+ *  dishonesty this whole page exists to avoid. It is a different action from the admin-side
+ *  "Search on Beatport", which opens a search rather than one record, so the Chrome Rule is
+ *  satisfied by both: one action, one label. */
 const OPEN_LABEL: Record<string, string> = {
   "Apple Music": "Listen on Apple Music",
+  Beatport: "Buy on Beatport",
   Deezer: "Listen on Deezer",
   Discogs: "Open on Discogs",
   MusicBrainz: "Open on MusicBrainz",

@@ -501,6 +501,43 @@ export async function backfillAppleMusicCommand(
   );
 }
 
+export type BeatportBackfillResult = {
+  configured: boolean;
+  dryRun: boolean;
+  // Findings whose resolve errored (a scrape failure/timeout) — nothing was learned, so they back
+  // off and are retried. Distinct from `unresolved`, which is a concluded no-match.
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  nextCursor: null | string;
+  resolved: Array<{ logId: string; url: string }>;
+  resolvedCount: number;
+  skipped: string[];
+  skippedCount: number;
+  // Findings Beatport ran a search for and does not carry (a clean no-match).
+  unresolved: string[];
+  unresolvedCount: number;
+};
+
+// One bounded pass of the Beatport store-link backfill. The Worker holds the Firecrawl key, scrapes
+// Beatport's public search (no Beatport API key is used), and keeps a link ONLY where a result's
+// ISRC exactly equals the finding's. A safe no-op until FIRECRAWL_API_KEY is provisioned. Pass the
+// prior pass's `nextCursor` to resume; the CLI loops until it comes back null.
+export async function backfillBeatportCommand(
+  limit: number,
+  dryRun: boolean,
+  cursor?: string,
+): Promise<BeatportBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  return adminApiPost<BeatportBackfillResult>(
+    `/api/v1/admin/backfill/beatport?${params.toString()}`,
+  );
+}
+
 export type AppleCatalogueBackfillResult = {
   albumFactsWritten: number;
   // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent budget).

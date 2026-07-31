@@ -5,6 +5,12 @@
     // and Prettier genuinely disagree on these files. Kept HERE rather than .prettierignore
     // so the exemption stays formatting-only: .prettierignore doubles as oxlint's ignore
     // path, and parking this glob there silently exempted Raycast from LINTING too.
-    "apps/raycast/src/**"
+    "apps/raycast/src/**",
+    // Captured vendor pages kept as test fixtures. These are VERBATIM records of what a third
+    // party actually served (trimmed for size, never reshaped), and their exact markup is the
+    // thing under test — the parsers that read them exist precisely because that markup can
+    // change. Reformatting them would rewrite the evidence and could quietly move an attribute
+    // the parser matches on. Formatting-only, so they are still linted and still committed.
+    "apps/web/src/lib/server/__fixtures__/**/*.html"
   ]
 }

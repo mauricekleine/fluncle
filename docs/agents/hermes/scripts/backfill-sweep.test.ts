@@ -32,7 +32,7 @@ import { join } from "node:path";
 // startup does not reach the child — an env-var switch silently reads as unset.
 //
 // fluncleJson always appends --json as the last arg.
-function stubSource(callsFile: string, modeFile: string): string {
+function stubSource(callsFile: string, modeFile: string, beatportModeFile: string): string {
   return `#!/bin/bash
 case "$1" in
   ok-json) printf '{"ok":true,"lovedCount":2,"failedCount":0}\\n' ;;
@@ -55,6 +55,15 @@ case "$1" in
           *) printf '{"ok":true,"configured":true,"resolvedCount":9,"unresolvedCount":10,"failedCount":11,"albumFactsWritten":12,"rateLimited":true,"breakerTripped":true}\\n' ;;
         esac
         ;;
+      beatport)
+        mode="ok"
+        if [ -f ${JSON.stringify(beatportModeFile)} ]; then mode="$(cat ${JSON.stringify(beatportModeFile)})"; fi
+        case "$mode" in
+          unconfigured) printf '{"ok":true,"configured":false,"resolvedCount":0,"unresolvedCount":0,"failedCount":0,"skippedCount":0}\\n' ;;
+          crash) printf 'beatport boom\\n' >&2; exit 1 ;;
+          *) printf '{"ok":true,"configured":true,"resolvedCount":13,"unresolvedCount":14,"failedCount":15,"skippedCount":16}\\n' ;;
+        esac
+        ;;
     esac
     ;;
 esac
@@ -67,13 +76,15 @@ let backfillSweepExitCode: (summary: { ok: boolean }) => 0 | 1;
 let stubDir: string;
 let callsFile: string;
 let modeFile: string;
+let beatportModeFile: string;
 
 beforeAll(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "fluncle-stub-"));
   const stub = join(stubDir, "fluncle");
   callsFile = join(stubDir, "calls.log");
   modeFile = join(stubDir, "catalogue-mode");
-  writeFileSync(stub, stubSource(callsFile, modeFile));
+  beatportModeFile = join(stubDir, "beatport-mode");
+  writeFileSync(stub, stubSource(callsFile, modeFile, beatportModeFile));
   chmodSync(stub, 0o755);
   process.env.FLUNCLE_BIN = stub;
   ({ backfillSweepExitCode, fluncleJson, runBackfillSweep } =
@@ -87,6 +98,7 @@ beforeAll(async () => {
 afterEach(() => {
   rmSync(callsFile, { force: true });
   rmSync(modeFile, { force: true });
+  rmSync(beatportModeFile, { force: true });
 });
 
 afterAll(() => {
@@ -142,7 +154,7 @@ describe("the tick's legs", () => {
 
     const sources = recordedCalls().map((call) => call.split(" ")[2]);
 
-    expect(sources).toEqual(["discogs", "lastfm", "apple-music", "apple-catalogue"]);
+    expect(sources).toEqual(["discogs", "lastfm", "apple-music", "apple-catalogue", "beatport"]);
   });
 
   test("the catalogue leg asks for one server pass — --limit 100, the server's own ceiling", () => {
@@ -226,5 +238,56 @@ describe("the tick's legs", () => {
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
     expect(summary.ok).toBe(false);
     expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
+  });
+
+  test("the Beatport leg asks for the smallest batch in the sweep — one rendered scrape each", () => {
+    runBackfillSweep();
+
+    const beatport = recordedCalls().find((call) => call.includes("beatport"));
+
+    expect(beatport).toBe("admin backfills beatport --limit 10 --json");
+  });
+
+  test("the Beatport counts land in the summary under their own key", () => {
+    const summary = runBackfillSweep();
+
+    expect(summary.beatport).toEqual({
+      configured: true,
+      error: null,
+      failed: 15,
+      resolved: 13,
+      skipped: 16,
+      unresolved: 14,
+    });
+  });
+
+  test("an unconfigured Beatport leg is a recorded no-op, not a failed tick", () => {
+    writeFileSync(beatportModeFile, "unconfigured");
+
+    const summary = runBackfillSweep();
+
+    expect(summary.beatport).toEqual({
+      configured: false,
+      error: null,
+      failed: 0,
+      resolved: 0,
+      skipped: 0,
+      unresolved: 0,
+    });
+    expect(summary.ok).toBe(true);
+  });
+
+  test("a Beatport leg that crashes records its error and leaves every earlier leg intact", () => {
+    // The containment that matters: Beatport is the newest and slowest leg, and it reaches a
+    // Cloudflare-walled site through a third party. It must never be able to cost the sweep the
+    // four legs that ran before it.
+    writeFileSync(beatportModeFile, "crash");
+
+    const summary = runBackfillSweep();
+
+    expect((summary.beatport as { error: null | string }).error).toContain("beatport boom");
+    expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
+    expect((summary["apple-catalogue"] as { resolved: number }).resolved).toBe(9);
+    expect((summary.discogs as { resolved: number }).resolved).toBe(1);
   });
 });

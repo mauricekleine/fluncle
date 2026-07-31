@@ -101,6 +101,7 @@ const IdentityRecordingSchema = z.object({
   identifiers: z.object({ isrc: IdentityStateSchema, mbRecordingId: IdentityStateSchema }),
   links: z.object({
     appleMusic: IdentityStateSchema,
+    beatport: IdentityStateSchema,
     deezer: IdentityStateSchema,
     discogs: IdentityStateSchema,
     spotify: IdentityStateSchema,

@@ -17,6 +17,7 @@ import { env } from "cloudflare:workers";
 import {
   backfillAppleMusicCatalogue,
   backfillAppleMusicUrls,
+  backfillBeatportUrls,
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
@@ -132,6 +133,38 @@ export function adminBackfillsHandlers(os: Implementer) {
         throw apiFault(error);
       }
     });
+
+  // POST /admin/backfill/beatport — agent tier (`adminAuth`): resolves each finding's Beatport
+  // store URL by exact ISRC equality against Beatport's public search results and stores it (no
+  // publish, no certification), so the box's agent-token cron drives it. Keyless: no Beatport API
+  // key is used or wanted. A NO-OP until FIRECRAWL_API_KEY is provisioned (configured:false).
+  const backfillBeatportHandler = os.backfill_beatport.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const { query } = input;
+      const result = await backfillBeatportUrls(
+        parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+        parseBool(query.dryRun),
+        query.cursor ?? undefined,
+      );
+
+      return {
+        configured: result.configured,
+        dryRun: result.dryRun,
+        failed: result.failed,
+        failedCount: result.failedCount,
+        nextCursor: result.nextCursor,
+        ok: true as const,
+        resolved: result.resolved,
+        resolvedCount: result.resolvedCount,
+        skipped: result.skipped,
+        skippedCount: result.skippedCount,
+        unresolved: result.unresolved,
+        unresolvedCount: result.unresolvedCount,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
 
   // POST /admin/backfill/apple-catalogue — agent tier (`adminAuth`): the catalogue sibling of
   // `backfill_apple_music`. Batched URL drain over uncertified rows + single-ISRC album facts.
@@ -416,6 +449,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_apple_music: backfillAppleMusicHandler,
     backfill_artist_credits: backfillArtistCreditsHandler,
     backfill_artist_edges: backfillArtistEdgesHandler,
+    backfill_beatport: backfillBeatportHandler,
     backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_label_images: backfillLabelImagesHandler,

@@ -281,6 +281,77 @@ export const backfillAppleCatalogue = oc
     }),
   );
 
+/** A resolved Beatport row (`{ logId, url }`). */
+const BeatportResolvedSchema = z
+  .object({
+    logId: z.string(),
+    url: z.string(),
+  })
+  .meta({ id: "BeatportResolved" });
+
+/** A failed Beatport row (`{ error, logId }`). */
+const BeatportFailedSchema = z
+  .object({
+    error: z.string(),
+    logId: z.string(),
+  })
+  .meta({ id: "BeatportFailed" });
+
+/**
+ * `backfill_beatport` → `POST /admin/backfill/beatport` (operationId `backfillBeatport`).
+ *
+ * Agent tier (`adminAuth`) — the STORE leg of the identity answer. One bounded, reliability-gated
+ * pass over published findings carrying an ISRC but no Beatport link: a keyless scrape of
+ * Beatport's public search (through Firecrawl, since the site is Cloudflare-walled) whose results
+ * embed their own ISRCs, and the link is kept ONLY on exact ISRC equality with the one Fluncle
+ * already holds. Never a title guess, so a wrong link cannot render.
+ *
+ * NO BEATPORT API KEY IS USED, and the ecosystem's borrowed-embed-`client_id` workaround is
+ * forbidden outright — see lib/server/beatport-resolve.ts. A NO-OP until `FIRECRAWL_API_KEY` is
+ * provisioned (`configured: false`), stamping nothing so the archive stays eligible.
+ *
+ * `unresolved` is a CLEAN no-match (Beatport does not carry the recording — a `tried`, re-checkable
+ * if their catalogue grows); `failed` is a scrape that errored, where nothing was learned. The two
+ * are deliberately separate: writing the first as the second would tell a reader "not on Beatport"
+ * because a request timed out. It writes catalogue identity only (one URL on `tracks`), never a
+ * certification, so it stays agent-allowed.
+ */
+export const backfillBeatport = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillBeatport",
+    path: "/admin/backfill/beatport",
+    summary: "Back-fill Beatport URLs over published findings by exact ISRC",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        cursor: z.string().optional(),
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      configured: z.boolean(),
+      dryRun: z.boolean(),
+      failed: z.array(BeatportFailedSchema),
+      failedCount: z.number(),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      resolved: z.array(BeatportResolvedSchema),
+      resolvedCount: z.number(),
+      skipped: z.array(z.string()),
+      skippedCount: z.number(),
+      // Findings Beatport ran a search for and does not carry (a clean no-match).
+      unresolved: z.array(z.string()),
+      unresolvedCount: z.number(),
+    }),
+  );
+
 /**
  * `backfill_label_releases` → `POST /admin/backfill/label-releases` (operationId
  * `backfillLabelReleases`).
@@ -747,6 +818,7 @@ export const adminBackfillsContract = {
   backfill_apple_music: backfillAppleMusic,
   backfill_artist_credits: backfillArtistCredits,
   backfill_artist_edges: backfillArtistEdges,
+  backfill_beatport: backfillBeatport,
   backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,
   backfill_label_images: backfillLabelImages,

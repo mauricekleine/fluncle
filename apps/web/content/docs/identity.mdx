@@ -21,11 +21,13 @@ One key, one page: `https://www.fluncle.com/identity/<key>`.
 
 ## What is covered
 
-Six rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and four links out, **Spotify**, **Apple Music**, **Deezer**, and **Discogs**. Apple Music is page-only, for the licence reason below.
+Seven rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and five links out, **Spotify**, **Apple Music**, **Deezer**, **Discogs**, and **Beatport**. Apple Music is page-only, for the licence reason below.
 
 **Tidal is not covered.** There is no Tidal integration here at all, so it gets no row on the page. The API still answers Tidal explicitly, `unsupported`, so a machine caller reads the scope from the response instead of guessing at it.
 
 **Deezer is covered, but thinly.** Fluncle keeps a Deezer link only when another look at that recording already brought one back and it matches the recording he holds. Everything he logged before this reads `Not checked yet`, and stays that way until he looks at that recording again.
+
+**Beatport is where you buy it.** Spotify, Apple Music, and Deezer play you the tune, Discogs tells you what the release is, and Beatport sells you the download, so that row reads `Buy on Beatport`. Fluncle searches the store for a recording he has certified and keeps the link only when the record's own ISRC matches the one he already holds, so a near-miss with the right title never gets through. He has only run that search over his own findings so far, so a recording he holds but has not certified reads `Not checked yet`.
 
 ## The five answers
 

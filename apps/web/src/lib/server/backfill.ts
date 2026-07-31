@@ -38,6 +38,7 @@ import {
   recordAppleAuthOutcome,
   recordAppleCall,
 } from "./apple-breaker";
+import { resolveBeatportUrl } from "./beatport-resolve";
 import { getDb, typedRows } from "./db";
 import { type DiscogsThrottleVendor, discogsResolveRelease } from "./discogs";
 import { lastfmLove } from "./lastfm";
@@ -156,7 +157,7 @@ export type AppleMusicBackfillResult = BackfillPass<{
 // auto-note authoring step (`note_track`, agent tier) can reuse `recordAttempt` for
 // its "ran" stamp and the board can reuse `listBackfillRanForTracks(_, "note")` for
 // the Note cell's done-when-ran semantics, exactly like Discogs/Last.fm.
-export type BackfillSource = "apple_music" | "discogs" | "lastfm" | "note";
+export type BackfillSource = "apple_music" | "beatport" | "discogs" | "lastfm" | "note";
 
 // The per-source reliability state read off a finding's row.
 type ReliabilityState = {
@@ -183,10 +184,12 @@ function columnPrefix(source: BackfillSource): string {
 
 // Which TABLE a source's reliability columns live on. `apple_music` moved to `tracks` (its
 // output `apple_music_url` is catalogue identity and the sweep drains catalogue rows, which
-// have no `findings` row — RFC musickit-second-authority U1); the finding-only sweeps
+// have no `findings` row — RFC musickit-second-authority U1); `beatport` was BORN there for the
+// same reason (`beatport_url` describes the recording, so it is just as true of an uncertified
+// row — only the WORKLIST is certified-only today, not the column); the finding-only sweeps
 // (discogs/lastfm/note) stay on `findings`. A static literal, never interpolated user input.
 function reliabilityTable(source: BackfillSource): "findings" | "tracks" {
-  return source === "apple_music" ? "tracks" : "findings";
+  return source === "apple_music" || source === "beatport" ? "tracks" : "findings";
 }
 
 // Read a finding's per-source reliability state. Rows that predate the columns
@@ -958,6 +961,176 @@ export async function storeAlbumFactsForTrack(
   });
 
   return updated.rowsAffected > 0;
+}
+
+// ── Beatport ────────────────────────────────────────────────────────────────────────────────
+//
+// The store leg of the identity answer: a finding's Beatport BUY link, won by exact ISRC equality
+// through the keyless public-search resolve (lib/server/beatport-resolve.ts, which carries the
+// no-API-key ruling and the §F terms rail).
+//
+// SCOPED TO CERTIFIED FINDINGS, DELIBERATELY. This rides `runPublishedFindingPass` — the public
+// feed — so it sees published findings and is structurally blind to a catalogue track, exactly as
+// the Discogs and Last.fm legs are. That is the ruled scope, not an oversight: the ~85 certified
+// findings are worth one scrape each, and the catalogue tail is a different economic question
+// (docs/planning/ROADMAP.md's identity tail holds the gate). The COLUMN is on `tracks` and would
+// serve a catalogue row unchanged the day that ruling flips; only this worklist would change.
+//
+// NEW FINDINGS RIDE THE SAME SWEEP. A finding published tomorrow enters the feed with null
+// reliability columns, which reads as "never attempted" — so the next tick picks it up with no
+// backfill/steady-state split to maintain.
+//
+// NO SHARED METER. Unlike the two Apple legs, this leg has no cross-cutting call budget to
+// consult: pacing is the Firecrawl account's own limiter plus this pass's small `limit`. One
+// scrape per eligible finding, a handful per tick, and the reliability cooldown keeps a drained
+// archive quiet.
+
+/** The outcome of one bounded Beatport pass. */
+export type BeatportBackfillResult = {
+  configured: boolean;
+  dryRun: boolean;
+  // Findings whose resolve genuinely errored (a scrape failure, a timeout, an unreadable page).
+  // Distinct from `unresolved` — nothing was learned, so these back off and are retried.
+  failed: Array<{ error: string; logId: string }>;
+  failedCount: number;
+  nextCursor: null | string;
+  ok: boolean;
+  resolved: Array<{ logId: string; url: string }>;
+  resolvedCount: number;
+  // Findings the reliability gate skipped this pass (already linked, or cooling down).
+  skipped: string[];
+  skippedCount: number;
+  // Findings Beatport ran a search for and does not carry — a clean no-match, re-checkable.
+  unresolved: string[];
+  unresolvedCount: number;
+};
+
+/**
+ * Write a finding's Beatport URL and its verification stamp in ONE statement, and only onto a row
+ * that does not already carry one.
+ *
+ * FIRST WRITE WINS, enforced by the `beatport_url is null` predicate rather than by the caller
+ * having checked first — so two overlapping passes cannot have the second silently relabel a link
+ * the first already verified, and the stamp can never describe a different URL than the one beside
+ * it. NO `findings.updated_at` BUMP, unlike the Apple write: this link is terminal (§F) and never
+ * reaches /log, its JSON-LD `sameAs`, or any feed, so there is no public lastmod to move.
+ */
+async function setBeatportUrl(trackId: string, url: string): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: [url, new Date().toISOString(), trackId],
+    sql: `update tracks
+      set beatport_url = ?, beatport_verified_at = ?
+      where track_id = ? and beatport_url is null`,
+  });
+}
+
+/**
+ * Back-fill Beatport URLs over published findings that carry an ISRC but no link yet.
+ *
+ * The ledger writes, and the reasoning behind each (the rules at the top of this file):
+ *   - a match          → `done` (url + stamp written, failure streak cleared);
+ *   - a clean no-match → `tried` (attempted + counted, NOT done — Beatport's catalogue grows, and
+ *                         the receipt says "Not found · checked <date>" without promising a
+ *                         re-check, since no re-check policy is ruled yet);
+ *   - a scrape failure → `failure` (the streak scales the cooldown; nothing was concluded);
+ *   - unconfigured     → NOTHING at all, and the pass stops on the first one. Every finding would
+ *                         answer identically, so scanning the archive to no effect is waste, and
+ *                         recording an attempt nobody made would poison the receipt.
+ */
+export async function backfillBeatportUrls(
+  limit: number,
+  dryRun: boolean,
+  startCursor?: string,
+): Promise<BeatportBackfillResult> {
+  const resolved: BeatportBackfillResult["resolved"] = [];
+  const unresolved: string[] = [];
+  const failed: BeatportBackfillResult["failed"] = [];
+  const skipped: string[] = [];
+  const now = Date.now();
+  let configured = true;
+
+  const nextCursor = await runPublishedFindingPass(
+    startCursor,
+    batchLimit(limit),
+    async (track) => {
+      // NOTE THE MISSING CHECK. The Apple leg opens by testing `track.appleMusicUrl` off the feed
+      // item; there is deliberately no `track.beatportUrl` twin, because `beatport_url` is a
+      // terminal artifact (§F) and must never join the public track DTO just to give this sweep a
+      // convenient read. Idempotence rides the reliability ledger instead: a linked row carries
+      // `backfill_beatport_done_at`, which `shouldSkip` already treats as done. The write itself is
+      // guarded a second time by `setBeatportUrl`'s `beatport_url is null` predicate.
+
+      // The gate is exact ISRC equality, so a finding without one has nothing to match on.
+      if (!track.isrc?.trim()) {
+        return false;
+      }
+
+      const logId = track.logId ?? track.trackId;
+      const state = await readReliability(track.trackId, "beatport");
+
+      if (shouldSkip(state, now)) {
+        skipped.push(logId);
+
+        return false;
+      }
+
+      if (dryRun) {
+        // Preview the eligible set without scraping, writing, or recording state.
+        unresolved.push(logId);
+
+        return true;
+      }
+
+      const outcome = await resolveBeatportUrl({
+        artists: track.artists,
+        isrc: track.isrc,
+        title: track.title,
+      });
+
+      if (!outcome.configured) {
+        configured = false;
+
+        return "stop";
+      }
+
+      if (!outcome.ok) {
+        await recordAttempt(track.trackId, "beatport", "failure");
+        failed.push({ error: outcome.error, logId });
+
+        return true;
+      }
+
+      if (!outcome.url) {
+        await recordAttempt(track.trackId, "beatport", "tried");
+        unresolved.push(logId);
+
+        return true;
+      }
+
+      await setBeatportUrl(track.trackId, outcome.url);
+      await recordAttempt(track.trackId, "beatport", "done");
+      resolved.push({ logId, url: outcome.url });
+
+      return true;
+    },
+  );
+
+  return {
+    configured,
+    dryRun,
+    failed,
+    failedCount: failed.length,
+    nextCursor,
+    ok: failed.length === 0,
+    resolved,
+    resolvedCount: resolved.length,
+    skipped,
+    skippedCount: skipped.length,
+    unresolved,
+    unresolvedCount: unresolved.length,
+  };
 }
 
 // ── Apple Music — the CATALOGUE drain (RFC musickit-second-authority, U1) ────────────────────

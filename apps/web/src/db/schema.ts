@@ -173,6 +173,22 @@ export const tracks = sqliteTable(
     backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
     backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
     backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
+    // The Beatport leg's per-ROW reliability state. Same four-column shape and rules as the
+    // `backfill_apple_music_*` set above: *AttemptedAt drives the failure-scaled cooldown,
+    // *Attempts is a monotone tally (the identity envelope PRINTS it, so it must stay honest),
+    // *DoneAt stamps when a candidate's ISRC matched, *Failures is the consecutive-failure streak.
+    //
+    // A CLEAN MISS IS NOT A FAILURE, and the distinction decides what the receipt says. Every
+    // candidate page read to the end without an ISRC equal to this row's is a `tried` — the
+    // search ran, Beatport does not carry this recording, and the row reads "Not found · checked
+    // <date>". A Firecrawl error, a timeout, or an unparseable page is a `failure`: nothing was
+    // learned, so the streak backs the row off instead of recording a conclusion nobody reached.
+    // Unconfigured (no FIRECRAWL_API_KEY) stamps NOTHING at all — the row stays eligible for the
+    // day the key lands, exactly as the Apple leg treats its missing MusicKit secrets.
+    backfillBeatportAttemptedAt: text("backfill_beatport_attempted_at"),
+    backfillBeatportAttempts: integer("backfill_beatport_attempts").notNull().default(0),
+    backfillBeatportDoneAt: text("backfill_beatport_done_at"),
+    backfillBeatportFailures: integer("backfill_beatport_failures").notNull().default(0),
     // The RECORDING-GRAIN Discogs attempt record (RFC dnb-identity-graph, Unit 1 item 2). Same
     // four-column shape and rules as the `backfill_apple_music_*` set above — and it exists for one
     // reason: without it a CATALOGUE row cannot tell `absent` from `unattempted` for Discogs. The
@@ -214,6 +230,37 @@ export const tracks = sqliteTable(
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
     backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
+    // The recording's Beatport track URL — a public BUY link, the store sibling of the Spotify and
+    // Apple listen links. CATALOGUE identity (it describes the recording, not the certification),
+    // so it lives on `tracks` like `apple_music_url` and would be just as true of an uncertified
+    // row — though today only certified findings are ever swept for it (see the tier note in
+    // docs/planning/ROADMAP.md's identity tail).
+    //
+    // HOW IT IS WON, and the gate that makes it safe to render: a keyless two-hop through Firecrawl
+    // (lib/server/beatport-resolve.ts). Beatport's public search answers with candidate track
+    // pages; each candidate page embeds its own track entity in the Next.js page data, ISRC
+    // included; the link is kept ONLY when that ISRC exactly equals the ISRC Fluncle already holds
+    // for the row. There is no title-similarity fallback and no duration-only acceptance, so a
+    // wrong link cannot render — exact-or-nothing, the same bar `apple_music_url` clears. Stored
+    // as the page's OWN `<link rel="canonical">` href rather than built from a slug and an id, so
+    // Beatport stays the authority on its own URL shape. NULL until a candidate's ISRC matches
+    // (or forever, if none ever does — a missing link is honest, a wrong one is not).
+    //
+    // ── §F: A TERMINAL LINK ARTIFACT, AND NOTHING ELSE ────────────────────────────────────────
+    // Beatport's terms prohibit using site content, metadata included, for text/data mining or for
+    // training or feeding AI. This column and its `*_verified_at` stamp are therefore TERMINAL: a
+    // URL Fluncle points a reader at, and a date. They must NEVER enter the FTS5 index, the LLM
+    // search tier, an embedding, or any derived corpus, and nothing but the identity envelope and
+    // the /identity page may read them. The rail is also enforced by what is NOT here: the resolver
+    // reads Beatport's key, BPM, genre, and length off the same page object and deliberately keeps
+    // NONE of them — the ISRC is compared in memory and dropped. Fluncle's own key/BPM come from
+    // his own audio analysis and stay that way. Convenience is not a licence.
+    beatportUrl: text("beatport_url"),
+    // When the Beatport URL beside it was WRITTEN — a verification stamp, not an attempt stamp, and
+    // the identity envelope serves it as `atMeaning: "verified"` on that basis. There is no
+    // `beatport_verified_by` twin: exact ISRC equality is the only method this leg has or can have,
+    // so the envelope hardcodes `method: "isrc"` rather than storing one value forever.
+    beatportVerifiedAt: text("beatport_verified_at"),
     bpm: real("bpm"),
     // The analyzer's confidence in `bpm` (0..1) and where it came from (analysis
     // provenance, RFC bpm-key-accuracy). `bpmSource` is the analyzer's `bpmSource`

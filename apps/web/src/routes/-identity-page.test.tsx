@@ -69,6 +69,7 @@ function recording(overrides: Partial<IdentityRecording> = {}): IdentityRecordin
     },
     links: {
       appleMusic: { state: "unattempted" },
+      beatport: { state: "unattempted" },
       deezer: { state: "unattempted" },
       discogs: { state: "unattempted" },
       spotify: { state: "unattempted" },
@@ -105,6 +106,7 @@ describe("the identity answer", () => {
           certified: true,
           links: {
             appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
             deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: {
@@ -162,11 +164,86 @@ describe("the identity answer", () => {
 
     expect(html).not.toContain("Tidal");
     expect(html).not.toContain("Not covered");
-    // The six rows that ARE the coverage set. Deezer earns its row off a real column
-    // (`tracks.deezer_track_id`), so it renders its honest state like every other one.
-    for (const label of ["ISRC", "MusicBrainz", "Spotify", "Apple Music", "Deezer", "Discogs"]) {
+    // The seven rows that ARE the coverage set. Deezer and Beatport each earn a row off a real
+    // column (`tracks.deezer_track_id`, `tracks.beatport_url`), so they render their honest state
+    // like every other one.
+    for (const label of [
+      "ISRC",
+      "MusicBrainz",
+      "Spotify",
+      "Apple Music",
+      "Deezer",
+      "Discogs",
+      "Beatport",
+    ]) {
       expect(html).toContain(`<dt>${label}</dt>`);
     }
+  });
+
+  it("carries a held Beatport link out as a BUY, never a listen", async () => {
+    // Beatport is a store. Labelling its link the way the players are labelled would promise a
+    // reader a play and hand them a checkout — a small lie, on the one page whose entire job is not
+    // telling them.
+    const html = await renderPage(
+      found([
+        recording({
+          links: {
+            appleMusic: { state: "unattempted" },
+            beatport: {
+              state: "verified",
+              url: "https://www.beatport.com/track/pluto/19385810",
+              value: "https://www.beatport.com/track/pluto/19385810",
+              verification: {
+                at: "2026-07-30T00:00:00.000Z",
+                atMeaning: "verified",
+                method: "isrc",
+                source: null,
+              },
+            },
+            deezer: { state: "unattempted" },
+            discogs: { state: "unattempted" },
+            spotify: { state: "unattempted" },
+            tidal: { state: "unsupported" },
+          },
+        }),
+      ]),
+    );
+
+    expect(html).toContain('href="https://www.beatport.com/track/pluto/19385810"');
+    expect(html).toContain("Buy on Beatport");
+    expect(html).not.toContain("Listen on Beatport");
+    // The only method this leg has, said plainly, with the write's own date beside it.
+    expect(html).toContain("matched by ISRC · confirmed Jul 30, 2026");
+  });
+
+  it("says a Beatport miss without promising another look", async () => {
+    // No re-check cadence is ruled for this leg, so the receipt states the attempt and stops. A
+    // "will be checked again" here would be an invented promise.
+    const html = await renderPage(
+      found([
+        recording({
+          links: {
+            appleMusic: { state: "unattempted" },
+            beatport: {
+              attempts: 1,
+              cap: null,
+              lastAttemptedAt: "2026-07-30T00:00:00.000Z",
+              retry: "single-shot",
+              state: "absent",
+              terminal: null,
+            },
+            deezer: { state: "unattempted" },
+            discogs: { state: "unattempted" },
+            spotify: { state: "unattempted" },
+            tidal: { state: "unsupported" },
+          },
+        }),
+      ]),
+    );
+
+    expect(html).toContain("Not found · checked Jul 30, 2026");
+    expect(html).not.toContain("will be checked again");
+    expect(html).not.toContain("retired");
   });
 
   it("carries a held Deezer link out, with the rung that won it", async () => {
@@ -177,6 +254,7 @@ describe("the identity answer", () => {
         recording({
           links: {
             appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
             deezer: {
               state: "verified",
               url: "https://www.deezer.com/track/3135556",
@@ -223,6 +301,7 @@ describe("the identity answer", () => {
           },
           links: {
             appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
             deezer: { state: "unattempted" },
             discogs: {
               attempts: 2,
@@ -260,6 +339,7 @@ describe("the identity answer", () => {
         recording({
           links: {
             appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
             deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: {
@@ -305,6 +385,7 @@ describe("the identity answer", () => {
           },
           links: {
             appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
             deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: {
@@ -354,6 +435,7 @@ describe("the identity answer", () => {
           },
           links: {
             appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
             deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: { reason: "credit-not-an-identity", state: "refused" },
@@ -389,6 +471,7 @@ describe("the identity answer", () => {
                 source: null,
               },
             },
+            beatport: { state: "unattempted" },
             deezer: { state: "unattempted" },
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },

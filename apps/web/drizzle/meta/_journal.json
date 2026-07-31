@@ -981,6 +981,13 @@
       "when": 1785440611041,
       "tag": "0139_modern_power_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "6",
+      "when": 1785470013605,
+      "tag": "0140_red_radioactive_man",
+      "breakpoints": true
     }
   ]
 }

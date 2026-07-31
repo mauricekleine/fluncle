@@ -2643,6 +2643,20 @@ function addAdminCommands(program: Command): void {
       await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
     });
 
+  // `backfill_beatport` → `admin backfills beatport`. Resolves each finding's Beatport store URL
+  // by exact ISRC equality against Beatport's public search. Keyless — no Beatport API key is used.
+  // A no-op until the Worker's Firecrawl key is provisioned.
+  backfill
+    .command("beatport")
+    .description("Resolve missing Beatport URLs for published findings (exact ISRC match)")
+    .option("--dry-run", "Report the eligible set without resolving or writing", false)
+    .option("--limit <limit>", "Max findings to resolve", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillBeatportCommand } = await import("./commands/admin-tracks");
+      await runBackfillBeatport(options, backfillBeatportCommand);
+    });
+
   // The freshness tap (D8) has NO operator CLI command, deliberately. Its box sweep POSTs the
   // agent-tier `backfill_label_releases` op over HTTP rather than shelling out here, because the
   // baked box CLI is a PINNED release and a pin predating a flag fails the run outright (`Unknown
@@ -3962,6 +3976,95 @@ async function runBackfillAppleMusic(
   const verb = dryRun ? "Would resolve" : "Resolved";
   console.log(
     `${verb} ${resolved.length} Apple Music URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${skipped.length} skipped; ${albumFactsWritten} album facts.`,
+  );
+
+  for (const item of resolved) {
+    console.log(`  ${item.logId}: ${item.url}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.logId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function runBackfillBeatport(
+  options: BackfillSyncOptions,
+  backfillBeatportCommand: typeof import("./commands/admin-tracks").backfillBeatportCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: Array<{ logId: string; url: string }> = [];
+  const unresolved: string[] = [];
+  const failed: Array<{ error: string; logId: string }> = [];
+  const skipped: string[] = [];
+  let cursor: string | undefined;
+  let dryRun = options.dryRun;
+  let configured = true;
+
+  // The cap is on findings actually HANDLED (resolved + unresolved + failed); skips don't count, so
+  // the loop keeps draining cursors past cooling-down/done findings until the cap is met or the
+  // archive is exhausted (nextCursor null).
+  while (resolved.length + unresolved.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + unresolved.length + failed.length);
+    const result = await backfillBeatportCommand(remaining, options.dryRun, cursor);
+    dryRun = result.dryRun;
+    configured = result.configured;
+    resolved.push(...result.resolved);
+    unresolved.push(...result.unresolved);
+    failed.push(...result.failed);
+    skipped.push(...result.skipped);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} unresolved; ${result.failedCount} failed; ${result.skippedCount} skipped`,
+      );
+    }
+
+    if (!result.configured) {
+      // The Worker's Firecrawl key is unset — the leg is a no-op. Stop looping; the server already
+      // stopped the pass without recording anything.
+      break;
+    }
+
+    if (result.nextCursor === null) {
+      break;
+    }
+
+    cursor = result.nextCursor;
+  }
+
+  if (options.json) {
+    printSweepJson(
+      {
+        configured,
+        dryRun,
+        failed,
+        resolved,
+        resolvedCount: resolved.length,
+        skipped,
+        skippedCount: skipped.length,
+        unresolved,
+        unresolvedCount: unresolved.length,
+      },
+      failed.length,
+    );
+    return;
+  }
+
+  if (!configured) {
+    console.log(
+      "Beatport backfill is not configured (the Worker's Firecrawl key is unset) — nothing resolved.",
+    );
+    return;
+  }
+
+  const verb = dryRun ? "Would resolve" : "Resolved";
+  console.log(
+    `${verb} ${resolved.length} Beatport URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${skipped.length} skipped.`,
   );
 
   for (const item of resolved) {
