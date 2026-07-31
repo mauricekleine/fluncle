@@ -25,8 +25,8 @@ const RESPONSE: RecordSocialMetricsResponse = {
   ok: true,
   polled: 25,
   referrals: { total: 137 },
-  tiktok: { inserted: 3, matched: 4 },
-  youtube: { inserted: 6, matched: 8 },
+  tiktok: { fetched: 5, inserted: 3, matched: 4 },
+  youtube: { fetched: 8, inserted: 6, matched: 8 },
 };
 
 function deps(overrides: Partial<SocialMetricsDeps> = {}): SocialMetricsDeps {
@@ -44,15 +44,50 @@ describe("runSocialMetricsTick", () => {
     expect(summary.ok).toBe(true);
     expect(summary.day).toBe("2026-07-20");
     expect(summary.configured).toBe(true);
+    expect(summary.checked).toBe(38);
+    expect(summary.produced).toBe(31);
+    expect(summary.errors).toBe(0);
+    expect(summary.eligible).toBe(40);
+    expect(summary.failed).toBe(1);
     expect(summary.inserted).toBe(22);
     expect(summary.polled).toBe(25);
     expect(summary.missing).toBe(2);
     expect(summary.referralArrivals).toBe(137);
+    expect(summary.tiktokFetched).toBe(5);
     expect(summary.tiktokInserted).toBe(3);
     expect(summary.tiktokMatched).toBe(4);
+    expect(summary.youtubeFetched).toBe(8);
     expect(summary.youtubeInserted).toBe(6);
     expect(summary.youtubeMatched).toBe(8);
     expect(summary.error).toBeNull();
+    // `eligible - polled` is a recurring rotation pool, not a drain backlog: same-day re-runs can
+    // revisit it, and the independent TikTok/YouTube arms have no common outstanding-work total.
+    expect("queueDepth" in summary).toBe(false);
+    expect("queue_depth" in summary).toBe(false);
+    expect("expectedIntervalMs" in summary).toBe(false);
+    expect("expected_interval_ms" in summary).toBe(false);
+  });
+
+  test("preserves measured zero work as checked:0 rather than null or absence", async () => {
+    const summary = await runSocialMetricsTick(
+      deps({
+        record: () =>
+          Promise.resolve({
+            failed: 0,
+            inserted: 0,
+            missing: 0,
+            ok: true,
+            polled: 0,
+            tiktok: { fetched: 0, inserted: 0 },
+            youtube: { fetched: 0, inserted: 0 },
+          }),
+      }),
+    );
+
+    expect(summary.checked).toBe(0);
+    expect(summary.produced).toBe(0);
+    expect(summary.failed).toBe(0);
+    expect(summary.errors).toBe(0);
   });
 
   test("reports ok:false (never throws) when the op response is not ok", async () => {
@@ -62,6 +97,9 @@ describe("runSocialMetricsTick", () => {
 
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("did not return ok");
+    expect(summary.errors).toBe(1);
+    expect(summary.checked).toBeNull();
+    expect(summary.produced).toBeNull();
     expect(summary.inserted).toBeNull();
   });
 
@@ -72,6 +110,9 @@ describe("runSocialMetricsTick", () => {
 
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("metrics 500");
+    expect(summary.errors).toBe(1);
+    expect(summary.checked).toBeNull();
+    expect(summary.produced).toBeNull();
     expect(summary.inserted).toBeNull();
   });
 
@@ -84,8 +125,10 @@ describe("runSocialMetricsTick", () => {
     expect(summary.day).toBe("2026-07-20");
     expect(summary.inserted).toBeNull();
     expect(summary.referralArrivals).toBeNull();
+    expect(summary.tiktokFetched).toBeNull();
     expect(summary.tiktokInserted).toBeNull();
     expect(summary.tiktokMatched).toBeNull();
+    expect(summary.youtubeFetched).toBeNull();
     expect(summary.youtubeInserted).toBeNull();
     expect(summary.youtubeMatched).toBeNull();
   });

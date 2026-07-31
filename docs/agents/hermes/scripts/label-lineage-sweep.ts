@@ -98,14 +98,17 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
   );
 }
 
-// Main — ONE bounded batch. Deliberately not a loop: the `labels` worklist is the worklist and the
-// timer is the loop. A tick that finds every label already walked/attempted is a cheap no-op.
-export function main(): void {
+// Runner — ONE bounded batch. Deliberately not a loop: the `labels` worklist is the worklist and
+// the timer is the loop. A tick that finds every label already walked/attempted is a cheap no-op.
+export function runLabelLineageSweep() {
   const summary = {
+    checked: null as number | null,
     error: null as string | null,
+    errors: 0,
     failed: 0,
     none: 0,
     ok: true,
+    produced: null as number | null,
     resolved: 0,
     throttled: false,
     unmatchedParents: 0,
@@ -125,15 +128,26 @@ export function main(): void {
     summary.failed = pass.failedCount ?? 0;
     summary.unmatchedParents = pass.unmatchedParents ?? 0;
     summary.throttled = pass.rateLimited ?? false;
+    // Every returned outcome is a label the Worker actually inspected. `none` is a successful,
+    // terminal action too: the row is durably stamped so the sweep will not retry it forever.
+    summary.checked = summary.resolved + summary.none + summary.failed;
+    summary.produced = summary.resolved + summary.none;
 
     if (summary.throttled) {
       log("MusicBrainz throttled the pass — stopped clean; the next tick resumes.");
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`label-lineage fill pass failed: ${summary.error}`);
   }
+
+  return summary;
+}
+
+export function main(): void {
+  const summary = runLabelLineageSweep();
 
   console.log(JSON.stringify(summary));
 

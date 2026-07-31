@@ -103,11 +103,40 @@ describe("label-images-sweep's fluncleJson", () => {
     const summary = runLabelImagesSweep();
 
     expect(summary).toMatchObject({
+      checked: 3,
+      errors: 0,
       failed: 1,
       none: 1,
       ok: false,
+      produced: 2,
       resolved: 1,
       throttled: false,
+    });
+  });
+
+  test("emits canonical counters and omits queue depth because the bounded pass has no backlog count", () => {
+    mode("ok");
+
+    const summary = runLabelImagesSweep();
+
+    expect(summary).toMatchObject({ checked: 3, errors: 0, produced: 3 });
+    // The response only carries this bounded pass's outcomes. Its limit is not a remaining
+    // backlog, and the sweep must not add a count call merely to manufacture queue_depth.
+    expect(summary).not.toHaveProperty("queue_depth");
+    expect(summary).not.toHaveProperty("expected_interval_ms");
+  });
+
+  test("a command failure reports one run error without guessing work counters", () => {
+    mode("cli-error");
+
+    const summary = runLabelImagesSweep();
+
+    expect(summary).toMatchObject({
+      checked: null,
+      errors: 1,
+      failed: 0,
+      ok: false,
+      produced: null,
     });
   });
 

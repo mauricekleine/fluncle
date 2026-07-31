@@ -78,7 +78,15 @@ describe("runLabelReleasesTick", () => {
     expect(summary.passes).toBe(3);
     expect(summary.labelsProbed).toBe(10); // two working passes x 5
     expect(summary.newRows).toBe(2);
+    expect(summary.checked).toBe(10);
+    expect(summary.produced).toBe(10);
+    expect(summary.errors).toBe(0);
     expect(summary.skippedUngrounded).toBe(2);
+    // Each pass is bounded and exposes no total due-label count, so its limit is not backlog.
+    expect("queueDepth" in summary).toBe(false);
+    expect("queue_depth" in summary).toBe(false);
+    expect("expectedIntervalMs" in summary).toBe(false);
+    expect("expected_interval_ms" in summary).toBe(false);
     // It stopped at the drained pass — it did not keep asking.
     expect(script.calls()).toBe(3);
   });
@@ -159,6 +167,28 @@ describe("runLabelReleasesTick", () => {
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("worker 502");
     expect(summary.passes).toBe(0);
+    expect(summary.checked).toBeNull();
+    expect(summary.produced).toBeNull();
+    expect(summary.errors).toBe(1);
+  });
+
+  test("preserves completed label units when a later pass fails the run", async () => {
+    let calls = 0;
+    const summary = await runLabelReleasesTick(
+      5,
+      deps({
+        runPass: () => {
+          calls += 1;
+
+          return calls === 1 ? Promise.resolve(PASS) : Promise.reject(new Error("worker 502"));
+        },
+      }),
+    );
+
+    expect(summary.checked).toBe(5);
+    expect(summary.produced).toBe(5);
+    expect(summary.newRows).toBe(1);
+    expect(summary.errors).toBe(1);
   });
 
   test("counts the labels that hit a transient Spotify error on their search", async () => {
@@ -169,6 +199,10 @@ describe("runLabelReleasesTick", () => {
     const summary = await runLabelReleasesTick(5, deps({ runPass: script.runPass }));
 
     expect(summary.failedLabels).toBe(2);
+    expect(summary.failed).toBe(2);
+    expect(summary.checked).toBe(7);
+    expect(summary.produced).toBe(5);
+    expect(summary.errors).toBe(0);
     expect(summary.ok).toBe(true); // a per-label miss never fails the tick
   });
 

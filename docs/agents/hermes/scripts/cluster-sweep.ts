@@ -80,6 +80,14 @@ const CLUSTER_SCRIPT =
 
 const log = (message: string) => console.error(`[cluster-sweep] ${message}`);
 
+// The entrypoint catch sits outside `main`, so retain only the canonical counters it can report
+// losslessly if a fatal exception interrupts the run after the corpus read or some assignment
+// writes. Null means the failure happened before that measurement existed.
+const fatalCounters: { checked: null | number; produced: null | number } = {
+  checked: null,
+  produced: null,
+};
+
 // ---------------------------------------------------------------------------
 // Types — only the fields we consume from each surface.
 // ---------------------------------------------------------------------------
@@ -539,19 +547,27 @@ async function main(): Promise<void> {
   const started = Date.now();
   const mode = parseMode(process.argv.slice(2));
 
+  fatalCounters.checked = null;
+  fatalCounters.produced = null;
+
   const map = readMap();
   const corpus = readCorpus();
+  fatalCounters.checked = corpus.length;
+  fatalCounters.produced = 0;
   let active: Galaxy[] = map
     .filter((g) => g.retiredAt === null)
     .map((g) => ({ centroid: g.centroid, id: g.id }));
 
   const summary: Record<string, unknown> = {
     activeBefore: active.length,
+    checked: corpus.length,
     corpus: corpus.length,
     emptied: 0,
+    errors: 0,
     minted: 0,
     mode,
     ok: true,
+    produced: 0,
     reassigned: 0,
     retired: 0,
     splits: 0,
@@ -565,7 +581,7 @@ async function main(): Promise<void> {
   // ── operator act: cold start (map must be empty) ──────────────────────────
   if (mode === "cold-start") {
     if (active.length > 0) {
-      console.log(JSON.stringify({ ...summary, ok: false, reason: "map_not_empty" }));
+      console.log(JSON.stringify({ ...summary, errors: 1, ok: false, reason: "map_not_empty" }));
       process.exitCode = 1;
       return;
     }
@@ -654,6 +670,8 @@ async function main(): Promise<void> {
       "--galaxy-id",
       assignment.galaxyId,
     ]);
+    summary.produced = (summary.produced as number) + 1;
+    fatalCounters.produced = (fatalCounters.produced ?? 0) + 1;
   }
 
   summary.reassigned = changed.length;
@@ -702,7 +720,15 @@ if (import.meta.main) {
     console.error(
       `[cluster-sweep] fatal: ${error instanceof Error ? error.message : String(error)}`,
     );
-    console.log(JSON.stringify({ ok: false, reason: "fatal" }));
+    console.log(
+      JSON.stringify({
+        checked: fatalCounters.checked,
+        errors: 1,
+        ok: false,
+        produced: fatalCounters.produced,
+        reason: "fatal",
+      }),
+    );
     process.exitCode = 1;
   });
 }

@@ -135,12 +135,15 @@ export type DemandDeps = {
 export function runDemand(deps: DemandDeps): { ok: boolean } & Record<string, unknown> {
   const summary = {
     attempts: 0,
+    checked: null as null | number,
     configured: null as boolean | null,
     demandedArtists: 0,
     demandedLabels: 0,
     error: null as null | string,
+    errors: 0,
     frontierPromoted: 0,
     ok: true,
+    produced: null as null | number,
     tracksScored: 0,
   };
 
@@ -156,7 +159,13 @@ export function runDemand(deps: DemandDeps): { ok: boolean } & Record<string, un
       summary.demandedLabels = tick.demandedLabels ?? 0;
       summary.tracksScored = tick.tracksScored ?? 0;
       summary.frontierPromoted = tick.frontierPromoted ?? 0;
+      // The Simple Analytics page rows are the source units inspected. Resolved artist/label
+      // entity pages are the subset successfully acted on; track/frontier counts stay as domain
+      // fan-out counters rather than mixing downstream rows into the canonical numerator.
+      summary.checked = tick.pagesRead ?? 0;
+      summary.produced = summary.demandedArtists + summary.demandedLabels;
       summary.error = null;
+      summary.errors = 0;
       summary.ok = true;
 
       if (summary.configured === false) {
@@ -172,6 +181,7 @@ export function runDemand(deps: DemandDeps): { ok: boolean } & Record<string, un
         deps.log(`demand tick failed (${summary.error}) — retrying once`);
         deps.sleep(RETRY_DELAY_MS);
       } else {
+        summary.errors = 1;
         deps.log(`demand sweep failed after retry: ${summary.error}`);
       }
     }

@@ -58,6 +58,9 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
     expect(summary.demandedLabels).toBe(2);
     expect(summary.tracksScored).toBe(41);
     expect(summary.frontierPromoted).toBe(7);
+    expect(summary.checked).toBe(120);
+    expect(summary.produced).toBe(5);
+    expect(summary.errors).toBe(0);
   });
 
   test("an unprovisioned Worker (configured:false) is an honest, successful no-op", () => {
@@ -79,6 +82,10 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
     expect(summary.ok).toBe(true); // a missing SA key is not a fault
     expect(summary.configured).toBe(false);
     expect(summary.tracksScored).toBe(0);
+    // This is a measured empty analytics read: numeric zero, never null or an absent field.
+    expect(summary.checked).toBe(0);
+    expect(summary.produced).toBe(0);
+    expect(summary.errors).toBe(0);
   });
 
   test("a transient fault is retried ONCE, and the retry's success wins", () => {
@@ -100,6 +107,7 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
     expect(summary.ok).toBe(true);
     expect(summary.error).toBeNull();
     expect(summary.tracksScored).toBe(41);
+    expect(summary).toMatchObject({ checked: 120, errors: 0, produced: 5 });
   });
 
   test("a persistent fault fails honestly after the single retry (never a loop)", () => {
@@ -114,6 +122,16 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
     expect(calls).toBe(2); // exactly two attempts — one retry, then stop
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("worker down");
+    expect(summary).toMatchObject({ checked: null, errors: 1, produced: null });
+  });
+
+  test("omits queue depth because demand is a full nightly rewrite, not a backlog walk", () => {
+    const summary = runDemand(deps(() => CONFIGURED));
+
+    // Neither the trigger nor its response carries outstanding demand work. `pagesRead` is the
+    // measured input, not a remaining queue, and the sweep must not add a count call.
+    expect(summary).not.toHaveProperty("queue_depth");
+    expect(summary).not.toHaveProperty("expected_interval_ms");
   });
 });
 

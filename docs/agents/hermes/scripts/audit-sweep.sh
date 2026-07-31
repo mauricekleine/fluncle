@@ -69,14 +69,14 @@ run_audit() {
   fi
   local prompt_file="${AUDIT_DIR}/prompts/${DOMAIN}.md"
   if [ -z "${DOMAIN}" ] || [ ! -r "${prompt_file}" ]; then
-    echo "{\"ok\":false,\"stage\":\"domain\",\"domain\":\"${DOMAIN}\",\"error\":\"no prompt for domain\"}"
+    echo "{\"ok\":false,\"stage\":\"domain\",\"domain\":\"${DOMAIN}\",\"error\":\"no prompt for domain\",\"checked\":0,\"errors\":1,\"produced\":0}"
     return 1
   fi
   log "domain=${DOMAIN} dry_run=${DRY_RUN}"
 
   # 2. Auth for git + gh (both off GH_TOKEN; no token written to disk).
   if [ -z "${FLUNCLE_AUDIT_GITHUB_PAT:-}" ]; then
-    echo "{\"ok\":false,\"stage\":\"auth\",\"domain\":\"${DOMAIN}\",\"error\":\"no FLUNCLE_AUDIT_GITHUB_PAT\"}"
+    echo "{\"ok\":false,\"stage\":\"auth\",\"domain\":\"${DOMAIN}\",\"error\":\"no FLUNCLE_AUDIT_GITHUB_PAT\",\"checked\":0,\"errors\":1,\"produced\":0}"
     return 1
   fi
   export GH_TOKEN="${FLUNCLE_AUDIT_GITHUB_PAT}"
@@ -86,9 +86,9 @@ run_audit() {
     log "cloning ${repo} → ${ws}"
     mkdir -p "$(dirname -- "${ws}")"
     git clone --quiet "https://github.com/${repo}.git" "${ws}" || {
-      echo "{\"ok\":false,\"stage\":\"clone\",\"domain\":\"${DOMAIN}\"}"; return 1; }
+      echo "{\"ok\":false,\"stage\":\"clone\",\"domain\":\"${DOMAIN}\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
   fi
-  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\",\"domain\":\"${DOMAIN}\"}"; return 1; }
+  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\",\"domain\":\"${DOMAIN}\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
 
   # Bot identity + creds, scoped to this workspace. It has no 1Password signing key, so commits
   # are unsigned (a machine identity); scoped to this throwaway checkout, never global.
@@ -100,7 +100,7 @@ run_audit() {
   # this, that stray 100644→100755 mode flip lands in `git add -A` and pollutes every audit PR.
   git config core.fileMode false
 
-  git fetch --quiet origin main || { echo "{\"ok\":false,\"stage\":\"fetch\",\"domain\":\"${DOMAIN}\"}"; return 1; }
+  git fetch --quiet origin main || { echo "{\"ok\":false,\"stage\":\"fetch\",\"domain\":\"${DOMAIN}\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
   git reset --hard --quiet origin/main
   git clean -fdq                       # drop stray untracked; keeps ignored node_modules + .audit-parent
   rm -rf .audit && mkdir -p .audit
@@ -171,34 +171,40 @@ $(cat "${prompt_file}")"
   agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN \
     --scrub GOOGLE_APPLICATION_CREDENTIALS
   log "invoking claude -p (opus) for ${DOMAIN}…"
+  local run_errors=0
   FLUNCLE_UNATTENDED=1 env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} "$(command -v claude)" -p "${prompt}" \
     --model opus \
     --dangerously-skip-permissions \
-    >&2 || log "claude -p returned nonzero"
+    >&2 || { log "claude -p returned nonzero"; run_errors=1; }
 
   # 9. Report the outcome as the marker's JSON summary line.
   local changed pr_url
   changed="$(git status --porcelain | wc -l | tr -d ' ')"
   if [ "${DRY_RUN}" = "1" ]; then
+    local dry_produced=0
+    [ "${changed:-0}" = "0" ] || [ "${run_errors}" != "0" ] || dry_produced=1
     log "DRY RUN complete — ${changed} changed path(s) left in ${ws} for inspection"
     [ -r .audit/report.md ] && { log "── report ──"; cat .audit/report.md >&2; }
-    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"dry-run\",\"changed\":${changed:-0}}"
+    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"dry-run\",\"changed\":${changed:-0},\"checked\":1,\"errors\":${run_errors},\"produced\":${dry_produced}}"
     return 0
   fi
 
   pr_url="$(gh pr list --head "${branch}" --json url --jq '.[0].url // empty' 2>/dev/null || true)"
   if [ -n "${pr_url}" ]; then
-    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\"}"
+    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}"
     return 0
   fi
   # No PR. Either a clean night (no local commits ahead) or the agent failed to ship.
   if [ "$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)" = "0" ]; then
-    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"clean\"}"
+    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"clean\",\"checked\":1,\"errors\":${run_errors},\"produced\":0}"
     return 0
   fi
-  echo "{\"ok\":false,\"domain\":\"${DOMAIN}\",\"action\":\"ship-failed\",\"error\":\"commits exist but no PR was opened\"}"
+  echo "{\"ok\":false,\"domain\":\"${DOMAIN}\",\"action\":\"ship-failed\",\"error\":\"commits exist but no PR was opened\",\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}"
   return 1
 }
+
+# Deliberately no queue_depth: one rotating domain is inspected per tick, and this driver does
+# not enumerate a whole outstanding audit backlog from which a real remaining count could be made.
 
 # Host timers bypass the gateway's stdout capture, so self-report the /status marker
 # (cron-output.sh) — WRAP the payload so the marker is written even on a nonzero run.

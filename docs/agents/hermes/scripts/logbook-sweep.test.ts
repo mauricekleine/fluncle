@@ -11,6 +11,7 @@
 // in apps/web/src/lib/server/logbook.server.test.ts).
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,14 @@ writeFileSync(
   FLUNCLE_STUB,
   `#!/usr/bin/env bash
 set -euo pipefail
+if [ "\${1:-}" = "admin" ] && [ "\${2:-}" = "logbook" ] && [ "\${3:-}" = "gaps" ]; then
+  if [ "$(cat "${CONTROL}/queue-mode" 2>/dev/null || printf 'empty')" = "work" ]; then
+    printf '{"gaps":[{"date":"2026-07-05","findings":[{"artists":["Future Signal"],"logId":"036.7.2I","posterUrl":"x","title":"Fractals"}],"sector":36}],"spent":[]}'
+  else
+    printf '{"gaps":[],"spent":[]}'
+  fi
+  exit 0
+fi
 verdict="$(cat "${CONTROL}/verdict" 2>/dev/null || printf 'pass')"
 if [ "$verdict" = "infra403" ]; then
   printf 'error: request failed with 403 forbidden\\n' >&2
@@ -182,6 +191,38 @@ describe("readEchoedMove", () => {
     const message = "body_echoes_logbook: it reuses 42% of sector 12's words";
 
     expect(readEchoedMove(message)).toBeUndefined();
+  });
+});
+
+describe("run-ledger summary counters", () => {
+  test("the real tick counts one attempted day and one authored entry", () => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    writeFileSync(join(CONTROL, "queue-mode"), "work", "utf8");
+    verdict("pass");
+    claudeVerdict("up");
+
+    const result = spawnSync(process.execPath, [join(import.meta.dir, "logbook-sweep.ts")], {
+      encoding: "utf8",
+      env: { ...process.env, FLUNCLE_API_TOKEN: "" },
+    });
+    const summary = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+
+    expect(result.status).toBe(0);
+    expect(summary).toMatchObject({
+      authored: 1,
+      checked: 1,
+      errors: 0,
+      failed: 0,
+      gapsRemaining: 0,
+      produced: 1,
+    });
+    // The gaps endpoint is read with `--limit 10`; that page length is not the total backlog.
+    expect("queueDepth" in summary).toBe(false);
+    expect("queue_depth" in summary).toBe(false);
+    expect("expectedIntervalMs" in summary).toBe(false);
+    expect("expected_interval_ms" in summary).toBe(false);
   });
 });
 

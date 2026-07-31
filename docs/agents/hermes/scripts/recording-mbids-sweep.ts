@@ -117,19 +117,22 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 }
 
 // ---------------------------------------------------------------------------
-// Main — ONE bounded batch. Deliberately not a loop: the `tracks` worklist is the worklist and the
-// timer is the loop. A tick that finds every track already filled/attempted is a cheap no-op.
+// Runner — ONE bounded batch. Deliberately not a loop: the `tracks` worklist is the worklist and
+// the timer is the loop. A tick that finds every track already filled/attempted is a cheap no-op.
 // ---------------------------------------------------------------------------
 
-export function main(): void {
+export function runRecordingMbidsSweep() {
   const summary = {
+    checked: null as number | null,
     error: null as string | null,
+    errors: 0,
     failed: 0,
     // ISRCs MusicBrainz has no recording for — attempt-stamped, a clean terminal outcome.
     missed: 0,
     ok: true,
     // Crawler-history rows filled from their PK (the free strip).
     prefixStripped: 0,
+    produced: null as number | null,
     resolved: 0,
     throttled: false,
   };
@@ -148,15 +151,26 @@ export function main(): void {
     summary.missed = pass.missedCount ?? 0;
     summary.failed = pass.failedCount ?? 0;
     summary.throttled = pass.rateLimited ?? false;
+    // Prefix strips, MusicBrainz hits, and attempt-stamped misses are all durably handled tracks.
+    // Per-row failures were inspected but remain unproduced for a later retry.
+    summary.checked = summary.prefixStripped + summary.resolved + summary.missed + summary.failed;
+    summary.produced = summary.prefixStripped + summary.resolved + summary.missed;
 
     if (summary.throttled) {
       log("MusicBrainz throttled the pass — stopped clean; the next tick resumes.");
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`recording-MBID fill pass failed: ${summary.error}`);
   }
+
+  return summary;
+}
+
+export function main(): void {
+  const summary = runRecordingMbidsSweep();
 
   console.log(JSON.stringify(summary));
 

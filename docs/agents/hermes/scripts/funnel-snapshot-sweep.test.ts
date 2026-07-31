@@ -11,6 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type FunnelSnapshotDeps,
+  missingApiTokenSummary,
   type RecordSnapshotResponse,
   runFunnelSnapshotTick,
 } from "./funnel-snapshot-sweep";
@@ -34,6 +35,16 @@ function deps(overrides: Partial<FunnelSnapshotDeps> = {}): FunnelSnapshotDeps {
 }
 
 describe("runFunnelSnapshotTick", () => {
+  test("a pre-work credential gate reports unknown work, distinct from a measured zero", () => {
+    expect(missingApiTokenSummary()).toEqual({
+      checked: null,
+      errors: 1,
+      ok: false,
+      produced: null,
+      reason: "missing_api_token",
+    });
+  });
+
   test("maps a good snapshot response to an ok summary with the headline counts", async () => {
     const summary = await runFunnelSnapshotTick(deps());
 
@@ -43,6 +54,7 @@ describe("runFunnelSnapshotTick", () => {
     expect(summary.certified).toBe(42);
     expect(summary.recEligible).toBe(360);
     expect(summary.error).toBeNull();
+    expect(summary).toMatchObject({ checked: 1, errors: 0, produced: 1 });
   });
 
   test("reports ok:false (never throws) when the op response carries no snapshot", async () => {
@@ -53,6 +65,7 @@ describe("runFunnelSnapshotTick", () => {
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("did not return a snapshot");
     expect(summary.day).toBeNull();
+    expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0 });
   });
 
   test("reports ok:false with the error message when the record call throws", async () => {
@@ -63,6 +76,7 @@ describe("runFunnelSnapshotTick", () => {
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("snapshot 500");
     expect(summary.crawled).toBeNull();
+    expect(summary).toMatchObject({ checked: null, errors: 1, produced: null });
   });
 
   test("tolerates a snapshot missing a headline field — that field is null, the tick still ok", async () => {
@@ -74,5 +88,14 @@ describe("runFunnelSnapshotTick", () => {
     expect(summary.day).toBe("2026-07-18");
     expect(summary.crawled).toBeNull();
     expect(summary.certified).toBeNull();
+  });
+
+  test("omits queue depth because this periodic snapshot has no outstanding snapshot backlog", async () => {
+    const summary = await runFunnelSnapshotTick(deps());
+
+    // Funnel stage/queue totals are facts being snapshotted, not work remaining for this daily
+    // idempotent trigger. The response has no backlog of snapshot writes to report.
+    expect(summary).not.toHaveProperty("queue_depth");
+    expect(summary).not.toHaveProperty("expected_interval_ms");
   });
 });

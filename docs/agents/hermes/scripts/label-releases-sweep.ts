@@ -98,9 +98,15 @@ export type LabelReleasesSummary = {
   albumsSeen: number;
   /** True when the tick ended standing down for the shared Spotify budget (not a fault). */
   budgetPaused: boolean;
+  /** Enabled seed labels whose searches were attempted across every completed pass. */
+  checked: null | number;
   /** False when the Spotify grant is gone — nothing ran; the operator must reconnect Spotify. */
   configured: boolean;
   error: null | string;
+  /** Run-level failure count. Per-label misses remain in `failedLabels`. */
+  errors: number;
+  /** Individual label searches that failed while the bounded pass continued. */
+  failed: number;
   /** Seed labels that hit a transient Spotify error on their search (backed off, re-probed later). */
   failedLabels: number;
   /** Enabled seed labels probed across every pass this tick. */
@@ -109,6 +115,8 @@ export type LabelReleasesSummary = {
   ok: boolean;
   /** Bounded passes driven this tick. */
   passes: number;
+  /** Enabled seed labels successfully probed this tick; `newRows` is their fan-out. */
+  produced: null | number;
   /** True when the tick stopped on a Spotify 429 (the backstop beneath the meter). */
   rateLimited: boolean;
   skippedKnown: number;
@@ -151,13 +159,17 @@ export async function runLabelReleasesTick(
     albumsMatched: 0,
     albumsSeen: 0,
     budgetPaused: false,
+    checked: null,
     configured: true,
     error: null,
+    errors: 0,
+    failed: 0,
     failedLabels: 0,
     labelsProbed: 0,
     newRows: 0,
     ok: true,
     passes: 0,
+    produced: null,
     rateLimited: false,
     skippedKnown: 0,
     skippedUndated: 0,
@@ -176,18 +188,22 @@ export async function runLabelReleasesTick(
       // resumes from exactly where this one stopped. Nothing is lost by giving up here.
       summary.ok = false;
       summary.error = error instanceof Error ? error.message : String(error);
+      summary.errors = 1;
 
       return summary;
     }
 
     summary.passes += 1;
     summary.labelsProbed += result.labelsProbed;
+    summary.checked = (summary.checked ?? 0) + result.labelsProbed + result.failedLabels.length;
     summary.albumsSeen += result.albumsSeen;
     summary.albumsMatched += result.albumsMatched;
     summary.newRows += result.newRows;
+    summary.produced = (summary.produced ?? 0) + result.labelsProbed;
     summary.skippedKnown += result.skippedKnown;
     summary.skippedUndated += result.skippedUndated;
     summary.skippedUngrounded += result.skippedUngrounded;
+    summary.failed += result.failedLabels.length;
     summary.failedLabels += result.failedLabels.length;
 
     if (!result.configured) {
@@ -285,7 +301,15 @@ async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "missing_api_token",
+      }),
+    );
     process.exit(1);
   }
 
@@ -307,7 +331,16 @@ if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`label-releases-sweep failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "label_releases_failed" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        error: message,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "label_releases_failed",
+      }),
+    );
     process.exit(1);
   });
 }

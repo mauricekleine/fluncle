@@ -172,6 +172,36 @@ export function logbookKey(gap: Gap): string | null {
   return typeof gap.sector === "number" ? String(gap.sector) : null;
 }
 
+/** One tick's domain detail plus the run-ledger counters shared by every final summary path. */
+export type LogbookSummary = {
+  alreadyAuthored: number;
+  authored: number;
+  checked: number;
+  echoSkipped: number;
+  errors: number;
+  exhausted: number;
+  failed: number;
+  gapsRemaining: number;
+  gateSkipped: number;
+  produced: number;
+};
+
+/** The gap read is capped, so `gapsRemaining` stays domain evidence and is never queue depth. */
+export function createLogbookSummary(gapsRemaining: number): LogbookSummary {
+  return {
+    alreadyAuthored: 0,
+    authored: 0,
+    checked: 0,
+    echoSkipped: 0,
+    errors: 0,
+    exhausted: 0,
+    failed: 0,
+    gapsRemaining,
+    gateSkipped: 0,
+    produced: 0,
+  };
+}
+
 /** The budget's read/write handle for one tick. */
 type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
@@ -888,19 +918,7 @@ async function main(): Promise<void> {
   // list the author writes against and the Worker's rails enforce. Empty on a fresh logbook.
   const spent = response.spent ?? [];
 
-  const summary = {
-    alreadyAuthored: 0,
-    authored: 0,
-    // The entry echoed the logbook twice over and was left a gap — the anti-sameness rail
-    // firing. The day stays in the gap list for a later, colder pass.
-    echoSkipped: 0,
-    // Days that have spent all `MAX_LOGBOOK_ATTEMPTS` refused passes and will never be authored for
-    // again. They stay gaps, and never carry copy the gate refused.
-    exhausted: 0,
-    failed: 0,
-    gapsRemaining: gaps.length,
-    gateSkipped: 0,
-  };
+  const summary = createLogbookSummary(gaps.length);
 
   if (gaps.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
@@ -934,11 +952,16 @@ async function main(): Promise<void> {
   }
 
   for (const gap of work) {
+    // Exhausted rows were filtered without a call. A checked row is one this tick actually
+    // attempted, regardless of whether it authored, was refused, or failed as an item.
+    summary.checked += 1;
+
     try {
       const outcome = await authorOne(gap, spent, budget);
 
       if (outcome === "authored") {
         summary.authored += 1;
+        summary.produced += 1;
       } else if (outcome === "alreadyAuthored") {
         summary.alreadyAuthored += 1;
       } else if (outcome === "echoSkipped") {
@@ -952,6 +975,7 @@ async function main(): Promise<void> {
       }
     } catch (error) {
       if (error instanceof ClaudeAuthError) {
+        summary.errors = 1;
         log("claude auth failed — aborting the batch, the gap list is untouched");
         pingClaudeAuthFailure(error.message);
         console.log(JSON.stringify({ ok: false, reason: "claude_auth", ...summary }));
@@ -982,7 +1006,15 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "sweep_error",
+      }),
+    );
     process.exit(1);
   });
 }

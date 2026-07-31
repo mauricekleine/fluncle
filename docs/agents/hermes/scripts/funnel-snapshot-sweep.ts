@@ -48,10 +48,13 @@ export type RecordSnapshotResponse = { ok?: boolean; snapshot?: SnapshotRow };
 /** One tick's honest summary — the JSON line the /status prober reads. */
 export type FunnelSnapshotSummary = {
   certified: null | number;
+  checked: null | number;
   crawled: null | number;
   day: null | string;
   error: null | string;
+  errors: number;
   ok: boolean;
+  produced: null | number;
   recEligible: null | number;
 };
 
@@ -68,10 +71,13 @@ export async function runFunnelSnapshotTick(
 ): Promise<FunnelSnapshotSummary> {
   const summary: FunnelSnapshotSummary = {
     certified: null,
+    checked: null,
     crawled: null,
     day: null,
     error: null,
+    errors: 0,
     ok: true,
+    produced: null,
     recEligible: null,
   };
 
@@ -80,18 +86,30 @@ export async function runFunnelSnapshotTick(
     const snapshot = response.snapshot;
 
     if (response.ok !== true || !snapshot) {
+      // The one scheduled snapshot operation returned, so it was checked, but no persisted
+      // snapshot was proven.
+      summary.checked = 1;
+      summary.errors = 1;
       summary.ok = false;
+      summary.produced = 0;
       summary.error = "record_catalogue_snapshot did not return a snapshot";
 
       return summary;
     }
 
+    summary.checked = 1;
+    summary.produced = 1;
     summary.day = snapshot.day ?? null;
     summary.crawled = typeof snapshot.crawled === "number" ? snapshot.crawled : null;
     summary.certified = typeof snapshot.certified === "number" ? snapshot.certified : null;
     summary.recEligible = typeof snapshot.recEligible === "number" ? snapshot.recEligible : null;
   } catch (error) {
+    // With no response, the driver cannot know whether the Worker looked at or persisted the
+    // snapshot. Null preserves that uncertainty instead of laundering it into a measured zero.
+    summary.checked = null;
+    summary.errors = 1;
     summary.ok = false;
+    summary.produced = null;
     summary.error = error instanceof Error ? error.message : String(error);
     deps.log(`snapshot failed: ${summary.error}`);
   }
@@ -123,11 +141,22 @@ async function recordSnapshot(): Promise<RecordSnapshotResponse> {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
+/** A pre-work credential gate made no work measurement; null distinguishes it from a real no-op. */
+export function missingApiTokenSummary() {
+  return {
+    checked: null,
+    errors: 1,
+    ok: false,
+    produced: null,
+    reason: "missing_api_token",
+  } as const;
+}
+
 async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(JSON.stringify(missingApiTokenSummary()));
     process.exit(1);
   }
 
@@ -144,7 +173,16 @@ if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`funnel-snapshot-sweep failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "funnel_snapshot_failed" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        error: message,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "funnel_snapshot_failed",
+      }),
+    );
     process.exit(1);
   });
 }
