@@ -20,6 +20,7 @@ import { EntityRow } from "@/components/entity-row";
 import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { archiveCopy, archiveView } from "@/lib/archive-state";
 import { openExternalUrl } from "@/lib/open-external-url";
+import { type ReplicaFinding, useReplicaFindings } from "@/lib/replica";
 import { type SavedFinding } from "@/lib/saved-store";
 import { useSavedFindings } from "@/lib/saved";
 import { partitionEntities, partitionTracks, searchView } from "@/lib/search-state";
@@ -104,6 +105,13 @@ export default function ArchiveScreen() {
 
   const view = archiveView({ count: shown.length, isError, isPaused, isPending });
 
+  // The offline browse (offline-first slice 2). When the feed has nothing AND the device is
+  // off the map, the archive reads the local replica instead of stopping at the offline line.
+  // It is LAYERED: a build without the libSQL engine, a device that has never pulled, or a
+  // dark token endpoint all answer an empty list, and the shipped offline state stands
+  // exactly as it was written. Online behaviour is untouched — the read only runs here.
+  const replica = useReplicaFindings(view === "offline");
+
   return (
     <View style={{ flex: 1 }}>
       <CosmosBackdrop />
@@ -149,7 +157,15 @@ export default function ArchiveScreen() {
         ) : browse.kind === "saved" ? (
           <SavedList list={saved.list} ready={saved.ready} renderItem={renderSaved} />
         ) : view === "offline" ? (
-          <ArchiveOffline />
+          !replica.ready ? (
+            // The local read has not answered yet. Skeletons rather than the offline line, so
+            // a device that HAS a replica never flashes "off the map" on its way to the list.
+            <LoadingRows count={7} />
+          ) : replica.findings.length > 0 ? (
+            <ReplicaList findings={replica.findings} onOpen={(id) => router.push(`/log/${id}`)} />
+          ) : (
+            <ArchiveOffline />
+          )
         ) : view === "loading" ? (
           <LoadingRows count={7} />
         ) : view === "error" ? (
@@ -336,6 +352,45 @@ function SavedList({
           Nothing saved yet. Tap the bookmark on a finding to keep it here.
         </Text>
       }
+    />
+  );
+}
+
+// The offline browse list (offline-first slice 2): findings read straight off the device's
+// local replica of the anchored catalogue cut, newest first, in the same row idiom the Saved
+// view uses. It renders ONLY when the device is offline and the feed came back empty, so it
+// never competes with the live list — and it introduces no state of its own: an empty replica
+// falls through to the shipped offline line above.
+//
+// A replica row carries no galaxy name (the cut has no such column), and the meta line drops
+// empty fields — so the row is quieter offline rather than inventing anything.
+function ReplicaList({
+  findings,
+  onOpen,
+}: {
+  findings: ReplicaFinding[];
+  onOpen: (logId: string) => void;
+}) {
+  return (
+    <FlatList
+      data={findings}
+      keyExtractor={(finding) => finding.logId}
+      renderItem={({ index, item }) => (
+        <ArchiveRow
+          accessibilityLabel={`Open the log page for ${item.artists.join(", ")} — ${item.title}`}
+          albumImageUrl={item.albumImageUrl}
+          artists={item.artists}
+          bpm={item.bpm}
+          certified
+          isLast={index === findings.length - 1}
+          logId={item.logId}
+          musicalKey={item.key}
+          onPress={() => onOpen(item.logId)}
+          title={item.title}
+        />
+      )}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={styles.listContent}
     />
   );
 }

@@ -20,7 +20,14 @@ const link = new OpenAPILink(contract, {
   url: `${API_BASE}/api/v1`,
 });
 
-const client: JsonifiedClient<ContractRouterClient<typeof contract>> = createORPCClient(link);
+/**
+ * The raw typed client. Everything the UI reads goes through `orpc` below instead — a query
+ * belongs in the cache. This is exported for the one caller that is not a query and must not
+ * become one: the replica's credential fetch (@/lib/replica), which runs outside React on a
+ * background schedule and owns its own cache with its own expiry rules.
+ */
+export const apiClient: JsonifiedClient<ContractRouterClient<typeof contract>> =
+  createORPCClient(link);
 
 /** Typed TanStack Query utilities (the contract is flat: `orpc.list_findings.infiniteOptions(...)`, …). */
-export const orpc = createTanstackQueryUtils(client);
+export const orpc = createTanstackQueryUtils(apiClient);
