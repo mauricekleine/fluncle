@@ -18,6 +18,7 @@ import {
   backfillAppleMusicCatalogue,
   backfillAppleMusicUrls,
   backfillBeatportUrls,
+  backfillDeezer,
   backfillDiscogsFacts,
   backfillDiscogsIds,
   backfillLastfmLoves,
@@ -181,6 +182,12 @@ export function adminBackfillsHandlers(os: Implementer) {
       );
 
       return {
+        catalogueFailed: result.catalogueFailed,
+        catalogueFailedCount: result.catalogueFailedCount,
+        catalogueResolved: result.catalogueResolved,
+        catalogueResolvedCount: result.catalogueResolvedCount,
+        catalogueUnresolved: result.catalogueUnresolved,
+        catalogueUnresolvedCount: result.catalogueUnresolvedCount,
         configured: result.configured,
         dryRun: result.dryRun,
         failed: result.failed,
@@ -193,6 +200,37 @@ export function adminBackfillsHandlers(os: Implementer) {
         skippedCount: result.skippedCount,
         unresolved: result.unresolved,
         unresolvedCount: result.unresolvedCount,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  // POST /admin/backfill/deezer — agent tier (`adminAuth`): the FORWARD-ACCRETION Deezer leg.
+  // Resolves a row's Deezer track id EXACTLY by ISRC through the keyless public endpoint, gated on
+  // duration agreement, over certified rows first and then the Ear-ranked catalogue. Catalogue
+  // identity only (one id + provenance on `tracks`, no publish, no certification), so the box's
+  // agent-token cron drives it. No key to provision, so no `configured` flag — it is live on deploy.
+  const backfillDeezerHandler = os.backfill_deezer.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const { query } = input;
+      const result = await backfillDeezer(
+        parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+        parseBool(query.dryRun),
+      );
+
+      return {
+        dryRun: result.dryRun,
+        failed: result.failed,
+        failedCount: result.failedCount,
+        ok: true as const,
+        rateLimited: result.rateLimited,
+        resolved: result.resolved,
+        resolvedCount: result.resolvedCount,
+        unresolved: result.unresolved,
+        unresolvedCount: result.unresolvedCount,
+        unvouchable: result.unvouchable,
+        unvouchableCount: result.unvouchableCount,
       };
     } catch (error) {
       throw apiFault(error);
@@ -485,6 +523,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_artist_edges: backfillArtistEdgesHandler,
     backfill_beatport: backfillBeatportHandler,
     backfill_cover_masters: backfillCoverMastersHandler,
+    backfill_deezer: backfillDeezerHandler,
     backfill_discogs: backfillDiscogsHandler,
     backfill_discogs_facts: backfillDiscogsFactsHandler,
     backfill_label_images: backfillLabelImagesHandler,

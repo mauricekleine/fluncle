@@ -24,6 +24,7 @@
 //   4. `fluncle admin backfills apple-catalogue --limit <M> --json`  → one batched pass.
 //   5. `fluncle admin backfills beatport        --limit <B> --json`  → one paced batch.
 //   6. `fluncle admin backfills discogs-facts   --limit <F> --json`  → one paced batch.
+//   7. `fluncle admin backfills deezer          --limit <D> --json`  → one paced batch.
 //
 // The apple-music leg is a NO-OP until the Worker's MusicKit secrets are provisioned
 // (the summary carries `configured: false`), exactly like the lastfm leg is a no-op
@@ -50,6 +51,20 @@
 // (ten findings off one record cost one lookup), self-draining (an album leaves the worklist the
 // moment it is ruled `resolved` or `none`), and cursorless. It is a NO-OP without the Worker's
 // Discogs token (`configured: false`).
+//
+// LEG 5 NOW CARRIES A SECOND TIER. Beatport drains the certified feed first and, on the pass that
+// exhausts it, scrapes a small capped batch of CATALOGUE rows — the forward-accretion half, so a
+// newly crawled row gets its buy link without waiting for a manual campaign. That tier's cap is a
+// WORKER var (FLUNCLE_BACKFILL_BEATPORT_CATALOGUE_LIMIT, default 5), not a flag here: each row is a
+// Firecrawl credit, so the cap lives where the key and the spend are, and the box's PINNED CLI
+// cannot fail on a flag it does not know. Its counts land under `beatport.catalogue*`.
+//
+// LEG 7 IS THE DEEZER SIBLING OF LEG 5's NEW TIER, and it runs last because it is newest. It is
+// KEYLESS — `GET /track/isrc:<ISRC>` needs no token — so unlike legs 3-6 it has no `configured`
+// flag to report and is live the moment it deploys. Its limit is the second-smallest here for a
+// different reason than Beatport's: Deezer's quota is PER-IP and the Worker egresses from
+// Cloudflare's SHARED edge, so a big burst earns a throttle for rows that would otherwise resolve.
+// A throttle is recorded as `throttled` and stamps nothing at all — the rows stay eligible.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -93,6 +108,14 @@ const BEATPORT_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_BEATPORT_LIMIT 
 // worklist is album-grained and terminal in both directions, so it drains to a fast no-op and stays
 // there — a record does not grow a second catalogue number.
 const DISCOGS_FACTS_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_DISCOGS_FACTS_LIMIT ?? "10");
+
+// The Deezer leg's own limit. Deezer's tokenless quota is PER-IP and the Worker egresses from
+// Cloudflare's shared edge IPs, where that budget is spent by the whole platform rather than by
+// Fluncle — measured: the same search code recovered 0 of 5,133 rows from the edge and answered
+// 25/25 from the box's own IP. So this stays modest on purpose: 25 keyless reads a tick accretes
+// steadily across the catalogue without bursting into a quota answer, and the server clamps to the
+// same number anyway. A throttled pass ends early and the next tick resumes with a fresh window.
+const DEEZER_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_DEEZER_LIMIT ?? "25");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -150,6 +173,11 @@ type AppleCatalogueSummary = {
 };
 
 type BeatportSummary = {
+  // The CATALOGUE tier's counts, reported apart from the certified ones because that tier is the
+  // metered spend (one Firecrawl credit per row against a five-figure catalogue).
+  catalogueFailedCount?: number;
+  catalogueResolvedCount?: number;
+  catalogueUnresolvedCount?: number;
   // False when the Worker's Firecrawl key is unset — the leg was a no-op this tick.
   configured?: boolean;
   // Findings whose scrape errored (nothing learned; they back off and retry). Distinct from
@@ -159,6 +187,23 @@ type BeatportSummary = {
   resolvedCount?: number;
   skippedCount?: number;
   unresolvedCount?: number;
+};
+
+type DeezerSummary = {
+  // Rows whose lookup errored in transport (nothing learned; they retry until a failure cap).
+  failedCount?: number;
+  ok?: boolean;
+  // True when Deezer answered its quota limit — the pass stopped and stamped NOTHING. Recorded so a
+  // throttled tick reads as THROTTLED rather than as a silent "0 resolved".
+  rateLimited?: boolean;
+  resolvedCount?: number;
+  // ISRCs Deezer concluded it carries no recording for — a stamped, honest negative.
+  unresolvedCount?: number;
+  // Rows Deezer picked a track for whose duration did not vouch — stamped nothing, still eligible.
+  unvouchableCount?: number;
+  // No `configured`: the endpoint is keyless, so there is nothing to provision and the leg is live
+  // from its first tick. No `skippedCount` either — the worklist is a ledger-gated read, so a
+  // concluded row never enters the pass to be reported as skipped.
 };
 
 type DiscogsFactsSummary = {
@@ -257,6 +302,9 @@ export function runBackfillSweep() {
       unresolved: 0,
     },
     beatport: {
+      catalogueFailed: 0,
+      catalogueResolved: 0,
+      catalogueUnresolved: 0,
       configured: false,
       error: null as string | null,
       failed: 0,
@@ -265,6 +313,14 @@ export function runBackfillSweep() {
       unresolved: 0,
     },
     checked: 0,
+    deezer: {
+      error: null as string | null,
+      failed: 0,
+      resolved: 0,
+      throttled: false,
+      unresolved: 0,
+      unvouchable: 0,
+    },
     discogs: {
       error: null as string | null,
       resolved: 0,
@@ -425,10 +481,20 @@ export function runBackfillSweep() {
     summary.beatport.unresolved = beatport.unresolvedCount ?? 0;
     summary.beatport.failed = beatport.failedCount ?? 0;
     summary.beatport.skipped = beatport.skippedCount ?? 0;
+    summary.beatport.catalogueResolved = beatport.catalogueResolvedCount ?? 0;
+    summary.beatport.catalogueUnresolved = beatport.catalogueUnresolvedCount ?? 0;
+    summary.beatport.catalogueFailed = beatport.catalogueFailedCount ?? 0;
+    // The canonical counters cover BOTH tiers: a catalogue row scraped is a row checked and a link
+    // won is a link produced, whichever side of the certification it sits on.
     summary.checked +=
-      summary.beatport.resolved + summary.beatport.unresolved + summary.beatport.failed;
-    summary.produced += summary.beatport.resolved;
-    summary.failed += summary.beatport.failed;
+      summary.beatport.resolved +
+      summary.beatport.unresolved +
+      summary.beatport.failed +
+      summary.beatport.catalogueResolved +
+      summary.beatport.catalogueUnresolved +
+      summary.beatport.catalogueFailed;
+    summary.produced += summary.beatport.resolved + summary.beatport.catalogueResolved;
+    summary.failed += summary.beatport.failed + summary.beatport.catalogueFailed;
 
     if (beatport.ok === false) {
       // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
@@ -468,6 +534,43 @@ export function runBackfillSweep() {
   } catch (error) {
     summary["discogs-facts"].error = error instanceof Error ? error.message : String(error);
     log(`discogs-facts backfill failed: ${summary["discogs-facts"].error}`);
+  }
+
+  // The Deezer forward-accretion leg, last because it is newest. It shares no budget with any leg
+  // above — its own vendor, no key at all — and its failure is contained here like every other
+  // leg's, so it can never abort the sweep.
+  try {
+    const deezer = fluncleJson<DeezerSummary>([
+      "admin",
+      "backfills",
+      "deezer",
+      "--limit",
+      String(DEEZER_BATCH_LIMIT),
+    ]);
+    summary.deezer.resolved = deezer.resolvedCount ?? 0;
+    summary.deezer.unresolved = deezer.unresolvedCount ?? 0;
+    summary.deezer.unvouchable = deezer.unvouchableCount ?? 0;
+    summary.deezer.failed = deezer.failedCount ?? 0;
+    summary.deezer.throttled = deezer.rateLimited ?? false;
+    // `unvouchable` is deliberately OUT of `checked`: Deezer answered, but nothing was concluded and
+    // nothing was stamped, so counting it as a checked row would overstate the tick's real work.
+    summary.checked += summary.deezer.resolved + summary.deezer.unresolved + summary.deezer.failed;
+    summary.produced += summary.deezer.resolved;
+    summary.failed += summary.deezer.failed;
+
+    if (deezer.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
+      // some resolved, some failed — distinct from the catch below, which is the whole leg erroring.
+      log(`deezer backfill partial: ${summary.deezer.failed} row(s) failed this tick`);
+    }
+
+    if (summary.deezer.throttled) {
+      log("deezer backfill yielded: Deezer answered its quota limit, nothing was stamped");
+    }
+  } catch (error) {
+    summary.errors += 1;
+    summary.deezer.error = error instanceof Error ? error.message : String(error);
+    log(`deezer backfill failed: ${summary.deezer.error}`);
   }
 
   return summary;

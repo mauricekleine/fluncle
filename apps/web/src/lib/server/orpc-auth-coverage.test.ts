@@ -246,6 +246,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // album's/artist's OWN ≤1200² cover into R2, publishes nothing, the `backfill_label_images`
   // precedent.
   backfill_cover_masters: "admin",
+  // The forward-accretion Deezer leg — agent tier (adminAuth only): it resolves a row's Deezer
+  // track id by exact ISRC through the keyless public endpoint and writes catalogue identity only
+  // (one id + its provenance on `tracks`, no publish, no certification), so the box's agent-token
+  // cron drives it, the `backfill_beatport` precedent.
+  backfill_deezer: "admin",
   backfill_discogs: "admin",
   // The Discogs release-FACTS drain — agent tier (adminAuth only): it reads an already-resolved
   // release's catalogue number + styles onto the `albums` row (catalogue metadata only, no publish,
