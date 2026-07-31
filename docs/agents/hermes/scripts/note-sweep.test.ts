@@ -58,6 +58,10 @@ writeFileSync(
   `#!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "tracks" ] && [ "\${2:-}" = "get" ]; then
+  if [ "\${NOTE_STUB_TRACK_GET_FAIL:-0}" = "1" ]; then
+    printf 'track read failed\\n' >&2
+    exit 1
+  fi
   printf '{"track":{"artists":["Future Signal"],"title":"Fractals","logId":"011.5.9D","trackId":"t-1"}}'
   exit 0
 fi
@@ -67,6 +71,14 @@ if [ "\${1:-}" = "tracks" ] && [ "\${2:-}" = "similar" ]; then
 fi
 if [ "\${1:-}" = "admin" ] && [ "\${3:-}" = "context" ]; then
   printf '{"contextNote":"A 2016 single."}'
+  exit 0
+fi
+if [ "\${1:-}" = "admin" ] && [ "\${2:-}" = "tracks" ] && [ "\${3:-}" = "note" ] && [ "\${4:-}" = "--queue" ]; then
+  if [ "\${NOTE_STUB_QUEUE_FAIL:-0}" = "1" ]; then
+    printf 'queue read failed\\n' >&2
+    exit 1
+  fi
+  printf '{"ok":true,"tracks":[]}'
   exit 0
 fi
 printf '%s\\n' "\${4:-?}" >> "${CONTROL}/deliveries"
@@ -204,6 +216,72 @@ describe("readEchoedPhrase", () => {
     const message = "note_echoes_neighbours: it reuses 34% of 012.1.0A's words";
 
     expect(readEchoedPhrase(message)).toBeUndefined();
+  });
+});
+
+describe("note sweep run-error vocabulary", () => {
+  test("an ordinary dry-run item failure reports errors:0 and failed:1", async () => {
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        new URL("./note-sweep.ts", import.meta.url).pathname,
+        "--dry-run",
+        "011.5.9D",
+      ],
+      {
+        env: {
+          ...process.env,
+          CLAUDE_BIN: CLAUDE_STUB,
+          FLUNCLE_BIN: FLUNCLE_STUB,
+          NOTE_STATE_DIR: STATE_DIR,
+          NOTE_STUB_TRACK_GET_FAIL: "1",
+        },
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [exitCode, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      checked: 1,
+      errors: 0,
+      failed: 1,
+      ok: true,
+    });
+  });
+
+  test("a genuine note run failure reports errors:1 and exits non-zero", async () => {
+    const proc = Bun.spawn(
+      [process.execPath, new URL("./note-sweep.ts", import.meta.url).pathname],
+      {
+        env: {
+          ...process.env,
+          CLAUDE_BIN: CLAUDE_STUB,
+          FLUNCLE_BIN: FLUNCLE_STUB,
+          NOTE_STATE_DIR: STATE_DIR,
+          NOTE_STUB_QUEUE_FAIL: "1",
+        },
+        stderr: "pipe",
+        stdout: "pipe",
+      },
+    );
+    const [exitCode, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      errors: 1,
+      ok: false,
+      reason: "sweep_error",
+    });
   });
 });
 

@@ -11,6 +11,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   bpmIsMissing,
+  buildCaptureConfigFailureSummary,
+  buildCaptureFatalSummary,
+  buildCaptureSummary,
   captureSessionSeed,
   filterRejectedCandidates,
   buildSearchQuery,
@@ -42,21 +45,76 @@ import {
 // honest way to pin the wording contract is to run the real lines through them.
 import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
 
-describe("capture sweep queueDepth source contract", () => {
+describe("capture sweep canonical counters", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
-  test("never launders the bounded page length or limit into queueDepth", () => {
-    expect(source).not.toMatch(/queueDepth\s*:\s*(?:queue\.length|QUEUE_LIMIT)\b/);
+  test("counts the attempted batch, successful captures, and continued item failures", () => {
+    const summary = buildCaptureSummary({
+      batch: 4,
+      botChallenges: 2,
+      botChallengesUncleared: 1,
+      counts: { done: 2, failed: 1, skipped: 0, unmatched: 1 },
+      elapsedMs: 123,
+    });
+
+    expect(summary).toMatchObject({
+      checked: 4,
+      done: 2,
+      errors: 0,
+      failed: 1,
+      produced: 2,
+    });
   });
 
-  test("omits queueDepth rather than scanning the unindexed capture predicate every tick", () => {
+  test("preserves a measured empty batch as checked:0", () => {
+    const summary = buildCaptureSummary({
+      batch: 0,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: { done: 0, failed: 0, skipped: 0, unmatched: 0 },
+      elapsedMs: 1,
+    });
+
+    expect(summary.checked).toBe(0);
+    expect(summary.produced).toBe(0);
+  });
+
+  test("never launders the bounded page length or limit into queue_depth", () => {
+    expect(source).not.toMatch(/queue_depth\s*:\s*(?:queue\.length|QUEUE_LIMIT)\b/);
+  });
+
+  test("omits queue_depth rather than scanning the unindexed capture predicate every tick", () => {
     // `countTrackWork(kind=capture)` scans the growing tracks table and pulls in findings via
     // `f.log_id`; unlike embed, capture has no covering partial queue index. A hot-path scan is
     // not an acceptable price for this gauge, so absence is the contract until an operator-owned
     // index is proven on hosted Turso.
-    expect(source).not.toMatch(/\bqueueDepth\s*:/);
+    const summary = buildCaptureSummary({
+      batch: 1,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: { done: 1, failed: 0, skipped: 0, unmatched: 0 },
+      elapsedMs: 1,
+    });
+
+    expect(summary).not.toHaveProperty("queue_depth");
+    expect(source).not.toMatch(/\bqueue_depth\s*:/);
     expect(source).not.toContain("fetchCaptureQueueDepth");
     expect(source).not.toContain("kind=capture&scope=all&count=true");
+  });
+
+  test("configuration and fatal failures are run errors with honest item counts", () => {
+    expect(buildCaptureConfigFailureSummary("missing_api_token")).toMatchObject({
+      checked: 0,
+      errors: 1,
+      failed: 0,
+      produced: 0,
+    });
+    expect(buildCaptureFatalSummary(new Error("queue unavailable"))).toMatchObject({
+      checked: null,
+      errors: 1,
+      failed: null,
+      produced: null,
+    });
   });
 });
 

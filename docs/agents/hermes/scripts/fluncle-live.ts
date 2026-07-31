@@ -154,6 +154,53 @@ async function getToken(): Promise<string> {
 
 type LivePoll = { live: boolean; title: string | null; startedAt: string | null };
 
+export function buildLiveSummary(options: { at: string; poll: LivePoll; posted: boolean }): {
+  at: string;
+  checked: number;
+  errors: number;
+  failed: number;
+  live: boolean;
+  ok: true;
+  posted: boolean;
+  produced: number;
+  queue_depth: number;
+  title: string | null;
+} {
+  return {
+    at: options.at,
+    checked: 1,
+    errors: 0,
+    failed: options.posted ? 0 : 1,
+    live: options.poll.live,
+    ok: true,
+    posted: options.posted,
+    produced: options.posted ? 1 : 0,
+    // This poller has no durable queue: every tick observes the one current channel state.
+    queue_depth: 0,
+    title: options.poll.title,
+  };
+}
+
+export function buildLiveFailureSummary(): {
+  checked: null;
+  errors: 1;
+  failed: null;
+  ok: false;
+  produced: null;
+  queue_depth: 0;
+  reason: "poller_error";
+} {
+  return {
+    checked: null,
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    queue_depth: 0,
+    reason: "poller_error",
+  };
+}
+
 /** One Helix `Get Streams` read for the channel. Retries once on a 401 (stale token). */
 async function pollTwitch(): Promise<LivePoll> {
   const url = `https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(TWITCH_USER_LOGIN)}`;
@@ -236,7 +283,7 @@ async function postLiveState(at: string, poll: LivePoll): Promise<boolean> {
 // Main — mint/reuse the token, poll Twitch, POST the state.
 // ---------------------------------------------------------------------------
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const at = new Date().toISOString();
 
   if (!TWITCH_CLIENT_ID || !TWITCH_CLIENT_SECRET) {
@@ -250,27 +297,21 @@ async function main(): Promise<void> {
 
   // One JSON summary line — the cron run output. `ok` reflects the POLLER run, not
   // whether Fluncle is live (an offline channel is a normal, successful tick).
-  console.log(
-    JSON.stringify({
-      at,
-      live: poll.live,
-      ok: true as const,
-      posted,
-      title: poll.title,
-    }),
-  );
+  console.log(JSON.stringify(buildLiveSummary({ at, poll, posted })));
 }
 
 // ONE bounded retry before exiting 1: the every-minute poll sees a transient upstream
 // blip a handful of times a day; each used to fire a Discord alert the very next tick
 // self-healed — pure noise. A PERSISTENT failure still exits 1 (and alerts) after the
 // in-tick retry misses too.
-main().catch(async (error) => {
-  log(`poll failed, retrying once: ${error instanceof Error ? error.message : String(error)}`);
-  await new Promise((resolve) => setTimeout(resolve, 5_000));
-  await main().catch((second) => {
-    log(`fatal: ${second instanceof Error ? (second.stack ?? second.message) : String(second)}`);
-    console.log(JSON.stringify({ ok: false, reason: "poller_error" }));
-    process.exit(1);
+if (import.meta.main) {
+  main().catch(async (error) => {
+    log(`poll failed, retrying once: ${error instanceof Error ? error.message : String(error)}`);
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await main().catch((second) => {
+      log(`fatal: ${second instanceof Error ? (second.stack ?? second.message) : String(second)}`);
+      console.log(JSON.stringify(buildLiveFailureSummary()));
+      process.exit(1);
+    });
   });
-});
+}

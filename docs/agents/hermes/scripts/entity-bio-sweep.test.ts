@@ -104,8 +104,10 @@ const {
   attemptKey,
   attemptLedgerPath,
   bioCostEvent,
+  buildBioFatalSummary,
   buildRewriteBlock,
   clearAttempts,
+  createBioSweepSummary,
   describeOne,
   exhaustedRecapLine,
   formatAttemptLedger,
@@ -114,6 +116,7 @@ const {
   parseAttemptLedger,
   planAttempt,
   readBioRejection,
+  recordBioOutcome,
   recordAttempt,
   selectBioWork,
 } = await import("./entity-bio-sweep");
@@ -344,6 +347,70 @@ describe("selectBioWork (an exhausted entity must not block the queue)", () => {
 
     expect(exhausted).toEqual([]);
     expect(work.map((row) => row.slug)).toEqual(["spent", "fresh"]);
+  });
+});
+
+describe("shared bio sweep canonical counters", () => {
+  test.each(["artist", "label", "album"] as const)(
+    "%s gets checked/produced/errors and deliberately omits capped queue depth",
+    (kind) => {
+      const summary = createBioSweepSummary(kind);
+
+      recordBioOutcome(summary, "authored");
+      recordBioOutcome(summary, "alreadyBio");
+      recordBioOutcome(summary, "gateSkipped");
+      recordBioOutcome(summary, "skipped");
+
+      expect(summary).toMatchObject({
+        authored: 1,
+        checked: 4,
+        errors: 0,
+        failed: 1,
+        kind,
+        produced: 1,
+      });
+      // `describe --queue --limit 200` is capped, so its length is not a real backlog.
+      expect(summary).not.toHaveProperty("queue_depth");
+    },
+  );
+
+  test("exhausted page rows are not checked until they are actually passed to describeOne", () => {
+    const summary = createBioSweepSummary("artist");
+
+    summary.exhausted = 3;
+    recordBioOutcome(summary, "authored", true);
+
+    expect(summary.checked).toBe(1);
+    expect(summary.produced).toBe(1);
+    expect(summary.bypassedGate).toBe(1);
+  });
+
+  test("a measured no-work tick preserves checked: 0, never null", () => {
+    const summary = createBioSweepSummary("label");
+
+    expect(summary.checked).toBe(0);
+    expect(summary.checked).not.toBeNull();
+    expect(summary.produced).toBe(0);
+    expect(summary.errors).toBe(0);
+  });
+
+  test("a dry-run author counts as checked/authored but never as produced", () => {
+    const summary = createBioSweepSummary("album");
+
+    recordBioOutcome(summary, "authored", false, false);
+
+    expect(summary.checked).toBe(1);
+    expect(summary.authored).toBe(1);
+    expect(summary.produced).toBe(0);
+  });
+
+  test("a fatal run reports errors without guessing work counters", () => {
+    expect(buildBioFatalSummary()).toMatchObject({
+      checked: null,
+      errors: 1,
+      failed: null,
+      produced: null,
+    });
   });
 });
 

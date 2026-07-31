@@ -53,7 +53,7 @@ import { resolveSweepPrompt } from "./prompt-fetch";
 // ---------------------------------------------------------------------------
 
 const BATCH_CAP = 3; // triage is cheaper than note authoring (short verdict, small prompt).
-const QUEUE_LIMIT = 100; // ceiling on the queue read (we only act on BATCH_CAP).
+const QUEUE_LIMIT = 100; // preserve the work ceiling; count the full queue before slicing
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
@@ -96,7 +96,71 @@ type ClaudeEnvelope = {
   subtype?: string;
 };
 
-type Outcome = "triaged" | "gateSkipped" | "skipped";
+export type TriageOutcome = "triaged" | "gateSkipped" | "alreadyReviewed" | "failed";
+
+export type TriageSweepSummary = {
+  alreadyReviewed: number;
+  checked: number;
+  errors: number;
+  failed: number;
+  gateSkipped: number;
+  produced: number;
+  queue_depth: number;
+  queueRemaining: number;
+  skipped: number;
+  triaged: number;
+};
+
+/** The API returns the full pending queue, so this is a real outstanding count. */
+export function createTriageSummary(untriaged: number): TriageSweepSummary {
+  return {
+    alreadyReviewed: 0,
+    checked: 0,
+    errors: 0,
+    failed: 0,
+    gateSkipped: 0,
+    produced: 0,
+    queueRemaining: untriaged,
+    queue_depth: untriaged,
+    skipped: 0,
+    triaged: 0,
+  };
+}
+
+/** Record one completed attempt while preserving the existing skipped/gateSkipped detail. */
+export function recordTriageOutcome(summary: TriageSweepSummary, outcome: TriageOutcome): void {
+  summary.checked += 1;
+
+  if (outcome === "triaged") {
+    summary.triaged += 1;
+    summary.produced += 1;
+    summary.queue_depth = Math.max(0, summary.queue_depth - 1);
+  } else if (outcome === "gateSkipped") {
+    summary.gateSkipped += 1;
+  } else {
+    summary.skipped += 1;
+
+    if (outcome === "alreadyReviewed") {
+      summary.alreadyReviewed += 1;
+      summary.queue_depth = Math.max(0, summary.queue_depth - 1);
+    } else {
+      summary.failed += 1;
+    }
+  }
+
+  summary.queueRemaining = summary.queue_depth;
+}
+
+export function buildTriageFatalSummary(): Record<string, unknown> {
+  return {
+    checked: null,
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    reason: "sweep_error",
+  };
+}
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
@@ -490,7 +554,27 @@ function isArchived(spotifyTrackId: string): boolean {
 // (400/422) is a `gateSkipped`; a 409 (already reviewed) is a `skipped` no-op.
 // ---------------------------------------------------------------------------
 
-function deliverVerdict(id: string, verdict: string, promptVersion: number | null): Outcome {
+export function classifyTriageDeliveryFailure(detail: string): Exclude<TriageOutcome, "triaged"> {
+  const normalized = detail.toLowerCase();
+
+  if (
+    normalized.includes("verdict_too_short") ||
+    normalized.includes("verdict_too_long") ||
+    normalized.includes("no_verdict") ||
+    normalized.includes("422") ||
+    normalized.includes("400")
+  ) {
+    return "gateSkipped";
+  }
+
+  if (normalized.includes("invalid_status") || normalized.includes("409")) {
+    return "alreadyReviewed";
+  }
+
+  return "failed";
+}
+
+function deliverVerdict(id: string, verdict: string, promptVersion: number | null): TriageOutcome {
   const dir = mkdtempSync(join(tmpdir(), "triage-sweep-"));
   const verdictPath = join(dir, "verdict.txt");
 
@@ -512,15 +596,10 @@ function deliverVerdict(id: string, verdict: string, promptVersion: number | nul
     ]);
 
     if (code !== 0) {
-      const detail = `${stdout}\n${stderr}`.toLowerCase();
+      const detail = `${stdout}\n${stderr}`;
+      const outcome = classifyTriageDeliveryFailure(detail);
 
-      if (
-        detail.includes("verdict_too_short") ||
-        detail.includes("verdict_too_long") ||
-        detail.includes("no_verdict") ||
-        detail.includes("422") ||
-        detail.includes("400")
-      ) {
+      if (outcome === "gateSkipped") {
         log(`${id}: the length gate rejected the verdict — skipping (stays un-triaged)`);
 
         return "gateSkipped";
@@ -528,15 +607,15 @@ function deliverVerdict(id: string, verdict: string, promptVersion: number | nul
 
       // A 409 means the submission was approved/rejected between the queue read and now
       // — a clean no-op (the operator already decided), not a failure.
-      if (detail.includes("invalid_status") || detail.includes("409")) {
+      if (outcome === "alreadyReviewed") {
         log(`${id}: already reviewed — nothing to triage`);
 
-        return "skipped";
+        return "alreadyReviewed";
       }
 
       log(`${id}: triage exited ${code}: ${stderr.trim().slice(-200)}`);
 
-      return "skipped";
+      return "failed";
     }
 
     log(`${id}: verdict written`);
@@ -551,14 +630,14 @@ function deliverVerdict(id: string, verdict: string, promptVersion: number | nul
 // Per-submission: dedupe → assess → author → deliver.
 // ---------------------------------------------------------------------------
 
-async function triageOne(submission: PendingSubmission): Promise<Outcome> {
+async function triageOne(submission: PendingSubmission): Promise<TriageOutcome> {
   const id = submission.id;
   const spotifyTrackId = submission.spotifyTrackId;
 
   if (!id || !spotifyTrackId || !submission.title || !submission.artists?.length) {
     log("submission missing id/spotifyTrackId/title/artists — skipping");
 
-    return "skipped";
+    return "failed";
   }
 
   // (a) DEDUPE against the archive by spotify id (= track_id).
@@ -584,7 +663,7 @@ async function triageOne(submission: PendingSubmission): Promise<Outcome> {
   );
 
   if (!authored) {
-    return "skipped";
+    return "failed";
   }
 
   // (d) DELIVER: the CLI posts it; the Worker length-gates + stores onto the pending row.
@@ -637,17 +716,13 @@ function pingClaudeAuthFailure(detail: string): void {
 async function main(): Promise<void> {
   // `admin submissions --json` returns `{ ok: true, submissions: [...] }`.
   const response = fluncleJson<SubmissionsResponse>(["admin", "submissions"]);
-  const pending = (response.submissions ?? []).slice(0, QUEUE_LIMIT);
+  const pending = response.submissions ?? [];
   // Only the ones the sweep hasn't voiced yet (fill-empty-first; the sweep may refresh
   // its own prior verdict on a later manual re-run, but the cron acts on blanks).
-  const queue = pending.filter((submission) => !submission.triageVerdict?.trim());
+  const untriaged = pending.filter((submission) => !submission.triageVerdict?.trim());
+  const queue = untriaged.slice(0, QUEUE_LIMIT);
 
-  const summary = {
-    gateSkipped: 0,
-    queueRemaining: queue.length,
-    skipped: 0,
-    triaged: 0,
-  };
+  const summary = createTriageSummary(untriaged.length);
 
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
@@ -659,15 +734,11 @@ async function main(): Promise<void> {
     try {
       const outcome = await triageOne(submission);
 
-      if (outcome === "triaged") {
-        summary.triaged += 1;
-      } else if (outcome === "gateSkipped") {
-        summary.gateSkipped += 1;
-      } else {
-        summary.skipped += 1;
-      }
+      recordTriageOutcome(summary, outcome);
     } catch (error) {
       if (error instanceof ClaudeAuthError) {
+        summary.checked += 1;
+        summary.errors += 1;
         log("claude auth failed — aborting the batch, the queue is untouched");
         pingClaudeAuthFailure(error.message);
         console.log(
@@ -675,7 +746,6 @@ async function main(): Promise<void> {
             ok: false,
             reason: "claude_auth",
             ...summary,
-            queueRemaining: Math.max(0, queue.length - summary.triaged),
           }),
         );
         process.exit(1);
@@ -683,14 +753,12 @@ async function main(): Promise<void> {
 
       // One submission's failure must not abort the sweep — log it and move on; it
       // stays un-triaged for the next tick.
-      summary.skipped += 1;
+      recordTriageOutcome(summary, "failed");
       log(
         `error on ${submission.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
-
-  summary.queueRemaining = Math.max(0, queue.length - summary.triaged);
 
   console.log(JSON.stringify({ ok: true, ...summary }));
 }
@@ -700,7 +768,7 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    console.log(JSON.stringify(buildTriageFatalSummary()));
     process.exit(1);
   });
 }

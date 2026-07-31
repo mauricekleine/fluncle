@@ -30,6 +30,7 @@ const { buildArtistFoldMap, buildIdentityClaimedNames, matchTrackNames, resolveA
 
 beforeEach(() => {
   execute.mockReset();
+  execute.mockResolvedValue({ rows: [], rowsAffected: 0 });
 });
 
 afterEach(() => {
@@ -254,7 +255,7 @@ describe("resolveArtistEdges", () => {
       ],
     });
     primeCorpus();
-    execute.mockResolvedValue({ rowsAffected: 1 });
+    execute.mockResolvedValue({ rows: [], rowsAffected: 1 });
 
     const result = await resolveArtistEdges(2, false);
 
@@ -274,8 +275,8 @@ describe("resolveArtistEdges", () => {
     expect(result.edgesWritten).toBe(1); // the tuple it WOULD write
     expect(result.partiallyMatched).toEqual(["tPartial"]);
     expect(result.unmatchedNames).toBe(1);
-    // Only the worklist + the two corpus reads ran — no insert, no stamp.
-    expect(execute).toHaveBeenCalledTimes(3);
+    // Worklist + two corpus reads + the indexed queue count ran — no insert, no stamp.
+    expect(execute).toHaveBeenCalledTimes(4);
   });
 
   it("an empty worklist is a clean no-op (no corpus read, no write)", async () => {
@@ -286,7 +287,7 @@ describe("resolveArtistEdges", () => {
     expect(result.scanned).toBe(0);
     expect(result.edgesWritten).toBe(0);
     expect(result.nextCursor).toBeNull();
-    expect(execute).toHaveBeenCalledTimes(1); // just the worklist read
+    expect(execute).toHaveBeenCalledTimes(2); // worklist read + authoritative indexed count
   });
 });
 
@@ -308,7 +309,7 @@ describe("every statement binds exactly its placeholders", () => {
       ],
     });
     execute.mockResolvedValueOnce({ rows: [] }); // loadAliases
-    execute.mockResolvedValue({ rowsAffected: 2 });
+    execute.mockResolvedValue({ rows: [], rowsAffected: 2 });
 
     await resolveArtistEdges(200, false, "cursor-x");
 

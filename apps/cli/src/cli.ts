@@ -4791,6 +4791,7 @@ async function runBackfillArtistEdges(
   let cursor: string | undefined;
   let dryRun = options.dryRun;
   let edgesWritten = 0;
+  let queueDepth = 0;
   let scanned = 0;
   let unmatchedNames = 0;
 
@@ -4804,6 +4805,7 @@ async function runBackfillArtistEdges(
     fullyMatched.push(...result.fullyMatched);
     partiallyMatched.push(...result.partiallyMatched);
     zeroMatched.push(...result.zeroMatched);
+    queueDepth = result.queueDepth;
 
     if (!options.json) {
       const verb = result.dryRun ? "would write" : "wrote";
@@ -4828,6 +4830,7 @@ async function runBackfillArtistEdges(
       ok: true,
       partiallyMatched,
       partiallyMatchedCount: partiallyMatched.length,
+      queueDepth,
       scanned,
       unmatchedNames,
       zeroMatched,

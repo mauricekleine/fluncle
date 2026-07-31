@@ -349,37 +349,135 @@ async function fetchEmbedQueue(): Promise<{ queued?: number; tracks: QueueFindin
   return parseEmbedQueue(await res.json());
 }
 
+type EmbedCounts = {
+  done: number;
+  failed: number;
+  fetchFailed: number;
+  noSource: number;
+  skipped: number;
+};
+
+function emptyEmbedCounts(): EmbedCounts {
+  return {
+    done: 0,
+    failed: 0,
+    fetchFailed: 0,
+    noSource: 0,
+    skipped: 0,
+  };
+}
+
+export function buildEmbedSummary(options: {
+  batchFallout?: number;
+  checked: number;
+  costWriteFailures?: number;
+  counts: EmbedCounts;
+  errors: number;
+  ok: boolean;
+  queued?: number;
+  reason?: string;
+}): Record<string, unknown> {
+  const batchFallout = Math.max(0, options.batchFallout ?? 0);
+  const continuedSkipped = Math.max(0, options.counts.skipped - batchFallout);
+  const failed =
+    options.counts.failed + options.counts.fetchFailed + options.counts.noSource + continuedSkipped;
+  const queueDepth =
+    options.queued === undefined
+      ? {}
+      : { queue_depth: Math.max(0, options.queued - options.counts.done) };
+
+  return {
+    checked: options.checked,
+    ...(options.costWriteFailures === undefined
+      ? {}
+      : { costWriteFailures: options.costWriteFailures }),
+    done: options.counts.done,
+    // `failed` used to mean only embedder-reported item failures. Keep that split explicitly
+    // while the canonical counter covers every item failure the run continued past.
+    embedFailed: options.counts.failed,
+    errors: options.errors,
+    failed,
+    fetchFailed: options.counts.fetchFailed,
+    noSource: options.counts.noSource,
+    ok: options.ok,
+    produced: options.counts.done,
+    ...(options.queued === undefined ? {} : { queued: options.queued }),
+    ...queueDepth,
+    ...(options.reason === undefined ? {} : { reason: options.reason }),
+    skipped: options.counts.skipped,
+  };
+}
+
+export function buildEmbedFatalSummary(error?: unknown): Record<string, unknown> {
+  const errorMessage =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "unknown error";
+
+  return {
+    checked: null,
+    ...(error === undefined ? {} : { error: errorMessage }),
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    reason: "fatal",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main — drain a bounded batch off the queue.
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_r2_credentials" }));
+    console.log(
+      JSON.stringify(
+        buildEmbedSummary({
+          checked: 0,
+          counts: emptyEmbedCounts(),
+          errors: 1,
+          ok: false,
+          reason: "missing_r2_credentials",
+        }),
+      ),
+    );
     process.exitCode = 1;
     return;
   }
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(
+      JSON.stringify(
+        buildEmbedSummary({
+          checked: 0,
+          counts: emptyEmbedCounts(),
+          errors: 1,
+          ok: false,
+          reason: "missing_api_token",
+        }),
+      ),
+    );
     process.exitCode = 1;
     return;
   }
 
   const queuePage = await fetchEmbedQueue();
   const queue = queuePage.tracks;
+  const batch = queue.slice(0, BATCH_CAP);
 
-  const summary = {
-    done: 0,
-    failed: 0,
-    fetchFailed: 0,
-    noSource: 0,
-    ...(queuePage.queued === undefined ? {} : { queued: queuePage.queued }),
-    skipped: 0,
-  };
+  const counts = emptyEmbedCounts();
 
   if (queue.length === 0) {
-    console.log(JSON.stringify({ ok: true, ...summary }));
+    console.log(
+      JSON.stringify(
+        buildEmbedSummary({
+          checked: 0,
+          counts,
+          errors: 0,
+          ok: true,
+          queued: queuePage.queued,
+        }),
+      ),
+    );
 
     return; // fast no-op
   }
@@ -392,17 +490,17 @@ async function main(): Promise<void> {
     // needed. We GET the full key string as stored (never rebuild it).
     const manifest: { id: string; path: string }[] = [];
 
-    for (const finding of queue.slice(0, BATCH_CAP)) {
+    for (const finding of batch) {
       const source = chooseEmbedSource(finding);
 
       if (source.kind === "skip") {
         if (source.reason === "no_track_id") {
-          summary.skipped += 1;
+          counts.skipped += 1;
         } else {
           // The queue is key-gated upstream, so this is defensive: a finding with no captured
           // full song is left queued (capture may land it later). We deliberately never embed
           // the 30s preview as a fallback.
-          summary.noSource += 1;
+          counts.noSource += 1;
           log(`${finding.logId ?? "?"}: no source_audio_key — leaving queued`);
         }
         continue;
@@ -416,7 +514,7 @@ async function main(): Promise<void> {
       } catch (error) {
         // A transient R2 error (or a key whose object went missing) — leave it queued; a later
         // tick retries. Never a fallback to the preview.
-        summary.fetchFailed += 1;
+        counts.fetchFailed += 1;
         log(
           `${source.trackId}: source-audio GET failed for ${source.key}: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -424,7 +522,17 @@ async function main(): Promise<void> {
     }
 
     if (manifest.length === 0) {
-      console.log(JSON.stringify({ ok: true, ...summary }));
+      console.log(
+        JSON.stringify(
+          buildEmbedSummary({
+            checked: batch.length,
+            counts,
+            errors: 0,
+            ok: true,
+            queued: queuePage.queued,
+          }),
+        ),
+      );
       return;
     }
 
@@ -439,8 +547,20 @@ async function main(): Promise<void> {
     if (embed.code !== 0) {
       // A batch-level failure (torch import / model load): leave everything queued.
       log(`embed-track exited ${embed.code}: ${embed.stderr.trim().slice(-400)}`);
-      summary.skipped += manifest.length;
-      console.log(JSON.stringify({ ok: false, reason: "embed_failed", ...summary }));
+      counts.skipped += manifest.length;
+      console.log(
+        JSON.stringify(
+          buildEmbedSummary({
+            batchFallout: manifest.length,
+            checked: batch.length,
+            counts,
+            errors: 1,
+            ok: false,
+            queued: queuePage.queued,
+            reason: "embed_failed",
+          }),
+        ),
+      );
       process.exitCode = 1;
       return;
     }
@@ -451,8 +571,20 @@ async function main(): Promise<void> {
       parsed = JSON.parse(embed.stdout) as EmbedOutput;
     } catch {
       log(`embed-track did not return JSON: ${embed.stdout.slice(0, 200)}`);
-      summary.skipped += manifest.length;
-      console.log(JSON.stringify({ ok: false, reason: "embed_bad_output", ...summary }));
+      counts.skipped += manifest.length;
+      console.log(
+        JSON.stringify(
+          buildEmbedSummary({
+            batchFallout: manifest.length,
+            checked: batch.length,
+            counts,
+            errors: 1,
+            ok: false,
+            queued: queuePage.queued,
+            reason: "embed_bad_output",
+          }),
+        ),
+      );
       process.exitCode = 1;
       return;
     }
@@ -479,10 +611,10 @@ async function main(): Promise<void> {
         const vectorPath = join(workdir, `${result.id}.json`);
         writeFileSync(vectorPath, JSON.stringify(result.embedding));
         fluncleJson(["admin", "tracks", "update", result.id, "--embedding-file", vectorPath]);
-        summary.done += 1;
+        counts.done += 1;
         log(`${result.id}: embedded + written`);
       } catch (error) {
-        summary.skipped += 1;
+        counts.skipped += 1;
         log(
           `${result.id}: write-back failed: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -490,14 +622,25 @@ async function main(): Promise<void> {
     }
 
     for (const failure of parsed.errors ?? []) {
-      summary.failed += 1;
+      counts.failed += 1;
       log(`${failure.id}: embed error — ${failure.error}`);
     }
 
     // Record the tick's compute spend best-effort. A ledger failure cannot kill the
     // sweep, but its rejected row count belongs in the final status reading.
     const costWriteFailures = (await emitCost(costs)).failed;
-    console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
+    console.log(
+      JSON.stringify(
+        buildEmbedSummary({
+          checked: batch.length,
+          costWriteFailures,
+          counts,
+          errors: 0,
+          ok: true,
+          queued: queuePage.queued,
+        }),
+      ),
+    );
   } finally {
     // Temp files (the captured audio + the vector JSON) are cleaned up here regardless of outcome.
     rmSync(workdir, { force: true, recursive: true });
@@ -507,7 +650,7 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     console.error(`[embed-sweep] fatal: ${error instanceof Error ? error.message : String(error)}`);
-    console.log(JSON.stringify({ ok: false, reason: "fatal" }));
+    console.log(JSON.stringify(buildEmbedFatalSummary(error)));
     process.exitCode = 1;
   });
 }

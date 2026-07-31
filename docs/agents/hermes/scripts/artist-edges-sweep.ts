@@ -61,6 +61,8 @@ type ArtistEdgesSummary = {
   partiallyMatchedCount?: number;
   // Tracks VISITED this pass (fully + partially + zero).
   scanned?: number;
+  // Authoritative remaining work after the pass (indexed in the Worker).
+  queueDepth?: number;
   // Credited names that matched NO identity — the residual a future MB credit-sweep would mint from.
   unmatchedNames?: number;
   // Tracks where no credited name matched an identity.
@@ -122,13 +124,31 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // timer is the loop. A tick that finds every track already backfilled is a cheap no-op.
 // ---------------------------------------------------------------------------
 
-export function main(): void {
-  const summary = {
+export function main(): { ok: boolean } & Record<string, unknown> {
+  const summary: {
+    checked: number;
+    edgesWritten: number;
+    error: string | null;
+    errors: number;
+    failed: number;
+    fullyMatched: number;
+    ok: boolean;
+    partiallyMatched: number;
+    produced: number;
+    queue_depth?: number;
+    scanned: number;
+    unmatchedNames: number;
+    zeroMatched: number;
+  } = {
+    checked: 0,
     edgesWritten: 0,
     error: null as string | null,
+    errors: 0,
+    failed: 0,
     fullyMatched: 0,
     ok: true,
     partiallyMatched: 0,
+    produced: 0,
     scanned: 0,
     unmatchedNames: 0,
     zeroMatched: 0,
@@ -149,21 +169,31 @@ export function main(): void {
     summary.partiallyMatched = pass.partiallyMatchedCount ?? 0;
     summary.zeroMatched = pass.zeroMatchedCount ?? 0;
     summary.unmatchedNames = pass.unmatchedNames ?? 0;
+
+    if (pass.queueDepth !== undefined) {
+      summary.queue_depth = pass.queueDepth;
+    }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`track_artists graph-backfill pass failed: ${summary.error}`);
   }
 
+  // Every visited row is successfully stamped, whether its credited names matched fully, partly,
+  // or not at all. Edge count is forensic detail, not the unit of work.
+  summary.checked = summary.scanned;
+  summary.produced = summary.scanned;
+
   console.log(JSON.stringify(summary));
 
-  if (!summary.ok) {
-    process.exit(1);
-  }
+  return summary;
 }
 
 // The cron runs this file directly; the guard keeps importing `fluncleJson` for the tests
 // (artist-edges-sweep.test.ts) side-effect free.
 if (import.meta.main) {
-  main();
+  if (!main().ok) {
+    process.exit(1);
+  }
 }

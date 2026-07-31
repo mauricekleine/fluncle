@@ -32,9 +32,9 @@ case "$(cat "$DIR/mode")" in
   # prod nested them, and every tick parsed as zeros. The stubs now mirror prod.
   drain)
     case "$N" in
-      1) printf '{"ok":true,"summary":{"scored":250,"prioritized":10,"remaining":400,"corpus":"60:60"}}\\n' ;;
-      2) printf '{"ok":true,"summary":{"scored":250,"prioritized":5,"remaining":150,"corpus":"60:60"}}\\n' ;;
-      *) printf '{"ok":true,"summary":{"scored":150,"prioritized":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
+      1) printf '{"ok":true,"summary":{"scored":250,"prioritized":10,"quarantined":2,"catalogueDuplicates":3,"remaining":400,"corpus":"60:60"}}\\n' ;;
+      2) printf '{"ok":true,"summary":{"scored":250,"prioritized":5,"quarantined":1,"catalogueDuplicates":2,"remaining":150,"corpus":"60:60"}}\\n' ;;
+      *) printf '{"ok":true,"summary":{"scored":150,"prioritized":0,"quarantined":0,"catalogueDuplicates":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
     esac ;;
   # Never drains — the tick budget must stop it, and say so honestly.
   endless) printf '{"ok":true,"summary":{"scored":250,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\\n' ;;
@@ -100,8 +100,19 @@ describe("rank-sweep drains the stale set", () => {
     expect(summary.calls).toBe(3);
     expect(summary.scored).toBe(650); // 250 + 250 + 150, summed across the drain
     expect(summary.prioritized).toBe(15);
+    expect(summary.quarantined).toBe(3);
+    expect(summary.catalogueDuplicates).toBe(5);
     expect(summary.remaining).toBe(0);
     expect(summary.ok).toBe(true);
+    // Duplicate rows are a subset of `scored`, not extra checked/produced work.
+    expect(summary).toMatchObject({
+      checked: 668,
+      errors: 0,
+      failed: 0,
+      produced: 668,
+    });
+    // `remaining` is only a 0/1 fullness sentinel on the automation path, never queue depth.
+    expect(summary).not.toHaveProperty("queue_depth");
   });
 
   test("the tick BUDGET bounds it when the backlog is bigger — and it says so", () => {
@@ -121,6 +132,9 @@ describe("rank-sweep drains the stale set", () => {
     expect(calls()).toBe(1);
     expect(summary.scored).toBe(0);
     expect(summary.remaining).toBe(0);
+    // A measured empty stale set must survive as zero, not disappear into null/absence.
+    expect(summary).toMatchObject({ checked: 0, errors: 0, failed: 0, produced: 0 });
+    expect(summary).not.toHaveProperty("queue_depth");
   });
 
   test("the pre-envelope FLAT payload still parses (the unwrap fallback)", () => {
@@ -153,5 +167,7 @@ describe("rank-sweep's fluncleJson", () => {
 
     expect(summary.ok).toBe(false);
     expect(summary.error).toBeTruthy();
+    expect(summary.errors).toBe(1);
+    expect(summary.failed).toBe(0);
   });
 });

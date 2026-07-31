@@ -98,12 +98,15 @@ function drainKind(kind: "album" | "artist"): CoverMastersSummary {
 // ONE bounded batch of EACH kind. Deliberately not a loop over ticks: the `albums`/`artists`
 // worklists ARE the worklist and the timer is the loop. A tick that finds everything resolved/none
 // is a cheap no-op.
-export function main(): void {
+export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
+    checked: 0,
     error: null as string | null,
+    errors: 0,
     failed: 0,
     none: 0,
     ok: true,
+    produced: 0,
     resolved: 0,
   };
 
@@ -116,19 +119,25 @@ export function main(): void {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`cover-master resolve pass failed: ${summary.error}`);
   }
 
+  // `none` is a successful terminal action: the entity was checked and durably retired from the
+  // worklist without a usable source image. Per-entity failures remain `failed`, not run errors.
+  summary.checked = summary.resolved + summary.none + summary.failed;
+  summary.produced = summary.resolved + summary.none;
+
   console.log(JSON.stringify(summary));
 
-  if (!summary.ok) {
-    process.exit(1);
-  }
+  return summary;
 }
 
 // The cron runs this file directly; the guard keeps importing `fluncleJson` for the tests
 // (cover-masters-sweep.test.ts) side-effect free.
 if (import.meta.main) {
-  main();
+  if (!main().ok) {
+    process.exit(1);
+  }
 }

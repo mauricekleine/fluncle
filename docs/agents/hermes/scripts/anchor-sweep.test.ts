@@ -418,7 +418,8 @@ describe("runAnchorTick", () => {
 
     expect(summary).toMatchObject({
       checked: 28,
-      errors: 9,
+      errors: 0,
+      failed: 9,
       lbEmptyIds: 3,
       lbGateRejected: 6,
       lbMetadataFailed: 5,
@@ -450,6 +451,9 @@ describe("runAnchorTick", () => {
     // reads healthy — which is exactly how a dead free rung stayed invisible for a week. The count is
     // unconditional so the very first tick after a breakage says so.
     expect(summary.freeRungErrors).toBe(3);
+    expect(summary.error).toBeNull();
+    expect(summary.errors).toBe(0);
+    expect(summary.failed).toBe(3);
   });
 
   test("freeRungErrors is zero on a clean tick and survives the paged merge", async () => {
@@ -638,6 +642,8 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.skipped).toBe(2);
+    expect(summary.errors).toBe(0);
+    expect(summary.failed).toBe(2);
     expect(summary.anchoredByIsrc + summary.anchoredBySearch + summary.missed).toBe(0);
   });
 
@@ -720,8 +726,33 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.ok).toBe(false);
+    expect(summary.errors).toBe(1);
+    expect(summary.failed).toBe(0);
     expect(summary.error).toContain("queue down");
   });
+});
+
+test("a genuine anchor run failure reports errors:1 and exits non-zero", async () => {
+  const env = { ...process.env };
+  delete env.FLUNCLE_API_TOKEN;
+  delete env.APIFY_API_TOKEN;
+
+  const proc = Bun.spawn(
+    [process.execPath, new URL("./anchor-sweep.ts", import.meta.url).pathname],
+    {
+      env,
+      stderr: "pipe",
+      stdout: "pipe",
+    },
+  );
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  expect(exitCode).not.toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({ errors: 1, ok: false });
 });
 
 // ── THE BOX-SIDE DEEZER CLIENT (rung 0's fetch) ──────────────────────────────────────────────────
@@ -952,7 +983,8 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.pages).toBe(2);
     expect(summary.lbNoMap).toBe(2);
     expect(summary.lbMetadataFailed).toBe(2);
-    expect(summary.errors).toBe(2);
+    expect(summary.errors).toBe(0);
+    expect(summary.failed).toBe(2);
   });
 
   test("a failing page stops the sweep and carries the error", async () => {

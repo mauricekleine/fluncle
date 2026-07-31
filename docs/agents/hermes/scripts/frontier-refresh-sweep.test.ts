@@ -28,6 +28,7 @@ N=$((N + 1))
 echo "$N" > "$DIR/count"
 case "$(cat "$DIR/mode")" in
   ok)       printf '{"ok":true,"total":3,"refreshed":2,"unchanged":1,"minted":0,"editionOnly":0,"skipped":0,"failed":0,"switchOff":false}\\n' ;;
+  empty)    printf '{"ok":true,"total":0,"refreshed":0,"unchanged":0,"minted":0,"editionOnly":0,"skipped":0,"failed":0,"switchOff":false}\\n' ;;
   # The kill switch is closed — editions are still written (internal cache); Spotify skipped.
   switched) printf '{"ok":true,"total":2,"refreshed":0,"unchanged":0,"minted":0,"editionOnly":2,"skipped":0,"failed":0,"switchOff":true}\\n' ;;
   # A best-effort per-user Spotify fault — still a successful tick.
@@ -88,13 +89,17 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
 
     expect(calls()).toBe(1);
     expect(summary).toMatchObject({
+      checked: 3,
+      errors: 0,
       failed: 0,
       ok: true,
+      produced: 2,
       refreshed: 2,
       switchOff: false,
       total: 3,
       unchanged: 1,
     });
+    expect(summary).not.toHaveProperty("queue_depth");
   });
 
   test("reports switchOff + editionOnly honestly when the kill switch is closed", () => {
@@ -106,6 +111,8 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     expect(summary.ok).toBe(true);
     // Dark ⇒ the sweep still writes editions (the internal cache); Spotify is skipped.
     expect(summary.editionOnly).toBe(2);
+    expect(summary.checked).toBe(2);
+    expect(summary.produced).toBe(2);
   });
 
   test("a per-user failure is still a successful tick (best-effort, retried next week)", () => {
@@ -113,6 +120,9 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     const summary = run();
 
     expect(summary.failed).toBe(1);
+    expect(summary.errors).toBe(0);
+    expect(summary.checked).toBe(4);
+    expect(summary.produced).toBe(2);
     expect(summary.ok).toBe(true);
   });
 
@@ -123,6 +133,17 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     expect(summary.ok).toBe(true);
     expect(summary.budgetPaused).toBe(true);
     expect(summary.building).toBe(1);
+    expect(summary.checked).toBe(3);
+    expect(summary.produced).toBe(2);
+  });
+
+  test("preserves a measured no-op as checked:0 rather than null", () => {
+    mode("empty");
+    const summary = run();
+
+    expect(summary.checked).toBe(0);
+    expect(summary.produced).toBe(0);
+    expect(summary.errors).toBe(0);
   });
 
   test("a CLI error is reported as ok:false, never thrown", () => {
@@ -130,6 +151,16 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     const summary = run();
 
     expect(summary.ok).toBe(false);
+    expect(summary.errors).toBe(1);
+    expect(summary.checked).toBeNull();
+    expect(summary.produced).toBeNull();
     expect(typeof summary.error).toBe("string");
+  });
+
+  test("omits queue_depth because total is a capped candidate page, not a backlog", () => {
+    const source = readFileSync(new URL("./frontier-refresh-sweep.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("`total` is capped and is not a remaining-backlog count");
+    expect(source).not.toMatch(/\bqueue_depth\s*:/);
   });
 });

@@ -158,7 +158,7 @@ const log = (message: string) => console.error(`[entity-bio-sweep] ${message}`);
 // Types — only the fields we consume from each surface.
 // ---------------------------------------------------------------------------
 
-type EntityKind = "artist" | "label" | "album";
+export type EntityKind = "artist" | "label" | "album";
 
 // The CLI command GROUP for one kind (the `fluncle admin <group>` noun): plural of the kind.
 function groupForKind(kind: EntityKind): "artists" | "labels" | "albums" {
@@ -216,7 +216,80 @@ type ClaudeEnvelope = {
 
 // `exhausted` is the ONE terminal outcome: the entity spent all `MAX_BIO_ATTEMPTS` and this sweep
 // will never author for it again. Distinct from `gateSkipped` (a rejection with budget left).
-type Outcome = "authored" | "alreadyBio" | "exhausted" | "gateSkipped" | "skipped";
+export type BioOutcome = "authored" | "alreadyBio" | "exhausted" | "gateSkipped" | "skipped";
+
+export type BioSweepSummary = {
+  alreadyBio: number;
+  authored: number;
+  bypassedGate: number;
+  checked: number;
+  errors: number;
+  exhausted: number;
+  failed: number;
+  gateSkipped: number;
+  kind: EntityKind;
+  produced: number;
+};
+
+/**
+ * Canonical summary shared by all three wrappers. `queue_depth` is deliberately absent:
+ * the queue API is capped at `QUEUE_LIMIT`, so its length is not a real backlog count.
+ */
+export function createBioSweepSummary(kind: EntityKind): BioSweepSummary {
+  return {
+    alreadyBio: 0,
+    authored: 0,
+    bypassedGate: 0,
+    checked: 0,
+    errors: 0,
+    exhausted: 0,
+    failed: 0,
+    gateSkipped: 0,
+    kind,
+    produced: 0,
+  };
+}
+
+/** Record one row actually passed to `describeOne`, preserving every domain counter. */
+export function recordBioOutcome(
+  summary: BioSweepSummary,
+  outcome: BioOutcome,
+  gateBypassed = false,
+  stored = true,
+): void {
+  summary.checked += 1;
+
+  if (gateBypassed) {
+    summary.bypassedGate += 1;
+  }
+
+  if (outcome === "authored") {
+    summary.authored += 1;
+
+    if (stored) {
+      summary.produced += 1;
+    }
+  } else if (outcome === "alreadyBio") {
+    summary.alreadyBio += 1;
+  } else if (outcome === "gateSkipped") {
+    summary.gateSkipped += 1;
+  } else if (outcome === "exhausted") {
+    summary.exhausted += 1;
+  } else {
+    summary.failed += 1;
+  }
+}
+
+export function buildBioFatalSummary(): Record<string, unknown> {
+  return {
+    checked: null,
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    reason: "sweep_error",
+  };
+}
 
 // The authored bio plus the prompt version it was written under (N = operator override,
 // 0 = registry default, null = the baked-in fallback wrote it — stamped on the artifact
@@ -241,7 +314,7 @@ type DescribeResult = {
    *  `bypassedGate` counter; the operator's REVIEW is the `bio-review` attention row the Worker
    *  raised when it stored the bio (apps/web/src/lib/server/bio-review.ts). */
   gateBypassed?: boolean;
-  outcome: Outcome;
+  outcome: BioOutcome;
 };
 
 // A narrow sentinel the loop throws to abort the batch on a claude auth failure.
@@ -702,7 +775,7 @@ async function authorBio(
 export function bioCostEvent(input: {
   authored: AuthoredBio | null;
   dryRun: boolean;
-  outcome: Outcome;
+  outcome: BioOutcome;
   slug: string;
 }): BoxCostEvent | null {
   const { authored, dryRun, outcome, slug } = input;
@@ -751,7 +824,7 @@ function modelForKind(kind: EntityKind): string {
 // never indistinguishable from one that cleared the gate in EITHER place.
 // ---------------------------------------------------------------------------
 
-type Delivery = { gateBypassed: boolean; outcome: Outcome; rejection?: string };
+type Delivery = { gateBypassed: boolean; outcome: BioOutcome; rejection?: string };
 
 function deliverBio(input: {
   bio: string;
@@ -1178,18 +1251,32 @@ async function main(): Promise<void> {
     log(`DRY RUN over ${dryRunSlugs.length} ${kind}(s) — nothing will be stored`);
 
     const outcomes: Record<string, string> = {};
+    const summary = createBioSweepSummary(kind);
 
     for (const slug of dryRunSlugs) {
       try {
         // No ledger: a pre-flight must not spend an entity's real attempt budget.
-        outcomes[slug] = (await describeOne(kind, { name: slug, slug }, { dryRun: true })).outcome;
+        const { gateBypassed, outcome } = await describeOne(
+          kind,
+          { name: slug, slug },
+          { dryRun: true },
+        );
+        outcomes[slug] = outcome;
+        // The preview authored a paragraph but deliberately stored nothing.
+        recordBioOutcome(summary, outcome, gateBypassed, false);
       } catch (error) {
         outcomes[slug] = "failed";
+        recordBioOutcome(summary, "skipped");
+
+        if (error instanceof ClaudeAuthError) {
+          summary.errors += 1;
+        }
+
         log(`error on ${slug}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    console.log(JSON.stringify({ dryRun: true, kind, ok: true, outcomes }));
+    console.log(JSON.stringify({ gateState: "dry-run", ok: true, outcomes, ...summary }));
 
     return;
   }
@@ -1205,18 +1292,7 @@ async function main(): Promise<void> {
     String(QUEUE_LIMIT),
   ]);
 
-  const summary = {
-    alreadyBio: 0,
-    authored: 0,
-    // Bios that landed ONLY because it was the final attempt — this tick's count; the standing
-    // backlog is the `bio-review` queue each one raised (see `deliverBio`).
-    bypassedGate: 0,
-    // Queued entities that have spent all `MAX_BIO_ATTEMPTS` and will never be authored again.
-    exhausted: 0,
-    failed: 0,
-    gateSkipped: 0,
-    kind,
-  };
+  const summary = createBioSweepSummary(kind);
 
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
@@ -1250,24 +1326,12 @@ async function main(): Promise<void> {
         costs.push(cost);
       }
 
-      if (gateBypassed) {
-        summary.bypassedGate += 1;
-      }
-
-      if (outcome === "authored") {
-        summary.authored += 1;
-      } else if (outcome === "alreadyBio") {
-        summary.alreadyBio += 1;
-      } else if (outcome === "gateSkipped") {
-        summary.gateSkipped += 1;
-      } else if (outcome === "exhausted") {
-        summary.exhausted += 1;
-      } else {
-        summary.failed += 1;
-      }
+      recordBioOutcome(summary, outcome, gateBypassed);
     } catch (error) {
       if (error instanceof ClaudeAuthError) {
         // Auth failure: STOP the batch, leave the queue intact, alert loudly.
+        summary.checked += 1;
+        summary.errors += 1;
         log("claude auth failed — aborting the batch, the queue is untouched");
         pingClaudeAuthFailure(kind, error.message);
         console.log(
@@ -1282,7 +1346,7 @@ async function main(): Promise<void> {
 
       // One entity's failure must not abort the sweep — log it and move on; it stays in
       // the queue for the next tick.
-      summary.failed += 1;
+      recordBioOutcome(summary, "skipped");
       log(`error on ${row.slug ?? "?"}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -1298,7 +1362,7 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    console.log(JSON.stringify(buildBioFatalSummary()));
     process.exit(1);
   });
 }

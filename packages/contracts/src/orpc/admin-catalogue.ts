@@ -558,8 +558,25 @@ export const listUnverifiedCaptures = oc
       "Captured rows not yet fingerprint-verified against their preview (the backfill worklist)",
     tags: ["Admin"],
   })
-  .input(z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }))
-  .output(z.object({ ok: z.literal(true), tracks: z.array(CaptureVerifyItemSchema) }));
+  .input(
+    z.object({
+      /**
+       * Opt in to the authoritative worklist count. This queue's leading
+       * `capture_verification is null` predicate is index-backed; callers that only need a page
+       * keep the count off their hot path.
+       */
+      count: z.coerce.boolean().default(false),
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+    }),
+  )
+  .output(
+    z.object({
+      ok: z.literal(true),
+      /** Total rows in the worklist before this page is processed; present only with `count=true`. */
+      queued: z.number().optional(),
+      tracks: z.array(CaptureVerifyItemSchema),
+    }),
+  );
 
 /**
  * `verify_capture` → `POST /admin/catalogue/captures/verify` (operationId `verifyCapture`).

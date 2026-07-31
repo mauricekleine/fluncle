@@ -19,7 +19,8 @@ vi.mock("./db", async (importOriginal) => {
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 
-const { resolveArtistEdges } = await import("./backfill-artist-edges");
+const { ARTIST_EDGES_QUEUE_DEPTH_SQL, resolveArtistEdges } =
+  await import("./backfill-artist-edges");
 
 const NOW = "2026-07-20T00:00:00.000Z";
 
@@ -93,6 +94,7 @@ describe("resolveArtistEdges (integration)", () => {
     // "Some Unknown MC" + "Nobody At All" — the residual a future MB credit-sweep would mint from.
     expect(result.unmatchedNames).toBe(2);
     expect(result.scanned).toBe(4);
+    expect(result.queueDepth).toBe(0);
 
     // The edges landed — including the alias hit — with 1-based positions.
     expect(await edges(db)).toEqual([
@@ -111,6 +113,7 @@ describe("resolveArtistEdges (integration)", () => {
     const second = await resolveArtistEdges(200, false);
     expect(second.scanned).toBe(0);
     expect(second.edgesWritten).toBe(0);
+    expect(second.queueDepth).toBe(0);
     expect((await edges(db)).length).toBe(4);
   });
 
@@ -123,6 +126,7 @@ describe("resolveArtistEdges (integration)", () => {
     expect(result.dryRun).toBe(true);
     expect(result.fullyMatched).toEqual(["tA"]);
     expect(result.edgesWritten).toBe(1); // what it WOULD write
+    expect(result.queueDepth).toBe(1); // dry-run leaves the indexed worklist unchanged
 
     // Nothing was written — the worklist still holds the track on a real (wet) pass.
     expect((await edges(db)).length).toBe(0);
@@ -142,6 +146,20 @@ describe("resolveArtistEdges (integration)", () => {
 
     // The already-linked track was never in the worklist.
     expect(result.scanned).toBe(0);
+    expect(result.queueDepth).toBe(0);
     expect((await edges(db)).length).toBe(1);
+  });
+
+  it("counts the post-pass queue through the candidate and anti-join indexes", async () => {
+    await seedCatalogueTrack(db, { artists: ["Nobody"], title: "Queued", trackId: "tQueued" });
+
+    const plan = await db.execute(`explain query plan ${ARTIST_EDGES_QUEUE_DEPTH_SQL}`);
+    const details = plan.rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join("\n");
+
+    expect(details).toContain("tracks_artist_edges_backfill_queue_idx");
+    expect(details).toContain("track_artists_track_id_idx");
+    expect((await resolveArtistEdges(200, true)).queueDepth).toBe(1);
   });
 });

@@ -36,6 +36,7 @@ set -euo pipefail
 # `bash social-capture-sweep.sh` works because it inherits the container's full PATH).
 # Prepend the known install dirs so `curl` resolves regardless of the runner's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
+export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
 # The Worker origin (the agent-scoped token is a custom var that passes Hermes'
 # provider-cred blocklist, so it rides the cron env like the other sweeps).
@@ -55,8 +56,21 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # WRAP the curl (never `exec`) so the marker is written even when the trigger fails.
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"
-emit_cron_output social-capture -- curl -fsS --max-time 30 \
-  -X POST "${API_BASE_URL}${CAPTURE_PATH}" \
-  -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{}'
+
+run_social_capture() {
+  local raw rc=0
+  raw="$(curl -fsS --max-time 30 \
+    -X POST "${API_BASE_URL}${CAPTURE_PATH}" \
+    -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d '{}')" || rc="$?"
+
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' '{"checked":null,"errors":1,"failed":null,"ok":false,"produced":null,"reason":"request_failed"}'
+    return "$rc"
+  fi
+
+  printf '%s' "$raw" | "${BUN_BIN}" "${SCRIPT_DIR}/worker-trigger-counters.ts" social-capture
+}
+
+emit_cron_output social-capture -- run_social_capture
