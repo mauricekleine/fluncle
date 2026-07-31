@@ -295,6 +295,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // ≤1200² cover master in R2 (RFC U3b), never a certification, never a publish.
   "POST /admin/backfill/cover-masters": "backfill_cover_masters",
   "POST /admin/backfill/discogs": "backfill_discogs",
+  // Agent tier: the box's `fluncle-backfill` cron drives it. The FACTS sibling of the line above —
+  // it reads an already-resolved release's catalogue number + styles onto the `albums` row, never a
+  // certification, never a publish.
+  "POST /admin/backfill/discogs-facts": "backfill_discogs_facts",
   "POST /admin/backfill/label-images": "backfill_label_images",
   // The label-lineage fill (founding date/place + parent imprint from MusicBrainz) — contract-only
   // oRPC (no TanStack route file). ADMIN tier (agent-allowed): the on-box `fluncle-label-lineage`

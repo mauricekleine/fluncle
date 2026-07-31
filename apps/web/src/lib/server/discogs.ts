@@ -121,7 +121,20 @@ function noop(): void {
 
 const throttleDiscogs = makeRateLimiter();
 
-export type DiscogsEnrichment = {
+/**
+ * The two RELEASE facts a Discogs payload carries that Fluncle used to score and discard:
+ * the label's own catalogue number and the release's styles. Both are album-grained (see
+ * `albums.discogs_catno` in db/schema.ts), so the resolver hands them up and the caller
+ * decides where they land.
+ */
+export type DiscogsReleaseFacts = {
+  /** The label catalogue number verbatim ("RAMM123"). Absent when the release carries none. */
+  catno?: string;
+  /** The release's styles ("Drum n Bass", "Jungle"). Absent when the release lists none. */
+  styles?: string[];
+};
+
+export type DiscogsEnrichment = DiscogsReleaseFacts & {
   masterId?: number;
   // The vendor whose brake actually tripped. A backfill driven through the
   // Discogs resolver also calls MusicBrainz first, so `rateLimited` alone cannot
@@ -455,7 +468,10 @@ type DiscogsTrack = { title?: string };
 
 type DiscogsArtist = { name?: string };
 
-type DiscogsLabel = { name?: string };
+// `catno` is the label's own catalogue number for this release — the code printed on the
+// sleeve. Discogs writes the literal string "none" when a release has no number, which is a
+// value to DROP, not to store (see `releaseFacts`).
+type DiscogsLabel = { name?: string; catno?: string };
 
 type DiscogsRelease = {
   id?: number;
@@ -605,6 +621,32 @@ function scoreRelease(input: DiscogsResolveInput, release: DiscogsRelease): numb
   }
 
   return total === 0 ? 0 : weighted / total;
+}
+
+/**
+ * Pull the two album-grained RELEASE facts off a fetched Discogs release: the label catalogue
+ * number and the styles. Pure — no request of its own, because every caller already holds the
+ * payload it needs (that is the whole point: these facts cost nothing extra).
+ *
+ * `catno` takes the FIRST label that carries a real one. A release credited to several labels
+ * (a licensed reissue, a co-release) lists one number each; the first is the primary pressing's,
+ * and storing one representative number is the ruled album-grain behaviour. Discogs writes the
+ * literal `"none"` for a release with no number at all, so that string is dropped rather than
+ * stored — printing "none" beside a record would be a lie dressed as a fact.
+ */
+function releaseFacts(release: DiscogsRelease): DiscogsReleaseFacts {
+  const catno = (release.labels ?? [])
+    .map((label) => label.catno?.trim() ?? "")
+    .find((value) => value.length > 0 && value.toLowerCase() !== "none");
+
+  const styles = (release.styles ?? [])
+    .map((style) => style.trim())
+    .filter((style) => style.length > 0);
+
+  return {
+    ...(catno ? { catno } : {}),
+    ...(styles.length > 0 ? { styles } : {}),
+  };
 }
 
 /** Build the ordered Discogs `database/search` query variants we try. */
@@ -790,6 +832,12 @@ export async function discogsResolveRelease(
         : undefined;
 
     return {
+      // The catno + styles ride the SAME payload the scoring already fetched — zero extra
+      // requests. Only this leg carries them: the MusicBrainz bridge above returns a curated
+      // relation without ever fetching the Discogs release, so a bridge-resolved finding leaves
+      // its album's facts to `backfill_discogs_facts` (backfill.ts), which is exactly what that
+      // leg exists for.
+      ...releaseFacts(release),
       // Store the exact release when we have it; the master rides along when known.
       masterId,
       releaseId: release.id,
@@ -800,6 +848,49 @@ export async function discogsResolveRelease(
     logEvent("error", "discogs.resolve-failed", { artist: cleanArtist, error, title: cleanTitle });
 
     return rateLimitedOutcome(signal);
+  }
+}
+
+/**
+ * Read the album-grained RELEASE facts (catno + styles) for a release Fluncle has ALREADY
+ * resolved — one `GET /releases/{id}` on the shared, paced, authed Discogs client.
+ *
+ * This is the backfill half of the same answer `discogsResolveRelease` returns inline. It exists
+ * because the resolver's PRIMARY leg is the MusicBrainz bridge, which reaches a Discogs id
+ * through a curated relation and never touches the Discogs API — so the majority of resolved
+ * findings carry an id whose payload nobody ever fetched. Given the id, the facts are one cheap
+ * lookup away, and `backfill_discogs_facts` walks that worklist.
+ *
+ * NEVER THROWS, the module's standing discipline. The three outcomes are distinct on purpose and
+ * the sweep writes a different ledger state for each:
+ *   - `{ found: true, facts }`     → the release answered; `facts.catno` may still be absent
+ *                                     (a release genuinely without a number — a terminal `none`).
+ *   - `{ found: false }`           → the lookup failed or the id is gone (a `failure`, retried).
+ *   - `{ rateLimited: true }`      → Discogs is throttling; the caller STOPS the pass rather than
+ *                                     marching the next album into the same wall.
+ */
+export async function fetchDiscogsReleaseFacts(
+  releaseId: number,
+  token: string,
+): Promise<{ facts?: DiscogsReleaseFacts; found: boolean; rateLimited: boolean }> {
+  const signal: RateLimitSignal = { hit: false };
+
+  try {
+    const release = await discogsFetch<DiscogsRelease>(`/releases/${releaseId}`, token, signal);
+
+    if (signal.hit) {
+      return { found: false, rateLimited: true };
+    }
+
+    if (!release) {
+      return { found: false, rateLimited: false };
+    }
+
+    return { facts: releaseFacts(release), found: true, rateLimited: false };
+  } catch (error) {
+    logEvent("error", "discogs.release-facts-failed", { error, releaseId });
+
+    return { found: false, rateLimited: signal.hit };
   }
 }
 

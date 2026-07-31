@@ -1709,9 +1709,9 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command:
-      "fluncle admin backfills discogs && fluncle admin backfills lastfm && fluncle admin backfills apple-music && fluncle admin backfills apple-catalogue",
+      "fluncle admin backfills discogs && fluncle admin backfills lastfm && fluncle admin backfills apple-music && fluncle admin backfills apple-catalogue && fluncle admin backfills beatport && fluncle admin backfills discogs-facts",
     exposedContent: [
-      "Discogs id + Last.fm love + Apple Music link repair, findings then catalogue (--no-agent, Worker HTTP)",
+      "Discogs id + Last.fm love + Apple Music link + Beatport link repair, findings then catalogue, then each record's catalogue number (--no-agent, Worker HTTP)",
     ],
     kind: "cron",
     name: "cron.backfill",

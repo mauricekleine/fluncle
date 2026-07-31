@@ -38,9 +38,19 @@ import {
   recordAppleAuthOutcome,
   recordAppleCall,
 } from "./apple-breaker";
+import {
+  recordAlbumDiscogsFailure,
+  storeAlbumDiscogsFacts,
+  storeAlbumDiscogsFactsForTrack,
+} from "./albums";
 import { resolveBeatportUrl } from "./beatport-resolve";
 import { getDb, typedRows } from "./db";
-import { type DiscogsThrottleVendor, discogsResolveRelease } from "./discogs";
+import {
+  type DiscogsThrottleVendor,
+  discogsResolveRelease,
+  fetchDiscogsReleaseFacts,
+} from "./discogs";
+import { readOptionalEnv } from "./env";
 import { lastfmLove } from "./lastfm";
 import { decodeTrackCursor, encodeTrackCursor, listTracks, type TrackListItem } from "./tracks";
 
@@ -615,6 +625,17 @@ export async function backfillDiscogsIds(
       await setDiscogsIds(track.trackId, enrichment.releaseId, enrichment.masterId);
       await recordAttempt(track.trackId, "discogs", "done");
 
+      // CAPTURE ON RESOLVE, the publish path's twin (publish.ts). The scored search leg held the
+      // release payload, so its catno + styles are already in hand — store them at the album grain
+      // rather than throwing away a fact we paid for. A MusicBrainz-bridge resolve carries none and
+      // leaves the album `pending` for `backfillDiscogsFacts` below. Fill-empty-only in SQL.
+      if (enrichment.catno !== undefined || enrichment.styles !== undefined) {
+        await storeAlbumDiscogsFactsForTrack(track.trackId, {
+          catno: enrichment.catno,
+          styles: enrichment.styles,
+        });
+      }
+
       resolved.push({
         logId,
         masterId: enrichment.masterId,
@@ -689,6 +710,212 @@ async function setDiscogsIds(
     ],
     "write",
   );
+}
+
+// ── Discogs — the RELEASE FACTS drain (catalogue number + styles) ──────────────────────────────
+//
+// The sweep above resolves a finding to a Discogs RELEASE ID and stops. This one takes that id and
+// reads the two album-grained facts off the release: `labels[].catno` (the label's own catalogue
+// number, the code printed on the sleeve — RAMM###, HOSP###) and `styles[]`. Both land on the
+// `albums` row (db/schema.ts § albums, docs/album-entity.md); the catno reaches the album page and
+// its JSON-LD, the styles are stored only.
+//
+// WHY A SECOND LEG AT ALL, when the resolver hands the same facts back inline. Because the
+// resolver's PRIMARY path never sees a release payload: the MusicBrainz bridge reaches a Discogs id
+// through a curated `url-rels` relation and accepts it directly, so a bridge-resolved finding
+// carries an id and no facts. Capture-on-resolve covers the scored-search half for free; this leg
+// covers the rest, and it is the only path that can reach the findings resolved before the facts
+// columns existed at all.
+//
+// THE WORKLIST IS ALBUM-GRAINED AND SELF-DRAINING. It starts from the tracks that carry an
+// `in_release_id` (a partial index fronts exactly that slice — a full scan of `tracks` every tick
+// is the shape AGENTS.md forbids), joins their album by primary key, and keeps only albums still
+// `pending` and past their cooldown. A pass that resolves an album flips it to `resolved`, one that
+// finds a release with no number flips it to terminal `none`, and either way the row leaves the
+// worklist for good. No cursor: the next tick simply reads what is left.
+//
+// ONE LOOKUP PER ALBUM, NOT PER TRACK. Ten findings off one record share one catalogue number, so
+// the pass groups by album and buys the release once — which is also why the ledger lives on
+// `albums` rather than reusing the per-track `backfill_*` columns.
+
+/** One album awaiting its Discogs facts, with the release to read and the ledger the gate needs. */
+type DiscogsFactsCandidate = {
+  albumId: string;
+  attemptedAt: null | string;
+  failures: number;
+  releaseId: number;
+  slug: string;
+};
+
+/** One bounded Discogs-facts pass's numbers. No cursor — the worklist self-drains by state. */
+export type DiscogsFactsBackfillResult = {
+  // False when DISCOGS_USER_TOKEN is unset — the leg is a NO-OP this tick (nothing read, nothing
+  // stamped), so the cron output reads honestly as "unconfigured" rather than a silent "0 resolved".
+  configured: boolean;
+  dryRun: boolean;
+  // Albums whose release lookup ERRORED — nothing was learned, the streak scales their cooldown.
+  failed: Array<{ error: string; slug: string }>;
+  failedCount: number;
+  // Albums whose release genuinely carries no catalogue number — terminal, never re-read.
+  none: string[];
+  noneCount: number;
+  // True when the pass STOPPED on the Discogs rate-limit circuit breaker; the next tick resumes
+  // with a fresh window rather than marching the rest of the batch into the same wall.
+  rateLimited: boolean;
+  resolved: Array<{ catno: string; slug: string }>;
+  resolvedCount: number;
+};
+
+// At most this many albums per pass. Each is one paced (~1.1s) Discogs release lookup, so 25 is
+// ~28s of wall time — comfortably inside the Worker request budget, with the box driving a smaller
+// batch than this ceiling on its own 30-minute cadence.
+const DISCOGS_FACTS_MAX_BATCH = 25;
+
+/**
+ * Read the Discogs-facts worklist: albums still `pending`, past the base cooldown, that at least one
+ * Discogs-resolved track points at. The `group by` collapses a record's tracks to ONE row and
+ * `min(in_release_id)` picks its release deterministically, so a re-read of the same worklist asks
+ * for the same releases. The precise failure-scaled cooldown is refined per row in TS, exactly as
+ * `listCatalogueAppleWork` does — the SQL applies only the cheap base cutoff.
+ */
+async function listDiscogsFactsWork(limit: number): Promise<DiscogsFactsCandidate[]> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - COOLDOWN_BASE_MS).toISOString();
+  const result = await db.execute({
+    args: [cutoff, limit],
+    sql: `select a.id as album_id, a.slug as slug,
+                 a.discogs_attempted_at as attempted_at,
+                 a.discogs_failures as failures,
+                 min(t.in_release_id) as release_id
+          from tracks t
+          join albums a on a.id = t.album_id
+          where t.in_release_id is not null
+            and a.discogs_state = 'pending'
+            and (a.discogs_attempted_at is null or a.discogs_attempted_at < ?)
+          group by a.id
+          order by a.id
+          limit ?`,
+  });
+
+  return typedRows<{
+    album_id: string;
+    attempted_at: null | string;
+    failures: null | number;
+    release_id: number;
+    slug: string;
+  }>(result.rows).map((row) => ({
+    albumId: row.album_id,
+    attemptedAt: row.attempted_at,
+    failures: typeof row.failures === "number" ? row.failures : 0,
+    releaseId: row.release_id,
+    slug: row.slug,
+  }));
+}
+
+/**
+ * Drain one bounded pass of the Discogs release-facts worklist.
+ *
+ * The ledger writes, and the reasoning behind each:
+ *   - a release with a catno  → `resolved` (catno + styles stored, terminal);
+ *   - a release with none     → `none` (terminal too: a pressing does not grow a catalogue number
+ *                                later, so re-reading it forever would spend the rate budget on a
+ *                                question already answered);
+ *   - a lookup that errored   → `failure` (streak scales the cooldown; nothing was concluded, so
+ *                                the album stays `pending` and a later tick retries it);
+ *   - a throttle              → NOTHING at all, and the pass stops. The album was budget-blocked,
+ *                                not unanswerable, so stamping it would poison the ledger.
+ *   - unconfigured            → NOTHING at all, and the pass stops before the first read.
+ */
+export async function backfillDiscogsFacts(
+  limit: number,
+  dryRun: boolean,
+): Promise<DiscogsFactsBackfillResult> {
+  const resolved: DiscogsFactsBackfillResult["resolved"] = [];
+  const none: string[] = [];
+  const failed: DiscogsFactsBackfillResult["failed"] = [];
+  const now = Date.now();
+
+  const summarize = (over: Partial<DiscogsFactsBackfillResult>): DiscogsFactsBackfillResult => ({
+    configured,
+    dryRun,
+    failed,
+    failedCount: failed.length,
+    none,
+    noneCount: none.length,
+    rateLimited: false,
+    resolved,
+    resolvedCount: resolved.length,
+    ...over,
+  });
+
+  // Read the token FIRST, so `configured` is honest on every return path including a dry run — a
+  // preview that reports "configured" on a Worker with no Discogs token would tell the operator the
+  // sweep is armed when the very next live tick will do nothing. The preview itself still runs
+  // unconfigured (the worklist is a pure DB read), which is exactly what makes it useful there.
+  const token = await readOptionalEnv("DISCOGS_USER_TOKEN");
+  const configured = Boolean(token);
+
+  const page = Math.max(1, Math.min(limit, DISCOGS_FACTS_MAX_BATCH));
+  const candidates = await listDiscogsFactsWork(page);
+
+  // The precise failure-scaled cooldown, refined per row (the SQL applied only the base cutoff).
+  // `isDone: false` because a done album is not in the worklist at all — the `pending` predicate
+  // already removed it, so this gate only has the backoff window left to decide.
+  const eligible = candidates.filter(
+    (candidate) =>
+      !shouldSkip(
+        { attemptedAt: candidate.attemptedAt, failures: candidate.failures, isDone: false },
+        now,
+      ),
+  );
+
+  if (eligible.length === 0) {
+    return summarize({});
+  }
+
+  if (dryRun) {
+    // Preview the eligible set (as `none` — the "would be read" set) without a single vendor call.
+    for (const candidate of eligible) {
+      none.push(candidate.slug);
+    }
+
+    return summarize({});
+  }
+
+  // No token → no reads, no stamps. Every album would answer identically, so scanning to no effect
+  // is waste and recording an attempt nobody made would poison the ledger (the Beatport rule).
+  if (!token) {
+    return summarize({});
+  }
+
+  for (const candidate of eligible) {
+    const outcome = await fetchDiscogsReleaseFacts(candidate.releaseId, token);
+
+    if (outcome.rateLimited) {
+      // Circuit breaker: stop the whole pass rather than marching the next album into the same 429.
+      // Nothing is stamped, so every remaining album stays eligible for the next tick's fresh window.
+      return summarize({ rateLimited: true });
+    }
+
+    if (!outcome.found || !outcome.facts) {
+      await recordAlbumDiscogsFailure(candidate.albumId);
+      failed.push({
+        error: `Discogs release ${candidate.releaseId} could not be read`,
+        slug: candidate.slug,
+      });
+      continue;
+    }
+
+    await storeAlbumDiscogsFacts(candidate.albumId, outcome.facts);
+
+    if (outcome.facts.catno) {
+      resolved.push({ catno: outcome.facts.catno, slug: candidate.slug });
+    } else {
+      none.push(candidate.slug);
+    }
+  }
+
+  return summarize({});
 }
 
 // ── Apple Music ─────────────────────────────────────────────────────────────────

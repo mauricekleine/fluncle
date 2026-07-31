@@ -108,6 +108,82 @@ export const backfillDiscogs = oc
     }),
   );
 
+/** A resolved Discogs-facts row (`{ catno, slug }`) — the leg is album-grained, so it keys by slug. */
+const DiscogsFactsResolvedSchema = z
+  .object({
+    catno: z.string(),
+    slug: z.string(),
+  })
+  .meta({ id: "DiscogsFactsResolved" });
+
+/** A failed Discogs-facts row (`{ error, slug }`). */
+const DiscogsFactsFailedSchema = z
+  .object({
+    error: z.string(),
+    slug: z.string(),
+  })
+  .meta({ id: "DiscogsFactsFailed" });
+
+/**
+ * `backfill_discogs_facts` → `POST /admin/backfill/discogs-facts` (operationId
+ * `backfillDiscogsFacts`).
+ *
+ * Agent tier (`adminAuth`) — the FACTS sibling of `backfill_discogs`. That leg resolves a finding to
+ * a Discogs RELEASE ID and stops; this one takes the id and reads the two album-grained facts off
+ * the release: `labels[].catno` (the label's own catalogue number, the code printed on the sleeve)
+ * and `styles[]`. Both land on the `albums` row — the catno reaches `/album/<slug>` and its
+ * MusicRelease JSON-LD as `catalogNumber`, the styles are stored only (the album page has no honest
+ * home for them; see docs/album-entity.md).
+ *
+ * IT EXISTS BECAUSE THE RESOLVER'S PRIMARY LEG NEVER SEES A RELEASE PAYLOAD: the MusicBrainz bridge
+ * reaches a Discogs id through a curated `url-rels` relation and accepts it directly, so most
+ * resolved findings carry an id whose payload nobody fetched. The scored-search half is captured
+ * inline at resolve time for free; this drains the rest at the shared client's ~1 req/s pacing.
+ *
+ * ALBUM-GRAINED AND SELF-DRAINING. Ten findings off one record share one catalogue number, so the
+ * worklist groups by album and buys the release once, and the ledger lives on `albums`
+ * (`discogs_state` pending → resolved | none, plus the attempted/failures pair). No cursor: an album
+ * leaves the worklist the moment it is ruled. `none` is the releases that genuinely carry no number
+ * (terminal — a pressing does not grow one later); `failed` is a lookup that errored, where nothing
+ * was learned and a later tick retries. It writes catalogue metadata only, never a certification, so
+ * it stays agent-allowed. A NO-OP until `DISCOGS_USER_TOKEN` is provisioned (`configured: false`).
+ */
+export const backfillDiscogsFacts = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillDiscogsFacts",
+    path: "/admin/backfill/discogs-facts",
+    summary: "Back-fill album catalogue numbers + styles from already-resolved Discogs releases",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      // False when DISCOGS_USER_TOKEN is unset — the leg was a no-op this tick.
+      configured: z.boolean(),
+      dryRun: z.boolean(),
+      failed: z.array(DiscogsFactsFailedSchema),
+      failedCount: z.number(),
+      // Albums whose release genuinely carries no catalogue number — terminal, never re-read.
+      none: z.array(z.string()),
+      noneCount: z.number(),
+      ok: z.literal(true),
+      // True when the pass STOPPED on the Discogs rate-limit circuit breaker — the next tick
+      // resumes with a fresh window, and nothing was stamped.
+      rateLimited: z.boolean(),
+      resolved: z.array(DiscogsFactsResolvedSchema),
+      resolvedCount: z.number(),
+    }),
+  );
+
 /**
  * `backfill_lastfm` → `POST /admin/backfill/lastfm` (operationId
  * `backfillLastfm`).
@@ -821,6 +897,7 @@ export const adminBackfillsContract = {
   backfill_beatport: backfillBeatport,
   backfill_cover_masters: backfillCoverMasters,
   backfill_discogs: backfillDiscogs,
+  backfill_discogs_facts: backfillDiscogsFacts,
   backfill_label_images: backfillLabelImages,
   backfill_label_lineage: backfillLabelLineage,
   backfill_label_releases: backfillLabelReleases,
