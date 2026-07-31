@@ -49,6 +49,7 @@ import {
   serializeState,
   type ServiceState,
   STDERR_DELIMITER,
+  STRAIN_ITEM_FAILURE_RATE,
   type StrainState,
   strainMinimumPoints,
   strainTotals,
@@ -510,10 +511,10 @@ describe("the strain vocabulary against the real box output", () => {
     expect(tripped.map((entry) => entry.line)).toEqual([]);
   });
 
-  test("designed throttling contributes zero strain while a real failure still scores", () => {
+  test("designed throttling contributes zero strain while a run failure still scores", () => {
     const yielded = strainMarker('{"ok":true,"throttled":true}', [DESIGNED_BACKPRESSURE.line]);
-    const failed = strainMarker('{"failed":1,"ok":true}', [
-      "[capture-sweep] unexpected error on mb_x: Apify returned 502",
+    const failed = strainMarker('{"errors":1,"ok":false}', [
+      "[crawl-sweep] fatal: the run aborted",
     ]);
 
     expect(countDistressLines(`> ${DESIGNED_BACKPRESSURE.line}`)).toBe(0);
@@ -560,7 +561,7 @@ describe("the strain vocabulary against the real box output", () => {
 });
 
 describe("the summary half — the sweeps' own counters", () => {
-  test("failure counters score; designed backpressure and success counters do not", () => {
+  test("direct failure counters score; designed backpressure and success counters do not", () => {
     // entity-bio's real summary shape: the gate skips ARE the stuck loop, in its own numbers.
     expect(countSummaryStrain({ authored: 0, gateSkipped: 3, ok: true, queueRemaining: 40 })).toBe(
       3,
@@ -568,15 +569,55 @@ describe("the summary half — the sweeps' own counters", () => {
     // crawl's real summary shape: designed backpressure is visible on its separate axis.
     expect(countSummaryStrain({ ok: true, throttled: true, tracksWritten: 120 })).toBe(0);
     expect(countSummaryBackpressure({ ok: true, throttled: true, tracksWritten: 120 })).toBe(1);
-    // capture's real summary shape: `skipped`/`unmatched` are ordinary outcomes, not failures.
-    expect(countSummaryStrain({ done: 4, failed: 2, ok: true, skipped: 6, unmatched: 3 })).toBe(2);
     // A clean tick scores nothing at all, whatever else it reports.
     expect(countSummaryStrain({ done: 10, embedded: 471, ok: true })).toBe(0);
     expect(countSummaryStrain(null)).toBe(0);
   });
 
-  test("array failure counters and nullable error strings preserve their real value shapes", () => {
-    expect(countSummaryStrain({ failed: ["youtube", "telegram", "bluesky"], ok: true })).toBe(3);
+  test("HEADLINE: an exit-0 capture-shaped 4/12 partial batch contributes no strain", () => {
+    const summary = { checked: 12, errors: 0, failed: 4, ok: true };
+    const stderr = Array.from(
+      { length: 4 },
+      (_, index) => `[capture-sweep] capture failed for catalogue (mb_${index}): bot challenge`,
+    );
+
+    expect(countSummaryStrain(summary)).toBe(0);
+    // Structured `failed` owns this marker, so duplicate prose cannot restore occurrence counting.
+    expect(markerStrain(strainMarker(JSON.stringify(summary), stderr))).toBe(0);
+  });
+
+  test("a genuine run failure still contributes strain", () => {
+    expect(countSummaryStrain({ checked: 12, errors: 1, failed: 4, ok: false })).toBe(1);
+  });
+
+  test("a genuinely high item-failure rate still contributes one point", () => {
+    expect(STRAIN_ITEM_FAILURE_RATE).toBe(0.5);
+    expect(countSummaryStrain({ checked: 12, failed: 5, ok: true })).toBe(0);
+    expect(countSummaryStrain({ checked: 12, failed: 6, ok: true })).toBe(1);
+    expect(
+      countSummaryStrain({
+        checked: 6,
+        failed: ["youtube", "telegram", "bluesky"],
+        ok: true,
+      }),
+    ).toBe(1);
+  });
+
+  test("failed with no usable checked denominator contributes nothing", () => {
+    expect(countSummaryStrain({ failed: 400, ok: true })).toBe(0);
+    expect(countSummaryStrain({ checked: 0, failed: 400, ok: true })).toBe(0);
+    expect(countSummaryStrain({ failed: ["youtube", "telegram", "bluesky"], ok: true })).toBe(0);
+    expect(
+      markerStrain(
+        strainMarker('{"failed":1,"ok":true}', [
+          "[capture-sweep] capture failed for catalogue (mb_x): bot challenge",
+        ]),
+      ),
+    ).toBe(0);
+    expect(markerStrain(strainMarker('{"ok":true}', ["[legacy-sweep] 400 items failed"]))).toBe(0);
+  });
+
+  test("nullable error strings preserve their real value shape", () => {
     expect(countSummaryStrain({ error: "Apify returned 502", ok: true })).toBeGreaterThanOrEqual(1);
     expect(countSummaryStrain({ error: null, failed: [], ok: true })).toBe(0);
   });
@@ -585,7 +626,7 @@ describe("the summary half — the sweeps' own counters", () => {
     // THE FIRST CONSTRAINT: strain must not falsify a sweep's report. A marker with 200 error
     // lines still reads `fresh-ok` to judgeCron, because that is what the sweep actually said.
     const body = strainMarker(
-      '{"ok":true,"batch":10,"failed":10}',
+      '{"ok":true,"checked":10,"failed":10}',
       Array.from({ length: 200 }, () => REAL_PROBLEMS[0]?.line ?? ""),
     );
     const dir = markerDir([{ ageMs: 60_000, body }]);
@@ -594,8 +635,8 @@ describe("the summary half — the sweeps' own counters", () => {
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
 
-    // …and yet the strain is fully visible on the separate signal: 200 lines + 10 `failed`.
-    expect(markerStrain(body)).toBe(210);
+    // …and yet the high item-failure rate is visible as ONE tick, without 210× double-counting.
+    expect(markerStrain(body)).toBe(1);
   });
 });
 
@@ -668,7 +709,7 @@ describe("the rolling window", () => {
   });
 
   test("a daily cron can be judged across three scheduled ticks", () => {
-    const failedTick = strainMarker('{"failed":1,"ok":true}', []);
+    const failedTick = strainMarker('{"checked":2,"failed":1,"ok":true}', []);
     const dir = markerDir([
       { ageMs: 48 * HOUR, body: failedTick },
       { ageMs: 24 * HOUR, body: failedTick },
@@ -749,7 +790,7 @@ describe("the sweep-errors row + the strain alert", () => {
   });
 });
 
-describe("normalizeStrain — the v3 state section", () => {
+describe("normalizeStrain — the v4 state section", () => {
   test("a v1/v2 file with no strain section loads empty, never throws", () => {
     expect(normalizeStrain({ web: "ok" })).toEqual({});
     expect(normalizeStrain({ services: {}, version: 2 })).toEqual({});
@@ -771,6 +812,7 @@ describe("normalizeStrain — the v3 state section", () => {
             watermarkMs: -1,
           },
         },
+        version: 4,
       }),
     ).toEqual({
       "cron.capture": {
@@ -784,7 +826,28 @@ describe("normalizeStrain — the v3 state section", () => {
     });
   });
 
-  test("a real v3 file round-trips through serialize → parse → normalize", () => {
+  test("v3 points are discarded while the prior strained flag survives for a clear alert", () => {
+    expect(
+      normalizeStrain({
+        strain: {
+          "cron.capture": {
+            buckets: { "7200000": { points: 400, ticks: 12 } },
+            strained: true,
+            watermarkMs: 7_260_000,
+          },
+        },
+        version: 3,
+      }),
+    ).toEqual({
+      "cron.capture": {
+        buckets: {},
+        strained: true,
+        watermarkMs: 0,
+      },
+    });
+  });
+
+  test("a real v4 file round-trips through serialize → parse → normalize", () => {
     const strain: Record<string, StrainState> = {
       "cron.capture": {
         buckets: { "7200000": { backpressure: 2, points: 40, ticks: 12 } },

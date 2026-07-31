@@ -1574,10 +1574,10 @@ async function main(): Promise<void> {
   console.log(
     JSON.stringify({
       batch: batch.length,
-      // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's STRAIN_COUNTER_KEYS
-      // (`errors` / `failed` / `gateSkipped`), so publishing the number does not
-      // by itself make a steady state read as strain — the same contract the log lines keep,
-      // and pinned by the same tests.
+      // THE CHALLENGE RATE, per tick. Neither key is part of the healthcheck's failure
+      // vocabulary, so publishing the number does not by itself make a steady state read as
+      // strain. Item-level `failed` is judged separately only when a real `checked`
+      // denominator exists; this sweep deliberately emits none, so it contributes nothing.
       botChallenges: botChallenges.total,
       botChallengesUncleared: botChallenges.uncleared,
       done: counts.done,
