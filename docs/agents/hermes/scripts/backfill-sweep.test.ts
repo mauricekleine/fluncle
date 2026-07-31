@@ -285,6 +285,36 @@ describe("the tick's legs", () => {
     });
   });
 
+  test("canonical counters use handled rows, exclude reliability skips, and omit queue depth", () => {
+    const summary = runBackfillSweep();
+
+    // checked:
+    //   Discogs 1 resolved + 2 unresolved
+    //   Last.fm 4 loved + 0 failed
+    //   Apple findings 6 resolved + 7 unresolved + 0 failed
+    //   Apple catalogue 9 resolved + 10 unresolved + 11 failed
+    //   Beatport 13 resolved + 14 unresolved + 15 failed
+    // The 3 + 5 + 8 + 16 reliability skips are deliberately excluded.
+    expect(summary.checked).toBe(92);
+    expect(summary.produced).toBe(33);
+    expect(summary.failed).toBe(26);
+    expect(summary.errors).toBe(0);
+    expect(summary).not.toHaveProperty("queue_depth");
+  });
+
+  test("measured zero canonical counters survive as zero, never null", () => {
+    writeFileSync(modeFile, "unconfigured");
+    writeFileSync(beatportModeFile, "unconfigured");
+
+    const summary = runBackfillSweep();
+
+    // The three configured legs still did measured work, while the two unconfigured
+    // legs contribute real zeroes rather than unknown/null values.
+    expect(summary.checked).toBe(20);
+    expect(summary.produced).toBe(11);
+    expect(summary.errors).toBe(0);
+  });
+
   test("an unconfigured Beatport leg is a recorded no-op, not a failed tick", () => {
     writeFileSync(beatportModeFile, "unconfigured");
 
@@ -313,6 +343,12 @@ describe("the tick's legs", () => {
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
     expect((summary["apple-catalogue"] as { resolved: number }).resolved).toBe(9);
     expect((summary.discogs as { resolved: number }).resolved).toBe(1);
+    expect(summary.errors).toBe(1);
+    // Known pre-existing behaviour: Beatport's catch does not flip `ok`, so the process
+    // still exits zero. The new canonical counter makes the run failure visible without
+    // changing that behaviour in this observability-only slice.
+    expect(summary.ok).toBe(true);
+    expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(0);
   });
 
   test("the Discogs-facts leg runs LAST and asks for its own small batch", () => {

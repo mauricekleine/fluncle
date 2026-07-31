@@ -70,6 +70,8 @@ export type ArtistEdgesBackfillResult = {
   // Track ids where SOME names matched and some did not (their unmatched names feed the residual).
   partiallyMatched: string[];
   partiallyMatchedCount: number;
+  // Authoritative rows still in the worklist after this pass.
+  queueDepth: number;
   // Tracks VISITED this pass (fully + partially + zero). The CLI loop's cap unit — with the sweep's
   // `--limit` pinned to `MAX_BATCH`, a full page equals the limit and the loop stops after one call.
   scanned: number;
@@ -301,6 +303,29 @@ async function listWork(
   return typedRows<WorkRow>(result.rows);
 }
 
+/**
+ * Authoritative remaining work after a pass. The candidate predicate rides
+ * `tracks_artist_edges_backfill_queue_idx`; the anti-join probes
+ * `track_artists_track_id_idx`. Both are existing btrees, so this gauge does not turn the hourly
+ * tick into a table scan.
+ */
+export const ARTIST_EDGES_QUEUE_DEPTH_SQL = `select count(*) as queued
+          from tracks t
+          where t.artist_edges_backfilled_at is null
+            and not exists (
+              select 1 from track_artists ta where ta.track_id = t.track_id
+            )`;
+
+async function countWork(db: Awaited<ReturnType<typeof getDb>>): Promise<number> {
+  const result = await db.execute({
+    args: [],
+    sql: ARTIST_EDGES_QUEUE_DEPTH_SQL,
+  });
+  const row = typedRows<{ queued: bigint | number }>(result.rows)[0];
+
+  return Number(row?.queued ?? 0);
+}
+
 /** Load the full `artists` name corpus (id + canonical name) for the fold map — one bounded read. */
 async function loadArtists(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -425,6 +450,7 @@ export async function resolveArtistEdges(
       ok: true,
       partiallyMatched,
       partiallyMatchedCount: 0,
+      queueDepth: await countWork(db),
       scanned: 0,
       unmatchedNames: 0,
       zeroMatched,
@@ -480,6 +506,7 @@ export async function resolveArtistEdges(
     await stampVisited(db, visited);
   }
 
+  const queueDepth = await countWork(db);
   const lastTrackId = rows.at(-1)?.track_id ?? null;
   const nextCursor = rows.length < batchLimit ? null : lastTrackId;
 
@@ -492,6 +519,7 @@ export async function resolveArtistEdges(
     ok: true,
     partiallyMatched,
     partiallyMatchedCount: partiallyMatched.length,
+    queueDepth,
     scanned: rows.length,
     unmatchedNames,
     zeroMatched,

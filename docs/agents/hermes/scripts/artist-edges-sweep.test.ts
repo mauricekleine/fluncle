@@ -25,15 +25,16 @@ import { join } from "node:path";
 // cannot ride on an env var either.)
 const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
-  drained) printf '{"ok":true,"dryRun":false,"scanned":0,"edgesWritten":0,"fullyMatched":[],"fullyMatchedCount":0,"partiallyMatched":[],"partiallyMatchedCount":0,"zeroMatched":[],"zeroMatchedCount":0,"unmatchedNames":0}\\n' ;;
+  drained) printf '{"ok":true,"dryRun":false,"scanned":0,"edgesWritten":0,"fullyMatched":[],"fullyMatchedCount":0,"partiallyMatched":[],"partiallyMatchedCount":0,"queueDepth":0,"zeroMatched":[],"zeroMatchedCount":0,"unmatchedNames":0}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
-  *) printf '{"ok":true,"dryRun":false,"scanned":5,"edgesWritten":6,"fullyMatched":["a","b"],"fullyMatchedCount":2,"partiallyMatched":["c"],"partiallyMatchedCount":1,"zeroMatched":["d","e"],"zeroMatchedCount":2,"unmatchedNames":3}\\n' ;;
+  *) printf '{"ok":true,"dryRun":false,"scanned":5,"edgesWritten":6,"fullyMatched":["a","b"],"fullyMatchedCount":2,"partiallyMatched":["c"],"partiallyMatchedCount":1,"queueDepth":17,"zeroMatched":["d","e"],"zeroMatchedCount":2,"unmatchedNames":3}\\n' ;;
 esac
 `;
 
 let dir: string;
 let fluncleJson: typeof import("./artist-edges-sweep").fluncleJson;
+let main: typeof import("./artist-edges-sweep").main;
 
 /** Point the stub at one of its canned responses. */
 function mode(name: string): void {
@@ -48,7 +49,7 @@ beforeAll(async () => {
   process.env.FLUNCLE_BIN = bin;
   mode("ok");
 
-  ({ fluncleJson } = await import("./artist-edges-sweep"));
+  ({ fluncleJson, main } = await import("./artist-edges-sweep"));
 });
 
 afterAll(() => {
@@ -60,6 +61,7 @@ type Pass = {
   fullyMatchedCount?: number;
   ok?: boolean;
   partiallyMatchedCount?: number;
+  queueDepth?: number;
   scanned?: number;
   unmatchedNames?: number;
   zeroMatchedCount?: number;
@@ -100,5 +102,54 @@ describe("artist-edges-sweep's fluncleJson", () => {
     mode("crash");
 
     expect(() => fluncleJson<Pass>(["admin", "backfills", "artist-edges"])).toThrow(/exited 1/);
+  });
+});
+
+function run(): Record<string, unknown> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line: string) => lines.push(line);
+
+  try {
+    main();
+  } finally {
+    console.log = original;
+  }
+
+  return JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
+}
+
+describe("artist-edges-sweep's canonical counters", () => {
+  test("every visited-and-stamped track is checked + produced, with indexed post-pass depth", () => {
+    mode("ok");
+
+    expect(run()).toMatchObject({
+      checked: 5,
+      errors: 0,
+      failed: 0,
+      produced: 5,
+      queue_depth: 17,
+      scanned: 5,
+    });
+  });
+
+  test("a measured drained worklist preserves checked: 0 and queue_depth: 0", () => {
+    mode("drained");
+
+    expect(run()).toMatchObject({
+      checked: 0,
+      errors: 0,
+      failed: 0,
+      produced: 0,
+      queue_depth: 0,
+    });
+  });
+
+  test("a command failure is a run error, never an item failure", () => {
+    mode("crash");
+    const summary = run();
+
+    expect(summary).toMatchObject({ checked: 0, errors: 1, failed: 0, ok: false, produced: 0 });
+    expect(summary).not.toHaveProperty("queue_depth");
   });
 });

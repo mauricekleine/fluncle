@@ -9,7 +9,14 @@
 // touching the dedupe/plausibility heuristic or the verdict prompt.
 import { describe, expect, test } from "bun:test";
 
-import { assessSubmission, buildTriagePrompt } from "./triage-sweep";
+import {
+  assessSubmission,
+  buildTriageFatalSummary,
+  buildTriagePrompt,
+  classifyTriageDeliveryFailure,
+  createTriageSummary,
+  recordTriageOutcome,
+} from "./triage-sweep";
 
 describe("assessSubmission", () => {
   test("archived (spotify id already in the archive) dominates: archived + a lead signal", () => {
@@ -102,5 +109,53 @@ describe("buildTriagePrompt", () => {
     );
 
     expect(prompt).toContain("LOOKS LIKE A FIND");
+  });
+});
+
+describe("triage sweep canonical counters", () => {
+  test("checked counts attempts, produced counts stored verdicts, and queue depth uses the full queue", () => {
+    const summary = createTriageSummary(12);
+
+    recordTriageOutcome(summary, "triaged");
+    recordTriageOutcome(summary, "gateSkipped");
+    recordTriageOutcome(summary, "alreadyReviewed");
+    recordTriageOutcome(summary, "failed");
+
+    expect(summary).toEqual({
+      alreadyReviewed: 1,
+      checked: 4,
+      errors: 0,
+      failed: 1,
+      gateSkipped: 1,
+      produced: 1,
+      queueRemaining: 10,
+      queue_depth: 10,
+      skipped: 2,
+      triaged: 1,
+    });
+  });
+
+  test("classifies gate skips and already-reviewed races separately from true item failures", () => {
+    expect(classifyTriageDeliveryFailure('{"code":"verdict_too_long"}')).toBe("gateSkipped");
+    expect(classifyTriageDeliveryFailure('{"code":"invalid_status"} 409')).toBe("alreadyReviewed");
+    expect(classifyTriageDeliveryFailure("upstream request failed")).toBe("failed");
+  });
+
+  test("a measured empty queue preserves checked: 0 and queue_depth: 0, never null", () => {
+    const summary = createTriageSummary(0);
+
+    expect(summary.checked).toBe(0);
+    expect(summary.checked).not.toBeNull();
+    expect(summary.produced).toBe(0);
+    expect(summary.queue_depth).toBe(0);
+  });
+
+  test("a fatal run reports errors without guessing work counters", () => {
+    expect(buildTriageFatalSummary()).toMatchObject({
+      checked: null,
+      errors: 1,
+      failed: null,
+      produced: null,
+    });
   });
 });

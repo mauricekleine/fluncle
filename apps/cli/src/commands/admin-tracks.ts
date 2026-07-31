@@ -657,6 +657,8 @@ export type ArtistEdgesBackfillResult = {
   // Track ids where SOME names matched and some did not (their unmatched names feed the residual).
   partiallyMatched: string[];
   partiallyMatchedCount: number;
+  // Authoritative rows still in the worklist after this pass.
+  queueDepth: number;
   // Tracks VISITED this pass (fully + partially + zero) — the loop's cap unit.
   scanned: number;
   // Total credited names across the batch that matched NO identity — the future MB-sweep residual.

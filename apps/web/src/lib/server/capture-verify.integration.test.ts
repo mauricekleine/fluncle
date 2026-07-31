@@ -1,7 +1,13 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { listUnverifiedCaptures, verifyCapture, WRONG_AUDIO_STATUS } from "./catalogue";
+import {
+  COUNT_UNVERIFIED_CAPTURES_SQL,
+  countUnverifiedCaptures,
+  listUnverifiedCaptures,
+  verifyCapture,
+  WRONG_AUDIO_STATUS,
+} from "./catalogue";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
 // THE CAPTURE-VERIFICATION ROUTING, PROVEN — against the real schema (docs/the-ear.md § Wrong
@@ -186,5 +192,20 @@ describe("listUnverifiedCaptures — the backfill's worklist", () => {
     expect(finding?.certified).toBe(true);
     expect(finding?.logId).toBe("001.1.1A");
     expect(items.find((item) => item.trackId === "cat_pending")?.certified).toBe(false);
+
+    // The opt-in gauge executes against the generated schema and counts the exact same worklist.
+    expect(await countUnverifiedCaptures()).toBe(2);
+
+    const plan = await db.execute({
+      args: [WRONG_AUDIO_STATUS],
+      sql: `explain query plan ${COUNT_UNVERIFIED_CAPTURES_SQL}`,
+    });
+    const details = plan.rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join("\n");
+
+    // The leading `capture_verification is null` seek must stay on the documented btree; adding a
+    // gauge is acceptable here precisely because it does not scan the growing tracks table.
+    expect(details).toContain("tracks_capture_verification_verified_at_idx");
   });
 });

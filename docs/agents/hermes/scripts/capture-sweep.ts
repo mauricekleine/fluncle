@@ -1535,19 +1535,75 @@ async function captureFinding(
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
+type CaptureCounts = {
+  done: number;
+  failed: number;
+  skipped: number;
+  unmatched: number;
+};
+
+export function buildCaptureSummary(options: {
+  batch: number;
+  botChallenges: number;
+  botChallengesUncleared: number;
+  counts: CaptureCounts;
+  elapsedMs: number;
+}): Record<string, unknown> {
+  const { counts } = options;
+
+  return {
+    batch: options.batch,
+    botChallenges: options.botChallenges,
+    botChallengesUncleared: options.botChallengesUncleared,
+    checked: options.batch,
+    done: counts.done,
+    elapsedMs: options.elapsedMs,
+    errors: 0,
+    failed: counts.failed,
+    ok: true,
+    produced: counts.done,
+    // Deliberately no `queue_depth`: capture's whole-backlog count is an unindexed hot-path scan.
+    skipped: counts.skipped,
+    unmatched: counts.unmatched,
+  };
+}
+
+export function buildCaptureConfigFailureSummary(reason: string): Record<string, unknown> {
+  return {
+    checked: 0,
+    errors: 1,
+    failed: 0,
+    ok: false,
+    produced: 0,
+    reason,
+  };
+}
+
+export function buildCaptureFatalSummary(error: unknown): Record<string, unknown> {
+  return {
+    checked: null,
+    error: error instanceof Error ? error.message : String(error),
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    reason: "capture_failed",
+  };
+}
+
 async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(JSON.stringify(buildCaptureConfigFailureSummary("missing_api_token")));
     process.exit(1);
   }
   if (!PROXY_HOST || !PROXY_PORT || !PROXY_USERNAME || !PROXY_PASSWORD) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_proxy_credentials" }));
+    console.log(JSON.stringify(buildCaptureConfigFailureSummary("missing_proxy_credentials")));
     process.exit(1);
   }
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_r2_credentials" }));
+    console.log(JSON.stringify(buildCaptureConfigFailureSummary("missing_r2_credentials")));
     process.exit(1);
   }
 
@@ -1591,33 +1647,33 @@ async function main(): Promise<void> {
   logBotChallengeRecap(botChallenges);
 
   console.log(
-    JSON.stringify({
-      batch: batch.length,
-      // THE CHALLENGE RATE, per tick. Neither key is part of the healthcheck's failure
-      // vocabulary, so publishing the number does not by itself make a steady state read as
-      // strain. Item-level `failed` is judged separately only when a real `checked`
-      // denominator exists; this sweep deliberately emits none, so it contributes nothing.
-      botChallenges: botChallenges.total,
-      botChallengesUncleared: botChallenges.uncleared,
-      done: counts.done,
-      elapsedMs: Date.now() - started,
-      failed: counts.failed,
-      ok: true,
-      // Deliberately NO `queueDepth`. `queue.length` is only the bounded page, while the honest
-      // `count=true` capture predicate scans the growing tracks table plus its findings join on
-      // every hot-path tick (capture has no covering queue index). Until an operator-approved,
-      // hosted-Turso-proven index exists, omission is the only honest and affordable gauge.
-      skipped: counts.skipped,
-      unmatched: counts.unmatched,
-    }),
+    JSON.stringify(
+      buildCaptureSummary({
+        batch: batch.length,
+        // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's failure vocabulary,
+        // so publishing the number does not by itself make a steady state read as strain.
+        botChallenges: botChallenges.total,
+        botChallengesUncleared: botChallenges.uncleared,
+        counts,
+        elapsedMs: Date.now() - started,
+        // Deliberately NO `queue_depth`. `queue.length` is only the bounded page, while the honest
+        // `count=true` capture predicate scans the growing tracks table plus its findings join on
+        // every hot-path tick (capture has no covering queue index). Until an operator-approved,
+        // hosted-Turso-proven index exists, omission is the only honest and affordable gauge.
+        //
+        // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
+        // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
+        // baseline against bot challenges no longer parks it on the public degraded row.
+      }),
+    ),
   );
 }
 
 if (import.meta.main) {
   main().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    log(`capture sweep failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "capture_failed" }));
+    const summary = buildCaptureFatalSummary(error);
+    log(`capture sweep failed: ${String(summary.error)}`);
+    console.log(JSON.stringify(summary));
     process.exit(1);
   });
 }

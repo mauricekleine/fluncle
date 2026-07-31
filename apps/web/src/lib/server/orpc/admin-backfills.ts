@@ -433,6 +433,7 @@ export function adminBackfillsHandlers(os: Implementer) {
           ok: true as const,
           partiallyMatched: result.partiallyMatched,
           partiallyMatchedCount: result.partiallyMatchedCount,
+          queueDepth: result.queueDepth,
           scanned: result.scanned,
           unmatchedNames: result.unmatchedNames,
           zeroMatched: result.zeroMatched,

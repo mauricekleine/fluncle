@@ -63,11 +63,13 @@ const log = (message: string) => console.error(`[rank-sweep] ${message}`);
 // ---------------------------------------------------------------------------
 
 type RankSummary = {
+  catalogueDuplicates?: number;
   corpus?: string;
   embeddedFindings?: number;
   findings?: number;
   ok?: boolean;
   prioritized?: number;
+  quarantined?: number;
   // The server's "> 0, run me again" signal — INFERRED from batch fullness, not a live
   // count (a full batch ⇒ more stale by construction; a short/empty batch ⇒ drained). The
   // sweep reads it only for the `=== 0` stop test below (docs/db-scale-backlog Wave 1 #1).
@@ -146,10 +148,16 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
     calls: 0,
+    catalogueDuplicates: 0,
+    checked: 0,
     corpus: null as null | string,
     error: null as null | string,
+    errors: 0,
+    failed: 0,
     ok: true,
     prioritized: 0,
+    produced: 0,
+    quarantined: 0,
     // What is still stale when the tick's budget ran out. > 0 is not a failure — it is
     // the honest "there is more, and the next tick will take it".
     remaining: 0,
@@ -166,6 +174,8 @@ export function main(): { ok: boolean } & Record<string, unknown> {
       summary.corpus = tick.corpus ?? summary.corpus;
       summary.scored += tick.scored ?? 0;
       summary.prioritized += tick.prioritized ?? 0;
+      summary.quarantined += tick.quarantined ?? 0;
+      summary.catalogueDuplicates += tick.catalogueDuplicates ?? 0;
       summary.remaining = tick.remaining ?? 0;
 
       if (summary.remaining === 0) {
@@ -180,9 +190,16 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`rank sweep failed: ${summary.error}`);
   }
+
+  // `catalogueDuplicates` is a forensic SUBSET of rows already scored, never extra work.
+  // Quarantine and priority writes are successful actions in their own right, so both belong in
+  // the canonical denominator/numerator alongside scored rows.
+  summary.checked = summary.scored + summary.prioritized + summary.quarantined;
+  summary.produced = summary.checked;
 
   console.log(JSON.stringify(summary));
 

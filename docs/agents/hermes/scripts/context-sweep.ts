@@ -77,6 +77,62 @@ type ContextResult = {
 
 type Outcome = "filled" | "noop" | "skipped";
 
+type ContextCounts = {
+  batch: number;
+  failed: number;
+  filled: number;
+  noop: number;
+  queueRemaining: number;
+};
+
+export function buildContextSummary(
+  counts: ContextCounts,
+  retryEmpty: boolean,
+): {
+  batch: number;
+  checked: number;
+  errors: number;
+  failed: number;
+  filled: number;
+  noop: number;
+  ok: true;
+  processed: number;
+  produced: number;
+  queueRemaining: number;
+  retryEmpty: boolean;
+} {
+  return {
+    ...counts,
+    checked: counts.batch,
+    errors: 0,
+    ok: true,
+    processed: counts.filled + counts.noop,
+    // Only a newly written context note is production; an idempotent no-op is not.
+    produced: counts.filled,
+    retryEmpty,
+  };
+}
+
+export function buildContextFailureSummary(error: unknown): {
+  checked: null;
+  error: string;
+  errors: 1;
+  failed: null;
+  ok: false;
+  produced: null;
+  reason: "context_failed";
+} {
+  return {
+    checked: null,
+    error: error instanceof Error ? error.message : String(error),
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    reason: "context_failed",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Shell helper — synchronous, fail-loud where it matters.
 // ---------------------------------------------------------------------------
@@ -144,7 +200,7 @@ function contextOne(finding: QueueFinding): Outcome {
 // Main — drain a bounded batch off the queue.
 // ---------------------------------------------------------------------------
 
-function main(): void {
+export function main(): void {
   // `context --queue --json` returns `{ ok: true, tracks: [...] }`, not a bare array.
   // `--retry-empty` (the occasional widen pass) also re-picks confirmed-empty finds;
   // the routine cron omits it, so the worklist stays narrow tick to tick.
@@ -159,38 +215,37 @@ function main(): void {
   ]);
   const queue = response.tracks ?? [];
 
-  const summary = {
+  const counts: ContextCounts = {
     batch: 0,
     failed: 0,
     filled: 0,
     noop: 0,
     queueRemaining: queue.length,
-    retryEmpty: RETRY_EMPTY,
   };
 
   if (queue.length === 0) {
-    console.log(JSON.stringify({ ok: true, processed: 0, ...summary }));
+    console.log(JSON.stringify(buildContextSummary(counts, RETRY_EMPTY)));
 
     return; // fast no-op
   }
 
   for (const finding of queue.slice(0, BATCH_CAP)) {
-    summary.batch += 1;
+    counts.batch += 1;
 
     try {
       const outcome = contextOne(finding);
 
       if (outcome === "filled") {
-        summary.filled += 1;
+        counts.filled += 1;
       } else if (outcome === "noop") {
-        summary.noop += 1;
+        counts.noop += 1;
       } else {
-        summary.failed += 1;
+        counts.failed += 1;
       }
     } catch (error) {
       // One finding's failure must not abort the sweep — log it and move on; it
       // stays in the queue for the next tick.
-      summary.failed += 1;
+      counts.failed += 1;
       log(
         `error on ${finding.trackId ?? finding.logId ?? "?"}: ${
           error instanceof Error ? error.message : String(error)
@@ -199,12 +254,19 @@ function main(): void {
     }
   }
 
-  // queueRemaining is the queue depth AT READ TIME minus what we filled/no-op'd this
-  // tick (failures stay queued); the next tick re-reads the live queue regardless.
-  summary.queueRemaining = Math.max(0, queue.length - summary.filled - summary.noop);
-  const processed = summary.filled + summary.noop;
-
-  console.log(JSON.stringify({ ok: true, processed, ...summary }));
+  // Preserve the existing bounded-page residual as forensic detail. It is deliberately NOT
+  // `queue_depth`: the queue read is capped and its predicate has no cheap covering count.
+  counts.queueRemaining = Math.max(0, queue.length - counts.filled - counts.noop);
+  console.log(JSON.stringify(buildContextSummary(counts, RETRY_EMPTY)));
 }
 
-main();
+if (import.meta.main) {
+  try {
+    main();
+  } catch (error) {
+    const summary = buildContextFailureSummary(error);
+    log(`context sweep failed: ${summary.error}`);
+    console.log(JSON.stringify(summary));
+    process.exit(1);
+  }
+}
