@@ -213,8 +213,15 @@ RUN arch="$(uname -m)" \
 # workspace package does not exist on the box), and clip-drip-sweep.sh (an un-deployed cron). Keep
 # provision-rave-03.sh — it is NOT operator-only: render-conductor.sh execs it as a sibling
 # (`$SCRIPT_DIR/provision-rave-03.sh`) on a render-box cold start, so the render timer needs it
-# baked here too. World-readable + exec so the non-root hermes cron user runs them.
+# baked here too. The two device-mirror development shims are overwritten immediately afterward
+# by their canonical dependency-free modules from apps/web; this keeps the box script
+# self-contained without duplicating the device whitelist or anchored-cut SQL. World-readable +
+# exec so the non-root hermes cron user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
+COPY apps/web/src/lib/catalogue-eligibility.ts \
+     apps/web/scripts/lib/device-db-derivation.ts \
+     apps/web/scripts/lib/device-db-schema.ts \
+     /opt/hermes-scripts/
 RUN rm -f /opt/hermes-scripts/*.test.ts \
           /opt/hermes-scripts/bunfig.toml \
           /opt/hermes-scripts/clip-drip-sweep.sh \

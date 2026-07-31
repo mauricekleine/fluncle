@@ -20,7 +20,15 @@ import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { REC_ELIGIBLE_WHERE } from "../src/lib/server/recommendations";
+import { REC_ELIGIBLE_WHERE } from "../src/lib/catalogue-eligibility";
+import {
+  createDeviceTableSql as createTableSql,
+  type DeviceDbCut as Cut,
+  type DeviceDbSqliteColumn as SqliteColumn,
+  DEVICE_DB_INDEXES,
+  insertDeviceTableSql,
+  quoteDeviceDbIdentifier as quoteIdentifier,
+} from "./lib/device-db-derivation";
 import {
   DEVICE_DB_COLUMNS,
   DEVICE_DB_SCHEMA_VERSION,
@@ -28,17 +36,6 @@ import {
   DEVICE_SYNC_META_COLUMNS,
   type DeviceSourceTable,
 } from "./lib/device-db-schema";
-
-type Cut = "anchored" | "certified" | "full";
-
-type SqliteColumn = {
-  cid: number;
-  dflt_value: null | string;
-  name: string;
-  notnull: 0 | 1;
-  pk: number;
-  type: string;
-};
 
 type DerivationArgs = {
   cut: Cut;
@@ -51,54 +48,6 @@ type SourceInspection = {
   rowCounts: Record<string, number>;
   schema: Map<DeviceSourceTable, SqliteColumn[]>;
 };
-
-type DeviceIndex = {
-  columns: readonly string[];
-  name: string;
-  table: DeviceSourceTable;
-  unique?: boolean;
-};
-
-const DEVICE_INDEXES: readonly DeviceIndex[] = [
-  { columns: ["album_id"], name: "device_tracks_album_id_idx", table: "tracks" },
-  { columns: ["label_id"], name: "device_tracks_label_id_idx", table: "tracks" },
-  { columns: ["is_catalogue"], name: "device_tracks_is_catalogue_idx", table: "tracks" },
-  { columns: ["release_date"], name: "device_tracks_release_date_idx", table: "tracks" },
-  {
-    columns: ["log_id"],
-    name: "device_findings_log_id_idx",
-    table: "findings",
-    unique: true,
-  },
-  { columns: ["added_at"], name: "device_findings_added_at_idx", table: "findings" },
-  { columns: ["slug"], name: "device_artists_slug_idx", table: "artists", unique: true },
-  { columns: ["slug"], name: "device_labels_slug_idx", table: "labels", unique: true },
-  { columns: ["parent_label_id"], name: "device_labels_parent_id_idx", table: "labels" },
-  { columns: ["slug"], name: "device_albums_slug_idx", table: "albums", unique: true },
-  {
-    columns: ["track_id"],
-    name: "device_track_artists_track_id_idx",
-    table: "track_artists",
-  },
-  {
-    columns: ["artist_id"],
-    name: "device_track_artists_artist_id_idx",
-    table: "track_artists",
-  },
-];
-
-const INSERT_ORDER: Record<DeviceSourceTable, readonly string[]> = {
-  albums: ["id"],
-  artists: ["id"],
-  findings: ["track_id"],
-  labels: ["id"],
-  track_artists: ["track_id", "artist_id"],
-  tracks: ["track_id"],
-};
-
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replaceAll('"', '""')}"`;
-}
 
 function parseArgs(argv: readonly string[]): DerivationArgs {
   const values = new Map<string, string>();
@@ -149,28 +98,6 @@ async function sourceWatermark(sourcePath: string): Promise<string> {
   return `sha256:${hash.digest("hex")}`;
 }
 
-function declaredType(type: string, table: string, column: string): string {
-  const normalized = type.trim().toUpperCase();
-
-  if (normalized.includes("INT")) {
-    return "INTEGER";
-  }
-  if (normalized.includes("CHAR") || normalized.includes("CLOB") || normalized.includes("TEXT")) {
-    return "TEXT";
-  }
-  if (normalized.includes("REAL") || normalized.includes("FLOA") || normalized.includes("DOUB")) {
-    return "REAL";
-  }
-  if (normalized === "" || normalized.includes("BLOB")) {
-    return "BLOB";
-  }
-  if (normalized.includes("NUM") || normalized.includes("DEC") || normalized.includes("BOOL")) {
-    return "NUMERIC";
-  }
-
-  throw new Error(`Unsupported declared type for ${table}.${column}: ${type}`);
-}
-
 function tableInfo(source: Database, table: DeviceSourceTable): SqliteColumn[] {
   const rows = source
     .query(`PRAGMA main.table_info(${quoteIdentifier(table)})`)
@@ -191,119 +118,8 @@ function tableInfo(source: Database, table: DeviceSourceTable): SqliteColumn[] {
   return rows;
 }
 
-function createTableSql(table: DeviceSourceTable, sourceColumns: readonly SqliteColumn[]): string {
-  const byName = new Map(sourceColumns.map((column) => [column.name, column]));
-  const definitions: string[] = [];
-
-  for (const name of DEVICE_DB_COLUMNS[table]) {
-    const column = byName.get(name);
-
-    if (!column) {
-      throw new Error(`Source column is missing: ${table}.${name}`);
-    }
-
-    definitions.push(
-      `${quoteIdentifier(name)} ${declaredType(column.type, table, name)}${
-        column.notnull === 1 ? " NOT NULL" : ""
-      }`,
-    );
-  }
-
-  const primaryKey = sourceColumns
-    .filter(
-      (column) => column.pk > 0 && DEVICE_DB_COLUMNS[table].some((name) => name === column.name),
-    )
-    .sort((left, right) => left.pk - right.pk)
-    .map((column) => quoteIdentifier(column.name));
-
-  if (primaryKey.length > 0) {
-    definitions.push(`PRIMARY KEY (${primaryKey.join(", ")})`);
-  }
-
-  return `CREATE TABLE main.${quoteIdentifier(table)} (${definitions.join(", ")})`;
-}
-
-function selectedTracksCte(cut: Cut): string {
-  const where =
-    cut === "certified"
-      ? "f.track_id is not null"
-      : cut === "anchored"
-        ? `f.track_id is not null or (${REC_ELIGIBLE_WHERE})`
-        : `f.track_id is not null
-           or (t.dismissed_at is null and t.duplicate_of_track_id is null)`;
-
-  return `WITH selected_tracks(track_id) AS (
-    SELECT t.track_id
-    FROM source.${quoteIdentifier("tracks")} AS t
-    LEFT JOIN source.${quoteIdentifier("findings")} AS f ON f.track_id = t.track_id
-    WHERE ${where}
-  )`;
-}
-
-function selectedSourceSql(table: DeviceSourceTable, cut: Cut): string {
-  const cte = selectedTracksCte(cut);
-  const sourceTable = `source.${quoteIdentifier(table)}`;
-
-  if (table === "tracks") {
-    return `${cte}
-      SELECT source_row.*
-      FROM ${sourceTable} AS source_row
-      JOIN selected_tracks selected ON selected.track_id = source_row.track_id`;
-  }
-
-  if (table === "findings" || table === "track_artists") {
-    return `${cte}
-      SELECT source_row.*
-      FROM ${sourceTable} AS source_row
-      JOIN selected_tracks selected ON selected.track_id = source_row.track_id`;
-  }
-
-  if (cut === "full") {
-    return `SELECT source_row.* FROM ${sourceTable} AS source_row`;
-  }
-
-  if (table === "artists") {
-    return `${cte}
-      SELECT source_row.*
-      FROM ${sourceTable} AS source_row
-      WHERE source_row.id IN (
-        SELECT track_artist.artist_id
-        FROM source.${quoteIdentifier("track_artists")} AS track_artist
-        JOIN selected_tracks selected ON selected.track_id = track_artist.track_id
-      )`;
-  }
-
-  const pointer = table === "labels" ? "label_id" : "album_id";
-
-  return `${cte}
-    SELECT source_row.*
-    FROM ${sourceTable} AS source_row
-    WHERE source_row.id IN (
-      SELECT track.${quoteIdentifier(pointer)}
-      FROM source.${quoteIdentifier("tracks")} AS track
-      JOIN selected_tracks selected ON selected.track_id = track.track_id
-      WHERE track.${quoteIdentifier(pointer)} IS NOT NULL
-    )`;
-}
-
-function insertTableSql(table: DeviceSourceTable, cut: Cut): string {
-  const columns = DEVICE_DB_COLUMNS[table];
-  const projection = columns.map((column) => `source_row.${quoteIdentifier(column)}`).join(", ");
-  const order = INSERT_ORDER[table]
-    .map((column) => `source_row.${quoteIdentifier(column)}`)
-    .join(", ");
-  const selectedSql = selectedSourceSql(table, cut).replace(
-    "SELECT source_row.*",
-    `SELECT ${projection}`,
-  );
-
-  return `INSERT INTO main.${quoteIdentifier(table)} (${columns.map(quoteIdentifier).join(", ")})
-    ${selectedSql}
-    ORDER BY ${order}`;
-}
-
 function createIndexes(source: Database): void {
-  for (const index of DEVICE_INDEXES) {
+  for (const index of DEVICE_DB_INDEXES) {
     source.run(
       `CREATE ${index.unique ? "UNIQUE " : ""}INDEX main.${quoteIdentifier(index.name)}
        ON ${quoteIdentifier(index.table)} (${index.columns.map(quoteIdentifier).join(", ")})`,
@@ -432,7 +248,7 @@ async function derive(args: DerivationArgs): Promise<void> {
 
     const copy = output.transaction(() => {
       for (const table of DEVICE_SOURCE_TABLES) {
-        output.run(insertTableSql(table, args.cut));
+        output.run(insertDeviceTableSql(table, args.cut, REC_ELIGIBLE_WHERE));
       }
 
       createIndexes(output);

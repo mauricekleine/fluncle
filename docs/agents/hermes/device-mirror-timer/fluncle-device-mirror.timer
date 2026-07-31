@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-device-mirror timer — refresh the shared device replica hourly
+
+[Timer]
+# Re-roll a small delay every firing so a restart cannot align this Turso writer with the rest of
+# the fleet's hourly jobs.
+RandomizedDelaySec=90
+# The mirror is a rolling interval rather than a wall-clock publication. Persistent catches up a
+# missed tick after reboot; a full source/target diff makes every rerun idempotent.
+OnBootSec=23min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

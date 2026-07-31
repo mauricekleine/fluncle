@@ -42,6 +42,7 @@
 // picked" is UI copy, not data.
 
 import { bestAlbumCoverUrl } from "../media";
+import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { DUPLICATE_SIMILARITY, diversifyRanked, LONG_FORM_MS } from "./catalogue";
 import { getDb, typedRow, typedRows } from "./db";
@@ -118,13 +119,7 @@ export const RECOMMENDATIONS_RATE_WINDOW_MS = 60 * 60 * 1000;
  * exclusions (the seed set, the recent-editions novelty window) are NOT part of pool
  * eligibility; `listRecommendations` appends them after this fragment.
  */
-export const REC_ELIGIBLE_WHERE = `f.track_id is null
-      and t.embedding_blob is not null
-      and t.spotify_uri is not null
-      and t.dismissed_at is null
-      and t.duplicate_of_track_id is null
-      and (t.nearest_finding_score is null or t.nearest_finding_score < ${DUPLICATE_SIMILARITY})
-      and t.duration_ms < ${LONG_FORM_MS}`;
+export { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 
 type TrackRefRow = {
   log_id: null | string;
