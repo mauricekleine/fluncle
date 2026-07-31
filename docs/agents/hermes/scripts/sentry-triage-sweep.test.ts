@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 
 import {
   compactIssue,
@@ -322,6 +323,31 @@ function writeGhStub(dir: string): string {
   return binDir;
 }
 
+// Bun 1.3.14 on macOS rejects `Bun.serve({ port: 0 })` with EADDRINUSE instead of asking the
+// kernel for an ephemeral port. Reserve one through node:net, release it, then bind Bun to it.
+async function availableLoopbackPort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (typeof address === "string" || address === null) {
+        server.close();
+        reject(new Error("could not reserve a loopback port"));
+        return;
+      }
+      const port = address.port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
 describe("fetch summary (the real sweep, against a fixture Sentry) — ok is DERIVED", () => {
   /**
    * Run `sentry-triage-sweep.ts fetch` for real against a loopback Sentry that either answers or
@@ -329,9 +355,11 @@ describe("fetch summary (the real sweep, against a fixture Sentry) — ok is DER
    */
   async function runFetch(
     mode: "answers" | "refuses",
+    projects = "fluncle-web,fluncle-worker",
   ): Promise<{ requests: string[]; summary: Record<string, unknown> }> {
     const root = mkdtempSync(join(tmpdir(), "fluncle-sentry-fetch-"));
     const requests: string[] = [];
+    const port = await availableLoopbackPort();
     const server = Bun.serve({
       fetch(req) {
         const url = new URL(req.url);
@@ -363,7 +391,8 @@ describe("fetch summary (the real sweep, against a fixture Sentry) — ok is DER
           },
         );
       },
-      port: 0,
+      hostname: "127.0.0.1",
+      port,
     });
 
     try {
@@ -375,7 +404,7 @@ describe("fetch summary (the real sweep, against a fixture Sentry) — ok is DER
             // ONLY the stub dir: a real `gh` can never be resolved from here.
             PATH: writeGhStub(root),
             SENTRY_TRIAGE_API_BASE: `http://127.0.0.1:${server.port}`,
-            SENTRY_TRIAGE_PROJECTS: "fluncle-web,fluncle-worker",
+            SENTRY_TRIAGE_PROJECTS: projects,
             SENTRY_TRIAGE_TOKEN: "fixture-token",
           },
           stderr: "pipe",
@@ -394,12 +423,36 @@ describe("fetch summary (the real sweep, against a fixture Sentry) — ok is DER
     const { summary } = await runFetch("refuses");
     // This is the exact line production printed three nights running — except for `ok`, which was
     // the literal `true` sitting beside `errors: 2`.
-    expect(summary).toEqual({ errors: 2, ok: false, totalUnresolved: 0, triaged: 0 });
+    expect(summary).toEqual({
+      checked: 0,
+      errors: 2,
+      ok: false,
+      produced: 0,
+      totalUnresolved: 0,
+      triaged: 0,
+    });
   });
 
   test("a clean fetch still reports ok:true — the derivation is not just 'always false'", async () => {
     const { summary } = await runFetch("answers");
-    expect(summary).toEqual({ errors: 0, ok: true, totalUnresolved: 2, triaged: 2 });
+    expect(summary).toEqual({
+      checked: 2,
+      errors: 0,
+      ok: true,
+      produced: 2,
+      totalUnresolved: 2,
+      triaged: 2,
+    });
+    // Sentry pagination and the triage worklist are bounded; neither is a whole-backlog count.
+    expect("queue_depth" in summary).toBe(false);
+    expect("expected_interval_ms" in summary).toBe(false);
+  });
+
+  test("BLINDNESS: zero configured projects is checked:0 and never a healthy detector run", async () => {
+    const { requests, summary } = await runFetch("answers", "");
+
+    expect(requests).toEqual([]);
+    expect(summary).toMatchObject({ checked: 0, errors: 1, ok: false, produced: 0 });
   });
 
   test("the request that goes over the wire carries no stats period", async () => {
@@ -471,7 +524,7 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
         '  require("fs").writeFileSync(outFile ?? ".sentry/issues.json", JSON.stringify({',
         '    issues: [{ id: "1", shortId: "F-1", title: "boom" }],',
         "  }));",
-        "  console.log(JSON.stringify({ errors: 0, ok: true, totalUnresolved: 1, triaged: 1 }));",
+        "  console.log(JSON.stringify({ checked: 2, errors: 0, ok: true, produced: 1, totalUnresolved: 1, triaged: 1 }));",
         "} else {",
         "  console.log(JSON.stringify({ ok: true }));",
         "}",
@@ -624,12 +677,13 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
 
     copyFileSync(SWEEP_SH, join(scriptDir, "sentry-triage-sweep.sh"));
     copyFileSync(CRON_OUTPUT_SH, join(scriptDir, "cron-output.sh"));
+    copyFileSync(join(import.meta.dir, "agent-env.sh"), join(scriptDir, "agent-env.sh"));
     writeFileSync(join(scriptDir, "sentry-triage-prompt.md"), "# fixture prompt\n", "utf8");
 
     // The fixture helper: `reconcile` is a clean no-op; `fetch` writes an EMPTY worklist and then
-    // behaves per FIXTURE_FETCH_MODE — `clean` says ok:true, `fails` says ok:false, `silent` says
-    // nothing at all (the helper crashed before printing). ALL THREE EXIT ZERO, which is the whole
-    // point: the old driver's only check was the exit code.
+    // behaves per FIXTURE_FETCH_MODE — `clean` says ok:true, `fails` says ok:false, `blind` lies
+    // with ok:true beside checked:0, and `silent` says nothing at all. ALL FOUR EXIT ZERO, which
+    // is the whole point: the old driver's only check was the exit code.
     writeFileSync(
       join(scriptDir, "sentry-triage-sweep.ts"),
       [
@@ -638,17 +692,22 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
         "  console.log(JSON.stringify({ candidates: 0, ok: true, resolved: 0 }));",
         '} else if (cmd === "fetch") {',
         '  const mode = process.env.FIXTURE_FETCH_MODE ?? "clean";',
-        '  require("fs").writeFileSync(outFile ?? ".sentry/issues.json", JSON.stringify({ issues: [] }));',
+        '  const issues = mode === "work" ? [{ id: "1", shortId: "F-1", title: "boom" }] : [];',
+        '  require("fs").writeFileSync(outFile ?? ".sentry/issues.json", JSON.stringify({ issues }));',
         '  if (mode !== "silent") {',
         "    console.log(",
         "      JSON.stringify({",
+        '        checked: ["fails", "blind"].includes(mode) ? 0 : 2,',
         '        errors: mode === "fails" ? 2 : 0,',
         '        ok: mode !== "fails",',
-        "        totalUnresolved: 0,",
-        "        triaged: 0,",
+        "        produced: issues.length,",
+        "        totalUnresolved: issues.length,",
+        "        triaged: issues.length,",
         "      }),",
         "    );",
         "  }",
+        '} else if (cmd === "comment") {',
+        "  console.log(JSON.stringify({ commented: 0, ok: true }));",
         "}",
         "",
       ].join("\n"),
@@ -690,13 +749,19 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
     );
     git(["push", "--quiet", "-u", "origin", "main"], ws);
 
+    const binDir = writeGhStub(root);
+    const claude = join(binDir, "claude");
+    writeFileSync(claude, '#!/usr/bin/env bash\nexit "${FIXTURE_CLAUDE_STATUS:-0}"\n', "utf8");
+    chmodSync(claude, 0o755);
+
     return { cronDir, root, script: join(scriptDir, "sentry-triage-sweep.sh"), ws };
   }
 
   /** Run the driver end to end and return its exit code, its summary line, and the marker file. */
   function runDriver(
     box: ReturnType<typeof setUpBox>,
-    mode: "clean" | "fails" | "silent",
+    mode: "blind" | "clean" | "fails" | "silent" | "work",
+    extraEnv: Record<string, string> = {},
   ): { marker: string; status: number | null; summary: Record<string, unknown> } {
     const run = spawnSync("bash", [box.script], {
       encoding: "utf8",
@@ -706,11 +771,12 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
         FLUNCLE_AUDIT_GITHUB_PAT: "fixture-pat",
         HEALTHCHECK_CRON_OUTPUT_DIR: box.cronDir,
         HOME: join(box.root, "home"),
-        PATH: `${writeGhStub(box.root)}:${process.env.PATH ?? ""}`,
+        PATH: `${join(box.root, "bin")}:${process.env.PATH ?? ""}`,
         // Point the secrets loader at a file that does not exist: the real box env is never read.
         SENTRY_TRIAGE_SECRETS_FILE: join(box.root, "absent-secrets.env"),
         SENTRY_TRIAGE_TOKEN: "fixture-token",
         SENTRY_TRIAGE_WORKSPACE: box.ws,
+        ...extraEnv,
       },
     });
 
@@ -735,6 +801,9 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
 
     expect(summary.ok).toBe(false);
     expect(summary.action).toBe("fetch-failed");
+    expect(summary.checked).toBe(0);
+    expect(summary.errors).toBe(2);
+    expect(summary.produced).toBe(0);
     // The helper's failure count rides along, so the line says HOW BAD, not just that it failed.
     expect(summary.fetchErrors).toBe(2);
     expect(status).toBe(1); // the systemd unit fails too, not just the board
@@ -753,15 +822,49 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
     expect(status).toBe(1);
   });
 
+  test("BLINDNESS: checked:0 fails even when the helper self-asserts ok:true", () => {
+    const box = setUpBox();
+    const { status, summary } = runDriver(box, "blind");
+
+    expect(summary).toMatchObject({
+      action: "fetch-failed",
+      checked: 0,
+      errors: 1,
+      ok: false,
+      produced: 0,
+    });
+    expect(status).toBe(1);
+  });
+
   test("a genuinely empty night is still green — an empty worklist is not itself a failure", () => {
     const box = setUpBox();
     const { marker, status, summary } = runDriver(box, "clean");
 
     expect(summary.ok).toBe(true);
     expect(summary.action).toBe("clean");
+    expect(summary.checked).toBe(2);
+    expect(summary.errors).toBe(0);
+    expect(summary.produced).toBe(0);
     expect(summary.triaged).toBe(0);
     expect(summary.fetchErrors).toBeUndefined(); // the clean line stays exactly as it was
+    expect("queue_depth" in summary).toBe(false);
     expect(status).toBe(0);
     expect(marker).toContain('"ok":true');
+  });
+
+  test("a nonzero triage agent is a run error and produces no successfully acted-on issues", () => {
+    const box = setUpBox();
+    const { status, summary } = runDriver(box, "work", { FIXTURE_CLAUDE_STATUS: "1" });
+
+    // Flow stays unchanged: the best-effort driver completes, but the ledger derives failure
+    // from errors:1 and does not mistake the handed-off worklist for completed action.
+    expect(status).toBe(0);
+    expect(summary).toMatchObject({
+      action: "triaged",
+      checked: 2,
+      errors: 1,
+      produced: 0,
+      triaged: 1,
+    });
   });
 });

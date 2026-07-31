@@ -946,6 +946,42 @@ type BoxStateOutcome =
   | { ok: true; reason: string; skipped: true }
   | { error: string; ok: false; skipped: false };
 
+/** Canonical ledger counters over the top-level backup operations this tick actually attempts. */
+export type BackupRunCounters = {
+  checked: number;
+  errors: number;
+  failed: number;
+  produced: number;
+};
+
+export function createBackupRunCounters(): BackupRunCounters {
+  return { checked: 0, errors: 0, failed: 0, produced: 0 };
+}
+
+/** Mark a database or encrypted box-state operation as attempted before it can throw. */
+export function beginBackupOperation(counters: BackupRunCounters): void {
+  counters.checked += 1;
+}
+
+/** Mark one attempted operation's durable artifact as successfully produced. */
+export function completeBackupOperation(counters: BackupRunCounters): void {
+  counters.produced += 1;
+}
+
+/** A box-state leg may fail as an item while the completed tick still emits its full summary. */
+export function failBackupOperation(counters: BackupRunCounters): void {
+  counters.failed += 1;
+}
+
+const runCounters = createBackupRunCounters();
+
+function resetRunCounters(): void {
+  runCounters.checked = 0;
+  runCounters.errors = 0;
+  runCounters.failed = 0;
+  runCounters.produced = 0;
+}
+
 /** LEG 2 — build, encrypt, upload, prune. Never throws; the caller decides what it means. */
 async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutcome> {
   const key = boxStateKeyFromEnv(process.env);
@@ -1002,11 +1038,19 @@ async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutco
 async function main(): Promise<void> {
   const started = Date.now();
   const now = new Date();
+  resetRunCounters();
 
   if (OUT_DIR !== undefined && BOX_STATE_OUT_DIR !== undefined) {
     // Two different artifacts with two different verifications — run them one at a time so a
     // dry run's summary always describes exactly one thing.
-    console.log(JSON.stringify({ ok: false, reason: "out_and_box_state_out_are_exclusive" }));
+    console.log(
+      JSON.stringify({
+        ...runCounters,
+        errors: 1,
+        ok: false,
+        reason: "out_and_box_state_out_are_exclusive",
+      }),
+    );
     process.exit(1);
   }
 
@@ -1016,10 +1060,18 @@ async function main(): Promise<void> {
     const key = boxStateKeyFromEnv(process.env);
 
     if (!key) {
-      console.log(JSON.stringify({ ok: false, reason: "no_encryption_key" }));
+      console.log(
+        JSON.stringify({
+          ...runCounters,
+          errors: 1,
+          ok: false,
+          reason: "no_encryption_key",
+        }),
+      );
       process.exit(1);
     }
 
+    beginBackupOperation(runCounters);
     const { file, manifest } = await buildBoxStateArchive({
       generatedAt: now,
       key,
@@ -1029,8 +1081,10 @@ async function main(): Promise<void> {
     });
 
     writeFileSync(join(BOX_STATE_OUT_DIR, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
+    completeBackupOperation(runCounters);
     console.log(
       JSON.stringify({
+        ...runCounters,
         cipherBytes: file.bytes,
         dryRun: true,
         elapsedMs: Date.now() - started,
@@ -1043,7 +1097,9 @@ async function main(): Promise<void> {
   }
 
   if (!TURSO_URL) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_turso_url" }));
+    console.log(
+      JSON.stringify({ ...runCounters, errors: 1, ok: false, reason: "missing_turso_url" }),
+    );
     process.exit(1);
   }
 
@@ -1057,6 +1113,7 @@ async function main(): Promise<void> {
   if (OUT_DIR !== undefined) {
     mkdirSync(OUT_DIR, { recursive: true });
 
+    beginBackupOperation(runCounters);
     const { file, manifest } = await writeGzippedDump(
       libsqlSource(),
       join(OUT_DIR, "fluncle.sql.gz"),
@@ -1064,8 +1121,10 @@ async function main(): Promise<void> {
     );
 
     writeFileSync(join(OUT_DIR, MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`);
+    completeBackupOperation(runCounters);
     console.log(
       JSON.stringify({
+        ...runCounters,
         dryRun: true,
         elapsedMs: Date.now() - started,
         gzipBytes: file.bytes,
@@ -1079,7 +1138,14 @@ async function main(): Promise<void> {
   }
 
   if (!R2.accountId || !R2.accessKeyId || !R2.secretAccessKey) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_r2_credentials" }));
+    console.log(
+      JSON.stringify({
+        ...runCounters,
+        errors: 1,
+        ok: false,
+        reason: "missing_r2_credentials",
+      }),
+    );
     process.exit(1);
   }
 
@@ -1090,6 +1156,7 @@ async function main(): Promise<void> {
   let dump: { file: ArtifactFile; manifest: DumpManifest };
   let tier: { dailyKey: string; monthlyWritten: boolean; pruned: number };
 
+  beginBackupOperation(runCounters);
   try {
     dump = await writeGzippedDump(libsqlSource(), dumpPath, dumpOptions);
 
@@ -1110,23 +1177,34 @@ async function main(): Promise<void> {
       month,
       monthlyPrefix: MONTHLY_PREFIX,
     });
+    completeBackupOperation(runCounters);
   } finally {
     await rm(dumpPath, { force: true });
   }
 
   // LEG 2 runs only AFTER the database leg is durable in R2, so a box-state fault can
   // never cost the night's dump.
+  const boxStateConfigured = boxStateKeyFromEnv(process.env) !== null;
+
+  if (boxStateConfigured) {
+    beginBackupOperation(runCounters);
+  }
+
   const boxState = await runBoxStateLeg(now, tempDir);
 
   if (!boxState.ok) {
+    failBackupOperation(runCounters);
     log(`box-state leg failed: ${boxState.error}`);
     await alertDiscord(`Fluncle backup-sweep: the box-state leg failed — ${boxState.error}`);
+  } else if (!boxState.skipped) {
+    completeBackupOperation(runCounters);
   }
 
   // `ok` covers BOTH legs. A half-backup reporting green is the failure mode that let three
   // OOM-killed nights read healthy on /status — the whole run tells the truth or none of it does.
   console.log(
     JSON.stringify({
+      ...runCounters,
       boxState: boxState.skipped
         ? { reason: boxState.reason, skipped: true }
         : boxState.ok
@@ -1155,7 +1233,15 @@ if (import.meta.main) {
     const message = error instanceof Error ? error.message : String(error);
     log(`backup failed: ${message}`);
     await alertDiscord(`Fluncle backup-sweep failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "backup_failed" }));
+    console.log(
+      JSON.stringify({
+        ...runCounters,
+        error: message,
+        errors: 1,
+        ok: false,
+        reason: "backup_failed",
+      }),
+    );
     process.exit(1);
   });
 }

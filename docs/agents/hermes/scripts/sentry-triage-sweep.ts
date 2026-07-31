@@ -440,7 +440,16 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
   } catch {
     // Never crash on a missing token: write an empty worklist and let the driver SKIP cleanly.
     writeFileSync(outFile, JSON.stringify({ error: "no SENTRY_TRIAGE_TOKEN", issues: [] }));
-    console.log(JSON.stringify({ error: "no SENTRY_TRIAGE_TOKEN", ok: true, triaged: 0 }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        error: "no SENTRY_TRIAGE_TOKEN",
+        errors: 1,
+        ok: false,
+        produced: 0,
+        triaged: 0,
+      }),
+    );
     return;
   }
 
@@ -463,14 +472,19 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
   const deps = defaultFetchDeps();
   const all: CompactIssue[] = [];
   const errors: Array<{ error: string; project: string }> = [];
+  let checked = 0;
   for (const project of PROJECTS) {
     try {
       const issues = await listUnresolvedIssues(project, token, deps);
       all.push(...issues);
+      checked += 1;
     } catch (e) {
       errors.push({ error: (e as Error).message, project });
       log(`fetch ${project} degraded: ${(e as Error).message}`);
     }
+  }
+  if (checked === 0 && errors.length === 0) {
+    errors.push({ error: "no Sentry projects configured", project: "*" });
   }
 
   const fresh = filterNewIssues(all, covered).sort((a, b) => b.count - a.count);
@@ -497,10 +511,16 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
   // `ok` is DERIVED from the failure count, never asserted. A literal `ok: true` sat on this line
   // directly beside `errors: errors.length` and printed `{"errors":2,"ok":true,…}` every night for
   // 11 nights while BOTH projects' fetches threw. A summary that cannot say "no" is not a summary.
+  //
+  // Deliberately no `queue_depth`: both the Sentry pagination and tonight's worklist are bounded,
+  // so neither `all.length` nor MAX_TRIAGE is a trustworthy whole-backlog measurement.
+  const checkedCounter = { checked };
   console.log(
     JSON.stringify({
       errors: errors.length,
-      ok: errors.length === 0,
+      ...checkedCounter,
+      ok: errors.length === 0 && checked > 0,
+      produced: enriched.length,
       totalUnresolved: all.length,
       triaged: enriched.length,
     }),

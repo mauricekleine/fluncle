@@ -67,8 +67,14 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.albums).toBe(3);
     expect(summary.artists).toBe(44);
     expect(summary.corrected).toBe(48);
+    expect(summary.checked).toBe(3);
+    expect(summary.produced).toBe(48);
+    expect(summary.errors).toBe(0);
     expect(summary.tookMs).toBe(1150);
     expect(summary.error).toBeNull();
+    // Corrected rows describe this pass; the endpoint does not measure drift remaining afterward.
+    expect("queue_depth" in summary).toBe(false);
+    expect("expected_interval_ms" in summary).toBe(false);
   });
 
   test("maps the healthy steady state to zeroes, not to nulls", async () => {
@@ -81,6 +87,9 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.labels).toBe(0);
     expect(summary.albums).toBe(0);
     expect(summary.artists).toBe(0);
+    expect(summary.checked).toBe(3);
+    expect(summary.produced).toBe(0);
+    expect(summary.errors).toBe(0);
   });
 
   test("logs the AUDIT line with every per-table number — the operator's drift trail", async () => {
@@ -109,6 +118,7 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("did not ack");
     expect(summary.corrected).toBeNull();
+    expect(summary).toMatchObject({ checked: 0, errors: 1, produced: null });
   });
 
   test("reports ok:false with the error message when the reconcile call throws", async () => {
@@ -120,6 +130,7 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.error).toContain("reconcile 500");
     expect(summary.labels).toBeNull();
     expect(summary.corrected).toBeNull();
+    expect(summary).toMatchObject({ checked: 0, errors: 1, produced: null });
   });
 
   test("tolerates a table the op omitted — that table is null, the total is null, tick still ok", async () => {
@@ -136,6 +147,7 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.artists).toBeNull();
     // A partial read must NOT be summed into a confident-looking total.
     expect(summary.corrected).toBeNull();
+    expect(summary).toMatchObject({ checked: 2, errors: 0, produced: null });
   });
 
   test("a partial read still logs an AUDIT line, with `?` for what it could not read", async () => {
@@ -148,5 +160,20 @@ describe("runReconcileHubCountsTick", () => {
     await runReconcileHubCountsTick(capturingDeps);
 
     expect(lines).toContain("AUDIT corrected=? labels=1 albums=3 artists=? tookMs=?");
+  });
+
+  test("BLINDNESS: an ack with no table results is checked:0 and a run failure", async () => {
+    const summary = await runReconcileHubCountsTick(
+      deps({ reconcile: () => Promise.resolve({ ok: true }) }),
+    );
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      corrected: null,
+      errors: 1,
+      ok: false,
+      produced: null,
+    });
+    expect(summary.error).toContain("inspected no tables");
   });
 });

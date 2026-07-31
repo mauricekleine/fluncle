@@ -12,6 +12,7 @@
 // pinned separately by prompt-drift.test.ts.
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +52,14 @@ writeFileSync(
   FLUNCLE_STUB,
   `#!/usr/bin/env bash
 set -euo pipefail
+if [ "\${1:-}" = "admin" ] && [ "\${2:-}" = "tracks" ] && [ "\${3:-}" = "observe" ] && [ "\${4:-}" = "--queue" ]; then
+  if [ "$(cat "${CONTROL}/queue-mode" 2>/dev/null || printf 'empty')" = "work" ]; then
+    printf '{"ok":true,"tracks":[{"trackId":"t-1"}]}'
+  else
+    printf '{"ok":true,"tracks":[]}'
+  fi
+  exit 0
+fi
 if [ "\${1:-}" = "tracks" ] && [ "\${2:-}" = "get" ]; then
   printf '{"track":{"artists":["Future Signal"],"title":"Fractals","logId":"011.5.9D","trackId":"t-1"}}'
   exit 0
@@ -182,6 +191,39 @@ describe("readEchoedMove", () => {
 
   test("returns undefined for an overlap-only rejection (no lifted phrase to name)", () => {
     expect(readEchoedMove("it reuses 42% of 012.1.0A's words")).toBeUndefined();
+  });
+});
+
+describe("run-ledger summary counters", () => {
+  test("the real tick counts one attempted finding and one rendered output", () => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    writeFileSync(join(CONTROL, "queue-mode"), "work", "utf8");
+    verdict("pass");
+    claudeVerdict("up");
+
+    const result = spawnSync(process.execPath, [join(import.meta.dir, "observe-sweep.ts")], {
+      encoding: "utf8",
+      env: { ...process.env, FLUNCLE_API_TOKEN: "" },
+    });
+    const summary = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+
+    expect(result.status).toBe(0);
+    expect(summary).toMatchObject({
+      checked: 1,
+      errors: 0,
+      failed: 0,
+      produced: 1,
+      queueRemaining: 0,
+      rendered: 1,
+    });
+    // `observe --queue --limit 50` returns only a capped page. `queueRemaining` is retained as
+    // domain evidence, but the sweep cannot cheaply know the total outstanding backlog.
+    expect("queueDepth" in summary).toBe(false);
+    expect("queue_depth" in summary).toBe(false);
+    expect("expectedIntervalMs" in summary).toBe(false);
+    expect("expected_interval_ms" in summary).toBe(false);
   });
 });
 

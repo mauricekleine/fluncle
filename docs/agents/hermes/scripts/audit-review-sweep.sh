@@ -50,16 +50,16 @@ run_review() {
   local ws="${AUDIT_WORKSPACE:-${HOME:-/opt/data/home}/audit-workspace/fluncle}"
 
   if [ -z "${FLUNCLE_AUDIT_GITHUB_PAT:-}" ]; then
-    echo "{\"ok\":false,\"stage\":\"auth\",\"error\":\"no FLUNCLE_AUDIT_GITHUB_PAT\"}"
+    echo "{\"ok\":false,\"stage\":\"auth\",\"error\":\"no FLUNCLE_AUDIT_GITHUB_PAT\",\"checked\":0,\"errors\":1,\"produced\":0}"
     return 1
   fi
   export GH_TOKEN="${FLUNCLE_AUDIT_GITHUB_PAT}"
 
   if [ ! -d "${ws}/.git" ]; then
-    echo "{\"ok\":false,\"stage\":\"workspace\",\"error\":\"no audit workspace (run the auditor first)\"}"
+    echo "{\"ok\":false,\"stage\":\"workspace\",\"error\":\"no audit workspace (run the auditor first)\",\"checked\":0,\"errors\":1,\"produced\":0}"
     return 1
   fi
-  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\"}"; return 1; }
+  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
   git config user.name "fluncle-audit-bot"
   git config user.email "hey@mauricekleine.com"
   git config commit.gpgsign false
@@ -73,8 +73,10 @@ run_review() {
       --jq '[.[] | select(.headRefName | startswith("audit/"))] | sort_by(.createdAt) | reverse | .[0].number // empty' 2>/dev/null || true)"
   fi
   if [ -z "${PR_NUM}" ]; then
-    echo "{\"ok\":true,\"action\":\"none\",\"note\":\"no open audit PR to review\"}"
-    return 0
+    # This is a detector, not an optional consumer: no PR means the reviewer inspected zero
+    # audit units. Report blindness instead of laundering the missing auditor output as healthy.
+    echo "{\"ok\":false,\"action\":\"none\",\"note\":\"no open audit PR to review\",\"checked\":0,\"errors\":1,\"produced\":0}"
+    return 1
   fi
   branch="$(gh pr view "${PR_NUM}" --repo "${repo}" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
   domain="${branch##*-}"
@@ -82,7 +84,7 @@ run_review() {
 
   # Check out the PR branch + sync deps so the reviewer can re-run checks.
   gh pr checkout "${PR_NUM}" --repo "${repo}" >/dev/null 2>&1 || {
-    echo "{\"ok\":false,\"stage\":\"checkout\",\"pr\":${PR_NUM}}"; return 1; }
+    echo "{\"ok\":false,\"stage\":\"checkout\",\"pr\":${PR_NUM},\"checked\":1,\"errors\":1,\"produced\":0}"; return 1; }
   "${BUN_BIN}" install --silent || log "bun install nonzero (continuing)"
 
   local runtime_note prompt
@@ -117,20 +119,25 @@ ${runtime_note}"
   # Declares GH_TOKEN — the reviewer reads the PR, comments, and holds it open or lets it merge.
   agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN
   log "invoking claude -p (opus) reviewer for PR #${PR_NUM}…"
+  local run_errors=0
   FLUNCLE_UNATTENDED=1 env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} "$(command -v claude)" -p "${prompt}" \
     --model opus \
     --dangerously-skip-permissions \
-    >&2 || log "claude -p returned nonzero"
+    >&2 || { log "claude -p returned nonzero"; run_errors=1; }
 
   # Report the outcome from the PR's final state.
-  local state
+  local held_produced=1 state
+  [ "${run_errors}" = "0" ] || held_produced=0
   state="$(gh pr view "${PR_NUM}" --repo "${repo}" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
   case "${state}" in
-    MERGED) echo "{\"ok\":true,\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\"}" ;;
-    OPEN)   echo "{\"ok\":true,\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\"}" ;;
-    *)      echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\"}" ;;
+    MERGED) echo "{\"ok\":true,\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
+    OPEN)   echo "{\"ok\":true,\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
+    *)      echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\",\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}" ;;
   esac
 }
+
+# Deliberately no queue_depth: the newest-PR selector does not establish the full number of open
+# audit PRs, so its one selected row must never be misreported as the outstanding review backlog.
 
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"

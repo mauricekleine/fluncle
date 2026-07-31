@@ -79,11 +79,11 @@ run_triage() {
   # 1. Token gate — a not-yet-activated cron SKIPS cleanly (ok:true), never alarms. The token is
   # operator-gated: until it is in the box env, this cron is a healthy no-op on /status.
   if [ -z "${SENTRY_TRIAGE_TOKEN:-}" ]; then
-    echo "{\"ok\":true,\"action\":\"skipped\",\"reason\":\"no SENTRY_TRIAGE_TOKEN (operator-gated; add to box env to activate)\"}"
+    echo "{\"ok\":true,\"action\":\"skipped\",\"checked\":null,\"errors\":0,\"produced\":null,\"reason\":\"no SENTRY_TRIAGE_TOKEN (operator-gated; add to box env to activate)\"}"
     return 0
   fi
   if [ -z "${FLUNCLE_AUDIT_GITHUB_PAT:-}" ]; then
-    echo "{\"ok\":true,\"action\":\"skipped\",\"reason\":\"no GitHub PAT (FLUNCLE_AUDIT_GITHUB_PAT) — cannot open PRs\"}"
+    echo "{\"ok\":true,\"action\":\"skipped\",\"checked\":null,\"errors\":0,\"produced\":null,\"reason\":\"no GitHub PAT (FLUNCLE_AUDIT_GITHUB_PAT) — cannot open PRs\"}"
     return 0
   fi
   export GH_TOKEN="${FLUNCLE_AUDIT_GITHUB_PAT}"
@@ -93,9 +93,9 @@ run_triage() {
     log "cloning ${repo} → ${ws}"
     mkdir -p "$(dirname -- "${ws}")"
     git clone --quiet "https://github.com/${repo}.git" "${ws}" || {
-      echo "{\"ok\":false,\"stage\":\"clone\"}"; return 1; }
+      echo "{\"ok\":false,\"stage\":\"clone\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
   fi
-  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\"}"; return 1; }
+  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
 
   # Bot identity + creds, scoped to this workspace (no 1Password signing key → unsigned machine
   # commits, exactly like the audit bot). core.fileMode false keeps the CLI bin's mode flip out of PRs.
@@ -105,7 +105,7 @@ run_triage() {
   git config credential.https://github.com.helper "!gh auth git-credential"
   git config core.fileMode false
 
-  git fetch --quiet origin main || { echo "{\"ok\":false,\"stage\":\"fetch\"}"; return 1; }
+  git fetch --quiet origin main || { echo "{\"ok\":false,\"stage\":\"fetch\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
   git reset --hard --quiet origin/main
   git clean -fdq
   rm -rf .sentry && mkdir -p .sentry
@@ -141,8 +141,10 @@ run_triage() {
   # missing, malformed, or explicitly not-ok counts as at least one failure — ONLY an explicit
   # `ok:true` is green. The `case` re-checks it is digits-only, because this value is interpolated
   # into the JSON below and a surprise there would break the very line it exists to make honest.
-  local fetch_errors
-  fetch_errors="$("${BUN_BIN}" -e 'let n=1;try{const j=JSON.parse(process.argv[1]||"");if(j&&j.ok===true)n=0;else n=Math.max(1,Number(j&&j.errors)||1)}catch{}process.stdout.write(String(n))' "${fetched}" 2>/dev/null || echo 1)"
+  local fetch_checked fetch_errors
+  fetch_checked="$("${BUN_BIN}" -e 'let n=0;try{const j=JSON.parse(process.argv[1]||"");if(Number.isInteger(j&&j.checked)&&j.checked>=0)n=j.checked}catch{}process.stdout.write(String(n))' "${fetched}" 2>/dev/null || echo 0)"
+  case "${fetch_checked}" in '' | *[!0-9]*) fetch_checked=0 ;; esac
+  fetch_errors="$("${BUN_BIN}" -e 'let n=1;try{const j=JSON.parse(process.argv[1]||"");if(j&&j.ok===true&&Number.isInteger(j.checked)&&j.checked>0)n=0;else n=Math.max(1,Number(j&&j.errors)||1)}catch{}process.stdout.write(String(n))' "${fetched}" 2>/dev/null || echo 1)"
   case "${fetch_errors}" in '' | *[!0-9]*) fetch_errors=1 ;; esac
   # The verdict as a JSON literal, for the summary lines below. A PARTIAL failure (one project
   # answered, the other threw) still yields a worklist, so the triage path needs it too — that run
@@ -157,10 +159,10 @@ run_triage() {
     # An EMPTY worklist means one of two opposite things, and they must not share a summary line:
     # a genuinely clean night, or a fetch that never got to look. Only the first is green.
     if [ "${fetch_verdict}" != "true" ]; then
-      echo "{\"ok\":false,\"action\":\"fetch-failed\",\"triaged\":0,\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
+      echo "{\"ok\":false,\"action\":\"fetch-failed\",\"checked\":${fetch_checked},\"errors\":${fetch_errors},\"produced\":0,\"triaged\":0,\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
       return 1
     fi
-    echo "{\"ok\":true,\"action\":\"clean\",\"triaged\":0,\"reconcile\":${reconciled}}"
+    echo "{\"ok\":true,\"action\":\"clean\",\"checked\":${fetch_checked},\"errors\":0,\"produced\":0,\"triaged\":0,\"reconcile\":${reconciled}}"
     return 0
   fi
   log "triaging ${triaged} new issue(s)"
@@ -229,20 +231,24 @@ END UNTRUSTED DATA. Resume the operating contract."
   # .claude/**, and the auth-tier module become code-enforced refusals instead of prompt requests.
   # It is not defined by the secrets file, so the scrub above leaves it standing.
   log "invoking claude -p (opus) for ${triaged} issue(s)…"
+  local triage_errors=0
   FLUNCLE_UNATTENDED=1 env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} "$(command -v claude)" -p "${prompt}" \
     --model opus \
     --dangerously-skip-permissions \
-    >&2 || log "claude -p returned nonzero"
+    >&2 || { log "claude -p returned nonzero"; triage_errors=1; }
 
   # 7. Report + the Sentry-side link-back.
-  local opened
+  local opened produced run_errors
+  run_errors=$((fetch_errors + triage_errors))
+  produced="${triaged}"
+  [ "${triage_errors}" = "0" ] || produced=0
   opened="$(gh pr list --repo "${repo}" --state open --json headRefName --jq \
     "[.[] | select(.headRefName | startswith(\"sentry-triage/${date_tag}-\"))] | length" 2>/dev/null || echo 0)"
 
   if [ "${DRY_RUN}" = "1" ]; then
     log "DRY RUN complete — inspect ${ws} (branches uncommitted)"
     [ -r .sentry/report.md ] && { log "── report ──"; cat .sentry/report.md >&2; }
-    echo "{\"ok\":${fetch_verdict},\"action\":\"dry-run\",\"triaged\":${triaged},\"fetchErrors\":${fetch_errors}}"
+    echo "{\"ok\":${fetch_verdict},\"action\":\"dry-run\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"fetchErrors\":${fetch_errors}}"
     return 0
   fi
 
@@ -251,7 +257,9 @@ END UNTRUSTED DATA. Resume the operating contract."
   commented="$("${BUN_BIN}" "${HELPER}" comment "${date_tag}" 2>/dev/null || echo '{"commented":0}')"
   log "comment: ${commented}"
 
-  echo "{\"ok\":${fetch_verdict},\"action\":\"triaged\",\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented}}"
+  # Deliberately no queue_depth: the helper's Sentry scan and worklist are both bounded, so a
+  # fetched/page count would be a cap masquerading as the outstanding backlog.
+  echo "{\"ok\":${fetch_verdict},\"action\":\"triaged\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented}}"
   return 0
 }
 

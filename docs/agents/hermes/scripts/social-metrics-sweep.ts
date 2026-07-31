@@ -46,24 +46,37 @@ export type RecordSocialMetricsResponse = {
   ok?: boolean;
   polled?: number;
   referrals?: { total?: number };
-  tiktok?: { inserted?: number; matched?: number };
-  youtube?: { inserted?: number; matched?: number };
+  tiktok?: { fetched?: number; inserted?: number; matched?: number };
+  youtube?: { fetched?: number; inserted?: number; matched?: number };
 };
 
 /** One tick's honest summary — the JSON line the /status prober reads. */
 export type SocialMetricsSummary = {
+  /** Units read across the independent Postiz, TikTok, and YouTube arms. */
+  checked: null | number;
   configured: boolean | null;
   day: null | string;
+  /** Run-level failure count. Per-post failures remain in `failed`. */
+  errors: number;
   error: null | string;
+  eligible: null | number;
+  /** Individual published posts whose analytics read failed while the op continued. */
+  failed: null | number;
   inserted: null | number;
   missing: null | number;
   ok: boolean;
   polled: null | number;
+  /** Snapshot rows successfully appended across all three arms this tick. */
+  produced: null | number;
   referralArrivals: null | number;
+  /** TikTok videos fetched from the Display API this tick. */
+  tiktokFetched: null | number;
   /** TikTok Display-API rows appended this tick (the `tiktok_display` source). */
   tiktokInserted: null | number;
   /** TikTok videos matched to a published post this tick. */
   tiktokMatched: null | number;
+  /** YouTube videos fetched from the Data API this tick. */
+  youtubeFetched: null | number;
   /** YouTube Analytics rows appended this tick (the `youtube_analytics` source). */
   youtubeInserted: null | number;
   /** YouTube videos matched to a published post this tick. */
@@ -80,16 +93,23 @@ export type SocialMetricsDeps = {
 
 export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<SocialMetricsSummary> {
   const summary: SocialMetricsSummary = {
+    checked: null,
     configured: null,
     day: null,
+    eligible: null,
     error: null,
+    errors: 0,
+    failed: null,
     inserted: null,
     missing: null,
     ok: true,
     polled: null,
+    produced: null,
     referralArrivals: null,
+    tiktokFetched: null,
     tiktokInserted: null,
     tiktokMatched: null,
+    youtubeFetched: null,
     youtubeInserted: null,
     youtubeMatched: null,
   };
@@ -97,30 +117,48 @@ export async function runSocialMetricsTick(deps: SocialMetricsDeps): Promise<Soc
   try {
     const response = await deps.record();
 
-    if (response.ok !== true) {
-      summary.ok = false;
-      summary.error = "record_social_metrics did not return ok";
-
-      return summary;
-    }
-
-    summary.day = response.day ?? null;
     summary.configured = typeof response.configured === "boolean" ? response.configured : null;
+    summary.day = response.day ?? null;
+    summary.eligible = typeof response.eligible === "number" ? response.eligible : null;
+    summary.failed = typeof response.failed === "number" ? response.failed : null;
     summary.inserted = typeof response.inserted === "number" ? response.inserted : null;
-    summary.polled = typeof response.polled === "number" ? response.polled : null;
     summary.missing = typeof response.missing === "number" ? response.missing : null;
+    summary.polled = typeof response.polled === "number" ? response.polled : null;
     summary.referralArrivals =
       typeof response.referrals?.total === "number" ? response.referrals.total : null;
+    summary.tiktokFetched =
+      typeof response.tiktok?.fetched === "number" ? response.tiktok.fetched : null;
     summary.tiktokInserted =
       typeof response.tiktok?.inserted === "number" ? response.tiktok.inserted : null;
     summary.tiktokMatched =
       typeof response.tiktok?.matched === "number" ? response.tiktok.matched : null;
+    summary.youtubeFetched =
+      typeof response.youtube?.fetched === "number" ? response.youtube.fetched : null;
     summary.youtubeInserted =
       typeof response.youtube?.inserted === "number" ? response.youtube.inserted : null;
     summary.youtubeMatched =
       typeof response.youtube?.matched === "number" ? response.youtube.matched : null;
+    summary.checked =
+      summary.polled !== null && summary.tiktokFetched !== null && summary.youtubeFetched !== null
+        ? summary.polled + summary.tiktokFetched + summary.youtubeFetched
+        : null;
+    summary.produced =
+      summary.inserted !== null &&
+      summary.tiktokInserted !== null &&
+      summary.youtubeInserted !== null
+        ? summary.inserted + summary.tiktokInserted + summary.youtubeInserted
+        : null;
+
+    if (response.ok !== true) {
+      summary.ok = false;
+      summary.errors = 1;
+      summary.error = "record_social_metrics did not return ok";
+
+      return summary;
+    }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     deps.log(`snapshot failed: ${summary.error}`);
   }
@@ -156,7 +194,15 @@ async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "missing_api_token",
+      }),
+    );
     process.exit(1);
   }
 
@@ -173,7 +219,16 @@ if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`social-metrics-sweep failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "social_metrics_failed" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        error: message,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "social_metrics_failed",
+      }),
+    );
     process.exit(1);
   });
 }

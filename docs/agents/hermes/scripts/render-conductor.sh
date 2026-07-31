@@ -102,6 +102,13 @@ DONE_MARKER='${HOME:-/home/user}/conductor-run.done'
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
+# Tick-local render counters. `checked` counts finding slots actually inspected (the in-flight
+# slot and queue candidates); `produced` counts successful render completions and launches.
+# Item failures stay in `failed`; only emit_fail marks the RUN itself failed. Deliberately no
+# queue_depth: the queue read is capped at 25, not a whole-backlog count.
+RUN_CHECKED=0
+RUN_PRODUCED=0
+RUN_FAILED=0
 # The cron run summary lands on stdout — as the human line PLUS the contracted JSON summary
 # line fluncle-healthcheck's findJsonSummary requires (#892 hardened no-summary to "died
 # mid-flight" on first sighting, which turned every text-only tick — queue empty included —
@@ -110,11 +117,13 @@ log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE" 2>/dev/null |
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 emit() {
   printf '%s\n' "$*"
-  printf '{"ok":true,"summary":"%s"}\n' "$(json_escape "$*")"
+  printf '{"ok":true,"summary":"%s","checked":%s,"errors":0,"failed":%s,"produced":%s}\n' \
+    "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED"
 }
 emit_fail() {
   printf '%s\n' "$*"
-  printf '{"ok":false,"summary":"%s"}\n' "$(json_escape "$*")"
+  printf '{"ok":false,"summary":"%s","checked":%s,"errors":1,"failed":%s,"produced":%s}\n' \
+    "$(json_escape "$*")" "$RUN_CHECKED" "$RUN_FAILED" "$RUN_PRODUCED"
 }
 now() { date +%s; }
 read_or() { cat "$1" 2>/dev/null || printf '%s' "$2"; }
@@ -288,6 +297,7 @@ is_poisoned() {
 # when the count crosses the threshold (the poisoning moment), never on every later skip.
 bump_fail() {
   local id="$1" prev next; [ -n "$id" ] || return 0
+  RUN_FAILED=$((RUN_FAILED + 1))
   prev="$(awk -F'\t' -v id="$id" '$1==id{print $2+0; f=1} END{if(!f)print 0}' "$FAILS_FILE" 2>/dev/null || printf 0)"
   next=$((prev + 1))
   { awk -F'\t' -v id="$id" '$1!=id' "$FAILS_FILE" 2>/dev/null; printf '%s\t%s\t%s\n' "$id" "$next" "$(now)"; } \
@@ -463,8 +473,10 @@ boxid="$(read_or "$BOXID_FILE" '')"
 
 # ============================ RENDERING: poll ============================
 if [ "$state" = "rendering" ]; then
+  RUN_CHECKED=$((RUN_CHECKED + 1))
   if [ -z "$boxid" ]; then
     printf 'idle' >"$STATE_FILE"
+    RUN_FAILED=$((RUN_FAILED + 1))
     emit "render-conductor: rendering state with no box id — reset to idle"
     exit 0
   fi
@@ -521,6 +533,7 @@ if [ "$state" = "rendering" ]; then
       0)
         if render_produced_video "$rendered_logid"; then
           clear_fail "$rendered_logid"
+          RUN_PRODUCED=$((RUN_PRODUCED + 1))
         else
           log "render EXIT=0 but $rendered_logid still has no video — false success, counting as a failure"
           bump_fail "$rendered_logid"
@@ -534,7 +547,7 @@ if [ "$state" = "rendering" ]; then
           fi
         fi
         ;;
-      '' | *[!0-9]*) : ;; # unparseable exit — leave the ledger untouched
+      '' | *[!0-9]*) RUN_FAILED=$((RUN_FAILED + 1)) ;; # unparseable exit — leave the poison ledger untouched
       *) bump_fail "$rendered_logid" ;;
     esac
     # Chain: fall out of the rendering block to the idle pick in THIS tick — a
@@ -579,6 +592,7 @@ queued_ids="$(printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.
 head=""; skipped=0
 while IFS= read -r lid; do
   [ -n "$lid" ] || continue
+  RUN_CHECKED=$((RUN_CHECKED + 1))
   if is_poisoned "$lid"; then skipped=$((skipped + 1)); continue; fi
   head="$lid"; break
 done <<EOF
@@ -704,6 +718,7 @@ trigger_out="$("$BOX_BIN" ssh "$boxid" 'bash ~/render-detached.sh' 2>&1)"
 printf '%s\n' "$trigger_out" >>"$LOG_FILE"
 if ! printf '%s' "$trigger_out" | grep -q 'render-detached: launched'; then
   log "render trigger did not launch on $boxid (wedged box) — deleting it + staying idle to reprovision"
+  RUN_FAILED=$((RUN_FAILED + 1))
   emit_fail "render-conductor: render trigger failed on $boxid — box condemned, reprovision next tick"
   # condemn_box retries the delete and, if box.ascii still will not take it, files the id
   # to the orphan ledger. Clearing BOXID_FILE below is what makes the next tick provision a
@@ -717,5 +732,6 @@ printf 'rendering' >"$STATE_FILE"
 now >"$STARTED_FILE"
 printf '%s' "$head" >"$RENDER_LOGID_FILE" # the finding this render is spending on (cost scope)
 log "started detached render of $head on box $boxid"
+RUN_PRODUCED=$((RUN_PRODUCED + 1))
 emit "render-conductor: started render of $head on $boxid"
 exit 0

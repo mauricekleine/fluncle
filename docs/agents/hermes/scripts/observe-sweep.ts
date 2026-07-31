@@ -205,6 +205,34 @@ export function observeKey(queued: QueueFinding): string | null {
   return queued.trackId ?? queued.logId ?? null;
 }
 
+/** One tick's domain detail plus the run-ledger counters shared by every final summary path. */
+export type ObserveSummary = {
+  checked: number;
+  echoSkipped: number;
+  errors: number;
+  exhausted: number;
+  failed: number;
+  gateSkipped: number;
+  produced: number;
+  queueRemaining: number;
+  rendered: number;
+};
+
+/** The queue read is capped, so `queueRemaining` stays domain evidence and is never queue depth. */
+export function createObserveSummary(queueRemaining: number): ObserveSummary {
+  return {
+    checked: 0,
+    echoSkipped: 0,
+    errors: 0,
+    exhausted: 0,
+    failed: 0,
+    gateSkipped: 0,
+    produced: 0,
+    queueRemaining,
+    rendered: 0,
+  };
+}
+
 /** The budget's read/write handle for one tick. */
 type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
@@ -970,18 +998,7 @@ async function main(): Promise<void> {
   ]);
   const queue = response.tracks ?? [];
 
-  const summary = {
-    // The read echoed its sonic neighbourhood twice over and was left unrendered — the
-    // anti-sameness rail firing. A finding here stays queued for a later, colder pass.
-    echoSkipped: 0,
-    // Findings that have spent all `MAX_OBSERVE_ATTEMPTS` refused passes and will never be authored
-    // for again. They stay unvoiced, and never carry copy the gate refused.
-    exhausted: 0,
-    failed: 0,
-    gateSkipped: 0,
-    queueRemaining: queue.length,
-    rendered: 0,
-  };
+  const summary = createObserveSummary(queue.length);
 
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
@@ -1025,6 +1042,10 @@ async function main(): Promise<void> {
   const costs: BoxCostEvent[] = [];
 
   for (const queued of work) {
+    // Exhausted rows were filtered without a call. A checked row is one this tick actually
+    // attempted, regardless of whether it rendered, was refused, or failed as an item.
+    summary.checked += 1;
+
     try {
       const { cost, outcome } = await observeOne(queued, budget);
 
@@ -1034,6 +1055,7 @@ async function main(): Promise<void> {
 
       if (outcome === "rendered") {
         summary.rendered += 1;
+        summary.produced += 1;
       } else if (outcome === "gateSkipped") {
         summary.gateSkipped += 1;
       } else if (outcome === "echoSkipped") {
@@ -1046,6 +1068,7 @@ async function main(): Promise<void> {
     } catch (error) {
       if (error instanceof ClaudeAuthError) {
         // Auth failure: STOP the batch, leave the queue intact, alert loudly.
+        summary.errors = 1;
         log("claude auth failed — aborting the batch, the queue is untouched");
         pingClaudeAuthFailure(error.message);
         console.log(
@@ -1086,7 +1109,15 @@ async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
+    console.log(
+      JSON.stringify({
+        checked: null,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "sweep_error",
+      }),
+    );
     process.exit(1);
   });
 }

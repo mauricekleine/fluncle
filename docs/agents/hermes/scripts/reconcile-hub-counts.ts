@@ -71,14 +71,22 @@ export type ReconcileHubCountsResponse = {
 };
 
 /** One tick's honest summary — the JSON line the /status prober reads, and the drift audit. */
+// Deliberately no `queue_depth`: the endpoint returns rows corrected during the pass, not an
+// independently measured count of drift remaining after it, so zero would be an assumption.
 export type ReconcileHubCountsSummary = {
   albums: null | number;
   artists: null | number;
+  /** Entity tables whose corrected-row result the tick actually read. */
+  checked: number;
   /** The three tables' corrected rows added up — null when the tick could not read them. */
   corrected: null | number;
   error: null | string;
+  /** Run-level failures. Per-table drift remains in the domain counters below. */
+  errors: number;
   labels: null | number;
   ok: boolean;
+  /** Rows the reconciliation successfully corrected; null when the response was partial. */
+  produced: null | number;
   /** Server-side wall clock for the SQL pass (distinct from the tick's own elapsedMs). */
   tookMs: null | number;
 };
@@ -102,10 +110,13 @@ export async function runReconcileHubCountsTick(
   const summary: ReconcileHubCountsSummary = {
     albums: null,
     artists: null,
+    checked: 0,
     corrected: null,
     error: null,
+    errors: 0,
     labels: null,
     ok: true,
+    produced: null,
     tookMs: null,
   };
 
@@ -115,6 +126,7 @@ export async function runReconcileHubCountsTick(
     if (response.ok !== true) {
       summary.ok = false;
       summary.error = "reconcile_hub_counts did not ack";
+      summary.errors = 1;
 
       return summary;
     }
@@ -125,9 +137,22 @@ export async function runReconcileHubCountsTick(
     summary.tookMs = typeof response.tookMs === "number" ? response.tookMs : null;
 
     const perTable = [summary.labels, summary.albums, summary.artists];
+    summary.checked = perTable.filter((value) => value !== null).length;
     summary.corrected = perTable.every((value) => value !== null)
       ? perTable.reduce((total, value) => (total ?? 0) + (value ?? 0), 0)
       : null;
+    summary.produced = summary.corrected;
+
+    // This is a detector: an acknowledged response with no readable table result proved
+    // nothing. A healthy all-zero pass is checked:3 / produced:0; checked:0 is blindness.
+    if (summary.checked === 0) {
+      summary.ok = false;
+      summary.error = "reconcile_hub_counts inspected no tables";
+      summary.errors = 1;
+      deps.log(`reconcile failed: ${summary.error}`);
+
+      return summary;
+    }
 
     // THE AUDIT LINE. Emitted on EVERY tick — a run of zeroes is the evidence the counters are
     // healthy, and a non-zero reading is the evidence a write path is leaking. Both belong in the
@@ -140,6 +165,7 @@ export async function runReconcileHubCountsTick(
   } catch (error) {
     summary.ok = false;
     summary.error = error instanceof Error ? error.message : String(error);
+    summary.errors = 1;
     deps.log(`reconcile failed: ${summary.error}`);
   }
 
@@ -176,7 +202,15 @@ async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "missing_api_token",
+      }),
+    );
     process.exit(1);
   }
 
@@ -193,7 +227,16 @@ if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`reconcile-hub-counts failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "reconcile_failed" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        error: message,
+        errors: 1,
+        ok: false,
+        produced: null,
+        reason: "reconcile_failed",
+      }),
+    );
     process.exit(1);
   });
 }

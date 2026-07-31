@@ -102,12 +102,15 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // the test runner mid-assertion (the rank-sweep lesson).
 export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
+    checked: null as null | number,
     error: null as null | string,
+    errors: 0,
     // How many (platform, metric) rows this snapshot actually wrote (a same-day re-run is 0).
     inserted: 0,
     // How many platforms landed at least one metric this tick.
     landed: 0,
     ok: true,
+    produced: null as null | number,
     // How many platforms were skipped (unconfigured, or a best-effort fetch fault) — honest,
     // not a failure: a platform whose key isn't held yet simply doesn't snapshot today.
     skipped: 0,
@@ -120,10 +123,20 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     summary.landed = tick.collected?.length ?? 0;
     summary.skipped = tick.skipped?.length ?? 0;
 
+    if (Array.isArray(tick.collected) && Array.isArray(tick.skipped)) {
+      // Platforms are the work unit: every landed/skipped platform was checked, and a landed
+      // platform was successfully acted on even when an idempotent same-day write inserts 0 rows.
+      // Both arrays must exist before zero is measured; domain counters retain their legacy
+      // defaults when a failed response omits the evidence needed for canonical counters.
+      summary.checked = summary.landed + summary.skipped;
+      summary.produced = summary.landed;
+    }
+
     if (tick.ok === false) {
       // The Worker reported a hard stop (not a per-platform skip, which stays inside
       // `skipped`) — carry it through as a failed tick rather than a false success.
       summary.ok = false;
+      summary.errors = 1;
       summary.error = "record_platform_stats returned ok:false";
       log("collect returned ok:false");
     } else if (summary.skipped > 0) {
@@ -131,6 +144,7 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`reach sweep failed: ${summary.error}`);
   }

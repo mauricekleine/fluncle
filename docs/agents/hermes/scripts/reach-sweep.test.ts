@@ -31,8 +31,10 @@ case "$(cat "$DIR/mode")" in
   noop) printf '{"ok":true,"inserted":0,"collected":[{"platform":"mixcloud","metrics":["followers"]}],"skipped":[]}\\n' ;;
   # Every platform skipped (all keys held back) — still a successful tick, just an empty one.
   all-skipped) printf '{"ok":true,"inserted":0,"collected":[],"skipped":[{"platform":"tiktok","reason":"no oauth"},{"platform":"instagram","reason":"no oauth"}]}\\n' ;;
-  # The Worker reported a hard stop.
-  worker-fail) printf '{"ok":false,"inserted":0,"collected":[],"skipped":[]}\\n' ;;
+  # A measured empty collect: both outcome arrays exist and contain zero platforms.
+  empty) printf '{"ok":true,"inserted":0,"collected":[],"skipped":[]}\\n' ;;
+  # The Worker reported a hard stop before it could return trustworthy outcome arrays.
+  worker-fail) printf '{"ok":false,"inserted":0}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
 esac
@@ -90,6 +92,9 @@ describe("reach-sweep takes ONE daily snapshot", () => {
     expect(summary.inserted).toBe(4);
     expect(summary.landed).toBe(2);
     expect(summary.skipped).toBe(1);
+    expect(summary.checked).toBe(3);
+    expect(summary.produced).toBe(2);
+    expect(summary.errors).toBe(0);
     expect(summary.ok).toBe(true);
   });
 
@@ -99,6 +104,10 @@ describe("reach-sweep takes ONE daily snapshot", () => {
 
     expect(calls()).toBe(1);
     expect(summary.inserted).toBe(0);
+    // Platforms, not inserted metric rows, are the work unit: the idempotent collect still
+    // checked and successfully handled Mixcloud.
+    expect(summary.checked).toBe(1);
+    expect(summary.produced).toBe(1);
     expect(summary.ok).toBe(true);
   });
 
@@ -108,8 +117,33 @@ describe("reach-sweep takes ONE daily snapshot", () => {
 
     expect(summary.landed).toBe(0);
     expect(summary.skipped).toBe(2);
+    expect(summary.checked).toBe(2);
+    expect(summary.produced).toBe(0);
     // A held-back key is not a fault — the tick succeeded, it just had nothing to write.
     expect(summary.ok).toBe(true);
+  });
+
+  test("explicit empty outcome arrays are a measured canonical zero", () => {
+    mode("empty");
+    const summary = run();
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      landed: 0,
+      produced: 0,
+      skipped: 0,
+    });
+  });
+
+  test("omits queue depth because a daily snapshot has no remaining backlog", () => {
+    mode("full");
+    const summary = run();
+
+    // The collect is a periodic whole-platform snapshot, not a capped queue walk. A platform
+    // count is work checked, not work remaining, so there is no honest queue_depth to emit.
+    expect(summary).not.toHaveProperty("queue_depth");
+    expect(summary).not.toHaveProperty("expected_interval_ms");
   });
 });
 
@@ -119,6 +153,15 @@ describe("reach-sweep fails honestly", () => {
     const summary = run();
 
     expect(summary.ok).toBe(false);
+    // Domain defaults remain numeric for backwards compatibility, but absent outcome arrays mean
+    // the canonical work pair is unknown rather than a fabricated measured zero.
+    expect(summary).toMatchObject({
+      checked: null,
+      errors: 1,
+      landed: 0,
+      produced: null,
+      skipped: 0,
+    });
     expect(summary.error).toBeTruthy();
   });
 
@@ -133,6 +176,7 @@ describe("reach-sweep fails honestly", () => {
     const summary = run();
 
     expect(summary.ok).toBe(false);
+    expect(summary).toMatchObject({ checked: null, errors: 1, produced: null });
     expect(summary.error).toBeTruthy();
   });
 });

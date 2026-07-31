@@ -19,6 +19,7 @@
 //   bun test docs/agents/hermes/scripts/backup-sweep.test.ts
 
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +36,11 @@ import {
 // `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
 // side-effect free — no Turso, no R2.
 import {
+  beginBackupOperation,
   type DumpSource,
+  completeBackupOperation,
+  createBackupRunCounters,
+  failBackupOperation,
   hashFile,
   selectExpiredBackupKeys,
   signedPut,
@@ -414,5 +419,41 @@ describe("selectExpiredBackupKeys — retention is unchanged", () => {
         monthlyPrefix: "box-state/monthly/",
       }),
     ).toEqual(["box-state/daily/2026-07-25/box-state.tar.gz.enc"]);
+  });
+});
+
+describe("run-ledger summary counters", () => {
+  test("counts attempted backup operations without promoting a leg failure to run errors", () => {
+    const counters = createBackupRunCounters();
+
+    beginBackupOperation(counters);
+    completeBackupOperation(counters);
+    beginBackupOperation(counters);
+    failBackupOperation(counters);
+
+    expect(counters).toEqual({ checked: 2, errors: 0, failed: 1, produced: 1 });
+    // Backup has two explicit operations, not an outstanding work queue.
+    expect("queueDepth" in counters).toBe(false);
+    expect("queue_depth" in counters).toBe(false);
+    expect("expectedIntervalMs" in counters).toBe(false);
+    expect("expected_interval_ms" in counters).toBe(false);
+  });
+
+  test("a preflight failure reports a failed run with zero attempted operations", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dir, "backup-sweep.ts"),
+        "--out",
+        "/tmp/fluncle-backup-summary-db",
+        "--box-state-out",
+        "/tmp/fluncle-backup-summary-box",
+      ],
+      { encoding: "utf8" },
+    );
+    const summary = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+
+    expect(result.status).toBe(1);
+    expect(summary).toMatchObject({ checked: 0, errors: 1, failed: 0, produced: 0 });
   });
 });

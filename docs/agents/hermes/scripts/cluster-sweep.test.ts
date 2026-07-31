@@ -10,6 +10,10 @@
 // mean-centroid recompute, the FIXED-POINT invariant, the empty-retire path, the diff that
 // keeps a nightly write to "a handful", the split's larger-first continuity, and silhouette.
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   assignFindings,
@@ -225,5 +229,44 @@ describe("parseMode", () => {
     expect(parseMode(["--remint"])).toBe("remint");
     // cold-start wins if both are (mistakenly) passed — a snap beats a redraw.
     expect(parseMode(["--cold-start", "--remint"])).toBe("cold-start");
+  });
+});
+
+describe("run-ledger summary counters", () => {
+  test("the real empty-corpus path emits measured zeroes and no queue-depth fiction", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cluster-summary-test-"));
+    const fluncle = join(dir, "fluncle");
+
+    writeFileSync(
+      fluncle,
+      `#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  *"admin galaxies map"*) printf '{"galaxies":[]}' ;;
+  *"admin galaxies embeddings"*) printf '{"embeddings":[],"nextCursor":null}' ;;
+  *) exit 9 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    chmodSync(fluncle, 0o755);
+
+    try {
+      const result = spawnSync(process.execPath, [join(import.meta.dir, "cluster-sweep.ts")], {
+        encoding: "utf8",
+        env: { ...process.env, FLUNCLE_API_TOKEN: "", FLUNCLE_BIN: fluncle },
+      });
+      const summary = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+
+      expect(result.status).toBe(0);
+      expect(summary).toMatchObject({ checked: 0, errors: 0, produced: 0 });
+      // Clustering reads the corpus itself. There is no outstanding work queue to count.
+      expect("queueDepth" in summary).toBe(false);
+      expect("queue_depth" in summary).toBe(false);
+      expect("expectedIntervalMs" in summary).toBe(false);
+      expect("expected_interval_ms" in summary).toBe(false);
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 });

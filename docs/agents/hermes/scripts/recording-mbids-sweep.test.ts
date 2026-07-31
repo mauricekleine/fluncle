@@ -35,6 +35,7 @@ esac
 
 let dir: string;
 let fluncleJson: typeof import("./recording-mbids-sweep").fluncleJson;
+let runRecordingMbidsSweep: typeof import("./recording-mbids-sweep").runRecordingMbidsSweep;
 
 /** Point the stub at one of its canned responses. */
 function mode(name: string): void {
@@ -49,7 +50,7 @@ beforeAll(async () => {
   process.env.FLUNCLE_BIN = bin;
   mode("ok");
 
-  ({ fluncleJson } = await import("./recording-mbids-sweep"));
+  ({ fluncleJson, runRecordingMbidsSweep } = await import("./recording-mbids-sweep"));
 });
 
 afterAll(() => {
@@ -98,6 +99,47 @@ describe("recording-mbids-sweep's fluncleJson", () => {
     expect(pass.resolvedCount).toBe(1);
     expect(pass.missedCount).toBe(1);
     expect(pass.failedCount).toBe(1);
+  });
+
+  test("keeps item failures separate from canonical run errors", () => {
+    mode("partial");
+
+    const summary = runRecordingMbidsSweep();
+
+    expect(summary).toMatchObject({
+      checked: 3,
+      errors: 0,
+      failed: 1,
+      missed: 1,
+      produced: 2,
+      resolved: 1,
+    });
+  });
+
+  test("emits canonical counters and omits queue depth because the bounded pass has no backlog count", () => {
+    mode("ok");
+
+    const summary = runRecordingMbidsSweep();
+
+    expect(summary).toMatchObject({ checked: 8, errors: 0, produced: 8 });
+    // The response only carries this bounded pass's outcomes. Its limit is not a remaining
+    // backlog, and the sweep must not add a count call merely to manufacture queue_depth.
+    expect(summary).not.toHaveProperty("queue_depth");
+    expect(summary).not.toHaveProperty("expected_interval_ms");
+  });
+
+  test("a command failure reports one run error without guessing work counters", () => {
+    mode("cli-error");
+
+    const summary = runRecordingMbidsSweep();
+
+    expect(summary).toMatchObject({
+      checked: null,
+      errors: 1,
+      failed: 0,
+      ok: false,
+      produced: null,
+    });
   });
 
   test("throws on the CLI's own error payload (a failed command, not a partial pass)", () => {

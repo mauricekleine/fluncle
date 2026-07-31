@@ -128,11 +128,14 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 
 export function runLabelImagesSweep() {
   const summary = {
+    checked: null as number | null,
     error: null as string | null,
+    errors: 0,
     failed: 0,
     // Labels floored to the cover (no own logo anywhere) — a clean outcome, terminal.
     none: 0,
     ok: true,
+    produced: null as number | null,
     resolved: 0,
     throttled: false,
   };
@@ -150,6 +153,10 @@ export function runLabelImagesSweep() {
     summary.none = pass.noneCount ?? 0;
     summary.failed = pass.failedCount ?? 0;
     summary.throttled = pass.rateLimited ?? false;
+    // Every returned outcome is a label the Worker actually inspected. `none` is a successful,
+    // terminal action too: the row is durably floored so the sweep will not retry it forever.
+    summary.checked = summary.resolved + summary.none + summary.failed;
+    summary.produced = summary.resolved + summary.none;
     summary.ok = pass.ok !== false && summary.failed === 0;
 
     if (summary.throttled) {
@@ -157,6 +164,7 @@ export function runLabelImagesSweep() {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
     log(`label-image resolve pass failed: ${summary.error}`);
   }
