@@ -1002,6 +1002,13 @@
       "when": 1785487046280,
       "tag": "0142_cool_firebrand",
       "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "6",
+      "when": 1785487983534,
+      "tag": "0143_worthless_firestar",
+      "breakpoints": true
     }
   ]
 }

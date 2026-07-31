@@ -21,11 +21,13 @@ One key, one page: `https://www.fluncle.com/identity/<key>`.
 
 ## What is covered
 
-Seven rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and five links out, **Spotify**, **Apple Music**, **Deezer**, **Discogs**, and **Beatport**. Apple Music is page-only, for the licence reason below.
+Eight rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and six links out, **Spotify**, **Apple Music**, **Deezer**, **Discogs**, **Beatport**, and **YouTube**. Apple Music is page-only, for the licence reason below.
 
 **Deezer is covered, but thinly.** Fluncle keeps a Deezer link only when another look at that recording already brought one back and it matches the recording he holds. Everything he logged before this reads `Not checked yet`, and stays that way until he looks at that recording again.
 
 **Beatport is where you buy it.** Spotify, Apple Music, and Deezer play you the tune, Discogs tells you what the release is, and Beatport sells you the download, so that row reads `Buy on Beatport`. Fluncle searches the store for a recording he has certified and keeps the link only when the record's own ISRC matches the one he already holds, so a near-miss with the right title never gets through. He has only run that search over his own findings so far, so a recording he holds but has not certified reads `Not checked yet`.
+
+**YouTube comes out of the audio, not out of a search.** When Fluncle buys a recording's audio he searches YouTube for it, pulls down what comes back, and fingerprints it against the official preview. That match is what can put a link here, so the row fills only for a recording he has captured since he started keeping the video id. He never goes looking for a YouTube link on its own, and that is the platform's doing: `search.list` sits in its own bucket of [100 calls a day](https://developers.google.com/youtube/v3/determine_quota_cost) that only a compliance audit lifts, and `youtube.com/robots.txt` disallows the search page. He checks the uploader too, and keeps the link only when the channel is the artist's own or one of YouTube's auto-generated artist channels, because a rip carries the right audio just as well and he would rather show you nothing than send you to one. Every other recording reads `Not checked yet`, a rip he turned down included.
 
 ## What is not covered
 
@@ -36,8 +38,6 @@ Every platform below is out for a reason that belongs to the platform, not to wh
 **SoundCloud.** SoundCloud's [API terms](https://developers.soundcloud.com/docs/api/terms-of-use) bar an online presence dedicated to specific artists or repertoire, playback that aggregates SoundCloud with other services, and caching anything the API returns past the end of a session. Fluncle's archive, with a page per artist, runs into all three. His artist pages do carry a SoundCloud profile where the artist holds one, and that link goes through no API.
 
 **Qobuz.** Qobuz's [API Terms of Use](https://static.qobuz.com/apps/api/QobuzAPI-TermsofUse.pdf), dated 1 September 2011, bar making the API available to any person who is not a Qobuz user, and bar indexing the service in whole or in part. So there is no Qobuz row.
-
-**YouTube.** Going looking means searching, and `search.list` sits in its own bucket of [100 calls a day](https://developers.google.com/youtube/v3/determine_quota_cost) that only a compliance audit lifts, while `youtube.com/robots.txt` disallows the search page. Hand him a video and matching it to the recording he holds costs almost nothing, so a YouTube link can appear here when it reached him some other way. He can take a YouTube link; he cannot go find one.
 
 **Bandcamp.** There is nothing to match a recording on. A public release page carries no ISRC, no UPC, and no structured data, and the [developer API](https://bandcamp.com/developer) is built for labels and fulfilment partners working their own accounts, so it answers no lookup against Bandcamp's catalogue.
 

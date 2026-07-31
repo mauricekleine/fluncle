@@ -764,6 +764,52 @@ export const tracks = sqliteTable(
     spotifyUrl: text("spotify_url"),
     title: text("title").notNull(),
     trackId: text("track_id").primaryKey(),
+    // THE CAPTURE'S YOUTUBE PROVENANCE, AND WHETHER IT MAY BE SHOWN (operator ruling 2026-07-31).
+    // The capture sweep already searches YouTube, downloads the audio, and FINGERPRINT-VERIFIES it
+    // against the ISRC-resolved official preview (capture-sweep.ts § the fingerprint gate). Until
+    // now only the REJECTED ids were remembered (`source_audio_rejected`); the winner's id was
+    // thrown away at the moment it was most certain. So for every capture from here on, Fluncle
+    // knows which upload carries this recording, PROVEN by his own ears — and not one YouTube Data
+    // API call is made to learn it. Kept the same way the Deezer trio above is: forward-only, no
+    // sweep, no backfill (a discarded id is unrecoverable), so a row fills the next time the
+    // capture sweep runs over it.
+    //
+    // THE TWO QUESTIONS ARE DIFFERENT, and conflating them is the whole risk here:
+    //
+    // `youtube_verified_at` is when the officialness check ran, NOT when the fingerprint matched.
+    // The identity envelope serves it with `atMeaning: "verified"` — the moment the link was
+    // written — on the Deezer precedent.
+    //
+    // `youtube_video_id` is the ACCEPTED upload's id, stored as TEXT (an opaque external id, never
+    // arithmetic). Written ONLY from a capture whose verdict was a real `preview-match` — the
+    // sweep's abstain path (no preview reference, nothing compared) reports no id, because this
+    // column is served as `method: "fingerprint"` and must never front a match that never ran.
+    //
+    // A fingerprint match proves the AUDIO is this recording. It proves NOTHING about whether the
+    // upload is legitimate: a rip carries the same bytes as the master, which is exactly why the
+    // fingerprint passes it.
+    //
+    // `youtube_video_official` is therefore the LOAD-BEARING GATE, and the only column the public
+    // surface reads as permission. 1 = the upload's own channel is an auto-generated
+    // `<Artist> - Topic` art track or an artist channel this recording is credited to; 0 = it is
+    // neither; NULL = nobody has checked, which is NOT a verdict. Decided server-side against
+    // YouTube's KEYLESS oEmbed endpoint (lib/server/youtube-official.ts), whose `author_name` is
+    // the upload's channel. The check is deliberately CONSERVATIVE and its false-negative bias is
+    // the point: a missed official upload merely stays internal, while a rip shown as Fluncle's
+    // link is a lie the /identity page exists to prevent. An oEmbed failure leaves this NULL — the
+    // id is still kept, because it is real capture provenance, and it simply never surfaces.
+    //
+    // ONLY `official = 1` REACHES A READER. The id alone is internal provenance: `/identity`
+    // renders nothing and the API answers `unattempted` for an unchecked or non-official id, which
+    // is honest — no per-recording YouTube SEARCH ever concludes here, so there is no `absent` to
+    // serve and never will be.
+    //
+    // NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule the Deezer block above
+    // records: a `.default()` on a `tracks` column makes drizzle regenerate the whole table and
+    // drop+recreate all ~125 indexes, a production stall. NOT INDEXED: nothing queries by them.
+    youtubeVerifiedAt: text("youtube_verified_at"),
+    youtubeVideoId: text("youtube_video_id"),
+    youtubeVideoOfficial: integer("youtube_video_official"),
   },
   // Every list/queue/feed order and predicate for a FINDING lives on the certification
   // half (added_at, log_id, video_url, enrichment_status, galaxy_id), so the four former

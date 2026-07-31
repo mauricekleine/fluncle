@@ -83,6 +83,18 @@ const UpdateTrackBodySchema = z.looseObject({
   // sources. Agent-writable; the handler narrows it to a string.
   sourceAudioRejected: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
+  // THE CAPTURE'S YOUTUBE PROVENANCE (operator ruling 2026-07-31) — the id of the upload whose
+  // audio the capture sweep FINGERPRINT-VERIFIED for this recording. ADDITIVE AND OPTIONAL, on
+  // the Deezer precedent: the baked box scripts freshen asynchronously after a deploy, so an old
+  // sweep that never sends this field must keep working unchanged, and it does. LOOSE like the
+  // rest: the handler narrows it to a string, decides officialness server-side, and fills it
+  // once — the box is never trusted to say whether an upload may be shown.
+  //
+  // IT ONLY COUNTS BESIDE `captureVerification: "preview-match"`, in the SAME body. The envelope
+  // serves this id under `method: "fingerprint"`, so an id from the sweep's ABSTAIN path (a track
+  // with no preview reference, stamped `unverified`, where nothing was compared) would publish a
+  // match that never ran. Sent alone or beside any other verdict, it is dropped — fail closed.
+  youtubeVideoId: z.unknown().optional(),
 });
 
 /**

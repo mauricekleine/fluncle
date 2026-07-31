@@ -85,6 +85,10 @@ type TrackFixture = {
   spotifyUri?: string;
   spotifyVerifiedBy?: string;
   title?: string;
+  youtubeVerifiedAt?: string;
+  youtubeVideoId?: string;
+  /** 1 = cleared to show, 0 = checked and refused, undefined = never concluded. */
+  youtubeVideoOfficial?: number;
 };
 
 async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<void> {
@@ -124,6 +128,9 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
       fields.beatportAttempts ?? 0,
       fields.deezerAttemptedAt ?? null,
       fields.deezerAttempts ?? 0,
+      fields.youtubeVideoId ?? null,
+      fields.youtubeVideoOfficial ?? null,
+      fields.youtubeVerifiedAt ?? null,
     ],
     sql: `insert into tracks (
             track_id, title, artists_json, duration_ms,
@@ -139,8 +146,9 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
             deezer_track_id, deezer_verified_at, deezer_verified_by,
             beatport_url, beatport_verified_at,
             backfill_beatport_attempted_at, backfill_beatport_attempts,
-            backfill_deezer_attempted_at, backfill_deezer_attempts
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            backfill_deezer_attempted_at, backfill_deezer_attempts,
+            youtube_video_id, youtube_video_official, youtube_verified_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -570,6 +578,68 @@ describe("the identifiers and the other platforms", () => {
         // rather than inventing one.
         source: null,
       },
+    });
+  });
+
+  // ── YOUTUBE ─────────────────────────────────────────────────────────────────────────────────
+  // Two states, like Deezer's, and for a sharper reason: the id is a by-product of Fluncle's OWN
+  // capture (the fingerprint gate accepted this upload while buying the audio), so no YouTube
+  // search ever concludes and `absent` would be a lie. On top of that, holding the id is not
+  // enough — the server's officialness verdict is the permission, because a fingerprint match
+  // proves the recording and never the legitimacy of the upload carrying it.
+  it("serves the YouTube link only once the upload has been cleared as official", async () => {
+    await insertTrack("yt-official", {
+      youtubeVerifiedAt: "2026-07-31T00:00:00.000Z",
+      youtubeVideoId: "dQw4w9WgXcQ",
+      youtubeVideoOfficial: 1,
+    });
+
+    expect((await only({ idOrLogId: "yt-official", kind: "idOrLogId" })).links.youtube).toEqual({
+      state: "verified",
+      url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      value: "dQw4w9WgXcQ",
+      verification: {
+        at: "2026-07-31T00:00:00.000Z",
+        // The stamp is when the check ran and the link was written, never an attempt time.
+        atMeaning: "verified",
+        // Hardcoded rather than stored: the audio match is the only gate this leg has, so a
+        // `youtube_verified_by` column would be one value repeated forever.
+        method: "fingerprint",
+        source: null,
+      },
+    });
+  });
+
+  it("stays silent about a held id the officialness check REFUSED", async () => {
+    // THE PRODUCT RAIL. The bytes matched, so the capture is sound and the id is real provenance —
+    // and the upload is a rip. Fluncle keeps it for himself and says nothing, which is why this
+    // reads exactly like a row he holds nothing for.
+    await insertTrack("yt-rip", {
+      youtubeVerifiedAt: "2026-07-31T00:00:00.000Z",
+      youtubeVideoId: "ripUpload01",
+      youtubeVideoOfficial: 0,
+    });
+
+    expect((await only({ idOrLogId: "yt-rip", kind: "idOrLogId" })).links.youtube).toEqual({
+      state: "unattempted",
+    });
+  });
+
+  it("stays silent about a held id whose check never concluded", async () => {
+    // A NULL verdict is "not yet checked", never "fine to show". An oEmbed that 404'd or timed out
+    // must degrade into silence rather than into a claim in either direction.
+    await insertTrack("yt-unchecked", { youtubeVideoId: "uncheckedId" });
+
+    expect((await only({ idOrLogId: "yt-unchecked", kind: "idOrLogId" })).links.youtube).toEqual({
+      state: "unattempted",
+    });
+  });
+
+  it("says nobody has looked at YouTube when it holds no id at all", async () => {
+    await insertTrack("yt-none");
+
+    expect((await only({ idOrLogId: "yt-none", kind: "idOrLogId" })).links.youtube).toEqual({
+      state: "unattempted",
     });
   });
 

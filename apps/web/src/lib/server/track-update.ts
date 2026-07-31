@@ -10,12 +10,14 @@ export type { TrackUpdateResult };
 // change. Backs PATCH /api/admin/tracks/:id.
 
 import { isLogId } from "../log-id";
+import { parseArtistsJson } from "./artists";
 import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
 import { purgeTrackEntityPages } from "./entity-cache-purge";
 import { type AdminRole } from "./env";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
+import { checkYoutubeOfficial } from "./youtube-official";
 
 export type TrackUpdate = {
   /**
@@ -207,6 +209,16 @@ export type TrackUpdate = {
   videoPlateSubject?: string;
   /** The video's dominant STRUCTURAL family (structure ledger; render.json `structure.dominant`). */
   videoStructure?: string;
+  /**
+   * THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id) — the id of the upload the
+   * capture sweep fingerprint-verified for this recording. Internal capture side-channel like
+   * `sourceAudioKey`, and NOT in VISIBLE_FIELDS: keeping it moves no public lastmod.
+   *
+   * The caller sends ONLY the id. The officialness verdict and its stamp are decided server-side
+   * (lib/server/youtube-official.ts) and are deliberately absent from this type — a box sweep can
+   * report what it captured, never grant permission for it to be shown.
+   */
+  youtubeVideoId?: string;
 };
 
 // The fields whose write changes a PUBLIC surface, so it should move the
@@ -295,12 +307,18 @@ const CERTIFICATION_FIELDS = new Set<keyof TrackUpdate>([
 
 type ExistingRow = {
   added_at: string | null;
+  // The names this recording is credited to, as stored JSON — read ONLY by the YouTube
+  // officialness gate, which compares them against the upload's channel.
+  artists_json: string | null;
   bpm_source: string | null;
   // 1 when a `findings` row exists — i.e. the track is a FINDING, not a catalogue row.
   certified: number;
   isrc: string | null;
   key_source: string | null;
   log_id: string | null;
+  // Already-held capture provenance, so the fill-empty-only rule can short-circuit BEFORE
+  // spending an oEmbed request on a row that will not take the answer anyway.
+  youtube_video_id: string | null;
 };
 
 export async function updateTrack(
@@ -322,6 +340,7 @@ export async function updateTrack(
   const existingResult = await db.execute({
     args: [trackId],
     sql: `select tracks.isrc, tracks.bpm_source, tracks.key_source,
+                 tracks.artists_json, tracks.youtube_video_id,
                  findings.log_id, findings.added_at,
                  (findings.track_id is not null) as certified
           from tracks
@@ -620,6 +639,45 @@ export async function updateTrack(
   if (update.sourceAudioBytes !== undefined) {
     sets.push("source_audio_bytes = ?");
     args.push(update.sourceAudioBytes);
+  }
+
+  // THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id). The sweep reports the id
+  // of the upload its fingerprint gate accepted; the SERVER decides whether that upload may ever
+  // be shown, and stamps when it decided. The box is never trusted with permission.
+  //
+  // FILL-EMPTY-ONLY, and ALL THREE COLUMNS MOVE TOGETHER OR NOT AT ALL. `coalesce` alone would be
+  // wrong here in a way the Deezer trio never faces: `youtube_video_official` is legitimately NULL
+  // (an unconcluded check) while the id beside it is set, so a coalesce on the verdict would let a
+  // LATER capture's verdict attach itself to an EARLIER capture's id — a row claiming one upload is
+  // official on the strength of a check run against a different one. The two `case` clauses read
+  // the row's PRE-UPDATE `youtube_video_id` (SQLite evaluates every SET expression against the
+  // original row), so the trio is atomically all-or-nothing: first write wins, provenance intact.
+  //
+  // AND THE ID IS ONLY TAKEN ALONGSIDE A REAL MATCH. The capture sweep also has an ABSTAIN path —
+  // a track with no preview reference stores its bytes stamped `unverified`, having compared
+  // nothing — and the envelope serves this id under `method: "fingerprint"`. Accepting an id from
+  // that path would print "matched by audio fingerprint" beneath a match that never ran. The sweep
+  // already withholds it there; this is the same condition enforced where a stale or wrong box
+  // build cannot reach, which is the rule the whole leg is built on: the box reports, the server
+  // rules. It fails CLOSED — an id arriving without its verdict is simply not stored.
+  if (
+    update.youtubeVideoId !== undefined &&
+    update.captureVerification === "preview-match" &&
+    !existing.youtube_video_id
+  ) {
+    // Skipped entirely when the row already holds an id — no oEmbed request is spent on an answer
+    // the write would discard.
+    const official = await checkYoutubeOfficial(
+      update.youtubeVideoId,
+      parseArtistsJson(existing.artists_json ?? "[]"),
+    );
+
+    sets.push(
+      "youtube_video_id = coalesce(youtube_video_id, ?)",
+      "youtube_video_official = case when youtube_video_id is null then ? else youtube_video_official end",
+      "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+    );
+    args.push(update.youtubeVideoId, official, new Date().toISOString());
   }
 
   // THE PROVENANCE INVARIANT: a `*_prompt_version` column always describes the text

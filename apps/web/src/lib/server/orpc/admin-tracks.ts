@@ -373,6 +373,13 @@ export function adminTracksHandlers(os: Implementer) {
         update.sourceAudioRejected = body.sourceAudioRejected;
       }
 
+      // The accepted upload's id, from the capture sweep's fingerprint gate. Trimmed and only
+      // taken when non-empty — there is no "clear it" semantic here, because the sweep only ever
+      // reports an id it PROVED, and an empty string would be a claim about nothing.
+      if (typeof body.youtubeVideoId === "string" && body.youtubeVideoId.trim()) {
+        update.youtubeVideoId = body.youtubeVideoId.trim();
+      }
+
       // The agent role may only touch analysis fields. Reject (not silently drop)
       // an attempt at an operator-only field — a 403 the gate can voice. The role
       // is read from the oRPC context (lifted by `adminAuth`), not re-derived.

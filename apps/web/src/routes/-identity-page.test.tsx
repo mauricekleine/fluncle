@@ -56,8 +56,11 @@ async function renderPage(data: IdentityPageData): Promise<string> {
  * Apple sits at `unattempted` rather than `unsupported` because the PAGE reads the envelope
  * first-party, and that read computes Apple's real state; `unsupported` for Apple is a machine-only
  * answer. Deezer sits at `unattempted` for the same kind of reason — it is a covered platform whose
- * quietest state is "nobody has looked". Tidal keeps the `unsupported` the envelope really serves
- * it, so the coverage-set assertions below run against the true shape rather than a doctored one.
+ * quietest state is "nobody has looked". YouTube sits there too, and for it that state covers the
+ * most ground: no id, an id whose officialness check was refused, and an id never checked all read
+ * `unattempted`, because none of them is a look Fluncle ran on the reader's behalf. Tidal keeps the
+ * `unsupported` the envelope really serves it, so the coverage-set assertions below run against the
+ * true shape rather than a doctored one.
  */
 function recording(overrides: Partial<IdentityRecording> = {}): IdentityRecording {
   return {
@@ -74,6 +77,7 @@ function recording(overrides: Partial<IdentityRecording> = {}): IdentityRecordin
       discogs: { state: "unattempted" },
       spotify: { state: "unattempted" },
       tidal: { state: "unsupported" },
+      youtube: { state: "unattempted" },
     },
     logId: null,
     relation: "canonical",
@@ -121,6 +125,7 @@ describe("the identity answer", () => {
               },
             },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
           logId: "004.7.2I",
         }),
@@ -164,9 +169,9 @@ describe("the identity answer", () => {
 
     expect(html).not.toContain("Tidal");
     expect(html).not.toContain("Not covered");
-    // The seven rows that ARE the coverage set. Deezer and Beatport each earn a row off a real
-    // column (`tracks.deezer_track_id`, `tracks.beatport_url`), so they render their honest state
-    // like every other one.
+    // The eight rows that ARE the coverage set. Deezer, Beatport, and YouTube each earn a row off
+    // a real column (`tracks.deezer_track_id`, `tracks.beatport_url`, `tracks.youtube_video_id`),
+    // so they render their honest state like every other one.
     for (const label of [
       "ISRC",
       "MusicBrainz",
@@ -175,6 +180,7 @@ describe("the identity answer", () => {
       "Deezer",
       "Discogs",
       "Beatport",
+      "YouTube",
     ]) {
       expect(html).toContain(`<dt>${label}</dt>`);
     }
@@ -204,6 +210,7 @@ describe("the identity answer", () => {
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -214,6 +221,55 @@ describe("the identity answer", () => {
     expect(html).not.toContain("Listen on Beatport");
     // The only method this leg has, said plainly, with the write's own date beside it.
     expect(html).toContain("matched by ISRC · confirmed Jul 30, 2026");
+  });
+
+  it("carries a held YouTube link out as a WATCH, under the fingerprint that won it", async () => {
+    // YouTube is a video surface, so the label names watching. The method fragment is the one in
+    // this whole set whose evidence is the SOUND — Fluncle's own capture matched the audio — and it
+    // spends neither `confirmed` nor `checked`, which the date fragment beside it owns.
+    const html = await renderPage(
+      found([
+        recording({
+          links: {
+            appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
+            deezer: { state: "unattempted" },
+            discogs: { state: "unattempted" },
+            spotify: { state: "unattempted" },
+            tidal: { state: "unsupported" },
+            youtube: {
+              state: "verified",
+              url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              value: "dQw4w9WgXcQ",
+              verification: {
+                at: "2026-07-31T00:00:00.000Z",
+                atMeaning: "verified",
+                method: "fingerprint",
+                source: null,
+              },
+            },
+          },
+        }),
+      ]),
+    );
+
+    expect(html).toContain('href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"');
+    expect(html).toContain("Watch on YouTube");
+    expect(html).not.toContain("Listen on YouTube");
+    expect(html).toContain("matched by audio fingerprint · confirmed Jul 31, 2026");
+  });
+
+  it("says nothing at all about a YouTube id it has not cleared", async () => {
+    // THE PRODUCT RAIL. A fingerprint match proves the audio; it proves nothing about whether the
+    // upload is legitimate, because a rip carries the same bytes as the master. So an id whose
+    // officialness check came back refused or never concluded is INTERNAL provenance: the envelope
+    // hands the page `unattempted`, and the page must render no link, no id, and no hint that
+    // Fluncle is sitting on one.
+    const html = await renderPage(found([recording()]));
+
+    expect(html).toContain("<dt>YouTube</dt>");
+    expect(html).not.toContain("youtube.com/watch");
+    expect(html).not.toContain("Watch on YouTube");
   });
 
   it("says a Beatport miss without promising another look", async () => {
@@ -236,6 +292,7 @@ describe("the identity answer", () => {
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -269,6 +326,7 @@ describe("the identity answer", () => {
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -302,6 +360,7 @@ describe("the identity answer", () => {
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -351,6 +410,7 @@ describe("the identity answer", () => {
             },
             spotify: { reason: "attempt-cap-reached", state: "refused" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -388,6 +448,7 @@ describe("the identity answer", () => {
               terminal: false,
             },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -438,6 +499,7 @@ describe("the identity answer", () => {
               },
             },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -478,6 +540,7 @@ describe("the identity answer", () => {
             discogs: { state: "unattempted" },
             spotify: { reason: "credit-not-an-identity", state: "refused" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),
@@ -514,6 +577,7 @@ describe("the identity answer", () => {
             discogs: { state: "unattempted" },
             spotify: { state: "unattempted" },
             tidal: { state: "unsupported" },
+            youtube: { state: "unattempted" },
           },
         }),
       ]),

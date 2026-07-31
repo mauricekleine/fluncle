@@ -93,6 +93,8 @@ export type IdentityAudience = "first-party" | "machine";
  * How a link or identifier came to be trusted. CLOSED; every value is backed by a stored column or
  * by the row's own primary key, and the set is asserted equal to the contract's enum by a test.
  *
+ *   · `fingerprint`    — Fluncle's own capture matched the audio against the official preview. The
+ *                        only method here where the EVIDENCE IS THE SOUND rather than metadata.
  *   · `isrc`           — an ISRC equality decided it. The recording's real identity.
  *   · `operator`       — a human read the evidence and ruled.
  *   · `pk-derived`     — the identifier IS the row's origin, not a lookup result.
@@ -103,6 +105,7 @@ export type IdentityAudience = "first-party" | "machine";
  *   · `unknown-legacy` — Fluncle holds no record of how. Never a claim about the check itself.
  */
 export type IdentityMethod =
+  | "fingerprint"
   | "isrc"
   | "operator"
   | "pk-derived"
@@ -117,6 +120,7 @@ export type IdentityMethod =
  * two definitions honest with each other in the type system as well.
  */
 export const IDENTITY_METHODS = [
+  "fingerprint",
   "isrc",
   "operator",
   "pk-derived",
@@ -194,6 +198,7 @@ export type IdentityRecording = {
     discogs: IdentityState;
     spotify: IdentityState;
     tidal: IdentityState;
+    youtube: IdentityState;
   };
   /** Carried beside `certified`, never inferred from it (a straggler mid-publish has neither). */
   logId: null | string;
@@ -221,6 +226,7 @@ const IDENTITY_SELECT = `t.track_id, t.title, t.artists_json, t.duration_ms,
     t.backfill_beatport_attempts,
     t.deezer_track_id, t.deezer_verified_at, t.deezer_verified_by,
     t.backfill_deezer_attempted_at, t.backfill_deezer_attempts,
+    t.youtube_video_id, t.youtube_video_official, t.youtube_verified_at,
     t.dismissed_at, t.duplicate_of_track_id,
     f.log_id as log_id, (f.track_id is not null) as has_finding`;
 
@@ -262,6 +268,9 @@ type IdentityRow = {
   spotify_uri: null | string;
   title: string;
   track_id: string;
+  youtube_verified_at: null | string;
+  youtube_video_id: null | string;
+  youtube_video_official: null | number;
 };
 
 /** The keys a caller may look a recording up by. Exactly one is honoured; the op enforces that. */
@@ -525,6 +534,49 @@ function deezerState(row: IdentityRow): IdentityState {
 }
 
 /**
+ * THE YOUTUBE ANSWER, off the capture provenance Fluncle keeps for a recording
+ * (`tracks.youtube_video_id` + `youtube_video_official`).
+ *
+ * TWO STATES, and only two — the same shape as Deezer's, for a related reason and a different one.
+ *
+ * The related reason: NO YOUTUBE SEARCH EVER CONCLUDES HERE. The id is a by-product of the capture
+ * sweep buying this recording's audio, not of a look for a YouTube link, so there is no attempt to
+ * report and `absent` would be a lie — it would claim a search ran and came back empty. There is
+ * likewise nothing to refuse.
+ *
+ * The different one, and the load-bearing half: TWO SEPARATE FACTS HAVE TO BE TRUE before a link
+ * renders. The fingerprint proved the AUDIO is this recording; it proved nothing about whether the
+ * upload is legitimate, because a rip carries the same bytes as the master. So `official === 1` —
+ * the server-side oEmbed verdict (lib/server/youtube-official.ts) — is the permission, and the id
+ * alone is not. A held id whose verdict is 0 (checked, refused) or NULL (never concluded) reads
+ * exactly as one Fluncle does not hold: `unattempted`, rendering nothing, saying nothing. That is
+ * honest rather than evasive — no look was made on the reader's behalf either way, and the archive
+ * declining to point somewhere is not a fact about the recording.
+ *
+ * A shown link is `verified` with `method: "fingerprint"` HARDCODED rather than stored: this is the
+ * only path that writes the column and the audio match is the only gate it has, so a
+ * `youtube_verified_by` column would be one value repeated forever (the Beatport precedent above).
+ * `atMeaning: "verified"`, because the stamp beside it is the moment the check ran and the link was
+ * written, not the moment a search concluded.
+ *
+ * SERVED TO BOTH AUDIENCES, like every row but Apple's.
+ */
+function youtubeState(row: IdentityRow): IdentityState {
+  const id = row.youtube_video_id?.trim();
+
+  // The verdict is the permission. `Number(...)` rather than a truthiness test: 0 and null are
+  // different facts internally, and both must fall through to the same silence here.
+  if (id && Number(row.youtube_video_official) === 1) {
+    return verified("fingerprint", row.youtube_verified_at, "verified", {
+      url: `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,
+      value: id,
+    });
+  }
+
+  return { state: "unattempted" };
+}
+
+/**
  * THE BEATPORT ANSWER, off the store link Fluncle keeps for a recording (`tracks.beatport_url`).
  *
  * THE ONE PLACE THIS LINK IS ALLOWED TO SURFACE. `beatport_url` is a terminal artifact under
@@ -657,6 +709,7 @@ function toRecording(
       spotify: spotifyState(row),
       // No Tidal integration exists at all. Honest, and cheaper than pretending.
       tidal: { state: "unsupported" },
+      youtube: youtubeState(row),
     },
     logId: row.log_id,
     relation,
