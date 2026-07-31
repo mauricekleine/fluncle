@@ -1,21 +1,25 @@
 ---
 title: Identity
-description: Look a recording up by ISRC, MusicBrainz id, or Log ID, and get the links Fluncle found plus where he looked and found nothing.
+description: "Look a recording up by a Spotify or Deezer link, an ISRC, a MusicBrainz id, or a Log ID: the links Fluncle found, and where he looked and found nothing."
 ---
 
 Fluncle knows, for tens of thousands of recordings, that _this recording_ is _this Spotify link_ is _this MusicBrainz id_ is _this ISRC_. This is how you ask.
 
 Ask on the web at [`/identity`](/identity), or from a machine through the track endpoint. Both read the same answer, so the page and the API tell you the same thing about a recording. They present it differently on purpose: the page is a receipt, one row per thing Fluncle covers, while the API answers every platform explicitly so a machine caller never has to infer a gap from a missing field. One field also differs in substance, and only one: Apple Music, for a licence reason spelled out below.
 
-## The three keys
+## The keys
 
-| Key                      | Looks like     | Where it comes from                                                                              |
-| ------------------------ | -------------- | ------------------------------------------------------------------------------------------------ |
-| ISRC                     | `GBXXX0000000` | The recording's own international standard code. Hyphens and spaces are fine; they are stripped. |
-| MusicBrainz recording id | a UUID         | The recording's id at musicbrainz.org.                                                           |
-| Log ID                   | `004.7.2I`     | The coordinate Fluncle stamps on a recording he has certified. See [Log ID](/docs/log-id).       |
+| Key                      | Looks like                 | Where it comes from                                                                              |
+| ------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------ |
+| ISRC                     | `GBXXX0000000`             | The recording's own international standard code. Hyphens and spaces are fine; they are stripped. |
+| MusicBrainz recording id | a UUID                     | The recording's id at musicbrainz.org.                                                           |
+| Log ID                   | `004.7.2I`                 | The coordinate Fluncle stamps on a recording he has certified. See [Log ID](/docs/log-id).       |
+| Spotify link             | `open.spotify.com/track/…` | Straight off a share sheet. The `spotify:track:` URI and the bare 22-character id work too.      |
+| Deezer link              | `deezer.com/track/…`       | Straight off a share sheet. The bare numeric id works too.                                       |
 
 One key, one page: `https://www.fluncle.com/identity/<key>`.
+
+**A pasted link needs no tidying.** Fluncle reads past a locale in the path (`/nl/track/…`, `/intl-de/track/…`) and a tracking tail (`?si=…`, `?utm_source=…`), so the same track pasted three different ways lands on one address rather than three. Beatport is the one platform that is a destination only, never a key. Fluncle keeps a Beatport URL and no Beatport id, and matching a URL by its tail means reading every row in the archive to answer one question. He would rather leave that key out than answer it slowly.
 
 **An answer is a list, not a row.** An ISRC is not unique in this archive, and neither is a MusicBrainz id across the paths a recording can arrive by. So a lookup brings back every recording Fluncle has on file under the key, each marked with how it stands to the others: the only answer, one of several he has not ruled between, or a duplicate of another recording here. Picking a winner quietly is exactly what this surface exists not to do.
 
@@ -74,16 +78,28 @@ The track endpoint answers the same thing as JSON. Pass a single `-` in the path
 ```
 GET /api/v1/tracks/-?isrc=GBXXX0000000
 GET /api/v1/tracks/-?mbid=<uuid>
+GET /api/v1/tracks/-?spotify=https://open.spotify.com/track/<id>
+GET /api/v1/tracks/-?deezer=https://www.deezer.com/track/<id>
 GET /api/v1/tracks/004.7.2I?identity=1
 ```
 
-Exactly one key at a time. A key that matches nothing is a `404`; a key that is not a well-formed ISRC or UUID is a `422`. The full request and response shapes are in the [API reference](/docs/api).
+One kind of key per request. ISRCs may arrive in a batch, below. A key that matches nothing is a `404`; a key that is not a well-formed ISRC, UUID, Spotify id, or Deezer id is a `422`. The full request and response shapes are in the [API reference](/docs/api).
+
+**Up to 20 ISRCs at once**, comma separated:
+
+```
+GET /api/v1/tracks/-?isrc=GBXXX0000000,GBXXX0000001,GBXXX0000002
+```
+
+The answer is the same shape one ISRC gets, because it was already a list: one `recordings` array holding every match, in the order the keys were sent, each carrying its own ISRC so you can pair an answer back to what you asked. A key that matches nothing brings back no recording, and the whole request is a `404` only when none of them matched. One mistyped ISRC refuses the batch rather than quietly answering nineteen of twenty, and more than 20 is a `422`. It saves you round trips, not keys: the meter counts keys, so 20 ISRCs spend 20.
+
+**From a browser.** Fluncle answers `Access-Control-Allow-Origin: *` on every public read and on its `OPTIONS` preflight, so an extension or a web app can call these endpoints straight from the browser. He opens exactly as much as an anonymous request already sees and no more: a `*` header means no browser attaches cookies, so nothing signed in is reachable this way, and the admin endpoints sit outside it entirely. He sends the header on refusals too, so a `404`, a `422`, and a `429` each read as themselves rather than as one indistinguishable network error.
 
 Spotify links come back as `https://www.fluncle.com/out/spotify/<trackId>`, a redirect on Fluncle's own domain. Follow it and you land on Spotify. The one place the raw link is served instead is the structured data on a page, where a link is an identity claim rather than somewhere to go, and a redirect would break the claim.
 
 ## Fair use
 
-The lookups are metered at **30 requests a minute** and **1,000 a day** from one place, counted per caller. Past either, the answer is a `429` and the meter resets on its own. That is the whole policy, it costs nothing, and there is no key to apply for.
+The lookups are metered at **30 keys a minute** and **1,000 a day** from one place, counted per caller. One lookup is one key, and a batch of 20 ISRCs is 20. Past either, the answer is a `429` and the meter resets on its own. That is the whole policy, it costs nothing, and there is no key to apply for.
 
 If you build on this, two things come with it: say the data came from Fluncle and link back to `fluncle.com`, and wherever you show a platform link, name that platform and link to it the way its own rules ask. The [terms](/terms) say the same thing in full.
 

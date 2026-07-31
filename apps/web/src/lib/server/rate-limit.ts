@@ -82,34 +82,49 @@ export async function consumeRateLimit({
  * bucket is into a window to fire a threshold exactly once (identity-envelope.ts). Reading the
  * counter back separately would reopen the read-then-write race this statement exists to close, so
  * the count comes out of the same atomic statement or not at all.
+ *
+ * `units` is how much this call SPENDS, and it defaults to 1 so every existing caller is unchanged.
+ * It exists because one request is not always one unit of work: a batch identity read answers
+ * twenty keys and must cost twenty, or a caller could pace themselves under a per-minute dial and
+ * still walk the archive twenty times faster than the dial was set for. The whole spend clears or
+ * none of it does — a partially-charged batch would refuse work it had already been paid for.
  */
 export async function bumpRateLimitCounter({
   action,
   bucket,
   limit,
+  units = 1,
   windowMs,
 }: {
   action: string;
   bucket: string;
   limit: number;
+  units?: number;
   windowMs: number;
 }): Promise<number | undefined> {
+  // A spend wider than the whole window can never fit, and the statement below would open a fresh
+  // window ABOVE the cap on the insert path. Refuse it before it can, rather than after.
+  if (units < 1 || units > limit) {
+    return undefined;
+  }
+
   const db = await getDb();
   // Align the window so every request in the same windowMs slice shares a row.
   const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs).toISOString();
 
-  // One atomic conditional upsert. The INSERT path opens a new window at count=1.
-  // The conflict path bumps the existing counter ONLY while it is below `limit`;
-  // at the cap the `WHERE count < ?` predicate makes the UPDATE a no-op, so
+  // One atomic conditional upsert. The INSERT path opens a new window at the spend.
+  // The conflict path bumps the existing counter ONLY while the spend still fits under
+  // `limit`; at the cap the `WHERE count + ? <= ?` predicate makes the UPDATE a no-op, so
   // RETURNING yields no row and we know the caller is over the limit. SQLite runs
   // the statement atomically (and libSQL serializes writers), closing the
-  // count-then-insert TOCTOU gap the old limiters had.
+  // count-then-insert TOCTOU gap the old limiters had. At `units = 1` the predicate is
+  // `count + 1 <= limit`, exactly the `count < limit` this replaced.
   const result = await db.execute({
-    args: [action, bucket, windowStart, limit],
+    args: [action, bucket, windowStart, units, units, units, limit],
     sql: `insert into rate_limit_counters (action, bucket, window_start, count)
-      values (?, ?, ?, 1)
-      on conflict(action, bucket, window_start) do update set count = count + 1
-      where count < ?
+      values (?, ?, ?, ?)
+      on conflict(action, bucket, window_start) do update set count = count + ?
+      where count + ? <= ?
       returning count`,
   });
 

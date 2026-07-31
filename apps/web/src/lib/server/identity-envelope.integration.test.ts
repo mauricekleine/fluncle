@@ -922,7 +922,7 @@ describe("the key lookups and the relation between what they return", () => {
   it("answers a single match as canonical", async () => {
     await insertTrack("k-1", { isrc: "GBABC1234567" });
 
-    const envelope = await readIdentity({ isrc: "GBABC1234567", kind: "isrc" });
+    const envelope = await readIdentity({ isrcs: ["GBABC1234567"], kind: "isrc" });
 
     expect(envelope?.recordings).toHaveLength(1);
     expect(envelope?.recordings[0]?.relation).toBe("canonical");
@@ -934,7 +934,7 @@ describe("the key lookups and the relation between what they return", () => {
     await insertTrack("k-a", { isrc: "GBABC1234567" });
     await insertTrack("k-b", { isrc: "GBABC1234567" });
 
-    const envelope = await readIdentity({ isrc: "GBABC1234567", kind: "isrc" });
+    const envelope = await readIdentity({ isrcs: ["GBABC1234567"], kind: "isrc" });
 
     expect(envelope?.recordings.map((row) => row.trackId)).toEqual(["k-a", "k-b"]);
     // Nobody has ruled between them, and the envelope says exactly that rather than picking.
@@ -945,7 +945,7 @@ describe("the key lookups and the relation between what they return", () => {
     await insertTrack("k-canon", { isrc: "GBABC1234567" });
     await insertTrack("k-dupe", { duplicateOf: "k-canon", isrc: "GBABC1234567" });
 
-    const envelope = await readIdentity({ isrc: "GBABC1234567", kind: "isrc" });
+    const envelope = await readIdentity({ isrcs: ["GBABC1234567"], kind: "isrc" });
     const byId = new Map(envelope?.recordings.map((row) => [row.trackId, row.relation]));
 
     expect(byId.get("k-dupe")).toBe("duplicate-of:k-canon");
@@ -966,7 +966,7 @@ describe("the key lookups and the relation between what they return", () => {
   });
 
   it("returns undefined for a key that matches nothing", async () => {
-    expect(await readIdentity({ isrc: "GBZZZ9999999", kind: "isrc" })).toBeUndefined();
+    expect(await readIdentity({ isrcs: ["GBZZZ9999999"], kind: "isrc" })).toBeUndefined();
     expect(
       await readIdentity({ kind: "mbid", mbid: "11111111-2222-3333-4444-555555555555" }),
     ).toBeUndefined();

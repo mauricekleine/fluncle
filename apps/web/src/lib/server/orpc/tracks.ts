@@ -18,8 +18,10 @@ import {
 import { resolveLogPageTarget } from "../log-resolver";
 import {
   type IdentityKey,
+  normalizeDeezerKey,
   normalizeIsrcKey,
   normalizeMbidKey,
+  normalizeSpotifyKey,
   readIdentity,
 } from "../identity-envelope";
 import { assertIdentityReadAllowed } from "../identity-dials";
@@ -49,6 +51,29 @@ const MIXABLE_MAX_LIMIT = 32;
 const IDENTITY_PATH_PLACEHOLDER = "-";
 
 /**
+ * HOW MANY ISRCs ONE REQUEST MAY CARRY.
+ *
+ * The batch exists because the caller who needs this surface most — someone re-pointing a library
+ * off a resolver that shut down — holds ISRCs by the thousand, and a request each is a round trip
+ * each. Twenty is a deliberate ceiling rather than a technical one: it stays comfortably under the
+ * 30-a-minute burst dial, so one honest batch always clears, and it keeps the widest possible
+ * answer inside a Worker's response budget. Past it the answer is a 422 that says the number, not a
+ * silent truncation that would hand back an incomplete answer wearing a complete answer's shape.
+ */
+const IDENTITY_MAX_BATCH_KEYS = 20;
+
+/**
+ * Split a batch key on commas. Empty segments are dropped, so a trailing comma or a doubled one is
+ * read as the typo it is rather than counted as a key against the caller's allowance.
+ */
+function splitBatchKey(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+}
+
+/**
  * Decide which identity key (if any) this request carries, and refuse the malformed ones.
  *
  * `undefined` ⇒ no identity projection was asked for and the plain finding read runs, byte-for-byte
@@ -57,17 +82,27 @@ const IDENTITY_PATH_PLACEHOLDER = "-";
  * 400 and 422 is the honest status for a well-formed request carrying an unusable value.
  */
 function identityKeyFor(input: {
+  deezer?: string;
   identity?: string;
   idOrLogId: string;
   isrc?: string;
   mbid?: string;
+  spotify?: string;
 }): IdentityKey | undefined {
   const isrc = input.isrc?.trim();
   const mbid = input.mbid?.trim();
+  const spotify = input.spotify?.trim();
+  const deezer = input.deezer?.trim();
   const path = input.idOrLogId.trim();
   const pathIsKey = path !== "" && path !== IDENTITY_PATH_PLACEHOLDER;
 
-  const supplied = [pathIsKey, Boolean(isrc), Boolean(mbid)].filter(Boolean).length;
+  const supplied = [
+    pathIsKey,
+    Boolean(isrc),
+    Boolean(mbid),
+    Boolean(spotify),
+    Boolean(deezer),
+  ].filter(Boolean).length;
 
   if (supplied > 1) {
     throw new ApiError(
@@ -78,13 +113,28 @@ function identityKeyFor(input: {
   }
 
   if (isrc) {
-    const normalized = normalizeIsrcKey(isrc);
+    // ONE KEY OR TWENTY, one code path: a bare ISRC is a one-element batch, so the single-key
+    // request cannot drift away from the batch as either changes.
+    const parts = splitBatchKey(isrc);
 
-    if (!normalized) {
+    if (parts.length > IDENTITY_MAX_BATCH_KEYS) {
+      throw new ApiError(
+        "invalid_isrc",
+        `That's ${parts.length} ISRCs. ${IDENTITY_MAX_BATCH_KEYS} at a time.`,
+        422,
+      );
+    }
+
+    const normalized = parts.map((part) => normalizeIsrcKey(part));
+
+    // The WHOLE batch is refused when any one key is malformed, rather than the bad keys being
+    // dropped quietly: a caller who mistyped one ISRC in twenty needs to be told, not handed
+    // nineteen answers that look like twenty.
+    if (normalized.length === 0 || normalized.some((value) => value === undefined)) {
       throw new ApiError("invalid_isrc", "That's not a well-formed ISRC.", 422);
     }
 
-    return { isrc: normalized, kind: "isrc" };
+    return { isrcs: normalized.filter((value) => value !== undefined), kind: "isrc" };
   }
 
   if (mbid) {
@@ -97,14 +147,46 @@ function identityKeyFor(input: {
     return { kind: "mbid", mbid: normalized };
   }
 
+  if (spotify) {
+    const normalized = normalizeSpotifyKey(spotify);
+
+    if (!normalized) {
+      throw new ApiError("invalid_spotify", "That's not a well-formed Spotify track link.", 422);
+    }
+
+    return { kind: "spotify", spotifyId: normalized };
+  }
+
+  if (deezer) {
+    const normalized = normalizeDeezerKey(deezer);
+
+    if (!normalized) {
+      throw new ApiError("invalid_deezer", "That's not a well-formed Deezer track link.", 422);
+    }
+
+    return { deezerId: normalized, kind: "deezer" };
+  }
+
   if (!pathIsKey) {
     // No usable key anywhere: the placeholder was passed with nothing to look up.
-    throw new ApiError("invalid_key", "Pass a Log ID, a track id, an ISRC, or an MBID.", 422);
+    throw new ApiError(
+      "invalid_key",
+      "Pass a Log ID, a track id, an ISRC, an MBID, or a Spotify or Deezer link.",
+      422,
+    );
   }
 
   // The projection is opt-in on the path key: a bare read keeps serving the finding DTO every
   // existing caller depends on. Any non-empty value turns it on, the tolerant-parse habit.
   return input.identity?.trim() ? { idOrLogId: path, kind: "idOrLogId" } : undefined;
+}
+
+/**
+ * What one identity read COSTS on the dials: one unit per key it answers. A batch is a saved round
+ * trip, never a cheaper read (identity-dials.ts holds the argument).
+ */
+function identityReadUnits(key: IdentityKey): number {
+  return key.kind === "isrc" ? key.isrcs.length : 1;
 }
 
 /**
@@ -138,8 +220,9 @@ export function tracksHandlers(os: Implementer) {
 
       if (identityKey) {
         // METERED (identity-dials.ts): this is the read whose value to a harvester is the
-        // aggregate rather than the row. The plain read below stays unmetered.
-        await assertIdentityReadAllowed(context.request);
+        // aggregate rather than the row. The plain read below stays unmetered. Charged per KEY,
+        // so a 20-ISRC batch spends 20 and the published dial keeps meaning what it says.
+        await assertIdentityReadAllowed(context.request, { units: identityReadUnits(identityKey) });
 
         const identity = await readIdentity(identityKey);
 

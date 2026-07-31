@@ -9,7 +9,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { IdentityAnswer } from "./identity.$key";
 import { type IdentityEnvelope, type IdentityRecording } from "@/lib/server/identity-envelope";
-import { type IdentityPageData } from "./-identity-page-data";
+import { identityKeyFor, type IdentityPageData } from "./-identity-page-data";
 
 // The identity answer page, rendered through a router (TanStack `<Link>` needs one) so the
 // assertions run over the REAL server HTML a crawler and a JS-blind reader receive.
@@ -627,5 +627,46 @@ describe("the identity answer", () => {
     expect(html).toContain('href="/"');
     // Nothing to look up with while the meter is spent — the form would only spend more.
     expect(html).not.toContain('action="/identity"');
+  });
+});
+
+// ── THE DOOR'S KEY ROUTING ─────────────────────────────────────────────────────────────────────
+// One field takes every kind of key, so which kind was typed is worked out from the value. The
+// grammar itself is unit-tested (lib/identity-key.test.ts); what is pinned here is the DISPATCH —
+// that each shape reaches the read predicate meant for it, because a pasted link routed to the
+// reference branch would answer "nothing on file" about a recording the archive plainly holds.
+describe("the door's key routing", () => {
+  it("routes each shape to its own read", () => {
+    expect(identityKeyFor("gb-abc-12-34567")).toEqual({
+      key: { isrcs: ["GBABC1234567"], kind: "isrc" },
+      kind: "isrc",
+    });
+    expect(identityKeyFor("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")).toEqual({
+      key: { kind: "mbid", mbid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" },
+      kind: "mbid",
+    });
+    expect(
+      identityKeyFor("https://open.spotify.com/intl-nl/track/4cOdK2wGLETKBW3PvgPWqT?si=x"),
+    ).toEqual({
+      key: { kind: "spotify", spotifyId: "4cOdK2wGLETKBW3PvgPWqT" },
+      kind: "platform",
+    });
+    expect(identityKeyFor("https://www.deezer.com/nl/track/3135556")).toEqual({
+      key: { deezerId: "3135556", kind: "deezer" },
+      kind: "platform",
+    });
+  });
+
+  it("leaves a bare string a reference key, coordinate or track id alike", () => {
+    expect(identityKeyFor("004.7.2I")).toEqual({
+      key: { idOrLogId: "004.7.2I", kind: "idOrLogId" },
+      kind: "reference",
+    });
+    // A bare Spotify id IS Fluncle's own track id for a published finding, so it stays a reference
+    // key rather than being claimed by the platform branch.
+    expect(identityKeyFor("4cOdK2wGLETKBW3PvgPWqT")).toEqual({
+      key: { idOrLogId: "4cOdK2wGLETKBW3PvgPWqT", kind: "idOrLogId" },
+      kind: "reference",
+    });
   });
 });

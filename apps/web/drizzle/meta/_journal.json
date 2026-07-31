@@ -1009,6 +1009,13 @@
       "when": 1785487983534,
       "tag": "0143_worthless_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 144,
+      "version": "6",
+      "when": 1785489076451,
+      "tag": "0144_military_ego",
+      "breakpoints": true
     }
   ]
 }
