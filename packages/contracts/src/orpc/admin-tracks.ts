@@ -83,17 +83,36 @@ const UpdateTrackBodySchema = z.looseObject({
   // sources. Agent-writable; the handler narrows it to a string.
   sourceAudioRejected: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
-  // THE CAPTURE'S YOUTUBE PROVENANCE (operator ruling 2026-07-31) — the id of the upload whose
-  // audio the capture sweep FINGERPRINT-VERIFIED for this recording. ADDITIVE AND OPTIONAL, on
-  // the Deezer precedent: the baked box scripts freshen asynchronously after a deploy, so an old
-  // sweep that never sends this field must keep working unchanged, and it does. LOOSE like the
-  // rest: the handler narrows it to a string, decides officialness server-side, and fills it
-  // once — the box is never trusted to say whether an upload may be shown.
+  // THE RE-VERDICT ASK (operator ruling 2026-07-31) — re-rule the officialness of the id this row
+  // ALREADY holds, under whatever the current rule is. Carries no verdict and no id: the server
+  // re-runs its own keyless oEmbed check. It can only PROMOTE a row off 0/NULL; a row already at 1
+  // is left alone, so a re-ask can never retract a link. ADDITIVE AND OPTIONAL like the rest.
+  youtubeReverdict: z.unknown().optional(),
+  // THE PROVENANCE BACKFILL'S VERDICT (operator ruling 2026-07-31) — what the capture sweep's
+  // PROVENANCE phase found when it re-ran the whole ladder over an already-captured row and threw
+  // the candidate bytes away. `preview-match` (beside `youtubeVideoId`) authorizes that id exactly
+  // as `captureVerification` does for a real capture; `no-match` (with NO id) records that the
+  // question was asked and answered no, which is what keeps the row out of the worklist's re-ask
+  // window instead of re-buying the same download every tick.
   //
-  // IT ONLY COUNTS BESIDE `captureVerification: "preview-match"`, in the SAME body. The envelope
-  // serves this id under `method: "fingerprint"`, so an id from the sweep's ABSTAIN path (a track
-  // with no preview reference, stamped `unverified`, where nothing was compared) would publish a
-  // match that never ran. Sent alone or beside any other verdict, it is dropped — fail closed.
+  // DELIBERATELY NOT `captureVerification`. That field is the STORED AUDIO's provenance and moves
+  // capture columns with it; this sweep stores no audio and must never move one, so borrowing the
+  // capture verdict would be a lie about the archive. ADDITIVE AND OPTIONAL on the Deezer/#1049
+  // precedent: an old baked box build that never sends it keeps working unchanged.
+  youtubeVerification: z.unknown().optional(),
+  // THE CAPTURE'S YOUTUBE PROVENANCE (operator ruling 2026-07-31) — the id of the upload whose
+  // audio a fingerprint gate VERIFIED for this recording. ADDITIVE AND OPTIONAL, on the Deezer
+  // precedent: the baked box scripts freshen asynchronously after a deploy, so an old sweep that
+  // never sends this field must keep working unchanged, and it does. LOOSE like the rest: the
+  // handler narrows it to a string, decides officialness server-side, and fills it once — the box
+  // is never trusted to say whether an upload may be shown.
+  //
+  // IT ONLY COUNTS BESIDE A FINGERPRINT VERDICT in the SAME body — `captureVerification:
+  // "preview-match"` (the capture sweep, storing the bytes it matched) or `youtubeVerification:
+  // "preview-match"` (the provenance backfill, which matched and then discarded them). The envelope
+  // serves this id under `method: "fingerprint"`, so an id from either sweep's ABSTAIN path (a
+  // track with no preview reference, where nothing was compared) would publish a match that never
+  // ran. Sent alone or beside any other verdict, it is dropped — fail closed.
   youtubeVideoId: z.unknown().optional(),
 });
 
@@ -644,10 +663,21 @@ export const listTracksAdmin = oc
  * the catalogue Spotify-anchor worklist (docs/catalogue-crawler.md § the anchor) — un-anchored
  * catalogue rows the box's Apify sweep fills via `anchor_track`; it carries no audio, so it is a
  * sibling of the three audio stages rather than one of them.
+ *
+ * The two `youtube-*` kinds are the PROVENANCE BACKFILL's queues, both drained by budgeted phases
+ * inside the `fluncle-capture` tick rather than by a timer of their own:
+ *
+ *   · `youtube-provenance` — rows whose audio was captured before the winning video id was kept.
+ *     Re-running the ladder costs a full candidate download, so it is METERED exactly like
+ *     `capture`: the same catalogue brake gates it, and the sweep spends a tiny per-tick budget.
+ *   · `youtube-reverdict` — rows that HOLD an id whose officialness is 0 or NULL, re-ruled under
+ *     the widened heuristic. Keyless oEmbed only, so it costs nothing and carries no brake.
  */
-export const TrackWorkKindSchema = z.enum(["analyze", "anchor", "capture", "embed"]).meta({
-  id: "TrackWorkKind",
-});
+export const TrackWorkKindSchema = z
+  .enum(["analyze", "anchor", "capture", "embed", "youtube-provenance", "youtube-reverdict"])
+  .meta({
+    id: "TrackWorkKind",
+  });
 
 /** Which half of the archive a worklist covers: certified findings, the catalogue, or both. */
 export const TrackWorkScopeSchema = z.enum(["all", "catalogue", "findings"]).meta({

@@ -92,7 +92,26 @@ import {
  * queues: capture never gates the other two (docs/track-lifecycle.md), and analyze never
  * gates embed.
  */
-export type TrackWorkKind = "analyze" | "anchor" | "capture" | "embed";
+export type TrackWorkKind =
+  | "analyze"
+  | "anchor"
+  | "capture"
+  | "embed"
+  | "youtube-provenance"
+  | "youtube-reverdict";
+
+/**
+ * THE PROVENANCE RE-ASK WINDOW. How long a captured row whose YouTube provenance came back
+ * EMPTY-HANDED sits out before the backfill offers it again.
+ *
+ * Every offer is a full candidate download through the metered proxy, so this is the same shape as
+ * the anchor's re-ask window and for the same reason: "nothing on YouTube fingerprint-matches this
+ * today" is not "nothing ever will" — uploads appear — but a row re-asked every five minutes is a
+ * treadmill that bills forever for an answer that is not changing. A quarter is long enough that a
+ * genuinely absent upload has had time to appear, and short enough that the archive keeps closing.
+ * The stamp it reads is `youtube_verified_at`, written by the sweep's `no-match` report.
+ */
+export const YOUTUBE_PROVENANCE_REASK_AFTER_DAYS = 90;
 
 /**
  * THE ANCHOR RE-ASK BACKOFF (docs/catalogue-crawler.md § the anchor). How long a catalogue row
@@ -323,6 +342,17 @@ const ANCHOR_ORDER = `order by t.has_embedding desc,
   t.nearest_finding_score desc,
   t.track_id desc`;
 
+/**
+ * THE RE-VERDICT ORDER — oldest-ruled first, which is what makes the queue a self-draining
+ * round-robin rather than a set that needs a "which rule version judged this" column.
+ *
+ * SQLite sorts NULL smallest, so a plain `asc` already puts the NEVER-RULED rows (an oEmbed that
+ * timed out at capture time) ahead of everything that has at least an old answer — exactly the
+ * priority wanted, and spelled without a `nulls first` the planner would have to reason about.
+ * `track_id` is the deterministic tiebreak so a tick is reproducible.
+ */
+const REVERDICT_ORDER = `order by t.youtube_verified_at asc, t.track_id asc`;
+
 /** The scope's WHERE fragment. Static literals — never interpolated user input. */
 export function scopeClause(scope: TrackWorkScope): string {
   if (scope === "findings") {
@@ -460,6 +490,59 @@ export function anchorRefusalReason(row: AnchorEligibilityRow): AnchorRefusalRea
 }
 
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
+  if (kind === "youtube-provenance") {
+    // THE PROVENANCE BACKFILL'S WORKLIST (docs/agents/hermes/scripts/capture-sweep.ts § the
+    // provenance phase). Slice #1049 keeps the winning video id at CAPTURE time; every row captured
+    // BEFORE it shipped had that id discarded, and a discarded id is unrecoverable from the stored
+    // bytes. So the id is re-derived the only honest way: run the ladder again.
+    //
+    //   · `source_audio_key is not null` — the row HAS been captured. This queue is a backfill over
+    //     history, never a second acquisition path; a row with no audio belongs to `capture`.
+    //   · `youtube_video_id is null`     — fill-empty-only, expressed as a queue so a row that has
+    //     an id is never re-bought.
+    //   · `capture_status <> 'wrong-audio'` — a quarantined row is already queued for a full
+    //     re-capture, which will report its own id for free. Spending a second download on it here
+    //     buys nothing (same guard, same reason, as `analyze`/`embed`).
+    //   · the RE-ASK WINDOW — never asked, or asked longer ago than the window. The sweep's
+    //     `no-match` report stamps `youtube_verified_at` precisely so this clause can drain.
+    //
+    // NO COVERING INDEX, deliberately for now: the shape is the same class as the `capture` and
+    // `analyze` predicates beside it (a `tracks` scan with a residual filter), and this queue is
+    // read twice a tick at most. An index on it is a schema change worth measuring on hosted Turso
+    // first, not one worth guessing at.
+    const cutoff = new Date(
+      Date.now() - YOUTUBE_PROVENANCE_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    return {
+      args: [cutoff],
+      sql: `t.source_audio_key is not null
+            and t.youtube_video_id is null
+            and coalesce(t.capture_status, '') <> 'wrong-audio'
+            and (t.youtube_verified_at is null or t.youtube_verified_at < ?)`,
+    };
+  }
+
+  if (kind === "youtube-reverdict") {
+    // THE RE-VERDICT WORKLIST. Rows that HOLD an id whose officialness is 0 (checked and refused)
+    // or NULL (never concluded), re-ruled under whatever the current heuristic is. A row at 1 is
+    // excluded: the re-ask exists to say yes more often, never to retract.
+    //
+    // THERE IS NO WINDOW HERE, and that is the design rather than an omission. The whole point is
+    // that a WIDENED rule must reach rows ruled under a narrower one, and a time window cannot
+    // express that — a row ruled 0 an hour before the widening shipped would sit out for the whole
+    // window while the rule it was judged by no longer exists. Instead the order is OLDEST-RULED
+    // FIRST and every re-verdict re-stamps `youtube_verified_at`, which makes the queue a
+    // round-robin that fixed-points on its own: each widening drains through the whole 0/NULL set
+    // once and then keeps cycling. It can afford to, because the check is a keyless oEmbed read —
+    // no quota, no key, no bytes — and the phase spends five of them a tick.
+    return {
+      args: [],
+      sql: `t.youtube_video_id is not null
+            and coalesce(t.youtube_video_official, 0) <> 1`,
+    };
+  }
+
   if (kind === "anchor") {
     // THE ANCHOR WORKLIST (docs/catalogue-crawler.md § the anchor). Catalogue-only by construction
     // (`f.track_id is null` — a finding's Spotify id is its identity, never re-anchored), so
@@ -571,6 +654,21 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
   };
 }
 
+/**
+ * The kinds that spend metered residential-proxy bandwidth, and so answer to the catalogue capture
+ * budget. Named once and shared by the page read and the count, so the two can never disagree about
+ * whether a queue is braked — the failure mode being a count that advertises work the queue refuses.
+ */
+const METERED_KINDS = new Set<TrackWorkKind>(["capture", "youtube-provenance"]);
+
+/**
+ * The kinds whose sweep runs the FULL YouTube ladder — search, rank, download, fingerprint — and so
+ * needs the DTO's trust and bad-audio-memory signals to run it the same way. The capture sweep and
+ * the provenance backfill share one implementation of that walk (capture-sweep.ts), so they must
+ * share the facts it reads, or the shared walk would behave differently depending on who called it.
+ */
+const LADDER_KINDS = new Set<TrackWorkKind>(["capture", "youtube-provenance"]);
+
 /** The hard ceiling on one worklist read — a sweep acts on a far smaller batch than this. */
 const MAX_WORK_LIMIT = 200;
 
@@ -589,11 +687,15 @@ export async function listTrackWork(options: {
   const { kind, limit = 50, scope = "all" } = options;
   const page = Math.min(Math.max(1, Math.trunc(limit)), MAX_WORK_LIMIT);
 
-  // THE BRAKE. Only `capture` spends money, so only `capture` is gated — `analyze` and
-  // `embed` read bytes that are already bought and are free (the same reason the label veto
-  // is scoped to capture alone). The budget is consulted BEFORE the queue is read, so a shut
-  // budget is not a filter applied to a page of candidates: those rows are never selected.
-  const catalogueShut = kind === "capture" ? !(await isCatalogueCaptureOpen()) : false;
+  // THE BRAKE. Only the two METERED kinds are gated — `analyze` and `embed` read bytes that are
+  // already bought and are free (the same reason the label veto is scoped to capture alone), and
+  // `youtube-reverdict` is a keyless oEmbed read. `youtube-provenance` joins `capture` here because
+  // it costs exactly what capture costs: a full candidate download through the residential proxy,
+  // billed per GB. A backfill that quietly spent the catalogue's money while the operator believed
+  // the brake was on would be the same bug the brake exists to prevent, wearing a new name. The
+  // budget is consulted BEFORE the queue is read, so a shut budget is not a filter applied to a
+  // page of candidates: those rows are never selected.
+  const catalogueShut = METERED_KINDS.has(kind) ? !(await isCatalogueCaptureOpen()) : false;
 
   // A caller that asked for the catalogue explicitly gets an honest empty queue, with no
   // database round-trip at all — the answer is already known.
@@ -606,9 +708,12 @@ export async function listTrackWork(options: {
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
 
   const kindWhere = kindClause(kind);
-  // The `anchor` worklist rides its own budget-order (embedded + ranked first); every other kind
-  // rides the shared capture ladder.
-  const order = kind === "anchor" ? ANCHOR_ORDER : WORK_ORDER;
+  // The `anchor` worklist rides its own budget-order (embedded + ranked first) and the re-verdict
+  // its round-robin (oldest-ruled first); every other kind — the provenance backfill included —
+  // rides the shared capture ladder, which is what puts the findings ahead of the catalogue and
+  // orders them newest-first.
+  const order =
+    kind === "anchor" ? ANCHOR_ORDER : kind === "youtube-reverdict" ? REVERDICT_ORDER : WORK_ORDER;
   const db = await getDb();
   const result = await db.execute({
     args: [...kindWhere.args, page],
@@ -663,6 +768,18 @@ export async function listTrackWork(options: {
               row.source_audio_failures !== null && Number(row.source_audio_failures) > 0
                 ? Number(row.source_audio_failures)
                 : undefined,
+          }
+        : {}),
+      // THE BAD-AUDIO MEMORY rides BOTH ladder-running worklists. The provenance backfill runs the
+      // same search → rank → download → fingerprint walk, so it wants the same pre-download videoId
+      // filter: a candidate an earlier capture already proved wrong must not cost proxy bytes a
+      // second time just because a different sweep is asking. It READS the memory and never writes
+      // it — writing is a capture column, and the backfill moves none.
+      // Deliberately NOT extended to the provenance kind: `bpm`/`analyzedFrom` feed the
+      // capture→enrich re-derive and `sourceAudioFailures` the capture failure backoff, and the
+      // backfill performs neither.
+      ...(LADDER_KINDS.has(kind)
+        ? {
             sourceAudioRejected:
               typeof row.source_audio_rejected === "string" && row.source_audio_rejected.trim()
                 ? row.source_audio_rejected
@@ -675,7 +792,7 @@ export async function listTrackWork(options: {
   // The artist-own-channel trust signal is a SEPARATE batched read (a correlated subquery on
   // the main select would bloat every DTO), and it is CAPTURE-only — the same field, off the
   // same reader, the finding-only capture queue attaches (tracks.ts), so the two cannot drift.
-  if (kind === "capture" && items.length > 0) {
+  if (LADDER_KINDS.has(kind) && items.length > 0) {
     const byTrack = await readArtistYoutubeChannelIdsByTrack(
       db,
       items.map((item) => item.trackId),
@@ -725,10 +842,9 @@ export async function countTrackWork(options: {
 
   // The same brake, in the same order as the page read — a shut budget must not be able to
   // report a backlog the queue would refuse to hand out. Reuse a passed-in state; else read it.
-  const catalogueShut =
-    kind === "capture"
-      ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
-      : false;
+  const catalogueShut = METERED_KINDS.has(kind)
+    ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
+    : false;
 
   if (catalogueShut && scope === "catalogue") {
     return 0;

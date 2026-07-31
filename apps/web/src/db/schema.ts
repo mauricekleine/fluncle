@@ -770,9 +770,18 @@ export const tracks = sqliteTable(
     // now only the REJECTED ids were remembered (`source_audio_rejected`); the winner's id was
     // thrown away at the moment it was most certain. So for every capture from here on, Fluncle
     // knows which upload carries this recording, PROVEN by his own ears — and not one YouTube Data
-    // API call is made to learn it. Kept the same way the Deezer trio above is: forward-only, no
-    // sweep, no backfill (a discarded id is unrecoverable), so a row fills the next time the
-    // capture sweep runs over it.
+    // API call is made to learn it.
+    //
+    // AND THE ROWS CAPTURED BEFORE THAT are reached by the PROVENANCE BACKFILL, a budgeted phase
+    // inside the capture sweep's tick (docs/agents/hermes/scripts/capture-sweep.ts). A discarded id
+    // cannot be recovered from the stored bytes, so the backfill re-derives it the only honest way:
+    // it runs the whole ladder again — search, rank, download, fingerprint — and then DISCARDS the
+    // candidate audio. That discard is a ruling, not an optimisation. The obvious shape (just
+    // re-capture the row) was piloted and rejected on what it did: a recapture REPLACED a finding's
+    // clean archived audio with a fan BLEND that legitimately passed the fingerprint gate, because
+    // a blend contains the original's preview segment. So the backfill moves the three columns
+    // below and NOT ONE capture column — `source_audio_key`, `capture_status` and their kin are
+    // untouchable from that path, pinned by tests on both sides of the wire.
     //
     // THE TWO QUESTIONS ARE DIFFERENT, and conflating them is the whole risk here:
     //
@@ -781,8 +790,10 @@ export const tracks = sqliteTable(
     // written — on the Deezer precedent.
     //
     // `youtube_video_id` is the ACCEPTED upload's id, stored as TEXT (an opaque external id, never
-    // arithmetic). Written ONLY from a capture whose verdict was a real `preview-match` — the
-    // sweep's abstain path (no preview reference, nothing compared) reports no id, because this
+    // arithmetic). It means "a video whose audio FINGERPRINT-MATCHED this recording" — never "the
+    // official video": a blend, a rip, or a fan upload carries the original's audio and passes the
+    // gate for exactly that reason. Written ONLY beside a real `preview-match` verdict — the
+    // sweeps' abstain path (no preview reference, nothing compared) reports no id, because this
     // column is served as `method: "fingerprint"` and must never front a match that never ran.
     //
     // A fingerprint match proves the AUDIO is this recording. It proves NOTHING about whether the
@@ -791,8 +802,11 @@ export const tracks = sqliteTable(
     //
     // `youtube_video_official` is therefore the LOAD-BEARING GATE, and the only column the public
     // surface reads as permission. 1 = the upload's own channel is an auto-generated
-    // `<Artist> - Topic` art track or an artist channel this recording is credited to; 0 = it is
-    // neither; NULL = nobody has checked, which is NOT a verdict. Decided server-side against
+    // `<Artist> - Topic` art track, an artist channel this recording is credited to, or THIS
+    // recording's own label; 0 = it is none of those; NULL = nobody has checked, which is NOT a
+    // verdict. A row at 0 or NULL is re-asked by the RE-VERDICT phase, which is how a widened rule
+    // reaches rows ruled under a narrower one; a row at 1 is never re-asked, so a re-ask can only
+    // ever promote and never retract a link. Decided server-side against
     // YouTube's KEYLESS oEmbed endpoint (lib/server/youtube-official.ts), whose `author_name` is
     // the upload's channel. The check is deliberately CONSERVATIVE and its false-negative bias is
     // the point: a missed official upload merely stays internal, while a rip shown as Fluncle's

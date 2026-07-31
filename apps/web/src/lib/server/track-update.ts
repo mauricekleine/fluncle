@@ -210,13 +210,45 @@ export type TrackUpdate = {
   /** The video's dominant STRUCTURAL family (structure ledger; render.json `structure.dominant`). */
   videoStructure?: string;
   /**
-   * THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id) — the id of the upload the
-   * capture sweep fingerprint-verified for this recording. Internal capture side-channel like
+   * ASK THE SERVER TO RE-RULE the officialness of the id this row ALREADY holds — the widened
+   * heuristic's way of reaching rows ruled under a narrower one, with no id and no capture column
+   * moving. Carries no verdict: the server re-runs the same oEmbed check and writes what it gets.
+   *
+   * It can only ever PROMOTE. A row already at `official = 1` is left alone, so a re-ask can never
+   * revoke a link Fluncle has been serving on the strength of a channel that has since renamed
+   * itself — the widening exists to say yes more often, never to start saying no.
+   */
+  youtubeReverdict?: boolean;
+  /**
+   * WHAT THE PROVENANCE SWEEP FOUND (docs/agents/hermes/scripts/capture-sweep.ts § the provenance
+   * phase). The backfill re-runs capture's whole ladder — search, rank, download, fingerprint —
+   * against a row whose audio was captured before the id was kept, then throws the candidate bytes
+   * away. So it has capture's PROOF without any capture WRITE, and this field is how it says so:
+   *
+   *   · `preview-match` — the fingerprint gate accepted an upload. Sent WITH `youtubeVideoId`, and
+   *     it is the alternative to `captureVerification: "preview-match"` for authorizing that id.
+   *   · `no-match` — the ladder concluded and found nothing. Sent with NO id; it stamps only
+   *     `youtube_verified_at`, which is what keeps the row out of the worklist's re-ask window
+   *     instead of re-buying the same download every tick.
+   *
+   * Deliberately SEPARATE from `captureVerification`: that field is the stored audio's provenance
+   * and moves capture columns, and this sweep must never move one.
+   */
+  youtubeVerification?: "no-match" | "preview-match";
+  /**
+   * THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id) — the id of the upload a
+   * fingerprint gate verified for this recording. Internal capture side-channel like
    * `sourceAudioKey`, and NOT in VISIBLE_FIELDS: keeping it moves no public lastmod.
    *
-   * The caller sends ONLY the id. The officialness verdict and its stamp are decided server-side
-   * (lib/server/youtube-official.ts) and are deliberately absent from this type — a box sweep can
-   * report what it captured, never grant permission for it to be shown.
+   * It means "a video whose audio fingerprint-matched this recording" — NOT "the official video".
+   * A blend, a rip, or a fan upload carries the original's audio and passes the gate for exactly
+   * that reason, which is why `youtube_video_official` and not this column is what public serving
+   * reads.
+   *
+   * The caller sends ONLY the id, and only beside proof (`captureVerification` or
+   * `youtubeVerification` at `preview-match`). The officialness verdict and its stamp are decided
+   * server-side (lib/server/youtube-official.ts) and are deliberately absent from this type — a box
+   * sweep can report what it captured, never grant permission for it to be shown.
    */
   youtubeVideoId?: string;
 };
@@ -315,11 +347,37 @@ type ExistingRow = {
   certified: number;
   isrc: string | null;
   key_source: string | null;
+  // The RAW `tracks.label` spelling — the officialness gate's fallback label name, for a row the
+  // crawler minted before it had a canonical `labels` row to point at.
+  label: string | null;
+  // The CANONICAL `labels.name` behind `tracks.label_id`, the officialness gate's first choice.
+  label_name: string | null;
   log_id: string | null;
   // Already-held capture provenance, so the fill-empty-only rule can short-circuit BEFORE
   // spending an oEmbed request on a row that will not take the answer anyway.
   youtube_video_id: string | null;
+  // The standing officialness verdict, read so a re-verdict can refuse to DEMOTE a row already
+  // at 1 — the widening only ever says yes more often.
+  youtube_video_official: number | null;
 };
+
+/**
+ * The names the YouTube officialness gate compares an upload's channel against: everyone this
+ * recording is credited to, plus the label it came out on.
+ *
+ * BOTH label spellings go in, and the order is not a preference — `isOfficialAuthor` accepts on
+ * equality with ANY of them. The canonical `labels.name` is the collapsed spelling the entity
+ * carries; the raw `tracks.label` is whatever the release actually said, and for a row the crawler
+ * minted before it had a canonical label to point at, it is the only one there is. A channel
+ * matching either one is that label's channel.
+ */
+function recordingNames(existing: ExistingRow): { artists: string[]; labels: string[] } {
+  const labels = [existing.label_name, existing.label]
+    .filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+    .map((name) => name.trim());
+
+  return { artists: parseArtistsJson(existing.artists_json ?? "[]"), labels };
+}
 
 export async function updateTrack(
   trackId: string,
@@ -339,12 +397,18 @@ export async function updateTrack(
   // has nowhere to put it.
   const existingResult = await db.execute({
     args: [trackId],
+    // The `labels` join is for the officialness gate's third accepted class (a recording's own
+    // label channel). It rides the indexed `tracks.label_id` → `labels.id` edge and is an OUTER
+    // join, so a row with no canonical label resolves exactly as before and falls back to the raw
+    // `tracks.label` string.
     sql: `select tracks.isrc, tracks.bpm_source, tracks.key_source,
-                 tracks.artists_json, tracks.youtube_video_id,
+                 tracks.artists_json, tracks.youtube_video_id, tracks.youtube_video_official,
+                 tracks.label, labels.name as label_name,
                  findings.log_id, findings.added_at,
                  (findings.track_id is not null) as certified
           from tracks
           left join findings on findings.track_id = tracks.track_id
+          left join labels on labels.id = tracks.label_id
           where tracks.track_id = ? limit 1`,
   });
   const existing = typedRow<ExistingRow>(existingResult.rows);
@@ -653,24 +717,44 @@ export async function updateTrack(
   // the row's PRE-UPDATE `youtube_video_id` (SQLite evaluates every SET expression against the
   // original row), so the trio is atomically all-or-nothing: first write wins, provenance intact.
   //
-  // AND THE ID IS ONLY TAKEN ALONGSIDE A REAL MATCH. The capture sweep also has an ABSTAIN path —
-  // a track with no preview reference stores its bytes stamped `unverified`, having compared
-  // nothing — and the envelope serves this id under `method: "fingerprint"`. Accepting an id from
-  // that path would print "matched by audio fingerprint" beneath a match that never ran. The sweep
-  // already withholds it there; this is the same condition enforced where a stale or wrong box
-  // build cannot reach, which is the rule the whole leg is built on: the box reports, the server
-  // rules. It fails CLOSED — an id arriving without its verdict is simply not stored.
-  if (
-    update.youtubeVideoId !== undefined &&
-    update.captureVerification === "preview-match" &&
-    !existing.youtube_video_id
-  ) {
+  // AND THE ID IS ONLY TAKEN ALONGSIDE A REAL MATCH. Both proving sweeps have an ABSTAIN path —
+  // a track with no preview reference compares nothing — and the envelope serves this id under
+  // `method: "fingerprint"`. Accepting an id from that path would print "matched by audio
+  // fingerprint" beneath a match that never ran. The sweeps already withhold it there; this is the
+  // same condition enforced where a stale or wrong box build cannot reach, which is the rule the
+  // whole leg is built on: the box reports, the server rules. It fails CLOSED — an id arriving
+  // with NEITHER proof beside it is simply not stored.
+  //
+  // TWO PROOFS ARE ACCEPTED, and they are different claims about different writes:
+  //
+  //   · `captureVerification: "preview-match"` — the CAPTURE sweep, which is storing the very
+  //     bytes it fingerprinted in this same body. Unchanged, so an old baked box build that knows
+  //     nothing about the field below keeps working exactly as it did.
+  //   · `youtubeVerification: "preview-match"` — the PROVENANCE backfill, which re-ran the same
+  //     ladder over an already-captured row and threw the candidate bytes away. It has the proof
+  //     and deliberately no capture write at all, so it cannot borrow capture's field: sending
+  //     `captureVerification` from a sweep that stored nothing would be a lie about the archive.
+  //
+  // A BARE ID IS STILL REFUSED under both. The distinguishing fact is not who sent it — the server
+  // has no way to know that — but whether the payload CARRIES a fingerprint verdict at all.
+  const provenanceProven =
+    update.captureVerification === "preview-match" ||
+    update.youtubeVerification === "preview-match";
+
+  // Whether this body ASKED something of the YouTube trio. A declined ask — an id the row already
+  // holds, a re-verdict on a row already ruled official, a bare id with no proof — must be a silent
+  // NO-OP SUCCESS, never the `no_fields` 400: the provenance backfill's whole payload is these
+  // fields, so a decline would otherwise read to the box as a failed write and a failed sweep. The
+  // same reasoning the source-hierarchy guard above is built on.
+  const askedYoutube =
+    update.youtubeVideoId !== undefined ||
+    update.youtubeVerification !== undefined ||
+    update.youtubeReverdict !== undefined;
+
+  if (update.youtubeVideoId !== undefined && provenanceProven && !existing.youtube_video_id) {
     // Skipped entirely when the row already holds an id — no oEmbed request is spent on an answer
     // the write would discard.
-    const official = await checkYoutubeOfficial(
-      update.youtubeVideoId,
-      parseArtistsJson(existing.artists_json ?? "[]"),
-    );
+    const official = await checkYoutubeOfficial(update.youtubeVideoId, recordingNames(existing));
 
     sets.push(
       "youtube_video_id = coalesce(youtube_video_id, ?)",
@@ -678,6 +762,54 @@ export async function updateTrack(
       "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
     );
     args.push(update.youtubeVideoId, official, new Date().toISOString());
+  }
+
+  // THE PROVENANCE SWEEP'S EMPTY-HANDED REPORT. The ladder ran, cost real proxy bandwidth, and
+  // concluded that nothing on YouTube fingerprint-matches this recording. That is worth recording:
+  // without it the worklist would hand the same row back on the very next tick and re-buy the same
+  // download forever, which is the treadmill the anchor queue's re-ask window exists to prevent.
+  //
+  // ONE COLUMN MOVES, and it is not the id: `youtube_verified_at` becomes "when the provenance
+  // question was last answered for this recording", answered NO. The id stays NULL, so a later
+  // capture or a later backfill still fills it — the stamp is a schedule, never a verdict. Guarded
+  // on the pre-update id anyway, so it can never disturb a row that already holds one.
+  if (
+    update.youtubeVerification === "no-match" &&
+    update.youtubeVideoId === undefined &&
+    !existing.youtube_video_id
+  ) {
+    sets.push(
+      "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+    );
+    args.push(new Date().toISOString());
+  }
+
+  // THE RE-VERDICT. A row already holds an id whose officialness was ruled 0 (checked and refused)
+  // or NULL (never concluded). The rule that ruled it has since WIDENED — a recording's own label
+  // channel now counts — so the question is asked again, keylessly and for free.
+  //
+  // IT ONLY EVER PROMOTES. A row at 1 is excluded here as well as in the worklist: the widening is
+  // the only reason to re-ask, and a channel rename must never quietly retract a link Fluncle has
+  // been serving. The id is never touched, no capture column is touched, and an UNCONCLUDED check
+  // (a 404, a timeout) leaves the verdict exactly as it was while still advancing the stamp — so
+  // the round-robin moves on rather than spinning on an unreachable video.
+  if (
+    update.youtubeReverdict === true &&
+    existing.youtube_video_id &&
+    Number(existing.youtube_video_official) !== 1
+  ) {
+    const official = await checkYoutubeOfficial(
+      existing.youtube_video_id,
+      recordingNames(existing),
+    );
+
+    if (official !== null) {
+      sets.push("youtube_video_official = ?");
+      args.push(official);
+    }
+
+    sets.push("youtube_verified_at = ?");
+    args.push(new Date().toISOString());
   }
 
   // THE PROVENANCE INVARIANT: a `*_prompt_version` column always describes the text
@@ -848,10 +980,12 @@ export async function updateTrack(
 
   if (sets.length === 0 && findingSets.length === 0) {
     // The provenance guard dropped every field this write carried (an agent trying to
-    // downgrade a rekordbox/operator-graded row with nothing else in the payload): a
-    // silent no-op success, NOT a no_fields error — the on-box sweeps must keep
-    // succeeding. A genuinely empty update (no guard drop) is still the 400.
-    if (guardDroppedFields) {
+    // downgrade a rekordbox/operator-graded row with nothing else in the payload), or a
+    // YouTube-provenance ask was declined (a row that already holds an id, a re-verdict on
+    // a row already ruled official): a silent no-op success, NOT a no_fields error — the
+    // on-box sweeps must keep succeeding, and for the provenance backfill a decline is the
+    // NORMAL outcome, not an error. A genuinely empty update is still the 400.
+    if (guardDroppedFields || askedYoutube) {
       return { fields: [], trackId };
     }
 

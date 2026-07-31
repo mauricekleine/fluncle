@@ -373,11 +373,25 @@ export function adminTracksHandlers(os: Implementer) {
         update.sourceAudioRejected = body.sourceAudioRejected;
       }
 
-      // The accepted upload's id, from the capture sweep's fingerprint gate. Trimmed and only
-      // taken when non-empty — there is no "clear it" semantic here, because the sweep only ever
-      // reports an id it PROVED, and an empty string would be a claim about nothing.
+      // The accepted upload's id, from a fingerprint gate. Trimmed and only taken when non-empty —
+      // there is no "clear it" semantic here, because a sweep only ever reports an id it PROVED,
+      // and an empty string would be a claim about nothing.
       if (typeof body.youtubeVideoId === "string" && body.youtubeVideoId.trim()) {
         update.youtubeVideoId = body.youtubeVideoId.trim();
+      }
+
+      // The PROVENANCE backfill's verdict — the alternative proof for the id above, from a sweep
+      // that fingerprinted a candidate and then discarded it rather than storing it. Narrowed to
+      // the 2-value enum; `updateTrack` decides what each one is allowed to move, and neither one
+      // moves a capture column.
+      if (body.youtubeVerification === "preview-match" || body.youtubeVerification === "no-match") {
+        update.youtubeVerification = body.youtubeVerification;
+      }
+
+      // The re-verdict ask. A pure `true` and nothing else: it carries no verdict of its own, so
+      // there is no value here for a caller to get wrong, and any other shape is simply not the ask.
+      if (body.youtubeReverdict === true) {
+        update.youtubeReverdict = true;
       }
 
       // The agent role may only touch analysis fields. Reject (not silently drop)

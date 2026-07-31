@@ -886,3 +886,267 @@ describe("listTrackWork — the wrong-audio quarantine (docs/the-ear.md § Wrong
     ).toEqual(["catclear00000000000000"]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE YOUTUBE PROVENANCE BACKFILL'S TWO QUEUES (docs/agents/hermes/scripts/capture-sweep.ts).
+//
+// The capture write keeps the winning video id, but only from the moment it shipped: every row
+// captured before that had its id discarded, unrecoverably. These two worklists are how those
+// rows are reached — one that costs a metered download and so answers to the capture brake, and
+// one that costs a keyless oEmbed read and so does not.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** Give a track the YouTube provenance trio, as the capture write or a re-verdict leaves it. */
+async function withYoutubeProvenance(
+  trackId: string,
+  fields: { official?: null | number; verifiedAt?: null | string; videoId?: null | string },
+): Promise<void> {
+  await db.execute({
+    args: [fields.videoId ?? null, fields.official ?? null, fields.verifiedAt ?? null, trackId],
+    sql: `update tracks
+          set youtube_video_id = ?, youtube_video_official = ?, youtube_verified_at = ?
+          where track_id = ?`,
+  });
+}
+
+describe("listTrackWork — the youtube-provenance backfill", () => {
+  it("offers a CAPTURED row that holds no video id", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+
+    expect(
+      (await listTrackWork({ kind: "youtube-provenance" })).map((item) => item.trackId),
+    ).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
+  });
+
+  it("never offers a row with NO captured audio — this is a backfill, not a second capture path", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // A row with nothing on file belongs to the `capture` queue, which will report its own id for
+    // free. Offering it here would be a download bought twice for one recording.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+
+    expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
+  });
+
+  it("drops a row the moment it holds an id — fill-empty-only, expressed as a queue", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await withYoutubeProvenance("aaaaaaaaaaaaaaaaaaaaaa", { videoId: "dQw4w9WgXcQ" });
+
+    expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
+  });
+
+  it("keeps a WRONG-AUDIO row out — its re-capture will report an id for free", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await db.execute({
+      args: ["aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set capture_status = 'wrong-audio' where track_id = ?`,
+    });
+
+    expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
+  });
+
+  it("HOLDS A RE-ASKED ROW OUT until the window is past — the ladder is not re-bought every tick", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The sweep's `no-match` report stamps `youtube_verified_at` with nothing else. That stamp is
+    // a SCHEDULE: without it the queue hands the same row back on the next tick and spends the
+    // same metered download again, forever.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await withYoutubeProvenance("aaaaaaaaaaaaaaaaaaaaaa", {
+      verifiedAt: new Date().toISOString(),
+    });
+
+    expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
+  });
+
+  it("…and offers it again once the window HAS passed — a missing upload can appear later", async () => {
+    const { listTrackWork, YOUTUBE_PROVENANCE_REASK_AFTER_DAYS } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await withYoutubeProvenance("aaaaaaaaaaaaaaaaaaaaaa", {
+      verifiedAt: new Date(
+        Date.now() - (YOUTUBE_PROVENANCE_REASK_AFTER_DAYS + 1) * 24 * 60 * 60 * 1000,
+      ).toISOString(),
+    });
+
+    expect(
+      (await listTrackWork({ kind: "youtube-provenance" })).map((item) => item.trackId),
+    ).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
+  });
+
+  it("puts the FINDINGS ahead of the catalogue, newest first", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await openCaptureBudget();
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withAudio("cat1000000000000000000");
+    await withPriority("cat1000000000000000000", 3);
+    await seedTrack(db, {
+      addedAt: "2026-06-01T00:00:00.000Z",
+      logId: "004.7.2I",
+      trackId: "oldfinding000000000000",
+    });
+    await withAudio("oldfinding000000000000");
+    await seedTrack(db, {
+      addedAt: "2026-07-01T00:00:00.000Z",
+      logId: "005.7.2I",
+      trackId: "newfinding000000000000",
+    });
+    await withAudio("newfinding000000000000");
+
+    expect(
+      (await listTrackWork({ kind: "youtube-provenance" })).map((item) => item.trackId),
+    ).toEqual(["newfinding000000000000", "oldfinding000000000000", "cat1000000000000000000"]);
+  });
+
+  it("ANSWERS THE CAPTURE BRAKE — a shut budget serves no catalogue row here either", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // This queue costs exactly what capture costs: a full candidate download through the metered
+    // proxy. A backfill that quietly spent the catalogue's money while the operator believed the
+    // brake was on would be the same bug the brake exists to prevent, wearing a new name. The
+    // budget is DEFAULT-DENY, so this test's untouched database is the shipped state.
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withAudio("cat1000000000000000000");
+    await withPriority("cat1000000000000000000", 3);
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+
+    // It NARROWS to the findings, never to empty — the archive is never starved by the brake.
+    expect(
+      (await listTrackWork({ kind: "youtube-provenance", scope: "all" })).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
+    expect(await listTrackWork({ kind: "youtube-provenance", scope: "catalogue" })).toEqual([]);
+  });
+
+  it("carries the ladder's trust + bad-audio-memory signals, because it runs that ladder", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The backfill runs the SAME search → rank → download → fingerprint walk as capture, so it
+    // needs the same facts: the artist-own-channel trust tier and the videoId pre-download filter.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await withArtistYoutubeChannel("aaaaaaaaaaaaaaaaaaaaaa", "UCr8ocLOaApCXWLjL7vdsgw");
+    await db.execute({
+      args: ["aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks
+            set source_audio_rejected = '[{"videoId":"badId","sha256":"ff","reason":"fingerprint-mismatch","at":"2026-07-01T00:00:00.000Z"}]'
+            where track_id = ?`,
+    });
+
+    const [item] = await listTrackWork({ kind: "youtube-provenance" });
+
+    expect(item?.artistYoutubeChannelIds).toEqual(["UCr8ocLOaApCXWLjL7vdsgw"]);
+    expect(item?.sourceAudioRejected).toContain("badId");
+    // …and NOT the capture-only re-derive/backoff signals, which the backfill never acts on.
+    expect(item?.bpm).toBeUndefined();
+    expect(item?.analyzedFrom).toBeUndefined();
+    expect(item?.sourceAudioFailures).toBeUndefined();
+  });
+});
+
+describe("listTrackWork — the youtube-reverdict round-robin", () => {
+  it("offers a row whose id was RULED 0, and one never ruled at all", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "refused000000000000000" });
+    await withYoutubeProvenance("refused000000000000000", { official: 0, videoId: "vidA" });
+    await seedTrack(db, { logId: "005.7.2I", trackId: "unchecked0000000000000" });
+    await withYoutubeProvenance("unchecked0000000000000", { official: null, videoId: "vidB" });
+
+    expect(
+      (await listTrackWork({ kind: "youtube-reverdict" })).map((item) => item.trackId).sort(),
+    ).toEqual(["refused000000000000000", "unchecked0000000000000"]);
+  });
+
+  it("NEVER offers a row already ruled OFFICIAL — the widening only says yes more often", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withYoutubeProvenance("aaaaaaaaaaaaaaaaaaaaaa", { official: 1, videoId: "vidA" });
+
+    expect(await listTrackWork({ kind: "youtube-reverdict" })).toEqual([]);
+  });
+
+  it("never offers a row that holds no id — there is nothing to rule on", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+
+    expect(await listTrackWork({ kind: "youtube-reverdict" })).toEqual([]);
+  });
+
+  it("orders OLDEST-RULED FIRST, with the never-ruled ahead of everything", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // This order IS the mechanism. There is no window and no rule-version column: a widened rule
+    // reaches every 0/NULL row because the queue cycles, and each re-verdict re-stamps the row to
+    // the back of the line.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "recent0000000000000000" });
+    await withYoutubeProvenance("recent0000000000000000", {
+      official: 0,
+      verifiedAt: "2026-07-30T00:00:00.000Z",
+      videoId: "vidA",
+    });
+    await seedTrack(db, { logId: "005.7.2I", trackId: "ancient000000000000000" });
+    await withYoutubeProvenance("ancient000000000000000", {
+      official: 0,
+      verifiedAt: "2026-01-01T00:00:00.000Z",
+      videoId: "vidB",
+    });
+    await seedTrack(db, { logId: "006.7.2I", trackId: "neverruled000000000000" });
+    await withYoutubeProvenance("neverruled000000000000", { official: null, videoId: "vidC" });
+
+    expect(
+      (await listTrackWork({ kind: "youtube-reverdict" })).map((item) => item.trackId),
+    ).toEqual(["neverruled000000000000", "ancient000000000000000", "recent0000000000000000"]);
+  });
+
+  it("carries NO brake — a keyless oEmbed read costs nothing to hold back", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The capture budget is default-deny here (untouched database) and the catalogue row is still
+    // served: the brake governs metered bandwidth, and this queue spends none.
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withYoutubeProvenance("cat1000000000000000000", { official: 0, videoId: "vidA" });
+
+    expect(
+      (await listTrackWork({ kind: "youtube-reverdict", scope: "catalogue" })).map(
+        (item) => item.trackId,
+      ),
+    ).toEqual(["cat1000000000000000000"]);
+  });
+});
+
+describe("countTrackWork — the backfill queues report the same brake the page read applies", () => {
+  it("counts the provenance backlog behind the SAME capture brake", async () => {
+    const { countTrackWork } = await import("./track-work");
+
+    await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
+    await withAudio("cat1000000000000000000");
+    await withPriority("cat1000000000000000000", 3);
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+
+    // Shut (the shipped default): the count must not advertise work the queue would refuse.
+    expect(await countTrackWork({ kind: "youtube-provenance", scope: "all" })).toBe(1);
+
+    await openCaptureBudget();
+
+    expect(await countTrackWork({ kind: "youtube-provenance", scope: "all" })).toBe(2);
+  });
+});

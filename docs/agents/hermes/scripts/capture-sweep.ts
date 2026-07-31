@@ -193,6 +193,38 @@ const DOWNLOAD_ATTEMPTS = Number(process.env.FLUNCLE_CAPTURE_DOWNLOAD_ATTEMPTS ?
 // 3 = the full search ladder (raw ytsearch → music search → normalized fallback on music).
 const QUERY_VARIANTS = Number(process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? "3");
 
+// ── THE PROVENANCE PHASE'S BUDGET (see THE PROVENANCE PHASE below) ───────────────────
+//
+// How many already-captured rows the backfill re-derives a YouTube id for, per tick. It rides
+// this sweep's tick rather than a timer of its own because the alternative — a new host timer —
+// is an operator fan-out (a unit, an install, a runbook) for work that is the same work, through
+// the same proxy, under the same brake; a phase self-deploys with the next rebake.
+//
+// DEFAULT 2, and the smallness is the point: each row is a FULL candidate download through the
+// residential proxy, so this is real bandwidth money spent on provenance for audio Fluncle already
+// owns. It is a backlog to grind down over weeks, never a batch to blast through — 2 a tick is
+// ~576 rows a day, which clears the findings in an afternoon and the catalogue at a pace the
+// operator can watch. The row is ATTEMPTED, not necessarily concluded: a row whose download fails
+// transiently spends its slot and is retried on a later tick, which is what keeps the cost ceiling
+// per tick honest and readable.
+const PROVENANCE_LIMIT = Number(process.env.FLUNCLE_CAPTURE_PROVENANCE_LIMIT ?? "2");
+
+// How many of those rows may be UNCERTIFIED catalogue rows. DEFAULT 0 — the backfill spends the
+// whole budget on the findings and does not touch the catalogue until the operator says so, which
+// is one env flip on the box and no code change. It is a SUB-cap, not an extra allowance: the
+// catalogue can only ever use budget the findings did not, so opening it can never raise the tick's
+// total spend above `PROVENANCE_LIMIT`. (The server's catalogue capture brake gates this queue too,
+// so a shut budget serves no catalogue row regardless of what is set here.)
+const PROVENANCE_CATALOGUE_LIMIT = Number(
+  process.env.FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT ?? "0",
+);
+
+// How many rows the RE-VERDICT phase re-rules per tick. Higher than the provenance budget because
+// it costs nothing comparable: no download, no proxy, no bytes — the server answers each one with a
+// single keyless oEmbed read. 5 a tick drains a widened rule through the whole 0/NULL set quickly
+// and then keeps cycling (the queue is a round-robin by design — track-work.ts).
+const REVERDICT_LIMIT = Number(process.env.FLUNCLE_CAPTURE_REVERDICT_LIMIT ?? "5");
+
 const YT_SEARCH_TIMEOUT_MS = 60_000;
 const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
 
@@ -918,14 +950,17 @@ async function r2Put(key: string, body: Uint8Array, contentType: string): Promis
 
 // ── Admin API (direct HTTP — pin-independent, not the baked CLI) ──────────────
 
-async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
-  // The CATALOGUE-AWARE worklist (docs/gpu-batch-embed.md), NOT the old findings-only
-  // `captureQueue=true` admin list. `kind=capture&scope=all` serves both halves in the
-  // metered-budget drain order (certified first, then the Ear's capture-priority ladder);
-  // the budget's brake — consulted server-side BEFORE the worklist is selected — narrows the
-  // scope to the findings while it is shut (its default), so a paused brake reads exactly the
-  // findings the old queue did. No `order` param: this queue's order is fixed by the budget.
-  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=capture&scope=all&limit=${QUEUE_LIMIT}`;
+/**
+ * Read one worklist. `kind` and `scope` are the server's enums (track-work.ts) — the ORDER and the
+ * BRAKE are both decided there, so this is a dumb page read and deliberately has no opinion about
+ * which rows it gets or how many are left behind.
+ */
+async function fetchTrackWork(options: {
+  kind: "capture" | "youtube-provenance" | "youtube-reverdict";
+  limit: number;
+  scope: "all" | "catalogue" | "findings";
+}): Promise<CaptureFinding[]> {
+  const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=${options.kind}&scope=${options.scope}&limit=${options.limit}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     // The Worker API worklist read (`list_track_work`), NOT a media download: ~10s p95 with a
@@ -935,11 +970,23 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
   });
   if (!res.ok) {
     throw new Error(
-      `capture queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      `${options.kind} queue read failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
     );
   }
   const body = (await res.json()) as { tracks?: CaptureFinding[] };
   return Array.isArray(body.tracks) ? body.tracks : [];
+}
+
+/**
+ * The CAPTURE worklist (docs/gpu-batch-embed.md), NOT the old findings-only `captureQueue=true`
+ * admin list. `kind=capture&scope=all` serves both halves in the metered-budget drain order
+ * (certified first, then the Ear's capture-priority ladder); the budget's brake — consulted
+ * server-side BEFORE the worklist is selected — narrows the scope to the findings while it is shut
+ * (its default), so a paused brake reads exactly the findings the old queue did. No `order` param:
+ * this queue's order is fixed by the budget.
+ */
+async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
+  return fetchTrackWork({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
 }
 
 async function patchTrack(trackId: string, update: Record<string, unknown>): Promise<void> {
@@ -1181,6 +1228,303 @@ export function logBotChallengeRecap(meter: BotChallengeMeter): void {
   );
 }
 
+// ── THE SHARED YOUTUBE LADDER ───────────────────────────────────────────────
+//
+// Search → rank → download → duration re-check → FINGERPRINT GATE, extracted so the two sweeps
+// that need it run the SAME one. The capture sweep runs it to acquire audio it will STORE; the
+// provenance backfill (below) runs it to learn WHICH upload carries a recording whose audio is
+// already on file, and throws the bytes away. That difference is entirely in what the CALLER does
+// with the result — a parallel copy of this walk would drift within a release, and the thing it
+// would drift on is the identity gate that keeps wrong audio out of the archive.
+
+/**
+ * ONE sticky residential-proxy session for one track's run, with its single bot-challenge re-roll.
+ * `url` is what every yt-dlp call reads and `reroll` flips it exactly once (module header: a
+ * challenge is an IP-reputation verdict on the exit, so the only answer is a different exit).
+ * Every challenge is METERED whether or not a re-roll is left — the meter and the guard are
+ * deliberately separate concerns (see THE BOT-CHALLENGE METER above).
+ */
+export type ProxySession = {
+  /** Whether the run still has its one re-roll — read BEFORE `reroll` spends it. */
+  rerollable: () => boolean;
+  /** Meter a challenge, and move to a fresh exit if the run has a re-roll left. */
+  reroll: (stage: BotChallengeStage) => boolean;
+  url: string;
+};
+
+function openProxySession(sessionSeed: string, meter: BotChallengeMeter): ProxySession {
+  const rerolledProxyUrl = buildStickyProxyUrl({
+    host: PROXY_HOST,
+    password: PROXY_PASSWORD,
+    port: PROXY_PORT,
+    sessionId: rerollSessionId(sessionSeed),
+    username: PROXY_USERNAME,
+  });
+  const session: ProxySession = {
+    reroll: (stage: BotChallengeStage) => {
+      const canReroll = session.url !== rerolledProxyUrl;
+
+      noteBotChallenge(meter, stage, canReroll);
+
+      if (!canReroll) {
+        return false;
+      }
+
+      session.url = rerolledProxyUrl;
+      return true;
+    },
+    rerollable: () => session.url !== rerolledProxyUrl,
+    url: buildStickyProxyUrl({
+      host: PROXY_HOST,
+      password: PROXY_PASSWORD,
+      port: PROXY_PORT,
+      sessionId: sessionSeed,
+      username: PROXY_USERNAME,
+    }),
+  };
+
+  return session;
+}
+
+/** The bad-audio memory as the walk carries it: the sources, plus whether THIS run grew them. */
+export type RejectedMemory = { dirty: boolean; sources: RejectedSource[] };
+
+/** An upload the fingerprint gate accepted, with the downloaded file still on disk. */
+export type VerifiedUpload = {
+  bytes: Uint8Array;
+  digest: string;
+  ext: string;
+  path: string;
+  /** `match` = fingerprint-verified. `no-reference` = the honest abstain (nothing was compared). */
+  verdict: "match" | "no-reference";
+  videoId: string;
+};
+
+/**
+ * Run the ladder for one track and return the first upload that clears the fingerprint gate, or
+ * `null` when the walk DISPROVED every candidate it could reach.
+ *
+ * THROWS on a transient failure (a proxy error, a bot wall that outlived the re-roll, a DRM-locked
+ * top hit with nothing usable behind it), exactly as the inline walk did — a recoverable skip
+ * disproves nothing, so it must not be allowed to read as a terminal verdict (the 047.0.8M case).
+ * `memory` is mutated in place, so a caller that persists it keeps every paid-for rejection.
+ */
+async function findVerifiedUpload(options: {
+  dir: string;
+  finding: CaptureFinding;
+  /**
+   * A source-audio R2 key whose embedded sha256 is KNOWN-BAD for this track — the legacy
+   * single-sha memory a row quarantined before the general one shipped still carries. CALLER-
+   * SUPPLIED, never read off the row here, because `source_audio_key` means opposite things to
+   * the two callers (see the backstop below).
+   */
+  legacyRejectKey?: string;
+  memory: RejectedMemory;
+  session: ProxySession;
+}): Promise<VerifiedUpload | null> {
+  const { dir, finding, memory, session } = options;
+  const { trackId } = finding;
+  const primaryQuery = buildSearchQuery(finding, 0);
+
+  // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
+  // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
+  // unmatched audit showed an over-constrained multi-artist query routinely returns five
+  // WRONG candidates (live sets, shorts) that all miss the duration guard — under the old
+  // "zero raw candidates" trigger that suppressed the fallback exactly when it was needed.
+  // The rungs, in measured-yield order (the 323-row spike):
+  //   1. ytsearch5 with the historic raw query — byte-identical, no regression.
+  //   2. the SAME query against music.youtube.com — the auto-generated `<Artist> - Topic`
+  //      art-tracks rank first there; this step alone recovered 61% of the terminal-
+  //      unmatched set, duration-verified.
+  //   3. the normalized de-constrained variant (primary artist + version-stripped title,
+  //      typographic punctuation folded) on music — +20 rows the raw shape missed.
+  const rankContext = {
+    artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
+    durationMs: finding.durationMs,
+    label: finding.label,
+    title: finding.title,
+  };
+  const fallbackQuery = normalizeSearchQuery(buildSearchQuery(finding, 1));
+  const ladder: { query: string; source: "music" | "youtube" }[] = [
+    { query: primaryQuery, source: "youtube" },
+    { query: primaryQuery, source: "music" },
+    ...(fallbackQuery && fallbackQuery !== primaryQuery
+      ? [{ query: fallbackQuery, source: "music" as const }]
+      : []),
+  ].slice(0, Math.max(1, QUERY_VARIANTS));
+
+  let candidates: YtCandidate[] = [];
+  let ranked: ReturnType<typeof rankCandidates> = [];
+  for (const [step, rung] of ladder.entries()) {
+    if (step > 0) {
+      log(
+        `no accepted candidate yet — ladder step ${step + 1}/${ladder.length}: ${rung.source} search "${rung.query}"`,
+      );
+    }
+    try {
+      candidates = runYtSearch(session.url, rung.query, rung.source);
+    } catch (error) {
+      if (!(error as { isBotChallenge?: boolean }).isBotChallenge || !session.reroll("search")) {
+        throw error;
+      }
+      candidates = runYtSearch(session.url, rung.query, rung.source);
+    }
+    ranked = rankCandidates(candidates, rankContext);
+    if (ranked.length > 0) {
+      break;
+    }
+  }
+
+  // The ladder concluded and nothing survived the duration guard. The CALLER owns what that
+  // means and what it writes: for capture it is a terminal `unmatched`, for the provenance
+  // backfill it is a `no-match` report that moves no capture column at all.
+  if (ranked.length === 0) {
+    return null;
+  }
+
+  // ── THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) ──────────────────────────────────
+  // Two layers. The GENERAL memory (`source_audio_rejected`) drives a videoId PRE-download
+  // filter + a sha256 POST-download backstop. The LEGACY single-sha (embedded in a kept
+  // `source_audio_key`) is folded into the same backstop, so a row quarantined before the
+  // general memory shipped still refuses its known-bad bytes. `memoryDirty` tracks whether this
+  // run added a rejection, so the terminal write persists the grown memory exactly once.
+  const rejectedIds = rejectedVideoIds(memory.sources);
+  const knownBadShas = rejectedShas(memory.sources);
+  // …and the LEGACY single-sha, which the CALLER supplies rather than this function reading it off
+  // the row. That is not indirection for its own sake: `source_audio_key` means opposite things to
+  // the two callers. On a CAPTURE it is only ever present on a wrong-audio re-capture, so its sha
+  // is known-BAD. On the PROVENANCE backfill every row has a key by definition, and its sha is the
+  // GOOD audio the archive is holding — folding that in would blacklist the one upload most likely
+  // to be the right answer, which is exactly the upload the original capture came from.
+  const legacyRejectHash = extractSourceAudioSha256(options.legacyRejectKey);
+  if (legacyRejectHash) {
+    knownBadShas.add(legacyRejectHash);
+  }
+
+  // PRE-DOWNLOAD FILTER: a candidate whose video id is already remembered as bad never costs
+  // proxy bytes again. Applied before the attempt budget, so DOWNLOAD_ATTEMPTS is spent only on
+  // candidates that could actually be new audio.
+  const attempts = filterRejectedCandidates(ranked, rejectedIds, DOWNLOAD_ATTEMPTS);
+
+  // ── THE REFERENCE ────────────────────────────────────────────────────────────────────────
+  // The ISRC-resolved official 30s preview, fingerprinted ONCE per track (not per candidate).
+  // null ⇒ the track has NO preview source, or fpcalc is absent — the gate then ABSTAINS on
+  // whatever downloads (stamped `unverified`), never blocking a track that has no reference.
+  // The preview is a verification REFERENCE only: never a vector, never a stored analysis input.
+  const previewFp = await fetchPreviewFingerprint({
+    apiBaseUrl: API_BASE_URL,
+    apiToken: API_TOKEN,
+    idOrLogId: trackId,
+  });
+
+  // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
+  // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
+  // reference) is RETURNED to the caller; a fingerprint MISMATCH rejects the candidate,
+  // remembers it, and falls through to the next upload. A DRM/bot-walled hit is skipped
+  // (recoverable) but keeps the run off a terminal verdict (see below); a non-recoverable
+  // error aborts.
+  let lastError: unknown;
+  for (const candidate of attempts) {
+    try {
+      let file: { ext: string; path: string };
+      try {
+        file = runYtDownload(session.url, candidate.candidate.id, dir, false);
+      } catch (error) {
+        const flags = error as DownloadErrorFlags;
+        // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll`.
+        const recovery = chooseDownloadRecovery(flags, session.rerollable());
+
+        // Metered whichever branch wins — a challenge the run cannot clear is still a
+        // challenge, and its visibility must not ride on there being a re-roll left.
+        if (flags.isBotChallenge) {
+          session.reroll("download");
+        }
+
+        if (recovery === "reroll") {
+          // A fresh exit usually clears the challenge for the SAME candidate; if it
+          // throws again the outer catch handles it as before (recoverable → next
+          // candidate, since the run's one re-roll is now spent).
+          file = runYtDownload(session.url, candidate.candidate.id, dir, false);
+        } else if (recovery === "player-client-fallback") {
+          file = runYtDownload(session.url, candidate.candidate.id, dir, true);
+        } else {
+          throw error;
+        }
+      }
+
+      const fileBytes = new Uint8Array(readFileSync(file.path));
+      const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
+
+      // KNOWN-BAD BYTES (the deep backstop): the same wrong audio re-uploaded under a new id.
+      if (knownBadShas.has(fileDigest)) {
+        log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
+        rmSync(file.path, { force: true });
+        continue;
+      }
+
+      // Belt-and-suspenders: confirm the REAL downloaded duration passes the SYMMETRIC guard
+      // (the search value can lie / point at a different manifest). A wrong-LENGTH file is a
+      // plain miss, not a same-recording claim, so it is skipped but NOT remembered.
+      const realDurationSec = probeDurationSec(file.path);
+      if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
+        rmSync(file.path, { force: true });
+        continue;
+      }
+
+      // ── THE FINGERPRINT GATE ──────────────────────────────────────────────────────────────
+      const verdict = verifyCaptureFile(previewFp, file.path);
+
+      if (verdict === "mismatch") {
+        // WRONG AUDIO: the captured bytes do not match the ISRC-resolved preview (the 005.9.9L
+        // failure). Remember the source — videoId (PRE-download filter) + sha (backstop) — so it
+        // never costs bytes again, and fall through to the next upload.
+        log(`candidate ${candidate.candidate.id} failed fingerprint verification — trying next`);
+        memory.sources = appendRejectedSource(memory.sources, {
+          at: new Date().toISOString(),
+          reason: "fingerprint-mismatch",
+          sha256: fileDigest,
+          videoId: candidate.candidate.id,
+        });
+        memory.dirty = true;
+        knownBadShas.add(fileDigest);
+        rmSync(file.path, { force: true });
+        continue;
+      }
+
+      // ACCEPTED. The file is still on disk and the caller decides its fate: the capture sweep
+      // stores the bytes in R2, the provenance backfill deletes them and keeps only the id.
+      return {
+        bytes: fileBytes,
+        digest: fileDigest,
+        ext: file.ext,
+        path: file.path,
+        verdict,
+        videoId: candidate.candidate.id,
+      };
+    } catch (error) {
+      lastError = error;
+      if ((error as { isRecoverable?: boolean }).isRecoverable) {
+        log(`candidate ${candidate.candidate.id} unusable (DRM/bot-wall) — trying next`);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  // Nothing accepted. `null` — a terminal verdict for the caller to name — is returned ONLY when
+  // the walk actually DISPROVED every upload: each fresh candidate was WRONG AUDIO (known-bad or
+  // a fingerprint mismatch) or wrong-length, or the pre-filter left nothing to try. A recoverable
+  // skip (DRM/bot-wall) disproves nothing — the skipped upload can be the RIGHT audio (the
+  // 047.0.8M case: the correct art-track bot-walled, two wrong songs fingerprint-rejected, and
+  // the rejections masked the transient error into a terminal verdict) — so any `lastError`
+  // rethrows into the caller's retryable path.
+  if (!lastError) {
+    return null;
+  }
+
+  throw lastError;
+}
+
 // ── Per-finding capture ────────────────────────────────────────────────────
 
 type FindingOutcome = "done" | "unmatched" | "failed" | "skipped";
@@ -1205,307 +1549,102 @@ async function captureFinding(
   // and the R2 key root. A finding is its coordinate; a catalogue row is its track id.
   const keyRoot = logId ?? `catalogue/${trackId}`;
 
-  const primaryQuery = buildSearchQuery(finding, 0);
   // The persisted consecutive-failure count: drives the retry backoff bookkeeping in the
   // catch below AND rotates the sticky session per retry run (captureSessionSeed) so a
   // retry never re-lands on the exit whose flag just failed it.
   const priorFailures =
     typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
-  const sessionSeed = captureSessionSeed(logId ?? trackId, priorFailures);
-  const proxyUrl = buildStickyProxyUrl({
-    host: PROXY_HOST,
-    password: PROXY_PASSWORD,
-    port: PROXY_PORT,
-    sessionId: sessionSeed,
-    username: PROXY_USERNAME,
-  });
-  // THE BOT-CHALLENGE RE-ROLL (one per run). A "Sign in to confirm you're not a bot" is an
-  // IP-reputation verdict on the sticky exit — the answer is a DIFFERENT residential exit,
-  // once, after which the run stays on the re-rolled session (a pool that challenges two
-  // exits is cooling off; backoff owns the rest). `activeProxyUrl` is what every yt-dlp
-  // call below uses; `rerollOnBotChallenge` flips it exactly once.
-  const rerolledProxyUrl = buildStickyProxyUrl({
-    host: PROXY_HOST,
-    password: PROXY_PASSWORD,
-    port: PROXY_PORT,
-    sessionId: rerollSessionId(sessionSeed),
-    username: PROXY_USERNAME,
-  });
-  let activeProxyUrl = proxyUrl;
-  // EVERY challenge is metered and logged; the guard decides only whether a re-roll is left.
-  // Keeping those two apart is the whole point — the old shape logged inside the guard, so a
-  // run's second challenge onward left no trace at all (see THE BOT-CHALLENGE METER above).
-  const rerollOnBotChallenge = (stage: BotChallengeStage): boolean => {
-    const canReroll = activeProxyUrl !== rerolledProxyUrl;
-
-    noteBotChallenge(meter, stage, canReroll);
-
-    if (!canReroll) {
-      return false;
-    }
-
-    activeProxyUrl = rerolledProxyUrl;
-    return true;
-  };
+  const session = openProxySession(captureSessionSeed(logId ?? trackId, priorFailures), meter);
 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
   // The bad-audio memory lives OUTSIDE the try: a run that grew it and then errored still
   // persists it on the `failed` patch in the catch, so a paid-for rejection is never lost.
-  let rejectedMemory: RejectedSource[] = parseRejectedSources(finding.sourceAudioRejected);
-  let memoryDirty = false;
+  const memory: RejectedMemory = {
+    dirty: false,
+    sources: parseRejectedSources(finding.sourceAudioRejected),
+  };
 
   try {
-    // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
-    // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
-    // unmatched audit showed an over-constrained multi-artist query routinely returns five
-    // WRONG candidates (live sets, shorts) that all miss the duration guard — under the old
-    // "zero raw candidates" trigger that suppressed the fallback exactly when it was needed.
-    // The rungs, in measured-yield order (the 323-row spike):
-    //   1. ytsearch5 with the historic raw query — byte-identical, no regression.
-    //   2. the SAME query against music.youtube.com — the auto-generated `<Artist> - Topic`
-    //      art-tracks rank first there; this step alone recovered 61% of the terminal-
-    //      unmatched set, duration-verified.
-    //   3. the normalized de-constrained variant (primary artist + version-stripped title,
-    //      typographic punctuation folded) on music — +20 rows the raw shape missed.
-    const rankContext = {
-      artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
-      durationMs: finding.durationMs,
-      label: finding.label,
-      title: finding.title,
-    };
-    const fallbackQuery = normalizeSearchQuery(buildSearchQuery(finding, 1));
-    const ladder: { query: string; source: "music" | "youtube" }[] = [
-      { query: primaryQuery, source: "youtube" },
-      { query: primaryQuery, source: "music" },
-      ...(fallbackQuery && fallbackQuery !== primaryQuery
-        ? [{ query: fallbackQuery, source: "music" as const }]
-        : []),
-    ].slice(0, Math.max(1, QUERY_VARIANTS));
-
-    let candidates: YtCandidate[] = [];
-    let ranked: ReturnType<typeof rankCandidates> = [];
-    for (const [step, rung] of ladder.entries()) {
-      if (step > 0) {
-        log(
-          `no accepted candidate yet — ladder step ${step + 1}/${ladder.length}: ${rung.source} search "${rung.query}"`,
-        );
-      }
-      try {
-        candidates = runYtSearch(activeProxyUrl, rung.query, rung.source);
-      } catch (error) {
-        if (
-          !(error as { isBotChallenge?: boolean }).isBotChallenge ||
-          !rerollOnBotChallenge("search")
-        ) {
-          throw error;
-        }
-        candidates = runYtSearch(activeProxyUrl, rung.query, rung.source);
-      }
-      ranked = rankCandidates(candidates, rankContext);
-      if (ranked.length > 0) {
-        break;
-      }
-    }
-
-    if (ranked.length === 0) {
-      // `sourceAudioAttemptedAt` on an UNMATCHED too: it was a billed proxy request (a search),
-      // and the capture budget's ledger counts attempts rather than successes — a day of
-      // unmatched rows still spends money, and a meter that could not see that would read zero
-      // while the bill climbed. See apps/web/src/lib/server/capture-budget.ts.
-      await patchTrack(trackId, {
-        captureStatus: "unmatched",
-        sourceAudioAttemptedAt: new Date().toISOString(),
-      });
-      return "unmatched";
-    }
-
-    // ── THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) ──────────────────────────────────
-    // Two layers. The GENERAL memory (`source_audio_rejected`) drives a videoId PRE-download
-    // filter + a sha256 POST-download backstop. The LEGACY single-sha (embedded in a kept
-    // `source_audio_key`) is folded into the same backstop, so a row quarantined before the
-    // general memory shipped still refuses its known-bad bytes. `memoryDirty` tracks whether this
-    // run added a rejection, so the terminal write persists the grown memory exactly once.
-    const rejectedIds = rejectedVideoIds(rejectedMemory);
-    const knownBadShas = rejectedShas(rejectedMemory);
-    const legacyRejectHash = extractSourceAudioSha256(finding.sourceAudioKey);
-    if (legacyRejectHash) {
-      knownBadShas.add(legacyRejectHash);
-    }
-
-    // PRE-DOWNLOAD FILTER: a candidate whose video id is already remembered as bad never costs
-    // proxy bytes again. Applied before the attempt budget, so DOWNLOAD_ATTEMPTS is spent only on
-    // candidates that could actually be new audio.
-    const attempts = filterRejectedCandidates(ranked, rejectedIds, DOWNLOAD_ATTEMPTS);
-
-    // ── THE REFERENCE ────────────────────────────────────────────────────────────────────────
-    // The ISRC-resolved official 30s preview, fingerprinted ONCE per track (not per candidate).
-    // null ⇒ the track has NO preview source, or fpcalc is absent — the gate then ABSTAINS on
-    // whatever downloads (stamped `unverified`), never blocking a track that has no reference.
-    // The preview is a verification REFERENCE only: never a vector, never a stored analysis input.
-    const previewFp = await fetchPreviewFingerprint({
-      apiBaseUrl: API_BASE_URL,
-      apiToken: API_TOKEN,
-      idOrLogId: trackId,
+    // A capture row carries `source_audio_key` ONLY on a wrong-audio re-capture, where its sha is
+    // the known-bad audio the walk must refuse. That is the legacy single-sha memory.
+    const accepted = await findVerifiedUpload({
+      dir,
+      finding,
+      legacyRejectKey: finding.sourceAudioKey,
+      memory,
+      session,
     });
 
-    // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
-    // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
-    // reference) is stored + stamped; a fingerprint MISMATCH rejects the candidate, remembers it,
-    // and falls through to the next upload. A DRM/bot-walled hit is skipped (recoverable) but
-    // keeps the run off the terminal `unmatched` (see below); a non-recoverable error aborts
-    // (→ `failed`).
-    let lastError: unknown;
-    for (const candidate of attempts) {
-      try {
-        let file: { ext: string; path: string };
-        try {
-          file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, false);
-        } catch (error) {
-          const flags = error as DownloadErrorFlags;
-          // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll`.
-          const recovery = chooseDownloadRecovery(flags, activeProxyUrl !== rerolledProxyUrl);
-
-          // Metered whichever branch wins — a challenge the run cannot clear is still a
-          // challenge, and its visibility must not ride on there being a re-roll left.
-          if (flags.isBotChallenge) {
-            rerollOnBotChallenge("download");
-          }
-
-          if (recovery === "reroll") {
-            // A fresh exit usually clears the challenge for the SAME candidate; if it
-            // throws again the outer catch handles it as before (recoverable → next
-            // candidate, since the run's one re-roll is now spent).
-            file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, false);
-          } else if (recovery === "player-client-fallback") {
-            file = runYtDownload(activeProxyUrl, candidate.candidate.id, dir, true);
-          } else {
-            throw error;
-          }
-        }
-
-        const fileBytes = new Uint8Array(readFileSync(file.path));
-        const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
-
-        // KNOWN-BAD BYTES (the deep backstop): the same wrong audio re-uploaded under a new id.
-        if (knownBadShas.has(fileDigest)) {
-          log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
-          rmSync(file.path, { force: true });
-          continue;
-        }
-
-        // Belt-and-suspenders: confirm the REAL downloaded duration passes the SYMMETRIC guard
-        // (the search value can lie / point at a different manifest). A wrong-LENGTH file is a
-        // plain miss, not a same-recording claim, so it is skipped but NOT remembered.
-        const realDurationSec = probeDurationSec(file.path);
-        if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
-          rmSync(file.path, { force: true });
-          continue;
-        }
-
-        // ── THE FINGERPRINT GATE ──────────────────────────────────────────────────────────────
-        const verdict = verifyCaptureFile(previewFp, file.path);
-
-        if (verdict === "mismatch") {
-          // WRONG AUDIO: the captured bytes do not match the ISRC-resolved preview (the 005.9.9L
-          // failure). Remember the source — videoId (PRE-download filter) + sha (backstop) — so it
-          // never costs bytes again, and fall through to the next upload.
-          log(`candidate ${candidate.candidate.id} failed fingerprint verification — trying next`);
-          rejectedMemory = appendRejectedSource(rejectedMemory, {
-            at: new Date().toISOString(),
-            reason: "fingerprint-mismatch",
-            sha256: fileDigest,
-            videoId: candidate.candidate.id,
-          });
-          memoryDirty = true;
-          knownBadShas.add(fileDigest);
-          rmSync(file.path, { force: true });
-          continue;
-        }
-
-        // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain). Store the
-        // bytes + stamp the verdict provenance in the same write.
-        const verification = verdict === "match" ? "preview-match" : "unverified";
-        const key = buildSourceAudioKey(keyRoot, fileDigest, file.ext);
-
-        await r2Put(key, fileBytes, contentTypeForExt(file.ext));
-
-        // The key + done + the captured stamp + THE METER + THE VERIFICATION PROVENANCE.
-        // Clobber-safe enrichment trigger — for a CERTIFIED finding, re-queue when the BPM is
-        // missing OR the row was analyzed from a preview (closing the capture→enrich race; a
-        // catalogue row has no enrichment and is skipped). `sourceAudioBytes` is the billed size,
-        // knowable only HERE. `sourceAudioAttemptedAt` is stamped on success too (the budget's
-        // rolling-24h ledger is a range seek on it). If this run REJECTED an earlier candidate,
-        // the grown memory rides this write so it is never lost.
-        // THE ACCEPTED UPLOAD'S ID rides this write (operator ruling 2026-07-31). Until now the
-        // walk remembered only the ids it REJECTED (`sourceAudioRejected`) and threw the winner
-        // away at the moment it was most certain — this is the one place that knows which YouTube
-        // upload carries this recording, proven by the fingerprint gate a few lines up. The server
-        // decides separately whether that upload may ever be SHOWN (a rip carries the same bytes as
-        // the master, so a fingerprint match is identity, never permission); the sweep's whole job
-        // is to report the id. Forward-only: a capture before this shipped is unrecoverable, so
-        // there is no backfill.
-        const now = new Date().toISOString();
-        const update: Record<string, unknown> = {
-          captureStatus: "done",
-          captureVerification: verification,
-          captureVerifiedAt: now,
-          sourceAudioAttemptedAt: now,
-          sourceAudioBytes: fileBytes.byteLength,
-          sourceAudioCapturedAt: now,
-          sourceAudioKey: key,
-        };
-
-        // ONLY A REAL MATCH REPORTS AN ID. `verification` is `unverified` on the abstain path —
-        // the track had no preview reference (or fpcalc was absent), so the bytes were accepted on
-        // duration and ranking alone and NOTHING was fingerprinted. The identity envelope serves
-        // this id under `method: "fingerprint"`, so shipping one from the abstain path would put
-        // the words "matched by audio fingerprint" on a page under a match that never happened.
-        // The server re-checks this same condition (lib/server/track-update.ts) rather than
-        // trusting the box, but the honest source is here.
-        if (verdict === "match") {
-          update.youtubeVideoId = candidate.candidate.id;
-        }
-        if (memoryDirty) {
-          update.sourceAudioRejected = JSON.stringify(rejectedMemory);
-        }
-        if (shouldReenrichAfterCapture(finding.certified, finding.bpm, finding.analyzedFrom)) {
-          update.enrichmentStatus = "pending";
-        }
-        await patchTrack(trackId, update);
-
-        return "done";
-      } catch (error) {
-        lastError = error;
-        if ((error as { isRecoverable?: boolean }).isRecoverable) {
-          log(`candidate ${candidate.candidate.id} unusable (DRM/bot-wall) — trying next`);
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    // Nothing stored. `unmatched` (terminal — the queue never re-burns it; a fresh finding
-    // still jumps it newest-first) is landed ONLY when the walk actually DISPROVED every
-    // upload: each fresh candidate was WRONG AUDIO (known-bad or a fingerprint mismatch) or
-    // wrong-length, or the pre-filter left nothing to try. A recoverable skip (DRM/bot-wall)
-    // disproves nothing — the skipped upload can be the RIGHT audio (the 047.0.8M case: the
-    // correct art-track bot-walled, two wrong songs fingerprint-rejected, and the rejections
-    // masked the transient error into a terminal verdict) — so any `lastError` rethrows into
-    // the retryable `failed` path, whose patch carries the grown memory too.
-    if (!lastError) {
+    if (!accepted) {
+      // `unmatched` is terminal — the queue never re-burns it; a fresh finding still jumps it
+      // newest-first. `sourceAudioAttemptedAt` is stamped here too: it was a billed proxy request,
+      // and the capture budget's ledger counts attempts rather than successes — a day of unmatched
+      // rows still spends money, and a meter that could not see that would read zero while the bill
+      // climbed. See apps/web/src/lib/server/capture-budget.ts.
       const update: Record<string, unknown> = {
         captureStatus: "unmatched",
         sourceAudioAttemptedAt: new Date().toISOString(),
       };
-      if (memoryDirty) {
-        update.sourceAudioRejected = JSON.stringify(rejectedMemory);
+      if (memory.dirty) {
+        update.sourceAudioRejected = JSON.stringify(memory.sources);
       }
       await patchTrack(trackId, update);
       return "unmatched";
     }
 
-    throw lastError;
+    // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain). Store the
+    // bytes + stamp the verdict provenance in the same write.
+    const verification = accepted.verdict === "match" ? "preview-match" : "unverified";
+    const key = buildSourceAudioKey(keyRoot, accepted.digest, accepted.ext);
+
+    await r2Put(key, accepted.bytes, contentTypeForExt(accepted.ext));
+
+    // The key + done + the captured stamp + THE METER + THE VERIFICATION PROVENANCE.
+    // Clobber-safe enrichment trigger — for a CERTIFIED finding, re-queue when the BPM is
+    // missing OR the row was analyzed from a preview (closing the capture→enrich race; a
+    // catalogue row has no enrichment and is skipped). `sourceAudioBytes` is the billed size,
+    // knowable only HERE. `sourceAudioAttemptedAt` is stamped on success too (the budget's
+    // rolling-24h ledger is a range seek on it). If this run REJECTED an earlier candidate,
+    // the grown memory rides this write so it is never lost.
+    // THE ACCEPTED UPLOAD'S ID rides this write (operator ruling 2026-07-31). Until now the
+    // walk remembered only the ids it REJECTED (`sourceAudioRejected`) and threw the winner
+    // away at the moment it was most certain — this is the one place that knows which YouTube
+    // upload carries this recording, proven by the fingerprint gate. The server decides
+    // separately whether that upload may ever be SHOWN (a rip carries the same bytes as the
+    // master, so a fingerprint match is identity, never permission); the sweep's whole job is
+    // to report the id. Rows captured BEFORE this shipped are reached by the PROVENANCE PHASE
+    // below, which re-derives the id without touching a single capture column.
+    const now = new Date().toISOString();
+    const update: Record<string, unknown> = {
+      captureStatus: "done",
+      captureVerification: verification,
+      captureVerifiedAt: now,
+      sourceAudioAttemptedAt: now,
+      sourceAudioBytes: accepted.bytes.byteLength,
+      sourceAudioCapturedAt: now,
+      sourceAudioKey: key,
+    };
+
+    // ONLY A REAL MATCH REPORTS AN ID. `verification` is `unverified` on the abstain path —
+    // the track had no preview reference (or fpcalc was absent), so the bytes were accepted on
+    // duration and ranking alone and NOTHING was fingerprinted. The identity envelope serves
+    // this id under `method: "fingerprint"`, so shipping one from the abstain path would put
+    // the words "matched by audio fingerprint" on a page under a match that never happened.
+    // The server re-checks this same condition (lib/server/track-update.ts) rather than
+    // trusting the box, but the honest source is here.
+    if (accepted.verdict === "match") {
+      update.youtubeVideoId = accepted.videoId;
+    }
+    if (memory.dirty) {
+      update.sourceAudioRejected = JSON.stringify(memory.sources);
+    }
+    if (shouldReenrichAfterCapture(finding.certified, finding.bpm, finding.analyzedFrom)) {
+      update.enrichmentStatus = "pending";
+    }
+    await patchTrack(trackId, update);
+
+    return "done";
   } catch (error) {
     // A yt-dlp / proxy / R2 error → failed (retriable under backoff). ACCUMULATE the
     // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`
@@ -1518,8 +1657,8 @@ async function captureFinding(
       sourceAudioAttemptedAt: new Date().toISOString(),
       sourceAudioFailures: priorFailures + 1,
     };
-    if (memoryDirty) {
-      update.sourceAudioRejected = JSON.stringify(rejectedMemory);
+    if (memory.dirty) {
+      update.sourceAudioRejected = JSON.stringify(memory.sources);
     }
     await patchTrack(trackId, update).catch((patchError: unknown) => {
       log(`failed to record failure for ${trackId}: ${String(patchError)}`);
@@ -1531,6 +1670,201 @@ async function captureFinding(
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
+}
+
+// ── THE PROVENANCE PHASE (operator ruling 2026-07-31) ───────────────────────
+//
+// WHAT IT IS FOR. The capture write above keeps the winning video id — but only from the moment it
+// shipped. Every row captured before that had its id discarded at the instant it was most certain,
+// and a discarded id cannot be recovered from the stored bytes: nothing in an R2 object says which
+// upload it came from. So the only honest way to fill those rows is to ask the question again, and
+// that means running the whole ladder again.
+//
+// ── AND IT THROWS THE AUDIO AWAY. THIS IS THE RULING, NOT AN OPTIMISATION ────────────────────
+// The obvious shape — just re-capture the row and let the normal write keep the id — was piloted
+// over three rows and REJECTED on what it did: a recapture REPLACED a finding's clean archived
+// audio with a fan BLEND that legitimately passed the fingerprint gate. It passed because a blend
+// CONTAINS the original's preview segment, so the gate is working exactly as designed and simply
+// cannot tell the two apart. The archive is the thing Fluncle is least willing to degrade, and a
+// backfill that trades good audio for a provenance link is a bad trade at any hit rate.
+//
+// So this phase is PROVENANCE-ONLY, and the rail is absolute: it never sends `sourceAudioKey`,
+// `captureStatus`, `captureVerification`, `sourceAudioBytes`, `sourceAudioRejected`, or any other
+// capture column. The candidate file is deleted the moment the verdict is read. The only thing it
+// can move is the YouTube trio, and it moves that through its OWN verdict field
+// (`youtubeVerification`) precisely so it cannot borrow capture's — sending
+// `captureVerification: "preview-match"` from a sweep that stored nothing would be a lie about the
+// archive, and the honest field costs one line.
+//
+// IT READS THE BAD-AUDIO MEMORY AND NEVER WRITES IT. Reading is free and saves money: a candidate a
+// previous capture already proved wrong is filtered out before it costs proxy bytes. Writing would
+// be a capture column, so a rejection this phase pays for is not remembered — the accepted cost of
+// a rail with no exceptions in it.
+
+/** What one provenance row cost and what it concluded. */
+type ProvenanceOutcome = "found" | "none" | "failed";
+
+/**
+ * Re-derive one already-captured row's YouTube provenance: run the ladder, read the verdict, throw
+ * the bytes away, report the id.
+ *
+ * A NON-MATCH IS REPORTED TOO (`no-match`), and it has to be. The ladder just spent a real download
+ * on this row; without a record of that the worklist would hand the same row back on the next tick
+ * and buy it again, forever. The report stamps `youtube_verified_at` and nothing else, which is
+ * what puts the row inside the server's re-ask window (track-work.ts). It covers both ways of
+ * concluding without a reportable id: nothing matched, and nothing could be COMPARED (a track with
+ * no preview reference is the ladder's honest abstain — its id is unprovable, so it is unreportable,
+ * and re-asking every tick would buy the same nothing).
+ */
+async function proveTrackProvenance(
+  row: CaptureFinding,
+  meter: BotChallengeMeter,
+): Promise<ProvenanceOutcome> {
+  const { logId, trackId } = row;
+  // The same sticky-session shape a clean capture run uses — determinism per track is all
+  // stickiness needs, and sharing the shape means sharing the behaviour that was tuned for it.
+  const session = openProxySession(captureSessionSeed(logId ?? trackId, 0), meter);
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-provenance-"));
+  // READ-ONLY (see the phase header): it feeds the pre-download filter and is never written back.
+  const memory: RejectedMemory = {
+    dirty: false,
+    sources: parseRejectedSources(row.sourceAudioRejected),
+  };
+
+  try {
+    // NO `legacyRejectKey`. Every row here has a `source_audio_key` by definition — it is the
+    // queue's own predicate — and that key's sha is the GOOD audio the archive holds. Passing it
+    // as a known-bad hash, the way the capture path correctly does for a quarantined row, would
+    // blacklist the upload most likely to be the right answer: the one the original capture came
+    // from. Same field, opposite meaning, which is why the caller supplies it and the walk does not.
+    const accepted = await findVerifiedUpload({ dir, finding: row, memory, session });
+
+    // THE DISCARD, first and unconditionally. The bytes exist only to be fingerprinted; nothing
+    // downstream may read them, and the `finally` below removes the directory regardless.
+    if (accepted) {
+      rmSync(accepted.path, { force: true });
+    }
+
+    if (!accepted || accepted.verdict !== "match") {
+      await patchTrack(trackId, { youtubeVerification: "no-match" });
+      return "none";
+    }
+
+    // ONLY the id and its proof. No capture column appears in this body, by construction — the
+    // server accepts the pair and refuses a bare id exactly as it does on the capture path.
+    await patchTrack(trackId, {
+      youtubeVerification: "preview-match",
+      youtubeVideoId: accepted.videoId,
+    });
+
+    return "found";
+  } catch (error) {
+    // NOTHING IS WRITTEN on a transient failure — no stamp, no id, and above all no capture
+    // column. The row keeps its place in the worklist and is asked again on a later tick, which is
+    // the right answer for a proxy hiccup and costs only the slot this tick already spent.
+    log(
+      `provenance failed for ${logId ?? "catalogue"} (${trackId}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+
+    return "failed";
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+}
+
+/** The provenance phase's tally for the tick summary. */
+export type ProvenanceCounts = { failed: number; found: number; none: number };
+
+/**
+ * Split the tick's provenance budget between the two halves of the archive.
+ *
+ * FINDINGS FIRST and the catalogue only with what is left: the sub-cap can never RAISE the tick's
+ * total spend, only redirect the part the findings did not need. With the shipped default of 0 the
+ * catalogue read is skipped entirely — no request, no page, no possibility of spending.
+ */
+export function splitProvenanceBudget(
+  total: number,
+  catalogueCap: number,
+): { catalogue: number; findings: number } {
+  const findings = Math.max(0, Math.trunc(total) || 0);
+
+  return { catalogue: Math.min(Math.max(0, Math.trunc(catalogueCap) || 0), findings), findings };
+}
+
+async function runProvenancePhase(meter: BotChallengeMeter): Promise<ProvenanceCounts> {
+  const counts: ProvenanceCounts = { failed: 0, found: 0, none: 0 };
+  const budget = splitProvenanceBudget(PROVENANCE_LIMIT, PROVENANCE_CATALOGUE_LIMIT);
+
+  if (budget.findings === 0) {
+    return counts;
+  }
+
+  // The findings half fills the budget first. Asking for the whole budget from `scope=findings`
+  // rather than `scope=all` is what makes the catalogue sub-cap a real cap rather than a hope: a
+  // catalogue row cannot arrive in this page at all.
+  const rows = await fetchTrackWork({
+    kind: "youtube-provenance",
+    limit: budget.findings,
+    scope: "findings",
+  });
+
+  // …and only what the findings left over may go to the catalogue, up to the sub-cap.
+  const catalogueRoom = Math.min(budget.catalogue, budget.findings - rows.length);
+
+  if (catalogueRoom > 0) {
+    rows.push(
+      ...(await fetchTrackWork({
+        kind: "youtube-provenance",
+        limit: catalogueRoom,
+        scope: "catalogue",
+      })),
+    );
+  }
+
+  // SERIAL, not the capture batch's worker pool. The budget is two rows; a pool over two rows buys
+  // nothing and would only widen the concurrent proxy footprint of a tick that is already running
+  // its capture batch.
+  for (const row of rows) {
+    counts[await proveTrackProvenance(row, meter)] += 1;
+  }
+
+  return counts;
+}
+
+// ── THE RE-VERDICT PHASE ────────────────────────────────────────────────────
+//
+// A row already HOLDS an id, and its officialness was ruled 0 or never concluded. The rule that
+// ruled it has since widened (a recording's own label channel now counts — youtube-official.ts), so
+// the question is asked again. The box's whole part in this is pacing: it reads the queue and sends
+// a `youtubeReverdict` ask per row. It never fetches the oEmbed, never sees a channel name, and
+// never carries a verdict — permission is decided server-side or it is not decided at all.
+
+async function runReverdictPhase(): Promise<{ asked: number; failed: number }> {
+  const limit = Math.max(0, Math.trunc(REVERDICT_LIMIT) || 0);
+
+  if (limit === 0) {
+    return { asked: 0, failed: 0 };
+  }
+
+  // `scope=all`: this phase spends no metered bandwidth, so there is no reason to hold the
+  // catalogue's rows back from a free re-ask.
+  const rows = await fetchTrackWork({ kind: "youtube-reverdict", limit, scope: "all" });
+  let asked = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    try {
+      await patchTrack(row.trackId, { youtubeReverdict: true });
+      asked += 1;
+    } catch (error) {
+      failed += 1;
+      log(
+        `re-verdict failed for ${row.trackId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return { asked, failed };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -1548,8 +1882,10 @@ export function buildCaptureSummary(options: {
   botChallengesUncleared: number;
   counts: CaptureCounts;
   elapsedMs: number;
+  provenance: ProvenanceCounts;
+  reverdict: { asked: number; failed: number };
 }): Record<string, unknown> {
-  const { counts } = options;
+  const { counts, provenance, reverdict } = options;
 
   return {
     batch: options.batch,
@@ -1562,6 +1898,15 @@ export function buildCaptureSummary(options: {
     failed: counts.failed,
     ok: true,
     produced: counts.done,
+    // THE PROVENANCE PHASE, reported separately from the capture batch it rides. Kept out of
+    // `checked`/`failed`/`produced` on purpose: those are the CAPTURE gauges the /status strain
+    // detector reads as a rate, and folding a different unit of work into them would move a
+    // published health number for a reason that has nothing to do with capture's health.
+    provenanceFailed: provenance.failed,
+    provenanceFound: provenance.found,
+    provenanceNone: provenance.none,
+    reverdictAsked: reverdict.asked,
+    reverdictFailed: reverdict.failed,
     // Deliberately no `queue_depth`: capture's whole-backlog count is an unindexed hot-path scan.
     skipped: counts.skipped,
     unmatched: counts.unmatched,
@@ -1644,6 +1989,22 @@ async function main(): Promise<void> {
     Array.from({ length: Math.min(CONCURRENCY, batch.length) || 1 }, () => worker()),
   );
 
+  // ── THE PROVENANCE PHASE, after the capture batch and never instead of it ──────────────────
+  // Ordered last on purpose: acquisition is the sweep's job and a backfill must never be able to
+  // delay or starve it. Both phases are caught here rather than thrown, for the same reason the
+  // capture worker catches per row — a backfill that could abort the tick would be able to hide a
+  // capture that already succeeded.
+  const provenance = await runProvenancePhase(botChallenges).catch((error: unknown) => {
+    log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
+
+    return { failed: 0, found: 0, none: 0 } satisfies ProvenanceCounts;
+  });
+  const reverdict = await runReverdictPhase().catch((error: unknown) => {
+    log(`re-verdict phase failed: ${error instanceof Error ? error.message : String(error)}`);
+
+    return { asked: 0, failed: 0 };
+  });
+
   logBotChallengeRecap(botChallenges);
 
   console.log(
@@ -1664,6 +2025,8 @@ async function main(): Promise<void> {
         // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
         // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
         // baseline against bot challenges no longer parks it on the public degraded row.
+        provenance,
+        reverdict,
       }),
     ),
   );

@@ -38,6 +38,7 @@ import {
   rankCandidates,
   rerollSessionId,
   shouldReenrichAfterCapture,
+  splitProvenanceBudget,
   verifyCaptureFile,
 } from "./capture-sweep";
 // The REAL /status strain detector, imported rather than re-implemented: since #994 this
@@ -55,6 +56,8 @@ describe("capture sweep canonical counters", () => {
       botChallengesUncleared: 1,
       counts: { done: 2, failed: 1, skipped: 0, unmatched: 1 },
       elapsedMs: 123,
+      provenance: { failed: 0, found: 0, none: 0 },
+      reverdict: { asked: 0, failed: 0 },
     });
 
     expect(summary).toMatchObject({
@@ -73,6 +76,8 @@ describe("capture sweep canonical counters", () => {
       botChallengesUncleared: 0,
       counts: { done: 0, failed: 0, skipped: 0, unmatched: 0 },
       elapsedMs: 1,
+      provenance: { failed: 0, found: 0, none: 0 },
+      reverdict: { asked: 0, failed: 0 },
     });
 
     expect(summary.checked).toBe(0);
@@ -94,6 +99,8 @@ describe("capture sweep canonical counters", () => {
       botChallengesUncleared: 0,
       counts: { done: 1, failed: 0, skipped: 0, unmatched: 0 },
       elapsedMs: 1,
+      provenance: { failed: 0, found: 0, none: 0 },
+      reverdict: { asked: 0, failed: 0 },
     });
 
     expect(summary).not.toHaveProperty("queue_depth");
@@ -1010,20 +1017,20 @@ describe("the accepted upload's id rides the success PATCH", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
   test("the success update carries youtubeVideoId, taken from the candidate that WON", () => {
-    // The sweep is the only place that knows which upload the fingerprint gate accepted; before
-    // this it remembered only the ids it REJECTED. `candidate.candidate.id` is the winner in scope
-    // at that point — the same value the rejection memory stores on a mismatch a few lines up.
-    expect(source).toContain("update.youtubeVideoId = candidate.candidate.id");
+    // The walk is the only place that knows which upload the fingerprint gate accepted; before
+    // this it remembered only the ids it REJECTED. `accepted.videoId` is the winner the shared
+    // ladder hands back — the same value the rejection memory would have stored on a mismatch.
+    expect(source).toContain("update.youtubeVideoId = accepted.videoId");
   });
 
   test("only a REAL match reports an id — the abstain path stays silent", () => {
-    // `verification` is `unverified` when the track had no preview reference: the bytes were kept
+    // The verdict is `no-reference` when the track had no preview reference: the bytes were kept
     // on duration and ranking alone and nothing was compared. The identity envelope serves this id
     // under `method: "fingerprint"`, so an id from the abstain path would put "matched by audio
     // fingerprint" on a page under a match that never ran. The assignment is therefore gated on
     // the verdict itself, not merely on reaching the success branch.
     expect(source).toMatch(
-      /if \(verdict === "match"\) \{\s*update\.youtubeVideoId = candidate\.candidate\.id;/,
+      /if \(accepted\.verdict === "match"\) \{\s*update\.youtubeVideoId = accepted\.videoId;/,
     );
   });
 
@@ -1040,9 +1047,173 @@ describe("the accepted upload's id rides the success PATCH", () => {
   test("the sweep never sends an officialness verdict — that is the server's call", () => {
     // A box sweep reports what it captured; it never grants permission for a link to be shown. The
     // oEmbed check lives in apps/web/src/lib/server/youtube-official.ts, behind the API boundary,
-    // so a compromised or stale box can never promote a rip onto the page.
+    // so a compromised or stale box can never promote a rip onto the page. The RE-VERDICT phase
+    // does not weaken this: it sends a bare `youtubeReverdict: true` ask and carries no verdict.
     expect(source).not.toContain("youtubeVideoOfficial");
     expect(source).not.toContain("youtubeVerifiedAt");
     expect(source).not.toContain("oembed");
+  });
+});
+
+describe("the PROVENANCE phase never touches a capture column", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+  // The phase's own body — from its entry point to the re-verdict phase that follows it. Everything
+  // asserted below is about THIS slice, so a capture column elsewhere in the file cannot mask a
+  // regression and cannot cause a false alarm either.
+  const phase = source.slice(
+    source.indexOf("async function proveTrackProvenance("),
+    source.indexOf("// ── THE RE-VERDICT PHASE"),
+  );
+
+  test("the slice under test is real", () => {
+    expect(phase.length).toBeGreaterThan(500);
+    expect(phase).toContain("findVerifiedUpload");
+  });
+
+  test("THE RAIL — no capture column can leave this phase, so no row can regress", () => {
+    // The pilot's verdict: a RE-CAPTURE replaced a finding's clean archived audio with a fan blend
+    // that legitimately passed the fingerprint gate (a blend contains the original's preview
+    // segment). The backfill is provenance-only for that reason, and this is the pin: not one of
+    // the capture columns may appear anywhere in the phase's body.
+    for (const column of [
+      "sourceAudioKey",
+      "captureStatus",
+      "captureVerification",
+      "captureVerifiedAt",
+      "sourceAudioBytes",
+      "sourceAudioCapturedAt",
+      "sourceAudioAttemptedAt",
+      "sourceAudioFailures",
+      "enrichmentStatus",
+    ]) {
+      expect(phase).not.toContain(column);
+    }
+  });
+
+  test("it never stores the candidate — no R2 put, and the file is deleted", () => {
+    // The bytes exist only to be fingerprinted. `r2Put` is the archive's only door and this phase
+    // does not go through it; the accepted file is removed the moment its verdict has been read.
+    expect(phase).not.toContain("r2Put");
+    expect(phase).toContain("rmSync(accepted.path, { force: true })");
+  });
+
+  test("it reports the id under its OWN verdict field, never capture's", () => {
+    // `youtubeVerification` is the honest field for a sweep that matched and then discarded:
+    // borrowing `captureVerification` would claim a capture that never happened.
+    expect(phase).toContain('youtubeVerification: "preview-match"');
+    expect(phase).toContain("youtubeVideoId: accepted.videoId");
+  });
+
+  test("a non-match is REPORTED, so the row is not re-bought every tick", () => {
+    // Without this the worklist hands the same row back on the next tick and spends the same
+    // download again, forever. The report stamps only `youtube_verified_at`, server-side.
+    expect(phase).toContain('youtubeVerification: "no-match"');
+    expect(phase).toMatch(/if \(!accepted \|\| accepted\.verdict !== "match"\)/);
+  });
+
+  test("a transient failure writes NOTHING at all", () => {
+    // Not even the no-match stamp: a proxy hiccup is not an answer, and burning the re-ask window
+    // on one would cost the row months for a reason that had nothing to do with the row.
+    const failurePath = phase.slice(phase.indexOf("} catch (error) {"));
+
+    expect(failurePath).not.toContain("patchTrack");
+  });
+
+  test("it runs the SHARED ladder, never a second copy of it", () => {
+    // A parallel walk would drift, and the thing it would drift on is the identity gate that keeps
+    // wrong audio out of the archive. Exactly one implementation exists, and both callers use it.
+    expect(source.match(/async function findVerifiedUpload\(/g)).toHaveLength(1);
+    expect(source.match(/verifyCaptureFile\(previewFp/g)).toHaveLength(1);
+    expect(source.match(/const attempts = filterRejectedCandidates\(/g)).toHaveLength(1);
+  });
+
+  test("it never feeds its OWN archived sha to the known-bad backstop", () => {
+    // `source_audio_key` means opposite things to the two callers, and this is the trap. On a
+    // CAPTURE it appears only on a wrong-audio re-capture, so its embedded sha is known-BAD. On
+    // THIS queue every row has a key by definition and that sha is the GOOD audio the archive
+    // holds — the upload the original capture came from. Feeding it in would blacklist the single
+    // most likely correct candidate on nearly every row, silently, and the backfill would report
+    // `no-match` for recordings whose id was sitting right there. So the walk never reads the key
+    // itself: the CAPTURE caller passes it, and this one deliberately does not.
+    // The phase's CALL passes exactly four options, and `legacyRejectKey` is not among them.
+    expect(phase).toContain("findVerifiedUpload({ dir, finding: row, memory, session })");
+    expect(phase).not.toContain("legacyRejectKey:");
+    // The capture path, which is where the key genuinely IS known-bad, still passes it.
+    expect(source).toContain("legacyRejectKey: finding.sourceAudioKey");
+    // …and the walk reads it from the OPTIONS, never off the row.
+    expect(source).toContain("extractSourceAudioSha256(options.legacyRejectKey)");
+    expect(source).not.toContain("extractSourceAudioSha256(finding.sourceAudioKey)");
+  });
+
+  test("it reads the bad-audio memory and never writes it back", () => {
+    // Reading saves money (a known-bad candidate never costs proxy bytes twice); writing would be
+    // a capture column, so a rejection this phase pays for is deliberately not remembered.
+    expect(phase).toContain("parseRejectedSources(row.sourceAudioRejected)");
+    expect(phase).not.toContain("sourceAudioRejected:");
+  });
+});
+
+describe("the provenance phase's tick budget", () => {
+  test("the catalogue sub-cap can never RAISE the tick's total spend", () => {
+    // It redirects budget the findings did not use; it is not an extra allowance. A cap set above
+    // the total is clamped to it, so no combination of env values buys more than `total` rows.
+    expect(splitProvenanceBudget(2, 0)).toEqual({ catalogue: 0, findings: 2 });
+    expect(splitProvenanceBudget(2, 1)).toEqual({ catalogue: 1, findings: 2 });
+    expect(splitProvenanceBudget(2, 99)).toEqual({ catalogue: 2, findings: 2 });
+  });
+
+  test("the shipped default keeps the catalogue at ZERO — the operator opens it deliberately", () => {
+    expect(splitProvenanceBudget(2, 0).catalogue).toBe(0);
+  });
+
+  test("a zeroed or nonsense budget spends nothing rather than defaulting to something", () => {
+    expect(splitProvenanceBudget(0, 5)).toEqual({ catalogue: 0, findings: 0 });
+    expect(splitProvenanceBudget(Number.NaN, Number.NaN)).toEqual({ catalogue: 0, findings: 0 });
+    expect(splitProvenanceBudget(-3, -3)).toEqual({ catalogue: 0, findings: 0 });
+  });
+});
+
+describe("the provenance and re-verdict phases ride the tick without distorting it", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+
+  test("both phases run AFTER the capture batch and cannot abort the tick", () => {
+    const main = source.slice(source.indexOf("async function main("));
+    const batchEnd = main.indexOf("Array.from({ length: Math.min(CONCURRENCY");
+    const provenanceAt = main.indexOf("runProvenancePhase(botChallenges)");
+
+    expect(provenanceAt).toBeGreaterThan(batchEnd);
+    // Caught, not thrown: a backfill that could abort the tick could hide a capture that succeeded.
+    expect(main).toContain("runProvenancePhase(botChallenges).catch(");
+    expect(main).toContain("runReverdictPhase().catch(");
+  });
+
+  test("the phases report their OWN counters, never the capture gauges /status reads as a rate", () => {
+    const summary = buildCaptureSummary({
+      batch: 4,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: { done: 4, failed: 0, skipped: 0, unmatched: 0 },
+      elapsedMs: 1,
+      provenance: { failed: 2, found: 1, none: 3 },
+      reverdict: { asked: 5, failed: 1 },
+    });
+
+    // The capture gauges are untouched by a busy — or a failing — backfill.
+    expect(summary).toMatchObject({ checked: 4, errors: 0, failed: 0, produced: 4 });
+    expect(summary).toMatchObject({
+      provenanceFailed: 2,
+      provenanceFound: 1,
+      provenanceNone: 3,
+      reverdictAsked: 5,
+      reverdictFailed: 1,
+    });
+  });
+
+  test("the re-verdict ask carries no verdict — the box paces, the server rules", () => {
+    const phase = source.slice(source.indexOf("async function runReverdictPhase("));
+
+    expect(phase).toContain("youtubeReverdict: true");
+    expect(phase).not.toContain("checkYoutubeOfficial");
+    expect(phase).not.toContain("author_name");
   });
 });

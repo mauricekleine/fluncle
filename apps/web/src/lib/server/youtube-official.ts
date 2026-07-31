@@ -13,21 +13,30 @@
 // capture-provenance leg makes anywhere. The YouTube Data API is not used, here or elsewhere in
 // this leg.
 //
-// THE BIAS IS DELIBERATE. Two rules accept, and everything else is refused:
+// THE BIAS IS DELIBERATE. Three rules accept, and everything else is refused:
 //
 //   1. An auto-generated `<Artist> - Topic` channel. These are Art Tracks — YouTube mints them
 //      from the rights-holder's own delivered audio, so the channel's existence IS the licence.
 //   2. A channel whose name FOLDS EQUAL to a name this recording is credited to. Exact equality
 //      after the house fold, never a substring: "Netsky" accepts on Netsky's own channel, and
 //      "Netsky Fan Rips" does not.
+//   3. A channel whose name FOLDS EQUAL to THIS RECORDING'S OWN LABEL — the third class, added by
+//      the operator's ruling of 2026-07-31 on the evidence of the provenance backfill's pilot. A
+//      D&B release lives on its label's channel far more often than on the artist's: rule 2 alone
+//      left "Fokuz Recordings" refused on a Fokuz release, which is not a rip and never was. The
+//      label is read canonically (`labels.name` via `tracks.label_id`) with the raw `tracks.label`
+//      string as a fallback, and the comparison is the SAME equality on the SAME fold — never
+//      containment, and never a curated allowlist. The narrowness is what keeps it honest: a
+//      channel is accepted only for the recordings that label actually released, so "Hospital
+//      Records" accepts on a Hospital release and is refused on everyone else's, exactly as before.
 //
-// That refuses plenty of genuinely official uploads — a label's channel (Hospital Records), a VEVO
-// channel (`NetskyVEVO`), an alias, a channel that renamed itself. Every one of those is a FALSE
-// NEGATIVE, and every one of them is FINE: the id is still kept as capture provenance, it simply
-// stays internal and no reader is told anything. The asymmetry is the whole design — a missed
-// official upload costs a link nobody sees, while a rip served as Fluncle's link is exactly the
-// small dishonesty the /identity page exists to prevent. Widening this heuristic is a ruling, not
-// a tidy-up.
+// That still refuses genuinely official uploads — a VEVO channel (`NetskyVEVO`), an alias, a
+// channel that renamed itself, an aggregator with a licence Fluncle cannot see. Every one of those
+// is a FALSE NEGATIVE, and every one of them is FINE: the id is still kept as capture provenance,
+// it simply stays internal and no reader is told anything. The asymmetry is the whole design — a
+// missed official upload costs a link nobody sees, while a rip served as Fluncle's link is exactly
+// the small dishonesty the /identity page exists to prevent. Widening this heuristic again is a
+// ruling, not a tidy-up.
 //
 // A VERDICT REQUIRES AN ANSWER. `null` is returned unless YouTube actually replied with a channel
 // name — a 404, a 401 on a private video, a 5xx, a timeout, malformed JSON, all of it reads
@@ -52,16 +61,39 @@ export function isTopicChannel(authorName: string): boolean {
 }
 
 /**
+ * The names a recording answers to, for the officialness comparison.
+ *
+ * An OBJECT rather than two positional arrays on purpose: `artists` and `labels` are both
+ * `string[]`, they carry different permission weight, and a caller that swapped them would compile
+ * cleanly and quietly accept a rip on an artist-named channel for somebody else's release.
+ */
+export type RecordingNames = {
+  /** Every name this recording is credited to. */
+  artists: readonly string[];
+  /**
+   * The names of THIS recording's label — the canonical `labels.name` and the raw `tracks.label`
+   * spelling, either of which may be the one the channel is called. Both are scoped to this row:
+   * a label channel is permission for that label's own releases and for nothing else.
+   */
+  labels?: readonly string[];
+};
+
+/**
  * THE PREDICATE, pure and unit-tested apart from the fetch. `authorName` is the upload's channel;
- * `artistNames` are the names this recording is credited to.
+ * `names` are what this recording is credited to and released on.
  *
  * `fold` is the house's canonical comparison form (lib/server/track-match.ts): lowercase, accents
  * stripped, `&` folded to `and`, punctuation dropped, whitespace collapsed. Comparing FOLDED
  * EQUALITY rather than containment is what keeps this conservative — the fold makes "Chase &
  * Status" meet "Chase and Status", and still refuses any channel that merely embeds an artist's
- * name inside a longer one.
+ * or a label's name inside a longer one ("Netsky Fan Rips", "Best of Hospital Records").
+ *
+ * The label class is deliberately NOT normalized the way the capture sweep's channel ranker
+ * normalizes ("Hospital Records" → "hospital"): that ranker is choosing between candidates and can
+ * afford to be generous, while this is granting permission and cannot. A boilerplate-stripping fold
+ * would make "Critical Music" meet a channel called "Critical", which is a different party.
  */
-export function isOfficialAuthor(authorName: string, artistNames: readonly string[]): boolean {
+export function isOfficialAuthor(authorName: string, names: RecordingNames): boolean {
   const author = authorName.trim();
 
   if (!author) {
@@ -78,7 +110,7 @@ export function isOfficialAuthor(authorName: string, artistNames: readonly strin
     return false;
   }
 
-  return artistNames.some((name) => {
+  return [...names.artists, ...(names.labels ?? [])].some((name) => {
     const foldedName = fold(name);
 
     return foldedName.length > 0 && foldedName === foldedAuthor;
@@ -102,7 +134,7 @@ const OEMBED_TIMEOUT_MS = 5_000;
  */
 export async function checkYoutubeOfficial(
   videoId: string,
-  artistNames: readonly string[],
+  names: RecordingNames,
   // Injectable for tests, so the predicate and the transport can be exercised without a network.
   fetchImpl: typeof fetch = fetch,
 ): Promise<YoutubeOfficialVerdict> {
@@ -126,7 +158,7 @@ export async function checkYoutubeOfficial(
       return null;
     }
 
-    return isOfficialAuthor(authorName, artistNames) ? 1 : 0;
+    return isOfficialAuthor(authorName, names) ? 1 : 0;
   } catch {
     return null;
   }

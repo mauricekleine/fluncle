@@ -20,8 +20,9 @@ import {
  * equal so neither side can gain a member alone. Every value is backed by a stored
  * column or by the recording's own primary key:
  *
- *   - `fingerprint` — Fluncle's own capture matched the audio against the official preview. The
- *     one method whose evidence is the SOUND rather than metadata.
+ *   - `fingerprint` — Fluncle matched the audio against the official preview, either while buying a
+ *     capture or while re-deriving an older one's provenance. The one method whose evidence is the
+ *     SOUND rather than metadata.
  *   - `isrc` — an ISRC equality decided it.
  *   - `operator` — a human read the evidence and ruled.
  *   - `pk-derived` — the identifier is the recording's origin, not a lookup result.

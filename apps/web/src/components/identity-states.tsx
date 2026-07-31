@@ -29,8 +29,9 @@
 // Deezer are the players, Discogs is the reference, and then two rows that are each qualified in
 // their own way: Beatport is the only link that opens a CHECKOUT, so it comes after the ways to
 // hear and look the recording up; YouTube comes after Beatport because it is the only link Fluncle
-// did not go looking for. It is a by-product of his own capture — the upload his fingerprint gate
-// happened to accept while buying the audio — and it renders at all only when the upload is an
+// did not go looking for. It is a by-product of the audio — the upload his fingerprint gate
+// happened to accept, while buying the capture or while re-deriving an older one's provenance —
+// and it renders at all only when the upload is an
 // official one. THE ONE ROW NOBODY WENT LOOKING FOR READS LAST, which is a claim about how the
 // link was come by and NOT about how good the evidence is: the fingerprint is the strongest
 // evidence on this page, being the only method here that compared the sound itself.

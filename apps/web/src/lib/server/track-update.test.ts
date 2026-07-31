@@ -41,9 +41,26 @@ const EXISTING = {
   artists_json: '["Calibre"]',
   certified: 1,
   isrc: "GB1234567890",
+  label: null,
+  label_name: null,
   log_id: "004.7.2I",
   youtube_video_id: null,
+  youtube_video_official: null,
 };
+
+/** Re-point the SELECT at a modified existing row, keeping the UPDATE capture intact. */
+function withExistingRow(overrides: Record<string, unknown>): void {
+  execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
+    if (query.sql.startsWith("select")) {
+      return Promise.resolve({ rows: [{ ...EXISTING, ...overrides }] });
+    }
+
+    lastUpdateSql += query.sql;
+    lastUpdateArgs = lastUpdateArgs.concat(query.args ?? []);
+
+    return Promise.resolve({ rows: [] });
+  });
+}
 
 let lastUpdateSql = "";
 let lastUpdateArgs: unknown[] = [];
@@ -524,9 +541,12 @@ describe("updateTrack — the capture's YouTube provenance", () => {
       youtubeVideoId: "dQw4w9WgXcQ",
     });
 
-    // The gate is asked with the recording's OWN credited artists — the comparison it makes is
-    // "is this channel one of the people this track is by".
-    expect(checkYoutubeOfficial).toHaveBeenCalledWith("dQw4w9WgXcQ", ["Calibre"]);
+    // The gate is asked with the recording's OWN names — the comparison it makes is "is this
+    // channel one of the people this track is by, or the label it came out on".
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith("dQw4w9WgXcQ", {
+      artists: ["Calibre"],
+      labels: [],
+    });
     expect(lastUpdateSql).toContain("youtube_video_id = coalesce(youtube_video_id, ?)");
     expect(lastUpdateSql).toContain("youtube_video_official = case");
     expect(lastUpdateSql).toContain("youtube_verified_at = case");
@@ -621,5 +641,181 @@ describe("updateTrack — the capture's YouTube provenance", () => {
     expect(lastUpdateSql).not.toContain("youtube_video_id");
     // The rest of the capture write still lands — the provenance is optional, the capture is not.
     expect(lastUpdateSql).toContain("capture_status");
+  });
+
+  it("asks the gate with the recording's LABEL as well as its artists", async () => {
+    // The 2026-07-31 widening: a D&B release lives on its label's channel far more often than on
+    // the artist's. BOTH spellings go in — the canonical `labels.name` and the raw `tracks.label` —
+    // because a crawled row may only have the second, and a channel matching either is the label's.
+    withExistingRow({ label: "Fokuz", label_name: "Fokuz Recordings" });
+
+    await updateTrack("track-123", {
+      captureVerification: "preview-match",
+      youtubeVideoId: "RFObrLVHMvg",
+    });
+
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith("RFObrLVHMvg", {
+      artists: ["Calibre"],
+      labels: ["Fokuz Recordings", "Fokuz"],
+    });
+  });
+});
+
+describe("updateTrack — the PROVENANCE backfill's write path", () => {
+  it("accepts an id proved by the provenance sweep, with no capture column in the body", async () => {
+    // The backfill re-ran the whole ladder over an already-captured row and threw the candidate
+    // bytes away. It has capture's PROOF and deliberately no capture WRITE, so it carries its own
+    // verdict field — and the server accepts that as authorization for the id exactly as it accepts
+    // `captureVerification` on the capture path.
+    await updateTrack("track-123", {
+      youtubeVerification: "preview-match",
+      youtubeVideoId: "dQw4w9WgXcQ",
+    });
+
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith("dQw4w9WgXcQ", {
+      artists: ["Calibre"],
+      labels: [],
+    });
+    expect(lastUpdateSql).toContain("youtube_video_id = coalesce(youtube_video_id, ?)");
+    expect(lastUpdateArgs).toContain("dQw4w9WgXcQ");
+  });
+
+  it("THE RAIL — a provenance write can never move a capture column", async () => {
+    // The pilot's verdict, enforced at the boundary rather than only in the box script: a recapture
+    // replaced a finding's clean archived audio with a fan blend that legitimately passed the
+    // fingerprint gate. The backfill's payload carries no capture field, so its statement cannot
+    // set one — and this is the assertion a future box build cannot talk its way past.
+    await updateTrack("track-123", {
+      youtubeVerification: "preview-match",
+      youtubeVideoId: "dQw4w9WgXcQ",
+    });
+
+    for (const column of [
+      "source_audio_key",
+      "capture_status",
+      "capture_verification",
+      "capture_verified_at",
+      "source_audio_bytes",
+      "source_audio_captured_at",
+      "source_audio_attempted_at",
+      "source_audio_failures",
+      "source_audio_rejected",
+      "enrichment_status",
+    ]) {
+      expect(lastUpdateSql).not.toContain(column);
+    }
+  });
+
+  it("records a NO-MATCH as a stamp and nothing else", async () => {
+    // The ladder ran and cost a real download. Without this the worklist hands the same row back
+    // next tick and buys it again, forever. The stamp is a SCHEDULE, not a verdict: the id stays
+    // NULL, so a later capture still fills it.
+    await updateTrack("track-123", { youtubeVerification: "no-match" });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).toContain(
+      "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+    );
+    expect(lastUpdateSql).not.toContain("youtube_video_id = coalesce");
+    expect(lastUpdateSql).not.toContain("youtube_video_official");
+  });
+
+  it("refuses a bare id from the provenance path too — the guard is the PAYLOAD, not the sender", async () => {
+    // The server cannot know which sweep sent a body, and does not try to. What it checks is
+    // whether a fingerprint verdict rides along, and `no-match` is not one.
+    await updateTrack("track-123", {
+      youtubeVerification: "no-match",
+      youtubeVideoId: "unprovenId",
+    });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_id");
+    // …and the no-match stamp is withheld too: a body claiming both is not a shape any sweep sends.
+    expect(lastUpdateSql).not.toContain("youtube_verified_at");
+  });
+
+  it("leaves a row that already holds an id alone, id and stamp both", async () => {
+    withExistingRow({ youtube_video_id: "alreadyHeld" });
+
+    await updateTrack("track-123", { youtubeVerification: "no-match" });
+
+    expect(lastUpdateSql).not.toContain("youtube_verified_at");
+  });
+});
+
+describe("updateTrack — the RE-VERDICT", () => {
+  it("re-rules a refused id under the current heuristic and re-stamps it", async () => {
+    // The live case: a row holding `RFObrLVHMvg` (uploaded by "Fokuz Recordings", its label) was
+    // ruled 0 under the artist-only rule. The widened rule says 1, and this is the path that
+    // reaches it — no id moves, no capture column moves, and no download is spent.
+    withExistingRow({
+      label_name: "Fokuz Recordings",
+      youtube_video_id: "RFObrLVHMvg",
+      youtube_video_official: 0,
+    });
+
+    await updateTrack("track-123", { youtubeReverdict: true });
+
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith("RFObrLVHMvg", {
+      artists: ["Calibre"],
+      labels: ["Fokuz Recordings"],
+    });
+    expect(lastUpdateSql).toContain("youtube_video_official = ?");
+    expect(lastUpdateSql).toContain("youtube_verified_at = ?");
+    expect(lastUpdateArgs).toContain(1);
+    // The id itself is never rewritten — the re-verdict rules on what is already there.
+    expect(lastUpdateSql).not.toContain("youtube_video_id =");
+  });
+
+  it("re-rules a NEVER-CONCLUDED id too", async () => {
+    // NULL is "nobody checked" — an oEmbed that 404'd or timed out at capture time. It is exactly
+    // the row a re-ask is for.
+    withExistingRow({ youtube_video_id: "heldId", youtube_video_official: null });
+
+    await updateTrack("track-123", { youtubeReverdict: true });
+
+    expect(checkYoutubeOfficial).toHaveBeenCalled();
+    expect(lastUpdateSql).toContain("youtube_video_official = ?");
+  });
+
+  it("NEVER DEMOTES — a row already ruled official is not re-asked at all", async () => {
+    // The widening is the only reason to re-ask, so it can only ever say yes more often. A channel
+    // that renamed itself must not quietly retract a link Fluncle has been serving.
+    withExistingRow({ youtube_video_id: "heldId", youtube_video_official: 1 });
+
+    await updateTrack("track-123", { youtubeReverdict: true });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_official");
+  });
+
+  it("does nothing on a row that holds no id — there is nothing to rule on", async () => {
+    await updateTrack("track-123", { youtubeReverdict: true });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_official");
+  });
+
+  it("advances the stamp but keeps the old verdict when the check does not conclude", async () => {
+    // A 404 or a timeout says nothing about who uploaded it, so overwriting a stored 0 with NULL
+    // would lose the fact that it WAS checked. The stamp still moves, so the round-robin walks on
+    // instead of spinning on an unreachable video.
+    checkYoutubeOfficial.mockResolvedValue(null);
+    withExistingRow({ youtube_video_id: "goneId", youtube_video_official: 0 });
+
+    await updateTrack("track-123", { youtubeReverdict: true });
+
+    expect(lastUpdateSql).not.toContain("youtube_video_official");
+    expect(lastUpdateSql).toContain("youtube_verified_at = ?");
+  });
+
+  it("moves no capture column and no public lastmod", async () => {
+    withExistingRow({ youtube_video_id: "heldId", youtube_video_official: 0 });
+
+    await updateTrack("track-123", { youtubeReverdict: true });
+
+    expect(lastUpdateSql).not.toContain("updated_at = ?");
+    expect(lastUpdateSql).not.toContain("capture_status");
+    expect(lastUpdateSql).not.toContain("source_audio_key");
   });
 });

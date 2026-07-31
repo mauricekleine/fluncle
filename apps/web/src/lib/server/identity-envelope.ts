@@ -93,7 +93,8 @@ export type IdentityAudience = "first-party" | "machine";
  * How a link or identifier came to be trusted. CLOSED; every value is backed by a stored column or
  * by the row's own primary key, and the set is asserted equal to the contract's enum by a test.
  *
- *   · `fingerprint`    — Fluncle's own capture matched the audio against the official preview. The
+ *   · `fingerprint`    — Fluncle matched the audio against the official preview, either while
+ *                        buying a capture or while re-deriving an older one's provenance. The
  *                        only method here where the EVIDENCE IS THE SOUND rather than metadata.
  *   · `isrc`           — an ISRC equality decided it. The recording's real identity.
  *   · `operator`       — a human read the evidence and ruled.

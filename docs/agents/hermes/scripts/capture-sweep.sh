@@ -35,6 +35,12 @@
 #       optional: FLUNCLE_API_BASE_URL (default https://www.fluncle.com),
 #         FLUNCLE_SOURCE_AUDIO_R2_BUCKET (default fluncle-source-audio),
 #         FLUNCLE_CAPTURE_BATCH_CAP (4) / _QUEUE_LIMIT (8) / _TOLERANCE_SEC (3) / _TOLERANCE_PCT (0.03).
+#         THE PROVENANCE BACKFILL's budget (a phase inside this same tick, not a timer of its own):
+#         FLUNCLE_CAPTURE_PROVENANCE_LIMIT (2) — rows a tick, each one a FULL metered download;
+#         FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT (0) — how many of those may be catalogue rows,
+#           a SUB-cap that redirects unused budget and can never raise the tick's total. Raise it
+#           only alongside the server-side catalogue capture budget, which gates this queue too;
+#         FLUNCLE_CAPTURE_REVERDICT_LIMIT (5) — officialness re-asks a tick. Keyless oEmbed, free.
 #   - The private bucket must exist (operator step; done 2026-07-07).
 #
 # Operator install (host timer — full runbook in ../capture-timer/README.md): the sweep + the
