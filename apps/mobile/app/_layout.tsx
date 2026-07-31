@@ -21,6 +21,7 @@ import { meFetch } from "@/lib/auth-client";
 import { configureKeyNotationSync } from "@/lib/key-notation";
 import { isOnline } from "@/lib/network-status";
 import { QUERY_GC_TIME_MS, createPersistConfig } from "@/lib/persist-config";
+import { useReplicaSync } from "@/lib/replica";
 import { useNotificationObserver } from "@/push/use-notification-observer";
 import { color } from "@/theme/tokens";
 
@@ -95,6 +96,12 @@ export default function RootLayout() {
   }, []);
 
   useNotificationObserver();
+
+  // The device replica's whole schedule (offline-first slice 2). Every pull it makes is
+  // background work behind `runAfterInteractions`, and every link in it is allowed to be
+  // missing — a build without the libSQL engine, a dark token endpoint, or no network all
+  // leave the app exactly as it behaves today. See @/lib/replica.
+  useReplicaSync();
 
   if (!fontsLoaded) {
     return null;
