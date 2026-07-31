@@ -23,11 +23,27 @@ One key, one page: `https://www.fluncle.com/identity/<key>`.
 
 Seven rows on the answer page: two identifiers, **ISRC** and **MusicBrainz**, and five links out, **Spotify**, **Apple Music**, **Deezer**, **Discogs**, and **Beatport**. Apple Music is page-only, for the licence reason below.
 
-**Tidal is not covered.** There is no Tidal integration here at all, so it gets no row on the page. The API still answers Tidal explicitly, `unsupported`, so a machine caller reads the scope from the response instead of guessing at it.
-
 **Deezer is covered, but thinly.** Fluncle keeps a Deezer link only when another look at that recording already brought one back and it matches the recording he holds. Everything he logged before this reads `Not checked yet`, and stays that way until he looks at that recording again.
 
 **Beatport is where you buy it.** Spotify, Apple Music, and Deezer play you the tune, Discogs tells you what the release is, and Beatport sells you the download, so that row reads `Buy on Beatport`. Fluncle searches the store for a recording he has certified and keeps the link only when the record's own ISRC matches the one he already holds, so a near-miss with the right title never gets through. He has only run that search over his own findings so far, so a recording he holds but has not certified reads `Not checked yet`.
+
+## What is not covered
+
+Every platform below is out for a reason that belongs to the platform, not to what Fluncle got round to. The API answers each of them `unsupported`.
+
+**Tidal.** Tidal's developer terms bar displaying what their API returns alongside similar services, storing it in a database, and using it in connection with artificial intelligence. There is no Tidal integration here at all, so Tidal gets no row on the page.
+
+**SoundCloud.** SoundCloud's [API terms](https://developers.soundcloud.com/docs/api/terms-of-use) bar an online presence dedicated to specific artists or repertoire, playback that aggregates SoundCloud with other services, and caching anything the API returns past the end of a session. Fluncle's archive, with a page per artist, runs into all three. His artist pages do carry a SoundCloud profile where the artist holds one, and that link goes through no API.
+
+**Qobuz.** Qobuz's [API Terms of Use](https://static.qobuz.com/apps/api/QobuzAPI-TermsofUse.pdf), dated 1 September 2011, bar making the API available to any person who is not a Qobuz user, and bar indexing the service in whole or in part. So there is no Qobuz row.
+
+**YouTube.** Going looking means searching, and `search.list` sits in its own bucket of [100 calls a day](https://developers.google.com/youtube/v3/determine_quota_cost) that only a compliance audit lifts, while `youtube.com/robots.txt` disallows the search page. Hand him a video and matching it to the recording he holds costs almost nothing, so a YouTube link can appear here when it reached him some other way. He can take a YouTube link; he cannot go find one.
+
+**Bandcamp.** There is nothing to match a recording on. A public release page carries no ISRC, no UPC, and no structured data, and the [developer API](https://bandcamp.com/developer) is built for labels and fulfilment partners working their own accounts, so it answers no lookup against Bandcamp's catalogue.
+
+**Amazon Music.** A request for an invented Amazon Music link comes back as success, the same as a request for a real one, so nothing Fluncle can observe tells the two apart. An honest negative has to be computed from something stored, so he makes no claim about Amazon Music in either direction.
+
+**Juno Download.** The store has closed. Every Juno link on the web, product pages included, now lands on a farewell page.
 
 ## The five answers
 
