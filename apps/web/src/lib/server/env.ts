@@ -35,6 +35,13 @@ const envKeys = [
   "CARTESIA_API_KEY",
   "CARTESIA_VOICE_ID",
   "FIRECRAWL_API_KEY",
+  // The Beatport backfill's CATALOGUE sub-cap (lib/server/backfill.ts) — how many uncertified rows
+  // one tick may scrape. Non-secret operator tuning, read via readOptionalEnv: unset falls back to
+  // the small in-code default, and `0` switches the tier off. It lives in the WORKER rather than
+  // the box because the Worker holds FIRECRAWL_API_KEY and each row is one Firecrawl credit, so
+  // the spending cap belongs where the spending is — and because the box's PINNED CLI would fail
+  // outright on a new flag (the freshness tap's missing CLI command records that trap).
+  "FLUNCLE_BACKFILL_BEATPORT_CATALOGUE_LIMIT",
   "FLUNCLE_API_TOKEN",
   // The Hermes box's admin Bearer. A SECOND, lower-privilege admin token: it
   // authenticates as the "agent" role (see adminRole / requireOperator), which is

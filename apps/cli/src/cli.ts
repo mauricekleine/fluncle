@@ -2697,6 +2697,22 @@ JSON field reference:
       await runBackfillBeatport(options, backfillBeatportCommand);
     });
 
+  // `backfill_deezer` → `admin backfills deezer`. The forward-accretion leg: resolves each
+  // ISRC-bearing row's Deezer track id through the keyless public endpoint, gated on duration
+  // agreement, certified rows first then the Ear-ranked catalogue. No key anywhere, so nothing to
+  // configure — but Deezer's quota is per-IP and the Worker shares Cloudflare's egress, so a
+  // throttled pass ends early and the next tick resumes.
+  backfill
+    .command("deezer")
+    .description("Resolve missing Deezer track ids for certified + catalogue rows (exact ISRC)")
+    .option("--dry-run", "Report the eligible set without resolving or writing", false)
+    .option("--limit <limit>", "Max rows to resolve", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillDeezerCommand } = await import("./commands/admin-tracks");
+      await runBackfillDeezer(options, backfillDeezerCommand);
+    });
+
   // The freshness tap (D8) has NO operator CLI command, deliberately. Its box sweep POSTs the
   // agent-tier `backfill_label_releases` op over HTTP rather than shelling out here, because the
   // baked box CLI is a PINNED release and a pin predating a flag fails the run outright (`Unknown
@@ -4040,6 +4056,11 @@ async function runBackfillBeatport(
   const unresolved: string[] = [];
   const failed: Array<{ error: string; logId: string }> = [];
   const skipped: string[] = [];
+  // The CATALOGUE tier's rows, accumulated separately: the server runs that tier once the certified
+  // feed is drained, so at most one pass of this loop contributes to them.
+  const catalogueResolved: Array<{ trackId: string; url: string }> = [];
+  const catalogueUnresolved: string[] = [];
+  const catalogueFailed: Array<{ error: string; trackId: string }> = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
   let configured = true;
@@ -4056,6 +4077,9 @@ async function runBackfillBeatport(
     unresolved.push(...result.unresolved);
     failed.push(...result.failed);
     skipped.push(...result.skipped);
+    catalogueResolved.push(...result.catalogueResolved);
+    catalogueUnresolved.push(...result.catalogueUnresolved);
+    catalogueFailed.push(...result.catalogueFailed);
 
     if (!options.json) {
       const verb = result.dryRun ? "would resolve" : "resolved";
@@ -4080,6 +4104,12 @@ async function runBackfillBeatport(
   if (options.json) {
     printSweepJson(
       {
+        catalogueFailed,
+        catalogueFailedCount: catalogueFailed.length,
+        catalogueResolved,
+        catalogueResolvedCount: catalogueResolved.length,
+        catalogueUnresolved,
+        catalogueUnresolvedCount: catalogueUnresolved.length,
         configured,
         dryRun,
         failed,
@@ -4090,7 +4120,7 @@ async function runBackfillBeatport(
         unresolved,
         unresolvedCount: unresolved.length,
       },
-      failed.length,
+      failed.length + catalogueFailed.length,
     );
     return;
   }
@@ -4106,13 +4136,110 @@ async function runBackfillBeatport(
   console.log(
     `${verb} ${resolved.length} Beatport URL(s); ${unresolved.length} unresolved; ${failed.length} failed; ${skipped.length} skipped.`,
   );
+  console.log(
+    `  Catalogue tier — ${catalogueResolved.length} resolved; ${catalogueUnresolved.length} unresolved; ${catalogueFailed.length} failed.`,
+  );
 
   for (const item of resolved) {
     console.log(`  ${item.logId}: ${item.url}`);
   }
 
+  for (const item of catalogueResolved) {
+    console.log(`  ${item.trackId}: ${item.url}`);
+  }
+
   for (const item of failed) {
     console.log(`  ${item.logId}: ${item.error}`);
+  }
+
+  for (const item of catalogueFailed) {
+    console.log(`  ${item.trackId}: ${item.error}`);
+  }
+
+  if (failed.length + catalogueFailed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function runBackfillDeezer(
+  options: BackfillSyncOptions,
+  backfillDeezerCommand: typeof import("./commands/admin-tracks").backfillDeezerCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: Array<{ trackId: string; url: string }> = [];
+  const unresolved: string[] = [];
+  const unvouchable: string[] = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+  let dryRun = options.dryRun;
+  let throttled = false;
+
+  // No cursor: the worklist self-drains by the ledger, so the CLI loops until a pass concludes
+  // nothing (the eligible set is empty) or Deezer's quota stops it.
+  while (resolved.length + unresolved.length + unvouchable.length + failed.length < limit) {
+    const handled = resolved.length + unresolved.length + unvouchable.length + failed.length;
+    const result = await backfillDeezerCommand(limit - handled, options.dryRun);
+    dryRun = result.dryRun;
+    resolved.push(...result.resolved);
+    unresolved.push(...result.unresolved);
+    unvouchable.push(...result.unvouchable);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would resolve" : "resolved";
+      console.log(
+        `  …${verb} ${result.resolvedCount}; ${result.unresolvedCount} not on Deezer; ${result.unvouchableCount} unvouchable; ${result.failedCount} failed`,
+      );
+    }
+
+    if (result.rateLimited) {
+      throttled = true;
+      break;
+    }
+
+    // A pass that concluded nothing drained the eligible worklist this window.
+    if (
+      result.resolvedCount === 0 &&
+      result.unresolvedCount === 0 &&
+      result.unvouchableCount === 0 &&
+      result.failedCount === 0
+    ) {
+      break;
+    }
+  }
+
+  if (options.json) {
+    printSweepJson(
+      {
+        dryRun,
+        failed,
+        rateLimited: throttled,
+        resolved,
+        resolvedCount: resolved.length,
+        unresolved,
+        unresolvedCount: unresolved.length,
+        unvouchable,
+        unvouchableCount: unvouchable.length,
+      },
+      failed.length,
+    );
+    return;
+  }
+
+  const verb = dryRun ? "Would resolve" : "Resolved";
+  console.log(
+    `${verb} ${resolved.length} Deezer id(s); ${unresolved.length} not on Deezer; ${unvouchable.length} unvouchable; ${failed.length} failed.`,
+  );
+
+  if (throttled) {
+    console.log("Deezer answered its quota limit — the pass stopped and recorded nothing.");
+  }
+
+  for (const item of resolved) {
+    console.log(`  ${item.trackId}: ${item.url}`);
+  }
+
+  for (const item of failed) {
+    console.log(`  ${item.trackId}: ${item.error}`);
   }
 
   if (failed.length > 0) {

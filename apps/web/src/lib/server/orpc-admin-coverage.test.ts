@@ -294,6 +294,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Agent tier: the box's `fluncle-cover-masters` cron drives it. It owns an album's/artist's
   // ≤1200² cover master in R2 (RFC U3b), never a certification, never a publish.
   "POST /admin/backfill/cover-masters": "backfill_cover_masters",
+  // Agent tier: the box's `fluncle-backfill` cron drives it. Writes ONE Deezer id + its provenance
+  // onto `tracks` off a duration-vouched ISRC match, never a certification, never a publish.
+  "POST /admin/backfill/deezer": "backfill_deezer",
   "POST /admin/backfill/discogs": "backfill_discogs",
   // Agent tier: the box's `fluncle-backfill` cron drives it. The FACTS sibling of the line above —
   // it reads an already-resolved release's catalogue number + styles onto the `albums` row, never a

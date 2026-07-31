@@ -37,6 +37,7 @@ function stubSource(
   modeFile: string,
   beatportModeFile: string,
   discogsFactsModeFile: string,
+  deezerModeFile: string,
 ): string {
   return `#!/bin/bash
 case "$1" in
@@ -64,9 +65,18 @@ case "$1" in
         mode="ok"
         if [ -f ${JSON.stringify(beatportModeFile)} ]; then mode="$(cat ${JSON.stringify(beatportModeFile)})"; fi
         case "$mode" in
-          unconfigured) printf '{"ok":true,"configured":false,"resolvedCount":0,"unresolvedCount":0,"failedCount":0,"skippedCount":0}\\n' ;;
+          unconfigured) printf '{"ok":true,"configured":false,"resolvedCount":0,"unresolvedCount":0,"failedCount":0,"skippedCount":0,"catalogueResolvedCount":0,"catalogueUnresolvedCount":0,"catalogueFailedCount":0}\\n' ;;
           crash) printf 'beatport boom\\n' >&2; exit 1 ;;
-          *) printf '{"ok":true,"configured":true,"resolvedCount":13,"unresolvedCount":14,"failedCount":15,"skippedCount":16}\\n' ;;
+          *) printf '{"ok":true,"configured":true,"resolvedCount":13,"unresolvedCount":14,"failedCount":15,"skippedCount":16,"catalogueResolvedCount":20,"catalogueUnresolvedCount":21,"catalogueFailedCount":22}\\n' ;;
+        esac
+        ;;
+      deezer)
+        mode="ok"
+        if [ -f ${JSON.stringify(deezerModeFile)} ]; then mode="$(cat ${JSON.stringify(deezerModeFile)})"; fi
+        case "$mode" in
+          throttled) printf '{"ok":true,"resolvedCount":0,"unresolvedCount":0,"unvouchableCount":0,"failedCount":0,"rateLimited":true}\\n' ;;
+          crash) printf 'deezer boom\\n' >&2; exit 1 ;;
+          *) printf '{"ok":true,"resolvedCount":23,"unresolvedCount":24,"unvouchableCount":25,"failedCount":26,"rateLimited":false}\\n' ;;
         esac
         ;;
       discogs-facts)
@@ -92,6 +102,7 @@ let callsFile: string;
 let modeFile: string;
 let beatportModeFile: string;
 let discogsFactsModeFile: string;
+let deezerModeFile: string;
 
 beforeAll(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "fluncle-stub-"));
@@ -100,7 +111,11 @@ beforeAll(async () => {
   modeFile = join(stubDir, "catalogue-mode");
   beatportModeFile = join(stubDir, "beatport-mode");
   discogsFactsModeFile = join(stubDir, "discogs-facts-mode");
-  writeFileSync(stub, stubSource(callsFile, modeFile, beatportModeFile, discogsFactsModeFile));
+  deezerModeFile = join(stubDir, "deezer-mode");
+  writeFileSync(
+    stub,
+    stubSource(callsFile, modeFile, beatportModeFile, discogsFactsModeFile, deezerModeFile),
+  );
   chmodSync(stub, 0o755);
   process.env.FLUNCLE_BIN = stub;
   ({ backfillSweepExitCode, fluncleJson, runBackfillSweep } =
@@ -116,6 +131,7 @@ afterEach(() => {
   rmSync(modeFile, { force: true });
   rmSync(beatportModeFile, { force: true });
   rmSync(discogsFactsModeFile, { force: true });
+  rmSync(deezerModeFile, { force: true });
 });
 
 afterAll(() => {
@@ -178,6 +194,7 @@ describe("the tick's legs", () => {
       "apple-catalogue",
       "beatport",
       "discogs-facts",
+      "deezer",
     ]);
   });
 
@@ -276,6 +293,9 @@ describe("the tick's legs", () => {
     const summary = runBackfillSweep();
 
     expect(summary.beatport).toEqual({
+      catalogueFailed: 22,
+      catalogueResolved: 20,
+      catalogueUnresolved: 21,
       configured: true,
       error: null,
       failed: 15,
@@ -283,6 +303,19 @@ describe("the tick's legs", () => {
       skipped: 16,
       unresolved: 14,
     });
+  });
+
+  test("the Beatport CATALOGUE tier is tallied apart from the certified one", () => {
+    // The two tiers are different money — ~85 certified rows versus a five-figure catalogue where
+    // every row is a Firecrawl credit — so the operator has to be able to read the catalogue spend
+    // on its own line rather than inferring it from a merged total.
+    const summary = runBackfillSweep();
+    const beatport = summary.beatport as Record<string, number>;
+
+    expect(beatport.resolved).toBe(13);
+    expect(beatport.catalogueResolved).toBe(20);
+    expect(beatport.catalogueUnresolved).toBe(21);
+    expect(beatport.catalogueFailed).toBe(22);
   });
 
   test("canonical counters use handled rows, exclude reliability skips, and omit queue depth", () => {
@@ -293,11 +326,14 @@ describe("the tick's legs", () => {
     //   Last.fm 4 loved + 0 failed
     //   Apple findings 6 resolved + 7 unresolved + 0 failed
     //   Apple catalogue 9 resolved + 10 unresolved + 11 failed
-    //   Beatport 13 resolved + 14 unresolved + 15 failed
-    // The 3 + 5 + 8 + 16 reliability skips are deliberately excluded.
-    expect(summary.checked).toBe(92);
-    expect(summary.produced).toBe(33);
-    expect(summary.failed).toBe(26);
+    //   Beatport 13 resolved + 14 unresolved + 15 failed, PLUS its catalogue tier's 20 + 21 + 22
+    //   Deezer 23 resolved + 24 unresolved + 26 failed
+    // The 3 + 5 + 8 + 16 reliability skips are deliberately excluded, and so are Deezer's 25
+    // UNVOUCHABLE rows: Deezer answered, but nothing was concluded and nothing was stamped, so
+    // counting them as checked would overstate the tick's real work.
+    expect(summary.checked).toBe(228);
+    expect(summary.produced).toBe(76);
+    expect(summary.failed).toBe(74);
     expect(summary.errors).toBe(0);
     expect(summary).not.toHaveProperty("queue_depth");
   });
@@ -308,10 +344,11 @@ describe("the tick's legs", () => {
 
     const summary = runBackfillSweep();
 
-    // The three configured legs still did measured work, while the two unconfigured
-    // legs contribute real zeroes rather than unknown/null values.
-    expect(summary.checked).toBe(20);
-    expect(summary.produced).toBe(11);
+    // The configured legs still did measured work, while the two unconfigured legs contribute real
+    // zeroes rather than unknown/null values. Deezer has no key to be unconfigured BY, so it keeps
+    // reporting: 3 + 4 + 13 from the first three legs, plus its own 23 + 24 + 26.
+    expect(summary.checked).toBe(93);
+    expect(summary.produced).toBe(34);
     expect(summary.errors).toBe(0);
   });
 
@@ -321,6 +358,9 @@ describe("the tick's legs", () => {
     const summary = runBackfillSweep();
 
     expect(summary.beatport).toEqual({
+      catalogueFailed: 0,
+      catalogueResolved: 0,
+      catalogueUnresolved: 0,
       configured: false,
       error: null,
       failed: 0,
@@ -351,16 +391,19 @@ describe("the tick's legs", () => {
     expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(0);
   });
 
-  test("the Discogs-facts leg runs LAST and asks for its own small batch", () => {
+  test("the Discogs-facts leg runs AFTER the Discogs one and asks for its own small batch", () => {
     // The order is the priority: this leg shares leg 1's Discogs rate window, and leg 1's
     // release-ID resolves (which a finding's public `sameAs` depends on) must get first call on it.
+    // It is no longer the sweep's LAST leg — Deezer is — but its position relative to Discogs is
+    // the part that carries meaning, so that is what this pins.
     runBackfillSweep();
 
     const calls = recordedCalls();
+    const sources = calls.map((call) => call.split(" ")[2]);
     const facts = calls.find((call) => call.includes("discogs-facts"));
 
     expect(facts).toBe("admin backfills discogs-facts --limit 10 --json");
-    expect(calls.at(-1)).toBe(facts);
+    expect(sources.indexOf("discogs-facts")).toBeGreaterThan(sources.indexOf("discogs"));
   });
 
   test("the Discogs-facts counts land in the summary under their own key", () => {
@@ -402,5 +445,63 @@ describe("the tick's legs", () => {
     );
     expect((summary.discogs as { resolved: number }).resolved).toBe(1);
     expect((summary.beatport as { resolved: number }).resolved).toBe(13);
+  });
+
+  test("the Deezer leg runs LAST and asks for its own per-IP-safe batch", () => {
+    // It shares no budget with any leg above (its own vendor, and no key at all), so its position
+    // carries no priority meaning — but the LIMIT does: Deezer's quota is per-IP and the Worker
+    // egresses from Cloudflare's shared edge, so the batch stays modest by design.
+    runBackfillSweep();
+
+    const calls = recordedCalls();
+    const deezer = calls.find((call) => call.includes("deezer"));
+
+    expect(deezer).toBe("admin backfills deezer --limit 25 --json");
+    expect(calls.at(-1)).toBe(deezer);
+  });
+
+  test("the Deezer counts land in the summary under their own key", () => {
+    const summary = runBackfillSweep();
+
+    expect(summary.deezer).toEqual({
+      error: null,
+      failed: 26,
+      resolved: 23,
+      throttled: false,
+      unresolved: 24,
+      unvouchable: 25,
+    });
+  });
+
+  test("a throttled Deezer leg reads as THROTTLED, not as a silent zero", () => {
+    // Deezer signals its quota inside an HTTP-200 body, which is exactly how this failure hid for a
+    // week the last time: a throttle that reads as "nothing found" is indistinguishable from a
+    // drained worklist. The tick must be able to say which happened.
+    writeFileSync(deezerModeFile, "throttled");
+
+    const summary = runBackfillSweep();
+
+    expect(summary.deezer).toEqual({
+      error: null,
+      failed: 0,
+      resolved: 0,
+      throttled: true,
+      unresolved: 0,
+      unvouchable: 0,
+    });
+    // A throttle is not a failed tick — nothing was stamped and every row stays eligible.
+    expect(summary.ok).toBe(true);
+  });
+
+  test("a Deezer leg that crashes records its error and leaves every earlier leg intact", () => {
+    writeFileSync(deezerModeFile, "crash");
+
+    const summary = runBackfillSweep();
+
+    expect((summary.deezer as { error: null | string }).error).toContain("deezer boom");
+    expect((summary.discogs as { resolved: number }).resolved).toBe(1);
+    expect((summary.beatport as { resolved: number }).resolved).toBe(13);
+    expect((summary["discogs-facts"] as { resolved: number }).resolved).toBe(17);
+    expect(summary.errors).toBe(1);
   });
 });

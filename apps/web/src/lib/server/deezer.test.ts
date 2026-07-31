@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deezerSearchQuery,
   enrichFromDeezer,
+  lookupDeezerTrackByIsrc,
   lookupIsrcFromDeezer,
   searchDeezerCandidates,
 } from "./deezer";
@@ -375,5 +376,105 @@ describe("enrichFromDeezer — the by-ISRC read, and the duration guard on its i
     expect(enrichment.deezerTrackId).toBeUndefined();
     // The label/preview behaviour is untouched by the guard — only the link is gated.
     expect(enrichment.previewUrl).toBe("https://cdn.deezer.com/p.mp3");
+  });
+});
+
+// The forward-accretion sweep's read (lib/server/backfill.ts § backfill_deezer). It exists BESIDE
+// enrichFromDeezer rather than replacing it because the sweep writes a LEDGER, and a ledger needs
+// the four outcomes that one collapses into a single empty return told apart: a concluded miss, a
+// throttle, a transport failure, and a pick nobody can vouch for. Getting that split wrong is how a
+// platform-wide throttle ends up stamped across a tick's rows as "not on Deezer".
+describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
+  const track = (over: Record<string, unknown> = {}) =>
+    Response.json({ duration: 300, id: 3263968181, title: "Mr Right On", ...over });
+
+  it("MATCHES when the duration vouches for Deezer's pick", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(track()));
+
+    expect(await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).toEqual({
+      deezerTrackId: "3263968181",
+      outcome: "matched",
+    });
+  });
+
+  it("matches inside the ratified tolerance and refuses just outside it", async () => {
+    // The window is what stands between the ~7% silent mismatch and a wrong public link, so both
+    // sides of the boundary are pinned rather than just the happy middle.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(track({ duration: 304 })));
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("matched");
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(track({ duration: 306 })));
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("unvouchable");
+  });
+
+  it("is UNVOUCHABLE when Deezer sends no duration, or the row has none to check against", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(track({ duration: undefined })));
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("unvouchable");
+
+    // No duration on file: no request is made at all, so nothing can be concluded.
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 0)).outcome).toBe("unvouchable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the HTTP-200 QUOTA body as a throttle, never as a miss", async () => {
+    // The trap this whole type exists for: Deezer signals its quota with a 200 carrying an error
+    // body, so anything checking only `response.ok` reads a platform-wide throttle as absence.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: { code: 4, message: "Quota limit exceeded", type: "Exception" } }),
+        ),
+    );
+
+    expect(await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).toEqual({ outcome: "quota" });
+  });
+
+  it("reads a DataException as ABSENT — the one negative worth stamping", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: { code: 800, message: "no data", type: "DataException" } }),
+        ),
+    );
+
+    expect(await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).toEqual({ outcome: "absent" });
+  });
+
+  it("treats every OTHER error code as a transport failure, never as absence", async () => {
+    // Absence gets a whitelist, not a catch-all: a service-busy or auth exception says something
+    // went wrong on the way to the answer, and stamping it would put a lie on the receipt.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: { code: 700, message: "Service busy", type: "Exception" } }),
+        ),
+    );
+
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("failed");
+  });
+
+  it("never throws: a non-2xx, an unparseable body, and a thrown fetch all map to failed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 503 })));
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("failed");
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("not json")));
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("failed");
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket closed")));
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("failed");
+  });
+
+  it("a 200 carrying neither an error nor an id is failed, not absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({})));
+
+    expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("failed");
   });
 });

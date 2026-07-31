@@ -373,6 +373,22 @@ const BeatportFailedSchema = z
   })
   .meta({ id: "BeatportFailed" });
 
+/** A resolved Beatport CATALOGUE row (`{ trackId, url }`) — an uncertified row has no Log ID. */
+const BeatportCatalogueResolvedSchema = z
+  .object({
+    trackId: z.string(),
+    url: z.string(),
+  })
+  .meta({ id: "BeatportCatalogueResolved" });
+
+/** A failed Beatport CATALOGUE row (`{ error, trackId }`). */
+const BeatportCatalogueFailedSchema = z
+  .object({
+    error: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "BeatportCatalogueFailed" });
+
 /**
  * `backfill_beatport` → `POST /admin/backfill/beatport` (operationId `backfillBeatport`).
  *
@@ -412,6 +428,15 @@ export const backfillBeatport = oc
   )
   .output(
     z.object({
+      // The CATALOGUE tier's own counters, kept apart from the findings arrays because the two are
+      // different money (one of ~85 certified rows versus one of five figures, each a Firecrawl
+      // credit) and keyed differently (a catalogue row has no Log ID).
+      catalogueFailed: z.array(BeatportCatalogueFailedSchema),
+      catalogueFailedCount: z.number(),
+      catalogueResolved: z.array(BeatportCatalogueResolvedSchema),
+      catalogueResolvedCount: z.number(),
+      catalogueUnresolved: z.array(z.string()),
+      catalogueUnresolvedCount: z.number(),
       configured: z.boolean(),
       dryRun: z.boolean(),
       failed: z.array(BeatportFailedSchema),
@@ -425,6 +450,80 @@ export const backfillBeatport = oc
       // Findings Beatport ran a search for and does not carry (a clean no-match).
       unresolved: z.array(z.string()),
       unresolvedCount: z.number(),
+    }),
+  );
+
+/** A resolved Deezer row (`{ trackId, url }`) — the leg spans both tiers, so it keys by track. */
+const DeezerResolvedSchema = z
+  .object({
+    trackId: z.string(),
+    url: z.string(),
+  })
+  .meta({ id: "DeezerResolved" });
+
+/** A failed Deezer row (`{ error, trackId }`). */
+const DeezerFailedSchema = z
+  .object({
+    error: z.string(),
+    trackId: z.string(),
+  })
+  .meta({ id: "DeezerFailed" });
+
+/**
+ * `backfill_deezer` → `POST /admin/backfill/deezer` (operationId `backfillDeezer`).
+ *
+ * Agent tier (`adminAuth`) — the FORWARD-ACCRETION leg for the Deezer link. One bounded,
+ * ledger-gated pass over ISRC-bearing rows with no `deezer_track_id` and no concluded look yet:
+ * CERTIFIED rows first, then CATALOGUE rows in the Ear's capture-priority order, one keyless
+ * `GET /track/isrc:<ISRC>` each. No key is used or wanted, so there is no `configured` flag — the
+ * leg is live on deploy.
+ *
+ * THE GATE IS THE DURATION. That endpoint PICKS a recording rather than listing them (a measured
+ * ~7% silent mismatch), so an id is kept only when the returned track's duration agrees with the
+ * row's within the ratified window. A pick that cannot be vouched for is reported as `unvouchable`
+ * and stamps NOTHING — it is neither a hit nor a miss, and the receipt refuses to claim either.
+ *
+ * `unresolved` is a CONCLUDED miss (Deezer answered `DataException`: it looked and carries nothing),
+ * stamped so `/identity` can say "Not found · checked <date>" instead of "Not checked yet".
+ * `failed` is transport, which stamps only a failure streak so the row stays eligible.
+ * `rateLimited` is Deezer's quota answer — which arrives in an HTTP-200 body, so it is invisible to
+ * anything that only reads `data` — and it ENDS the pass having stamped nothing at all. No cursor:
+ * the worklist is a fresh ledger-gated read each tick. It writes catalogue identity only (one id +
+ * its provenance on `tracks`), never a certification, so it stays agent-allowed.
+ */
+export const backfillDeezer = oc
+  .route({
+    inputStructure: "detailed",
+    method: "POST",
+    operationId: "backfillDeezer",
+    path: "/admin/backfill/deezer",
+    summary: "Back-fill Deezer track ids over certified + catalogue rows by exact ISRC",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      query: z.object({
+        dryRun: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    }),
+  )
+  .output(
+    z.object({
+      dryRun: z.boolean(),
+      failed: z.array(DeezerFailedSchema),
+      failedCount: z.number(),
+      ok: z.literal(true),
+      // True when the pass STOPPED on Deezer's quota answer; nothing was stamped.
+      rateLimited: z.boolean(),
+      resolved: z.array(DeezerResolvedSchema),
+      resolvedCount: z.number(),
+      // ISRCs Deezer concluded it carries no recording for (stamped, a real negative).
+      unresolved: z.array(z.string()),
+      unresolvedCount: z.number(),
+      // Rows Deezer picked a track for whose duration did not vouch — stamped nothing.
+      unvouchable: z.array(z.string()),
+      unvouchableCount: z.number(),
     }),
   );
 
@@ -898,6 +997,7 @@ export const adminBackfillsContract = {
   backfill_artist_edges: backfillArtistEdges,
   backfill_beatport: backfillBeatport,
   backfill_cover_masters: backfillCoverMasters,
+  backfill_deezer: backfillDeezer,
   backfill_discogs: backfillDiscogs,
   backfill_discogs_facts: backfillDiscogsFacts,
   backfill_label_images: backfillLabelImages,
