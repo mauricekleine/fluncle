@@ -45,7 +45,9 @@ describe("run-level errors stay separate from item-level failures", () => {
 
     expect(source).toContain("failed: counts.failed");
     expect(source).not.toContain("errors: counts.failed");
-    expect(source).toContain('{ error: message, ok: false, reason: "capture_failed" }');
+    expect(source).toContain("export function buildCaptureFatalSummary");
+    expect(source).toContain('reason: "capture_failed"');
+    expect(source).toContain("errors: 1");
     expect(source).toContain("process.exit(1)");
   });
 });

@@ -28,6 +28,7 @@ esac
 
 let dir: string;
 let fluncleJson: typeof import("./cover-masters-sweep").fluncleJson;
+let main: typeof import("./cover-masters-sweep").main;
 
 function mode(name: string): void {
   writeFileSync(join(dir, "mode"), name);
@@ -41,7 +42,47 @@ beforeAll(async () => {
   process.env.FLUNCLE_BIN = bin;
   mode("ok");
 
-  ({ fluncleJson } = await import("./cover-masters-sweep"));
+  ({ fluncleJson, main } = await import("./cover-masters-sweep"));
+});
+
+function run(): Record<string, unknown> {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (line: string) => lines.push(line);
+
+  try {
+    main();
+  } finally {
+    console.log = original;
+  }
+
+  return JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
+}
+
+describe("cover-masters-sweep's canonical counters", () => {
+  test("resolved + terminal-none are produced; per-entity failures remain failed", () => {
+    mode("partial");
+
+    // The stub answers the same partial result for both album and artist passes.
+    expect(run()).toMatchObject({
+      checked: 6,
+      errors: 0,
+      failed: 2,
+      none: 2,
+      produced: 4,
+      resolved: 2,
+    });
+  });
+
+  test("a run failure is errors:1 and never invents queue depth", () => {
+    mode("crash");
+    const summary = run();
+
+    expect(summary).toMatchObject({ checked: 0, errors: 1, failed: 0, ok: false, produced: 0 });
+    // image_state + cooldown worklists have no covering index, so a per-tick count is deliberately
+    // omitted instead of taxing this hot path with a scan.
+    expect(summary).not.toHaveProperty("queue_depth");
+  });
 });
 
 afterAll(() => {

@@ -105,13 +105,25 @@ export type VerifyWorkItem = {
 
 export type Verdict = "match" | "mismatch" | "no-preview";
 
+export type VerifyQueue = {
+  /** Authoritative worklist size before this tick; absent when the caller deliberately skipped it. */
+  queued?: number;
+  tracks: VerifyWorkItem[];
+};
+
 /** One tick's honest tally — the JSON summary line. */
 export type VerifySummary = {
+  checked: number;
   error: null | string;
+  errors: number;
+  failed: number;
   flaggedFindings: number;
   matched: number;
   ok: boolean;
+  produced: number;
   quarantinedCatalogue: number;
+  /** Real outstanding rows after this tick, derived from the indexed pre-count when present. */
+  queue_depth?: number;
   /** ISRC-null rows CONFIRMED by a title+artist reference (a subset of `matched`). */
   searchMatched: number;
   /** ISRC-null rows whose title+artist reference MISMATCHED — abstained (unverified), NEVER condemned. */
@@ -131,7 +143,7 @@ export type VerifyDeps = {
   fingerprintFile: (path: string) => number[] | null;
   /** Fetch + fingerprint the track's ISRC-resolved official preview; null = no preview source. */
   fetchPreviewFp: (trackId: string) => Promise<number[] | null>;
-  fetchQueue: (limit: number) => Promise<VerifyWorkItem[]>;
+  fetchQueue: (limit: number) => Promise<VerifyQueue>;
   /** Pull the captured bytes from the private bucket into a scratch file; null = R2 read failed. */
   fetchCapture: (key: string, dir: string) => Promise<null | string>;
   log: (message: string) => void;
@@ -179,10 +191,14 @@ export function deriveVerdict(
 /** One tick: read the worklist, verify each row, report each verdict. Injected effects. */
 export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<VerifySummary> {
   const summary: VerifySummary = {
+    checked: 0,
     error: null,
+    errors: 0,
+    failed: 0,
     flaggedFindings: 0,
     matched: 0,
     ok: true,
+    produced: 0,
     quarantinedCatalogue: 0,
     searchMatched: 0,
     searchMismatch: 0,
@@ -191,18 +207,19 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
     verified: 0,
   };
 
-  let queue: VerifyWorkItem[];
+  let queue: VerifyQueue;
 
   try {
     queue = await deps.fetchQueue(batch);
   } catch (error) {
     summary.ok = false;
+    summary.errors = 1;
     summary.error = error instanceof Error ? error.message : String(error);
 
     return summary;
   }
 
-  for (const item of queue) {
+  for (const item of queue.tracks) {
     const { sourceAudioKey, trackId } = item;
 
     if (!trackId || !sourceAudioKey) {
@@ -308,6 +325,16 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
     }
   }
 
+  summary.checked = summary.verified + summary.skipped;
+  summary.produced = summary.verified;
+  summary.failed = summary.skipped;
+
+  if (queue.queued !== undefined) {
+    // `queued` is the authoritative PRE-pass count. Every successfully reported row leaves the
+    // worklist, while skipped rows remain, so subtraction yields the real post-pass backlog.
+    summary.queue_depth = Math.max(0, queue.queued - summary.verified);
+  }
+
   return summary;
 }
 
@@ -401,8 +428,11 @@ function encodeKey(key: string): string {
 
 const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
-async function fetchVerifyQueue(limit: number): Promise<VerifyWorkItem[]> {
-  const url = `${API_BASE_URL}/api/v1/admin/catalogue/captures/unverified?limit=${limit}`;
+async function fetchVerifyQueue(limit: number): Promise<VerifyQueue> {
+  // `count=true` is deliberately opt-in. This worklist is index-backed by
+  // `tracks_capture_verification_verified_at_idx`; other hot-path queues without a covering
+  // predicate must never copy this count call.
+  const url = `${API_BASE_URL}/api/v1/admin/catalogue/captures/unverified?limit=${limit}&count=true`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
     signal: AbortSignal.timeout(30_000),
@@ -414,9 +444,16 @@ async function fetchVerifyQueue(limit: number): Promise<VerifyWorkItem[]> {
     );
   }
 
-  const body = (await res.json()) as { tracks?: VerifyWorkItem[] };
+  const body = (await res.json()) as { queued?: unknown; tracks?: VerifyWorkItem[] };
+  const queued =
+    typeof body.queued === "number" && Number.isInteger(body.queued) && body.queued >= 0
+      ? body.queued
+      : undefined;
 
-  return Array.isArray(body.tracks) ? body.tracks : [];
+  return {
+    ...(queued === undefined ? {} : { queued }),
+    tracks: Array.isArray(body.tracks) ? body.tracks : [],
+  };
 }
 
 /** GET the captured full song from the private bucket into a scratch file (key used AS STORED). */
@@ -478,15 +515,54 @@ export function fpcalcAvailable(bin: string = FPCALC_BIN): boolean {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
+/** The measured no-work summary when the image lacks fpcalc. It deliberately does not read queue. */
+export function fpcalcMissingSummary(): VerifySummary & { reason: "fpcalc_missing" } {
+  return {
+    checked: 0,
+    error: null,
+    errors: 0,
+    failed: 0,
+    flaggedFindings: 0,
+    matched: 0,
+    ok: true,
+    produced: 0,
+    quarantinedCatalogue: 0,
+    reason: "fpcalc_missing",
+    searchMatched: 0,
+    searchMismatch: 0,
+    skipped: 0,
+    unverified: 0,
+    verified: 0,
+  };
+}
+
 async function main(): Promise<void> {
   const started = Date.now();
 
   if (!API_TOKEN) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_api_token" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        errors: 1,
+        failed: 0,
+        ok: false,
+        produced: 0,
+        reason: "missing_api_token",
+      }),
+    );
     process.exit(1);
   }
   if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
-    console.log(JSON.stringify({ ok: false, reason: "missing_r2_credentials" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        errors: 1,
+        failed: 0,
+        ok: false,
+        produced: 0,
+        reason: "missing_r2_credentials",
+      }),
+    );
     process.exit(1);
   }
 
@@ -495,7 +571,7 @@ async function main(): Promise<void> {
   // failure the /status prober should page on.
   if (!fpcalcAvailable()) {
     log("fpcalc is not on PATH — the image needs the chromaprint rebake; nothing verified");
-    console.log(JSON.stringify({ ok: true, reason: "fpcalc_missing", verified: 0 }));
+    console.log(JSON.stringify(fpcalcMissingSummary()));
 
     return;
   }
@@ -540,7 +616,17 @@ if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`verify-captures failed: ${message}`);
-    console.log(JSON.stringify({ error: message, ok: false, reason: "verify_failed" }));
+    console.log(
+      JSON.stringify({
+        checked: 0,
+        error: message,
+        errors: 1,
+        failed: 0,
+        ok: false,
+        produced: 0,
+        reason: "verify_failed",
+      }),
+    );
     process.exit(1);
   });
 }

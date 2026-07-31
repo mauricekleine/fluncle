@@ -8,7 +8,90 @@
 // side-effect free (no R2 GET, no embedder spawn, no CLI). Keep this green when touching the
 // source-selection or the temp-file extension logic.
 import { describe, expect, test } from "bun:test";
-import { chooseEmbedSource, parseEmbedQueue, sourceAudioExt } from "./embed-sweep";
+import {
+  buildEmbedFatalSummary,
+  buildEmbedSummary,
+  chooseEmbedSource,
+  parseEmbedQueue,
+  sourceAudioExt,
+} from "./embed-sweep";
+
+describe("embed-sweep canonical counters", () => {
+  test("counts the attempted batch, successful write-backs, and every continued item failure", () => {
+    const summary = buildEmbedSummary({
+      checked: 6,
+      counts: { done: 2, failed: 1, fetchFailed: 1, noSource: 1, skipped: 1 },
+      errors: 0,
+      ok: true,
+      queued: 10,
+    });
+
+    expect(summary).toMatchObject({
+      checked: 6,
+      embedFailed: 1,
+      errors: 0,
+      failed: 4,
+      produced: 2,
+      queue_depth: 8,
+      queued: 10,
+    });
+  });
+
+  test("preserves an authoritative queued:0 and measured checked:0 as zero", () => {
+    const summary = buildEmbedSummary({
+      checked: 0,
+      counts: { done: 0, failed: 0, fetchFailed: 0, noSource: 0, skipped: 0 },
+      errors: 0,
+      ok: true,
+      queued: 0,
+    });
+
+    expect(summary.checked).toBe(0);
+    expect(summary.queue_depth).toBe(0);
+    expect(summary.produced).toBe(0);
+  });
+
+  test("omits queue_depth when the server did not return an authoritative count", () => {
+    const summary = buildEmbedSummary({
+      checked: 1,
+      counts: { done: 0, failed: 0, fetchFailed: 1, noSource: 0, skipped: 0 },
+      errors: 0,
+      ok: true,
+    });
+
+    expect(summary).not.toHaveProperty("queue_depth");
+  });
+
+  test("batch-level embed fallout is a run error, not a set of item failures", () => {
+    const summary = buildEmbedSummary({
+      batchFallout: 3,
+      checked: 3,
+      counts: { done: 0, failed: 0, fetchFailed: 0, noSource: 0, skipped: 3 },
+      errors: 1,
+      ok: false,
+      queued: 20,
+      reason: "embed_failed",
+    });
+
+    expect(summary).toMatchObject({
+      checked: 3,
+      errors: 1,
+      failed: 0,
+      produced: 0,
+      queue_depth: 20,
+      skipped: 3,
+    });
+  });
+
+  test("a fatal/config-level failure does not guess item counters", () => {
+    expect(buildEmbedFatalSummary(new Error("queue unavailable"))).toMatchObject({
+      checked: null,
+      errors: 1,
+      failed: null,
+      produced: null,
+    });
+  });
+});
 
 describe("chooseEmbedSource", () => {
   test("embeds a finding with both a trackId and a captured key", () => {

@@ -264,6 +264,7 @@ export function runBackfillSweep() {
       skipped: 0,
       unresolved: 0,
     },
+    checked: 0,
     discogs: {
       error: null as string | null,
       resolved: 0,
@@ -279,9 +280,12 @@ export function runBackfillSweep() {
       resolved: 0,
       throttled: false,
     },
+    errors: 0,
+    failed: 0,
     lastfm: { error: null as string | null, failed: 0, loved: 0, skipped: 0, throttled: false },
     musicbrainz: { throttled: false },
     ok: true,
+    produced: 0,
   };
 
   const limit = ["--limit", String(BATCH_LIMIT)];
@@ -291,6 +295,8 @@ export function runBackfillSweep() {
     summary.discogs.resolved = discogs.resolvedCount ?? 0;
     summary.discogs.unresolved = discogs.unresolvedCount ?? 0;
     summary.discogs.skipped = discogs.skippedCount ?? 0;
+    summary.checked += summary.discogs.resolved + summary.discogs.unresolved;
+    summary.produced += summary.discogs.resolved;
     summary.discogs.throttled = discogs.rateLimited === true && discogs.rateLimitedBy === "discogs";
     summary.musicbrainz.throttled =
       discogs.rateLimited === true && discogs.rateLimitedBy === "musicbrainz";
@@ -301,6 +307,7 @@ export function runBackfillSweep() {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors += 1;
     summary.discogs.error = error instanceof Error ? error.message : String(error);
     log(`discogs backfill failed: ${summary.discogs.error}`);
   }
@@ -311,6 +318,9 @@ export function runBackfillSweep() {
     summary.lastfm.failed = lastfm.failedCount ?? 0;
     summary.lastfm.skipped = lastfm.skippedCount ?? 0;
     summary.lastfm.throttled = lastfm.rateLimited ?? false;
+    summary.checked += summary.lastfm.loved + summary.lastfm.failed;
+    summary.produced += summary.lastfm.loved;
+    summary.failed += summary.lastfm.failed;
 
     if (lastfm.ok === false) {
       summary.ok = false;
@@ -321,6 +331,7 @@ export function runBackfillSweep() {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors += 1;
     summary.lastfm.error = error instanceof Error ? error.message : String(error);
     log(`lastfm backfill failed: ${summary.lastfm.error}`);
   }
@@ -333,6 +344,12 @@ export function runBackfillSweep() {
     summary["apple-music"].failed = apple.failedCount ?? 0;
     summary["apple-music"].skipped = apple.skippedCount ?? 0;
     summary["apple-music"].throttled = apple.rateLimited ?? false;
+    summary.checked +=
+      summary["apple-music"].resolved +
+      summary["apple-music"].unresolved +
+      summary["apple-music"].failed;
+    summary.produced += summary["apple-music"].resolved;
+    summary.failed += summary["apple-music"].failed;
 
     if (apple.ok === false) {
       summary.ok = false;
@@ -344,6 +361,7 @@ export function runBackfillSweep() {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors += 1;
     summary["apple-music"].error = error instanceof Error ? error.message : String(error);
     log(`apple-music backfill failed: ${summary["apple-music"].error}`);
   }
@@ -365,6 +383,12 @@ export function runBackfillSweep() {
     summary["apple-catalogue"].albumFacts = catalogue.albumFactsWritten ?? 0;
     summary["apple-catalogue"].throttled = catalogue.rateLimited ?? false;
     summary["apple-catalogue"].breakerTripped = catalogue.breakerTripped ?? false;
+    summary.checked +=
+      summary["apple-catalogue"].resolved +
+      summary["apple-catalogue"].unresolved +
+      summary["apple-catalogue"].failed;
+    summary.produced += summary["apple-catalogue"].resolved;
+    summary.failed += summary["apple-catalogue"].failed;
 
     if (catalogue.ok === false) {
       summary.ok = false;
@@ -380,6 +404,7 @@ export function runBackfillSweep() {
     }
   } catch (error) {
     summary.ok = false;
+    summary.errors += 1;
     summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
     log(`apple-catalogue backfill failed: ${summary["apple-catalogue"].error}`);
   }
@@ -400,6 +425,10 @@ export function runBackfillSweep() {
     summary.beatport.unresolved = beatport.unresolvedCount ?? 0;
     summary.beatport.failed = beatport.failedCount ?? 0;
     summary.beatport.skipped = beatport.skippedCount ?? 0;
+    summary.checked +=
+      summary.beatport.resolved + summary.beatport.unresolved + summary.beatport.failed;
+    summary.produced += summary.beatport.resolved;
+    summary.failed += summary.beatport.failed;
 
     if (beatport.ok === false) {
       // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
@@ -407,6 +436,9 @@ export function runBackfillSweep() {
       log(`beatport backfill partial: ${summary.beatport.failed} finding(s) failed this tick`);
     }
   } catch (error) {
+    // Preserve the pre-existing exit/`ok` behaviour for this slice: this bug is reported
+    // separately. The canonical run-failure counter still exposes the failed whole leg.
+    summary.errors += 1;
     summary.beatport.error = error instanceof Error ? error.message : String(error);
     log(`beatport backfill failed: ${summary.beatport.error}`);
   }

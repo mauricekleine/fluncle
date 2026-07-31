@@ -6,6 +6,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   deriveVerdict,
+  fpcalcMissingSummary,
   runVerifyTick,
   type VerifyDeps,
   type VerifyWorkItem,
@@ -50,7 +51,7 @@ describe("deriveVerdict", () => {
   });
 });
 
-type DepsOverrides = Partial<VerifyDeps> & { queue?: VerifyWorkItem[] };
+type DepsOverrides = Partial<VerifyDeps> & { queue?: VerifyWorkItem[]; queued?: number };
 
 // The server's routing, mirrored for the stub: match/no-preview stamp, a catalogue mismatch
 // quarantines, a finding mismatch raises the attention item. `certifiedIds` marks the findings.
@@ -60,7 +61,12 @@ function stubDeps(overrides: DepsOverrides, certifiedIds: Set<string> = new Set(
   return {
     fetchCapture: overrides.fetchCapture ?? (async () => "/tmp/fake-capture.webm"),
     fetchPreviewFp: overrides.fetchPreviewFp ?? (async () => PREVIEW_FP),
-    fetchQueue: overrides.fetchQueue ?? (async () => queue),
+    fetchQueue:
+      overrides.fetchQueue ??
+      (async () => ({
+        ...(overrides.queued === undefined ? {} : { queued: overrides.queued }),
+        tracks: queue,
+      })),
     fingerprintFile: overrides.fingerprintFile ?? (() => CAPTURE_FP),
     log: overrides.log ?? (() => undefined),
     mkWorkdir: overrides.mkWorkdir ?? (() => "/tmp/fake-workdir"),
@@ -140,6 +146,60 @@ describe("runVerifyTick — the routing tally", () => {
   });
 });
 
+describe("runVerifyTick — canonical counters + authoritative queue gauge", () => {
+  test("checked is attempted rows, produced is verified, failed is skipped", async () => {
+    const summary = await runVerifyTick(
+      20,
+      stubDeps({
+        fetchCapture: async (key) => (key.includes("skip") ? null : "/tmp/fake.webm"),
+        queue: [row("done"), row("skip")],
+        queued: 9,
+      }),
+    );
+
+    expect(summary).toMatchObject({
+      checked: 2,
+      errors: 0,
+      failed: 1,
+      produced: 1,
+      queue_depth: 8,
+      skipped: 1,
+      verified: 1,
+    });
+  });
+
+  test("a measured empty queue preserves checked: 0 and queue_depth: 0", async () => {
+    const summary = await runVerifyTick(20, stubDeps({ queue: [], queued: 0 }));
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      failed: 0,
+      produced: 0,
+      queue_depth: 0,
+    });
+  });
+
+  test("an absent authoritative count omits queue_depth rather than guessing from the page", async () => {
+    const summary = await runVerifyTick(20, stubDeps({ queue: [row("done")] }));
+
+    expect(summary).not.toHaveProperty("queue_depth");
+  });
+
+  test("fpcalc-missing measures no work and omits depth because it deliberately skips the queue", () => {
+    const summary = fpcalcMissingSummary();
+
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 0,
+      failed: 0,
+      produced: 0,
+      reason: "fpcalc_missing",
+    });
+    expect(summary).not.toHaveProperty("queue_depth");
+  });
+});
+
 describe("runVerifyTick — skip-not-stamp + isolation (idempotence's other half)", () => {
   test("a failed R2 read SKIPS the row (stays queued) — never a verdict", async () => {
     const report = mock(async () => "preview-match");
@@ -191,6 +251,7 @@ describe("runVerifyTick — skip-not-stamp + isolation (idempotence's other half
 
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("api down");
+    expect(summary).toMatchObject({ checked: 0, errors: 1, failed: 0, produced: 0 });
   });
 });
 

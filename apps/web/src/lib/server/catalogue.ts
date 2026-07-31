@@ -3055,6 +3055,29 @@ export async function listUnverifiedCaptures(limit = 50): Promise<CaptureVerifyI
   }));
 }
 
+export const COUNT_UNVERIFIED_CAPTURES_SQL = `select count(*) as queued
+          from tracks ct
+          where ct.source_audio_key is not null
+            and ct.capture_verification is null
+            and (ct.capture_status is null or ct.capture_status <> ?)`;
+
+/**
+ * The verification worklist's authoritative size. This is deliberately a separate, opt-in read:
+ * `capture_verification is null` seeks through
+ * `tracks_capture_verification_verified_at_idx`, so the gauge is cheap without teaching
+ * unindexed hot-path queues to count.
+ */
+export async function countUnverifiedCaptures(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [WRONG_AUDIO_STATUS],
+    sql: COUNT_UNVERIFIED_CAPTURES_SQL,
+  });
+  const row = typedRows<{ queued: bigint | number }>(result.rows)[0];
+
+  return Number(row?.queued ?? 0);
+}
+
 /**
  * ROUTE a backfill verdict to its action (docs/the-ear.md § Wrong audio):
  *
