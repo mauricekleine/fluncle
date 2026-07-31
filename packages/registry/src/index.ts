@@ -606,7 +606,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
-      "the R2 media zone — each finding's video bundle + mixtape audio",
+      "the R2 media zone: each finding's video bundle and mixtape audio",
       "the /cdn-cgi/media transform base (same zone, no cross-origin)",
     ],
     kind: "subdomain",
@@ -638,7 +638,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
-      "the Tor onion mirror of www.fluncle.com — the archive, API, RSS, and MCP over Tor",
+      "the Tor onion mirror of www.fluncle.com: the archive, API, RSS, and MCP over Tor",
     ],
     kind: "subdomain",
     name: "subdomain.onion",

@@ -25,7 +25,8 @@
 //   (c) EXCLAMATION MARKS — the Dry Rule, prose only (`!` is everywhere in code).
 //
 // WHAT IS SCANNED. See SCAN_ROOTS: the public web, mobile, and extension
-// surfaces, the CLI, and two named modules out of `apps/web/src/lib` (below).
+// surfaces, the CLI, and the individually-named modules out of `apps/web/src/lib`
+// whose strings reach a PUBLIC audience (below).
 //
 // WHAT IS NOT, AND WHY. Every edge is a deliberate register or tooling boundary:
 //   - `/admin` under the web roots is skipped ENTIRELY (see SKIPPED_DIRECTORIES):
@@ -54,26 +55,37 @@
 //     overwhelmingly operator/DB/API strings (status reasons, query builders,
 //     vendor payloads) where the register question is unsettled, so scanning the
 //     tree wholesale would bury the gate in a judgment call it cannot make. The
-//     two modules whose strings reach a PUBLIC audience are pulled into
-//     SCAN_ROOTS individually instead. Drawing the real `lib/**` boundary is a
-//     follow-up, and it is a canon question before it is a code one.
+//     modules whose strings reach a PUBLIC audience are pulled into SCAN_ROOTS
+//     individually instead — the MCP specs and agent-discovery from the start, and
+//     since 2026-07-31 the entity strings (`identity.ts`), the log page's
+//     definitional prose (`log-prose.ts`), and the two CREW FEEDS (`telegram.ts`,
+//     `bluesky.ts`), which carry the most voice-load-bearing hand-written copy in
+//     the repo and were outside the net only because of where they live. Drawing
+//     the real `lib/**` boundary is a follow-up, and it is a canon question before
+//     it is a code one.
 //   - `apps/ssh/main.go` — Go, so oxc cannot parse it. Its em dashes are
 //     `Artist — Title` separators today; a Go-side scan is its own slice.
 //   - `apps/web/public/*.txt` — `llms.txt` and `humans.txt` are hand-written,
 //     voice-governed prose and DO belong under these rails; they are skipped only
 //     because oxc parses JavaScript, not plain text. A text-file scanner is a
 //     separate, worthwhile slice (a prose em dash shipped in `llms.txt` before).
-//   - `packages/**` — a deliberate boundary, not an empty one: a literal in a
-//     package is never re-typed in the app, so e.g. `packages/registry` surface
-//     titles render on `/status`, the SSH menu, and MCP unchecked. Extending the
-//     roots there is cheap and wanted; it is held back only to keep this slice
-//     reviewable.
+//   - `packages/**` as a SOURCE SCAN — a deliberate boundary, not an empty one: a
+//     literal in a package is never re-typed in the app, so e.g. `packages/registry`
+//     surface titles render on `/status`, the SSH menu, and MCP unchecked, and that
+//     hole had shipped two prose em dashes onto the public `fluncle status` board.
+//     `packages/registry` is now covered instead by the "registry" describe below,
+//     which applies these same rails to the IMPORTED catalog rather than its source
+//     — a data check, so it can be scoped to the three fields a non-operator reads
+//     without dragging in a catalog whose bulk is operator notes. The rest of
+//     `packages/**` is still unscanned; extending the roots there is cheap and
+//     wanted.
 //
 // THE ESCAPE HATCH. Put `// voice-lint-allow: <reason>` (or, inside JSX,
 // `{/* voice-lint-allow: <reason> */}`) on the line DIRECTLY ABOVE the offending
 // line. The reason must be non-empty — a bare marker suppresses nothing, so an
 // exemption always says why it earned one.
 
+import { liveSurfaces } from "@fluncle/registry";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +107,16 @@ const SCAN_ROOTS = [
   "apps/web/src/lib/server/tools/specs.ts",
   // Renders the markdown home that agents and crawlers read.
   "apps/web/src/lib/server/agent-discovery.ts",
+  // The canonical entity strings, reused verbatim by every meta/OG/JSON-LD surface.
+  "apps/web/src/lib/identity.ts",
+  // The log page's definitional prose — the visible block, the meta description, and
+  // the MusicRecording JSON-LD description all read from it.
+  "apps/web/src/lib/log-prose.ts",
+  // The two CREW FEEDS. These are the most voice-load-bearing hand-written strings
+  // Fluncle ships (a post lands in a stranger's Telegram and on Bluesky), and they
+  // sat outside the net purely because they live under lib/.
+  "apps/web/src/lib/server/telegram.ts",
+  "apps/web/src/lib/server/bluesky.ts",
 ];
 
 /** The operator workstation — a different register, out of the public net. */
@@ -413,6 +435,10 @@ describe("voice lint", () => {
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/tools/specs.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/identity.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/log-prose.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/telegram.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/bluesky.ts")).toBe(true);
 
     const strays = [...scanned].filter(
       (file) =>
@@ -506,5 +532,74 @@ describe("voice lint rails", () => {
     const cli = scanSource(FIXTURE_FILE, FIXTURE_SOURCE, { emDash: false });
     expect(cli.some((violation) => violation.rail === "prose-em-dash")).toBe(false);
     expect(cli.some((violation) => violation.rail === "banned-word")).toBe(true);
+  });
+});
+
+// The surfaces registry's PUBLIC-rendering strings, checked as DATA rather than
+// source. `packages/**` is outside SCAN_ROOTS (see the header), and that hole had
+// shipped two prose em dashes onto the public `fluncle status` board. Scanning the
+// catalog's source would drag in operator notes and a hundred catalog descriptions
+// nobody outside the operator reads; importing it instead lets the rails land on
+// exactly the three fields a STRANGER meets:
+//
+//   - `title` + `statusDescription`  → the /status health board, a public console page.
+//   - `exposedContent[0]` of a surface whose `operatorNotes` names a /status service
+//     → the note column of the public `fluncle status` command
+//       (apps/cli/src/commands/status.ts) and the MCP `get_status` service labels
+//       (apps/web/src/lib/server/tools/registry.ts), both of which mine that marker.
+//
+// It lives here, not in packages/registry's own test, so BANNED_WORDS stays a single
+// array with a single reader — a second copy in a leaf package is the exact drift
+// ./voice-words.ts was created to prevent. The precedent for an apps/web test
+// guarding a registry field is already set (registry/src/index.test.ts notes the
+// /status infra aliases are "guarded there by the apps/web coverage test").
+const SERVICE_PROBE_MARKER = /service `([a-z0-9-]+)`/;
+
+/** Every registry string a non-operator reads, labelled by where it came from. */
+function publicRegistryStrings(): { text: string; where: string }[] {
+  const strings: { text: string; where: string }[] = [];
+
+  for (const surface of liveSurfaces()) {
+    if (surface.title !== undefined) {
+      strings.push({ text: surface.title, where: `${surface.name}.title` });
+    }
+
+    if (surface.statusDescription !== undefined) {
+      strings.push({ text: surface.statusDescription, where: `${surface.name}.statusDescription` });
+    }
+
+    const label = surface.exposedContent[0];
+    if (label !== undefined && SERVICE_PROBE_MARKER.test(surface.operatorNotes ?? "")) {
+      strings.push({ text: label, where: `${surface.name}.exposedContent[0]` });
+    }
+  }
+
+  return strings;
+}
+
+describe("voice lint over the surfaces registry", () => {
+  // No registry label is ever an `Artist — Title` line, so the tracklist carve-out
+  // does not apply here: every em dash in one of these strings is prose.
+  it("finds no banned word, em dash, or exclamation mark in a public-rendering string", () => {
+    const violations = publicRegistryStrings()
+      .filter(
+        ({ text }) =>
+          text.includes("—") ||
+          text.includes("!") ||
+          BANNED_WORD_MATCHERS.some((matcher) => matcher.test(text)),
+      )
+      .map(({ text, where }) => `${where} ${JSON.stringify(text)}`);
+
+    expect(violations).toEqual([]);
+  });
+
+  // A detector over live data is only proven if the data is actually there: an empty
+  // catalog read would pass the assertion above while checking nothing.
+  it("reads a non-empty set of public strings, including the /status service notes", () => {
+    const strings = publicRegistryStrings();
+
+    expect(strings.length).toBeGreaterThan(0);
+    expect(strings.some(({ where }) => where.endsWith(".statusDescription"))).toBe(true);
+    expect(strings.some(({ where }) => where.endsWith(".exposedContent[0]"))).toBe(true);
   });
 });
