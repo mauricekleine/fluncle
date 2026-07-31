@@ -30,6 +30,7 @@ vi.mock("./db", () => ({
   // A telemetry database IS provisioned here: the unprovisioned no-op path is covered by
   // run-events.integration.test.ts, and this file is about the endpoint.
   getTelemetryDb: async () => ({ execute }),
+  retryRunEventInsert: async <T>(insert: () => Promise<T>) => insert(),
 }));
 
 beforeAll(setAdminTokenEnv);

@@ -64,7 +64,7 @@ import {
   type RunLedgerUnitRollup,
 } from "@fluncle/contracts/orpc";
 import { runLedgerWriters } from "@fluncle/registry";
-import { getTelemetryDb } from "./db";
+import { getTelemetryDb, retryRunEventInsert } from "./db";
 import { logEvent } from "./log";
 import { ApiError } from "./spotify";
 
@@ -683,33 +683,40 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
     };
   }
 
-  const result = await db.execute({
-    args: [
-      id,
-      summary.checked,
-      new Date().toISOString(),
-      input.ended_at,
-      summary.errors,
-      input.exit_code,
-      summary.expectedIntervalMs,
-      summary.gateState,
-      JSON.stringify(summary.missingFields),
-      input.started_at,
-      runOk ? 1 : 0,
-      summary.produced,
-      summary.queueDepth,
-      runDurationMs(input.started_at, input.ended_at),
-      summary.selfAssertedOk === null ? null : Number(summary.selfAssertedOk),
-      input.summary_raw ?? null,
-      summary.summaryStatus,
-      input.unit,
-      JSON.stringify(summary.unrecognisedFields),
-      summary.vendorCalls,
-    ],
-    sql: `insert into run_events (${INSERT_COLUMNS.join(", ")})
-      values (${INSERT_COLUMNS.map(() => "?").join(", ")})
-      on conflict(id) do nothing`,
-  });
+  // This is the one write we can safely retry: `id` is deterministic from
+  // `${unit}:${started_at}`, and `ON CONFLICT(id) DO NOTHING` makes a replay after a
+  // lost gateway receipt either insert the missing row or return the existing one as a
+  // no-op. Do not widen this to writes whose effects accumulate (crawler `settle`, for
+  // example, increments attempts).
+  const result = await retryRunEventInsert(() =>
+    db.execute({
+      args: [
+        id,
+        summary.checked,
+        new Date().toISOString(),
+        input.ended_at,
+        summary.errors,
+        input.exit_code,
+        summary.expectedIntervalMs,
+        summary.gateState,
+        JSON.stringify(summary.missingFields),
+        input.started_at,
+        runOk ? 1 : 0,
+        summary.produced,
+        summary.queueDepth,
+        runDurationMs(input.started_at, input.ended_at),
+        summary.selfAssertedOk === null ? null : Number(summary.selfAssertedOk),
+        input.summary_raw ?? null,
+        summary.summaryStatus,
+        input.unit,
+        JSON.stringify(summary.unrecognisedFields),
+        summary.vendorCalls,
+      ],
+      sql: `insert into run_events (${INSERT_COLUMNS.join(", ")})
+        values (${INSERT_COLUMNS.map(() => "?").join(", ")})
+        on conflict(id) do nothing`,
+    }),
+  );
 
   return {
     id,
