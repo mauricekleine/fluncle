@@ -1437,6 +1437,14 @@ async function captureFinding(
         // knowable only HERE. `sourceAudioAttemptedAt` is stamped on success too (the budget's
         // rolling-24h ledger is a range seek on it). If this run REJECTED an earlier candidate,
         // the grown memory rides this write so it is never lost.
+        // THE ACCEPTED UPLOAD'S ID rides this write (operator ruling 2026-07-31). Until now the
+        // walk remembered only the ids it REJECTED (`sourceAudioRejected`) and threw the winner
+        // away at the moment it was most certain — this is the one place that knows which YouTube
+        // upload carries this recording, proven by the fingerprint gate a few lines up. The server
+        // decides separately whether that upload may ever be SHOWN (a rip carries the same bytes as
+        // the master, so a fingerprint match is identity, never permission); the sweep's whole job
+        // is to report the id. Forward-only: a capture before this shipped is unrecoverable, so
+        // there is no backfill.
         const now = new Date().toISOString();
         const update: Record<string, unknown> = {
           captureStatus: "done",
@@ -1447,6 +1455,17 @@ async function captureFinding(
           sourceAudioCapturedAt: now,
           sourceAudioKey: key,
         };
+
+        // ONLY A REAL MATCH REPORTS AN ID. `verification` is `unverified` on the abstain path —
+        // the track had no preview reference (or fpcalc was absent), so the bytes were accepted on
+        // duration and ranking alone and NOTHING was fingerprinted. The identity envelope serves
+        // this id under `method: "fingerprint"`, so shipping one from the abstain path would put
+        // the words "matched by audio fingerprint" on a page under a match that never happened.
+        // The server re-checks this same condition (lib/server/track-update.ts) rather than
+        // trusting the box, but the honest source is here.
+        if (verdict === "match") {
+          update.youtubeVideoId = candidate.candidate.id;
+        }
         if (memoryDirty) {
           update.sourceAudioRejected = JSON.stringify(rejectedMemory);
         }

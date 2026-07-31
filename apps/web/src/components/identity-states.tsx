@@ -19,14 +19,21 @@
 //
 // ── THE COVERAGE SET ──────────────────────────────────────────────────────────────────────────
 // The page renders rows ONLY for what the archive covers: ISRC, MusicBrainz, Spotify, Apple Music,
-// Deezer, Discogs, Beatport. Tidal is absent by design — a "not covered" row is the API contract
-// leaking into a human surface, and it reads as a roadmap promise. The API still answers all six
-// platforms explicitly, `unsupported` included, because a machine needs the field to exist; the
-// SCOPE of what Fluncle covers is stated once in `/docs/identity` rather than once per recording.
+// Deezer, Discogs, Beatport, YouTube. Tidal is absent by design — a "not covered" row is the API
+// contract leaking into a human surface, and it reads as a roadmap promise. The API still answers
+// all seven platforms explicitly, `unsupported` included, because a machine needs the field to
+// exist; the SCOPE of what Fluncle covers is stated once in `/docs/identity` rather than once per
+// recording.
 //
-// Beatport sits LAST among the links, after Discogs, because it is the only one that opens a
-// checkout — the ways to hear or look up the recording come first, and the shop is where you go once
-// you have decided you want it.
+// READING ORDER, and why the tail is not sorted by what the link does. Spotify → Apple Music →
+// Deezer are the players, Discogs is the reference, and then two rows that are each qualified in
+// their own way: Beatport is the only link that opens a CHECKOUT, so it comes after the ways to
+// hear and look the recording up; YouTube comes after Beatport because it is the only link Fluncle
+// did not go looking for. It is a by-product of his own capture — the upload his fingerprint gate
+// happened to accept while buying the audio — and it renders at all only when the upload is an
+// official one. THE ONE ROW NOBODY WENT LOOKING FOR READS LAST, which is a claim about how the
+// link was come by and NOT about how good the evidence is: the fingerprint is the strongest
+// evidence on this page, being the only method here that compared the sound itself.
 //
 // ── THE UNLIT RULE (DESIGN.md) ────────────────────────────────────────────────────────────────
 // A recording Fluncle has certified reads LIT: cream ink and its coordinate, linking home to its
@@ -50,14 +57,15 @@ const IDENTIFIER_ROWS = [
   { key: "mbRecordingId", label: "MusicBrainz" },
 ] as const;
 
-/** The covered platforms, and only those, in reading order — where you listen, then where you look
- *  it up. See the coverage-set note in the file header. */
+/** The covered platforms, and only those, in reading order — where you listen, where you look it
+ *  up, where you buy it, and what his own capture turned up. See the file header. */
 const LINK_ROWS = [
   { key: "spotify", label: "Spotify" },
   { key: "appleMusic", label: "Apple Music" },
   { key: "deezer", label: "Deezer" },
   { key: "discogs", label: "Discogs" },
   { key: "beatport", label: "Beatport" },
+  { key: "youtube", label: "YouTube" },
 ] as const;
 
 /** The literal label on the link a `verified` state carries. "Listen on Spotify" is the ratified
@@ -75,6 +83,9 @@ const OPEN_LABEL: Record<string, string> = {
   Discogs: "Open on Discogs",
   MusicBrainz: "Open on MusicBrainz",
   Spotify: "Listen on Spotify",
+  // "Watch", not "Listen": the link opens a video. Naming what the link actually does is the same
+  // rule that made Beatport read "Buy".
+  YouTube: "Watch on YouTube",
 };
 
 /** The fragment separator, matching the middot the rest of the site already joins facts with. */
@@ -95,6 +106,12 @@ function fragmentLine(...parts: (string | undefined)[]): string {
  */
 function methodFragment(method: IdentityMethod, label: string): string | undefined {
   switch (method) {
+    // The one method whose evidence is the SOUND. "matched by" keeps it in the comparison family
+    // beside ISRC; "audio fingerprint" says what was compared without spending `confirmed` or
+    // `checked`, which the date fragment beside this one owns.
+    case "fingerprint":
+      return "matched by audio fingerprint";
+
     case "isrc":
       return "matched by ISRC";
 

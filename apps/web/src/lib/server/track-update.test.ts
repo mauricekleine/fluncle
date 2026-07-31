@@ -25,28 +25,42 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
+// The officialness gate makes a real oEmbed request, so it is stubbed here: this file is about
+// which COLUMNS a write sets, and a unit test must never reach YouTube. The gate's own logic is
+// proven in youtube-official.test.ts.
+const checkYoutubeOfficial = vi.hoisted(() => vi.fn(async () => 1 as null | number));
+
+vi.mock("./youtube-official", () => ({ checkYoutubeOfficial }));
+
 // A CERTIFIED finding: the resolve query outer-joins `findings`, so `certified` is the flag
 // that says a `findings` row exists. Every case in this file is about a finding; the
 // UNCERTIFIED (catalogue) half of `updateTrack` — the certification rail — is proven against
 // the real schema in findings-certification.integration.test.ts, where a mock could not.
 const EXISTING = {
   added_at: "2026-06-01T00:00:00.000Z",
+  artists_json: '["Calibre"]',
   certified: 1,
   isrc: "GB1234567890",
   log_id: "004.7.2I",
+  youtube_video_id: null,
 };
 
 let lastUpdateSql = "";
+let lastUpdateArgs: unknown[] = [];
 
 beforeEach(() => {
   lastUpdateSql = "";
+  lastUpdateArgs = [];
   execute.mockReset();
-  execute.mockImplementation((query: { sql: string }) => {
+  checkYoutubeOfficial.mockClear();
+  checkYoutubeOfficial.mockResolvedValue(1);
+  execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
     if (query.sql.startsWith("select")) {
       return Promise.resolve({ rows: [EXISTING] });
     }
 
     lastUpdateSql += query.sql;
+    lastUpdateArgs = lastUpdateArgs.concat(query.args ?? []);
 
     return Promise.resolve({ rows: [] });
   });
@@ -500,5 +514,112 @@ describe("updateTrack — the prompt-provenance invariant", () => {
     expect(lastUpdateSql).not.toContain("note_prompt_version");
     expect(lastUpdateSql).not.toContain("context_prompt_version");
     expect(lastUpdateSql).not.toContain("observation_prompt_version");
+  });
+});
+
+describe("updateTrack — the capture's YouTube provenance", () => {
+  it("rules on the upload server-side and writes the id, the verdict, and the stamp together", async () => {
+    await updateTrack("track-123", {
+      captureVerification: "preview-match",
+      youtubeVideoId: "dQw4w9WgXcQ",
+    });
+
+    // The gate is asked with the recording's OWN credited artists — the comparison it makes is
+    // "is this channel one of the people this track is by".
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith("dQw4w9WgXcQ", ["Calibre"]);
+    expect(lastUpdateSql).toContain("youtube_video_id = coalesce(youtube_video_id, ?)");
+    expect(lastUpdateSql).toContain("youtube_video_official = case");
+    expect(lastUpdateSql).toContain("youtube_verified_at = case");
+    expect(lastUpdateArgs).toContain("dQw4w9WgXcQ");
+    expect(lastUpdateArgs).toContain(1);
+  });
+
+  it("stores the verdict the SERVER reached, never one the caller supplied", async () => {
+    // The box reports an id; permission is not its to grant. An unconcluded check stores NULL,
+    // which renders nothing — the honest degradation.
+    checkYoutubeOfficial.mockResolvedValue(null);
+
+    await updateTrack("track-123", {
+      captureVerification: "preview-match",
+      youtubeVideoId: "uncheckedId",
+    });
+
+    expect(lastUpdateSql).toContain("youtube_video_id = coalesce");
+    expect(lastUpdateArgs).toContain(null);
+  });
+
+  it("does NOT bump updated_at — capture provenance moves no public surface", async () => {
+    await updateTrack("track-123", {
+      captureVerification: "preview-match",
+      youtubeVideoId: "dQw4w9WgXcQ",
+    });
+
+    expect(lastUpdateSql).not.toContain("updated_at = ?");
+  });
+
+  it("gates the VERDICT on the id being empty, so a later check cannot adopt an earlier id", async () => {
+    // The trap `coalesce` alone would walk into: `youtube_video_official` is legitimately NULL
+    // beside a set id, so coalescing the verdict would let a second capture's ruling attach itself
+    // to the first capture's upload. Both stamp clauses therefore test the PRE-UPDATE id.
+    await updateTrack("track-123", {
+      captureVerification: "preview-match",
+      youtubeVideoId: "dQw4w9WgXcQ",
+    });
+
+    expect(lastUpdateSql).toContain(
+      "youtube_video_official = case when youtube_video_id is null then ? else youtube_video_official end",
+    );
+    expect(lastUpdateSql).toContain(
+      "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+    );
+  });
+
+  it("refuses an id from the ABSTAIN path, where nothing was fingerprinted", async () => {
+    // `unverified` is the capture sweep's honest abstain: the track had no preview reference, so
+    // the bytes were kept on duration and ranking alone and no comparison ran. The envelope serves
+    // this id under `method: "fingerprint"`, so taking one from here would print "matched by audio
+    // fingerprint" beneath a match that never happened. The sweep withholds it; the server refuses
+    // it regardless, so a stale box build cannot talk its way past.
+    await updateTrack("track-123", {
+      captureVerification: "unverified",
+      youtubeVideoId: "abstainId",
+    });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_id");
+    // The capture itself still lands — only the optional provenance is dropped.
+    expect(lastUpdateSql).toContain("capture_verification");
+  });
+
+  it("fails CLOSED on an id that arrives with no verdict beside it", async () => {
+    await updateTrack("track-123", { captureStatus: "done", youtubeVideoId: "orphanId" });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_id");
+  });
+
+  it("spends no oEmbed request on a row that already holds an id", async () => {
+    // Fill-empty-only short-circuits BEFORE the network: the write would discard the answer, so
+    // asking for it would be a request bought for nothing.
+    execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
+      if (query.sql.startsWith("select")) {
+        return Promise.resolve({ rows: [{ ...EXISTING, youtube_video_id: "alreadyHeld" }] });
+      }
+
+      lastUpdateSql += query.sql;
+
+      return Promise.resolve({ rows: [] });
+    });
+
+    await updateTrack("track-123", {
+      captureStatus: "done",
+      captureVerification: "preview-match",
+      youtubeVideoId: "secondCapture",
+    });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_id");
+    // The rest of the capture write still lands — the provenance is optional, the capture is not.
+    expect(lastUpdateSql).toContain("capture_status");
   });
 });

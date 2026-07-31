@@ -947,3 +947,44 @@ describe("captureSessionSeed — retry runs rotate off the flagged exit", () => 
     expect(url).toContain(".a3");
   });
 });
+
+describe("the accepted upload's id rides the success PATCH", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+
+  test("the success update carries youtubeVideoId, taken from the candidate that WON", () => {
+    // The sweep is the only place that knows which upload the fingerprint gate accepted; before
+    // this it remembered only the ids it REJECTED. `candidate.candidate.id` is the winner in scope
+    // at that point — the same value the rejection memory stores on a mismatch a few lines up.
+    expect(source).toContain("update.youtubeVideoId = candidate.candidate.id");
+  });
+
+  test("only a REAL match reports an id — the abstain path stays silent", () => {
+    // `verification` is `unverified` when the track had no preview reference: the bytes were kept
+    // on duration and ranking alone and nothing was compared. The identity envelope serves this id
+    // under `method: "fingerprint"`, so an id from the abstain path would put "matched by audio
+    // fingerprint" on a page under a match that never ran. The assignment is therefore gated on
+    // the verdict itself, not merely on reaching the success branch.
+    expect(source).toMatch(
+      /if \(verdict === "match"\) \{\s*update\.youtubeVideoId = candidate\.candidate\.id;/,
+    );
+  });
+
+  test("only the SUCCESS path reports an id — never the unmatched or failed patches", () => {
+    // An id is provenance for audio Fluncle actually kept. A walk that stored nothing has no
+    // upload to attribute, and a failed one never got that far.
+    const unmatched = source.slice(source.indexOf('captureStatus: "unmatched"'));
+    const failed = source.slice(source.indexOf('captureStatus: "failed"'));
+
+    expect(unmatched.slice(0, 400)).not.toContain("youtubeVideoId");
+    expect(failed.slice(0, 400)).not.toContain("youtubeVideoId");
+  });
+
+  test("the sweep never sends an officialness verdict — that is the server's call", () => {
+    // A box sweep reports what it captured; it never grants permission for a link to be shown. The
+    // oEmbed check lives in apps/web/src/lib/server/youtube-official.ts, behind the API boundary,
+    // so a compromised or stale box can never promote a rip onto the page.
+    expect(source).not.toContain("youtubeVideoOfficial");
+    expect(source).not.toContain("youtubeVerifiedAt");
+    expect(source).not.toContain("oembed");
+  });
+});

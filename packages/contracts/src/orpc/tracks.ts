@@ -20,6 +20,8 @@ import {
  * equal so neither side can gain a member alone. Every value is backed by a stored
  * column or by the recording's own primary key:
  *
+ *   - `fingerprint` — Fluncle's own capture matched the audio against the official preview. The
+ *     one method whose evidence is the SOUND rather than metadata.
  *   - `isrc` — an ISRC equality decided it.
  *   - `operator` — a human read the evidence and ruled.
  *   - `pk-derived` — the identifier is the recording's origin, not a lookup result.
@@ -31,7 +33,16 @@ import {
  *   - `unknown-legacy` — Fluncle holds no record of how, rather than the check being weak.
  */
 export const IdentityMethodSchema = z
-  .enum(["isrc", "operator", "pk-derived", "publish", "search", "search-subset", "unknown-legacy"])
+  .enum([
+    "fingerprint",
+    "isrc",
+    "operator",
+    "pk-derived",
+    "publish",
+    "search",
+    "search-subset",
+    "unknown-legacy",
+  ])
   .describe("How the identifier or link came to be trusted.");
 
 /**
@@ -106,6 +117,7 @@ const IdentityRecordingSchema = z.object({
     discogs: IdentityStateSchema,
     spotify: IdentityStateSchema,
     tidal: IdentityStateSchema,
+    youtube: IdentityStateSchema,
   }),
   logId: z.string().nullable(),
   relation: z
