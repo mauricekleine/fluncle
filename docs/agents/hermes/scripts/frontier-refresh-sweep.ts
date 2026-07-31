@@ -87,58 +87,85 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
   );
 }
 
+export function buildFrontierSummary(tick: FrontierRefreshSummary): Record<string, unknown> {
+  const building = tick.building ?? 0;
+  const editionOnly = tick.editionOnly ?? 0;
+  const failed = tick.failed ?? 0;
+  const minted = tick.minted ?? 0;
+  const refreshed = tick.refreshed ?? 0;
+  const skipped = tick.skipped ?? 0;
+  const unchanged = tick.unchanged ?? 0;
+
+  return {
+    budgetPaused: tick.budgetPaused ?? false,
+    building,
+    // `total` is the Worker's capped candidate page, not the number actually attempted.
+    checked: failed + building + minted + refreshed + editionOnly + unchanged + skipped,
+    editionOnly,
+    error: null,
+    errors: 0,
+    failed,
+    minted,
+    ok: true,
+    produced: minted + refreshed + editionOnly,
+    refreshed,
+    skipped,
+    switchOff: tick.switchOff ?? false,
+    total: tick.total ?? 0,
+    unchanged,
+    // Deliberately no `queue_depth`: `total` is capped and is not a remaining-backlog count.
+  };
+}
+
+export function buildFrontierFailureSummary(error: unknown): Record<string, unknown> {
+  return {
+    budgetPaused: null,
+    building: null,
+    checked: null,
+    editionOnly: null,
+    error: error instanceof Error ? error.message : String(error),
+    errors: 1,
+    failed: null,
+    minted: null,
+    ok: false,
+    produced: null,
+    refreshed: null,
+    skipped: null,
+    switchOff: null,
+    total: null,
+    unchanged: null,
+  };
+}
+
 // `main` RETURNS its summary and never exits: the process-level exit code is the
 // entrypoint's job below. That keeps the sweep importable (frontier-refresh-sweep.test.ts).
 export function main(): { ok: boolean } & Record<string, unknown> {
-  const summary = {
-    budgetPaused: false,
-    building: 0,
-    editionOnly: 0,
-    error: null as null | string,
-    failed: 0,
-    minted: 0,
-    ok: true,
-    refreshed: 0,
-    skipped: 0,
-    switchOff: false,
-    total: 0,
-    unchanged: 0,
-  };
-
   try {
     const tick = fluncleJson<FrontierRefreshSummary>(["admin", "frontier", "refresh"]);
+    const summary = buildFrontierSummary(tick);
 
-    summary.total = tick.total ?? 0;
-    summary.refreshed = tick.refreshed ?? 0;
-    summary.unchanged = tick.unchanged ?? 0;
-    summary.minted = tick.minted ?? 0;
-    summary.editionOnly = tick.editionOnly ?? 0;
-    summary.skipped = tick.skipped ?? 0;
-    summary.failed = tick.failed ?? 0;
-    summary.switchOff = tick.switchOff ?? false;
-    summary.building = tick.building ?? 0;
-    summary.budgetPaused = tick.budgetPaused ?? false;
-
-    if (summary.switchOff) {
+    if (tick.switchOff ?? false) {
       log(
-        `Frontier minting is paused (kill switch closed) — ${summary.editionOnly} edition(s) written, Spotify skipped`,
+        `Frontier minting is paused (kill switch closed) — ${tick.editionOnly ?? 0} edition(s) written, Spotify skipped`,
       );
-    } else if (summary.budgetPaused) {
+    } else if (tick.budgetPaused ?? false) {
       log(
-        `Spotify budget spent — paused after ${summary.building} deferred; the durable cursor resumes next tick`,
+        `Spotify budget spent — paused after ${tick.building ?? 0} deferred; the durable cursor resumes next tick`,
       );
-    } else if (summary.failed > 0) {
-      log(`${summary.failed} playlist(s) failed to refresh (best-effort; retried next tick)`);
+    } else if ((tick.failed ?? 0) > 0) {
+      log(`${tick.failed ?? 0} playlist(s) failed to refresh (best-effort; retried next tick)`);
     }
+
+    console.log(JSON.stringify(summary));
+
+    return summary as { ok: boolean } & Record<string, unknown>;
   } catch (error) {
-    summary.ok = false;
-    summary.error = error instanceof Error ? error.message : String(error);
-    log(`frontier refresh sweep failed: ${summary.error}`);
+    const summary = buildFrontierFailureSummary(error);
+    log(`frontier refresh sweep failed: ${String(summary.error)}`);
+    console.log(JSON.stringify(summary));
+
+    return summary as { ok: boolean } & Record<string, unknown>;
   }
-
-  console.log(JSON.stringify(summary));
-
-  return summary;
 }
 
 if (import.meta.main) {

@@ -249,6 +249,7 @@ function main(): void {
 
   const summary = {
     batch: 0,
+    errors: 0,
     failed: 0,
     imagesBudgetLimited: false,
     imagesChecked: 0,
@@ -298,11 +299,11 @@ function main(): void {
   summary.imagesRateLimited = images.rateLimited;
   summary.imagesSkipped = images.skipped;
   summary.throttled ||= images.rateLimited;
+  summary.failed += images.failed;
 
   const processed = summary.resolved + summary.noop;
   const checked = summary.batch + summary.imagesChecked;
   const produced = processed + summary.imagesFilled + summary.imagesSkipped;
-  const errors = summary.failed + summary.imagesFailed;
   const queueDepth =
     queue.length < QUEUE_LIMIT && images.queueDepth !== null
       ? summary.queueRemaining + images.queueDepth
@@ -312,7 +313,6 @@ function main(): void {
     JSON.stringify({
       ...summary,
       checked,
-      errors,
       expected_interval_ms: EXPECTED_INTERVAL_MS,
       ok: true,
       processed,
@@ -325,5 +325,12 @@ function main(): void {
 // The cron runs this file directly; the guard keeps importing `fluncleJson` for
 // the tests (artist-sweep.test.ts) side-effect free.
 if (import.meta.main) {
-  main();
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`fatal: ${message}`);
+    console.log(JSON.stringify({ error: message, errors: 1, ok: false, reason: "artist_failed" }));
+    process.exit(1);
+  }
 }

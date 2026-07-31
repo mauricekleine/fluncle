@@ -54,6 +54,7 @@ import {
   setCatalogueCapturePaused,
 } from "../capture-budget";
 import {
+  countUnverifiedCaptures,
   clearWrongAudio,
   flagWrongAudio,
   forceCapture,
@@ -170,7 +171,16 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
-        return { ok: true, tracks: await listUnverifiedCaptures(input.limit) } as const;
+        const [tracks, queued] = await Promise.all([
+          listUnverifiedCaptures(input.limit),
+          input.count ? countUnverifiedCaptures() : Promise.resolve(undefined),
+        ]);
+
+        return {
+          ok: true,
+          ...(queued === undefined ? {} : { queued }),
+          tracks,
+        } as const;
       } catch (error) {
         throw apiFault(error);
       }

@@ -54,12 +54,13 @@ function statementSql(statement: InStatement): string {
 // several independent round trips, so a bare client turns every transient
 // gateway blip into a rendered error page.
 //
-// THE SAFETY CONTRACT: reads retry, writes NEVER do. A 5xx on a write is
-// ambiguous — the write may well have been applied before the gateway gave
-// up — so re-running it risks double-applying it. Only the `execute` path
-// retries, and only for a statement the classifier is CONFIDENT is a read;
-// `batch` never retries (a batch is one unit and can contain writes) and
-// `transaction` is untouched.
+// THE GENERIC SAFETY CONTRACT: the instrumented `execute` path retries reads
+// and NEVER writes. A 5xx on a write is ambiguous — the write may well have
+// been applied before the gateway gave up — so re-running it risks
+// double-applying it. The generic path retries only a statement the classifier
+// is CONFIDENT is a read; `batch` never retries (a batch is one unit and can
+// contain writes) and `transaction` is untouched. The one path-specific write
+// exception is named and justified beside `retryRunEventInsert` below.
 
 // 2 retries = 3 attempts total. The backoff array's length IS the retry cap,
 // so tuning is one edit. Kept short: an `/artist/*` render fires several of
@@ -145,15 +146,17 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function recordRetries(span: Span, attempt: number): void {
-  if (attempt > 0) {
+function recordRetries(span: Span | undefined, attempt: number): void {
+  if (span && attempt > 0) {
     span.setAttribute("db.retry.attempts", attempt);
   }
 }
 
-// Runs inside the caller's `db.query` span so one logical query stays ONE span
-// (no phantom spans; the Slow DB Queries detector keeps working).
-async function runWithRetry<T>(run: () => Promise<T>, span: Span): Promise<T> {
+// The generic read path supplies its `db.query` span so one logical query stays
+// ONE span (no phantom spans; the Slow DB Queries detector keeps working). The
+// run-ledger exception calls the same retry primitive around its already-
+// instrumented execute.
+async function runWithRetry<T>(run: () => Promise<T>, span?: Span): Promise<T> {
   let attempt = 0;
 
   for (;;) {
@@ -177,6 +180,19 @@ async function runWithRetry<T>(run: () => Promise<T>, span: Span): Promise<T> {
       await delay(backoffMs + Math.random() * DB_RETRY_JITTER_MS);
     }
   }
+}
+
+/**
+ * The ONE write-specific retry exception: `insertRunEvent`'s append into the run ledger.
+ *
+ * This is deliberately named for that path rather than exposed as a generic write retry.
+ * Its caller supplies a deterministic `${unit}:${startedAt}` primary key and executes
+ * `ON CONFLICT(id) DO NOTHING`, so replaying a request whose receipt was lost can only
+ * insert the missing row or observe the already-inserted row as a no-op. Other writes do
+ * not inherit that proof (crawler `settle`, for example, increments attempts).
+ */
+export async function retryRunEventInsert<T>(insert: () => Promise<T>): Promise<T> {
+  return runWithRetry(insert);
 }
 
 // One chokepoint: wrap the created client in a Proxy that opens a `db.query`

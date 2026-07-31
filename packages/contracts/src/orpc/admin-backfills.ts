@@ -776,8 +776,8 @@ export const backfillRecordingMbids = oc
  * worklist drains and a re-run is a no-op — catalogue-graph identity only (no publish, no
  * certification), so the box's agent-token cron drives it, the `backfill_recording_mbids` precedent.
  * Returns `{ ok, dryRun, scanned, edgesWritten, fullyMatched(+Count), partiallyMatched(+Count),
- * zeroMatched(+Count), unmatchedNames, nextCursor }` — `unmatchedNames` is the residual (credited
- * names with no identity) a future paced MusicBrainz credit-sweep would mint from.
+ * zeroMatched(+Count), unmatchedNames, nextCursor, queueDepth }` — `unmatchedNames` is the residual
+ * (credited names with no identity) a future paced MusicBrainz credit-sweep would mint from.
  */
 export const backfillArtistEdges = oc
   .route({
@@ -810,6 +810,8 @@ export const backfillArtistEdges = oc
       // Track ids where SOME names matched and some did not — their unmatched names feed the residual.
       partiallyMatched: z.array(z.string()),
       partiallyMatchedCount: z.number(),
+      // Authoritative post-pass worklist size. The Worker counts through the two queue indexes.
+      queueDepth: z.number(),
       // Tracks VISITED this pass (fully + partially + zero) — the CLI loop's cap unit.
       scanned: z.number(),
       // Total credited names across the batch that matched NO identity — the residual a future paced

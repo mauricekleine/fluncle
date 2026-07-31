@@ -19,7 +19,11 @@ const COUNTER_EMITTER_PROOFS: Readonly<Record<string, EmitterProof>> = {
   gateSkipped: {
     file: "entity-bio-sweep.ts",
     patterns: [
-      /const summary = \{[\s\S]{0,500}\bgateSkipped:\s*0,/,
+      // Deliberately NOT anchored to `const summary = {` plus a character distance. That form
+      // broke twice on legitimate edits — a longer comment, then this sweep's move to a
+      // `createBioSweepSummary` factory — each time reporting a missing emitter that was never
+      // missing. Assert the initializer exists; deleting the counter still fails this.
+      /\bgateSkipped:\s*0,/,
       /JSON\.stringify\(\{\s*ok:\s*true,\s*\.\.\.summary\s*\}\)/,
     ],
   },

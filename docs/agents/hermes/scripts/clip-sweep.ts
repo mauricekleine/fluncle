@@ -38,7 +38,7 @@ import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 // ---------------------------------------------------------------------------
 
 const BATCH_CAP = Number(process.env.CLIP_BATCH_CAP ?? "1") || 1;
-const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
+const QUEUE_LIMIT = 50; // preserve the work ceiling; the full response still meters backlog
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -53,12 +53,75 @@ type PendingClip = {
   mixtapeId?: string;
 };
 
-type Outcome = "cut" | "skipped";
+export type ClipOutcome = "cut" | "deferred" | "failed";
 
 // The outcome plus the self-seconds cost row — non-null ONLY on a delivered cut. The
 // clip is a set-level artifact, not a finding, so the row is `global`-scoped (logId +
 // trackId null); occurredAt keeps each cut's row distinct.
-type CutResult = { cost: BoxCostEvent | null; outcome: Outcome };
+type CutResult = { cost: BoxCostEvent | null; outcome: ClipOutcome };
+
+export type ClipSweepSummary = {
+  batch: number;
+  checked: number;
+  cut: number;
+  errors: number;
+  failed: number;
+  pending: number;
+  produced: number;
+  queue_depth: number;
+  skipped: number;
+};
+
+/** Start a measured summary from the API's full pending list, never a page/batch cap. */
+export function createClipSummary(pending: number): ClipSweepSummary {
+  return {
+    batch: 0,
+    checked: 0,
+    cut: 0,
+    errors: 0,
+    failed: 0,
+    pending,
+    produced: 0,
+    queue_depth: pending,
+    skipped: 0,
+  };
+}
+
+/** Classify a non-zero cut command without conflating a staged-video defer with failure. */
+export function classifyClipFailure(detail: string): Exclude<ClipOutcome, "cut"> {
+  return detail.toLowerCase().includes("set_not_staged") ? "deferred" : "failed";
+}
+
+/** Record one attempted clip while preserving the existing batch/cut/skipped counters. */
+export function recordClipOutcome(summary: ClipSweepSummary, outcome: ClipOutcome): void {
+  summary.batch += 1;
+  summary.checked += 1;
+
+  if (outcome === "cut") {
+    summary.cut += 1;
+    summary.produced += 1;
+    summary.queue_depth = Math.max(0, summary.queue_depth - 1);
+
+    return;
+  }
+
+  summary.skipped += 1;
+
+  if (outcome === "failed") {
+    summary.failed += 1;
+  }
+}
+
+export function buildClipFatalSummary(): Record<string, unknown> {
+  return {
+    checked: null,
+    errors: 1,
+    failed: null,
+    ok: false,
+    produced: null,
+    reason: "sweep_error",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Shell helpers — synchronous, fail-loud where it matters.
@@ -105,7 +168,7 @@ function cutOne(clip: PendingClip): CutResult {
   if (!id) {
     log("queue item without a clip id — skipping");
 
-    return { cost: null, outcome: "skipped" };
+    return { cost: null, outcome: "failed" };
   }
 
   // Time the on-box ffmpeg cut (trim + 9:16 crop + brand frame + upload) for the
@@ -117,8 +180,9 @@ function cutOne(clip: PendingClip): CutResult {
 
   if (code !== 0) {
     const detail = `${stdout}\n${stderr}`.toLowerCase();
+    const outcome = classifyClipFailure(detail);
 
-    if (detail.includes("set_not_staged")) {
+    if (outcome === "deferred") {
       log(
         `${id}: set video not staged yet — skipping (stays pending until distribute --set-video)`,
       );
@@ -126,7 +190,7 @@ function cutOne(clip: PendingClip): CutResult {
       log(`${id}: cut exited ${code}: ${stderr.trim().slice(-200)}`);
     }
 
-    return { cost: null, outcome: "skipped" };
+    return { cost: null, outcome };
   }
 
   log(`${id}: cut`);
@@ -153,9 +217,10 @@ async function main(): Promise<void> {
     "--status",
     "pending",
   ]);
-  const queue = (response.clips ?? []).slice(0, QUEUE_LIMIT);
+  const queue = response.clips ?? [];
+  const work = queue.slice(0, QUEUE_LIMIT);
 
-  const summary = { batch: 0, cut: 0, pending: queue.length, skipped: 0 };
+  const summary = createClipSummary(queue.length);
 
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
@@ -167,9 +232,7 @@ async function main(): Promise<void> {
   // are already durable — a dropped POST only understates the ledger).
   const costs: BoxCostEvent[] = [];
 
-  for (const clip of queue.slice(0, BATCH_CAP)) {
-    summary.batch += 1;
-
+  for (const clip of work.slice(0, BATCH_CAP)) {
     try {
       const { cost, outcome } = cutOne(clip);
 
@@ -177,11 +240,11 @@ async function main(): Promise<void> {
         costs.push(cost);
       }
 
-      summary[outcome] += 1;
+      recordClipOutcome(summary, outcome);
     } catch (error) {
       // One clip's failure must not abort the sweep — log it and move on; it stays
       // pending for the next tick.
-      summary.skipped += 1;
+      recordClipOutcome(summary, "failed");
       log(`error on ${clip.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -192,8 +255,10 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
 }
 
-main().catch((error) => {
-  log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-  console.log(JSON.stringify({ ok: false, reason: "sweep_error" }));
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error) => {
+    log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    console.log(JSON.stringify(buildClipFatalSummary()));
+    process.exit(1);
+  });
+}

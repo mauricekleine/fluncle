@@ -221,12 +221,14 @@ export type AnchorSummary = {
    * of. Those rows resolve normally, just unhelped (no ISRC recovered).
    */
   deezerSearchFailed: number;
-  /** The first failure message for diagnosis; `errors` is the permanent, lossless count. */
+  /** The first run-failure message for diagnosis; item diagnostics stay in their counters/logs. */
   error: null | string;
-  /** Canonical run-ledger failure count across every rung and write edge. */
+  /** Run-level failures only: the sweep could not do its job and exits non-zero. */
   errors: number;
   /** The timer's real hourly cadence, for run-ledger freshness. */
   expectedIntervalMs: number;
+  /** Individual row/rung failures that did not prevent the run from continuing. */
+  failed: number;
   /**
    * Free-rung (`resolve_anchor`) calls that THREW. Counted UNCONDITIONALLY, because it is the tell
    * that a rung is broken: with Apify enabled these rows fall silently through to the paid fallback
@@ -288,8 +290,13 @@ export type AnchorDeps = {
   sleep: (ms: number) => Promise<void>;
 };
 
-/** Count a failure without letting a later one overwrite the first useful diagnostic. */
-function recordError(summary: AnchorSummary, message?: string): void {
+/** Count an item/rung failure that did not stop the run. */
+function recordFailure(summary: AnchorSummary): void {
+  summary.failed += 1;
+}
+
+/** Count a run failure without letting a later one overwrite the first useful diagnostic. */
+function recordRunError(summary: AnchorSummary, message?: string): void {
   summary.errors += 1;
 
   if (summary.error === null && message) {
@@ -315,7 +322,7 @@ function tallyListenBrainzOutcome(summary: AnchorSummary, verdict: AnchorVerdict
       break;
     case "metadata-failed":
       summary.lbMetadataFailed += 1;
-      recordError(summary);
+      recordFailure(summary);
       break;
     case "no-mbid":
       summary.lbNoMbid += 1;
@@ -328,7 +335,7 @@ function tallyListenBrainzOutcome(summary: AnchorSummary, verdict: AnchorVerdict
       break;
     case "request-failed":
       summary.lbRequestFailed += 1;
-      recordError(summary);
+      recordFailure(summary);
       break;
     case "anchored":
     case undefined:
@@ -462,6 +469,7 @@ export async function runAnchorTick(
     error: null,
     errors: 0,
     expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
+    failed: 0,
     freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
     lbEmptyIds: 0,
@@ -487,7 +495,7 @@ export async function runAnchorTick(
     summary.checked = queue.length;
   } catch (error) {
     summary.ok = false;
-    recordError(summary, error instanceof Error ? error.message : String(error));
+    recordRunError(summary, error instanceof Error ? error.message : String(error));
 
     return summary;
   }
@@ -499,7 +507,7 @@ export async function runAnchorTick(
   );
   const invalidRows = queue.length - rows.length;
   summary.skipped += invalidRows;
-  summary.errors += invalidRows;
+  summary.failed += invalidRows;
 
   if (rows.length === 0) {
     return summary;
@@ -544,7 +552,7 @@ export async function runAnchorTick(
 
       if (hits === null) {
         summary.deezerSearchFailed += 1;
-        recordError(summary);
+        recordFailure(summary);
       }
 
       deezerCandidates = hits ?? [];
@@ -598,7 +606,7 @@ export async function runAnchorTick(
       );
       freeRungThrew += 1;
       summary.freeRungErrors += 1;
-      recordError(summary, error instanceof Error ? error.message : String(error));
+      recordFailure(summary);
     }
 
     apifyRows.push(row);
@@ -639,7 +647,7 @@ export async function runAnchorTick(
       deps.log(`actor run failed: ${error instanceof Error ? error.message : String(error)}`);
       summary.ok = false;
       summary.apifyActorErrors += 1;
-      recordError(summary, error instanceof Error ? error.message : String(error));
+      recordRunError(summary, error instanceof Error ? error.message : String(error));
       summary.skipped += batch.length;
       continue;
     }
@@ -666,7 +674,7 @@ export async function runAnchorTick(
         // One row's anchor POST failing never aborts the tick (the capture-sweep discipline).
         deps.log(`${row.trackId}: ${error instanceof Error ? error.message : String(error)}`);
         summary.skipped += 1;
-        recordError(summary, error instanceof Error ? error.message : String(error));
+        recordFailure(summary);
       }
     }
   }
@@ -1006,6 +1014,7 @@ export async function runAnchorSweep(
     error: null as null | string,
     errors: 0,
     expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
+    failed: 0,
     freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
     lbEmptyIds: 0,
@@ -1054,6 +1063,7 @@ export async function runAnchorSweep(
     // a failed Deezer search still resolves its row, and a thrown free rung is already counted by
     // whatever that row ends up as (an Apify verdict, or `skipped` when Apify is off).
     merged.deezerSearchFailed += page.deezerSearchFailed;
+    merged.failed += page.failed;
     merged.freeRungErrors += page.freeRungErrors;
     merged.errors += page.errors;
     merged.missed += page.missed;
