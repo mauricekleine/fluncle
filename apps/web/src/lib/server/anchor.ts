@@ -912,6 +912,14 @@ async function resolveViaSpotifySearch(
  * cleared as its provenance, and `/identity` serves a Deezer link off it. It is free — the id came
  * in the search response that was already read — and it is never kept off an ungated answer.
  *
+ * THIS IS ALSO THE ONE PLACE THE DEEZER LEDGER IS WRITTEN (`tracks.backfill_deezer_*`, schema.ts).
+ * It is stamped by the two outcomes that settle whether Deezer carries this recording — a hit that
+ * cleared the gate WITH an id, and a gate-clean refusal — and by nothing else. The two exits above
+ * (an unverifiable row, an empty candidate list) stamp nothing, on exactly the reasoning that already
+ * governs `isrc_attempted_at` here, and so does the legacy branch where a cleared hit arrives with no
+ * id (see the write below). The ledger is what lets a checked-and-missed row say so: without it, a
+ * row this rung had searched and found nothing for would still be reading "Not checked yet".
+ *
  * A verified hit's ISRC is written FILL-EMPTY-ONLY (`coalesce(isrc, ?)`, mirroring the anchor-hit
  * write) — a real ISRC is never overwritten (defensive; we only reach here for an ISRC-less row) — and
  * returned so the SAME resolve call carries it forward in memory to the exact-ISRC rungs. Returns
@@ -981,9 +989,25 @@ export async function recoverIsrcViaDeezer(
     // of the column. Note where this sits: BELOW the empty-candidates return above, which is
     // deliberately left unstamped, because `searchDeezerCandidates` hands back the same empty array
     // for "Deezer has nothing" and for a quota/network failure, and a throttle is not an answer.
+    //
+    // THE DEEZER LEDGER RIDES THE SAME STATEMENT (schema.ts § `backfill_deezer_*`), because this is
+    // the miss it was built for. The same candidates that failed the ISRC gate failed the DEEZER-ID
+    // gate — the id is kept only off a hit that clears, so a gate-clean miss ends with no id — and
+    // that is a look CONCLUDED, not a look never taken. Without this stamp the row's receipt would
+    // go on claiming "Not checked yet" after Fluncle had checked and come back empty; with it the
+    // row reads "Not found · checked <date>". `attempted_at` is a plain assignment (the last
+    // concluded look, a moving watermark) and `attempts` increments (the monotone tally the identity
+    // envelope prints). `done_at` stays null — nothing resolved — and `failures` stays 0, since this
+    // branch IS the clean conclusion rather than the transport failure a streak would back off from.
+    const missAt = new Date().toISOString();
+
     await db.execute({
-      args: [new Date().toISOString(), trackId],
-      sql: `update tracks set isrc_attempted_at = ? where track_id = ?`,
+      args: [missAt, missAt, trackId],
+      sql: `update tracks
+            set isrc_attempted_at = ?,
+                backfill_deezer_attempted_at = ?,
+                backfill_deezer_attempts = backfill_deezer_attempts + 1
+            where track_id = ?`,
     });
 
     return undefined;
@@ -1000,8 +1024,25 @@ export async function recoverIsrcViaDeezer(
   // made for it. The trio is first-write-wins through `coalesce` and moves together, so a row can
   // never wear an id with another id's provenance. Null id (an older box's payload, or a hit Deezer
   // sent without one) binds three nulls and changes nothing.
+  //
+  // AND THE DEEZER LEDGER (schema.ts § `backfill_deezer_*`), in this same statement — but ONLY when
+  // an id actually came back. A hit that cleared the gate AND carried an id is a look concluded, so
+  // `attempted_at` moves and `attempts` increments; a tally that counted only misses would be no
+  // tally at all. `done_at` follows the id exactly: it coalesces on the same first-write-wins rule
+  // and binds the same value as `deezer_verified_at`, so the moment the link was won and the moment
+  // the ledger says it resolved can never drift apart.
+  //
+  // A CLEARED HIT THAT ARRIVED WITHOUT AN ID STAMPS NOTHING, and the reason is the receipt's
+  // vocabulary. That branch is a legacy-box-payload defence (`searchDeezerCandidates` sets the id
+  // from Deezer's numeric `id`, which it always sends), and on it Deezer demonstrably DOES carry the
+  // recording — the ISRC being written on this very line came out of that hit. Stamping would render
+  // the row "Not found · checked <date>", and on every other row of that page "Not found" means the
+  // look could not identify the recording on that platform, not that a payload omitted a field. No
+  // state fits: `absent` misstates the fact and `verified` has no link to show. So the row stays
+  // `unattempted`, the same reading this rung already gives every outcome it cannot stand behind.
   const now = new Date().toISOString();
   const deezerTrackId = verified?.candidate.deezerTrackId ?? null;
+  const deezerWonAt = deezerTrackId === null ? null : now;
 
   await db.execute({
     args: [
@@ -1009,7 +1050,10 @@ export async function recoverIsrcViaDeezer(
       now,
       deezerTrackId,
       deezerTrackId === null ? null : (verified?.via ?? null),
-      deezerTrackId === null ? null : now,
+      deezerWonAt,
+      deezerWonAt,
+      deezerTrackId === null ? 0 : 1,
+      deezerWonAt,
       trackId,
     ],
     sql: `update tracks
@@ -1017,7 +1061,10 @@ export async function recoverIsrcViaDeezer(
               isrc_attempted_at = ?,
               deezer_track_id = coalesce(deezer_track_id, ?),
               deezer_verified_by = coalesce(deezer_verified_by, ?),
-              deezer_verified_at = coalesce(deezer_verified_at, ?)
+              deezer_verified_at = coalesce(deezer_verified_at, ?),
+              backfill_deezer_attempted_at = coalesce(?, backfill_deezer_attempted_at),
+              backfill_deezer_attempts = backfill_deezer_attempts + ?,
+              backfill_deezer_done_at = coalesce(backfill_deezer_done_at, ?)
           where track_id = ?`,
   });
 

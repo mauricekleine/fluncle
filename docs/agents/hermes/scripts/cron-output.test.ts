@@ -160,7 +160,7 @@ describe("emit_cron_output — the marker's shape", () => {
   test("PLUMBING: a real stderr error line reaches the marker AND scores strain", () => {
     const { marker } = emit(
       "artist-bio",
-      `echo ${JSON.stringify(REAL_ERROR_LINE)} >&2; echo '{"ok":true,"authored":0,"gateSkipped":1}'`,
+      `echo ${JSON.stringify(REAL_ERROR_LINE)} >&2; echo '{"ok":true,"authored":0,"failed":0,"gateSkipped":1}'`,
     );
 
     // The line is on disk (it was NOT, before this change — stderr was never captured).
@@ -168,11 +168,11 @@ describe("emit_cron_output — the marker's shape", () => {
     expect(marker).toContain(REAL_ERROR_LINE);
 
     // The sweep's own verdict is untouched and still reads green.
-    expect(findJsonSummary(marker)).toEqual({ authored: 0, gateSkipped: 1, ok: true });
+    expect(findJsonSummary(marker)).toEqual({ authored: 0, failed: 0, gateSkipped: 1, ok: true });
 
-    // And the detector, reading the SAME bytes the wrapper wrote, scores it:
-    // one distress line + one `gateSkipped`.
-    expect(markerStrain(marker)).toBe(2);
+    // And the detector, reading the SAME bytes the wrapper wrote, scores the structured
+    // `gateSkipped` once; the summary's `failed` field prevents duplicate stderr counting.
+    expect(markerStrain(marker)).toBe(1);
   });
 
   test("PLUMBING: benign chatter reaches the marker and scores NOTHING", () => {

@@ -82,6 +82,10 @@ async function seedCatalogue(row: {
 /** The anchor + attempt-stamp state of a row, for the assertions. */
 async function anchorState(trackId: string): Promise<{
   attempted: unknown;
+  deezerAttemptedAt: unknown;
+  deezerAttempts: unknown;
+  deezerDoneAt: unknown;
+  deezerFailures: unknown;
   deezerTrackId: unknown;
   deezerVerifiedAt: unknown;
   deezerVerifiedBy: unknown;
@@ -91,12 +95,18 @@ async function anchorState(trackId: string): Promise<{
   const row = await db.execute({
     args: [trackId],
     sql: `select spotify_uri, spotify_anchor_attempted_at, isrc,
-                 deezer_track_id, deezer_verified_at, deezer_verified_by
+                 deezer_track_id, deezer_verified_at, deezer_verified_by,
+                 backfill_deezer_attempted_at, backfill_deezer_attempts,
+                 backfill_deezer_done_at, backfill_deezer_failures
           from tracks where track_id = ?`,
   });
 
   return {
     attempted: row.rows[0]?.spotify_anchor_attempted_at,
+    deezerAttemptedAt: row.rows[0]?.backfill_deezer_attempted_at,
+    deezerAttempts: row.rows[0]?.backfill_deezer_attempts,
+    deezerDoneAt: row.rows[0]?.backfill_deezer_done_at,
+    deezerFailures: row.rows[0]?.backfill_deezer_failures,
     deezerTrackId: row.rows[0]?.deezer_track_id,
     deezerVerifiedAt: row.rows[0]?.deezer_verified_at,
     deezerVerifiedBy: row.rows[0]?.deezer_verified_by,
@@ -661,6 +671,14 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(text(state.deezerTrackId)).toBe("3135556");
     expect(text(state.deezerVerifiedBy)).toBe("search");
     expect(state.deezerVerifiedAt).not.toBeNull();
+    // THE LEDGER MOVES WITH IT (schema.ts § `backfill_deezer_*`). A hit is a look concluded, so the
+    // tally counts it — a counter that only ever counted misses would misreport how often Fluncle
+    // has actually asked. `done_at` binds the same moment as `deezer_verified_at`, so the moment the
+    // link was won and the moment the ledger calls it resolved can never drift apart.
+    expect(state.deezerAttemptedAt).not.toBeNull();
+    expect(Number(state.deezerAttempts)).toBe(1);
+    expect(text(state.deezerDoneAt)).toBe(text(state.deezerVerifiedAt));
+    expect(Number(state.deezerFailures)).toBe(0);
   });
 
   it("keeps NO Deezer id off a hit that failed the gate", async () => {
@@ -695,6 +713,42 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(state.deezerTrackId).toBeNull();
     expect(state.deezerVerifiedBy).toBeNull();
     expect(state.deezerVerifiedAt).toBeNull();
+    // AND THE LEDGER RECORDS THE MISS, which is the whole reason it exists. Deezer answered, the
+    // gate ruled, and Fluncle came away with nothing — so `/identity` must read "Not found · checked
+    // <date>" here rather than going on claiming "Not checked yet". `done_at` stays null (nothing
+    // resolved) and `failures` stays 0: this is a clean conclusion, not the transport failure a
+    // streak would back off from.
+    expect(state.deezerAttemptedAt).not.toBeNull();
+    expect(Number(state.deezerAttempts)).toBe(1);
+    expect(state.deezerDoneAt).toBeNull();
+    expect(Number(state.deezerFailures)).toBe(0);
+  });
+
+  it("leaves the Deezer ledger alone when the candidate list came back empty", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: null,
+      title: "Dribble",
+      trackId: "mb_box_dzempty",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue(null);
+
+    // THE AMBIGUOUS EXIT, and the one the ledger must never dress up as an answer. An empty array is
+    // what `searchDeezerCandidates` returns for "Deezer has nothing" AND for a quota or network
+    // failure — the two are indistinguishable here — so a throttled tick must not leave the row
+    // claiming Deezer was checked and does not carry the recording. It stays honestly unattempted,
+    // the same reasoning that already keeps `isrc_attempted_at` off this branch.
+    await resolveAnchorFree("mb_box_dzempty", new Date(), { deezerCandidates: [] });
+
+    const state = await anchorState("mb_box_dzempty");
+
+    expect(state.deezerAttemptedAt).toBeNull();
+    expect(Number(state.deezerAttempts)).toBe(0);
+    expect(state.deezerDoneAt).toBeNull();
   });
 
   it("recovers the ISRC from a hit an older box sent without an id, and keeps no link", async () => {
@@ -723,6 +777,15 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(result.isrcRecoveredByDeezer).toBe(true);
     expect(text(state.isrc)).toBe("GBBOXDZ00004");
     expect(state.deezerTrackId).toBeNull();
+    // AND THE LEDGER STAYS EMPTY, which is the subtle one. A look did conclude — but what it
+    // concluded is that Deezer DOES carry this recording (the recovered ISRC came out of that very
+    // hit); the id was simply missing from the payload. Stamping would render the row "Not found ·
+    // checked <date>", and on every other row of /identity "Not found" means the look could not
+    // identify the recording on that platform — a different claim in the same words. `absent`
+    // misstates the fact and `verified` has no link to show, so neither is claimed.
+    expect(state.deezerAttemptedAt).toBeNull();
+    expect(Number(state.deezerAttempts)).toBe(0);
+    expect(state.deezerDoneAt).toBeNull();
   });
 
   it("refuses a box-supplied hit that fails the gate — the box cannot bypass verification", async () => {

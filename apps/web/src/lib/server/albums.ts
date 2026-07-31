@@ -68,6 +68,13 @@ export type AlbumRecord = {
    * not carry it; the surfacing reads it off `getAlbumBySlug`. See lib/server/bio.ts.
    */
   bio?: string;
+  /**
+   * The label's own catalogue number for this record (`albums.discogs_catno`), or undefined —
+   * the quiet factual line the album page prints beside its label, and the MusicRelease JSON-LD's
+   * `catalogNumber`. `albums.discogs_styles` deliberately has NO twin here: it is stored but
+   * nothing public reads it (see db/schema.ts and docs/album-entity.md).
+   */
+  discogsCatno?: string;
   id: string;
   name: string;
   /**
@@ -224,7 +231,7 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
   // a scan of a growing table). `release_group_mbid` + `upc` ride off the `albums` row itself.
   const result = await db.execute({
     args: [slug],
-    sql: `select ${ALBUM_COLUMNS}, bio, release_group_mbid, upc,
+    sql: `select ${ALBUM_COLUMNS}, bio, release_group_mbid, upc, discogs_catno,
                  (select min(t.release_date) from tracks t
                     where t.album_id = albums.id and t.release_date is not null) as release_date
           from albums where slug = ? limit 1`,
@@ -233,6 +240,7 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
   const row = typedRows<
     AlbumRow & {
       bio: string | null;
+      discogs_catno: string | null;
       release_date: string | null;
       release_group_mbid: string | null;
       upc: string | null;
@@ -243,6 +251,10 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
     ? {
         ...toAlbumRecord(row),
         bio: typeof row.bio === "string" && row.bio.trim() ? row.bio : undefined,
+        discogsCatno:
+          typeof row.discogs_catno === "string" && row.discogs_catno.trim()
+            ? row.discogs_catno
+            : undefined,
         releaseDate:
           typeof row.release_date === "string" && row.release_date ? row.release_date : undefined,
         releaseGroupMbid:
@@ -252,6 +264,108 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
         upc: typeof row.upc === "string" && row.upc ? row.upc : undefined,
       }
     : undefined;
+}
+
+// ── The Discogs release facts: catno + styles, written once per album ──────────────────
+//
+// A record's catalogue number and its styles are RELEASE attributes, so they land here at
+// album grain — the ruling `record_label_raw` already carries (db/schema.ts § albums). Both
+// arrive free: the Discogs resolver holds the payload it scored, and `backfill_discogs_facts`
+// re-reads a release Fluncle already resolved for the findings the MusicBrainz bridge answered
+// without ever fetching one.
+//
+// FILL-EMPTY-ONLY, ENFORCED IN SQL, exactly as `fillEmptyAlbumBio` below is. Every write is
+// gated on `discogs_state = 'pending'`, so a resolved album is never re-written and a terminal
+// `none` never re-enters the worklist — the once-per-album idempotence is the predicate, not the
+// caller's discipline, and two passes racing the same album cannot make the second overwrite the
+// first. The state machine is the `image_state` one verbatim (pending → resolved | none).
+
+/** The two facts a Discogs release carries, at the album grain that stores them. */
+export type AlbumDiscogsFacts = {
+  /** The label catalogue number, or undefined when the release carries none. */
+  catno?: string;
+  /** The release's styles, or undefined when it lists none. */
+  styles?: string[];
+};
+
+/**
+ * Store an album's Discogs facts, ONCE. A release that answered with a catno resolves the album;
+ * one that answered with none is TERMINAL (`none`) so the sweep never buys the same lookup twice.
+ * Styles ride either outcome — a release can list styles and no number.
+ *
+ * Returns true iff a row was written (false = the album is gone, or it was already ruled by an
+ * earlier pass). `styles` is stored as a JSON array so the column reads back as one value; an
+ * empty list stores NULL rather than `"[]"`, keeping "no styles" and "never looked" the same
+ * honest absence the rest of the schema uses.
+ */
+export async function storeAlbumDiscogsFacts(
+  albumId: string,
+  facts: AlbumDiscogsFacts,
+): Promise<boolean> {
+  const db = await getDb();
+  const catno = facts.catno?.trim();
+  const styles = (facts.styles ?? []).map((style) => style.trim()).filter((style) => style !== "");
+  const now = new Date().toISOString();
+
+  const result = await db.execute({
+    args: [
+      catno && catno.length > 0 ? catno : null,
+      styles.length > 0 ? JSON.stringify(styles) : null,
+      catno && catno.length > 0 ? "resolved" : "none",
+      now,
+      now,
+      albumId,
+    ],
+    sql: `update albums
+            set discogs_catno = ?,
+                discogs_styles = ?,
+                discogs_state = ?,
+                discogs_failures = 0,
+                discogs_attempted_at = ?,
+                updated_at = ?
+          where id = ? and discogs_state = 'pending'`,
+  });
+
+  return result.rowsAffected > 0;
+}
+
+/**
+ * Record a FAILED Discogs facts attempt on an album: the streak advances (which scales the
+ * cooldown the worklist applies) and the state stays `pending`, because nothing was concluded.
+ * The mirror of `resolveLabelImages`'s failure branch, and the reason a lookup that 500s is not
+ * silently indistinguishable from a release that genuinely has no number.
+ */
+export async function recordAlbumDiscogsFailure(albumId: string): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: [new Date().toISOString(), albumId],
+    sql: `update albums
+            set discogs_failures = discogs_failures + 1,
+                discogs_attempted_at = ?
+          where id = ? and discogs_state = 'pending'`,
+  });
+}
+
+/**
+ * Store the Discogs facts for the album a TRACK points at — the resolve-path entry point, where
+ * the caller holds a track id rather than an album id. Resolves `tracks.album_id` and delegates.
+ * NULL-SAFE at every hop: a track with no album row writes nothing and returns false, which is
+ * the honest outcome for a single that never minted one.
+ */
+export async function storeAlbumDiscogsFactsForTrack(
+  trackId: string,
+  facts: AlbumDiscogsFacts,
+): Promise<boolean> {
+  const db = await getDb();
+  const target = await db.execute({
+    args: [trackId],
+    sql: `select album_id from tracks where track_id = ? and album_id is not null limit 1`,
+  });
+
+  const albumId = typedRows<{ album_id: string }>(target.rows)[0]?.album_id;
+
+  return typeof albumId === "string" ? storeAlbumDiscogsFacts(albumId, facts) : false;
 }
 
 // ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────

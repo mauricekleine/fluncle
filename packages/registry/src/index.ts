@@ -1461,6 +1461,23 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "mirror the anchored, explicitly allowlisted public catalogue into the shared read-only device replica",
+    ],
+    kind: "cron",
+    name: "cron.device-mirror",
+    operatorNotes:
+      "hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Reads one consistent anchored-cut snapshot through a read-only source credential, diffs every whitelisted tuple against the shared device database, then applies dependent-first deletes and parent-first upserts in bounded parameterized batches. The target is mutated IN PLACE: rebuilding it would reset the libSQL replication log and force every device to bootstrap the full database again. A schema-version mismatch stops for an operator migration; the content fingerprint and derived timestamp update only after a verified zero-drift tick. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*. See docs/planning/offline-first-mobile-research.md.",
+    probeConfig: {
+      cadenceMs: 60 * MINUTE_MS,
+      cronName: "fluncle-device-mirror",
+      kind: "cron",
+    },
+    statusDescription: "keeps the offline catalogue replica in step",
+    title: "Device catalogue mirror",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin frontier refresh",
     exposedContent: [
       "re-mirror every crew member's Fluncle's Frontier playlist from their current recommendations",
@@ -1709,9 +1726,9 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command:
-      "fluncle admin backfills discogs && fluncle admin backfills lastfm && fluncle admin backfills apple-music && fluncle admin backfills apple-catalogue",
+      "fluncle admin backfills discogs && fluncle admin backfills lastfm && fluncle admin backfills apple-music && fluncle admin backfills apple-catalogue && fluncle admin backfills beatport && fluncle admin backfills discogs-facts",
     exposedContent: [
-      "Discogs id + Last.fm love + Apple Music link repair, findings then catalogue (--no-agent, Worker HTTP)",
+      "Discogs id + Last.fm love + Apple Music link + Beatport link repair, findings then catalogue, then each record's catalogue number (--no-agent, Worker HTTP)",
     ],
     kind: "cron",
     name: "cron.backfill",

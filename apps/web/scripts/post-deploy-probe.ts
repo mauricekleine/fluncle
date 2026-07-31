@@ -64,6 +64,16 @@ const PARAM_PLACEHOLDER = "probe";
 // `.onion` subdomains are skipped separately (not routable from GitHub Actions).
 const NON_ROOT_200_SUBDOMAINS = new Set<string>(["subdomain.found"]);
 
+// Public ops that legitimately ship DARK — deployed with their env deliberately absent,
+// answering a typed unavailability fault until the operator wires the bindings
+// (documented, small, like NON_ROOT_200_SUBDOMAINS above):
+//   - get_replica_token — the device-replica key mint; dark until the replica DB +
+//     Turso platform credential exist (offline-first slice 2). Its dark answer is a
+//     503 whose JSON body carries `replica_unavailable`.
+const DARK_CAPABLE_OPERATIONS = new Map<string, { darkStatus: number; darkCode: string }>([
+  ["get_replica_token", { darkCode: "replica_unavailable", darkStatus: 503 }],
+]);
+
 // Politeness + resilience knobs — gentle on prod.
 const CONCURRENCY = 4;
 const TIMEOUT_MS = 10_000;
@@ -77,7 +87,12 @@ type ContentKind = "html" | "json" | "text" | "xml";
 /** What a target's response must look like to pass. */
 type Expectation =
   | { kind: "served"; content: ContentKind } // 2xx (+content); 400 = served-with-input-required.
-  | { kind: "auth-gate" }; // 401/403 unauthenticated; a 2xx here is a CRITICAL leak.
+  | { kind: "auth-gate" } // 401/403 unauthenticated; a 2xx here is a CRITICAL leak.
+  | { kind: "dark-or-served"; content: ContentKind; darkStatus: number; darkCode: string };
+// dark-or-served: an op that legitimately SHIPS DARK until the operator wires its env
+// (see DARK_CAPABLE_OPERATIONS). Its typed dark fault still PROVES the route resolves —
+// the handler answered with its documented shape — so it passes; the wrong status, or the
+// dark status with the wrong body, still fails. Once lit it is judged exactly like served.
 
 /** Coarse grouping for the report, one row per surface. */
 type TargetClass = "api-auth" | "api-public" | "discovery" | "feed" | "subdomain" | "web";
@@ -332,9 +347,18 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
       continue;
     }
 
+    const dark = DARK_CAPABLE_OPERATIONS.get(name);
+
     targets.push({
       className: "api-public",
-      expect: { content: "json", kind: "served" },
+      expect: dark
+        ? {
+            content: "json",
+            darkCode: dark.darkCode,
+            darkStatus: dark.darkStatus,
+            kind: "dark-or-served",
+          }
+        : { content: "json", kind: "served" },
       name,
       rewritable: true,
       url: `${PROD_BASE_URL}${API_PREFIX}${path}`,
@@ -474,6 +498,18 @@ export function judge(
     }
 
     return { detail: `${status} (expected 401/403)`, verdict: "FAIL" };
+  }
+
+  if (expect.kind === "dark-or-served" && status === expect.darkStatus) {
+    // The op's documented dark state: the handler answered its typed fault, which
+    // proves the route resolves. The body must actually carry the dark code — a bare
+    // gateway 503 or an unrelated error page must not pass as "dark".
+    return body.includes(expect.darkCode)
+      ? { detail: `${status} dark (typed ${expect.darkCode} — env not wired)`, verdict: "PASS" }
+      : {
+          detail: `${status} without ${expect.darkCode} (expected the typed dark fault)`,
+          verdict: "FAIL",
+        };
   }
 
   if (status >= 200 && status < 300) {

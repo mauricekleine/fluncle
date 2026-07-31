@@ -18,6 +18,7 @@ import {
   backfillAppleMusicCatalogue,
   backfillAppleMusicUrls,
   backfillBeatportUrls,
+  backfillDiscogsFacts,
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
@@ -69,6 +70,38 @@ export function adminBackfillsHandlers(os: Implementer) {
       throw apiFault(error);
     }
   });
+
+  // POST /admin/backfill/discogs-facts — agent tier (`adminAuth`): the FACTS sibling of
+  // `backfill_discogs`. It takes a release id that sweep already resolved and reads the album's
+  // catalogue number + styles off the release, writing catalogue metadata onto the `albums` row
+  // (no publish, no certification), so the box's agent-token cron drives it. Album-grained and
+  // self-draining — no cursor. A NO-OP until DISCOGS_USER_TOKEN is provisioned (configured:false).
+  const backfillDiscogsFactsHandler = os.backfill_discogs_facts
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { query } = input;
+        const result = await backfillDiscogsFacts(
+          parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
+          parseBool(query.dryRun),
+        );
+
+        return {
+          configured: result.configured,
+          dryRun: result.dryRun,
+          failed: result.failed,
+          failedCount: result.failedCount,
+          none: result.none,
+          noneCount: result.noneCount,
+          ok: true as const,
+          rateLimited: result.rateLimited,
+          resolved: result.resolved,
+          resolvedCount: result.resolvedCount,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
 
   // POST /admin/backfill/lastfm — agent tier (`adminAuth`): the Last.fm love is
   // idempotent + reversible (no publish), so the box's agent-token cron drives it.
@@ -452,6 +485,7 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_beatport: backfillBeatportHandler,
     backfill_cover_masters: backfillCoverMastersHandler,
     backfill_discogs: backfillDiscogsHandler,
+    backfill_discogs_facts: backfillDiscogsFactsHandler,
     backfill_label_images: backfillLabelImagesHandler,
     backfill_label_lineage: backfillLabelLineageHandler,
     backfill_label_releases: backfillLabelReleasesHandler,

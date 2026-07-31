@@ -32,7 +32,12 @@ import { join } from "node:path";
 // startup does not reach the child — an env-var switch silently reads as unset.
 //
 // fluncleJson always appends --json as the last arg.
-function stubSource(callsFile: string, modeFile: string, beatportModeFile: string): string {
+function stubSource(
+  callsFile: string,
+  modeFile: string,
+  beatportModeFile: string,
+  discogsFactsModeFile: string,
+): string {
   return `#!/bin/bash
 case "$1" in
   ok-json) printf '{"ok":true,"lovedCount":2,"failedCount":0}\\n' ;;
@@ -64,6 +69,15 @@ case "$1" in
           *) printf '{"ok":true,"configured":true,"resolvedCount":13,"unresolvedCount":14,"failedCount":15,"skippedCount":16}\\n' ;;
         esac
         ;;
+      discogs-facts)
+        mode="ok"
+        if [ -f ${JSON.stringify(discogsFactsModeFile)} ]; then mode="$(cat ${JSON.stringify(discogsFactsModeFile)})"; fi
+        case "$mode" in
+          unconfigured) printf '{"ok":true,"configured":false,"resolvedCount":0,"noneCount":0,"failedCount":0,"rateLimited":false}\\n' ;;
+          crash) printf 'discogs facts boom\\n' >&2; exit 1 ;;
+          *) printf '{"ok":true,"configured":true,"resolvedCount":17,"noneCount":18,"failedCount":19,"rateLimited":true}\\n' ;;
+        esac
+        ;;
     esac
     ;;
 esac
@@ -77,6 +91,7 @@ let stubDir: string;
 let callsFile: string;
 let modeFile: string;
 let beatportModeFile: string;
+let discogsFactsModeFile: string;
 
 beforeAll(async () => {
   stubDir = mkdtempSync(join(tmpdir(), "fluncle-stub-"));
@@ -84,7 +99,8 @@ beforeAll(async () => {
   callsFile = join(stubDir, "calls.log");
   modeFile = join(stubDir, "catalogue-mode");
   beatportModeFile = join(stubDir, "beatport-mode");
-  writeFileSync(stub, stubSource(callsFile, modeFile, beatportModeFile));
+  discogsFactsModeFile = join(stubDir, "discogs-facts-mode");
+  writeFileSync(stub, stubSource(callsFile, modeFile, beatportModeFile, discogsFactsModeFile));
   chmodSync(stub, 0o755);
   process.env.FLUNCLE_BIN = stub;
   ({ backfillSweepExitCode, fluncleJson, runBackfillSweep } =
@@ -99,6 +115,7 @@ afterEach(() => {
   rmSync(callsFile, { force: true });
   rmSync(modeFile, { force: true });
   rmSync(beatportModeFile, { force: true });
+  rmSync(discogsFactsModeFile, { force: true });
 });
 
 afterAll(() => {
@@ -154,7 +171,14 @@ describe("the tick's legs", () => {
 
     const sources = recordedCalls().map((call) => call.split(" ")[2]);
 
-    expect(sources).toEqual(["discogs", "lastfm", "apple-music", "apple-catalogue", "beatport"]);
+    expect(sources).toEqual([
+      "discogs",
+      "lastfm",
+      "apple-music",
+      "apple-catalogue",
+      "beatport",
+      "discogs-facts",
+    ]);
   });
 
   test("the catalogue leg asks for one server pass — --limit 100, the server's own ceiling", () => {
@@ -289,5 +313,58 @@ describe("the tick's legs", () => {
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
     expect((summary["apple-catalogue"] as { resolved: number }).resolved).toBe(9);
     expect((summary.discogs as { resolved: number }).resolved).toBe(1);
+  });
+
+  test("the Discogs-facts leg runs LAST and asks for its own small batch", () => {
+    // The order is the priority: this leg shares leg 1's Discogs rate window, and leg 1's
+    // release-ID resolves (which a finding's public `sameAs` depends on) must get first call on it.
+    runBackfillSweep();
+
+    const calls = recordedCalls();
+    const facts = calls.find((call) => call.includes("discogs-facts"));
+
+    expect(facts).toBe("admin backfills discogs-facts --limit 10 --json");
+    expect(calls.at(-1)).toBe(facts);
+  });
+
+  test("the Discogs-facts counts land in the summary under their own key", () => {
+    const summary = runBackfillSweep();
+
+    expect(summary["discogs-facts"]).toEqual({
+      configured: true,
+      error: null,
+      failed: 19,
+      none: 18,
+      resolved: 17,
+      throttled: true,
+    });
+  });
+
+  test("an unconfigured Discogs-facts leg is a recorded no-op, not a failed tick", () => {
+    writeFileSync(discogsFactsModeFile, "unconfigured");
+
+    const summary = runBackfillSweep();
+
+    expect(summary["discogs-facts"]).toEqual({
+      configured: false,
+      error: null,
+      failed: 0,
+      none: 0,
+      resolved: 0,
+      throttled: false,
+    });
+    expect(summary.ok).toBe(true);
+  });
+
+  test("a Discogs-facts leg that crashes records its error and leaves every earlier leg intact", () => {
+    writeFileSync(discogsFactsModeFile, "crash");
+
+    const summary = runBackfillSweep();
+
+    expect((summary["discogs-facts"] as { error: null | string }).error).toContain(
+      "discogs facts boom",
+    );
+    expect((summary.discogs as { resolved: number }).resolved).toBe(1);
+    expect((summary.beatport as { resolved: number }).resolved).toBe(13);
   });
 });

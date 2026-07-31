@@ -2449,6 +2449,20 @@ a.catalogue-letter:focus-visible {
   margin-top: 0.5rem;
 }
 
+/* The catalogue number riding the uplink line — the code stamped on the sleeve. It changes exactly
+   ONE thing about the text it sits in, and deliberately so: NO third typeface. Mono is reserved for
+   the terminal surfaces (DESIGN.md §3, the One Voice Rule — mono speaks only for the machine, and a
+   number a label stamped on a record is the most physical fact on the page, not a command), and
+   Oxanium is the face a Log ID wears, so borrowing it would let a catno read as a coordinate. What
+   is left is the right answer anyway: Space Grotesk, inherited, which §3 puts on exactly this job
+   ("disappears when you are scanning metadata"). The middot in front already separates it from the
+   label NAME, so tabular figures are the whole mark it needs (The Tabular Rule) — and inheriting
+   the size and ink keeps it in `.graph-uplink`'s Stardust with no gold at rest or on hover, because
+   this is a fact rather than a link and the One Sun budget belongs to the findings below. */
+.graph-uplink-catno {
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── THE UNLIT REGISTER ────────────────────────────────────────────────────────────────
    The quieter rows on a graph page: a track Fluncle knows of but has never certified. The
    whole visual job is that an unlit row CANNOT be mistaken for a finding, and cannot be

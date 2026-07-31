@@ -49,11 +49,11 @@
 
 import { countIndexableAlbums } from "./albums";
 import { countIndexableArtists } from "./artists";
+import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { type CatalogueCaptureState, getCatalogueCaptureState } from "./capture-budget";
 import { getFrontierCounts } from "./crawl";
 import { getDb, typedRow, typedRows } from "./db";
 import { countIndexableLabels } from "./labels";
-import { REC_ELIGIBLE_WHERE } from "./recommendations";
 import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause } from "./track-work";
 import { tracksHubCountQuery } from "./tracks-hub";

@@ -501,6 +501,38 @@ export async function backfillAppleMusicCommand(
   );
 }
 
+export type DiscogsFactsBackfillResult = {
+  // False when the Worker's DISCOGS_USER_TOKEN is unset — the leg was a no-op this tick.
+  configured: boolean;
+  dryRun: boolean;
+  // Albums whose release lookup ERRORED — nothing was learned, so they back off and are retried.
+  failed: Array<{ error: string; slug: string }>;
+  failedCount: number;
+  // Albums whose release genuinely carries no catalogue number — terminal, never re-read.
+  none: string[];
+  noneCount: number;
+  // True when the pass STOPPED on the Discogs rate-limit circuit breaker; nothing was stamped.
+  rateLimited: boolean;
+  resolved: Array<{ catno: string; slug: string }>;
+  resolvedCount: number;
+};
+
+// One bounded pass of the Discogs release-FACTS drain — the sibling of `backfillDiscogsCommand`.
+// That one resolves a finding to a release id; this takes the id and reads the album's catalogue
+// number + styles off the release, onto the `albums` row. ALBUM-GRAINED and self-draining, so there
+// is NO cursor: an album leaves the worklist the moment it is ruled, and the CLI loops until a pass
+// rules nothing. A safe no-op until the Worker's DISCOGS_USER_TOKEN is provisioned.
+export async function backfillDiscogsFactsCommand(
+  limit: number,
+  dryRun: boolean,
+): Promise<DiscogsFactsBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  return adminApiPost<DiscogsFactsBackfillResult>(
+    `/api/v1/admin/backfill/discogs-facts?${params.toString()}`,
+  );
+}
+
 export type BeatportBackfillResult = {
   configured: boolean;
   dryRun: boolean;

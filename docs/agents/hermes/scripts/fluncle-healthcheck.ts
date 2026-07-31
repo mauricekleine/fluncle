@@ -616,6 +616,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" }, // freshness tap — day-one Spotify releases for enabled seed labels
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
   { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" }, // catalogue Spotify anchors via Apify — one bounded batch per hour
+  { cadenceMs: 60 * 60_000, match: "device-mirror", service: "cron.device-mirror" }, // shared anchored-cut device replica — full diff, in-place writes
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
   { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" }, // MusicBrainz recording MBIDs — crawler PK strip + ISRC resolve, one bounded batch per tick
   { cadenceMs: 60 * 60_000, match: "artist-edges", service: "cron.artist-edges" }, // track_artists graph backfill — fold artists_json names onto existing artist identities, one bounded batch per tick
@@ -1018,10 +1019,11 @@ function probeCrons(claimed: Map<string, string>): Check[] {
 //     skipping the authoring spend" on a healthy no-op), which is why the entity-bio signature
 //     is the far tighter "stays queued" — the item is still in the queue, by the sweep's own
 //     words. There is deliberately no /error/i catch-all.
-//   • STRAIN_COUNTER_KEYS + the nullable `error` field — fields the sweeps ALREADY put in their
-//     JSON summaries and no one reads (`failed`, `gateSkipped`, `errors`, `error`). Exact machine
-//     counts and one explicit error value, zero interpretation. `skipped` and `unmatched` are
-//     deliberately absent: both are ordinary outcomes here, not failures.
+//   • STRAIN_COUNTER_KEYS + the nullable `error` field — run-level failures and stuck-loop
+//     counters the sweeps ALREADY put in their JSON summaries (`errors`, `gateSkipped`, `error`).
+//   • STRAIN_RATE_COUNTERS — item-level `failed` is ordinary batch fallout unless its rate against
+//     `checked` is high. With no denominator it says nothing; the detector never assumes the worst.
+//     `skipped` and `unmatched` are likewise ordinary outcomes here, not failures.
 //
 // Designed vendor backpressure is counted separately. A sweep that says `throttled: true`
 // stopped cleanly and will resume next tick, so it stays visible on the healthy sweep-errors
@@ -1075,8 +1077,6 @@ export const STRAIN_PHRASES: readonly string[] = [
   // trailing space is load-bearing: it matches the catch line and not the word "error" loose
   // in prose.
   "error on ",
-  "failed",
-  "failure",
   // `fatal:` and claude's own error envelope. Both are exact strings the sweeps print, and
   // `is_error` is the signature of an authoring tick that left its item queued.
   "fatal:",
@@ -1093,12 +1093,15 @@ export const STRAIN_PHRASES: readonly string[] = [
 ];
 
 /**
- * Summary fields that COUNT work that did not get done. Each unit is one point — these are
- * the sweeps' own numbers, so there is nothing to interpret. Deliberately excluded: `skipped`
- * and `unmatched`, both of which are ordinary outcomes (an already-noted finding, a capture
- * whose fingerprint did not match) rather than failures.
+ * Summary fields that COUNT run-level failures or a stuck loop. Each unit is one point — these
+ * are the sweeps' own numbers, so there is nothing to interpret. Item-level `failed` is handled
+ * separately as a rate. Deliberately excluded: `skipped` and `unmatched`, both of which are
+ * ordinary outcomes (an already-noted finding, a capture whose fingerprint did not match).
  */
-export const STRAIN_COUNTER_KEYS: readonly string[] = ["errors", "failed", "gateSkipped"];
+export const STRAIN_COUNTER_KEYS: readonly string[] = ["errors", "gateSkipped"];
+
+/** Item-failure counters that need a real work denominator before they can say anything. */
+export const STRAIN_RATE_COUNTERS = [{ denominator: "checked", numerator: "failed" }] as const;
 
 /** Summary fields that record designed backpressure, not failed work. One yielded tick each. */
 export const BACKPRESSURE_FLAG_KEYS: readonly string[] = ["throttled"];
@@ -1122,7 +1125,16 @@ export function countDistressLines(stderrRegion: string): number {
   return points;
 }
 
-/** Strain points from a marker's JSON summary: its own failure counters and error value. */
+/** A summary counter's non-negative integer value; arrays use their item count. */
+function summaryCount(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** Strain points from a marker's JSON summary: direct counters, high item-failure rate, and error. */
 export function countSummaryStrain(summary: Record<string, unknown> | null): number {
   if (!summary) {
     return 0;
@@ -1131,12 +1143,21 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
   let points = 0;
 
   for (const key of STRAIN_COUNTER_KEYS) {
-    const value = summary[key];
+    points += summaryCount(summary[key]);
+  }
 
-    if (Array.isArray(value)) {
-      points += value.length;
-    } else if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      points += Math.floor(value);
+  for (const { denominator, numerator } of STRAIN_RATE_COUNTERS) {
+    const denominatorValue = summary[denominator];
+    const checked =
+      typeof denominatorValue === "number" &&
+      Number.isFinite(denominatorValue) &&
+      denominatorValue > 0
+        ? Math.floor(denominatorValue)
+        : 0;
+    const failed = summaryCount(summary[numerator]);
+
+    if (checked > 0 && failed / checked >= STRAIN_ITEM_FAILURE_RATE) {
+      points += 1;
     }
   }
 
@@ -1165,16 +1186,21 @@ export function countSummaryBackpressure(summary: Record<string, unknown> | null
 }
 
 /**
- * The two signals one marker (one tick) contributes. A real failure that is BOTH logged and
- * counted scores twice; the rate threshold is calibrated against those observed points.
- * Designed backpressure has its own axis and cannot leak into `strain`.
+ * The two signals one marker (one tick) contributes. Once a summary carries structured `failed`,
+ * that field owns item-failure judgment: matching stderr prose is not a fallback that can bypass
+ * `checked`, or duplicate a high-rate point. Legacy markers with no `failed` field keep the
+ * stderr signal. Designed backpressure has its own axis and cannot leak into `strain`.
  */
 export function markerSignals(body: string): { backpressure: number; strain: number } {
   const summary = findJsonSummary(body);
+  const hasStructuredItemFailures =
+    summary !== null &&
+    STRAIN_RATE_COUNTERS.some(({ numerator }) => Object.hasOwn(summary, numerator));
+  const distress = hasStructuredItemFailures ? 0 : countDistressLines(splitMarker(body).stderr);
 
   return {
     backpressure: countSummaryBackpressure(summary),
-    strain: countDistressLines(splitMarker(body).stderr) + countSummaryStrain(summary),
+    strain: distress + countSummaryStrain(summary),
   };
 }
 
@@ -1190,12 +1216,29 @@ export function markerBackpressure(body: string): number {
 // Every threshold is env-overridable on the box, so tuning after a day of real data needs no
 // rebake: set it in the box env, restart the timer, done.
 //
+// ITEM FAILURE RATE (50%, per tick). Bare `failed` / `failure` prose is deliberately absent from
+// STRAIN_PHRASES: an occurrence count has no denominator. At least half of checked work must fail
+// before the tick
+// earns ONE strain point; a capture-shaped 4/12 tick is ordinary, while 6/12 is signal. The
+// outer cadence gate still applies: the fastest cron needs 90 such ticks out of 360 scheduled
+// in 6h; the slowest needs all three scheduled ticks in its 21d window. One point per high-rate
+// tick prevents a large batch from overpowering that cadence-relative gate.
+const CONFIGURED_ITEM_FAILURE_RATE = Number.parseFloat(
+  process.env.HEALTHCHECK_STRAIN_ITEM_FAILURE_RATE ?? "",
+);
+export const STRAIN_ITEM_FAILURE_RATE =
+  Number.isFinite(CONFIGURED_ITEM_FAILURE_RATE) &&
+  CONFIGURED_ITEM_FAILURE_RATE > 0 &&
+  CONFIGURED_ITEM_FAILURE_RATE <= 1
+    ? CONFIGURED_ITEM_FAILURE_RATE
+    : 0.5;
+//
 // WINDOW (max(6h, 3 × cadence)). Fast crons clear a fixed condition the same morning. Daily and
 // weekly crons get exactly the three scheduled opportunities required by the repeated-tick gate;
 // no cron in AUTOMATION_CRONS is silently too slow to be judged.
 //
-// FAILURE RATE (25%). The point bar scales with scheduled ticks in that cron's window instead
-// of making a fast cron buy the same 12 points as a slow one. At the fleet's fastest cadence,
+// REPEATED-TICK RATE (25%). The point bar scales with scheduled ticks in that cron's window
+// instead of making a fast cron buy the same 12 points as a slow one. At the fleet's fastest cadence,
 // `live` gets 360 scheduled ticks in 6h and needs 90 points: 0.25 failure points/tick. At the
 // slowest cadence, `newsletter` gets three scheduled ticks in 21d; rounding makes the rate gate
 // one point (0.33/tick), while the three-distinct-error-ticks gate below makes the effective
@@ -1588,10 +1631,10 @@ function probeHealthcheck(): Check {
 // degrades to a fresh entry, never an exception.
 // ---------------------------------------------------------------------------
 
-// v3 adds the `strain` section (the per-cron rolling error window). It is additive and read
-// defensively, so a v1/v2 file on disk still loads and simply starts its strain windows empty
-// — and an older prober reading a v3 file only ever looks at `services`, which is untouched.
-const STATE_VERSION = 3;
+// v3 added the `strain` section (the per-cron rolling error window). v4 resets v3's buckets
+// because their points used the old item-count vocabulary, while leaving `services` untouched.
+// Older files still load defensively and simply start their strain windows empty.
+const STATE_VERSION = 4;
 
 function isStatus(value: unknown): value is Status {
   return value === "ok" || value === "degraded" || value === "down";
@@ -1653,20 +1696,28 @@ export function normalizeState(parsed: unknown): StateMap {
 }
 
 /**
- * Read the v3 `strain` section: per-cron hourly buckets + watermark + the reported flag.
- * Everything is validated field by field — a v1/v2 file (no section at all), a truncated
- * write, or any junk simply yields an empty map, and the windows refill from the markers
- * still on disk within a tick or two. It must never throw: this is the same read that
- * carries the transition baseline.
+ * Read the v4 `strain` section: per-cron hourly buckets + watermark + the reported flag.
+ * A v3 section carries points scored under the old item-count vocabulary, so its buckets and
+ * watermarks are deliberately reset while its `strained` flags survive long enough to emit the
+ * edge-triggered recovery alert. Retained markers are then re-read under v4. A v1/v2 file (no
+ * section), a truncated write, or junk yields an empty map. It must never throw: this is the same
+ * read that carries the transition baseline.
  */
 export function normalizeStrain(parsed: unknown): StrainMap {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {};
   }
 
-  const section = (parsed as Record<string, unknown>).strain;
+  const record = parsed as Record<string, unknown>;
+  const section = record.strain;
 
   if (!section || typeof section !== "object" || Array.isArray(section)) {
+    return {};
+  }
+
+  const resetsOldScoring = record.version === 3;
+
+  if (record.version !== STATE_VERSION && !resetsOldScoring) {
     return {};
   }
 
@@ -1678,6 +1729,17 @@ export function normalizeStrain(parsed: unknown): StrainMap {
     }
 
     const entry = value as Record<string, unknown>;
+
+    if (resetsOldScoring) {
+      strain[service] = {
+        buckets: {},
+        strained: entry.strained === true,
+        watermarkMs: 0,
+      };
+
+      continue;
+    }
+
     const rawBuckets = entry.buckets;
     const buckets: Record<string, StrainBucket> = {};
 

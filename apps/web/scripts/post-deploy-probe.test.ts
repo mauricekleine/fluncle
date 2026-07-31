@@ -67,6 +67,43 @@ describe("judge — auth-gate expectation", () => {
   });
 });
 
+describe("judge — dark-or-served expectation", () => {
+  const darkCapable = {
+    content: "json",
+    darkCode: "replica_unavailable",
+    darkStatus: 503,
+    kind: "dark-or-served",
+  } as const;
+
+  it("passes the documented dark state — the typed fault proves the route resolves", () => {
+    const dark = judge(
+      darkCapable,
+      503,
+      "application/json",
+      '{"ok":false,"code":"replica_unavailable","message":"The device replica is unavailable."}',
+    );
+    expect(dark.verdict).toBe("PASS");
+    expect(dark.detail).toContain("dark");
+  });
+
+  it("passes a lit 2xx exactly like served", () => {
+    expect(
+      judge(darkCapable, 200, "application/json", '{"url":"libsql://x","token":"t"}').verdict,
+    ).toBe("PASS");
+  });
+
+  it("fails the dark status without the typed code — a bare gateway 503 is not dark", () => {
+    expect(judge(darkCapable, 503, "text/html", "<html>upstream error</html>").verdict).toBe(
+      "FAIL",
+    );
+  });
+
+  it("still fails a dead route or an unexpected error status", () => {
+    expect(judge(darkCapable, 404, "text/html", "<html></html>").verdict).toBe("FAIL");
+    expect(judge(darkCapable, 500, "application/json", "{}").verdict).toBe("FAIL");
+  });
+});
+
 describe("judge — served expectation", () => {
   const servedJson = { content: "json", kind: "served" } as const;
 

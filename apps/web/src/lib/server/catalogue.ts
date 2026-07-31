@@ -49,6 +49,7 @@
 
 import { createHash } from "node:crypto";
 import { type InStatement } from "@libsql/client/web";
+import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { CLEAR_EMBEDDING_SQL } from "./embedding";
@@ -151,7 +152,7 @@ export const DUPLICATE_CAPTURE_TIER = -2;
  * DISPLAY-ONLY (no state machine, nothing stored) and tunable: raise it toward 1.0 to flag only
  * bit-identical masters, lower it to also catch alternate masters of the same performance.
  */
-export const DUPLICATE_SIMILARITY = 0.995;
+export { DUPLICATE_SIMILARITY } from "../catalogue-eligibility";
 
 /**
  * The LONG-FORM veto (operator ruling, 2026-07-13): a "track" at or above this duration is not a
@@ -170,7 +171,7 @@ export const DUPLICATE_SIMILARITY = 0.995;
  * vector — already paid for, and harmless to others: a catalogue row is never anyone's
  * nearest-finding candidate); the veto is a READ + QUEUE exclusion, never a deletion.
  */
-export const LONG_FORM_MS = 15 * 60_000;
+export { LONG_FORM_MS } from "../catalogue-eligibility";
 
 /**
  * The long-form veto's LOWER twin (the 2026-07-14 unmatched audit). Two classes below this

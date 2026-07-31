@@ -220,6 +220,7 @@ const IDENTITY_SELECT = `t.track_id, t.title, t.artists_json, t.duration_ms,
     t.beatport_url, t.beatport_verified_at, t.backfill_beatport_attempted_at,
     t.backfill_beatport_attempts,
     t.deezer_track_id, t.deezer_verified_at, t.deezer_verified_by,
+    t.backfill_deezer_attempted_at, t.backfill_deezer_attempts,
     t.dismissed_at, t.duplicate_of_track_id,
     f.log_id as log_id, (f.track_id is not null) as has_finding`;
 
@@ -233,6 +234,8 @@ type IdentityRow = {
   backfill_apple_music_done_at: null | string;
   backfill_beatport_attempted_at: null | string;
   backfill_beatport_attempts: null | number;
+  backfill_deezer_attempted_at: null | string;
+  backfill_deezer_attempts: null | number;
   backfill_discogs_attempted_at: null | string;
   backfill_discogs_attempts: null | number;
   backfill_discogs_done_at: null | string;
@@ -466,19 +469,31 @@ function discogsState(row: IdentityRow): IdentityState {
 }
 
 /**
- * THE DEEZER ANSWER, off the id Fluncle keeps for a recording (`tracks.deezer_track_id`).
+ * THE DEEZER ANSWER, off the id Fluncle keeps for a recording (`tracks.deezer_track_id`) and the
+ * honest-miss ledger beside it (`tracks.backfill_deezer_*`).
  *
- * TWO STATES, and only two, because only two are backed by a column. Fluncle holds a Deezer id or he
- * does not, and there is NO attempt record here at all: the id is kept as a by-product of reads run
- * for other reasons (the anchor rung's ISRC recovery, the add flow's ISRC fallback and its
- * label/preview enrichment), and none of those is a Deezer LOOK that could conclude. So a row with
- * no id reads `unattempted` — nobody has gone looking, which is exactly true — and never `absent`,
- * which would claim a search ran and came back empty. There is likewise nothing to `refuse`.
+ * THREE STATES, each backed by a real column:
+ *   · a held id → `verified` with the rung that won it (`isrc` | `search` | `search-subset`, all
+ *     three gated at the write) and `atMeaning: "verified"`, since the stamp beside it is the moment
+ *     the link was WRITTEN rather than a look concluding. A NULL method reads `unknown-legacy` — the
+ *     same honest "we hold no record of how" the Spotify answer serves, though no write path can
+ *     produce one here.
+ *   · no id but an attempt on file → `absent`, carrying the real monotone `attempts` tally. The
+ *     Beatport shape exactly, and for the same reason: `retry: "single-shot"` with `terminal: null`
+ *     says the receipt states the attempt and promises nothing, because no re-check cadence is ruled
+ *     for this leg. `terminal: null` is "we do not know whether we will look again", never a claim
+ *     that we will not — and when a cadence is ruled this becomes `recheckable` with no other change.
+ *   · neither → `unattempted`. Nobody has gone looking, which is exactly true.
  *
- * A held id is `verified` with the rung that won it (`isrc` | `search` | `search-subset`, all three
- * gated at the write) and `atMeaning: "verified"`, since the stamp beside it is the moment the link
- * was WRITTEN rather than a look concluding. A NULL method reads `unknown-legacy` — the same honest
- * "we hold no record of how" the Spotify answer serves, though no write path can produce one here.
+ * THE `absent` BRANCH IS NARROW ON PURPOSE, and that narrowness is the whole point of the ledger.
+ * Only a concluded Deezer look stamps it — today the anchor rung's ISRC recovery, on a verified hit
+ * or on a gate-clean miss (anchor.ts § recoverIsrcViaDeezer). A quota-shaped empty result, an
+ * unverifiable row, and every publish-time read stamp NOTHING (schema.ts § `backfill_deezer_*` lists
+ * each one and why), so they keep reading `unattempted`. The failure mode this rules out is the one
+ * that matters: a row that was checked and missed must never keep saying "Not checked yet", and a row
+ * nothing could conclude on must never be dressed up as a search that came back empty.
+ *
+ * There is still nothing to `refuse`: this leg has no attempt cap to spend.
  *
  * SERVED TO BOTH AUDIENCES. Unlike Apple, no licence clause bars passing a Deezer link on, so the
  * page and the API answer identically and this function takes no audience.
@@ -493,6 +508,17 @@ function deezerState(row: IdentityRow): IdentityState {
       "verified",
       { url: `https://www.deezer.com/track/${encodeURIComponent(id)}`, value: id },
     );
+  }
+
+  if (row.backfill_deezer_attempted_at) {
+    return {
+      attempts: row.backfill_deezer_attempts ?? 0,
+      cap: null,
+      lastAttemptedAt: row.backfill_deezer_attempted_at,
+      retry: "single-shot",
+      state: "absent",
+      terminal: null,
+    };
   }
 
   return { state: "unattempted" };

@@ -279,6 +279,44 @@ describe("the identity answer", () => {
     expect(html).toContain("matched by artist, title, and length · confirmed Jul 30, 2026");
   });
 
+  it("says a Deezer miss was checked, never confirmed, and promises no second look", async () => {
+    // The receipt's reserved-word rule decides this line. An ATTEMPT stamp is when a look concluded
+    // and may only ever read "checked"; "confirmed" is reserved for the moment something was WRITTEN,
+    // and spending it on a miss would tell the reader Fluncle had confirmed an absence he merely
+    // failed to fill. No re-check cadence is ruled for this leg either, so a "will be checked again"
+    // here would be an invented promise.
+    const html = await renderPage(
+      found([
+        recording({
+          links: {
+            appleMusic: { state: "unattempted" },
+            beatport: { state: "unattempted" },
+            deezer: {
+              attempts: 1,
+              cap: null,
+              lastAttemptedAt: "2026-07-30T00:00:00.000Z",
+              retry: "single-shot",
+              state: "absent",
+              terminal: null,
+            },
+            discogs: { state: "unattempted" },
+            spotify: { state: "unattempted" },
+            tidal: { state: "unsupported" },
+          },
+        }),
+      ]),
+    );
+
+    expect(html).toContain("Not found · checked Jul 30, 2026");
+    expect(html).not.toContain("confirmed Jul 30, 2026");
+    expect(html).not.toContain("will be checked again");
+    expect(html).not.toContain("retired");
+    // The miss must not leave the row reading like nobody had ever looked — that lie is the reason
+    // the ledger exists. Every other row on this fixture is `unattempted`, so the phrase is present;
+    // what matters is that the Deezer row is no longer one of them.
+    expect(html).not.toContain("Listen on Deezer");
+  });
+
   it("says every negative out loud rather than leaving a gap", async () => {
     const html = await renderPage(
       found([

@@ -247,6 +247,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // precedent.
   backfill_cover_masters: "admin",
   backfill_discogs: "admin",
+  // The Discogs release-FACTS drain — agent tier (adminAuth only): it reads an already-resolved
+  // release's catalogue number + styles onto the `albums` row (catalogue metadata only, no publish,
+  // no certification), so the box's agent-token cron drives it, the `backfill_discogs` precedent.
+  backfill_discogs_facts: "admin",
   // The label-logo resolve sweep — agent tier (adminAuth only): it resolves a label's OWN image
   // (Discogs → Wikidata) into R2, publishes nothing, so the box's agent-token cron drives it,
   // the `backfill_discogs` precedent.

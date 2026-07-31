@@ -41,6 +41,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   const {
     artists,
     bio,
+    catalogNumber,
     catalogue,
     coverImageUrl,
     findings,
@@ -117,6 +118,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
         musicAlbumJsonLd({
           artists,
           bio,
+          catalogNumber,
           // The owned cover master when the album resolved one (bestAlbumCoverUrl already chose it
           // for the finding's DTO), taken to `large` — never a raw i.scdn.co URL when a master exists.
           imageUrl: albumCoverAtSize(coverImageUrl, "large"),
@@ -159,7 +161,7 @@ function AlbumPage() {
     return null;
   }
 
-  const { artists, bio, catalogue, findings, label, name } = data;
+  const { artists, bio, catalogNumber, catalogue, findings, label, name } = data;
 
   return (
     <main className="log-plate-stage">
@@ -167,13 +169,34 @@ function AlbumPage() {
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
           {/* The album → label edge, the one link the label page has no twin for. The label's
-              NAME is the graph link; the "On" that introduces it is not part of the entity. */}
+              NAME is the graph link; the "On" that introduces it is not part of the entity.
+
+              THE CATALOGUE NUMBER RIDES THAT LINE AND ONLY THAT LINE. `Label CATNO` is the
+              record-shop convention, and the label is what makes the code legible AS a code — a
+              reader parses RAMM123 without being told what it is precisely because "On RAM Records"
+              stands in front of it. Strip the label and the convention goes with it, leaving a bare
+              alphanumeric as the only sub-line under an album title with nothing on the page to
+              identify it. That is not a rare case: `getLabelForAlbum` resolves through the
+              certification, so an uncertified, crawl-minted record ALWAYS reads `label: undefined`
+              — exactly the tier that is never introduced, never named, never given a noun
+              (docs/album-entity.md; DESIGN.md's Unlit Rule). So the number waits for its host, and
+              a record that has one without a linked label simply does not print it.
+
+              The machine still gets it either way: the JSON-LD emits `catalogNumber` on the
+              MusicRelease whether or not the label edge exists (lib/log-schema.ts), because a key
+              named `catalogNumber` carries its own noun and needs no host to be legible. */}
           {label ? (
             <p className="graph-uplink">
               On{" "}
               <GraphLink kind="label" slug={label.slug}>
                 {label.name}
               </GraphLink>
+              {catalogNumber ? (
+                <>
+                  {" "}
+                  · <span className="graph-uplink-catno">{catalogNumber}</span>
+                </>
+              ) : undefined}
             </p>
           ) : undefined}
           {/* The voiced bio sits beneath the masthead — body prose that augments the signature

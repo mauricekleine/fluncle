@@ -335,6 +335,15 @@ function findOccurrences(source: string): readonly Occurrence[] {
     }
   }
 
+  // The shared eligibility fragment (lib/catalogue-eligibility.ts) carries this anti-join
+  // as text with NO alias context this scanner can derive, so the shape would otherwise
+  // vanish from the guardrail while still executing — instead, every INTERPOLATION of the
+  // named fragment counts as one occurrence at the site that runs it. Matched against the
+  // raw source so imports/re-exports of the identifier do not inflate the count.
+  for (const match of source.matchAll(/\$\{REC_ELIGIBLE_WHERE\}/g)) {
+    push("anti-join:findings-is-null", match.index, match[0]);
+  }
+
   for (const match of code.matchAll(/not\s+exists\s*\(\s*select\s+1\s+from\s+findings\b/gi)) {
     if (!/\bis_catalogue\b/i.test(enclosingRegion(scanned, match.index))) {
       push("anti-join:not-exists-findings", match.index, match[0]);
@@ -459,18 +468,18 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The unlit half of a per-entity `/fresh` window. Entity-seeked plus a `release_date` range, so the anti-join is a residual on one entity's window (the growing-table risk here is backlog Wave-1 item 15, which was proven out and dropped).",
   },
   {
-    count: 6,
+    count: 7,
     file: "lib/server/funnel.ts",
     pattern: "anti-join:findings-is-null",
     reason:
-      "DELIBERATE, and never executed as written: the six are the CANONICAL fragment spellings — five STAGE_SCAN_SELECT conditional aggregates plus ANCHOR_BACKOFF_WHERE — which `onMirrors()` rewrites onto the materialized columns (`t.is_catalogue`, `t.has_embedding`) at query construction, throwing if a respelling stops matching, with a fold-equivalence test pinning the pair. The fold itself carries NO findings join any more: the `certified` arm reads `t.is_catalogue = 0`, which is what lets the whole pass ride `tracks_funnel_scan_idx` as a covering scan (backlog Wave 2 #7). `onMirrors()`'s own rewrite TABLE is exempt rather than uncounted — each rule keeps `<canonical> => <mirrored>` in one literal, so the `is_catalogue` in-region signal fires for the right reason. The spellings that DO execute are the three standalone REFERENCE queries kept for that equivalence test, which is why this ceiling covers fragments and not executed scans.",
+      "DELIBERATE, and never executed as written: six are the CANONICAL fragment spellings — five STAGE_SCAN_SELECT conditional aggregates plus ANCHOR_BACKOFF_WHERE — which `onMirrors()` rewrites onto the materialized columns (`t.is_catalogue`, `t.has_embedding`) at query construction, throwing if a respelling stops matching, with a fold-equivalence test pinning the pair. The fold itself carries NO findings join any more: the `certified` arm reads `t.is_catalogue = 0`, which is what lets the whole pass ride `tracks_funnel_scan_idx` as a covering scan (backlog Wave 2 #7). `onMirrors()`'s own rewrite TABLE is exempt rather than uncounted — each rule keeps `<canonical> => <mirrored>` in one literal, so the `is_catalogue` in-region signal fires for the right reason. The spellings that DO execute are the three standalone REFERENCE queries kept for that equivalence test, which is why this ceiling covers fragments and not executed scans. The seventh is the ${REC_ELIGIBLE_WHERE} interpolation (the fragment's text lives in lib/catalogue-eligibility.ts since the device-mirror extraction) — OWNED by backlog Wave 3-1, same as recommendations.ts.",
   },
   {
     count: 1,
     file: "lib/server/recommendations.ts",
     pattern: "anti-join:findings-is-null",
     reason:
-      "REC_ELIGIBLE_WHERE — OWNED by backlog Wave 3-1 (per-user candidate cache off the request hot path + a partial index over the rec-eligible slice). Do not convert piecemeal; the shape is one half of that design call.",
+      "The ${REC_ELIGIBLE_WHERE} interpolation (the fragment's text moved to lib/catalogue-eligibility.ts for the device-mirror sweep) — OWNED by backlog Wave 3-1 (per-user candidate cache off the request hot path + a partial index over the rec-eligible slice). Do not convert piecemeal; the shape is one half of that design call.",
   },
   {
     count: 1,
@@ -569,6 +578,13 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
 const SRC_DIR = fileURLToPath(new URL("../..", import.meta.url));
 const SCAN_ROOTS = ["lib/server", "db"];
 
+// Individual files OUTSIDE the roots whose SQL text is executed by lib/server consumers.
+// lib/catalogue-eligibility.ts is the client-safe home of REC_ELIGIBLE_WHERE (extracted
+// 2026-07-31 for the device-mirror sweep): the anti-join's TEXT lives here while every
+// query that runs it stays in lib/server — scanning the file keeps the tracked Wave 3-1
+// debt visible instead of letting an extraction silently launder it out of this guardrail.
+const SCAN_FILES = ["lib/catalogue-eligibility.ts"];
+
 /** Every non-test `.ts` file under a scan root, as a path relative to `src`. */
 function listSourceFiles(root: string, prefix = root): string[] {
   const out: string[] = [];
@@ -595,7 +611,7 @@ function listSourceFiles(root: string, prefix = root): string[] {
 type FileScan = { readonly file: string; readonly occurrences: readonly Occurrence[] };
 
 function scanSurface(): readonly FileScan[] {
-  return SCAN_ROOTS.flatMap((root) => listSourceFiles(root)).map((file) => ({
+  return [...SCAN_ROOTS.flatMap((root) => listSourceFiles(root)), ...SCAN_FILES].map((file) => ({
     file,
     occurrences: findOccurrences(readFileSync(`${SRC_DIR}/${file}`, "utf8")),
   }));
