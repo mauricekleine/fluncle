@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { getPostizPlatformAnalytics } from "./postiz";
+
 import {
   collectAppStore,
   collectBluesky,
@@ -277,9 +279,29 @@ describe("mapPostizMetrics", () => {
     ]);
   });
 
-  it("throws on a payload with no mapped labels — an honest skip, never a hollow row", () => {
+  it("throws on a non-empty payload with no mapped labels — a shape fault, never empty", () => {
     expect(() =>
       mapPostizMetrics([{ label: "Reach", latestTotal: 0 }], { Views: "views" }, "instagram"),
     ).toThrow(/no mapped metrics/);
+  });
+});
+
+describe("getPostizPlatformAnalytics", () => {
+  it("rejects a 200 error object instead of turning it into measured-empty metrics", async () => {
+    process.env.POSTIZ_API_KEY = "postiz-key";
+
+    await expect(
+      getPostizPlatformAnalytics(
+        ["tiktok"],
+        7,
+        fakeFetch([
+          {
+            body: [{ disabled: false, id: "tiktok-id", identifier: "tiktok" }],
+            match: "/integrations",
+          },
+          { body: { error: "token expired" }, match: "/analytics/tiktok-id" },
+        ]),
+      ),
+    ).rejects.toThrow(/non-array payload/);
   });
 });

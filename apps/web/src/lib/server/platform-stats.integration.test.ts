@@ -41,7 +41,10 @@ const ORIGINAL_ENV = { ...process.env };
 
 // A fake `fetch` covering every network platform. `failing` forces a platform's
 // endpoint to a 500 so its best-effort skip can be asserted in isolation.
-function collectorFetch(failing: Set<string> = new Set()): FetchImpl {
+function collectorFetch(
+  failing: Set<string> = new Set(),
+  empty: Set<string> = new Set(),
+): FetchImpl {
   const bodyFor = (url: string): { body: unknown; match: string } | undefined => {
     if (url.includes("api.mixcloud.com")) {
       return {
@@ -59,7 +62,9 @@ function collectorFetch(failing: Set<string> = new Set()): FetchImpl {
       return { body: { downloads: 91 }, match: "npm" };
     }
     if (url.includes("itunes.apple.com")) {
-      return { body: { resultCount: 1, results: [{ userRatingCount: 7 }] }, match: "appstore" };
+      return empty.has("appstore")
+        ? { body: { resultCount: 0, results: [] }, match: "appstore" }
+        : { body: { resultCount: 1, results: [{ userRatingCount: 7 }] }, match: "appstore" };
     }
     if (url.includes("user.getinfo")) {
       return { body: { user: { playcount: "15342" } }, match: "lastfm" };
@@ -100,10 +105,16 @@ describe("the /reach store", () => {
     process.env = {
       ...ORIGINAL_ENV,
       LASTFM_API_KEY: "test-key",
+      RESEND_API_KEY: "resend-key",
+      RESEND_SEGMENT_ID: "segment-id",
+      SPOTIFY_PLAYLIST_ID: "playlist-id",
       TELEGRAM_BOT_TOKEN: "bot-token",
       TELEGRAM_CHANNEL_ID: "@fluncle",
       YOUTUBE_API_KEY: "yt-key",
     };
+    delete process.env.POSTIZ_API_KEY;
+    delete process.env.TWITCH_CLIENT_ID;
+    delete process.env.TWITCH_CLIENT_SECRET;
   });
 
   afterEach(() => {
@@ -120,6 +131,7 @@ describe("the /reach store", () => {
     // — no stored token in this fresh db — so they skip cleanly and write nothing.
     expect(result.collected).toHaveLength(10);
     expect(result.inserted).toBe(15);
+    expect(result.failed).toEqual([]);
     expect(await rowCount(db, "platform_stats")).toBe(15);
 
     const collectedPlatforms = result.collected.map((entry) => entry.platform).sort();
@@ -143,20 +155,22 @@ describe("the /reach store", () => {
     const skippedPlatforms = result.skipped.map((entry) => entry.platform).sort();
     expect(skippedPlatforms).toEqual(["instagram", "tiktok", "twitch"]);
     for (const skip of result.skipped) {
+      expect(skip.kind).toBe("unconfigured");
       expect(skip.reason.length).toBeGreaterThan(0);
     }
   });
 
-  it("isolates a single platform's fetch fault as a skip, never dropping the rest", async () => {
+  it("isolates a single platform's fetch fault as failed, never dropping the rest", async () => {
     const at = new Date().toISOString();
     const result = await recordPlatformStats({
       at,
       fetchImpl: collectorFetch(new Set(["github"])),
     });
 
-    const githubSkip = result.skipped.find((entry) => entry.platform === "github");
-    expect(githubSkip).toBeDefined();
-    expect(githubSkip?.reason).toMatch(/GitHub responded 500/);
+    const githubFailure = result.failed.find((entry) => entry.platform === "github");
+    expect(githubFailure).toBeDefined();
+    expect(githubFailure?.reason).toMatch(/GitHub responded 500/);
+    expect(result.skipped.some((entry) => entry.platform === "github")).toBe(false);
 
     // The other nine Tier-1 platforms still landed: 15 total metrics minus github's
     // single `stars`. (The 3 dormant Tier-2 legs skip too, but that is not this test's
@@ -164,6 +178,28 @@ describe("the /reach store", () => {
     expect(result.collected).toHaveLength(9);
     expect(result.inserted).toBe(14);
     expect(result.collected.some((entry) => entry.platform === "github")).toBe(false);
+  });
+
+  it("distinguishes unconfigured, measured-empty, and faulted platform outcomes", async () => {
+    const result = await recordPlatformStats({
+      at: new Date().toISOString(),
+      fetchImpl: collectorFetch(new Set(["github"]), new Set(["appstore"])),
+    });
+
+    expect(result.skipped).toContainEqual({
+      kind: "unconfigured",
+      platform: "tiktok",
+      reason: "POSTIZ_API_KEY is not set",
+    });
+    expect(result.skipped).toContainEqual({
+      kind: "empty",
+      platform: "appstore",
+      reason: "App Store app is not live yet (resultCount 0)",
+    });
+    expect(result.failed).toContainEqual({
+      platform: "github",
+      reason: "GitHub responded 500",
+    });
   });
 
   it("is idempotent for a same-day re-collect (ON CONFLICT DO NOTHING)", async () => {

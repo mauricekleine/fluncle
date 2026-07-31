@@ -10,7 +10,7 @@
 //
 // WHAT IT DOES. One tick fires `fluncle admin reach collect` ONCE. `collect` is a bare
 // trigger — the WORKER owns every platform credential and does all the fetching (each
-// platform best-effort: a 401 skips + logs, never fails the snapshot), writing one
+// platform best-effort: a fault is reported + logged, never fatal to the snapshot), writing one
 // idempotent snapshot row per (platform, metric) keyed by `${platform}:${metric}:${yyyy-mm-dd}`
 // (ON CONFLICT DO NOTHING). A same-day re-run therefore lands `inserted: 0` and is a safe
 // no-op. Exactly the `catalogue rank` shape (a pacer, not an engine), minus the drain loop:
@@ -34,10 +34,12 @@ const log = (message: string) => console.error(`[reach-sweep] ${message}`);
 // ---------------------------------------------------------------------------
 
 type ReachCollected = { metrics: string[]; platform: string };
-type ReachSkipped = { platform: string; reason: string };
+type ReachFailed = { platform: string; reason: string };
+type ReachSkipped = { kind: "empty" | "unconfigured"; platform: string; reason: string };
 
 type ReachCollectResult = {
   collected?: ReachCollected[];
+  failed?: ReachFailed[];
   inserted?: number;
   ok?: boolean;
   skipped?: ReachSkipped[];
@@ -103,44 +105,56 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
     checked: null as null | number,
+    // Platforms that completed but measured no metrics.
+    empty: null as null | number,
     error: null as null | string,
     errors: 0,
+    // Per-platform fetch/parse faults; the run continued.
+    failed: null as null | number,
     // How many (platform, metric) rows this snapshot actually wrote (a same-day re-run is 0).
-    inserted: 0,
+    inserted: null as null | number,
     // How many platforms landed at least one metric this tick.
-    landed: 0,
+    landed: null as null | number,
     ok: true,
     produced: null as null | number,
-    // How many platforms were skipped (unconfigured, or a best-effort fetch fault) — honest,
-    // not a failure: a platform whose key isn't held yet simply doesn't snapshot today.
-    skipped: 0,
+    // Clean non-work: unconfigured plus measured-empty platforms.
+    skipped: null as null | number,
+    unconfigured: null as null | number,
   };
 
   try {
     const tick = fluncleJson<ReachCollectResult>(["admin", "reach", "collect"]);
 
-    summary.inserted = tick.inserted ?? 0;
-    summary.landed = tick.collected?.length ?? 0;
-    summary.skipped = tick.skipped?.length ?? 0;
+    summary.inserted = typeof tick.inserted === "number" ? tick.inserted : null;
 
-    if (Array.isArray(tick.collected) && Array.isArray(tick.skipped)) {
-      // Platforms are the work unit: every landed/skipped platform was checked, and a landed
+    if (
+      Array.isArray(tick.collected) &&
+      Array.isArray(tick.failed) &&
+      Array.isArray(tick.skipped)
+    ) {
+      summary.landed = tick.collected.length;
+      summary.failed = tick.failed.length;
+      summary.skipped = tick.skipped.length;
+      summary.empty = tick.skipped.filter((entry) => entry.kind === "empty").length;
+      summary.unconfigured = tick.skipped.filter((entry) => entry.kind === "unconfigured").length;
+      // Platforms are the work unit: every landed/skipped/failed platform was checked, and a landed
       // platform was successfully acted on even when an idempotent same-day write inserts 0 rows.
-      // Both arrays must exist before zero is measured; domain counters retain their legacy
-      // defaults when a failed response omits the evidence needed for canonical counters.
-      summary.checked = summary.landed + summary.skipped;
+      // All three arrays must exist before zero is measured.
+      summary.checked = summary.landed + summary.skipped + summary.failed;
       summary.produced = summary.landed;
     }
 
     if (tick.ok === false) {
-      // The Worker reported a hard stop (not a per-platform skip, which stays inside
-      // `skipped`) — carry it through as a failed tick rather than a false success.
+      // The Worker reported a hard stop (not a per-platform fault, which stays inside `failed`) —
+      // carry it through as a failed tick rather than a false success.
       summary.ok = false;
       summary.errors = 1;
       summary.error = "record_platform_stats returned ok:false";
       log("collect returned ok:false");
-    } else if (summary.skipped > 0) {
-      log(`${summary.landed} platform(s) landed, ${summary.skipped} skipped this tick`);
+    } else if ((summary.skipped ?? 0) > 0 || (summary.failed ?? 0) > 0) {
+      log(
+        `${summary.landed ?? 0} platform(s) landed, ${summary.skipped ?? 0} skipped, ${summary.failed ?? 0} failed this tick`,
+      );
     }
   } catch (error) {
     summary.ok = false;

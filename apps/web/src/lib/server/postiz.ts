@@ -124,14 +124,24 @@ export async function getPostizPlatformAnalytics(
     throw new ApiError("postiz_analytics", `Postiz analytics failed (${response.status})`, 502);
   }
 
-  const list = (await response.json()) as {
+  const body = (await response.json()) as unknown;
+
+  if (!Array.isArray(body)) {
+    throw new ApiError(
+      "postiz_analytics_shape",
+      "Postiz analytics returned a non-array payload",
+      502,
+    );
+  }
+
+  const list = body as {
     data?: { date?: string; total?: unknown }[];
     label?: string;
   }[];
 
   const metrics: PostizMetric[] = [];
 
-  for (const entry of Array.isArray(list) ? list : []) {
+  for (const entry of list) {
     const latest = entry.data?.at(-1)?.total;
     const value = typeof latest === "string" ? Number(latest) : latest;
 

@@ -12,9 +12,9 @@
 //     Bounded + ordered in SQL (the getServiceCheckSamples precedent).
 //
 // THE COLLECTOR is the noun-swap's other half of `record_health`'s per-probe
-// discipline: one fetcher per platform, EACH wrapped so a failure or a missing env
-// SKIPS that platform (a logEvent warn + a `{ platform, reason }` skip) and NEVER
-// fails the snapshot. Every number collected is already public on its own platform,
+// discipline: one fetcher per platform, EACH wrapped so missing configuration and measured-empty
+// results SKIP cleanly while fetch/parse faults become visible failed items; neither case fails the
+// snapshot. Every number collected is already public on its own platform,
 // so `platform_stats` is public-safe by construction.
 //
 // The standardization taxonomy (audience / reach / depth buckets) is deliberately
@@ -23,10 +23,10 @@
 import { getDb, typedRows } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
-import { getPostizPlatformAnalytics } from "./postiz";
+import { getPostizPlatformAnalytics, type PostizMetric } from "./postiz";
 import { countSegmentRecipients } from "./resend";
 import { clampSnapshotWindow } from "./snapshot-window";
-import { fetchPlaylistFollowerCount } from "./spotify";
+import { ApiError, fetchPlaylistFollowerCount } from "./spotify";
 import { getTwitchAccessToken, readTwitchClientId } from "./twitch";
 
 // The injectable fetch — the default is the global `fetch`; the tests pass a fake
@@ -50,12 +50,20 @@ export type PlatformStatRow = {
 /** A platform whose numbers landed this collect (the metric names written). */
 export type CollectedPlatform = { metrics: string[]; platform: string };
 
-/** A platform that was skipped this collect (unconfigured, or a fetch fault). */
-export type SkippedPlatform = { platform: string; reason: string };
+/** A clean non-work outcome: no configuration/connection, or a measured empty result. */
+export type SkippedPlatform = {
+  kind: "empty" | "unconfigured";
+  platform: string;
+  reason: string;
+};
+
+/** A platform whose isolated fetch or parse faulted while the rest of the collect continued. */
+export type FailedPlatform = { platform: string; reason: string };
 
 /** The collector's outcome — the rows to write + the per-platform summary. */
 export type PlatformStatsCollection = {
   collected: CollectedPlatform[];
+  failed: FailedPlatform[];
   rows: PlatformStatRow[];
   skipped: SkippedPlatform[];
 };
@@ -63,9 +71,24 @@ export type PlatformStatsCollection = {
 /** What `recordPlatformStats` returns: the summary + the count actually written. */
 export type PlatformStatsRecordResult = {
   collected: CollectedPlatform[];
+  failed: FailedPlatform[];
   inserted: number;
   skipped: SkippedPlatform[];
 };
+
+class PlatformSkipError extends Error {
+  kind: SkippedPlatform["kind"];
+
+  constructor(kind: SkippedPlatform["kind"], message: string) {
+    super(message);
+    this.name = "PlatformSkipError";
+    this.kind = kind;
+  }
+}
+
+function skipPlatform(kind: SkippedPlatform["kind"], reason: string): never {
+  throw new PlatformSkipError(kind, reason);
+}
 
 // A finding's User-Agent — GitHub REQUIRES one, and the others accept it. Fluncle,
 // the curation side-project (mirrors lastfm.ts's USER_AGENT precedent).
@@ -87,7 +110,7 @@ const YOUTUBE_HANDLE = "@fluncle";
  * Coerce a platform field into a non-negative integer count, THROWING when it is
  * absent or non-numeric (Last.fm/YouTube return counts as STRINGS; Mixcloud/Telegram
  * as numbers, so both are accepted). A throw here is caught by the collector and
- * turned into an honest skip, never a stored garbage number.
+ * turned into an honest failed item, never a stored garbage number.
  */
 export function requireCount(value: unknown, label: string): number {
   const parsed = typeof value === "string" ? Number(value) : value;
@@ -207,7 +230,7 @@ export async function collectAppStore(fetchImpl: FetchImpl): Promise<PlatformMet
   };
 
   if (!data.resultCount || data.resultCount === 0 || !data.results?.[0]) {
-    throw new Error("App Store app is not live yet (resultCount 0)");
+    skipPlatform("empty", "App Store app is not live yet (resultCount 0)");
   }
 
   return [
@@ -227,7 +250,7 @@ export async function collectLastfm(fetchImpl: FetchImpl): Promise<PlatformMetri
   const apiKey = await readOptionalEnv("LASTFM_API_KEY");
 
   if (!apiKey) {
-    throw new Error("LASTFM_API_KEY is not set");
+    skipPlatform("unconfigured", "LASTFM_API_KEY is not set");
   }
 
   const root = "https://ws.audioscrobbler.com/2.0/";
@@ -274,7 +297,7 @@ export async function collectTelegram(fetchImpl: FetchImpl): Promise<PlatformMet
   const channelId = await readOptionalEnv("TELEGRAM_CHANNEL_ID");
 
   if (!token || !channelId) {
-    throw new Error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID are not set");
+    skipPlatform("unconfigured", "TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID are not set");
   }
 
   const response = await fetchImpl(
@@ -296,10 +319,19 @@ export async function collectTelegram(fetchImpl: FetchImpl): Promise<PlatformMet
 
 /**
  * Newsletter — reuse `countSegmentRecipients` (the Resend segment size), the only
- * reach read that already existed. It returns null on any failure (incl. an unset
- * segment id), which is a clean skip.
+ * reach read that already existed. Preflight its two required env values so unconfigured is a clean
+ * skip; a null after that preflight is a read fault, not a counterfeit unconfigured outcome.
  */
 export async function collectNewsletter(): Promise<PlatformMetric[]> {
+  const [apiKey, segmentId] = await Promise.all([
+    readOptionalEnv("RESEND_API_KEY"),
+    readOptionalEnv("RESEND_SEGMENT_ID"),
+  ]);
+
+  if (!apiKey || !segmentId) {
+    skipPlatform("unconfigured", "RESEND_API_KEY / RESEND_SEGMENT_ID are not set");
+  }
+
   const count = await countSegmentRecipients();
 
   if (count === null) {
@@ -315,7 +347,23 @@ export async function collectNewsletter(): Promise<PlatformMetric[]> {
  * id is unset or `spotify_auth` is disconnected.
  */
 export async function collectSpotifyPlaylist(): Promise<PlatformMetric[]> {
-  const total = await fetchPlaylistFollowerCount();
+  const playlistId = await readOptionalEnv("SPOTIFY_PLAYLIST_ID");
+
+  if (!playlistId) {
+    skipPlatform("unconfigured", "SPOTIFY_PLAYLIST_ID is not set");
+  }
+
+  let total: number;
+
+  try {
+    total = await fetchPlaylistFollowerCount();
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "spotify_not_authenticated") {
+      skipPlatform("unconfigured", error.message);
+    }
+
+    throw error;
+  }
 
   return [{ metric: "playlist_saves", value: requireCount(total, "Spotify followers.total") }];
 }
@@ -329,7 +377,7 @@ export async function collectYoutube(fetchImpl: FetchImpl): Promise<PlatformMetr
   const key = await readOptionalEnv("YOUTUBE_API_KEY");
 
   if (!key) {
-    throw new Error("YOUTUBE_API_KEY is not set");
+    skipPlatform("unconfigured", "YOUTUBE_API_KEY is not set");
   }
 
   const response = await fetchImpl(
@@ -362,8 +410,8 @@ export async function collectYoutube(fetchImpl: FetchImpl): Promise<PlatformMetr
 //
 // Each reads a durable token minted server-side by its `get<Platform>AccessToken`
 // helper (twitch/tiktok/instagram.ts) — DORMANT until the operator connects, so an
-// absent env or an unconnected token throws a clean reason the collector turns into an
-// honest `{ platform, reason }` skip. The DB-free PARSE half of each is a separate
+// absent env or an unconnected token throws a clean reason the collector turns into an honest
+// `kind: "unconfigured"` skip. The DB-free PARSE half of each is a separate
 // exported function (token + fetch injected) so it is unit-testable with zero network.
 
 /**
@@ -407,7 +455,21 @@ export async function collectTwitchFollowers(
 
 /** Twitch registry wrapper — supplies the stored token + the app client id. */
 export async function collectTwitch(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
-  const [accessToken, clientId] = await Promise.all([getTwitchAccessToken(), readTwitchClientId()]);
+  let accessToken: string;
+  let clientId: string;
+
+  try {
+    [accessToken, clientId] = await Promise.all([getTwitchAccessToken(), readTwitchClientId()]);
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      (error.code === "twitch_not_authenticated" || error.code === "twitch_not_configured")
+    ) {
+      skipPlatform("unconfigured", error.message);
+    }
+
+    throw error;
+  }
 
   return collectTwitchFollowers(fetchImpl, accessToken, clientId);
 }
@@ -415,8 +477,8 @@ export async function collectTwitch(fetchImpl: FetchImpl): Promise<PlatformMetri
 /**
  * Map a Postiz analytics payload's platform-dependent LABELS onto reach metric names —
  * the shared parse half of the two Postiz-backed collectors, pure + unit-testable. A label
- * Postiz stops sending degrades to a missing metric (never a wrong one), and an entirely
- * empty result throws so the collector records an honest skip instead of a hollow row.
+ * Postiz stops sending degrades to a missing metric (never a wrong one). An empty payload is an
+ * honest clean skip; a non-empty payload with no known labels is a shape fault.
  */
 export function mapPostizMetrics(
   metrics: { label: string; latestTotal: number }[],
@@ -434,6 +496,10 @@ export function mapPostizMetrics(
   }
 
   if (out.length === 0) {
+    if (metrics.length === 0) {
+      skipPlatform("empty", `${platform}: Postiz returned no analytics metrics`);
+    }
+
     throw new Error(`${platform}: no mapped metrics in the Postiz analytics payload`);
   }
 
@@ -449,7 +515,23 @@ export function mapPostizMetrics(
  * carry, not the posting cadence). Supersedes the retired TikTok user-OAuth leg.
  */
 export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
-  const metrics = await getPostizPlatformAnalytics(["tiktok"], 7, fetchImpl);
+  const key = await readOptionalEnv("POSTIZ_API_KEY");
+
+  if (!key) {
+    skipPlatform("unconfigured", "POSTIZ_API_KEY is not set");
+  }
+
+  let metrics: PostizMetric[];
+
+  try {
+    metrics = await getPostizPlatformAnalytics(["tiktok"], 7, fetchImpl);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "no_integration") {
+      skipPlatform("unconfigured", error.message);
+    }
+
+    throw error;
+  }
 
   return mapPostizMetrics(
     metrics,
@@ -466,11 +548,23 @@ export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetri
  * ever activated through Meta's business verification — see docs/reach-tier2-activation.md.
  */
 export async function collectInstagram(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
-  const metrics = await getPostizPlatformAnalytics(
-    ["instagram-standalone", "instagram"],
-    7,
-    fetchImpl,
-  );
+  const key = await readOptionalEnv("POSTIZ_API_KEY");
+
+  if (!key) {
+    skipPlatform("unconfigured", "POSTIZ_API_KEY is not set");
+  }
+
+  let metrics: PostizMetric[];
+
+  try {
+    metrics = await getPostizPlatformAnalytics(["instagram-standalone", "instagram"], 7, fetchImpl);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "no_integration") {
+      skipPlatform("unconfigured", error.message);
+    }
+
+    throw error;
+  }
 
   return mapPostizMetrics(metrics, { Views: "views" }, "instagram");
 }
@@ -504,9 +598,8 @@ const PLATFORM_FETCHERS: PlatformFetcher[] = [
 ];
 
 /**
- * Run every Tier-1 platform fetcher, EACH isolated best-effort: a failure or a
- * missing env skips THAT platform (a logEvent warn + a `{ platform, reason }` skip)
- * and never fails the whole snapshot — the healthcheck's per-probe discipline. The
+ * Run every platform fetcher, EACH isolated best-effort: unconfigured/empty outcomes are clean
+ * skips, while fetch/parse faults are visible failures. Neither aborts the snapshot. The
  * `id` is the client-stable `${platform}:${metric}:${yyyy-mm-dd}` (the day derived
  * from `at`), so a second collect the same UTC day re-inserts the same ids and is
  * ignored. Sequential on purpose — a daily cron, not a hot path.
@@ -520,6 +613,7 @@ export async function collectPlatformStats(
 
   const rows: PlatformStatRow[] = [];
   const collected: CollectedPlatform[] = [];
+  const failed: FailedPlatform[] = [];
   const skipped: SkippedPlatform[] = [];
 
   for (const { collect, platform } of PLATFORM_FETCHERS) {
@@ -528,7 +622,7 @@ export async function collectPlatformStats(
 
       if (metrics.length === 0) {
         logEvent("warn", "platform-stats.collect-empty", { platform });
-        skipped.push({ platform, reason: "no metrics returned" });
+        skipped.push({ kind: "empty", platform, reason: "no metrics returned" });
         continue;
       }
 
@@ -545,12 +639,18 @@ export async function collectPlatformStats(
       collected.push({ metrics: metrics.map((metric) => metric.metric), platform });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      logEvent("warn", "platform-stats.collect-skipped", { error, platform });
-      skipped.push({ platform, reason });
+
+      if (error instanceof PlatformSkipError) {
+        logEvent("warn", "platform-stats.collect-skipped", { error, platform });
+        skipped.push({ kind: error.kind, platform, reason });
+      } else {
+        logEvent("warn", "platform-stats.collect-failed", { error, platform });
+        failed.push({ platform, reason });
+      }
     }
   }
 
-  return { collected, rows, skipped };
+  return { collected, failed, rows, skipped };
 }
 
 /**
@@ -592,7 +692,12 @@ export async function recordPlatformStats(
   const collection = await collectPlatformStats(options);
   const inserted = await insertPlatformStats(collection.rows);
 
-  return { collected: collection.collected, inserted, skipped: collection.skipped };
+  return {
+    collected: collection.collected,
+    failed: collection.failed,
+    inserted,
+    skipped: collection.skipped,
+  };
 }
 
 // ── The public read (`/reach`) ───────────────────────────────────────────────

@@ -86,35 +86,73 @@ export type SnapshotCandidate = {
   trackId: string;
 };
 
-/** The TikTok Display-API half's per-run counts. All zero + `configured: false` when TikTok is
- *  unconfigured or unconnected (the clean no-op). */
-export type TikTokSnapshotSummary = {
-  /** True when TikTok is configured (creds set) AND connected (a `tiktok_auth` row exists). */
-  configured: boolean;
-  /** Videos read from `video/list` this run. */
+type UnconfiguredSnapshotSummary = {
+  /** False only for the clean no-op: credentials are absent or the account is not connected. */
+  configured: false;
+  /** A clean no-op is not a failed work item. */
+  failed: 0;
+  /** No read ran, so these are unknown rather than measured zeroes. */
+  fetched: null;
+  inserted: null;
+  matched: null;
+  skipped: null;
+};
+
+type FailedSnapshotSummary = {
+  /** The arm faulted before it could return a trustworthy configuration outcome. */
+  configured: null;
+  /** One independently isolated arm faulted and the run continued. */
+  failed: 1;
+  /** The failed arm cannot honestly report complete work counts. */
+  fetched: null;
+  inserted: null;
+  matched: null;
+  skipped: null;
+};
+
+type MeasuredSnapshotSummary = {
+  configured: true;
+  /** The arm completed, including when it measured an empty result. */
+  failed: 0;
   fetched: number;
-  /** Snapshot rows actually appended (0 on a same-day re-run — idempotent by day). */
   inserted: number;
-  /** Fetched videos matched to a published tiktok `social_posts` row by native video id. */
   matched: number;
-  /** Fetched videos with no matching post row (may predate the archive) — counted, skipped. */
   skipped: number;
 };
 
-/** The YouTube Analytics half's per-run counts. All zero + `configured: false` when YouTube is
- *  unconfigured or unconnected (the clean no-op). Same shape as `TikTokSnapshotSummary`. */
-export type YouTubeSnapshotSummary = {
-  /** True when YouTube is configured (creds set) AND connected (a `youtube_auth` row exists). */
-  configured: boolean;
-  /** Videos the Data API returned metrics for this run. */
-  fetched: number;
-  /** Snapshot rows actually appended (0 on a same-day re-run — idempotent by day). */
-  inserted: number;
-  /** Published youtube posts with a parseable native video id — the pool we queried (≤ budget). */
-  matched: number;
-  /** Published youtube posts whose url carried no parseable video id — counted, skipped. */
-  skipped: number;
-};
+/** The TikTok Display-API half's discriminated per-run outcome. */
+export type TikTokSnapshotSummary =
+  | FailedSnapshotSummary
+  | MeasuredSnapshotSummary
+  | UnconfiguredSnapshotSummary;
+
+/** The YouTube Analytics half's discriminated per-run outcome. */
+export type YouTubeSnapshotSummary =
+  | FailedSnapshotSummary
+  | MeasuredSnapshotSummary
+  | UnconfiguredSnapshotSummary;
+
+function unconfiguredSnapshotSummary(): UnconfiguredSnapshotSummary {
+  return {
+    configured: false,
+    failed: 0,
+    fetched: null,
+    inserted: null,
+    matched: null,
+    skipped: null,
+  };
+}
+
+function failedSnapshotSummary(): FailedSnapshotSummary {
+  return {
+    configured: null,
+    failed: 1,
+    fetched: null,
+    inserted: null,
+    matched: null,
+    skipped: null,
+  };
+}
 
 /** The per-run summary — the JSON line the box sweep echoes and the /status marker carries. */
 export type RecordSocialMetricsSummary = {
@@ -324,28 +362,27 @@ async function appendTikTokSnapshot(
 /**
  * The TikTok Display-API half: read @fluncle's own videos, match each to a published tiktok post by
  * the native video id parsed off its url, and append a `tiktok_display` snapshot per match. A `null`
- * collect result (TikTok unconfigured/unconnected) is a clean no-op — `configured: false`, all zero.
- * Independent of Postiz.
+ * collect result (TikTok unconfigured/unconnected) is a clean no-op — `configured: false`, null
+ * work counts. Independent of Postiz.
  */
 async function snapshotTikTokVideos(
   collect: () => Promise<null | TikTokVideoMetrics[]>,
   now: Date,
 ): Promise<TikTokSnapshotSummary> {
-  const summary: TikTokSnapshotSummary = {
-    configured: false,
+  const videos = await collect();
+
+  if (videos === null) {
+    return unconfiguredSnapshotSummary();
+  }
+
+  const summary: MeasuredSnapshotSummary = {
+    configured: true,
+    failed: 0,
     fetched: 0,
     inserted: 0,
     matched: 0,
     skipped: 0,
   };
-
-  const videos = await collect();
-
-  if (videos === null) {
-    return summary;
-  }
-
-  summary.configured = true;
   summary.fetched = videos.length;
 
   // Map each published tiktok post's native video id → its track. A url that doesn't parse to a
@@ -437,30 +474,24 @@ async function appendYouTubeSnapshot(
  * The YouTube Analytics half: take the newest ≤`YOUTUBE_VIDEO_BUDGET` published youtube posts, parse
  * each one's native video id off its url, read the batch's metrics (Data API counters + Analytics
  * retention), and append a `youtube_analytics` snapshot per video. A `null` collect result (YouTube
- * unconfigured/unconnected) is a clean no-op — `configured: false`, all zero. Independent of Postiz.
+ * unconfigured/unconnected) is a clean no-op — `configured: false`, null work counts. Independent
+ * of Postiz.
  */
 async function snapshotYouTubeVideos(
   collect: (videoIds: string[]) => Promise<null | YouTubeVideoMetrics[]>,
   now: Date,
 ): Promise<YouTubeSnapshotSummary> {
-  const summary: YouTubeSnapshotSummary = {
-    configured: false,
-    fetched: 0,
-    inserted: 0,
-    matched: 0,
-    skipped: 0,
-  };
-
   // Build the newest-first, de-duplicated id list (a post whose url doesn't parse is counted skipped),
   // then cap it to the per-run budget.
   const trackByVideoId = new Map<string, string>();
   const orderedIds: string[] = [];
+  let skipped = 0;
 
   for (const post of await listYouTubePosts()) {
     const videoId = extractYoutubeVideoId(post.url);
 
     if (!videoId) {
-      summary.skipped += 1;
+      skipped += 1;
 
       continue;
     }
@@ -477,12 +508,17 @@ async function snapshotYouTubeVideos(
   const videos = await collect(videoIds);
 
   if (videos === null) {
-    return summary;
+    return unconfiguredSnapshotSummary();
   }
 
-  summary.configured = true;
-  summary.matched = videoIds.length;
-  summary.fetched = videos.length;
+  const summary: MeasuredSnapshotSummary = {
+    configured: true,
+    failed: 0,
+    fetched: videos.length,
+    inserted: 0,
+    matched: videoIds.length,
+    skipped,
+  };
 
   for (const video of videos) {
     const trackId = trackByVideoId.get(video.id);
@@ -507,8 +543,8 @@ async function snapshotYouTubeVideos(
  * is a clean no-op (`configured: false`) — the referrers block still runs. Finally the TikTok
  * Display-API half runs INDEPENDENTLY (even with no Postiz key): when @fluncle's TikTok is connected
  * it appends each of our videos' own metrics under the `tiktok_display` source; a fetch error is
- * logged and skipped, never failing the run. The YouTube Analytics half runs the same way under the
- * `youtube_analytics` source.
+ * logged and reported as one failed item, never failing the run. The YouTube Analytics half runs
+ * the same way under the `youtube_analytics` source.
  */
 export async function recordSocialMetrics(
   options: RecordSocialMetricsOptions = {},
@@ -549,8 +585,8 @@ export async function recordSocialMetrics(
     missing: 0,
     polled: 0,
     referrals,
-    tiktok: { configured: false, fetched: 0, inserted: 0, matched: 0, skipped: 0 },
-    youtube: { configured: false, fetched: 0, inserted: 0, matched: 0, skipped: 0 },
+    tiktok: unconfiguredSnapshotSummary(),
+    youtube: unconfiguredSnapshotSummary(),
   };
 
   // The Postiz half — a clean no-op with no key (the TikTok half below still runs).
@@ -595,11 +631,12 @@ export async function recordSocialMetrics(
     }
   }
 
-  // The TikTok Display-API half — independent of Postiz. A fetch/token error is logged and skipped,
-  // leaving the default no-op summary, so it never fails the run.
+  // The TikTok Display-API half — independent of Postiz. A fetch/token error is logged and exposed
+  // as one failed work item, but never fails the run.
   try {
     summary.tiktok = await snapshotTikTokVideos(collectTikTokVideos, now);
   } catch (error) {
+    summary.tiktok = failedSnapshotSummary();
     logEvent("warn", "social-metrics.tiktok-failed", { error });
   }
 
@@ -607,6 +644,7 @@ export async function recordSocialMetrics(
   try {
     summary.youtube = await snapshotYouTubeVideos(collectYouTubeVideos, now);
   } catch (error) {
+    summary.youtube = failedSnapshotSummary();
     logEvent("warn", "social-metrics.youtube-failed", { error });
   }
 

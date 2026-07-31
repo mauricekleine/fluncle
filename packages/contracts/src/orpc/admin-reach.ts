@@ -10,8 +10,8 @@
 //
 // The op takes NO body — the Worker owns every platform credential, so the box is a
 // bare trigger (zero LLM tokens, the crawl/rank precedent). The output is the
-// per-platform outcome: which platforms landed (and their metric names), which were
-// skipped (with a reason), and how many rows were actually written (a same-day
+// per-platform outcome: which platforms landed, which cleanly skipped, which faulted,
+// and how many rows were actually written (a same-day
 // re-run lands `inserted: 0`, since the snapshot is idempotent by id).
 
 import { oc } from "@orpc/contract";
@@ -25,13 +25,22 @@ const CollectedPlatformSchema = z
   })
   .meta({ id: "ReachCollectedPlatform" });
 
-/** A platform skipped this collect (unconfigured, or a best-effort fetch fault). */
+/** A platform that cleanly did no work: unconfigured/unconnected, or measured empty. */
 const SkippedPlatformSchema = z
   .object({
+    kind: z.enum(["empty", "unconfigured"]),
     platform: z.string(),
     reason: z.string(),
   })
   .meta({ id: "ReachSkippedPlatform" });
+
+/** A platform whose isolated fetch/parse faulted while the snapshot continued. */
+const FailedPlatformSchema = z
+  .object({
+    platform: z.string(),
+    reason: z.string(),
+  })
+  .meta({ id: "ReachFailedPlatform" });
 
 /**
  * `record_platform_stats` → `POST /admin/reach/collect` (operationId
@@ -55,6 +64,7 @@ export const recordPlatformStats = oc
   .output(
     z.object({
       collected: z.array(CollectedPlatformSchema),
+      failed: z.array(FailedPlatformSchema),
       inserted: z.number().int(),
       ok: z.literal(true),
       skipped: z.array(SkippedPlatformSchema),

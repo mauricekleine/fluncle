@@ -311,18 +311,20 @@ describe("recordSocialMetrics", () => {
     // The TikTok half is a clean no-op with no injected collector + no creds.
     expect(summary.tiktok).toEqual({
       configured: false,
-      fetched: 0,
-      inserted: 0,
-      matched: 0,
-      skipped: 0,
+      failed: 0,
+      fetched: null,
+      inserted: null,
+      matched: null,
+      skipped: null,
     });
     // The YouTube half is likewise a clean no-op with no injected collector + no creds.
     expect(summary.youtube).toEqual({
       configured: false,
-      fetched: 0,
-      inserted: 0,
-      matched: 0,
-      skipped: 0,
+      failed: 0,
+      fetched: null,
+      inserted: null,
+      matched: null,
+      skipped: null,
     });
   });
 });
@@ -371,6 +373,7 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
 
     expect(first.tiktok).toEqual({
       configured: true,
+      failed: 0,
       fetched: 1,
       inserted: 1,
       matched: 1,
@@ -451,6 +454,7 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
 
     expect(summary.tiktok).toEqual({
       configured: true,
+      failed: 0,
       fetched: 1,
       inserted: 0,
       matched: 0,
@@ -470,7 +474,8 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
     });
 
     expect(summary.tiktok.configured).toBe(false);
-    expect(summary.tiktok.fetched).toBe(0);
+    expect(summary.tiktok.failed).toBe(0);
+    expect(summary.tiktok.fetched).toBeNull();
     expect(await tiktokRowCount("999111")).toBe(0);
   });
 
@@ -490,22 +495,44 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
     expect(await tiktokRowCount("42")).toBe(1);
   });
 
-  it("never fails the run when the collector throws (logged + skipped)", async () => {
+  it("keeps a configured empty read distinct from an unconfigured arm and a fault", async () => {
     const summary = await recordSocialMetrics({
-      collectTikTokVideos: () => Promise.reject(new Error("tiktok 500")),
+      collectTikTokVideos: () => Promise.resolve([]),
       fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
       now: NOW,
       readReferrers: () => Promise.resolve(NO_REFERRALS),
     });
 
-    // The default no-op summary survives; the run itself did not throw.
     expect(summary.tiktok).toEqual({
-      configured: false,
+      configured: true,
+      failed: 0,
       fetched: 0,
       inserted: 0,
       matched: 0,
       skipped: 0,
     });
+  });
+
+  it("exposes a thrown collector as failed while Postiz and the run still complete", async () => {
+    await seedPost({ externalId: "postiz-ok", platform: "tiktok", trackId: "postiz-track" });
+
+    const summary = await recordSocialMetrics({
+      collectTikTokVideos: () => Promise.reject(new Error("tiktok 500")),
+      fetchAnalytics: () => Promise.resolve({ kind: "metrics", metrics: metrics({ views: 12 }) }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.tiktok).toEqual({
+      configured: null,
+      failed: 1,
+      fetched: null,
+      inserted: null,
+      matched: null,
+      skipped: null,
+    });
+    expect(summary.inserted).toBe(1);
+    expect(await metricsRowCount("postiz-ok")).toBe(1);
   });
 });
 
@@ -583,6 +610,7 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
 
     expect(first.youtube).toEqual({
       configured: true,
+      failed: 0,
       fetched: 1,
       inserted: 1,
       matched: 1,
@@ -693,6 +721,7 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
 
     expect(summary.youtube).toEqual({
       configured: true,
+      failed: 0,
       fetched: 0,
       inserted: 0,
       matched: 0,
@@ -711,7 +740,8 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
     });
 
     expect(summary.youtube.configured).toBe(false);
-    expect(summary.youtube.fetched).toBe(0);
+    expect(summary.youtube.failed).toBe(0);
+    expect(summary.youtube.fetched).toBeNull();
     expect(await youtubeRowCount("abc123DEF45")).toBe(0);
   });
 
@@ -731,23 +761,46 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
     expect(await youtubeRowCount("indep00VID1")).toBe(1);
   });
 
-  it("never fails the run when the YouTube collector throws (logged + skipped)", async () => {
+  it("keeps a configured empty read distinct from an unconfigured arm and a fault", async () => {
     await seedYouTubePost({ trackId: "track-1", videoId: "abc123DEF45" });
 
     const summary = await recordSocialMetrics({
-      collectYouTubeVideos: () => Promise.reject(new Error("youtube 500")),
+      collectYouTubeVideos: () => Promise.resolve([]),
       fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
       now: NOW,
       readReferrers: () => Promise.resolve(NO_REFERRALS),
     });
 
-    // The default no-op summary survives; the run itself did not throw.
     expect(summary.youtube).toEqual({
-      configured: false,
+      configured: true,
+      failed: 0,
       fetched: 0,
       inserted: 0,
-      matched: 0,
+      matched: 1,
       skipped: 0,
     });
+  });
+
+  it("exposes a thrown collector as failed while Postiz and the run still complete", async () => {
+    await seedYouTubePost({ trackId: "track-1", videoId: "abc123DEF45" });
+    await seedPost({ externalId: "postiz-ok", platform: "youtube", trackId: "postiz-track" });
+
+    const summary = await recordSocialMetrics({
+      collectYouTubeVideos: () => Promise.reject(new Error("youtube 500")),
+      fetchAnalytics: () => Promise.resolve({ kind: "metrics", metrics: metrics({ views: 12 }) }),
+      now: NOW,
+      readReferrers: () => Promise.resolve(NO_REFERRALS),
+    });
+
+    expect(summary.youtube).toEqual({
+      configured: null,
+      failed: 1,
+      fetched: null,
+      inserted: null,
+      matched: null,
+      skipped: null,
+    });
+    expect(summary.inserted).toBe(1);
+    expect(await metricsRowCount("postiz-ok")).toBe(1);
   });
 });

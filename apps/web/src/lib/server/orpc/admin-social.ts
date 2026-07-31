@@ -427,6 +427,7 @@ export function adminSocialHandlers(os: Implementer) {
         },
         tiktok: {
           configured: result.tiktok.configured,
+          failed: result.tiktok.failed,
           fetched: result.tiktok.fetched,
           inserted: result.tiktok.inserted,
           matched: result.tiktok.matched,
@@ -434,6 +435,7 @@ export function adminSocialHandlers(os: Implementer) {
         },
         youtube: {
           configured: result.youtube.configured,
+          failed: result.youtube.failed,
           fetched: result.youtube.fetched,
           inserted: result.youtube.inserted,
           matched: result.youtube.matched,

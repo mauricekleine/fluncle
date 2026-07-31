@@ -289,33 +289,36 @@ export const recordSocialMetrics = oc
         total: z.number().int(),
       }),
       /** The TikTok Display-API half — @fluncle's own per-video metrics into the `tiktok_display`
-       *  source. All zero + `configured: false` when TikTok is unconfigured/unconnected (no-op). */
+       *  source. Work counts are null when unconfigured or faulted, never fabricated zeroes. */
       tiktok: z.object({
-        /** TikTok is configured (creds set) AND connected (a `tiktok_auth` row exists). */
-        configured: z.boolean(),
+        /** True when configured/connected, false on a clean no-op, null when the arm faulted. */
+        configured: z.boolean().nullable(),
+        /** One when the isolated arm faulted; zero when it completed or was unconfigured. */
+        failed: z.number().int(),
         /** Videos read from `video/list` this run. */
-        fetched: z.number().int(),
+        fetched: z.number().int().nullable(),
         /** Snapshot rows appended (0 on a same-day re-run — idempotent by day). */
-        inserted: z.number().int(),
+        inserted: z.number().int().nullable(),
         /** Fetched videos matched to a published tiktok post by native video id. */
-        matched: z.number().int(),
+        matched: z.number().int().nullable(),
         /** Fetched videos with no matching post row (may predate the archive) — skipped. */
-        skipped: z.number().int(),
+        skipped: z.number().int().nullable(),
       }),
       /** The YouTube Analytics half — @fluncle's own per-video metrics (public counters + retention)
-       *  into the `youtube_analytics` source. All zero + `configured: false` when YouTube is
-       *  unconfigured/unconnected (no-op). */
+       *  into the `youtube_analytics` source. Work counts are null when unconfigured or faulted. */
       youtube: z.object({
-        /** YouTube is configured (creds set) AND connected (a `youtube_auth` row exists). */
-        configured: z.boolean(),
+        /** True when configured/connected, false on a clean no-op, null when the arm faulted. */
+        configured: z.boolean().nullable(),
+        /** One when the isolated arm faulted; zero when it completed or was unconfigured. */
+        failed: z.number().int(),
         /** Videos the Data API returned metrics for this run. */
-        fetched: z.number().int(),
+        fetched: z.number().int().nullable(),
         /** Snapshot rows appended (0 on a same-day re-run — idempotent by day). */
-        inserted: z.number().int(),
+        inserted: z.number().int().nullable(),
         /** Published youtube posts with a parseable native video id — the pool queried (≤ budget). */
-        matched: z.number().int(),
+        matched: z.number().int().nullable(),
         /** Published youtube posts whose url carried no parseable video id — skipped. */
-        skipped: z.number().int(),
+        skipped: z.number().int().nullable(),
       }),
     }),
   );

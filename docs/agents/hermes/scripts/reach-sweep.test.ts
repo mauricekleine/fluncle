@@ -3,7 +3,7 @@
 // The contract worth pinning is the SINGLE COLLECT: unlike rank (which loops while a backlog
 // drains), a daily snapshot is one idempotent `fluncle admin reach collect` call. So the sweep
 // makes exactly one call, folds the envelope into a one-line JSON summary (inserted / landed /
-// skipped), stays `ok` when platforms are merely skipped (a held-back key is not a failure),
+// skipped / failed), stays `ok` when individual platforms fault or cleanly skip,
 // and reports `ok:false` when the collect genuinely fails.
 //
 // The box-script sweeps are self-contained (they cannot import the workspace) and live outside
@@ -26,13 +26,17 @@ N=$((N + 1))
 echo "$N" > "$DIR/count"
 case "$(cat "$DIR/mode")" in
   # A full snapshot: two platforms landed, one skipped, four rows written.
-  full) printf '{"ok":true,"inserted":4,"collected":[{"platform":"mixcloud","metrics":["followers","listens"]},{"platform":"bluesky","metrics":["followers","posts"]}],"skipped":[{"platform":"tiktok","reason":"no oauth"}]}\\n' ;;
+  full) printf '{"ok":true,"inserted":4,"collected":[{"platform":"mixcloud","metrics":["followers","listens"]},{"platform":"bluesky","metrics":["followers","posts"]}],"failed":[],"skipped":[{"kind":"unconfigured","platform":"tiktok","reason":"no oauth"}]}\\n' ;;
   # A same-day re-run: everything already snapshotted, nothing new written — a safe no-op.
-  noop) printf '{"ok":true,"inserted":0,"collected":[{"platform":"mixcloud","metrics":["followers"]}],"skipped":[]}\\n' ;;
+  noop) printf '{"ok":true,"inserted":0,"collected":[{"platform":"mixcloud","metrics":["followers"]}],"failed":[],"skipped":[]}\\n' ;;
   # Every platform skipped (all keys held back) — still a successful tick, just an empty one.
-  all-skipped) printf '{"ok":true,"inserted":0,"collected":[],"skipped":[{"platform":"tiktok","reason":"no oauth"},{"platform":"instagram","reason":"no oauth"}]}\\n' ;;
+  all-skipped) printf '{"ok":true,"inserted":0,"collected":[],"failed":[],"skipped":[{"kind":"unconfigured","platform":"tiktok","reason":"no oauth"},{"kind":"unconfigured","platform":"instagram","reason":"no oauth"}]}\\n' ;;
   # A measured empty collect: both outcome arrays exist and contain zero platforms.
-  empty) printf '{"ok":true,"inserted":0,"collected":[],"skipped":[]}\\n' ;;
+  empty) printf '{"ok":true,"inserted":0,"collected":[],"failed":[],"skipped":[]}\\n' ;;
+  # The three non-landed outcomes have exact machine-readable buckets.
+  unconfigured) printf '{"ok":true,"inserted":0,"collected":[],"failed":[],"skipped":[{"kind":"unconfigured","platform":"tiktok","reason":"no oauth"}]}\\n' ;;
+  no-metrics) printf '{"ok":true,"inserted":0,"collected":[],"failed":[],"skipped":[{"kind":"empty","platform":"appstore","reason":"not live"}]}\\n' ;;
+  platform-fault) printf '{"ok":true,"inserted":0,"collected":[],"failed":[{"platform":"github","reason":"GitHub responded 500"}],"skipped":[]}\\n' ;;
   # The Worker reported a hard stop before it could return trustworthy outcome arrays.
   worker-fail) printf '{"ok":false,"inserted":0}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
@@ -92,6 +96,9 @@ describe("reach-sweep takes ONE daily snapshot", () => {
     expect(summary.inserted).toBe(4);
     expect(summary.landed).toBe(2);
     expect(summary.skipped).toBe(1);
+    expect(summary.unconfigured).toBe(1);
+    expect(summary.empty).toBe(0);
+    expect(summary.failed).toBe(0);
     expect(summary.checked).toBe(3);
     expect(summary.produced).toBe(2);
     expect(summary.errors).toBe(0);
@@ -117,6 +124,9 @@ describe("reach-sweep takes ONE daily snapshot", () => {
 
     expect(summary.landed).toBe(0);
     expect(summary.skipped).toBe(2);
+    expect(summary.unconfigured).toBe(2);
+    expect(summary.empty).toBe(0);
+    expect(summary.failed).toBe(0);
     expect(summary.checked).toBe(2);
     expect(summary.produced).toBe(0);
     // A held-back key is not a fault — the tick succeeded, it just had nothing to write.
@@ -129,10 +139,31 @@ describe("reach-sweep takes ONE daily snapshot", () => {
 
     expect(summary).toMatchObject({
       checked: 0,
+      empty: 0,
       errors: 0,
+      failed: 0,
       landed: 0,
       produced: 0,
       skipped: 0,
+      unconfigured: 0,
+    });
+  });
+
+  test.each([
+    ["unconfigured", { empty: 0, failed: 0, skipped: 1, unconfigured: 1 }],
+    ["no-metrics", { empty: 1, failed: 0, skipped: 1, unconfigured: 0 }],
+    ["platform-fault", { empty: 0, failed: 1, skipped: 0, unconfigured: 0 }],
+  ] as const)("keeps the %s platform outcome distinct", (state, expected) => {
+    mode(state);
+    const summary = run();
+
+    expect(summary).toMatchObject({
+      checked: 1,
+      errors: 0,
+      landed: 0,
+      ok: true,
+      produced: 0,
+      ...expected,
     });
   });
 
@@ -153,14 +184,17 @@ describe("reach-sweep fails honestly", () => {
     const summary = run();
 
     expect(summary.ok).toBe(false);
-    // Domain defaults remain numeric for backwards compatibility, but absent outcome arrays mean
-    // the canonical work pair is unknown rather than a fabricated measured zero.
+    // Absent outcome arrays mean every domain counter is unknown, never fabricated zero.
     expect(summary).toMatchObject({
       checked: null,
+      empty: null,
       errors: 1,
-      landed: 0,
+      failed: null,
+      inserted: 0,
+      landed: null,
       produced: null,
-      skipped: 0,
+      skipped: null,
+      unconfigured: null,
     });
     expect(summary.error).toBeTruthy();
   });

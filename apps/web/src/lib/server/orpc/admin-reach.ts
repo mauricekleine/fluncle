@@ -24,6 +24,7 @@ export function adminReachHandlers(os: Implementer) {
 
       return {
         collected: result.collected,
+        failed: result.failed,
         inserted: result.inserted,
         ok: true as const,
         skipped: result.skipped,

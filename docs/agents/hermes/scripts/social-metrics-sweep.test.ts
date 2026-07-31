@@ -25,8 +25,8 @@ const RESPONSE: RecordSocialMetricsResponse = {
   ok: true,
   polled: 25,
   referrals: { total: 137 },
-  tiktok: { fetched: 5, inserted: 3, matched: 4 },
-  youtube: { fetched: 8, inserted: 6, matched: 8 },
+  tiktok: { configured: true, failed: 0, fetched: 5, inserted: 3, matched: 4 },
+  youtube: { configured: true, failed: 0, fetched: 8, inserted: 6, matched: 8 },
 };
 
 function deps(overrides: Partial<SocialMetricsDeps> = {}): SocialMetricsDeps {
@@ -53,9 +53,13 @@ describe("runSocialMetricsTick", () => {
     expect(summary.polled).toBe(25);
     expect(summary.missing).toBe(2);
     expect(summary.referralArrivals).toBe(137);
+    expect(summary.tiktokConfigured).toBe(true);
+    expect(summary.tiktokFailed).toBe(0);
     expect(summary.tiktokFetched).toBe(5);
     expect(summary.tiktokInserted).toBe(3);
     expect(summary.tiktokMatched).toBe(4);
+    expect(summary.youtubeConfigured).toBe(true);
+    expect(summary.youtubeFailed).toBe(0);
     expect(summary.youtubeFetched).toBe(8);
     expect(summary.youtubeInserted).toBe(6);
     expect(summary.youtubeMatched).toBe(8);
@@ -78,8 +82,8 @@ describe("runSocialMetricsTick", () => {
             missing: 0,
             ok: true,
             polled: 0,
-            tiktok: { fetched: 0, inserted: 0 },
-            youtube: { fetched: 0, inserted: 0 },
+            tiktok: { configured: true, failed: 0, fetched: 0, inserted: 0 },
+            youtube: { configured: true, failed: 0, fetched: 0, inserted: 0 },
           }),
       }),
     );
@@ -88,6 +92,76 @@ describe("runSocialMetricsTick", () => {
     expect(summary.produced).toBe(0);
     expect(summary.failed).toBe(0);
     expect(summary.errors).toBe(0);
+  });
+
+  test.each([
+    [
+      "unconfigured",
+      { configured: false, failed: 0, fetched: null, inserted: null, matched: null },
+      { checked: 0, configured: false, failed: 0, fetched: null, produced: 0 },
+    ],
+    [
+      "empty",
+      { configured: true, failed: 0, fetched: 0, inserted: 0, matched: 0 },
+      { checked: 0, configured: true, failed: 0, fetched: 0, produced: 0 },
+    ],
+    [
+      "fault",
+      { configured: null, failed: 1, fetched: null, inserted: null, matched: null },
+      { checked: null, configured: null, failed: 1, fetched: null, produced: null },
+    ],
+  ] as const)(
+    "keeps a TikTok %s distinct in the summary line",
+    async (_state, tiktok, expected) => {
+      const summary = await runSocialMetricsTick(
+        deps({
+          record: () =>
+            Promise.resolve({
+              failed: 0,
+              inserted: 0,
+              ok: true,
+              polled: 0,
+              tiktok,
+              youtube: { configured: false, failed: 0, fetched: null, inserted: null },
+            }),
+        }),
+      );
+
+      expect(summary).toMatchObject({
+        checked: expected.checked,
+        errors: 0,
+        failed: expected.failed,
+        ok: true,
+        produced: expected.produced,
+        tiktokConfigured: expected.configured,
+        tiktokFailed: expected.failed,
+        tiktokFetched: expected.fetched,
+      });
+    },
+  );
+
+  test("counts both isolated arm faults as failed while the run remains successful", async () => {
+    const summary = await runSocialMetricsTick(
+      deps({
+        record: () =>
+          Promise.resolve({
+            failed: 0,
+            inserted: 0,
+            ok: true,
+            polled: 0,
+            tiktok: { configured: true, failed: 1, fetched: null, inserted: null },
+            youtube: { configured: true, failed: 1, fetched: null, inserted: null },
+          }),
+      }),
+    );
+
+    expect(summary).toMatchObject({
+      errors: 0,
+      failed: 2,
+      ok: true,
+      tiktokFailed: 1,
+      youtubeFailed: 1,
+    });
   });
 
   test("reports ok:false (never throws) when the op response is not ok", async () => {

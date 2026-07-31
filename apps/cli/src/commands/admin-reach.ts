@@ -12,12 +12,20 @@ import { adminApiPost } from "../api";
 /** A platform whose numbers landed this collect (its metric names). */
 export type ReachCollectedPlatform = { metrics: string[]; platform: string };
 
-/** A platform skipped this collect (unconfigured, or a best-effort fetch fault). */
-export type ReachSkippedPlatform = { platform: string; reason: string };
+/** A platform that cleanly did no work: unconfigured/unconnected, or measured empty. */
+export type ReachSkippedPlatform = {
+  kind: "empty" | "unconfigured";
+  platform: string;
+  reason: string;
+};
+
+/** A platform whose isolated fetch/parse faulted while the rest continued. */
+export type ReachFailedPlatform = { platform: string; reason: string };
 
 /** The `record_platform_stats` outcome envelope. */
 export type ReachCollectResult = {
   collected: ReachCollectedPlatform[];
+  failed: ReachFailedPlatform[];
   inserted: number;
   ok: true;
   skipped: ReachSkippedPlatform[];
@@ -28,8 +36,8 @@ export type ReachCollectResult = {
  *
  * Fires the agent-tier `record_platform_stats` op: the Worker fetches every Tier-1
  * platform (each best-effort), writes one idempotent snapshot row per (platform,
- * metric), and returns which platforms landed, which were skipped, and how many rows
- * were actually written (a same-day re-run lands `inserted: 0`).
+ * metric), and returns which platforms landed, cleanly skipped, or faulted plus how many rows were
+ * actually written (a same-day re-run lands `inserted: 0`).
  */
 export async function reachCollectCommand(): Promise<ReachCollectResult> {
   return adminApiPost<ReachCollectResult>("/api/v1/admin/reach/collect", {});

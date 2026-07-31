@@ -2575,20 +2575,23 @@ JSON field reference:
     .option("--json", "Print JSON", false)
     .action(async (options: JsonOptions) => {
       const { reachCollectCommand } = await import("./commands/admin-reach");
-      const { collected, inserted, skipped } = await reachCollectCommand();
+      const { collected, failed, inserted, skipped } = await reachCollectCommand();
 
       if (options.json) {
-        printJson({ collected, inserted, ok: true, skipped });
+        printJson({ collected, failed, inserted, ok: true, skipped });
         return;
       }
 
       const landed = collected
         .map((entry) => `${entry.platform} (${entry.metrics.join(", ")})`)
         .join("; ");
-      const missed = skipped.map((entry) => `${entry.platform}: ${entry.reason}`).join("; ");
+      const missed = skipped
+        .map((entry) => `${entry.platform} (${entry.kind}): ${entry.reason}`)
+        .join("; ");
+      const faults = failed.map((entry) => `${entry.platform}: ${entry.reason}`).join("; ");
 
       console.log(
-        `Collected ${collected.length} platform(s), wrote ${inserted} new row(s).${landed ? ` Landed: ${landed}.` : ""}${missed ? ` Skipped: ${missed}.` : ""}`,
+        `Collected ${collected.length} platform(s), wrote ${inserted} new row(s).${landed ? ` Landed: ${landed}.` : ""}${missed ? ` Skipped: ${missed}.` : ""}${faults ? ` Failed: ${faults}.` : ""}`,
       );
     });
 

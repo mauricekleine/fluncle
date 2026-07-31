@@ -78,4 +78,20 @@ describe("run-level errors stay separate from item-level failures", () => {
     expect(source).toContain("errors: 1");
     expect(source).toContain("process.exit(1)");
   });
+
+  test("social metrics adds isolated arm faults to `failed` and keeps `errors` run-level", () => {
+    const source = sweep("social-metrics");
+
+    expect(source).toContain("postizFailed + summary.tiktokFailed + summary.youtubeFailed");
+    expect(source).not.toContain("summary.errors = summary.failed");
+    expect(source).toContain("summary.errors = 1");
+  });
+
+  test("reach counts isolated platform faults in `failed` and reserves `errors` for a hard stop", () => {
+    const source = sweep("reach");
+
+    expect(source).toContain("summary.failed = tick.failed.length");
+    expect(source).not.toContain("summary.errors = summary.failed");
+    expect(source).toContain("summary.errors = 1");
+  });
 });
