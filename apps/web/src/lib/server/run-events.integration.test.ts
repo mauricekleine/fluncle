@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InArgs, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { insertRunEvent, readRunLedger } from "./run-events";
@@ -35,6 +35,74 @@ function envelope(over: Partial<Parameters<typeof insertRunEvent>[0]> = {}) {
       '{"checked":120,"errors":0,"expectedIntervalMs":3600000,"produced":4,"queueDepth":17}',
     unit: "fluncle-enrich",
     ...over,
+  };
+}
+
+function gatewayError(status: number): Error {
+  return new Error(`SERVER_ERROR: Server returned HTTP status ${status}`, {
+    cause: Object.assign(new Error(`server returned HTTP status ${status}`), { status }),
+  });
+}
+
+function executeStatement(client: Client, statement: InStatement, args?: InArgs) {
+  return args !== undefined && typeof statement === "string"
+    ? client.execute(statement, args)
+    : client.execute(statement);
+}
+
+type InsertFault = {
+  afterExecute?: boolean;
+  error: Error;
+};
+
+/**
+ * Fault only the run-event INSERT while leaving the real in-memory libSQL client underneath.
+ * `afterExecute` is the production incident: the row landed, but the gateway lost its receipt.
+ */
+function faultRunEventInsert(
+  client: Client,
+  faults: InsertFault[],
+): { client: Client; insertCalls: () => number } {
+  let faultIndex = 0;
+  let insertCalls = 0;
+
+  return {
+    client: new Proxy(client, {
+      get(target, property, receiver) {
+        if (property === "execute") {
+          return async (statement: InStatement, args?: InArgs) => {
+            const sql = typeof statement === "string" ? statement : statement.sql;
+
+            if (!sql.includes("insert into run_events")) {
+              return executeStatement(target, statement, args);
+            }
+
+            insertCalls += 1;
+
+            const fault = faults[faultIndex];
+
+            if (!fault) {
+              return executeStatement(target, statement, args);
+            }
+
+            faultIndex += 1;
+
+            if (fault.afterExecute === true) {
+              await executeStatement(target, statement, args);
+            }
+
+            throw fault.error;
+          };
+        }
+
+        const value: unknown = Reflect.get(target, property, receiver);
+
+        return typeof value === "function"
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    }),
+    insertCalls: () => insertCalls,
   };
 }
 
@@ -117,6 +185,61 @@ describe("insertRunEvent — the round trip", () => {
 });
 
 describe("insertRunEvent — idempotency", () => {
+  it("retries a 502 on the ledger insert and lands the row", async () => {
+    const client = telemetryDb;
+
+    if (!client) {
+      throw new Error("no telemetry database in this test");
+    }
+
+    const fault = faultRunEventInsert(client, [{ error: gatewayError(502) }]);
+    telemetryDb = fault.client;
+
+    const recorded = await insertRunEvent(envelope());
+
+    expect(recorded.inserted).toBe(1);
+    expect(recorded.stored).toBe(true);
+    expect(fault.insertCalls()).toBe(2);
+    await onlyRow();
+  });
+
+  it("replays a lost 502 receipt as inserted: 0 and keeps exactly one row", async () => {
+    const client = telemetryDb;
+
+    if (!client) {
+      throw new Error("no telemetry database in this test");
+    }
+
+    const fault = faultRunEventInsert(client, [{ afterExecute: true, error: gatewayError(502) }]);
+    telemetryDb = fault.client;
+
+    const recorded = await insertRunEvent(envelope());
+
+    expect(recorded.inserted).toBe(0);
+    expect(recorded.stored).toBe(true);
+    expect(fault.insertCalls()).toBe(2);
+    await onlyRow();
+  });
+
+  it("does not retry a 524 and leaves the row absent", async () => {
+    const client = telemetryDb;
+
+    if (!client) {
+      throw new Error("no telemetry database in this test");
+    }
+
+    const error = gatewayError(524);
+    const fault = faultRunEventInsert(client, [{ error }]);
+    telemetryDb = fault.client;
+
+    await expect(insertRunEvent(envelope())).rejects.toBe(error);
+    expect(fault.insertCalls()).toBe(1);
+
+    const result = await client.execute("select count(*) as n from run_events");
+
+    expect(Number(result.rows[0]?.n)).toBe(0);
+  });
+
   it("collapses a retried POST to ONE row", async () => {
     // The POST is best-effort, so it WILL be retried. An append-only ledger double-counts a
     // retry without `on conflict(id) do nothing`, and a doubled run count is a lie about

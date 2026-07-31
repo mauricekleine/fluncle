@@ -12,12 +12,9 @@ Non-canonical planning input for the offline-first mobile work (ROADMAP § _Offl
 
 - **The engine flip (a 1.2-class release decision):** when a production binary ships with `useLibSQL` — the moment the app-side replica code (already shipped, dark, engine-probed) can activate for real users. Wants its own regression pass, since slice 1's kv-store stores change engine with it.
 
-## Operator activation checklist (the server side is built and waiting)
+## Activation — DONE 2026-07-31
 
-- Mint the production derived DB (`bun apps/web/scripts/derive-device-db.ts --cut anchored` against a prod snapshot; set the file to WAL mode before `turso db create --from-file`).
-- Provision on the box: read-only source URL/token + write-scoped target URL/token for the mirror sweep.
-- Rebake the Hermes image (bakes the sweep + roster line together), enable the hourly `fluncle-device-mirror` timer, attend the first tick.
-- Wire the Worker's four bindings (`DEVICE_REPLICA_DB_URL`, `DEVICE_REPLICA_DB_NAME`, `TURSO_PLATFORM_ORG`, `TURSO_PLATFORM_TOKEN`) to light `get_replica_token`.
+The whole chain is live and was verified end to end the same day: the derived DB serves the anchored cut, the hourly `fluncle-device-mirror` timer runs on the box (first tick reconciled the morning's churn with zero errors and reported to the run ledger), `get_replica_token` mints real 24-hour credentials, and a dev-client build on current `main` bootstrapped its replica unassisted — pulling rows the sweep had mirrored after the seed snapshot, which proves the prod → sweep → replica → token → device loop, not just its parts. Store users feel none of it until the engine flip below.
 
 ## Carried-forward UNVERIFIED list
 

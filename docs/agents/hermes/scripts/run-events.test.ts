@@ -455,15 +455,28 @@ type Envelope = {
 };
 type Summary = Record<string, boolean | number | string | null>;
 
-async function withLedger<T>(body: (base: string, calls: LedgerCall[]) => Promise<T>): Promise<T> {
+async function withLedger<T>(
+  body: (base: string, calls: LedgerCall[], landed: LedgerCall[]) => Promise<T>,
+  options: { responseStatus?: number } = {},
+): Promise<T> {
   const calls: LedgerCall[] = [];
+  const landed: LedgerCall[] = [];
   const server = Bun.serve({
     async fetch(request) {
-      calls.push({
+      const call = {
         auth: request.headers.get("authorization") ?? "",
         body: await request.text(),
         path: new URL(request.url).pathname,
-      });
+      };
+      calls.push(call);
+
+      const responseStatus = options.responseStatus ?? 200;
+
+      if (responseStatus < 200 || responseStatus >= 300) {
+        return new Response("ledger unavailable", { status: responseStatus });
+      }
+
+      landed.push(call);
 
       return Response.json({ inserted: 1, ok: true });
     },
@@ -471,7 +484,7 @@ async function withLedger<T>(body: (base: string, calls: LedgerCall[]) => Promis
   });
 
   try {
-    return await body(`http://127.0.0.1:${server.port}`, calls);
+    return await body(`http://127.0.0.1:${server.port}`, calls, landed);
   } finally {
     await server.stop(true);
   }
@@ -823,6 +836,24 @@ describe("timer-watchdog reports a run", () => {
     });
 
     expect(runEvents(calls)).toHaveLength(0);
+    expect(code).toBe(0);
+  });
+
+  test("a permanently failing ledger POST leaves the sweep unharmed and the row absent", async () => {
+    const { calls, code, landed } = await withLedger(
+      async (base, calls, landed) => {
+        const run = await runWatchdog(
+          { containerEnv: { FLUNCLE_API_TOKEN: "container-agent-token" }, timers: HEALTHY },
+          base,
+        );
+
+        return { calls, code: run.code, landed };
+      },
+      { responseStatus: 502 },
+    );
+
+    expect(runEvents(calls)).toHaveLength(1);
+    expect(runEvents(landed)).toHaveLength(0);
     expect(code).toBe(0);
   });
 });

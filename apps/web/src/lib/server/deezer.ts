@@ -148,6 +148,20 @@ const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 const DEEZER_QUOTA_ERROR_CODE = 4;
 
 /**
+ * Deezer's "there is no such row" answer — a `DataException` (`{"error":{"type":"DataException",
+ * "message":"no data","code":800}}`), delivered in the same HTTP-200 envelope as the quota error
+ * above. It is the ONLY error code that settles a question: it says Deezer looked this ISRC up and
+ * carries no recording for it, which is a real, stampable MISS.
+ *
+ * Every OTHER code is deliberately NOT absence — a quota (4, handled above), a service-busy, a
+ * malformed query, an auth exception. Those say something went wrong on the way to the answer, so
+ * the ledger records a transport failure and the row stays eligible. The asymmetry is the point:
+ * absence is the only negative Fluncle ever writes down, so it is the only one that gets a
+ * whitelist rather than a catch-all.
+ */
+const DEEZER_DATA_EXCEPTION_CODE = 800;
+
+/**
  * Backoff between quota retries. Deezer's quota window is a few seconds wide, so a short wait lands in
  * a FRESH window — the point is to outlast a neighbour's burst on the shared egress IP, not to grind.
  * Two retries, ≤4s added and ONLY on the throttled path: bounded well inside the box sweep's 30s
@@ -490,4 +504,139 @@ export async function enrichFromDeezer(
   } catch {
     return {};
   }
+}
+
+/**
+ * One by-ISRC lookup's outcome, and the whole reason this function exists beside {@link
+ * enrichFromDeezer}: that one collapses a miss, a throttle, a network error and a duration
+ * disagreement into the SAME empty return, which is exactly why publish stamps nothing (schema.ts §
+ * `backfill_deezer_*` records the reasoning). The forward-accretion sweep has to write a ledger, so
+ * it needs those four told apart — a stamp nobody can stand behind is worse than no stamp.
+ *
+ *   · `matched`     — Deezer carries this recording AND its duration vouches for the pick. The id
+ *                     is safe to render as a public link.
+ *   · `absent`      — Deezer answered `DataException` (see {@link DEEZER_DATA_EXCEPTION_CODE}): it
+ *                     looked and carries nothing. The one negative worth writing down.
+ *   · `unvouchable` — Deezer PICKED something, but its duration disagrees (or it sent none, or the
+ *                     row has none to compare). `/track/isrc:` picks wrong ~7% of the time, so this
+ *                     is "found it, will not vouch for it" — neither a hit nor a miss, and the
+ *                     caller stamps NOTHING.
+ *   · `quota`       — the HTTP-200 quota body (code 4). A throttle is not an answer; it ends the
+ *                     pass and stamps nothing.
+ *   · `failed`      — transport: a thrown request, a timeout, a non-2xx, an unparseable body, an
+ *                     unrecognized error code, or a 200 carrying no id at all. Nothing was learned.
+ */
+export type DeezerIsrcLookup =
+  | { deezerTrackId: string; outcome: "matched" }
+  | { error: string; outcome: "failed" }
+  | { outcome: "absent" }
+  | { outcome: "quota" }
+  | { outcome: "unvouchable" };
+
+/**
+ * Resolve a recording's Deezer track id from its ISRC — the read behind the forward-accretion
+ * `backfill_deezer` sweep (lib/server/backfill.ts).
+ *
+ * KEYLESS, ONE REQUEST. `GET /track/isrc:<isrc>` takes no token and answers with the track itself,
+ * so a row costs exactly one request; the album read `enrichFromDeezer` makes for its label is
+ * deliberately NOT made here, because the sweep wants the id and nothing else.
+ *
+ * THE GATE IS THE DURATION, and it is not optional. The endpoint does not answer "here are the
+ * recordings under this ISRC", it PICKS one, and it picks wrong about 7% of the time — measured,
+ * and the same vendor behaviour the identity envelope's `ambiguous` relation exists for. A wrong id
+ * becomes a wrong Deezer link on a public page under a real recording's name, so the returned
+ * track's duration must agree with the row's within ±{@link DURATION_TOLERANCE_S}s or the answer
+ * comes back `unvouchable` and the caller writes nothing. `expectedDurationMs` that is absent or
+ * non-positive fails the gate for the same reason — there is nothing to check against.
+ *
+ * NEVER THROWS. Every failure path is mapped onto {@link DeezerIsrcLookup} so the sweep's ledger
+ * always has an outcome to reason about. Politeness matches the sibling reads: the identified
+ * Fluncle User-Agent and the shared per-request deadline.
+ */
+export async function lookupDeezerTrackByIsrc(
+  isrc: string,
+  expectedDurationMs: number,
+): Promise<DeezerIsrcLookup> {
+  const trimmed = isrc.trim();
+
+  // Nothing to ask with, or nothing to vouch with. Both are `unvouchable` rather than `failed`:
+  // no request was made, so no conclusion was reached and the ledger must stay silent.
+  if (!trimmed || !(expectedDurationMs > 0)) {
+    return { outcome: "unvouchable" };
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`https://api.deezer.com/track/isrc:${encodeURIComponent(trimmed)}`, {
+      headers: { "User-Agent": DEEZER_USER_AGENT },
+      signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // A network error OR a timeout abort — nothing was learned either way.
+    logEvent("warn", "deezer.isrc-lookup-threw", { error });
+
+    return { error: error instanceof Error ? error.message : String(error), outcome: "failed" };
+  }
+
+  if (!response.ok) {
+    logEvent("warn", "deezer.isrc-lookup-http-error", { status: response.status });
+
+    return { error: `Deezer answered HTTP ${response.status}`, outcome: "failed" };
+  }
+
+  let body: unknown;
+
+  try {
+    body = await response.json();
+  } catch (error) {
+    logEvent("warn", "deezer.isrc-lookup-malformed-body", { error });
+
+    return { error: "Deezer sent an unparseable body", outcome: "failed" };
+  }
+
+  // THE ERROR BODY, READ BEFORE THE TRACK — a 200 is not a result (see the quota note above). This
+  // is the branch the search client shipped without, and its absence made a platform-wide throttle
+  // read as a per-row miss for a week.
+  const error = (body as DeezerTrack).error;
+
+  if (error) {
+    const code = (error as { code?: unknown }).code;
+
+    if (code === DEEZER_QUOTA_ERROR_CODE) {
+      return { outcome: "quota" };
+    }
+
+    if (code === DEEZER_DATA_EXCEPTION_CODE) {
+      // The one stampable negative: Deezer looked and carries no recording under this ISRC.
+      return { outcome: "absent" };
+    }
+
+    logEvent("warn", "deezer.isrc-lookup-api-error", { error });
+
+    return { error: `Deezer error code ${String(code)}`, outcome: "failed" };
+  }
+
+  const track = body as DeezerTrack;
+
+  if (typeof track.id !== "number") {
+    // A 200 with neither an error nor an id is a shape we do not understand — not an absence.
+    logEvent("warn", "deezer.isrc-lookup-unexpected-shape", {});
+
+    return { error: "Deezer sent no track id", outcome: "failed" };
+  }
+
+  const durationConfirmed =
+    typeof track.duration === "number" &&
+    track.duration > 0 &&
+    Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
+
+  if (!durationConfirmed) {
+    // Found, but not vouched for. Distinct from `absent` on purpose: Deezer demonstrably carries
+    // SOMETHING here, so recording "not found" would misstate it, while keeping the id would
+    // render a link we cannot stand behind. Neither state fits, so none is claimed.
+    return { outcome: "unvouchable" };
+  }
+
+  return { deezerTrackId: String(track.id), outcome: "matched" };
 }

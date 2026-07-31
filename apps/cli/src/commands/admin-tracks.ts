@@ -534,6 +534,14 @@ export async function backfillDiscogsFactsCommand(
 }
 
 export type BeatportBackfillResult = {
+  // The CATALOGUE tier's own counters — an uncertified row has no Log ID, and its spend is metered
+  // separately (each row is one Firecrawl credit against a five-figure catalogue).
+  catalogueFailed: Array<{ error: string; trackId: string }>;
+  catalogueFailedCount: number;
+  catalogueResolved: Array<{ trackId: string; url: string }>;
+  catalogueResolvedCount: number;
+  catalogueUnresolved: string[];
+  catalogueUnresolvedCount: number;
   configured: boolean;
   dryRun: boolean;
   // Findings whose resolve errored (a scrape failure/timeout) — nothing was learned, so they back
@@ -549,6 +557,38 @@ export type BeatportBackfillResult = {
   unresolved: string[];
   unresolvedCount: number;
 };
+
+export type DeezerBackfillResult = {
+  dryRun: boolean;
+  // Rows whose lookup errored in transport — nothing learned, so they retry until a failure cap.
+  failed: Array<{ error: string; trackId: string }>;
+  failedCount: number;
+  // True when the pass STOPPED on Deezer's quota answer (an HTTP-200 error body): nothing was
+  // stamped, so the CLI stops looping and the next tick resumes with a fresh window.
+  rateLimited: boolean;
+  resolved: Array<{ trackId: string; url: string }>;
+  resolvedCount: number;
+  // ISRCs Deezer concluded it carries no recording for — stamped, a real negative.
+  unresolved: string[];
+  unresolvedCount: number;
+  // Rows Deezer picked a track for whose duration did not vouch — stamped nothing, still eligible.
+  unvouchable: string[];
+  unvouchableCount: number;
+};
+
+// One bounded pass of the forward-accretion Deezer backfill — the Worker resolves each row's Deezer
+// track id EXACTLY by ISRC through the keyless public endpoint (no key to provision anywhere), keeps
+// it only when the returned track's duration vouches for the pick, and writes the id + provenance
+// server-side. Certified rows drain first, then the Ear-ranked catalogue. NO cursor: the worklist is
+// a fresh ledger-gated read each tick, so the CLI loops until a pass does nothing.
+export async function backfillDeezerCommand(
+  limit: number,
+  dryRun: boolean,
+): Promise<DeezerBackfillResult> {
+  const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
+
+  return adminApiPost<DeezerBackfillResult>(`/api/v1/admin/backfill/deezer?${params.toString()}`);
+}
 
 // One bounded pass of the Beatport store-link backfill. The Worker holds the Firecrawl key, scrapes
 // Beatport's public search (no Beatport API key is used), and keeps a link ONLY where a result's

@@ -43,8 +43,10 @@ import {
   storeAlbumDiscogsFacts,
   storeAlbumDiscogsFactsForTrack,
 } from "./albums";
+import { parseArtistsJson } from "./artists";
 import { resolveBeatportUrl } from "./beatport-resolve";
 import { getDb, typedRows } from "./db";
+import { lookupDeezerTrackByIsrc } from "./deezer";
 import {
   type DiscogsThrottleVendor,
   discogsResolveRelease,
@@ -1212,8 +1214,24 @@ export async function storeAlbumFactsForTrack(
 // scrape per eligible finding, a handful per tick, and the reliability cooldown keeps a drained
 // archive quiet.
 
-/** The outcome of one bounded Beatport pass. */
+/**
+ * The outcome of one bounded Beatport pass — BOTH tiers.
+ *
+ * The catalogue tier keeps its own counters rather than folding into the findings arrays, because
+ * the two are different money. A certified row is one of ~85 and worth a scrape on sight; a
+ * catalogue row is one of five figures and every one of them is a Firecrawl credit, so the operator
+ * has to be able to read this tier's spend on its own line. They are keyed differently too: a
+ * catalogue row has no Log ID to report.
+ */
 export type BeatportBackfillResult = {
+  // Catalogue rows whose scrape errored — nothing learned, the streak backs them off.
+  catalogueFailed: Array<{ error: string; trackId: string }>;
+  catalogueFailedCount: number;
+  catalogueResolved: Array<{ trackId: string; url: string }>;
+  catalogueResolvedCount: number;
+  // Catalogue rows Beatport ran a search for and does not carry — a concluded no-match.
+  catalogueUnresolved: string[];
+  catalogueUnresolvedCount: number;
   configured: boolean;
   dryRun: boolean;
   // Findings whose resolve genuinely errored (a scrape failure, a timeout, an unreadable page).
@@ -1344,13 +1362,40 @@ export async function backfillBeatportUrls(
     },
   );
 
+  // THE CATALOGUE TIER, BEHIND THE CERTIFIED ONE — and `nextCursor === null` is what puts it there.
+  //
+  // The order is the budget, exactly as it is on the shared Apple meter: the certified feed gets
+  // first call on the Firecrawl window every tick, and the catalogue drains only what is left. A
+  // null cursor is precisely the statement "the certified feed is exhausted for this tick", so
+  // gating on it makes the priority structural rather than hoped-for — a tick busy with certified
+  // rows spends nothing on the catalogue, by construction.
+  //
+  // IT IS ALSO THE SPEND BOUND, and that is the load-bearing half. The CLI LOOPS this endpoint,
+  // re-firing the cursor until the feed drains — so a catalogue drain on every pass would multiply
+  // the sub-cap by however many passes a tick happens to take (a ~4-pass tick would quietly spend
+  // 4× the credits the operator capped). Exactly one pass per invocation returns a null cursor, so
+  // the tier runs exactly once per tick and the cap means what it says.
+  //
+  // Unconfigured skips it too: the findings pass already stopped on the first unconfigured resolve,
+  // and scanning a second worklist to make the same discovery would be waste.
+  const catalogue =
+    configured && nextCursor === null
+      ? await drainBeatportCatalogue(dryRun)
+      : { failed: [], resolved: [], unresolved: [] };
+
   return {
+    catalogueFailed: catalogue.failed,
+    catalogueFailedCount: catalogue.failed.length,
+    catalogueResolved: catalogue.resolved,
+    catalogueResolvedCount: catalogue.resolved.length,
+    catalogueUnresolved: catalogue.unresolved,
+    catalogueUnresolvedCount: catalogue.unresolved.length,
     configured,
     dryRun,
     failed,
     failedCount: failed.length,
     nextCursor,
-    ok: failed.length === 0,
+    ok: failed.length === 0 && catalogue.failed.length === 0,
     resolved,
     resolvedCount: resolved.length,
     skipped,
@@ -1358,6 +1403,194 @@ export async function backfillBeatportUrls(
     unresolved,
     unresolvedCount: unresolved.length,
   };
+}
+
+// ── Beatport — the CATALOGUE tier ─────────────────────────────────────────────────────────────
+//
+// The findings pass above rides `runPublishedFindingPass` (the public feed), so it is structurally
+// blind to a catalogue track — the same hole the Apple drain closed for its own read. `beatport_url`
+// was BORN on `tracks` precisely because it describes the recording and is just as true of an
+// uncertified row (schema.ts), so nothing but the WORKLIST had to change to reach them.
+//
+// THE ECONOMICS ARE THE WHOLE DESIGN, and they are why this tier is capped separately rather than
+// sharing the leg's `--limit`. One catalogue row is one RENDERED page scrape through Firecrawl —
+// the slowest and only metered call in this sweep — and the catalogue is five figures. So the
+// default is 5 a tick: enough that newly crawled rows accrete their buy link steadily, small enough
+// that the tier can never quietly become the sweep's dominant spend. The operator raises
+// FLUNCLE_BACKFILL_BEATPORT_CATALOGUE_LIMIT when he wants that spend, and 0 turns the tier off.
+//
+// WHY THE CAP IS A WORKER ENV VAR AND NOT A CLI FLAG. The box drives this leg through its PINNED
+// `fluncle` CLI, and a pin that predates a new flag fails the whole run outright (`Unknown option
+// '--limit'`, seen live — the note above the freshness tap's missing CLI command records it). A
+// Worker var also puts the spending cap where the spending happens: the Worker holds
+// FIRECRAWL_API_KEY, so one place decides how much of it this tier may burn, and changing it is a
+// var edit rather than a box rebake.
+//
+// AND WHY THE WORKLIST IS `attempted_at is null`, NOT THE FINDINGS TIER'S COOLDOWN. Verified while
+// building this: the certified tier gates on `shouldSkip`, whose base cooldown is 24h — so a
+// concluded no-match there becomes eligible again a day later. That is survivable across ~85
+// findings and would be ruinous across the catalogue, where it would re-spend a Firecrawl credit on
+// every row the operator's campaign already concluded, forever. No re-check cadence is ruled for
+// Beatport (the identity envelope serves `retry: "single-shot"` because none is), so this tier asks
+// once: a row that has ever concluded is out, and only a row nothing has ever concluded on is in.
+// A row whose scrape FAILED is still in (`failures > 0` re-admits it), held back by the same
+// failure-scaled backoff the rest of the module uses.
+
+/** One catalogue Beatport candidate — identity plus the ledger the backoff gate reads. */
+type BeatportCatalogueCandidate = {
+  artists: string[];
+  attemptedAt: null | string;
+  failures: number;
+  isrc: string;
+  title: string;
+  trackId: string;
+};
+
+// The default per-tick catalogue sub-cap. Small on purpose (see the section header); the operator
+// raises it via FLUNCLE_BACKFILL_BEATPORT_CATALOGUE_LIMIT when he wants the spend.
+const BEATPORT_CATALOGUE_DEFAULT_LIMIT = 5;
+
+// The ceiling the operator's var is clamped to, so a fat-fingered value cannot turn one tick into
+// an unbounded Firecrawl bill. Raising the real ceiling is a deliberate code change.
+const BEATPORT_CATALOGUE_MAX_LIMIT = 50;
+
+/**
+ * How many catalogue rows this tick may scrape. Reads the operator's var, falling back to the small
+ * default; a non-numeric or negative value falls back too (a typo must never silently widen spend),
+ * and an explicit `0` is honoured as a kill switch for the tier.
+ */
+async function beatportCatalogueLimit(): Promise<number> {
+  const raw = await readOptionalEnv("FLUNCLE_BACKFILL_BEATPORT_CATALOGUE_LIMIT");
+
+  if (raw === undefined) {
+    return BEATPORT_CATALOGUE_DEFAULT_LIMIT;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return BEATPORT_CATALOGUE_DEFAULT_LIMIT;
+  }
+
+  return Math.min(parsed, BEATPORT_CATALOGUE_MAX_LIMIT);
+}
+
+/**
+ * Read the catalogue Beatport worklist: uncertified rows carrying an ISRC and no link, that nothing
+ * has ever concluded on — or that only ever FAILED, which concluded nothing and so is re-admitted.
+ * Ordered by the Ear's capture-priority ladder, the same free ordering the Apple drain uses. The
+ * precise failure-scaled cooldown is refined per row in TS; the SQL applies only the base cutoff.
+ */
+async function listBeatportCatalogueWork(limit: number): Promise<BeatportCatalogueCandidate[]> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - COOLDOWN_BASE_MS).toISOString();
+  const result = await db.execute({
+    args: [cutoff, limit],
+    // `title` + `artists_json` ride the worklist read so the drain needs no per-row lookup: they
+    // steer Beatport's SEARCH, while the link itself is authorised by exact ISRC equality alone.
+    sql: `select t.track_id, t.isrc, t.title, t.artists_json,
+                 t.backfill_beatport_attempted_at as attempted_at,
+                 t.backfill_beatport_failures as failures
+          from tracks t
+          where t.is_catalogue = 1
+            and t.beatport_url is null
+            and t.isrc is not null and trim(t.isrc) <> ''
+            and t.backfill_beatport_done_at is null
+            and (t.backfill_beatport_attempted_at is null
+                 or (t.backfill_beatport_failures > 0
+                     and t.backfill_beatport_attempted_at < ?))
+          order by t.capture_priority desc, t.track_id
+          limit ?`,
+  });
+
+  return typedRows<{
+    artists_json: null | string;
+    attempted_at: null | string;
+    failures: null | number;
+    isrc: string;
+    title: string;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    artists: parseArtistsJson(row.artists_json ?? "[]"),
+    attemptedAt: row.attempted_at,
+    failures: typeof row.failures === "number" ? row.failures : 0,
+    isrc: row.isrc,
+    title: row.title,
+    trackId: row.track_id,
+  }));
+}
+
+/**
+ * Drain the catalogue tier: up to the sub-cap, one keyless ISRC-exact Beatport resolve each, with
+ * the same ledger writes the findings tier makes (`done` on a match, `tried` on a concluded
+ * no-match, `failure` on a scrape error). Returns this tier's rows for the caller's summary.
+ */
+async function drainBeatportCatalogue(dryRun: boolean): Promise<{
+  failed: Array<{ error: string; trackId: string }>;
+  resolved: Array<{ trackId: string; url: string }>;
+  unresolved: string[];
+}> {
+  const resolved: Array<{ trackId: string; url: string }> = [];
+  const unresolved: string[] = [];
+  const failed: Array<{ error: string; trackId: string }> = [];
+  const limit = await beatportCatalogueLimit();
+
+  if (limit === 0) {
+    // The operator has switched the tier off. No read, no spend.
+    return { failed, resolved, unresolved };
+  }
+
+  const now = Date.now();
+  const candidates = await listBeatportCatalogueWork(limit);
+  // The precise failure-scaled cooldown, refined per row. `isDone: false` because a done row is not
+  // in the worklist at all — the `done_at is null` predicate already removed it.
+  const eligible = candidates.filter(
+    (candidate) =>
+      !shouldSkip(
+        { attemptedAt: candidate.attemptedAt, failures: candidate.failures, isDone: false },
+        now,
+      ),
+  );
+
+  if (dryRun) {
+    // Preview the eligible set (as `unresolved` — the "would be scraped" set), no call, no write.
+    for (const candidate of eligible) {
+      unresolved.push(candidate.trackId);
+    }
+
+    return { failed, resolved, unresolved };
+  }
+
+  for (const candidate of eligible) {
+    const outcome = await resolveBeatportUrl({
+      artists: candidate.artists,
+      isrc: candidate.isrc,
+      title: candidate.title,
+    });
+
+    if (!outcome.configured) {
+      // Unconfigured mid-drain (a key pulled between calls): stop, stamp nothing.
+      break;
+    }
+
+    if (!outcome.ok) {
+      await recordAttempt(candidate.trackId, "beatport", "failure");
+      failed.push({ error: outcome.error, trackId: candidate.trackId });
+      continue;
+    }
+
+    if (!outcome.url) {
+      await recordAttempt(candidate.trackId, "beatport", "tried");
+      unresolved.push(candidate.trackId);
+      continue;
+    }
+
+    await setBeatportUrl(candidate.trackId, outcome.url);
+    await recordAttempt(candidate.trackId, "beatport", "done");
+    resolved.push({ trackId: candidate.trackId, url: outcome.url });
+  }
+
+  return { failed, resolved, unresolved };
 }
 
 // ── Apple Music — the CATALOGUE drain (RFC musickit-second-authority, U1) ────────────────────
@@ -1639,6 +1872,316 @@ async function drainCatalogueAlbumFacts(
   }
 
   return written;
+}
+
+// ── Deezer — the FORWARD-ACCRETION leg ───────────────────────────────────────────────────────
+//
+// The id-retention slice kept the Deezer track ids three existing reads already carried and threw
+// away (schema.ts § `deezer_track_id`), and was deliberately FORWARD-ONLY: no sweep, so a row only
+// ever filled when one of those three paths happened to run over it. The operator's catalogue-wide
+// campaign then filled the historical archive by hand. This leg is what stops the gap RE-OPENING:
+// every newly crawled row now accretes its Deezer link on its own, the way Apple's catalogue drain
+// already does, instead of waiting for the next manual campaign.
+//
+// ONE LEG, BOTH TIERS. Unlike the Apple pair (a findings sweep + a separate catalogue drain), this
+// is a single leg that drains CERTIFIED rows first and then the catalogue in the Ear's
+// capture-priority order. That is possible here because the read is cheap and identical for both —
+// the column is on `tracks`, the gate is the row's own duration, and a finding needs no lastmod
+// bump (a link on an existing recording moves no finding, schema.ts). Two worklist reads rather
+// than one sorted union, deliberately: the Deezer gate matches nearly every row in the table today,
+// so a single `order by certified, capture_priority` would sort tens of thousands of rows every
+// tick, while each tier's own read rides an index and stops at its LIMIT.
+//
+// KEYLESS, AND METERED BY THE CAP RATHER THAN A BREAKER. `GET /track/isrc:<ISRC>` takes no token,
+// so there is nothing to provision and no `configured` flag to report — the leg is live the moment
+// it ships. What it does have is Deezer's PER-IP quota, and the Worker egresses from Cloudflare's
+// SHARED edge IPs where that quota is spent by the whole platform rather than by Fluncle (measured:
+// the search rung recovered 0 of 5,133 rows from the edge while answering 25/25 from the box's own
+// IP — deezer.ts's header). So the default cap stays small, the calls are paced, and a throttle
+// ends the pass instead of failing the row.
+//
+// THE LEDGER LAW (schema.ts § `backfill_deezer_*`), which is what this leg is really built around:
+// stamp ONLY an outcome that settles whether Deezer carries the recording.
+//   · a duration-vouched hit → the id trio + `done` (first-write-wins);
+//   · a `DataException` miss → `tried` (attempted + counted, done_at null) — the honest negative
+//     that lets `/identity` say "Not found · checked <date>" instead of "Not checked yet";
+//   · found-but-unvouchable  → NOTHING. Deezer picked something whose duration disagrees, which is
+//     neither a hit nor a miss, and a receipt cannot be written for it;
+//   · a THROTTLE (quota code 4, arriving in an HTTP-200 body) → NOTHING, and the pass ENDS. This is
+//     the known ledger poison: the quota answer is indistinguishable from a miss to any client that
+//     only checks `data`, and stamping it would mark a whole tick's rows "not on Deezer" because a
+//     neighbour on the shared IP burst;
+//   · a transport failure → the failure STREAK only, never `attempted_at`. The row stays in the
+//     worklist (whose predicate is `attempted_at is null`) and retries on a later tick until the
+//     streak hits its cap, at which point it drops out rather than burning the budget forever.
+
+/** One Deezer worklist candidate — identity plus the duration the gate needs. */
+type DeezerCandidate = {
+  durationMs: number;
+  isrc: string;
+  trackId: string;
+};
+
+/** One bounded Deezer pass's numbers. No cursor — the worklist self-drains by the ledger. */
+export type DeezerBackfillResult = {
+  dryRun: boolean;
+  // Rows whose lookup errored in transport — nothing was learned, the streak backs them off.
+  failed: Array<{ error: string; trackId: string }>;
+  failedCount: number;
+  // True when the pass STOPPED on Deezer's quota answer. Nothing was stamped, so every remaining
+  // row stays eligible for the next tick's fresh window.
+  rateLimited: boolean;
+  resolved: Array<{ trackId: string; url: string }>;
+  resolvedCount: number;
+  // ISRCs Deezer answered `DataException` for — a concluded miss, stamped.
+  unresolved: string[];
+  unresolvedCount: number;
+  // Rows Deezer PICKED a track for whose duration did not vouch. Stamped NOTHING, so they stay
+  // eligible; surfaced separately because a rising count here means the gate is doing its job.
+  unvouchable: string[];
+  unvouchableCount: number;
+};
+
+// At most this many rows per pass. Deliberately modest: the Worker shares Cloudflare's egress IPs
+// with the whole platform, and Deezer's tokenless quota is per-IP, so a big burst is exactly how a
+// tick earns a quota answer for rows that would otherwise have resolved. 25 paced reads is ~9s of
+// wall time — comfortably inside the request budget — and the box drives one pass per tick.
+const DEEZER_MAX_BATCH = 25;
+
+// Pace between reads, for the same shared-IP reason. The sibling search client carries no pacing
+// gate because the anchor waterfall makes exactly ONE Deezer call per request; this leg makes up to
+// DEEZER_MAX_BATCH in a row, so it supplies the cadence the waterfall got for free.
+const DEEZER_DELAY_MS = 250;
+
+// A row whose lookup has errored this many times in a row leaves the worklist. Transport failures
+// stamp only the streak (never `attempted_at`), so without this cap a permanently unreadable row
+// would re-enter every tick forever and eat the small per-tick budget. The row is not concluded —
+// nothing is written to the ledger — it is simply no longer asked about.
+const DEEZER_MAX_FAILURES = 3;
+
+/** The shared worklist gate, spelled once so the two tiers cannot drift apart. */
+const DEEZER_WORK_GATE = `t.deezer_track_id is null
+  and t.backfill_deezer_attempted_at is null
+  and t.backfill_deezer_failures < ?
+  and t.isrc is not null and trim(t.isrc) <> ''
+  and t.duration_ms > 0`;
+
+/**
+ * Read the Deezer worklist: CERTIFIED rows first (newest finding first), then CATALOGUE rows in the
+ * Ear's capture-priority order — the same ladder the Apple catalogue drain reads by, and for the
+ * same reason (the rows nearest his taste resolve first).
+ *
+ * WHY `attempted_at is null` RATHER THAN A COOLDOWN. This leg accretes forward; it is not a
+ * re-check cadence, and no re-check cadence is ruled for Deezer (the identity envelope serves
+ * `retry: "single-shot"` precisely because none is). A concluded miss is therefore permanent until
+ * someone rules otherwise, which is also what keeps the operator's completed campaign from being
+ * re-spent: every row it concluded carries a stamp, and a stamped row is not in this worklist.
+ *
+ * `duration_ms > 0` is a WORKLIST predicate, not just a runtime guard: without a duration there is
+ * nothing to vouch a pick with, so such a row could only ever come back `unvouchable` — which
+ * stamps nothing, which would leave it in the worklist to be re-asked forever. Excluding it in SQL
+ * means the budget is never spent on a question that cannot be answered.
+ */
+async function listDeezerWork(limit: number): Promise<DeezerCandidate[]> {
+  const db = await getDb();
+
+  const toCandidates = (rows: Parameters<typeof typedRows>[0]): DeezerCandidate[] =>
+    typedRows<{ duration_ms: number; isrc: string; track_id: string }>(rows).map((row) => ({
+      durationMs: Number(row.duration_ms),
+      isrc: row.isrc,
+      trackId: row.track_id,
+    }));
+
+  const certified = await db.execute({
+    args: [DEEZER_MAX_FAILURES, limit],
+    // Driven FROM `findings` (a small table) rather than scanning `tracks` for the certified
+    // slice — the join is by primary key, so the tier costs one seek per finding.
+    sql: `select t.track_id, t.isrc, t.duration_ms
+          from findings f
+          join tracks t on t.track_id = f.track_id
+          where ${DEEZER_WORK_GATE}
+          order by f.added_at desc, t.track_id
+          limit ?`,
+  });
+
+  const candidates = toCandidates(certified.rows);
+
+  if (candidates.length >= limit) {
+    return candidates;
+  }
+
+  const catalogue = await db.execute({
+    args: [DEEZER_MAX_FAILURES, limit - candidates.length],
+    // Plain desc (no coalesce wrapper) rides tracks_capture_priority_idx and sorts NULLs last —
+    // the spelling listCatalogueAppleWork settled on, kept identical here on purpose.
+    sql: `select t.track_id, t.isrc, t.duration_ms
+          from tracks t
+          where t.is_catalogue = 1
+            and ${DEEZER_WORK_GATE}
+          order by t.capture_priority desc, t.track_id
+          limit ?`,
+  });
+
+  return [...candidates, ...toCandidates(catalogue.rows)];
+}
+
+/**
+ * Write a vouched Deezer id, its provenance, and the ledger — in ONE statement.
+ *
+ * The trio is FIRST-WRITE-WINS through `coalesce` (schema.ts § `deezer_track_id`), so a row can
+ * never wear an id with another path's provenance and this leg never clobbers what the anchor rung
+ * or a publish already won. `deezer_verified_by` is `"isrc"`: the id came off `/track/isrc:` and
+ * was duration-confirmed, which is exactly what that value is defined to mean.
+ *
+ * The ledger rides the same statement so an attempt and its outcome can never be recorded apart —
+ * `done_at` coalesces on the same first-write-wins rule and binds the same instant as
+ * `deezer_verified_at`, so the moment the link was won and the moment the ledger says it resolved
+ * cannot drift. `failures` resets: the streak counts CONSECUTIVE failures, and this is a success.
+ *
+ * NO `findings.updated_at` BUMP, unlike the Apple write and like the Beatport one: a link on an
+ * existing recording moves no finding's public lastmod (schema.ts says so in as many words).
+ */
+async function setDeezerTrackId(trackId: string, deezerTrackId: string): Promise<void> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+
+  await db.execute({
+    args: [deezerTrackId, "isrc", now, now, now, trackId],
+    sql: `update tracks
+      set deezer_track_id = coalesce(deezer_track_id, ?),
+        deezer_verified_by = coalesce(deezer_verified_by, ?),
+        deezer_verified_at = coalesce(deezer_verified_at, ?),
+        backfill_deezer_attempted_at = ?,
+        backfill_deezer_attempts = backfill_deezer_attempts + 1,
+        backfill_deezer_done_at = coalesce(backfill_deezer_done_at, ?),
+        backfill_deezer_failures = 0
+      where track_id = ?`,
+  });
+}
+
+/**
+ * Stamp a CONCLUDED Deezer miss — Deezer looked and carries no recording under this ISRC.
+ * `attempted_at` moves and `attempts` increments (the monotone tally the identity envelope prints);
+ * `done_at` stays null because nothing resolved, and `failures` resets because this branch IS a
+ * clean conclusion rather than the transport failure a streak backs off from.
+ */
+async function recordDeezerMiss(trackId: string): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: [new Date().toISOString(), trackId],
+    sql: `update tracks
+      set backfill_deezer_attempted_at = ?,
+        backfill_deezer_attempts = backfill_deezer_attempts + 1,
+        backfill_deezer_failures = 0
+      where track_id = ?`,
+  });
+}
+
+/**
+ * Record a TRANSPORT failure — the streak, and nothing else. Deliberately NOT `attempted_at`: the
+ * worklist gates on that column, so stamping it here would silently conclude a row nothing was
+ * learned about, and `/identity` would start reading "Not found · checked <date>" off a timeout.
+ * The streak alone backs the row off (and eventually past {@link DEEZER_MAX_FAILURES} out of the
+ * worklist) while the receipt keeps telling the truth: nobody has concluded anything yet.
+ */
+async function recordDeezerFailure(trackId: string): Promise<void> {
+  const db = await getDb();
+
+  await db.execute({
+    args: [trackId],
+    sql: `update tracks
+      set backfill_deezer_failures = backfill_deezer_failures + 1
+      where track_id = ?`,
+  });
+}
+
+/**
+ * Drain one bounded pass of the Deezer worklist — certified rows first, then the Ear-ranked
+ * catalogue. One keyless `/track/isrc:` read per row, gated on exact duration agreement, with the
+ * ledger law above deciding what (if anything) each outcome writes.
+ */
+export async function backfillDeezer(
+  limit: number,
+  dryRun: boolean,
+): Promise<DeezerBackfillResult> {
+  const resolved: DeezerBackfillResult["resolved"] = [];
+  const unresolved: string[] = [];
+  const unvouchable: string[] = [];
+  const failed: DeezerBackfillResult["failed"] = [];
+
+  const summarize = (over: Partial<DeezerBackfillResult>): DeezerBackfillResult => ({
+    dryRun,
+    failed,
+    failedCount: failed.length,
+    rateLimited: false,
+    resolved,
+    resolvedCount: resolved.length,
+    unresolved,
+    unresolvedCount: unresolved.length,
+    unvouchable,
+    unvouchableCount: unvouchable.length,
+    ...over,
+  });
+
+  const page = Math.max(1, Math.min(limit, DEEZER_MAX_BATCH));
+  const candidates = await listDeezerWork(page);
+
+  if (candidates.length === 0) {
+    return summarize({});
+  }
+
+  if (dryRun) {
+    // Preview the eligible set (as `unresolved` — the "would be asked about" set) without a call.
+    for (const candidate of candidates) {
+      unresolved.push(candidate.trackId);
+    }
+
+    return summarize({});
+  }
+
+  let first = true;
+
+  for (const candidate of candidates) {
+    if (!first) {
+      await delay(DEEZER_DELAY_MS);
+    }
+    first = false;
+
+    const outcome = await lookupDeezerTrackByIsrc(candidate.isrc, candidate.durationMs);
+
+    if (outcome.outcome === "quota") {
+      // THE THROTTLE. Stop the whole pass rather than marching the rest of the batch into the same
+      // spent window — and stamp nothing, so every remaining row is untouched next tick.
+      return summarize({ rateLimited: true });
+    }
+
+    if (outcome.outcome === "failed") {
+      await recordDeezerFailure(candidate.trackId);
+      failed.push({ error: outcome.error, trackId: candidate.trackId });
+      continue;
+    }
+
+    if (outcome.outcome === "unvouchable") {
+      // Found, not vouched for. The one outcome that writes NOTHING at all.
+      unvouchable.push(candidate.trackId);
+      continue;
+    }
+
+    if (outcome.outcome === "absent") {
+      await recordDeezerMiss(candidate.trackId);
+      unresolved.push(candidate.trackId);
+      continue;
+    }
+
+    await setDeezerTrackId(candidate.trackId, outcome.deezerTrackId);
+    resolved.push({
+      trackId: candidate.trackId,
+      url: `https://www.deezer.com/track/${encodeURIComponent(outcome.deezerTrackId)}`,
+    });
+  }
+
+  return summarize({});
 }
 
 // One pass never handles more than MAX_BATCH eligible findings, so a single
