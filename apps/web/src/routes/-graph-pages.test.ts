@@ -355,4 +355,19 @@ describe("the album page", () => {
 
     expect(await resolveAlbumPageData("wormhole")).toMatchObject({ label: undefined });
   });
+
+  it("carries the catalogue number through to the page when the record has one", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, discogsCatno: "RAMM123" });
+    getFindingsByAlbum.mockResolvedValue(findings(3));
+
+    expect(await resolveAlbumPageData("wormhole")).toMatchObject({ catalogNumber: "RAMM123" });
+  });
+
+  it("carries no catalogue number until the Discogs facts sweep has ruled on the record", async () => {
+    // The absence is the honest default: an album minted today has a `pending` ledger and no
+    // number, and the page must simply not print the line rather than print a placeholder.
+    getFindingsByAlbum.mockResolvedValue(findings(3));
+
+    expect(await resolveAlbumPageData("wormhole")).toMatchObject({ catalogNumber: undefined });
+  });
 });

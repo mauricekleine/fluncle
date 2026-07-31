@@ -638,6 +638,45 @@ describe("musicAlbumJsonLd (the album page schema)", () => {
     expect(jsonLd).not.toHaveProperty("sameAs");
   });
 
+  it("stamps the catalogue number onto the MusicRelease beside the label", () => {
+    const jsonLd = musicAlbumJsonLd({
+      ...base,
+      catalogNumber: "HOSPCD01",
+      label: { name: "Hospital Records", slug: "hospital-records" },
+    });
+
+    expect(jsonLd.albumRelease).toMatchObject({
+      "@type": "MusicRelease",
+      catalogNumber: "HOSPCD01",
+      recordLabel: { name: "Hospital Records" },
+    });
+  });
+
+  it("still emits the number when the record's label edge is missing", () => {
+    // A record can carry a number Fluncle read off Discogs while its `labels` row is unlinked.
+    // Dropping the number for want of the edge would throw away a true fact.
+    const jsonLd = musicAlbumJsonLd({ ...base, catalogNumber: "RAMM123" });
+
+    expect(jsonLd.albumRelease).toEqual({
+      "@type": "MusicRelease",
+      catalogNumber: "RAMM123",
+      name: "Colours in the Dark",
+    });
+  });
+
+  it("omits the MusicRelease entirely when neither a label nor a number is known", () => {
+    expect(musicAlbumJsonLd(base)).not.toHaveProperty("albumRelease");
+  });
+
+  it("omits catalogNumber from a labelled release that carries none", () => {
+    const jsonLd = musicAlbumJsonLd({
+      ...base,
+      label: { name: "Hospital Records", slug: "hospital-records" },
+    });
+
+    expect(jsonLd.albumRelease).not.toHaveProperty("catalogNumber");
+  });
+
   it("carries each finding's duration, ISRC, and datePublished on its track MusicRecording (G1)", () => {
     const jsonLd = musicAlbumJsonLd({
       ...base,

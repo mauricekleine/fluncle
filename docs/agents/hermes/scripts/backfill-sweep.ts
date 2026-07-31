@@ -23,6 +23,7 @@
 //   3. `fluncle admin backfills apple-music     --limit <N> --json`  → one paced batch.
 //   4. `fluncle admin backfills apple-catalogue --limit <M> --json`  → one batched pass.
 //   5. `fluncle admin backfills beatport        --limit <B> --json`  → one paced batch.
+//   6. `fluncle admin backfills discogs-facts   --limit <F> --json`  → one paced batch.
 //
 // The apple-music leg is a NO-OP until the Worker's MusicKit secrets are provisioned
 // (the summary carries `configured: false`), exactly like the lastfm leg is a no-op
@@ -42,6 +43,13 @@
 // of ticks, and the reliability cooldown keeps a drained archive quiet afterwards. It is a NO-OP
 // until the Worker's Firecrawl key is provisioned (`configured: false`), like leg 3 without its
 // MusicKit secrets.
+//
+// LEG 6 IS THE FACTS SIBLING OF LEG 1 and shares its vendor budget, which is exactly why it runs
+// LAST: leg 1's release-ID resolves are the ones a finding's public `sameAs` depends on, so they get
+// first call on the Discogs rate window and this leg drains whatever survives. It is ALBUM-grained
+// (ten findings off one record cost one lookup), self-draining (an album leaves the worklist the
+// moment it is ruled `resolved` or `none`), and cursorless. It is a NO-OP without the Worker's
+// Discogs token (`configured: false`).
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
@@ -78,6 +86,13 @@ const CATALOGUE_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_CATALOGUE_LIMI
 // than an API call. 10 per 30-minute tick drains the certified archive comfortably while leaving
 // the Firecrawl budget to the artist/bio sweeps that share it.
 const BEATPORT_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_BEATPORT_LIMIT ?? "10");
+
+// The Discogs-FACTS leg's own limit. Each album costs one paced (~1.1s) Discogs release lookup, and
+// the leg shares its rate window with leg 1, so 10 per 30-minute tick reads a record's catalogue
+// number without ever crowding out the release-ID resolves the public `sameAs` depends on. The
+// worklist is album-grained and terminal in both directions, so it drains to a fast no-op and stays
+// there — a record does not grow a second catalogue number.
+const DISCOGS_FACTS_BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_DISCOGS_FACTS_LIMIT ?? "10");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -144,6 +159,18 @@ type BeatportSummary = {
   resolvedCount?: number;
   skippedCount?: number;
   unresolvedCount?: number;
+};
+
+type DiscogsFactsSummary = {
+  // False when the Worker's Discogs token is unset — the leg was a no-op this tick.
+  configured?: boolean;
+  // Albums whose release lookup errored (nothing learned; they back off and retry). Distinct from
+  // `noneCount`, which is a concluded "this release carries no catalogue number".
+  failedCount?: number;
+  noneCount?: number;
+  ok?: boolean;
+  rateLimited?: boolean;
+  resolvedCount?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -243,6 +270,14 @@ export function runBackfillSweep() {
       skipped: 0,
       throttled: false,
       unresolved: 0,
+    },
+    "discogs-facts": {
+      configured: false,
+      error: null as string | null,
+      failed: 0,
+      none: 0,
+      resolved: 0,
+      throttled: false,
     },
     lastfm: { error: null as string | null, failed: 0, loved: 0, skipped: 0, throttled: false },
     musicbrainz: { throttled: false },
@@ -374,6 +409,33 @@ export function runBackfillSweep() {
   } catch (error) {
     summary.beatport.error = error instanceof Error ? error.message : String(error);
     log(`beatport backfill failed: ${summary.beatport.error}`);
+  }
+
+  // The Discogs release-FACTS leg, last: it shares leg 1's Discogs rate window, and leg 1's
+  // release-ID resolves (which a finding's public `sameAs` depends on) get first call on it. Its
+  // failure is contained here like every other leg's, so it can never abort the sweep.
+  try {
+    const facts = fluncleJson<DiscogsFactsSummary>([
+      "admin",
+      "backfills",
+      "discogs-facts",
+      "--limit",
+      String(DISCOGS_FACTS_BATCH_LIMIT),
+    ]);
+    summary["discogs-facts"].configured = facts.configured ?? false;
+    summary["discogs-facts"].resolved = facts.resolvedCount ?? 0;
+    summary["discogs-facts"].none = facts.noneCount ?? 0;
+    summary["discogs-facts"].failed = facts.failedCount ?? 0;
+    summary["discogs-facts"].throttled = facts.rateLimited ?? false;
+
+    if (facts.ok === false) {
+      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
+      // some read, some failed — distinct from the catch below, which is the whole leg erroring.
+      log(`discogs-facts backfill partial: ${summary["discogs-facts"].failed} album(s) failed`);
+    }
+  } catch (error) {
+    summary["discogs-facts"].error = error instanceof Error ? error.message : String(error);
+    log(`discogs-facts backfill failed: ${summary["discogs-facts"].error}`);
   }
 
   return summary;

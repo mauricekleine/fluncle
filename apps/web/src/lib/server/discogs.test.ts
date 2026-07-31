@@ -4,6 +4,7 @@ import {
   discogsReleaseUrl,
   discogsResolveRelease,
   fetchDiscogsLabelImage,
+  fetchDiscogsReleaseFacts,
   parseDiscogsLabelUrl,
 } from "@/lib/server/discogs";
 
@@ -172,8 +173,9 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
           artists: [{ name: "Ownglow" }],
           formats: [{ name: "Single" }],
           id: 555,
+          labels: [{ catno: "VPR079", name: "Viper Recordings" }],
           master_id: 42,
-          styles: ["Drum n Bass"],
+          styles: ["Drum n Bass", "Jungle"],
           title: "Do U?",
           tracklist: [{ title: "Do U?" }, { title: "Do U? (VIP)" }],
           year: 2021,
@@ -189,7 +191,14 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       title: "Do U?",
     });
 
-    expect(result).toEqual({ masterId: 42, releaseId: 555 });
+    // CAPTURE ON RESOLVE: the catno + styles come back off the SAME payload the scoring fetched,
+    // so the caller can store them without spending a second request.
+    expect(result).toEqual({
+      catno: "VPR079",
+      masterId: 42,
+      releaseId: 555,
+      styles: ["Drum n Bass", "Jungle"],
+    });
   });
 
   it("THE GATE: rejects a top hit whose tracklist does not contain the title (VA-comp false match)", async () => {
@@ -272,7 +281,9 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
         releaseDate: "2020",
         title: "Title",
       }),
-    ).toEqual({ releaseId: 7 });
+      // The styles ride along: they cost nothing (the scoring already fetched this payload) and a
+      // 0 master_id still normalizes away.
+    ).toEqual({ releaseId: 7, styles: ["Drum n Bass"] });
   });
 
   // ─────────────── degradation / safety ───────────────
@@ -365,7 +376,10 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     ]);
 
     // No ISRC in the legacy form → MB bridge is skipped, straight to the search.
-    expect(await discogsResolveRelease("Teddy Killerz", "Gate")).toEqual({ releaseId: 7 });
+    expect(await discogsResolveRelease("Teddy Killerz", "Gate")).toEqual({
+      releaseId: 7,
+      styles: ["Drum n Bass"],
+    });
   });
 
   it("trips the rate-limit signal proactively when X-Discogs-Ratelimit-Remaining is spent", async () => {
@@ -387,6 +401,108 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       rateLimitedBy: "discogs",
     });
     expect(calls.filter((url) => url.includes(DISCOGS_SEARCH))).toHaveLength(1);
+  });
+});
+
+// THE RELEASE FACTS — the catalogue number + styles the resolver used to score and discard, and the
+// backfill leg that reads them for a release Fluncle already resolved. The claims on trial: the
+// facts come off the payload the resolver already holds, Discogs' literal "none" is DROPPED rather
+// than stored, a multi-label release takes the first real number, and the three outcomes the ledger
+// branches on (found / not found / throttled) stay distinguishable.
+describe("fetchDiscogsReleaseFacts", () => {
+  const ORIGINAL_TOKEN = process.env.DISCOGS_USER_TOKEN;
+
+  beforeEach(() => {
+    process.env.DISCOGS_USER_TOKEN = "test-token";
+    __setRateLimitForTests(0);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    __setRateLimitForTests(1100);
+
+    if (ORIGINAL_TOKEN === undefined) {
+      delete process.env.DISCOGS_USER_TOKEN;
+    } else {
+      process.env.DISCOGS_USER_TOKEN = ORIGINAL_TOKEN;
+    }
+  });
+
+  it("reads the catalogue number + styles off a resolved release", async () => {
+    mockFetch([
+      {
+        body: {
+          id: 6414598,
+          labels: [{ catno: "RAMM123", name: "RAM Records" }],
+          styles: ["Drum n Bass", "Neurofunk"],
+          title: "Gate",
+        },
+        match: `${DISCOGS_RELEASE}6414598`,
+      },
+    ]);
+
+    expect(await fetchDiscogsReleaseFacts(6414598, "test-token")).toEqual({
+      facts: { catno: "RAMM123", styles: ["Drum n Bass", "Neurofunk"] },
+      found: true,
+      rateLimited: false,
+    });
+  });
+
+  it("DROPS Discogs' literal 'none' rather than storing it as a number", async () => {
+    // A white label with no number reads `catno: "none"` on Discogs. Storing that string would put
+    // the word "none" on the record's page dressed as a fact, so it must resolve to an ABSENCE —
+    // which the sweep then rules terminal, having genuinely learned there is no number.
+    mockFetch([
+      {
+        body: { id: 42, labels: [{ catno: "none", name: "Not On Label" }], styles: ["Jungle"] },
+        match: `${DISCOGS_RELEASE}42`,
+      },
+    ]);
+
+    const outcome = await fetchDiscogsReleaseFacts(42, "test-token");
+
+    expect(outcome.found).toBe(true);
+    expect(outcome.facts).toEqual({ styles: ["Jungle"] });
+  });
+
+  it("takes the first label that carries a real number on a co-release", async () => {
+    mockFetch([
+      {
+        body: {
+          id: 43,
+          labels: [
+            { catno: "  ", name: "Blank" },
+            { catno: "HOSPCD01", name: "Hospital Records" },
+            { catno: "SECOND02", name: "Licensee" },
+          ],
+        },
+        match: `${DISCOGS_RELEASE}43`,
+      },
+    ]);
+
+    expect((await fetchDiscogsReleaseFacts(43, "test-token")).facts).toEqual({
+      catno: "HOSPCD01",
+    });
+  });
+
+  it("reports a release it could not read as NOT FOUND, distinctly from a throttle", async () => {
+    mockFetch([{ match: `${DISCOGS_RELEASE}44`, response: new Response("gone", { status: 404 }) }]);
+
+    expect(await fetchDiscogsReleaseFacts(44, "test-token")).toEqual({
+      found: false,
+      rateLimited: false,
+    });
+  });
+
+  it("reports a 429 as THROTTLED so the pass stops instead of stamping the album", async () => {
+    mockFetch([
+      { match: `${DISCOGS_RELEASE}45`, response: new Response("slow down", { status: 429 }) },
+    ]);
+
+    expect(await fetchDiscogsReleaseFacts(45, "test-token")).toEqual({
+      found: false,
+      rateLimited: true,
+    });
   });
 });
 

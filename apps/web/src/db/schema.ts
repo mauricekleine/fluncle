@@ -946,6 +946,16 @@ export const tracks = sqliteTable(
     // the Cloudflare deploy's migrate step and holds the single writer for that window — reads
     // proceed under WAL and the box sweeps retry, but the merge belongs at a quiet hour.
     index("tracks_mb_recording_id_idx").on(table.mbRecordingId),
+    // The DISCOGS-RESOLVED slice — the only rows the `backfill_discogs_facts` worklist can start
+    // from (a track with no `in_release_id` has no release to re-read). PARTIAL for the
+    // `tracks_artist_edges_backfill_queue_idx` reason, and here the ratio is extreme: a resolved
+    // release id exists on the low hundreds of rows the Discogs sweep has confidently matched,
+    // against a `tracks` table in the tens of thousands. Without it the worklist is a full scan of
+    // a growing table on every tick — precisely the shape AGENTS.md forbids; with it, the pass
+    // walks only the rows that could possibly qualify and joins `albums` by primary key.
+    index("tracks_discogs_release_idx")
+      .on(table.inReleaseId)
+      .where(sql`${table.inReleaseId} is not null`),
     // The track_artists graph-backfill queue — "not yet attempted by the name-fold backfill"
     // (backfill-artist-edges.ts, `backfill_artist_edges`, RFC artist-primary-capture slice 0).
     // PARTIAL for the `tracks_mb_recording_id_queue_idx` reason: the worklist is DERIVED and this
@@ -3777,6 +3787,42 @@ export const albums = sqliteTable(
      */
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
     createdAt: text("created_at").notNull(),
+    // ── THE DISCOGS RELEASE FACTS (the catalogue number + the styles) ───────────────────────
+    // Two facts Fluncle ALREADY fetched and threw away. The Discogs resolver (lib/server/
+    // discogs.ts) pulls a full release payload to SCORE it, and that payload carries
+    // `labels[].catno` (the label's own catalogue number — RAMM###, HOSP###, the code printed
+    // on the sleeve) and `styles[]` ("Drum n Bass", "Jungle", "Neurofunk"). Both are RELEASE
+    // attributes, so they land on the album — the same grain ruling `record_label_raw` above
+    // already carries, and for the same reason: a fact that varies per pressing is stored once
+    // at album grain rather than smeared across every track of the record.
+    //
+    // THE PRESSING CAVEAT, stated plainly. `albums` folds on the release GROUP (MusicBrainz's
+    // abstraction over pressings) while a Discogs release id names ONE pressing, so the stored
+    // catno is the catno of the pressing Fluncle actually resolved — representative, not
+    // exhaustive. That is the honest thing to print beside a record, and it is why the column
+    // is a single text field rather than a list.
+    //
+    //   - `discogs_catno`        — the label catalogue number, verbatim from Discogs. Rendered
+    //                              on `/album/<slug>` and stamped into the MusicRelease JSON-LD
+    //                              as `catalogNumber`.
+    //   - `discogs_styles`       — the release's styles, a JSON array of strings. STORE-ONLY
+    //                              today: the album page has no honest home for a style band
+    //                              (its genre is Drum and Bass by construction), so nothing
+    //                              public reads this yet. See docs/album-entity.md.
+    //   - `discogs_state`        — the resolve lifecycle, the `image_state` machine verbatim:
+    //                              `pending` (DDL default; every album enters the worklist),
+    //                              `resolved` (facts stored), `none` (the release carries no
+    //                              catno — terminal, so the sweep never re-reads it).
+    //   - `discogs_attempted_at` / `discogs_failures` — the shipped reliability pair (the
+    //                              failure-scaled cooldown + the give-up), exactly as the image
+    //                              sweep uses them.
+    discogsAttemptedAt: text("discogs_attempted_at"),
+    discogsCatno: text("discogs_catno"),
+    discogsFailures: integer("discogs_failures").notNull().default(0),
+    discogsState: text("discogs_state", { enum: ["pending", "resolved", "none"] })
+      .notNull()
+      .default("pending"),
+    discogsStyles: text("discogs_styles"),
     id: text("id").primaryKey(),
     // ── THE OWNED COVER MASTER (RFC musickit-second-authority, U3b) ─────────────────────────
     // The `labels` image state machine, cloned onto the album so every album serves its OWN

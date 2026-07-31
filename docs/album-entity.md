@@ -19,6 +19,8 @@ slugify(tracks.album) = albums.slug
 
 A record's finding count is **derived**, never stored — the denormalization-drift class is deleted outright, as with labels and galaxy member counts.
 
+**The Discogs release facts** (`discogs_catno`, `discogs_styles`, plus the `discogs_state`/`discogs_attempted_at`/`discogs_failures` ledger) come off the Discogs release a finding already resolves to (`tracks.in_release_id`): the label's own **catalogue number** and the release's **styles**. Both are RELEASE attributes, so they land at album grain for the reason `record_label_raw` does — a fact that varies per pressing is stored once per record, and the stored catno is the one from the pressing Fluncle actually resolved, representative rather than exhaustive. They arrive two ways and cost nothing extra: the resolver's scored-search leg already holds the payload it scored (captured inline, at publish and in `backfill_discogs`), and `backfill_discogs_facts` re-reads the release for the majority the MusicBrainz bridge resolved without ever fetching one. The worklist is album-grained and self-draining (`pending` → `resolved` | terminal `none`), so one lookup serves every finding on a record. **The catno is the only half that is public**, and it is public **only beside its label** — a quiet code after the `On <label>` uplink on `/album/<slug>`, introduced by no noun. `Label CATNO` is the record-shop convention and the label is what makes the code legible _as_ a code; a bare alphanumeric under an album title with no host is the unnamed tier being handed vocabulary, and since `getLabelForAlbum` resolves through the certification, a label-less record is precisely an uncertified one. So the visible number waits for its label while the MusicRelease JSON-LD's `catalogNumber` emits either way — a key named `catalogNumber` carries its own noun and needs no host. The styles are **store-only**, because a page whose genre is drum & bass by construction has no honest home for a style band, and inventing one would give the page vocabulary it has not earned.
+
 ### The graph pointer (`tracks.album_id` / `tracks.label_id`)
 
 Tracks carry indexed `album_id` and `label_id` pointers for graph-page seeks. The raw `tracks.album` and `tracks.label` strings remain immutable normalization inputs.
@@ -106,7 +108,7 @@ The answer is the **alias map** `label-entity.md` already records as the eventua
 
 ## The ops
 
-There are none. The album entity has **no admin surface and no API op** — nothing about a record is an operator decision, and the public pages are SSR loader-driven (the `/artist/<slug>` precedent: a public route is loader + `useLoaderData`, no react-query, no oRPC).
+There is nothing to decide. The album entity has **no admin surface and no operator op** — nothing about a record is an operator decision, and the public pages are SSR loader-driven (the `/artist/<slug>` precedent: a public route is loader + `useLoaderData`, no react-query, no oRPC). What it does have is agent-tier ENRICHMENT sweeps that fill its columns and ask nobody: `backfill_cover_masters` (the owned cover), `describe_album` (the bio), and `backfill_discogs_facts` (the catalogue number + styles above).
 
 The album's (and artist's) **cover art** is its own concern — an owned ≤1200²-capped master in Fluncle's R2, served through Cloudflare Images, best-source-wins. That is [docs/album-artwork.md](./album-artwork.md), not this doc.
 

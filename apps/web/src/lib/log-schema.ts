@@ -790,6 +790,12 @@ export type MusicAlbumInput = {
    * content). Undefined until backfilled ⇒ the key is omitted, never `description: null`.
    */
   bio?: string;
+  /**
+   * The label's own catalogue number for this record (`albums.discogs_catno`) — the code printed on
+   * the sleeve. Emitted as the MusicRelease's `catalogNumber`, schema.org's property for exactly
+   * this. Absent ⇒ omitted.
+   */
+  catalogNumber?: string;
   imageUrl?: string;
   /** The album's label, when one of its tracks carried one — the album → label graph edge. */
   label?: { name: string; slug: string };
@@ -821,10 +827,16 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
     "@context": "https://schema.org",
     "@id": pageUrl,
     "@type": "MusicAlbum",
+    // The MusicRelease node carries the two facts that belong to the PRESSING rather than the work:
+    // the label (the graph edge that closes log ↔ artist ↔ label ↔ album) and the label's own
+    // catalogue number. It emits when EITHER is known — a record can carry a catno Fluncle read off
+    // Discogs while its label row is still unlinked, and dropping the number for want of the edge
+    // would throw away a true fact.
     ...(album.label && labelUrl
       ? {
           albumRelease: {
             "@type": "MusicRelease",
+            ...(album.catalogNumber ? { catalogNumber: album.catalogNumber } : {}),
             name: album.name,
             recordLabel: {
               "@id": `${labelUrl}#organization`,
@@ -834,7 +846,15 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
             },
           },
         }
-      : {}),
+      : album.catalogNumber
+        ? {
+            albumRelease: {
+              "@type": "MusicRelease",
+              catalogNumber: album.catalogNumber,
+              name: album.name,
+            },
+          }
+        : {}),
     byArtist: album.artists.map((artist) => ({
       "@id": artistPageUrl(artist.slug),
       "@type": "MusicGroup",

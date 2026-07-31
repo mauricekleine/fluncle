@@ -2641,6 +2641,21 @@ JSON field reference:
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
 
+  // `backfill_discogs_facts` → `admin backfills discogs-facts`. The FACTS sibling of the leg
+  // above: it takes a release id that sweep already resolved and reads the album's catalogue
+  // number + styles off the release. Album-grained, so no cursor. A no-op until the Worker's
+  // Discogs token is provisioned.
+  backfill
+    .command("discogs-facts")
+    .description("Read album catalogue numbers + styles from already-resolved Discogs releases")
+    .option("--dry-run", "Report the eligible albums without reading Discogs or writing", false)
+    .option("--limit <limit>", "Max albums to read", "50")
+    .option("--json", "Print JSON", false)
+    .action(async (options: BackfillSyncOptions) => {
+      const { backfillDiscogsFactsCommand } = await import("./commands/admin-tracks");
+      await runBackfillDiscogsFacts(options, backfillDiscogsFactsCommand);
+    });
+
   // `backfill_apple_music` → `admin backfills apple-music`. Resolves each finding's
   // Apple Music URL EXACTLY by ISRC and stores it. A no-op until the Worker's MusicKit
   // secrets are provisioned.
@@ -4191,6 +4206,89 @@ async function runBackfillAppleCatalogue(
 
   for (const item of failed) {
     console.log(`  ${item.trackId}: ${item.error}`);
+  }
+
+  if (failed.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function runBackfillDiscogsFacts(
+  options: BackfillSyncOptions,
+  backfillDiscogsFactsCommand: typeof import("./commands/admin-tracks").backfillDiscogsFactsCommand,
+): Promise<void> {
+  const limit = parseListLimit(options.limit);
+  const resolved: Array<{ catno: string; slug: string }> = [];
+  const none: string[] = [];
+  const failed: Array<{ error: string; slug: string }> = [];
+  let dryRun = options.dryRun;
+  let throttled = false;
+  let configured = true;
+
+  // No cursor: the worklist is album-grained and self-draining (an album leaves it the moment it is
+  // ruled `resolved` or `none`), so the CLI loops until a pass rules nothing or a throttle stops it.
+  while (resolved.length + none.length + failed.length < limit) {
+    const remaining = limit - (resolved.length + none.length + failed.length);
+    const result = await backfillDiscogsFactsCommand(remaining, options.dryRun);
+    dryRun = result.dryRun;
+    configured = result.configured;
+    resolved.push(...result.resolved);
+    none.push(...result.none);
+    failed.push(...result.failed);
+
+    if (!options.json) {
+      const verb = result.dryRun ? "would read" : "read";
+      console.log(
+        `  …${verb} ${result.resolvedCount} catalogue number(s); ${result.noneCount} with none; ${result.failedCount} failed`,
+      );
+    }
+
+    if (!result.configured) {
+      break;
+    }
+
+    if (result.rateLimited) {
+      throttled = true;
+      break;
+    }
+
+    // A pass that ruled nothing drained the eligible worklist this window.
+    if (result.resolvedCount === 0 && result.noneCount === 0 && result.failedCount === 0) {
+      break;
+    }
+  }
+
+  if (options.json) {
+    printSweepJson(
+      {
+        configured,
+        dryRun,
+        failed,
+        none,
+        noneCount: none.length,
+        rateLimited: throttled,
+        resolved,
+        resolvedCount: resolved.length,
+      },
+      failed.length,
+    );
+    return;
+  }
+
+  if (!configured) {
+    console.log(
+      "Discogs facts backfill is not configured (the Worker's DISCOGS_USER_TOKEN is unset) — nothing read.",
+    );
+    return;
+  }
+
+  const verb = dryRun ? "Would read" : "Read";
+  console.log(
+    `${verb} ${resolved.length} catalogue number(s); ${none.length} release(s) carry none; ${failed.length} failed.`,
+  );
+
+  for (const item of failed) {
+    console.log(`  ${item.slug}: ${item.error}`);
   }
 
   if (failed.length > 0) {

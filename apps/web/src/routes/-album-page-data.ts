@@ -36,6 +36,13 @@ export type AlbumPageData =
       bio: string | undefined;
       /** Uncertified tracks on this album. Empty until the catalogue lands. */
       catalogue: CatalogueTrackItem[];
+      /**
+       * The label's own catalogue number for this record (`albums.discogs_catno`) — the code
+       * printed on the sleeve, read off the Discogs release Fluncle already resolved. The page
+       * prints it as a quiet fact beside the label and stamps it into the MusicRelease JSON-LD as
+       * `catalogNumber`. Undefined until the Discogs facts sweep has ruled on the record.
+       */
+      catalogNumber: string | undefined;
       coverImageUrl: string | undefined;
       findings: TrackListItem[];
       indexable: boolean;
@@ -81,6 +88,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
   return {
     artists,
     bio: album.bio,
+    catalogNumber: album.discogsCatno,
     catalogue: catalogue.tracks,
     // The record's cover is its freshest finding's album art — never invented, never
     // re-hosted (the `i.scdn.co` attribution-by-link precedent). A record with no finding

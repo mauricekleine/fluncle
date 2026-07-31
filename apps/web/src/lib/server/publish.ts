@@ -18,7 +18,7 @@ import {
   hubCountDeltaStatement,
 } from "./hub-counts";
 import { submitFindingToIndexNow } from "./indexnow";
-import { linkTrackToAlbum } from "./albums";
+import { linkTrackToAlbum, storeAlbumDiscogsFactsForTrack } from "./albums";
 import { linkTrackToLabel } from "./labels";
 import { lastfmLove } from "./lastfm";
 import { logEvent } from "./log";
@@ -392,6 +392,19 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
       linkTrackToLabel(track.trackId, deezer.label),
       linkTrackToAlbum(track.trackId, track.album),
     ]);
+
+    // CAPTURE ON RESOLVE. The Discogs resolve above already held the release payload it scored,
+    // so its catalogue number + styles cost nothing extra — the album row exists as of the line
+    // above, and this stores them at the album grain that owns them (albums.ts). Only the scored
+    // SEARCH leg carries facts; a MusicBrainz-bridge resolve leaves them undefined and the album
+    // stays `pending` for `backfill_discogs_facts` to pick up. Fill-empty-only in SQL, so a second
+    // publish onto the same record never rewrites what the first one learned.
+    if (discogs.catno !== undefined || discogs.styles !== undefined) {
+      await storeAlbumDiscogsFactsForTrack(track.trackId, {
+        catno: discogs.catno,
+        styles: discogs.styles,
+      });
+    }
   } catch (labelError) {
     logEvent("warn", "publish.graph-entity-upsert-failed", {
       error: labelError,
