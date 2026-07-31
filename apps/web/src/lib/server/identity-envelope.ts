@@ -273,11 +273,19 @@ type IdentityRow = {
   youtube_video_official: null | number;
 };
 
-/** The keys a caller may look a recording up by. Exactly one is honoured; the op enforces that. */
+/**
+ * The keys a caller may look a recording up by. Exactly one KIND is honoured; the op enforces that.
+ *
+ * The ISRC arm carries a LIST rather than a single value: an ISRC is the one key a caller holds in
+ * bulk (a whole library's worth arrives from one export), so it is the one that answers a batch.
+ * A single ISRC is a one-element list and reads exactly as it always did.
+ */
 export type IdentityKey =
   | { idOrLogId: string; kind: "idOrLogId" }
-  | { isrc: string; kind: "isrc" }
-  | { kind: "mbid"; mbid: string };
+  | { isrcs: string[]; kind: "isrc" }
+  | { kind: "mbid"; mbid: string }
+  | { kind: "spotify"; spotifyId: string }
+  | { deezerId: string; kind: "deezer" };
 
 /**
  * The key grammar itself lives in the CLIENT-SAFE `lib/identity-key.ts` — pure string work with no
@@ -286,7 +294,12 @@ export type IdentityKey =
  * `loader` without dragging the `getDb` chain into the browser's entry chunk
  * (docs/client-bundle.md rule 1).
  */
-export { normalizeIsrcKey, normalizeMbidKey } from "../identity-key";
+export {
+  normalizeDeezerKey,
+  normalizeIsrcKey,
+  normalizeMbidKey,
+  normalizeSpotifyKey,
+} from "../identity-key";
 
 /** The bare Spotify track id behind a stored `spotify:track:<id>` URI. */
 function spotifyTrackId(uri: null | string): string | undefined {
@@ -718,41 +731,79 @@ function toRecording(
   };
 }
 
-/** Wrap rows in the envelope, newest metadata first. */
-function toEnvelope(rows: IdentityRow[], audience: IdentityAudience): IdentityEnvelope {
-  const relations = relationsFor(rows);
-
+/**
+ * Wrap rows in the envelope.
+ *
+ * The argument is a list of GROUPS, one per key the caller asked about, and that grouping is
+ * load-bearing rather than tidy: `relationsFor` decides `canonical` vs `ambiguous` by counting the
+ * unruled rows BESIDE a row, and beside means "under the same key". A batch of twenty ISRCs that
+ * each match one recording is twenty canonical answers; flattened first, it would be twenty rows
+ * calling each other ambiguous — the envelope's one claim about Fluncle's own opinion, inverted by
+ * an argument shape. A single key is one group and reads exactly as it always did.
+ */
+function toEnvelope(groups: IdentityRow[][], audience: IdentityAudience): IdentityEnvelope {
   return {
     meta: {
       asOf: new Date().toISOString(),
       attribution: IDENTITY_ATTRIBUTION,
       contact: IDENTITY_CONTACT,
     },
-    recordings: rows.map((row) =>
-      toRecording(row, relations.get(row.track_id) ?? "canonical", audience),
-    ),
+    recordings: groups.flatMap((rows) => {
+      const relations = relationsFor(rows);
+
+      return rows.map((row) =>
+        toRecording(row, relations.get(row.track_id) ?? "canonical", audience),
+      );
+    }),
   };
 }
 
 /**
  * The most rows one key may answer with. An ISRC collision is 2–3 rows in the measured corpus, so
  * this never bites in practice; it exists so a pathological key cannot turn one read into an
- * unbounded page.
+ * unbounded page. A batch is bounded by this PER KEY (the statement's `limit` scales with the key
+ * count, and each key's group is capped again in memory), so no single pathological ISRC can eat a
+ * batch's whole budget and starve the nineteen keys behind it.
  */
 const IDENTITY_MAX_ROWS = 25;
 
 /**
- * Read one recording's identity by whichever key the caller supplied. `undefined` means the key
+ * The stored spellings of ONE Spotify track id, all three of them.
+ *
+ * A recording reaches this archive by more than one road and each road spells the same Spotify
+ * track differently, so a link handed in at the door has to be matched against all three or the
+ * answer depends on how the row happened to be born:
+ *
+ *   · `<id>`               — a published finding. Its row IS keyed by the Spotify id (publish.ts).
+ *   · `sp_<id>`            — the freshness tap's catalogue mint (label-releases.ts, `sp_` namespace).
+ *   · `spotify:track:<id>` — the `spotify_uri` an anchor wrote onto a crawler row (anchor.ts),
+ *                            whose own key is the MusicBrainz `mb_<uuid>` mint instead.
+ *
+ * All three are EQUALITIES — two on the primary key, one on `tracks_spotify_uri_idx` — never a
+ * `like`. SQLite plans the disjunction as a `MULTI-INDEX OR` across those indexes; a `like` (or one
+ * unindexed arm) collapses the whole statement into a scan of a table where every embedded row
+ * drags a 4 KB vector blob off the page.
+ */
+function spotifyKeyArms(spotifyId: string): { args: string[]; where: string } {
+  return {
+    args: [spotifyId, `sp_${spotifyId}`, `spotify:track:${spotifyId}`],
+    where: `(t.track_id = ? or t.track_id = ? or t.spotify_uri = ?)`,
+  };
+}
+
+/**
+ * Read a recording's identity by whichever key the caller supplied. `undefined` means the key
  * matched nothing — the op turns that into a 404 with no submission affordance, because a machine
  * caller must never be invited to file into the crew's triage queue.
  *
  * `audience` defaults to `machine`, the cautious side: a new caller has to ASK for the first-party
  * Apple state rather than inherit it by forgetting the argument.
  *
- * Each branch is ONE indexed statement: the PK / `findings.log_id` for the path key, `tracks_isrc_idx`
- * for an ISRC, and `tracks_mb_recording_id_idx` for an MBID. Only the named columns come back — no
- * embedding blob is ever dragged across this read, which over a table this shape is the whole cost
- * question.
+ * Every branch is ONE indexed statement, and only the named columns come back — no embedding blob is
+ * ever dragged across this read, which over a table this shape is the whole cost question. The
+ * index behind each: the PK / `findings.log_id` for the path key, `tracks_isrc_idx` for an ISRC
+ * (one seek per key in the batch), `tracks_mb_recording_id_idx` for an MBID, the PK +
+ * `tracks_spotify_uri_idx` for a Spotify link, and `tracks_deezer_track_id_idx` for a Deezer one.
  */
 export async function readIdentity(
   key: IdentityKey,
@@ -760,20 +811,46 @@ export async function readIdentity(
 ): Promise<IdentityEnvelope | undefined> {
   const db = await getDb();
 
+  // A BATCH IS ONE STATEMENT. `in (?, ?, …)` over `tracks_isrc_idx` is one seek per key, where a
+  // request per key would be twenty round trips from a Worker; the row budget scales with the key
+  // count so twenty keys can answer as fully as one does.
+  const isrcs = key.kind === "isrc" ? key.isrcs : [];
+
+  // An empty ISRC list can only mean the op let a keyless batch through; answer nothing rather than
+  // emit `in ()`, which SQLite reads as a syntax error.
+  if (key.kind === "isrc" && isrcs.length === 0) {
+    return undefined;
+  }
+
   const query =
     key.kind === "isrc"
-      ? { args: [key.isrc, IDENTITY_MAX_ROWS], where: `t.isrc = ?` }
+      ? {
+          args: [...isrcs, IDENTITY_MAX_ROWS * Math.max(isrcs.length, 1)],
+          where: `t.isrc in (${isrcs.map(() => "?").join(", ")})`,
+        }
       : key.kind === "mbid"
         ? { args: [key.mbid, IDENTITY_MAX_ROWS], where: `t.mb_recording_id = ?` }
-        : {
-            args: [key.idOrLogId, key.idOrLogId, IDENTITY_MAX_ROWS],
-            // The same OR shape `getTrackByIdOrLogId` has always used against production: SQLite's
-            // OR optimization takes the PK for one arm and `findings.log_id` for the other.
-            where: `(t.track_id = ? or f.log_id = ?)`,
-          };
+        : key.kind === "spotify"
+          ? (() => {
+              const arms = spotifyKeyArms(key.spotifyId);
+
+              return { args: [...arms.args, IDENTITY_MAX_ROWS], where: arms.where };
+            })()
+          : key.kind === "deezer"
+            ? { args: [key.deezerId, IDENTITY_MAX_ROWS], where: `t.deezer_track_id = ?` }
+            : {
+                args: [key.idOrLogId, key.idOrLogId, IDENTITY_MAX_ROWS],
+                // The same OR shape `getTrackByIdOrLogId` has always used against production:
+                // SQLite's OR optimization takes the PK for one arm and `findings.log_id` for the
+                // other.
+                where: `(t.track_id = ? or f.log_id = ?)`,
+              };
 
   const result = await db.execute({
     args: query.args,
+    // `order by t.track_id asc` is UNCHANGED, deliberately: it is the order every existing caller's
+    // answer already arrives in, and the batch does its grouping in memory rather than buying it
+    // here with a second sort key that would reorder the single-key answers.
     sql: `select ${IDENTITY_SELECT} ${IDENTITY_FROM}
           where ${query.where}
           order by t.track_id asc
@@ -782,7 +859,25 @@ export async function readIdentity(
 
   const rows = typedRows<IdentityRow>(result.rows);
 
-  return rows.length === 0 ? undefined : toEnvelope(rows, audience);
+  if (rows.length === 0) {
+    return undefined;
+  }
+
+  return toEnvelope(key.kind === "isrc" ? groupByIsrc(rows, isrcs) : [rows], audience);
+}
+
+/**
+ * Split a batch's rows back into one group per ISRC the caller asked for, IN THE ORDER THEY ASKED.
+ *
+ * Two things ride on this. The order means a caller reading the answer top to bottom reads it in
+ * the order of their own request, and a key that matched nothing simply contributes no rows (the
+ * response carries every match's own ISRC, so the caller maps by value rather than by position).
+ * The grouping is what keeps `relation` honest — see `toEnvelope`.
+ */
+function groupByIsrc(rows: IdentityRow[], isrcs: string[]): IdentityRow[][] {
+  return isrcs
+    .map((isrc) => rows.filter((row) => row.isrc === isrc).slice(0, IDENTITY_MAX_ROWS))
+    .filter((group) => group.length > 0);
 }
 
 /**

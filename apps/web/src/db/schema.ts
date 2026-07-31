@@ -1002,6 +1002,31 @@ export const tracks = sqliteTable(
     index("tracks_discogs_release_idx")
       .on(table.inReleaseId)
       .where(sql`${table.inReleaseId} is not null`),
+    // THE PLATFORM-URL VALUE INDEXES — "which row IS this Spotify link / this Deezer link?"
+    // (`get_track`'s `?spotify=` / `?deezer=` keys, and the same two keys on `/identity`). Exactly
+    // the `tracks_mb_recording_id_idx` case above, one identifier over: a VALUE lookup over the
+    // filled slice, which GROWS with the catalogue, so a plain non-unique btree rather than one of
+    // the partial `is null` queue indexes.
+    //
+    // WHY THEY ARE NOT OPTIONAL, measured in this worktree with `explain query plan` over the
+    // migrated schema: `where spotify_uri = ?` and `where deezer_track_id = ?` both planned as
+    // `SCAN tracks` before these existed, and `where track_id = ? or spotify_uri = ?` degraded the
+    // WHOLE statement to a scan because one arm was unindexed. A scan of `tracks` drags every
+    // embedded row's 4 KB vector blob off the page — the ratified post-blob overflow trap — on a
+    // public, metered read whose common case is a MISS (a refugee pasting a link the archive does
+    // not hold). With them, the same statements plan `SEARCH … USING INDEX` and the Spotify OR
+    // plans `MULTI-INDEX OR` across the primary key and `tracks_spotify_uri_idx`.
+    //
+    // NOT unique, for `tracks_mb_recording_id_idx`'s reason: neither id is deduped across birth
+    // paths, and a unique index would turn a real collision into a failed migration rather than the
+    // `relation: "ambiguous"` the identity envelope exists to say out loud.
+    //
+    // COST OF THE BUILD: both columns sit post-blob, so each build drags every row's overflow pages
+    // exactly as `tracks_mb_recording_id_idx` did (measured 104s at 66,096 rows, hosted). They run
+    // in the Cloudflare deploy's migrate step and hold the single writer for that window — reads
+    // proceed under WAL and the box sweeps retry, but the merge belongs at a quiet hour.
+    index("tracks_spotify_uri_idx").on(table.spotifyUri),
+    index("tracks_deezer_track_id_idx").on(table.deezerTrackId),
     // The track_artists graph-backfill queue — "not yet attempted by the name-fold backfill"
     // (backfill-artist-edges.ts, `backfill_artist_edges`, RFC artist-primary-capture slice 0).
     // PARTIAL for the `tracks_mb_recording_id_queue_idx` reason: the worklist is DERIVED and this

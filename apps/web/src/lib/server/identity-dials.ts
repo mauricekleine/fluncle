@@ -103,19 +103,30 @@ export async function noteIdentityReadBlocked(bucket: string): Promise<void> {
 }
 
 /**
- * Charge one identity read against BOTH dials and throw a 429 `ApiError` when either is spent.
+ * Charge an identity read against BOTH dials and throw a 429 `ApiError` when either is spent.
  *
  * Order is load-bearing: the burst dial is charged first and, when it refuses, the daily dial is
  * NOT charged. A caller who trips the per-minute limit has not spent a day's allowance in that
  * instant, and charging both would let a short burst eat a ceiling it never actually used.
+ *
+ * ── ONE KEY, ONE UNIT ─────────────────────────────────────────────────────────────────────────
+ * `units` is how many KEYS this read answers, and it is what keeps the dials meaning what the
+ * published policy says they mean. A batch read answers up to twenty ISRCs in one request; charged
+ * as one, a caller pacing themselves under the per-minute dial would walk the archive twenty times
+ * faster than the dial was set for, and the number in the docs would be a fiction. So the meter
+ * counts keys, not requests — the batch is a round-trip saving, never a discount.
  */
-export async function assertIdentityReadAllowed(request: Request, userId?: string): Promise<void> {
+export async function assertIdentityReadAllowed(
+  request: Request,
+  { units = 1, userId }: { units?: number; userId?: string } = {},
+): Promise<void> {
   const bucket = rateLimitBucket(request, userId);
 
   const burst = await bumpRateLimitCounter({
     action: IDENTITY_BURST_ACTION,
     bucket,
     limit: IDENTITY_BURST_LIMIT,
+    units,
     windowMs: IDENTITY_BURST_WINDOW_MS,
   });
 
@@ -129,6 +140,7 @@ export async function assertIdentityReadAllowed(request: Request, userId?: strin
     action: IDENTITY_DAILY_ACTION,
     bucket,
     limit: IDENTITY_DAILY_LIMIT,
+    units,
     windowMs: IDENTITY_DAILY_WINDOW_MS,
   });
 

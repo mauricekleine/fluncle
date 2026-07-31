@@ -29,6 +29,7 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ORPCError } from "@orpc/server";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { type OrpcContext } from "./orpc-auth";
+import { applyPublicCors, buildPublicCorsMatcher, corsPreflightResponse } from "./orpc-cors";
 import { isApiFaultData } from "./orpc/_shared";
 import { adminAlbumsHandlers } from "./orpc/admin-albums";
 import { adminArtistsHandlers } from "./orpc/admin-artists";
@@ -235,10 +236,23 @@ const API_PREFIX = "/api/v1";
 // at the shared mount rather than in domain handlers.
 const NO_STORE_SUFFIXES = new Set(["/health", "/replica/token"]);
 
+// WHICH PATHS MAY ANSWER A BROWSER FROM ANOTHER ORIGIN, derived once from the router
+// above. The rule and its reasoning live in ./orpc-cors; what matters here is that it
+// is DERIVED — a new admin op, a new authenticated op, or a new write is outside the
+// allowance by construction rather than by anyone remembering to exclude it. Exported
+// so the coverage test can assert both sides of the line against the real router.
+export const isPublicCorsPath = buildPublicCorsMatcher(
+  router as unknown as Record<string, unknown>,
+);
+
 /**
  * Try to serve `request` with oRPC. Returns the `Response` when a procedure
  * matched, or `null` to fall through to the existing TanStack router (the
  * `matched: false` seam). Mounted at the single canonical `/api/v1` prefix.
+ *
+ * This is also where the public reads gain their cross-origin allowance — at the one
+ * shared mount, never per route, so no op can be given a browser door by accident and
+ * none can be forgotten.
  */
 export async function handleOrpc(request: Request): Promise<Response | null> {
   const url = new URL(request.url);
@@ -250,6 +264,18 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
     return null;
   }
 
+  const suffix = url.pathname.slice(API_PREFIX.length);
+
+  // The preflight is answered HERE rather than by the handler, because there is no
+  // procedure to match: oRPC routes a GET, and an OPTIONS asking about that GET would
+  // fall through to the TanStack router and 404 — which is what made every browser
+  // caller's real request fail before it was sent.
+  const preflight = corsPreflightResponse(request, suffix, isPublicCorsPath);
+
+  if (preflight) {
+    return preflight;
+  }
+
   const { matched, response } = await handler.handle(request, {
     context: { request },
     prefix: API_PREFIX,
@@ -259,9 +285,11 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
     return null;
   }
 
-  if (NO_STORE_SUFFIXES.has(url.pathname.slice(API_PREFIX.length))) {
+  if (NO_STORE_SUFFIXES.has(suffix)) {
     response.headers.set("Cache-Control", "no-store");
   }
+
+  applyPublicCors(request, suffix, response, isPublicCorsPath);
 
   return response;
 }

@@ -137,6 +137,12 @@ const IdentityRecordingSchema = z.object({
  * The identity answer. Always an array, because an ISRC or a MusicBrainz recording id
  * can name more than one recording in the archive and picking a winner silently is the
  * behaviour this response exists to avoid.
+ *
+ * That array is also what lets a BATCH answer in the SAME shape rather than a second one: up to 20
+ * comma-separated ISRCs come back as one `recordings` list holding every match, in the order the
+ * keys were supplied, each recording carrying its own `identifiers.isrc.value` so a caller maps an
+ * answer back to the key that earned it. A key that matched nothing contributes no recording. The
+ * single-key response is byte-for-byte what it always was.
  */
 export const IdentityEnvelopeSchema = z.object({
   meta: z.object({
@@ -156,25 +162,45 @@ export const IdentityEnvelopeSchema = z.object({
  * `{ ok: true } & ({ track } | { mixtape })` envelope (mirrors `TrackGetResponse`
  * in ../index.ts, plus the mixtape arm the live route already serves).
  *
- * THE IDENTITY PROJECTION (RFC dnb-identity-graph, Unit 2). Three query params turn
+ * THE IDENTITY PROJECTION (RFC dnb-identity-graph, Unit 2). A set of query params turns
  * the same op into the identity answer — the recording's identifiers and platform
  * links, each carrying whether Fluncle holds it, looked and missed, will not look, or
  * covers no such link:
  *
  *   - `identity=1` — return the identity answer for the recording named in the path.
  *   - `isrc=<ISRC>` — look the recording up by ISRC instead. Always the identity answer.
+ *     Accepts up to 20 comma-separated ISRCs; see the batch note below.
  *   - `mbid=<uuid>` — look it up by MusicBrainz recording id. Always the identity answer.
+ *   - `spotify=<link>` — look it up by Spotify track. Accepts a full `open.spotify.com/track/…`
+ *     URL (locale segment and tracking parameters and all), a `spotify:track:<id>` URI, or a bare
+ *     22-character id.
+ *   - `deezer=<link>` — look it up by Deezer track. Accepts a full `deezer.com/track/…` URL
+ *     (locale segment and tracking parameters and all) or a bare numeric id.
  *
- * THE KEY IS EXCLUSIVE. Exactly one of the three lookup keys may be supplied, and the
+ * THE PLATFORM KEYS are for the caller who holds a LINK rather than an identifier, which is what a
+ * share sheet and a playlist export actually hand out. Both resolve by equality on stored columns —
+ * a Spotify link against the row's own key and its `spotify_uri`, a Deezer link against
+ * `deezer_track_id` — never by pattern match. Beatport is deliberately absent: Fluncle stores a
+ * Beatport URL and no Beatport id, so the only available match would be a suffix `like` over a
+ * growing table, which is the one shape this read must not take.
+ *
+ * THE KEY IS EXCLUSIVE. Exactly one of the lookup keys may be supplied, and the
  * path segment counts as one of them: pass a single `-` in the path when the key rides
  * a query param (`GET /tracks/-?isrc=GBABC1234567`). Two keys at once is a 422, as is a
- * key that is not a well-formed ISRC or UUID. Every one of those is thrown IN-HANDLER,
+ * key that is not a well-formed ISRC, UUID, Spotify id, or Deezer id, as is a batch of
+ * more than 20 ISRCs. Every one of those is thrown IN-HANDLER,
  * on the `search_tracks` precedent: the input schema stays tolerant optional strings,
  * because oRPC's own schema rejection emits a 400 and the honest answer to a
  * well-formed request carrying an unusable value is a 422.
  *
+ * THE BATCH IS THE SAME OP AND THE SAME SHAPE, because the answer was already a list (see
+ * `IdentityEnvelopeSchema`) — a caller sending one ISRC reads exactly what they read before. What
+ * it is NOT is a discount: the dials count KEYS, so a 20-ISRC request spends 20 of the per-minute
+ * allowance and 20 of the daily one. The saving is the round trip, never the allowance.
+ *
  * A key that matches nothing is a 404, and carries no invitation to submit the
- * recording. The identity reads are rate limited per caller; the plain read is not.
+ * recording; a batch 404s only when NONE of its keys matched. The identity reads are rate limited
+ * per caller; the plain read is not.
  */
 export const getTrack = oc
   .route({
@@ -182,11 +208,17 @@ export const getTrack = oc
     operationId: "getTrack",
     path: "/tracks/{idOrLogId}",
     summary:
-      "Get a finding or mixtape by Spotify trackId or Log ID, or a recording's identifiers and links by ISRC or MusicBrainz id",
+      "Get a finding or mixtape by Spotify trackId or Log ID, or a recording's identifiers and links by ISRC, MusicBrainz id, or a Spotify or Deezer link",
     tags: ["Tracks"],
   })
   .input(
     z.object({
+      deezer: z
+        .string()
+        .optional()
+        .describe(
+          "Look it up by a Deezer track URL or a bare Deezer track id. Pass a single - in the path.",
+        ),
       idOrLogId: z
         .string()
         .describe(
@@ -199,11 +231,19 @@ export const getTrack = oc
       isrc: z
         .string()
         .optional()
-        .describe("Look the recording up by ISRC instead. Pass a single - in the path."),
+        .describe(
+          "Look the recording up by ISRC instead, or by up to 20 comma-separated ISRCs. Pass a single - in the path.",
+        ),
       mbid: z
         .string()
         .optional()
         .describe("Look it up by MusicBrainz recording id. Pass a single - in the path."),
+      spotify: z
+        .string()
+        .optional()
+        .describe(
+          "Look it up by a Spotify track URL, a spotify:track: URI, or a bare Spotify track id. Pass a single - in the path.",
+        ),
     }),
   )
   .output(

@@ -8,6 +8,13 @@
 // arrival on the canonical, normalized URL: `gb-abc-12-34567` and `GBABC1234567` are the same
 // recording, and only one of them is a page.
 //
+// ONE FIELD, EVERY KIND OF KEY. Which kind was typed is worked out from the value itself
+// (`canonicalIdentityKey`, in the client-safe `lib/identity-key.ts` the door's loader calls), so a
+// pasted Spotify or Deezer link needs no second field, no dropdown, and no mode. That detection
+// lives in the loader rather than in a submit handler on purpose: the loader runs on the server for
+// a cold arrival and in the browser for a client-side one, so the same parse holds with JavaScript
+// on or off, where a click handler would only hold with it on.
+//
 // Reference-register chrome on a catalogue page: quiet, bordered, no gold but the focus ring
 // (DESIGN.md's One Sun Rule).
 
@@ -15,7 +22,8 @@ import { Button } from "@fluncle/ui/components/button";
 import { Input } from "@fluncle/ui/components/input";
 
 /** The field's accessible name — literal, and the one string that names what a caller may type. */
-export const IDENTITY_FIELD_LABEL = "An ISRC, a MusicBrainz recording id, or a Log ID";
+export const IDENTITY_FIELD_LABEL =
+  "A Spotify or Deezer link, an ISRC, a MusicBrainz recording id, or a Log ID";
 
 export function IdentityLookupForm({ submitLabel = "Look up" }: { submitLabel?: string }) {
   return (

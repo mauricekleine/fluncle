@@ -49,8 +49,12 @@ export const Route = createFileRoute("/identity/")({
 const title = "Identity · Fluncle";
 // Machine-facing, so honestly-plain third person (VOICE.md's Narrator rule), and inside the
 // ~155-character SERP cap.
+// The four key kinds do not all fit under the cap alongside the clause that matters, and the clause
+// wins: "looked and found nothing" is the `absent` / `unattempted` split this whole surface exists
+// to say out loud, and it is what the docs twin says too. MusicBrainz is the one dropped here and
+// nowhere else — the field label, the intro, and the definition list all still name it.
 const description =
-  "Look up a drum & bass recording by ISRC, MusicBrainz id, or Log ID: the links Fluncle found, and where he looked and found nothing.";
+  "Look up a drum & bass recording by a Spotify or Deezer link, an ISRC, or a Log ID: the links Fluncle found, and where he looked and found nothing.";
 
 function identityDoorHead() {
   const pageUrl = `${siteUrl}/identity`;
@@ -75,8 +79,8 @@ function IdentityDoorPage() {
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Identity</h1>
           <p className="log-index-intro">
-            Name a recording by an ISRC, a MusicBrainz id, or a Log ID, and Fluncle answers with
-            every link he found for it.
+            Paste a Spotify or Deezer link, or name a recording by an ISRC, a MusicBrainz id, or a
+            Log ID, and Fluncle answers with every link he found for it.
           </p>
         </header>
 
@@ -91,7 +95,8 @@ function IdentityDoorPage() {
             <div className="log-about-definition">
               <dt>What you can look a recording up by</dt>
               <dd>
-                A recording&rsquo;s ISRC, its MusicBrainz recording id, or its Log ID coordinate if
+                A Spotify or Deezer link, pasted whole, tracking tail and all. Or a
+                recording&rsquo;s ISRC, its MusicBrainz recording id, or its Log ID coordinate if
                 Fluncle has certified it. One identifier can name more than one recording, so an
                 answer is a list.
               </dd>

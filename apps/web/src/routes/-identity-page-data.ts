@@ -22,37 +22,57 @@ import {
   readIdentity,
 } from "@/lib/server/identity-envelope";
 import { assertIdentityReadAllowed } from "@/lib/server/identity-dials";
-import { canonicalIdentityKey, normalizeIsrcKey, normalizeMbidKey } from "@/lib/identity-key";
+import {
+  canonicalIdentityKey,
+  normalizeIsrcKey,
+  normalizeMbidKey,
+  platformIdentityKey,
+} from "@/lib/identity-key";
 
 /**
- * Which of the three keys a caller's path segment turned out to be. Carried on the page data so
+ * Which kind of key a caller's path segment turned out to be. Carried on the page data so
  * the page can name the key it answered for without re-reading it.
  *
  *   · `isrc`      — the recording's own international standard code.
  *   · `mbid`      — a MusicBrainz recording id.
+ *   · `platform`  — a pasted Spotify or Deezer track link, collapsed to `<platform>:track:<id>`.
  *   · `reference` — a Log ID coordinate or Fluncle's own track id. One branch, because both answer
  *                   through the same indexed `track_id = ? or log_id = ?` read and neither has a
  *                   shape a caller has to be taught to tell apart.
  */
-export type IdentityKeyKind = "isrc" | "mbid" | "reference";
+export type IdentityKeyKind = "isrc" | "mbid" | "platform" | "reference";
 
 /**
  * The key as Fluncle stores it, plus what kind it is. A reader may type an ISRC with hyphens
- * (`GB-ABC-12-34567`) or a MusicBrainz id in any case; both normalize here, and the page
- * canonicalizes its URL onto the normalized spelling so one recording is not reachable at a dozen
- * spellings of one identifier.
+ * (`GB-ABC-12-34567`) or a MusicBrainz id in any case, or paste a Spotify or Deezer link straight
+ * off a share sheet with its locale segment and its tracking parameters still attached; all of them
+ * normalize here, and the page canonicalizes its URL onto the normalized spelling so one recording
+ * is not reachable at a dozen spellings of one identifier.
  */
 export function identityKeyFor(raw: string): { key: IdentityKey; kind: IdentityKeyKind } {
   const isrc = normalizeIsrcKey(raw);
 
   if (isrc) {
-    return { key: { isrc, kind: "isrc" }, kind: "isrc" };
+    return { key: { isrcs: [isrc], kind: "isrc" }, kind: "isrc" };
   }
 
   const mbid = normalizeMbidKey(raw);
 
   if (mbid) {
     return { key: { kind: "mbid", mbid }, kind: "mbid" };
+  }
+
+  // A link, or the URI spelling the door redirects onto. `platformIdentityKey` reads only the forms
+  // that NAME their platform, never a bare id — a bare Spotify id and Fluncle's own track id for a
+  // finding are the same string, so the reference branch below keeps that case.
+  const platform = platformIdentityKey(raw);
+
+  if (platform?.platform === "spotify") {
+    return { key: { kind: "spotify", spotifyId: platform.id }, kind: "platform" };
+  }
+
+  if (platform?.platform === "deezer") {
+    return { key: { deezerId: platform.id, kind: "deezer" }, kind: "platform" };
   }
 
   // Anything else is tried as a Log ID coordinate or a track id. A string that is neither simply
