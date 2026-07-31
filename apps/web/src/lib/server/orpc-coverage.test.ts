@@ -137,6 +137,9 @@ const PUBLIC_ROUTE_OPS: Record<string, string> = {
   // /api/v1/reach). Public tier: one bounded, grouped page read of the append-only
   // `platform_stats` ledger; the write half is `record_platform_stats` on the admin net.
   "GET /reach/stats": "list_platform_stats",
+  // One short-lived, read-only Turso credential for the shared device replica.
+  // Contract-only oRPC; the device then syncs the catalogue directly from Turso.
+  "GET /replica/token": "get_replica_token",
   "GET /search": "search_tracks",
   // Fluncle's OWN search — the archive, not Spotify (lib/server/search.ts). Contract-only
   // oRPC (no TanStack route file under /api/v1/search), so it has no route-file basename to

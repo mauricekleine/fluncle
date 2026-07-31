@@ -68,6 +68,7 @@ Public + private (`/me`) operations, with their OpenAPI `operationId`:
 | `GET/POST /me/saved-findings`            | `listPrivateSavedFindings` / `savePrivateFinding`         | **noun is `findings`, not `tracks`**                                                |
 | `DELETE /me/saved-findings/{trackId}`    | (not in spec)                                             | path param is `trackId`, resource is `findings`                                     |
 | `GET /me/submissions`                    | `listPrivateSubmissions`                                  |                                                                                     |
+| `GET /replica/token`                     | `getReplicaToken`                                         | short-lived read-only credential for the shared device replica                      |
 | `POST /me/export`, `GET /me/export/{id}` | `exportPrivateAccountData`                                |                                                                                     |
 | `POST /me/delete`                        | `deletePrivateAccount`                                    | **`POST` on a `/delete` path**, not `DELETE /me`                                    |
 | `PATCH /me/profile`                      | (not in spec)                                             |                                                                                     |

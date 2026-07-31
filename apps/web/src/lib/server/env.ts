@@ -171,6 +171,16 @@ const envKeys = [
   "BLUESKY_APP_PASSWORD",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
+  // The shared read-only catalogue replica for offline-first mobile. All four are
+  // OPTIONAL and read as one feature flag by orpc/replica.ts: absent or partial
+  // configuration keeps GET /replica/token dark with a typed 503. The URL is the
+  // libSQL URL handed to devices; the database name + organization identify the
+  // Platform API mint target; the Platform token is the Worker-only bearer that
+  // authorizes minting short-lived database credentials.
+  "DEVICE_REPLICA_DB_URL",
+  "DEVICE_REPLICA_DB_NAME",
+  "TURSO_PLATFORM_ORG",
+  "TURSO_PLATFORM_TOKEN",
   // The SECOND database — `fluncle-telemetry`, the run ledger (`src/db/telemetry-schema.ts`,
   // `getTelemetryDb` in ./db.ts). A separate store because libSQL has a single writer and a
   // ledger sitting behind the primary's writer goes dark exactly when the stall it should be

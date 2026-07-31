@@ -134,6 +134,9 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
   "get_radio_now_playing",
   "get_random_radio_track",
   "get_random_track",
+  // The shared device-replica credential is intentionally anonymous; its read-only
+  // 24-hour mint is bounded in-handler by the trusted-IP rate limiter.
+  "get_replica_token",
   "get_track",
   "list_artists",
   // The public found-order FEED (findings + published mixtapes) and the sonic "more like this" row.

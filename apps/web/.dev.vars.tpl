@@ -28,6 +28,15 @@ POSTIZ_API_URL=
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
 
+# Shared read-only catalogue replica for offline-first mobile. All four are
+# OPTIONAL: absent or partial, GET /api/v1/replica/token returns the typed
+# replica_unavailable fault and the app stays API-fed. The Platform token is the
+# only secret; the other values identify the replica that devices sync directly.
+# DEVICE_REPLICA_DB_URL=
+# DEVICE_REPLICA_DB_NAME=
+# TURSO_PLATFORM_ORG=
+# TURSO_PLATFORM_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/TURSO_PLATFORM_TOKEN
+
 # The SECOND database -- fluncle-telemetry, the run ledger (one table, run_events).
 # Both OPTIONAL: unset, `getTelemetryDb()` returns undefined and the record_run write
 # is a clean no-op, so local dev and the test suite run unprovisioned. Fill them from

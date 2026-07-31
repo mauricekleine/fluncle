@@ -81,6 +81,7 @@ import { mixtapesHandlers } from "./orpc/mixtapes";
 import { newsletterHandlers } from "./orpc/newsletter";
 import { radioHandlers } from "./orpc/radio";
 import { reachHandlers } from "./orpc/reach";
+import { replicaHandlers } from "./orpc/replica";
 import { searchHandlers } from "./orpc/search";
 import { storiesHandlers } from "./orpc/stories";
 import { submissionsHandlers } from "./orpc/submissions";
@@ -152,6 +153,7 @@ export const router = os.router({
   ...newsletterHandlers(os),
   ...radioHandlers(os),
   ...reachHandlers(os),
+  ...replicaHandlers(os),
   ...searchHandlers(os),
   ...storiesHandlers(os),
   ...submissionsHandlers(os),
@@ -227,10 +229,11 @@ const handler = new OpenAPIHandler(router, {
 
 const API_PREFIX = "/api/v1";
 
-// The live /api/v1/health route sets `Cache-Control: no-store` so a liveness poll is
-// never cached. oRPC owns the response framing, so the header is reapplied here on
-// a matched health response — parity without a per-handler header plugin.
-const HEALTH_SUFFIX = "/health";
+// Responses that must never enter a browser or edge cache. Health is a live probe;
+// the replica response carries a short-lived credential that must remain specific
+// to the requesting device. oRPC owns the response framing, so these headers live
+// at the shared mount rather than in domain handlers.
+const NO_STORE_SUFFIXES = new Set(["/health", "/replica/token"]);
 
 /**
  * Try to serve `request` with oRPC. Returns the `Response` when a procedure
@@ -256,9 +259,7 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
     return null;
   }
 
-  // Reapply the liveness probe's no-store directive (the one header the live
-  // route set that oRPC's framing would otherwise drop).
-  if (url.pathname === `${API_PREFIX}${HEALTH_SUFFIX}`) {
+  if (NO_STORE_SUFFIXES.has(url.pathname.slice(API_PREFIX.length))) {
     response.headers.set("Cache-Control", "no-store");
   }
 
