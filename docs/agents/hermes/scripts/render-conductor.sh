@@ -586,9 +586,23 @@ if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
 fi
 # Read a WINDOW of the queue (oldest first), not just the head, so a poisoned head can be
 # stepped over. The natural order is preserved: the pick is the oldest finding that is NOT
-# currently poisoned. 25 is far past any realistic simultaneous-poison count.
-queue_json="$("$FLUNCLE_BIN" admin tracks queue --limit 25 --json 2>/dev/null || printf '')"
-queued_ids="$(printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const t of (JSON.parse(s).tracks||[]))if(t&&t.logId)process.stdout.write(t.logId+"\n")}catch(e){}})' 2>/dev/null || printf '')"
+# currently poisoned. 25 is far past any realistic simultaneous-poison count. The read is
+# fail-closed: a failed CLI call or a response outside the CLI's `{ok:true,tracks:[…]}` contract
+# is a RUN error, never evidence that the queue is empty.
+queue_json="$("$FLUNCLE_BIN" admin tracks queue --limit 25 --json 2>>"$LOG_FILE")"
+queue_read_rc=$?
+if [ "$queue_read_rc" -ne 0 ]; then
+  log "queue read failed (rc=$queue_read_rc)"
+  emit_fail "render-conductor: queue read failed"
+  exit 1
+fi
+queued_ids="$(printf '%s' "$queue_json" | "$BUN_BIN" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let body;try{body=JSON.parse(s)}catch{process.exit(2)}if(!body||typeof body!=="object"||Array.isArray(body)||body.ok!==true||!Array.isArray(body.tracks)||body.tracks.some(track=>!track||typeof track!=="object"||Array.isArray(track)||typeof track.logId!=="string"||track.logId.length===0))process.exit(2);for(const track of body.tracks)process.stdout.write(track.logId+"\n")})' 2>>"$LOG_FILE")"
+queue_parse_rc=$?
+if [ "$queue_parse_rc" -ne 0 ]; then
+  log "queue response malformed (parser rc=$queue_parse_rc)"
+  emit_fail "render-conductor: queue response malformed"
+  exit 1
+fi
 head=""; skipped=0
 while IFS= read -r lid; do
   [ -n "$lid" ] || continue

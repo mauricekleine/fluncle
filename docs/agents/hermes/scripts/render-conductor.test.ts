@@ -33,7 +33,9 @@ const QUEUE_HEAD = "001.1.1A";
 type Tick = {
   doneResult?: string;
   initialState?: "idle" | "rendering";
-  queueEmpty?: boolean;
+  queueExitCode?: number;
+  queueResponse?: string;
+  queueStderr?: string;
   readyTimeout?: number;
   restoringCalls: number;
   trackHasVideo?: boolean;
@@ -41,6 +43,7 @@ type Tick = {
 
 type TickResult = {
   boxIdFile: string;
+  exitCode: number;
   log: string;
   orphans: string;
   state: string;
@@ -81,11 +84,9 @@ esac
 const FLUNCLE_STUB = `#!/usr/bin/env bash
 case "$*" in
   *"tracks queue"*)
-    if [ -n "\${STUB_QUEUE_JSON:-}" ]; then
-      printf '%s\\n' "$STUB_QUEUE_JSON"
-    else
-      printf '{"tracks":[{"logId":"${QUEUE_HEAD}"}]}\\n'
-    fi ;;
+    [ -n "\${STUB_QUEUE_RESPONSE:-}" ] && printf '%s\\n' "$STUB_QUEUE_RESPONSE"
+    [ -n "\${STUB_QUEUE_STDERR:-}" ] && printf '%s\\n' "$STUB_QUEUE_STDERR" >&2
+    exit "\${STUB_QUEUE_EXIT_CODE:-0}" ;;
   *"tracks get"*)
     if [ "\${STUB_TRACK_HAS_VIDEO:-0}" = "1" ]; then
       printf '{"track":{"videoUrl":"https://example.invalid/video.mp4"}}\\n'
@@ -121,7 +122,9 @@ function write(path: string, body: string) {
 function runTick({
   doneResult = "",
   initialState = "idle",
-  queueEmpty = false,
+  queueExitCode = 0,
+  queueResponse = `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
+  queueStderr = "",
   readyTimeout = 2,
   restoringCalls,
   trackHasVideo = false,
@@ -164,7 +167,9 @@ function runTick({
         PROVISION: join(stub, "provision.sh"),
         STUB_DIR: stub,
         STUB_DONE_RESULT: doneResult,
-        STUB_QUEUE_JSON: queueEmpty ? '{"tracks":[]}' : "",
+        STUB_QUEUE_EXIT_CODE: String(queueExitCode),
+        STUB_QUEUE_RESPONSE: queueResponse,
+        STUB_QUEUE_STDERR: queueStderr,
         STUB_TRACK_HAS_VIDEO: trackHasVideo ? "1" : "0",
       },
       timeout: 60_000,
@@ -179,6 +184,7 @@ function runTick({
     };
     return {
       boxIdFile: read(join(stateDir, "box-id")),
+      exitCode: run.status ?? -1,
       log: read(join(stateDir, "conductor.log")),
       orphans: read(join(stateDir, "orphan-boxes")),
       state: read(join(stateDir, "state")),
@@ -250,12 +256,64 @@ describe("await_box_ready", () => {
   });
 });
 
+describe("queue read", () => {
+  test("a genuinely empty queue is a healthy idle tick", () => {
+    const tick = runTick({
+      queueResponse: '{"ok":true,"tracks":[]}',
+      restoringCalls: 0,
+    });
+
+    expect(tick.exitCode).toBe(0);
+    expect(tick.stdout).toContain("render-conductor: queue empty — nothing to render");
+    expect(lastJsonLine(tick.stdout)).toMatchObject({
+      checked: 0,
+      errors: 0,
+      failed: 0,
+      ok: true,
+      produced: 0,
+    });
+  });
+
+  test("a failed queue read is a run error, not an empty queue", () => {
+    const tick = runTick({
+      queueExitCode: 7,
+      queueResponse: "",
+      queueStderr: "transport error",
+      restoringCalls: 0,
+    });
+
+    expect(tick.exitCode).toBe(1);
+    expect(tick.stdout).toContain("render-conductor: queue read failed");
+    expect(tick.stdout).not.toContain("queue empty");
+    expect(tick.log).toContain("transport error");
+    expect(lastJsonLine(tick.stdout)).toMatchObject({
+      errors: 1,
+      ok: false,
+    });
+  });
+
+  test("a successful error envelope is a malformed response, not an empty queue", () => {
+    const tick = runTick({
+      queueResponse: '{"ok":false,"error":"rate limited"}',
+      restoringCalls: 0,
+    });
+
+    expect(tick.exitCode).toBe(1);
+    expect(tick.stdout).toContain("render-conductor: queue response malformed");
+    expect(tick.stdout).not.toContain("queue empty");
+    expect(lastJsonLine(tick.stdout)).toMatchObject({
+      errors: 1,
+      ok: false,
+    });
+  });
+});
+
 describe("render state counters", () => {
   test("a shipped completion counts the inspected finding and successful completion", () => {
     const tick = runTick({
       doneResult: "EXIT=0 @ 2099-01-01T00:00:00Z DURATION=5",
       initialState: "rendering",
-      queueEmpty: true,
+      queueResponse: '{"ok":true,"tracks":[]}',
       restoringCalls: 0,
       trackHasVideo: true,
     });
@@ -272,7 +330,7 @@ describe("render state counters", () => {
     const tick = runTick({
       doneResult: "EXIT=7 @ 2099-01-01T00:00:00Z DURATION=5",
       initialState: "rendering",
-      queueEmpty: true,
+      queueResponse: '{"ok":true,"tracks":[]}',
       restoringCalls: 0,
     });
 
