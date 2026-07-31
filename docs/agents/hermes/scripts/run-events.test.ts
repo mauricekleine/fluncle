@@ -28,6 +28,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { runLedgerWriters } from "@fluncle/registry";
+
 import {
   boxScriptApiPaths,
   emittedGateStates,
@@ -429,7 +431,13 @@ describe("each unit's declared interval matches its own .timer", () => {
     ["secrets-sync", SECRETS_SYNC, SECRETS_SYNC_TIMER],
     ["sonar-freshen", SONAR_FRESHEN, SONAR_FRESHEN_TIMER],
   ])("%s", (_name, script, timer) => {
+    const unitMatch = /^RUN_EVENT_UNIT="([^"]+)"$/m.exec(readFileSync(script, "utf8"));
+    const unit = unitMatch?.[1];
+    const rosterCadence = runLedgerWriters().find((writer) => writer.unit === unit);
+
+    expect(unit).toBeDefined();
     expect(declaredIntervalMs(script)).toBe(timerIntervalMs(timer));
+    expect(rosterCadence?.expectedIntervalMs).toBe(declaredIntervalMs(script));
   });
 });
 

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
+import { type TelemetryMissingField } from "./commands/admin-telemetry";
 import { type FreshView } from "./commands/fresh";
 import { setEnvProfile } from "./env";
 import { spotifyPlaylistUrl, telegramUrl } from "./links";
@@ -42,7 +43,11 @@ type AdminQueueOptions = AdminListOptions & {
 };
 
 type AdminTelemetryOptions = AdminListOptions & {
+  blind?: boolean;
   cursor?: string;
+  liar?: boolean;
+  missing?: boolean;
+  missingField?: string;
   ok?: string;
   since?: string;
   unit?: string;
@@ -720,12 +725,32 @@ function addAdminCommands(program: Command): void {
     .command("read")
     .description("Run-ledger rows plus per-unit rollups")
     .option("--unit <unit>", "Only this systemd unit")
-    .option("--since <iso>", "Only runs at or after this occurred-at instant")
+    .option("--since <iso|age>", "Only runs at or after this instant (ISO, 24h, or 90m)")
     .option("--until <iso>", "Only runs at or before this occurred-at instant")
     .option("--ok <true|false>", "Filter by the Worker's derived run verdict")
+    .option("--liar", "Only rows whose claimed ok contradicts the derived verdict")
+    .option("--blind", "Only rows missing every work counter")
+    .option("--missing-field <name>", "Only rows missing this canonical counter")
+    .option("--missing", "List expected writers with no run in the selected window")
     .option("--limit <limit>", "Rows to show (1-100)", "50")
     .option("--cursor <cursor>", "Opaque cursor from the previous page")
-    .option("--json", "Print the lossless 20-column rows as JSON", false)
+    .option("--json", "Print lossless rows, rollups, and missing writers as JSON", false)
+    .addHelpText(
+      "after",
+      `
+Evidence and rollups:
+  --ok, --liar, --blind, and --missing-field filter evidence rows only.
+  RUNS always counts every run in the selected --unit/--since/--until window.
+  --missing is a separate roster view; combine it only with --unit/--since/--until.
+  --missing-field names: checked, produced, queue_depth, errors, expected_interval_ms.
+
+JSON field reference:
+  top-level ok        Request acknowledgement only; never a run verdict.
+  rows[].ok           Worker's derived verdict for that run.
+  rollups[]           Whole-window unit totals, including expectedIntervalMs.
+  missingRoster[]     Expected writers with no run in the selected window.
+`,
+    )
     .action(async (options: AdminTelemetryOptions) => {
       const { telemetryCommand } = await import("./commands/admin-telemetry");
       await runAdminTelemetry(options, telemetryCommand);
@@ -6652,15 +6677,102 @@ function parseTelemetryOk(value: string | undefined): boolean | undefined {
   return value === "true";
 }
 
-function parseTelemetryTimestamp(value: string | undefined, flag: string): string | undefined {
+const telemetryMissingFields = [
+  "checked",
+  "errors",
+  "expected_interval_ms",
+  "produced",
+  "queue_depth",
+] as const satisfies readonly TelemetryMissingField[];
+
+function parseTelemetryMissingField(value: string | undefined): TelemetryMissingField | undefined {
   if (value === undefined) {
     return undefined;
   }
 
-  const timestamp = new Date(value);
+  const field = telemetryMissingFields.find((candidate) => candidate === value);
 
-  if (Number.isNaN(timestamp.getTime())) {
-    throw new Error(`${flag} must be an ISO-8601 timestamp`);
+  if (field === undefined) {
+    throw new Error(`--missing-field must be one of: ${telemetryMissingFields.join(", ")}`);
+  }
+
+  return field;
+}
+
+function parseExplicitTelemetryInstant(value: string): Date | null {
+  if (value.length > 64) {
+    return null;
+  }
+
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(
+      value,
+    );
+
+  if (match === null) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const maximumDay = daysInMonth[month - 1];
+
+  if (maximumDay === undefined || day < 1 || day > maximumDay) {
+    return null;
+  }
+
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+}
+
+export function parseTelemetryTimestamp(
+  value: string | undefined,
+  flag: string,
+): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const relative = flag === "--since" ? value.match(/^([1-9]\d*)([mhdw])$/) : null;
+
+  if (relative !== null) {
+    const amount = Number(relative[1]);
+    const unitMs =
+      relative[2] === "w"
+        ? 7 * 24 * 60 * 60 * 1000
+        : relative[2] === "d"
+          ? 24 * 60 * 60 * 1000
+          : relative[2] === "h"
+            ? 60 * 60 * 1000
+            : 60 * 1000;
+    const durationMs = amount * unitMs;
+    const maximumDurationMs = 3650 * 24 * 60 * 60 * 1000;
+
+    if (
+      value.length > 32 ||
+      !Number.isSafeInteger(amount) ||
+      !Number.isSafeInteger(durationMs) ||
+      durationMs > maximumDurationMs
+    ) {
+      throw new Error("--since relative age must not exceed 3650d");
+    }
+
+    // Keep the relative expression on the wire. The Worker resolves its reference
+    // instant once, beside the matching `until` validation and database query.
+    return value;
+  }
+
+  const timestamp = parseExplicitTelemetryInstant(value);
+
+  if (timestamp === null) {
+    const expected =
+      flag === "--since"
+        ? "an explicit ISO-8601 instant (with Z or offset) or a relative age like 24h or 90m"
+        : "an explicit ISO-8601 instant with Z or offset";
+    throw new Error(`${flag} must be ${expected}`);
   }
 
   return timestamp.toISOString();
@@ -6774,16 +6886,35 @@ async function runAdminTelemetry(
   options: AdminTelemetryOptions,
   telemetryCommand: typeof import("./commands/admin-telemetry").telemetryCommand,
 ): Promise<void> {
+  if (
+    options.missing === true &&
+    (options.blind === true ||
+      options.cursor !== undefined ||
+      options.liar === true ||
+      options.missingField !== undefined ||
+      options.ok !== undefined)
+  ) {
+    throw new Error(
+      "--missing cannot be combined with --ok, --liar, --blind, --missing-field, or --cursor",
+    );
+  }
+
   const since = parseTelemetryTimestamp(options.since, "--since");
   const until = parseTelemetryTimestamp(options.until, "--until");
+  const sinceMs = since === undefined ? Number.NaN : Date.parse(since);
+  const untilMs = until === undefined ? Number.NaN : Date.parse(until);
 
-  if (since !== undefined && until !== undefined && since > until) {
+  if (Number.isFinite(sinceMs) && Number.isFinite(untilMs) && sinceMs > untilMs) {
     throw new Error("--since must be before or equal to --until");
   }
 
   const page = await telemetryCommand({
+    blind: options.blind,
     cursor: options.cursor,
+    liar: options.liar,
     limit: parseTelemetryLimit(options.limit),
+    missing: options.missing,
+    missingField: parseTelemetryMissingField(options.missingField),
     ok: parseTelemetryOk(options.ok),
     since,
     unit: options.unit,
@@ -6796,7 +6927,7 @@ async function runAdminTelemetry(
   }
 
   const { telemetryLines } = await import("./commands/admin-telemetry");
-  console.log(telemetryLines(page).join("\n"));
+  console.log(telemetryLines(page, { missing: options.missing === true }).join("\n"));
 }
 
 async function runAdminQueue(
@@ -7467,6 +7598,7 @@ const stringOptions = new Set([
   "--max-hop",
   "--max-overlap",
   "--metrics",
+  "--missing-field",
   "--mime",
   "--min-phrase-words",
   "--model",

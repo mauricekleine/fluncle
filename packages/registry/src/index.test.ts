@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   cronSurfaces,
   liveSurfaces,
+  runLedgerWriters,
   statusProbes,
   SURFACES,
   type Surface,
@@ -100,6 +101,37 @@ assert.equal(crons.length, surfacesByKind("cron").length, "cronSurfaces is the c
 for (const cron of crons) {
   assert.equal(cron.probeConfig?.kind, "cron", `${cron.name}: a cron is freshness-probed`);
 }
+
+// The run ledger's absence roster derives ordinary writers from those crons, excludes the
+// healthcheck that deliberately writes the health ledger instead, and includes the three
+// direct host writers that are not public surfaces.
+const ledgerWriters = runLedgerWriters();
+const ledgerWriterNames = ledgerWriters.map((writer) => writer.unit);
+assert.equal(
+  new Set(ledgerWriterNames).size,
+  ledgerWriterNames.length,
+  "ledger writers are unique",
+);
+assert.equal(ledgerWriters.length, 44, "the run-ledger roster has 41 cron + 3 direct writers");
+assert.ok(
+  !ledgerWriterNames.includes("fluncle-healthcheck"),
+  "the non-ledger healthcheck is excluded from the run-ledger roster",
+);
+assert.deepEqual(
+  ledgerWriters
+    .filter((writer) =>
+      ["fluncle-secrets-sync", "fluncle-sonar-freshen", "fluncle-timer-watchdog"].includes(
+        writer.unit,
+      ),
+    )
+    .map((writer) => [writer.unit, writer.expectedIntervalMs]),
+  [
+    ["fluncle-secrets-sync", 900_000],
+    ["fluncle-sonar-freshen", 3_600_000],
+    ["fluncle-timer-watchdog", 900_000],
+  ],
+  "the direct ledger writers and their cadences stay declared",
+);
 
 // ── Every status-visible surface carries its /status title + description ──────
 // THE RECURRENCE GUARD. A cron surface's registry `name` IS its /status service id

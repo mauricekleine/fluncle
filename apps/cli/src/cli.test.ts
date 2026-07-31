@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fluncleAsciiLogo } from "./brand";
+import { parseTelemetryTimestamp } from "./cli";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
 
@@ -97,10 +98,82 @@ describe("fluncle CLI parsing and JSON output", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("--unit <unit>");
-    expect(result.stdout).toContain("--since <iso>");
+    expect(result.stdout).toContain("--since <iso|age>");
     expect(result.stdout).toContain("--until <iso>");
     expect(result.stdout).toContain("--ok <true|false>");
+    expect(result.stdout).toContain("--liar");
+    expect(result.stdout).toContain("--blind");
+    expect(result.stdout).toContain("--missing-field <name>");
+    expect(result.stdout).toContain("--missing");
     expect(result.stdout).toContain("--cursor <cursor>");
+    expect(result.stdout).toContain("RUNS always counts every run");
+    expect(result.stdout).toContain("top-level ok        Request acknowledgement only");
+    expect(result.stdout).toContain("rows[].ok           Worker's derived verdict");
+    expect(result.stdout).toContain("missingRoster[]");
+  });
+
+  test("admin telemetry accepts the bounded relative --since grammar without rewriting it", () => {
+    expect(parseTelemetryTimestamp("90m", "--since")).toBe("90m");
+    expect(parseTelemetryTimestamp("24h", "--since")).toBe("24h");
+    expect(parseTelemetryTimestamp("3650d", "--since")).toBe("3650d");
+    expect(parseTelemetryTimestamp("520w", "--since")).toBe("520w");
+    expect(parseTelemetryTimestamp("87600h", "--since")).toBe("87600h");
+  });
+
+  test("admin telemetry rejects unsafe relative windows and local-time timestamps", () => {
+    for (const value of ["0h", "1.5h", "-1h", "24H", "24 h", "1s", "3651d", "87601h"]) {
+      expect(() => parseTelemetryTimestamp(value, "--since")).toThrow();
+    }
+
+    expect(() => parseTelemetryTimestamp("2026-07-30 18:00", "--since")).toThrow(
+      "explicit ISO-8601 instant",
+    );
+    expect(() => parseTelemetryTimestamp("2026-02-30T18:00:00Z", "--since")).toThrow(
+      "explicit ISO-8601 instant",
+    );
+    expect(() => parseTelemetryTimestamp("24h", "--until")).toThrow("explicit ISO-8601 instant");
+    expect(parseTelemetryTimestamp("2026-07-30T18:00Z", "--since")).toBe(
+      "2026-07-30T18:00:00.000Z",
+    );
+    expect(parseTelemetryTimestamp("2024-02-29T18:00Z", "--since")).toBe(
+      "2024-02-29T18:00:00.000Z",
+    );
+    expect(parseTelemetryTimestamp("2026-07-30T20:00:00+02:00", "--since")).toBe(
+      "2026-07-30T18:00:00.000Z",
+    );
+  });
+
+  test("admin telemetry requires a value for --missing-field before fetching", async () => {
+    const result = await runCli(["admin", "telemetry", "read", "--missing-field", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Did you forget to specify the option argument");
+  });
+
+  test("admin telemetry keeps the missing-roster view distinct from evidence filters", async () => {
+    const result = await runCli(["admin", "telemetry", "read", "--missing", "--liar", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--missing cannot be combined");
+  });
+
+  test("admin telemetry validates the closed --missing-field vocabulary before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "telemetry",
+      "read",
+      "--missing-field",
+      "vendor_calls",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain(
+      "--missing-field must be one of: checked, errors, expected_interval_ms, produced, queue_depth",
+    );
   });
 
   test("admin tracks enrich --queue validates --limit before fetching", async () => {

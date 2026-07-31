@@ -138,6 +138,14 @@ export type ProbeConfig = {
   timeoutMs?: number;
 };
 
+/** One unit expected to append sweep ticks to the run ledger. */
+export type RunLedgerWriter = {
+  /** The expected interval between ledger rows, in milliseconds. */
+  expectedIntervalMs: number;
+  /** The systemd unit name stored in `run_events.unit`. */
+  unit: string;
+};
+
 /** One Fluncle surface. URL/route/command/subdomain are populated per `kind`. */
 export type Surface = {
   /** A stable, human-readable id, unique across the catalog (e.g. "web.log", "api.tracks"). */
@@ -2068,4 +2076,36 @@ export function statusProbes(): Array<Surface & { probeConfig: ProbeConfig }> {
 /** Every on-box Hermes cron surface, in catalog order. */
 export function cronSurfaces(): Surface[] {
   return surfacesByKind("cron");
+}
+
+/**
+ * Every unit expected to append to the run ledger, with its authoritative cadence.
+ *
+ * Most writers are registry crons. `fluncle-healthcheck` is deliberately absent: it
+ * writes health snapshots to the separate health ledger and never sources the shared
+ * run-event emitter. Three host units also write run events without being public
+ * surfaces, so they are declared here rather than disappearing from an absence diff.
+ */
+export function runLedgerWriters(): RunLedgerWriter[] {
+  const registered = cronSurfaces().flatMap((surface): RunLedgerWriter[] => {
+    const probe = surface.probeConfig;
+
+    if (
+      probe?.kind !== "cron" ||
+      probe.cronName === undefined ||
+      probe.cronName === "fluncle-healthcheck" ||
+      probe.cadenceMs === undefined
+    ) {
+      return [];
+    }
+
+    return [{ expectedIntervalMs: probe.cadenceMs, unit: probe.cronName }];
+  });
+  const direct: RunLedgerWriter[] = [
+    { expectedIntervalMs: 900_000, unit: "fluncle-secrets-sync" },
+    { expectedIntervalMs: 3_600_000, unit: "fluncle-sonar-freshen" },
+    { expectedIntervalMs: 900_000, unit: "fluncle-timer-watchdog" },
+  ];
+
+  return [...registered, ...direct].sort((left, right) => left.unit.localeCompare(right.unit));
 }

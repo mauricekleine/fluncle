@@ -121,8 +121,8 @@ export const runEvents = sqliteTable(
     // Sentry sweep's `{"candidates":N,"ok":true,"resolved":N}` among them, so a hard
     // rejection produced NO ROW for precisely the sweeps this table was built to catch —
     // and a missing row reads as a dead sweep. With the claim stored beside the verdict,
-    // `where self_asserted_ok = 1 and errors > 0` is a one-line query that finds every
-    // sweep lying about its own health.
+    // `where self_asserted_ok = 1 and ok = 0` is a one-line query that finds every sweep
+    // lying about its own health, including an exit-code failure with zero reported errors.
     selfAssertedOk: integer("self_asserted_ok"),
     // The tick's summary line, verbatim and bounded. Kept even when it did not parse:
     // a sweep that crashed before printing a usable summary is exactly the case this

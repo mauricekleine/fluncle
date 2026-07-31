@@ -193,10 +193,10 @@ describe("insertRunEvent — the derived verdict reaches the column", () => {
   });
 
   it("makes 'the sweep is lying about itself' a one-line query", async () => {
-    // The eleven-night defect end to end: exit 0, `errors:2`, and a hardcoded `ok:true`.
-    // This is the read the column was added for.
-    await insertRunEvent(envelope({ exit_code: 0, summary_raw: '{"errors":2,"ok":true}' }));
-    // A control row: honest, and it must NOT appear.
+    // An exit-code-only failure: the summary reports zero errors and claims ok, but the
+    // stored verdict is false. A liar query coupled only to the error count loses this row.
+    await insertRunEvent(envelope({ exit_code: 1, summary_raw: '{"errors":0,"ok":true}' }));
+    // A control row: the same claim beside a true stored verdict must NOT appear.
     await insertRunEvent(
       envelope({
         started_at: "2026-07-29T04:00:00.000Z",
@@ -207,13 +207,14 @@ describe("insertRunEvent — the derived verdict reaches the column", () => {
 
     const client = telemetryDb;
     const liars = await client?.execute(
-      "select unit, ok, errors from run_events where self_asserted_ok = 1 and errors > 0",
+      "select unit, ok, errors, exit_code from run_events where self_asserted_ok = 1 and ok = 0",
     );
 
     expect(liars?.rows).toHaveLength(1);
     expect(liars?.rows[0]?.unit).toBe("fluncle-enrich");
     expect(liars?.rows[0]?.ok).toBe(0);
-    expect(liars?.rows[0]?.errors).toBe(2);
+    expect(liars?.rows[0]?.errors).toBe(0);
+    expect(liars?.rows[0]?.exit_code).toBe(1);
   });
 });
 
@@ -448,6 +449,7 @@ describe("insertRunEvent — unprovisioned degrades, it never breaks", () => {
 
     expect(page).toEqual({
       available: false,
+      missingRoster: [],
       nextCursor: null,
       rollups: [],
       rows: [],
@@ -561,6 +563,7 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
     expect(page.rollups).toEqual([
       {
         blindCount: 0,
+        expectedIntervalMs: 600_000,
         failedCount: 0,
         lastOccurredAt: "2026-07-30T19:20:00.000Z",
         liarCount: 0,
@@ -569,6 +572,7 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
       },
       {
         blindCount: 1,
+        expectedIntervalMs: 86_400_000,
         failedCount: 1,
         lastOccurredAt: "2026-07-30T19:10:00.000Z",
         liarCount: 1,
@@ -592,6 +596,27 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
       missingFields: ["checked", "errors", "produced", "queue_depth"],
       unit: "fluncle-sentry-triage",
     });
+  });
+
+  it("keeps an unregistered unit's emitted cadence on the row but null on its rollup", async () => {
+    await insertRunEvent(
+      envelope({
+        summary_raw:
+          '{"checked":1,"errors":0,"expectedIntervalMs":123456,"produced":0,"queueDepth":0}',
+        unit: "fluncle-legacy",
+      }),
+    );
+
+    const page = await readRunLedger({ limit: 100, unit: "fluncle-legacy" });
+
+    expect(page.rows).toMatchObject([{ expectedIntervalMs: 123_456 }]);
+    expect(page.rollups).toMatchObject([
+      {
+        expectedIntervalMs: null,
+        runCount: 1,
+        unit: "fluncle-legacy",
+      },
+    ]);
   });
 
   it("makes a narrow ISO window return fewer rows than a wide one", async () => {
@@ -618,6 +643,180 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
     expect(narrow.totalCount).toBe(1);
     expect(narrow.rows.length).toBeLessThan(wide.rows.length);
     expect(narrow.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T19:20:00.000Z"]);
+  });
+
+  it("accepts relative lookbacks without regressing ISO T-separated window comparisons", async () => {
+    for (const startedAt of [
+      "2026-07-29T21:00:00.000Z",
+      "2026-07-30T18:00:00.000Z",
+      "2026-07-30T19:30:00.000Z",
+    ]) {
+      await insertRunEvent(
+        envelope({
+          ended_at: new Date(Date.parse(startedAt) + 5_000).toISOString(),
+          started_at: startedAt,
+          unit: "fluncle-enrich",
+        }),
+      );
+    }
+
+    const nowMs = Date.parse("2026-07-30T20:00:00.000Z");
+    const wide = await readRunLedger({ limit: 100, since: "24h" }, nowMs);
+    const narrow = await readRunLedger({ limit: 100, since: "90m" }, nowMs);
+    const narrowIso = await readRunLedger({ limit: 100, since: "2026-07-30T18:30:00.000Z" }, nowMs);
+
+    expect(wide.totalCount).toBe(3);
+    expect(narrow.totalCount).toBe(1);
+    expect(narrow.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T19:30:00.000Z"]);
+    expect(narrow).toEqual(narrowIso);
+  });
+
+  it("filters stored liar, blind, and missing-field evidence without narrowing rollups", async () => {
+    await insertRunEvent(
+      envelope({
+        exit_code: 1,
+        started_at: "2026-07-30T19:00:00.000Z",
+        summary_raw: '{"checked":4,"errors":0,"ok":true,"produced":0,"queueDepth":9}',
+        unit: "fluncle-enrich",
+      }),
+    );
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-30T19:10:00.000Z",
+        summary_raw: "{}",
+        unit: "fluncle-enrich",
+      }),
+    );
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-30T19:20:00.000Z",
+        summary_raw: '{"checked":8,"errors":0,"ok":true,"produced":2,"queueDepth":0}',
+        unit: "fluncle-enrich",
+      }),
+    );
+
+    const liar = await readRunLedger({ liar: "true", limit: 100, unit: "fluncle-enrich" });
+    const blind = await readRunLedger({ blind: "true", limit: 100, unit: "fluncle-enrich" });
+    const missingField = await readRunLedger({
+      limit: 100,
+      missingField: "produced",
+      unit: "fluncle-enrich",
+    });
+    const notLiar = await readRunLedger({
+      liar: "false",
+      limit: 100,
+      unit: "fluncle-enrich",
+    });
+    const notBlind = await readRunLedger({
+      blind: "false",
+      limit: 100,
+      unit: "fluncle-enrich",
+    });
+
+    expect(liar.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T19:00:00.000Z"]);
+    expect(liar.rows[0]).toMatchObject({ errors: 0, ok: false, selfAssertedOk: true });
+    expect(blind.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T19:10:00.000Z"]);
+    expect(missingField.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T19:10:00.000Z"]);
+    expect(notLiar.rows.map((row) => row.occurredAt)).toEqual([
+      "2026-07-30T19:20:00.000Z",
+      "2026-07-30T19:10:00.000Z",
+    ]);
+    expect(notBlind.rows.map((row) => row.occurredAt)).toEqual([
+      "2026-07-30T19:20:00.000Z",
+      "2026-07-30T19:00:00.000Z",
+    ]);
+
+    for (const evidence of [liar, blind, missingField]) {
+      expect(evidence.totalCount).toBe(1);
+      expect(evidence.rollups).toMatchObject([
+        {
+          expectedIntervalMs: 300_000,
+          runCount: 3,
+          unit: "fluncle-enrich",
+        },
+      ]);
+    }
+    expect(notLiar.totalCount).toBe(2);
+    expect(notBlind.totalCount).toBe(2);
+  });
+
+  it("returns cadence-aware roster absences from only the time and optional unit scope", async () => {
+    const nowMs = Date.parse("2026-07-30T20:00:00.000Z");
+
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-29T19:00:00.000Z",
+        unit: "fluncle-enrich",
+      }),
+    );
+
+    const missingCron = await readRunLedger(
+      { limit: 100, missing: "true", since: "24h", unit: "fluncle-enrich" },
+      nowMs,
+    );
+    const missingDirect = await readRunLedger(
+      { limit: 100, missing: "true", since: "24h", unit: "fluncle-secrets-sync" },
+      nowMs,
+    );
+    const deliberateNonWriter = await readRunLedger(
+      { limit: 100, missing: "true", since: "24h", unit: "fluncle-healthcheck" },
+      nowMs,
+    );
+
+    expect(missingCron).toEqual({
+      available: true,
+      missingRoster: [{ expectedIntervalMs: 300_000, unit: "fluncle-enrich" }],
+      nextCursor: null,
+      rollups: [],
+      rows: [],
+      totalCount: 0,
+    });
+    expect(missingDirect.missingRoster).toEqual([
+      { expectedIntervalMs: 900_000, unit: "fluncle-secrets-sync" },
+    ]);
+    expect(deliberateNonWriter.missingRoster).toEqual([]);
+
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-30T19:30:00.000Z",
+        unit: "fluncle-secrets-sync",
+      }),
+    );
+
+    const presentDirect = await readRunLedger(
+      { limit: 100, missing: "true", since: "24h", unit: "fluncle-secrets-sync" },
+      nowMs,
+    );
+
+    expect(presentDirect.missingRoster).toEqual([]);
+  });
+
+  it("keeps all-run rollups under the derived-ok evidence filter", async () => {
+    await insertRunEvent(
+      envelope({
+        exit_code: 1,
+        started_at: "2026-07-30T19:00:00.000Z",
+        unit: "fluncle-enrich",
+      }),
+    );
+    await insertRunEvent(
+      envelope({
+        started_at: "2026-07-30T19:10:00.000Z",
+        unit: "fluncle-enrich",
+      }),
+    );
+
+    const failed = await readRunLedger({ limit: 100, ok: "false", unit: "fluncle-enrich" });
+
+    expect(failed.totalCount).toBe(1);
+    expect(failed.rows).toHaveLength(1);
+    expect(failed.rollups).toMatchObject([
+      {
+        failedCount: 1,
+        runCount: 2,
+        unit: "fluncle-enrich",
+      },
+    ]);
   });
 
   it("keyset-pages raw rows while keeping whole-window rollups stable", async () => {
@@ -649,5 +848,65 @@ describe("readRunLedger — rows plus cheap aggregates, never verdicts", () => {
     expect(first.totalCount).toBe(3);
     expect(second.totalCount).toBe(3);
     expect(second.rollups).toEqual(first.rollups);
+  });
+
+  it("keyset-pages only matching liar evidence while totalCount and rollups stay stable", async () => {
+    for (const [hour, liar] of [
+      ["01", true],
+      ["02", false],
+      ["03", true],
+      ["04", false],
+      ["05", true],
+    ] as const) {
+      await insertRunEvent(
+        envelope({
+          ended_at: `2026-07-30T${hour}:00:05.000Z`,
+          exit_code: liar ? 1 : 0,
+          started_at: `2026-07-30T${hour}:00:00.000Z`,
+          summary_raw: '{"checked":1,"errors":0,"ok":true,"produced":0,"queueDepth":0}',
+          unit: "fluncle-enrich",
+        }),
+      );
+    }
+
+    const first = await readRunLedger({
+      liar: "true",
+      limit: 2,
+      unit: "fluncle-enrich",
+    });
+    const cursor = first.nextCursor;
+
+    if (cursor === null) {
+      throw new Error("expected a second filtered run-ledger page");
+    }
+
+    const second = await readRunLedger({
+      cursor,
+      liar: "true",
+      limit: 2,
+      unit: "fluncle-enrich",
+    });
+
+    expect(first.rows.map((row) => row.occurredAt)).toEqual([
+      "2026-07-30T05:00:00.000Z",
+      "2026-07-30T03:00:00.000Z",
+    ]);
+    expect(second.rows.map((row) => row.occurredAt)).toEqual(["2026-07-30T01:00:00.000Z"]);
+    expect(
+      [...first.rows, ...second.rows].every(
+        (row) => row.selfAssertedOk === true && row.ok === false,
+      ),
+    ).toBe(true);
+    expect(second.nextCursor).toBeNull();
+    expect(first.totalCount).toBe(3);
+    expect(second.totalCount).toBe(3);
+    expect(second.rollups).toEqual(first.rollups);
+    expect(first.rollups).toMatchObject([
+      {
+        liarCount: 3,
+        runCount: 5,
+        unit: "fluncle-enrich",
+      },
+    ]);
   });
 });

@@ -11,42 +11,37 @@ Every sweep tick on the box POSTs one envelope — unit, start, end, exit code, 
 One op, one command:
 
 ```bash
-fluncle admin telemetry read --unit fluncle-enrich --since 2026-07-31T00:00:00Z --json
+fluncle admin telemetry read --unit fluncle-enrich --since 24h --json
 ```
 
-Flags: `--unit`, `--since`, `--until`, `--ok true|false`, `--limit` (1–100), `--cursor`, `--json`. Operator tier. Never reach around it with raw SQL — the CLI needs no database credential and cannot drift from the schema.
+Flags: `--unit`, `--since <iso|age>`, `--until <iso>`, `--ok true|false`, `--liar`, `--blind`, `--missing-field <name>`, `--missing`, `--limit` (1–100), `--cursor`, `--json`. Relative `--since` ages use a positive integer plus lowercase `m`, `h`, `d`, or `w`, such as `90m`, `24h`, or `2w`, up to `3650d`. Absolute bounds require an ISO-8601 instant with `T` and an explicit `Z` or offset. Operator tier. Never reach around it with raw SQL — the CLI needs no database credential and cannot drift from the schema.
+
+In JSON, top-level `.ok` acknowledges the request. It says nothing about run health. The derived run verdict is `.rows[].ok`.
 
 ## The two rules you read under
 
 **1. The ledger is the current truth. A prior report is not.** An audit from yesterday said the ListenBrainz anchor rung yielded zero; the live ledger showed it anchoring 10–33 per tick. If a claim about a sweep arrives from a doc, a backlog file, or an earlier session, re-measure it here before repeating it. A stale premise is the characteristic failure of a reader working from a previous harvest.
 
-**2. Absence is the loudest signal and it is invisible in the rows.** A unit that stopped reporting has no row to find. Every silence question is answered by diffing against the expected-writer roster, never against what is in the table. Step 4 below is that diff, and skipping it is how a dead sweep reads as a clean ledger.
+**2. Absence is the loudest signal and it is invisible in stored rows.** A unit that stopped reporting has no evidence row to find. Every silence question uses `--missing`, which diffs the selected window against the authoritative writer roster and returns the absent writers with cadence. Skipping that view is how a dead sweep reads as a clean ledger.
 
 ## The triage routine
 
 ### 0. Fix the window, then prove the filter works
 
 ```bash
-SINCE="$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)"          # macOS
-# GNU: SINCE="$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
-```
-
-Then sanity-check it: a narrow window MUST return fewer rows than a wide one.
-
-```bash
-fluncle admin telemetry read --since "$SINCE" --limit 1 --json | jq '.totalCount'
+fluncle admin telemetry read --since 24h --limit 1 --json | jq '.totalCount'
 fluncle admin telemetry read --limit 1 --json | jq '.totalCount'
 ```
 
-If the two match, your window is not filtering and every conclusion after this point is drawn from all time. Do this every session; it costs one call and it is the only thing that catches a silently-total window.
+The narrow window should return fewer rows than the all-time read. If the counts match, prove that the fleet really has no older rows before drawing conclusions. The Worker resolves the relative age once for the request and normalizes it to the same ISO shape as the stored timestamps.
 
 ### 1. Take the whole-fleet frame from the rollups
 
 ```bash
-fluncle admin telemetry read --since "$SINCE" --limit 1
+fluncle admin telemetry read --since 24h --limit 1
 ```
 
-`--limit 1` is deliberate: the rollups are computed over the entire filtered window regardless of paging, so one row's worth of page gives you the whole fleet's `RUNS / LAST / OK=0 / LIAR / BLIND` table for the price of one call. Read the shape of the fleet here and only then open individual units.
+`--limit 1` is deliberate: the rollups are computed over the entire unit/time window regardless of paging or evidence filters, so one row's worth of page gives you the whole fleet's `CADENCE / RUNS / LAST / OK=0 / LIAR / BLIND` table for the price of one call. `RUNS` always means all runs in that unit/time window. Read the shape of the fleet here and only then open individual units.
 
 ### 2. The liars — a claim that contradicts the verdict
 
@@ -55,53 +50,45 @@ fluncle admin telemetry read --since "$SINCE" --limit 1
 Any rollup with `LIAR` above zero, then pull the evidence:
 
 ```bash
-fluncle admin telemetry read --since "$SINCE" --unit fluncle-<name> --ok false --limit 100 --json \
-  | jq '[.rows[] | select(.selfAssertedOk == true)][0:5][]
-        | {occurredAt, exitCode, errors, summaryRaw}'
+fluncle admin telemetry read --since 24h --unit fluncle-<name> --liar --limit 100 --json
 ```
 
-A liar written under the current vocabulary is always a finding. It means a sweep is telling the fleet it is fine while its own run-level numbers say otherwise, and every consumer downstream of that claim is calibrated on a lie.
+`--liar` returns those evidence rows directly; use `--cursor` if there are more than 100. A liar written under the current vocabulary is always a finding. It means a sweep is telling the fleet it is fine while its own run-level numbers say otherwise, and every consumer downstream of that claim is calibrated on a lie.
 
 ### 3. The failures
 
 ```bash
-fluncle admin telemetry read --since "$SINCE" --ok false --limit 100 --json \
-  | jq -r '.rollups[] | "\(.unit)\t\(.runCount)\t\(.lastOccurredAt)"'
+fluncle admin telemetry read --since 24h --ok false --limit 100 --json
 ```
 
-Under `--ok false` the rollups obey the filter, so `runCount` here counts FAILED runs, not runs. Compare each against the unit's unfiltered `RUNS` from step 1 to get a rate; one failure in 300 ticks and 300 in 300 are different findings.
+`--ok false` filters evidence rows only. The rollups still describe all runs in the unit/time window, so `rollups[].runCount` is the denominator and `rollups[].failedCount` is the numerator in the same response. One failure in 300 ticks and 300 in 300 are different findings.
 
-### 4. The silence — judged against cadence, never against a threshold
-
-Derive the roster; never restate it. From the repo root:
+### 4. The silence — judged against cadence, never against recency
 
 ```bash
-bun -e 'import { cronSurfaces } from "@fluncle/registry";
-for (const s of cronSurfaces()) {
-  const p = s.probeConfig;
-  if (p?.kind === "cron") console.log(`${p.cronName}\t${p.cadenceMs}`);
-}'
+fluncle admin telemetry read --since 24h --missing
 ```
 
-That is the only roster whose drift fails the build. `docs/agents/hermes/scripts/cron-roster.ts` derives the same set from the committed timer units and guards it in both directions.
+`--missing` returns every expected writer with no run in the selected window, including its authoritative cadence. The roster already accounts for the non-ledger healthcheck and direct host writers. Do not rebuild or amend it by hand.
 
-Three deltas the ledger has that the registry does not:
+Then judge. `--missing` is an absence diff, not a defect verdict. A unit is late only when the gap exceeds roughly **3× its cadence**, the same staleness budget /status already uses. Confirm a candidate over a cadence-sized window:
 
-- **`fluncle-healthcheck` is a registry cron that writes no ledger row, by design.** Its wrapper never sources `cron-output.sh` — it self-reports to /status instead. Expect no row for it, ever.
-- **Three writers are not registry crons**: `fluncle-secrets-sync` and `fluncle-timer-watchdog` (host oneshots outside the container) and `fluncle-sonar-freshen` (another box). They carry their own `expectedIntervalMs` in the summary, so read their cadence off a row rather than the registry.
-- **`expected_interval_ms` is filled server-side for every roster unit**, so a registered cron never reports it missing. Seeing it on a unit's `missingFields` means that unit is not on the roster.
+```bash
+fluncle admin telemetry read --unit fluncle-<name> --since 72h --missing
+```
 
-Then judge. A unit is late only when the gap between now and its rollup's `lastOccurredAt` exceeds roughly **3× its cadence** — the same staleness budget /status already uses. A unit with no row at all in a window longer than 3× its cadence is the real alarm, and it is the one the rows cannot show you.
+Choose a lookback at least 3× that unit's cadence. A unit absent from a shorter window may still be healthy.
 
 The false positive this rule exists to prevent, measured: `fluncle-label-releases` showed 1 run, 7 hours old, while the rest of the fleet was minutes old. Its registry cadence is `86400000` ms. It was perfectly healthy. A silence rule without cadence produces exactly that, and a reader that cries wolf gets ignored.
 
 ### 5. The blind — a worklist, not an error
 
 ```bash
-fluncle admin telemetry read --since "$SINCE" --limit 100 --json \
-  | jq -r '.rows[] | select(.missingFields | length > 0)
-           | "\(.unit)\t\(.missingFields | join(","))"' | sort -u
+fluncle admin telemetry read --since 24h --blind --limit 100 --json
+fluncle admin telemetry read --since 24h --missing-field checked --limit 100 --json
 ```
+
+`--blind` returns rows where `checked`, `produced`, and `queueDepth` are all null. `--missing-field` returns rows missing one canonical counter; accepted names are `checked`, `produced`, `queue_depth`, `errors`, and `expected_interval_ms`. Use it once per counter you are measuring.
 
 `missingFields` lists the mandatory counters a summary did not carry, and that list IS the upgrade queue. Historical context, not a live claim: at the ledger's start the productivity axis was empty across its first 1,655 rows — `checked`, `produced`, `errors` and `expected_interval_ms` were zero non-null — and sweeps are being upgraded to emit them one at a time. Measure the current state here rather than repeating that. Report it as ONE line naming how many units still owe which counters. It is never N findings, and a unit appearing here is not broken.
 
@@ -110,7 +97,7 @@ fluncle admin telemetry read --since "$SINCE" --limit 100 --json \
 Neither half means anything alone. A sweep with a genuinely empty worklist legitimately produces nothing forever.
 
 ```bash
-fluncle admin telemetry read --since "$SINCE" --limit 100 --json \
+fluncle admin telemetry read --since 24h --limit 100 --json \
   | jq -r '.rows[]
            | select(.gateState == null or .gateState == "active")
            | select(.produced == 0 and (.queueDepth // 0) > 0)
@@ -122,7 +109,7 @@ The `gateState` filter is load-bearing. A `paused`/`disabled`/`locked` tick alre
 **Then check the gauge can move, before you report it.**
 
 ```bash
-fluncle admin telemetry read --unit fluncle-<name> --since "$SINCE" --limit 100 --json \
+fluncle admin telemetry read --unit fluncle-<name> --since 24h --limit 100 --json \
   | jq -r '[.rows[].queueDepth] | unique'
 ```
 
@@ -151,12 +138,12 @@ Rows earlier than this vocabulary change's deployment use the old meaning, so ca
 ## Traps
 
 - **The `T` separator.** `occurred_at` and `created_at` are ISO with a `T`; SQLite's `datetime('now', …)` emits a space, so a raw `>` comparison puts `'T'` against `' '` and **every row passes** — a window filter that silently matches everything, returning an all-time count from a fifteen-minute window. The reader normalizes `--since`/`--until` before comparing, so the CLI path is safe; this is the reason not to go around it. Step 0's narrow-versus-wide check is what catches it if you ever do.
-- **Local-time strings shift silently.** `--since "2026-07-30 18:00"` is parsed as LOCAL time and sent as a different instant; `--since 2026-07-30` is UTC midnight. Always pass an explicit `Z` or offset.
-- **The top-level `ok` in `--json` is the CLI's request ack, not a verdict.** `jq '.ok'` is always `true`. The verdicts are `.rows[].ok`.
-- **Rollups obey every filter.** Add `--ok false` or `--unit` and the rollup counts are over that subset. Only the unfiltered call gives you run counts.
-- **Rollups are whole-window; `rows` is one page.** `totalCount` is the sum of the rollups' run counts, not the page length.
-- **There is no server-side filter for liar, blind, or missing-field rows.** The rollup hands you the COUNT; the evidence rows cost paging plus `jq`.
-- **Cadence lives on the row, not the rollup.** Judging lateness needs the rollup's `lastOccurredAt` paired with `expectedIntervalMs` from a row or from the registry.
+- **Absolute bounds need a zone.** `--since` accepts a relative age or a full ISO-8601 instant with `T` and explicit `Z` or offset; `--until` accepts only the full instant. Zone-free strings and bare dates are rejected.
+- **Top-level `.ok` is never run health.** In `--json`, `.ok` is the request acknowledgement and remains `true` for a successful read. Only `.rows[].ok` is the Worker's derived verdict for a run.
+- **Evidence filters do not filter rollups.** `--ok`, `--liar`, `--blind`, and `--missing-field` narrow `.rows` and `totalCount`; rollups still cover every run selected by `--unit`, `--since`, and `--until`. `RUNS` therefore always means all unit/time-window runs.
+- **`--missing` is a separate roster view.** It accepts the unit/time window, not stored-row evidence filters or a cursor.
+- **Rollups are whole-window; `rows` is one page.** `totalCount` counts evidence rows across all pages after evidence filters; it is not the page length and, when evidence is filtered, not the sum of rollup `runCount`.
+- **Cadence lives on the rollup.** Use `rollups[].expectedIntervalMs` beside `lastOccurredAt`; a null cadence means the unit is outside the expected-writer roster.
 - **`--limit` caps at 100.** A 24h window across the fleet is thousands of rows. Work from rollups and open rows only for the unit under investigation.
 
 ## Reporting
@@ -165,7 +152,7 @@ A finding without the command that produced it is not a finding. Use this shape:
 
 ```
 fluncle-<unit> — <the shape, one line>
-  window:    --since 2026-07-31T00:00:00Z
+  window:    --since 24h
   command:   fluncle admin telemetry read --unit fluncle-<unit> --ok false --limit 100 --json
   evidence:  <rows or counts, verbatim from the output>
   ruled out: <the calibration row you checked, e.g. "cadence 86400000ms, gap 7h — not late">
@@ -176,19 +163,24 @@ Rules for the write-up:
 - Name the calibration item you ruled out. "Silent for 7 hours" becomes a finding only once the cadence is quoted beside it.
 - Report the blind set as one worklist line: how many units still owe which counters. Never as separate findings.
 - Every number comes from output you read this session. Never carry a figure from an audit doc or a previous run.
+- The server returns facts, not a defect verdict. Apply the calibration table before naming any row or roster absence as a finding.
 - Nothing wrong is a result. Say so with the window and the row count you actually read, so the next reader knows what was covered.
 
 ## Why this is a skill and not a cron
 
-Standing ruling: build the reader first, use it by hand until it is clear what is noise, and only then consider automating it. Every calibration row above was earned by a real false positive or a real defect. Automating before that table is stable would ship a detector that cries wolf, and a detector nobody trusts is worse than none.
+Standing ruling: the command selects evidence and computes factual rollups and roster absences; it does not decide what is broken. Use the reader by hand until it is clear what is noise, and only then consider automating a verdict. Every calibration row above was earned by a real false positive or a real defect. Automating before that table is stable would ship a detector that cries wolf, and a detector nobody trusts is worse than none.
 
 ## Field reference
 
-**Rollup (per unit, whole filtered window):** `unit`, `runCount`, `lastOccurredAt`, `failedCount` (derived `ok = false`), `liarCount` (claimed ok while derived ok is false), `blindCount` (`checked`, `produced` and `queueDepth` all null).
+**Top level:** `ok` is the request acknowledgement, never run health; `available` says whether the telemetry database is configured; `rows` is the evidence page; `totalCount` is the number of evidence rows across pages; `nextCursor` resumes that evidence page; `rollups` covers all runs in a standard read's selected unit/time window; `missingRoster` carries expected-writer absences. A `--missing` read returns empty `rows` and `rollups`, `totalCount: 0`, and the absence set in `missingRoster`.
 
-**Row (20 columns, lossless under `--json`):** `unit`, `id`, `occurredAt` (box start time), `endedAt`, `createdAt` (Worker write time), `runDurationMs`, `exitCode`, `ok` (derived), `selfAssertedOk` (claimed, never obeyed), `checked`, `produced`, `queueDepth`, `errors`, `vendorCalls`, `expectedIntervalMs`, `gateState`, `missingFields`, `unrecognisedFields`, `summaryStatus`, `summaryRaw`.
+**Rollup (per unit, whole unit/time window):** `unit`, `expectedIntervalMs`, `runCount`, `lastOccurredAt`, `failedCount` (derived run `ok = false`), `liarCount` (claimed ok while derived ok is false), `blindCount` (`checked`, `produced` and `queueDepth` all null). Evidence filters do not change these values.
 
-**Counter vocabulary:** `errors` says the run itself failed; domain counters such as `failed` remain readable in `summaryRaw` and say individual work items failed while the run continued.
+**Missing-roster entry:** `unit`, `expectedIntervalMs`.
+
+**Row (20 columns, lossless under `--json`):** `unit`, `id`, `occurredAt` (box start time), `endedAt`, `createdAt` (Worker write time), `runDurationMs`, `exitCode`, `ok` (the derived run verdict), `selfAssertedOk` (claimed, never obeyed), `checked`, `produced`, `queueDepth`, `errors`, `vendorCalls`, `expectedIntervalMs`, `gateState`, `missingFields`, `unrecognisedFields`, `summaryStatus`, `summaryRaw`.
+
+**Counter vocabulary:** `errors` says the run itself failed; domain counters such as `failed` remain readable in `summaryRaw` and say individual work items failed while the run continued. The run verdict remains `exitCode === 0 && (errors ?? 0) === 0`. Historical rows written before the vocabulary change keep their earlier interpretation; do not read them as current-vocabulary evidence.
 
 **`summaryStatus`** — `parsed` (a JSON object the Worker read), `absent` (the tick printed nothing: a crash before output), `malformed` (present but not JSON), `not_object` (JSON, but an array or a scalar).
 
@@ -202,7 +194,7 @@ Standing ruling: build the reader first, use it by hand until it is clear what i
 - Normalization rules 1–5 (derived `ok`, counter validation, the upgrade queue, the page-cap ban, gated nulls) — `apps/web/src/lib/server/run-events.ts`
 - CLI rendering and flags — `apps/cli/src/commands/admin-telemetry.ts`
 - The emitter, mirrored byte-identically across four scripts — `docs/agents/hermes/scripts/cron-output.sh`
-- The roster — `packages/registry/src/index.ts` (`cronSurfaces()`), guarded against the timer units by `docs/agents/hermes/scripts/cron-roster.ts`
+- The expected-writer roster — `packages/registry/src/index.ts` (`runLedgerWriters()`), with ordinary cron membership guarded against timer units by `docs/agents/hermes/scripts/cron-roster.ts`
 
 ## Not this skill
 

@@ -324,10 +324,37 @@ function accepts(op: unknown, input: unknown): boolean {
     "the derived-ok and ISO time filters are accepted",
   );
   assert.equal(
+    accepts(readRunLedger, {
+      blind: "true",
+      liar: "false",
+      missingField: "queue_depth",
+      since: "90m",
+    }),
+    true,
+    "stored evidence filters and a relative lookback are accepted",
+  );
+  assert.equal(
+    accepts(readRunLedger, { missing: "true", since: "24h", unit: "fluncle-enrich" }),
+    true,
+    "the roster-absence view accepts relative time and unit scope",
+  );
+  assert.equal(
+    accepts(readRunLedger, { missing: "true", ok: "false" }),
+    false,
+    "the roster-absence view rejects stored-row evidence filters",
+  );
+  assert.equal(
     accepts(readRunLedger, { ok: "yes" }),
     false,
     "the derived-ok filter is a closed true/false string",
   );
+  for (const since of ["0h", "1.5h", "24H", "60s", "-1h", "3651d"]) {
+    assert.equal(
+      accepts(readRunLedger, { since }),
+      false,
+      `the invalid relative lookback ${since} is rejected`,
+    );
+  }
   assert.equal(
     accepts(readRunLedger, {
       since: "2026-07-30T20:00:00.000Z",

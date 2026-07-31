@@ -287,6 +287,16 @@ describe("withRegisteredCronCadence — the roster owns schedule metadata", () =
     }
   });
 
+  it("pins a direct host writer to the cadence shared with its timer drift guard", () => {
+    const result = withRegisteredCronCadence(
+      "fluncle-sonar-freshen",
+      normalizeRunSummary('{"expectedIntervalMs":999999}'),
+    );
+
+    expect(result.expectedIntervalMs).toBe(3_600_000);
+    expect(result.missingFields).not.toContain("expected_interval_ms");
+  });
+
   it("retains an emitted fallback for an unregistered legacy unit", () => {
     const result = withRegisteredCronCadence(
       "fluncle-legacy",

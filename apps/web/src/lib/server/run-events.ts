@@ -23,7 +23,7 @@
 //      sweeps (plus the four shell ones and the three new host units), and a missing row reads as
 //      a dead sweep, so the founding case would have been the one case the ledger could
 //      not see. The claim lands in `self_asserted_ok` instead, beside the derived truth,
-//      which makes `where self_asserted_ok = 1 and errors > 0` a one-line query for every
+//      which makes `where self_asserted_ok = 1 and ok = 0` a one-line query for every
 //      sweep lying about its own health.
 //   2. A COUNTER IS A VALIDATED INTEGER OR A 400 — but an explicit `null` is neither.
 //      `typeof === "number"` alone lets a float and a negative through into a column that
@@ -63,7 +63,7 @@ import {
   type RunLedgerRow,
   type RunLedgerUnitRollup,
 } from "@fluncle/contracts/orpc";
-import { cronSurfaces } from "@fluncle/registry";
+import { runLedgerWriters } from "@fluncle/registry";
 import { getTelemetryDb } from "./db";
 import { logEvent } from "./log";
 import { ApiError } from "./spotify";
@@ -543,25 +543,16 @@ export function normalizeRunSummary(summaryRaw: null | string | undefined): Norm
   };
 }
 
-const REGISTERED_CRON_CADENCE_MS = new Map<string, number>();
-
-for (const surface of cronSurfaces()) {
-  const probe = surface.probeConfig;
-
-  if (
-    probe?.kind === "cron" &&
-    typeof probe.cronName === "string" &&
-    typeof probe.cadenceMs === "number"
-  ) {
-    REGISTERED_CRON_CADENCE_MS.set(probe.cronName, probe.cadenceMs);
-  }
-}
+const RUN_LEDGER_WRITERS = runLedgerWriters();
+const RUN_LEDGER_CADENCE_MS = new Map(
+  RUN_LEDGER_WRITERS.map((writer) => [writer.unit, writer.expectedIntervalMs]),
+);
 
 /**
  * Apply the roster's authoritative cadence to a normalized summary.
  *
- * The unit name in the strict envelope is the join key to `cronSurfaces()`. A registered
- * cron's cadence is schedule data, not something its work summary gets to redefine, so
+ * The unit name in the strict envelope is the join key to `runLedgerWriters()`. A roster
+ * unit's cadence is schedule data, not something its work summary gets to redefine, so
  * the registry value replaces any emitted fallback and satisfies the mandatory field
  * even when the summary was absent or malformed. Unregistered legacy units keep their
  * emitted value (or their missing-field item) for backwards compatibility.
@@ -570,7 +561,7 @@ export function withRegisteredCronCadence(
   unit: string,
   summary: NormalizedRunSummary,
 ): NormalizedRunSummary {
-  const cadenceMs = REGISTERED_CRON_CADENCE_MS.get(unit);
+  const cadenceMs = RUN_LEDGER_CADENCE_MS.get(unit);
 
   if (cadenceMs === undefined) {
     return summary;
@@ -874,13 +865,16 @@ function toRunLedgerRow(row: RunLedgerDbRow): RunLedgerRow {
 }
 
 function toRunLedgerRollup(row: RunLedgerRollupDbRow): RunLedgerUnitRollup {
+  const unit = ledgerText(row.unit, "unit");
+
   return {
     blindCount: ledgerNumber(row.blind_count, "blind_count"),
+    expectedIntervalMs: RUN_LEDGER_CADENCE_MS.get(unit) ?? null,
     failedCount: ledgerNumber(row.failed_count, "failed_count"),
     lastOccurredAt: ledgerText(row.last_occurred_at, "last_occurred_at"),
     liarCount: ledgerNumber(row.liar_count, "liar_count"),
     runCount: ledgerNumber(row.run_count, "run_count"),
-    unit: ledgerText(row.unit, "unit"),
+    unit,
   };
 }
 
@@ -911,24 +905,80 @@ function decodeRunLedgerCursor(value: string | undefined): RunLedgerCursor | und
   throw new ApiError("invalid_cursor", "Invalid run-ledger cursor", 400);
 }
 
-function normalizedRunLedgerBound(value: string | undefined): string | undefined {
-  return value === undefined ? undefined : new Date(value).toISOString();
+const RELATIVE_SINCE_PATTERN = /^([1-9][0-9]*)(m|h|d|w)$/;
+const RELATIVE_SINCE_MAX_MS = 3650 * 24 * 60 * 60 * 1000;
+const RELATIVE_SINCE_UNIT_MS = {
+  d: 24 * 60 * 60 * 1000,
+  h: 60 * 60 * 1000,
+  m: 60 * 1000,
+  w: 7 * 24 * 60 * 60 * 1000,
+} as const;
+
+function relativeRunLedgerDurationMs(value: string): number | null {
+  const match = RELATIVE_SINCE_PATTERN.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2] as keyof typeof RELATIVE_SINCE_UNIT_MS;
+  const durationMs = amount * RELATIVE_SINCE_UNIT_MS[unit];
+
+  return Number.isSafeInteger(durationMs) && durationMs <= RELATIVE_SINCE_MAX_MS
+    ? durationMs
+    : null;
+}
+
+function normalizedRunLedgerSince(value: string | undefined, nowMs: number): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const durationMs = relativeRunLedgerDurationMs(value);
+  const date = new Date(durationMs === null ? value : nowMs - durationMs);
+
+  if (!Number.isFinite(date.getTime())) {
+    throw new ApiError("invalid_time_bound", "Invalid run-ledger since bound", 400);
+  }
+
+  return date.toISOString();
+}
+
+function normalizedRunLedgerUntil(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    throw new ApiError("invalid_time_bound", "Invalid run-ledger until bound", 400);
+  }
+
+  return date.toISOString();
 }
 
 /**
  * Read one newest-first page plus whole-window per-unit aggregates.
  *
- * The unit/time/derived-ok filters apply to BOTH queries. The keyset cursor applies only
- * to the raw page, so pagination never changes the rollups. All time comparisons are
- * against normalized ISO strings with a `T` separator; SQLite's space-shaped
- * `datetime('now', …)` output never enters the query.
+ * Unit/time define the rollup frame. Stored evidence filters (`ok`, `liar`, `blind`,
+ * `missingField`) narrow only rows and their `totalCount`, so RUNS always means every run
+ * in the unit/time window. `missing=true` is a separate roster-absence view driven by one
+ * DISTINCT query over that same unit/time scope. The keyset cursor applies only to the raw
+ * page. All time comparisons use normalized ISO strings with a `T` separator; SQLite's
+ * space-shaped `datetime('now', …)` output never enters the query.
  */
-export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedgerPage> {
+export async function readRunLedger(
+  input: ReadRunLedgerInput,
+  nowMs = Date.now(),
+): Promise<RunLedgerPage> {
   const db = await getTelemetryDb();
 
   if (!db) {
     return {
       available: false,
+      missingRoster: [],
       nextCursor: null,
       rollups: [],
       rows: [],
@@ -936,35 +986,91 @@ export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedge
     };
   }
 
-  const clauses: string[] = [];
-  const args: (number | string)[] = [];
-  const since = normalizedRunLedgerBound(input.since);
-  const until = normalizedRunLedgerBound(input.until);
+  const scopeClauses: string[] = [];
+  const scopeArgs: (number | string)[] = [];
+  const since = normalizedRunLedgerSince(input.since, nowMs);
+  const until = normalizedRunLedgerUntil(input.until);
 
   if (input.unit !== undefined) {
-    clauses.push("unit = ?");
-    args.push(input.unit);
+    scopeClauses.push("unit = ?");
+    scopeArgs.push(input.unit);
   }
 
   if (since !== undefined) {
-    clauses.push("occurred_at >= ?");
-    args.push(since);
+    scopeClauses.push("occurred_at >= ?");
+    scopeArgs.push(since);
   }
 
   if (until !== undefined) {
-    clauses.push("occurred_at <= ?");
-    args.push(until);
+    scopeClauses.push("occurred_at <= ?");
+    scopeArgs.push(until);
   }
+
+  if (since !== undefined && until !== undefined && since > until) {
+    throw new ApiError("invalid_time_window", "since must be before or equal to until", 400);
+  }
+
+  const scopeWhere = scopeClauses.length === 0 ? "" : `where ${scopeClauses.join(" and ")}`;
+
+  if (input.missing === "true") {
+    const presentResult = await db.execute({
+      args: scopeArgs,
+      sql: `select distinct unit
+            from run_events
+            ${scopeWhere}`,
+    });
+    const presentUnits = new Set(presentResult.rows.map((row) => ledgerText(row.unit, "unit")));
+    const missingRoster = RUN_LEDGER_WRITERS.filter(
+      (writer) =>
+        (input.unit === undefined || writer.unit === input.unit) && !presentUnits.has(writer.unit),
+    );
+
+    return {
+      available: true,
+      missingRoster,
+      nextCursor: null,
+      rollups: [],
+      rows: [],
+      totalCount: 0,
+    };
+  }
+
+  const evidenceClauses = [...scopeClauses];
+  const evidenceArgs = [...scopeArgs];
 
   if (input.ok !== undefined) {
-    clauses.push("ok = ?");
-    args.push(input.ok === "true" ? 1 : 0);
+    evidenceClauses.push("ok = ?");
+    evidenceArgs.push(input.ok === "true" ? 1 : 0);
   }
 
-  const baseWhere = clauses.length === 0 ? "" : `where ${clauses.join(" and ")}`;
+  if (input.liar !== undefined) {
+    const liar = "coalesce(self_asserted_ok, 0) = 1 and ok = 0";
+
+    evidenceClauses.push(input.liar === "true" ? `(${liar})` : `not (${liar})`);
+  }
+
+  if (input.blind !== undefined) {
+    const blind = "checked is null and produced is null and queue_depth is null";
+
+    evidenceClauses.push(input.blind === "true" ? `(${blind})` : `not (${blind})`);
+  }
+
+  if (input.missingField !== undefined) {
+    evidenceClauses.push(
+      `exists (
+        select 1
+        from json_each(run_events.missing_fields) as missing_field
+        where missing_field.value = ?
+      )`,
+    );
+    evidenceArgs.push(input.missingField);
+  }
+
+  const evidenceWhere =
+    evidenceClauses.length === 0 ? "" : `where ${evidenceClauses.join(" and ")}`;
   const cursor = decodeRunLedgerCursor(input.cursor);
-  const pageClauses = [...clauses];
-  const pageArgs = [...args];
+  const pageClauses = [...evidenceClauses];
+  const pageArgs = [...evidenceArgs];
 
   if (cursor !== undefined) {
     pageClauses.push("(occurred_at < ? or (occurred_at = ? and id < ?))");
@@ -974,7 +1080,7 @@ export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedge
   const pageWhere = pageClauses.length === 0 ? "" : `where ${pageClauses.join(" and ")}`;
   pageArgs.push(input.limit + 1);
 
-  const [pageResult, rollupResult] = await Promise.all([
+  const [pageResult, rollupResult, countResult] = await Promise.all([
     db.execute({
       args: pageArgs,
       sql: `select checked, created_at, ended_at, errors, exit_code,
@@ -987,7 +1093,7 @@ export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedge
             limit ?`,
     }),
     db.execute({
-      args,
+      args: scopeArgs,
       sql: `select unit,
                    count(*) as run_count,
                    max(occurred_at) as last_occurred_at,
@@ -997,9 +1103,15 @@ export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedge
                    sum(case when checked is null and produced is null and queue_depth is null
                        then 1 else 0 end) as blind_count
             from run_events
-            ${baseWhere}
+            ${scopeWhere}
             group by unit
             order by last_occurred_at desc, unit asc`,
+    }),
+    db.execute({
+      args: evidenceArgs,
+      sql: `select count(*) as total_count
+            from run_events
+            ${evidenceWhere}`,
     }),
   ]);
 
@@ -1012,12 +1124,14 @@ export async function readRunLedger(input: ReadRunLedgerInput): Promise<RunLedge
       ? encodeRunLedgerCursor({ id: lastRow.id, occurredAt: lastRow.occurredAt })
       : null;
   const rollups = (rollupResult.rows as unknown as RunLedgerRollupDbRow[]).map(toRunLedgerRollup);
+  const totalCount = ledgerNumber(countResult.rows[0]?.total_count, "total_count");
 
   return {
     available: true,
+    missingRoster: [],
     nextCursor,
     rollups,
     rows,
-    totalCount: rollups.reduce((sum, rollup) => sum + rollup.runCount, 0),
+    totalCount,
   };
 }

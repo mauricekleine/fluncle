@@ -214,6 +214,8 @@ export {
   recordRun,
   type RunEventInput,
   RunEventInputSchema,
+  type RunLedgerMissingRosterEntry,
+  RunLedgerMissingRosterEntrySchema,
   type RunLedgerPage,
   RunLedgerPageSchema,
   type RunLedgerRow,

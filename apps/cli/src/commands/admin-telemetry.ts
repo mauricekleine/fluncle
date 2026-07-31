@@ -2,51 +2,23 @@
 // `fluncle-telemetry` database. The Worker owns filtering, pagination, and aggregates;
 // the CLI only serializes query options and renders the returned evidence.
 
+import { type RunLedgerPage } from "@fluncle/contracts/orpc";
 import { adminApiGet } from "../api";
 
-export type RunLedgerRow = {
-  checked: number | null;
-  createdAt: string;
-  endedAt: string;
-  errors: number | null;
-  exitCode: number;
-  expectedIntervalMs: number | null;
-  gateState: "active" | "disabled" | "dry-run" | "forced" | "locked" | "paused" | null;
-  id: string;
-  missingFields: string[];
-  occurredAt: string;
-  ok: boolean;
-  produced: number | null;
-  queueDepth: number | null;
-  runDurationMs: number | null;
-  selfAssertedOk: boolean | null;
-  summaryRaw: string | null;
-  summaryStatus: "absent" | "malformed" | "not_object" | "parsed";
-  unit: string;
-  unrecognisedFields: string[];
-  vendorCalls: number | null;
-};
-
-export type RunLedgerUnitRollup = {
-  blindCount: number;
-  failedCount: number;
-  lastOccurredAt: string;
-  liarCount: number;
-  runCount: number;
-  unit: string;
-};
-
-export type RunLedgerPage = {
-  available: boolean;
-  nextCursor: string | null;
-  rollups: RunLedgerUnitRollup[];
-  rows: RunLedgerRow[];
-  totalCount: number;
-};
+export type TelemetryMissingField =
+  | "checked"
+  | "errors"
+  | "expected_interval_ms"
+  | "produced"
+  | "queue_depth";
 
 export type TelemetryReadOptions = {
+  blind?: boolean;
   cursor?: string;
   limit: number;
+  liar?: boolean;
+  missing?: boolean;
+  missingField?: TelemetryMissingField;
   ok?: boolean;
   since?: string;
   unit?: string;
@@ -57,8 +29,24 @@ export type TelemetryReadOptions = {
 export async function telemetryCommand(options: TelemetryReadOptions): Promise<RunLedgerPage> {
   const params = new URLSearchParams({ limit: String(options.limit) });
 
+  if (options.blind === true) {
+    params.set("blind", "true");
+  }
+
   if (options.cursor !== undefined) {
     params.set("cursor", options.cursor);
+  }
+
+  if (options.liar === true) {
+    params.set("liar", "true");
+  }
+
+  if (options.missing === true) {
+    params.set("missing", "true");
+  }
+
+  if (options.missingField !== undefined) {
+    params.set("missingField", options.missingField);
   }
 
   if (options.ok !== undefined) {
@@ -99,19 +87,69 @@ function padded(columns: string[], widths: number[]): string {
     .trimEnd();
 }
 
+function cadence(expectedIntervalMs: number | null): string {
+  if (expectedIntervalMs === null) {
+    return "-";
+  }
+
+  const units = [
+    { label: "d", milliseconds: 24 * 60 * 60 * 1000 },
+    { label: "h", milliseconds: 60 * 60 * 1000 },
+    { label: "m", milliseconds: 60 * 1000 },
+    { label: "s", milliseconds: 1000 },
+  ];
+
+  for (const unit of units) {
+    if (expectedIntervalMs % unit.milliseconds === 0) {
+      return `${expectedIntervalMs / unit.milliseconds}${unit.label}`;
+    }
+  }
+
+  return `${expectedIntervalMs}ms`;
+}
+
+type TelemetryRenderOptions = {
+  missing?: boolean;
+};
+
 /** Terse operator rendering. `--json` remains the lossless 20-column read. */
-export function telemetryLines(page: RunLedgerPage): string[] {
+export function telemetryLines(
+  page: RunLedgerPage,
+  options: TelemetryRenderOptions = {},
+): string[] {
   if (!page.available) {
     return ["Telemetry database is not configured."];
   }
 
-  if (page.rows.length === 0) {
+  if (options.missing === true || page.missingRoster.length > 0) {
+    if (page.missingRoster.length === 0) {
+      return ["No expected writers are missing."];
+    }
+
+    const missingHeader = ["MISSING UNIT", "CADENCE"];
+    const missingRows = page.missingRoster.map((entry) => [
+      entry.unit,
+      cadence(entry.expectedIntervalMs),
+    ]);
+    const missingWidths = missingHeader.map((header, index) =>
+      Math.max(header.length, ...missingRows.map((row) => row[index]?.length ?? 0)),
+    );
+
+    return [
+      `Expected writers with no run (${missingRows.length})`,
+      padded(missingHeader, missingWidths),
+      ...missingRows.map((row) => padded(row, missingWidths)),
+    ];
+  }
+
+  if (page.rows.length === 0 && page.rollups.length === 0) {
     return ["No run events matched."];
   }
 
-  const rollupHeader = ["UNIT", "RUNS", "LAST", "OK=0", "LIAR", "BLIND"];
+  const rollupHeader = ["UNIT", "CADENCE", "RUNS", "LAST", "OK=0", "LIAR", "BLIND"];
   const rollupRows = page.rollups.map((rollup) => [
     rollup.unit,
+    cadence(rollup.expectedIntervalMs),
     String(rollup.runCount),
     rollup.lastOccurredAt,
     String(rollup.failedCount),
@@ -146,15 +184,29 @@ export function telemetryLines(page: RunLedgerPage): string[] {
   const runWidths = runHeader.map((header, index) =>
     Math.max(header.length, ...runRows.map((row) => row[index]?.length ?? 0)),
   );
-  const lines = [
-    `Unit rollups (${page.totalCount} matching runs)`,
-    padded(rollupHeader, rollupWidths),
-    ...rollupRows.map((row) => padded(row, rollupWidths)),
-    "",
-    `Runs (${page.rows.length} on this page)`,
-    padded(runHeader, runWidths),
-    ...runRows.map((row) => padded(row, runWidths)),
-  ];
+  const lines: string[] = [];
+
+  if (rollupRows.length > 0) {
+    lines.push(
+      "Unit rollups (all runs in the selected time/unit window)",
+      padded(rollupHeader, rollupWidths),
+      ...rollupRows.map((row) => padded(row, rollupWidths)),
+    );
+  }
+
+  if (lines.length > 0) {
+    lines.push("");
+  }
+
+  if (runRows.length === 0) {
+    lines.push("No evidence rows matched.");
+  } else {
+    lines.push(
+      `Evidence rows (${page.rows.length} of ${page.totalCount} matching; this page)`,
+      padded(runHeader, runWidths),
+      ...runRows.map((row) => padded(row, runWidths)),
+    );
+  }
 
   if (page.nextCursor !== null) {
     lines.push("", `Next cursor: ${page.nextCursor}`);

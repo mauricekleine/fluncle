@@ -58,6 +58,10 @@ beforeEach(() => {
       });
     }
 
+    if (query.sql.includes("count(*) as total_count")) {
+      return Promise.resolve({ rows: [{ total_count: 1 }] });
+    }
+
     if (query.sql.includes("from run_events")) {
       return Promise.resolve({
         rows: [
@@ -197,10 +201,12 @@ describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
       available: true,
+      missingRoster: [],
       nextCursor: null,
       rollups: [
         {
           blindCount: 1,
+          expectedIntervalMs: 86_400_000,
           failedCount: 1,
           lastOccurredAt: "2026-07-30T19:00:00.000Z",
           liarCount: 1,
@@ -239,9 +245,12 @@ describe(`read_run_ledger — GET ${RUN_EVENT_PATH}`, () => {
       .map(([query]) => query as { args?: unknown[]; sql: string })
       .filter((query) => query.sql.includes("from run_events"));
 
-    expect(selectCalls).toHaveLength(2);
+    expect(selectCalls).toHaveLength(3);
     expect(selectCalls.every((query) => query.sql.includes("occurred_at >= ?"))).toBe(true);
-    expect(selectCalls.every((query) => query.sql.includes("ok = ?"))).toBe(true);
+    expect(selectCalls.filter((query) => query.sql.includes("ok = ?"))).toHaveLength(2);
+    expect(
+      selectCalls.find((query) => query.sql.includes("count(*) as run_count"))?.sql,
+    ).not.toContain("ok = ?");
     expect(selectCalls.every((query) => query.args?.includes("2026-07-30T18:00:00.000Z"))).toBe(
       true,
     );

@@ -6,8 +6,9 @@
 //     already goes through). Bash stays dumb; the WORKER owns the schema, so no
 //     per-sweep code change is required for v1.
 //   - `read_run_ledger` — GET /admin/telemetry/runs. Operator-only rows plus cheap
-//     per-unit aggregates over the requested unit/time/derived-ok window. It returns
-//     evidence, never a fixed "broken sweep" verdict.
+//     per-unit aggregates over the requested unit/time window. Stored evidence filters
+//     narrow rows, never those all-run rollups. It returns evidence, never a fixed
+//     "broken sweep" verdict.
 //
 // AGENT tier (`adminAuth`, NOT `operatorGuard`) — the `record_cost` / `record_health`
 // precedent: the box holds the agent token and this writes only an internal diagnostics
@@ -98,7 +99,7 @@ export const MAX_SUMMARY_RAW_CHARS = 4096;
  *     25 sweep scripts print one today, so a rejection would leave exactly those sweeps —
  *     the founding case among them — with no row, and a missing row reads as a dead sweep.
  *     The Worker records that claim in `self_asserted_ok` and overrules it, which turns
- *     `where self_asserted_ok = 1 and errors > 0` into the query that finds the liars.
+ *     `where self_asserted_ok = 1 and ok = 0` into the query that finds the liars.
  *   - `id` is derived from `${unit}:${started_at}`, which this envelope already pins, so
  *     the idempotency key is deterministic without the wrapper having to construct one.
  */
@@ -129,6 +130,40 @@ const RunLedgerTimestampSchema = z.iso
   .max(MAX_TIMESTAMP_CHARS)
   .describe("ISO-8601 bound on occurredAt (box time)");
 
+const RELATIVE_SINCE_PATTERN = /^[1-9][0-9]*(m|h|d|w)$/;
+const RELATIVE_SINCE_MAX_CHARS = 32;
+const RELATIVE_SINCE_MAX_MS = 3650 * 24 * 60 * 60 * 1000;
+const RELATIVE_SINCE_UNIT_MS = {
+  d: 24 * 60 * 60 * 1000,
+  h: 60 * 60 * 1000,
+  m: 60 * 1000,
+  w: 7 * 24 * 60 * 60 * 1000,
+} as const;
+
+function relativeSinceMs(value: string): number | null {
+  const match = RELATIVE_SINCE_PATTERN.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number(match[0].slice(0, -1));
+  const unit = match[1] as keyof typeof RELATIVE_SINCE_UNIT_MS;
+  const durationMs = amount * RELATIVE_SINCE_UNIT_MS[unit];
+
+  return Number.isSafeInteger(durationMs) && durationMs <= RELATIVE_SINCE_MAX_MS
+    ? durationMs
+    : null;
+}
+
+const RunLedgerRelativeSinceSchema = z
+  .string()
+  .max(RELATIVE_SINCE_MAX_CHARS)
+  .refine((value) => relativeSinceMs(value) !== null, {
+    message: "since must be an ISO-8601 instant or a positive m/h/d/w duration up to 3650d",
+  })
+  .describe("Relative lookback such as 90m, 24h, 7d, or 2w");
+
 /** One raw ledger row, projected losslessly apart from JSON/boolean decoding. */
 export const RunLedgerRowSchema = z.object({
   checked: z.number().int().nullable(),
@@ -153,9 +188,10 @@ export const RunLedgerRowSchema = z.object({
   vendorCalls: z.number().int().nullable(),
 });
 
-/** Cheap facts for one unit over the full filtered window, independent of row pagination. */
+/** Cheap facts for one unit over the full unit/time window, independent of evidence filters. */
 export const RunLedgerUnitRollupSchema = z.object({
   blindCount: z.number().int().nonnegative(),
+  expectedIntervalMs: z.number().int().nullable(),
   failedCount: z.number().int().nonnegative(),
   lastOccurredAt: z.string(),
   liarCount: z.number().int().nonnegative(),
@@ -163,37 +199,72 @@ export const RunLedgerUnitRollupSchema = z.object({
   unit: z.string(),
 });
 
+/** One expected ledger writer with no stored row in the requested time/unit window. */
+export const RunLedgerMissingRosterEntrySchema = z.object({
+  expectedIntervalMs: z.number().int().positive(),
+  unit: z.string(),
+});
+
 /**
  * The read's query input. `ok` is the DERIVED ledger column, not the sweep's claim.
- * `since`/`until` are normalized to canonical ISO strings in the reader before their
+ * `liar`, `blind`, and `missingField` select STORED evidence without changing rollups.
+ * `missing=true` selects the separate expected-roster absence view. An ISO `since` or a
+ * relative m/h/d/w lookback is normalized to a canonical ISO string in the reader before
  * lexical SQLite comparison, keeping `T` on both sides of the comparison.
  */
 export const ReadRunLedgerInputSchema = z
   .object({
+    blind: z.enum(["true", "false"]).optional(),
     cursor: z.string().min(1).max(MAX_RUN_LEDGER_CURSOR_CHARS).optional(),
+    liar: z.enum(["true", "false"]).optional(),
     limit: z.coerce.number().int().min(1).max(MAX_RUN_LEDGER_PAGE_SIZE).default(50),
+    missing: z.enum(["true", "false"]).optional(),
+    missingField: z
+      .enum(["checked", "errors", "expected_interval_ms", "produced", "queue_depth"])
+      .optional(),
     ok: z.enum(["true", "false"]).optional(),
-    since: RunLedgerTimestampSchema.optional(),
+    since: z.union([RunLedgerTimestampSchema, RunLedgerRelativeSinceSchema]).optional(),
     unit: z.string().min(1).max(MAX_UNIT_CHARS).optional(),
     until: RunLedgerTimestampSchema.optional(),
   })
-  .refine(
-    (input) =>
-      input.since === undefined ||
-      input.until === undefined ||
-      Date.parse(input.since) <= Date.parse(input.until),
-    {
-      message: "since must be before or equal to until",
-      path: ["until"],
-    },
-  );
+  .superRefine((input, context) => {
+    if (
+      input.since !== undefined &&
+      input.until !== undefined &&
+      relativeSinceMs(input.since) === null &&
+      Date.parse(input.since) > Date.parse(input.until)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "since must be before or equal to until",
+        path: ["until"],
+      });
+    }
+
+    if (
+      input.missing === "true" &&
+      (input.blind !== undefined ||
+        input.cursor !== undefined ||
+        input.liar !== undefined ||
+        input.missingField !== undefined ||
+        input.ok !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "missing=true cannot be combined with stored-row evidence filters or a cursor",
+        path: ["missing"],
+      });
+    }
+  });
 
 export type ReadRunLedgerInput = z.infer<typeof ReadRunLedgerInputSchema>;
+export type RunLedgerMissingRosterEntry = z.infer<typeof RunLedgerMissingRosterEntrySchema>;
 export type RunLedgerRow = z.infer<typeof RunLedgerRowSchema>;
 export type RunLedgerUnitRollup = z.infer<typeof RunLedgerUnitRollupSchema>;
 
 export const RunLedgerPageSchema = z.object({
   available: z.boolean(),
+  missingRoster: z.array(RunLedgerMissingRosterEntrySchema),
   nextCursor: z.string().nullable(),
   rollups: z.array(RunLedgerUnitRollupSchema),
   rows: z.array(RunLedgerRowSchema),
@@ -206,9 +277,10 @@ export type RunLedgerPage = z.infer<typeof RunLedgerPageSchema>;
  * `read_run_ledger` → `GET /admin/telemetry/runs` (operationId `readRunLedger`).
  *
  * OPERATOR tier: the rows contain internal host-unit names and raw sweep summaries.
- * This read returns the raw page plus per-unit counts over the whole filtered window.
- * The counts name only stored shapes (`ok = 0`, claim-vs-derived contradiction, and
- * three NULL work counters); deciding what those facts mean belongs to the reader.
+ * This read returns the raw page plus per-unit counts over the whole unit/time window.
+ * Evidence filters narrow the page and `totalCount`, while rollups keep the denominator
+ * stable. The counts name only stored shapes (`ok = 0`, claim-vs-derived contradiction,
+ * and three NULL work counters); deciding what those facts mean belongs to the reader.
  */
 export const readRunLedger = oc
   .route({
