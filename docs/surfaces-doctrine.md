@@ -208,6 +208,7 @@ Checked by their last-run freshness (not an HTTP hit), so they carry a `cronName
 | `cron.label-releases`       | `fluncle-label-releases`       | every 24h           | tap day-one fresh releases for the operator's enabled seed labels → uncertified catalogue rows with their real dates, closing the MusicBrainz lag under `/fresh` (`--no-agent`, Worker-side Spotify, zero LLM tokens)                            | hidden    |
 | `cron.rank`                 | `fluncle-rank`                 | every 30m           | score each stale catalogue track against every embedded finding → its nearest finding + capture priority (`--no-agent`)                                                                                                                          | hidden    |
 | `cron.anchor`               | `fluncle-anchor`               | hourly              | fill each un-anchored catalogue row's Spotify anchor via an Apify actor → `anchor_track` (Worker verifies; the official Spotify app is left for user-facing paths; box activation operator-gated)                                                | hidden    |
+| `cron.device-mirror`        | `fluncle-device-mirror`        | hourly              | mirror the anchored public-catalogue cut into the shared read-only device replica — diff-based, in-place upserts/deletes so the libSQL replication log survives (`--no-agent`; box activation operator-gated)                                    | hidden    |
 | `cron.frontier-refresh`     | `fluncle-frontier-refresh`     | every 15m           | re-mirror each crew member's public Fluncle's Frontier playlist from their current recommendations — a paced, resumable drain against the shared Spotify budget (`--no-agent`, default-deny kill switch)                                         | hidden    |
 | `cron.artist-sweep`         | `fluncle-artist-sweep`         | every 60m           | resolve each artist's social identity: MB url-rel walk + Firecrawl gap-fill (`--no-agent`, Worker-side)                                                                                                                                          | hidden    |
 | `cron.label-images`         | `fluncle-label-images`         | every 60m           | resolve each pending label's own logo (Discogs → Wikidata → cover floor) → its own R2 image (`--no-agent`, Worker-side)                                                                                                                          | hidden    |
@@ -360,6 +361,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `cron.label-releases`       |           |           |           | hidden    |
 | `cron.rank`                 |           |           |           | hidden    |
 | `cron.anchor`               |           |           |           | hidden    |
+| `cron.device-mirror`        |           |           |           | hidden    |
 | `cron.frontier-refresh`     |           |           |           | hidden    |
 | `cron.artist-sweep`         |           |           |           | hidden    |
 | `cron.label-images`         |           |           |           | hidden    |
