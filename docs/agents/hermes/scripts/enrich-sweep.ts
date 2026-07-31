@@ -696,7 +696,7 @@ async function main(): Promise<void> {
       // One finding's failure must not abort the sweep — log it and move on; it
       // stays in the queue for the next tick.
       summary.skipped += 1;
-      summary.errors += 1;
+      summary.failed += 1;
       log(
         `error on ${finding.trackId ?? finding.logId ?? "?"}: ${
           error instanceof Error ? error.message : String(error)
@@ -731,7 +731,7 @@ async function main(): Promise<void> {
           }
         } catch (error) {
           summary.skipped += 1;
-          summary.errors += 1;
+          summary.failed += 1;
           log(
             `error on catalogue ${item.trackId ?? "?"}: ${
               error instanceof Error ? error.message : String(error)
@@ -742,7 +742,7 @@ async function main(): Promise<void> {
     } catch (error) {
       // The catalogue arm is best-effort. A queue read that fails (an older Worker without the
       // op, a transient 5xx) must not fail the tick — the findings arm already did its work.
-      summary.errors += 1;
+      summary.failed += 1;
       log(`catalogue arm skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

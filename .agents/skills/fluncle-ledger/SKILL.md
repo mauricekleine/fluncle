@@ -50,7 +50,7 @@ fluncle admin telemetry read --since "$SINCE" --limit 1
 
 ### 2. The liars — a claim that contradicts the verdict
 
-`ok` is derived server-side (`exit_code === 0 && (errors ?? 0) === 0`) and a sweep's own `ok` never sets it; the claim is filed beside it as `selfAssertedOk`. The founding case: the nightly Sentry sweep printed `{"errors":2,"ok":true}` for eleven nights while fetching nothing, because a rejected query parameter left `ok` a hardcoded literal.
+`ok` is derived server-side (`exit_code === 0 && (errors ?? 0) === 0`) and a sweep's own `ok` never sets it; the claim is filed beside it as `selfAssertedOk`. `errors` means the run itself failed; `failed` means individual work items failed and the run continued. The founding case: the nightly Sentry sweep printed `{"errors":2,"ok":true}` for eleven nights while fetching nothing, because a rejected query parameter left `ok` a hardcoded literal.
 
 Any rollup with `LIAR` above zero, then pull the evidence:
 
@@ -60,7 +60,7 @@ fluncle admin telemetry read --since "$SINCE" --unit fluncle-<name> --ok false -
         | {occurredAt, exitCode, errors, summaryRaw}'
 ```
 
-A liar is always a finding. It means a sweep is telling the fleet it is fine while its own numbers say otherwise, and every consumer downstream of that claim is calibrated on a lie.
+A liar written under the current vocabulary is always a finding. It means a sweep is telling the fleet it is fine while its own run-level numbers say otherwise, and every consumer downstream of that claim is calibrated on a lie.
 
 ### 3. The failures
 
@@ -132,8 +132,12 @@ A single value across many runs is a constant, not a backlog. This has happened 
 
 Do not report any of these. Each one is a shape a naive reader escalates.
 
+Rows earlier than this vocabulary change's deployment use the old meaning, so capture's historical liars are an artefact rather than evidence that those runs lied.
+
 | Shape                                                        | Why it is normal                                                                                                                                  |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exitCode: 0`, `failed > 0`, `ok: true`                      | An ordinary partial batch: individual work items failed, but the run continued successfully.                                                      |
+| A historical `fluncle-capture` liar                          | Old-vocabulary artefact: item-level `failed` was folded into run-level `errors` before this change deployed.                                      |
 | A 24h cron quiet for 7h                                      | Cadence, not recency. Quote `expectedIntervalMs` before calling anything late.                                                                    |
 | `checked: 0, produced: 0, queueDepth: 0`                     | Empty worklist. `artist-credits` reads exactly this today and is healthy.                                                                         |
 | A non-empty `missingFields`                                  | The upgrade queue. Most of the fleet is here while sweeps are upgraded one at a time.                                                             |
@@ -183,6 +187,8 @@ Standing ruling: build the reader first, use it by hand until it is clear what i
 **Rollup (per unit, whole filtered window):** `unit`, `runCount`, `lastOccurredAt`, `failedCount` (derived `ok = false`), `liarCount` (claimed ok while derived ok is false), `blindCount` (`checked`, `produced` and `queueDepth` all null).
 
 **Row (20 columns, lossless under `--json`):** `unit`, `id`, `occurredAt` (box start time), `endedAt`, `createdAt` (Worker write time), `runDurationMs`, `exitCode`, `ok` (derived), `selfAssertedOk` (claimed, never obeyed), `checked`, `produced`, `queueDepth`, `errors`, `vendorCalls`, `expectedIntervalMs`, `gateState`, `missingFields`, `unrecognisedFields`, `summaryStatus`, `summaryRaw`.
+
+**Counter vocabulary:** `errors` says the run itself failed; domain counters such as `failed` remain readable in `summaryRaw` and say individual work items failed while the run continued.
 
 **`summaryStatus`** — `parsed` (a JSON object the Worker read), `absent` (the tick printed nothing: a crash before output), `malformed` (present but not JSON), `not_object` (JSON, but an array or a scalar).
 

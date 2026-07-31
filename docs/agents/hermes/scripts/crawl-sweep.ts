@@ -181,7 +181,6 @@ export function main(): void {
     summary.failed = pass.failed ?? 0;
     summary.checked = summary.expanded + summary.failed;
     summary.produced = summary.expanded;
-    summary.errors = summary.failed;
     summary.labelsDiscovered = pass.labelsDiscovered ?? [];
     summary.pending = pass.frontierPending ?? 0;
     summary.queueDepth = summary.pending;

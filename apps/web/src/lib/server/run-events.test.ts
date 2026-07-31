@@ -132,18 +132,18 @@ describe("normalizeRunSummary — a counter is a validated integer or a 400", ()
     expect(normalizeRunSummary("{}").missingFields).toContain("produced");
   });
 
-  it("counts the fleet's legacy `failed` number/array and nullable `error` shapes", () => {
+  it("keeps domain `failed` out of canonical errors while reading legacy run-level `error`", () => {
     expect(normalizeRunSummary('{"failed":[],"advanced":0}')).toMatchObject({
-      errors: 0,
-      missingFields: expect.not.arrayContaining(["errors"]),
+      errors: null,
+      missingFields: expect.arrayContaining(["errors"]),
       unrecognisedFields: ["advanced"],
     });
-    expect(normalizeRunSummary('{"failed":3}').errors).toBe(3);
+    expect(normalizeRunSummary('{"failed":3}').errors).toBeNull();
     expect(normalizeRunSummary('{"error":"boom","scanned":0}').errors).toBe(1);
     expect(normalizeRunSummary('{"error":null,"scanned":0}').errors).toBe(0);
   });
 
-  it("lets canonical `errors` win while still validating coexisting domain shapes", () => {
+  it("lets canonical `errors` win while still validating coexisting domain detail", () => {
     expect(normalizeRunSummary('{"errors":4,"failed":[],"error":"boom"}')).toMatchObject({
       errors: 4,
       unrecognisedFields: [],
@@ -223,14 +223,14 @@ describe("normalizeRunSummary — canonical pilot counters coexist with domain d
     ]);
   });
 
-  it("parses the crawl pilot line without rejecting canonical + legacy errors", () => {
+  it("parses the crawl pilot line without folding item failures into run errors", () => {
     const result = normalizeRunSummary(
-      '{"checked":8,"error":null,"errors":1,"expanded":7,"failed":1,"labelsDiscovered":["Hospital Records"],"ok":true,"pending":42,"produced":7,"queueDepth":42,"throttled":false,"tracksFound":63,"tracksSkipped":2,"tracksWritten":61}',
+      '{"checked":8,"error":null,"errors":0,"expanded":7,"failed":1,"labelsDiscovered":["Hospital Records"],"ok":true,"pending":42,"produced":7,"queueDepth":42,"throttled":false,"tracksFound":63,"tracksSkipped":2,"tracksWritten":61}',
     );
 
     expect(result).toMatchObject({
       checked: 8,
-      errors: 1,
+      errors: 0,
       produced: 7,
       queueDepth: 42,
     });
@@ -238,12 +238,12 @@ describe("normalizeRunSummary — canonical pilot counters coexist with domain d
 
   it("parses the enrich pilot line and leaves its unknown backlog absent", () => {
     const result = normalizeRunSummary(
-      '{"ok":true,"batch":4,"catalogueDone":1,"catalogueQueued":2,"checked":6,"done":3,"errors":1,"failed":0,"produced":4,"queued":50,"skipped":1}',
+      '{"ok":true,"batch":4,"catalogueDone":1,"catalogueQueued":2,"checked":6,"done":3,"errors":0,"failed":1,"produced":4,"queued":50,"skipped":1}',
     );
 
     expect(result).toMatchObject({
       checked: 6,
-      errors: 1,
+      errors: 0,
       produced: 4,
       queueDepth: null,
     });
@@ -253,12 +253,12 @@ describe("normalizeRunSummary — canonical pilot counters coexist with domain d
 
   it("parses the note pilot line and never launders queueRemaining into queue_depth", () => {
     const result = normalizeRunSummary(
-      '{"ok":true,"alreadyNoted":1,"checked":4,"echoSkipped":1,"errors":1,"failed":1,"gateSkipped":0,"noted":1,"produced":1,"queueRemaining":47}',
+      '{"ok":true,"alreadyNoted":1,"checked":4,"echoSkipped":1,"errors":0,"failed":1,"gateSkipped":0,"noted":1,"produced":1,"queueRemaining":47}',
     );
 
     expect(result).toMatchObject({
       checked: 4,
-      errors: 1,
+      errors: 0,
       produced: 1,
       queueDepth: null,
     });

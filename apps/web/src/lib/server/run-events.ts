@@ -30,10 +30,11 @@
 //      means "a count of work", and `ok` is derived from one of these numbers. A `null`,
 //      though, is the emitter SAYING it does not know (the sonar freshen prints
 //      `"checked":null` on a lock-skipped tick); that is stored as SQL NULL and is not a
-//      validation failure. Error reporting has two measured legacy shapes that normalize
-//      without losing their signal: `failed` is a number or an array (counted by length),
-//      while nullable `error` means zero for null and one for a message. Canonical
-//      `errors` wins when a migrating emitter sends both canonical and domain counters.
+//      validation failure. Run failure reporting has one measured legacy shape that
+//      normalizes without losing its signal: nullable `error` means zero for null and one
+//      for a message. Canonical `errors` wins when a migrating emitter sends both. The
+//      domain `failed` counter is still validated and preserved in `summary_raw`, but it
+//      counts individual work items and NEVER feeds the run verdict.
 //   3. MISSING FIELDS ARE RECORDED, NOT GUESSED. The mandatory counters a summary did
 //      not carry are listed in `missing_fields`, and THAT LIST IS THE UPGRADE QUEUE.
 //      A counter the Worker invented is a counter nobody can trust. "Did not carry" means
@@ -152,7 +153,7 @@ const COUNTER_FIELDS: { canonical: string; spellings: string[] }[] = [
 ];
 
 const CANONICAL_ERROR_SPELLINGS = ["errors"];
-const LEGACY_FAILED_SPELLINGS = ["failed"];
+const DOMAIN_FAILED_SPELLINGS = ["failed"];
 const LEGACY_ERROR_SPELLINGS = ["error"];
 const GATE_STATE_SPELLINGS = ["gateState", "gate_state"];
 const PAUSED_SPELLINGS = ["paused"];
@@ -170,7 +171,7 @@ const GATE_STATES = new Set<string>([
 const RECOGNISED_KEYS = new Set<string>([
   ...COUNTER_FIELDS.flatMap((field) => field.spellings),
   ...CANONICAL_ERROR_SPELLINGS,
-  ...LEGACY_FAILED_SPELLINGS,
+  ...DOMAIN_FAILED_SPELLINGS,
   ...LEGACY_ERROR_SPELLINGS,
   ...GATE_STATE_SPELLINGS,
   ...PAUSED_SPELLINGS,
@@ -283,31 +284,23 @@ function readField(
 }
 
 /**
- * Normalize the three error shapes already present in the fleet.
+ * Normalize the run-level error shapes already present in the fleet.
  *
- * `errors` is the canonical integer and wins whenever it is present. The two legacy
- * domain shapes are still validated even beside it: `failed` is either an integer count
- * or an array whose length is the count, while `error` is a nullable message (`null`
- * explicitly means zero, any string means one). Precedence is canonical `errors`, then
- * `failed`, then `error`; that lets the crawl line keep both of its legacy fields without
- * manufacturing a contradiction. Only total absence is MISSING — none of these explicit
- * zero shapes may collapse into "not reported".
+ * `errors` is the canonical integer and wins whenever it is present. The legacy `error`
+ * shape is a nullable run-failure message (`null` explicitly means zero, any string means
+ * one). The domain `failed` shape is still validated as either an integer count or an
+ * array, and remains preserved in `summary_raw`, but it counts individual work items and
+ * NEVER becomes canonical `errors`. Only absence of both run-level shapes is MISSING.
  */
 function readErrors(summary: Record<string, unknown>): SummaryField {
   const canonical = readField(summary, "errors", CANONICAL_ERROR_SPELLINGS);
-  const failed = readField(summary, "failed", LEGACY_FAILED_SPELLINGS);
+  const failed = readField(summary, "failed", DOMAIN_FAILED_SPELLINGS);
   const error = readField(summary, "error", LEGACY_ERROR_SPELLINGS);
 
-  let normalizedFailed: SummaryField = failed;
-
   if (failed.kind === "value") {
-    normalizedFailed = {
-      key: failed.key,
-      kind: "value",
-      value: Array.isArray(failed.value)
-        ? failed.value.length
-        : requireCount(failed.key, failed.value),
-    };
+    if (!Array.isArray(failed.value)) {
+      requireCount(failed.key, failed.value);
+    }
   }
 
   let normalizedError: SummaryField = error;
@@ -338,10 +331,6 @@ function readErrors(summary: Record<string, unknown>): SummaryField {
 
   if (normalizedCanonical.kind !== "absent") {
     return normalizedCanonical;
-  }
-
-  if (normalizedFailed.kind !== "absent") {
-    return normalizedFailed;
   }
 
   return normalizedError;

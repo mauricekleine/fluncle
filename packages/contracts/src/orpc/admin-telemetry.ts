@@ -73,7 +73,7 @@ export const MAX_SUMMARY_RAW_CHARS = 4096;
  *   - `queue_depth` is the real outstanding backlog remaining after the tick. It is
  *     NEVER a batch limit, page size, or fetched-page cap; omit it when the emitter
  *     cannot obtain a real outstanding count.
- *   - `errors` is an integer count of errors/failures reported by the tick.
+ *   - `errors` means the run itself failed; `failed` means individual work items failed and the run continued.
  *
  * NULL IS NOT ZERO. `0` is a measured answer ("looked and found none", "no failures");
  * `null` explicitly says the emitter cannot know, and absence says it did not report the

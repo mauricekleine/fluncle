@@ -217,6 +217,59 @@ describe("insertRunEvent — the derived verdict reaches the column", () => {
   });
 });
 
+describe("run failure vocabulary — acceptance", () => {
+  it("keeps a capture-shaped partial batch ok and out of the liar count", async () => {
+    const summaryRaw = '{"batch":12,"done":8,"failed":4,"ok":true}';
+    const recorded = await insertRunEvent(
+      envelope({ exit_code: 0, summary_raw: summaryRaw, unit: "fluncle-capture" }),
+    );
+    const page = await readRunLedger({ limit: 100, unit: "fluncle-capture" });
+
+    expect(recorded.runOk).toBe(true);
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]).toMatchObject({
+      errors: null,
+      ok: true,
+      selfAssertedOk: true,
+      summaryRaw,
+    });
+    expect(page.rollups).toMatchObject([{ failedCount: 0, liarCount: 0 }]);
+  });
+
+  it("keeps the founding Sentry shape failed and in the liar count", async () => {
+    const summaryRaw = '{"errors":2,"ok":true}';
+    const recorded = await insertRunEvent(
+      envelope({ exit_code: 0, summary_raw: summaryRaw, unit: "fluncle-sentry-triage" }),
+    );
+    const page = await readRunLedger({ limit: 100, unit: "fluncle-sentry-triage" });
+
+    expect(recorded.runOk).toBe(false);
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]).toMatchObject({
+      errors: 2,
+      ok: false,
+      selfAssertedOk: true,
+      summaryRaw,
+    });
+    expect(page.rollups).toMatchObject([{ failedCount: 1, liarCount: 1 }]);
+  });
+
+  it("preserves the domain `failed` counter in the readable raw summary", async () => {
+    await insertRunEvent(
+      envelope({
+        summary_raw: '{"checked":12,"failed":4,"ok":true,"produced":8}',
+        unit: "fluncle-capture",
+      }),
+    );
+    const page = await readRunLedger({ limit: 100, unit: "fluncle-capture" });
+    const summaryRaw = page.rows[0]?.summaryRaw;
+
+    expect(summaryRaw).not.toBeNull();
+    expect(JSON.parse(summaryRaw ?? "{}")).toMatchObject({ failed: 4 });
+    expect(page.rows[0]?.unrecognisedFields).toEqual([]);
+  });
+});
+
 describe("insertRunEvent — a gated run stores NULL, never 0", () => {
   it("writes NULL work counters so the alarm conjunction cannot fire on a paused sweep", async () => {
     await insertRunEvent(

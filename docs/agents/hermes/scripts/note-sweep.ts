@@ -1195,13 +1195,11 @@ async function main(): Promise<void> {
         summary.exhausted += 1;
       } else {
         summary.failed += 1;
-        summary.errors += 1;
       }
     } catch (error) {
-      summary.errors += 1;
-
       if (error instanceof ClaudeAuthError) {
         // Auth failure: STOP the batch, leave the queue intact, alert loudly.
+        summary.errors = 1;
         log("claude auth failed — aborting the batch, the queue is untouched");
         pingClaudeAuthFailure(error.message);
         console.log(
