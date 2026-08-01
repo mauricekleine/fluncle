@@ -152,12 +152,10 @@ SF_STARTED_AT=""
 # the number that contradicted it — so a self-reported `ok` is exactly the thing this ledger
 # must not accept.
 #
-# BEST-EFFORT, ALWAYS: no token or an empty base URL ⇒ silently skipped; every curl failure is
-# swallowed; the caller's exit code is never touched; the whole thing is hard-timeout bounded.
-# It is deliberately SILENT rather than logging a failure — a chatty retry line would land in
-# the marker's stderr tail and score against the strain detector. A dropped POST leaves a
-# missing row, a missing row reads as a missed run, and the roster alarms on that. Absence
-# being loud is why delivery need not be guaranteed.
+# BEST-EFFORT, ALWAYS: the caller's exit code is never touched and the whole thing is
+# hard-timeout bounded. Delivery failure is returned, not swallowed here: the caller decides
+# how to surface it without turning a telemetry outage into a failed sweep. The reason is a
+# public-safe enum-like string, never a URL, response body, or token.
 RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
 # 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
 # measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
@@ -165,6 +163,7 @@ RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
 # single writer. 5s absorbs a cold isolate plus a slow tick and still sits two orders inside
 # the shortest unit TimeoutStartSec on either box.
 RUN_EVENT_TIMEOUT_SECS="${RUN_EVENT_TIMEOUT_SECS:-5}"
+RUN_EVENT_FAILURE_REASON=""
 
 # Escape one line for a JSON string literal, in pure bash parameter expansion — NOT
 # `sed -e 's/\t/\\t/'`, whose `\t` is a GNU extension that silently matches a literal `t` on
@@ -183,6 +182,7 @@ _run_event_json_string() {
 record_run_event() {
   local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
   local base token body
+  RUN_EVENT_FAILURE_REASON=""
   # `-` NOT `:-`, deliberately. With the colon an EMPTY base fell back to the production
   # URL, which made the guard two lines down unreachable and fired a real POST at
   # www.fluncle.com from every `bun run test:scripts` — in CI and in the deploy gate. An
@@ -190,9 +190,18 @@ record_run_event() {
   base="${FLUNCLE_API_BASE_URL-https://www.fluncle.com}"
   base="${base%/}"
   token="${FLUNCLE_API_TOKEN:-}"
-  [ -n "$token" ] || return 0
-  [ -n "$base" ] || return 0
-  command -v curl >/dev/null 2>&1 || return 0
+  if [ -z "$token" ]; then
+    RUN_EVENT_FAILURE_REASON="missing-token"
+    return 1
+  fi
+  if [ -z "$base" ]; then
+    RUN_EVENT_FAILURE_REASON="missing-base-url"
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    RUN_EVENT_FAILURE_REASON="curl-unavailable"
+    return 1
+  fi
   case "$exit_code" in '' | *[!0-9]*) exit_code=0 ;; esac
   body="$(printf '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}' \
     "$(_run_event_json_string "$unit")" \
@@ -200,10 +209,13 @@ record_run_event() {
     "$(_run_event_json_string "$ended_at")" \
     "$exit_code" \
     "$(_run_event_json_string "$summary_raw")")"
-  curl -s -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
+  if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
     -X POST -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${token}" \
-    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1 || true
+    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
+    RUN_EVENT_FAILURE_REASON="post-failed"
+    return 1
+  fi
   return 0
 }
 

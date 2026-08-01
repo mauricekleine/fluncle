@@ -22,6 +22,7 @@ BOOTSTRAP="${SECRETS_SYNC_BOOTSTRAP:-/etc/hermes-bootstrap.env}"
 TPL_DIR="${SECRETS_SYNC_TPL_DIR:-/etc/hermes}"
 GATEWAY_OUT="${SECRETS_SYNC_GATEWAY_OUT:-/etc/hermes.env}"
 SWEEP_OUT="${SECRETS_SYNC_SWEEP_OUT:-/home/admin/.hermes/home/.fluncle-secrets.env}" # = /opt/data/home/.fluncle-secrets.env in-container
+CONTAINER="${HERMES_CONTAINER:-hermes}"
 
 # What this run reports as. `RUN_EVENT_INTERVAL_MS` MIRRORS this unit's own timer
 # (`OnUnitActiveSec=15min` in fluncle-secrets-sync.timer); run-events.test.ts parses that file
@@ -37,6 +38,15 @@ PRODUCED=0
 ERRORS=0
 SUMMARY_EMITTED=0
 STARTED_AT=""
+
+# Read one KEY out of the container's configured env. FLUNCLE_API_TOKEN lives there — it is
+# injected when the container is created and is deliberately absent from the sweep-secrets
+# file this script materializes. `docker inspect` needs no credential of its own; no container
+# (including first boot before it exists) means an empty result that the receipt path reports.
+container_env() {
+  docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n "s/^$1=//p" | head -1 || true
+}
 
 # >>> BEGIN MIRRORED BLOCK: record_run_event — keep BYTE-IDENTICAL across all four copies >>>
 # The run-ledger emitter. FOUR scripts carry this block verbatim, because they run on two
@@ -65,12 +75,10 @@ STARTED_AT=""
 # the number that contradicted it — so a self-reported `ok` is exactly the thing this ledger
 # must not accept.
 #
-# BEST-EFFORT, ALWAYS: no token or an empty base URL ⇒ silently skipped; every curl failure is
-# swallowed; the caller's exit code is never touched; the whole thing is hard-timeout bounded.
-# It is deliberately SILENT rather than logging a failure — a chatty retry line would land in
-# the marker's stderr tail and score against the strain detector. A dropped POST leaves a
-# missing row, a missing row reads as a missed run, and the roster alarms on that. Absence
-# being loud is why delivery need not be guaranteed.
+# BEST-EFFORT, ALWAYS: the caller's exit code is never touched and the whole thing is
+# hard-timeout bounded. Delivery failure is returned, not swallowed here: the caller decides
+# how to surface it without turning a telemetry outage into a failed sweep. The reason is a
+# public-safe enum-like string, never a URL, response body, or token.
 RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
 # 5s, NOT cost-emit.ts's 15s. That budget was sized for a contended `insert into settings`
 # measured at ~8.9s p95 on the PRIMARY database; this is one small insert into the separate
@@ -78,6 +86,7 @@ RUN_EVENT_PATH='/api/v1/admin/telemetry/runs'
 # single writer. 5s absorbs a cold isolate plus a slow tick and still sits two orders inside
 # the shortest unit TimeoutStartSec on either box.
 RUN_EVENT_TIMEOUT_SECS="${RUN_EVENT_TIMEOUT_SECS:-5}"
+RUN_EVENT_FAILURE_REASON=""
 
 # Escape one line for a JSON string literal, in pure bash parameter expansion — NOT
 # `sed -e 's/\t/\\t/'`, whose `\t` is a GNU extension that silently matches a literal `t` on
@@ -96,6 +105,7 @@ _run_event_json_string() {
 record_run_event() {
   local unit="$1" started_at="$2" ended_at="$3" exit_code="$4" summary_raw="$5"
   local base token body
+  RUN_EVENT_FAILURE_REASON=""
   # `-` NOT `:-`, deliberately. With the colon an EMPTY base fell back to the production
   # URL, which made the guard two lines down unreachable and fired a real POST at
   # www.fluncle.com from every `bun run test:scripts` — in CI and in the deploy gate. An
@@ -103,9 +113,18 @@ record_run_event() {
   base="${FLUNCLE_API_BASE_URL-https://www.fluncle.com}"
   base="${base%/}"
   token="${FLUNCLE_API_TOKEN:-}"
-  [ -n "$token" ] || return 0
-  [ -n "$base" ] || return 0
-  command -v curl >/dev/null 2>&1 || return 0
+  if [ -z "$token" ]; then
+    RUN_EVENT_FAILURE_REASON="missing-token"
+    return 1
+  fi
+  if [ -z "$base" ]; then
+    RUN_EVENT_FAILURE_REASON="missing-base-url"
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    RUN_EVENT_FAILURE_REASON="curl-unavailable"
+    return 1
+  fi
   case "$exit_code" in '' | *[!0-9]*) exit_code=0 ;; esac
   body="$(printf '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}' \
     "$(_run_event_json_string "$unit")" \
@@ -113,10 +132,13 @@ record_run_event() {
     "$(_run_event_json_string "$ended_at")" \
     "$exit_code" \
     "$(_run_event_json_string "$summary_raw")")"
-  curl -s -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
+  if ! curl -fsS -o /dev/null --max-time "$RUN_EVENT_TIMEOUT_SECS" \
     -X POST -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${token}" \
-    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1 || true
+    --data-binary "$body" "${base}${RUN_EVENT_PATH}" >/dev/null 2>&1; then
+    RUN_EVENT_FAILURE_REASON="post-failed"
+    return 1
+  fi
   return 0
 }
 
@@ -128,18 +150,6 @@ run_event_now() {
 }
 # <<< END MIRRORED BLOCK: record_run_event <<<
 
-# The agent token this script POSTs with, read out of the sweep-secrets file it maintains —
-# so it introduces NO new credential and nothing from `op` beyond what it already handles.
-# Read ONCE, at emit time, which covers both cases without a second read: the file is only
-# ever replaced by an atomic `install`, so a run that dies at `op inject` still finds LAST
-# sync's token on disk and can report its own failure, and a run that got as far as installing
-# finds the freshly-rotated one. Never echoed, never logged, never passed on a command line.
-read_secret_token() {
-  [ -r "$SWEEP_OUT" ] || return 0
-  sed -n 's/^[[:space:]]*FLUNCLE_API_TOKEN=//p' "$SWEEP_OUT" 2>/dev/null | tail -1 \
-    | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" || true
-}
-
 # Print the run's summary line and POST its envelope, exactly once, whatever exit path got
 # here — including the `set -e` aborts, which is where the interesting failures are. The
 # summary line uses the ledger's canonical counter names; the POST envelope has its own
@@ -147,6 +157,8 @@ read_secret_token() {
 #
 # THE LINE CARRIES NO `ok`, deliberately: the Worker derives the verdict from the exit code and
 # the error count, and rejects a summary that states one. The two facts are what this prints.
+# A missing token or failed POST does not change either fact or the credential-refresh exit:
+# it logs a public-safe reason and appends `"runLedgerReceipt":false` to the final line instead.
 emit_run_summary() {
   local rc="${1:-0}" queue=0 ended summary
   if [ "$SUMMARY_EMITTED" = "1" ]; then return 0; fi
@@ -157,11 +169,15 @@ emit_run_summary() {
   ended="$(run_event_now)"
   summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queue_depth":%d,"gateState":null,"expectedIntervalMs":%d}' \
     "$CHECKED" "$PRODUCED" "$ERRORS" "$queue" "$RUN_EVENT_INTERVAL_MS")"
-  printf '%s\n' "$summary"
   if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
-    FLUNCLE_API_TOKEN="$(read_secret_token)"
+    FLUNCLE_API_TOKEN="$(container_env FLUNCLE_API_TOKEN)"
   fi
-  record_run_event "$RUN_EVENT_UNIT" "$STARTED_AT" "$ended" "$rc" "$summary" || true
+  if ! record_run_event "$RUN_EVENT_UNIT" "$STARTED_AT" "$ended" "$rc" "$summary"; then
+    printf 'fluncle-secrets-sync: run-ledger receipt did not land (%s)\n' \
+      "${RUN_EVENT_FAILURE_REASON:-unknown}" >&2
+    summary="${summary%?},\"runLedgerReceipt\":false}"
+  fi
+  printf '%s\n' "$summary"
   return 0
 }
 

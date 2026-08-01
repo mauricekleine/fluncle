@@ -26,7 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { runLedgerWriters } from "@fluncle/registry";
 
@@ -98,6 +98,10 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     expect(canonical).toContain('-H "Authorization: Bearer ${token}"');
     // Bounded, always — an unbounded POST would hold a sweep open to its unit's timeout.
     expect(canonical).toContain('--max-time "$RUN_EVENT_TIMEOUT_SECS"');
+    // HTTP and transport failures both reach the caller; only the caller may decide that a
+    // best-effort receipt failure leaves its primary job successful.
+    expect(canonical).toContain('RUN_EVENT_FAILURE_REASON="post-failed"');
+    expect(canonical).toContain("curl -fsS");
 
     // And no `ok` in the CODE at all: the Worker derives it, so there is nowhere for a
     // self-reported one to creep back in. (The prose above the code quotes the bug it exists
@@ -524,17 +528,14 @@ function writeStub(dir: string, name: string, body: string): void {
  * THE LOOPBACK RAIL — `curl` is a PATH stub, exactly like `systemctl`, `docker` and `flock`.
  *
  * The header of this file says nothing here touches the network. Until this existed that was a
- * CLAIM, not a mechanism, and it was false: the secrets-sync fixtures below omit
- * `FLUNCLE_API_BASE_URL`, an unset base is documented to fall back to the emitter's box default
- * — production — and the run reads its own agent token off the secrets file it just wrote, so
- * every no-ledger secrets-sync run fired a real POST at www.fluncle.com. It cost the suite a
- * timeout, because a POST that cannot connect burns its full 5s `--max-time` and the GSC test
- * makes two of them.
+ * CLAIM, not a mechanism, and it was false: an unset `FLUNCLE_API_BASE_URL` is documented to
+ * fall back to the emitter's box default — production — and a script can resolve its own token
+ * independently of the test runner's environment. That once sent no-ledger fixtures off-box.
  *
  * So the rail: a loopback URL passes through to the real binary, anything else is REFUSED and
- * recorded, and `runScript` throws on a recorded refusal. Refusing is not enough on its own —
- * `record_run_event` swallows every curl failure with `|| true` by design — so the recording is
- * what turns a leak into a named test failure instead of a silent one.
+ * recorded, and `runScript` throws on a recorded refusal. Refusing is not enough on its own:
+ * three callers still deliberately discard the emitter's best-effort return, so the recording
+ * turns a leak into a named test failure instead of a silent one.
  */
 function loopbackCurlRail(): { dir: string; refusals: string } {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-loopback-rail-"));
@@ -863,38 +864,30 @@ describe("timer-watchdog reports a run", () => {
 // ---------------------------------------------------------------------------
 
 type SecretsFixture = {
+  /** Agent token exposed by the container configuration this host unit inspects. */
+  containerToken?: string;
   /** Fail the `op inject` of the sweep secrets (the real-world op outage). */
   injectFails?: boolean;
   /** Configure the optional GSC key, and whether `op read` for it succeeds. */
   gsc?: "ok" | "fails";
-  /** Seed a PREVIOUS sync's secrets file, so a failing run still has a token to report with. */
-  seedToken?: string;
-  /** The token the fresh `op inject` writes. */
-  token?: string;
 };
 
 async function runSecretsSync(
   fixture: SecretsFixture,
   base?: string,
-): Promise<{ code: number; root: string; stdout: string; summary: Summary }> {
+): Promise<{ code: number; root: string; stderr: string; stdout: string; summary: Summary }> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-sync-"));
   const bin = join(root, "bin");
   const tpl = join(root, "tpl");
   const sweepOut = join(root, "state/home/.fluncle-secrets.env");
-  const token = fixture.token ?? "fresh-agent-token";
 
   mkdirSync(bin, { recursive: true });
   mkdirSync(tpl, { recursive: true });
   writeFileSync(join(tpl, "hermes.env.tpl"), "OPENROUTER_API_KEY={{op}}\n", "utf8");
   writeFileSync(join(tpl, "fluncle-secrets.env.tpl"), "CLAUDE_CODE_OAUTH_TOKEN={{op}}\n", "utf8");
 
-  if (fixture.seedToken !== undefined) {
-    mkdirSync(dirname(sweepOut), { recursive: true });
-    writeFileSync(sweepOut, `FLUNCLE_API_TOKEN="${fixture.seedToken}"\n`, "utf8");
-  }
-
-  // An `op` that materializes exactly what the real one would: the gateway env, the sweep env
-  // (carrying the agent token this script later POSTs with), and the GSC service-account json.
+  // An `op` that materializes exactly what the real one does: the gateway env, the sweep env
+  // (which deliberately does NOT carry FLUNCLE_API_TOKEN), and the GSC service-account json.
   writeStub(
     bin,
     "op",
@@ -912,11 +905,22 @@ async function runSecretsSync(
       'case "$in" in',
       "  *fluncle-secrets.env.tpl)",
       `    [ "\${OP_INJECT_SWEEP:-ok}" = "ok" ] || exit 1`,
-      `    printf 'CLAUDE_CODE_OAUTH_TOKEN=stub\\nFLUNCLE_API_TOKEN="%s"\\n' "\${OP_SWEEP_TOKEN}" >"$out" ;;`,
+      `    printf 'CLAUDE_CODE_OAUTH_TOKEN=stub\\n' >"$out" ;;`,
       `  *) printf 'OPENROUTER_API_KEY=stub\\n' >"$out" ;;`,
       "esac",
     ].join("\n"),
   );
+
+  // The host unit's credential-free source: `docker inspect` of the container configuration.
+  // The stub ignores inspect's formatting arguments and emits the same KEY=value lines.
+  const containerEnv = join(root, "container-env");
+
+  writeFileSync(
+    containerEnv,
+    fixture.containerToken === undefined ? "" : `FLUNCLE_API_TOKEN=${fixture.containerToken}\n`,
+    "utf8",
+  );
+  writeStub(bin, "docker", `cat ${JSON.stringify(containerEnv)}`);
 
   const bootstrap = join(root, "bootstrap.env");
 
@@ -934,18 +938,13 @@ async function runSecretsSync(
   );
 
   const run = await runScript(SECRETS_SYNC, {
-    // EXPLICITLY EMPTY, never absent, when there is no ledger fixture. This unit is the one
-    // whose token it materializes ITSELF — `read_secret_token` off the secrets file it just
-    // wrote — so unlike the watchdog and the sonar freshen it cannot be kept off the wire by
-    // withholding a token. An ABSENT base is documented to fall back to the box's production
-    // default; an empty one means THERE IS NO LEDGER HERE and reaches the emitter's own guard,
-    // which is the line that says so. Getting this wrong sent four live POSTs at
-    // www.fluncle.com per suite run and timed the GSC test out on a network-restricted runner.
+    // EXPLICITLY EMPTY, never absent, when there is no ledger fixture. An ABSENT base is
+    // documented to fall back to the box's production default; an empty one means THERE IS NO
+    // LEDGER HERE and reaches the emitter's own guard, which is the line that says so.
     FLUNCLE_API_BASE_URL: base ?? "",
     HOME: root,
     OP_GSC: fixture.gsc === "fails" ? "fails" : "ok",
     OP_INJECT_SWEEP: fixture.injectFails ? "fails" : "ok",
-    OP_SWEEP_TOKEN: token,
     PATH: `${bin}:/usr/bin:/bin`,
     SECRETS_SYNC_BOOTSTRAP: bootstrap,
     SECRETS_SYNC_GATEWAY_OUT: join(root, "hermes.env"),
@@ -954,7 +953,13 @@ async function runSecretsSync(
     SECRETS_SYNC_TPL_DIR: tpl,
   });
 
-  return { code: run.code, root, stdout: run.stdout, summary: lastJsonLine(run.stdout) };
+  return {
+    code: run.code,
+    root,
+    stderr: run.stderr,
+    stdout: run.stdout,
+    summary: lastJsonLine(run.stdout),
+  };
 }
 
 describe("secrets-sync reports a run", () => {
@@ -969,6 +974,7 @@ describe("secrets-sync reports a run", () => {
       gateState: null,
       produced: 2,
       queue_depth: 0,
+      runLedgerReceipt: false,
     });
     expect(derivedOk(code, summary.errors)).toBe(true);
     // The real work still happened — the summary is a report, not a replacement.
@@ -978,14 +984,15 @@ describe("secrets-sync reports a run", () => {
     );
   });
 
-  test("posts with the token from the file it just wrote", async () => {
+  test("posts with the token resolved from the container configuration", async () => {
     const { calls } = await withLedger(async (base, calls) => {
-      await runSecretsSync({ token: "rotated-agent-token" }, base);
+      await runSecretsSync({ containerToken: "container-agent-token" }, base);
 
       return { calls };
     });
 
-    expect(runEvents(calls)[0]?.auth).toBe("Bearer rotated-agent-token");
+    expect(runEvents(calls)).toHaveLength(1);
+    expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
 
     const { envelope, summary } = received(calls);
 
@@ -994,12 +1001,12 @@ describe("secrets-sync reports a run", () => {
     expect("ok" in summary).toBe(false);
   });
 
-  // The whole reason the token is read BEFORE the rewrite: an op outage is exactly when this
-  // unit most needs to be able to say so, and its fresh secrets file does not exist yet.
-  test("a failed op inject still reports — with LAST sync's token", async () => {
+  // The container source is independent of the files this script rewrites, so an op outage is
+  // still reportable even though no fresh sweep-secrets file exists.
+  test("a failed op inject still reports with the container token", async () => {
     const { calls, code } = await withLedger(async (base, calls) => {
       const run = await runSecretsSync(
-        { injectFails: true, seedToken: "previous-agent-token" },
+        { containerToken: "container-agent-token", injectFails: true },
         base,
       );
 
@@ -1007,7 +1014,7 @@ describe("secrets-sync reports a run", () => {
     });
 
     expect(code).not.toBe(0);
-    expect(runEvents(calls)[0]?.auth).toBe("Bearer previous-agent-token");
+    expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
 
     const { envelope, summary } = received(calls);
 
@@ -1018,25 +1025,58 @@ describe("secrets-sync reports a run", () => {
     expect(derivedOk(envelope.exit_code, summary.errors)).toBe(false);
   });
 
-  test("a missing bootstrap env reports the failure rather than dying quiet", async () => {
-    const { code, summary } = await runSecretsSync({ seedToken: "previous-agent-token" }).then(
-      async () => {
-        const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
-        const run = await runScript(SECRETS_SYNC, {
-          FLUNCLE_API_BASE_URL: "",
-          HOME: root,
-          PATH: "/usr/bin:/bin",
-          SECRETS_SYNC_BOOTSTRAP: join(root, "does-not-exist.env"),
-          SECRETS_SYNC_SWEEP_OUT: join(root, "state/home/.fluncle-secrets.env"),
-        });
+  test("a missing container token is visible but does not fail the credential refresh", async () => {
+    const { calls, code, root, stderr, summary } = await withLedger(async (base, calls) => {
+      const run = await runSecretsSync({}, base);
 
-        return { code: run.code, summary: lastJsonLine(run.stdout) };
+      return { calls, ...run };
+    });
+
+    expect(runEvents(calls)).toHaveLength(0);
+    expect(code).toBe(0);
+    expect(stderr).toContain("run-ledger receipt did not land (missing-token)");
+    expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
+    expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+    expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    );
+  });
+
+  test("a failed POST is visible but does not fail the credential refresh", async () => {
+    const { calls, code, landed, root, stderr, summary } = await withLedger(
+      async (base, calls, landed) => {
+        const run = await runSecretsSync({ containerToken: "container-agent-token" }, base);
+
+        return { calls, landed, ...run };
       },
+      { responseStatus: 502 },
     );
 
-    expect(code).toBe(1);
+    expect(runEvents(calls)).toHaveLength(1);
+    expect(runEvents(landed)).toHaveLength(0);
+    expect(code).toBe(0);
+    expect(stderr).toContain("run-ledger receipt did not land (post-failed)");
+    expect(summary).toMatchObject({ errors: 0, produced: 2, runLedgerReceipt: false });
+    expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("OPENROUTER_API_KEY");
+    expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    );
+  });
+
+  test("a missing bootstrap env reports the failure rather than dying quiet", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
+    const run = await runScript(SECRETS_SYNC, {
+      FLUNCLE_API_BASE_URL: "",
+      HOME: root,
+      PATH: "/usr/bin:/bin",
+      SECRETS_SYNC_BOOTSTRAP: join(root, "does-not-exist.env"),
+      SECRETS_SYNC_SWEEP_OUT: join(root, "state/home/.fluncle-secrets.env"),
+    });
+    const summary = lastJsonLine(run.stdout);
+
+    expect(run.code).toBe(1);
     expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0 });
-    expect(derivedOk(code, summary.errors)).toBe(false);
+    expect(derivedOk(run.code, summary.errors)).toBe(false);
   });
 
   test("the optional GSC key counts as a target — success and failure both land", async () => {
