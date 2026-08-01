@@ -817,11 +817,15 @@ describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403
 //      operator whether a change to the challenge rate worked.
 //   2. The wording each line carries is what `countDistressLines` scores. A re-rolled
 //      challenge is recoverable friction on a healthy tick (~12% of runs) and must score
-//      ZERO — at that rate a scoring line means a `degraded` that can never clear. A
-//      challenge with the re-roll already spent is real distress and must score.
+//      ZERO — at that rate a scoring line means a `degraded` that can never clear. A challenge
+//      with the re-roll already spent is item-failure evidence and scores only at a high rate
+//      against the tick's real `checked` denominator.
 
 /** Run something that logs, and score its REAL stderr with the REAL /status detector. */
-function withCapturedStderr(run: () => void): { lines: string[]; strain: number } {
+function withCapturedStderr(
+  run: () => void,
+  checked: null | number = null,
+): { lines: string[]; strain: number } {
   const lines: string[] = [];
   const original = console.error;
 
@@ -835,7 +839,7 @@ function withCapturedStderr(run: () => void): { lines: string[]; strain: number 
     console.error = original;
   }
 
-  return { lines, strain: countDistressLines(lines.join("\n")) };
+  return { lines, strain: countDistressLines(lines.join("\n"), checked) };
 }
 
 describe("noteBotChallenge — the count", () => {
@@ -902,10 +906,10 @@ describe("what the sweep's challenge logs say to the /status strain detector", (
     expect(strain).toBe(0);
   });
 
-  test("a challenge with the re-roll SPENT does score — nothing is left to swap onto", () => {
+  test("a challenge with the re-roll SPENT scores at a 1/1 item-failure rate", () => {
     const { strain } = withCapturedStderr(() => {
       noteBotChallenge(createBotChallengeMeter(), "download", false);
-    });
+    }, 1);
 
     expect(strain).toBeGreaterThan(0);
   });

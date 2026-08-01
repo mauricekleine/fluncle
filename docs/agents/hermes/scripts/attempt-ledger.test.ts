@@ -118,9 +118,10 @@ describe("the attempt ledger (the count that survives a tick)", () => {
         writeAttemptLedger(attemptLedgerPath(blocker), new Map(), (message) => lines.push(message)),
       ).not.toThrow();
       expect(lines.join("\n")).toContain("could not persist the attempt ledger");
-      // …and it says so in the strain detector's vocabulary, because a budget that silently stops
-      // persisting is a budget that silently stops bounding anything.
-      expect(countDistressLines(lines.join("\n"))).toBeGreaterThan(0);
+      // …and it stays on the strain detector's item-rate path, because a budget that silently
+      // stops persisting is a budget that silently stops bounding anything. This helper attempted
+      // one item, so its real `checked` denominator is one.
+      expect(countDistressLines(lines.join("\n"), 1)).toBeGreaterThan(0);
     } finally {
       rmSync(dir, { force: true, recursive: true });
     }
