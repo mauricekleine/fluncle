@@ -1013,12 +1013,10 @@ function probeCrons(claimed: Map<string, string>): Check[] {
 // touching the sweep's own verdict.
 //
 // The evidence is two explicit, reviewable lists and nothing else:
-//   • STRAIN_PHRASES — substrings that appear in a sweep's stderr when an item did not get
-//     done. Empirically tuned against all 191 `log()` string literals in this directory, not
-//     guessed: `skipping` alone was tested and REJECTED (a note sweep logs "already on file —
-//     skipping the authoring spend" on a healthy no-op), which is why the entity-bio signature
-//     is the far tighter "stays queued" — the item is still in the queue, by the sweep's own
-//     words. There is deliberately no /error/i catch-all.
+//   • STRAIN_PHRASES — classified stderr substrings. A run-level line scores directly. An
+//     item-level line supplies a `failed`-shaped numerator and only scores as a rate against the
+//     marker's `checked` denominator. Empirically tuned against the sweeps' actual `log()` lines,
+//     not guessed: there is deliberately no /error/i catch-all.
 //   • STRAIN_COUNTER_KEYS + the nullable `error` field — run-level failures and stuck-loop
 //     counters the sweeps ALREADY put in their JSON summaries (`errors`, `gateSkipped`, `error`).
 //   • STRAIN_RATE_COUNTERS — item-level `failed` is ordinary batch fallout unless its rate against
@@ -1061,36 +1059,39 @@ export function splitMarker(body: string): { stderr: string; stdout: string } {
 }
 
 /**
- * THE VOCABULARY — the whole detector's false-positive surface, kept short and readable on
- * purpose. A stderr line counts as one point of strain if it contains any of these
- * (case-insensitively). Every entry says "an item did not get done"; none of them appears in
- * the high-volume healthy chatter (`embedded + written`, `catalogue done (bpm …)`, `authoring
- * with Worker-gathered Firecrawl facts`, `baked paths (derived from …)`), which is the test
- * that matters — a detector that fires on the 471-a-day success line is worse than none.
+ * THE VOCABULARY — the whole stderr detector's false-positive surface, kept classified at the
+ * source so prose and counters cannot disagree about `errors` (the RUN failed) versus `failed`
+ * (ITEMS failed and the run continued). A line matching both levels is run-level: the explicit
+ * `fatal:` / batch-abort wrapper is the stronger statement.
  */
-export const STRAIN_PHRASES: readonly string[] = [
-  "aborting the batch",
-  "bot-challenged",
-  "could not",
-  // The per-row catch shared by ~10 sweeps ("error on <id>: …", "unexpected error on <id>: …")
-  // — the single most common way a sweep says "this item did not get done, moving on". The
-  // trailing space is load-bearing: it matches the catch line and not the word "error" loose
-  // in prose.
-  "error on ",
-  // `fatal:` and claude's own error envelope. Both are exact strings the sweeps print, and
-  // `is_error` is the signature of an authoring tick that left its item queued.
-  "fatal:",
-  "giving up",
-  "is_error",
-  "rate-limited",
-  "rejected the",
-  "retrying",
-  "stays queued",
-  "stays un-triaged",
-  "timed out",
-  "unable to",
-  "unavailable",
-];
+export const STRAIN_PHRASES = [
+  // Every producer follows these with a non-zero exit: the auth branches stop the batch and the
+  // top-level catches print `fatal:` before their failed summary.
+  { level: "run", phrase: "aborting the batch" },
+  { level: "run", phrase: "fatal:" },
+  // Capture's spent re-roll loses one track, then the batch continues.
+  { level: "item", phrase: "bot-challenged" },
+  // Ambiguous English, therefore not safe as a run verdict. Actual producers use it for optional
+  // context fallbacks, best-effort state writes, and individual unavailable resources; a fatal
+  // wrapper still wins when one really ends the run.
+  { level: "item", phrase: "could not" },
+  // The shared per-row catch in the batch sweeps. The trailing space is load-bearing: it matches
+  // `error on <id>` / `unexpected error on <id>`, not the word "error" loose in prose.
+  { level: "item", phrase: "error on " },
+  // One entity/finding/day exhausted its authoring budget; the sweep moves to the next item.
+  { level: "item", phrase: "giving up" },
+  // Claude's error envelope leaves one authoring target queued; it does not abort the sweep.
+  { level: "item", phrase: "is_error" },
+  // These are all continuation/backoff or per-item rejection diagnostics in their producers.
+  { level: "item", phrase: "rate-limited" },
+  { level: "item", phrase: "rejected the" },
+  { level: "item", phrase: "retrying" },
+  { level: "item", phrase: "stays queued" },
+  { level: "item", phrase: "stays un-triaged" },
+  { level: "item", phrase: "timed out" },
+  { level: "item", phrase: "unable to" },
+  { level: "item", phrase: "unavailable" },
+] as const satisfies readonly { level: "item" | "run"; phrase: string }[];
 
 /**
  * Summary fields that COUNT run-level failures or a stuck loop. Each unit is one point — these
@@ -1106,9 +1107,11 @@ export const STRAIN_RATE_COUNTERS = [{ denominator: "checked", numerator: "faile
 /** Summary fields that record designed backpressure, not failed work. One yielded tick each. */
 export const BACKPRESSURE_FLAG_KEYS: readonly string[] = ["throttled"];
 
-/** Strain points from a marker's stderr tail: one per line matching the vocabulary. */
-export function countDistressLines(stderrRegion: string): number {
-  let points = 0;
+type DistressEvidence = { itemFailures: number; runFailures: number };
+
+/** Classified evidence from a marker's stderr tail: at most one observation per line. */
+function countDistressEvidence(stderrRegion: string): DistressEvidence {
+  const evidence: DistressEvidence = { itemFailures: 0, runFailures: 0 };
 
   for (const raw of stderrRegion.split("\n")) {
     // Strip the blockquote prefix cron-output.sh writes, then normalise for matching.
@@ -1117,12 +1120,20 @@ export function countDistressLines(stderrRegion: string): number {
       .trim()
       .toLowerCase();
 
-    if (line && STRAIN_PHRASES.some((phrase) => line.includes(phrase))) {
-      points += 1;
+    if (!line) {
+      continue;
+    }
+
+    if (STRAIN_PHRASES.some(({ level, phrase }) => level === "run" && line.includes(phrase))) {
+      evidence.runFailures += 1;
+    } else if (
+      STRAIN_PHRASES.some(({ level, phrase }) => level === "item" && line.includes(phrase))
+    ) {
+      evidence.itemFailures += 1;
     }
   }
 
-  return points;
+  return evidence;
 }
 
 /** A summary counter's non-negative integer value; arrays use their item count. */
@@ -1132,6 +1143,27 @@ function summaryCount(value: unknown): number {
   }
 
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** One rate-gated point from item failures, shared by structured counters and stderr prose. */
+function countItemFailureRateStrain(failedValue: unknown, checkedValue: unknown): number {
+  const checked =
+    typeof checkedValue === "number" && Number.isFinite(checkedValue) && checkedValue > 0
+      ? Math.floor(checkedValue)
+      : 0;
+  const failed = summaryCount(failedValue);
+
+  return checked > 0 && failed / checked >= STRAIN_ITEM_FAILURE_RATE ? 1 : 0;
+}
+
+/**
+ * Strain points from stderr alone. Run failures score directly; item failures use the same rate
+ * gate as structured `failed`, and therefore say nothing without a `checked` denominator.
+ */
+export function countDistressLines(stderrRegion: string, checked: unknown = null): number {
+  const evidence = countDistressEvidence(stderrRegion);
+
+  return evidence.runFailures + countItemFailureRateStrain(evidence.itemFailures, checked);
 }
 
 /** Strain points from a marker's JSON summary: direct counters, high item-failure rate, and error. */
@@ -1147,18 +1179,7 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
   }
 
   for (const { denominator, numerator } of STRAIN_RATE_COUNTERS) {
-    const denominatorValue = summary[denominator];
-    const checked =
-      typeof denominatorValue === "number" &&
-      Number.isFinite(denominatorValue) &&
-      denominatorValue > 0
-        ? Math.floor(denominatorValue)
-        : 0;
-    const failed = summaryCount(summary[numerator]);
-
-    if (checked > 0 && failed / checked >= STRAIN_ITEM_FAILURE_RATE) {
-      points += 1;
-    }
+    points += countItemFailureRateStrain(summary[numerator], summary[denominator]);
   }
 
   if (typeof summary.error === "string") {
@@ -1186,21 +1207,24 @@ export function countSummaryBackpressure(summary: Record<string, unknown> | null
 }
 
 /**
- * The two signals one marker (one tick) contributes. Once a summary carries structured `failed`,
- * that field owns item-failure judgment: matching stderr prose is not a fallback that can bypass
- * `checked`, or duplicate a high-rate point. Legacy markers with no `failed` field keep the
- * stderr signal. Designed backpressure has its own axis and cannot leak into `strain`.
+ * The two signals one marker (one tick) contributes. Structured `failed` owns the item-failure
+ * numerator when present; otherwise classified item prose supplies it. Both use the SAME rate
+ * scorer and the summary's `checked` denominator. Run-level prose always scores directly.
+ * Designed backpressure has its own axis and cannot leak into `strain`.
  */
 export function markerSignals(body: string): { backpressure: number; strain: number } {
   const summary = findJsonSummary(body);
+  const distress = countDistressEvidence(splitMarker(body).stderr);
   const hasStructuredItemFailures =
     summary !== null &&
     STRAIN_RATE_COUNTERS.some(({ numerator }) => Object.hasOwn(summary, numerator));
-  const distress = hasStructuredItemFailures ? 0 : countDistressLines(splitMarker(body).stderr);
+  const proseItemStrain = hasStructuredItemFailures
+    ? 0
+    : countItemFailureRateStrain(distress.itemFailures, summary?.checked);
 
   return {
     backpressure: countSummaryBackpressure(summary),
-    strain: distress + countSummaryStrain(summary),
+    strain: distress.runFailures + proseItemStrain + countSummaryStrain(summary),
   };
 }
 
@@ -1216,10 +1240,10 @@ export function markerBackpressure(body: string): number {
 // Every threshold is env-overridable on the box, so tuning after a day of real data needs no
 // rebake: set it in the box env, restart the timer, done.
 //
-// ITEM FAILURE RATE (50%, per tick). Bare `failed` / `failure` prose is deliberately absent from
-// STRAIN_PHRASES: an occurrence count has no denominator. At least half of checked work must fail
-// before the tick
-// earns ONE strain point; a capture-shaped 4/12 tick is ordinary, while 6/12 is signal. The
+// ITEM FAILURE RATE (50%, per tick). Structured `failed` and classified item-failure prose share
+// this scorer; an occurrence count without `checked` has no denominator and contributes nothing.
+// At least half of checked work must fail before the tick earns ONE strain point; a capture-shaped
+// 4/12 tick is ordinary, while 6/12 is signal. The
 // outer cadence gate still applies: the fastest cron needs 90 such ticks out of 360 scheduled
 // in 6h; the slowest needs all three scheduled ticks in its 21d window. One point per high-rate
 // tick prevents a large batch from overpowering that cadence-relative gate.
@@ -1631,10 +1655,11 @@ function probeHealthcheck(): Check {
 // degrades to a fresh entry, never an exception.
 // ---------------------------------------------------------------------------
 
-// v3 added the `strain` section (the per-cron rolling error window). v4 resets v3's buckets
-// because their points used the old item-count vocabulary, while leaving `services` untouched.
-// Older files still load defensively and simply start their strain windows empty.
-const STATE_VERSION = 4;
+// v3 added the `strain` section (the per-cron rolling error window). v4 reset v3's buckets when
+// structured item counters moved to a rate; v5 resets v4 because item-level prose now uses that
+// same rate instead of direct occurrence points. `services` remains untouched. Older files still
+// load defensively and simply start their strain windows empty.
+const STATE_VERSION = 5;
 
 function isStatus(value: unknown): value is Status {
   return value === "ok" || value === "degraded" || value === "down";
@@ -1696,10 +1721,10 @@ export function normalizeState(parsed: unknown): StateMap {
 }
 
 /**
- * Read the v4 `strain` section: per-cron hourly buckets + watermark + the reported flag.
- * A v3 section carries points scored under the old item-count vocabulary, so its buckets and
+ * Read the v5 `strain` section: per-cron hourly buckets + watermark + the reported flag.
+ * A v3/v4 section carries points scored under an older item-count rule, so its buckets and
  * watermarks are deliberately reset while its `strained` flags survive long enough to emit the
- * edge-triggered recovery alert. Retained markers are then re-read under v4. A v1/v2 file (no
+ * edge-triggered recovery alert. Retained markers are then re-read under v5. A v1/v2 file (no
  * section), a truncated write, or junk yields an empty map. It must never throw: this is the same
  * read that carries the transition baseline.
  */
@@ -1715,7 +1740,7 @@ export function normalizeStrain(parsed: unknown): StrainMap {
     return {};
   }
 
-  const resetsOldScoring = record.version === 3;
+  const resetsOldScoring = record.version === 3 || record.version === 4;
 
   if (record.version !== STATE_VERSION && !resetsOldScoring) {
     return {};

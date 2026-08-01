@@ -342,7 +342,8 @@ async function tickWithStrain(id: string): Promise<{ lines: string[]; strain: nu
     console.error = original;
   }
 
-  return { lines, strain: countDistressLines(lines.join("\n")) };
+  // This helper runs exactly one work item, so its real `checked` denominator is one.
+  return { lines, strain: countDistressLines(lines.join("\n"), 1) };
 }
 
 describe("noteOne (the bounded re-author, across ticks)", () => {

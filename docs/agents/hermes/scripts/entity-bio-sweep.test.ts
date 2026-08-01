@@ -496,7 +496,8 @@ async function tickWithStrain(slug: string): Promise<{ lines: string[]; strain: 
     console.error = original;
   }
 
-  return { lines, strain: countDistressLines(lines.join("\n")) };
+  // This helper runs exactly one work item, so its real `checked` denominator is one.
+  return { lines, strain: countDistressLines(lines.join("\n"), 1) };
 }
 
 function readLines(file: string): string[] {

@@ -651,7 +651,7 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
     `echo ${JSON.stringify(REAL_ERROR_LINE)} >&2`,
     `echo ${JSON.stringify(REAL_ERROR_LINE.replace("future-signal", "invaderz-transmissions"))} >&2`,
     `echo ${JSON.stringify(REAL_BENIGN_LINE)} >&2`,
-    `echo '{"ok":true,"authored":0,"gateSkipped":2,"queueRemaining":40}'`,
+    `echo '{"ok":true,"authored":0,"checked":2,"gateSkipped":0,"queueRemaining":40}'`,
   ].join("\n");
 
   const HEALTHY_TICK = [
@@ -660,8 +660,8 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
   ].join("\n");
 
   test("FIRES: the real stuck-queue condition reaches the row and names the sweep", () => {
-    // Four daily ticks, each scoring 2 log lines + 2 gateSkipped = 4 → 16 points over 4 ticks,
-    // past the cadence-relative rate gate and the 3-tick spread gate.
+    // Four daily ticks, each with 2/2 item-failure lines collapsing to ONE rate-gated point → 4
+    // points over 4 ticks, past the cadence-relative rate gate and the 3-tick spread gate.
     const dir = runTicks(STUCK_TICK, 4);
     const result = probeSweepStrain(new Map([["cron.backup", dir]]), {});
 
@@ -697,8 +697,8 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
     const points = (map: typeof first.next) =>
       Object.values(map["cron.backup"]?.buckets ?? {}).reduce((sum, b) => sum + b.points, 0);
 
-    expect(points(first.next)).toBe(16);
-    expect(points(second.next)).toBe(16); // unchanged — nothing new on disk
+    expect(points(first.next)).toBe(4);
+    expect(points(second.next)).toBe(4); // unchanged — nothing new on disk
 
     // Already reported, so it is not announced a second time; the row stays degraded.
     expect(second.newly).toEqual([]);

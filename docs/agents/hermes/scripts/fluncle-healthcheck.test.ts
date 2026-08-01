@@ -427,7 +427,7 @@ describe("boxUptimeMs", () => {
 // proven separately, against the real bash, in cron-output.test.ts.)
 // ---------------------------------------------------------------------------
 
-/** Lines the operator classed as REAL PROBLEMS. Every one must score. */
+/** Real observed problem prose on the rate-gated path. Every line must remain recognizable. */
 const REAL_PROBLEMS: readonly { count: number; line: string }[] = [
   // The UNCLEARED challenge — the run's one re-roll is already spent, so the track is lost.
   // Its cleared sibling lives in BENIGN_CHATTER below: a challenge that re-rolls to a fresh
@@ -499,8 +499,52 @@ function strainMarker(summary: string, stderrLines: readonly string[]): string {
 }
 
 describe("the strain vocabulary against the real box output", () => {
-  test("EVERY real problem line scores (the detector FIRES)", () => {
-    const missed = REAL_PROBLEMS.filter(({ line }) => countDistressLines(`> ${line}`) === 0);
+  test("per-row catch lines at a healthy item-failure rate contribute no strain", () => {
+    const lines = [
+      "[anchor-sweep] error on mb_1: transient Deezer failure",
+      "[anchor-sweep] unexpected error on mb_2: socket closed",
+    ];
+
+    expect(markerStrain(strainMarker('{"checked":12,"ok":true}', lines))).toBe(0);
+  });
+
+  test("genuine run-level prose still contributes strain directly", () => {
+    expect(
+      markerStrain(
+        strainMarker('{"checked":12,"ok":true}', ["[rank-sweep] fatal: cannot reach the Worker"]),
+      ),
+    ).toBe(1);
+    expect(
+      markerStrain(
+        strainMarker('{"checked":12,"ok":true}', [
+          "[note-sweep] claude auth failed — aborting the batch, the queue is untouched",
+        ]),
+      ),
+    ).toBe(1);
+  });
+
+  test("item-level prose with no checked denominator contributes nothing", () => {
+    expect(
+      markerStrain(
+        strainMarker('{"ok":true}', [
+          "[anchor-sweep] error on mb_1: transient Deezer failure",
+          "[capture-sweep] bot-challenged at download (rerolled=false)",
+        ]),
+      ),
+    ).toBe(0);
+  });
+
+  test("a genuinely high prose item-failure rate still contributes one point", () => {
+    const lines = Array.from(
+      { length: 6 },
+      (_, index) => `[anchor-sweep] error on mb_${index}: transient Deezer failure`,
+    );
+
+    expect(markerStrain(strainMarker('{"checked":12,"ok":true}', lines))).toBe(1);
+  });
+
+  test("EVERY observed problem line survives on the item-rate path", () => {
+    const missed = REAL_PROBLEMS.filter(({ line }) => countDistressLines(`> ${line}`, 1) === 0);
 
     expect(missed.map((entry) => entry.line)).toEqual([]);
   });
@@ -540,23 +584,26 @@ describe("the strain vocabulary against the real box output", () => {
     // were MISSED by the first draft of the vocabulary; an audit over all 238 `log()` string
     // literals in this directory is what surfaced them. Same for claude's own error envelope,
     // which is the signature of an authoring tick that left its item queued.
-    expect(countDistressLines("> [note-sweep] error on 241.7.3A: Firecrawl 502")).toBe(1);
-    expect(countDistressLines("> [capture-sweep] unexpected error on mb_x: socket closed")).toBe(1);
+    expect(countDistressLines("> [note-sweep] error on 241.7.3A: Firecrawl 502", 1)).toBe(1);
+    expect(countDistressLines("> [capture-sweep] unexpected error on mb_x: socket closed", 1)).toBe(
+      1,
+    );
     expect(
       countDistressLines(
         "> [logbook-sweep] claude -p returned is_error (max_turns) — leaving day queued",
+        1,
       ),
     ).toBe(1);
     expect(countDistressLines("> [rank-sweep] fatal: cannot reach the Worker")).toBe(1);
   });
 
-  test("a mixed tick counts only the problems", () => {
-    const body = strainMarker('{"ok":true}', [
+  test("a mixed tick collapses item prose to one rate-gated point", () => {
+    const body = strainMarker('{"checked":12,"ok":true}', [
       ...BENIGN_CHATTER.map((entry) => entry.line),
       ...REAL_PROBLEMS.map((entry) => entry.line),
     ]);
 
-    expect(markerStrain(body)).toBe(REAL_PROBLEMS.length);
+    expect(markerStrain(body)).toBe(1);
   });
 });
 
@@ -790,7 +837,7 @@ describe("the sweep-errors row + the strain alert", () => {
   });
 });
 
-describe("normalizeStrain — the v4 state section", () => {
+describe("normalizeStrain — the v5 state section", () => {
   test("a v1/v2 file with no strain section loads empty, never throws", () => {
     expect(normalizeStrain({ web: "ok" })).toEqual({});
     expect(normalizeStrain({ services: {}, version: 2 })).toEqual({});
@@ -812,7 +859,7 @@ describe("normalizeStrain — the v4 state section", () => {
             watermarkMs: -1,
           },
         },
-        version: 4,
+        version: 5,
       }),
     ).toEqual({
       "cron.capture": {
@@ -826,7 +873,7 @@ describe("normalizeStrain — the v4 state section", () => {
     });
   });
 
-  test("v3 points are discarded while the prior strained flag survives for a clear alert", () => {
+  test("v4 points are discarded while the prior strained flag survives for a clear alert", () => {
     expect(
       normalizeStrain({
         strain: {
@@ -836,7 +883,7 @@ describe("normalizeStrain — the v4 state section", () => {
             watermarkMs: 7_260_000,
           },
         },
-        version: 3,
+        version: 4,
       }),
     ).toEqual({
       "cron.capture": {
@@ -847,7 +894,7 @@ describe("normalizeStrain — the v4 state section", () => {
     });
   });
 
-  test("a real v4 file round-trips through serialize → parse → normalize", () => {
+  test("a real v5 file round-trips through serialize → parse → normalize", () => {
     const strain: Record<string, StrainState> = {
       "cron.capture": {
         buckets: { "7200000": { backpressure: 2, points: 40, ticks: 12 } },
