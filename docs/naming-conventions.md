@@ -97,6 +97,7 @@ Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), express
 | Replace one label's complete artist-rule set          | `PUT /admin/labels/{id}/artists` (`replace_label_artist_rules`; operator tier)                                                        |
 | List global artist acquisition rules                  | `GET /admin/artist-rules` (`list_artist_rules`; admin tier)                                                                           |
 | Add / remove a global artist acquisition rule         | `POST /admin/artist-rules` / `DELETE /admin/artist-rules/{id}` (`add_artist_rule` / `remove_artist_rule`; operator tier)              |
+| Stamp an artist rule's MusicBrainz drift audit        | `PATCH /admin/artist-rules/{id}` (`update_artist_rule`; operator tier; script-consumed bookkeeping, not a scope change)               |
 | Name / rename / request-split a galaxy                | `PATCH /admin/galaxies/{id}` (`update_galaxy`; **operator** tier — naming is publish-class)                                           |
 | Write the galaxy map (the `fluncle-cluster` cron)     | `PUT /admin/galaxies/map` (`update_galaxy_map`; the Worker mints ids/handles for `id: null` rows)                                     |
 | List track embeddings (the cluster engine's input)    | `GET /admin/tracks/embeddings` (`list_track_embeddings`; cursor-paginated)                                                            |

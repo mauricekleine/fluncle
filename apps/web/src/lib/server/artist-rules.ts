@@ -7,6 +7,7 @@ import { mbFetch } from "./musicbrainz";
 export const ARTIST_RULE_LIMIT = 100;
 
 export type ArtistRuleVerdict = "allow" | "block";
+export type ArtistRuleSource = "operator" | "triage";
 
 export type ArtistRule = {
   artistMbid: string;
@@ -31,6 +32,12 @@ export type GlobalArtistRuleInput = {
   artistMbid: string;
   artistName?: string;
   verdict: ArtistRuleVerdict;
+};
+
+export type UpdateArtistRuleInput = {
+  checkedAt?: string;
+  resolvedMbid?: null | string;
+  resolvedName?: null | string;
 };
 
 type ArtistRuleRow = {
@@ -70,6 +77,9 @@ export class DuplicateGlobalArtistRuleError extends Error {}
 
 /** A global rule omitted its name and neither MusicBrainz nor the local artist graph supplied one. */
 export class MissingArtistRuleNameError extends Error {}
+
+/** No global or per-label artist rule carries the requested globally unique id. */
+export class ArtistRuleNotFoundError extends Error {}
 
 function toArtistRule(row: ArtistRuleRow): ArtistRule {
   return {
@@ -191,6 +201,7 @@ export async function listLabelArtistRules(labelId: string): Promise<ArtistRule[
 export async function replaceLabelArtistRules(
   labelId: string,
   rules: LabelArtistRuleInput[],
+  source: ArtistRuleSource = "operator",
 ): Promise<ArtistRule[]> {
   if (rules.length > ARTIST_RULE_LIMIT) {
     throw new RangeError(`A label may carry at most ${ARTIST_RULE_LIMIT} artist rules.`);
@@ -218,13 +229,14 @@ export async function replaceLabelArtistRules(
         rule.artistSpotifyId,
         rule.verdict,
         labelId,
+        source,
         now,
         now,
       ],
       sql: `insert into artist_rules
               (id, artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source,
                resolved_mbid, resolved_name, checked_at, rearmed_at, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?, 'operator', null, null, null, null, ?, ?)`,
+            values (?, ?, ?, ?, ?, ?, ?, null, null, null, null, ?, ?)`,
     })),
     {
       args: [now, now, labelId],
@@ -314,4 +326,61 @@ export async function removeArtistRule(id: string): Promise<void> {
     args: [id],
     sql: `delete from artist_rules where id = ? and label_id is null`,
   });
+}
+
+/**
+ * Stamp MusicBrainz drift-audit bookkeeping on either scope of artist rule. The assignment list is
+ * deliberately closed over the three audit columns; identity, verdict, scope, and re-arm state are
+ * unreachable here, and unlike a whole-set replace this never touches the owning label.
+ */
+export async function updateArtistRule(
+  id: string,
+  input: UpdateArtistRuleInput,
+): Promise<ArtistRule> {
+  const assignments: string[] = [];
+  const args: Array<null | string> = [];
+
+  if (input.resolvedMbid !== undefined) {
+    assignments.push("resolved_mbid = ?");
+    args.push(input.resolvedMbid);
+  }
+
+  if (input.resolvedName !== undefined) {
+    assignments.push("resolved_name = ?");
+    args.push(input.resolvedName);
+  }
+
+  if (input.checkedAt !== undefined) {
+    assignments.push("checked_at = ?");
+    args.push(input.checkedAt);
+  }
+
+  if (assignments.length === 0) {
+    throw new RangeError("Pass at least one artist-rule drift-audit field.");
+  }
+
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const updated = await db.execute({
+    args: [...args, now, id],
+    sql: `update artist_rules
+          set ${assignments.join(", ")}, updated_at = ?
+          where id = ?`,
+  });
+
+  if (updated.rowsAffected === 0) {
+    throw new ArtistRuleNotFoundError(`No artist rule with id ${id}.`);
+  }
+
+  const result = await db.execute({
+    args: [id],
+    sql: `select ${RULE_COLUMNS} from artist_rules where id = ? limit 1`,
+  });
+  const row = typedRows<ArtistRuleRow>(result.rows)[0];
+
+  if (!row) {
+    throw new Error(`Artist rule ${id} was updated but could not be read back.`);
+  }
+
+  return toArtistRule(row);
 }

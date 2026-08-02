@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { DEEZER_CANDIDATE_LIMIT, resolveAnchor } from "./admin-catalogue";
 import { recordCost } from "./admin-costs";
+import { updateArtistRule } from "./admin-artist-rules";
 import { replaceLabelArtistRules } from "./admin-labels";
 import {
   MAX_RUN_LEDGER_PAGE_SIZE,
@@ -40,6 +41,25 @@ function accepts(op: unknown, input: unknown): boolean {
   assert.ok(!(result instanceof Promise), "validation is synchronous");
 
   return result.issues === undefined;
+}
+
+// ── update_artist_rule: at least one drift-audit stamp, including explicit nulls ─────────
+{
+  assert.equal(
+    accepts(updateArtistRule, { id: "arl_test" }),
+    false,
+    "an empty drift-audit PATCH is rejected",
+  );
+  assert.equal(
+    accepts(updateArtistRule, { id: "arl_test", resolvedMbid: null }),
+    true,
+    "an explicit null clears a drift-audit value and satisfies the at-least-one rule",
+  );
+  assert.equal(
+    accepts(updateArtistRule, { checkedAt: "2026-08-02T12:34:56.000Z", id: "arl_test" }),
+    true,
+    "a checkedAt-only sweep stamp is accepted",
+  );
 }
 
 // ── replace_label_artist_rules: a bounded, duplicate-free whole-set swap ────────────────

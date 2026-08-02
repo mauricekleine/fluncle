@@ -4,10 +4,12 @@
 import { ORPCError } from "@orpc/server";
 import {
   addArtistRule,
+  ArtistRuleNotFoundError,
   DuplicateGlobalArtistRuleError,
   listArtistRules,
   MissingArtistRuleNameError,
   removeArtistRule,
+  updateArtistRule,
 } from "../artist-rules";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
@@ -65,9 +67,33 @@ export function adminArtistRulesHandlers(os: Implementer) {
       }
     });
 
+  // PATCH /admin/artist-rules/{id} — OPERATOR tier: drift-audit bookkeeping for either
+  // global or per-label rules. This stamps no acquisition scope and performs no re-arm.
+  const updateArtistRuleHandler = os.update_artist_rule
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const rule = await updateArtistRule(input.id, {
+          checkedAt: input.checkedAt,
+          resolvedMbid: input.resolvedMbid,
+          resolvedName: input.resolvedName,
+        });
+
+        return { ok: true as const, rule };
+      } catch (error) {
+        if (error instanceof ArtistRuleNotFoundError) {
+          throw new ORPCError("NOT_FOUND", { message: error.message });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
   return {
     add_artist_rule: addArtistRuleHandler,
     list_artist_rules: listArtistRulesHandler,
     remove_artist_rule: removeArtistRuleHandler,
+    update_artist_rule: updateArtistRuleHandler,
   };
 }

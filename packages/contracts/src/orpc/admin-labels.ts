@@ -23,7 +23,11 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { ArtistRuleInputSchema, ArtistRuleSchema } from "./admin-artist-rules.js";
+import {
+  ArtistRuleInputSchema,
+  ArtistRuleSchema,
+  ArtistRuleSourceSchema,
+} from "./admin-artist-rules.js";
 
 /**
  * A label's crawl-seed state — the operator's ruling, and CRAWL SCOPE ONLY.
@@ -182,6 +186,7 @@ export const replaceLabelArtistRules = oc
             seen.add(rule.artistMbid);
           }
         }),
+      source: ArtistRuleSourceSchema.default("operator"),
     }),
   )
   .output(z.object({ ok: z.literal(true), rules: z.array(ArtistRuleSchema) }));

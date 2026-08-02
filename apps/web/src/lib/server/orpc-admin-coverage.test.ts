@@ -213,6 +213,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The user-account roster — contract-only oRPC (no TanStack route file; oRPC owns the
   // path directly). Admin tier (agent-allowed read).
   "GET /admin/users": "list_users_admin",
+  // MusicBrainz drift-audit bookkeeping for either scope of artist rule. Operator tier, but not
+  // an acquisition-scope change: this cannot touch verdicts, re-arm watermarks, or label scope.
+  "PATCH /admin/artist-rules/{id}": "update_artist_rule",
   // The fresh-links INLINE EDIT (correct + approve a social's URL in one act) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path directly, sharing it with the DELETE remove
   // above). Operator tier: it writes an operator-owned, confirmed, public link.

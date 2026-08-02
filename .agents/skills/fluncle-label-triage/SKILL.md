@@ -107,7 +107,7 @@ Reads the staged verdicts (`label-triage.json`) and writes:
 | `dnb_partial` | `PUT /admin/labels/{id}/artists` **only** — the seed state is never touched                 |
 | `unclear`     | nothing                                                                                     |
 
-It re-checks each row is STILL `undecided` server-side before writing (other sessions rule labels too), drops inert rules, refuses a row whose rule verdicts contradict its bucket, and reports per row. The rule PUT is a **whole-set swap that re-arms the label's crawl scope**, so rules the operator added by hand and the round did not re-propose are replaced away — the report says so. `pilot` picks a RULE-CARRYING label when the round proposed any and verifies the whole round-trip: the server's rule set matches what was sent, and `scopeChangedAt` moved.
+It re-checks each row is STILL `undecided` server-side before writing (other sessions rule labels too), drops inert rules, refuses a row whose rule verdicts contradict its bucket, and reports per row. The rule PUT records `source: "triage"` and is a **whole-set swap that re-arms the label's crawl scope**, so rules the operator added by hand and the round did not re-propose are replaced away — the report says so. `pilot` picks a RULE-CARRYING label when the round proposed any and verifies the whole round-trip: the server's rule set matches what was sent, and `scopeChangedAt` moved.
 
 Single labels also work through the first-class CLI: `fluncle admin labels update <slug> --seed-state enabled|disabled` and `fluncle admin labels artists <slug> [--replace --rules-file <json>]`. The API sits behind Cloudflare — every request needs a real `User-Agent` (the default `Python-urllib` signature gets a 1010).
 
@@ -125,7 +125,7 @@ python3 <skill>/scripts/apply-rulings.py rescope   # reads calib-rules.json, wri
 
 Re-checks every existing rule against `GET /ws/2/artist/<mbid>` at 1 req/s and reports four shapes: **MERGED** (MusicBrainz answered with a different entity id than the one requested), **GONE** (404), **RENAMED** (the credited spelling no longer matches), **UNREACHABLE**. It writes `rescope-drift.json` and fixes nothing — an MB merge is benign until the operator decides what the rule should say, and re-authoring one re-arms that label's whole crawl scope.
 
-**Known gap:** the drift stamps themselves (`resolved_mbid` / `resolved_name` / `checked_at` on the rule row) have no API carrier. `replace_label_artist_rules` accepts only `{artistMbid, artistName, verdict}` and writes those three columns to NULL on every replace, so `rescope` is detection + report until an op can carry the refresh.
+The audit-only `update_artist_rule` PATCH now carries the drift stamps: `checked_at` for every sweep result, `resolved_*` from a MusicBrainz response (or null when the artist is gone). It never re-authors the rule or re-arms label scope; PATCH failures are reported separately and fail the run.
 
 ## Verification quality bar (the pass earns trust once, keeps it always)
 

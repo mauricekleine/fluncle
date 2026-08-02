@@ -7,6 +7,7 @@ list and prints the HTTP calls it WOULD make. Run with:
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
@@ -195,6 +196,7 @@ def test_dry_run_apply_prints_every_planned_call(tmp_path):
     assert "WOULD PUT /api/v1/admin/labels/lbl_gutterfunk/artists" in out
     assert "WOULD PATCH /api/v1/admin/labels/lbl_major" in out
     assert "WOULD PUT /api/v1/admin/labels/lbl_yuku/artists" in out
+    assert out.count('"source": "triage"') == 2
     # dnb_partial never touches the seed state, and unclear is never written at all.
     assert "WOULD PATCH /api/v1/admin/labels/lbl_yuku" not in out
     assert "lbl_held" not in out
@@ -217,11 +219,12 @@ def test_a_slug_that_moved_since_the_triage_is_skipped(tmp_path):
     assert "lbl_gutterfunk" not in out
 
 
-def test_dry_run_rescope_lists_the_worklist_without_calling_musicbrainz(tmp_path):
+def test_dry_run_rescope_emits_checked_at_only_patch_plan_without_musicbrainz(tmp_path):
     (tmp_path / "calib-rules.json").write_text(
         json.dumps(
             [
                 {
+                    "id": "arl_rule_a",
                     "artist_mbid": MBID_A,
                     "artist_name": "Jus Now",
                     "label_id": None,
@@ -235,7 +238,126 @@ def test_dry_run_rescope_lists_the_worklist_without_calling_musicbrainz(tmp_path
 
     assert "rescope worklist: 1 rule(s)" in out
     assert f"WOULD GET musicbrainz artist/{MBID_A}" in out
+    assert "WOULD PATCH /api/v1/admin/artist-rules/arl_rule_a" in out
+    assert '"checkedAt":' in out
+    assert '"resolvedMbid":' not in out
+    assert '"resolvedName":' not in out
     assert "1 clean" in out
+
+
+def test_rescope_stamps_musicbrainz_outcomes_without_changing_the_drift_report(
+    monkeypatch, tmp_path
+):
+    rows = [
+        {
+            "id": "arl_merged",
+            "artist_mbid": MBID_A,
+            "artist_name": "Old Name",
+            "label_name": "Merge Scope",
+        },
+        {
+            "id": "arl_gone",
+            "artist_mbid": MBID_B,
+            "artist_name": "Gone Artist",
+            "label_name": "Gone Scope",
+        },
+        {
+            "id": "arl_unreachable",
+            "artist_mbid": MBID_C,
+            "artist_name": "Offline Artist",
+            "label_name": None,
+        },
+    ]
+    responses = iter(
+        [
+            (200, {"id": MBID_C, "name": "New Name"}),
+            (404, "missing"),
+            (0, "network down"),
+        ]
+    )
+    monkeypatch.setattr(apply_rulings, "load_rescope_rules", lambda api, args: rows)
+    monkeypatch.setattr(apply_rulings, "musicbrainz", lambda path: next(responses))
+
+    class RecordingApi:
+        dry_run = False
+
+        def __init__(self):
+            self.calls = []
+
+        def call(self, method, path, body=None):
+            self.calls.append((method, path, body))
+            return 200, {"rule": {}}
+
+    api = RecordingApi()
+    args = argparse.Namespace(report_file=str(tmp_path / "rescope-drift.json"))
+
+    assert apply_rulings.run_rescope(api, args) == 0
+    assert [path for _, path, _ in api.calls] == [
+        "/api/v1/admin/artist-rules/arl_merged",
+        "/api/v1/admin/artist-rules/arl_gone",
+        "/api/v1/admin/artist-rules/arl_unreachable",
+    ]
+    checked_at = api.calls[0][2]["checkedAt"]
+    assert api.calls[0][2] == {
+        "checkedAt": checked_at,
+        "resolvedMbid": MBID_C,
+        "resolvedName": "New Name",
+    }
+    assert api.calls[1][2] == {
+        "checkedAt": checked_at,
+        "resolvedMbid": None,
+        "resolvedName": None,
+    }
+    assert api.calls[2][2] == {"checkedAt": checked_at}
+    assert json.loads((tmp_path / "rescope-drift.json").read_text()) == [
+        {
+            "detail": f"MusicBrainz now answers as {MBID_C}",
+            "kind": "MERGED",
+            "mbid": MBID_A,
+            "name": "Old Name",
+            "scope": "Merge Scope",
+        },
+        {
+            "detail": "MusicBrainz 404",
+            "kind": "GONE",
+            "mbid": MBID_B,
+            "name": "Gone Artist",
+            "scope": "Gone Scope",
+        },
+        {
+            "detail": "0 network down",
+            "kind": "UNREACHABLE",
+            "mbid": MBID_C,
+            "name": "Offline Artist",
+            "scope": "GLOBAL",
+        },
+    ]
+
+
+def test_rescope_reports_stamp_failures_separately_and_fails_the_run(
+    monkeypatch, tmp_path, capsys
+):
+    rows = [{"id": "arl_failed", "artist_mbid": MBID_A, "artist_name": "Jus Now"}]
+    monkeypatch.setattr(apply_rulings, "load_rescope_rules", lambda api, args: rows)
+    monkeypatch.setattr(
+        apply_rulings,
+        "musicbrainz",
+        lambda path: (200, {"id": MBID_A, "name": "Jus Now"}),
+    )
+
+    class FailingApi:
+        dry_run = False
+
+        def call(self, method, path, body=None):
+            return 503, "unavailable"
+
+    args = argparse.Namespace(report_file=str(tmp_path / "rescope-drift.json"))
+
+    assert apply_rulings.run_rescope(FailingApi(), args) == 1
+    out = capsys.readouterr().out
+    assert "stamp failures: 1" in out
+    assert "PATCH 503 unavailable" in out
+    assert not (tmp_path / "rescope-drift.json").exists()
 
 
 # ── the ratification page ───────────────────────────────────────────────────────────────────

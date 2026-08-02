@@ -21,12 +21,14 @@ vi.mock("./musicbrainz", async (importOriginal) => {
 import { createIntegrationDb } from "./integration-db";
 import {
   addArtistRule,
+  ArtistRuleNotFoundError,
   DuplicateGlobalArtistRuleError,
   listArtistRules,
   listLabelArtistRules,
   MissingArtistRuleNameError,
   removeArtistRule,
   replaceLabelArtistRules,
+  updateArtistRule,
 } from "./artist-rules";
 import { LabelNotFoundError } from "./labels";
 
@@ -201,6 +203,90 @@ describe("label artist rules", () => {
     expect(state.rows[0]?.scope_changed_at).toBeTruthy();
     expect(state.rows[0]?.updated_at).toBe(state.rows[0]?.scope_changed_at);
   });
+
+  it("stores operator provenance by default and triage provenance when supplied", async () => {
+    await seedLabel("lbl_operator_source");
+    await seedLabel("lbl_triage_source");
+    mbMiss();
+    mbMiss();
+
+    const [operatorRule] = await replaceLabelArtistRules("lbl_operator_source", [
+      { artistMbid: "mbid-operator", artistName: "Operator Artist", verdict: "block" },
+    ]);
+    const [triageRule] = await replaceLabelArtistRules(
+      "lbl_triage_source",
+      [{ artistMbid: "mbid-triage", artistName: "Triage Artist", verdict: "allow" }],
+      "triage",
+    );
+    const sources = await db.execute({
+      args: [operatorRule?.id ?? "", triageRule?.id ?? ""],
+      sql: `select id, source from artist_rules where id in (?, ?) order by id`,
+    });
+    const sourceById = new Map(sources.rows.map((row) => [row.id, row.source]));
+
+    expect(sourceById.get(operatorRule?.id)).toBe("operator");
+    expect(sourceById.get(triageRule?.id)).toBe("triage");
+  });
+
+  it("updates only drift-audit columns and leaves label scope_changed_at and protected rule fields unchanged", async () => {
+    await seedLabel("lbl_drift_stamp");
+    mbMiss();
+    const [rule] = await replaceLabelArtistRules("lbl_drift_stamp", [
+      { artistMbid: "mbid-original", artistName: "Original Name", verdict: "block" },
+    ]);
+
+    expect(rule).toBeDefined();
+    const ruleId = rule?.id ?? "";
+    const previousUpdatedAt = "2026-08-01T07:00:00.000Z";
+    await db.execute({
+      args: ["2026-08-01T08:00:00.000Z", previousUpdatedAt, ruleId],
+      sql: `update artist_rules set rearmed_at = ?, updated_at = ? where id = ?`,
+    });
+    const beforeRule = await db.execute({
+      args: [ruleId],
+      sql: `select artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source,
+                   rearmed_at, created_at
+            from artist_rules where id = ?`,
+    });
+    const beforeLabel = await db.execute({
+      args: ["lbl_drift_stamp"],
+      sql: `select scope_changed_at from labels where id = ?`,
+    });
+    const checkedAt = "2026-08-02T12:34:56.000Z";
+
+    const updated = await updateArtistRule(ruleId, {
+      checkedAt,
+      resolvedMbid: "mbid-merged",
+      resolvedName: "Merged Name",
+    });
+    const afterRule = await db.execute({
+      args: [ruleId],
+      sql: `select artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source,
+                   rearmed_at, created_at
+            from artist_rules where id = ?`,
+    });
+    const afterAudit = await db.execute({
+      args: [ruleId],
+      sql: `select updated_at from artist_rules where id = ?`,
+    });
+    const afterLabel = await db.execute({
+      args: ["lbl_drift_stamp"],
+      sql: `select scope_changed_at from labels where id = ?`,
+    });
+
+    expect(updated).toMatchObject({
+      artistMbid: "mbid-original",
+      artistName: "Original Name",
+      checkedAt,
+      resolvedMbid: "mbid-merged",
+      resolvedName: "Merged Name",
+      verdict: "block",
+    });
+    expect(afterRule.rows[0]).toEqual(beforeRule.rows[0]);
+    expect(afterAudit.rows[0]?.updated_at).toBe(updated.updatedAt);
+    expect(afterAudit.rows[0]?.updated_at).not.toBe(previousUpdatedAt);
+    expect(afterLabel.rows[0]?.scope_changed_at).toBe(beforeLabel.rows[0]?.scope_changed_at);
+  });
 });
 
 describe("global artist rules", () => {
@@ -282,5 +368,29 @@ describe("global artist rules", () => {
 
     expect(await listArtistRules()).toEqual([]);
     expect(await listLabelArtistRules("lbl_sibling")).toHaveLength(1);
+  });
+
+  it("stamps global rules by the same globally unique id and rejects unknown ids", async () => {
+    mbMiss();
+    const rule = await addArtistRule({
+      artistMbid: "mbid-global-drift",
+      artistName: "Global Drift",
+      verdict: "allow",
+    });
+
+    await expect(
+      updateArtistRule(rule.id, {
+        checkedAt: "2026-08-02T18:00:00.000Z",
+        resolvedMbid: null,
+        resolvedName: "Current Global Name",
+      }),
+    ).resolves.toMatchObject({
+      checkedAt: "2026-08-02T18:00:00.000Z",
+      resolvedMbid: null,
+      resolvedName: "Current Global Name",
+    });
+    await expect(
+      updateArtistRule("arl_missing", { checkedAt: "2026-08-02T18:00:00.000Z" }),
+    ).rejects.toBeInstanceOf(ArtistRuleNotFoundError);
   });
 });

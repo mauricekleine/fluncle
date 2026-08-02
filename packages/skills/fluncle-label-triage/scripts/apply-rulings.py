@@ -41,6 +41,7 @@ except under --dry-run, which makes no request at all.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -221,7 +222,9 @@ def write_row(api: Api, entry: dict, label_id: str) -> tuple[bool, str]:
 
     if entry["rules"]:
         code, res = api.call(
-            "PUT", f"/api/v1/admin/labels/{label_id}/artists", {"rules": entry["rules"]}
+            "PUT",
+            f"/api/v1/admin/labels/{label_id}/artists",
+            {"rules": entry["rules"], "source": "triage"},
         )
         written = len(res.get("rules") or []) if isinstance(res, dict) else 0
         if api.dry_run:
@@ -384,7 +387,7 @@ def load_rescope_rules(api: Api, args) -> list[dict]:
 
 
 def run_rescope(api: Api, args) -> int:
-    """Re-check every existing rule's MB identity. READ-ONLY: it never fixes anything.
+    """Re-check every existing rule's MB identity without auto-fixing rule scope or identity.
 
     Drift shows up three ways, and each is reported for the operator to act on by hand:
       - MERGED — MusicBrainz answered with a DIFFERENT entity id than the one requested (an MB
@@ -393,11 +396,9 @@ def run_rescope(api: Api, args) -> int:
       - RENAMED — the entity's name no longer matches the credited spelling the rule was written
         with (display only; the rule still matches, since the MBID is the key).
 
-    The refresh WRITE half (stamping `resolved_mbid` / `resolved_name` / `checked_at` on the rule)
-    has no API carrier today: `replace_label_artist_rules` takes only
-    `{artistMbid, artistName, verdict}` and hard-writes those three columns to NULL, and a re-PUT
-    would additionally re-arm the label's whole crawl scope. So this mode detects and reports; it
-    does not stamp. Correcting a drifted rule is a deliberate operator act.
+    The audit-only PATCH stamps what MusicBrainz returned without changing the rule's match key,
+    verdict, scope, or crawl re-arm watermark. Correcting a drifted rule remains a deliberate
+    operator act.
     """
     rows = load_rescope_rules(api, args)
     if not rows:
@@ -407,9 +408,12 @@ def run_rescope(api: Api, args) -> int:
     def field(rule, snake, camel):
         return rule.get(snake, rule.get(camel))
 
+    sweep_checked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     drift = []
+    stamp_failures = []
     checked = ok = 0
     for rule in rows:
+        rule_id = field(rule, "id", "id")
         mbid = field(rule, "artist_mbid", "artistMbid")
         name = field(rule, "artist_name", "artistName") or ""
         scope = rule.get("label_name") or rule.get("label_slug") or "GLOBAL"
@@ -418,27 +422,54 @@ def run_rescope(api: Api, args) -> int:
         checked += 1
         if api.dry_run:
             print(f"  WOULD GET musicbrainz artist/{mbid} for {scope} | {name}")
+            stamp_body = {"checkedAt": sweep_checked_at}
             ok += 1
+        else:
+            status, payload = musicbrainz(f"artist/{urllib.parse.quote(mbid)}?fmt=json")
+            stamp_body = {"checkedAt": sweep_checked_at}
+            if status == 404 or status == 410:
+                drift.append(("GONE", scope, name, mbid, f"MusicBrainz {status}"))
+                stamp_body.update({"resolvedMbid": None, "resolvedName": None})
+            elif status != 200 or not isinstance(payload, dict):
+                drift.append(("UNREACHABLE", scope, name, mbid, f"{status} {str(payload)[:60]}"))
+            else:
+                returned = payload.get("id")
+                resolved_name = payload.get("name")
+                stamp_body.update(
+                    {
+                        "resolvedMbid": returned if isinstance(returned, str) else None,
+                        "resolvedName": resolved_name if isinstance(resolved_name, str) else None,
+                    }
+                )
+                if returned and returned != mbid:
+                    drift.append(
+                        ("MERGED", scope, name, mbid, f"MusicBrainz now answers as {returned}")
+                    )
+                elif resolved_name and resolved_name != name:
+                    drift.append(
+                        ("RENAMED", scope, name, mbid, f"MusicBrainz calls it {resolved_name!r}")
+                    )
+                else:
+                    ok += 1
+
+        if not rule_id:
+            stamp_failures.append((scope, name, mbid, "rule id missing from worklist"))
             continue
-        status, payload = musicbrainz(f"artist/{urllib.parse.quote(mbid)}?fmt=json")
-        if status == 404 or status == 410:
-            drift.append(("GONE", scope, name, mbid, f"MusicBrainz {status}"))
-            continue
-        if status != 200 or not isinstance(payload, dict):
-            drift.append(("UNREACHABLE", scope, name, mbid, f"{status} {str(payload)[:60]}"))
-            continue
-        returned = payload.get("id")
-        if returned and returned != mbid:
-            drift.append(("MERGED", scope, name, mbid, f"MusicBrainz now answers as {returned}"))
-            continue
-        if payload.get("name") and payload["name"] != name:
-            drift.append(("RENAMED", scope, name, mbid, f"MusicBrainz calls it {payload['name']!r}"))
-            continue
-        ok += 1
+        patch_code, patch_payload = api.call(
+            "PATCH", f"/api/v1/admin/artist-rules/{rule_id}", stamp_body
+        )
+        if patch_code != 200:
+            stamp_failures.append(
+                (scope, name, mbid, f"PATCH {patch_code} {str(patch_payload)[:90]}")
+            )
 
     print(f"\nrescope: {checked} rule(s) checked — {ok} clean, {len(drift)} needing a look")
     for kind, scope, name, mbid, detail in drift:
         print(f"  {kind:11} {scope} | {name} ({mbid}) — {detail}")
+    if stamp_failures:
+        print(f"\nstamp failures: {len(stamp_failures)}")
+        for scope, name, mbid, detail in stamp_failures[:10]:
+            print(f"  FAILED {scope} | {name} ({mbid}) — {detail}")
     if drift:
         json.dump(
             [
@@ -452,10 +483,9 @@ def run_rescope(api: Api, args) -> int:
         print(
             "NOT auto-fixed by design. A drifted rule is re-authored by the operator "
             "(`fluncle admin labels artists <slug> --replace --rules-file …`, which also re-arms "
-            "that label's crawl scope), and `checked_at`/`resolved_*` stay unstamped until an op "
-            "can carry them."
+            "that label's crawl scope). The audit-only PATCH stamps what MusicBrainz observed."
         )
-    return 0
+    return 1 if stamp_failures else 0
 
 
 def main() -> int:

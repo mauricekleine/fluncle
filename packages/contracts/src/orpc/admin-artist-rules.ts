@@ -3,6 +3,7 @@
 //
 //   - `list_artist_rules` — admin tier (agent-allowed read).
 //   - `add_artist_rule` — operator tier: add one global allow/block exception.
+//   - `update_artist_rule` — operator tier: stamp drift-audit bookkeeping by global id.
 //   - `remove_artist_rule` — operator tier: remove one global exception.
 
 // Per-label rules live beside their label in `./admin-labels.ts`; both surfaces share the
@@ -12,6 +13,9 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 export const ArtistRuleVerdictSchema = z.enum(["allow", "block"]).meta({ id: "ArtistRuleVerdict" });
+export const ArtistRuleSourceSchema = z
+  .enum(["operator", "triage"])
+  .meta({ id: "ArtistRuleSource" });
 
 const ArtistMbidSchema = z.string().uuid();
 const ArtistNameSchema = z.string().trim().min(1, "Artist name cannot be blank");
@@ -73,6 +77,38 @@ export const addArtistRule = oc
   .input(AddArtistRuleInputSchema)
   .output(z.object({ ok: z.literal(true), rule: ArtistRuleSchema }));
 
+/**
+ * `update_artist_rule` → `PATCH /admin/artist-rules/{id}` (operationId `updateArtistRule`).
+ *
+ * Drift-audit bookkeeping only: this may stamp the identity MusicBrainz currently resolves and
+ * when the check ran. It cannot edit the rule's scope, verdict, original identity, or re-arm state.
+ */
+export const updateArtistRule = oc
+  .route({
+    method: "PATCH",
+    operationId: "updateArtistRule",
+    path: "/admin/artist-rules/{id}",
+    summary: "Stamp an artist rule's MusicBrainz drift audit (operator; no scope change)",
+    tags: ["Admin"],
+  })
+  .input(
+    z
+      .object({
+        checkedAt: z.string().optional(),
+        id: z.string(),
+        resolvedMbid: z.string().nullable().optional(),
+        resolvedName: z.string().nullable().optional(),
+      })
+      .refine(
+        (input) =>
+          input.checkedAt !== undefined ||
+          input.resolvedMbid !== undefined ||
+          input.resolvedName !== undefined,
+        { error: "Pass checkedAt, resolvedMbid, or resolvedName" },
+      ),
+  )
+  .output(z.object({ ok: z.literal(true), rule: ArtistRuleSchema }));
+
 /** `remove_artist_rule` → `DELETE /admin/artist-rules/{id}` (operationId `removeArtistRule`). */
 export const removeArtistRule = oc
   .route({
@@ -89,4 +125,5 @@ export const adminArtistRulesContract = {
   add_artist_rule: addArtistRule,
   list_artist_rules: listArtistRules,
   remove_artist_rule: removeArtistRule,
+  update_artist_rule: updateArtistRule,
 };

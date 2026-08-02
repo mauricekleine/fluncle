@@ -102,7 +102,7 @@ export function adminLabelsHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const rules = await replaceLabelArtistRules(input.id, input.rules);
+        const rules = await replaceLabelArtistRules(input.id, input.rules, input.source);
 
         return { ok: true as const, rules };
       } catch (error) {

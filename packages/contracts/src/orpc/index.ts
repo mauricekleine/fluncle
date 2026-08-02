@@ -134,9 +134,11 @@ export {
   adminArtistRulesContract,
   ArtistRuleInputSchema,
   ArtistRuleSchema,
+  ArtistRuleSourceSchema,
   ArtistRuleVerdictSchema,
   listArtistRules,
   removeArtistRule,
+  updateArtistRule,
 } from "./admin-artist-rules";
 export {
   addArtistSocial,
