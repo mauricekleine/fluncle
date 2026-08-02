@@ -178,6 +178,116 @@ async function seedLabel(name: string, slug: string, seedState: string): Promise
   });
 }
 
+async function seedArtistRule(rule: {
+  artistMbid: string;
+  labelId?: null | string;
+  rearmedAt?: null | string;
+  verdict: "allow" | "block";
+}): Promise<void> {
+  const labelKey = rule.labelId ?? "global";
+  await db.execute({
+    args: [
+      `arl_${labelKey}_${rule.artistMbid}`,
+      rule.artistMbid,
+      `Artist ${rule.artistMbid}`,
+      rule.verdict,
+      rule.labelId ?? null,
+      "operator",
+      rule.rearmedAt ?? null,
+      NOW,
+      NOW,
+    ],
+    sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, label_id, source, rearmed_at, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+type RuleTestCredit = { id?: string; name: string };
+type RuleTestTrack = { credits: RuleTestCredit[]; id: string; isrc?: string; title: string };
+
+function ruleTestRelease(input: {
+  id: string;
+  labelMbid: string;
+  labelName: string;
+  tracks: RuleTestTrack[];
+}): object {
+  return {
+    "cover-art-archive": { front: true },
+    date: "2026-07-11",
+    id: input.id,
+    "label-info": [{ label: { id: input.labelMbid, name: input.labelName } }],
+    media: [
+      {
+        tracks: input.tracks.map((track) => ({
+          recording: {
+            "artist-credit": track.credits.map((credit) => ({
+              artist: credit.id ? { id: credit.id, name: credit.name } : { name: credit.name },
+              name: credit.name,
+            })),
+            id: track.id,
+            isrcs: track.isrc ? [track.isrc] : [],
+            length: 180_000,
+            title: track.title,
+          },
+        })),
+      },
+    ],
+    relations: [],
+    "release-group": { id: `rg-${input.id}` },
+    title: `Album ${input.id}`,
+  };
+}
+
+async function prepareRuleRelease(input: {
+  labelId: string;
+  labelMbid: string;
+  labelName: string;
+  labelSlug: string;
+  releaseId: string;
+  seedState: "disabled" | "enabled" | "undecided";
+  tracks: RuleTestTrack[];
+}): Promise<void> {
+  await db.execute("update labels set seed_state = 'disabled'");
+  await db.execute({
+    args: [
+      input.labelId,
+      input.labelName,
+      input.labelSlug,
+      input.seedState,
+      input.labelMbid,
+      NOW,
+      NOW,
+    ],
+    sql: `insert into labels
+            (id, name, slug, seed_state, mb_label_id, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?)`,
+  });
+  await seedFrontierNode({
+    createdAt: NOW,
+    externalId: input.releaseId,
+    hop: 0,
+    id: `musicbrainz:release:${input.releaseId}`,
+    kind: "release",
+    labelSlug: input.labelSlug,
+  });
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      const body = url.includes(`/release/${input.releaseId}`)
+        ? ruleTestRelease({
+            id: input.releaseId,
+            labelMbid: input.labelMbid,
+            labelName: input.labelName,
+            tracks: input.tracks,
+          })
+        : {};
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    }),
+  );
+}
+
 async function seedFrontierNode(node: {
   createdAt: string;
   externalId: string;
@@ -689,6 +799,771 @@ describe("the STORAGE GATE — a track is stored only when its release's label i
   });
 });
 
+describe("the artist exception gate", () => {
+  it("a blocklist drops on the FIRST credit and keeps the guest feature", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-first-block",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [
+            { name: "Unresolved join phrase" },
+            { id: "artist-blocked", name: "Blocked" },
+            { id: "artist-keeper", name: "Keeper" },
+          ],
+          id: "rec-first-blocked",
+          title: "Blocked billing",
+        },
+        {
+          credits: [
+            { id: "artist-keeper", name: "Keeper" },
+            { id: "artist-blocked", name: "Blocked" },
+          ],
+          id: "rec-blocked-guest",
+          title: "Blocked guest",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-blocked", verdict: "block" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(1);
+    expect(pass.tracksWritten).toBe(1);
+    const tracks = await db.execute("select title from tracks");
+    expect(tracks.rows.map((row) => text(row.title))).toEqual(["Blocked guest"]);
+  });
+
+  it("a blocklist keeps a candidate whose credits carry no MBID", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-null-credit",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [{ name: "Unknown billing" }],
+          id: "rec-null-credit",
+          title: "No identity",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-blocked", verdict: "block" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksWritten).toBe(1);
+  });
+
+  it("an allow stores a billed record from a disabled label and skips the same artist's guest credit", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-first-allow",
+      seedState: "disabled",
+      tracks: [
+        {
+          credits: [
+            { id: "artist-allowed", name: "Allowed" },
+            { id: "artist-guest", name: "Guest" },
+          ],
+          id: "rec-first-allowed",
+          title: "Allowed billing",
+        },
+        {
+          credits: [
+            { id: "artist-other", name: "Other" },
+            { id: "artist-allowed", name: "Allowed" },
+          ],
+          id: "rec-allowed-guest",
+          title: "Allowed guest",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-allowed", verdict: "allow" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksAllowedIn).toBe(1);
+    expect(pass.tracksSkippedLabelGate).toBe(1);
+    expect(pass.tracksWritten).toBe(1);
+    const tracks = await db.execute("select title from tracks");
+    expect(tracks.rows.map((row) => text(row.title))).toEqual(["Allowed billing"]);
+  });
+
+  it("a per-label rule beats a global rule", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-precedence",
+      seedState: "disabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-precedence", name: "Precedence" }],
+          id: "rec-precedence",
+          title: "Specific wins",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-precedence", verdict: "block" });
+    await seedArtistRule({
+      artistMbid: "artist-precedence",
+      labelId: "lbl_scope",
+      verdict: "allow",
+    });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksAllowedIn).toBe(1);
+    expect(pass.tracksWritten).toBe(1);
+  });
+
+  it("two enabled labels that fold together never share a scope", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await prepareRuleRelease({
+      labelId: "lbl_radar_two",
+      // The payload identity matches neither namesake, forcing the name-fold fallback to confront
+      // the collision. Its per-label rule must not leak; enabled default is the only safe verdict.
+      labelMbid: "label-radar-unknown",
+      labelName: "Radar-Records",
+      labelSlug: "radar-records-two",
+      releaseId: "release-radar-two",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-radar", name: "Radar Artist" }],
+          id: "rec-radar-two",
+          title: "The other Radar",
+        },
+      ],
+    });
+    await db.execute(
+      "update labels set mb_label_id = 'label-radar-two' where id = 'lbl_radar_two'",
+    );
+    await db.execute({
+      args: ["lbl_radar_one", "Radar Records", "radar-records-one", "label-radar-one", NOW, NOW],
+      sql: `insert into labels (id, name, slug, seed_state, mb_label_id, created_at, updated_at)
+            values (?, ?, ?, 'enabled', ?, ?, ?)`,
+    });
+    await seedArtistRule({
+      artistMbid: "artist-radar",
+      labelId: "lbl_radar_one",
+      verdict: "block",
+    });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksWritten).toBe(1);
+    expect(
+      warn.mock.calls.some(([line]) =>
+        typeof line === "string" ? line.includes('"event":"crawl.scope-ambiguous"') : false,
+      ),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("an ambiguous label fold never applies a global rule", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await prepareRuleRelease({
+      labelId: "lbl_echo_two",
+      labelMbid: "label-echo-unknown",
+      labelName: "Echo-Records",
+      labelSlug: "echo-records-two",
+      releaseId: "release-echo-two",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-echo", name: "Echo Artist" }],
+          id: "rec-echo-two",
+          title: "Global must not leak",
+        },
+      ],
+    });
+    await db.execute("update labels set mb_label_id = 'label-echo-two' where id = 'lbl_echo_two'");
+    await db.execute({
+      args: ["lbl_echo_one", "Echo Records", "echo-records-one", "label-echo-one", NOW, NOW],
+      sql: `insert into labels (id, name, slug, seed_state, mb_label_id, created_at, updated_at)
+            values (?, ?, ?, 'enabled', ?, ?, ?)`,
+    });
+    await seedArtistRule({ artistMbid: "artist-echo", verdict: "block" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    expect(pass.tracksSkippedArtistRule).toBe(0);
+    expect(pass.tracksWritten).toBe(1);
+    expect(
+      warn.mock.calls.some(([line]) =>
+        typeof line === "string" ? line.includes('"event":"crawl.scope-ambiguous"') : false,
+      ),
+    ).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("a fully-excluded release mints no albums row", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-no-album",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [{ id: "artist-blocked", name: "Blocked" }],
+          id: "rec-no-album",
+          title: "Nothing kept",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-blocked", verdict: "block" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    const albums = await db.execute("select id from albums");
+    expect(albums.rows).toHaveLength(0);
+  });
+
+  it("the artist-hop leg still enqueues from excluded credits", async () => {
+    await prepareRuleRelease({
+      labelId: "lbl_scope",
+      labelMbid: "label-scope",
+      labelName: "Scope Records",
+      labelSlug: "scope-records",
+      releaseId: "release-excluded-hop",
+      seedState: "enabled",
+      tracks: [
+        {
+          credits: [
+            { id: "artist-blocked", name: "Blocked" },
+            { id: "artist-discovery", name: "Discovery" },
+          ],
+          id: "rec-excluded-hop",
+          title: "Excluded but walked",
+        },
+      ],
+    });
+    await seedArtistRule({ artistMbid: "artist-blocked", verdict: "block" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    await crawlCatalogue({ limit: 1, maxHop: 1 });
+
+    const artists = await db.execute(
+      "select external_id from crawl_frontier where kind = 'artist' order by external_id",
+    );
+    expect(artists.rows.map((row) => text(row.external_id))).toEqual([
+      "artist-blocked",
+      "artist-discovery",
+    ]);
+  });
+
+  it("split counters remain exact and tracksSkipped is their sum", async () => {
+    await db.execute("update labels set seed_state = 'disabled'");
+    await db.execute({
+      args: ["lbl_counter_in", "Counter In", "counter-in", "label-counter-in", NOW, NOW],
+      sql: `insert into labels (id, name, slug, seed_state, mb_label_id, created_at, updated_at)
+            values (?, ?, ?, 'enabled', ?, ?, ?)`,
+    });
+    await db.execute({
+      args: ["lbl_counter_out", "Counter Out", "counter-out", "label-counter-out", NOW, NOW],
+      sql: `insert into labels (id, name, slug, seed_state, mb_label_id, created_at, updated_at)
+            values (?, ?, ?, 'disabled', ?, ?, ?)`,
+    });
+    await db.execute(
+      `insert into tracks (track_id, title, artists_json, duration_ms)
+       values ('mb_rec-counter-held', 'Already held', '["Held"]', 180000)`,
+    );
+    await seedArtistRule({ artistMbid: "artist-counter-block", verdict: "block" });
+    await seedArtistRule({ artistMbid: "artist-counter-allow", verdict: "allow" });
+
+    const counterReleases: [string, string][] = [
+      ["release-counter-in", "counter-in"],
+      ["release-counter-out", "counter-out"],
+    ];
+
+    for (const [releaseId, labelSlug] of counterReleases) {
+      await seedFrontierNode({
+        createdAt: NOW,
+        externalId: releaseId,
+        hop: 0,
+        id: `musicbrainz:release:${releaseId}`,
+        kind: "release",
+        labelSlug,
+      });
+    }
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        let body: object = {};
+
+        if (url.includes("/release/release-counter-in")) {
+          body = ruleTestRelease({
+            id: "release-counter-in",
+            labelMbid: "label-counter-in",
+            labelName: "Counter In",
+            tracks: [
+              {
+                credits: [{ id: "artist-held", name: "Held" }],
+                id: "rec-counter-held",
+                title: "Already held",
+              },
+              {
+                credits: [{ id: "artist-counter-block", name: "Blocked" }],
+                id: "rec-counter-block",
+                title: "Blocked",
+              },
+            ],
+          });
+        } else if (url.includes("/release/release-counter-out")) {
+          body = ruleTestRelease({
+            id: "release-counter-out",
+            labelMbid: "label-counter-out",
+            labelName: "Counter Out",
+            tracks: [
+              {
+                credits: [{ id: "artist-counter-allow", name: "Allowed" }],
+                id: "rec-counter-allow",
+                title: "Allowed",
+              },
+              {
+                credits: [{ id: "artist-counter-other", name: "Other" }],
+                id: "rec-counter-label",
+                title: "Label gated",
+              },
+            ],
+          });
+        }
+
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 4, maxHop: 0 });
+
+    expect(pass.tracksFound).toBe(4);
+    expect(pass.tracksAllowedIn).toBe(1);
+    expect(pass.tracksSkippedHeld).toBe(1);
+    expect(pass.tracksSkippedLabelGate).toBe(1);
+    expect(pass.tracksSkippedArtistRule).toBe(1);
+    expect(pass.tracksSkipped).toBe(
+      pass.tracksSkippedHeld + pass.tracksSkippedLabelGate + pass.tracksSkippedArtistRule,
+    );
+    expect(pass.tracksWritten).toBe(1);
+
+    const notes = await db.execute(
+      `select external_id, note from crawl_frontier
+       where external_id in ('release-counter-in', 'release-counter-out')
+       order by external_id`,
+    );
+    expect(notes.rows.map((row) => `${text(row.external_id)}:${text(row.note)}`)).toEqual([
+      "release-counter-in:stored=0 skipped_held=1 skipped_label=0 skipped_rule=1",
+      "release-counter-out:stored=1 skipped_held=0 skipped_label=1 skipped_rule=0",
+    ]);
+  });
+});
+
+describe("the allowed-artist re-arm", () => {
+  it("roots an already-pending allowed artist at hop 0", async () => {
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedFrontierNode({
+      createdAt: NOW,
+      externalId: "artist-pending-allow",
+      hop: 2,
+      id: "musicbrainz:artist:artist-pending-allow",
+      kind: "artist",
+      labelSlug: "old-provenance",
+    });
+    await seedArtistRule({ artistMbid: "artist-pending-allow", verdict: "allow" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 0, maxHop: 2 });
+    expect(pass.artistsRearmed).toBe(1);
+
+    const node = await db.execute(
+      `select cursor, hop, label_slug, parent_id, state from crawl_frontier
+       where id = 'musicbrainz:artist:artist-pending-allow'`,
+    );
+    expect(node.rows[0]?.state).toBe("pending");
+    expect(Number(node.rows[0]?.cursor)).toBe(0);
+    expect(Number(node.rows[0]?.hop)).toBe(0);
+    expect(node.rows[0]?.label_slug).toBeNull();
+    expect(node.rows[0]?.parent_id).toBeNull();
+  });
+
+  it("roots a failed allowed artist without bypassing its backoff", async () => {
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedFrontierNode({
+      createdAt: NOW,
+      externalId: "artist-failed-allow",
+      hop: 2,
+      id: "musicbrainz:artist:artist-failed-allow",
+      kind: "artist",
+      labelSlug: "old-provenance",
+      state: "failed",
+    });
+    await db.execute({
+      args: [NOW],
+      sql: `update crawl_frontier
+            set cursor = 73, failures = 2, attempted_at = ?,
+                parent_id = 'musicbrainz:artist:old-parent'
+            where id = 'musicbrainz:artist:artist-failed-allow'`,
+    });
+    await seedArtistRule({ artistMbid: "artist-failed-allow", verdict: "allow" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 0, maxHop: 2 });
+    expect(pass.artistsRearmed).toBe(1);
+
+    const node = await db.execute(
+      `select attempted_at, cursor, failures, hop, label_slug, parent_id, state
+       from crawl_frontier where id = 'musicbrainz:artist:artist-failed-allow'`,
+    );
+    expect(node.rows[0]?.state).toBe("failed");
+    expect(Number(node.rows[0]?.cursor)).toBe(0);
+    expect(Number(node.rows[0]?.failures)).toBe(2);
+    expect(Number(node.rows[0]?.hop)).toBe(0);
+    expect(node.rows[0]?.attempted_at).toBe(NOW);
+    expect(node.rows[0]?.label_slug).toBeNull();
+    expect(node.rows[0]?.parent_id).toBeNull();
+  });
+
+  it("an allowed artist's node is minted at hop 0 and its billed releases store from a disabled label", async () => {
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedLabel("Allowed Label", "allowed-label", "disabled");
+    await db.execute(
+      "update labels set mb_label_id = 'label-allowed' where id = 'lbl_allowed-label'",
+    );
+    await seedArtistRule({ artistMbid: "artist-allowed", verdict: "allow" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/release?artist=artist-allowed")) {
+          return json({ "release-count": 1, releases: [{ id: "release-allowed-backcat" }] });
+        }
+        if (url.includes("/release/release-allowed-backcat")) {
+          return json(
+            ruleTestRelease({
+              id: "release-allowed-backcat",
+              labelMbid: "label-allowed",
+              labelName: "Allowed Label",
+              tracks: [
+                {
+                  credits: [{ id: "artist-allowed", name: "Allowed Artist" }],
+                  id: "rec-allowed-backcat",
+                  title: "Allowed back catalogue",
+                },
+              ],
+            }),
+          );
+        }
+
+        return json({});
+      }),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    const browse = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(browse.artistsRearmed).toBe(1);
+
+    const artistNode = await db.execute(
+      "select hop from crawl_frontier where id = 'musicbrainz:artist:artist-allowed'",
+    );
+    expect(Number(artistNode.rows[0]?.hop)).toBe(0);
+
+    const release = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(release.tracksAllowedIn).toBe(1);
+    expect(release.tracksWritten).toBe(1);
+  });
+
+  it("a second allowed-artist re-arm pass is a no-op", async () => {
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedArtistRule({ artistMbid: "artist-allowed", verdict: "allow" });
+
+    const { crawlCatalogue } = await import("./crawl");
+    expect((await crawlCatalogue({ limit: 0 })).artistsRearmed).toBe(1);
+    expect((await crawlCatalogue({ limit: 0 })).artistsRearmed).toBe(0);
+
+    const stamped = await db.execute(
+      "select rearmed_at from artist_rules where artist_mbid = 'artist-allowed'",
+    );
+    expect(stamped.rows[0]?.rearmed_at).not.toBeNull();
+  });
+
+  it("an owed forward allow replay cannot be consumed by the daily batch", async () => {
+    const before = "2026-07-01T00:00:00.000Z";
+    await db.execute("update labels set seed_state = 'disabled'");
+
+    for (let index = 0; index <= 10; index += 1) {
+      const artistMbid = `artist-batch-${String(index).padStart(2, "0")}`;
+      await seedArtistRule({ artistMbid, verdict: "allow" });
+      await seedFrontierNode({
+        createdAt: before,
+        externalId: artistMbid,
+        hop: 0,
+        id: `musicbrainz:artist:${artistMbid}`,
+        kind: "artist",
+        labelSlug: null,
+        state: "done",
+      });
+    }
+    await db.execute({
+      args: [before],
+      sql: "update crawl_frontier set done_at = ? where state = 'done'",
+    });
+
+    const { crawlCatalogue } = await import("./crawl");
+    const first = await crawlCatalogue({ limit: 0, maxHop: 2 });
+    expect(first.artistsRearmed).toBe(10);
+
+    const overflow = await db.execute(
+      `select node.state, rules.rearmed_at
+       from crawl_frontier as node
+       join artist_rules as rules on rules.artist_mbid = node.external_id
+       where node.id = 'musicbrainz:artist:artist-batch-10'`,
+    );
+    expect(overflow.rows[0]?.state).toBe("done");
+    expect(overflow.rows[0]?.rearmed_at).toBeNull();
+
+    const second = await crawlCatalogue({ limit: 0, maxHop: 2 });
+    expect(second.artistsRearmed).toBe(1);
+    const rearmed = await db.execute(
+      "select state from crawl_frontier where id = 'musicbrainz:artist:artist-batch-10'",
+    );
+    expect(rearmed.rows[0]?.state).toBe("pending");
+  });
+
+  it("daily allowed-artist re-arm reads tail-first and only mints new releases", async () => {
+    const before = "2026-07-01T00:00:00.000Z";
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedArtistRule({
+      artistMbid: "artist-daily",
+      rearmedAt: NOW,
+      verdict: "allow",
+    });
+    await seedFrontierNode({
+      createdAt: before,
+      externalId: "artist-daily",
+      hop: 0,
+      id: "musicbrainz:artist:artist-daily",
+      kind: "artist",
+      labelSlug: null,
+      state: "done",
+    });
+    await seedFrontierNode({
+      createdAt: before,
+      externalId: "release-daily-known",
+      hop: 1,
+      id: "musicbrainz:release:release-daily-known",
+      kind: "release",
+      labelSlug: null,
+      state: "done",
+    });
+    await db.execute({
+      args: [before],
+      sql: "update crawl_frontier set done_at = ? where state = 'done'",
+    });
+    const browseUrls: string[] = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        browseUrls.push(url);
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get("offset") ?? "0");
+        const limit = Number(parsed.searchParams.get("limit") ?? "100");
+        const releases = [{ id: "release-daily-known" }, { id: "release-daily-new" }];
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              "release-count": releases.length,
+              releases: releases.slice(offset, offset + limit),
+            }),
+            { status: 200 },
+          ),
+        );
+      }),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    const pass = await crawlCatalogue({ limit: 1, maxHop: 2 });
+
+    expect(pass.artistsRearmed).toBe(1);
+    expect(browseUrls).toHaveLength(2);
+    expect(new URL(browseUrls[0] ?? "http://invalid").searchParams.get("limit")).toBe("1");
+    const releases = await db.execute(
+      "select external_id, state from crawl_frontier where kind = 'release' order by external_id",
+    );
+    expect(releases.rows.map((row) => `${text(row.external_id)}:${text(row.state)}`)).toEqual([
+      "release-daily-known:done",
+      "release-daily-new:pending",
+    ]);
+  });
+
+  it("an allowed-artist forward watermark revives DONE releases once and then terminates", async () => {
+    const before = "2026-07-01T00:00:00.000Z";
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedArtistRule({ artistMbid: "artist-watermark", verdict: "allow" });
+    await seedFrontierNode({
+      createdAt: before,
+      externalId: "artist-watermark",
+      hop: 2,
+      id: "musicbrainz:artist:artist-watermark",
+      kind: "artist",
+      labelSlug: "old-provenance",
+      state: "done",
+    });
+    await seedFrontierNode({
+      createdAt: before,
+      externalId: "release-watermark",
+      hop: 2,
+      id: "musicbrainz:release:release-watermark",
+      kind: "release",
+      labelSlug: "old-provenance",
+      state: "done",
+    });
+    await db.execute({
+      args: [before],
+      sql: "update crawl_frontier set done_at = ? where state = 'done'",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              "release-count": 1,
+              releases: [{ id: "release-watermark" }],
+            }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    const replay = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(replay.artistsRearmed).toBe(1);
+    expect(replay.nodesEnqueued).toBe(1);
+
+    const revived = await db.execute(
+      `select hop, parent_id, state from crawl_frontier
+       where id = 'musicbrainz:release:release-watermark'`,
+    );
+    expect(revived.rows[0]?.state).toBe("pending");
+    expect(Number(revived.rows[0]?.hop)).toBe(0);
+    expect(revived.rows[0]?.parent_id).toBe("musicbrainz:artist:artist-watermark");
+
+    const second = await crawlCatalogue({ limit: 0, maxHop: 2 });
+    expect(second.artistsRearmed).toBe(0);
+    const artist = await db.execute(
+      "select done_at, state from crawl_frontier where id = 'musicbrainz:artist:artist-watermark'",
+    );
+    expect(artist.rows[0]?.state).toBe("done");
+    expect(artist.rows[0]?.done_at).not.toBe(before);
+  });
+
+  it("an allow-artist browse promotes an already-pending release into storable provenance", async () => {
+    await db.execute("update labels set seed_state = 'disabled'");
+    await db.execute("update labels set seed_state = 'enabled' where slug = 'medschool'");
+    await seedArtistRule({
+      artistMbid: "artist-promote",
+      rearmedAt: NOW,
+      verdict: "allow",
+    });
+    await seedFrontierNode({
+      createdAt: NOW,
+      externalId: "artist-promote",
+      hop: 0,
+      id: "musicbrainz:artist:artist-promote",
+      kind: "artist",
+      labelSlug: null,
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: "release-promote-target",
+      hop: 2,
+      id: "musicbrainz:release:release-promote-target",
+      kind: "release",
+      labelSlug: "anjunabeats",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-12T00:00:00.000Z",
+      externalId: "release-promote-priority",
+      hop: 0,
+      id: "musicbrainz:release:release-promote-priority",
+      kind: "release",
+      labelSlug: "medschool",
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes("/release?artist=artist-promote")) {
+          return json({ "release-count": 1, releases: [{ id: "release-promote-target" }] });
+        }
+        if (url.includes("/release/release-promote-priority")) {
+          return json(
+            ruleTestRelease({
+              id: "release-promote-priority",
+              labelMbid: "label-promote-priority",
+              labelName: "Medschool",
+              tracks: [
+                {
+                  credits: [{ id: "artist-priority", name: "Priority" }],
+                  id: "rec-promote-priority",
+                  title: "Priority release",
+                },
+              ],
+            }),
+          );
+        }
+
+        return json({});
+      }),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    await crawlCatalogue({ limit: 2, maxHop: 2 });
+
+    const promoted = await db.execute(
+      `select hop, label_slug, parent_id, state from crawl_frontier
+       where id = 'musicbrainz:release:release-promote-target'`,
+    );
+    expect(promoted.rows[0]?.state).toBe("pending");
+    expect(Number(promoted.rows[0]?.hop)).toBe(0);
+    expect(promoted.rows[0]?.label_slug).toBeNull();
+    expect(promoted.rows[0]?.parent_id).toBe("musicbrainz:artist:artist-promote");
+  });
+});
+
 describe("the scoped label re-arm — a widened ruling replays refused releases", () => {
   const SCOPED_LABEL_MBID = "label-scope-rearm";
   const SCOPED_LABEL_NAME = "Scope Re-arm Records";
@@ -973,6 +1848,48 @@ describe("the frontier drain — releases never starve behind a discovery wave",
     expect(picked.rows.map((row) => `${text(row.id)}:${text(row.state)}`)).toEqual([
       "mb:release:disabled-provenance-first:pending",
       "mb:release:enabled-provenance-second:done",
+    ]);
+  });
+
+  it("ranks an allow-artist subtree as storable release provenance", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+    await seedArtistRule({
+      artistMbid: "artist-allowed-order",
+      rearmedAt: NOW,
+      verdict: "allow",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: HOP2_RELEASE,
+      hop: 2,
+      id: "mb:release:ordinary-disabled-first",
+      kind: "release",
+      labelSlug: "anjunabeats",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-12T00:00:00.000Z",
+      externalId: SEED_RELEASE,
+      hop: 2,
+      id: "mb:release:allowed-subtree-second",
+      kind: "release",
+      labelSlug: "anjunabeats",
+    });
+    await db.execute(
+      `update crawl_frontier
+       set parent_id = 'musicbrainz:artist:artist-allowed-order'
+       where id = 'mb:release:allowed-subtree-second'`,
+    );
+
+    await crawlCatalogue({ limit: 1, maxHop: 2 });
+
+    const picked = await db.execute(
+      `select id, state from crawl_frontier
+       where id in ('mb:release:ordinary-disabled-first', 'mb:release:allowed-subtree-second')
+       order by id`,
+    );
+    expect(picked.rows.map((row) => `${text(row.id)}:${text(row.state)}`)).toEqual([
+      "mb:release:allowed-subtree-second:done",
+      "mb:release:ordinary-disabled-first:pending",
     ]);
   });
 

@@ -10,14 +10,16 @@
 // simply lands with `capture_status` at its DDL default, and a separate, operator-gated
 // pipeline decides whether the bytes are ever fetched.
 //
-// ── THE BOUNDARY GATE: enabled-label STORAGE + graph-distance DISCOVERY ──────────
-// There is NO genre inference here — no MusicBrainz tag, no Discogs style, no BPM band.
+// ── THE BOUNDARY GATE: label defaults + artist exceptions + graph discovery ─────
+// THE BOUNDARY GATE uses label defaults plus exact FIRST-credit artist exceptions. There is NO
+// genre inference here — no MusicBrainz tag, no Discogs style, no BPM band.
 // The operator already drew the boundary when he ruled on the labels (`labels.seed_state`,
 // docs/label-entity.md). Two things follow from it, and they are DISTINCT:
 //
-//   STORAGE — a release's tracks are written ONLY when the label that pressed it is one the
-//     operator ENABLED (`isEnabledLabel`, checked at the write chokepoint in `expandRelease`).
-//     A release on a non-enabled label is walked but stores nothing — no tracks, no album, no edges.
+//   STORAGE — `labels.seed_state` is the default: enabled stores, disabled/undecided skips.
+//     Artist rules are FIRST-credit exceptions at the `expandRelease` write chokepoint: a block
+//     can refuse an artist's billed records on an enabled label, and an allow can admit their billed
+//     records on a non-enabled one. Per-label rules beat global rules; names never participate.
 //
 //   DISCOVERY — the walk still runs to graph distance so it can FIND the next labels to rule on:
 //       hop 0 — a release on a label whose `seed_state` is `enabled`
@@ -30,9 +32,9 @@
 //
 // A label the walk DISCOVERS that nobody has ruled on enters as `undecided` (the
 // `labels` DDL default) and surfaces in the operator's attention queue. It is NOT
-// crawled — and, until enabled, its releases store nothing. A subsequent crawl seeds from it
-// (and stores it) only once the operator enables it. That is the self-widening-but-operator-
-// ratified loop: the crawler proposes, the operator rules.
+// crawled as a label seed until enabled. An allow-artist browse can still reach it and admit only
+// that artist's billed records. That is the self-widening-but-operator-ratified loop: the crawler
+// proposes, the operator rules, and exact exceptions never widen discovery without a ruling.
 //
 // ── WHY MUSICBRAINZ CARRIES THE WALK ───────────────────────────────────────────
 // MusicBrainz is the only one of the three sources that is RECORDING-centric, which is
@@ -144,6 +146,12 @@ export const REARM_BATCH = 10;
 /** Scope-widening label re-arms per pass, oldest watermark first. */
 export const REARM_SCOPED_BATCH = 10;
 
+/** Allow-rule artist nodes minted/revived per pass, and stale allowed-artist subscriptions re-armed. */
+export const REARM_ALLOWED_BATCH = 10;
+
+/** Hard ceiling on the one per-tick rules read; overflow fails the pass instead of losing a rule. */
+const ARTIST_RULE_MEMO_LIMIT = 10_000;
+
 // The retry window for a FAILED node, growing with its consecutive-failure count — the
 // shipped `backfill_*` backoff, verbatim in shape (backfill.ts): base × 2^failures,
 // capped, so a node the vendor keeps throttling backs off hard instead of being retried
@@ -203,6 +211,11 @@ type TrackCandidate = {
 
 /** What one `crawl_catalogue` pass did. Every number here is real, not an estimate. */
 export type CrawlPass = {
+  /**
+   * Initial distinct allow identities processed (their rules stamped; failed nodes stay failed)
+   * plus stale allowed-artist browse nodes actually tail-rearmed this pass.
+   */
+  artistsRearmed: number;
   dryRun: boolean;
   /** Frontier nodes expanded this pass. */
   expanded: number;
@@ -228,7 +241,15 @@ export type CrawlPass = {
   seedsRearmed: number;
   /** Catalogue tracks the walk SAW on the releases it expanded. */
   tracksFound: number;
-  /** Tracks already in the archive (by ISRC, or by MB recording id) — the idempotence. */
+  /** Candidates admitted by an allow because their label default was non-enabled. */
+  tracksAllowedIn: number;
+  /** Candidates refused by an explicit block rule. */
+  tracksSkippedArtistRule: number;
+  /** Tracks already in the archive (by ISRC, MB recording id, or album/title fold). */
+  tracksSkippedHeld: number;
+  /** Candidates refused by their non-enabled label default. */
+  tracksSkippedLabelGate: number;
+  /** Exact sum of held/idempotent, label-default, and artist-rule skips. */
   tracksSkipped: number;
   /** Catalogue rows actually written into `tracks`. Never a `findings` row. */
   tracksWritten: number;
@@ -396,7 +417,7 @@ async function settle(
 /**
  * The pass's pick: the next `limit` nodes to expand — breadth-first and deterministic
  * (`hop, demand_rank, created_at, id`) WITHIN each class of a kind-aware split. The RELEASE half
- * drains storable provenance (currently an enabled seed label) before non-storable provenance;
+ * drains storable provenance (an enabled label or allow-artist parent) before non-storable provenance;
  * the DISCOVERY half is unchanged. `demand_rank` (docs/catalogue-crawler.md § Demand) sits AFTER
  * `hop`, so a demanded entity's subtree is expanded before its undemanded siblings AT THE SAME
  * HOP within its class — never ahead of a nearer hop in that class. It takes `pending`
@@ -438,7 +459,14 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
     args: [...cutoffs, releaseShare],
     sql: `select crawl_frontier.id, kind, source, external_id, hop, cursor, failures, label_slug,
                 crawl_frontier.done_at,
-                case when provenance_label.seed_state = 'enabled' then 1 else 0 end as is_storable
+                case
+                  when provenance_label.seed_state = 'enabled' then 1
+                  when crawl_frontier.parent_id in (
+                    select 'musicbrainz:artist:' || artist_mbid
+                    from artist_rules where verdict = 'allow'
+                  ) then 1
+                  else 0
+                end as is_storable
           from crawl_frontier
           left join labels as provenance_label on provenance_label.slug = crawl_frontier.label_slug
           where kind = 'release' and ${eligible}
@@ -673,6 +701,104 @@ async function rearmScopedLabelReleases(): Promise<number> {
 }
 
 // ── The writes ───────────────────────────────────────────────────────────────
+
+/**
+ * THE ALLOW-ARTIST RE-ARM — an allow is also a request to walk that artist's back catalogue.
+ *
+ * Rules, rather than `artists` rows, own the request because an allowed MusicBrainz identity may
+ * not have an entity row yet. One bounded DISTINCT read chooses artists with an unstamped allow;
+ * each gets a hop-0 forward browse node. An existing pending or drained node is rooted at the head;
+ * a drained node keeps its old `done_at` as the replay watermark. A failed node keeps its failure
+ * state/backoff but is likewise rooted at cursor 0, so its eventual retry cannot resume halfway
+ * through the newly-allowed catalogue. All selected rules for the identity are stamped together,
+ * so global + per-label duplicates cost one browse and the next pass is a no-op.
+ */
+async function rearmAllowedArtists(): Promise<number> {
+  const db = await getDb();
+  const selected = await db.execute({
+    args: [REARM_ALLOWED_BATCH],
+    sql: `select artist_mbid
+          from artist_rules
+          where verdict = 'allow' and rearmed_at is null
+          group by artist_mbid
+          order by min(created_at) asc, artist_mbid asc
+          limit ?`,
+  });
+  const artistMbids = typedRows<{ artist_mbid: string }>(selected.rows).map(
+    (row) => row.artist_mbid,
+  );
+
+  if (artistMbids.length === 0) {
+    return 0;
+  }
+
+  const now = new Date().toISOString();
+
+  for (const artistMbid of artistMbids) {
+    await db.execute({
+      args: [frontierId("musicbrainz", "artist", artistMbid), artistMbid, now, now],
+      sql: `insert into crawl_frontier
+              (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor,
+               created_at, updated_at)
+            values (?, 'artist', 'musicbrainz', ?, 0, null, null, 'pending', 0, ?, ?)
+            on conflict (id) do update set
+              state = case when crawl_frontier.state = 'failed' then 'failed' else 'pending' end,
+              cursor = 0, hop = 0, parent_id = null,
+              label_slug = null, updated_at = excluded.updated_at
+            where crawl_frontier.state in ('done', 'failed', 'pending')`,
+    });
+  }
+
+  await db.execute({
+    args: [now, ...artistMbids],
+    sql: `update artist_rules set rearmed_at = ?
+          where verdict = 'allow' and rearmed_at is null
+            and artist_mbid in (${artistMbids.map(() => "?").join(", ")})`,
+  });
+
+  logEvent("info", "crawl.artists-rearmed", { count: artistMbids.length, mode: "forward" });
+  return artistMbids.length;
+}
+
+/** Daily tail-first subscription for artists carrying any allow rule. */
+async function rearmStaleAllowedArtists(): Promise<number> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - REARM_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+  const result = await db.execute({
+    args: [REARM_TAIL, now, cutoff, REARM_ALLOWED_BATCH],
+    sql: `update crawl_frontier
+          set state = 'pending', cursor = ?, updated_at = ?
+          where id in (
+            select node.id from crawl_frontier as node
+            where node.kind = 'artist'
+              and node.source = 'musicbrainz'
+              and node.state = 'done'
+              and node.done_at is not null
+              and node.done_at < ?
+              and exists (
+                select 1 from artist_rules
+                where artist_rules.artist_mbid = node.external_id
+                  and artist_rules.verdict = 'allow'
+              )
+              and not exists (
+                select 1 from artist_rules as outstanding
+                where outstanding.artist_mbid = node.external_id
+                  and outstanding.verdict = 'allow'
+                  and outstanding.rearmed_at is null
+              )
+            order by node.done_at asc, node.id asc
+            limit ?
+          )`,
+  });
+  const rearmed = result.rowsAffected;
+
+  if (rearmed > 0) {
+    logEvent("info", "crawl.artists-rearmed", { count: rearmed, mode: "tail" });
+  }
+
+  return rearmed;
+}
 
 /**
  * Write a release's tracks into `tracks` as CATALOGUE rows — and nowhere near `findings`.
@@ -915,7 +1041,11 @@ type Expansion = {
   enqueued: number;
   labelsDiscovered: string[];
   next: { cursor: number; state: CrawlNodeState; note?: string };
+  tracksAllowedIn: number;
   tracksFound: number;
+  tracksSkippedArtistRule: number;
+  tracksSkippedHeld: number;
+  tracksSkippedLabelGate: number;
   tracksSkipped: number;
   tracksWritten: number;
 };
@@ -924,8 +1054,12 @@ const EMPTY: Expansion = {
   enqueued: 0,
   labelsDiscovered: [],
   next: { cursor: 0, state: "done" },
+  tracksAllowedIn: 0,
   tracksFound: 0,
   tracksSkipped: 0,
+  tracksSkippedArtistRule: 0,
+  tracksSkippedHeld: 0,
+  tracksSkippedLabelGate: 0,
   tracksWritten: 0,
 };
 
@@ -1075,12 +1209,12 @@ async function enqueueReleaseNodes(
   node: FrontierRow,
   releases: { id: string }[],
   childHop: number,
-  scopedWatermark?: string,
+  replayWatermark?: string,
 ): Promise<number> {
   let newlyEnqueued = 0;
 
   for (const release of releases) {
-    if (!scopedWatermark) {
+    if (!replayWatermark) {
       newlyEnqueued += await enqueue({
         externalId: release.id,
         hop: childHop,
@@ -1105,16 +1239,21 @@ async function enqueueReleaseNodes(
         parentId: node.id,
         source: "musicbrainz",
         updatedAt: now,
-        watermark: scopedWatermark,
+        watermark: replayWatermark,
       },
       sql: `insert into crawl_frontier
               (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
             values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug, :createdAt, :updatedAt)
             on conflict (id) do update set
               state = 'pending', cursor = 0, hop = 0,
-              label_slug = excluded.label_slug, updated_at = excluded.updated_at
-            where crawl_frontier.state = 'done'
-              and crawl_frontier.done_at < :watermark`,
+              parent_id = excluded.parent_id, label_slug = excluded.label_slug,
+              updated_at = excluded.updated_at
+            where (crawl_frontier.state = 'done'
+                   and crawl_frontier.done_at < :watermark)
+               or (crawl_frontier.state = 'pending'
+                   and (crawl_frontier.parent_id is not :parentId
+                        or crawl_frontier.hop <> 0
+                        or crawl_frontier.label_slug is not :labelSlug))`,
     });
     newlyEnqueued += result.rowsAffected;
   }
@@ -1123,34 +1262,48 @@ async function enqueueReleaseNodes(
 }
 
 /**
- * Resolve the durable scope watermark for one page of a scoped full-forward label replay.
- * The prior `done_at` is retained on the pending node until the replay finishes, so this lookup
- * works even when pagination or retry pushes the next page into a later isolate.
+ * Resolve the durable watermark for a full-forward label or allow-artist replay. The prior
+ * `done_at` is retained on the pending browse node until its final settle, so later pages keep
+ * reviving release nodes whose terminal state predates the scope change, even across isolates.
  */
-async function scopedLabelWatermark(node: FrontierRow): Promise<string | undefined> {
-  if (
-    node.kind !== "label" ||
-    node.source !== "musicbrainz" ||
-    node.cursor < 0 ||
-    !node.done_at ||
-    !node.label_slug
-  ) {
+async function forwardReplayWatermark(node: FrontierRow): Promise<string | undefined> {
+  if (node.source !== "musicbrainz" || node.cursor < 0) {
     return undefined;
   }
 
   const db = await getDb();
-  const result = await db.execute({
-    args: [node.label_slug, node.external_id, node.done_at],
-    sql: `select scope_changed_at from labels
-          where slug = ?
-            and seed_state = 'enabled'
-            and (mb_label_id is null or mb_label_id = ?)
-            and scope_changed_at is not null
-            and scope_changed_at > ?
-          limit 1`,
-  });
 
-  return typedRows<{ scope_changed_at: string }>(result.rows)[0]?.scope_changed_at;
+  if (node.kind === "label" && node.done_at && node.label_slug) {
+    const result = await db.execute({
+      args: [node.label_slug, node.external_id, node.done_at],
+      sql: `select scope_changed_at from labels
+            where slug = ?
+              and seed_state = 'enabled'
+              and (mb_label_id is null or mb_label_id = ?)
+              and scope_changed_at is not null
+              and scope_changed_at > ?
+            limit 1`,
+    });
+
+    return typedRows<{ scope_changed_at: string }>(result.rows)[0]?.scope_changed_at;
+  }
+
+  if (node.kind !== "artist") {
+    return undefined;
+  }
+
+  // An artist replay is warranted by ANY applicable allow: global and per-label rules both need
+  // the full release list, while the release gate later decides which label scope actually admits
+  // each candidate. The durable watermark is max(max(created_at, updated_at)) for this identity.
+  const result = await db.execute({
+    args: [node.external_id],
+    sql: `select max(max(created_at, updated_at)) as watermark
+          from artist_rules
+          where artist_mbid = ? and verdict = 'allow'`,
+  });
+  const watermark = typedRows<{ watermark: string | null }>(result.rows)[0]?.watermark ?? null;
+
+  return watermark && (!node.done_at || watermark > node.done_at) ? watermark : undefined;
 }
 
 /**
@@ -1189,12 +1342,12 @@ async function expandForwardBrowse(
   key: string,
   childHop: number,
 ): Promise<Expansion> {
-  const scopedWatermark = await scopedLabelWatermark(node);
+  const replayWatermark = await forwardReplayWatermark(node);
   const browse = await mb<MbReleaseBrowse>(
     `/release?${key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
   );
-  const releases = browseReleases(browse, scopedWatermark !== undefined);
-  const enqueued = await enqueueReleaseNodes(node, releases, childHop, scopedWatermark);
+  const releases = browseReleases(browse, node.kind === "label" && replayWatermark !== undefined);
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop, replayWatermark);
 
   // Cursor movement follows MusicBrainz's RAW page array, including scoped status exclusions and
   // malformed entries. Otherwise one dropped item in a full page advances by 99, overlaps the next
@@ -1283,33 +1436,174 @@ async function expandRearmedBrowse(
   };
 }
 
-// ── THE STORAGE GATE: enabled-label-only ───────────────────────────────────────
-// The whitelist (`labels.seed_state = 'enabled'`) now gates STORAGE, not only seeding. A
-// release's tracks are WRITTEN only when the label that pressed it is one the operator
-// ENABLED; the 2-hop walk is a label-DISCOVERY mechanism (it surfaces unruled labels into
-// the ruling queue), never a licence to store. So a hop-2 release on a reggae/jazz/major
-// label is still walked for the labels it reveals, then its tracks are dropped on the floor.
+// ── THE STORAGE GATE: label default + FIRST-credit artist exception ─────────────
+// `labels.seed_state` is the default, not the final verdict. Exact FIRST-credit artist rules are
+// exceptions: per-label beats global, then enabled stores and non-enabled skips. Names never match
+// rules. Exact MB label identity wins over the name fold; an unsafe fold collision falls back to the
+// label default only, so two namesakes never borrow each other's artist scope.
 //
-// Read ONCE per crawl tick (tens of labels), never per-release in the hot loop: memoized in
-// `enabledLabelFolds`, which `crawlCatalogue` clears at the top of every pass — so a mid-crawl
-// ruling is honoured on the NEXT tick. Matched by the same aggressive `fold` the rest of the
-// file uses ("Medschool" ⇄ "Med School"), against the ARCHIVE spelling already resolved into
-// `labelName`, so the gate agrees with `linkTracksToLabel` and the seed walk by construction.
-let enabledLabelFolds: null | Set<string> = null;
+// Read ONCE per crawl tick (the bounded `artist_rules` read plus the label entity set), never once
+// per candidate. `crawlCatalogue` clears the memo at the pass boundary so a ruling made since the
+// last tick takes effect atomically on the next one.
+type LabelScopeEntry = { enabled: boolean; labelId: string };
+type FoldScopeEntry = "ambiguous" | LabelScopeEntry;
+type ScopeMemo = {
+  enabledLabelFolds: Set<string>;
+  globalAllow: Set<string>;
+  globalBlock: Set<string>;
+  labelAllow: Map<string, Set<string>>;
+  labelBlock: Map<string, Set<string>>;
+  labelByFold: Map<string, FoldScopeEntry>;
+  labelByMbid: Map<string, LabelScopeEntry>;
+};
+type ArtistRuleMemoRow = {
+  artist_mbid: string;
+  label_id: string | null;
+  verdict: "allow" | "block";
+};
+type ReleaseLabelScope = { enabled: boolean; labelId: string | null; rulesAllowed: boolean };
+type ScopeDecision = "allow" | "block" | "default";
 
-async function isEnabledLabel(labelName: null | string | undefined): Promise<boolean> {
+let scopeMemo: null | ScopeMemo = null;
+
+function addLabelRule(map: Map<string, Set<string>>, labelId: string, artistMbid: string): void {
+  const artists = map.get(labelId) ?? new Set<string>();
+  artists.add(artistMbid);
+  map.set(labelId, artists);
+}
+
+async function getScopeMemo(): Promise<ScopeMemo> {
+  if (scopeMemo) {
+    return scopeMemo;
+  }
+
+  const labels = await listLabels();
+  const db = await getDb();
+  const result = await db.execute({
+    args: [ARTIST_RULE_MEMO_LIMIT + 1],
+    sql: `select artist_mbid, label_id, verdict from artist_rules
+          order by id asc limit ?`,
+  });
+  const rules = typedRows<ArtistRuleMemoRow>(result.rows);
+
+  if (rules.length > ARTIST_RULE_MEMO_LIMIT) {
+    throw new Error(`artist rule memo exceeds ${ARTIST_RULE_MEMO_LIMIT} rows`);
+  }
+
+  const memo: ScopeMemo = {
+    enabledLabelFolds: new Set<string>(),
+    globalAllow: new Set<string>(),
+    globalBlock: new Set<string>(),
+    labelAllow: new Map<string, Set<string>>(),
+    labelBlock: new Map<string, Set<string>>(),
+    labelByFold: new Map<string, FoldScopeEntry>(),
+    labelByMbid: new Map<string, LabelScopeEntry>(),
+  };
+
+  for (const label of labels) {
+    const entry = { enabled: label.seedState === "enabled", labelId: label.id };
+    const key = fold(label.name);
+
+    if (label.mbLabelId) {
+      memo.labelByMbid.set(label.mbLabelId, entry);
+    }
+
+    if (!key) {
+      continue;
+    }
+
+    if (entry.enabled) {
+      memo.enabledLabelFolds.add(key);
+    }
+
+    const previous = memo.labelByFold.get(key);
+    memo.labelByFold.set(
+      key,
+      !previous
+        ? entry
+        : previous === "ambiguous" || previous.labelId !== label.id
+          ? "ambiguous"
+          : entry,
+    );
+  }
+
+  for (const rule of rules) {
+    if (!rule.label_id) {
+      (rule.verdict === "allow" ? memo.globalAllow : memo.globalBlock).add(rule.artist_mbid);
+      continue;
+    }
+
+    addLabelRule(
+      rule.verdict === "allow" ? memo.labelAllow : memo.labelBlock,
+      rule.label_id,
+      rule.artist_mbid,
+    );
+  }
+
+  scopeMemo = memo;
+  return memo;
+}
+
+async function releaseLabelScope(
+  mbLabelId: null | string,
+  labelName: null | string | undefined,
+): Promise<ReleaseLabelScope> {
+  const memo = await getScopeMemo();
+  const exact = mbLabelId ? memo.labelByMbid.get(mbLabelId) : undefined;
+
+  if (exact) {
+    return { ...exact, rulesAllowed: true };
+  }
+
   const key = labelName ? fold(labelName) : "";
+  const fallback = key ? memo.labelByFold.get(key) : undefined;
 
-  if (!key) {
-    return false;
+  if (fallback && fallback !== "ambiguous") {
+    return { ...fallback, rulesAllowed: true };
   }
 
-  if (!enabledLabelFolds) {
-    const enabled = await listLabels("enabled");
-    enabledLabelFolds = new Set(enabled.map((label) => fold(label.name)).filter(Boolean));
+  if (fallback === "ambiguous") {
+    logEvent("warn", "crawl.scope-ambiguous", { label: labelName ?? null, mbLabelId });
+
+    return {
+      enabled: memo.enabledLabelFolds.has(key),
+      labelId: null,
+      rulesAllowed: false,
+    };
   }
 
-  return enabledLabelFolds.has(key);
+  return { enabled: false, labelId: null, rulesAllowed: true };
+}
+
+/** The exact precedence function: FIRST non-null credit; per-label, then global, then default. */
+function artistScopeVerdict(
+  candidate: TrackCandidate,
+  scope: ReleaseLabelScope,
+  memo: ScopeMemo,
+): ScopeDecision {
+  const first = candidate.creditMbids.find((mbid): mbid is string => mbid !== null) ?? null;
+
+  if (!first || !scope.rulesAllowed) {
+    return "default";
+  }
+
+  if (scope.labelId) {
+    if (memo.labelAllow.get(scope.labelId)?.has(first)) {
+      return "allow";
+    }
+    if (memo.labelBlock.get(scope.labelId)?.has(first)) {
+      return "block";
+    }
+  }
+
+  if (memo.globalAllow.has(first)) {
+    return "allow";
+  }
+  if (memo.globalBlock.has(first)) {
+    return "block";
+  }
+
+  return "default";
 }
 
 /**
@@ -1320,10 +1614,9 @@ async function isEnabledLabel(labelName: null | string | undefined): Promise<boo
  *
  * It also mints a `labels` row for the release's label. THAT is the widening loop: a
  * label nobody has ruled on enters `undecided` and lands in the operator's attention
- * queue. It does not get crawled until he enables it — and, since the STORAGE GATE, its
- * tracks are not stored until then either; the walk only ever DISCOVERS it. When the label
- * IS enabled it mints + links the `albums` row for the release, folded on the release-group
- * MBID (`inc=release-groups`) — the album edge is written inline here, not deferred.
+ * queue. It does not become a seed until he enables it; artist allows can still admit exactly the
+ * billed records they cover. An album is minted + linked only when at least one candidate survives
+ * that gate, folded on the release-group MBID (`inc=release-groups`).
  */
 async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansion> {
   const release = await mb<MbReleaseDetail>(
@@ -1438,15 +1731,41 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   }
 
   // ── THE STORAGE GATE ──────────────────────────────────────────────────────────
-  // Store this release's tracks ONLY when its label is one the operator ENABLED. A hop-2
-  // release on a non-enabled label was still walked above (its label was DISCOVERED into the
-  // ruling queue via `ensureLabel`), but nothing is stored for it — no tracks, no album, no
-  // edges. The artist-hop walk BELOW still runs regardless, because the walk is how the crawler
-  // reaches the next labels to rule on; it is naturally hop-bounded and terminates by construction.
-  let skipped = candidates.length;
+  // Apply FIRST-credit exceptions to the label default. The artist-hop walk below remains
+  // deliberately unfiltered: storage scope never prunes discovery, and maxHop still terminates it.
+  const scope = await releaseLabelScope(mbLabelId, mbLabelName ?? labelName);
+  const memo = await getScopeMemo();
+  const labelCanAllow = scope.labelId ? (memo.labelAllow.get(scope.labelId)?.size ?? 0) > 0 : false;
+  const canAllow = scope.rulesAllowed && (memo.globalAllow.size > 0 || labelCanAllow);
+  const kept: TrackCandidate[] = [];
+  let tracksAllowedIn = 0;
+  let tracksSkippedArtistRule = 0;
+  let tracksSkippedLabelGate = 0;
+
+  // Preserve the cheap non-enabled no-op: no candidate verdict work when no allow can match.
+  if (!scope.enabled && !canAllow) {
+    tracksSkippedLabelGate = candidates.length;
+  } else {
+    for (const candidate of candidates) {
+      const verdict = artistScopeVerdict(candidate, scope, memo);
+
+      if (verdict === "block") {
+        tracksSkippedArtistRule += 1;
+      } else if (verdict === "allow") {
+        kept.push(candidate);
+        tracksAllowedIn += scope.enabled ? 0 : 1;
+      } else if (scope.enabled) {
+        kept.push(candidate);
+      } else {
+        tracksSkippedLabelGate += 1;
+      }
+    }
+  }
+
+  let tracksSkippedHeld = 0;
   let written = 0;
 
-  if (await isEnabledLabel(labelName)) {
+  if (kept.length > 0) {
     // The album row, resolved ONCE up front (folded on the release-group MBID, slug fallback). It is
     // the same-album title-fold dedupe key `writeCatalogueTracks` reads (the Apple-twin guard) AND
     // the `album_id` edge stamped below — one resolve, so the two can never disagree. Resolved inside
@@ -1454,8 +1773,8 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     const albumId =
       (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null)) ?? null;
 
-    const result = await writeCatalogueTracks(candidates, albumId);
-    skipped = result.skipped;
+    const result = await writeCatalogueTracks(kept, albumId);
+    tracksSkippedHeld = result.skipped;
     written = result.written;
     const { writtenIds } = result;
 
@@ -1485,10 +1804,7 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
     await linkTracksToArtistEntities(
       writtenIds,
       new Map(
-        candidates.map((candidate) => [
-          catalogueTrackId(candidate.recordingId),
-          candidate.creditMbids,
-        ]),
+        kept.map((candidate) => [catalogueTrackId(candidate.recordingId), candidate.creditMbids]),
       ),
     );
 
@@ -1522,9 +1838,17 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   return {
     enqueued,
     labelsDiscovered,
-    next: { cursor: 0, state: "done" },
+    next: {
+      cursor: 0,
+      note: `stored=${written} skipped_held=${tracksSkippedHeld} skipped_label=${tracksSkippedLabelGate} skipped_rule=${tracksSkippedArtistRule}`,
+      state: "done",
+    },
+    tracksAllowedIn,
     tracksFound: candidates.length,
-    tracksSkipped: skipped,
+    tracksSkipped: tracksSkippedHeld + tracksSkippedLabelGate + tracksSkippedArtistRule,
+    tracksSkippedArtistRule,
+    tracksSkippedHeld,
+    tracksSkippedLabelGate,
     tracksWritten: written,
   };
 }
@@ -1549,12 +1873,12 @@ export async function crawlCatalogue({
   limit?: number;
   maxHop?: number;
 } = {}): Promise<CrawlPass> {
-  // Reset the storage gate's memo so this tick reads the enabled-label set fresh — a ruling the
-  // operator made since the last tick takes effect now, and stale enablement never leaks across ticks.
-  enabledLabelFolds = null;
+  // One immutable gate snapshot per tick: label identities/defaults and every artist exception.
+  scopeMemo = null;
 
   const hopLimit = Math.max(0, Math.min(maxHop, MAX_HOP_CEILING));
   const pass: CrawlPass = {
+    artistsRearmed: 0,
     dryRun,
     expanded: 0,
     failed: 0,
@@ -1566,8 +1890,12 @@ export async function crawlCatalogue({
     releasesRearmed: 0,
     seeded: 0,
     seedsRearmed: 0,
+    tracksAllowedIn: 0,
     tracksFound: 0,
     tracksSkipped: 0,
+    tracksSkippedArtistRule: 0,
+    tracksSkippedHeld: 0,
+    tracksSkippedLabelGate: 0,
     tracksWritten: 0,
   };
 
@@ -1587,6 +1915,8 @@ export async function crawlCatalogue({
   // label node, and the full replay must not be collapsed into a tail read. Both happen BEFORE the
   // pick so a re-armed browse node can expand in this very pass, bounded against frontier floods.
   pass.releasesRearmed = await rearmScopedLabelReleases();
+  pass.artistsRearmed = await rearmAllowedArtists();
+  pass.artistsRearmed += await rearmStaleAllowedArtists();
   pass.seedsRearmed = await rearmSeedLabels();
 
   const nodes = await pickNodes(limit);
@@ -1607,8 +1937,12 @@ export async function crawlCatalogue({
 
       pass.expanded += 1;
       pass.nodesEnqueued += expansion.enqueued;
+      pass.tracksAllowedIn += expansion.tracksAllowedIn;
       pass.tracksFound += expansion.tracksFound;
       pass.tracksWritten += expansion.tracksWritten;
+      pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
+      pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
+      pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;
       pass.tracksSkipped += expansion.tracksSkipped;
       pass.labelsDiscovered.push(...expansion.labelsDiscovered);
     } catch (error) {

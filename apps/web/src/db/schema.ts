@@ -3702,6 +3702,34 @@ export const labels = sqliteTable(
   ],
 );
 
+export const artistRules = sqliteTable(
+  "artist_rules",
+  {
+    artistMbid: text("artist_mbid").notNull(),
+    artistName: text("artist_name").notNull(),
+    artistSpotifyId: text("artist_spotify_id"),
+    checkedAt: text("checked_at"),
+    createdAt: text("created_at").notNull(),
+    id: text("id").primaryKey(),
+    labelId: text("label_id"),
+    rearmedAt: text("rearmed_at"),
+    resolvedMbid: text("resolved_mbid"),
+    resolvedName: text("resolved_name"),
+    source: text("source", { enum: ["operator", "triage"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+    verdict: text("verdict", { enum: ["allow", "block"] }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("artist_rules_label_artist_idx")
+      .on(table.labelId, table.artistMbid)
+      .where(sql`${table.labelId} is not null`),
+    uniqueIndex("artist_rules_global_artist_idx")
+      .on(table.artistMbid)
+      .where(sql`${table.labelId} is null`),
+    index("artist_rules_label_id_idx").on(table.labelId),
+  ],
+);
+
 // LABEL ALIASES — two spellings, one label, ISRC-anchored trust (RFC musickit-second-authority,
 // U2a). The `artist_socials` precedent: a per-label side table of alternative spellings, each
 // carrying its source + a candidate/confirmed status, so a second metadata authority (Apple's

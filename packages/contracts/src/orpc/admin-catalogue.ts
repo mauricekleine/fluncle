@@ -628,6 +628,8 @@ export const verifyCapture = oc
 /** One bounded crawl pass's real numbers. Nothing here is an estimate. */
 export const CrawlPassSchema = z
   .object({
+    /** Artist-browse nodes re-armed from allow rules this pass. */
+    artistsRearmed: z.number().optional(),
     dryRun: z.boolean(),
     /** Frontier nodes expanded this pass. */
     expanded: z.number(),
@@ -661,10 +663,18 @@ export const CrawlPassSchema = z
      * re-arm spreads over ticks. See docs/catalogue-crawler.md § the seed re-arm.
      */
     seedsRearmed: z.number(),
+    /** Tracks admitted by an artist allow rule over a non-enabled label default. */
+    tracksAllowedIn: z.number().optional(),
     /** Catalogue tracks the walk saw on the releases it expanded. */
     tracksFound: z.number(),
-    /** Tracks the archive already held (by ISRC, or by MB recording id) — the idempotence. */
+    /** Exact sum of held/idempotent, label-default, and artist-rule skips. */
     tracksSkipped: z.number(),
+    /** Tracks kept out by an artist rule. */
+    tracksSkippedArtistRule: z.number().optional(),
+    /** Candidate tracks already held by the archive and skipped by dedupe. */
+    tracksSkippedHeld: z.number().optional(),
+    /** Tracks kept out by the label's seed-state gate. */
+    tracksSkippedLabelGate: z.number().optional(),
     /** Catalogue rows written into `tracks`. Never a `findings` row. */
     tracksWritten: z.number(),
   })
