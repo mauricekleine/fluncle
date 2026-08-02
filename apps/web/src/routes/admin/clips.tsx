@@ -3,7 +3,7 @@ import { type ClipDTO, type RecordingDTO } from "@fluncle/contracts/orpc";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { readError } from "@/lib/read-error";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -29,6 +29,7 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type ClipSocialPost, isDripPaused, listClipPosts } from "@/lib/server/clip-social";
 import { listClips } from "@/lib/server/clips";
 import { listRecordings } from "@/lib/server/recordings";
+import { useAutoNotice } from "@/lib/use-auto-notice";
 import {
   ALL_FILTER,
   type ClipStatusFilter,
@@ -522,24 +523,4 @@ function EmptyLibrary() {
       </EmptyHeader>
     </Empty>
   );
-}
-
-// A transient notice that clears itself after 5s (the editor's pattern).
-function useAutoNotice(): readonly [
-  string | undefined,
-  Dispatch<SetStateAction<string | undefined>>,
-] {
-  const [value, setValue] = useState<string>();
-
-  useEffect(() => {
-    if (!value) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => setValue(undefined), 5000);
-
-    return () => window.clearTimeout(timer);
-  }, [value]);
-
-  return [value, setValue] as const;
 }

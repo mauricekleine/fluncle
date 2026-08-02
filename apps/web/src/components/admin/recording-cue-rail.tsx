@@ -8,7 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { type RecordingTracklistItem } from "@fluncle/contracts/orpc";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Badge } from "@fluncle/ui/components/badge";
 import { Button } from "@fluncle/ui/components/button";
 import {
@@ -24,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/
 import { formatClock } from "@/components/video";
 import { albumCoverAtSize } from "@/lib/media";
 import { type NewCue, parseArtists, recordingCueProgress } from "@/lib/recording-cues";
+import { useDebounced } from "@/lib/use-debounced";
 
 // The recording cue-authoring rail (RFC plan→recording→mixtape §8, surface 3). A TAKE's
 // cues carry the tracks the operator played, each ideally LINKED to a real Fluncle finding
@@ -427,18 +428,6 @@ function CueThumb({ src }: { src?: string }) {
   }
 
   return <div className="track-artwork-fallback size-8 shrink-0 rounded-sm border border-border" />;
-}
-
-function useDebounced<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-
-  return debounced;
 }
 
 async function searchCueFindings(q: string): Promise<CueFinding[]> {

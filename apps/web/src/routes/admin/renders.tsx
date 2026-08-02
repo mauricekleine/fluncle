@@ -8,7 +8,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type Dispatch, type ReactNode, type SetStateAction, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { readError } from "@/lib/read-error";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -36,6 +36,7 @@ import {
 import { Empty } from "@fluncle/ui/components/empty";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type ServiceHealthStatus, getServiceStatuses } from "@/lib/server/status";
+import { useAutoNotice } from "@/lib/use-auto-notice";
 import {
   type BoardTrackListItem,
   listRecentlyRenderedFindings,
@@ -684,24 +685,4 @@ function elapsedShort(fromIso: string, nowIso: string): string {
   const hours = Math.floor(minutes / 60);
 
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-}
-
-// A transient notice that clears itself after 5s (the clip library's pattern).
-function useAutoNotice(): readonly [
-  string | undefined,
-  Dispatch<SetStateAction<string | undefined>>,
-] {
-  const [value, setValue] = useState<string>();
-
-  useEffect(() => {
-    if (!value) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => setValue(undefined), 5000);
-
-    return () => window.clearTimeout(timer);
-  }, [value]);
-
-  return [value, setValue] as const;
 }

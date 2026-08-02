@@ -8,7 +8,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { type Dispatch, type SetStateAction, useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { readError } from "@/lib/read-error";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -33,6 +33,7 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { editionsLabels } from "@/lib/server/edition-email";
 import { listEditions } from "@/lib/server/editions";
 import { listGalaxyNames } from "@/lib/server/galaxies-map";
+import { useAutoNotice } from "@/lib/use-auto-notice";
 
 // The operator's newsletter front-end (`/admin/newsletter`): the editions list
 // (drafts inclusive), a preview of what each one renders to, and the Send control
@@ -494,19 +495,4 @@ function DeleteControl({
       ) : null}
     </div>
   );
-}
-
-function useAutoNotice(): readonly [
-  string | undefined,
-  Dispatch<SetStateAction<string | undefined>>,
-] {
-  const [value, setValue] = useState<string>();
-  useEffect(() => {
-    if (!value) {
-      return;
-    }
-    const timer = window.setTimeout(() => setValue(undefined), 5000);
-    return () => window.clearTimeout(timer);
-  }, [value]);
-  return [value, setValue] as const;
 }

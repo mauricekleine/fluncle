@@ -20,15 +20,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import {
-  type Dispatch,
-  type SetStateAction,
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { readError } from "@/lib/read-error";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -68,6 +60,7 @@ import {
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { getMixtapeById } from "@/lib/server/mixtapes";
 import { getRecording } from "@/lib/server/recordings";
+import { useAutoNotice } from "@/lib/use-auto-notice";
 import {
   type TimelineRegion,
   bandToWindow,
@@ -1579,23 +1572,4 @@ function isOptionalHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function useAutoNotice(): readonly [
-  string | undefined,
-  Dispatch<SetStateAction<string | undefined>>,
-] {
-  const [value, setValue] = useState<string>();
-
-  useEffect(() => {
-    if (!value) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => setValue(undefined), 5000);
-
-    return () => window.clearTimeout(timer);
-  }, [value]);
-
-  return [value, setValue] as const;
 }

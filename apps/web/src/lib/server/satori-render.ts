@@ -127,6 +127,40 @@ export function cardFonts(): OgFont[] {
 }
 
 /**
+ * Fetch an image and inline it as a base64 data-URI, because SATORI DOES NOT FETCH REMOTE
+ * `<img>` — every picture a render shows has to arrive in the markup as bytes.
+ *
+ * Returns `undefined` on any failure (non-2xx, network, abort) so a card degrades to its bare
+ * background rather than 500ing: a link preview that renders without the cover still tells the
+ * reader what the page is, and a missing hero is not worth failing an unfurl over.
+ *
+ * `fallbackContentType` is only consulted when the response omits `content-type`. It defaults
+ * to the photographic case (`image/jpeg` — album art, drop frames); the mixtape cover passes
+ * `image/png` for its flat bundled ground.
+ *
+ * `nodejs_compat` gives the Worker a real `Buffer` for the base64 encode.
+ */
+export async function fetchImageDataUri(
+  url: string,
+  fallbackContentType = "image/jpeg",
+): Promise<string | undefined> {
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const contentType = response.headers.get("content-type") ?? fallbackContentType;
+    const buffer = await response.arrayBuffer();
+
+    return `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Make a track title / artist / label safe to drop into the HTML string Satori parses.
  *
  * ONLY `<` and `>`. This is NOT html-escaping, and escaping more is a BUG — workers-og

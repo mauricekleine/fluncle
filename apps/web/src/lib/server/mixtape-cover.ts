@@ -2,7 +2,13 @@ import { colors } from "@fluncle/tokens";
 import { ImageResponse } from "workers-og";
 import { FOUND_BASE } from "@/lib/media";
 import { getMixtapeForRender } from "@/lib/server/mixtapes";
-import { BRAND, OG_CACHE_CONTROL, brandFonts, satoriText } from "@/lib/server/satori-render";
+import {
+  BRAND,
+  OG_CACHE_CONTROL,
+  brandFonts,
+  fetchImageDataUri,
+  satoriText,
+} from "@/lib/server/satori-render";
 
 // The on-the-fly mixtape cover render, shared by the public cover route
 // (api/mixtape-cover.$logId.ts) and the YouTube finalize (which sets it as the
@@ -46,25 +52,6 @@ const COLOR = {
   cream: colors.starlightCream,
 } as const;
 
-// Inline an image as a base64 data-URI (Satori doesn't fetch remote <img>).
-// Returns undefined on failure so the cover degrades to the bare ground.
-async function fetchImageDataUri(url: string): Promise<string | undefined> {
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const contentType = response.headers.get("content-type") ?? "image/png";
-    const buffer = await response.arrayBuffer();
-
-    return `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Render a published/distributing mixtape's cover at the given size, or null if no
  * such mixtape exists. The result is an ImageResponse (a Response) — the route
@@ -84,7 +71,8 @@ export async function renderMixtapeCover(
     return null;
   }
 
-  const bg = await fetchImageDataUri(background);
+  // The ground is a flat bundled PNG, so that is the fallback when the response omits a type.
+  const bg = await fetchImageDataUri(background, "image/png");
 
   // Mirror the Remotion composition's lower-band typography (vmin-based), so the
   // stamped text matches mixtape-cover.tsx at every aspect.

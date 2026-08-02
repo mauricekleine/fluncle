@@ -71,6 +71,7 @@ import {
   listFreshLinks,
   partitionFreshLinks,
 } from "@/lib/server/artists";
+import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 
 // The `/admin/artists` overview — the stable MANAGE surface for every artist Fluncle features
@@ -235,15 +236,6 @@ export const Route = createFileRoute("/admin/artists")({
   },
   component: AdminArtistsPage,
 });
-
-function useDebounced<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-  return debounced;
-}
 
 function AdminArtistsPage() {
   const { firstPage, fresh: initialFresh } = Route.useLoaderData();

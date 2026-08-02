@@ -3,7 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { ImageResponse } from "workers-og";
 import { albumCoverAtSize } from "@/lib/media";
 import { parseSetParam } from "@/lib/mix-set";
-import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
+import {
+  BODY,
+  BRAND,
+  OG_CACHE_CONTROL,
+  cardFonts,
+  fetchImageDataUri,
+  satoriText,
+} from "@/lib/server/satori-render";
 import { getTracksByLogIds } from "@/lib/server/tracks";
 
 // The set-level Open Graph card (1200×630) for a shared `/mix` link (RFC
@@ -27,23 +34,6 @@ const COLOR = {
   gold: colors.eclipseGold,
   stardust: colors.stardust,
 } as const;
-
-async function fetchImageDataUri(url: string): Promise<string | undefined> {
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const contentType = response.headers.get("content-type") ?? "image/jpeg";
-    const buffer = await response.arrayBuffer();
-
-    return `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
-  } catch {
-    return undefined;
-  }
-}
 
 // BARE-ONLY MOUNT, SO NO `aliasHandlers`: that helper's `as never` exists only to unbind
 // the phantom path coupling when ONE handler object is mounted at both /api/x and

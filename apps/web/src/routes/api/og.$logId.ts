@@ -5,7 +5,14 @@ import { formatDateLong } from "@/lib/format";
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { albumCoverAtSize, trackMedia } from "@/lib/media";
 import { requireParam } from "@/lib/server/http-errors";
-import { BODY, BRAND, OG_CACHE_CONTROL, cardFonts, satoriText } from "@/lib/server/satori-render";
+import {
+  BODY,
+  BRAND,
+  OG_CACHE_CONTROL,
+  cardFonts,
+  fetchImageDataUri,
+  satoriText,
+} from "@/lib/server/satori-render";
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
@@ -40,26 +47,6 @@ const COLOR = {
   gold: colors.eclipseGold,
   stardust: colors.stardust,
 } as const;
-
-// Fetch an image and inline it as a base64 data-URI (nodejs_compat gives us
-// Buffer). Returns undefined on any failure so the card degrades to the bare
-// cosmos background rather than 500ing.
-async function fetchImageDataUri(url: string): Promise<string | undefined> {
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const contentType = response.headers.get("content-type") ?? "image/jpeg";
-    const buffer = await response.arrayBuffer();
-
-    return `data:${contentType};base64,${Buffer.from(buffer).toString("base64")}`;
-  } catch {
-    return undefined;
-  }
-}
 
 export const serverHandlers: ApiHandlers = {
   GET: async ({ params }) => {

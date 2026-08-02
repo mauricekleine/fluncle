@@ -78,6 +78,8 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listClips } from "@/lib/server/clips";
 import { getRecordingCues, listRecordings } from "@/lib/server/recordings";
 import { getTracksByIds, type TrackListItem } from "@/lib/server/tracks";
+import { useAutoNotice } from "@/lib/use-auto-notice";
+import { useDebounced } from "@/lib/use-debounced";
 import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 
 // The PLAN editor (RFC plan→recording→mixtape §8, surface 1). A PLAN is a videoless
@@ -996,30 +998,6 @@ function AutosaveStatus({
       All changes saved.
     </span>
   );
-}
-
-function useAutoNotice(): readonly [
-  string | undefined,
-  Dispatch<SetStateAction<string | undefined>>,
-] {
-  const [value, setValue] = useState<string>();
-  useEffect(() => {
-    if (!value) {
-      return;
-    }
-    const timer = window.setTimeout(() => setValue(undefined), 5000);
-    return () => window.clearTimeout(timer);
-  }, [value]);
-  return [value, setValue] as const;
-}
-
-function useDebounced<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebounced(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-  return debounced;
 }
 
 // An ISO instant → the `datetime-local` input's value (local wall-clock, minute precision).
