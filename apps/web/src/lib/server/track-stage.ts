@@ -85,7 +85,7 @@ function hasPost(posts: SocialPostItem[] | undefined, platform: string, now: num
 export function trackStage(track: StageInput, now: number = Date.now()): TrackStage {
   const onSpotifyAndTelegram = track.addedToSpotify && track.postedToTelegram;
 
-  // Not fully added yet — the synchronous add hasn't landed on both surfaces.
+  // Not fully added yet — the synchronous add has not reached both surfaces.
   // (At current scale every listed finding is already added; this keeps the fn
   // total and honest if a half-added record ever appears.)
   if (!onSpotifyAndTelegram) {

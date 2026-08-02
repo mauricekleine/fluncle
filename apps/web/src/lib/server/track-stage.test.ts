@@ -52,7 +52,7 @@ describe("trackStage — base lifecycle", () => {
     });
   });
 
-  it("enriched but no video → `enriched`, needs a video (the old vibe-tagging stage is gone)", () => {
+  it("enriched but no video → `enriched`, needs a video", () => {
     expect(trackStage({ ...added, enrichmentStatus: "done" })).toEqual({
       blockedOn: "needs a video",
       stage: "enriched",
@@ -93,7 +93,7 @@ describe("trackStage — publishing stages", () => {
 
   it("a STALE TikTok draft (past 24h, likely bounced) re-opens the finding as ready for TikTok", () => {
     // The live bug: TikTok async-bounces the draft, Postiz still reports success, the
-    // row stays `draft` — so a bounced draft used to read as posted forever. Past 24h
+    // row stays `draft` — so a bounced draft can otherwise read as posted forever. Past 24h
     // it must re-surface in the "ready for TikTok" worklist.
     expect(
       trackStage(

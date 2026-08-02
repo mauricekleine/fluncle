@@ -116,19 +116,19 @@ describe("oRPC list_mixtapes_admin (GET /admin/mixtapes)", () => {
   });
 });
 
-// ── the retired draft-authoring ops ──────────────────────────────────────────
-// A mixtape is only ever born via `promote_recording` now: the create/members/
-// publish/delete ops are OFF THE WIRE. `handleOrpc` returns undefined for an
+// ── the absent draft-authoring ops ───────────────────────────────────────────
+// A mixtape is only ever born via `promote_recording`: the create/members/publish/delete
+// ops are OFF THE WIRE. `handleOrpc` returns undefined for an
 // unmatched route (it falls through to the file-route router, where none of these
 // paths exist either — returning null), so a null here proves no draft mixtape
-// can be created, seeded, minted, or deleted over HTTP anymore.
-describe("oRPC retired draft-mixtape ops", () => {
-  it("no longer matches POST /admin/mixtapes (create_mixtape retired)", async () => {
+// can be created, seeded, minted, or deleted over HTTP.
+describe("oRPC draft-mixtape ops", () => {
+  it("does not match POST /admin/mixtapes", async () => {
     const { handleOrpc } = await import("./orpc");
     expect(await handleOrpc(req("/admin/mixtapes", "POST", OPERATOR_TOKEN, {}))).toBeNull();
   });
 
-  it("no longer matches the members writes (append + replace retired)", async () => {
+  it("does not match the members write routes", async () => {
     const { handleOrpc } = await import("./orpc");
     expect(
       await handleOrpc(
@@ -142,14 +142,14 @@ describe("oRPC retired draft-mixtape ops", () => {
     ).toBeNull();
   });
 
-  it("no longer matches POST .../publish (publish_mixtape retired — promote mints)", async () => {
+  it("does not match POST .../publish", async () => {
     const { handleOrpc } = await import("./orpc");
     expect(
       await handleOrpc(req(`/admin/mixtapes/${MIXTAPE_ID}/publish`, "POST", OPERATOR_TOKEN)),
     ).toBeNull();
   });
 
-  it("no longer matches DELETE /admin/mixtapes/{id} (delete_mixtape retired)", async () => {
+  it("does not match DELETE /admin/mixtapes/{id}", async () => {
     const { handleOrpc } = await import("./orpc");
     expect(
       await handleOrpc(req(`/admin/mixtapes/${MIXTAPE_ID}`, "DELETE", OPERATOR_TOKEN)),

@@ -67,9 +67,8 @@ describe("securityHeadersFor", () => {
   it("gives an HTML document the referrer, HSTS and the ENFORCED policy — one CSP header", () => {
     const headers = headerMap(httpsGet(), html());
 
-    // Exactly one CSP header. Graduating the full policy subsumed the framing-only
-    // header that used to ship beside it, so a report-only header reappearing here means
-    // the flip regressed.
+    // Exactly one CSP header. A report-only or separate framing header would violate
+    // the enforced policy contract.
     expect(headers).toEqual({
       "Content-Security-Policy": CONTENT_POLICY_WITH_REPORTING,
       "Referrer-Policy": "strict-origin-when-cross-origin",
@@ -92,9 +91,8 @@ describe("securityHeadersFor", () => {
   });
 
   it("carries frame-ancestors INSIDE the one enforced policy", () => {
-    // The framing directive used to ship as its own enforced header while everything
-    // else was advisory. It is now a directive in this policy — pinned because losing it
-    // in the collapse would silently drop clickjacking protection.
+    // The framing directive is part of this policy — pinned because losing it would
+    // silently drop clickjacking protection.
     expect(CONTENT_POLICY).toContain("frame-ancestors 'self'");
 
     // …and the honest policy names the hosts the app actually loads, plus the three
@@ -136,12 +134,10 @@ describe("securityHeadersFor", () => {
     expect(CONTENT_POLICY).not.toContain("unsafe-eval");
   });
 
-  it("keeps font-src 'self' — the one third-party font was turned OFF, not allowed in", () => {
-    // A real-browser sweep on 2026-08-02 found /docs/api pulling 14 faces from
-    // fonts.scalar.com — invisible to four days of report-only because nothing loads
-    // that page. `customCss` already re-points Scalar's font variables at our own stack,
-    // so the fix was `withDefaultFonts: false` (routes/docs.api.tsx) rather than a new
-    // origin here. This pins the decision: the moment font-src grows a host, that choice
+  it("keeps font-src 'self' — Scalar uses the app font stack", () => {
+    // Scalar's docs surface uses our own font stack (`withDefaultFonts: false` and
+    // `customCss` in routes/docs.api.tsx), so `font-src` must remain self-only. The moment
+    // it grows a host, that choice
     // is being reversed.
     expect(CONTENT_POLICY).toContain("font-src 'self'");
     expect(CONTENT_POLICY).not.toContain("fonts.scalar.com");
@@ -277,7 +273,7 @@ describe("securityHeadersFor", () => {
 
       expect(headers["Reporting-Endpoints"]).toBe(`csp-endpoint="${SENTRY_CSP_REPORT_ENDPOINT}"`);
       // The legacy Reporting-API-v0 header is deliberately not sent — `Reporting-Endpoints`
-      // supersedes it, and `report-uri` covers the engines that shipped neither.
+      // supersedes it, and `report-uri` covers engines without Reporting-API support.
       expect(headers["Report-To"]).toBeUndefined();
     });
 

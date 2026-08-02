@@ -85,8 +85,8 @@ describe("splitTitle", () => {
   });
 
   it("folds a BARE trailing strong version word into the descriptor (the anchor false-miss)", () => {
-    // Measured 2026-07-26: our catalogue row "Paint It Black VIP" vs Spotify's
-    // "Paint It Black (Vip)" — same recording, permanently un-anchorable without this.
+    // "Paint It Black VIP" and Spotify's "Paint It Black (Vip)" are the same recording;
+    // without this fold it is un-anchorable.
     expect(splitTitle("Paint It Black VIP")).toEqual({ base: "paint it black", descriptor: "vip" });
     expect(splitTitle("Song Remix")).toEqual({ base: "song", descriptor: "remix" });
     expect(matchKey(["Sigma"], "Paint It Black VIP")).toBe(
@@ -106,9 +106,8 @@ describe("splitTitle", () => {
   });
 
   it("folds the `rmx` spelling onto `remix` so the two forms share a key", () => {
-    // Measured 2026-07-26: our row "Feels Like Before (Air.K & Cephei rmx)" vs streaming's
-    // "(Air.K & Cephei Remix)" — same recording, Δduration ≤1s, permanently un-anchorable
-    // while the descriptor stayed an opaque string.
+    // "Feels Like Before (Air.K & Cephei rmx)" and "(Air.K & Cephei Remix)" identify the
+    // same recording, so the descriptor cannot remain opaque.
     expect(splitTitle("Feels Like Before (Air.K & Cephei rmx)")).toEqual({
       base: "feels like before",
       descriptor: "air k and cephei remix",
@@ -123,7 +122,7 @@ describe("splitTitle", () => {
   });
 
   it("drops a redundant trailing `mix` after a version word", () => {
-    // Measured 2026-07-26: "Part of Me (instrumental mix)" vs streaming's "(Instrumental)".
+    // "Part of Me (instrumental mix)" and streaming's "(Instrumental)" share a descriptor.
     expect(splitTitle("Part of Me (instrumental mix)")).toEqual({
       base: "part of me",
       descriptor: "instrumental",
@@ -171,8 +170,8 @@ describe("splitTitle", () => {
 
 describe("canonicalizeSearchTitle (the query spelling)", () => {
   // The retrieval-side twin of the descriptor fold: the SAME two rules on the RAW title the anchor
-  // rungs search with. Both cases below are measured anchor misses (2026-07-27) — retrievable under
-  // the canonical spelling, unreachable under the row's own.
+  // rungs search with. Both cases below are retrievable under the canonical spelling and
+  // unreachable under the row's raw spelling.
   it("spells `rmx` the way the platforms index it", () => {
     expect(canonicalizeSearchTitle("Feels Like Before (Air.K & Cephei rmx)")).toBe(
       "Feels Like Before (Air.K & Cephei Remix)",

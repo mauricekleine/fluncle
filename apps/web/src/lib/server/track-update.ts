@@ -412,7 +412,7 @@ export async function updateTrack(
   const db = await getDb();
   // Resolve from `tracks` with an OUTER join onto the certification, NOT through the
   // finding join. The audio pipeline must be able to write bpm/key/features/the vector
-  // onto a CATALOGUE track (track-work.ts) — under the old inner join every such write
+  // onto a CATALOGUE track (track-work.ts) — an inner join would make every such write
   // 404'd, which is the other half of the bug the split left behind. `certified` carries
   // the answer forward so the rail below can reject a certification field on a row that
   // has nowhere to put it.
@@ -824,7 +824,7 @@ export async function updateTrack(
   // for one that can NEVER conclude, and the worklist would go on offering that row every window
   // forever. `youtube_provenance_failures` is what retires it: the envelope never reads the column,
   // so a retired row's receipt honestly stays "Not checked yet" rather than acquiring a verdict it
-  // did not earn (the Deezer starvation fix of 2026-08-01, in a new place).
+  // did not earn; the streak guard applies here as well.
   //
   // `inconclusive` is the same streak WITHOUT the stamp. The catalogue ladder ran and the CDN
   // refused every section it tried; that is not an answer, so burning the 90-day window on it would
@@ -1075,8 +1075,8 @@ export async function updateTrack(
 
   // At most two statements, each fired only when its half actually has columns to write.
   // They are issued as one libSQL BATCH, so a partial write is impossible: the pair moves
-  // together or not at all (the transactional guarantee the single UPDATE used to give for
-  // free). `write` batches are transactional in libSQL.
+  // together or not at all (the transactional guarantee of a single UPDATE). `write` batches
+  // are transactional in libSQL.
   const statements = [
     ...(sets.length > 0
       ? [

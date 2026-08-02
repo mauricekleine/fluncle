@@ -12,22 +12,20 @@
 // adjacency. So the weights below are VERSIONED PRODUCT CONFIG, not a fitted model,
 // and validation (`scripts/mixability-diagnostics.ts` + the committed floor-check
 // test) is a characterization diagnostic, never a training target. Do not re-invent
-// the fit. RECORDED DIAGNOSTIC (2026-07-10, live archive; re-run to refresh):
+// the fit. DIAGNOSTIC (re-run to refresh):
 //   Floor check — real consecutive transitions n=14 mean≈0.30–0.34; all-pairs random
 //     baseline n=240 mean≈0.35–0.36 → verdict AT CHANCE (key does not predict him).
 //   Within-set successor rank — mean true-next rank ≈5.2 vs ~4.75 random (no signal).
 //   Coverage — 16/17 keyed, 17/17 features, 1/17 embedded (the sonic term dormant).
 //
-// THE SIGNAL REALITY. As of 2026-07-11 the embed cron has DRAINED: all 60 findings
+// THE SIGNAL REALITY. The embed corpus is DRAINED: all 60 findings
 // carry a MuQ embedding vector (every one is assigned to a sonic galaxy, which is
 // impossible without one), so `sonicGateOpen(60)` → 1770 pairs ≥ MIN_EMBEDDED_PAIRS
 // and THE SONIC TERM IS LIVE. It activated with zero code change, exactly as designed.
 // The other signals: `key` ~50/60 and discriminative; `bpm` ~53/60 but near-constant in
 // the folded 170–175 band (tiebreak-grade); `features_json` 60/60 (the dense texture
 // tiebreak, which now backs up the sonic term inside key plateaus rather than standing
-// in for it). Re-measure at build time rather than trusting this comment — an earlier
-// snapshot of it (3/56 embedded, "dormant") outlived its truth by a day and misled a
-// downstream RFC into planning around a dead engine.
+// in for it). Re-measure at build time rather than treating this diagnostic as immutable.
 
 import { type Camelot, parseKey, toCamelot } from "../key-camelot";
 import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
@@ -386,7 +384,7 @@ export function sonicSubScoreFromCosine(cos: number | null, gateOpen: boolean): 
  *
  * SINGLE-PROBE-ON-LAST, the ratified model. Mixing a transition is a question about the track
  * you just played, so the probe is that track's vector and nothing else — not a fold over a
- * seeded artist list, which is what this used to be (`tracks.ts`, "Taste: SINGLE-PROBE-ON-LAST").
+ * seeded artist list; the probe is the last track's vector (`tracks.ts`, "Taste: SINGLE-PROBE-ON-LAST").
  * The chain is still the EXCLUDE list, which is what lets a set drift as it goes: track 5 is
  * chosen next to track 4, which was chosen next to track 3.
  *

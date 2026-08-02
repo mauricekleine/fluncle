@@ -103,8 +103,7 @@ describe("publishMixtape — mint the claimed coordinate", () => {
 
     const minted = await publishMixtape("claim-id");
 
-    // The sector is 2026-07-01, the recorded date. (The old plannedFor-wins
-    // resolution retired with `mixtapes.planned_for` in the Deploy-2 cutover.)
+    // The sector day is the recorded date; `plannedFor` is not consulted.
     expect(minted.logId).toBe("032.F.1A");
   });
 

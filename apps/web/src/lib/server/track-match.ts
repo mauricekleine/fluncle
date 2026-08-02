@@ -44,7 +44,7 @@ const NEUTRAL_DESCRIPTORS = new Set([
 
 // The subset of VERSION_WORDS strong enough to mark a version even BARE at the end of a
 // title — no parens, no dash ("Paint It Black VIP" vs Spotify's "Paint It Black (Vip)";
-// measured as a real anchor false-miss, 2026-07-26). Deliberately narrow: `dub`, `mix`,
+// an anchor false-miss). Deliberately narrow: `dub`, `mix`,
 // `version`, `edit`, `flip`, and `extended` are genuine title-final words all over
 // jungle/DnB ("… Dub" titles), and folding one of those off a real title would let two
 // different recordings match — a wrong anchor is worse than a missed one.
@@ -60,8 +60,8 @@ const BARE_TRAILING_VERSION_WORDS = new Set([
 ]);
 
 // Token spellings that name the SAME version word. Two platforms writing one recording
-// two ways ("(Air.K & Cephei rmx)" vs "(Air.K & Cephei Remix)") is a measured anchor
-// false-miss (2026-07-26), so the descriptor's tokens are rewritten to one spelling
+// two ways ("(Air.K & Cephei rmx)" vs "(Air.K & Cephei Remix)") is an anchor false-miss,
+// so the descriptor's tokens are rewritten to one spelling
 // before it becomes identity. Deliberately tiny — only spellings observed in the wild
 // go in; a new synonym is a one-line addition here — and BOTH sides of the fold read this
 // one map: `canonicalizeDescriptor` (identity) and `canonicalizeSearchTitle` (retrieval).
@@ -185,7 +185,7 @@ function dropRedundantMix(descriptor: string): string {
  * THE QUERY SPELLING — the retrieval-side twin of {@link canonicalizeDescriptor}. The identity fold
  * forgives two platforms spelling one version two ways, but it only ever runs on a candidate we
  * already HAVE: if the search we sent was spelled the row's way and the platform indexes the other
- * way, the gate is handed nothing to judge and the row misses forever (measured 2026-07-27 — Minos
+ * way, the gate is handed nothing to judge and the row misses forever (Minos
  * "Feels Like Before (Air.K & Cephei rmx)" and Klute "Part of Me (instrumental mix)", both
  * retrievable under the canonical spelling, both unreachable under the raw one).
  *

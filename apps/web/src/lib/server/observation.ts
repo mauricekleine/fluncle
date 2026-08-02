@@ -179,7 +179,7 @@ export type VoiceGateViolation = { reason: string; word?: string };
 
 // ── THE NAME EXEMPTION — what the gate is allowed to police ──────────────────────────
 //
-// THE OPERATOR'S RULING (2026-07-29, extended to every voiced family 2026-07-30): the voice gate
+// THE VOICE-GATE RULE: the voice gate
 // polices every word FLUNCLE WROTE, and stops policing words it did not choose. A real-world
 // proper name is not Fluncle's prose. "Future Signal" is an artist; "Invaderz Transmissions" is a
 // label; "Jungle Sound: The Bassline Strikes Back!" is an album. A note, an observation, a bio, or
@@ -1055,10 +1055,9 @@ const CARTESIA_SAMPLE_RATE = 44100;
 const CARTESIA_MP3_KBPS = 96;
 
 /**
- * The delivery, picked by ear in the 2026-07-18 bake-off (two scripts × six configs;
- * a listener had flagged the reads as flat). `excited` at 0.85 keeps the uncle-over-
- * the-tune register — awake and present, not a DJ working a crowd — and won clearly
- * on both a climber and a deep no-rush roller. Speed was 0.78 pre-facelift.
+ * The default delivery uses `excited` at 0.85, which keeps the uncle-over-the-tune
+ * register — awake and present, not a DJ working a crowd — across both climbers and
+ * deep no-rush rollers.
  */
 export const DEFAULT_CARTESIA_SPEED = 0.85;
 export const DEFAULT_CARTESIA_EMOTION = "excited";

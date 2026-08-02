@@ -5,10 +5,9 @@ import { createIntegrationDb, seedTrack } from "./integration-db";
 import { getSocialMetricsBoard } from "./reach-board";
 
 // THE BOARD SQL, PROVEN AGAINST THE REAL SCHEMA. The unit tests cover the pure velocity/pivot
-// helpers; THIS file exists because the board's SQL once shipped reading `video_structure` off
-// the WRONG TABLE (`tracks` instead of `findings`) — the unit tests passed, the local dev DB's
-// schema drift hid it, and production 500ed (2026-07-26). A query built from the generated
-// migrations is the only honest oracle: if a column moves tables, this fails at build time.
+// helpers; THIS file proves the board's SQL reads `video_structure` from the RIGHT TABLE
+// (`findings`, not `tracks`). A query built from the generated migrations is the only honest
+// oracle: if a column moves tables, this fails at build time.
 
 let db: Client;
 

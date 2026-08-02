@@ -140,17 +140,12 @@ function publicAuthSecret(): string {
 /**
  * The Better Auth `baseURL`, with the SAME hard-fail shape as the secret above.
  *
- * This used to be `process.env.BETTER_AUTH_URL || "http://localhost:3000"` — a silent
- * fallback, and the wrong kind of silent. Better Auth derives `useSecureCookies` from
- * this URL's scheme, so an unset variable in a deployed Worker would quietly mint
- * session cookies WITHOUT `Secure`, and would put `http://localhost:3000` into every
- * password-reset and email-verification link. Both are silent degradations that look
- * fine until they are exploited or reported. Outside dev/test the variable is now
- * REQUIRED: a missing one throws at auth construction instead of degrading.
+ * Outside dev/test, `BETTER_AUTH_URL` is REQUIRED. Better Auth derives
+ * `useSecureCookies` from this URL's scheme, so a missing value must throw at auth
+ * construction rather than minting cookies without `Secure` or emitting localhost links.
  *
- * Safe to demand — `BETTER_AUTH_URL` is provisioned as a production Worker secret
- * (verified against `wrangler secret list`), and the dev/test path keeps the same
- * localhost default it always had. A whitespace-only value counts as absent, so a
+ * Safe to demand — `BETTER_AUTH_URL` is provisioned for the production Worker, and the
+ * dev/test path uses the localhost default. A whitespace-only value counts as absent, so a
  * blank secret cannot sneak past as a valid base URL the way `||` let it.
  */
 export function resolvePublicAuthBaseUrl(url: string | undefined, isDev: boolean): string {
@@ -575,9 +570,8 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
   }
 
   // The presence stamp the /admin/users board reads ("Not seen yet" ⇔ NULL). Written HERE —
-  // the one chokepoint every authenticated request resolves through — because nothing else
-  // ever wrote it: the column shipped with the auth config declaring it and no writer, so the
-  // board read NULL for every user forever (found 2026-07-18). Throttled to once per window so
+  // the one chokepoint every authenticated request resolves through. The column is populated
+  // here rather than in a scattered caller. Throttled to once per window so
   // the auth hot path stays read-only almost always, and fire-and-forget so a failed stamp
   // never touches the session (the submitFindingToIndexNow discipline).
   if (shouldBumpLastSeen(user.last_seen_at, Date.now())) {

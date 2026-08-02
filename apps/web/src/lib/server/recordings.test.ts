@@ -172,7 +172,7 @@ beforeEach(() => {
 });
 
 describe("promoteRecording", () => {
-  it("mints once on a fresh recording, then copies → repoints → deletes the old key LAST", async () => {
+  it("mints once on a fresh recording, then copies → repoints → deletes the source key LAST", async () => {
     seedRecording();
 
     const recording = await promoteRecording("rec-1");

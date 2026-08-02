@@ -23,7 +23,7 @@
 //   - Anything else is an UNEXPECTED fault: the full detail goes to the server log
 //     and Sentry, and the wire gets a generic message — EXCEPT for a request that
 //     carries a VERIFIED admin principal, where the detailed message is operator
-//     diagnostics (the 2026-07-26 incident proved its worth).
+//     diagnostics, while unverified requests receive the generic message.
 //
 // WHY VERIFIED IDENTITY, NOT THE PAGE PATH: an earlier draft granted detail when the
 // request "looked" admin (an `/admin` URL or Referer). Both are attacker-settable on

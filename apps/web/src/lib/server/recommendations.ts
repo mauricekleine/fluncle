@@ -12,7 +12,7 @@
 //     probe bound ONCE as a raw float32 BLOB (`toVectorProbe` — never text,
 //     the 14× hosted cliff). Never a `union all` branch per probe over a CTE:
 //     the planner flattens the CTE and re-runs the candidate scan per branch
-//     (63 s hosted, measured 2026-07-18 — docs/local-database.md). Probe
+//     (63 s hosted; docs/local-database.md). Probe
 //     fan-out is bounded by construction: ≤ MAX_REC_SEEDS terms.
 //   - The rank-and-cut lives IN SQL (`order by dist asc limit ?`), the
 //     `getSimilarFindings` shape — only (track_id, dist) pairs cross the wire,
@@ -515,8 +515,8 @@ export async function listRecommendations(
   // select list (max-similarity = min distance). NEVER a `union all` branch per
   // probe over a CTE: the planner does not materialize the CTE — it FLATTENS it
   // and re-executes the candidate scan once per branch, so 12 seeds meant 12
-  // full passes over `tracks` dragging the 4 KB vector each time (63 s measured
-  // hosted, 2026-07-18; docs/local-database.md "Local is not production").
+  // full passes over `tracks` dragging the 4 KB vector each time (63 s hosted;
+  // docs/local-database.md "Local is not production").
   //
   // The one-probe case binds the bare distance: single-argument `min()` is
   // SQLite's AGGREGATE min and would collapse the scan to one row.
@@ -564,8 +564,8 @@ export async function listRecommendations(
   //
   // THE SCALE TRIPWIRE this finally moves: the probe count is capped (MAX_REC_SEEDS) but the
   // candidate count is not — it grows with capture + Spotify anchoring, and it has already
-  // crossed the band this file warned about (9,859 eligible rows / ~1.84s measured against
-  // production 2026-07-26, up from ~360 rows on 2026-07-18). Because the two scans run
+  // crossed the band this file warns about (9,859 eligible rows / ~1.84s in production).
+  // Because the two scans run
   // CONCURRENTLY, this half sets the page's latency floor, so routing the findings slots alone
   // could never move it.
   const [cataloguePool, findingSlots] = await Promise.all([

@@ -859,7 +859,7 @@ describe("oRPC auth-tier coverage", () => {
         ? "public-unauth"
         : EXPECTED_TIERS[name];
 
-      // Neither list claims the op ⇒ an op shipped with no deliberate tier. If it
+      // Neither list claims the op ⇒ an op has no deliberate tier. If it
       // derived "public-unauth", an agent added an endpoint and forgot the auth
       // wiring; if it derived an authenticated tier, the explicit map was not
       // updated. Either way: fail, with the derived tier named so the fix is obvious.

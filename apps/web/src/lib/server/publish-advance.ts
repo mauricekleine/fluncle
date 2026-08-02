@@ -8,8 +8,8 @@
 // the inbox draft the operator still finishes in-app (a platform limit — the licensed
 // sound attaches only there — not ours).
 //
-// THIS AUTOMATES A PUBLIC PUBLISH. A human used to be the last gate before something
-// appeared on Fluncle's YouTube channel; this removes that gate. So the module is built
+// THIS AUTOMATES A PUBLIC PUBLISH. A freshly-rendered video can appear on Fluncle's
+// YouTube channel without a human push. The module is built
 // around four properties, each provable rather than asserted:
 //
 //   1. NEVER TWICE. The advance only ever picks a finding with NO `social_posts` row for

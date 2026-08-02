@@ -50,14 +50,12 @@
 //
 // OUT OF SCOPE — each a real boundary with a real cost, not a claim that nothing
 // there matters:
-//   - The REST of `apps/web/src/lib`. Measured 2026-07-27 with these exact rails:
-//     287 files carrying 60 prose em dashes and 7 banned-word hits. They are
+//   - The REST of `apps/web/src/lib`. These are
 //     overwhelmingly operator/DB/API strings (status reasons, query builders,
 //     vendor payloads) where the register question is unsettled, so scanning the
 //     tree wholesale would bury the gate in a judgment call it cannot make. The
 //     modules whose strings reach a PUBLIC audience are pulled into SCAN_ROOTS
-//     individually instead — the MCP specs and agent-discovery from the start, and
-//     since 2026-07-31 the entity strings (`identity.ts`), the log page's
+//     individually instead — the MCP specs and agent-discovery, the entity strings (`identity.ts`), the log page's
 //     definitional prose (`log-prose.ts`), and the two CREW FEEDS (`telegram.ts`,
 //     `bluesky.ts`), which carry the most voice-load-bearing hand-written copy in
 //     the repo and were outside the net only because of where they live. Drawing
@@ -68,11 +66,11 @@
 //   - `apps/web/public/*.txt` — `llms.txt` and `humans.txt` are hand-written,
 //     voice-governed prose and DO belong under these rails; they are skipped only
 //     because oxc parses JavaScript, not plain text. A text-file scanner is a
-//     separate, worthwhile slice (a prose em dash shipped in `llms.txt` before).
+//     separate, worthwhile slice.
 //   - `packages/**` as a SOURCE SCAN — a deliberate boundary, not an empty one: a
 //     literal in a package is never re-typed in the app, so e.g. `packages/registry`
 //     surface titles render on `/status`, the SSH menu, and MCP unchecked, and that
-//     hole had shipped two prose em dashes onto the public `fluncle status` board.
+//     the source boundary can otherwise leave public `fluncle status` strings unchecked.
 //     `packages/registry` is now covered instead by the "registry" describe below,
 //     which applies these same rails to the IMPORTED catalog rather than its source
 //     — a data check, so it can be scoped to the three fields a non-operator reads
@@ -130,7 +128,7 @@ const SKIPPED_DIRECTORIES = [
 /**
  * The em-dash rail (b) only. The operator-tier CLI uses `—` as a clause separator
  * as one systematic house style, and whether the prose discipline reaches operator
- * tool output is an OPEN CANON QUESTION — see the 2026-07-18 `audit/20260717-voice`
+ * tool output is an OPEN CANON QUESTION — see the voice audit
  * row in docs/audit-backlog.md, which also blesses the `—` null-cell glyph. Scoped
  * to the ADMIN tree only: `cli.ts` (where every admin command's description is
  * registered, and where the ledger measured ~35 instances) and the `admin-*`
@@ -536,8 +534,7 @@ describe("voice lint rails", () => {
 });
 
 // The surfaces registry's PUBLIC-rendering strings, checked as DATA rather than
-// source. `packages/**` is outside SCAN_ROOTS (see the header), and that hole had
-// shipped two prose em dashes onto the public `fluncle status` board. Scanning the
+// source. `packages/**` is outside SCAN_ROOTS (see the header), and scanning the
 // catalog's source would drag in operator notes and a hundred catalog descriptions
 // nobody outside the operator reads; importing it instead lets the rails land on
 // exactly the three fields a STRANGER meets:

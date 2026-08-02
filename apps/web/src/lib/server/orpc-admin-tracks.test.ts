@@ -156,13 +156,11 @@ const LIST_ITEM = {
 // Every test in this file reaches the router the same way — `await import("./orpc")`, 102
 // times — and 101 of those hit the module cache and cost nothing. The first one drags the
 // whole app graph in (the router + every contract + the server modules it re-exports), and
-// on a loaded Cloudflare build box that took **20,032 ms** on 2026-07-29 against the 20,000 ms
-// `testTimeout`, failing `deploy:gate` and blocking the deploy with a green local run. It is
-// not a slow test; it is a module load wearing a test's timeout. Raising `testTimeout` was
-// the previous answer (5s → 20s, see vitest.config.ts) and it only moved the threshold — the
-// same build shows the sibling oRPC files paying 2.5–8 s for the identical import, so which
-// file loses is a scheduling lottery, not a property of the code under test.
-//
+// on a loaded Cloudflare build box can exceed the 20,000 ms `testTimeout`, failing
+// `deploy:gate` even when the test itself is not slow. It is a module load wearing a test's
+// timeout, while the sibling oRPC files pay 2.5–8 s for the identical import, so which
+// file loses is a scheduling lottery, not a property of the code under test. The import
+// therefore belongs in a hook with its own budget.
 // A hook has its own budget, so charging the import to `beforeAll` (with room for a badly
 // contended box) takes the load off the per-test clock entirely: the tests then measure only
 // what they actually exercise. Sibling oRPC test files still carry the original shape.
@@ -510,7 +508,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     expect(renderObservationCartesia).not.toHaveBeenCalled();
   });
 
-  it("lets the AGENT observe (the tier flip — no longer operator-only)", async () => {
+  it("lets the AGENT observe", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     updateTrack.mockResolvedValueOnce({ fields: [], trackId: TRACK_ID });
 
@@ -649,7 +647,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
     );
   });
 
-  it("force with a NEW script does not inherit the old script's provenance", async () => {
+  it("force with a NEW script does not inherit the prior script's provenance", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce({
       ...TRACK,
       observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1",
@@ -740,7 +738,7 @@ describe("oRPC observe_track (POST /admin/tracks/{trackId}/observe)", () => {
         "observation_echoes_neighbours",
       );
       // The rejection is HELD (the ledger), and — the whole point of gating BEFORE the
-      // render — not a cent of Cartesia was spent and nothing landed in R2 or the row.
+      // render — not a cent of Cartesia was spent and nothing was written to R2 or the row.
       expect(recordObservationRejection).toHaveBeenCalledTimes(1);
       expect(renderObservationCartesia).not.toHaveBeenCalled();
       expect(put).not.toHaveBeenCalled();
@@ -1038,11 +1036,9 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
     expect(recordNoteAttempt).toHaveBeenCalledWith(TRACK_ID, true);
   });
 
-  // THE PROVENANCE STAMP, end to end. The 2026-07-14 audit found `note_prompt_version` NULL
-  // on 60/61 findings; the wire path (sweep --prompt-version → CLI body → this handler →
-  // fillEmptyNote) shipped with the registry (#516), so the NULLs are HISTORICAL — notes
-  // authored before the stamp existed, plus operator-typed ones. This pins the forward path,
-  // so a regression can never quietly reopen the gap.
+  // THE PROVENANCE STAMP, end to end. The wire path (sweep --prompt-version → CLI body → this
+  // handler → fillEmptyNote) forwards the version in the same atomic write as the note. This
+  // pins the forward path, so a regression cannot quietly reopen the gap.
   it("FORWARDS the sweep's promptVersion into the atomic fill (the provenance stamp)", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     fillEmptyNote.mockResolvedValueOnce(true);
@@ -1060,7 +1056,7 @@ describe("oRPC note_track (POST /admin/tracks/{trackId}/note)", () => {
   // THE RACE IS CLOSED AT THE DB: a note lands between the handler's read and its
   // write, so the fast-path guard passed but the atomic fill matches no row. The
   // handler must report skipped and echo the WINNING note — never clobber.
-  it("reports skipped when the atomic fill loses the race (a note landed after the read)", async () => {
+  it("reports skipped when a concurrent note wins the atomic fill race", async () => {
     // Read sees an empty note (fast-path passes) …
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     // … the DB predicate refuses the write (rowsAffected 0) …

@@ -157,7 +157,7 @@ describe("syncTelescopePlaylist", () => {
     const result = await syncTelescopePlaylist();
 
     expect(result).toMatchObject({ ok: false });
-    // The mirror state only advances AFTER a landed PUT — the next sync retries.
+    // The mirror state only advances AFTER a successful PUT — the next sync retries.
     expect(settings.get(TELESCOPE_MIRROR_SETTING)).toBeUndefined();
   });
 });

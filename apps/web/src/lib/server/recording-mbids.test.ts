@@ -346,10 +346,8 @@ describe("parseIsrcRefreshLimit — the wire cap", () => {
   });
 });
 
-// THE ARITY GUARD. The strip statement shipped with two placeholders and one bound arg — a
-// mismatch the mocked db.execute could never surface (prod threw LibsqlError "expected 2, got
-// 1" on every wet pass). Every statement this module issues must bind exactly as many args as
-// it declares placeholders; none of its SQL carries a literal '?', so the count is exact.
+// THE ARITY GUARD. Every statement this module issues must bind exactly as many args as it
+// declares placeholders; none of its SQL carries a literal '?', so the count is exact.
 describe("every statement binds exactly its placeholders", () => {
   it("holds across a full wet pass (strip + worklist + resolved + missed writes)", async () => {
     execute.mockResolvedValueOnce({ rowsAffected: 2 });

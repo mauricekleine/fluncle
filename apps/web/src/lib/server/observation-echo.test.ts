@@ -16,8 +16,7 @@ describe("scoreObservationEcho", () => {
   });
 
   it("catches a lifted phrase across two scripts (the cross-script verbatim the audit flagged)", () => {
-    // The 2026-07-14 audit's worst verbatim: "my shoulders went before i'd clocked the
-    // coordinate" surviving in two scripts. An 8-word run clears the 4-word phrase threshold.
+    // An 8-word run surviving in two scripts clears the 4-word phrase threshold.
     const candidate =
       "My shoulders went before I'd clocked the coordinate on this one, pure rolling menace.";
     const neighbor = {

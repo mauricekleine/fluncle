@@ -113,7 +113,7 @@ export const mcpOnlyTools: McpTool[] = [
 // The realized MCP tool set: the shared read tools projected from the registry, then the
 // MCP-only verbs. `toMcpTool` bridges the dispatcher's positional (args, request) call and
 // leaves the args un-validated, so the limit tools keep their tolerant clamp. The vocabulary
-// cut retired the `get_recent_tracks` deprecation alias — no back-compat shims — so the tool
+// omits the `get_recent_tracks` deprecation alias — no back-compat shims — so the tool
 // set is exactly the shared MCP tools plus the MCP-only verbs.
 const tools: McpTool[] = [
   ...SHARED_TOOLS.filter((tool) => tool.transports.includes("mcp")).map(toMcpTool),
@@ -359,8 +359,8 @@ export async function handleMcp(request: Request): Promise<Response | undefined>
     return jsonRpcResponse(failure(null, -32700, "Parse error"), 400);
   }
 
-  // JSON-RPC batches were dropped in 2025-06-18, but older clients may still
-  // send them; handle an array as a courtesy, a single message otherwise.
+  // Accept JSON-RPC batches as a courtesy for clients that send them; handle a single
+  // message otherwise.
   if (Array.isArray(payload)) {
     const responses = (
       await Promise.all(payload.map((message) => dispatch(message, request)))

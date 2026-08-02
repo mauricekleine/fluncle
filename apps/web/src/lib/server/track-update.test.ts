@@ -14,7 +14,7 @@ vi.mock("./db", () => ({
   // `updateTrack` fans ONE logical write out across the tracks/findings pair, issued as a
   // single libSQL BATCH (at most two statements: the recording's columns, then the
   // certification's). The mock replays each statement through the same `execute` spy the
-  // tests already assert on, so a batched write is observed exactly like the old single
+  // tests already assert on, so a batched write is observed like a single
   // UPDATE — one call per statement, in order, with its bound args.
   getDb: async () => ({
     batch: (statements: { args?: unknown[]; sql: string }[]) =>
@@ -644,7 +644,7 @@ describe("updateTrack — the capture's YouTube provenance", () => {
   });
 
   it("asks the gate with the recording's LABEL as well as its artists", async () => {
-    // The 2026-07-31 widening: a D&B release lives on its label's channel far more often than on
+    // A D&B release lives on its label's channel far more often than on
     // the artist's. BOTH spellings go in — the canonical `labels.name` and the raw `tracks.label` —
     // because a crawled row may only have the second, and a channel matching either is the label's.
     withExistingRow({ label: "Fokuz", label_name: "Fokuz Recordings" });
@@ -828,7 +828,7 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
 
   it("a NO-MATCH moves the streak AS WELL AS the stamp", async () => {
     // The window paces a row that concluded honestly; the streak retires one that never will. Both
-    // empty-handed reports move it (the Deezer starvation fix of 2026-08-01, in a new place).
+    // empty-handed reports move it, so a row that never concludes still reaches the cap.
     await updateTrack("track-123", { youtubeVerification: "no-match" });
 
     expect(lastUpdateSql).toContain(
@@ -907,7 +907,7 @@ describe("updateTrack — the RE-VERDICT", () => {
     expect(lastUpdateSql).not.toContain("youtube_video_official");
   });
 
-  it("advances the stamp but keeps the old verdict when the check does not conclude", async () => {
+  it("advances the stamp but keeps the existing verdict when the check does not conclude", async () => {
     // A 404 or a timeout says nothing about who uploaded it, so overwriting a stored 0 with NULL
     // would lose the fact that it WAS checked. The stamp still moves, so the round-robin walks on
     // instead of spinning on an unreachable video.

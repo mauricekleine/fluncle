@@ -592,8 +592,8 @@ export async function replaceRecordingCues(
  *   1. CLAIM-BEFORE-MINT — reuse `mixtapes.recording_id`'s mixtape if present; else
  *      CLAIM the link with an atomic conditional insert (a guarded draft insert carrying
  *      `recording_id`), THEN seed + mint it (`publishMixtape`). The claim is the guard
- *      (RFC §2, staff-eng SF-6): the old check-then-mint path could burn a second scarce
- *      coordinate on a concurrent double-promote (both saw no link, both minted). Now two
+ *      A non-atomic check-then-mint path could burn a second scarce coordinate on a concurrent
+ *      double-promote (both saw no link, both minted). Two
  *      concurrent promoters serialize on the claim insert — the loser inserts 0 rows and
  *      reuses the winner's row, so at most ONE coordinate is ever minted per recording.
  *   2. copy the set video to `<logId>/set.mp4` (overwrite-safe; skipped if already there).

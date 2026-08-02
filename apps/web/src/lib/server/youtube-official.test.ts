@@ -63,10 +63,10 @@ describe("isOfficialAuthor — the permission, not the identity", () => {
   });
 });
 
-describe("isOfficialAuthor — the recording's own label channel (the 2026-07-31 widening)", () => {
+describe("isOfficialAuthor — the recording's own label channel", () => {
   it("accepts the label that released THIS recording", () => {
-    // The live case the widening was ruled on: `RFObrLVHMvg`, uploaded by "Fokuz Recordings", is
-    // the label's own upload of a Fokuz release. Rule 2 alone refused it, which was never right.
+    // A label's own upload of its release is official even when the artist-channel rule does not
+    // match; the recording's canonical label is part of the equality check.
     expect(
       isOfficialAuthor("Fokuz Recordings", {
         artists: ["Lauren Ritchie"],

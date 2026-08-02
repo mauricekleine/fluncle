@@ -655,8 +655,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
 });
 
 // The generated PUBLIC OpenAPI document — the spec served at /api/v1/openapi.json
-// (Scalar + Postman read it) since the spec flip retired the static
-// public/openapi.json. The load-bearing constraint: it carries EVERY public op and
+// (Scalar + Postman read it). The load-bearing constraint: it carries EVERY public op and
 // ZERO admin ops — admin stays OFF the public spec.
 type ErrorSchema = {
   type?: string;
@@ -742,8 +741,8 @@ const PUBLIC_OPERATION_IDS = [
   // Hydrate a whole shared `?set=` chain in one read — the public twin of the web /mix loader's
   // server-only getMixTracksByTokens, so a saved set opens whole on mobile (uncertified tokens
   // included). Public-unauth like the other /mix reads.
-  // The fresh-releases keystone (cc0feb4e): GET /api/v1/tracks/fresh, public by design — the
-  // op landed without this spec pin and turned the deploy gate red (2026-07-18).
+  // The fresh-releases operation, GET /api/v1/tracks/fresh, is public by design — the
+  // The public fresh-releases operation is pinned here so every public op remains in the spec.
   "listFresh",
   "listSetTracks",
   "listStories",

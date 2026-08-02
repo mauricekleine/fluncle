@@ -100,24 +100,20 @@ const EXPECTED_STATUS_WRITER_CADENCE_MS = new Map<string, number>([
   ...SELF_POSTED_AUTOMATION_ORDER.map((service) => [service, SELF_POSTED_CADENCE_MS] as const),
 ]);
 
-// Service ids no current prober writes — orphaned `service_status` rows left over
-// from a probe that was retired or renamed. The healthcheck cron upserts but never
+// Service ids with no current prober writes — stale `service_status` rows from probes
+// outside the active registry. The healthcheck cron upserts but never
 // deletes, so a retired id lingers stale forever until an operator drops the row by
 // hand. Filtering them here (the SHARED read) makes them vanish from EVERY surface
 // at once — the /status page, /api/status, the CLI `status` command, and the MCP
 // `get_status` tool — so none of them shows a permanently-stale row.
 // Remove an id's registry surface before adding it here, or absence synthesis will resurrect it.
 //
-// `automation` is the known orphan: PR #177 split the single aggregate probe into one
-// row per Hermes cron (`cron.enrich`, `cron.render`, …), so the old `automation`
-// aggregate is no longer posted. `cron.artist-follow` is retired too — the flaky
-// auto-follow cron was removed (2026-07-08), but the box's old-image healthcheck keeps
-// upserting it until it re-bakes, and the upserted row lingers after. Add an id here
+// `automation` and `cron.artist-follow` have no current prober. The box healthcheck can
+// continue to upsert those ids, so they stay in this filter until their rows are removed.
+// Add an id here
 // when a probe is retired; remove it once the underlying `service_status` row is dropped.
-// `cron.apple-releases` was the freshness tap's working name for less than a day
-// (2026-07-19): it registered, reported once, and shipped renamed as `cron.label-releases`
-// before any timer existed — leaving the classic orphaned row (bare-slug title, permanent
-// "never run") on /status.
+// `cron.apple-releases` is an excluded legacy id; the active freshness tap is
+// `cron.label-releases`, and the stale bare-slug row must not appear on /status.
 // `cron.clip-drip` is the case the NO_RUNS_GRACE_MS note below was written about: the
 // clip→Instagram drip-feed was registered but never deployed (stripped from the image bake,
 // no timer), so it posted "no runs yet" forever. Its registry surface + prober row are gone;
@@ -357,7 +353,7 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
   // `pruneRateLimitCounters`). It rides here because this is the repo's periodic-maintenance write
   // and a housekeeping delete must never sit on a read a caller is waiting for. NON-CRITICAL, the
   // samples-ledger discipline above: a failure here is logged and swallowed, because the health
-  // snapshot this function exists for has already landed and must not be lost to upkeep.
+  // snapshot this function exists for is already complete and must not be lost to upkeep.
   try {
     const pruned = await pruneRateLimitCounters();
 

@@ -15,7 +15,7 @@ import {
 } from "./mixability";
 import { getFindingsByGalaxyRanked, getGalaxyAuditionMembers, getMixableTracks } from "./tracks";
 
-// The other two readers that used to pull every vector into the isolate, now ranked IN SQL
+// The other two readers rank every vector IN SQL rather than pulling vectors into the isolate
 // (lib/server/embedding.ts, docs/local-database.md "Local is not production"): the `/mix` rail
 // (`getMixableTracks` — the DB computes each candidate's cosine to the target) and a
 // galaxy's core-first order (`getFindingsByGalaxyRanked` — a `galaxy_id`-pre-filtered

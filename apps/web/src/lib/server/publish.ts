@@ -202,7 +202,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   const deezer = await enrichFromDeezer(track.isrc, track.durationMs);
 
   // THE DEEZER LINK, off whichever of the two reads above earned it (schema.ts § `deezer_track_id`).
-  // Both already had Deezer's track id in hand and both used to drop it; keeping it costs no extra
+  // Both already have Deezer's track id in hand; keeping it costs no extra
   // request and gives `/identity` a Deezer row. Neither is trusted bare:
   //
   //   · the BY-NAME hit is re-run through the anchor's own identity fold (same artist set, same base
@@ -542,8 +542,7 @@ Posted to Telegram`;
  *
  * It shares the exact mint the Spotify add uses (`resolveFindingLogId` + `findingInsertStatement`),
  * so a coordinate is born the same way however a finding arrives — AND the same announce fan-out
- * (operator ruling, 2026-07-13: the first workstation certify skipped Spotify + Telegram, and a
- * finding is a finding however it arrives). The differences from `publishTrack`, both deliberate:
+ * (operator ruling) a finding is a finding however it arrives. The differences from `publishTrack`, both deliberate:
  *
  *   · PRESENCE IS RESOLVED, NEVER ASSUMED. A crawled row may have no Spotify identity at all, so
  *     the playlist add rides the row's stored `spotify_uri` or an exact-ISRC lookup
@@ -635,7 +634,7 @@ export async function certifyExistingTrack(
     null;
 
   // ── THE ANCHOR PRE-FLIGHT (resolve BEFORE minting) ─────────────────────────────────────
-  // RULED 2026-07-15: a finding must anchor to Spotify — the public playlist carries every
+  // A finding must anchor to Spotify — the public playlist carries every
   // banger, the feed contract requires `spotifyUrl`, and the log page's open action links it.
   // The crawler still reaches beyond Spotify (archive value), but only a Spotify-linked track
   // can be CERTIFIED. A crawler-born row arrives without an identity, so try the same

@@ -100,10 +100,10 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       args: [track.trackId, track.logId, "2026-07-01T00:00:00.000Z"],
       sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
     });
-    // Keystone 1's maintained discriminator, flipped exactly as `publishTrack` does: a track WITH a
+    // Keystone 1's maintained discriminator, set exactly as `publishTrack` does: a track WITH a
     // findings row is not catalogue. The link calls below read it to move the entity's maintained
     // `certified_finding_count`, which is the half of the hub gate that decides whether search may
-    // offer this label/album at all — so the flip has to land before them.
+    // offer this label/album at all — so the discriminator must be set before them.
     await client.execute({
       args: [track.trackId],
       sql: `update tracks set is_catalogue = 0 where track_id = ?`,
@@ -255,8 +255,7 @@ describe("tier 1 — a coordinate", () => {
 // ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
 
 // An artist, a label, and an album are ONE affordance — the thing you searched for, offered as
-// a destination, with its tracks under it. The label and the album used to come back as a bare
-// filter chip (their pages did not exist when search shipped); they are first-class here now,
+// a destination, with its tracks under it. The label and the album are first-class destinations,
 // and these three tests are the same test three times ON PURPOSE.
 describe("tier 2 — an exact entity name", () => {
   it("jumps to the artist page, offers the artist, and lists their tracks under it", async () => {
@@ -846,7 +845,7 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
     expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-netsky"]);
   });
 
-  it("keeps the substring scan for an artist whose edges have not landed yet", async () => {
+  it("keeps the substring scan for an artist with no edges", async () => {
     // THE COUNT GUARD. `a1` (Netsky) exists but carries no edges — resolving it would hand back a
     // confident, silent EMPTY. It stays on the string, which is the degradation contract holding.
     expect(await resolveFilterEntities({ artist: "Netsky" })).toEqual({});

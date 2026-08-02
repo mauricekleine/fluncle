@@ -403,7 +403,7 @@ describe("the year fast lane", () => {
 
   it("yearPages drops a bucket that is not a four-digit year but still counts its rows", () => {
     // An empty-string `release_date` passes the read's `is not null` gate and folds to an empty
-    // `substr(…, 1, 4)`, which used to render a lane chip with no text (a nameless link). It is
+    // `substr(…, 1, 4)`, which renders a lane chip with no text (a nameless link). It is
     // dropped from the lane; its rows still advance the rank so the years after it keep their pages.
     expect(
       yearPages(

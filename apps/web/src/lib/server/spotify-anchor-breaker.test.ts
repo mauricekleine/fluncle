@@ -300,9 +300,8 @@ describe("resetSpotifyAnchorBreaker", () => {
 });
 
 describe("adopting the orphaned production rows", () => {
-  // The three keys already exist in the production `settings` table with these EXACT values, written
-  // 2026-07-18 and frozen since because no code could change them. Adoption must be a no-op on the
-  // first deploy: the long-past trip has to read as EXPIRED (via the cooldown), not as a live one.
+  // The three keys are seeded with the production `settings` values. Adoption must be a no-op:
+  // a stale trip reads as EXPIRED (via the cooldown), not as a live one.
   const PROD_TRIPPED_AT = "2026-07-18T09:25:37.713Z";
   const PROD_REASON = "throttled";
   const PROD_FAILURES = "1";
@@ -320,7 +319,7 @@ describe("adopting the orphaned production rows", () => {
     // The one NEW key is absent, exactly as it is in production.
   }
 
-  it("the stale 2026-07-18 trip reads as EXPIRED, not as permanently tripped", async () => {
+  it("the stale trip reads as EXPIRED, not as permanently tripped", async () => {
     const { getSpotifyAnchorBreakerState, spotifyAnchorSearchBreakerTripped } =
       await import("./spotify-anchor-breaker");
 

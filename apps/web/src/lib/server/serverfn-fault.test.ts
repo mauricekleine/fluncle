@@ -6,8 +6,8 @@ import { ApiError } from "./spotify";
 
 // `redactServerFnFault` is the wire-redaction discipline for TanStack Start server
 // functions: it decides what may cross to the browser when a loader/server-fn throws.
-// The property under test is the leak the 2026-07-26 incident exposed — a raw driver
-// message reaching a PUBLIC browser — and its operator-only carve-out, which is gated
+// The property under test is the leak of a raw driver message reaching a PUBLIC browser
+// and its operator-only carve-out, which is gated
 // on a VERIFIED admin principal (`adminRole`), NEVER on a spoofable path/header claim.
 
 // Log + Sentry are the private diagnostics side channel. Stub both so the suite can

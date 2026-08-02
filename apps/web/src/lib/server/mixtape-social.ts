@@ -72,7 +72,7 @@ export async function finalizeMixtapeDistribution(
   // naive "mixtape is published → notify" double-fires. The flip is split into two
   // statements so exactly one call can own the transition:
   //   [1] the GUARDED transition flip — `where status = 'distributing'` — whose
-  //       rowsAffected is 1 only for the call that actually flipped it, 0 for the
+  //       rowsAffected is 1 only for the call that owns the transition, 0 for the
   //       second platform (and any retry of the owner). That is the single-owner
   //       signal (the `updateSubmissionStatus` rowsAffected guard precedent).
   //   [2] an unconditional touch of published_at/updated_at, so a re-run still
@@ -114,7 +114,8 @@ export async function finalizeMixtapeDistribution(
       },
       {
         // [2] Unconditional touch so an already-published re-run still bumps
-        // updated_at (cover cache-buster), as the old CASE flip did.
+        // updated_at (cover cache-buster), preserving the re-run touch from the
+        // conditional transition.
         args: [now, mixtapeId],
         sql: `update mixtapes set updated_at = ? where id = ?`,
       },

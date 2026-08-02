@@ -4,7 +4,8 @@
 // ── WHY THIS EXISTS ──────────────────────────────────────────────────────────────────
 // Fluncle exposes the same drum & bass archive as agent-callable TOOLS on three surfaces: the
 // public MCP server (lib/server/mcp.ts), ChatDnB's AI-SDK tools (lib/server/chat.ts), and the
-// in-page WebMCP surface (lib/webmcp.ts). Those three used to hand-maintain their own copies of
+// in-page WebMCP surface (lib/webmcp.ts). The shared registry prevents those three surfaces from
+// hand-maintaining their own copies of
 // every overlapping tool's name, description, and input schema — so the same verb could drift
 // into three subtly different answers (the `list_fresh` empty-in-chat bug that kicked off this
 // work). The tool SPECS (name + title + description + Zod input schema, client-safe) live in
@@ -837,8 +838,8 @@ const listFreshTool = {
       // THE REGISTER SPLIT (PR-4): the fresh list carries both registers. Certified releases
       // hydrate into `findings` (Fluncle speaks about them as just dropped); the uncertified rows —
       // already cover/coordinate-free from listFreshTracks — ride into the UNLIT `catalogue` bucket,
-      // named and listed, never spoken as found. NO new server read; this fixes the list_fresh
-      // empty-in-chat bug (a fresh window that is all uncertified catalogue used to return nothing).
+      // named and listed, never spoken as found. NO new server read; an all-uncertified fresh
+      // window still returns its catalogue rows.
       const certified = showTracks
         ? fresh.tracks.filter((track) => track.certified && track.logId)
         : [];
@@ -1255,7 +1256,7 @@ const listArtistCatalogueTool = {
 
     // The artist's catalogue is grouped by record; a browse returns one whole GROUP PAGE flattened
     // (bounded by GRAPH_GROUP_ROW_CEILING), each row keeping its record name as quiet context. Paging
-    // over group pages reaches every record — the fix for the old first-page-only, ≤24-row cap.
+    // over group pages reaches every record, with no first-page-only or ≤24-row cap.
     const { pagination, rows } = await pagedGroupedCatalogue(
       () => listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, page),
       (loaded) =>

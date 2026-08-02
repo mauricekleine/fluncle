@@ -232,11 +232,11 @@ export const getStatusSpec = defineSpec({
   transports: ["mcp", "chat"],
 });
 
-// ── The archive-read tools that used to live only in ChatDnB ─────────────────────────
+// ── The shared archive-read tools ─────────────────────────────────────────────
 //
-// PR-2 lifts these into the shared registry so the MCP (and, where a public HTTP twin exists,
-// WebMCP) gains a real ARCHIVE search + the entity/dossier reads its Spotify-only `search_tracks`
-// never had. The descriptions are shared, model-facing, and register-neutral — the certified /
+// The shared registry gives MCP (and, where a public HTTP twin exists, WebMCP) a real ARCHIVE
+// search plus entity/dossier reads beyond the Spotify-only `search_tracks`. The descriptions are
+// shared, model-facing, and register-neutral — the certified /
 // catalogue register discipline lives in ChatDnB's system prompt (the MCP has no model prose), not
 // in the tool text, so nothing here teaches a tier (DESIGN.md Unlit Rule).
 

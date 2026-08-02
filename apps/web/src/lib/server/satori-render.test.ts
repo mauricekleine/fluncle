@@ -6,12 +6,9 @@ import spaceGrotesk400 from "./fonts/space-grotesk-400.ttf?inline";
 import spaceGrotesk700 from "./fonts/space-grotesk-700.ttf?inline";
 import { BODY, BRAND, brandFonts, cardFonts, satoriText } from "./satori-render";
 
-// The two things that were silently WRONG on these cards before, both of which fail without
-// a sound: (1) the markup asking for a weight nobody registered — Satori synthesizes nothing,
-// so it snaps to the nearest face and the rendered weight quietly differs from the code; and
-// (2) a cut shipped without the One Box metrics baked in — Satori reads the TTF's own tables,
-// so a re-cut that forgets the patch would drift the type off-centre in the one place nobody
-// can inspect it. Both are now build-gate failures instead of things you notice on Discord.
+// The card contract has two build-gate checks: markup may ask only for registered weights,
+// because Satori synthesizes no missing face; and every TTF must carry the One Box metrics,
+// because Satori reads the font's own tables when positioning the render.
 
 /** The faces the render surfaces may ask for. One buffer per weight — no synthesis. */
 const REGISTERED: Record<string, number[]> = {

@@ -73,9 +73,8 @@ const HSTS_VALUE = "max-age=31536000";
 const FRAME_ANCESTORS = "frame-ancestors 'self'";
 
 /**
- * The full content policy — ENFORCED as of 2026-08-02, after a report-only window that
- * ran from 2026-07-27 and produced four real findings, each fixed at its source rather
- * than absorbed as an allowlist entry where that was possible:
+ * The full content policy is ENFORCED, with each known source fixed at its source rather
+ * than absorbed as an allowlist entry where that is possible:
  *
  *   - Simple Analytics' `<img>` beacon (queue.*) — a genuine first-party host, allowed.
  *   - Cover Art Archive covers, which 307 → archive.org → a per-node `*.archive.org`.
@@ -136,7 +135,7 @@ const FRAME_ANCESTORS = "frame-ancestors 'self'";
  *     NOTHING in this repo ships it: Web Analytics' automatic setup makes Cloudflare
  *     inject the tag at the edge, so it arrives whether or not the app asks. The script
  *     host and the host it POSTs to (`/cdn-cgi/rum`, read out of beacon.min.js) are
- *     different, so both are named. Operator ruling 2026-08-01: keep the data, allow it.
+ *     different, so both are named. The policy keeps the data and allows these hosts.
  *     Injection is rare and inconsistent — 15 reports over four days against a streamed
  *     SSR response — so treat that dashboard as a biased sample, not as traffic.
  *   - `data:` for the CSS grain tile (styles.css), `blob:` for the local avatar-crop
@@ -163,12 +162,12 @@ export const CONTENT_POLICY = [
   // serve (Spotify's CDN, and Cover Art Archive for crawler-minted albums with no
   // owned master yet — crawl.ts stores `coverartarchive.org/release/<id>/front-500`),
   // Google avatars, and Simple Analytics' image beacon (its script reports via an
-  // <img> GET to queue.*; first watch-window catch, FLUNCLE-WEB-5/6, 2026-07-27).
+  // <img> GET to queue.*; the analytics beacon needs this image host).
   //
   // WHY archive.org rides along with coverartarchive.org, and why naming only the
   // latter was a BUG rather than a tight policy: a CAA cover URL is a redirect stub.
   // `coverartarchive.org/release/<id>/front-500` answers 307 → `archive.org/download/…`
-  // → 302 → a per-node `dn<NNNNNN>.ca.archive.org` (measured 2026-07-29 across
+  // → 302 → a per-node `dn<NNNNNN>.ca.archive.org` across
   // samples; the US pool answers as `ia<NNN>.us.archive.org`). CSP re-checks EVERY
   // redirect hop, so allowing only the stub blocked the image at hop one and reported
   // it under the stub's own URL — which is exactly why FLUNCLE-WEB-6 kept firing (157
@@ -270,8 +269,8 @@ export const SENTRY_CSP_REPORT_ENDPOINT = sentryCspReportEndpoint(
  * group it names is defined by the `Reporting-Endpoints` header below.
  *
  * The legacy `Report-To` JSON header (Reporting API v0) is deliberately NOT sent:
- * `Reporting-Endpoints` supersedes it in every engine that ever shipped v0, and the
- * browsers that shipped neither are covered by `report-uri` anyway.
+ * `Reporting-Endpoints` supersedes it in engines that support it, and browsers without
+ * either Reporting-API version are covered by `report-uri` anyway.
  *
  * Falls back to the bare policy if the DSN ever fails to parse — the policy itself must
  * never depend on the sink existing.
@@ -363,7 +362,7 @@ export function securityHeadersFor(request: Request, response: Response): [strin
   // `frame-ancestors *` intact without this module carrying `/embed/` anywhere.
   if (!response.headers.has("content-security-policy")) {
     // ONE header now, not two. Graduating the full policy to enforcing subsumes the
-    // framing-only header that used to ship beside it — `frame-ancestors 'self'` is a
+    // framing-only header is not sent beside it — `frame-ancestors 'self'` is a
     // directive INSIDE this policy — so the report-only slot simply stops being sent
     // rather than being duplicated.
     const policyHeader = isLocalDevOrigin(url)

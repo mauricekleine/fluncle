@@ -7,7 +7,7 @@ import { getDb, typedRows } from "./db";
 // `context_note` is INTERNAL creative fuel and the backfill stamps are internal curation
 // state: none ride the public `TrackListItem` contract, JSON-LD, RSS, or llms.txt. So the
 // board pulls them through this admin-only path instead — ONE batch flags query for the
-// whole page (folded from what used to be five same-id round-trips), plus the single-track
+// whole page (one batch rather than five same-id round-trips), plus the single-track
 // text reads for the view dialogs. All sit behind the same gated admin server functions the
 // rest of the board uses.
 
@@ -27,7 +27,7 @@ export type FindingBoardFlags = {
 
 /**
  * Every board status flag for a page of findings, in ONE query keyed by `track_id`. Folds
- * the five reads the board used to fan out over the same 50 ids — the `context_note`
+ * the board's five reads over the same 50 ids — the `context_note`
  * presence and the Discogs/Last.fm/Note ran-stamps + the Last.fm loved-stamp — into a single
  * pass over `findings` (each is a bare column predicate on that one row; `track_id` is unique
  * there, so no aggregation). A finding absent from the map (or predating a column) reads all

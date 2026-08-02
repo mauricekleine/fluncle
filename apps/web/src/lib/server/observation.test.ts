@@ -518,7 +518,7 @@ describe("observationDurationFromAlignment", () => {
       ],
     });
 
-    // 38239 (real audio end) + pad — NOT the old flat 30000 that cut the seam.
+    // 38239 is the real audio end; add the observation tail pad rather than a flat duration.
     expect(duration).toBe(38239 + OBSERVATION_TAIL_PAD_MS);
   });
 

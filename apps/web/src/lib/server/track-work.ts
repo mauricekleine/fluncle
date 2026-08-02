@@ -218,13 +218,13 @@ export type TrackWorkScope = "all" | "catalogue" | "findings";
  * `artistYoutubeChannelIds`) are what the finding-only capture queue (`captureQueue=true`,
  * tracks.ts) surfaced before this worklist replaced it — carried here so the migrated sweep's
  * per-finding behaviour (trust classification, failure-count accumulation, the capture→enrich
- * re-derive) is byte-identical to what it did on the old queue. They are ABSENT for
+ * re-derive) is byte-identical to the migrated worklist. They are ABSENT for
  * `analyze`/`embed`, which read those columns off the row directly and never needed them here.
  */
 export type TrackWorkItem = {
   /**
    * Which audio class BPM/key were last analyzed from — CAPTURE-only, so the sweep can
-   * decide whether a just-landed capture must re-derive from the full song. Absent for
+   * decide whether a newly captured track must re-derive from the full song. Absent for
    * `analyze`/`embed` (they read it off the row directly) and for a never-analyzed track.
    */
   analyzedFrom?: "full" | "preview";
@@ -347,7 +347,7 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
  * load-bearing:
  *
  *   · `t.has_embedding`, not `(t.embedding_blob is not null)`. A btree cannot key on an
- *     expression, so the old spelling forced the sweep to materialise the whole un-anchored set,
+ *     expression, so an expression spelling would force the sweep to materialise the whole un-anchored set,
  *     table-probe each row for the blob's null-ness and sort — hourly, over a set that grows with
  *     the catalogue. The mirror is written in the same statement as every vector (schema.ts §
  *     `has_embedding`), so this reads the truth rather than a copy of it.
@@ -404,8 +404,8 @@ export function scopeClause(scope: TrackWorkScope): string {
  *       exists to prevent. `>= 0` is the veto (see the module header).
  *
  *   `wrong-audio` (docs/the-ear.md § Wrong audio) is a re-capture TRIGGER: The Ear caught a
- *   capture that landed the wrong master, rewound the row to the pre-audio ladder, and kept its
- *   old `source_audio_key` so the sweep can refuse the identical bad bytes. Its restored
+ *   capture with the wrong master, rewound the row to the pre-audio ladder, and kept its
+ *   previous `source_audio_key` so the sweep can refuse the identical bad bytes. Its restored
  *   `capture_priority >= 0` puts it back in line for a fresh download.
  *
  * `analyze` — the full-audio analysis worklist: audio on file, and the stored analysis did
@@ -559,8 +559,8 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
   if (kind === "youtube-provenance") {
     // THE PROVENANCE BACKFILL'S WORKLIST (docs/agents/hermes/scripts/capture-sweep.ts § the
     // provenance phase). Slice #1049 keeps the winning video id at CAPTURE time; every row captured
-    // BEFORE it shipped had that id discarded, and a discarded id is unrecoverable from the stored
-    // bytes. So the id is re-derived the only honest way: run the ladder again.
+    // Rows without the winning video id must re-derive it the only honest way: run the ladder
+    // again. The id is fill-empty-only and never re-bought once present.
     //
     //   · `source_audio_key is not null` — the row HAS been captured. This queue is a backfill over
     //     history, never a second acquisition path; a row with no audio belongs to `capture`.
@@ -575,8 +575,8 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //     The window paces a row that concluded honestly and does nothing at all for one that can
     //     never conclude: a row whose every candidate the CDN refuses reports `inconclusive`, moves
     //     no stamp, and is handed straight back on the next tick — forever, starving everything
-    //     queued behind it. That is the Deezer starvation loop of 2026-08-01 in a new place, and the
-    //     answer is the same: the streak counts runs that settled nothing and this clause retires
+    //     queued behind it. The same starvation shape is possible here, and the answer is the same:
+    //     the streak counts runs that settled nothing and this clause retires
     //     the row at the cap. Nothing is written to the row's receipt on the way out — the identity
     //     envelope never reads this column, so a retired row honestly reads `Not checked yet`.
     //
@@ -605,7 +605,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //
     // THERE IS NO WINDOW HERE, and that is the design rather than an omission. The whole point is
     // that a WIDENED rule must reach rows ruled under a narrower one, and a time window cannot
-    // express that — a row ruled 0 an hour before the widening shipped would sit out for the whole
+    // express that — a row ruled 0 before the widening would sit out for the whole
     // window while the rule it was judged by no longer exists. Instead the order is OLDEST-RULED
     // FIRST and every re-verdict re-stamps `youtube_verified_at`, which makes the queue a
     // round-robin that fixed-points on its own: each widening drains through the whole 0/NULL set
@@ -943,7 +943,7 @@ export async function countTrackWork(options: {
   // for its SELECT and its ORDER BY). `findings.track_id` is unique, so a `left join findings`
   // the WHERE never mentions can neither filter nor fan a row out: it changes no `count(*)`. It
   // is not free, though — at 100k rows the planner still probes `findings` once per row, ~175 ms
-  // of the 316 ms cold-start p50 (measured 2026-07-12; docs/local-database.md). So the join goes
+  // of the 316 ms cold-start p50 (docs/local-database.md). So the join goes
   // in exactly when the predicate references it, derived STRUCTURALLY from the assembled clause
   // rather than a kind/scope truth table: the ONLY thing under an `f.` prefix is the `findings`
   // alias, so any `f.` fragment — the `findings`/`catalogue` scopes' `f.track_id`, `capture`'s

@@ -250,9 +250,7 @@ function liftedPhrase(a: string, b: string, minPhraseWords: number): string {
 
 // ── The GENERIC echo scorer — one definition of "does this text echo its neighbourhood" ──
 //
-// The notes were the first family to get an echo gate; the spoken observations are the
-// second (they were the worst-measured family, and had no rail — docs/planning/
-// homogenisation-evidence.md, 2026-07-14). Rather than clone the scorer, both families call
+// Notes and spoken observations share this scorer rather than cloning it. Both families call
 // this ONE function over a `{ logId, text }` neighbourhood, so "same" means exactly the same
 // thing whether the text is a one-line note or a 40-second spoken script. The family wrappers
 // (`scoreNoteEcho`, `scoreObservationEcho`) only rename `text` to the field their callers know.

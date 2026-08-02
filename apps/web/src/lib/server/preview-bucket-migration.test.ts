@@ -128,7 +128,7 @@ async function seedLegacy(
   return oldKey;
 }
 
-/** Put a public object at an arbitrary legacy key (used to seed ORPHANS). */
+/** Put a public object at an arbitrary legacy key (to seed ORPHANS). */
 async function putPublicObject(
   publicBucket: FakeBucket,
   logId: string,

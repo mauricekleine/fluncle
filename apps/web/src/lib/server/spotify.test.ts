@@ -382,8 +382,7 @@ describe("the publish grant's authorize URL — the scope pin", () => {
     const scopes = (url.searchParams.get("scope") ?? "").split(" ");
 
     // `ugc-image-upload` is what un-inerts the Frontier cover leg; this pin exists
-    // because the cover feature once shipped with the upload code but WITHOUT the
-    // scope in the re-auth URL — inert with no path to un-inert.
+    // because the cover path requires the scope in the re-auth URL to remain active.
     expect(scopes).toContain("playlist-modify-public");
     expect(scopes).toContain("playlist-modify-private");
     expect(scopes).toContain("ugc-image-upload");

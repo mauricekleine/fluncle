@@ -119,10 +119,9 @@ describe("preview archive helpers", () => {
 
   // THE RAIL, ENFORCED. The slot holds ONE official 30s preview, never a full song
   // (audio-source policy: captured full audio is internal-only, in the private source-audio
-  // bucket). analyze-track's `--archive-dir` used to be source-blind, so running it with
-  // `--audio-file` emitted the WHOLE captured song as `preview.<ext>` — and the skill told
-  // you to upload exactly that. The analyzer now refuses, and the server refuses too: a body
-  // an order of magnitude past any 30s clip is not a preview, whatever the caller claims.
+  // bucket). `analyze-track --archive-dir` and the server both reject `--audio-file` bodies
+  // that are an order of magnitude past any 30s clip: a full captured song is never a preview,
+  // whatever the caller claims.
   it("rejects a full song — a body too large to be a 30s preview never reaches R2", async () => {
     const puts: string[] = [];
     const bucket = {

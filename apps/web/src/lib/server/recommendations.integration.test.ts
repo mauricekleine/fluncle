@@ -654,7 +654,7 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
     expect(findingIds).toContain("find-clean");
   });
 
-  it("only the last FRONTIER_NOVELTY_WINDOW editions exclude — an older one no longer does", async () => {
+  it("only the last FRONTIER_NOVELTY_WINDOW editions exclude", async () => {
     const { FRONTIER_NOVELTY_WINDOW, listRecommendations, saveRecSeed } =
       await import("./recommendations");
     const user = publicUser("user-A");

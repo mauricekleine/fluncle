@@ -4,7 +4,7 @@
 // One official Spotify app serves EVERY Spotify-touching path: the mint on a track add, publish, the
 // Frontier-playlist refresh, /reach — and, when the operator arms the dark flag, the catalogue's
 // anchor SEARCH rungs (./anchor-spotify-search.ts). Only one of those is optional. A sustained anchor
-// sweep DID starve that app with 429s (2026-07-18), which is why the rungs ship dark; the two
+// sweep can starve that app with 429s, which is why the rungs ship dark; the two
 // governors that survived that day are per-CALL, and neither can see a STORM:
 //
 //   - `spotifyFetch`'s 429/Retry-After backoff (./spotify.ts) waits out ONE call's throttle in
@@ -62,13 +62,12 @@ import { getSetting, setSetting } from "./settings";
 // ── Keys ──────────────────────────────────────────────────────────────────────────────────────
 //
 // THE THREE ADOPTED KEYS. `spotify_anchor_breaker_{reason,tripped_at,failures}` already existed as
-// rows in the production `settings` table, written once and then orphaned: nothing in the codebase
-// read or wrote them, so they held the same values from 2026-07-18 onward because no code COULD
-// change them. They are adopted rather than superseded — the names describe exactly this mechanism,
-// a fresh set would leave the old three sitting there looking live, and their stored values are
+// rows in the production `settings` table. They are adopted rather than superseded — the names
+// describe exactly this mechanism, a fresh set would leave the previous three sitting there
+// looking live, and their stored values are
 // already the values this code writes (`reason = "throttled"`, an ISO `tripped_at`, an integer
-// `failures`). Adoption makes them true; superseding them would only add a second lie. The stale
-// 2026-07-18 `tripped_at` needs no migration: a trip that far past is expired by the cooldown, so
+// `failures`). Adoption makes them true; superseding them would only add a second lie. A stale
+// `tripped_at` needs no migration: a trip past the cooldown is expired, so
 // the breaker reads as CLEAR on the first deploy (pinned by a test using the literal prod values).
 
 /** ISO of when the breaker last TRIPPED, or unset/empty when clear. ADOPTED (see above). */

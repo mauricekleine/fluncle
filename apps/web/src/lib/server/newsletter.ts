@@ -24,9 +24,8 @@ export async function subscribeToNewsletter(
 ): Promise<void> {
   const email = validateInput(body);
 
-  // The shared atomic, DB-backed limiter — the old per-isolate in-memory array
-  // reset on every redeploy and was per-Worker-isolate, which is no limit at all
-  // against an email-bombing flood. Keyed on the signed-in user when present, else
+  // The shared atomic, DB-backed limiter prevents a per-isolate reset from becoming
+  // no limit at all against an email-bombing flood. Keyed on the signed-in user when present, else
   // hash(cf-connecting-ip) (never x-forwarded-for, never the User-Agent).
   const publicUser = await getPublicSession(request);
 

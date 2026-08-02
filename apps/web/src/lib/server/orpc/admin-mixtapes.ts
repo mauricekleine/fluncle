@@ -2,7 +2,7 @@
 // video→YouTube distribution control plane for PROMOTED mixtapes. Each handler
 // reuses the live `/api/v1/admin/mixtapes/*` route logic verbatim; the auth tier
 // moves to the oRPC procedure middleware (../orpc-auth). The draft-authoring
-// handlers (create/members/publish/delete) retired with draft mixtapes — a
+// handlers (create/members/publish/delete) are absent for draft mixtapes — a
 // mixtape is only ever born via `promote_recording`; plans own pre-publish
 // authoring.
 //
@@ -958,7 +958,7 @@ export function adminMixtapesHandlers(os: Implementer) {
   // the box uploads `<clipId>/footage.mp4`, mark the cut `done` (the operator
   // `update_clip` is unreachable to the agent token) AND purge the clip's stale edge
   // renditions server-side (the box holds no Cloudflare creds), so a re-cut to the same
-  // clipId never keeps serving the old cut. Mirrors `finalize_track_video`.
+  // clipId never keeps serving the previous cut. Mirrors `finalize_track_video`.
   const finalizeClipCutHandler = os.finalize_clip_cut.use(adminAuth).handler(async ({ input }) => {
     try {
       const clip = await markClipCutDone(input.clipId);

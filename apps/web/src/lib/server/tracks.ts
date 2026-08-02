@@ -162,8 +162,7 @@ type MixtapeFeedRow = {
  * (`findings_added_at_track_id_idx` carries the feed order); `tracks` is reached by its
  * PRIMARY KEY, so the join costs one b-tree seek per row.
  *
- * TODAY the join is behaviour-preserving: every `tracks` row has a `findings` row (the
- * archive is all certified), so it selects exactly the rows the old monolithic
+ * With an all-certified archive the join selects exactly the rows a direct `from tracks`
  * `from tracks` did. It stops being a no-op the moment the catalogue epic lands
  * uncertified tracks — which is precisely when a missing join would have become a bug.
  *
@@ -203,7 +202,7 @@ export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_m
 //
 // Every PUBLIC list surface (the homepage feed, /log index, Stories, llms.txt paging,
 // the public `list_findings`/`list_stories` ops) renders a handful of per-row fields but
-// used to over-fetch three HEAVY ones that none of them read: `observation_alignment_json`
+// The projection excludes three HEAVY fields that none of them read: `observation_alignment_json`
 // (the spoken observation's word-timing arrays — big), `features_json` (the spectral
 // summary), and `video_model_reasoning`. Shipping them on every list row bloats the SSR
 // HTML and the hydrated react-query cache, and it grows with the archive.
@@ -1445,8 +1444,8 @@ export async function getTrackNeighbors(track: {
   };
 }
 
-// The old `getRelatedTracks` (vibe-quadrant "more in this galaxy" adjacency) is retired with its /log row (browse-by-feel RFC, Slice 4): the sonic
-// galaxy lens (`/galaxies/<slug>`, reached from the linked prose clause) is the real
+// Related-track adjacency is provided by the sonic galaxy lens
+// (`/galaxies/<slug>`, reached from the linked prose clause), which is the real
 // topical adjacency now, and "Close in sound" (`getSimilarFindings`) already covers the
 // per-finding neighbourhood. The vibe columns themselves are dropped — nothing read or
 // wrote them, and the stale coordinates were still leaking into the observe/note prompts.
@@ -1750,7 +1749,7 @@ function camelotOfKey(key: string | null): Camelot | null {
  *
  * `tasteLive` is false when there is no trustworthy measurement to multiply by (the target has
  * no vector, or the archive has not cleared the sonic coverage gate). Then the rail is the plain
- * mixability order, exactly the un-seeded rail this used to be. The two must move together:
+ * mixability order when there is no trustworthy taste measurement. The two must move together:
  * the gate exists to say "the MuQ term is not trustworthy here yet", and taste is that same
  * measurement asked against the same anchor.
  *

@@ -17,7 +17,7 @@
 //
 // THE FILL-EMPTY-ONLY RAIL SURVIVES INTACT. Accepting a held note writes it through
 // `fillEmptyNote` — the same atomic `and (note is null or trim(note) = '')` DB predicate
-// the agent's own write goes through — so an operator note that landed in the meantime is
+// the agent's own write goes through — so a concurrent operator note is
 // never clobbered, and a held note can never overwrite anything. A held rejection likewise
 // never BLOCKS a future good draft: the finding stays in the note queue (`hasNote=false`),
 // the sweep keeps trying, and a fresh line that clears the gate simply fills the note and
@@ -366,7 +366,7 @@ export type ResolveResult = {
  *
  * `accepted` — he read it and it is good. The line is written to the finding through
  * `fillEmptyNote`: the SAME atomic fill-empty-only predicate the agent's own write uses,
- * so a note that landed since the rejection cannot be clobbered. If it was, we report
+ * so a concurrent note cannot be clobbered. If it was, we report
  * `skipped` and resolve the rejection anyway (the held line is moot — the finding has a
  * note). Deliberately, the accepted line is NOT re-run through the echo gate: the gate's
  * verdict is exactly what he is overruling, and a human reading both notes side by side is
@@ -407,7 +407,7 @@ export async function resolveNoteRejection(
   if (resolution === "accepted") {
     // The fill-empty-only rail — the agent's write and the operator's acceptance of the
     // agent's write go through the same atomic predicate. A `false` here means an operator
-    // note landed since the gate rejected this one; it stands, and we never clobber it.
+    // a concurrent operator note won the predicate; it stands, and we never clobber it.
     const filled = await fillEmptyNote(row.track_id, row.note);
     skipped = !filled;
     note = row.note;

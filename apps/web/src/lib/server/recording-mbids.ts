@@ -186,10 +186,7 @@ async function stripCrawlerPrefixes(): Promise<number> {
   const db = await getDb();
 
   const result = await db.execute({
-    // BOTH placeholders bound — the prefix AND the limit. This statement shipped with only the
-    // limit bound and 500'd every wet pass with "Number of arguments mismatch: expected 2, got 1"
-    // (Sentry, 2026-07-18) while the dry-run twin below hardcodes 'mb_' and passed — the unit
-    // tests mocked db.execute, so nothing validated arity. The arity guard in the test file now
+    // BOTH placeholders bound — the prefix AND the limit. The arity guard in the test file
     // pins every statement this module issues.
     args: [CRAWLER_TRACK_ID_PREFIX, PREFIX_STRIP_BATCH],
     // `substr(track_id, 4)` drops the leading `mb_` (3 chars). `substr(track_id, 1, 3) = 'mb_'`

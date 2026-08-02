@@ -1,8 +1,5 @@
-// The MB pacing gate's two load-bearing properties. The first is THE 2026-07-18 regression: the
-// old serialized promise chain wedged the whole isolate when one caller's request context died
-// mid-call (Workers freeze a completed request's timers, so the chain's next delay() never fired
-// and every later MB caller queued forever — the label-lineage box tick poisoned its isolate this
-// way). Slot allocation must keep an unsettled call from ever blocking the next one.
+// The MB pacing gate's two load-bearing properties: slot allocation must keep an unsettled
+// call from blocking the next one, and an alive call must settle before the next call fires.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,10 +9,9 @@ const realFetch = globalThis.fetch;
 
 // Every property here is about WHEN one call fires relative to another, so the whole file runs
 // on FAKE time: the gate's two waits (the chain deadline, the slot delay) are stepped explicitly
-// instead of slept through. Real sleeps made the pacing assertion flaky — the slot clock hands
-// caller B a FIXED timestamp, so whenever caller A's own timer fired late under load the measured
-// gap collapsed to `interval - lateness` (observed 15ms against a 50ms interval on a loaded build
-// box, 2026-07-28). Fake time removes the lateness term entirely and drops the file to ~0ms.
+// instead of slept through. Real sleeps make the pacing assertion flaky — the slot clock hands
+// caller B a fixed timestamp, so timer jitter can collapse the measured gap. Fake time removes
+// the lateness term and keeps the file near-zero in runtime.
 //
 // Two rules keep the stepping honest, both learned by getting them wrong:
 //   - Step with `advanceTimersByTimeAsync`, never `runAllTimersAsync`. The latter jumps straight
@@ -91,9 +87,8 @@ describe("mbFetch pacing", () => {
   });
 
   it("serializes in-flight calls — the second fires only after a SLOW (but alive) first settles", async () => {
-    // The 2026-07-19 regression: arrival pacing alone let calls overlap when one ran long,
-    // and under MusicBrainz's evening slowdown the overlap compounded into real 503
-    // throttling. One call in flight at a time is the etiquette MB expects.
+    // Arrival pacing alone lets calls overlap when one runs long, and the overlap compounds
+    // into 503 throttling. One call in flight at a time is the etiquette MB expects.
     setMusicbrainzRateLimitForTests(10);
 
     const events: string[] = [];
@@ -148,7 +143,7 @@ describe("mbFetch pacing", () => {
     expect(fetchTimes).toHaveLength(2);
     const [first, second] = fetchTimes;
     // On fake time the slot arithmetic is exact, so this is the interval itself rather than
-    // the old 45ms tolerance for real-timer jitter.
+    // a tolerance for real-timer jitter.
     expect(Math.abs((second ?? 0) - (first ?? 0))).toBeGreaterThanOrEqual(50);
   });
 });

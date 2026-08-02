@@ -1,11 +1,9 @@
 // THE SITEMAP'S TWO READS, PROVEN AGAINST EACH OTHER — over a REAL libSQL database with the
 // generated migrations applied, because both halves of this are SQL.
 //
-// `/sitemap.xml` used to derive its ~eight `<sitemap>` lines by fetching every URL they point at:
-// all seven bags, every finding joined to `tracks`, and the artist/album/label sets with their
-// thin-content gates evaluated over the whole corpus — 3.2–13.6s for a ~1KB document that carries
-// no `<url>` at all, twice timing the post-deploy surface sweep out. It now reads AGGREGATES
-// (`collectSitemapIndexStats`), and a child reads ONE bag (`collectSitemapBag`).
+// `/sitemap.xml` reads AGGREGATES (`collectSitemapIndexStats`) for its ~eight `<sitemap>` lines,
+// and a child reads ONE bag (`collectSitemapBag`). The index carries no `<url>` at all, so neither
+// read evaluates the full archive's thin-content gates.
 //
 // That split is only safe while the cheap read and the rows AGREE, and a mocked-DB test could not
 // tell: the agreement lives entirely in whether a `count(*)`/`max()` covers the same set its row

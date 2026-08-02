@@ -56,16 +56,13 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// The pacing gate — BOTH properties, learned the hard way across 2026-07-18/19:
+// The pacing gate guarantees BOTH properties:
 //
 // 1. SINGLE-FILE (in-flight serialization). MusicBrainz wants one polite client, and the
-//    original promise chain guaranteed it implicitly. The pure slot allocator that briefly
-//    replaced it paced ARRIVALS at 1.1s but let calls OVERLAP whenever one ran long — under
-//    MB's evening slowdown the overlap compounded into real 503-throttling of our IP
-//    (observed 2026-07-19 ~21:30 UTC: `throttled: true` sweeps, label-images ticks stretched
-//    past the box CLI's 5-minute timeout). Each caller therefore waits for the previous
+//    slot allocator paces ARRIVALS at 1.1s but must not let calls OVERLAP whenever one runs long.
+//    Each caller therefore waits for the previous
 //    call to settle before firing.
-// 2. WEDGE-IMMUNE (the 2026-07-18 lesson). A predecessor whose request context died (client
+// 2. WEDGE-IMMUNE. A predecessor whose request context died (client
 //    timeout) can leave a frozen timer/fetch the runtime never settles, so the wait races a
 //    deadline on the CALLER'S OWN clock — a dead head delays the queue by at most
 //    CHAIN_WAIT_FACTOR slots, never forever, and every queued caller's own timer keeps
@@ -150,7 +147,7 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
 
       // 503 is MB's "slow down" — honour Retry-After and try again within this slot. Push the
       // slot clock forward too, so OTHER callers (whose slots were pre-allocated) also hold off
-      // for MB's cooldown — the global-backoff property the old serialized chain gave for free.
+      // for MB's cooldown — the global-backoff property shared by the pacing gate.
       if (response.status === 503 && attempt < 2) {
         const retryAfter = Number(response.headers.get("Retry-After")) || 2;
         logEvent("warn", "musicbrainz.retry", {

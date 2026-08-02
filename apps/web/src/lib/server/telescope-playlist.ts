@@ -1,4 +1,4 @@
-// FLUNCLE'S TELESCOPE — the discovery loop closed (operator ruling, 2026-07-15).
+// FLUNCLE'S TELESCOPE — the discovery loop (operator ruling).
 //
 // The ear's diversified top rows, mirrored into a PRIVATE Spotify playlist the operator
 // listens to through the day. The playlist is NEVER curated by hand: it is a pure mirror
@@ -127,9 +127,8 @@ export async function syncTelescopePlaylist(): Promise<TelescopeSyncResult> {
       const accessToken = await getSpotifyAccessToken();
       const playlistId = await ensureTelescopePlaylist(accessToken);
 
-      // `/items`, not the legacy `/tracks` alias: the Findings playlist's own add uses
-      // `/playlists/{id}/items` and works, while this app's tier 403s the alias (the
-      // step-labeled 2026-07-15 live failure).
+      // `/items`, not the `/tracks` alias: the Findings playlist's own add uses
+      // `/playlists/{id}/items`, while this app's tier rejects the alias.
       await step(
         "replace",
         spotifyFetch(`/playlists/${playlistId}/items`, accessToken, {

@@ -51,9 +51,9 @@ export const SONAR_RECS_ENABLED_KEY = "sonar_recs_enabled";
  *
  * A SEPARATE FLAG FROM {@link SONAR_RECS_ENABLED_KEY}, and the separation is the safety.
  * That one is already ON in production; reusing it would route the catalogue scan the instant
- * this merges — before the box's hourly self-deploy has shipped a binary that CARRIES the
+ * this merges — before the box's hourly self-deploy has a binary that CARRIES the
  * `has_finding`/`dismissed`/`is_duplicate`/`nearest_finding_score_max`/`duration_ms_max`
- * filter fields. (An older binary rejects the unknown fields rather than dropping them, so
+ * filter fields. (A binary without those fields rejects the unknown fields rather than dropping them, so
  * even that skew degrades to the Turso scan rather than a wrong page — but a flag whose
  * pre-condition is "the box has redeployed" must be flippable on its own.) Default OFF; the
  * go-live order is merge → self-deploy → verify `GET /health` reports the commit → flip.

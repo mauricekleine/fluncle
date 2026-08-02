@@ -448,11 +448,9 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
-  // The coordinate's sector day: the recorded date, else today. (The old
-  // `plannedFor`-wins resolution retired with `mixtapes.planned_for` — the live
-  // session lives on the PLAN now, and the promote path stamps the take's
-  // `recorded_at` onto the claim. Forward only: already-minted mixtapes keep
-  // their frozen coordinate.)
+  // The coordinate's sector day: the recorded date, else today. `plannedFor` is not
+  // consulted; the PLAN's promote path stamps the take's `recorded_at` onto the claim.
+  // Forward only: already-minted mixtapes keep their frozen coordinate.
   const recordedAt = claim.recordedAt ?? new Date().toISOString();
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
@@ -678,9 +676,9 @@ export async function listMixtapes({
 
 /**
  * The mixtapes the subscribe-able /calendar.ics surfaces: every `published`
- * mixtape — a past event, dated by recorded_at. (Upcoming live sessions come
- * from the PLAN side now — `listUpcomingPlans` in ./recordings — since
- * `mixtapes.planned_for` retired in the plan→recording→mixtape Deploy-2.)
+ * mixtape — a past event, dated by recorded_at. Upcoming live sessions come
+ * from the PLAN side — `listUpcomingPlans` in ./recordings` — and
+ * `mixtapes.planned_for` is not part of this read.
  * Members are hydrated so the .ics description can carry the tracklist.
  */
 export async function listCalendarMixtapes(): Promise<MixtapeDTO[]> {

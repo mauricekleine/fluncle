@@ -1,11 +1,9 @@
 // Everything `/sitemap.xml` (the index) and `/sitemap/<kind>-<n>.xml` (the children) know.
 //
 // ── ONE DOCUMENT, ONE READ ──────────────────────────────────────────────────────────────────────
-// Both used to call one `collectSitemapBags()` that fetched EVERY URL the whole sitemap can list —
-// so the index, which carries no `<url>` at all, paid for the entire archive to print ~eight
-// `<sitemap>` lines, and each child paid for the other six bags to slice its own. Now the index
-// reads AGGREGATES (`collectSitemapIndexStats` — a `count(*)` and a `max()` per child) and a child
-// reads ONE bag (`collectSitemapBag`). The two agree by construction, and
+// The index carries no `<url>` at all, so it reads AGGREGATES (`collectSitemapIndexStats` — a
+// `count(*)` and a `max()` per child) while each child reads ONE bag (`collectSitemapBag`).
+// The two agree by construction, and
 // `sitemap-data.integration.test.ts` proves it over a seeded archive rather than asserting it here.
 //
 // ── THE CERTIFICATION RAIL, RESTATED AS A BUDGET ────────────────────────────────────────
@@ -162,10 +160,8 @@ function mixtapePage(row: MixtapeRow): SitemapLogPage {
 // ── ONE BAG AT A TIME ────────────────────────────────────────────────────────────────────
 //
 // Each reader below is exactly one child sitemap's rows. They are separate functions rather than
-// one omnibus because that is the fix: `/sitemap/labels-1.xml` used to fetch all seven bags — every
-// finding, every mixtape, and the artist/album/label sets with their thin-content gates evaluated
-// over the whole `tracks` table — to slice one of them, and `/sitemap.xml`, a ~1KB INDEX carrying
-// no `<url>` at all, paid the same bill on every crawler hit.
+// one omnibus because each child reads exactly its own bag. `/sitemap.xml` is a ~1KB INDEX
+// carrying no `<url>` at all, so it reads only aggregate counts and timestamps.
 
 /** Every `/log/<coordinate>` page: the certified findings, then the published mixtapes. */
 async function readLogPages(): Promise<SitemapLogPage[]> {

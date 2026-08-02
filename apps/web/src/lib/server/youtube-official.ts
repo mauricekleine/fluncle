@@ -1,4 +1,4 @@
-// THE OFFICIALNESS GATE for a capture's YouTube provenance (operator ruling 2026-07-31).
+// THE OFFICIALNESS GATE for a capture's YouTube provenance (operator ruling).
 //
 // THE PROBLEM THIS SOLVES. The capture sweep finds a YouTube upload, downloads its audio, and
 // fingerprints it against the ISRC-resolved official preview. A match proves the AUDIO is this
@@ -21,14 +21,15 @@
 //      after the house fold, never a substring: "Netsky" accepts on Netsky's own channel, and
 //      "Netsky Fan Rips" does not.
 //   3. A channel whose name FOLDS EQUAL to THIS RECORDING'S OWN LABEL — the third class, added by
-//      the operator's ruling of 2026-07-31 on the evidence of the provenance backfill's pilot. A
+//      the provenance backfill's evidence. A
 //      D&B release lives on its label's channel far more often than on the artist's: rule 2 alone
 //      left "Fokuz Recordings" refused on a Fokuz release, which is not a rip and never was. The
 //      label is read canonically (`labels.name` via `tracks.label_id`) with the raw `tracks.label`
 //      string as a fallback, and the comparison is the SAME equality on the SAME fold — never
 //      containment, and never a curated allowlist. The narrowness is what keeps it honest: a
 //      channel is accepted only for the recordings that label actually released, so "Hospital
-//      Records" accepts on a Hospital release and is refused on everyone else's, exactly as before.
+//      Records" accepts on a Hospital release and is refused on everyone else's, under the same
+//      equality rule.
 //
 // That still refuses genuinely official uploads — a VEVO channel (`NetskyVEVO`), an alias, a
 // channel that renamed itself, an aggregator with a licence Fluncle cannot see. Every one of those

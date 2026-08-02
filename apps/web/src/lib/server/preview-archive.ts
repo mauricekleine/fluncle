@@ -42,7 +42,7 @@ const mimeToExtension: Record<string, string> = {
 
 // Every extension the archive can write. When a re-archive changes the extension
 // (e.g. an mp3 replaced by an m4a), the `<logId>/preview.<ext>` key overwrites in
-// place for the SAME extension but strands the old sibling — so after a successful
+// place for the SAME extension but strands the previous-extension sibling — so after a successful
 // put we sweep the other-extension siblings for this finding.
 const knownPreviewExtensions = ["aac", "bin", "m4a", "mp3"] as const;
 

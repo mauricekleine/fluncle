@@ -6,10 +6,9 @@ import { SENTRY_RELEASE } from "../../sentry-config";
 import { type Implementer } from "./_shared";
 
 /**
- * Build the `health` domain's handlers. `get_health` was ported from the old
- * /api/health GET file route (since deleted — this op IS the liveness probe now),
- * plus the deployed commit `sha`. A liveness poll must never be cached, so the
- * `Cache-Control: no-store` header the old route set is reapplied at the rails
+ * Build the `health` domain's handlers. `get_health` is the liveness probe, plus the
+ * deployed commit `sha`. A liveness poll must never be cached, so the
+ * `Cache-Control: no-store` header is applied at the rails
  * mount (../orpc.ts), where oRPC owns the response framing, rather than here.
  *
  * `sha` reuses `SENTRY_RELEASE` — the ONE build-time commit-SHA constant (inlined

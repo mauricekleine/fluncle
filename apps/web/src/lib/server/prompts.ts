@@ -100,9 +100,9 @@ export type PromptDefinition = {
 };
 
 // ---------------------------------------------------------------------------
-// The baked-in defaults. Each is the prompt as it shipped, turned into a template:
-// the prose is verbatim, and the per-item facts the caller used to interpolate in TS
-// are now `{{variables}}`. The conditional blocks became `{{#if x}}…{{/if}}`, so the
+// The baked-in defaults. Each is the prompt as a template:
+// the prose is verbatim, and the per-item facts the caller interpolates in TS
+// are held in `{{variables}}`. Conditional blocks use `{{#if x}}…{{/if}}`, so the
 // ENTIRE prose — including the rails that fight sameness — stays editable. That is the
 // point: a template that only exposed the data slots would let the operator change the
 // facts and nothing that matters.

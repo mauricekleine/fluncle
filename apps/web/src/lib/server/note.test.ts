@@ -98,8 +98,8 @@ describe("gateNoteText", () => {
 
 // ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
 //
-// The gate used to scan the finding's OWN artist and title along with everything else, while the
-// authoring prompt told the model that "naming the artist OR the title is fine". For a finding by
+// The gate scans the finding's OWN artist and title along with everything else, while the
+// authoring prompt tells the model that "naming the artist OR the title is fine". For a finding by
 // an artist called "Future Signal" those two rules cannot both hold: the note names the artist,
 // the scan sees "signal", and NO rewrite can ever clear it. That is an unsatisfiable gate, not a
 // strict one, and it sits at the head of a cap-1 oldest-first queue where it blocks every finding

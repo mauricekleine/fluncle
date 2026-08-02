@@ -10,12 +10,12 @@ import { type PublicUser } from "./public-auth";
 // thing this slice adds. Three properties carry the safety contract and each is pinned here:
 //
 //   1. FLAG OFF ⇒ the sonar client is never even reached, and the Turso fold answers exactly as it
-//      does today. The flag being unset is the steady state, so this is the shipped behaviour.
+//      does by default. The flag being unset is the steady state.
 //   2. FLAG ON ⇒ the FINDINGS SLOTS come back in SONAR'S order, with sonar's similarity, hydrated
 //      through the same mapper — and the CATALOGUE half is untouched, still ranked by the exact
 //      Turso scan, because REC_ELIGIBLE_WHERE has no faithful sonar filter.
 //   3. A `null` (sonar unusable) or EMPTY reply falls back to the Turso fold — the documented
-//      contract, and the reason a flag flip can only ever restore today's behaviour.
+//      contract, and the reason a flag change can only ever restore the Turso behaviour.
 
 const isSonarArtistsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarLogEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());

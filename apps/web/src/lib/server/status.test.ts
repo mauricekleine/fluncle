@@ -54,7 +54,7 @@ describe("getServiceStatuses retired-row filter", () => {
     ]);
   });
 
-  it("drops the retired `cron.artist-follow` row (the removed auto-follow cron)", async () => {
+  it("drops the retired `cron.artist-follow` row", async () => {
     execute.mockResolvedValue({
       rows: [row("cron.artist-sweep"), row("cron.artist-follow"), row("cron.enrich")],
     });
@@ -192,9 +192,8 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
   });
 
   it("degrades a no-runs-yet that has persisted past the grace window (never deployed)", async () => {
-    // 4 days of "no runs yet" is not a fresh box — the cron was never installed. (The
-    // original fixture was `cron.clip-drip`, the real case this guard was written for; it
-    // has since been retired outright, so the row is filtered before it reaches here.)
+    // 4 days of "no runs yet" is not a fresh box — the cron is not installed, so the
+    // row is filtered before it reaches the service-status read.
     execute.mockResolvedValue({ rows: [noRuns("cron.enrich", "2026-07-07T00:00:00.000Z")] });
 
     const [service] = await getServiceStatuses(NOW);

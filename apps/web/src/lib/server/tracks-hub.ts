@@ -437,8 +437,8 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
  * SQLite evaluates SELECT-list scalar subqueries for every row it MATERIALIZES, and `offset` skips
  * rows AFTER materialization — so a one-step read that carries `TRACK_SELECT`'s per-row subqueries
  * (album/label/galaxy slugs, the lead-artist join, the artist-slug JSON) pays them for every
- * offset-skipped row too: page 300 executed ~14,400 subquery sets, not 48 (measured live
- * 2026-07-19 — 3.7 s at page 2, 9.3 s at page 300, vs 1.3 s at page 1). So the read is TWO steps:
+ * offset-skipped row too: page 300 executes ~14,400 subquery sets, not 48 (3.7 s at page 2,
+ * 9.3 s at page 300, vs 1.3 s at page 1). So the read is TWO steps:
  *
  *   1. Page the bare ids — `select track_id … order by release_date desc … limit ? offset ?`, no
  *      SELECT-list subqueries, so the offset walk touches only the `tracks_release_date_idx` order

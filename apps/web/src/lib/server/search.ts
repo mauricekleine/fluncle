@@ -250,8 +250,8 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
 // portrait, or the freshest finding's cover art standing in for one), and `kind` decides the
 // route. There is deliberately no second pattern for the two that arrived later.
 //
-// (`docs/album-entity.md` is the shape they share; the LABEL and ALBUM pages did not exist
-// when search shipped, which is why those two used to come back as a bare filter chip.)
+// (`docs/album-entity.md` is the shape they share; the LABEL and ALBUM pages are first-class
+// destinations rather than bare filter chips.)
 
 /**
  * A row from any of the three entity tables — one projection, three sources. `logo_key` is the
@@ -314,7 +314,7 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  * row has a page. A LABEL or an ALBUM is offered when it clears the SHARED HUB GATE
  * ({@link hubInclusionWhere}) — a certified finding OR a page that clears the thin-content
  * floor — so search offers EXACTLY the labels/albums the `/labels` + `/albums` hubs and the API
- * list. This replaces the old certified-only guard, which predated the unified hub index: a
+ * list. The unified hub index uses this shared gate: a
  * catalogue-only label with enough renderable tracks now has a real page to jump to, so
  * withholding it would have been the lie. A below-floor imprint (the crawler mints a `labels`
  * row for every one it walks past) still declines the jump and falls back to a filter chip. The

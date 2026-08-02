@@ -22,7 +22,7 @@
 //     Batched by DB `track_id` cursor.
 //
 //   "delete" — the PUBLIC-PREFIX SWEEP. This is authoritative over the PREFIX, not
-//     over the DB rows: the old archive writer only ever `put`, never deleted a
+//     over the DB rows: the archive writer only ever `put`, never deleted a
 //     superseded object, so re-archiving a finding whose bytes differed left the
 //     prior `analysis/previews/<logId>/<oldHash>.<ext>` ORPHANED in the public
 //     bucket, referenced by no row. A row-driven delete cannot see those. So this
@@ -49,7 +49,7 @@ const LEGACY_PREFIX = "analysis/previews/";
 // queries, and this keeps the pattern injection-proof by construction.
 const LEGACY_LIKE = `${LEGACY_PREFIX}%`;
 
-// The audio extensions an archived preview can carry — used to find a finding's
+// The audio extensions an archived preview can carry — used when finding a finding's
 // private copy when a superseded orphan's extension differs from the current one
 // (a re-resolve from a different source can change the container).
 const PRIVATE_EXTS = ["mp3", "m4a", "aac"] as const;
@@ -410,7 +410,7 @@ async function copyPreviews(
         continue;
       }
 
-      // Rewrite the pointer, guarded on the old key so a concurrent run can't
+      // Rewrite the pointer, guarded on the previous key so a concurrent run can't
       // double-apply. Deliberately DOES NOT bump `updated_at` (matches the archive
       // writer — internal state, not visible content).
       await db.execute({

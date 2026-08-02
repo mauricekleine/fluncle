@@ -47,7 +47,7 @@ export type PlatformStatRow = {
   value: number;
 };
 
-/** A platform whose numbers landed this collect (the metric names written). */
+/** A platform whose metrics were written in this collect (the metric names written). */
 export type CollectedPlatform = { metrics: string[]; platform: string };
 
 /** A clean non-work outcome: no configuration/connection, or a measured empty result. */
@@ -510,9 +510,9 @@ export function mapPostizMetrics(
  * TikTok — via POSTIZ platform analytics (the account is already connected there for the
  * publish drafts, and Postiz exposes MORE than TikTok's own Display API would have:
  * followers + total likes + total views, no TikTok developer app, no scope review). The
- * 2026-07-14 live probe's labels: "Followers" / "Total Likes" / "Views" (plus
- * Following/Videos/Recent-* — deliberately unmapped: the reach page tracks audience and
- * carry, not the posting cadence). Supersedes the retired TikTok user-OAuth leg.
+ * The labels are "Followers" / "Total Likes" / "Views" (plus Following/Videos/Recent-* —
+ * deliberately unmapped: the reach page tracks audience and carry, not the posting cadence).
+ * The standalone TikTok user-OAuth leg is not used.
  */
 export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const key = await readOptionalEnv("POSTIZ_API_KEY");
@@ -542,7 +542,7 @@ export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetri
 
 /**
  * Instagram — via POSTIZ platform analytics. The standalone-Instagram connection exposes
- * ENGAGEMENT only (Reach/Views/Likes/Saves — the 2026-07-14 live probe), NOT a follower
+ * ENGAGEMENT only (Reach/Views/Likes/Saves), NOT a follower
  * count, so the reach page carries Instagram's `views` and the audience number stays absent
  * (honest) until the dormant Instagram-Login OAuth leg (instagram.ts + its auth routes) is
  * ever activated through Meta's business verification — see docs/reach-tier2-activation.md.

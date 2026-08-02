@@ -5,9 +5,9 @@ import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integratio
 
 // THE PIPELINE'S WORK QUEUES, PROVEN — against the REAL schema, on a real libSQL engine.
 //
-// Three claims are on trial here, and the first two are claims the previous code got WRONG:
+// Three claims are pinned here:
 //
-//   1. A CATALOGUE TRACK IS WORKABLE. The three sweeps used to read their worklists off
+//   1. A CATALOGUE TRACK IS WORKABLE. The three sweeps read their worklists from
 //      `listTracks`, which drives through the FINDING JOIN — so a `tracks` row with no
 //      `findings` row was structurally invisible to capture, analysis, and embedding. It
 //      could never get a vector, and The Ear ranks by vector, so the whole feature had
@@ -43,7 +43,7 @@ vi.mock("./db", async (importOriginal) => {
  * Open the catalogue capture budget — the ONE flip.
  *
  * Almost every catalogue-capture case below has to call this first, and that is not a test
- * inconvenience: it is the shipped default asserting itself. The feature is DEFAULT-DENY, so
+ * inconvenience: it is the default asserting itself. The feature is DEFAULT-DENY, so
  * an untouched database (a fresh deploy, a preview branch, this test file before its first
  * line runs) hands out NO catalogue capture work at all.
  */
@@ -164,7 +164,7 @@ beforeEach(async () => {
 });
 
 describe("listTrackWork — the catalogue is workable", () => {
-  it("embeds a CATALOGUE track: the queue the finding join used to hide it from", async () => {
+  it("embeds a CATALOGUE track: finding-free tracks are work items", async () => {
     const { listTrackWork } = await import("./track-work");
 
     await seedCatalogueTrack(db, { title: "Uncertified", trackId: "cat0000000000000000000" });
@@ -738,7 +738,7 @@ describe("countTrackWork — how big is the backlog, not how big is the page", (
   // hosted Turso, docs/local-database.md). The correctness claim: `findings.track_id` is unique,
   // so an unreferenced left join can neither filter nor fan out and changes no `count(*)`. This
   // proves it against the REAL predicates for every kind × scope, on a mixed dataset, by counting
-  // the ALWAYS-JOINED version directly and asserting the shipped count matches it.
+  // the ALWAYS-JOINED version directly and asserting the count matches it.
   // ───────────────────────────────────────────────────────────────────────────────────────
   describe("dropping the un-read findings join changes no count", () => {
     /** The ground-truth count: the module's exact predicate, but with the join ALWAYS present. */
@@ -960,7 +960,7 @@ describe("listTrackWork — the youtube-provenance backfill", () => {
     // The window paces a row that concluded honestly and does nothing at all for one that can never
     // conclude: an `inconclusive` report writes no stamp by design, so without this clause the same
     // CDN-refused row returns on the very next tick, forever, starving everything queued behind it.
-    // That is the Deezer starvation loop of 2026-08-01 in a new place.
+    // The same starvation shape must be capped here.
     await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
     await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
     await db.execute({
@@ -1056,7 +1056,7 @@ describe("listTrackWork — the youtube-provenance backfill", () => {
     // This queue costs exactly what capture costs: a full candidate download through the metered
     // proxy. A backfill that quietly spent the catalogue's money while the operator believed the
     // brake was on would be the same bug the brake exists to prevent, wearing a new name. The
-    // budget is DEFAULT-DENY, so this test's untouched database is the shipped state.
+    // budget is DEFAULT-DENY, so this test's untouched database is the default state.
     await seedCatalogueTrack(db, { trackId: "cat1000000000000000000" });
     await withAudio("cat1000000000000000000");
     await withPriority("cat1000000000000000000", 3);
@@ -1182,7 +1182,7 @@ describe("countTrackWork — the backfill queues report the same brake the page 
     await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
     await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
 
-    // Shut (the shipped default): the count must not advertise work the queue would refuse.
+    // Shut (the default): the count must not advertise work the queue would refuse.
     expect(await countTrackWork({ kind: "youtube-provenance", scope: "all" })).toBe(1);
 
     await openCaptureBudget();

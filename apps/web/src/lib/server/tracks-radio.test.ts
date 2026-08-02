@@ -36,7 +36,7 @@ const archive: StoredTrack[] = [
     track_id: "track-no-observation",
     video_squared_at: "2026-06-09T00:00:00.000Z",
   },
-  // Ineligible: observed but NOT squared (would be the old baked-text cut).
+  // Ineligible: observed but NOT squared; the radio requires a squared video.
   {
     observation_audio_url: "https://found.fluncle.com/002.5.9Z/observation.mp3",
     title: "Not Squared",

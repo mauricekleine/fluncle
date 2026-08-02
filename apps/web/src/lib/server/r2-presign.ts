@@ -252,7 +252,7 @@ export async function presignMultipartUpload(
 // No copy/delete existed in the repo before this — the video pipeline only ever
 // PRESIGNED uploads for the CLI. `promote` needs a SAME-bucket (`fluncle-videos`)
 // server-side copy (`recordings/<id>/set.mp4` → `<logId>/set.mp4`) plus a delete of
-// the old key; both run in the Worker with the R2 creds (no presign, no bytes through
+// the source key; both run in the Worker with the R2 creds (no presign, no bytes through
 // the Worker — R2 does the copy internally from the `x-amz-copy-source` header).
 
 // R2/S3's single-request CopyObject ceiling. A ~2 GB set rendition is comfortably

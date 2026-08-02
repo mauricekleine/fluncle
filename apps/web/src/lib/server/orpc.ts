@@ -409,9 +409,8 @@ function isAdminPath(path: string | undefined): boolean {
  * The PUBLIC OpenAPI 3.1 document, generated from the contract router with the
  * admin tier filtered out. Served at /api/v1/openapi.json and
  * consumed by Scalar (/docs/api) and the Postman route. The richer `info`
- * (summary/description/contact) and the absolute server URL are carried over from
- * the retired static `public/openapi.json` so the published surface keeps its
- * prose.
+ * (summary/description/contact) and the absolute server URL keep the published surface's
+ * prose intact.
  */
 export async function generateOpenApiDocument() {
   const document = await generator.generate(router, {

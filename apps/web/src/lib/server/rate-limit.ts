@@ -117,8 +117,8 @@ export async function bumpRateLimitCounter({
   // `limit`; at the cap the `WHERE count + ? <= ?` predicate makes the UPDATE a no-op, so
   // RETURNING yields no row and we know the caller is over the limit. SQLite runs
   // the statement atomically (and libSQL serializes writers), closing the
-  // count-then-insert TOCTOU gap the old limiters had. At `units = 1` the predicate is
-  // `count + 1 <= limit`, exactly the `count < limit` this replaced.
+  // count-then-insert TOCTOU gap. At `units = 1` the predicate is `count + 1 <= limit`,
+  // exactly the `count < limit` condition required by the limiter.
   const result = await db.execute({
     args: [action, bucket, windowStart, units, units, units, limit],
     sql: `insert into rate_limit_counters (action, bucket, window_start, count)

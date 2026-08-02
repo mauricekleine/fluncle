@@ -14,11 +14,9 @@ import { harmonicScore } from "./mixability";
 // (never a fit), and this test exists so no future session re-invents the rejected
 // weight-fit against these sets.
 //
-// MEASURED at build time (2026-07-10, off the live public archive — re-run
-// `scripts/generate-mixability-ground-truth.ts` to refresh): 16/17 keyed, 14 scorable
-// consecutive transitions, real-transition mean 0.30 vs the all-pairs random baseline
-// 0.36. (The RFC snapshot had 14/17 keyed / mean 0.36; the archive has since enriched,
-// and the verdict — key at chance — holds.)
+// The committed extract (refresh with `scripts/generate-mixability-ground-truth.ts`) has
+// 16/17 keyed, 14 scorable consecutive transitions, and a real-transition mean of 0.30
+// versus the all-pairs random baseline of 0.36. The verdict — key at chance — holds.
 
 type Row = { bpm: number | null; i: number; key: string | null; logId: string };
 const rows = groundTruth as Row[];

@@ -6,10 +6,9 @@ import { type NoteEcho } from "./note";
 
 // THE ECHO GATE'S LEDGER, against the real schema.
 //
-// The gate refuses to STORE an auto-note that echoes a sonic neighbour. #502 shipped that
-// refusal SILENT — the line went to /dev/null — which left the operator unable to read what
-// was binned, unable to judge whether the gate was right, and unable to prove its thresholds
-// wrong, because the evidence was the thing being destroyed. These cases pin the fix.
+// The gate refuses to STORE an auto-note that echoes a sonic neighbour and records the
+// refusal in this ledger, so the operator can inspect the binned line and judge the thresholds.
+// These cases pin that observable rejection contract.
 //
 // They run against the REAL in-memory libSQL schema (the generated migrations), because the
 // two properties that matter most are SQL properties a mock could not prove:

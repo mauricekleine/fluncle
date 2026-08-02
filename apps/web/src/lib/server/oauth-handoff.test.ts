@@ -5,11 +5,9 @@ import { handoffUrl, mintHandoffTicket, readHandoffTicket } from "./oauth-handof
 // The handoff TICKET (./oauth-handoff.ts) — the carrier that lets a connect started in
 // a terminal finish in a browser.
 //
-// The residual it closes: a Bearer-carried start used to hand the CLI the PROVIDER's
-// authorize URL with a `bind: "none"` state, replayable by anyone who saw it for ten
-// minutes, because the browser that opened it had never been given a nonce cookie. The
-// ticket replaces that URL with a Fluncle-origin link, and the mint happens inside the
-// operator's logged-in browser instead.
+// A Bearer-carried start cannot safely hand a provider URL to a browser that has no nonce
+// cookie. The ticket carries a Fluncle-origin link, and the mint happens inside the
+// operator's logged-in browser.
 //
 // This suite is the ticket alone. The wire-up — the start route's carrier branch, and
 // the handoff route's grant-cookie gate — is asserted end to end through the real

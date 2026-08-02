@@ -1,10 +1,6 @@
 // observation-echo.ts — the anti-sameness rail for the SPOKEN observation, the written
-// sibling of the note echo gate (note.ts). The observations were the worst-measured
-// generated family Fluncle has and the only written family with NO rail: echoing 59/61,
-// mean pairwise word overlap 0.0816, a closer that reads verbatim across a third of the
-// corpus ("…enjoy cosmonauts" as the last words of 32/61) and a body-reaction lifted
-// verbatim across two scripts ("my shoulders went before i'd clocked the coordinate").
-// See docs/planning/homogenisation-evidence.md, the 2026-07-14 full-corpus audit.
+// sibling of the note echo gate (note.ts). The rail rejects repeated phrases and wholesale
+// reuse across neighbouring scripts before a Cartesia render spends a cent.
 //
 // This ports the notes' PROVEN mechanism (which cut within-region overlap 0.041 → 0.015):
 //   1. the AUTHOR is handed its sonic neighbours' scripts as SPENT moves (the box

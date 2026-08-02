@@ -156,7 +156,7 @@ describe("list_artists / list_albums / list_labels — the A–Z browse index", 
 describe("list_artist_catalogue — pagination over the grouped read", () => {
   it("passes page to the grouped read and returns the whole flattened group page", async () => {
     getArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
-    // A group page whose flattened rows exceed the old 24-row cap — all must survive.
+    // A group page whose flattened rows exceed the per-page row cap — all must survive.
     const tracks = Array.from({ length: 30 }, (_, i) => catTrack(`t${i}`));
     listArtistCatalogueMock.mockResolvedValue({
       groups: [{ name: "A Record", releaseDate: undefined, slug: "a-record", tracks }],

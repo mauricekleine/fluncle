@@ -7,11 +7,8 @@ import { type ObservationEcho } from "./observation-echo";
 // THE OBSERVATION ECHO GATE'S LEDGER, against the real schema — the spoken sibling of
 // note-rejections.integration.test.ts, mirroring its cases one for one.
 //
-// The observations were the worst-measured generated family (echoing 59/61, "…enjoy
-// cosmonauts" verbatim closing 32/61 — docs/planning/homogenisation-evidence.md, 2026-07-14)
-// and the only written family with NO rail. The gate this ledger observes refuses to RENDER a
-// script that echoes a sonic neighbour's script — and, like the note gate before it, it must
-// refuse in the open: the script is held, the operator rules.
+// The gate refuses to RENDER a script that echoes a sonic neighbour's script. The script is
+// held in the ledger, the operator rules, and the rejection remains visible for review.
 //
 // These run against the REAL in-memory libSQL schema (the generated migrations), because the
 // properties that matter most are SQL properties a mock could not prove: the partial unique

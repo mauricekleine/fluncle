@@ -1,4 +1,4 @@
-// The `admin-bios` domain router module — the ruling on a bio that landed past the voice gate.
+// The `admin-bios` domain router module — the ruling on a bio refused by the voice gate.
 //
 // One op, on the `admin-notes` pattern:
 //

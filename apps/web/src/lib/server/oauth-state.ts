@@ -21,16 +21,10 @@
 // the cookie and break every flow), while a cross-site sub-resource request cannot
 // read it.
 //
-// THE CLI CARVE-OUT IS GONE. `fluncle admin auth <platform>` used to call the start
-// route with a Bearer token and print the PROVIDER's authorize URL — a different
-// client from the one that received the response, so there was no cookie to bind to.
-// That case signed `bind: "none"` and kept only the signature + window, leaving a
-// CLI-minted state replayable for ten minutes. It no longer exists: a Bearer-carried
-// start now prints a FLUNCLE-ORIGIN handoff link (./oauth-handoff.ts) that mints the
-// state inside the operator's logged-in browser, so this module has exactly one
-// path. `bind` therefore has one legal value, and the callback gate REJECTS anything
-// else — a state with a missing, unknown, or tampered `bind` is refused rather than
-// waved through as "probably a CLI start".
+// A Bearer-carried start prints a FLUNCLE-ORIGIN handoff link (./oauth-handoff.ts) that
+// mints state inside the operator's logged-in browser. This module has exactly one path:
+// `bind` has one legal value, and the callback gate REJECTS anything else — a state with
+// a missing, unknown, or tampered `bind` is refused rather than waved through.
 
 import { constantTimeEqual, readCookie, signOauthState } from "./env";
 

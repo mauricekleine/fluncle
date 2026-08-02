@@ -87,10 +87,8 @@ const MANIFEST_STAMP_KEYS = [
   "vehicle",
 ] as const;
 
-// THE TRANSPORT-PROOF STAMP FALLBACK (the 044.1.3L lesson, 2026-07-14): the render
-// box's ship crashed mid-upload (a Bun segfault on the box runtime), the agent
-// salvaged with a partial per-file upload, and finalize arrived WITHOUT the
-// diversity-ledger trio — even though render.json was already sitting on R2 in the
+// THE TRANSPORT-PROOF STAMP FALLBACK: a render can arrive WITHOUT the
+// diversity-ledger trio — even though render.json is already sitting on R2 in the
 // same bundle. The bundle's own manifest is the authority of record, so the finalize
 // handler calls this to fill any stamp the request body left out. Best-effort by
 // contract: a missing, corrupt, or unreadable manifest returns {} and NEVER fails

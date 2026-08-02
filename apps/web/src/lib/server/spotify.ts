@@ -73,8 +73,8 @@ type SpotifyAuthRow = {
 // reconnect affordance instead of a generic failure.
 export const SPOTIFY_REAUTH_REQUIRED = "spotify_reauth_required";
 
-// Spotify ages user refresh tokens out six months after issue (announced for
-// 2026-07-20). We flag a token as stale well before that so the operator can
+// Spotify ages user refresh tokens out six months after issue. We flag a token as stale
+// well before that so the operator can
 // reconnect on their own schedule rather than mid-publish. The clock is the
 // stored row's last write — every successful refresh rewrites it, so this tracks
 // the freshest token Spotify has handed us, not necessarily its true issue date.
@@ -264,8 +264,7 @@ export type ArtistImagesFetchResult = {
 /**
  * Fetch each artist's largest Spotify profile image, keyed by Spotify artist id.
  * One `/v1/artists/{id}` call per artist: the batch endpoint (`/v1/artists?ids=`)
- * returns a bare 403 for this app's tier (verified 2026-07-10 — same token, batch
- * 403s, single 200s), so per-id is the only allowed path. The result keeps a genuine
+ * returns a bare 403 for this app's tier, so per-id is the only allowed path. The result keeps a genuine
  * 200-without-an-image separate from malformed responses, per-id failures, exhausted
  * 429 backoff, and proactive shared-budget deferral. The image is an `i.scdn.co` URL
  * — the same host/precedent as `tracks.album_image_url`, served attribution-by-link.
@@ -616,7 +615,7 @@ export async function getSpotifyAccessToken(): Promise<string> {
       refresh_token: auth.refresh_token,
     });
   } catch (error) {
-    // A six-month-old refresh token ages out (Spotify, from 2026-07-20) or is
+    // A six-month-old refresh token ages out or is
     // revoked: the token endpoint answers 400 invalid_grant. Spotify's guidance
     // is to discard the dead token rather than retry it, then send the operator
     // back through sign-in.

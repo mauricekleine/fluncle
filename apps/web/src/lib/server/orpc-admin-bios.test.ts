@@ -181,7 +181,7 @@ describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
   });
 
   it("reports skipped (never clobbers) when it LOSES the fill-empty race", async () => {
-    // The read saw an empty bio, but a bio landed before the atomic write: the predicate
+    // The read saw an empty bio, but a concurrent bio write won before the atomic write: the predicate
     // matched no row, so fillEmptyArtistBio returns false and we re-read the winner.
     getArtistBySlug
       .mockResolvedValueOnce(ARTIST)

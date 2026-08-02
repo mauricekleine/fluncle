@@ -66,8 +66,7 @@ import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 // Fields only the operator may write: editorial voice (note), the vehicle/video
 // (videoUrl), and the immutable identity fields (isrc/logId). The agent role is
 // limited to machine-measured analysis (bpm, key, features, enrichmentStatus) —
-// overwritable, internal, no public footprint. (The retired vibe placement
-// vibeX/vibeY is gone entirely — the sonic galaxy is now the automatic
+// overwritable, internal, no public footprint. (`vibeX`/`vibeY` are not writable — the sonic galaxy is now the automatic
 // `fluncle-cluster` assignment over the MuQ embedding, not an operator write.)
 const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = ["isrc", "logId", "note", "videoUrl"];
 
@@ -76,7 +75,7 @@ const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = ["isrc", "logId", "note", "v
 // `.input(...)` to its TS type, so a `PatchBody`/`ObserveBody` hand-mirror can't
 // drift from the schema the route validates. The contract inputs are LOOSE (each
 // field `?: unknown`) by design — the handler narrows them itself — so these are
-// `{ …?: unknown; trackId: string }`, exactly what the old hand-types said.
+// `{ …?: unknown; trackId: string }`, matching the handler's narrowed contract input.
 type AdminTrackInputs = InferContractRouterInputs<typeof contract>;
 type PatchBody = AdminTrackInputs["update_track"];
 type ObserveBody = AdminTrackInputs["observe_track"];
@@ -271,8 +270,8 @@ export function adminTracksHandlers(os: Implementer) {
       }
 
       // The render's diversity-ledger stamps (vehicle/grain/register). Normally the
-      // video FINALIZE writes them from the bundle's render.json, but a bundle can ship
-      // without them (the 2026-07 unlabelled trio), and the correction path is this
+      // video FINALIZE writes them from the bundle's render.json, but a bundle can be missing
+      // them, and the correction path is this
       // generic update — the operator watches the video and stamps what is on screen.
       // Same trim/length discipline as the finalize mapping; the certification rail in
       // updateTrack still 409s them on an uncertified row (they are findings columns).
@@ -613,8 +612,7 @@ export function adminTracksHandlers(os: Implementer) {
       // bounced draft costs nothing. Score the script against the finding's sonic
       // neighbourhood (the SAME neighbour scripts the box author was handed as spent moves,
       // `observationNeighbours` → `getSimilarFindings`), and a lifted phrase or wholesale word
-      // overlap hard-fails with `observation_echoes_neighbours`/422 — so the observations, the
-      // worst-measured family (docs/planning/homogenisation-evidence.md, 2026-07-14), can no
+      // overlap hard-fails with `observation_echoes_neighbours`/422 — so observations cannot
       // longer quietly flatten a region into one voice. A finding with no embedding yet, or the
       // first observation in an empty neighbourhood, has nothing to echo and passes untouched.
       // A rejected script is HELD in the `observation_rejections` ledger + raised in the
@@ -896,7 +894,7 @@ export function adminTracksHandlers(os: Implementer) {
       // Fill the empty note ATOMICALLY. The fill-empty-only guard is now a DB
       // predicate inside `fillEmptyNote` (`and (note is null or trim(note) = '')`),
       // not the check-then-act above — so an operator note (or a concurrent agent
-      // tick) that landed between our read and this write can NEVER be clobbered: the
+      // tick) that wins between our read and this write can NEVER be clobbered: the
       // loser matches no row and reports `skipped`. `parseEditorialNote` re-validates
       // the length against the public budget on the same path an operator note takes
       // (it returns `undefined` only for a non-string input, which `gateNoteText`
@@ -908,7 +906,7 @@ export function adminTracksHandlers(os: Implementer) {
       );
 
       if (!filled) {
-        // Lost the race: a note landed between our read and this write. The guard held
+        // Lost the race: a concurrent note won between our read and this write. The guard held
         // at the DB, so we wrote nothing — re-read the winner and report skipped,
         // never clobber. `track.logId` is the immutable coordinate (guarded above).
         await recordNoteAttempt(track.trackId, false);
@@ -1161,7 +1159,7 @@ export function adminTracksHandlers(os: Implementer) {
       // Drop stale edge entries on EVERY finalize, not just when track.videoUrl was
       // already set: the requeue flow clears video_url to re-queue a finding, so a
       // re-render's finalize sees no prior url and would otherwise skip the purge (the
-      // gap the manual heartbeat used to cover). On a genuine first render nothing is
+      // gap that a genuine first render does not have). On a genuine first render nothing is
       // cached yet, so this is a harmless no-op. `squared` reflects the layout the
       // finding now carries, so the purge set matches what the surfaces will request —
       // built with the NEW vintage, the same `?v` the surfaces mint from now on.

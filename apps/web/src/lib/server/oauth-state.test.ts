@@ -9,18 +9,14 @@ import {
 
 // The OAuth state browser binding (./oauth-state.ts).
 //
-// BEFORE: the state carried a `nonce` that was never stored anywhere, so it proved
-// nothing — a still-fresh state lifted from a log or a URL could be replayed at the
-// callback with the attacker's own authorization code, and Fluncle would store THEIR
-// platform tokens. AFTER: the start leg also hands the browser an HttpOnly cookie
-// holding that nonce, and the callback refuses the exchange unless the two match.
+// The state carries a `nonce`, and the start leg hands the browser an HttpOnly cookie
+// holding that nonce. The callback refuses the exchange unless the two match, so a state
+// lifted from a log or URL cannot authorize a different browser's code.
 //
-// THE CLI CARVE-OUT IS GONE. `fluncle admin auth <platform>` used to receive the
-// PROVIDER's authorize URL with a `bind: "none"` state — replayable for ten minutes,
-// because the operator opened it in a client that had never been handed a cookie. A
-// Bearer-carried start now prints a Fluncle-origin handoff link instead
-// (./oauth-handoff.ts + its suite), so this module mints exactly one kind of state and
-// the callback gate REJECTS every other `bind` rather than waving it through.
+// A Bearer-carried start prints a Fluncle-origin handoff link instead of handing a
+// provider URL to a client without the binding cookie (./oauth-handoff.ts + its suite).
+// This module mints exactly one kind of state, and the callback gate REJECTS every other
+// `bind` rather than waving it through.
 
 const SESSION_SECRET = "test-session-secret-oauth-state";
 
@@ -187,10 +183,8 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
     ).toBe(true);
   });
 
-  it('REJECTS the retired `bind: "none"` even with the right cookie present', () => {
-    // The unbound state is gone with the CLI carve-out. A state still carrying it is
-    // either pre-deploy (it expires in ten minutes) or someone re-signing an old
-    // shape — either way the callback refuses rather than skipping the cookie check.
+  it('REJECTS `bind: "none"` even with the right cookie present', () => {
+    // A state carrying the unbound value is refused rather than skipping the cookie check.
     expect(
       stateIsBoundToThisBrowser(callbackRequest("fluncle_oauth_youtube_auth=n"), {
         bind: "none",

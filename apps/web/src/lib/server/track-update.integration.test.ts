@@ -53,10 +53,8 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     expect(await noteOf(TRACK_ID)).toBe("Pure rolling menace, patient and mean.");
   });
 
-  // THE PROVENANCE STAMP, at the row. The 2026-07-14 audit found `note_prompt_version` NULL
-  // on 60/61 findings — the stamp shipped with the registry (#516), after most of the corpus
-  // was authored, so the NULLs are historical rather than a broken write. This pins that a
-  // stamped fill actually lands the version in the column, in the same atomic statement.
+  // THE PROVENANCE STAMP, at the row. A stamped fill writes the version in the column
+  // in the same atomic statement as the note.
   it("stamps note_prompt_version in the same statement as the note (and NULL when unstamped)", async () => {
     const { fillEmptyNote } = await import("./track-update");
 
