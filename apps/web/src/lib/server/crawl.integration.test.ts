@@ -178,6 +178,34 @@ async function seedLabel(name: string, slug: string, seedState: string): Promise
   });
 }
 
+async function seedFrontierNode(node: {
+  createdAt: string;
+  externalId: string;
+  hop: number;
+  id: string;
+  kind: "artist" | "label" | "release";
+  labelSlug: null | string;
+  source?: "fluncle" | "musicbrainz";
+  state?: "done" | "failed" | "pending" | "skipped";
+}): Promise<void> {
+  await db.execute({
+    args: [
+      node.id,
+      node.kind,
+      node.source ?? "musicbrainz",
+      node.externalId,
+      node.hop,
+      node.labelSlug,
+      node.state ?? "pending",
+      node.createdAt,
+      node.createdAt,
+    ],
+    sql: `insert into crawl_frontier
+            (id, kind, source, external_id, hop, parent_id, label_slug, state, created_at, updated_at)
+          values (?, ?, ?, ?, ?, null, ?, ?, ?, ?)`,
+  });
+}
+
 beforeEach(async () => {
   db = await createIntegrationDb();
   setMusicbrainzRateLimitForTests(0);
@@ -662,6 +690,158 @@ describe("the STORAGE GATE — a track is stored only when its release's label i
 });
 
 describe("the frontier drain — releases never starve behind a discovery wave", () => {
+  it("picks enabled-provenance releases before disabled provenance at the same hop", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: HOP2_RELEASE,
+      hop: 2,
+      id: "mb:release:disabled-provenance-first",
+      kind: "release",
+      labelSlug: "anjunabeats",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-12T00:00:00.000Z",
+      externalId: SEED_RELEASE,
+      hop: 2,
+      id: "mb:release:enabled-provenance-second",
+      kind: "release",
+      labelSlug: "medschool",
+    });
+
+    await crawlCatalogue({ limit: 1, maxHop: 2 });
+
+    const picked = await db.execute(
+      `select id, state from crawl_frontier
+       where id in ('mb:release:disabled-provenance-first', 'mb:release:enabled-provenance-second')
+       order by id`,
+    );
+    expect(picked.rows.map((row) => `${text(row.id)}:${text(row.state)}`)).toEqual([
+      "mb:release:disabled-provenance-first:pending",
+      "mb:release:enabled-provenance-second:done",
+    ]);
+  });
+
+  it("still picks a disabled-provenance release when no storable release is pending", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: HOP2_RELEASE,
+      hop: 2,
+      id: "mb:release:disabled-provenance-only",
+      kind: "release",
+      labelSlug: "anjunabeats",
+    });
+
+    await crawlCatalogue({ limit: 1, maxHop: 2 });
+
+    const picked = await db.execute(
+      "select state from crawl_frontier where id = 'mb:release:disabled-provenance-only'",
+    );
+    expect(picked.rows[0]?.state).toBe("done");
+  });
+
+  it.each([
+    { labelSlug: null, provenance: "NULL provenance" },
+    { labelSlug: "missing-label", provenance: "provenance with no labels row" },
+  ])("orders $provenance last without pruning it", async ({ labelSlug }) => {
+    const { crawlCatalogue } = await import("./crawl");
+    const nonStorableId = `mb:release:${labelSlug ?? "null"}-provenance`;
+
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: HOP2_RELEASE,
+      hop: 2,
+      id: nonStorableId,
+      kind: "release",
+      labelSlug,
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-12T00:00:00.000Z",
+      externalId: SEED_RELEASE,
+      hop: 2,
+      id: "mb:release:enabled-before-unruled-provenance",
+      kind: "release",
+      labelSlug: "medschool",
+    });
+
+    await crawlCatalogue({ limit: 1, maxHop: 2 });
+
+    const deferred = await db.execute({
+      args: [nonStorableId],
+      sql: "select state from crawl_frontier where id = ?",
+    });
+    expect(deferred.rows[0]?.state).toBe("pending");
+
+    await crawlCatalogue({ limit: 1, maxHop: 2 });
+
+    const eventuallyPicked = await db.execute({
+      args: [nonStorableId],
+      sql: "select state from crawl_frontier where id = ?",
+    });
+    expect(eventuallyPicked.rows[0]?.state).toBe("done");
+  });
+
+  it("leaves the discovery half ordered independently of release provenance", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+
+    // Keep seeding idempotent without adding a second pending discovery node: this is the exact
+    // deterministic id `seedFromEnabledLabels` would try to enqueue for Medschool.
+    await seedFrontierNode({
+      createdAt: "2026-07-09T00:00:00.000Z",
+      externalId: "medschool",
+      hop: 0,
+      id: "fluncle:label:medschool",
+      kind: "label",
+      labelSlug: "medschool",
+      source: "fluncle",
+      state: "done",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-10T00:00:00.000Z",
+      externalId: HOP2_RELEASE,
+      hop: 2,
+      id: "mb:release:discovery-disabled-provenance",
+      kind: "release",
+      labelSlug: "anjunabeats",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-12T00:00:00.000Z",
+      externalId: SEED_RELEASE,
+      hop: 2,
+      id: "mb:release:discovery-enabled-provenance",
+      kind: "release",
+      labelSlug: "medschool",
+    });
+    await seedFrontierNode({
+      createdAt: "2026-07-11T00:00:00.000Z",
+      externalId: OTHER_ARTIST_MBID,
+      hop: 1,
+      id: "mb:artist:disabled-provenance-discovery",
+      kind: "artist",
+      labelSlug: "anjunabeats",
+    });
+
+    await crawlCatalogue({ limit: 2, maxHop: 2 });
+
+    const picked = await db.execute(
+      `select id, state from crawl_frontier
+       where id in (
+         'mb:release:discovery-disabled-provenance',
+         'mb:release:discovery-enabled-provenance',
+         'mb:artist:disabled-provenance-discovery'
+       )
+       order by id`,
+    );
+    expect(picked.rows.map((row) => `${text(row.id)}:${text(row.state)}`)).toEqual([
+      "mb:artist:disabled-provenance-discovery:done",
+      "mb:release:discovery-disabled-provenance:pending",
+      "mb:release:discovery-enabled-provenance:done",
+    ]);
+  });
+
   it("guarantees release nodes half the batch even when older, lower-hop artist nodes crowd the head", async () => {
     const { crawlCatalogue } = await import("./crawl");
 

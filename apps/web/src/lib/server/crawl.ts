@@ -378,10 +378,11 @@ async function settle(
 
 /**
  * The pass's pick: the next `limit` nodes to expand — breadth-first and deterministic
- * (`hop, demand_rank, created_at, id`) WITHIN each half of a kind-aware split. `demand_rank`
- * (docs/catalogue-crawler.md § Demand) sits AFTER `hop`, so a demanded entity's subtree is
- * expanded before its undemanded siblings AT THE SAME HOP — never ahead of a nearer hop, so
- * breadth-first is preserved. It takes `pending`
+ * (`hop, demand_rank, created_at, id`) WITHIN each class of a kind-aware split. The RELEASE half
+ * drains storable provenance (currently an enabled seed label) before non-storable provenance;
+ * the DISCOVERY half is unchanged. `demand_rank` (docs/catalogue-crawler.md § Demand) sits AFTER
+ * `hop`, so a demanded entity's subtree is expanded before its undemanded siblings AT THE SAME
+ * HOP within its class — never ahead of a nearer hop in that class. It takes `pending`
  * nodes plus `failed` ones whose exponential backoff has elapsed and which have not
  * yet been abandoned — so a transient 503 is retried by a later tick instead of
  * silently pruning a subtree.
@@ -418,10 +419,13 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
 
   const releases = await db.execute({
     args: [...cutoffs, releaseShare],
-    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug
+    sql: `select crawl_frontier.id, kind, source, external_id, hop, cursor, failures, label_slug,
+                case when provenance_label.seed_state = 'enabled' then 1 else 0 end as is_storable
           from crawl_frontier
+          left join labels as provenance_label on provenance_label.slug = crawl_frontier.label_slug
           where kind = 'release' and ${eligible}
-          order by hop asc, demand_rank asc, created_at asc, id asc
+          order by is_storable desc, crawl_frontier.hop asc, demand_rank asc,
+                   crawl_frontier.created_at asc, crawl_frontier.id asc
           limit ?`,
   });
   const releaseRows = typedRows<FrontierRow>(releases.rows);
