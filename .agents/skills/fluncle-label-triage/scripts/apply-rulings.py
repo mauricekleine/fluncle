@@ -285,7 +285,7 @@ def run_apply(api: Api, args) -> int:
     partials = sum(1 for e in plan if e["bucket"] == "dnb_partial")
     rules = sum(len(e["rules"]) for e in plan)
     print(
-        f"plan: {enables} enable, {disables} disable, {partials} rules-only (stay disabled), "
+        f"plan: {enables} enable, {disables} disable, {partials} rules-only (seed state untouched), "
         f"{rules} artist rule(s), {len(unclear)} left undecided"
     )
 

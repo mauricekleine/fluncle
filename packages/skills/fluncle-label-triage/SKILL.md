@@ -22,7 +22,7 @@ The ruling itself is an OPERATOR act (`update_label` is operator-tier — crawl 
 That gives a round two shapes the old three buckets could not express, and both change what the NEXT crawl takes while touching nothing already stored:
 
 - **enable + blocks** — a mainly-DnB label with a recurring off-lane act. Only when the off-lane FIRST-credit share is **≤ 15 %**; above that the label is not mainly DnB and stays `unclear` for the operator.
-- **`dnb_partial`: stay disabled + allows** — a minority-DnB label whose DnB acts deserve the archive (the YUKU / Crucast shape). The label is left exactly as it is; only the allow rules are written.
+- **`dnb_partial`: stay out of the seed set + allows** — a minority-DnB label whose DnB acts deserve the archive (the YUKU / Crucast shape). The label is left exactly as it is (undecided stays undecided); only the allow rules are written.
 
 Four rails hold in every round:
 
