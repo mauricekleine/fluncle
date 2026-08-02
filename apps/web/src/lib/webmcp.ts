@@ -191,8 +191,7 @@ const tools: WebMcpTool[] = [
   ...webmcpOnlyTools,
 ];
 
-// The vocabulary cut retired the last deprecation alias (`get_recent_tracks`) with no
-// replacement shim, so the WebMCP tool set is exactly the shared web tools plus the
+// The WebMCP tool set has no deprecation aliases, so it is exactly the shared web tools plus the
 // WebMCP-only verbs — one name per operation, in parity with the server MCP surface.
 
 function asString(value: unknown): string {

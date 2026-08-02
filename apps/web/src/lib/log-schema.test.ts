@@ -498,7 +498,7 @@ describe("breadcrumbsJsonLd", () => {
 
 describe("the detail-page trails that had none", () => {
   // A Logbook entry and a newsletter edition are detail pages under a real hub, exactly like a
-  // finding under /log or an artist under /artists, and both shipped without a BreadcrumbList.
+  // finding under /log or an artist under /artists, and both detail pages must carry a BreadcrumbList.
   // The leaf is the BARE coordinate: VOICE.md §3 keeps "sector" as first-person colour, never
   // a structural label, so the trail ends on the same `036` the page's h1 wears.
   it("walks Fluncle → Logbook → the entry's coordinate", () => {

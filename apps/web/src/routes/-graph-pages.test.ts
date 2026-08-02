@@ -181,10 +181,10 @@ describe("the label page", () => {
   it("SERVES a label with no findings — a discography is a page", async () => {
     // THE REVERSAL. A label the crawler discovered carries a `labels` row (that row IS the
     // operator's ruling queue) and can carry hundreds of crawled releases. That is a real,
-    // useful page — an honest record of what the label put out — and it indexes. It used to 404
-    // on the rule "the catalogue deepens a page, it never creates one".
+    // useful page — an honest record of what the label put out — and it indexes. A discovered label
+    // with releases must not 404 under the rule "the catalogue deepens a page, it never creates one".
     //
-    // What made the old page a DOORWAY was never its existence; it was the HOLLOW RENDERING —
+    // A page becomes a DOORWAY through HOLLOW RENDERING, not through its existence —
     // a "Nothing logged off this one yet." heading over a wall of Spotify outlinks. Conditional
     // sections fix that at the source: no findings, no findings section, no apology.
     getFindingsByLabel.mockResolvedValue([]);

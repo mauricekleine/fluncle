@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 // actually armed. Without it, any test touching a write path runs with the operator's
 // real `.dev.vars` credentials — `loadLocalEnv` loads them whenever `import.meta.env.DEV`
 // is true, which it is under vitest — and fires the live integration. That is not
-// hypothetical: on 2026-07-20 the submission suites POSTed ~15 real messages per run to
+// hypothetical: without the rail, submission suites can POST ~15 real messages per run to
 // the crew's Discord channel.
 //
 // If this file ever fails, the rail is down and the suite can reach production services.

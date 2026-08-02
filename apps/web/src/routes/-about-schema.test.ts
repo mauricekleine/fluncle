@@ -118,7 +118,7 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
     expect(website?.publisher).toEqual({ "@id": fluncleEntityId });
   });
 
-  it("the home MusicPlaylist is created BY the canonical node, and no longer re-declares sameAs", () => {
+  it("the home MusicPlaylist is created BY the canonical node and does not re-declare sameAs", () => {
     const playlist = schemasOf(homeHead).find((schema) => schema["@type"] === "MusicPlaylist");
 
     expect(playlist?.creator).toEqual({ "@id": fluncleEntityId });

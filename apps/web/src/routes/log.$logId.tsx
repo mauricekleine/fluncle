@@ -132,7 +132,7 @@ const fetchLogPage = createServerFn({ method: "GET" })
 
 // Typed helper outside the route options: an inline head() that reads
 // loaderData makes the route's own type inference circular (same pattern as
-// the old stories route).
+// the stories route).
 function logHead(loaderData: LogPageData | undefined) {
   if (loaderData?.status !== "found" && loaderData?.status !== "found-mixtape") {
     return {};

@@ -63,7 +63,7 @@ function sectorOf(track: GameTrack): number {
   const logId = track.logId;
 
   // FINDINGS ONLY. Mixtape coordinates (`NNN.F.xx`) are deliberately NOT placed in
-  // the game — operator ruling 2026-07-11: the voyage thread is the findings' spiral
+  // the game — the voyage thread is the findings' spiral (operator ruling)
   // and stays findings-only (a mixtape checkpoint body at its sector is a separate,
   // unbuilt idea — see ROADMAP). A mixtape's `F` middle slot fails the finding
   // pattern, so it falls through to the found-date sector below exactly as a

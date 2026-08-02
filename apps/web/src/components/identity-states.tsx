@@ -13,9 +13,8 @@
 // trust the answer. Trust comes from precision and brevity, not personality. So the content of a row
 // is a method, a date, and a status, and it renders as exactly that: status-vocabulary fragments
 // joined by middots, with no subject, no sentences, and no idioms. Voice lives in the page's one
-// intro line (identity.$key.tsx) and nowhere else here. (Operator ruling, 2026-07-30. It supersedes
-// the two earlier rounds on this surface, which rendered the same provenance metadata as prose and
-// read as dead passive and then as narrated folksiness.)
+// intro line (identity.$key.tsx) and nowhere else here. The rows remain terse status-vocabulary
+// fragments rather than prose or narrated folksiness.
 //
 // ── THE COVERAGE SET ──────────────────────────────────────────────────────────────────────────
 // The page renders rows ONLY for what the archive covers: ISRC, MusicBrainz, Spotify, Apple Music,

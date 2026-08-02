@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 // The /docs content pane, as a MAIN LANDMARK.
 //
 // Fumadocs' stock container slot renders `<article id="nd-page">`. `article` maps to the `article`
-// role, which is not a landmark — so /docs shipped with no `<main>` at all, and every line of a doc
-// page sat outside any landmark (axe: `landmark-one-main` plus six `region` nodes, 2026-07-26). A
+// role, which is not a landmark — the docs shell supplies `<main>`, so every line of a doc
+// page sits inside a landmark (axe: `landmark-one-main` plus six `region` nodes). A
 // screen-reader reader had no "skip to the content" target on the one surface that is nothing BUT
 // content.
 //

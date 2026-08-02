@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 //
 // The dialog reads the LIVE row each render (the board passes identity, not a
 // snapshot), so right after a push it shows the confirm step without reopening.
-// One surface instead of the old push-button + separate status dialog: the cell
+// One surface for push and status: the cell
 // is "is this live?", and clicking it always lands you wherever the work is.
 
 type PushDialogProps = {

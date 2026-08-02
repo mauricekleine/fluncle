@@ -25,9 +25,8 @@ import { getMixChainDepth, getMixTracksByTokens } from "@/lib/server/tracks";
 // and the taste behind it live in the URL (`?set=` + `?taste=`), so a set is its link.
 //
 // ── THE GATE ────────────────────────────────────────────────────────────────────────────
-// It used to be admin-only behind a ~250-FINDING FLOOR: a number nobody could defend,
-// standing in for the real question ("is there enough here to chain a set?"). That question
-// is now asked directly, of the archive, on every load — `getMixChainDepth` measures whether
+// The gate asks the real question directly ("is there enough here to chain a set?") of the
+// archive on every load — `getMixChainDepth` measures whether
 // the MEDIAN track can reach one of Fluncle's own sets' worth of tracks (17) plus a full rail
 // (12) by a NAMED harmonic move. Neither number is invented; see `MIX_PUBLIC_FLOOR`.
 //

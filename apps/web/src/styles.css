@@ -2148,8 +2148,8 @@ body::before {
 .catalogue-letters {
   display: flex;
   flex-wrap: wrap;
-  /* One row-gap step up from the old 0.15rem, so the 24px chips below never sit shoulder to
-     shoulder across wrapped rows (WCAG 2.5.8's spacing clause as well as its size clause). */
+  /* The 0.25rem row gap keeps the 24px chips below from sitting shoulder to shoulder across
+     wrapped rows (WCAG 2.5.8's spacing clause as well as its size clause). */
   gap: 0.25rem 0.3rem;
   margin-top: 0.7rem;
 }

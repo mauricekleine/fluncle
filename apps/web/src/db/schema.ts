@@ -156,7 +156,7 @@ export const tracks = sqliteTable(
     // U1). These MOVED here from `findings` — and the move is the whole point. `apple_music_url`
     // is CATALOGUE identity (it describes the recording, true of an uncertified track), so the
     // Apple sweep now drains CATALOGUE rows too (a `tracks` row with no `findings` row). The
-    // shipped bookkeeping lived on `findings`, where a catalogue row has no row at all —
+    // The bookkeeping belongs on `tracks`, where a catalogue row has no `findings` row at all —
     // `readReliability`/`recordAttempt` hard-coded `findings` and silently updated zero rows on
     // a catalogue track, so a naive catalogue sweep would re-hit every ISRC every tick forever.
     // Putting the bookkeeping on `tracks` (where the output already lives) is the capture-
@@ -403,8 +403,8 @@ export const tracks = sqliteTable(
     captureVerifiedAt: text("capture_verified_at"),
     catalogueRankCorpus: text("catalogue_rank_corpus"),
     catalogueRankedAt: text("catalogue_ranked_at"),
-    // THE DEEZER LINK, AND HOW IT WAS WON — the "keep what we already fetch" leg (operator ruling
-    // 2026-07-30). Fluncle receives a Deezer track id on three paths and threw all three away: the
+    // THE DEEZER LINK, AND HOW IT IS WON — the "keep what we already fetch" leg (operator ruling). Fluncle stores the
+    // Deezer track id whenever any of three existing paths receives it: the
     // anchor rung's ISRC-recovery search (anchor.ts § recoverIsrcViaDeezer), the add flow's
     // ISRC fallback (deezer.ts § lookupIsrcFromDeezer), and the add flow's label/preview enrichment
     // by ISRC (deezer.ts § enrichFromDeezer, which needed the id to read the album at all). Keeping
@@ -499,14 +499,15 @@ export const tracks = sqliteTable(
     // `F32_BLOB(1024)` that spills to overflow pages, and SQLite must WALK that overflow
     // chain to reach any column stored after it in the record. So a scan whose predicates
     // read `dismissed_at` / `nearest_finding_score` / `spotify_anchor_attempted_at` / `isrc`
-    // pays for the vector it never selects: measured 2026-07-26 on hosted prod, the
-    // `/admin/funnel` stage scan ran 9.5s cold against 0.38s warm, and three post-blob
-    // columns cost 3.32s where three pre-blob columns cost 0.23s. Testing `embedding_blob IS
-    // NOT NULL` is itself cheap (null-ness reads the record header) — the cost is SKIPPING
+    // pays for the vector it never selects. The `/admin/funnel` stage scan takes 9.5s cold / 0.38s
+    // warm, and three post-blob columns cost 3.32s versus 0.23s for three pre-blob columns. Testing
+    // `embedding_blob IS NOT NULL` is itself cheap (null-ness reads the record header) — the cost is
+    // SKIPPING
     // PAST the blob, so no amount of care with the vector column fixes it. Mirroring the flag
     // lets `tracks_funnel_scan_idx` COVER the whole scan, which never touches a table row and
     // so never touches an overflow page: on a 54,860-row prod clone that is a 5 MB index against a
-    // 125 MB table, and the scan went 12.6-19.9s cold → 1.70s first-touch, 0.30s after.
+    // 125 MB table; the scan is 12.6-19.9s cold, 1.70s first-touch, 0.30s after.
+    // Re-measure with `apps/web/scripts/bench-db-scale.ts`.
     //
     // WHY NOT A GENERATED COLUMN. A `VIRTUAL` generated column mirroring the same expression
     // was measured and REJECTED: the planner will not treat an index over it as covering, so
@@ -666,7 +667,7 @@ export const tracks = sqliteTable(
     sourceAudioKey: text("source_audio_key"),
     // THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) — a JSON array of the sources this
     // track's captures have been REJECTED from, capped at the newest ~10 ({ videoId?, sha256,
-    // reason, at }). It is the general form of the single-sha memory the old quarantine embedded in
+    // reason, at }). It is the rejected-source memory: two filters ride it in the capture sweep.
     // a kept `source_audio_key`: two filters ride it in the capture sweep. The `videoId` is the
     // cheap PRE-download filter (a known-bad candidate never costs proxy bytes again); the `sha256`
     // is the deep backstop (the same audio re-uploaded under a NEW id is rejected post-download and
@@ -764,12 +765,11 @@ export const tracks = sqliteTable(
     spotifyUrl: text("spotify_url"),
     title: text("title").notNull(),
     trackId: text("track_id").primaryKey(),
-    // THE CAPTURE'S YOUTUBE PROVENANCE, AND WHETHER IT MAY BE SHOWN (operator ruling 2026-07-31).
+    // THE CAPTURE'S YOUTUBE PROVENANCE, AND WHETHER IT MAY BE SHOWN (operator ruling).
     // The capture sweep already searches YouTube, downloads the audio, and FINGERPRINT-VERIFIES it
-    // against the ISRC-resolved official preview (capture-sweep.ts § the fingerprint gate). Until
-    // now only the REJECTED ids were remembered (`source_audio_rejected`); the winner's id was
-    // thrown away at the moment it was most certain. So for every capture from here on, Fluncle
-    // knows which upload carries this recording, PROVEN by his own ears — and not one YouTube Data
+    // against the ISRC-resolved official preview (capture-sweep.ts § the fingerprint gate). The
+    // winner's id is stored alongside rejected ids, so every capture records which upload carries
+    // this recording, PROVEN by his own ears — and not one YouTube Data
     // API call is made to learn it.
     //
     // AND THE ROWS CAPTURED BEFORE THAT are reached by the PROVENANCE BACKFILL, a budgeted phase
@@ -826,10 +826,10 @@ export const tracks = sqliteTable(
     // an exhausted row (every rung concluded, nothing vouchable) and an inconclusive one (the CDN
     // refused every section it tried). It exists for one reason: a row that can never be concluded
     // is otherwise handed back by the worklist every single tick, forever, starving everything
-    // queued behind it. That is the Deezer starvation loop of 2026-08-01 in a new place, and the
-    // streak is the same answer — the worklist retires a row at the cap
-    // (`YOUTUBE_PROVENANCE_MAX_FAILURES`, track-work.ts), and the identity envelope never reads this
-    // column, so a retired row's receipt honestly stays "Not checked yet" rather than acquiring a
+    // queued behind it. This counter prevents a provenance row from starving later work: the
+    // worklist retires the row at the cap (`YOUTUBE_PROVENANCE_MAX_FAILURES`, track-work.ts), and
+    // the identity envelope never reads this column, so a retired row's receipt honestly stays
+    // "Not checked yet" rather than acquiring a
     // verdict it never earned.
     //
     // `youtube_verified_by` is HOW the held id came to be trusted, on the `deezer_verified_by`
@@ -889,7 +889,7 @@ export const tracks = sqliteTable(
     index("tracks_label_id_idx").on(table.labelId),
     // THE CATALOGUE ANTI-JOIN, MATERIALIZED (docs/db-scale-backlog Wave 2 keystone 1). The single
     // most-repeated read shape in the app — `tracks LEFT JOIN findings WHERE findings.track_id IS
-    // NULL` — used to force a full left-join scan of the growing `tracks` table with a per-row
+    // NULL` — a full left-join scan of the growing `tracks` table with a per-row
     // findings probe. With `is_catalogue` maintained (see the column comment), that anti-join becomes
     // `where is_catalogue = 1`, and this PARTIAL index over exactly the catalogue slice turns it into
     // an index seek (proven 5.7× the anti-join at 150k hosted). PARTIAL `where is_catalogue = 1` — not
@@ -906,9 +906,10 @@ export const tracks = sqliteTable(
     // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the
     // only lever left is HOW MANY BYTES the scan touches. Every column those arms read is here, in
     // one index, so the planner reads `SCAN tracks USING COVERING INDEX` and never fetches a table
-    // row. Measured on a 54,860-row clone of production (hosted Turso, 2026-07-26): 12.6-19.9s cold
-    // before, 1.70s first-touch and 0.30s after, reading a 5 MB index instead of a 125 MB table —
-    // with all twelve counts identical by construction, being the same predicates read off the two
+    // row. On a 54,860-row clone of production, it reads a 5 MB index instead of a 125 MB table:
+    // 12.6-19.9s cold, 1.70s first-touch, 0.30s after. Re-measure with
+    // `apps/web/scripts/bench-db-scale.ts` if the scale changes; all twelve counts are identical by
+    // construction, being the same predicates read off the two
     // mirrors. Without this the scan drags every 4 KB vector's overflow pages to reach the post-blob
     // columns (see `has_embedding`).
     //
@@ -1029,7 +1030,7 @@ export const tracks = sqliteTable(
     // the catalogue — the shrinking-slice logic that justifies the partial queue indexes above
     // argues the other way here.
     //
-    // COST OF THE BUILD, measured 2026-07-29 on a hosted scratch fork at 66,096 rows: 104s, because
+    // COST OF THE BUILD: 104s at 66,096 rows, because
     // `mb_recording_id` sits post-blob and the build drags every row's overflow pages. It runs in
     // the Cloudflare deploy's migrate step and holds the single writer for that window — reads
     // proceed under WAL and the box sweeps retry, but the merge belongs at a quiet hour.
@@ -1153,9 +1154,8 @@ export const tracks = sqliteTable(
     // WHY `has_embedding` LEADS: the drain order is "a row Fluncle already spent capture + embed
     // money on is the one he most wants recommendable, so anchor it first" — the mirror IS the
     // first sort key. It has to be a stored column, not the raw `embedding_blob is not null`
-    // expression the order used to read: a btree cannot key on an expression, and an index on that
-    // expression is never chosen by the planner (measured — see the funnel scan's three failed
-    // shapes). The mirror is maintained in the same statement as every vector write (see
+    // expression: a btree cannot key on an expression, and the planner never chooses an index on
+    // that expression. The mirror is maintained in the same statement as every vector write (see
     // `has_embedding` above), so this index is walking the truth, not a copy of it.
     //
     // PLAIN ASC throughout (a `desc()` index would poison the drizzle snapshot into rebuilding
@@ -1366,8 +1366,8 @@ export const findings = sqliteTable(
     // (`{ source, words: [{ text, startMs, endMs }] }` — see lib/server/observation.ts
     // `ObservationAlignment`). Drives the synced subtitles on the radio player (and,
     // later, /log): the current word is highlighted off `audio.currentTime`. Captured
-    // at render time from Cartesia's word timestamps (a retired one-off `/forced-alignment`
-    // backfill seeded older rows). Internal-but-PUBLIC: unlike the script, the
+    // at render time from Cartesia's word timestamps; existing rows may also carry backfill data.
+    // Internal-but-PUBLIC: unlike the script, the
     // word timings ARE surfaced (the public TrackListItem carries them so the radio
     // caption render can read them), but they describe an EXISTING artifact, so writing
     // them does NOT bump updated_at (a backfill must move no public lastmod).
@@ -2091,7 +2091,7 @@ export const rateLimitEvents = sqliteTable(
 // incremented by a single atomic conditional upsert (see lib/server/rate-limit.ts).
 // This is the durable, race-free backbone for every action limiter — the
 // `count < max` guard lives in the upsert's `WHERE`, so two concurrent requests
-// can never both pass the limit (unlike the old count-then-insert TOCTOU path).
+// can never both pass the limit.
 // The `bucket` is `hash(cf-connecting-ip)` for anonymous callers or `userId` for
 // authenticated ones — never the spoofable x-forwarded-for, never the User-Agent.
 export const rateLimitCounters = sqliteTable(
@@ -2341,8 +2341,8 @@ export const userSavedSets = sqliteTable(
 // UNIQUE on (user_id, kind, entity_id) makes watching twice idempotent — a second watch of
 // the same entity upserts rather than duplicating.
 //
-// `include_similar` is HEADROOM with no consumer yet: the deferred email digest (operator
-// deferral 2026-07-19) will read it to decide whether a watch also pulls in sonically-near
+// `include_similar` is HEADROOM with no consumer yet: the email digest will read it to decide
+// whether a watch also pulls in sonically-near
 // entities. It defaults OFF in storage and has no UI — nothing writes anything but the
 // default today. Do not build a control for it until the digest lands.
 export const userWatches = sqliteTable(
@@ -2535,7 +2535,7 @@ export const mixtapes = sqliteTable(
     publishedAt: text("published_at"),
     recordedAt: text("recorded_at"),
     // The `recordings` row this mixtape was PROMOTED from (RFC recording-primitive,
-    // Design B). Nullable: a mixtape born the old way (minted directly) has none;
+    // Design B). Nullable: a mixtape without a promoted recording has none;
     // set only when `promote` links a coordinate-less recording to this mixtape.
     // Plain text id, no declared FK — this schema declares none. ADDED beside the
     // existing columns (SQLite ADD COLUMN can't be NOT NULL without a default;
@@ -2544,7 +2544,7 @@ export const mixtapes = sqliteTable(
     sequenceNumber: integer("sequence_number").unique(),
     // When set (an ISO timestamp), the full set video has been uploaded to R2 at
     // `<log-id>/set.mp4` and the mixtape `/log` page shows the branded scrubber
-    // player. Operator-flipped from /admin/mixtapes AFTER the upload; null until
+    // player. Set by the operator in the admin surface AFTER the upload; null until
     // then. A flag, not a URL — the URL derives from the Log ID (mixtapeSetVideoUrl).
     setVideoAt: text("set_video_at"),
     // "distributing" is the minted-but-uploading state before published (see
@@ -2834,8 +2834,7 @@ export const noteRejections = sqliteTable(
 
 // THE SPOKEN sibling of `note_rejections` — an observation script the echo gate refused to
 // RENDER because it echoed a sonic neighbour's script, held for the operator's eye rather
-// than binned (docs/agents/observation-agent.md; docs/planning/homogenisation-evidence.md,
-// 2026-07-14). Same shape as the note ledger, one column renamed: the evidence is the SCRIPT
+// than binned. Same shape as the note ledger, one column renamed: the evidence is the SCRIPT
 // the model wrote, and the snapshot is the NEIGHBOUR SCRIPT it echoed. The gate rejects BEFORE
 // the Cartesia render, so a held rejection never cost a cent.
 export const observationRejections = sqliteTable(
@@ -3113,10 +3112,10 @@ export const artists = sqliteTable(
     // paragraph the gate said NO to is live on `/artist/<slug>`, in its JSON-LD, and on the
     // unauthenticated `/mcp` surface.
     //
-    // WHY THE COLUMNS EXIST. The acceptance used to be visible only as a `FINAL-ATTEMPT
-    // ACCEPTANCE` line in the cron's stderr, i.e. only to a human who remembered to grep for
-    // it — a review channel with no reader. These two columns ARE the reader: they are the
-    // `labels.seed_state = 'undecided'` of the bio engine, so a bypassed bio raises a
+    // WHY THE COLUMNS EXIST. A `FINAL-ATTEMPT ACCEPTANCE` line in the cron's stderr is not a review
+    // channel, so these columns are the reader: they are visible to the attention queue and carry
+    // the gate's own reasons. They mirror `labels.seed_state = 'undecided'` in the bio engine, so a
+    // bypassed bio raises a
     // `bio-review` row on the `/admin` attention queue exactly the way an unruled label does.
     //
     // `bio_gate_bypassed_at` — WHEN the acceptance happened, and the queue's oldest-first
@@ -3490,7 +3489,7 @@ export const artistSocials = sqliteTable(
 // reads the enabled set via `list_labels_admin?seedState=enabled`. See docs/label-entity.md.
 // ── THE LABEL'S OWN IMAGE (its real logo, not a borrowed album cover) ───────────
 // A label surface (the /labels cards, the /label/<slug> page, search, the hover
-// card) used to show the freshest finding's album art as the label's picture — an
+// card) shows the label's OWN image rather than a finding's album art, which would be an
 // arbitrary sleeve for every label whose cover doesn't happen to carry the logo.
 // These columns give a label its OWN image, resolved from Discogs (labels are
 // first-class there and `GET /labels/{id}` returns a real logo), with a Wikidata
@@ -3957,7 +3956,7 @@ export const albums = sqliteTable(
     //                              `pending` (DDL default; every album enters the worklist),
     //                              `resolved` (facts stored), `none` (the release carries no
     //                              catno — terminal, so the sweep never re-reads it).
-    //   - `discogs_attempted_at` / `discogs_failures` — the shipped reliability pair (the
+    //   - `discogs_attempted_at` / `discogs_failures` — the reliability pair (the
     //                              failure-scaled cooldown + the give-up), exactly as the image
     //                              sweep uses them.
     discogsAttemptedAt: text("discogs_attempted_at"),
@@ -3988,7 +3987,7 @@ export const albums = sqliteTable(
     //   - `image_updated_at` — the `?v` bust VINTAGE: a replaced master bumps it, re-keying the
     //                          Cloudflare Images rendition cache (the video-variants `?v` lesson —
     //                          a transform cache survives a zone purge).
-    //   - `image_attempted_at` / `image_failures` — the shipped reliability pair (backoff + give-up).
+    //   - `image_attempted_at` / `image_failures` — the reliability pair (backoff + give-up).
     imageAttemptedAt: text("image_attempted_at"),
     imageFailures: integer("image_failures").notNull().default(0),
     imageKey: text("image_key"),

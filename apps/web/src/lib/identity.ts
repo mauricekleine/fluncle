@@ -1,5 +1,4 @@
-// The Fluncle identity strings (web-overhaul RFC §4, decisions §8.4 +
-// 2026-06-11 follow-up).
+// The Fluncle identity strings (web-overhaul RFC §4, decisions §8.4).
 //
 // - fluncleDescription: the canonical ENTITY description for machine-facing
 //   surfaces — home/root meta, llms.txt, the glossary, WebSite/MusicGroup

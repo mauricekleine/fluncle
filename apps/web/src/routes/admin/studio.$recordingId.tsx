@@ -79,7 +79,7 @@ import {
 // recordings index on `/admin/clips` (a CLI-created recording) or the "Clip this set"
 // action on a promoted mixtape (which links to its recording's Studio).
 //
-// Vs. the old mixtape-keyed Studio: the preview sources the recording's owned key
+// The preview sources the recording's owned key
 // directly; clips are created against `/admin/recordings/{id}/clips`; the cue rail is the
 // NET-NEW authoring editor (a recording starts with an EMPTY tracklist — the operator
 // types + marks each cue, persisted as the whole `tracklistJson` array via

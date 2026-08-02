@@ -13,8 +13,8 @@ export type TracksSearch = TracksHubFilters;
 
 // Machine-facing (the page's <title>/<meta>/OG), so honestly-plain third person (VOICE.md, Narrator):
 // what the page is, in the nouns a stranger would search for — never a first-person take. Bing flagged
-// the hub layer for short, keyword-free titles and identical paged meta (2026-07-18), so the title
-// carries the genre keyword and the paged variants bake their page number into BOTH strings.
+// the hub layer needs keyword-rich titles and distinct paged meta, so the title carries the genre
+// keyword and the paged variants bake their page number into BOTH strings.
 export const tracksHubTitle = "Every drum & bass track, newest first · Fluncle";
 export const tracksHubDescription =
   "Every drum & bass track Fluncle holds, newest release first. Filter the whole list by release year, key, and label, or jump straight to a year.";
@@ -38,8 +38,8 @@ const heldCountFormatter = new Intl.NumberFormat("en-US");
  * the superset, the held count riding it). One string on purpose, not JSX fragments: a conditional
  * JSX clause SSRs as several text nodes split by `<!-- -->` hydration markers, and a naive text
  * extractor (a first-text-node reader, a `>text<` regex) then sees only the first fragment — which
- * is exactly how a live check misread the count as missing (2026-07-19; the clause was present in
- * the HTML and post-hydration all along). A single text node is unambiguous for every reader.
+ * is exactly how a naive text extractor can misread the count as missing. A single text node is
+ * unambiguous for every reader.
  * Pure, so the clause's presence at a real count is unit-pinned. The count drops at ≤ 1
  * ("1 drum & bass tracks" is not a sentence).
  */

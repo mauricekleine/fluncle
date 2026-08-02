@@ -9,7 +9,7 @@ import { Route as LogRoute } from "./log.$logId";
 // string `children` TanStack renders RAW via dangerouslySetInnerHTML. Plain
 // `JSON.stringify` does NOT neutralize `</script>`, so a `</script>` in a
 // Spotify-sourced title / artist / album, or the operator note woven into the
-// log description, used to break out of the inline <script> and execute (there
+// log description can break out of the inline <script> and execute (there
 // is no CSP). Every emitter now serializes through `jsonLdScript`, which escapes
 // `< > & U+2028 U+2029` to their `\uXXXX` JSON forms — neutralizing the breakout
 // while leaving the payload valid JSON-LD a parser still reads.

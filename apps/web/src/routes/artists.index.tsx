@@ -107,7 +107,7 @@ const fetchSimilarArtists = createServerFn({ method: "GET" })
   });
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
-// genre keyword: Bing flagged the hub layer for short titles + identical paged meta (2026-07-18).
+// genre keyword, and paged variants carry their page number in the meta pair.
 const title = "Every drum & bass artist, A to Z · Fluncle";
 const description =
   "Every drum & bass artist Fluncle holds, A to Z, with the labels that pressed their records.";

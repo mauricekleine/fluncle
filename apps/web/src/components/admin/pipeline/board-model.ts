@@ -299,8 +299,7 @@ export function boardSteps(row: BoardRow, now: number = Date.now()): BoardStep[]
       // on-box `fluncle-embed` cron drains the `embedding_blob IS NULL` queue over the
       // captured full song and stamps a MuQ vector; `done` (filled) once the finding
       // carries one, grey while it's still in the queue. This is the sonic fingerprint
-      // a finding's galaxy is clustered from, in place of the retired manual vibe map
-      // — see docs/track-lifecycle.md.
+      // a finding's galaxy is clustered from; see docs/track-lifecycle.md.
       actionable: false,
       gated: false,
       hint: row.hasEmbedding

@@ -50,7 +50,7 @@ const CLOSE_DELAY_MS = 200;
 /**
  * How the card's count line names each kind — "3 findings on this label".
  *
- * The label used to read "off this imprint", and "imprint" is out of the vocabulary: it is
+ * The count line uses "label", never "imprint"; "imprint" is out of the vocabulary: it is
  * trade-press English, not something the uncle says out loud (lib/graph-prose.ts). It is a
  * label, and he says so.
  */

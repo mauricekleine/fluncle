@@ -1,12 +1,9 @@
 // THE ENTITY BIO → META DESCRIPTION TRIM.
 //
-// The graph pages (/artist/<slug>, /label/<slug>) used to reuse ONE templated `description`
-// across the whole catalogue ("Every X banger Fluncle has found …") — near-identical on every
-// page, which is the duplicate-description SEO weakness. When an entity carries a factual bio
-// (the objective, third-person paragraph the page already prints), THAT is the honest, unique
-// meta description: the same definitional content a searcher or an answer-engine wants, and it
-// is already the Narrator-plain register meta text must stay in (VOICE.md — no first person in
-// the meta).
+// The graph pages (/artist/<slug>, /label/<slug>) use a factual entity bio when available. The
+// objective, third-person paragraph the page already prints is the honest, unique meta description:
+// the same definitional content a searcher or an answer-engine wants, and it is already the
+// Narrator-plain register meta text must stay in (VOICE.md — no first person in the meta).
 //
 // The bio can run 3–4 sentences (≤500 chars); a `<meta name="description">` reads best around
 // 155–160. So this trims to 160 at a boundary — never mid-word — preferring a clean sentence

@@ -19,7 +19,7 @@ import { type IdentityPageData } from "./-identity-page-data";
 // platforms while the API answers every one of them — a rendering choice, not a contract split; see
 // the coverage-set note in `components/identity-states.tsx`.
 //
-// A RECEIPT (operator ruling, 2026-07-30): every per-row line is status-vocabulary fragments joined
+// A RECEIPT (operator ruling): every per-row line is status-vocabulary fragments joined
 // by middots, agentless and terse, because trust on this surface comes from precision rather than
 // personality. Voice lives in the ONE intro line below and nowhere else on the page. No nameplate,
 // no first-person intro.

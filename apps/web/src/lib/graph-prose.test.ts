@@ -1,6 +1,6 @@
 // THE LOAD-BEARING GUARANTEE OF THE GRAPH-LINK SYSTEM: the hover card mirrors the entity page
 // by construction, because both go through `graph-prose.ts`. Since the Three Areas Rule
-// (DESIGN.md; VOICE.md §5, ratified 2026-07-18), that mirror has two states: the GALAXY page
+// (DESIGN.md; VOICE.md §5), that mirror has two states: the GALAXY page
 // opens with its intro line (a galaxy is lore), and the three CATALOGUE kinds — artist, label,
 // album — open with NO line at all (their first-person signature lines are retired; the pages
 // speak through the third-person dossier bio instead). These tests pin BOTH: the surviving

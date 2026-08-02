@@ -492,7 +492,7 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
 
   // Each bio that landed only because it was the sweep's FINAL attempt is one row — the voice gate
   // read the paragraph, said no, and it went live anyway (the operator's own ruling, so the sweep
-  // terminates). That acceptance used to exist only as a line in a cron log, which is a review flag
+  // terminates). That acceptance needs a row rather than a line in a cron log, which is a review flag
   // with no reader; here it is the row, carrying the gate's own reasons so the ruling can be made
   // from the queue instead of from a grep. Both rulings act on state the server already holds, so
   // like the anchor-review row the decision IS the row — there is no bio station to deep-link to.

@@ -3,10 +3,8 @@
 // Client-safe (no server-only deps): the sector is the day-granular `sectorDay`
 // primitive shared with the finding Log ID, and the tail is a pure function of the
 // mint sequence. The mint lives server-side (publishMixtape in
-// lib/server/mixtapes.ts) and mints ONLY at publish — the old reserved-coordinate
-// prediction (`predictedMixtapeLogId`) is deleted, so the drift bug it carried
-// can't return (RFC plan→recording→mixtape §6: a plan's stable handle is the
-// Galaxy-vocab slug instead).
+// lib/server/mixtapes.ts) and mints ONLY at publish. A plan's stable handle is the
+// Galaxy-vocab slug; the client never predicts a mixtape coordinate.
 
 import { sectorDay } from "./log-id-shared";
 

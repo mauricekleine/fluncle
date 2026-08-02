@@ -42,7 +42,7 @@ if (import.meta.env.PROD) {
 
 // Deploy-skew self-heal. A tab left open across a deploy holds HTML that
 // references the OLD build's hashed chunks; a later lazy navigation then 404s
-// (FLUNCLE-WEB-4, 2026-07-26 — eight deploys in one day made it visible). Vite
+// A stale tab can hit this after a deploy; Vite
 // fires `vite:preloadError` for exactly this, so reload once to pick up the
 // fresh build instead of surfacing a broken page. The sessionStorage guard
 // keeps a genuinely-missing chunk (or an offline client) from reload-looping:

@@ -6,8 +6,8 @@ import { type BaseLayoutProps } from "fumadocs-ui/layouts/shared";
 export function docsBaseOptions(): BaseLayoutProps {
   return {
     githubUrl: undefined,
-    // One link back to the music. "API reference" used to live here too, but it
-    // already sits in the sidebar tree under "The API" (meta.json), so a second
+    // One link back to the music; "API reference" sits
+    // in the sidebar tree under "The API" (meta.json), so a second
     // copy at the top was a duplicate — kept to a single entry now.
     links: [
       {

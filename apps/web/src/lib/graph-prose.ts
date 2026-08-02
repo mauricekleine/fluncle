@@ -3,7 +3,7 @@
 // Fluncle's archive is a graph: log ↔ artist ↔ label ↔ album ↔ galaxy. The GALAXY page opens
 // with one first-person intro line (a galaxy is lore); the artist/label/album pages open with
 // NO line at all — their first-person signature lines ("I'm up to 3 findings on this label
-// now") were retired by the Three Areas Rule (DESIGN.md; VOICE.md §5, ratified 2026-07-18):
+// now") are excluded by the Three Areas Rule (DESIGN.md; VOICE.md §5):
 // those are CATALOGUE pages, reference shelves where Fluncle appears as data and through the
 // third-person dossier bio, never as narrator.
 //
@@ -22,7 +22,7 @@
 //
 // 1. NOTHING FOUND YET ⇒ NO LINE (`undefined`). Fluncle has nothing to say about a label he
 //    has never pulled a tune off, so he says nothing, and the masthead is just the name. These
-//    used to return "Nothing logged off this one yet." — an apology for the absent half of the
+//    say nothing instead of emitting "Nothing logged off this one yet." — an apology for the absent half of the
 //    page, and an apology is still a CLAIM: it told a crawler the page was ABOUT findings and
 //    then had none, which is the definition of a doorway page. A crawler-discovered label with
 //    700 releases is a real page about a label; it is not a broken findings page. The callers

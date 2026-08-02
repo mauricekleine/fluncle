@@ -258,7 +258,7 @@ describe("server.ts shared-cache isolation", () => {
   });
 
   it("shared-caches a paginated hub's ?page=N under its OWN distinct key (never colliding onto page 1)", async () => {
-    // The positive half of the contract, at the dispatch layer where the old blanket refusal
+    // The positive half of the contract, at the dispatch layer where a lone `?page=N`
     // lived: a lone `?page=N` on a paginated catalogue hub IS cacheable, folded into the key as
     // the parsed page, so page 2 and page 3 are distinct entries and neither can serve page 1's
     // body back (the collision-safety property).

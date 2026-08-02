@@ -65,13 +65,13 @@ export const appStoreUrl = "https://apps.apple.com/app/id6790080540";
 // link kept in sameAs.
 export const onionUrl = "http://p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd.onion";
 
-// Third-party corroboration anchors (created 2026-06-11): the independent,
+// Third-party corroboration anchors: the independent,
 // machine-readable identities the entity schema points at via sameAs.
 export const musicbrainzUrl = "https://musicbrainz.org/artist/53346748-1357-45c0-a847-9d248b65d655";
 
 export const wikidataUrl = "https://www.wikidata.org/wiki/Q140169844";
 
-// Music-graph profiles (created 2026-06-20): the same corroboration role as
+// Music-graph profiles: the same corroboration role as
 // MusicBrainz/Wikidata, kept in sameAs. Any write-side sync (Last.fm love,
 // Discogs List) lives server-side (lib/server/lastfm.ts, lib/server/discogs.ts), not here.
 export const lastfmUrl = "https://www.last.fm/user/fluncle";

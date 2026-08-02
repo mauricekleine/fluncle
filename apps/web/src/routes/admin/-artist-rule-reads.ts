@@ -1,7 +1,7 @@
 // The PAGE-LOCAL reads behind the two artist-rule admin surfaces (`/admin/labels` and
 // `/admin/artists`). Every function here is a bounded aggregate over the rows the operator can
 // actually see — never a whole-corpus fold — and none of them is a public operation: the rule
-// WRITES all ride the shipped oRPC ops (`replace_label_artist_rules`, `add_artist_rule`,
+// WRITES all ride the oRPC ops (`replace_label_artist_rules`, `add_artist_rule`,
 // `remove_artist_rule`), and the per-rule reads ride `list_label_artist_rules` /
 // `list_artist_rules`. What lives here is exactly the board-shaped glue those ops do not carry:
 // per-page counts, the queued-release read, and the artist typeahead.

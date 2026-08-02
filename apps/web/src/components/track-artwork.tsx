@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 // 3.25rem album artwork with the eclipse-gradient fallback (DESIGN.md track row).
 //
 // The fallback covers BOTH absence and failure: a cover URL that errors (a third-party host down —
-// the 2026-07-19 archive.org 503 wave put broken-image icons on public rows) degrades to the same
+// a failed third-party request degrades to the same
 // eclipse gradient instead of the browser's broken glyph. Failure is tracked per URL so a later
 // src change gets a fresh try, and the mount effect catches an image that already failed BEFORE
 // hydration (the error event fires pre-hydration, so React's onError alone never sees it). The

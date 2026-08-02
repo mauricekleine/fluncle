@@ -57,7 +57,7 @@ const fetchAlbumsPage = createServerFn({ method: "GET" })
 
 // Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
 // genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
-// meta (2026-07-18). Paged variants bake their page number into BOTH strings.
+// meta must vary by page. Paged variants bake their page number into BOTH strings.
 const title = "Every drum & bass album, A to Z · Fluncle";
 const description =
   "Every drum & bass album, EP and single Fluncle holds, A to Z, with the artists and labels behind them.";

@@ -206,7 +206,7 @@ function trackSegmentMs(track: Track): number {
 // units, long sentences chunked into bounded phrase windows — see
 // lib/observation-slices.ts); only the slice containing the currently-spoken word
 // is on screen. Within that slice the CURRENT word is lit (the Gold heat), carried
-// over verbatim from the old per-word treatment. When the spoken word reaches a
+// When the spoken word reaches a
 // slice's last word, the next tick swaps to the next slice with its first word lit
 // — a soft cross-fade keyed on sliceIndex, instant under reduced motion. All of it
 // reads off the SAME shared-clock offset the audio resyncs to (not raw

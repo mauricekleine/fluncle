@@ -9,7 +9,7 @@
 // Sprites are served from /pipeline/*.png; the live cron heartbeat reads /api/status.
 //
 // PAINT: the per-machine / per-surface tint palette below is lore art, exempt from the One
-// Sun Rule (DESIGN.md §2, The Lore-Art Paint Exemption; ratified 2026-07-27). The exemption
+// Sun Rule (DESIGN.md §2, The Lore-Art Paint Exemption). The exemption
 // buys hue diversity and nothing else, so three constraints still hold here: no hue may sit
 // in Nebula Violet's reserved BAND (#ab7bff is h262; the arc is roughly h240–h300 — blue the
 // top channel with red above green), every neutral leans warm, elevation stays shadow-free.
@@ -323,8 +323,8 @@ const K: Kiosk[] = [
   { label: "radio", tint: "#6f9bd6", url: "https://radio.fluncle.com", wh: "observations" },
   { label: "CLI", tint: "#4fb39a", url: "https://www.fluncle.com/docs", wh: "terminal" },
   { label: "SSH", tint: "#63d69a", url: "https://www.fluncle.com/docs", wh: "rave." },
-  // the mobile cabinet — it floated above the plaza with its cable dangling unplugged
-  // through App Store review; approved 2026-07-29, it joined the row like everything else.
+  // the mobile cabinet — it floats above the plaza with its cable dangling unplugged,
+  // but sits in the row like every other surface.
   { label: "mobile", tint: "#7bd0c0", url: "https://apps.apple.com/app/id6790080540", wh: "iOS" },
   {
     label: "MCP",

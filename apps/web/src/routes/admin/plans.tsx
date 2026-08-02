@@ -86,8 +86,8 @@ import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 // `recordings` row (kind=plan, `r2Key` NULL): the operator lines up the findings for an
 // upcoming set and carries the plan's handle onto Beatport / Rekordbox / a USB stick. A
 // captured set is a TAKE (a recording that owns a video); a take attaches to its plan and
-// is clipped + promoted in the Studio. This surface renamed from `/admin/mixtapes` — the
-// old draft-mixtape editor's publish-time cruft (recorded date, dream note, SoundCloud,
+// is clipped + promoted in the Studio. Plans and published mixtapes have separate concerns: the
+// draft-mixtape editor's publish-time cruft (recorded date, dream note, SoundCloud,
 // the CLI publish panel) belongs to the PUBLISHED mixtape, not the plan.
 //
 // Reads run SERVER-SIDE (createServerFn calling the server helpers in-process — no

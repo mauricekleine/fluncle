@@ -246,13 +246,12 @@ const MODE_WORDS: Record<"major" | "minor", string[]> = {
  * binds, in the archive's own casing so the comparison is a BARE column equality.
  *
  * Matching keys as text is the honest way to do it here: `tracks.key` is a display string and
- * there is no pitch-class column to compare against. What changed (backlog Wave 3-2) is the SIDE
- * the normalising happens on. It used to be the column's — `lower(tracks.key) in (…)` — which is
- * a function call per row, so `tracks_key_idx` could never be seeked and the filter degraded into
- * a scan of a growing table. The INPUT is what gets normalised now: the parser folds whatever the
- * reader typed onto a closed set of canonical spellings, and each one is a b-tree probe that
- * stays a b-tree probe at 150k rows — which is exactly the "btree pre-filter" a sonic query needs
- * in front of its vector scan (docs/local-database.md).
+ * there is no pitch-class column to compare against. The INPUT is normalised rather than the
+ * column: applying `lower(tracks.key) in (…)` to the column is a function call per row, so
+ * `tracks_key_idx` could never be seeked and the filter would degrade into a scan of a growing
+ * table. The parser folds whatever the reader typed onto a closed set of canonical spellings, and
+ * each one is a b-tree probe that stays a b-tree probe at 150k rows — which is exactly the
+ * "btree pre-filter" a sonic query needs in front of its vector scan (docs/local-database.md).
  *
  * The spread is deliberately wider than what any writer emits (both enharmonic notes × both mode
  * words) because a probe costs a seek and a miss costs nothing. What it does NOT cover is a

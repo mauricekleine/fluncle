@@ -27,7 +27,7 @@ import {
   type PlatformStatsView,
 } from "@/lib/server/platform-stats";
 
-// The PUBLIC reach page — Fluncle's TELEMETRY CONSOLE (operator ruling, 2026-07-14).
+// The PUBLIC reach page — Fluncle's TELEMETRY CONSOLE (operator ruling).
 // The probes went out across the Galaxy; this is the panel where their readings come
 // home. It deliberately carries dashboard AFFORDANCES — one primary time-series chart,
 // grouped stat tiles with sparklines, a per-platform filter, period pills — because the
@@ -168,7 +168,7 @@ function toRow(series: PlatformStatSeries): ReachRow | undefined {
   };
 }
 
-// Alphabetical by platform, then metric (operator ruling, 2026-07-14 — the console is
+// Alphabetical by platform, then metric (operator ruling): the console is
 // tabular, and tabular order is alphabetical; "loudest first" was the editor's bias).
 function orderRows(rows: ReachRow[]): ReachRow[] {
   return [...rows].sort((a, b) => {

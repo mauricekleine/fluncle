@@ -10,7 +10,7 @@ import {
 } from "./use-video-recovery";
 
 // The stall verdict is the load-bearing decision of the watchdog (a stuck load
-// fires no `error`, so the old one-shot onError never recovered it). It runs on a
+// fires no `error`, so recovery is driven by timeout and stall detection rather than `onError`. It runs on a
 // timer with real DOM elements in the field, so the logic is tested in isolation:
 // a playable element is left alone, an idle element never fires, and only a
 // genuinely wedged not-yet-playable load (timeout OR a lingering stall event)

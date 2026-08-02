@@ -96,7 +96,7 @@ export function graphPageTracks(
  * The catalogue-register curator heading over the findings block — fixed, and folded into the
  * component (not a prop) so no call site can reintroduce an entity-named title ("Findings on X").
  * The lore-area surfaces carry the archive's own cosmos name; a catalogue/entity page reads plainly
- * (VOICE.md Three Areas; DESIGN.md Unlit Rule mixed-list carve-out, operator-ratified 2026-07-20).
+ * (VOICE.md Three Areas; DESIGN.md Unlit Rule mixed-list carve-out).
  */
 const FINDINGS_HEADING = "Recommended by Fluncle";
 

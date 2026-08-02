@@ -537,7 +537,7 @@ describe("the URL set is preserved across the split", () => {
     expect(new Set(locs)).toEqual(expected);
   });
 
-  it("keeps every graph entity's <loc> that the single `graph` child used to carry", () => {
+  it("keeps every graph entity's <loc> across the per-entity children", () => {
     // The four per-entity children, unioned, are exactly what a `graph` bucket held — the four
     // entity URLs, no more, no less.
     const graphLocs = (["artists", "labels", "albums", "galaxies"] as const).flatMap((kind) => {

@@ -26,7 +26,7 @@ import { buildSaveSetBody, canSaveSet } from "@/lib/mix-save";
 // `/api/v1/me` confirms a session, so nothing new appears for the anonymous stranger the tool is
 // built for.
 //
-// THE RULING (2026-07-14) — one save-set contract on web AND mobile:
+// THE RULING — one save-set contract on web AND mobile:
 //  · "Save set" ALWAYS opens a small dialog: a name field, Save, Cancel.
 //  · The name PREFILLS with the opened set's name when editing an existing set (the stable
 //    reference), empty for a new one.

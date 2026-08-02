@@ -268,7 +268,7 @@ export function StoriesPlayer({
     // Desktop dialog: the full-bleed DialogContent IS the stage, so Base UI's
     // own click-outside never fires. A press on the letterbox (anything outside
     // the 9:16 pane) is a backdrop click — close, don't read it as a play
-    // gesture (which is why a click beside the pane used to pause, not close).
+    // gesture.
     if (presentation === "dialog" && !interactive && !target.closest(".stories-viewport")) {
       close();
       return;

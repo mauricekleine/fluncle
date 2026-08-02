@@ -71,9 +71,8 @@ export function formatReleaseDate(releaseDate: string): string {
  *
  * A finding is the only named object in Fluncle's world, so its count is printed on half the
  * surfaces in the app (the label/album/artist cards, the galaxy cards, the admin rows), and
- * every one of them used to inline its own `count === 1 ? … : …`. That is a bug per copy of
- * the ternary waiting to happen, and one of them shipped ("1 findings"). Counting is not a
- * per-surface decision; it is arithmetic. Route every count string through here.
+ * every surface routes its count string through here. Pluralization is arithmetic, not a
+ * per-surface decision, so no caller repeats the `count === 1 ? … : …` rule.
  */
 export function findingsCount(count: number): string {
   return `${count} ${count === 1 ? "finding" : "findings"}`;

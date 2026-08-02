@@ -125,8 +125,8 @@ describe("nav model completeness", () => {
     const labels = browse?.items.find((item) => item.id === "labels");
     const albums = browse?.items.find((item) => item.id === "albums");
 
-    // The `future` flag exists for a designed-but-unshipped slot; the Labels slot it was
-    // introduced for is now a real route, and Albums landed with it. Neither may carry it —
+    // The `future` flag is reserved for designed-but-unavailable slots; Labels and Albums are
+    // real routes, so neither may carry it —
     // a future item renders as a disabled "soon" slot, which would now be a lie.
     expect(labels?.future).toBeUndefined();
     expect(albums?.future).toBeUndefined();

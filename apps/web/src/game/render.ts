@@ -139,9 +139,8 @@ export function createRenderer(container: HTMLElement): Renderer {
   const ctx = maybeCtx;
 
   ctx.imageSmoothingEnabled = false;
-  // Pin the baseline. It is sticky canvas state, and the old code set "top" in one
-  // draw and let every following draw inherit it — which is why converting one call
-  // site silently moved the one below it.
+  // Pin the baseline. It is sticky canvas state, so each draw must set its intended baseline;
+  // leaving it implicit would let a later draw inherit the wrong value.
   ctx.textBaseline = "alphabetic";
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1177,8 +1176,8 @@ export function createRenderer(container: HTMLElement): Renderer {
   // The gate is the ONE screen whose type is positioned from the alphabetic
   // baseline, and deliberately so: it only ever draws before the first HUD frame
   // (draw() returns early in the gate phase, and the phase never comes back), so
-  // it never inherited the old sticky "top" the rest of the frame was written
-  // against. Its offsets are baselines. Leave them; do not "fix" them to cap-top.
+  // it never shares the frame's baseline state. Its offsets are baselines. Leave them; do not
+  // "fix" them to cap-top.
   function drawGate(view: RenderView): void {
     // A quiet starfield behind the plate, drifting just enough to feel alive.
     drawDistantStars(reducedMotion ? 0 : view.nowS * 0.02, Math.round(height * 0.4), view.nowS);

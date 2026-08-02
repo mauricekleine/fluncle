@@ -9,7 +9,7 @@ import { listLabelFreshTracks } from "../lib/server/fresh-entity";
 
 // The per-LABEL sibling of /fresh.xml — the whole-archive release feed narrowed to one label:
 // what just came OUT on this label, over the same trailing 30-day release-date window. Only the
-// label's OWN tracks ride it, never a widening to similar labels (ratified 2026-07-18). The two
+// label's OWN tracks ride it, never a widening to similar labels. The two
 // tiers + the release-framing live in ../lib/fresh-feed-rss. An unknown slug 404s; the feed is
 // anonymous + public (the never-gates law).
 //

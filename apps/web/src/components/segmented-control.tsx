@@ -2,8 +2,7 @@ import { ToggleGroup, ToggleGroupItem } from "@fluncle/ui/components/toggle-grou
 import { cn } from "@/lib/utils";
 
 // The app's ONE segmented single-choice control — a radio in segmented clothing, built on
-// the Shadcn toggle-group. Two invariants fix the failures its hand-rolled predecessor
-// shipped (operator-flagged 2026-07-14: "which one is active?"):
+// the Shadcn toggle-group. Two invariants govern this control:
 //
 //   1. THE ACTIVE SEGMENT IS UNMISTAKABLE, and it speaks the same accent grammar as the
 //      Tabs control (`data-active:bg-accent text-accent-foreground`): the gold fill means

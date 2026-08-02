@@ -11,7 +11,7 @@ import {
 } from "./sim";
 import { type Star } from "./types";
 
-// The pure-sim contract this game shipped without: fuel burns and refuels, a
+// The pure-sim contract this game enforces: fuel burns and refuels, a
 // star parks and logs you, a dry tank drifts → tows → restarts, and N/N flips
 // the run home. All deterministic, state-in/state-out — no canvas, no audio.
 

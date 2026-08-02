@@ -49,8 +49,8 @@ function discogsStep(row: BoardRow) {
 
 describe("boardSteps — Discogs cell", () => {
   it("reads done (filled) when a release is linked on add, even without a backfill stamp", () => {
-    // The regression: on-add resolve linked the release (`discogsReleaseUrl`) but the
-    // backfill never ran (`discogsRan` false), so the cell used to render `open`.
+    // On-add resolution links the release (`discogsReleaseUrl`) even when the
+    // backfill has not run (`discogsRan` false), so the cell must render `done`.
     const step = discogsStep(
       makeRow({ discogsRan: false, discogsReleaseUrl: "https://www.discogs.com/release/1098936" }),
     );
@@ -81,7 +81,7 @@ describe("boardSteps — Discogs cell", () => {
 // MuQ audio embedding (`embedding_blob IS NOT NULL`, surfaced as `hasEmbedding`),
 // `open` (hollow) while it's still in the embed cron's queue. No operator action — the
 // on-box `fluncle-embed` cron advances it. This is the sonic fingerprint that
-// superseded the retired manual vibe-map Tag cell (docs/track-lifecycle.md).
+// provide the sonic fingerprint; the Tag cell is not part of this board (docs/track-lifecycle.md).
 function embeddingStep(row: BoardRow) {
   const step = boardSteps(row).find((s) => s.key === "embedding");
 
@@ -118,7 +118,7 @@ describe("boardSteps — Embeddings cell", () => {
 
     expect(embeddingAt).toBe(enrichAt + 1);
     expect(contextAt).toBe(embeddingAt + 1);
-    // The retired Tag cell is gone entirely.
+    // The board has no Tag cell.
     expect(keys).not.toContain("tag");
   });
 });

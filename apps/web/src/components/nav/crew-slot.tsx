@@ -2,7 +2,7 @@
 //
 // One element, two faces, resolved from the session:
 //   - SIGNED OUT (and while the session is still resolving): the "Join the crew"
-//     button that used to live in the home masthead — the identity CTA, now
+//     button available from every public page — the identity CTA,
 //     reachable from every public page, not just home. Rendering it during the
 //     pending state means the bar never shifts: the join button and the account
 //     door share a footprint, so the swap is a content change, not a reflow.
@@ -245,7 +245,7 @@ export function CrewSlot({ home }: { home: boolean }): ReactNode {
     return <JoinButton glow={home} />;
   }
 
-  // Name first (the X model, operator-ratified 2026-07-16): the header shows the
+  // Name first: the header shows the
   // freeform Name; the handle is the fallback for a name-less account.
   const name = user.name || (user.displayUsername ?? user.username ?? "cosmonaut");
 

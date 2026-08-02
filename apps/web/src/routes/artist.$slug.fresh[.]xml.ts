@@ -9,7 +9,7 @@ import { listArtistFreshTracks } from "../lib/server/fresh-entity";
 
 // The per-ARTIST sibling of /fresh.xml — the whole-archive release feed narrowed to one artist:
 // what just came OUT from this artist, over the same trailing 30-day release-date window. Only the
-// artist's OWN tracks ride it, never a widening to similar artists (ratified 2026-07-18). The two
+// artist's OWN tracks ride it, never a widening to similar artists. The two
 // tiers + the release-framing live in ../lib/fresh-feed-rss. An unknown slug 404s; the feed is
 // anonymous + public (the never-gates law).
 //

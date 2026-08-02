@@ -253,9 +253,8 @@ describe("loadHomeData — the Galaxies gate is NOT the home loader's job", () =
 
     const data = await loadHomeData();
 
-    // A fully named map would once have flipped a `galaxiesLive` here — a duplicate of the value
-    // the root loader already resolved for the nav. The home page reads it from there now, so this
-    // loader must not ask the database again.
+    // The home page reads `galaxiesLive` from the root loader, so this loader must not ask the
+    // database again or expose a duplicate field.
     expect(data).not.toHaveProperty("galaxiesLive");
   });
 });

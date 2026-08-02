@@ -80,9 +80,9 @@ import { cn } from "@/lib/utils";
 // (pipeline/board-model) and wires every cell back to the dialogs through `actions`.
 //
 // Reads + writes go through the same gated admin API the CLI uses. This board is the
-// single admin surface — it folded in the old Posts and Tag pages. (Manual vibe-map
+// single admin surface — Posts and Tag concerns live here. (Manual vibe-map
 // tagging has since been retired — MuQ audio embeddings supersede it — so the board's
-// analysis lane now surfaces embedding presence where the Tag cell used to sit.)
+// analysis lane now surfaces embedding presence in the Tag cell's place.)
 
 const PAGE_SIZE = 50;
 

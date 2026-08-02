@@ -588,11 +588,10 @@ function LabelRow({
 
 // WHICH LABEL IS THIS? The ruling-time identity line.
 //
-// The row used to carry a name, a logo, a slug and two buttons — everything except the one thing a
-// ruling actually turns on. Three labels are called "Helix" and the operator was being asked to
-// decide about a name. So the row now says what MusicBrainz knows about the entity behind it:
-// its disambiguation comment (the field MB writes FOR exactly this problem), when and where it
-// started, and a link straight to the MBID so the whole entity is one click away while ruling.
+// A ruling turns on the entity behind the name, not just its display fields. The row says what
+// MusicBrainz knows about the entity behind it: its disambiguation comment (the field MB writes FOR
+// exactly this problem), when and where it started, and a link straight to the MBID so the whole
+// entity is one click away while ruling.
 //
 // Every part is optional and most labels carry none — a label with nothing to say renders NO
 // subtitle at all rather than a placeholder or an empty row of separators. That is why this is a

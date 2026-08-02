@@ -1,14 +1,13 @@
 // Golden pin for the Galaxy engine: the frozen fixtures under ./testdata/*.json
 // capture the exact placement, sim, and frontier output this TypeScript authority
 // must produce. Any drift in placeStars / the sim / placeFrontier fails the exact
-// compare, so the web Galaxy game can never silently regress. (These fixtures were
-// once the SHARED golden with the retired SSH/Go galaxy; that terminal game is
-// gone, and they now live in apps/web as the sole home of the TS authority.)
+// compare, so the web Galaxy game can never silently regress. These fixtures are the sole
+// golden for the TypeScript authority; the terminal game's output is outside this contract.
 //
 // GEOMETRY NOTE: these fixtures were deliberately regenerated for the voyage
 // SPIRAL layout (placeStars: Earth-centred Archimedean thread, radius strictly
-// monotonic per day-sector) that replaced the old concentric day-rings. They are
-// pinned exactly (toEqual on placement), so regenerating them is a conscious act,
+// monotonic per day-sector). They are pinned exactly (toEqual on placement), so regenerating them
+// is a conscious act,
 // never a fudge. To re-pin after an intended placement/sim change: replay these
 // same scripted scenarios against the TS authority UNDER VITEST (V8 — Bun's
 // JavaScriptCore differs by ~1 ULP in Math.sin/cos and would fail the exact

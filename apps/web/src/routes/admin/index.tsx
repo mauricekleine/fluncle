@@ -352,7 +352,7 @@ function AdminQueuePage() {
   const [snoozeFor, setSnoozeFor] = useState<string | undefined>();
   // The open "Mark posted" popover — a TikTok draft's finish-in-app panel (copy the cover,
   // paste the live URL). Per-row; the URL field lives inside the popover, so one row's edit
-  // can't leak into another's (the old page-level markUrl leaked the previous track's URL).
+  // can't leak into another's: the URL field is local to the popover.
   const [finishFor, setFinishFor] = useState<string | undefined>();
   // The zero state's cover — the last row dealt with this session; a fresh load
   // falls back to the newest finding's cover from the snapshot.
@@ -1366,7 +1366,7 @@ function PrimaryButton({
 
 // The "Mark posted" panel for a pushed TikTok draft: copy the cover to attach in-app, then
 // paste the live URL to clear the row. The URL field is LOCAL to this popover, so one row's
-// edit never leaks into another's (the old page-level markUrl surfaced the previous track's
+// edit never leaks into another's: the URL field is local to this popover, so a previous track's
 // URL on a different row).
 function MarkPostedPopover({
   busy,

@@ -158,7 +158,7 @@ describe("videoCropPoster", () => {
 
 // The fast offset-join clip (the radio-broadcast RFC Unit B). CF MT `mode=video`
 // `time=`/`duration=` returns a faststart rendition that BEGINS at the global
-// offset (verified live: time=5s,duration=10s → 200, ~7MB faststart, edge-cached).
+// offset; a 5s/10s clip returns 200 as a ~7MB faststart, edge-cached rendition.
 // Crop + audio-strip + clip are ONE combined transform, never nested.
 describe("videoClipCrop", () => {
   it("builds one combined crop+strip+clip beginning at the offset (landscape)", () => {
@@ -574,8 +574,8 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
   });
 
   // The PORTRAIT family. Spotify keys an artist photo off `ab676161`, a different prefix from album
-  // art's `ab67616d`, on its own 640/320/160 ladder — so this used to pass through untouched and
-  // ship the stored 640² into a 1.5rem chip (measured: 372 KB across /artist/1991's four kin chips).
+  // art's `ab67616d`, on its own 640/320/160 ladder. Portraits use that ladder so a 1.5rem chip
+  // does not receive the stored 640² source.
   it("swaps a Spotify ARTIST-portrait prefix down its own ladder", () => {
     const portrait = "https://i.scdn.co/image/ab6761610000e5ebcafef00d";
 

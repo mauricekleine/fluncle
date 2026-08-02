@@ -466,8 +466,8 @@ export function MixBuilder({
 
   // The rail off the chain's tail, excluding the whole chain server-side, tilted by taste.
   // `isPending` is the never-false-empty guard: a fetch (the first, and every re-rank after an
-  // add — a fresh query key) reads as skeletons, never the "Quiet sector" line (operator flag
-  // 2026-07-14 — the empty state rendered while the rail was still ranking).
+  // add — a fresh query key) reads as skeletons, never the "Quiet sector" line while the rail
+  // ranks.
   const { data: candidates = [], isPending: railPending } = useQuery({
     enabled: !readOnly && Boolean(tail),
     queryFn: () => (tail ? fetchMixable(tail, chainTokens, taste) : Promise.resolve([])),

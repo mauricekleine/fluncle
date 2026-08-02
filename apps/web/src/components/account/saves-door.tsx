@@ -230,8 +230,8 @@ function SavedFindingRow({
 
     try {
       // `requireJsonMutation` 415s ANY mutation without a JSON content-type — DELETEs
-      // included (browser-verified; the monolith's remove shipped without it and never
-      // worked). The saved-set mutations already carry it; this matches them.
+      // included (the DELETE must carry this header or `requireJsonMutation` returns 415). The
+      // saved-set mutations already carry it; this matches them.
       const response = await fetch(`/api/v1/me/saved-findings/${finding.trackId}`, {
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "DELETE",

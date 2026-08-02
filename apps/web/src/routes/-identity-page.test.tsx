@@ -29,7 +29,7 @@ import { identityKeyFor, type IdentityPageData } from "./-identity-page-data";
 //   3. THE COVERAGE SET IS THE PAGE'S SCOPE. Tidal never renders here: a "not covered"
 //      row is the API contract leaking into a human surface. The API still answers it
 //      `unsupported` — that half is pinned in lib/server/identity-envelope.integration.test.ts.
-//      Deezer joined the covered set on 2026-07-30 and now renders like any other link row.
+//      Deezer is in the covered set and renders like any other link row.
 //   4. NEITHER DEGRADED STATE IS A FAULT. A key that matches nothing and a caller who has spent
 //      the dials both render as a calm page with a way back, never an error boundary.
 

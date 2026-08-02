@@ -35,8 +35,8 @@ describe("storyProgress — clip gate", () => {
   });
 
   it("still holds when only metadata (duration) is in but no frame has played", () => {
-    // The exact field bug: duration is known, so the old code divided and ran
-    // the bar — but readyState is below HAVE_CURRENT_DATA, nothing has played.
+    // Duration alone must not advance the bar: readyState is below HAVE_CURRENT_DATA, so nothing
+    // has played.
     expect(storyProgress(clip({ currentTime: 0, duration: 30, readyState: METADATA }))).toEqual({
       finished: false,
       loading: true,

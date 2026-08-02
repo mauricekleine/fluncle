@@ -5,9 +5,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "main": "./src/server.ts",
   // /llms.txt exists as a static file in public/ (the single source of truth), but Cloudflare's
-  // asset handler serves statics BEFORE the Worker — so the agent-discovery interceptor that
-  // re-types it text/markdown never ran in prod (verified live 2026-07-18: text/plain). This
-  // sends the one path through the Worker first; the static file stays as the fallback.
+  // asset handler serves statics BEFORE the Worker, so the agent-discovery interceptor only runs
+  // when the path is listed here. This sends the one path through the Worker first; the static
+  // file stays as the fallback.
   "assets": { "run_worker_first": ["/llms.txt"] },
   "observability": {
     "enabled": true,
@@ -41,9 +41,8 @@
     "CF_CACHE_PURGE_ZONE_ID": "93b403e3d6ed70d10cdd2890c557376f",
     // Cartesia (Sonic) — the observation voice. CARTESIA_VOICE_ID is the cloned
     // Fluncle voice (instant-clone of the bespoke read), a swappable config var. The
-    // matching CARTESIA_API_KEY is a secret set with `wrangler secret put`. (ElevenLabs
-    // was fully decommissioned after the migration — no key, voice id, or provider
-    // switch remains.)
+    // matching CARTESIA_API_KEY is a secret set with `wrangler secret put`; Cartesia is the
+    // only voice provider and no provider switch is supported.)
     "CARTESIA_VOICE_ID": "ca8c023f-1901-40f7-be8c-faafd7a58139",
     // The search-filter model (tier 4, lib/server/search-llm.ts), non-secret config.
     // The effort pin is LOAD-BEARING for a reasoning model — higher efforts parse

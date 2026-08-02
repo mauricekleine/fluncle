@@ -163,7 +163,7 @@ const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
  *
  * Those grids are `repeat(auto-fill, minmax(6.5rem, 1fr))`: a tile measures ~114px on the plate
  * (an artist avatar ~102px), so a 2× retina display wants ~230 device px. `medium` (300) covers
- * that with headroom; the `large` (640) rung those grids used to request was a 5.6× over-fetch of
+ * that with headroom; the `large` (640) rung is a 5.6× over-fetch of
  * every cover on the page, and `small` (64) would visibly soften on retina. One named constant so
  * the three hubs cannot drift apart.
  */
@@ -178,11 +178,10 @@ const SPOTIFY_ALBUM_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab67616d[0-9a-f
 // own size ladder under the `ab676161` id prefix: `ab6761610000e5eb` = 640², `ab67616100005174` =
 // 320², `ab6761610000f178` = 160². (Measured off i.scdn.co on one artist: 118 KB / 34 KB / 11 KB.)
 //
-// The album-art regex above does NOT match this family, so every artist without an owned avatar
-// master used to leave `albumCoverAtSize` untouched and ship the stored 640² portrait into a
-// 1.5rem chip — measured 372 KB across the four similar-artist chips on /artist/1991, ~99% of it
-// pixels the tile cannot show. Recognising the family costs one prefix swap, the same trick the
-// album ladder already uses.
+// The album-art regex above does NOT match this family, so artist avatars use their own portrait
+// ladder instead of passing `albumCoverAtSize` through to the stored 640² portrait. A 1.5rem chip
+// cannot show those pixels; recognising the family costs one prefix swap, the same trick the album
+// ladder already uses.
 //
 // Spotify publishes no 64 rung for a portrait, so `small` clamps to 160 — still an order of
 // magnitude off the 640, and the owned-master ladder (which does have a 64) is preferred whenever
@@ -428,12 +427,9 @@ const MEDIA_TRANSFORM_BASE = `${FOUND_BASE}/cdn-cgi/media`;
  * overwritten in place at the same R2 key the cached renditions keep serving the
  * OLD master's bytes. Crucially, MT caches video outputs in its OWN internal
  * layer (responses arrive `cf-cache-status: BYPASS`), which the zone purge API
- * CANNOT evict — verified live on the 027.9.5H re-render (2026-07-03): the crop
- * kept serving the replaced clip on a fresh BYPASS fetch, while the same URL
- * with a bumped `?v` derived the new master instantly. So changing the URL is
- * the ONLY reliable rendition eviction: every transform source carries a `?v`
- * token that is per-finding video VINTAGE where one exists (`videoVersion` off
- * `videoSquaredAt`, bumped by every squared re-upload; clips use `updatedAt`),
+ * CANNOT evict. Changing the transform URL is the ONLY reliable rendition eviction: every
+ * transform source carries a `?v` token that is per-finding video VINTAGE where one exists
+ * (`videoVersion` off `videoSquaredAt`, bumped by every squared re-upload; clips use `updatedAt`),
  * falling back to this catalogue-wide constant for legacy masters that predate
  * the two-master layout. R2 ignores the query (the master resolves
  * byte-identically, verified), so only the transform cache key changes — never
@@ -607,7 +603,7 @@ export function videoCropPoster(
  * at a global offset — the fast offset-join (the radio-broadcast RFC Unit B). CF MT
  * `mode=video` supports `time=` (start offset) + `duration=` (1-60s), so a joiner
  * fetches a faststart rendition whose frame 0 IS the offset — no in-file seek of
- * the non-faststart master (verified live 2026-06-22: `time=5s,duration=10s` → a
+ * the non-faststart master: `time=5s,duration=10s` returns a
  * 200, ~7MB faststart MP4, edge-cached at a 20-day TTL).
  *
  * The crop + audio-strip + clip are ONE combined transform — never nested (the
@@ -650,7 +646,7 @@ const AUDIO_STRIPPED_WIDTH = 1080;
  * Strip the audio track from a same-zone portrait master via `audio=false`. The
  * TikTok push reaches for this off `footage.social.mp4` so the operator attaches
  * the licensed sound in-app — replacing the stored `footage-silent.mp4` cut,
- * which is retired under the two-master model. `source` must be a full
+ * which is not stored under the two-master model. `source` must be a full
  * found.fluncle.com URL (same zone as the transform base).
  *
  * `mode=video,width=1080` is REQUIRED, not decorative: `audio=false` ALONE is a
@@ -671,9 +667,8 @@ export function videoAudioStripped(source: string, version?: number): string {
 //   1. The `?v=<videoVersion>` vintage token on every transform source (above) —
 //      the ONLY thing that evicts stale RENDITIONS. Media Transformations caches
 //      video outputs in its own internal layer (`cf-cache-status: BYPASS`), which
-//      the zone purge API cannot touch — verified live on the 027.9.5H re-render:
-//      the purge-covered crop URL kept serving the replaced clip until its URL
-//      changed. A squared finalize bumps `videoSquaredAt`, every surface mints
+//      the zone purge API cannot touch. A purge-covered crop URL can keep serving a replaced clip
+//      until its URL changes. A squared finalize bumps `videoSquaredAt`, every surface mints
 //      new transform URLs, MT derives fresh. Nothing to purge.
 //
 //   2. `videoPurgeUrls` + the zone purge-by-URL API — evicts the zone-edge-cached
