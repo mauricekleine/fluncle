@@ -36,6 +36,9 @@ const SURFACES = [
   "/admin/recordings",
   "/admin/mixtapes",
   "/admin/plans",
+  // The labels station: three sections of rows, each with a ruling pair or a ⋮ carrying the
+  // re-ruling and the artist-rule dialog — the densest control cluster on any admin row.
+  "/admin/labels",
 ] as const;
 
 const MIN_TOUCH = 44;

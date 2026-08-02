@@ -173,6 +173,15 @@ Every index on a growing table is paid for on every write to it, so a REDUNDANT 
 - impact: MEDIUM — gated behind operator opening catalogue capture.
 - fix: Keep the default-shut brake. For open-budget: drive the findings arm from `findings` (PK join) and the catalogue arm from tracks_capture_priority_track_id_idx (partial, walking capture_priority desc), filter capture_status/duration/dismissed as residuals, and INTERLEAVE the two ordered streams (findings first) in TS instead of one ORDER BY the planner must sort. This is now the ONLY live path for that shape: the denormalize alternative it used to be weighed against (a maintained `capturable` flag, the old Wave-2 item 6) was dropped on 2026-07-27, so the decision has collapsed from flag-vs-merge to build-or-don't — and it is still gated on the operator opening catalogue capture.
 
+**5. Artist-rule admin reads: the leading-wildcard typeahead + the whole-table rule fold** · **watch item, no change recommended yet**
+`tier=design · artists, artist_rules · T2`
+**STATUS: WATCH — small by construction today; re-measure when the rule set grows past the operator's hand-authored scale.**
+
+- loc: apps/web/src/routes/admin/-artist-rule-reads.ts (`searchRuleArtists`, `ruledLabelCounts`)
+- shape: `searchRuleArtists` filters `artists` with a leading-wildcard `like '%…%'` (unsargable → full scan) on every settled keystroke in the `/admin/labels` rules dialog; it mirrors the `/admin/artists` board search that has always done this. `ruledLabelCounts` is a whole-table fold over `artist_rules` joined to `labels`, and it sits on the `/admin/labels` loader's critical path.
+- impact: LOW — `artist_rules` is operator-authored (≤100 rules per label, a handful of labels), and the typeahead is debounced, capped at 8 rows, and behind a dialog nobody opens in bulk. Both are `/admin`-only, so no public read pays for them.
+- fix (when it matters): an FTS5 or prefix-anchored path for the artist typeahead (shared with the board search, which has the same shape), and a maintained per-label rule count on `labels` if the fold ever shows up. Neither is worth a column today.
+
 ## Owned elsewhere — do NOT touch
 
 - already-fixed — catalogue.ts:1183 rankCatalogue max-similarity vector cross-scan (finding_vec/candidate_vec CTEs) + the RANK_BATCH_SIZE=250 batch write. CONFIRMED mitigated: both CTE arms carry `as materialized`, the join is a `cross join` pinning findings (small) as the driver with the `embedding_blob is not null` guards moved inside the CTEs, and the batch write is bounded/single-row/PK-keyed/idempotent under the single-writer box sweep. Do NOT re-flag as new.

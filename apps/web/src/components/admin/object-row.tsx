@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode } from "react";
+import { type ComponentType, type ReactNode, type Ref } from "react";
 import { cn } from "@/lib/utils";
 
 // The canonical admin index list + row (docs/admin-shell.md, "The Object Row"). Every index
@@ -25,11 +25,14 @@ export function ObjectList({ children, className }: { children: ReactNode; class
 export function ObjectRow({
   children,
   className,
+  ref,
   trailing,
 }: {
   /** The identity block (FindingIdentity for tracks, or ObjectLead for sets). Grows. */
   children: ReactNode;
   className?: string;
+  /** The row element, so a deep-linked board can scroll its target into view. */
+  ref?: Ref<HTMLLIElement>;
   /** The right-aligned zone: quiet meta, then the primary action / ⋮ menu. */
   trailing?: ReactNode;
 }) {
@@ -39,6 +42,7 @@ export function ObjectRow({
         "flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 sm:flex-nowrap sm:px-4",
         className,
       )}
+      ref={ref}
     >
       {children}
       {trailing ? (

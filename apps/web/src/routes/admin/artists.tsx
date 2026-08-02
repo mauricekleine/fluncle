@@ -4,6 +4,7 @@ import {
   CaretRightIcon,
   CheckCircleIcon,
   CircleNotchIcon,
+  DotsThreeVerticalIcon,
   GlobeIcon,
   MagnifyingGlassIcon,
   PencilSimpleIcon,
@@ -30,6 +31,7 @@ import {
   siX,
   siYoutube,
 } from "simple-icons";
+import { type ArtistRuleVerdict } from "@fluncle/contracts";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { BrandIcon } from "@/components/brand-icon";
@@ -43,6 +45,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@fluncle/ui/components/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@fluncle/ui/components/dropdown-menu";
 import { Input } from "@fluncle/ui/components/input";
 import { Label } from "@fluncle/ui/components/label";
 import {
@@ -73,6 +83,7 @@ import {
 } from "@/lib/server/artists";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
+import { type ArtistRuleState, artistRuleStates } from "./-artist-rule-reads";
 
 // The `/admin/artists` overview — the stable MANAGE surface for every artist Fluncle features
 // (Unit 5). Not a worklist: an artist never drops off for being resolved, so the operator can
@@ -90,6 +101,14 @@ import { cn } from "@/lib/utils";
 // artist's links reviewed at once. The structural edits — add, remove — live behind the "Manage
 // links" dialog. The WORK surfaces as an /admin attention row (source "artist-review") that
 // deep-links here with ?artist=<id>, auto-expanding that artist.
+//
+// ── THE GLOBAL ARTIST RULE ──────────────────────────────────────────────────────────────────
+// The row's ⋮ also carries the artist's standing with the catalogue crawler: never take their
+// records anywhere, or always take them anywhere. It is the GLOBAL half of the same exception
+// model `/admin/labels` scopes to one label, and it is acquisition scope like every other ruling
+// — it steers what the next crawl takes and moves nothing already stored. A rule matches on the
+// artist's MusicBrainz id, so an artist with no id resolved yet cannot carry one, and the menu
+// says that rather than offering an action the boundary would refuse.
 
 // The board's PAGE query key — the search term is the last segment, so an invalidate on the
 // bare prefix clears every search's cache at once (a mutation must refresh whatever page the
@@ -100,19 +119,28 @@ const ARTISTS_FRESH_KEY = ["admin", "artists", "fresh"] as const;
 // invalidate it too and the dashboard's count stays honest without waiting on a refetch.
 const ATTENTION_KEY = ["admin", "attention"] as const;
 
+/**
+ * One board page, plus each visible artist's global-rule standing and the MusicBrainz id a rule
+ * write posts as its match key. Both come from ONE bounded indexed read over the page's ids — the
+ * `list_artist_rules` op reads the rules, this read is what joins them to the rows on screen.
+ */
+type ArtistsBoardPage = ArtistsPage & { ruleStates: Record<string, ArtistRuleState> };
+
 // One page of the name-sorted artist board — a keyset slice, optionally name-filtered. The
 // loader calls it with no cursor for page 1; the infinite query pages by the returned cursor.
 const fetchArtistsPage = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string; search?: string }) => data)
-  .handler(async ({ data }): Promise<ArtistsPage> => {
+  .handler(async ({ data }): Promise<ArtistsBoardPage> => {
     if (!(await isAdminRequest())) {
       throw redirect({ to: "/admin/login" });
     }
 
-    return listArtistsPage({
+    const page = await listArtistsPage({
       ...(data.cursor ? { cursor: data.cursor } : {}),
       ...(data.search ? { search: data.search } : {}),
     });
+
+    return { ...page, ruleStates: await artistRuleStates(page.items.map((item) => item.id)) };
   });
 
 // The fresh-links work queue — every artist with an unreviewed link (capped, oldest-first),
@@ -187,6 +215,24 @@ function PlatformLogo({
     case "homepage":
       return <GlobeIcon aria-hidden="true" className={className} weight="bold" />;
   }
+}
+
+// A JSON-bodied admin POST (the global rule add). Same grant cookie and message-bearing errors
+// as the bodyless writes below.
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    body: JSON.stringify(body),
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  const data = (await response.json()) as T & { message?: string; ok?: boolean };
+
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.message ?? `Request failed (${response.status})`);
+  }
+
+  return data;
 }
 
 async function mutateJson<T>(url: string, method: "POST" | "DELETE"): Promise<T> {
@@ -282,6 +328,15 @@ function AdminArtistsPage() {
 
   const artists = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data]);
   const totalCount = data?.pages.at(-1)?.totalCount ?? firstPage.totalCount;
+  // The rule standings of every loaded page, folded into one lookup the rows read by id.
+  const ruleStates = useMemo(
+    () =>
+      Object.assign({}, ...(data?.pages ?? []).map((page) => page.ruleStates)) as Record<
+        string,
+        ArtistRuleState
+      >,
+    [data],
+  );
 
   const toggleExpanded = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -340,11 +395,28 @@ function AdminArtistsPage() {
     onSuccess: invalidate,
   });
 
+  // The operator-tier global-rule writes (`add_artist_rule` / `remove_artist_rule`). Both change
+  // what the NEXT crawl takes and nothing already stored, so neither is dressed as destructive.
+  const addRule = useMutation({
+    mutationFn: (input: { artistMbid: string; artistName: string; verdict: ArtistRuleVerdict }) =>
+      postJson("/api/v1/admin/artist-rules", input),
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: invalidate,
+  });
+  const removeRule = useMutation({
+    mutationFn: (ruleId: string) =>
+      mutateJson(`/api/v1/admin/artist-rules/${encodeURIComponent(ruleId)}`, "DELETE"),
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: invalidate,
+  });
+
   const busy =
     reviewArtist.isPending ||
     removeSocial.isPending ||
     addSocial.isPending ||
-    reviewSocial.isPending;
+    reviewSocial.isPending ||
+    addRule.isPending ||
+    removeRule.isPending;
 
   const pageErrorMessage = pageError
     ? pageError instanceof Error
@@ -448,8 +520,13 @@ function AdminArtistsPage() {
                 onAdd={(platform, url) => addSocial.mutate({ artistId: artist.id, platform, url })}
                 onRemove={(socialId) => removeSocial.mutate(socialId)}
                 onReview={() => reviewArtist.mutate(artist.id)}
+                onRule={(artistMbid, verdict) =>
+                  addRule.mutate({ artistMbid, artistName: artist.name, verdict })
+                }
                 onToggle={() => toggleExpanded(artist.id)}
+                onUnrule={(ruleId) => removeRule.mutate(ruleId)}
                 ref={artist.id === focusId ? focusRef : undefined}
+                ruleState={ruleStates[artist.id]}
               />
             ))}
             {hasNextPage ? (
@@ -795,8 +872,11 @@ function ArtistAccordion({
   onAdd,
   onRemove,
   onReview,
+  onRule,
   onToggle,
+  onUnrule,
   ref,
+  ruleState,
 }: {
   artist: ArtistOverviewItem;
   busy: boolean;
@@ -805,8 +885,11 @@ function ArtistAccordion({
   onAdd: (platform: string, url: string) => void;
   onRemove: (socialId: string) => void;
   onReview: () => void;
+  onRule: (artistMbid: string, verdict: ArtistRuleVerdict) => void;
   onToggle: () => void;
+  onUnrule: (ruleId: string) => void;
   ref?: Ref<HTMLElement>;
+  ruleState: ArtistRuleState | undefined;
 }) {
   const headerId = useId();
   const bodyId = useId();
@@ -817,30 +900,42 @@ function ArtistAccordion({
       className={cn("border-b border-border last:border-b-0", focused && "bg-primary/5")}
       ref={ref}
     >
-      <button
-        aria-controls={bodyId}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring"
-        id={headerId}
-        onClick={onToggle}
-        type="button"
-      >
-        {expanded ? (
-          <CaretDownIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        ) : (
-          <CaretRightIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
-        )}
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{artist.name}</span>
-        {needsLook ? (
-          <Badge className="shrink-0 border-primary/40 text-primary" variant="outline">
-            needs a look
-          </Badge>
-        ) : null}
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {findingsCount(artist.findingCount)} · {artist.socials.length} link
-          {artist.socials.length === 1 ? "" : "s"}
-        </span>
-      </button>
+      {/* The ⋮ sits BESIDE the expand control rather than inside it — a menu trigger nested in
+          the header button would be a button inside a button. */}
+      <div className="flex items-center gap-1 pr-2">
+        <button
+          aria-controls={bodyId}
+          aria-expanded={expanded}
+          className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 focus-visible:outline-2 focus-visible:outline-ring"
+          id={headerId}
+          onClick={onToggle}
+          type="button"
+        >
+          {expanded ? (
+            <CaretDownIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
+          ) : (
+            <CaretRightIcon aria-hidden="true" className="shrink-0 text-muted-foreground" />
+          )}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{artist.name}</span>
+          {needsLook ? (
+            <Badge className="shrink-0 border-primary/40 text-primary" variant="outline">
+              needs a look
+            </Badge>
+          ) : null}
+          <RuleBadge rule={ruleState?.rule ?? null} />
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {findingsCount(artist.findingCount)} · {artist.socials.length} link
+            {artist.socials.length === 1 ? "" : "s"}
+          </span>
+        </button>
+        <ArtistRuleMenu
+          busy={busy}
+          name={artist.name}
+          onRule={onRule}
+          onUnrule={onUnrule}
+          state={ruleState}
+        />
+      </div>
 
       {expanded ? (
         <div aria-labelledby={headerId} className="space-y-3 px-4 pb-4 pt-1 sm:px-5" id={bodyId}>
@@ -886,6 +981,80 @@ function ArtistAccordion({
         </div>
       ) : null}
     </section>
+  );
+}
+
+// The artist's standing with the crawler, as quiet data (the labels board's seed-state chip
+// precedent): a rule is a routing decision, never an alarm. Absent while the artist carries none.
+function RuleBadge({ rule }: { rule: ArtistRuleState["rule"] }) {
+  if (!rule) {
+    return null;
+  }
+
+  return (
+    <Badge className="shrink-0 text-muted-foreground" variant="outline">
+      {rule.verdict === "block" ? "Never take" : "Always take"}
+    </Badge>
+  );
+}
+
+// The global rule, behind the row's ⋮ (the disclosure law — it is the rare act beside browsing
+// and link review). One verdict per artist: while a rule stands, the only move is clearing it.
+function ArtistRuleMenu({
+  busy,
+  name,
+  onRule,
+  onUnrule,
+  state,
+}: {
+  busy: boolean;
+  name: string;
+  onRule: (artistMbid: string, verdict: ArtistRuleVerdict) => void;
+  onUnrule: (ruleId: string) => void;
+  state: ArtistRuleState | undefined;
+}) {
+  const mbid = state?.mbid;
+  const rule = state?.rule;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={`Crawl rules for ${name}`}
+        className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/10 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <DotsThreeVerticalIcon aria-hidden="true" className="size-4" weight="bold" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-72 min-w-56">
+        {!mbid ? (
+          // A rule matches on the MusicBrainz id, so a row without one cannot carry a rule. Said
+          // as a LABEL rather than a disabled item: roving focus skips a disabled item, which
+          // would land a screen reader in an apparently empty menu.
+          <DropdownMenuLabel className="font-normal">No MusicBrainz id yet</DropdownMenuLabel>
+        ) : (
+          <DropdownMenuGroup>
+            {/* The boundary leads, because it is what makes the action below safe to take —
+                the same clause the labels station's rules dialog carries. */}
+            <DropdownMenuLabel className="font-normal text-wrap">
+              Rules change what the next crawl takes. Everything already here stays.
+            </DropdownMenuLabel>
+            {rule ? (
+              <DropdownMenuItem disabled={busy} onClick={() => onUnrule(rule.id)}>
+                Clear the rule
+              </DropdownMenuItem>
+            ) : (
+              <>
+                <DropdownMenuItem disabled={busy} onClick={() => onRule(mbid, "block")}>
+                  Never take their records
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={busy} onClick={() => onRule(mbid, "allow")}>
+                  Always take their records
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuGroup>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
