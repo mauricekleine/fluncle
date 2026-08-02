@@ -86,6 +86,8 @@ type TrackFixture = {
   spotifyVerifiedBy?: string;
   title?: string;
   youtubeVerifiedAt?: string;
+  /** How the held id was proved: `fingerprint` (the sound) or `search` (a Topic art track). */
+  youtubeVerifiedBy?: string;
   youtubeVideoId?: string;
   /** 1 = cleared to show, 0 = checked and refused, undefined = never concluded. */
   youtubeVideoOfficial?: number;
@@ -131,6 +133,7 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
       fields.youtubeVideoId ?? null,
       fields.youtubeVideoOfficial ?? null,
       fields.youtubeVerifiedAt ?? null,
+      fields.youtubeVerifiedBy ?? null,
     ],
     sql: `insert into tracks (
             track_id, title, artists_json, duration_ms,
@@ -147,8 +150,8 @@ async function insertTrack(trackId: string, fields: TrackFixture = {}): Promise<
             beatport_url, beatport_verified_at,
             backfill_beatport_attempted_at, backfill_beatport_attempts,
             backfill_deezer_attempted_at, backfill_deezer_attempts,
-            youtube_video_id, youtube_video_official, youtube_verified_at
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            youtube_video_id, youtube_video_official, youtube_verified_at, youtube_verified_by
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -602,12 +605,69 @@ describe("the identifiers and the other platforms", () => {
         at: "2026-07-31T00:00:00.000Z",
         // The stamp is when the check ran and the link was written, never an attempt time.
         atMeaning: "verified",
-        // Hardcoded rather than stored: the audio match is the only gate this leg has, so a
-        // `youtube_verified_by` column would be one value repeated forever.
+        // NULL `youtube_verified_by` is a row written before the column existed, when the
+        // fingerprint was the only path that could write an id at all — so the fallback is
+        // `fingerprint` and every historic receipt reads exactly as it did.
         method: "fingerprint",
         source: null,
       },
     });
+  });
+
+  it("says `matched by artist, title, and length` for an id the Topic rung proved on METADATA", async () => {
+    // The catalogue ladder's rung 1 accepts an `<Artist> - Topic` art track on artist, title and
+    // length, having compared NO AUDIO. It is a real claim and a weaker one, and the receipt has to
+    // carry the weaker sentence — `search`, the Spotify anchor's claim class — rather than borrow
+    // the fingerprint's. This is the whole reason the method is stored rather than hardcoded.
+    await insertTrack("yt-topic", {
+      youtubeVerifiedAt: "2026-08-01T00:00:00.000Z",
+      youtubeVerifiedBy: "search",
+      youtubeVideoId: "topicArtTrk",
+      youtubeVideoOfficial: 1,
+    });
+
+    expect((await only({ idOrLogId: "yt-topic", kind: "idOrLogId" })).links.youtube).toEqual({
+      state: "verified",
+      url: "https://www.youtube.com/watch?v=topicArtTrk",
+      value: "topicArtTrk",
+      verification: {
+        at: "2026-08-01T00:00:00.000Z",
+        atMeaning: "verified",
+        method: "search",
+        source: null,
+      },
+    });
+  });
+
+  it("says `fingerprint` for an id a stored audio match proved", async () => {
+    // The segment rung compared the sound — against the row's own archived master rather than a 30s
+    // preview, which is the same claim by a better reference.
+    await insertTrack("yt-segment", {
+      youtubeVerifiedAt: "2026-08-01T00:00:00.000Z",
+      youtubeVerifiedBy: "fingerprint",
+      youtubeVideoId: "segmentProv",
+      youtubeVideoOfficial: 1,
+    });
+
+    expect(
+      (await only({ idOrLogId: "yt-segment", kind: "idOrLogId" })).links.youtube,
+    ).toMatchObject({ verification: { method: "fingerprint" } });
+  });
+
+  it("degrades an UNRECOGNISED stored method to the legacy answer rather than to silence", async () => {
+    // A value the envelope does not know must not reach the receipt renderer as a method that does
+    // not exist — the line would then print no method fragment at all and the reader would be told
+    // LESS, not more. The honest fallback is the one path that has always written this column.
+    await insertTrack("yt-garbled", {
+      youtubeVerifiedAt: "2026-08-01T00:00:00.000Z",
+      youtubeVerifiedBy: "vibes",
+      youtubeVideoId: "garbledMeth",
+      youtubeVideoOfficial: 1,
+    });
+
+    expect(
+      (await only({ idOrLogId: "yt-garbled", kind: "idOrLogId" })).links.youtube,
+    ).toMatchObject({ verification: { method: "fingerprint" } });
   });
 
   it("stays silent about a held id the officialness check REFUSED", async () => {

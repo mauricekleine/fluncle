@@ -30,15 +30,21 @@ import {
   isBotChallengeStderr,
   isTopicChannel,
   logBotChallengeRecap,
+  metadataDurationAgrees,
+  metadataIdentityMatch,
+  METADATA_TOLERANCE_SEC,
   needsReenrichAfterCapture,
   normalizeChannelName,
   normalizeSearchQuery,
   noteBotChallenge,
   pickCandidate,
+  pickSegmentCandidates,
+  pickTopicCandidate,
   rankCandidates,
   rerollSessionId,
   shouldReenrichAfterCapture,
   splitProvenanceBudget,
+  topicChannelArtist,
   verifyCaptureFile,
 } from "./capture-sweep";
 // The REAL /status strain detector, imported rather than re-implemented: since #994 this
@@ -1219,5 +1225,459 @@ describe("the provenance and re-verdict phases ride the tick without distorting 
     expect(phase).toContain("youtubeReverdict: true");
     expect(phase).not.toContain("checkYoutubeOfficial");
     expect(phase).not.toContain("author_name");
+  });
+});
+describe("flat search extraction — one seventh of the bytes, on every search there will ever be", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+
+  test("the search asks for the LISTING, not five resolutions of it", () => {
+    // `--flat-playlist` returns the search page's own entries. The measured cost is 139KB against
+    // 968KB for the resolving shape, and it applies to every capture and every provenance search.
+    expect(source).toContain('...(FLAT_SEARCH ? ["--flat-playlist"] : [])');
+    // Behind an env knob so the operator can revert to the historic shape with no re-bake, and ON
+    // unless he says otherwise.
+    expect(source).toContain(
+      'const FLAT_SEARCH = (process.env.FLUNCLE_CAPTURE_FLAT_SEARCH ?? "1") !== "0"',
+    );
+  });
+
+  test("the printed field set is UNCHANGED — a flat entry already carries all six", () => {
+    // The ranker reads duration, id, channel, channel_id, channel_is_verified and title. If flat
+    // extraction had cost any one of them this switch would have been a downgrade, not a saving.
+    expect(source).toContain(
+      "%(duration)s\\t%(id)s\\t%(channel)s\\t%(channel_id)s\\t%(channel_is_verified)s\\t%(title)s",
+    );
+  });
+
+  test("THE CEIL IS ABSORBED — the guard is max(3s, 3%) and a flat duration rounds UP by at most 1s", () => {
+    // The one thing flat extraction loses: a listed duration is the CEIL of the rendered length
+    // (+1s on ~47% of ids measured 2026-08-01). The capture guard's floor is three whole seconds,
+    // so a one-second ceil cannot move a candidate across it in either direction.
+    const targetMs = 217_000;
+
+    // The exact length, and the same length ceiled — both still inside the guard.
+    expect(durationWithinTolerance(217, targetMs)).toBe(true);
+    expect(durationWithinTolerance(218, targetMs)).toBe(true);
+    // …and a candidate that was ALREADY near the edge is not tipped out by the ceil either, because
+    // 3% of a 217s track is 6.5s and the ceil spends one of them.
+    expect(durationWithinTolerance(223, targetMs)).toBe(true);
+    // The guard still refuses a genuinely different length. The ceil buys no slack it should not.
+    expect(durationWithinTolerance(260, targetMs)).toBe(false);
+  });
+
+  test("FULL RESOLUTION still happens, for the ONE candidate that wins", () => {
+    // Flat extraction changes what a SEARCH costs and nothing about what a download does: the
+    // download fetches `watch?v=<id>` per id exactly as it always did, and the duration that
+    // decides anything is ffprobe'd off the real file rather than read from any listing.
+    expect(source).toContain("`https://www.youtube.com/watch?v=${videoId}`");
+    expect(source).toContain("const realDurationSec = probeDurationSec(file.path)");
+  });
+});
+
+describe("the metadata gate — artist, title and length, and nothing else", () => {
+  const row = { artists: ["Netsky"], durationMs: 217_000, title: "Rio" };
+
+  test("the tolerance is a FLAT 3s, not the capture guard's max(3s, 3%)", () => {
+    // Nothing decides identity properly after this gate, so it is tighter than the pre-fingerprint
+    // filter: ±3s absolute, whatever the track's length. On a 217s track the capture guard would
+    // allow 6.5s, and this one does not.
+    expect(METADATA_TOLERANCE_SEC).toBe(3);
+    expect(metadataDurationAgrees(220, 217_000)).toBe(true);
+    expect(metadataDurationAgrees(221, 217_000)).toBe(false);
+    expect(durationWithinTolerance(221, 217_000)).toBe(true);
+  });
+
+  test("±3s and NOT ±2s — the flat ceil and a whole-second length each want one", () => {
+    // ~70% of catalogue durations are whole-second MusicBrainz values, so the stored length is
+    // already ±1s of the master; the flat listing's ceil spends another. ±2s would leave nothing
+    // for the second of those and would refuse correct art tracks for arithmetic reasons.
+    expect(metadataDurationAgrees(219, 217_000)).toBe(true);
+    expect(metadataDurationAgrees(215, 217_000)).toBe(true);
+  });
+
+  test("a missing or zero length abstains — there is nothing to agree with", () => {
+    expect(metadataDurationAgrees(217, undefined)).toBe(false);
+    expect(metadataDurationAgrees(217, 0)).toBe(false);
+    expect(metadataDurationAgrees(0, 217_000)).toBe(false);
+  });
+
+  test("FORM A — the bare title on the artist's own Topic channel", () => {
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "a", title: "Rio" },
+        row,
+      ),
+    ).toBe("channel");
+  });
+
+  test("FORM B — `Artist - Title` carried in the title itself", () => {
+    expect(
+      metadataIdentityMatch(
+        { channel: "Some Uploader", durationSec: 217, id: "b", title: "Netsky - Rio" },
+        row,
+      ),
+    ).toBe("title");
+  });
+
+  test("a trailing version parenthetical folds away on BOTH sides", () => {
+    // "Original Mix" is a neutral descriptor in the house fold, so it is not part of the identity
+    // and the two titles are the same recording with or without it.
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "c", title: "Rio (Original Mix)" },
+        row,
+      ),
+    ).toBe("channel");
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "d", title: "Rio" },
+        { ...row, title: "Rio (Original Mix)" },
+      ),
+    ).toBe("channel");
+  });
+
+  test("A REMIX IS A DIFFERENT RECORDING — the descriptor must appear on both sides", () => {
+    // The whole reason the fold compares base AND descriptor. Serving the original under a remix's
+    // id (or the reverse) is exactly the wrong-version failure a duration guard cannot see.
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "e", title: "Rio (Calibre Remix)" },
+        row,
+      ),
+    ).toBeNull();
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "f", title: "Rio" },
+        { ...row, title: "Rio (Calibre Remix)" },
+      ),
+    ).toBeNull();
+  });
+
+  test("a name the row is NOT credited to is refused, on either side", () => {
+    // The same title at the same length by somebody else is the case this gate exists to catch.
+    expect(
+      metadataIdentityMatch(
+        { channel: "Camo & Krooked - Topic", durationSec: 217, id: "g", title: "Rio" },
+        row,
+      ),
+    ).toBeNull();
+    expect(
+      metadataIdentityMatch(
+        { channel: "Some Uploader", durationSec: 217, id: "h", title: "Hybrid Minds - Rio" },
+        row,
+      ),
+    ).toBeNull();
+  });
+
+  test("the credit test is a SUBSET, so a split credit and an `&` name both pass", () => {
+    // A track credited to two artists lives on the primary's Topic channel, and "Chase & Status"
+    // folds into two names on BOTH sides at once. Equality would refuse each of those wrongly.
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "i", title: "Rio" },
+        { ...row, artists: ["Netsky", "Metrik"] },
+      ),
+    ).toBe("channel");
+    expect(
+      metadataIdentityMatch(
+        { channel: "Chase & Status - Topic", durationSec: 217, id: "j", title: "Rio" },
+        { ...row, artists: ["Chase & Status"] },
+      ),
+    ).toBe("channel");
+  });
+
+  test("a row with no title or no credited artist can prove nothing", () => {
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "k", title: "Rio" },
+        { artists: ["Netsky"] },
+      ),
+    ).toBeNull();
+    expect(
+      metadataIdentityMatch(
+        { channel: "Netsky - Topic", durationSec: 217, id: "l", title: "Rio" },
+        { artists: [], title: "Rio" },
+      ),
+    ).toBeNull();
+  });
+
+  test("a hyphen INSIDE a word is never mistaken for the artist separator", () => {
+    // "Nu:Tone" and "NC-17" are one token. The separator is spaced on both sides for that reason.
+    expect(topicChannelArtist("Nu:Tone - Topic")).toBe("Nu:Tone");
+    expect(
+      metadataIdentityMatch(
+        { channel: "Some Uploader", durationSec: 180, id: "m", title: "NC-17" },
+        { artists: ["Netsky"], durationMs: 180_000, title: "NC-17" },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("RUNG 1 — the Topic art track, served on metadata alone", () => {
+  const row = { artists: ["Netsky", "Metrik"], durationMs: 217_000, title: "Rio" };
+
+  test("a Topic candidate that clears the gate is the pick", () => {
+    const pick = pickTopicCandidate(
+      [{ channel: "Netsky - Topic", durationSec: 217, id: "topic", title: "Rio" }],
+      row,
+    );
+
+    expect(pick?.id).toBe("topic");
+  });
+
+  test("a NON-Topic candidate is never served here, however well it folds", () => {
+    // There is no channel authority among fan re-ups, so metadata alone cannot settle one. That
+    // candidate belongs to rung 2, which buys 30 seconds and listens.
+    expect(
+      pickTopicCandidate(
+        [{ channel: "DnB Uploads", durationSec: 217, id: "fan", title: "Netsky - Rio" }],
+        row,
+      ),
+    ).toBeNull();
+  });
+
+  test("a Topic candidate at the WRONG length is refused — the gate is all three signals", () => {
+    expect(
+      pickTopicCandidate(
+        [{ channel: "Netsky - Topic", durationSec: 260, id: "long", title: "Rio" }],
+        row,
+      ),
+    ).toBeNull();
+  });
+
+  test("AMBIGUITY — the primary artist's channel wins a split credit", () => {
+    // A split credit puts the same delivered master on each credited artist's channel. Every tie
+    // the 2026-08-01 spike saw was that, so the preference is the row's PRIMARY artist.
+    const pick = pickTopicCandidate(
+      [
+        { channel: "Metrik - Topic", durationSec: 217, id: "secondary", title: "Rio" },
+        { channel: "Netsky - Topic", durationSec: 217, id: "primary", title: "Rio" },
+      ],
+      row,
+    );
+
+    expect(pick?.id).toBe("primary");
+  });
+
+  test("a residual tie takes the closest length rather than refusing to answer", () => {
+    // The remaining candidates are the same recording; picking between two of the same recording
+    // is not a decision that can be got wrong, and abstaining would cost the row its id for nothing.
+    const pick = pickTopicCandidate(
+      [
+        { channel: "Metrik - Topic", durationSec: 219, id: "far", title: "Rio" },
+        { channel: "Metrik - Topic", durationSec: 217, id: "near", title: "Rio" },
+      ],
+      { ...row, artists: ["Someone Else", "Metrik"] },
+    );
+
+    expect(pick?.id).toBe("near");
+  });
+});
+
+describe("RUNG 2 — the non-Topic candidates that have to be listened to", () => {
+  const row = { artists: ["Netsky"], durationMs: 217_000, title: "Rio" };
+  const candidates = [
+    { channel: "Netsky - Topic", durationSec: 217, id: "topic", title: "Rio" },
+    { channel: "DnB Uploads", durationSec: 219, id: "fan-far", title: "Netsky - Rio" },
+    { channel: "Rips", durationSec: 217, id: "fan-near", title: "Netsky - Rio" },
+    { channel: "Noise", durationSec: 217, id: "other", title: "Hybrid Minds - Rio" },
+  ];
+
+  test("only the non-Topic hits, closest length first", () => {
+    expect(pickSegmentCandidates(candidates, row, new Set(), 5).map(({ id }) => id)).toEqual([
+      "fan-near",
+      "fan-far",
+    ]);
+  });
+
+  test("a candidate the bad-audio memory already disproved never costs a byte", () => {
+    expect(
+      pickSegmentCandidates(candidates, row, new Set(["fan-near"]), 5).map(({ id }) => id),
+    ).toEqual(["fan-far"]);
+  });
+
+  test("the attempt budget caps the walk — a third candidate is money, not evidence", () => {
+    expect(pickSegmentCandidates(candidates, row, new Set(), 1).map(({ id }) => id)).toEqual([
+      "fan-near",
+    ]);
+    expect(pickSegmentCandidates(candidates, row, new Set(), 0)).toEqual([]);
+  });
+});
+
+describe("THE CATALOGUE LADDER never buys a whole song", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+  // The ladder's own body — from its section header to the provenance phase that follows it.
+  const ladder = source.slice(
+    source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+    source.indexOf("// ── THE PROVENANCE PHASE (operator ruling 2026-07-31)"),
+  );
+
+  test("the slice under test is real", () => {
+    expect(ladder.length).toBeGreaterThan(1_000);
+    expect(ladder).toContain("async function proveCatalogueProvenance(");
+  });
+
+  test("THE RAIL — no full download is reachable from this tier", () => {
+    // The whole point of the cheap tier. A full download is ~6.5MB against a section's ~1.5MB, and
+    // 30,672 of them is ~200GB of metered residential proxy. Neither the full-song downloader nor
+    // the shared full-fingerprint walk may appear here.
+    expect(ladder).not.toContain("runYtDownload");
+    expect(ladder).not.toContain("findVerifiedUpload");
+    // …and every download it DOES make is a section.
+    expect(ladder).toContain("runYtSection(");
+    expect(source).toContain('"--download-sections"');
+  });
+
+  test("it inherits the provenance rail — not one capture column leaves it", () => {
+    // Same ruling as the phase below: a backfill that could move a capture column could replace a
+    // finding's clean archived audio, which is the trade the pilot rejected.
+    for (const column of [
+      "captureStatus",
+      "captureVerification",
+      "captureVerifiedAt",
+      "sourceAudioBytes",
+      "sourceAudioCapturedAt",
+      "sourceAudioAttemptedAt",
+      "sourceAudioFailures",
+      "enrichmentStatus",
+    ]) {
+      expect(ladder).not.toContain(column);
+    }
+    // `source_audio_key` is READ — it is where the archived reference lives — and never written.
+    expect(ladder).toContain("row.sourceAudioKey");
+    expect(ladder).not.toContain("sourceAudioKey:");
+    expect(ladder).not.toContain("sourceAudioRejected:");
+    expect(ladder).not.toContain("r2Put");
+  });
+
+  test("each rung reports its OWN verdict, so the receipt cannot overclaim", () => {
+    // The Topic rung compared no audio, so it says so and the server renders the weaker sentence.
+    expect(ladder).toContain('youtubeVerification: "metadata-match"');
+    // The segment rung DID compare audio, against the archive rather than a preview.
+    expect(ladder).toContain('youtubeVerification: "archive-match"');
+    // Neither borrows the capture sweep's field, and the sweep never rules on officialness.
+    expect(ladder).not.toContain("captureVerification");
+    expect(ladder).not.toContain("youtubeVideoOfficial");
+  });
+
+  test("the reference is the row's own archive, which costs no vendor bandwidth", () => {
+    expect(ladder).toContain("loadArchiveFingerprint(archiveKey, dir)");
+    expect(ladder).toContain("slidingWindowMatch(archiveFp, sectionFp)");
+  });
+
+  test("AN EXHAUSTED ROW MOVES THE STREAK — it is never re-served forever", () => {
+    // The ledger law. `no-match` stamps the re-ask window AND moves the can't-conclude streak;
+    // `inconclusive` moves the streak alone, because a CDN refusal is not an answer and must not
+    // burn the row's window — but a row that is refused forever must still stop being asked.
+    expect(ladder).toContain('youtubeVerification: "no-match"');
+    expect(ladder).toContain('youtubeVerification: "inconclusive"');
+    // …and neither carries an id. A row concludes nothing, or it concludes with proof.
+    const exhausted = ladder.slice(ladder.indexOf('youtubeVerification: "no-match"'));
+
+    expect(exhausted.slice(0, 200)).not.toContain("youtubeVideoId");
+  });
+
+  test("a TRANSIENT failure moves the streak too — a search that never answers is the loop", () => {
+    // The outcome most likely to repeat: a row whose query the proxy cannot answer gets no stamp,
+    // comes straight back next tick, and holds the head of the queue forever. Reported rather than
+    // swallowed, and the report is itself best-effort, because the thing that failed may be the API.
+    const failurePath = ladder.slice(ladder.indexOf("} catch (error) {"));
+
+    expect(failurePath).toContain('youtubeVerification: "inconclusive"');
+    expect(failurePath).toContain(".catch(");
+  });
+
+  test("a DEFERRED row is not written to at all", () => {
+    // The segment budget ran out under it. It concluded nothing, cost nothing, and is asked again
+    // next tick; stamping it would spend a 90-day window on a queue position.
+    expect(ladder).toContain("deferred = true");
+    expect(ladder).toMatch(
+      /if \(deferred\) \{\s*counts\.deferred \+= 1;\s*\n\s*return "deferred";/,
+    );
+  });
+});
+
+describe("the catalogue tier's budget accounting", () => {
+  const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
+  const phase = source.slice(source.indexOf("async function runProvenancePhase("));
+
+  test("SEGMENT DOWNLOADS respect the operator's limit strictly", () => {
+    // `PROVENANCE_CATALOGUE_LIMIT` is still THE knob and it now meters downloads: one shared
+    // counter, decremented per section, checked before every one.
+    expect(phase).toContain("const segmentBudget = { segments: catalogueRoom }");
+    expect(source).toContain("budget.segments -= 1");
+    expect(source).toContain("if (budget.segments <= 0)");
+  });
+
+  test("SEARCHES are budgeted generously — they are 139KB, not the bandwidth", () => {
+    // Most rows conclude on rung 1 for the price of a search, so metering rows at the download's
+    // rate would throw the cheap tier's whole point away.
+    expect(phase).toContain(
+      "limit: catalogueRoom * Math.max(1, Math.trunc(PROVENANCE_SEARCH_FACTOR) || 1)",
+    );
+    expect(source).toContain('process.env.FLUNCLE_CAPTURE_PROVENANCE_SEARCH_FACTOR ?? "5"');
+  });
+
+  test("the shipped default still keeps the catalogue DARK", () => {
+    // Unchanged: the ladder exists, and it spends nothing until the operator opens the sub-cap.
+    expect(source).toContain('process.env.FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT ?? "0"');
+    expect(splitProvenanceBudget(2, 0).catalogue).toBe(0);
+  });
+
+  test("the FINDINGS tier keeps the full fingerprint — the cheap ladder is catalogue-only", () => {
+    expect(phase).toContain("proveTrackProvenance(row, meter)");
+    expect(phase).toContain('scope: "findings"');
+    expect(phase).toContain("proveCatalogueProvenance(row, meter, segmentBudget, ladder)");
+  });
+
+  test("a deferral is not folded into the phase's outcome gauges", () => {
+    expect(phase).toContain('if (outcome !== "deferred")');
+  });
+
+  test("the ladder's per-rung tally rides the tick summary", () => {
+    const summary = buildCaptureSummary({
+      batch: 0,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: { done: 0, failed: 0, skipped: 0, unmatched: 0 },
+      elapsedMs: 1,
+      ladder: {
+        deferred: 1,
+        exhausted: 4,
+        residualRescued: 2,
+        searched: 30,
+        segmentMissed: 3,
+        segmentVerified: 2,
+        topicServed: 7,
+      },
+      provenance: { failed: 0, found: 9, none: 4 },
+      reverdict: { asked: 0, failed: 0 },
+    });
+
+    expect(summary).toMatchObject({
+      provenanceFound: 9,
+      provenanceLadderDeferred: 1,
+      provenanceLadderExhausted: 4,
+      provenanceLadderResidualRescued: 2,
+      provenanceLadderSearched: 30,
+      provenanceLadderSegmentMissed: 3,
+      provenanceLadderSegmentVerified: 2,
+      provenanceLadderTopicServed: 7,
+    });
+  });
+
+  test("a tick with no ladder work reports zeroes, never absent keys", () => {
+    // The catalogue budget is shut by default, so this is the shape an operator reads every night.
+    const summary = buildCaptureSummary({
+      batch: 1,
+      botChallenges: 0,
+      botChallengesUncleared: 0,
+      counts: { done: 1, failed: 0, skipped: 0, unmatched: 0 },
+      elapsedMs: 1,
+      provenance: { failed: 0, found: 0, none: 0 },
+      reverdict: { asked: 0, failed: 0 },
+    });
+
+    expect(summary).toMatchObject({ provenanceLadderSearched: 0, provenanceLadderTopicServed: 0 });
   });
 });

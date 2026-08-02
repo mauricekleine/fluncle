@@ -743,6 +743,117 @@ describe("updateTrack — the PROVENANCE backfill's write path", () => {
   });
 });
 
+describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
+  it("accepts the Topic rung's metadata proof and stores it as `search`, never `fingerprint`", async () => {
+    // The rung matched artist, title and length on an `<Artist> - Topic` art-track channel and
+    // compared NO AUDIO. That is a real claim and a weaker one, so the receipt has to say the weaker
+    // thing: `search` renders "matched by artist, title, and length" on /identity, and the id must
+    // never be able to arrive wearing the fingerprint's sentence.
+    await updateTrack("track-123", {
+      youtubeVerification: "metadata-match",
+      youtubeVideoId: "topicId",
+    });
+
+    expect(checkYoutubeOfficial).toHaveBeenCalledWith("topicId", {
+      artists: ["Calibre"],
+      labels: [],
+    });
+    expect(lastUpdateSql).toContain("youtube_video_id = coalesce(youtube_video_id, ?)");
+    expect(lastUpdateSql).toContain(
+      "youtube_verified_by = case when youtube_video_id is null then ? else youtube_verified_by end",
+    );
+    expect(lastUpdateArgs).toContain("search");
+    expect(lastUpdateArgs).not.toContain("fingerprint");
+  });
+
+  it("OFFICIALNESS IS STILL THE SERVER'S CALL, even on a Topic pick the box could see", async () => {
+    // The box knows the channel name and could have ruled; it deliberately does not. The same
+    // keyless oEmbed check runs, and a Topic channel earns its 1 from the server's own rule.
+    await updateTrack("track-123", {
+      youtubeVerification: "metadata-match",
+      youtubeVideoId: "topicId",
+    });
+
+    expect(lastUpdateSql).toContain("youtube_video_official = case");
+    expect(lastUpdateArgs).toContain(1);
+  });
+
+  it("accepts the segment rung's archive fingerprint under the SAME claim as a preview one", async () => {
+    // `archive-match` names what was compared — the row's own archived master rather than a 30s
+    // preview — and carries the identical claim class, because both are the sound.
+    await updateTrack("track-123", {
+      youtubeVerification: "archive-match",
+      youtubeVideoId: "segmentId",
+    });
+
+    expect(lastUpdateSql).toContain("youtube_video_id = coalesce(youtube_video_id, ?)");
+    expect(lastUpdateArgs).toContain("fingerprint");
+    expect(lastUpdateArgs).not.toContain("search");
+  });
+
+  it("the legacy preview proof still stores `fingerprint`, so no historic receipt moves", async () => {
+    await updateTrack("track-123", {
+      youtubeVerification: "preview-match",
+      youtubeVideoId: "previewId",
+    });
+
+    expect(lastUpdateArgs).toContain("fingerprint");
+  });
+
+  it("an UNRECOGNISED verdict proves nothing — fail closed, exactly like a bare id", async () => {
+    // The map is the guard. A verdict value the server does not know maps to no method, so it
+    // authorizes no id — which is what keeps a future or garbled box build from talking its way in.
+    await updateTrack("track-123", {
+      youtubeVerification: "sounds-about-right" as never,
+      youtubeVideoId: "smuggledId",
+    });
+
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+    expect(lastUpdateSql).not.toContain("youtube_video_id");
+  });
+
+  it("an INCONCLUSIVE run moves the streak and NOTHING else — no stamp, no receipt", async () => {
+    // The ladder ran and the CDN refused every section it tried. That is not an answer, so burning
+    // the 90-day window on it would cost the row months for a reason that had nothing to do with the
+    // row. The streak still moves, because a row refused forever must stop being asked forever.
+    await updateTrack("track-123", { youtubeVerification: "inconclusive" });
+
+    expect(lastUpdateSql).toContain(
+      "youtube_provenance_failures = coalesce(youtube_provenance_failures, 0) + 1",
+    );
+    expect(lastUpdateSql).not.toContain("youtube_verified_at");
+    expect(lastUpdateSql).not.toContain("youtube_video_id");
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+  });
+
+  it("a NO-MATCH moves the streak AS WELL AS the stamp", async () => {
+    // The window paces a row that concluded honestly; the streak retires one that never will. Both
+    // empty-handed reports move it (the Deezer starvation fix of 2026-08-01, in a new place).
+    await updateTrack("track-123", { youtubeVerification: "no-match" });
+
+    expect(lastUpdateSql).toContain(
+      "youtube_provenance_failures = coalesce(youtube_provenance_failures, 0) + 1",
+    );
+    expect(lastUpdateSql).toContain("youtube_verified_at = case");
+  });
+
+  it("neither empty-handed report touches a row that already holds an id", async () => {
+    withExistingRow({ youtube_video_id: "alreadyHeld" });
+
+    await updateTrack("track-123", { youtubeVerification: "inconclusive" });
+
+    expect(lastUpdateSql).not.toContain("youtube_provenance_failures");
+  });
+
+  it("an unrecognised verdict on its own is a silent no-op, never a `no_fields` 400", async () => {
+    // The box's whole payload is these fields, so a declined ask has to read as success or a stale
+    // build would see a failed write and call the sweep broken.
+    await expect(
+      updateTrack("track-123", { youtubeVerification: "sounds-about-right" as never }),
+    ).resolves.toBeDefined();
+  });
+});
+
 describe("updateTrack — the RE-VERDICT", () => {
   it("re-rules a refused id under the current heuristic and re-stamps it", async () => {
     // The live case: a row holding `RFObrLVHMvg` (uploaded by "Fokuz Recordings", its label) was

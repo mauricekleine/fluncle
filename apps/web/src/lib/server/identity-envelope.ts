@@ -228,6 +228,7 @@ const IDENTITY_SELECT = `t.track_id, t.title, t.artists_json, t.duration_ms,
     t.deezer_track_id, t.deezer_verified_at, t.deezer_verified_by,
     t.backfill_deezer_attempted_at, t.backfill_deezer_attempts,
     t.youtube_video_id, t.youtube_video_official, t.youtube_verified_at,
+    t.youtube_verified_by,
     t.dismissed_at, t.duplicate_of_track_id,
     f.log_id as log_id, (f.track_id is not null) as has_finding`;
 
@@ -270,6 +271,7 @@ type IdentityRow = {
   title: string;
   track_id: string;
   youtube_verified_at: null | string;
+  youtube_verified_by: null | string;
   youtube_video_id: null | string;
   youtube_video_official: null | number;
 };
@@ -548,6 +550,16 @@ function deezerState(row: IdentityRow): IdentityState {
 }
 
 /**
+ * How a held YouTube id came to be trusted, read off the stored column and NARROWED rather than
+ * cast. The column is written by one server path, but a value it does not recognise must degrade to
+ * the honest legacy answer instead of reaching `methodFragment` as a method that does not exist —
+ * the receipt would then print nothing at all and the reader would be told less, not more.
+ */
+function youtubeMethod(storedBy: null | string): IdentityMethod {
+  return storedBy === "search" ? "search" : "fingerprint";
+}
+
+/**
  * THE YOUTUBE ANSWER, off the capture provenance Fluncle keeps for a recording
  * (`tracks.youtube_video_id` + `youtube_video_official`).
  *
@@ -567,9 +579,16 @@ function deezerState(row: IdentityRow): IdentityState {
  * honest rather than evasive — no look was made on the reader's behalf either way, and the archive
  * declining to point somewhere is not a fact about the recording.
  *
- * A shown link is `verified` with `method: "fingerprint"` HARDCODED rather than stored: this is the
- * only path that writes the column and the audio match is the only gate it has, so a
- * `youtube_verified_by` column would be one value repeated forever (the Beatport precedent above).
+ * A shown link's METHOD IS STORED (`youtube_verified_by`), on the Deezer precedent, because there is
+ * now more than one way to earn one. A fingerprint match — the capture gate, the findings backfill,
+ * the catalogue ladder's segment rung — is `fingerprint`, the only method in the envelope whose
+ * evidence is the sound. An `<Artist> - Topic` art track accepted on artist, title and length alone
+ * is `search`, the same claim class the Spotify anchor makes, and it renders as the weaker sentence
+ * it is: nothing was listened to, and the receipt says so. NULL is the shape of a row written before
+ * the column existed, when the fingerprint was the only path that could write an id at all — so the
+ * fallback is `fingerprint` rather than `unknown-legacy`, and every historic receipt reads exactly
+ * as it did.
+ *
  * `atMeaning: "verified"`, because the stamp beside it is the moment the check ran and the link was
  * written, not the moment a search concluded.
  *
@@ -581,7 +600,7 @@ function youtubeState(row: IdentityRow): IdentityState {
   // The verdict is the permission. `Number(...)` rather than a truthiness test: 0 and null are
   // different facts internally, and both must fall through to the same silence here.
   if (id && Number(row.youtube_video_official) === 1) {
-    return verified("fingerprint", row.youtube_verified_at, "verified", {
+    return verified(youtubeMethod(row.youtube_verified_by), row.youtube_verified_at, "verified", {
       url: `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,
       value: id,
     });

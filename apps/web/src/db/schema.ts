@@ -821,7 +821,29 @@ export const tracks = sqliteTable(
     // NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule the Deezer block above
     // records: a `.default()` on a `tracks` column makes drizzle regenerate the whole table and
     // drop+recreate all ~125 indexes, a production stall. NOT INDEXED: nothing queries by them.
+    //
+    // `youtube_provenance_failures` counts the times the provenance ladder RAN and settled nothing —
+    // an exhausted row (every rung concluded, nothing vouchable) and an inconclusive one (the CDN
+    // refused every section it tried). It exists for one reason: a row that can never be concluded
+    // is otherwise handed back by the worklist every single tick, forever, starving everything
+    // queued behind it. That is the Deezer starvation loop of 2026-08-01 in a new place, and the
+    // streak is the same answer — the worklist retires a row at the cap
+    // (`YOUTUBE_PROVENANCE_MAX_FAILURES`, track-work.ts), and the identity envelope never reads this
+    // column, so a retired row's receipt honestly stays "Not checked yet" rather than acquiring a
+    // verdict it never earned.
+    //
+    // `youtube_verified_by` is HOW the held id came to be trusted, on the `deezer_verified_by`
+    // precedent, and it exists because there is now more than one way. A fingerprint match (the
+    // capture gate, the findings backfill, the catalogue ladder's segment rung) is `fingerprint`; an
+    // `<Artist> - Topic` art track accepted on artist + title + length alone is `search` — a real
+    // claim, and a weaker one, so it must not be able to render as the other. NULL means the row
+    // predates the column, which is `fingerprint` by construction (it was the only path that wrote
+    // an id), so no backfill is needed and no existing receipt changes.
+    //
+    // All three NULLABLE with NO `.default()`, on the `spotify_anchor_attempts` rule above.
+    youtubeProvenanceFailures: integer("youtube_provenance_failures"),
     youtubeVerifiedAt: text("youtube_verified_at"),
+    youtubeVerifiedBy: text("youtube_verified_by"),
     youtubeVideoId: text("youtube_video_id"),
     youtubeVideoOfficial: integer("youtube_video_official"),
   },

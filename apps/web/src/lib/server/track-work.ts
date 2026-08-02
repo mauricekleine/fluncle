@@ -114,6 +114,25 @@ export type TrackWorkKind =
 export const YOUTUBE_PROVENANCE_REASK_AFTER_DAYS = 90;
 
 /**
+ * THE PROVENANCE CAN'T-CONCLUDE CAP. How many runs that SETTLED NOTHING a row may accumulate before
+ * the backfill stops offering it at all.
+ *
+ * The window above paces a row that concluded honestly; this retires the one that never concludes.
+ * Both empty-handed reports move the streak — `no-match` (every rung ran and nothing on YouTube is
+ * vouchable) and `inconclusive` (the CDN refused every section the ladder tried, so there was no
+ * answer to have) — and the second is the one that would otherwise loop: it writes no stamp by
+ * design, so without a cap the same refused row returns on the very next tick, forever, starving
+ * everything behind it.
+ *
+ * FIVE rather than the anchor's three. A `no-match` run costs a quarter each time, so five spans
+ * more than a year of genuine re-asking; and an `inconclusive` run is a CDN mood rather than a fact
+ * about the recording, which deserves more than three chances to pass. A retired row is not a ruled
+ * row: nothing is written to its receipt, the identity envelope never reads this column, and a
+ * later full capture still fills the id for free.
+ */
+export const YOUTUBE_PROVENANCE_MAX_FAILURES = 5;
+
+/**
  * THE ANCHOR RE-ASK BACKOFF (docs/catalogue-crawler.md § the anchor). How long a catalogue row
  * that was ATTEMPTED and missed sits out before the anchor worklist offers it again. "Not on
  * Spotify today" is NOT "never on Spotify" — a small-label recording lands on Spotify weeks after
@@ -505,6 +524,14 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //     buys nothing (same guard, same reason, as `analyze`/`embed`).
     //   · the RE-ASK WINDOW — never asked, or asked longer ago than the window. The sweep's
     //     `no-match` report stamps `youtube_verified_at` precisely so this clause can drain.
+    //   · the CAN'T-CONCLUDE CAP — under `YOUTUBE_PROVENANCE_MAX_FAILURES` settled-nothing runs.
+    //     The window paces a row that concluded honestly and does nothing at all for one that can
+    //     never conclude: a row whose every candidate the CDN refuses reports `inconclusive`, moves
+    //     no stamp, and is handed straight back on the next tick — forever, starving everything
+    //     queued behind it. That is the Deezer starvation loop of 2026-08-01 in a new place, and the
+    //     answer is the same: the streak counts runs that settled nothing and this clause retires
+    //     the row at the cap. Nothing is written to the row's receipt on the way out — the identity
+    //     envelope never reads this column, so a retired row honestly reads `Not checked yet`.
     //
     // NO COVERING INDEX, deliberately for now: the shape is the same class as the `capture` and
     // `analyze` predicates beside it (a `tracks` scan with a residual filter), and this queue is
@@ -519,6 +546,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       sql: `t.source_audio_key is not null
             and t.youtube_video_id is null
             and coalesce(t.capture_status, '') <> 'wrong-audio'
+            and coalesce(t.youtube_provenance_failures, 0) < ${YOUTUBE_PROVENANCE_MAX_FAILURES}
             and (t.youtube_verified_at is null or t.youtube_verified_at < ?)`,
     };
   }

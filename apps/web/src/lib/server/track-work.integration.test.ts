@@ -954,6 +954,46 @@ describe("listTrackWork — the youtube-provenance backfill", () => {
     expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
   });
 
+  it("RETIRES A ROW AT THE CAN'T-CONCLUDE CAP — it is never re-served forever", async () => {
+    const { listTrackWork, YOUTUBE_PROVENANCE_MAX_FAILURES } = await import("./track-work");
+
+    // The window paces a row that concluded honestly and does nothing at all for one that can never
+    // conclude: an `inconclusive` report writes no stamp by design, so without this clause the same
+    // CDN-refused row returns on the very next tick, forever, starving everything queued behind it.
+    // That is the Deezer starvation loop of 2026-08-01 in a new place.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await db.execute({
+      args: [YOUTUBE_PROVENANCE_MAX_FAILURES - 1, "aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set youtube_provenance_failures = ? where track_id = ?`,
+    });
+
+    // One under the cap is still offered — the cap is a ceiling, not a hair trigger.
+    expect(
+      (await listTrackWork({ kind: "youtube-provenance" })).map((item) => item.trackId),
+    ).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
+
+    await db.execute({
+      args: [YOUTUBE_PROVENANCE_MAX_FAILURES, "aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set youtube_provenance_failures = ? where track_id = ?`,
+    });
+
+    expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
+  });
+
+  it("a NULL streak counts as zero, so nothing that never failed is retired by accident", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The column carries no `.default()` (a default on a `tracks` column rebuilds all ~125 indexes),
+    // so every historic row arrives NULL and must read as "has failed nothing".
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+
+    expect(
+      (await listTrackWork({ kind: "youtube-provenance" })).map((item) => item.trackId),
+    ).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
+  });
+
   it("HOLDS A RE-ASKED ROW OUT until the window is past — the ladder is not re-bought every tick", async () => {
     const { listTrackWork } = await import("./track-work");
 

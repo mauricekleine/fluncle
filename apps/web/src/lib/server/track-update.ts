@@ -15,6 +15,7 @@ import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
 import { purgeTrackEntityPages } from "./entity-cache-purge";
 import { type AdminRole } from "./env";
+import { type IdentityMethod } from "./identity-envelope";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 import { checkYoutubeOfficial } from "./youtube-official";
@@ -225,16 +226,36 @@ export type TrackUpdate = {
    * against a row whose audio was captured before the id was kept, then throws the candidate bytes
    * away. So it has capture's PROOF without any capture WRITE, and this field is how it says so:
    *
-   *   · `preview-match` — the fingerprint gate accepted an upload. Sent WITH `youtubeVideoId`, and
-   *     it is the alternative to `captureVerification: "preview-match"` for authorizing that id.
-   *   · `no-match` — the ladder concluded and found nothing. Sent with NO id; it stamps only
+   *   · `preview-match` — the fingerprint gate accepted an upload against the track's ISRC-resolved
+   *     official preview. Sent WITH `youtubeVideoId`, and it is the alternative to
+   *     `captureVerification: "preview-match"` for authorizing that id.
+   *   · `archive-match` — the same fingerprint proof from the CATALOGUE ladder's segment rung, where
+   *     the reference was the row's own archived master rather than a 30s preview. A separate value
+   *     because the field names what was compared, and calling an archive comparison a preview one
+   *     would be a small lie for no gain; it carries the identical claim (`method: "fingerprint"`).
+   *   · `metadata-match` — the catalogue ladder's Topic rung. The upload was matched on ARTIST,
+   *     TITLE and LENGTH and on nothing else, and it sat on an `<Artist> - Topic` art-track channel,
+   *     which is YouTube minting the rights-holder's own delivered master. NO AUDIO WAS COMPARED, so
+   *     it is stored as `method: "search"` — the Spotify anchor's claim class, which the /identity
+   *     page renders as "matched by artist, title, and length". It must never render as a
+   *     fingerprint, and the column below is what keeps the two apart.
+   *   · `no-match` — the ladder concluded and found nothing. Sent with NO id; it stamps
    *     `youtube_verified_at`, which is what keeps the row out of the worklist's re-ask window
-   *     instead of re-buying the same download every tick.
+   *     instead of re-buying the same download every tick, and moves the can't-conclude streak.
+   *   · `inconclusive` — the ladder RAN and could not conclude (the CDN refused every section it
+   *     tried). Sent with NO id. It earns no stamp and no receipt — it was not an answer — but it
+   *     moves the streak, because a row that can never be concluded would otherwise be re-served
+   *     every tick forever and starve everything behind it.
    *
    * Deliberately SEPARATE from `captureVerification`: that field is the stored audio's provenance
    * and moves capture columns, and this sweep must never move one.
    */
-  youtubeVerification?: "no-match" | "preview-match";
+  youtubeVerification?:
+    | "archive-match"
+    | "inconclusive"
+    | "metadata-match"
+    | "no-match"
+    | "preview-match";
   /**
    * THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id) — the id of the upload a
    * fingerprint gate verified for this recording. Internal capture side-channel like
@@ -737,9 +758,24 @@ export async function updateTrack(
   //
   // A BARE ID IS STILL REFUSED under both. The distinguishing fact is not who sent it — the server
   // has no way to know that — but whether the payload CARRIES a fingerprint verdict at all.
-  const provenanceProven =
-    update.captureVerification === "preview-match" ||
-    update.youtubeVerification === "preview-match";
+  // …AND EACH PROOF NAMES ITS OWN METHOD, which is the whole reason this is a map and not a
+  // boolean. `youtube_verified_by` is served straight to the reader as the receipt's method
+  // fragment, so the value chosen here IS the sentence the /identity page prints. A fingerprint
+  // proof says "matched by audio fingerprint"; the Topic rung's metadata proof says "matched by
+  // artist, title, and length" and must not be able to borrow the other. An UNKNOWN verdict maps to
+  // nothing and so proves nothing — fail closed, exactly as a bare id does.
+  const YOUTUBE_PROOF_METHODS: Record<string, IdentityMethod> = {
+    "archive-match": "fingerprint",
+    "metadata-match": "search",
+    "preview-match": "fingerprint",
+  };
+
+  const provenanceMethod: IdentityMethod | undefined =
+    update.captureVerification === "preview-match"
+      ? "fingerprint"
+      : typeof update.youtubeVerification === "string"
+        ? YOUTUBE_PROOF_METHODS[update.youtubeVerification]
+        : undefined;
 
   // Whether this body ASKED something of the YouTube trio. A declined ask — an id the row already
   // holds, a re-verdict on a row already ruled official, a bare id with no proof — must be a silent
@@ -751,7 +787,13 @@ export async function updateTrack(
     update.youtubeVerification !== undefined ||
     update.youtubeReverdict !== undefined;
 
-  if (update.youtubeVideoId !== undefined && provenanceProven && !existing.youtube_video_id) {
+  // `provenanceMethod !== undefined` IS the proof test — an unmapped verdict yields no method, and
+  // narrowing on it here is what keeps `undefined` out of the bound args below.
+  if (
+    update.youtubeVideoId !== undefined &&
+    provenanceMethod !== undefined &&
+    !existing.youtube_video_id
+  ) {
     // Skipped entirely when the row already holds an id — no oEmbed request is spent on an answer
     // the write would discard.
     const official = await checkYoutubeOfficial(update.youtubeVideoId, recordingNames(existing));
@@ -760,8 +802,12 @@ export async function updateTrack(
       "youtube_video_id = coalesce(youtube_video_id, ?)",
       "youtube_video_official = case when youtube_video_id is null then ? else youtube_video_official end",
       "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+      // THE METHOD RIDES THE SAME ALL-OR-NOTHING CASE as the verdict and the stamp, for the same
+      // reason: a method that could attach itself to an EARLIER write's id would print the wrong
+      // sentence under the right link, which is the one failure this receipt exists to prevent.
+      "youtube_verified_by = case when youtube_video_id is null then ? else youtube_verified_by end",
     );
-    args.push(update.youtubeVideoId, official, new Date().toISOString());
+    args.push(update.youtubeVideoId, official, new Date().toISOString(), provenanceMethod);
   }
 
   // THE PROVENANCE SWEEP'S EMPTY-HANDED REPORT. The ladder ran, cost real proxy bandwidth, and
@@ -773,11 +819,27 @@ export async function updateTrack(
   // question was last answered for this recording", answered NO. The id stays NULL, so a later
   // capture or a later backfill still fills it — the stamp is a schedule, never a verdict. Guarded
   // on the pre-update id anyway, so it can never disturb a row that already holds one.
-  if (
-    update.youtubeVerification === "no-match" &&
+  //
+  // AND IT MOVES THE STREAK. The stamp alone paces a row that concluded honestly; it does nothing
+  // for one that can NEVER conclude, and the worklist would go on offering that row every window
+  // forever. `youtube_provenance_failures` is what retires it: the envelope never reads the column,
+  // so a retired row's receipt honestly stays "Not checked yet" rather than acquiring a verdict it
+  // did not earn (the Deezer starvation fix of 2026-08-01, in a new place).
+  //
+  // `inconclusive` is the same streak WITHOUT the stamp. The catalogue ladder ran and the CDN
+  // refused every section it tried; that is not an answer, so burning the 90-day window on it would
+  // cost the row months for a reason that had nothing to do with the row. The streak still moves,
+  // because a row that is refused forever must still stop being asked forever.
+  const youtubeSettledNothing =
+    (update.youtubeVerification === "no-match" || update.youtubeVerification === "inconclusive") &&
     update.youtubeVideoId === undefined &&
-    !existing.youtube_video_id
-  ) {
+    !existing.youtube_video_id;
+
+  if (youtubeSettledNothing) {
+    sets.push("youtube_provenance_failures = coalesce(youtube_provenance_failures, 0) + 1");
+  }
+
+  if (youtubeSettledNothing && update.youtubeVerification === "no-match") {
     sets.push(
       "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
     );

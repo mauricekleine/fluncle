@@ -107,12 +107,25 @@
 //   - EVERY challenge is metered and logged, not just the one that triggers the re-roll, and
 //     the tick's totals ride out in the JSON summary. See THE BOT-CHALLENGE METER below for
 //     that and for the strain contract these lines owe /status.
+//   - EVERY SEARCH IS FLAT (2026-08-01). `--flat-playlist` returns the search page's own entries
+//     rather than resolving all five, which carries the entire field set the ranker reads at one
+//     seventh of the bytes. See FLAT SEARCH EXTRACTION below for the one loss and why the duration
+//     guard absorbs it.
+//
+// TWO PROVENANCE BACKFILLS RIDE THIS TICK, and they answer the same question at very different
+// prices because the two halves of the archive are worth very different amounts of bandwidth:
+//   - THE FINDINGS TIER runs capture's full ladder over a certified row and throws the audio away
+//     (THE PROVENANCE PHASE below). Small set, already mostly done, and the right trade.
+//   - THE CATALOGUE TIER runs a THREE-RUNG CHEAP LADDER — metadata-Topic acceptance, then a 30s
+//     segment fingerprinted against the row's own archived master, then the residual search
+//     variants — and never buys a whole song (THE CATALOGUE PROVENANCE LADDER below). At 30,672
+//     rows the full ladder would be ~200GB of metered proxy; this is a fraction of it.
 //
 // stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // THE FINGERPRINT VERIFICATION GATE (docs/the-ear.md § Wrong audio) — the shared, pure matcher
@@ -120,12 +133,15 @@ import { join } from "node:path";
 import {
   appendRejectedSource,
   fetchPreviewFingerprint,
+  fold,
   fpcalcFingerprint,
+  normalizeArtists,
   parseRejectedSources,
   type RejectedSource,
   rejectedShas,
   rejectedVideoIds,
   slidingWindowMatch,
+  splitTitle,
 } from "./fingerprint-match";
 
 // ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
@@ -150,6 +166,29 @@ const R2_BUCKET = process.env.FLUNCLE_SOURCE_AUDIO_R2_BUCKET ?? "fluncle-source-
 // yt-dlp / ffprobe from PATH (both are a box deploy prereq — see cron/README.md).
 const YT_DLP_BIN = process.env.YT_DLP_BIN ?? "yt-dlp";
 const FFPROBE_BIN = process.env.FFPROBE_BIN ?? "ffprobe";
+
+// ── FLAT SEARCH EXTRACTION (measured 2026-08-01, n=40) ───────────────────────
+//
+// A search used to RESOLVE every result it listed — five full extractor round-trips to answer a
+// question the listing itself already answers. `--flat-playlist` returns the search page's own
+// entries instead: id, title, channel, channel_id, channel_is_verified, duration — the ENTIRE field
+// set `rankCandidates` reads, at 139KB against 968KB for the resolved shape. One seventh of the
+// bytes, on every capture and every provenance search there will ever be.
+//
+// THE ONE LOSS, and why the guard absorbs it: a flat entry's `duration` is the CEIL of the rendered
+// length (+1s on ~47% of ids measured). The duration guard is `max(3s, 3% of the target)` — three
+// whole seconds at its very tightest — so a one-second ceil cannot move a candidate across it. The
+// stricter METADATA_TOLERANCE_SEC below is ±3s for the same reason, and the belt-and-suspenders
+// `probeDurationSec` re-check after a download reads the REAL file, never a listed number: no ceiled
+// value ever reaches a stored column or a verdict.
+//
+// FULL RESOLUTION STILL HAPPENS for the ONE candidate that wins — `runYtDownload` fetches
+// `watch?v=<id>` per id, exactly as it always did. Flat extraction changes what a SEARCH costs, and
+// nothing about what a download does.
+//
+// The knob is the operator's revert without a re-bake: `FLUNCLE_CAPTURE_FLAT_SEARCH=0` restores the
+// historic resolving search byte-for-byte.
+const FLAT_SEARCH = (process.env.FLUNCLE_CAPTURE_FLAT_SEARCH ?? "1") !== "0";
 
 // How many queue rows to read, and how many to actually process per tick. The queue is
 // newest-first, so a fresh add is always in the first page and jumps the backfill.
@@ -218,6 +257,31 @@ const PROVENANCE_LIMIT = Number(process.env.FLUNCLE_CAPTURE_PROVENANCE_LIMIT ?? 
 const PROVENANCE_CATALOGUE_LIMIT = Number(
   process.env.FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT ?? "0",
 );
+
+// ── THE CATALOGUE TIER'S THREE KNOBS (see THE CATALOGUE PROVENANCE LADDER below) ─────
+//
+// `PROVENANCE_CATALOGUE_LIMIT` above remains THE knob and the whole brake: it is the number of
+// SEGMENT DOWNLOADS a tick may buy for the catalogue, and it is still 0 by default, so the ladder is
+// dark until the operator opens it. The three below only shape how that budget is spent.
+//
+// SEARCHES ARE NOT THE BUDGET. A flat search is ~139KB — a rounding error against a segment's ~1.5MB
+// and a full download's ~6.5MB — and rung 1 concludes on a search alone, so metering searches at the
+// download's rate would throw away the cheap tier's entire point. The walk therefore reads
+// `limit × FACTOR` rows and spends the strict `limit` on downloads: a tick can serve many rows for
+// free and still buy no more bandwidth than the operator authorised.
+const PROVENANCE_SEARCH_FACTOR = Number(
+  process.env.FLUNCLE_CAPTURE_PROVENANCE_SEARCH_FACTOR ?? "5",
+);
+// How many non-Topic candidates one row may spend a segment on before the row gives up. Two: the
+// ranked list's top hits are the plausible ones, and a third is money spent on a shape the first two
+// already argued against.
+const PROVENANCE_SEGMENT_ATTEMPTS = Number(
+  process.env.FLUNCLE_CAPTURE_PROVENANCE_SEGMENT_ATTEMPTS ?? "2",
+);
+// The section yt-dlp pulls for a segment fingerprint. 0:30–1:00 is inside the intro on essentially
+// every DnB arrangement and is long enough to clear `MIN_OVERLAP_FRAMES` by an order of magnitude.
+// yt-dlp cuts on keyframes, so the delivered clip is ~40s and ~1.5MB on the wire.
+const PROVENANCE_SEGMENT_RANGE = process.env.FLUNCLE_CAPTURE_SEGMENT_RANGE ?? "*00:30-01:00";
 
 // How many rows the RE-VERDICT phase re-rules per tick. Higher than the provenance budget because
 // it costs nothing comparable: no download, no proxy, no bytes — the server answers each one with a
@@ -490,6 +554,197 @@ const TOPIC_CHANNEL_MARKER = /-\s*topic\s*$/i;
 /** Whether a YouTube channel name is an auto-generated `<Artist> - Topic` art-track channel. */
 export function isTopicChannel(channel: string | undefined): boolean {
   return channel ? TOPIC_CHANNEL_MARKER.test(channel.trim()) : false;
+}
+
+// ── THE METADATA GATE (the catalogue ladder's rungs 1 and 2) ─────────────────────────────────
+//
+// A candidate that clears this gate has been matched on ARTIST, TITLE and LENGTH and on nothing
+// else. That is a real claim and a weaker one than the fingerprint's, which is why the two rungs
+// below treat it so differently: on a Topic channel it is enough to serve (rung 1), and on anybody
+// else it is only enough to justify buying 30 seconds of audio (rung 2).
+
+/**
+ * The metadata tier's duration tolerance, in whole seconds, and DELIBERATELY not the capture guard.
+ *
+ * The capture guard is `max(3s, 3%)` — nine seconds on a five-minute track — because it is a
+ * pre-filter in front of a fingerprint that will decide identity properly. Nothing decides identity
+ * properly after this one, so it is a flat ±3s: tight enough that a different arrangement of the
+ * same song fails it, wide enough to absorb the flat listing's +1s ceil on top of the ±1s rounding
+ * a whole-second MusicBrainz length carries (~70% of catalogue durations are whole seconds). ±2s
+ * would leave nothing for the second of those, which is why it is 3 and not 2.
+ */
+export const METADATA_TOLERANCE_SEC = Number(
+  process.env.FLUNCLE_CAPTURE_METADATA_TOLERANCE_SEC ?? "3",
+);
+
+/** Whether a candidate's listed length agrees with the row's, on the flat ±3s metadata tolerance. */
+export function metadataDurationAgrees(
+  candidateSec: number,
+  targetMs: number | undefined,
+): boolean {
+  if (!Number.isFinite(candidateSec) || candidateSec <= 0 || !targetMs || targetMs <= 0) {
+    return false;
+  }
+
+  return Math.abs(candidateSec - targetMs / 1000) <= METADATA_TOLERANCE_SEC;
+}
+
+/** `"Netsky - Topic"` → `"Netsky"`. The channel's artist credit, with the marker taken off. */
+export function topicChannelArtist(channel: string | undefined): string {
+  return (channel ?? "").trim().replace(TOPIC_CHANNEL_MARKER, "").trim();
+}
+
+/**
+ * Whether every name in `claimed` is one the row is credited to — a SUBSET test, not equality.
+ *
+ * Subset because the two sides are credited at different granularities and both directions of that
+ * are normal: a track credited "Netsky & Metrik" lives on the `Netsky - Topic` channel (one name of
+ * two), and "Chase & Status" splits into two names on both sides at once (the house fold's
+ * `normalizeArtists` breaks on `&`). What subset REFUSES is the case that matters — a name the row
+ * is not credited to at all, which is how a same-title different-artist upload gets in.
+ */
+function creditedBy(claimed: ReadonlySet<string>, credited: ReadonlySet<string>): boolean {
+  return claimed.size > 0 && [...claimed].every((name) => credited.has(name));
+}
+
+/** Which side of a candidate carried the artist agreement, or `null` when neither did. */
+export type MetadataSignal = "channel" | "title";
+
+// The `Artist - Title` separator YouTube uploads are named with. Spaced on both sides so a hyphen
+// inside a word ("Nu-Tone", "NC-17") is never mistaken for the split.
+const TITLE_ARTIST_SEPARATOR = /\s[-–—]\s/;
+
+/**
+ * THE HOUSE FOLD, applied to one candidate against one row. Returns which side proved the artist, or
+ * `null` when the candidate is not this recording under any of the accepted forms.
+ *
+ * The TITLE is compared through `splitTitle` on both sides, so the base and the VERSION DESCRIPTOR
+ * are compared separately: a trailing version parenthetical is taken off both titles before the
+ * bases meet, a neutral one ("Original Mix") folds away entirely, and a real one ("Calibre Remix")
+ * must appear on BOTH sides or the candidate is a different recording. That is the same identity
+ * rule `matchKey` uses everywhere else in the house, and it is what keeps a remix off an original.
+ *
+ * The ARTIST is proved one of two ways, which are the accepted upload shapes:
+ *   · `channel` — the bare song title on an `<Artist> - Topic` channel, where the CHANNEL carries
+ *     the credit. This is the art-track shape and the one rung 1 exists for.
+ *   · `title`   — `Artist - Title` in the title itself, the shape every other upload uses. Every
+ *     split point is tried, so `A - B - C` is offered as both `A | B - C` and `A - B | C`.
+ */
+export function metadataIdentityMatch(
+  candidate: YtCandidate,
+  row: { artists?: readonly string[]; title?: string },
+): MetadataSignal | null {
+  const want = splitTitle(row.title ?? "");
+  const credited = normalizeArtists([...(row.artists ?? [])]);
+
+  if (!want.base || credited.size === 0) {
+    return null;
+  }
+
+  const titleAgrees = (value: string) => {
+    const got = splitTitle(value);
+
+    return got.base === want.base && got.descriptor === want.descriptor;
+  };
+
+  // FORM A — the art track: the channel is the artist, the title is the bare song.
+  if (
+    isTopicChannel(candidate.channel) &&
+    titleAgrees(candidate.title) &&
+    creditedBy(normalizeArtists(topicChannelArtist(candidate.channel)), credited)
+  ) {
+    return "channel";
+  }
+
+  // FORM B — the artist rides the title. Walk every separator, not just the first: a title can
+  // carry the version after a second dash, and the base/descriptor comparison sorts that out.
+  const parts = candidate.title.split(TITLE_ARTIST_SEPARATOR);
+
+  for (let cut = 1; cut < parts.length; cut += 1) {
+    const left = parts.slice(0, cut).join(" - ");
+    const right = parts.slice(cut).join(" - ");
+
+    if (titleAgrees(right) && creditedBy(normalizeArtists(left), credited)) {
+      return "title";
+    }
+  }
+
+  return null;
+}
+
+/** A candidate that cleared the metadata gate, with the delta the ambiguity rule breaks ties on. */
+type MetadataHit = { candidate: YtCandidate; delta: number; signal: MetadataSignal };
+
+function metadataHits(
+  candidates: readonly YtCandidate[],
+  row: { artists?: readonly string[]; durationMs?: number; title?: string },
+): MetadataHit[] {
+  const targetSec = (row.durationMs ?? 0) / 1000;
+  const hits: MetadataHit[] = [];
+
+  for (const candidate of candidates) {
+    if (!metadataDurationAgrees(candidate.durationSec, row.durationMs)) {
+      continue;
+    }
+
+    const signal = metadataIdentityMatch(candidate, row);
+
+    if (signal) {
+      hits.push({ candidate, delta: Math.abs(candidate.durationSec - targetSec), signal });
+    }
+  }
+
+  return hits.sort((a, b) => a.delta - b.delta);
+}
+
+/**
+ * RUNG 1's pick: the `<Artist> - Topic` art track this row IS, or null.
+ *
+ * THE AMBIGUITY RULE. More than one Topic candidate can clear the gate — a split credit puts the
+ * same delivered master on each credited artist's channel, and every tie the 2026-08-01 spike saw
+ * was that. So the preference is the channel that folds to the row's PRIMARY artist, and a residual
+ * tie takes the closest length: the candidates are the same recording, and picking between two of
+ * the same recording is not a decision that can be got wrong.
+ */
+export function pickTopicCandidate(
+  candidates: readonly YtCandidate[],
+  row: { artists?: readonly string[]; durationMs?: number; title?: string },
+): YtCandidate | null {
+  const hits = metadataHits(candidates, row).filter(({ candidate }) =>
+    isTopicChannel(candidate.channel),
+  );
+
+  if (hits.length === 0) {
+    return null;
+  }
+
+  const primary = fold(row.artists?.[0] ?? "");
+  const preferred = primary
+    ? hits.find(({ candidate }) => fold(topicChannelArtist(candidate.channel)) === primary)
+    : undefined;
+
+  return (preferred ?? hits[0])?.candidate ?? null;
+}
+
+/**
+ * RUNG 2's candidates: the NON-Topic uploads that cleared the same gate, closest length first and
+ * capped at the row's attempt budget.
+ *
+ * They are deliberately NOT served on metadata. A fan re-up, a mix rip and a bootleg all name
+ * themselves `Artist - Title` and all run the right length; there is no channel authority among them
+ * to lean on, so the only thing that can settle it is the sound. Ids the bad-audio memory already
+ * proved wrong are dropped here, before they cost a single byte.
+ */
+export function pickSegmentCandidates(
+  candidates: readonly YtCandidate[],
+  row: { artists?: readonly string[]; durationMs?: number; title?: string },
+  rejectedIds: ReadonlySet<string>,
+  attempts: number,
+): YtCandidate[] {
+  return metadataHits(candidates, row)
+    .filter(({ candidate }) => !isTopicChannel(candidate.channel) && !rejectedIds.has(candidate.id))
+    .slice(0, Math.max(0, attempts))
+    .map(({ candidate }) => candidate);
 }
 
 /**
@@ -948,6 +1203,40 @@ async function r2Put(key: string, body: Uint8Array, contentType: string): Promis
   }
 }
 
+/**
+ * Read one object back out of the private source-audio bucket.
+ *
+ * THE ARCHIVE IS THE REFERENCE for the catalogue ladder's rung 2 (see THE CATALOGUE PROVENANCE
+ * LADDER below): the audio Fluncle already owns and already paid for, fingerprinted against a 30s
+ * slice of the candidate. It costs no vendor bandwidth — it is our own bucket — which is the whole
+ * reason the cheap tier can afford a fingerprint at all.
+ *
+ * `null` on a miss (a 404, or a key whose object has since gone) rather than a throw: a reference
+ * that cannot be fetched is an ABSTAIN, exactly like a missing preview on the capture path, and it
+ * must not turn into a failed tick.
+ */
+async function r2Get(key: string): Promise<null | Uint8Array> {
+  const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
+  const headers = await signS3Request({
+    accessKeyId: R2_ACCESS_KEY_ID,
+    method: "GET",
+    now: new Date(),
+    region: "auto",
+    secretAccessKey: R2_SECRET_ACCESS_KEY,
+    service: "s3",
+    url,
+  });
+  const res = await fetch(url, { headers, method: "GET" });
+
+  if (!res.ok) {
+    log(`R2 GET ${key} did not answer (${res.status}) — rung 2 has no reference for this row`);
+
+    return null;
+  }
+
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 // ── Admin API (direct HTTP — pin-independent, not the baked CLI) ──────────────
 
 /**
@@ -1038,6 +1327,9 @@ function runYtSearch(
       "--socket-timeout",
       "30",
       "--no-warnings",
+      // THE LISTING, not five resolutions of it (see FLAT SEARCH EXTRACTION above). The printed
+      // field set below is unchanged, because a flat entry already carries all six.
+      ...(FLAT_SEARCH ? ["--flat-playlist"] : []),
       // Tab-separated so title (which may itself contain tabs) stays LAST. Channel name +
       // id + verified flag drive the trust classification (channel-trust matching); yt-dlp
       // prints "NA" for an absent field.
@@ -1123,6 +1415,69 @@ function runYtDownload(
   }
   const ext = produced.slice(produced.indexOf(".") + 1);
   return { ext, path: join(dir, produced) };
+}
+
+/**
+ * Download ONE 30-second section of a video id — the catalogue ladder's probe, and the reason that
+ * ladder is affordable at 30,672 rows.
+ *
+ * `--download-sections` makes yt-dlp spawn ffmpeg, which does the fetching itself and over-reads the
+ * requested range by ~2.2× to land on keyframes. So the wire cost is ~1.5MB for a ~40s decodable
+ * clip against ~6.5MB for the whole song: a quarter of the bytes for everything a fingerprint needs.
+ * Measured 2026-08-01 on yt-dlp 2026.03.17.
+ *
+ * ~1 in 5 section fetches answer 403 — the same CDN IP-lock the full download hits, for the same
+ * reason (the media URL is pinned to the player-JSON's exit IP). It is classified through the SAME
+ * `classifyDownloadFailure`, so the caller answers it with the sticky session's re-roll exactly as
+ * the full path does, and a 403 that outlives the re-roll is a transient the next tick retries.
+ */
+function runYtSection(
+  proxyUrl: string,
+  videoId: string,
+  dir: string,
+  playerClientFallback: boolean,
+): { ext: string; path: string } {
+  const base = join(dir, "section");
+  const args = [
+    "--proxy",
+    proxyUrl,
+    "--socket-timeout",
+    "30",
+    "--no-warnings",
+    "--no-playlist",
+    "-f",
+    "bestaudio",
+    "--download-sections",
+    PROVENANCE_SEGMENT_RANGE,
+    "-o",
+    `${base}.%(ext)s`,
+  ];
+
+  if (playerClientFallback) {
+    args.push("--extractor-args", "youtube:player_client=tv,web_safari");
+  }
+
+  args.push(`https://www.youtube.com/watch?v=${videoId}`);
+
+  const result = spawnSync(YT_DLP_BIN, args, {
+    encoding: "utf8",
+    maxBuffer: 8 * 1024 * 1024,
+    timeout: YT_DOWNLOAD_TIMEOUT_MS,
+  });
+
+  if (result.status !== 0) {
+    const err = new Error(`yt-dlp section failed: ${(result.stderr || "").slice(0, 200)}`);
+    Object.assign(err, classifyDownloadFailure(result.stderr || ""));
+    throw err;
+  }
+
+  const produced = readdirSync(dir).find((entry) => entry.startsWith("section."));
+
+  if (!produced) {
+    throw new Error("yt-dlp produced no section file");
+  }
+
+  return { ext: produced.slice(produced.indexOf(".") + 1), path: join(dir, produced) };
 }
 
 /** ffprobe the file's real duration in seconds (belt-and-suspenders vs the search value). */
@@ -1672,6 +2027,304 @@ async function captureFinding(
   }
 }
 
+// ── THE CATALOGUE PROVENANCE LADDER (measured 2026-08-01, n=40) ─────────────
+//
+// WHAT IT IS FOR. The provenance phase below recovers a discarded video id by running capture's FULL
+// ladder again — a resolving search plus a whole-song download, ~7.5MB of billed residential proxy
+// per row. Across the 30,672-row catalogue backlog that is roughly 200GB, which is not a backfill,
+// it is a bill. This ladder answers the same question for the catalogue tier at a fraction of it, by
+// noticing that most rows do not need audio bought to be answered.
+//
+// THREE RUNGS, cheapest first, and each one only pays for what the one before it could not settle:
+//
+//   1. METADATA-TOPIC ACCEPTANCE — free beyond the flat search itself. A candidate on an
+//      `<Artist> - Topic` channel whose title clears the house fold and whose length agrees within
+//      ±3s is served on metadata alone. That is safe HERE and nowhere else: an art track is minted
+//      by YouTube from the rights-holder's own delivered master, so the channel is both the artist
+//      credit and the licence. The claim is stamped honestly as `metadata-match`, the server maps it
+//      to `method: "search"`, and the /identity page says "matched by artist, title, and length" —
+//      the Spotify anchor's exact claim class, never the fingerprint's.
+//
+//   2. SEGMENT FINGERPRINT — ~1.5MB. A NON-Topic candidate that clears the very same gate is NOT
+//      served on it: fan re-ups, mix rips and bootlegs all name themselves correctly and all run the
+//      right length, and there is no channel authority among them to break the tie. So 30 seconds of
+//      the candidate is bought and fingerprinted against the row's OWN ARCHIVED AUDIO, pulled back
+//      out of Fluncle's private R2 at no vendor cost. That is a strictly BETTER reference than the
+//      capture path's 30s preview — it is the full recording, and it is the recording Fluncle
+//      actually holds. Alignment needs no new machinery: `slidingWindowMatch` slides the SHORTER
+//      fingerprint across the LONGER one over every offset, so a clip taken from 0:30 of the
+//      candidate finds its place anywhere inside the archived master by construction.
+//
+//   3. THE RESIDUAL LADDER — the remaining search variants (music.youtube.com, then the normalized
+//      de-constrained query), flat, feeding whatever they return back through rungs 1 and 2. The
+//      spike ran only variant 0 and the music rung rescued 2 of its 11 misses, so the variants earn
+//      their place; they cost a search each and nothing more.
+//
+// NO FULL AUDIO DOWNLOAD HAPPENS ANYWHERE IN THIS TIER. The full-song downloader and the shared
+// full-fingerprint walk are both unreachable from here, and a test pins that by NAME over this
+// section's own source — the same spirit as the rail on the phase below, which never moves a capture
+// column. This ladder inherits that rail whole: it reads `source_audio_key` to FETCH the archive and
+// writes not one capture field.
+
+/** The per-rung tally the tick summary publishes, so an operator can read the ladder working. */
+export type ProvenanceLadderCounts = {
+  deferred: number;
+  exhausted: number;
+  residualRescued: number;
+  searched: number;
+  segmentMissed: number;
+  segmentVerified: number;
+  topicServed: number;
+};
+
+export function createLadderCounts(): ProvenanceLadderCounts {
+  return {
+    deferred: 0,
+    exhausted: 0,
+    residualRescued: 0,
+    searched: 0,
+    segmentMissed: 0,
+    segmentVerified: 0,
+    topicServed: 0,
+  };
+}
+
+/**
+ * Pull the row's archived master out of R2 and fingerprint it. `null` when the object is gone or
+ * fpcalc is absent — rung 2's honest abstain, which skips the rung rather than failing the row.
+ */
+async function loadArchiveFingerprint(key: string, dir: string): Promise<null | number[]> {
+  const bytes = await r2Get(key);
+
+  if (!bytes) {
+    return null;
+  }
+
+  const ext = (key.split(".").pop() ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const path = join(dir, `archive.${ext || "bin"}`);
+
+  writeFileSync(path, bytes);
+
+  const fingerprint = fpcalcFingerprint(path);
+
+  rmSync(path, { force: true });
+
+  return fingerprint;
+}
+
+/** Buy one candidate's 30s section, answering a challenge/403 the way the full download does. */
+function downloadSection(
+  session: ProxySession,
+  videoId: string,
+  dir: string,
+): { ext: string; path: string } {
+  try {
+    return runYtSection(session.url, videoId, dir, false);
+  } catch (error) {
+    const flags = error as DownloadErrorFlags;
+    // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll` — the same
+    // ordering trap `chooseDownloadRecovery` exists to settle on the capture path.
+    const recovery = chooseDownloadRecovery(flags, session.rerollable());
+
+    if (flags.isBotChallenge) {
+      session.reroll("download");
+    }
+
+    if (recovery === "reroll") {
+      return runYtSection(session.url, videoId, dir, false);
+    }
+
+    if (recovery === "player-client-fallback") {
+      return runYtSection(session.url, videoId, dir, true);
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Run the three rungs for ONE catalogue row.
+ *
+ * `budget.segments` is the tick's REMAINING segment allowance and is decremented in place, so the
+ * strict per-tick download cap holds across every row the walk touches. A row that reaches rung 2
+ * with the allowance already spent is DEFERRED — untouched, unstamped, and simply asked again next
+ * tick with a fresh allowance — which is the one outcome that must never be confused with an answer.
+ */
+async function proveCatalogueProvenance(
+  row: CaptureFinding,
+  meter: BotChallengeMeter,
+  budget: { segments: number },
+  counts: ProvenanceLadderCounts,
+): Promise<"deferred" | ProvenanceOutcome> {
+  const { trackId } = row;
+  const session = openProxySession(captureSessionSeed(trackId, 0), meter);
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-ladder-"));
+  // READ-ONLY, exactly as the phase below reads it: a candidate an earlier capture proved wrong must
+  // not cost bytes again. This run's own rejections join the set IN MEMORY for the rest of the walk
+  // and are never written back — that would be a capture column.
+  const rejectedIds = rejectedVideoIds(parseRejectedSources(row.sourceAudioRejected));
+  const archiveKey = row.sourceAudioKey ?? "";
+
+  const primaryQuery = buildSearchQuery(row, 0);
+  const fallbackQuery = normalizeSearchQuery(buildSearchQuery(row, 1));
+  const rungs: { query: string; source: "music" | "youtube" }[] = [
+    { query: primaryQuery, source: "youtube" },
+    { query: primaryQuery, source: "music" },
+    ...(fallbackQuery && fallbackQuery !== primaryQuery
+      ? [{ query: fallbackQuery, source: "music" as const }]
+      : []),
+  ].slice(0, Math.max(1, QUERY_VARIANTS));
+
+  // `undefined` = not looked for yet, `null` = looked for and unavailable. Fetched at most ONCE per
+  // row, and only when a rung-2 candidate actually exists to compare against.
+  let archiveFp: null | number[] | undefined;
+  let deferred = false;
+  // A recoverable skip DISPROVES NOTHING (the 047.0.8M lesson): a candidate the CDN 403'd could be
+  // the right answer, so a row that saw one concludes `inconclusive` rather than `no-match` and
+  // keeps its 90-day window unburned.
+  let transient: unknown;
+
+  try {
+    for (const [step, rung] of rungs.entries()) {
+      counts.searched += 1;
+
+      let candidates: YtCandidate[];
+
+      try {
+        candidates = runYtSearch(session.url, rung.query, rung.source);
+      } catch (error) {
+        if (!(error as { isBotChallenge?: boolean }).isBotChallenge || !session.reroll("search")) {
+          throw error;
+        }
+        candidates = runYtSearch(session.url, rung.query, rung.source);
+      }
+
+      // ── RUNG 1 ────────────────────────────────────────────────────────────────────────────────
+      const topic = pickTopicCandidate(candidates, row);
+
+      if (topic) {
+        await patchTrack(trackId, {
+          youtubeVerification: "metadata-match",
+          youtubeVideoId: topic.id,
+        });
+        counts.topicServed += 1;
+
+        if (step > 0) {
+          counts.residualRescued += 1;
+        }
+
+        return "found";
+      }
+
+      // ── RUNG 2 ────────────────────────────────────────────────────────────────────────────────
+      for (const candidate of pickSegmentCandidates(
+        candidates,
+        row,
+        rejectedIds,
+        PROVENANCE_SEGMENT_ATTEMPTS,
+      )) {
+        if (budget.segments <= 0) {
+          deferred = true;
+          break;
+        }
+
+        if (archiveFp === undefined) {
+          archiveFp = archiveKey ? await loadArchiveFingerprint(archiveKey, dir) : null;
+        }
+
+        if (archiveFp === null) {
+          // No reference exists for this row, so no amount of candidates can settle it. Rung 2 is
+          // over for the whole walk — leave the remaining rungs to look for a Topic upload.
+          break;
+        }
+
+        budget.segments -= 1;
+        rejectedIds.add(candidate.id);
+
+        let section: { ext: string; path: string };
+
+        try {
+          section = downloadSection(session, candidate.id, dir);
+        } catch (error) {
+          transient = error;
+          log(`section for ${candidate.id} unusable (DRM/bot-wall/403) — trying next`);
+          continue;
+        }
+
+        const sectionFp = fpcalcFingerprint(section.path);
+
+        rmSync(section.path, { force: true });
+
+        const result = sectionFp ? slidingWindowMatch(archiveFp, sectionFp) : null;
+
+        if (result?.match) {
+          await patchTrack(trackId, {
+            youtubeVerification: "archive-match",
+            youtubeVideoId: candidate.id,
+          });
+          counts.segmentVerified += 1;
+
+          if (step > 0) {
+            counts.residualRescued += 1;
+          }
+
+          return "found";
+        }
+
+        counts.segmentMissed += 1;
+      }
+
+      if (deferred) {
+        break;
+      }
+    }
+
+    if (deferred) {
+      counts.deferred += 1;
+
+      return "deferred";
+    }
+
+    if (transient) {
+      // THE STREAK, and nothing else. The ladder ran and could not conclude, so it earns no 90-day
+      // stamp and no receipt — but it must still move something, or a row the CDN refuses forever is
+      // handed back every tick and starves everything queued behind it (the 2026-08-01 Deezer
+      // lesson). The server bumps `youtube_provenance_failures` and retires the row at the cap.
+      await patchTrack(trackId, { youtubeVerification: "inconclusive" });
+
+      return "failed";
+    }
+
+    // EXHAUSTED — every rung concluded and nothing on YouTube is vouchable for this recording. The
+    // stamp is what puts the row inside the server's re-ask window instead of re-buying the same
+    // nothing next tick; the streak beside it is what retires a row that keeps coming back empty.
+    await patchTrack(trackId, { youtubeVerification: "no-match" });
+    counts.exhausted += 1;
+
+    return "none";
+  } catch (error) {
+    log(
+      `catalogue provenance failed for ${trackId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+
+    // THE SAME STREAK, for the same reason. A search that never returned is as unconcluded as a
+    // section the CDN refused, and it is the outcome most likely to REPEAT — a row whose query the
+    // proxy cannot get an answer for gets no stamp, comes straight back next tick, and holds the
+    // head of a 30,672-row queue forever. So the failure is reported rather than swallowed: no
+    // stamp, no receipt, one on the streak, and the worklist retires it at the cap. The report is
+    // itself best-effort, because the thing that just failed may be the API.
+    await patchTrack(trackId, { youtubeVerification: "inconclusive" }).catch(
+      (patchError: unknown) => {
+        log(`failed to record an inconclusive run for ${trackId}: ${String(patchError)}`);
+      },
+    );
+
+    return "failed";
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+}
+
 // ── THE PROVENANCE PHASE (operator ruling 2026-07-31) ───────────────────────
 //
 // WHAT IT IS FOR. The capture write above keeps the winning video id — but only from the moment it
@@ -1791,35 +2444,29 @@ export function splitProvenanceBudget(
   return { catalogue: Math.min(Math.max(0, Math.trunc(catalogueCap) || 0), findings), findings };
 }
 
-async function runProvenancePhase(meter: BotChallengeMeter): Promise<ProvenanceCounts> {
+async function runProvenancePhase(
+  meter: BotChallengeMeter,
+): Promise<{ counts: ProvenanceCounts; ladder: ProvenanceLadderCounts }> {
   const counts: ProvenanceCounts = { failed: 0, found: 0, none: 0 };
+  const ladder = createLadderCounts();
   const budget = splitProvenanceBudget(PROVENANCE_LIMIT, PROVENANCE_CATALOGUE_LIMIT);
 
   if (budget.findings === 0) {
-    return counts;
+    return { counts, ladder };
   }
 
   // The findings half fills the budget first. Asking for the whole budget from `scope=findings`
   // rather than `scope=all` is what makes the catalogue sub-cap a real cap rather than a hope: a
   // catalogue row cannot arrive in this page at all.
+  //
+  // THE FINDINGS TIER KEEPS THE FULL FINGERPRINT and is untouched by the cheap ladder. It is a small
+  // set, it is the archive, and it is already done — spending a whole download on a certified row is
+  // exactly the right trade, and changing it would buy nothing but risk.
   const rows = await fetchTrackWork({
     kind: "youtube-provenance",
     limit: budget.findings,
     scope: "findings",
   });
-
-  // …and only what the findings left over may go to the catalogue, up to the sub-cap.
-  const catalogueRoom = Math.min(budget.catalogue, budget.findings - rows.length);
-
-  if (catalogueRoom > 0) {
-    rows.push(
-      ...(await fetchTrackWork({
-        kind: "youtube-provenance",
-        limit: catalogueRoom,
-        scope: "catalogue",
-      })),
-    );
-  }
 
   // SERIAL, not the capture batch's worker pool. The budget is two rows; a pool over two rows buys
   // nothing and would only widen the concurrent proxy footprint of a tick that is already running
@@ -1828,7 +2475,37 @@ async function runProvenancePhase(meter: BotChallengeMeter): Promise<ProvenanceC
     counts[await proveTrackProvenance(row, meter)] += 1;
   }
 
-  return counts;
+  // …and only what the findings left over may go to the catalogue, up to the sub-cap.
+  const catalogueRoom = Math.min(budget.catalogue, budget.findings - rows.length);
+
+  if (catalogueRoom <= 0) {
+    return { counts, ladder };
+  }
+
+  // THE CATALOGUE TIER RIDES THE CHEAP LADDER. Its allowance is a SEGMENT-DOWNLOAD budget, so the
+  // walk is offered `FACTOR ×` as many rows as it may buy: most of them conclude on rung 1 for the
+  // price of a 139KB search, and the strict download cap is enforced by the shared counter below
+  // rather than by how many rows were read. A row that reaches rung 2 with the counter at zero is
+  // deferred, untouched, and asked again next tick.
+  const segmentBudget = { segments: catalogueRoom };
+  const catalogueRows = await fetchTrackWork({
+    kind: "youtube-provenance",
+    limit: catalogueRoom * Math.max(1, Math.trunc(PROVENANCE_SEARCH_FACTOR) || 1),
+    scope: "catalogue",
+  });
+
+  for (const row of catalogueRows) {
+    const outcome = await proveCatalogueProvenance(row, meter, segmentBudget, ladder);
+
+    // A DEFERRAL IS NOT AN OUTCOME. It concluded nothing, wrote nothing and cost no download, so
+    // folding it into `found`/`none`/`failed` would make the phase's own gauges lie about what a
+    // tick achieved. It has its own counter, and that is the whole of its report.
+    if (outcome !== "deferred") {
+      counts[outcome] += 1;
+    }
+  }
+
+  return { counts, ladder };
 }
 
 // ── THE RE-VERDICT PHASE ────────────────────────────────────────────────────
@@ -1882,10 +2559,12 @@ export function buildCaptureSummary(options: {
   botChallengesUncleared: number;
   counts: CaptureCounts;
   elapsedMs: number;
+  /** The catalogue ladder's per-rung tally. Absent on a tick whose catalogue budget was shut. */
+  ladder?: ProvenanceLadderCounts;
   provenance: ProvenanceCounts;
   reverdict: { asked: number; failed: number };
 }): Record<string, unknown> {
-  const { counts, provenance, reverdict } = options;
+  const { counts, ladder, provenance, reverdict } = options;
 
   return {
     batch: options.batch,
@@ -1904,6 +2583,18 @@ export function buildCaptureSummary(options: {
     // published health number for a reason that has nothing to do with capture's health.
     provenanceFailed: provenance.failed,
     provenanceFound: provenance.found,
+    // THE CATALOGUE LADDER, rung by rung, so the ledger shows WHICH rung is doing the work rather
+    // than only that something happened. `topicServed` + `segmentVerified` are the two ways a row
+    // gets an id and both are already inside `provenanceFound`; `residualRescued` is a TAG on those
+    // (the pick came from a search variant past the first), never a fourth outcome. `deferred` is
+    // the row the segment budget ran out under — no answer, no cost, asked again next tick.
+    provenanceLadderDeferred: ladder?.deferred ?? 0,
+    provenanceLadderExhausted: ladder?.exhausted ?? 0,
+    provenanceLadderResidualRescued: ladder?.residualRescued ?? 0,
+    provenanceLadderSearched: ladder?.searched ?? 0,
+    provenanceLadderSegmentMissed: ladder?.segmentMissed ?? 0,
+    provenanceLadderSegmentVerified: ladder?.segmentVerified ?? 0,
+    provenanceLadderTopicServed: ladder?.topicServed ?? 0,
     provenanceNone: provenance.none,
     reverdictAsked: reverdict.asked,
     reverdictFailed: reverdict.failed,
@@ -1997,7 +2688,7 @@ async function main(): Promise<void> {
   const provenance = await runProvenancePhase(botChallenges).catch((error: unknown) => {
     log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
 
-    return { failed: 0, found: 0, none: 0 } satisfies ProvenanceCounts;
+    return { counts: { failed: 0, found: 0, none: 0 }, ladder: createLadderCounts() };
   });
   const reverdict = await runReverdictPhase().catch((error: unknown) => {
     log(`re-verdict phase failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -2025,7 +2716,8 @@ async function main(): Promise<void> {
         // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
         // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
         // baseline against bot challenges no longer parks it on the public degraded row.
-        provenance,
+        ladder: provenance.ladder,
+        provenance: provenance.counts,
         reverdict,
       }),
     ),

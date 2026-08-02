@@ -36,10 +36,20 @@
 #         FLUNCLE_SOURCE_AUDIO_R2_BUCKET (default fluncle-source-audio),
 #         FLUNCLE_CAPTURE_BATCH_CAP (4) / _QUEUE_LIMIT (8) / _TOLERANCE_SEC (3) / _TOLERANCE_PCT (0.03).
 #         THE PROVENANCE BACKFILL's budget (a phase inside this same tick, not a timer of its own):
-#         FLUNCLE_CAPTURE_PROVENANCE_LIMIT (2) — rows a tick, each one a FULL metered download;
+#         FLUNCLE_CAPTURE_PROVENANCE_LIMIT (2) — FINDINGS rows a tick, each a FULL metered download;
 #         FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT (0) — how many of those may be catalogue rows,
 #           a SUB-cap that redirects unused budget and can never raise the tick's total. Raise it
-#           only alongside the server-side catalogue capture budget, which gates this queue too;
+#           only alongside the server-side catalogue capture budget, which gates this queue too.
+#           A catalogue row rides the CHEAP THREE-RUNG LADDER, so this number now meters SEGMENT
+#           downloads (~1.5MB each) rather than full songs, and rows concluded on metadata alone
+#           cost only a search;
+#         FLUNCLE_CAPTURE_PROVENANCE_SEARCH_FACTOR (5) — how many catalogue rows the ladder may READ
+#           per segment it may BUY. Searches are ~139KB, so they are budgeted generously;
+#         FLUNCLE_CAPTURE_PROVENANCE_SEGMENT_ATTEMPTS (2) — segments one row may spend before it
+#           gives up; FLUNCLE_CAPTURE_SEGMENT_RANGE (*00:30-01:00) — the slice it fingerprints;
+#         FLUNCLE_CAPTURE_METADATA_TOLERANCE_SEC (3) — the metadata rung's flat length tolerance;
+#         FLUNCLE_CAPTURE_FLAT_SEARCH (1) — flat search extraction (1/7th the bytes). Set 0 to
+#           restore the historic resolving search byte-for-byte, with no re-bake;
 #         FLUNCLE_CAPTURE_REVERDICT_LIMIT (5) — officialness re-asks a tick. Keyless oEmbed, free.
 #   - The private bucket must exist (operator step; done 2026-07-07).
 #

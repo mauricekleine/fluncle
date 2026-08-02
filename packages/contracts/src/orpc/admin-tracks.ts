@@ -89,11 +89,24 @@ const UpdateTrackBodySchema = z.looseObject({
   // is left alone, so a re-ask can never retract a link. ADDITIVE AND OPTIONAL like the rest.
   youtubeReverdict: z.unknown().optional(),
   // THE PROVENANCE BACKFILL'S VERDICT (operator ruling 2026-07-31) — what the capture sweep's
-  // PROVENANCE phase found when it re-ran the whole ladder over an already-captured row and threw
-  // the candidate bytes away. `preview-match` (beside `youtubeVideoId`) authorizes that id exactly
-  // as `captureVerification` does for a real capture; `no-match` (with NO id) records that the
-  // question was asked and answered no, which is what keeps the row out of the worklist's re-ask
-  // window instead of re-buying the same download every tick.
+  // PROVENANCE phase found when it re-ran the ladder over an already-captured row and threw the
+  // candidate bytes away. Five values, and each one is a different claim:
+  //
+  //   · `preview-match`  — a fingerprint match against the ISRC-resolved preview. Beside
+  //     `youtubeVideoId` it authorizes that id exactly as `captureVerification` does for a capture.
+  //   · `archive-match`  — the same fingerprint proof from the catalogue ladder's segment rung,
+  //     where the reference was the row's own archived master. Identical claim class.
+  //   · `metadata-match` — the catalogue ladder's Topic rung: artist + title + length on an
+  //     `<Artist> - Topic` art-track channel, with NO AUDIO COMPARED. The server stores it as
+  //     `method: "search"`, so /identity says "matched by artist, title, and length" and never
+  //     "matched by audio fingerprint". A weaker claim, kept visibly weaker.
+  //   · `no-match`       — the ladder concluded and found nothing. NO id; stamps the re-ask window
+  //     and moves the can't-conclude streak.
+  //   · `inconclusive`   — the ladder ran and could not conclude. NO id, NO stamp; it moves the
+  //     streak alone, so a row that can never be bought stops being offered forever.
+  //
+  // ADDITIVE at every step: an old baked box that only ever sends `preview-match`/`no-match` keeps
+  // working byte-for-byte, and an unrecognised verdict proves nothing and is simply not stored.
   //
   // DELIBERATELY NOT `captureVerification`. That field is the STORED AUDIO's provenance and moves
   // capture columns with it; this sweep stores no audio and must never move one, so borrowing the
