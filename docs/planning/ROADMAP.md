@@ -64,7 +64,7 @@ Monitoring, not work. Collapsed here so it stops occupying build sections.
 
 ### Dependency vulnerability posture — queue clear (0 open alerts, measured 2026-07-29)
 
-The Dependabot queue is clear: 0 open (19 dismissed, 13 fixed; the triage analysis lives in git history — the audit ledger's rows were cleared 2026-07-27, the security rows among them). What is ahead: the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the queue — and the CI-side half (`bun audit` + the Renovate npm extension, the follow-ups item below).
+The Dependabot queue is clear: 0 open (19 dismissed, 13 fixed; the triage analysis lives in git history — the audit ledger's rows were cleared 2026-07-27, the security rows among them). What is ahead: the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the queue — and the CI-side `bun audit` job (the follow-ups item below; the Renovate npm manager shipped 2026-07-29 in #985 and reads `bun.lock`, so there is no separate bun extension to add).
 
 ### Housekeeping follow-ups — operator decisions pending (2026-07-26 sweep)
 
@@ -73,7 +73,7 @@ Most of the sweep's queue is settled (git history + the ledgers hold the rulings
 - [ ] **CSP — enforced 2026-08-02; what is left is the watch.** `security-headers.ts` now ships ONE enforcing `Content-Security-Policy` carrying its own `report-uri`/`report-to`, on prod and the `.onion` alike; local dev stays report-only so a policy edit warns without killing HMR on the `localhost`/`127.0.0.1` origin split. There is deliberately no runtime kill switch — the header layer is sync and pure because it runs on every response including cache hits — so **the Sentry Security feed is the rollback signal**, and rollback is revert-and-deploy (~10 min). What remains: read that feed for a real traffic window, and archive third-party browser noise (Perplexity fonts and kin) as it arrives, which no policy can absorb.
   - **Adjacent, deliberately not folded in: HSTS `includeSubDomains`.** Every web-serving subdomain already redirects http→https and answers over https (measured 2026-08-01; `dig.fluncle.com` is DNS-only, so HSTS cannot reach it). But the header is served from `www`, where the directive would only cover `*.www.fluncle.com` — nothing. Real coverage means emitting HSTS from the **apex**, whose response is a 308 redirect with no HTML content-type, and `securityHeadersFor` scopes HSTS to HTML documents on purpose. That is a change to a deliberate design rule, not a one-word flip.
   - **Adjacent, found by the flip's browser sweep: `/admin` hotlinks Cover Art Archive, and CAA rate-limits it.** Those covers return 429 and render blank on the admin boards regardless of policy. The permanent fix is the `backfill_cover_masters` sweep replacing raw CAA URLs with owned masters ([docs/album-artwork.md](../album-artwork.md)); until it drains, the boards show gaps.
-- [ ] **The dependency-hygiene remainder:** `bun audit --audit-level=high` as a CI job and the Renovate npm/bun extension — the two moves that close the `bun.lock` blind spot (the deepsec bump shipped 2026-07-27).
+- [ ] **The dependency-hygiene remainder:** `bun audit --audit-level=high` as a **report-only** CI job — the last move that closes the `bun.lock` blind spot (the Renovate npm manager half shipped 2026-07-29 in #985; the deepsec bump shipped 2026-07-27). A first local run (2026-08-02) reads **15 high transitive advisories Dependabot cannot see** — several behind deliberate Renovate holds — so the job lands report-only, and triaging the 15 into fix-vs-ignore is the follow-up that gates any blocking flip.
 
 ### Sonar regional replication — a tripwire, not a task
 
@@ -84,12 +84,8 @@ The engine serves every "sounds like" surface from ONE region ([docs/vector-serv
 Everything proven in the 2026-07-24 audit has shipped (the anchor worklist index landed 2026-07-27 with its hosted proof — 28.5 s → 49 ms); what remains is the index economics plus three design calls. Full analysis, measurements, and the failed shapes stay in [docs/db-scale-backlog.md](../db-scale-backlog.md) — these are the promoted, schedulable pieces.
 
 - **Drop the three redundant-index candidates on the growing tables.** Every index is paid for on every write. `artist_socials_artist_id_idx` is a strict prefix of the unique composite and nothing pins it by name — the clean drop. `tracks_capture_priority_idx` is gated on a hosted `EXPLAIN QUERY PLAN` that also settles a repo self-contradiction about which index `listCatalogueAppleWork` actually rides. And `tracks_anchor_fill_queue_idx` is newly unblocked — the ledger gated it on the anchor-order index being proven, which happened 2026-07-27; a hosted plan over its remaining readers settles the drop.
-- **`/artists` carries ~890 ms of server time its twin hubs don't.** Measured TTFB 890 ms of a 2268 ms median FCP, against 80–125 ms on `/labels` and `/albums` running the identical `listHubPage`. PR #919 proposed a covering index (`artists_hub_gate_idx` over `(slug, renderable_track_count, certified_finding_count)`) and explicitly did not implement or EXPLAIN it. Same shape as the proven funnel-scan fix, and it would apply to all three hubs. **File this into `docs/db-scale-backlog.md` first** — today the claim exists only in a merged PR body.
+- **`/artists` may carry server time its twin hubs don't — filed as an UNVERIFIED hypothesis in `docs/db-scale-backlog.md` (2026-08-02).** The claimed 890 ms TTFB against 80–125 ms on `/labels`/`/albums` (identical `listHubPage`), and the proposed `artists_hub_gate_idx` covering index over `(slug, renderable_track_count, certified_finding_count)`, trace to no PR — the #919 attribution this bullet used to carry was false, and the numbers exist nowhere else in the repo. The ledger row holds the plausible mechanism and the gate: a fresh TTFB measurement first, then the hosted `EXPLAIN` per the guardrail.
 - **Three design calls await a decision** — the per-user recommendations cache, tracks-hub keyset pagination for the deep tail, and the capture split-OR merge (`docs/db-scale-backlog.md` Wave 3). They are decisions, not builds; the ledger holds the shapes and impacts. The capture one stays gated on the operator opening catalogue capture, and it is now a build-or-don't rather than a two-path choice — the `capturable` flag it used to be weighed against was dropped on 2026-07-27, along with the rank-sweep `match_key`/`needs_rank` columns and the `/tracks` year-lane rollup. Git history holds all three analyses if a trigger brings one back.
-
-### Ruling-time label identity on `/admin/labels` (small)
-
-The station renders the logo and the seed-ruling buttons and nothing else, so "which Helix?" — or "which Radar Records?", the 2026-07-27 namesake class — is answered by a periodic identity audit instead of at the moment of the ruling. Show each label's MusicBrainz entity (name + disambiguation + founding) beside the buttons. The crawler's mbid-authority seal (#966) covers the machine half; this is the human half. (Sole survivor of the pruned artist-primary-capture RFC — its Slice 2, a preview-BPM capture gate, is ruled OUT permanently: BPM is never a gate, `docs/the-ear.md`.)
 
 ### The acquisition boundary — `capture-sweep.ts` is in the wrong repo (parked 2026-07-11)
 
@@ -164,7 +160,6 @@ The Expo app ships feed, archive, finding pages, submissions, the Radio (backgro
 
 The on-site layer shipped (per-finding pages with definitional prose + `MusicRecording` identifiers, sitemap + IndexNow fan-out, the `/about` entity/FAQ surface, `VideoObject`). Monitoring moved to _Now → Standing operation_; what remains here is buildable, in rough value order:
 
-- **Label aliases join search.** The #700 artist-alias fold applied to labels — same deterministic tier, and `label_aliases` already accumulates candidates. The artist half is live in `search.ts` and is the precedent to copy; nothing references label aliases there yet. The only item in this tail with a proven shape to follow.
 - **Per-index OG images.** The hubs share the generic cover; a Satori card per hub is pure polish.
 - **`AudioObject` markup on observations.** The spoken observation as a first-class schema object on `/log/<id>` — absent from `apps/web/src` today.
 - **`speakable` markup.** The SpeakableSpecification pass, once assistants actually consume it.
@@ -177,10 +172,6 @@ The machine- and developer-facing surfaces mapped in [docs/surfaces-doctrine.md]
 ### Announcements — one operator line, three things owed one
 
 Announcing to the crew is one act, not a per-feature chore: a quiet line to the crew (Telegram / the Friday letter), drafted in Fluncle's voice through the `copywriting-fluncle` skill and operator-sent. Three things are owed one — **Fluncle Lens** (live in the Chrome Web Store, `extension.lens` registry fan-out done), the **Galaxy game** (v1 live; announce once the near-polish lands), and each mixtape as it goes out. (Fluncle for iOS went live 2026-07-29 with no announcement, by operator ruling — the channel's one member already knew; the app can ride a later go-to-market beat instead.) Anything new joins this line rather than growing its own.
-
-### Brand & canon — the video-side remainder (moodboard → canon audit)
-
-The web half is resolved: the logbook plate, ignition hovers, the grain architecture, and the archive grammar are in DESIGN.md now. The video-kit laws still live video-local in the `fluncle-video` skill doctrine (presence, the plate lane, fixed-pitch / anchored-accent) — decide whether to promote or cross-link them into DESIGN.md canon rather than leave two homes. **Cross-link, don't duplicate.** Small and closable.
 
 ### Label outreach — the archive that can show its receipts (operator-led, unstarted)
 

@@ -1,11 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "agent-orchestration": {
-      "source": "packages/skills/agent-orchestration",
-      "sourceType": "local",
-      "computedHash": "01fddedb37afe5eb83baab9f18b6cf487a2e85eb41782cf73805df0bb2394caf"
-    },
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
       "sourceType": "github",

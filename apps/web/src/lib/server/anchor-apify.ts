@@ -85,7 +85,7 @@ export async function isAnchorApifyEnabled(): Promise<boolean> {
  *
  * BOUNDED OPERATOR WRITE, off the hot path: this runs ONLY on the operator's flip-ON of the kill-flag,
  * never on any per-tick sweep, so a full-table scan of `tracks` here is acceptable (unlike the anchor
- * worklist read, which rides `tracks_anchor_fill_queue_idx`). The WHERE targets ONLY un-anchored rows
+ * worklist read, which rides `tracks_anchor_order_idx`). The WHERE targets ONLY un-anchored rows
  * (`spotify_uri is null`) whose stamp is `>= disabled_at`: every such stamp was written while the box made
  * ZERO Apify attempts, so it is a deferral, never a genuine miss-backoff — and genuine backoffs, which all
  * predate the off-window (`attempted_at < disabled_at`), are left untouched.
