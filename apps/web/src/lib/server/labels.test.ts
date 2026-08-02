@@ -72,6 +72,34 @@ async function seedStateOf(slug: string): Promise<string | undefined> {
   return result.rows[0]?.seed_state as string | undefined;
 }
 
+async function labelScopeState(slug: string): Promise<
+  | {
+      ruledAt: string | null;
+      scopeChangedAt: string | null;
+      seedState: string;
+      updatedAt: string;
+    }
+  | undefined
+> {
+  const result = await db.execute({
+    args: [slug],
+    sql: `select ruled_at, scope_changed_at, seed_state, updated_at
+          from labels where slug = ?`,
+  });
+  const row = result.rows[0];
+
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    ruledAt: row.ruled_at as string | null,
+    scopeChangedAt: row.scope_changed_at as string | null,
+    seedState: row.seed_state as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
@@ -273,6 +301,78 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
 
     expect(ruled.seedState).toBe("disabled");
     expect(ruled.ruledAt).not.toBeNull();
+  });
+
+  it("stamps the label-scope watermark when the operator enables a label", async () => {
+    await ensureLabel("Gutterfunk");
+    const [label] = await listLabels();
+    expect(label).toBeDefined();
+    if (!label) {
+      return;
+    }
+
+    const enabled = await updateLabelSeedState(label.id, "enabled");
+
+    expect(enabled.scopeChangedAt).not.toBeNull();
+    expect((await labelScopeState(label.slug))?.scopeChangedAt).toBe(enabled.scopeChangedAt);
+  });
+
+  it("preserves the label-scope watermark on a non-enable ruling", async () => {
+    await ensureLabel("Critical Music");
+    const [label] = await listLabels();
+    expect(label).toBeDefined();
+    if (!label) {
+      return;
+    }
+
+    const disabled = await updateLabelSeedState(label.id, "disabled");
+    expect(disabled.scopeChangedAt).toBeNull();
+
+    const watermark = "2026-08-01T00:00:00.000Z";
+    await db.execute({
+      args: [watermark, label.id],
+      sql: `update labels set scope_changed_at = ? where id = ?`,
+    });
+
+    const undecided = await updateLabelSeedState(label.id, "undecided");
+    expect(undecided.scopeChangedAt).toBe(watermark);
+    expect((await labelScopeState(label.slug))?.scopeChangedAt).toBe(watermark);
+  });
+
+  it("a bare re-walk stamps scope without changing the ruling or re-staling catalogue rank", async () => {
+    await seedFinding("t_rewalk", "1985 Music");
+    await reconcileLabels();
+    await linkTracksToLabels(db);
+    const [label] = await listLabels();
+    expect(label).toBeDefined();
+    if (!label) {
+      return;
+    }
+
+    await updateLabelSeedState(label.id, "disabled");
+    await db.execute({
+      args: ["2000-01-01T00:00:00.000Z", label.id],
+      sql: `update labels set updated_at = ? where id = ?`,
+    });
+    await db.execute({
+      args: [label.id],
+      sql: `update tracks set catalogue_rank_corpus = 'still-fresh' where label_id = ?`,
+    });
+    const before = await labelScopeState(label.slug);
+
+    const rewalked = await updateLabelSeedState(label.id, undefined, true);
+    const after = await labelScopeState(label.slug);
+    const ranked = await db.execute({
+      args: [label.id],
+      sql: `select catalogue_rank_corpus from tracks where label_id = ?`,
+    });
+
+    expect(rewalked.scopeChangedAt).not.toBeNull();
+    expect(after?.scopeChangedAt).toBe(rewalked.scopeChangedAt);
+    expect(after?.seedState).toBe(before?.seedState);
+    expect(after?.ruledAt).toBe(before?.ruledAt);
+    expect(after?.updatedAt).not.toBe(before?.updatedAt);
+    expect(ranked.rows[0]?.catalogue_rank_corpus).toBe("still-fresh");
   });
 
   it("404s on an id that is not there", async () => {

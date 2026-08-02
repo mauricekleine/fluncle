@@ -3644,6 +3644,9 @@ export const labels = sqliteTable(
      */
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
     ruledAt: text("ruled_at"),
+    // The crawl tick's label-scope re-arm watermark. An enable or explicit operator re-walk
+    // stamps it; other rulings preserve the previous watermark. Nullable, with no DDL default.
+    scopeChangedAt: text("scope_changed_at"),
     seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
       .notNull()
       .default("undecided"),

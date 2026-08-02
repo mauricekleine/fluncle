@@ -71,6 +71,8 @@ export const LabelAdminItemSchema = z
     mbLabelId: z.string().nullable().optional(),
     name: z.string(),
     ruledAt: z.string().nullable(),
+    /** The label-scope re-arm watermark, when an enable or explicit re-walk has armed one. */
+    scopeChangedAt: z.string().nullable().optional(),
     seedState: LabelSeedStateSchema,
     slug: z.string(),
     updatedAt: z.string(),
@@ -101,10 +103,9 @@ export const listLabelsAdmin = oc
 /**
  * `update_label` → `PATCH /admin/labels/{id}` (operationId `updateLabel`).
  *
- * OPERATOR tier (`adminAuth` + `operatorGuard`). The ruling: set a label's crawl-seed
- * state. It steers what Fluncle crawls NEXT — an editorial act, like naming a galaxy —
- * so an agent token 403s here. Stamps `ruledAt`, which permanently exempts the row from
- * the one-time bootstrap seed.
+ * OPERATOR tier (`adminAuth` + `operatorGuard`). A supplied `seedState` rules on the label and
+ * stamps `ruledAt`; `rewalk: true` arms the same scope again without changing that ruling. Both
+ * steer what Fluncle crawls NEXT, so an agent token 403s here.
  *
  * It changes the next crawl's seed set. It touches NOTHING already stored. `{ ok, label }`.
  */
@@ -113,10 +114,20 @@ export const updateLabel = oc
     method: "PATCH",
     operationId: "updateLabel",
     path: "/admin/labels/{id}",
-    summary: "Rule on a label's crawl-seed state (operator; next crawl only, never storage)",
+    summary: "Update a label's crawl scope or arm a re-walk (operator; never storage)",
     tags: ["Admin"],
   })
-  .input(z.object({ id: z.string(), seedState: LabelSeedStateSchema }))
+  .input(
+    z
+      .object({
+        id: z.string(),
+        rewalk: z.boolean().optional(),
+        seedState: LabelSeedStateSchema.optional(),
+      })
+      .refine((input) => input.seedState !== undefined || input.rewalk === true, {
+        error: "Pass seedState or set rewalk to true",
+      }),
+  )
   .output(z.object({ label: LabelAdminItemSchema, ok: z.literal(true) }));
 
 // ── Label merge: fold a slug-split twin into its canonical row (RFC musickit-second-authority, U2b) ──

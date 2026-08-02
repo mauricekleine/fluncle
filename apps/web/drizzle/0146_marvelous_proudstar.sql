@@ -1,0 +1,1 @@
+ALTER TABLE `labels` ADD `scope_changed_at` text;

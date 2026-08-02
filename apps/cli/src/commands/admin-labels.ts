@@ -42,7 +42,8 @@ export async function mergeLabelCommand(
 // worklists can pass ids straight through.
 export async function updateLabelCommand(
   slugOrId: string,
-  seedState: LabelSeedState,
+  seedState?: LabelSeedState,
+  rewalk = false,
 ): Promise<LabelAdminItem> {
   const { labels } = await adminApiGet<{ labels: LabelAdminItem[]; ok: boolean }>(
     "/api/v1/admin/labels",
@@ -55,7 +56,10 @@ export async function updateLabelCommand(
 
   const response = await adminApiPatch<{ label: LabelAdminItem; ok: boolean }>(
     `/api/v1/admin/labels/${encodeURIComponent(match.id)}`,
-    { seedState },
+    {
+      ...(rewalk ? { rewalk: true } : {}),
+      ...(seedState === undefined ? {} : { seedState }),
+    },
   );
 
   return response.label;

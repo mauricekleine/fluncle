@@ -650,6 +650,8 @@ export const CrawlPassSchema = z
      * fresh rate window (the shipped `backfill_*` discipline).
      */
     rateLimited: z.boolean(),
+    /** Scoped label-browse nodes re-armed from a newer label-scope watermark this pass. */
+    releasesRearmed: z.number(),
     /** Seed nodes minted from the operator's `enabled` labels this pass. */
     seeded: z.number(),
     /**

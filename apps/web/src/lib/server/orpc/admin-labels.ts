@@ -64,7 +64,7 @@ export function adminLabelsHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const label = await updateLabelSeedState(input.id, input.seedState);
+        const label = await updateLabelSeedState(input.id, input.seedState, input.rewalk);
 
         return { label, ok: true } as const;
       } catch (error) {

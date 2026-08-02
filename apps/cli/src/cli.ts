@@ -118,6 +118,30 @@ type JsonOptions = {
   json: boolean;
 };
 
+/** Human lines for one operator label-scope update. JSON output bypasses this entirely. */
+export function labelUpdateLines(
+  label: { name: string; seedState: string; slug: string },
+  options: { rewalk: boolean; seedState?: string },
+): string[] {
+  const lines: string[] = [];
+
+  if (options.seedState !== undefined) {
+    lines.push(`${label.name} (${label.slug}) → ${label.seedState}.`);
+    lines.push(
+      label.seedState === "enabled"
+        ? "  The next crawl seeds from it and stores its releases."
+        : "  The next crawl will not seed from it; nothing already stored is touched.",
+    );
+  }
+
+  if (options.rewalk) {
+    lines.push(`${label.name} (${label.slug}) → scoped re-walk armed.`);
+    lines.push("  The next crawl rechecks its MusicBrainz releases.");
+  }
+
+  return lines;
+}
+
 // The catalogue-index browse commands (`artists`, `albums`, `labels`): a JSON
 // toggle plus the 1-based `--page` cursor over the A-to-Z list.
 type BrowseOptions = {
@@ -3008,37 +3032,45 @@ JSON field reference:
       await runEntityBioDraft("label", slug, options, draftLabelBioCommand);
     });
 
-  // `update_label` → `admin labels update <slug> --seed-state <state>` (operator). The crawl-seed
-  // ruling: `enabled` opens STORAGE for the label's releases, `disabled`/`undecided` keeps them
-  // walked-but-unwritten (the storage gate). Steers the NEXT crawl only; touches nothing stored.
+  // `update_label` → `admin labels update <slug> [--seed-state <state>] [--rewalk]` (operator).
+  // The ruling changes crawl scope; the bare re-walk re-arms the label without changing its ruling.
   labels
     .command("update")
-    .description("Rule on a label's crawl-seed state (operator; next crawl only, never storage)")
+    .description("Rule on a label's crawl scope or arm a scoped re-walk (operator)")
     .argument("<slug>", "The label's slug (an exact lbl_… id also works)")
     .option("--seed-state <state>", "The ruling: enabled, disabled, or undecided")
+    .option("--rewalk", "Arm a scoped re-walk without changing the ruling", false)
     .option("--json", "Print JSON", false)
-    .action(async (slug: string, options: { json: boolean; seedState?: string }) => {
-      const seedState = options.seedState;
+    .action(
+      async (slug: string, options: { json: boolean; rewalk: boolean; seedState?: string }) => {
+        const seedState = options.seedState;
 
-      if (seedState !== "enabled" && seedState !== "disabled" && seedState !== "undecided") {
-        throw new Error("Pass --seed-state enabled|disabled|undecided");
-      }
+        if (
+          seedState !== undefined &&
+          seedState !== "enabled" &&
+          seedState !== "disabled" &&
+          seedState !== "undecided"
+        ) {
+          throw new Error("Pass --seed-state enabled|disabled|undecided");
+        }
 
-      const { updateLabelCommand } = await import("./commands/admin-labels");
-      const label = await updateLabelCommand(slug, seedState);
+        if (seedState === undefined && !options.rewalk) {
+          throw new Error("Pass --seed-state enabled|disabled|undecided or --rewalk");
+        }
 
-      if (options.json) {
-        printJson({ label, ok: true });
-        return;
-      }
+        const { updateLabelCommand } = await import("./commands/admin-labels");
+        const label = await updateLabelCommand(slug, seedState, options.rewalk);
 
-      console.log(`${label.name} (${label.slug}) → ${label.seedState}.`);
-      console.log(
-        label.seedState === "enabled"
-          ? "  The next crawl seeds from it and stores its releases."
-          : "  The next crawl will not seed from it; nothing already stored is touched.",
-      );
-    });
+        if (options.json) {
+          printJson({ label, ok: true });
+          return;
+        }
+
+        for (const line of labelUpdateLines(label, options)) {
+          console.log(line);
+        }
+      },
+    );
 
   // `merge_label` → `admin labels merge <losingSlug> <canonicalSlug>` (operator). Fold a slug-split
   // twin (the Med School / Medschool class) into its canonical row: re-point every FK, reconcile

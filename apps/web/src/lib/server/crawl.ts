@@ -141,6 +141,9 @@ export const REARM_AFTER_DAYS = 1;
  */
 export const REARM_BATCH = 10;
 
+/** Scope-widening label re-arms per pass, oldest watermark first. */
+export const REARM_SCOPED_BATCH = 10;
+
 // The retry window for a FAILED node, growing with its consecutive-failure count — the
 // shipped `backfill_*` backoff, verbatim in shape (backfill.ts): base × 2^failures,
 // capped, so a node the vendor keeps throttling backs off hard instead of being retried
@@ -165,6 +168,7 @@ export type CrawlNodeSource = "fluncle" | "musicbrainz";
 
 type FrontierRow = {
   cursor: number;
+  done_at: string | null;
   external_id: string;
   failures: number;
   hop: number;
@@ -213,6 +217,8 @@ export type CrawlPass = {
   nodesEnqueued: number;
   /** True when MusicBrainz actively throttled us and the pass STOPPED on the breaker. */
   rateLimited: boolean;
+  /** Label browse nodes re-armed after their acquisition scope widened. */
+  releasesRearmed: number;
   /** Seed nodes minted from the operator's `enabled` labels this pass. */
   seeded: number;
   /**
@@ -271,7 +277,10 @@ type MbReleaseDetail = {
   "release-group"?: { id?: string };
   title?: string;
 };
-type MbReleaseBrowse = { "release-count"?: number; releases?: { id?: string }[] };
+type MbReleaseBrowse = {
+  "release-count"?: number;
+  releases?: { id?: string; status?: string }[];
+};
 type MbLabelSearch = { labels?: { id?: string; name?: string; score?: number }[] };
 
 // ── Identity ─────────────────────────────────────────────────────────────────
@@ -361,7 +370,9 @@ async function settle(
   await db.execute({
     args: [
       state,
+      state,
       state === "done" ? now : null,
+      state,
       patch.cursor ?? 0,
       patch.failures ?? 0,
       patch.note ?? null,
@@ -370,7 +381,13 @@ async function settle(
       id,
     ],
     sql: `update crawl_frontier
-          set state = ?, done_at = ?, cursor = ?, failures = ?, note = ?,
+          set state = ?,
+              done_at = case
+                when ? = 'done' then ?
+                when ? in ('pending', 'failed') and done_at is not null then done_at
+                else null
+              end,
+              cursor = ?, failures = ?, note = ?,
               attempts = attempts + 1, attempted_at = ?, updated_at = ?
           where id = ?`,
   });
@@ -420,6 +437,7 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const releases = await db.execute({
     args: [...cutoffs, releaseShare],
     sql: `select crawl_frontier.id, kind, source, external_id, hop, cursor, failures, label_slug,
+                crawl_frontier.done_at,
                 case when provenance_label.seed_state = 'enabled' then 1 else 0 end as is_storable
           from crawl_frontier
           left join labels as provenance_label on provenance_label.slug = crawl_frontier.label_slug
@@ -440,7 +458,7 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const placeholders = releaseRows.map(() => "?").join(", ");
   const rest = await db.execute({
     args: [...cutoffs, ...releaseRows.map((row) => row.id), remainder],
-    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug
+    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug, done_at
           from crawl_frontier
           where ${eligible}
             ${releaseRows.length > 0 ? `and id not in (${placeholders})` : ""}
@@ -604,6 +622,51 @@ async function rearmSeedLabels(): Promise<number> {
 
   if (rearmed > 0) {
     logEvent("info", "crawl.seeds-rearmed", { count: rearmed });
+  }
+
+  return rearmed;
+}
+
+/**
+ * THE SCOPE RE-ARM — replay an enabled label's full release list after its ruling widened.
+ *
+ * `labels.scope_changed_at` is the durable request watermark. A matching, drained MusicBrainz
+ * label node whose prior `done_at` predates it returns to the HEAD (`cursor = 0`), not the daily
+ * subscription tail: releases refused by the old gate may live anywhere in the back catalogue.
+ * The previous `done_at` stays on the node while this forward walk paginates; expansion resolves
+ * the newer watermark from the label row on every tick, so process death cannot turn later pages
+ * into an ordinary no-revival browse.
+ */
+async function rearmScopedLabelReleases(): Promise<number> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const result = await db.execute({
+    args: [now, REARM_SCOPED_BATCH],
+    sql: `update crawl_frontier
+          set state = 'pending', cursor = 0, updated_at = ?
+          where id in (
+            select node.id from crawl_frontier as node
+            where node.kind = 'label'
+              and node.source = 'musicbrainz'
+              and node.state = 'done'
+              and node.done_at is not null
+              and exists (
+                select 1 from labels
+                where labels.slug = node.label_slug
+                  and labels.seed_state = 'enabled'
+                  and labels.scope_changed_at is not null
+                  and labels.scope_changed_at > node.done_at
+                  and (labels.mb_label_id is null or labels.mb_label_id = node.external_id)
+              )
+            order by node.done_at asc, node.id asc
+            limit ?
+          )`,
+  });
+
+  const rearmed = result.rowsAffected;
+
+  if (rearmed > 0) {
+    logEvent("info", "crawl.releases-rearmed", { count: rearmed });
   }
 
   return rearmed;
@@ -991,11 +1054,15 @@ async function expandSeedLabel(node: FrontierRow): Promise<Expansion> {
   return { ...EMPTY, enqueued };
 }
 
-/** The `{ id }` releases off a browse response — the ill-formed ones dropped. */
-function browseReleases(browse: MbReleaseBrowse | null): { id: string }[] {
-  return (browse?.releases ?? []).filter(
-    (release): release is { id: string } => typeof release.id === "string",
-  );
+/** The `{ id }` releases off a browse response — the ill-formed and scoped exclusions dropped. */
+function browseReleases(browse: MbReleaseBrowse | null, scoped = false): { id: string }[] {
+  return (browse?.releases ?? [])
+    .filter(
+      (release): release is { id: string; status?: string } =>
+        typeof release.id === "string" &&
+        (!scoped || (release.status !== "Bootleg" && release.status !== "Pseudo-Release")),
+    )
+    .map(({ id }) => ({ id }));
 }
 
 /**
@@ -1008,21 +1075,82 @@ async function enqueueReleaseNodes(
   node: FrontierRow,
   releases: { id: string }[],
   childHop: number,
+  scopedWatermark?: string,
 ): Promise<number> {
   let newlyEnqueued = 0;
 
   for (const release of releases) {
-    newlyEnqueued += await enqueue({
-      externalId: release.id,
-      hop: childHop,
-      kind: "release",
-      labelSlug: node.label_slug,
-      parentId: node.id,
-      source: "musicbrainz",
+    if (!scopedWatermark) {
+      newlyEnqueued += await enqueue({
+        externalId: release.id,
+        hop: childHop,
+        kind: "release",
+        labelSlug: node.label_slug,
+        parentId: node.id,
+        source: "musicbrainz",
+      });
+      continue;
+    }
+
+    const db = await getDb();
+    const now = new Date().toISOString();
+    const result = await db.execute({
+      args: {
+        createdAt: now,
+        externalId: release.id,
+        hop: childHop,
+        id: frontierId("musicbrainz", "release", release.id),
+        kind: "release",
+        labelSlug: node.label_slug,
+        parentId: node.id,
+        source: "musicbrainz",
+        updatedAt: now,
+        watermark: scopedWatermark,
+      },
+      sql: `insert into crawl_frontier
+              (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
+            values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug, :createdAt, :updatedAt)
+            on conflict (id) do update set
+              state = 'pending', cursor = 0, hop = 0,
+              label_slug = excluded.label_slug, updated_at = excluded.updated_at
+            where crawl_frontier.state = 'done'
+              and crawl_frontier.done_at < :watermark`,
     });
+    newlyEnqueued += result.rowsAffected;
   }
 
   return newlyEnqueued;
+}
+
+/**
+ * Resolve the durable scope watermark for one page of a scoped full-forward label replay.
+ * The prior `done_at` is retained on the pending node until the replay finishes, so this lookup
+ * works even when pagination or retry pushes the next page into a later isolate.
+ */
+async function scopedLabelWatermark(node: FrontierRow): Promise<string | undefined> {
+  if (
+    node.kind !== "label" ||
+    node.source !== "musicbrainz" ||
+    node.cursor < 0 ||
+    !node.done_at ||
+    !node.label_slug
+  ) {
+    return undefined;
+  }
+
+  const db = await getDb();
+  const result = await db.execute({
+    args: [node.label_slug, node.external_id, node.done_at],
+    sql: `select scope_changed_at from labels
+          where slug = ?
+            and seed_state = 'enabled'
+            and (mb_label_id is null or mb_label_id = ?)
+            and scope_changed_at is not null
+            and scope_changed_at > ?
+          limit 1`,
+  });
+
+  return typedRows<{ scope_changed_at: string }>(result.rows)[0]?.scope_changed_at;
 }
 
 /**
@@ -1061,15 +1189,20 @@ async function expandForwardBrowse(
   key: string,
   childHop: number,
 ): Promise<Expansion> {
+  const scopedWatermark = await scopedLabelWatermark(node);
   const browse = await mb<MbReleaseBrowse>(
     `/release?${key}=${node.external_id}&limit=${BROWSE_PAGE_SIZE}&offset=${node.cursor}`,
   );
-  const releases = browseReleases(browse);
-  const enqueued = await enqueueReleaseNodes(node, releases, childHop);
+  const releases = browseReleases(browse, scopedWatermark !== undefined);
+  const enqueued = await enqueueReleaseNodes(node, releases, childHop, scopedWatermark);
 
-  const consumed = node.cursor + releases.length;
+  // Cursor movement follows MusicBrainz's RAW page array, including scoped status exclusions and
+  // malformed entries. Otherwise one dropped item in a full page advances by 99, overlaps the next
+  // page, and can strand the final release forever.
+  const rawPageLength = browse?.releases?.length ?? 0;
+  const consumed = node.cursor + rawPageLength;
   const total = browse?.["release-count"] ?? consumed;
-  const hasMore = releases.length === BROWSE_PAGE_SIZE && consumed < total;
+  const hasMore = rawPageLength === BROWSE_PAGE_SIZE && consumed < total;
 
   return {
     ...EMPTY,
@@ -1430,6 +1563,7 @@ export async function crawlCatalogue({
     maxHop: hopLimit,
     nodesEnqueued: 0,
     rateLimited: false,
+    releasesRearmed: 0,
     seeded: 0,
     seedsRearmed: 0,
     tracksFound: 0,
@@ -1449,9 +1583,10 @@ export async function crawlCatalogue({
   const seed = await seedFromEnabledLabels();
   pass.seeded = seed.minted;
 
-  // Re-arm stale enabled seed labels BEFORE the pick, so a re-armed browse node can be expanded
-  // in this very pass (the subscription rides every tick — the cron needs no change). Bounded, so
-  // this never floods the frontier head ahead of the deep walk they share the rate budget with.
+  // Scope-widening full replays win before the daily tail subscription: both target the same done
+  // label node, and the full replay must not be collapsed into a tail read. Both happen BEFORE the
+  // pick so a re-armed browse node can expand in this very pass, bounded against frontier floods.
+  pass.releasesRearmed = await rearmScopedLabelReleases();
   pass.seedsRearmed = await rearmSeedLabels();
 
   const nodes = await pickNodes(limit);

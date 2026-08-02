@@ -81,6 +81,7 @@ type LabelRow = {
   mb_label_id: string | null;
   name: string;
   ruled_at: string | null;
+  scope_changed_at: string | null;
   seed_state: LabelSeedState;
   slug: string;
   updated_at: string;
@@ -116,6 +117,7 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
     mbLabelId: row.mb_label_id,
     name: row.name,
     ruledAt: row.ruled_at,
+    scopeChangedAt: row.scope_changed_at,
     seedState: row.seed_state,
     slug: row.slug,
     updatedAt: row.updated_at,
@@ -128,7 +130,7 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
  * `disambiguation`, `founding_date`, `founded_location`) alongside its state, because the operator
  * ruling on a label needs to know which label it IS.
  */
-const LABEL_COLUMNS = `id, name, slug, seed_state, ruled_at, created_at, updated_at,
+const LABEL_COLUMNS = `id, name, slug, seed_state, ruled_at, scope_changed_at, created_at, updated_at,
    image_key, image_updated_at, mb_label_id, disambiguation, founding_date, founded_location`;
 
 /** The `/admin/labels` section page size — each of the three seed-state sections pages this many. */
@@ -1610,9 +1612,10 @@ export async function listLabelsPage(
 export class LabelNotFoundError extends Error {}
 
 /**
- * The operator's ruling — the ONLY write that moves `seed_state`. Stamps `ruled_at`,
- * which is what tells the one-time D7 bootstrap (scripts/backfill-labels.ts) to keep
- * its hands off this row forever after.
+ * The operator's scope write — the ONLY write that moves `seed_state`. A supplied ruling stamps
+ * `ruled_at`, which tells the one-time D7 bootstrap (scripts/backfill-labels.ts) to keep its hands
+ * off this row forever after. A bare re-walk preserves the ruling and stamps only the scope
+ * watermark plus `updated_at`.
  *
  * It changes what the NEXT crawl seeds from. It touches nothing already stored — no
  * finding, no track, no crawled row is read, hidden, or deleted here, and none ever
@@ -1631,21 +1634,41 @@ export class LabelNotFoundError extends Error {}
  */
 export async function updateLabelSeedState(
   id: string,
-  seedState: LabelSeedState,
+  seedState?: LabelSeedState,
+  rewalk = false,
 ): Promise<LabelAdminItem> {
   const db = await getDb();
   const now = new Date().toISOString();
+  const assignments: string[] = [];
+  const args: string[] = [];
 
-  await db.batch(
-    [
-      {
-        args: [seedState, now, now, id],
-        sql: `update labels set seed_state = ?, ruled_at = ?, updated_at = ? where id = ?`,
-      },
-      restaleCatalogueRankByLabelStatement(id),
-    ],
-    "write",
-  );
+  if (seedState !== undefined) {
+    assignments.push("seed_state = ?", "ruled_at = ?");
+    args.push(seedState, now);
+  }
+
+  if (seedState === "enabled" || rewalk) {
+    assignments.push("scope_changed_at = ?");
+    args.push(now);
+  }
+
+  assignments.push("updated_at = ?");
+  args.push(now, id);
+
+  const statements = [
+    {
+      args,
+      sql: `update labels set ${assignments.join(", ")} where id = ?`,
+    },
+  ];
+
+  // A seed-state ruling changes capture authorization and owes The Ear a re-rank. A bare re-walk
+  // changes only crawl scheduling, so it deliberately leaves catalogue ranking fresh.
+  if (seedState !== undefined) {
+    statements.push(restaleCatalogueRankByLabelStatement(id));
+  }
+
+  await db.batch(statements, "write");
 
   const result = await db.execute({
     args: [id],

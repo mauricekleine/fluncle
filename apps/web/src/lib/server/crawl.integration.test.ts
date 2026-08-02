@@ -689,6 +689,259 @@ describe("the STORAGE GATE — a track is stored only when its release's label i
   });
 });
 
+describe("the scoped label re-arm — a widened ruling replays refused releases", () => {
+  const SCOPED_LABEL_MBID = "label-scope-rearm";
+  const SCOPED_LABEL_NAME = "Scope Re-arm Records";
+  const SCOPED_LABEL_SLUG = "scope-re-arm-records";
+  const SCOPED_RELEASE = "release-scope-rearm";
+  const SCOPED_RELEASE_NODE = `musicbrainz:release:${SCOPED_RELEASE}`;
+  const SCOPED_LABEL_NODE = `musicbrainz:label:${SCOPED_LABEL_MBID}`;
+  const BEFORE_SCOPE = "2026-07-01T00:00:00.000Z";
+
+  function scopedRelease(id = SCOPED_RELEASE): ReturnType<typeof release> {
+    return {
+      ...release(id, SCOPED_LABEL_NAME, `rg-${id}`, [
+        { id: `recording-${id}`, title: `Track from ${id}` },
+      ]),
+      "label-info": [{ label: { id: SCOPED_LABEL_MBID, name: SCOPED_LABEL_NAME } }],
+    };
+  }
+
+  function stubScopedLabel(releases: { id: string; status?: string }[]): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes(`/release?label=${SCOPED_LABEL_MBID}`)) {
+          return json({ "release-count": releases.length, releases });
+        }
+
+        const detail = url.match(/\/release\/([^?]+)/);
+
+        return detail ? json(scopedRelease(detail[1] ?? SCOPED_RELEASE)) : json({});
+      }),
+    );
+  }
+
+  async function prepareRefusedRelease(): Promise<void> {
+    const { crawlCatalogue } = await import("./crawl");
+
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedLabel(SCOPED_LABEL_NAME, SCOPED_LABEL_SLUG, "undecided");
+    await seedFrontierNode({
+      createdAt: BEFORE_SCOPE,
+      externalId: SCOPED_LABEL_MBID,
+      hop: 0,
+      id: SCOPED_LABEL_NODE,
+      kind: "label",
+      labelSlug: SCOPED_LABEL_SLUG,
+    });
+    stubScopedLabel([{ id: SCOPED_RELEASE }]);
+
+    // A real two-node walk while the label is undecided: browse enqueues the release, then the
+    // release detail reaches the storage gate and settles done with nothing written.
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    const refused = await db.execute({
+      args: [SCOPED_RELEASE_NODE],
+      sql: "select state from crawl_frontier where id = ?",
+    });
+    expect(refused.rows[0]?.state).toBe("done");
+    const tracks = await db.execute("select count(*) as n from tracks");
+    expect(Number(tracks.rows[0]?.n)).toBe(0);
+
+    // Keep the genuine terminal states, but make their watermark ordering deterministic even on
+    // a sub-millisecond test run: the actual server write below supplies the newer scope stamp.
+    await db.execute({
+      args: [BEFORE_SCOPE, SCOPED_LABEL_NODE, SCOPED_RELEASE_NODE],
+      sql: `update crawl_frontier set done_at = ? where id in (?, ?)`,
+    });
+  }
+
+  async function enableScopedLabel(): Promise<void> {
+    const { updateLabelSeedState } = await import("./labels");
+    await updateLabelSeedState(`lbl_${SCOPED_LABEL_SLUG}`, "enabled");
+  }
+
+  it("stores a previously gate-refused release once its label is ENABLED — the back-catalogue re-arm", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+    await prepareRefusedRelease();
+    await enableScopedLabel();
+
+    const rearm = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(rearm.releasesRearmed).toBe(1);
+    expect(rearm.nodesEnqueued).toBe(1);
+
+    const revival = await db.execute({
+      args: [SCOPED_RELEASE_NODE],
+      sql: "select hop, label_slug, state from crawl_frontier where id = ?",
+    });
+    expect(revival.rows[0]?.state).toBe("pending");
+    expect(Number(revival.rows[0]?.hop)).toBe(0);
+    expect(revival.rows[0]?.label_slug).toBe(SCOPED_LABEL_SLUG);
+
+    const stored = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(stored.tracksWritten).toBe(1);
+    const tracks = await db.execute("select title from tracks");
+    expect(tracks.rows.map((row) => text(row.title))).toEqual([`Track from ${SCOPED_RELEASE}`]);
+  });
+
+  it("a second re-arm pass is a no-op — the watermark terminates it", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+    await prepareRefusedRelease();
+    await enableScopedLabel();
+
+    expect((await crawlCatalogue({ limit: 1, maxHop: 0 })).releasesRearmed).toBe(1);
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+
+    const second = await crawlCatalogue({ limit: 0, maxHop: 0 });
+    expect(second.releasesRearmed).toBe(0);
+    expect(second.expanded).toBe(0);
+  });
+
+  it("the re-arm resets hop and label_slug so revived nodes are picked", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+    await prepareRefusedRelease();
+    await db.execute({
+      args: [SCOPED_RELEASE_NODE],
+      sql: `update crawl_frontier set hop = 2, label_slug = 'old-disabled-provenance' where id = ?`,
+    });
+    await enableScopedLabel();
+
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+    const revived = await db.execute({
+      args: [SCOPED_RELEASE_NODE],
+      sql: "select hop, label_slug, state from crawl_frontier where id = ?",
+    });
+    expect(Number(revived.rows[0]?.hop)).toBe(0);
+    expect(revived.rows[0]?.label_slug).toBe(SCOPED_LABEL_SLUG);
+    expect(revived.rows[0]?.state).toBe("pending");
+
+    const picked = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(picked.tracksWritten).toBe(1);
+    const settled = await db.execute({
+      args: [SCOPED_RELEASE_NODE],
+      sql: "select state from crawl_frontier where id = ?",
+    });
+    expect(settled.rows[0]?.state).toBe("done");
+  });
+
+  it("the re-arm skips Bootleg and keeps status-absent releases", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+    const releases = Array.from({ length: 101 }, (_, index) => ({
+      id: `scoped-status-${String(index).padStart(3, "0")}`,
+      ...(index === 0
+        ? { status: "Bootleg" }
+        : index === 1
+          ? { status: "Pseudo-Release" }
+          : index === 2 || index === 100
+            ? {}
+            : { status: "Official" }),
+    }));
+    const browseOffsets: number[] = [];
+    const browseUrls: string[] = [];
+
+    await db.execute("update labels set seed_state = 'disabled'");
+    await seedLabel(SCOPED_LABEL_NAME, SCOPED_LABEL_SLUG, "undecided");
+    await seedFrontierNode({
+      createdAt: BEFORE_SCOPE,
+      externalId: SCOPED_LABEL_MBID,
+      hop: 0,
+      id: SCOPED_LABEL_NODE,
+      kind: "label",
+      labelSlug: SCOPED_LABEL_SLUG,
+      state: "done",
+    });
+
+    for (const item of releases) {
+      await seedFrontierNode({
+        createdAt: BEFORE_SCOPE,
+        externalId: item.id,
+        hop: 2,
+        id: `musicbrainz:release:${item.id}`,
+        kind: "release",
+        labelSlug: "old-disabled-provenance",
+        state: "done",
+      });
+    }
+    await db.execute({
+      args: [BEFORE_SCOPE],
+      sql: "update crawl_frontier set done_at = ? where state = 'done'",
+    });
+    await enableScopedLabel();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const json = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+        if (url.includes(`/release?label=${SCOPED_LABEL_MBID}`)) {
+          const parsed = new URL(url);
+          const offset = Number(parsed.searchParams.get("offset") ?? "0");
+          const limit = Number(parsed.searchParams.get("limit") ?? "100");
+          browseOffsets.push(offset);
+          browseUrls.push(url);
+          return json({
+            "release-count": releases.length,
+            releases: releases.slice(offset, offset + limit),
+          });
+        }
+
+        return json({});
+      }),
+    );
+
+    const firstPage = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(firstPage.releasesRearmed).toBe(1);
+    expect(firstPage.nodesEnqueued).toBe(98);
+
+    const afterFirstPage = await db.execute({
+      args: [
+        "musicbrainz:release:scoped-status-000",
+        "musicbrainz:release:scoped-status-001",
+        "musicbrainz:release:scoped-status-002",
+      ],
+      sql: `select id, state from crawl_frontier where id in (?, ?, ?) order by id`,
+    });
+    expect(afterFirstPage.rows.map((row) => `${text(row.id)}:${text(row.state)}`)).toEqual([
+      "musicbrainz:release:scoped-status-000:done",
+      "musicbrainz:release:scoped-status-001:done",
+      "musicbrainz:release:scoped-status-002:pending",
+    ]);
+
+    const paginating = await db.execute({
+      args: [SCOPED_LABEL_NODE],
+      sql: "select cursor, done_at, state from crawl_frontier where id = ?",
+    });
+    expect(Number(paginating.rows[0]?.cursor)).toBe(100);
+    expect(paginating.rows[0]?.done_at).toBe(BEFORE_SCOPE);
+    expect(paginating.rows[0]?.state).toBe("pending");
+
+    // Let the next tick pick the still-paginating label node; these release nodes model pages the
+    // deep walk drained in between browse ticks. The label's retained `done_at` is untouched.
+    await db.execute({
+      args: [BEFORE_SCOPE],
+      sql: `update crawl_frontier
+            set state = 'done', done_at = ?
+            where kind = 'release' and state = 'pending'`,
+    });
+
+    const secondPage = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(secondPage.nodesEnqueued).toBe(1);
+    expect(browseOffsets).toEqual([0, 100]);
+    expect(browseUrls.every((url) => !new URL(url).searchParams.has("status"))).toBe(true);
+
+    const absentAtTail = await db.execute(
+      "select state from crawl_frontier where id = 'musicbrainz:release:scoped-status-100'",
+    );
+    expect(absentAtTail.rows[0]?.state).toBe("pending");
+  });
+});
+
 describe("the frontier drain — releases never starve behind a discovery wave", () => {
   it("picks enabled-provenance releases before disabled provenance at the same hop", async () => {
     const { crawlCatalogue } = await import("./crawl");

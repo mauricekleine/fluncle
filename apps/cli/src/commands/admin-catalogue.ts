@@ -300,6 +300,8 @@ export type CrawlPassResult = {
   // True when MusicBrainz actively throttled us and the pass stopped on its circuit
   // breaker. The driver must NOT loop: the next tick resumes from durable state.
   rateLimited: boolean;
+  // Scoped label-browse nodes re-armed from a newer label-scope watermark this pass.
+  releasesRearmed: number;
   seeded: number;
   // Stale enabled seed labels re-armed this pass — an enabled label is a subscription, so its
   // later releases surface. Bounded per pass so a mass re-arm spreads over ticks.

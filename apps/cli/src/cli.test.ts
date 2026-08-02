@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fluncleAsciiLogo } from "./brand";
-import { parseTelemetryTimestamp } from "./cli";
+import { labelUpdateLines, parseTelemetryTimestamp } from "./cli";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
 
@@ -58,6 +58,43 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
+  });
+
+  test("admin labels update requires a ruling or a scoped re-walk before fetching", async () => {
+    const result = await runCli(["admin", "labels", "update", "test-label", "--json"]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Pass --seed-state enabled|disabled|undecided or --rewalk");
+  });
+
+  test("admin labels update rejects an invalid supplied ruling even with --rewalk", async () => {
+    const result = await runCli([
+      "admin",
+      "labels",
+      "update",
+      "test-label",
+      "--seed-state",
+      "maybe",
+      "--rewalk",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Pass --seed-state enabled|disabled|undecided");
+  });
+
+  test("admin labels update uses distinct, literal scoped-arm copy", () => {
+    expect(
+      labelUpdateLines(
+        { name: "Test Label", seedState: "disabled", slug: "test-label" },
+        { rewalk: true },
+      ),
+    ).toEqual([
+      "Test Label (test-label) → scoped re-walk armed.",
+      "  The next crawl rechecks its MusicBrainz releases.",
+    ]);
   });
 
   test("admin telemetry validates its page cap before fetching", async () => {
