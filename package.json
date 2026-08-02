@@ -49,6 +49,7 @@
   },
   "type": "module",
   "scripts": {
+    "audit": "bun audit --audit-level=high",
     "build": "turbo run build",
     "check": "bun run lint && bun run format:check && bun run typecheck && bun run test && bun run test:scripts && bun run build",
     "check:fix": "bun run lint:fix && bun run format",
