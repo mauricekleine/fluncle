@@ -16,7 +16,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { RecordingDTOSchema } from "./_shared";
+import { RecordingDTOSchema, UploadContentTypeSchema } from "./_shared";
 
 /** The `{ ok, recording }` envelope the recording writes + reads return. */
 const RecordingEnvelope = z.object({ ok: z.literal(true), recording: RecordingDTOSchema });
@@ -137,7 +137,7 @@ export const presignRecordingUpload = oc
   })
   .input(
     z.looseObject({
-      contentType: z.unknown().optional(),
+      contentType: UploadContentTypeSchema.optional(),
       partCount: z.unknown().optional(),
       recordingId: z.string(),
     }),

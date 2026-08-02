@@ -688,3 +688,30 @@ export const SubmissionSchema = z
     triageVerdict: z.string().optional(),
   })
   .meta({ id: "Submission" });
+
+/**
+ * The Content-Type a caller may ask for on a direct-to-R2 upload presign
+ * (`presign_clip_upload`, `presign_set_video_upload`, `presign_recording_upload`).
+ *
+ * Bounded to `video/<subtype>` because all three ops sign an upload into
+ * `fluncle-videos`, which is served WORLD-READABLE at found.fluncle.com: the value is
+ * baked into the presigned signature (`X-Amz-SignedHeaders`) and stored as the object's
+ * Content-Type, so it is what the CDN serves those bytes as. An unconstrained value lets
+ * an admin-tier upload be served as `text/html` from a Fluncle origin. The sibling
+ * `presign_track_video_uploads` needs no such bound — it derives every artifact's type
+ * server-side from `VIDEO_ARTIFACTS` — and that server-derived map is the shape to prefer
+ * whenever the set of types is known in advance.
+ *
+ * `video/*` is the widest shape any real caller sends: the recording dialog's picker is
+ * `accept="video/*"` and passes `file.type` straight through, and both CLI legs send
+ * `video/mp4` or nothing (each handler defaults to `video/mp4`). Parameters (`; codecs=…`)
+ * are deliberately out — no caller produces one, and the object stores a bare type.
+ *
+ * It REJECTS rather than falling back to the default, so a wrong type is a clean 400
+ * instead of a silently mistyped world-served object. The subtype charset is RFC 6838's;
+ * the 128-char ceiling is well over twice the longest registered `video/*` type.
+ */
+export const UploadContentTypeSchema = z
+  .string()
+  .max(128)
+  .regex(/^video\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/, "Must be a video/* content type");

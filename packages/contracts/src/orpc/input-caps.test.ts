@@ -1,9 +1,11 @@
 // Self-running check for INPUT caps on bounded admin operations — no framework, the
-// `devices.test.ts` style. The writes here are AGENT tier (the box's token drives them, so the
+// `devices.test.ts` style. Most writes here are AGENT tier (the box's token drives them, so the
 // threat is a buggy or compromised sweep posting an unbounded payload, not a stranger);
-// `read_run_ledger` is the operator-tier read. Each cap is asserted at the cap (accepted — the
-// real sizes are far below it) and one past it (REJECTED at the edge, never trimmed: a dropped
-// cost row is a wrong ledger, a dropped cluster is a broken map).
+// `read_run_ledger` and two of the three R2 presigns are operator tier. Each cap is asserted at
+// the cap (accepted — the real sizes are far below it) and one past it (REJECTED at the edge,
+// never trimmed: a dropped cost row is a wrong ledger, a dropped cluster is a broken map).
+// The presign block at the bottom bounds a VALUE rather than a size, for the same reason: what
+// it refuses would otherwise be served to the world under a Fluncle origin.
 // Run: `bun src/orpc/input-caps.test.ts`.
 
 import assert from "node:assert/strict";
@@ -19,6 +21,8 @@ import {
   recordRun,
 } from "./admin-telemetry";
 import { updateGalaxyMap } from "./admin-galaxies";
+import { presignClipUpload, presignSetVideoUpload } from "./admin-mixtapes";
+import { presignRecordingUpload } from "./admin-recordings";
 
 /**
  * The Standard Schema surface we need, spelled out locally rather than imported from
@@ -423,6 +427,58 @@ function accepts(op: unknown, input: unknown): boolean {
     false,
     "an inverted time window is rejected",
   );
+}
+
+// ── the R2 presign ops: a world-served object's Content-Type is bounded to video/* ────────
+//
+// These three sign an upload into `fluncle-videos`, which is served world-readable at
+// found.fluncle.com, and the requested type becomes the stored object's Content-Type — so it
+// is what the CDN serves those bytes as. The bound is a value restriction rather than a batch
+// cap: `text/html` on a Fluncle origin is the thing it exists to refuse. Every real caller is
+// asserted accepted below, so the gate cannot bite a legitimate upload.
+{
+  const presigns = [
+    { input: (contentType: unknown) => ({ clipId: "clp_1", contentType }), op: presignClipUpload },
+    {
+      input: (contentType: unknown) => ({ contentType, mixtapeId: "mx_1", partCount: 1 }),
+      op: presignSetVideoUpload,
+    },
+    {
+      input: (contentType: unknown) => ({ contentType, partCount: 1, recordingId: "rec_1" }),
+      op: presignRecordingUpload,
+    },
+  ];
+
+  for (const { input, op } of presigns) {
+    const id = (op as { "~orpc": { route: { operationId: string } } })["~orpc"].route.operationId;
+
+    // Omitted entirely is the set-video CLI's shape — the handler then defaults to video/mp4.
+    assert.equal(accepts(op, input(undefined)), true, `${id}: an absent contentType is accepted`);
+
+    // The values the real callers send: the CLI legs' literal, and the `accept="video/*"`
+    // recording dialog passing `file.type` through for a .mov / .webm / .mkv pick.
+    for (const contentType of ["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"]) {
+      assert.equal(accepts(op, input(contentType)), true, `${id}: ${contentType} is accepted`);
+    }
+
+    // A type that would make the CDN serve an uploaded object as something other than video.
+    for (const contentType of ["text/html", "image/svg+xml", "application/javascript"]) {
+      assert.equal(accepts(op, input(contentType)), false, `${id}: ${contentType} is rejected`);
+    }
+
+    // Neither a non-string nor an unbounded string can reach the signer any more.
+    assert.equal(accepts(op, input(123)), false, `${id}: a non-string contentType is rejected`);
+    assert.equal(
+      accepts(op, input(`video/${"x".repeat(122)}`)),
+      true,
+      `${id}: a subtype AT the length cap is accepted`,
+    );
+    assert.equal(
+      accepts(op, input(`video/${"x".repeat(123)}`)),
+      false,
+      `${id}: one character past the length cap is rejected`,
+    );
+  }
 }
 
 console.log("input-caps: ok");

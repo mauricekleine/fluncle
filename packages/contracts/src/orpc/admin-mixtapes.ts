@@ -22,7 +22,12 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-import { ClipDTOSchema, MixtapeDTOSchema, MixtapeSocialPostItemSchema } from "./_shared";
+import {
+  ClipDTOSchema,
+  MixtapeDTOSchema,
+  MixtapeSocialPostItemSchema,
+  UploadContentTypeSchema,
+} from "./_shared";
 
 /** The `{ mixtape, ok }` envelope most mixtape ops return. */
 const MixtapeEnvelope = z.object({ mixtape: MixtapeDTOSchema, ok: z.literal(true) });
@@ -396,7 +401,7 @@ export const presignSetVideoUpload = oc
   })
   .input(
     z.looseObject({
-      contentType: z.unknown().optional(),
+      contentType: UploadContentTypeSchema.optional(),
       mixtapeId: z.string(),
       partCount: z.unknown().optional(),
     }),
@@ -438,7 +443,7 @@ export const presignClipUpload = oc
     summary: "Presign a single-PUT direct-to-R2 upload for a clip's cut output",
     tags: ["Admin"],
   })
-  .input(z.looseObject({ clipId: z.string(), contentType: z.unknown().optional() }))
+  .input(z.looseObject({ clipId: z.string(), contentType: UploadContentTypeSchema.optional() }))
   .output(
     z.object({
       clipId: z.string(),
