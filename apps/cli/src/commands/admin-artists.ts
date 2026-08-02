@@ -1,4 +1,53 @@
-import { adminApiGet, adminApiPost } from "../api";
+import {
+  type AddArtistRuleInput,
+  type ArtistRule,
+  type ArtistRuleAddResponse,
+  type ArtistRulesResponse,
+} from "@fluncle/contracts";
+import { adminApiDelete, adminApiGet, adminApiPost } from "../api";
+
+const MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Validate a global artist ruling before the operator-tier request can mutate anything. */
+export function artistRuleInput(
+  artistMbid: string,
+  verdict: string,
+  artistName?: string,
+): AddArtistRuleInput {
+  const cleanMbid = artistMbid.trim();
+  if (!MBID_PATTERN.test(cleanMbid)) {
+    throw new Error("Artist MBID must be a MusicBrainz artist MBID");
+  }
+
+  if (verdict !== "allow" && verdict !== "block") {
+    throw new Error("Pass --verdict allow|block");
+  }
+
+  const cleanName = artistName?.trim();
+  if (artistName !== undefined && !cleanName) {
+    throw new Error("--name must be a non-empty artist name");
+  }
+
+  return {
+    artistMbid: cleanMbid.toLowerCase(),
+    ...(cleanName ? { artistName: cleanName } : {}),
+    verdict,
+  };
+}
+
+export async function listArtistRulesCommand(): Promise<ArtistRule[]> {
+  const response = await adminApiGet<ArtistRulesResponse>("/api/v1/admin/artist-rules");
+  return response.rules;
+}
+
+export async function addArtistRuleCommand(input: AddArtistRuleInput): Promise<ArtistRule> {
+  const response = await adminApiPost<ArtistRuleAddResponse>("/api/v1/admin/artist-rules", input);
+  return response.rule;
+}
+
+export async function removeArtistRuleCommand(id: string): Promise<{ ok: true }> {
+  return adminApiDelete<{ ok: true }>(`/api/v1/admin/artist-rules/${encodeURIComponent(id)}`);
+}
 
 // ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
 // The entity sibling of `admin tracks note`: author the artist's/label's bio through the

@@ -28,6 +28,12 @@
 import { type z } from "zod";
 import { type AlbumDetailSchema, type AlbumListItemSchema } from "./orpc/albums.js";
 import { type ArtistListItemSchema } from "./orpc/artists.js";
+import {
+  type AddArtistRuleInputSchema,
+  type ArtistRuleInputSchema,
+  type ArtistRuleSchema,
+  type ArtistRuleVerdictSchema,
+} from "./orpc/admin-artist-rules.js";
 import { type LabelDetailSchema, type LabelListItemSchema } from "./orpc/labels.js";
 import {
   type AttentionQueueSchema,
@@ -198,6 +204,23 @@ export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
  * back to the raw `tracks.label` string; `findingCount` is derived, never stored.
  */
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
+
+/** An exact-MBID allow/block rule controlling what a future crawl may acquire. */
+export type ArtistRule = z.infer<typeof ArtistRuleSchema>;
+
+/** One member of a per-label whole-set replacement; a nonblank artist name is required. */
+export type ArtistRuleInput = z.infer<typeof ArtistRuleInputSchema>;
+
+/** One global rule add; the server may resolve an omitted artist name from known metadata. */
+export type AddArtistRuleInput = z.infer<typeof AddArtistRuleInputSchema>;
+
+export type ArtistRuleVerdict = z.infer<typeof ArtistRuleVerdictSchema>;
+
+/** List or whole-set replacement response for label-scoped and global artist rules. */
+export type ArtistRulesResponse = Ok<{ rules: ArtistRule[] }>;
+
+/** Response after adding one global artist rule. */
+export type ArtistRuleAddResponse = Ok<{ rule: ArtistRule }>;
 
 /**
  * The label-merge summary (`POST /api/v1/admin/labels/:slug/merge`, RFC musickit-second-authority U2b).

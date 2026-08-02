@@ -23,6 +23,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+import { ArtistRuleInputSchema, ArtistRuleSchema } from "./admin-artist-rules.js";
 
 /**
  * A label's crawl-seed state — the operator's ruling, and CRAWL SCOPE ONLY.
@@ -130,6 +131,61 @@ export const updateLabel = oc
   )
   .output(z.object({ label: LabelAdminItemSchema, ok: z.literal(true) }));
 
+/**
+ * `list_label_artist_rules` → `GET /admin/labels/{id}/artists`
+ * (operationId `listLabelArtistRules`). Admin tier: read the label's exact acquisition
+ * exceptions for the board, dialog, and operator scripts.
+ */
+export const listLabelArtistRules = oc
+  .route({
+    method: "GET",
+    operationId: "listLabelArtistRules",
+    path: "/admin/labels/{id}/artists",
+    summary: "List one label's artist rules for future catalogue acquisition",
+    tags: ["Admin"],
+  })
+  .input(z.object({ id: z.string() }))
+  .output(z.object({ ok: z.literal(true), rules: z.array(ArtistRuleSchema) }));
+
+/**
+ * `replace_label_artist_rules` → `PUT /admin/labels/{id}/artists`
+ * (operationId `replaceLabelArtistRules`). OPERATOR tier: transactionally replace the
+ * complete rule set and re-arm the label scope. A request may carry at most 100 exact-MBID
+ * rules; every member requires a nonblank artist name.
+ */
+export const replaceLabelArtistRules = oc
+  .route({
+    method: "PUT",
+    operationId: "replaceLabelArtistRules",
+    path: "/admin/labels/{id}/artists",
+    summary: "Replace one label's complete artist-rule set (operator)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      id: z.string(),
+      rules: z
+        .array(ArtistRuleInputSchema)
+        .max(100)
+        .superRefine((rules, context) => {
+          const seen = new Set<string>();
+
+          for (const [index, rule] of rules.entries()) {
+            if (seen.has(rule.artistMbid)) {
+              context.addIssue({
+                code: "custom",
+                message: "Each artist MBID may appear only once",
+                path: [index, "artistMbid"],
+              });
+            }
+
+            seen.add(rule.artistMbid);
+          }
+        }),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true), rules: z.array(ArtistRuleSchema) }));
+
 // ── Label merge: fold a slug-split twin into its canonical row (RFC musickit-second-authority, U2b) ──
 // The cleanup for a PRE-EXISTING split — two `labels` rows that mean one label (the Med School /
 // Medschool class). The operator merges the LOSING row into the CANONICAL one: every FK that
@@ -152,6 +208,8 @@ export const MergeLabelResultSchema = z
     aliasWritten: z.object({ alias: z.string(), aliasSlug: z.string() }),
     canonicalName: z.string(),
     canonicalSlug: z.string(),
+    /** Loser-scoped rules deliberately deleted rather than unioned onto the survivor. */
+    droppedRules: z.number(),
     losingName: z.string(),
     losingSlug: z.string(),
     /** The canonical fields filled FROM the loser (canonical-wins coalesce; empty when none were). */
@@ -418,9 +476,11 @@ export const adminLabelsContract = {
   describe_label: describeLabel,
   draft_label_bio: draftLabelBio,
   list_label_aliases: listLabelAliases,
+  list_label_artist_rules: listLabelArtistRules,
   list_labels_admin: listLabelsAdmin,
   list_labels_missing_bio: listLabelsMissingBio,
   merge_label: mergeLabel,
   reject_label_alias: rejectLabelAlias,
+  replace_label_artist_rules: replaceLabelArtistRules,
   update_label: updateLabel,
 };

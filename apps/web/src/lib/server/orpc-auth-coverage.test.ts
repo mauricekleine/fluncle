@@ -193,6 +193,8 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
+  // Global artist acquisition rules are editorial scope changes.
+  add_artist_rule: "operator",
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
   // operator-entered social lands confirmed + public at once.
   add_artist_social: "operator",
@@ -445,6 +447,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The album-bio worklist (albums with findings but no bio yet) — admin tier (agent-allowed
   // read), the list_labels_missing_bio precedent; the bio cron drains it. Publishes nothing.
   list_albums_missing_bio: "admin",
+  // Reading global artist acquisition scope changes nothing.
+  list_artist_rules: "admin",
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
   // precedent; the operator's review-queue station consumes it.
   list_artist_socials: "admin",
@@ -470,6 +474,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The open label-alias candidates the `/admin/labels` review section reads — admin tier
   // (agent-allowed), the list_labels_admin precedent. A pure read; it publishes nothing.
   list_label_aliases: "admin",
+  // Reading one label's exact artist exceptions changes nothing.
+  list_label_artist_rules: "admin",
   // The freshness tap's worklist (D8) — the enabled seed labels due for a fresh-release probe.
   // Agent tier (adminAuth only): a READ of machine state the box's `fluncle-label-releases` sweep
   // drains with its agent token, the `list_track_work` precedent. A pure read; it publishes nothing.
@@ -650,8 +656,12 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
   reject_label_alias: "operator",
   reject_submission: "operator",
+  // Global artist acquisition rules are editorial scope changes.
+  remove_artist_rule: "operator",
   // The review queue's inline remove of a social — operator tier.
   remove_artist_social: "operator",
+  // Whole-set label artist rules steer future acquisition and require the operator.
+  replace_label_artist_rules: "operator",
   // Replace a recording's whole cue set — operator tier (the Rekordbox derivation write
   // target): a write that reshapes what a clip/promote resolves to, so the agent 403s.
   replace_recording_cues: "operator",

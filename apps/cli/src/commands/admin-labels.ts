@@ -1,15 +1,117 @@
 import {
+  type ArtistRule,
+  type ArtistRuleInput,
+  type ArtistRulesResponse,
   type LabelAdminItem,
   type LabelSeedState,
   type MergeLabelResult,
 } from "@fluncle/contracts";
-import { adminApiGet, adminApiPatch, adminApiPost } from "../api";
+import { adminApiGet, adminApiPatch, adminApiPost, adminApiPut } from "../api";
 import {
   buildBioBody,
   type EntityBioDraft,
   type EntityBioResult,
   type EntityBioWorkItem,
 } from "./admin-artists";
+
+const MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function requireArtistMbid(value: unknown, at: string): string {
+  if (typeof value !== "string" || !MBID_PATTERN.test(value.trim())) {
+    throw new Error(`${at}.artistMbid must be a MusicBrainz artist MBID`);
+  }
+
+  return value.trim().toLowerCase();
+}
+
+function requireArtistName(value: unknown, at: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${at}.artistName must be a non-empty string`);
+  }
+
+  return value.trim();
+}
+
+function requireArtistVerdict(value: unknown, at: string): "allow" | "block" {
+  if (value === "allow" || value === "block") {
+    return value;
+  }
+
+  throw new Error(`${at}.verdict must be 'allow' or 'block'`);
+}
+
+/** Parse the complete scoped-rule set before the replace request can mutate anything. */
+export function parseLabelArtistRulesJson(source: string): ArtistRuleInput[] {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch {
+    throw new Error("Rules file must contain valid JSON");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Rules file must contain a JSON array");
+  }
+
+  if (parsed.length > 100) {
+    throw new Error("Rules file may contain at most 100 artist rules");
+  }
+
+  return parsed.map((entry, index) => {
+    const at = `Rules file entry ${index + 1}`;
+
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new Error(`${at} must be an object`);
+    }
+
+    const value = entry as Record<string, unknown>;
+    return {
+      artistMbid: requireArtistMbid(value.artistMbid, at),
+      artistName: requireArtistName(value.artistName, at),
+      verdict: requireArtistVerdict(value.verdict, at),
+    };
+  });
+}
+
+async function resolveLabel(slugOrId: string): Promise<LabelAdminItem> {
+  const { labels } = await adminApiGet<{ labels: LabelAdminItem[]; ok: boolean }>(
+    "/api/v1/admin/labels",
+  );
+  const match = labels.find((label) => label.slug === slugOrId || label.id === slugOrId);
+
+  if (!match) {
+    throw new Error(`No label with slug or id '${slugOrId}' — check \`fluncle labels\``);
+  }
+
+  return match;
+}
+
+/** List one label's artist exceptions. The public slug is resolved to the op's label id first. */
+export async function listLabelArtistRulesCommand(
+  slugOrId: string,
+): Promise<{ label: LabelAdminItem; rules: ArtistRule[] }> {
+  const label = await resolveLabel(slugOrId);
+  const response = await adminApiGet<ArtistRulesResponse>(
+    `/api/v1/admin/labels/${encodeURIComponent(label.id)}/artists`,
+  );
+
+  return { label, rules: response.rules };
+}
+
+/** Transactionally replace one label's complete artist-rule set. */
+export async function replaceLabelArtistRulesCommand(
+  slugOrId: string,
+  rules: ArtistRuleInput[],
+): Promise<{ label: LabelAdminItem; rules: ArtistRule[] }> {
+  const label = await resolveLabel(slugOrId);
+  const response = await adminApiPut<ArtistRulesResponse>(
+    `/api/v1/admin/labels/${encodeURIComponent(label.id)}/artists`,
+    { rules },
+  );
+
+  return { label, rules: response.rules };
+}
 
 // ── The label merge: fold a slug-split twin into its canonical row (RFC musickit-second-authority
 // U2b) ──────────────────────────────────────────────────────────────────────────────────────────
@@ -45,14 +147,7 @@ export async function updateLabelCommand(
   seedState?: LabelSeedState,
   rewalk = false,
 ): Promise<LabelAdminItem> {
-  const { labels } = await adminApiGet<{ labels: LabelAdminItem[]; ok: boolean }>(
-    "/api/v1/admin/labels",
-  );
-  const match = labels.find((label) => label.slug === slugOrId || label.id === slugOrId);
-
-  if (!match) {
-    throw new Error(`No label with slug or id '${slugOrId}' — check \`fluncle labels\``);
-  }
+  const match = await resolveLabel(slugOrId);
 
   const response = await adminApiPatch<{ label: LabelAdminItem; ok: boolean }>(
     `/api/v1/admin/labels/${encodeURIComponent(match.id)}`,

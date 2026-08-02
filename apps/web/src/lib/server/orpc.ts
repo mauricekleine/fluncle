@@ -32,6 +32,7 @@ import { type OrpcContext } from "./orpc-auth";
 import { applyPublicCors, buildPublicCorsMatcher, corsPreflightResponse } from "./orpc-cors";
 import { isApiFaultData } from "./orpc/_shared";
 import { adminAlbumsHandlers } from "./orpc/admin-albums";
+import { adminArtistRulesHandlers } from "./orpc/admin-artist-rules";
 import { adminArtistsHandlers } from "./orpc/admin-artists";
 import { adminAttentionHandlers } from "./orpc/admin-attention";
 import { adminBackfillsHandlers } from "./orpc/admin-backfills";
@@ -104,6 +105,7 @@ const os = implement(contract).$context<OrpcContext>();
 // Add a domain: import its `*Handlers(os)` factory and spread it here.
 export const router = os.router({
   ...adminAlbumsHandlers(os),
+  ...adminArtistRulesHandlers(os),
   ...adminArtistsHandlers(os),
   ...adminAttentionHandlers(os),
   ...adminBackfillsHandlers(os),

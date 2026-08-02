@@ -23,6 +23,7 @@
 
 import { isContractProcedure } from "@orpc/contract";
 import { adminAlbumsContract } from "./admin-albums";
+import { adminArtistRulesContract } from "./admin-artist-rules";
 import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
 import { adminBackfillsContract } from "./admin-backfills";
@@ -128,6 +129,16 @@ export {
   listAlbumsMissingBio,
 } from "./admin-albums";
 export {
+  addArtistRule,
+  AddArtistRuleInputSchema,
+  adminArtistRulesContract,
+  ArtistRuleInputSchema,
+  ArtistRuleSchema,
+  ArtistRuleVerdictSchema,
+  listArtistRules,
+  removeArtistRule,
+} from "./admin-artist-rules";
+export {
   addArtistSocial,
   adminArtistsContract,
   backfillArtistImages,
@@ -178,11 +189,13 @@ export {
   LabelAliasSourceSchema,
   LabelSeedStateSchema,
   listLabelAliases,
+  listLabelArtistRules,
   listLabelsAdmin,
   listLabelsMissingBio,
   mergeLabel,
   MergeLabelResultSchema,
   rejectLabelAlias,
+  replaceLabelArtistRules,
   updateLabel,
 } from "./admin-labels";
 export { adminMigrationsContract, migratePreviewArchive } from "./admin-migrations";
@@ -445,6 +458,7 @@ export {
  */
 export const contract = {
   ...adminAlbumsContract,
+  ...adminArtistRulesContract,
   ...adminArtistsContract,
   ...adminAttentionContract,
   ...adminBackfillsContract,

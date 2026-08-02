@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { fluncleAsciiLogo } from "./brand";
-import { labelUpdateLines, parseTelemetryTimestamp } from "./cli";
+import {
+  ARTIST_RULE_BOUNDARY,
+  artistRuleLines,
+  labelUpdateLines,
+  parseTelemetryTimestamp,
+} from "./cli";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
 
@@ -95,6 +100,79 @@ describe("fluncle CLI parsing and JSON output", () => {
       "Test Label (test-label) → scoped re-walk armed.",
       "  The next crawl rechecks its MusicBrainz releases.",
     ]);
+  });
+
+  test("artist rule commands validate mutation inputs before fetching", async () => {
+    const invalidMbid = await runCli([
+      "admin",
+      "artists",
+      "rule",
+      "not-an-mbid",
+      "--verdict",
+      "allow",
+      "--json",
+    ]);
+    const invalidVerdict = await runCli([
+      "admin",
+      "artists",
+      "rule",
+      "12345678-1234-1234-1234-123456789abc",
+      "--verdict",
+      "skip",
+      "--json",
+    ]);
+    const missingFile = await runCli([
+      "admin",
+      "labels",
+      "artists",
+      "test-label",
+      "--replace",
+      "--json",
+    ]);
+    const strayFile = await runCli([
+      "admin",
+      "labels",
+      "artists",
+      "test-label",
+      "--rules-file",
+      "/does/not/matter.json",
+      "--json",
+    ]);
+
+    expect(invalidMbid.stdout).toContain("Artist MBID must be a MusicBrainz artist MBID");
+    expect(invalidVerdict.stdout).toContain("Pass --verdict allow|block");
+    expect(missingFile.stdout).toContain("Pass --rules-file <json> with --replace");
+    expect(strayFile.stdout).toContain("Pass --replace with --rules-file");
+    for (const result of [invalidMbid, invalidVerdict, missingFile, strayFile]) {
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("");
+    }
+  });
+
+  test("artist rules render as a human table and keep the boundary clause exact", () => {
+    const lines = artistRuleLines([
+      {
+        artistMbid: "12345678-1234-1234-1234-123456789abc",
+        artistName: "Test Artist",
+        artistSpotifyId: null,
+        checkedAt: null,
+        createdAt: "2026-08-01T00:00:00.000Z",
+        id: "arl_test",
+        resolvedMbid: null,
+        resolvedName: null,
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        verdict: "allow",
+      },
+    ]);
+
+    expect(lines[0]).toContain("ID");
+    expect(lines[0]).toContain("VERDICT");
+    expect(lines[2]).toContain("arl_test");
+    expect(lines[2]).toContain("Test Artist");
+    expect(lines[2]).toContain("unresolved");
+    expect(ARTIST_RULE_BOUNDARY).toBe(
+      "Rules change what the next crawl takes. Everything already here stays.",
+    );
   });
 
   test("admin telemetry validates its page cap before fetching", async () => {

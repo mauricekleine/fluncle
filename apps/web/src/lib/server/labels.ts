@@ -1966,6 +1966,7 @@ type LabelMergeRow = {
   name: string;
   parent_label_id: null | string;
   ruled_at: null | string;
+  scope_changed_at: null | string;
   seed_state: LabelSeedState;
   slug: string;
 };
@@ -1974,7 +1975,7 @@ async function getLabelMergeRow(slug: string): Promise<LabelMergeRow | undefined
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select id, slug, name, seed_state, ruled_at, mb_label_id, discogs_label_id,
+    sql: `select id, slug, name, seed_state, ruled_at, scope_changed_at, mb_label_id, discogs_label_id,
                  image_key, image_state, founding_date, founded_location, parent_label_id, lineage_state
           from labels where slug = ? limit 1`,
   });
@@ -2048,6 +2049,14 @@ export async function mergeLabel(
     seedState = loser.seed_state;
     ruledAt = loser.ruled_at;
   }
+
+  // A scope watermark is an event cursor, not an identity fact. Preserve the latest timestamp
+  // across both rows so a merge can never move the crawler's re-arm boundary backwards.
+  const scopeChangedAt =
+    canonical.scope_changed_at == null ||
+    (loser.scope_changed_at != null && loser.scope_changed_at > canonical.scope_changed_at)
+      ? loser.scope_changed_at
+      : canonical.scope_changed_at;
 
   // ── identity + facts, CANONICAL-WINS (fill an EMPTY canonical slot from the loser only) ──
   const reconciled: string[] = [];
@@ -2167,13 +2176,14 @@ export async function mergeLabel(
         lineageState,
         seedState,
         ruledAt,
+        scopeChangedAt,
         now,
         canonical.id,
       ],
       sql: `update labels
               set mb_label_id = ?, discogs_label_id = ?, image_key = ?, image_state = ?,
                   founding_date = ?, founded_location = ?, parent_label_id = ?, lineage_state = ?,
-                  seed_state = ?, ruled_at = ?, updated_at = ?
+                  seed_state = ?, ruled_at = ?, scope_changed_at = ?, updated_at = ?
             where id = ?`,
     },
     // 6: the losing NAME becomes a CONFIRMED alias on the canonical, so the immutable tracks.label
@@ -2187,6 +2197,9 @@ export async function mergeLabel(
     // 7: the canonical ADOPTS the loser's maintained hub counts, censused above — the same batch,
     //    so the re-point (statement 1) and the counts it implies can never half-apply.
     hubCountDeltaStatement("labels", canonical.id, canonicalCredit),
+    // 8: scoped rules belong to this exact label identity. Never repoint or union the losing set
+    //    onto the canonical, because either move can invert the survivor's operator intent.
+    { args: [loser.id], sql: `delete from artist_rules where label_id = ?` },
   ];
 
   const results = await db.batch(statements, "write");
@@ -2195,6 +2208,7 @@ export async function mergeLabel(
     aliasWritten: { alias: loser.name, aliasSlug: loser.slug },
     canonicalName: canonical.name,
     canonicalSlug: canonical.slug,
+    droppedRules: results[8]?.rowsAffected ?? 0,
     losingName: loser.name,
     losingSlug: loser.slug,
     reconciled,

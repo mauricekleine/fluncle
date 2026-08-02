@@ -49,6 +49,8 @@ const PENDING = "__pending__" as const;
 // every route maps to its canonical converted op; the PENDING sentinel is retained
 // for future admin routes (a new route lands here as PENDING until it converts).
 const ADMIN_ROUTE_OPS: Record<string, string> = {
+  // Global artist acquisition rules — contract-only oRPC. Writes are operator tier.
+  "DELETE /admin/artist-rules/{id}": "remove_artist_rule",
   // The `/admin/artists` review queue's inline remove (Unit 5) — contract-only oRPC
   // (no TanStack route file; oRPC owns the path directly). Operator tier.
   "DELETE /admin/artists/socials/{socialId}": "remove_artist_social",
@@ -83,6 +85,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
   // describe_album sibling.
   "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
+  // Global artist acquisition rules — contract-only oRPC. The list is an agent-allowed read.
+  "GET /admin/artist-rules": "list_artist_rules",
   // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
   // worklist) + `resolve_artist` are agent tier (the box's `fluncle-artist-sweep` cron
   // drives both with its agent-scoped token); `backfill_artists` (Unit 1) is agent tier too.
@@ -142,6 +146,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // Admin tier (agent-allowed read).
   "GET /admin/labels/aliases": "list_label_aliases",
   "GET /admin/labels/bio-queue": "list_labels_missing_bio",
+  // Per-label artist acquisition rules — contract-only oRPC. The list is an agent-allowed read.
+  "GET /admin/labels/{id}/artists": "list_label_artist_rules",
   // The label bio-draft — contract-only oRPC (no TanStack route file). Agent tier: the box's
   // bio sweep triggers this Worker-side grounding read (Firecrawl facts + finding titles → a
   // ready-to-author prompt) with its agent token; the describe_label sibling.
@@ -248,6 +254,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly). Agent tier: the box's bio sweep drives the
   // fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/albums/{slug}/bio": "describe_album",
+  // Add one global artist acquisition rule. Operator tier.
+  "POST /admin/artist-rules": "add_artist_rule",
   // The similar-artists precompute sweep (D6) — contract-only oRPC (no TanStack route file;
   // oRPC owns the path directly). Agent tier: the box's agent-token cron drives one tick.
   "POST /admin/artists/rank": "rank_artists",
@@ -585,6 +593,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (no TanStack route file). Admin tier (agent-allowed): the Worker mints new galaxy
   // ids + handles server-side; the box's `fluncle-cluster` cron drives it.
   "PUT /admin/galaxies/map": "update_galaxy_map",
+  // Transactionally replace one label's complete artist-rule set. Operator tier.
+  "PUT /admin/labels/{id}/artists": "replace_label_artist_rules",
   // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",

@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import { DEEZER_CANDIDATE_LIMIT, resolveAnchor } from "./admin-catalogue";
 import { recordCost } from "./admin-costs";
+import { replaceLabelArtistRules } from "./admin-labels";
 import {
   MAX_RUN_LEDGER_PAGE_SIZE,
   MAX_SUMMARY_RAW_CHARS,
@@ -39,6 +40,45 @@ function accepts(op: unknown, input: unknown): boolean {
   assert.ok(!(result instanceof Promise), "validation is synchronous");
 
   return result.issues === undefined;
+}
+
+// ── replace_label_artist_rules: a bounded, duplicate-free whole-set swap ────────────────
+{
+  const rule = (index: number) => ({
+    artistMbid: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+    artistName: `Artist ${index}`,
+    verdict: "allow" as const,
+  });
+
+  assert.equal(
+    accepts(replaceLabelArtistRules, {
+      id: "lbl_test",
+      rules: Array.from({ length: 100 }, (_, index) => rule(index)),
+    }),
+    true,
+    "a label rule set AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(replaceLabelArtistRules, {
+      id: "lbl_test",
+      rules: Array.from({ length: 101 }, (_, index) => rule(index)),
+    }),
+    false,
+    "one artist rule past the cap is rejected",
+  );
+  assert.equal(
+    accepts(replaceLabelArtistRules, { id: "lbl_test", rules: [rule(1), rule(1)] }),
+    false,
+    "a duplicate artist MBID is rejected before the transaction",
+  );
+  assert.equal(
+    accepts(replaceLabelArtistRules, {
+      id: "lbl_test",
+      rules: [{ ...rule(1), artistName: " " }],
+    }),
+    false,
+    "a bare MBID without a display name is rejected",
+  );
 }
 
 // ── record_cost: at most 500 rows per batch (the widest sweep queue is 50) ────────────────

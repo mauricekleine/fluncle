@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync, readFileSync } from "node:fs";
+import { type ArtistRule } from "@fluncle/contracts";
 import path from "node:path";
 import { Command, CommanderError } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
@@ -339,6 +340,51 @@ type ArtistResolveOptions = {
   limit?: string;
   queue?: boolean;
 };
+
+type ArtistRuleOptions = {
+  json: boolean;
+  name?: string;
+  verdict: string;
+};
+
+type LabelArtistsOptions = {
+  json: boolean;
+  replace: boolean;
+  rulesFile?: string;
+};
+
+export const ARTIST_RULE_BOUNDARY =
+  "Rules change what the next crawl takes. Everything already here stays.";
+
+function artistRuleWriteLine(prefix: string): string {
+  return `${prefix} — ${ARTIST_RULE_BOUNDARY.replace(/^R/, "r")}`;
+}
+
+/** A compact fixed-width table shared by the global and per-label artist-rule reads. */
+export function artistRuleLines(rules: ArtistRule[]): string[] {
+  if (rules.length === 0) {
+    return ["No artist rules."];
+  }
+
+  const rows = rules.map((rule) => [
+    rule.id,
+    rule.verdict,
+    rule.resolvedName ?? rule.artistName,
+    rule.resolvedMbid ?? rule.artistMbid,
+    rule.artistSpotifyId ?? "unresolved",
+  ]);
+  const headings = ["ID", "VERDICT", "ARTIST", "MUSICBRAINZ", "SPOTIFY"];
+  const widths = headings.map((heading, index) =>
+    Math.max(heading.length, ...rows.map((row) => row[index]?.length ?? 0)),
+  );
+  const line = (row: string[]) =>
+    row
+      .map((value, index) => value.padEnd(widths[index] ?? value.length))
+      .join("  ")
+      .trimEnd();
+
+  return [line(headings), line(widths.map((width) => "-".repeat(width))), ...rows.map(line)];
+}
 
 // `admin artists|labels|albums describe` — the voiced-bio author (the entity-bio engine). Mirrors
 // `admin tracks note`: `--bio`/`--bio-file` carry the gated text, `--queue` shows the
@@ -2954,6 +3000,64 @@ JSON field reference:
       await runArtistsRank(options, rankArtistsCommand);
     });
 
+  artists
+    .command("rule")
+    .description("Always or never take one MusicBrainz artist's records (operator)")
+    .argument("<artist-mbid>", "The MusicBrainz artist MBID")
+    .requiredOption("--verdict <verdict>", "The ruling: allow or block")
+    .option("--name <name>", "Artist name (optional; the server resolves it when omitted)")
+    .option("--json", "Print JSON", false)
+    .action(async (artistMbid: string, options: ArtistRuleOptions) => {
+      const { addArtistRuleCommand, artistRuleInput } = await import("./commands/admin-artists");
+      const rule = await addArtistRuleCommand(
+        artistRuleInput(artistMbid, options.verdict, options.name),
+      );
+
+      if (options.json) {
+        printJson({ ok: true, rule });
+        return;
+      }
+
+      console.log(
+        artistRuleWriteLine(
+          `Rule set for ${rule.resolvedName ?? rule.artistName}: ${rule.verdict.toUpperCase()}`,
+        ),
+      );
+    });
+
+  artists
+    .command("rules")
+    .description("List the global artist crawl rules")
+    .option("--json", "Print JSON", false)
+    .action(async (options: JsonOptions) => {
+      const { listArtistRulesCommand } = await import("./commands/admin-artists");
+      const rules = await listArtistRulesCommand();
+
+      if (options.json) {
+        printJson({ ok: true, rules });
+        return;
+      }
+
+      console.log(artistRuleLines(rules).join("\n"));
+    });
+
+  artists
+    .command("unrule")
+    .description("Remove one global artist crawl rule (operator)")
+    .argument("<id>", "The artist rule id")
+    .option("--json", "Print JSON", false)
+    .action(async (id: string, options: JsonOptions) => {
+      const { removeArtistRuleCommand } = await import("./commands/admin-artists");
+      const result = await removeArtistRuleCommand(id);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(artistRuleWriteLine(`Rule removed: ${id}`));
+    });
+
   // `draft_artist_bio` → `admin artists draft-bio <slug>`. The box's bio sweep's TRIGGER: the
   // Worker gathers the grounding (Firecrawl facts + finding titles) and returns a
   // ready-to-author prompt + its provenance version. Prints the JSON the sweep consumes.
@@ -3032,6 +3136,49 @@ JSON field reference:
       await runEntityBioDraft("label", slug, options, draftLabelBioCommand);
     });
 
+  labels
+    .command("artists")
+    .description("List or replace one label's artist crawl rules")
+    .argument("<slug>", "The label's slug (an exact lbl_… id also works)")
+    .option("--replace", "Replace the complete rule set from --rules-file", false)
+    .option("--rules-file <file>", "JSON array of { artistMbid, artistName, verdict } rules")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string, options: LabelArtistsOptions) => {
+      const {
+        listLabelArtistRulesCommand,
+        parseLabelArtistRulesJson,
+        replaceLabelArtistRulesCommand,
+      } = await import("./commands/admin-labels");
+
+      if (!options.replace && options.rulesFile !== undefined) {
+        throw new Error("Pass --replace with --rules-file");
+      }
+
+      if (options.replace && options.rulesFile === undefined) {
+        throw new Error("Pass --rules-file <json> with --replace");
+      }
+
+      const result = options.replace
+        ? await replaceLabelArtistRulesCommand(
+            slug,
+            parseLabelArtistRulesJson(readFileSync(options.rulesFile ?? "", "utf8")),
+          )
+        : await listLabelArtistRulesCommand(slug);
+
+      if (options.json) {
+        printJson({ ok: true, rules: result.rules });
+        return;
+      }
+
+      if (options.replace) {
+        const noun = result.rules.length === 1 ? "rule" : "rules";
+        console.log(artistRuleWriteLine(`${result.rules.length} ${noun} set`));
+        return;
+      }
+
+      console.log(artistRuleLines(result.rules).join("\n"));
+    });
+
   // `update_label` → `admin labels update <slug> [--seed-state <state>] [--rewalk]` (operator).
   // The ruling changes crawl scope; the bare re-walk re-arms the label without changing its ruling.
   labels
@@ -3096,6 +3243,7 @@ JSON field reference:
       const {
         aliasWritten,
         canonicalSlug: canon,
+        droppedRules,
         losingSlug: loser,
         reconciled,
         repointed,
@@ -3105,6 +3253,7 @@ JSON field reference:
       console.log(
         `  Re-pointed: ${repointed.tracks} track(s), ${repointed.childLabels} sublabel(s), ${repointed.aliases} alias(es).`,
       );
+      console.log(`  Dropped: ${droppedRules} loser-scoped artist rule(s).`);
       console.log(
         reconciled.length > 0
           ? `  Filled onto ${canon} (was empty): ${reconciled.join(", ")}.`
@@ -7865,6 +8014,7 @@ const stringOptions = new Set([
   "--mime",
   "--min-phrase-words",
   "--model",
+  "--name",
   "--note",
   "--ok",
   "--order",
@@ -7882,6 +8032,7 @@ const stringOptions = new Set([
   "--reasoning",
   "--recorded-at",
   "--recording",
+  "--rules-file",
   "--render",
   "--scene",
   "--scheduled-for",

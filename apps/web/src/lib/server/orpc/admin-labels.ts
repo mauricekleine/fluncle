@@ -14,6 +14,7 @@
 
 import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
 import { purgeEntityCache } from "../edge-cache";
+import { listLabelArtistRules, replaceLabelArtistRules } from "../artist-rules";
 import {
   confirmLabelAlias,
   fillEmptyLabelBio,
@@ -67,6 +68,43 @@ export function adminLabelsHandlers(os: Implementer) {
         const label = await updateLabelSeedState(input.id, input.seedState, input.rewalk);
 
         return { label, ok: true } as const;
+      } catch (error) {
+        if (error instanceof LabelNotFoundError) {
+          throw new ORPCError("NOT_FOUND", { message: error.message });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
+  // GET /admin/labels/{id}/artists — ADMIN tier: read one label's exact-MBID acquisition
+  // exceptions. Reading scope changes nothing, so the box's agent token may inspect it.
+  const listLabelArtistRulesHandler = os.list_label_artist_rules
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const rules = await listLabelArtistRules(input.id);
+
+        return { ok: true as const, rules };
+      } catch (error) {
+        if (error instanceof LabelNotFoundError) {
+          throw new ORPCError("NOT_FOUND", { message: error.message });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
+  // PUT /admin/labels/{id}/artists — OPERATOR tier: replace the complete per-label set
+  // transactionally and re-arm that acquisition scope. Existing stored rows stay untouched.
+  const replaceLabelArtistRulesHandler = os.replace_label_artist_rules
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const rules = await replaceLabelArtistRules(input.id, input.rules);
+
+        return { ok: true as const, rules };
       } catch (error) {
         if (error instanceof LabelNotFoundError) {
           throw new ORPCError("NOT_FOUND", { message: error.message });
@@ -294,10 +332,12 @@ export function adminLabelsHandlers(os: Implementer) {
     describe_label: describeLabelHandler,
     draft_label_bio: draftLabelBioHandler,
     list_label_aliases: listLabelAliasesHandler,
+    list_label_artist_rules: listLabelArtistRulesHandler,
     list_labels_admin: listLabelsAdminHandler,
     list_labels_missing_bio: listLabelsMissingBioHandler,
     merge_label: mergeLabelHandler,
     reject_label_alias: rejectLabelAliasHandler,
+    replace_label_artist_rules: replaceLabelArtistRulesHandler,
     update_label: updateLabelHandler,
   };
 }

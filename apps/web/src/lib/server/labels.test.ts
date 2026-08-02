@@ -934,6 +934,7 @@ async function insertFullLabel(opts: {
   name: string;
   parentLabelId?: string;
   ruledAt?: string;
+  scopeChangedAt?: string;
   seedState?: string;
   slug: string;
 }): Promise<void> {
@@ -945,6 +946,7 @@ async function insertFullLabel(opts: {
       opts.slug,
       opts.seedState ?? "undecided",
       opts.ruledAt ?? null,
+      opts.scopeChangedAt ?? null,
       opts.mbLabelId ?? null,
       opts.discogsLabelId ?? null,
       opts.imageKey ?? null,
@@ -957,10 +959,10 @@ async function insertFullLabel(opts: {
       now,
     ],
     sql: `insert into labels
-            (id, name, slug, seed_state, ruled_at, mb_label_id, discogs_label_id, image_key,
+            (id, name, slug, seed_state, ruled_at, scope_changed_at, mb_label_id, discogs_label_id, image_key,
              image_state, founding_date, founded_location, parent_label_id, lineage_state,
              created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -981,6 +983,51 @@ async function labelIdOfTrack(trackId: string): Promise<null | string> {
   });
 
   return (result.rows[0]?.label_id as null | string) ?? null;
+}
+
+async function insertArtistRule(opts: {
+  artistMbid: string;
+  id: string;
+  labelId?: null | string;
+  verdict?: "allow" | "block";
+}): Promise<void> {
+  const now = "2026-08-02T00:00:00.000Z";
+  await db.execute({
+    args: [
+      opts.id,
+      opts.artistMbid,
+      `Artist ${opts.artistMbid}`,
+      opts.verdict ?? "block",
+      opts.labelId ?? null,
+      now,
+      now,
+    ],
+    sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+          values (?, ?, ?, ?, ?, 'operator', ?, ?)`,
+  });
+}
+
+async function artistRuleIds(): Promise<string[]> {
+  const result = await db.execute(`select id from artist_rules order by id`);
+  const ids: string[] = [];
+
+  for (const row of result.rows) {
+    if (typeof row.id === "string") {
+      ids.push(row.id);
+    }
+  }
+
+  return ids;
+}
+
+async function scopeChangedAtOf(labelId: string): Promise<null | string> {
+  const result = await db.execute({
+    args: [labelId],
+    sql: `select scope_changed_at from labels where id = ?`,
+  });
+
+  return (result.rows[0]?.scope_changed_at as null | string) ?? null;
 }
 
 describe("mergeLabel (the operator's slug-split cleanup)", () => {
@@ -1072,6 +1119,41 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     expect(result.seedState).toBe("disabled");
     expect((await getLabelBySlug("canon"))?.id).toBe("lbl_canon");
     expect(await seedStateOf("canon")).toBe("disabled");
+  });
+
+  it("drops only the loser's scoped rules and reports the deliberate loss", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Canon", slug: "canon" });
+    await insertFullLabel({ id: "lbl_loser", name: "Loser", slug: "loser" });
+    await insertArtistRule({ artistMbid: "mbid-canon", id: "arl_canon", labelId: "lbl_canon" });
+    await insertArtistRule({ artistMbid: "mbid-loser-1", id: "arl_loser_1", labelId: "lbl_loser" });
+    await insertArtistRule({ artistMbid: "mbid-loser-2", id: "arl_loser_2", labelId: "lbl_loser" });
+    await insertArtistRule({ artistMbid: "mbid-global", id: "arl_global" });
+
+    const result = await mergeLabel("loser", "canon");
+
+    expect(result.droppedRules).toBe(2);
+    expect(await artistRuleIds()).toEqual(["arl_canon", "arl_global"]);
+  });
+
+  it("keeps the latest scope watermark so a merge never moves the re-arm cursor backwards", async () => {
+    const older = "2026-07-31T00:00:00.000Z";
+    const newer = "2026-08-01T00:00:00.000Z";
+    await insertFullLabel({
+      id: "lbl_canon",
+      name: "Canon",
+      scopeChangedAt: older,
+      slug: "canon",
+    });
+    await insertFullLabel({
+      id: "lbl_loser",
+      name: "Loser",
+      scopeChangedAt: newer,
+      slug: "loser",
+    });
+
+    await mergeLabel("loser", "canon");
+
+    expect(await scopeChangedAtOf("lbl_canon")).toBe(newer);
   });
 
   it("REFUSES when both rows carry an operator ruling and their seed states disagree", async () => {
