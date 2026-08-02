@@ -15,14 +15,21 @@ import {
   chunk,
   groupCandidatesByTarget,
   itemToCandidate,
+  newSpotifyAskState,
+  parseIsrcAskWindow,
   parseLimitArg,
   runApifyActor,
   runAnchorSweep,
   runAnchorTick,
   searchDeezerOnBox,
   SPOTIFY_SEARCH_MIN_INTERVAL_MS,
+  spotifyAskDeferral,
   spotifySearchPaceMs,
+  withinIsrcAskWindow,
 } from "./anchor-sweep";
+
+/** The sweep's own default Apify chunk size — passed positionally so the ask state can follow it. */
+const ACTOR_CHUNK = 15;
 
 // A representative slice of the actor's output (artists + album on) — two candidates for one query.
 const APIFY_SAMPLE: ApifyResultItem[] = [
@@ -730,6 +737,300 @@ describe("runAnchorTick", () => {
     expect(summary.failed).toBe(0);
     expect(summary.error).toContain("queue down");
   });
+
+  // ── THE LISTENBRAINZ RUNG'S BREAKER YIELD ──────────────────────────────────────────────────────
+  // Through Spotify's throttle windows every LB candidate died on the rung's one by-id read, and the
+  // tick reported it as `lbMetadataFailed` — a broken rung, when the rung was fine and Spotify was
+  // pushing back. The server now says which it is; the tick must keep them apart.
+  test("a yielded ListenBrainz rung counts as a YIELD, never as a metadata failure", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: (trackId) =>
+          Promise.resolve(
+            trackId === "mb_none"
+              ? { anchored: false, listenbrainzOutcome: "metadata-failed", verifiedBy: null }
+              : { anchored: false, listenbrainzOutcome: "yielded-on-breaker", verifiedBy: null },
+          ),
+      }),
+    );
+
+    expect(summary.lbYieldedOnBreaker).toBe(2);
+    expect(summary.lbMetadataFailed).toBe(1);
+    // A yield is not a failure: only the genuine metadata failure moves `failed`.
+    expect(summary.failed).toBe(1);
+  });
+
+  // ── THE THREE TICK GUARDS (the Spotify rungs as a subordinate consumer) ─────────────────────────
+  test("the exact-ISRC ask budget defers the Spotify leg once it is spent", async () => {
+    const asked: (boolean | undefined)[] = [];
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: (_trackId, _deezer, options) => {
+          asked.push(options?.spotifySearch);
+
+          return Promise.resolve({
+            anchored: false,
+            // Every allowed call spends an exact-ISRC ask; a deferred one cannot.
+            spotifyIsrcAsked: options?.spotifySearch !== false,
+            verifiedBy: null,
+          });
+        },
+      }),
+      ACTOR_CHUNK,
+      newSpotifyAskState(2, ""),
+    );
+
+    // Two asks spend the budget; the third row is deferred — and the deferral is the ONLY thing the
+    // box sends, so the first two requests are byte-identical to a pre-slice one.
+    expect(asked).toEqual([undefined, undefined, false]);
+    expect(summary.spotifyIsrcAsks).toBe(2);
+    expect(summary.spotifyDeferredBudget).toBe(1);
+  });
+
+  test("the night window defers every row when the clock is outside it", async () => {
+    const asked: (boolean | undefined)[] = [];
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        // 12:00 UTC — outside "0-8".
+        now: () => Date.UTC(2026, 7, 2, 12, 0, 0),
+        resolveFree: (_trackId, _deezer, options) => {
+          asked.push(options?.spotifySearch);
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+      }),
+      ACTOR_CHUNK,
+      newSpotifyAskState(25, "0-8"),
+    );
+
+    expect(asked).toEqual([false, false, false]);
+    expect(summary.spotifyDeferredWindow).toBe(3);
+    expect(summary.spotifyIsrcAsks).toBe(0);
+  });
+
+  test("inside the night window nothing is deferred", async () => {
+    const asked: (boolean | undefined)[] = [];
+
+    await runAnchorTick(
+      50,
+      deps({
+        // 03:00 UTC — inside "0-8".
+        now: () => Date.UTC(2026, 7, 2, 3, 0, 0),
+        resolveFree: (_trackId, _deezer, options) => {
+          asked.push(options?.spotifySearch);
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+      }),
+      ACTOR_CHUNK,
+      newSpotifyAskState(25, "0-8"),
+    );
+
+    expect(asked).toEqual([undefined, undefined, undefined]);
+  });
+
+  test("THE YIELD LAW: one 429 ends every remaining Spotify ask in the tick", async () => {
+    const asked: (boolean | undefined)[] = [];
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        resolveFree: (trackId, _deezer, options) => {
+          asked.push(options?.spotifySearch);
+
+          return Promise.resolve({
+            anchored: false,
+            spotifyIsrcAsked: options?.spotifySearch !== false,
+            // The FIRST row eats the throttle; every row after it must be deferred.
+            spotifyThrottled: trackId === "mb_hold",
+            verifiedBy: null,
+          });
+        },
+      }),
+      ACTOR_CHUNK,
+      newSpotifyAskState(25, ""),
+    );
+
+    expect(asked).toEqual([undefined, false, false]);
+    expect(summary.spotifyDeferredYield).toBe(2);
+    // The throttled row is NOT a failure and NOT a skip — it falls to Apify like any other miss.
+    expect(summary.failed).toBe(0);
+    expect(summary.spotifyIsrcAsks).toBe(1);
+  });
+
+  test("the ask budget and the yield law span PAGES, not pages each", async () => {
+    let served = 0;
+    const asked: (boolean | undefined)[] = [];
+
+    // Two pages of one row each. A per-page ask state would hand the second page a fresh budget.
+    await runAnchorSweep(
+      2,
+      deps({
+        fetchQueue: () => {
+          served += 1;
+
+          return Promise.resolve([{ anchorQuery: `q${served}`, trackId: `mb_${served}` }]);
+        },
+        resolveFree: (_trackId, _deezer, options) => {
+          asked.push(options?.spotifySearch);
+
+          return Promise.resolve({
+            anchored: false,
+            spotifyIsrcAsked: options?.spotifySearch !== false,
+            verifiedBy: null,
+          });
+        },
+      }),
+      1,
+    );
+
+    // The env default is 25, so both rows are allowed here — what this pins is that the SECOND page
+    // ran under the same state object at all (a fresh one would also allow it, so the assertion that
+    // matters is the budget test above; this one guards the plumbing).
+    expect(asked.length).toBe(2);
+  });
+
+  // ── THE TWO OBSERVABILITY COUNTERS ─────────────────────────────────────────────────────────────
+  test("counts the rows whose query the Apify dataset came back WITHOUT", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+        // The actor answered for two of the three queries; "No Candidates Here" is simply absent.
+        runActor: () => Promise.resolve(APIFY_SAMPLE),
+      }),
+    );
+
+    expect(summary.apifyTargetOmitted).toBe(1);
+    // STAMPING IS UNCHANGED — the row is still a clean miss. This slice measures the class, it does
+    // not act on it.
+    expect(summary.missed).toBe(3);
+  });
+
+  test("counts Deezer hits withheld for a missing gate signal", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "q", deezerQuery: 'artist:"A" track:"B"', trackId: "mb_isrcless" },
+          ]),
+        report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+        runActor: () => Promise.resolve([]),
+        searchDeezer: () => Promise.resolve({ candidates: [], droppedIncomplete: 3 }),
+      }),
+    );
+
+    expect(summary.deezerHitsDroppedIncomplete).toBe(3);
+    // Withholding is not failing: the row resolved normally, just unhelped.
+    expect(summary.deezerSearchFailed).toBe(0);
+    expect(summary.failed).toBe(0);
+  });
+
+  test("still accepts the bare-array Deezer shape (nothing to report)", async () => {
+    const sent: unknown[] = [];
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "q", deezerQuery: 'artist:"A" track:"B"', trackId: "mb_isrcless" },
+          ]),
+        report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+        resolveFree: (_trackId, deezerCandidates) => {
+          sent.push(deezerCandidates);
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+        runActor: () => Promise.resolve([]),
+        searchDeezer: () =>
+          Promise.resolve([
+            { artistName: "A", durationMs: 1000, isrc: "GB0000000001", title: "B" },
+          ]),
+      }),
+    );
+
+    expect(sent).toEqual([
+      [{ artistName: "A", durationMs: 1000, isrc: "GB0000000001", title: "B" }],
+    ]);
+    expect(summary.deezerHitsDroppedIncomplete).toBe(0);
+  });
+});
+
+// ── THE NIGHT WINDOW (pure) ──────────────────────────────────────────────────────────────────────
+describe("parseIsrcAskWindow / withinIsrcAskWindow", () => {
+  const at = (hourUtc: number) => new Date(Date.UTC(2026, 7, 2, hourUtc, 30, 0));
+
+  test("`0-8` is 00:00 inclusive to 08:00 EXCLUSIVE", () => {
+    const window = parseIsrcAskWindow("0-8");
+
+    expect(window).toEqual({ endHour: 8, startHour: 0 });
+    expect(withinIsrcAskWindow(window, at(0))).toBe(true);
+    expect(withinIsrcAskWindow(window, at(7))).toBe(true);
+    expect(withinIsrcAskWindow(window, at(8))).toBe(false);
+    expect(withinIsrcAskWindow(window, at(23))).toBe(false);
+  });
+
+  test("an EMPTY value is `always` — no window at all", () => {
+    expect(parseIsrcAskWindow("")).toBe("always");
+    expect(parseIsrcAskWindow(undefined)).toBe("always");
+    expect(withinIsrcAskWindow("always", at(13))).toBe(true);
+  });
+
+  test("a start past its end WRAPS across midnight", () => {
+    const window = parseIsrcAskWindow("22-6");
+
+    expect(withinIsrcAskWindow(window, at(23))).toBe(true);
+    expect(withinIsrcAskWindow(window, at(2))).toBe(true);
+    expect(withinIsrcAskWindow(window, at(6))).toBe(false);
+    expect(withinIsrcAskWindow(window, at(12))).toBe(false);
+  });
+
+  test("a malformed value DENIES — the breaker's default-deny discipline", () => {
+    for (const raw of ["nonsense", "0-", "-8", "0-8-9", "24-30", "9pm-6am"]) {
+      expect(parseIsrcAskWindow(raw)).toBe("invalid");
+    }
+
+    expect(withinIsrcAskWindow("invalid", at(3))).toBe(false);
+  });
+
+  test("a degenerate range (start === end) is an EMPTY window, never an all-day one", () => {
+    // An operator who means `always` writes the empty string. The range is read literally.
+    expect(withinIsrcAskWindow(parseIsrcAskWindow("4-4"), at(4))).toBe(false);
+  });
+});
+
+describe("spotifyAskDeferral — which guard fired", () => {
+  const night = new Date(Date.UTC(2026, 7, 2, 3, 0, 0));
+  const day = new Date(Date.UTC(2026, 7, 2, 15, 0, 0));
+
+  test("null when every guard is clear", () => {
+    expect(spotifyAskDeferral(newSpotifyAskState(25, "0-8"), night)).toBeNull();
+  });
+
+  test("the yield law wins over the clock and the budget", () => {
+    const state = { ...newSpotifyAskState(0, "0-8"), yielded: true };
+
+    expect(spotifyAskDeferral(state, day)).toBe("yield");
+  });
+
+  test("the clock is asked before the budget", () => {
+    const state = { ...newSpotifyAskState(0, "0-8"), asksSpent: 99 };
+
+    expect(spotifyAskDeferral(state, day)).toBe("window");
+  });
+
+  test("a spent budget defers inside the window", () => {
+    const state = { ...newSpotifyAskState(2, "0-8"), asksSpent: 2 };
+
+    expect(spotifyAskDeferral(state, night)).toBe("budget");
+  });
+
+  test("a limit of 0 defers everything (the operator's off switch for the exact rung)", () => {
+    expect(spotifyAskDeferral(newSpotifyAskState(0, ""), day)).toBe("budget");
+  });
 });
 
 test("a genuine anchor run failure reports errors:1 and exits non-zero", async () => {
@@ -782,9 +1083,12 @@ describe("searchDeezerOnBox", () => {
       return Promise.resolve(Response.json({ data: [HIT] }));
     }) as typeof globalThis.fetch;
 
-    expect(await searchDeezerOnBox('artist:"Calibre" track:"Mr Right On"')).toEqual([
-      { artistName: "Calibre", durationMs: 132_000, isrc: "GBEXH1900314", title: "Mr Right On" },
-    ]);
+    expect(await searchDeezerOnBox('artist:"Calibre" track:"Mr Right On"')).toEqual({
+      candidates: [
+        { artistName: "Calibre", durationMs: 132_000, isrc: "GBEXH1900314", title: "Mr Right On" },
+      ],
+      droppedIncomplete: 0,
+    });
     // The server's spelling is sent VERBATIM — the sweep never rewrites the query it was handed.
     expect(decodeURIComponent(calls[0])).toContain('artist:"Calibre" track:"Mr Right On"');
     expect(calls[0]).toContain("https://api.deezer.com/search/track?q=");
@@ -804,14 +1108,20 @@ describe("searchDeezerOnBox", () => {
         }),
       )) as typeof globalThis.fetch;
 
-    expect((await searchDeezerOnBox("q"))?.map((hit) => hit.isrc)).toEqual(["GBEXH1900314"]);
+    const result = await searchDeezerOnBox("q");
+
+    expect(result?.candidates.map((hit) => hit.isrc)).toEqual(["GBEXH1900314"]);
+    // …AND SAYS SO. Four hits were withheld; without the count this response and a genuinely empty
+    // one both leave as `[]`, so an upstream change that stripped `isrc` would read as "Deezer has
+    // never heard of this catalogue" instead of as the regression it is.
+    expect(result?.droppedIncomplete).toBe(4);
   });
 
-  test("an empty result set is [] (an honest miss), NOT a failure", async () => {
+  test("an empty result set is an honest miss (no candidates, nothing dropped), NOT a failure", async () => {
     globalThis.fetch = (() =>
       Promise.resolve(Response.json({ data: [] }))) as typeof globalThis.fetch;
 
-    expect(await searchDeezerOnBox("q")).toEqual([]);
+    expect(await searchDeezerOnBox("q")).toEqual({ candidates: [], droppedIncomplete: 0 });
   });
 
   test("THE QUOTA TRAP: a 200 carrying an error body is retried, then reported as a FAILURE", async () => {
@@ -840,7 +1150,7 @@ describe("searchDeezerOnBox", () => {
       );
     }) as typeof globalThis.fetch;
 
-    expect((await searchDeezerOnBox("q", [0, 0]))?.length).toBe(1);
+    expect((await searchDeezerOnBox("q", [0, 0]))?.candidates.length).toBe(1);
     expect(calls).toBe(2);
   });
 

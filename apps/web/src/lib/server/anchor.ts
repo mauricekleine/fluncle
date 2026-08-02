@@ -18,6 +18,9 @@
 //      MusicBrainz recording MBID → Spotify track ids for free, with no auth (lib/server/
 //      listenbrainz.ts). The first id's metadata is fetched with ONE `GET /v1/tracks/{id}` (a cheap
 //      by-id read, never a search) to get its ISRC + duration, and that candidate runs the gate below.
+//      That one read draws on the SHARED official app, so it YIELDS to the throttle breaker
+//      (anchor-spotify-search.ts) and RECORDS into the shared call meter — before it did neither, and
+//      through Spotify's throttle windows every free candidate died on it and was re-bought from Apify.
 //   2/3. THE SPOTIFY SEARCH RUNGS (slice 2, DARK). When the free rung misses, and ONLY when the dark
 //      flag `anchor_spotify_search_enabled` is on and we are outside the Friday-refresh window
 //      (lib/server/anchor-spotify-search.ts), the row is resolved against the official Spotify app's
@@ -71,7 +74,12 @@
 // and the counter are written together, always — one attempt, one bump — so neither can drift.
 
 import { isAnchorApifyEnabled } from "./anchor-apify";
-import { anchorSpotifySearchAllowed, isAnchorSpotifySearchEnabled } from "./anchor-spotify-search";
+import {
+  anchorSpotifyBreakerAllows,
+  anchorSpotifySearchAllowed,
+  isAnchorSpotifySearchEnabled,
+  recordAnchorSpotifyCall,
+} from "./anchor-spotify-search";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
 import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
@@ -649,7 +657,15 @@ export async function anchorTrack(
 /** Which rung of the free (non-Apify) resolver waterfall anchored a row, or `null` on a full miss. */
 export type AnchorResolveSource = "listenbrainz" | "spotify-isrc" | "spotify-search";
 
-/** The ListenBrainz rung's exact terminal outcome for this row. */
+/**
+ * The ListenBrainz rung's exact terminal outcome for this row.
+ *
+ * `yielded-on-breaker` is DISTINCT from `metadata-failed` on purpose. Both end with no candidate,
+ * but one is a read that FAILED and the other is a read we chose not to make — and folding the
+ * second into the first is exactly how the money leak stayed invisible: through a Spotify throttle
+ * window `lbMetadataFailed` climbed to equal the whole tick's `failed` count, which reads as a broken
+ * rung rather than as backpressure. A yielded rung must look in the summary like what it is.
+ */
 export type ListenBrainzAnchorOutcome =
   | "anchored"
   | "empty-ids"
@@ -658,7 +674,8 @@ export type ListenBrainzAnchorOutcome =
   | "no-map"
   | "no-mbid"
   | "not-attempted"
-  | "request-failed";
+  | "request-failed"
+  | "yielded-on-breaker";
 
 /**
  * The `resolve_anchor` outcome. `source` names the rung that anchored (or `null` on a miss), so the
@@ -677,6 +694,15 @@ export type ListenBrainzAnchorOutcome =
  * as read for this call — a GLOBAL flag, so every verdict in a tick agrees. When FALSE (out of Apify
  * budget), the box skips the whole Apify actor loop for this tick, and this call has already
  * stamped-and-backed-off the row if it was a genuinely-exhausted full miss (see below).
+ *
+ * `spotifyIsrcAsked` is TRUE iff this call spent an EXACT-ISRC search (`findSpotifyTrackByIsrc`) —
+ * the unit the box's per-tick ask budget counts (`FLUNCLE_ANCHOR_ISRC_ASK_LIMIT`). It is narrower
+ * than `spotifySearchDone`, which any Spotify search sets.
+ *
+ * `spotifyThrottled` is TRUE iff a Spotify call in this call's anchor path came back 429. It is the
+ * YIELD LAW's wire: a throttle is PASS-ENDING (the box stops asking for Spotify rungs for the rest
+ * of the tick) and never ROW-FAILING — the row stamps nothing and keeps its turn, the same shape the
+ * Deezer quota law already has.
  */
 export type AnchorResolveResult = {
   anchored: boolean;
@@ -684,7 +710,9 @@ export type AnchorResolveResult = {
   isrcRecoveredByDeezer: boolean;
   listenbrainzOutcome: ListenBrainzAnchorOutcome;
   source: AnchorResolveSource | null;
+  spotifyIsrcAsked: boolean;
   spotifySearchDone: boolean;
+  spotifyThrottled: boolean;
   verifiedBy: AnchorGateVerification;
 };
 
@@ -697,50 +725,115 @@ type FreeResolveOutcome = Omit<
   "apifyEnabled" | "isrcRecoveredByDeezer" | "listenbrainzOutcome"
 >;
 
-/** Fetch a Spotify track's metadata and shape it into a verifiable candidate — best-effort. */
-async function metadataCandidate(spotifyTrackId: string): Promise<AnchorCandidate | undefined> {
+/** A Spotify-rung outcome with every field a miss carries — the shared "nothing happened" shape. */
+const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
+  anchored: false,
+  source: null,
+  spotifyIsrcAsked: false,
+  spotifySearchDone: false,
+  spotifyThrottled: false,
+  verifiedBy: null,
+};
+
+/**
+ * `spotifyFetch` throws a plain Error whose message carries the upstream status, so a 429 is read
+ * back off the message — the SAME sniff `findSpotifyTrackByIsrc` uses to set its own `rateLimited`.
+ * One helper so the yield law's definition of "Spotify pushed back" is written once.
+ */
+function isSpotifyThrottle(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("429");
+}
+
+/**
+ * Fetch a Spotify track's metadata and shape it into a verifiable candidate — best-effort.
+ *
+ * The call is RECORDED into the shared fixed-window meter whichever way it goes (a 429 is still a
+ * unit of pressure on the app), so the catalogue's draw on the official app stops being invisible to
+ * the paths that pace against it.
+ *
+ * `throttled` is reported rather than swallowed with the rest of the failure. The yield law is
+ * "ANY 429 in the anchor path ends the tick's remaining Spotify asks", and this by-id read is a
+ * Spotify call like any other — folding its throttle into an undifferentiated `undefined` would
+ * leave the law relying on the breaker's much slower 5-in-10-minutes threshold to notice.
+ */
+async function metadataCandidate(
+  spotifyTrackId: string,
+  now: Date,
+): Promise<{ candidate: AnchorCandidate | undefined; throttled: boolean }> {
   try {
     const metadata = await fetchTrackMetadata(spotifyTrackId);
 
     return {
-      albumImageUrl: metadata.albumImageUrl ?? null,
-      artists: metadata.artists.map((name, index) => ({
-        id: metadata.spotifyArtistIds[index] ?? null,
-        name,
-      })),
-      durationMs: metadata.durationMs,
-      isrc: metadata.isrc ?? null,
-      spotifyTrackId,
-      title: metadata.title,
+      candidate: {
+        albumImageUrl: metadata.albumImageUrl ?? null,
+        artists: metadata.artists.map((name, index) => ({
+          id: metadata.spotifyArtistIds[index] ?? null,
+          name,
+        })),
+        durationMs: metadata.durationMs,
+        isrc: metadata.isrc ?? null,
+        spotifyTrackId,
+        title: metadata.title,
+      },
+      throttled: false,
     };
   } catch (error) {
     logEvent("warn", "anchor.metadata-fetch-failed", { error, spotifyTrackId });
 
-    return undefined;
+    return { candidate: undefined, throttled: isSpotifyThrottle(error) };
+  } finally {
+    await recordAnchorSpotifyCall(now);
   }
 }
 
-type ListenBrainzResolveResult =
+type ListenBrainzResolveResult = {
+  /**
+   * True iff this rung's ONE by-id Spotify read came back 429. Carried up so the yield law sees a
+   * throttle wherever in the anchor path it happened — the rung is free, but its read is not.
+   */
+  throttled?: boolean;
+} & (
   | {
       outcome: "anchored";
       verifiedBy: Exclude<AnchorGateVerification, null>;
     }
   | {
       outcome: Exclude<ListenBrainzAnchorOutcome, "anchored" | "not-attempted">;
-    };
+    }
+);
 
 /**
  * THE FREE LISTENBRAINZ RUNG. Given the row's MusicBrainz recording MBID, ListenBrainz labs returns
  * the Spotify track ids for that exact recording (free, no auth). The FIRST id's metadata is fetched
  * with ONE `GET /v1/tracks/{id}` — a cheap by-id read, NEVER a search — and that single candidate runs
  * the SAME `anchorTrack` gate. Every outcome stays distinct (`no-mbid`, `no-map`, `empty-ids`,
- * `request-failed`, `metadata-failed`, `gate-rejected`, or `anchored`) so the box can measure where
- * candidates die. Anchors with `stampOnMiss: false` so a miss leaves the row for the later rungs. The
- * `AnchorTrackError` rails propagate (the caller maps them to status).
+ * `request-failed`, `metadata-failed`, `gate-rejected`, `yielded-on-breaker`, or `anchored`) so the
+ * box can measure where candidates die. Anchors with `stampOnMiss: false` so a miss leaves the row
+ * for the later rungs. The `AnchorTrackError` rails propagate (the caller maps them to status).
+ *
+ * ── THE BY-ID READ YIELDS TO THE BREAKER (the money leak this closes) ────────────────────────────
+ * That one by-id read draws on the SAME official Spotify app the mint and publish do, and it used to
+ * consult nothing at all: not the throttle breaker, not the shared call meter. Through Spotify's
+ * daily throttle windows the consequence was total and silent — every LB candidate died on the read
+ * (whole ticks where `summary.failed` equalled `summary.lbMetadataFailed` exactly, and the breaker
+ * re-tripped ~11s in), and each of those rows then bought a billed Apify search for an anchor it
+ * already had for free (~1,400 rows/day). So the read now checks the breaker FIRST and yields when
+ * it is tripped.
+ *
+ * WHERE THE CHECK SITS IS DELIBERATE: after the free ListenBrainz lookup, immediately before the
+ * Spotify read. Yielding earlier would save a free call and cost the diagnosis — `no-mbid` /
+ * `no-map` / `empty-ids` are answers about the ROW that stay true regardless of Spotify's mood, and
+ * collapsing them into a yield would blind the tally to where candidates actually die.
+ *
+ * A YIELD IS NOT A FAILURE. It stamps nothing, writes nothing, and reports its own outcome, so the
+ * row falls through to the later rungs exactly as any miss does. The breaker is durable state, so
+ * the first yield in a tick is effectively the whole tick's — which is the intent: while Spotify is
+ * pushing back, the free rung stops asking rather than burning its candidates one 429 at a time.
  */
 async function resolveViaListenBrainz(
   trackId: string,
   mbid: null | string,
+  now: Date,
 ): Promise<ListenBrainzResolveResult> {
   if (!mbid?.trim()) {
     return { outcome: "no-mbid" };
@@ -770,13 +863,19 @@ async function resolveViaListenBrainz(
     return { outcome: "empty-ids" };
   }
 
-  const candidate = await metadataCandidate(spotifyTrackId);
-
-  if (!candidate) {
-    return { outcome: "metadata-failed" };
+  // THE YIELD. A tripped breaker means the shared app has been pushing back; spending the by-id read
+  // into that wall just converts a free candidate into a paid Apify search.
+  if (!(await anchorSpotifyBreakerAllows(now))) {
+    return { outcome: "yielded-on-breaker" };
   }
 
-  const verdict = await anchorTrack(trackId, [candidate], {
+  const read = await metadataCandidate(spotifyTrackId, now);
+
+  if (!read.candidate) {
+    return { outcome: "metadata-failed", throttled: read.throttled };
+  }
+
+  const verdict = await anchorTrack(trackId, [read.candidate], {
     source: "listenbrainz",
     stampOnMiss: false,
   });
@@ -823,28 +922,57 @@ function searchResultCandidate(result: TrackSearchResult): AnchorCandidate {
  *   `searchTrackCandidates` returns up to 8 candidates, fed straight through the search-triple gate.
  *
  * `spotifySearchDone` is set the moment the first search is issued, so the box paces even on a miss.
- * A HIT anchors with `stampOnMiss: false` (a miss stays open for Apify), so this never stamps a miss.
+ * `spotifyIsrcAsked` is the NARROWER signal — set only by rung 2 — because the exact rung is the unit
+ * the box's per-tick ask budget meters. A HIT anchors with `stampOnMiss: false` (a miss stays open
+ * for Apify), so this never stamps a miss.
+ *
+ * ── THE YIELD LAW ────────────────────────────────────────────────────────────────────────────────
+ * ANY 429 in here reports `spotifyThrottled`, and a throttle is PASS-ENDING, never ROW-FAILING: the
+ * box stops asking for Spotify rungs for the rest of the tick, and this row stamps nothing — it is
+ * not a settled miss, it is a question we did not get to ask. Exactly the shape the Deezer quota law
+ * already has, and the reason the caller's terminal-stamp branch consults it. A row asked-and-MISSED
+ * under the exact rung is the opposite case and stamps normally: that IS a settled miss.
  */
 async function resolveViaSpotifySearch(
   trackId: string,
   isrc: null | string,
   artists: string[],
   title: string,
+  now: Date,
 ): Promise<FreeResolveOutcome> {
   // RUNG 2 — the exact ISRC search, only for a row that carries one.
   if (isrc?.trim()) {
     const lookup = await findSpotifyTrackByIsrc(isrc);
+    await recordAnchorSpotifyCall(now);
 
     // A throttle or a dead grant: do NOT spend the fuzzy search too — back off and fall to Apify.
+    // Only the THROTTLE arms the yield law; a dead grant is an operator problem the breaker does
+    // not model, and it already stops this row without pretending Spotify pushed back.
     if (lookup.rateLimited || lookup.unauthorized) {
-      return { anchored: false, source: null, spotifySearchDone: true, verifiedBy: null };
+      return {
+        ...NO_SPOTIFY_OUTCOME,
+        spotifyIsrcAsked: true,
+        spotifySearchDone: true,
+        spotifyThrottled: Boolean(lookup.rateLimited),
+      };
     }
 
     if (lookup.match) {
-      const candidate = await metadataCandidate(lookup.match.trackId);
+      const read = await metadataCandidate(lookup.match.trackId, now);
 
-      if (candidate) {
-        const result = await anchorTrack(trackId, [candidate], {
+      // The re-derivation read is a Spotify call too: a 429 on it ends the tick's asks and must not
+      // be spent again on the fuzzy rung.
+      if (read.throttled) {
+        return {
+          ...NO_SPOTIFY_OUTCOME,
+          spotifyIsrcAsked: true,
+          spotifySearchDone: true,
+          spotifyThrottled: true,
+        };
+      }
+
+      if (read.candidate) {
+        const result = await anchorTrack(trackId, [read.candidate], {
           source: "spotify-isrc",
           stampOnMiss: false,
         });
@@ -853,13 +981,17 @@ async function resolveViaSpotifySearch(
           return {
             anchored: true,
             source: "spotify-isrc",
+            spotifyIsrcAsked: true,
             spotifySearchDone: true,
+            spotifyThrottled: false,
             verifiedBy: result.verifiedBy,
           };
         }
       }
     }
   }
+
+  const isrcAsked = Boolean(isrc?.trim());
 
   // RUNG 3 — the verified fuzzy search (a no-ISRC row, or an ISRC miss). Best-effort: a search that
   // throws is a miss, and the row falls to Apify un-stamped.
@@ -870,7 +1002,14 @@ async function resolveViaSpotifySearch(
   } catch (error) {
     logEvent("warn", "anchor.spotify-search-failed", { error, trackId });
 
-    return { anchored: false, source: null, spotifySearchDone: true, verifiedBy: null };
+    return {
+      ...NO_SPOTIFY_OUTCOME,
+      spotifyIsrcAsked: isrcAsked,
+      spotifySearchDone: true,
+      spotifyThrottled: isSpotifyThrottle(error),
+    };
+  } finally {
+    await recordAnchorSpotifyCall(now);
   }
 
   const result = await anchorTrack(trackId, candidates.map(searchResultCandidate), {
@@ -881,7 +1020,9 @@ async function resolveViaSpotifySearch(
   return {
     anchored: result.anchored,
     source: result.anchored ? "spotify-search" : null,
+    spotifyIsrcAsked: isrcAsked,
     spotifySearchDone: true,
+    spotifyThrottled: false,
     verifiedBy: result.verifiedBy,
   };
 }
@@ -1155,11 +1296,19 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
  * `options.deezerCandidates` are the Deezer hits the BOX fetched for this row from its own IP (see
  * `recoverIsrcViaDeezer` — only the fetch moved; the gate and the write did not). Present ⇒ rung 0
  * verifies exactly those and issues no Deezer request of its own; absent ⇒ rung 0 searches Deezer here.
+ *
+ * `options.spotifySearch` is THE CALLER'S DEFERRAL — the box saying "not on this row". The sweep owns
+ * three guards the server cannot see because they are properties of a TICK rather than of a call: the
+ * per-tick exact-ISRC ask budget (`FLUNCLE_ANCHOR_ISRC_ASK_LIMIT`), the night window
+ * (`FLUNCLE_ANCHOR_ISRC_WINDOW_UTC`), and the yield law (any 429 ends the tick's remaining asks). It
+ * is ANDed with the server's own gate exactly like every other clause there, so a caller can only
+ * ever SUBTRACT permission — no request can talk the Spotify rungs INTO running, and the dark flag
+ * remains the one thing that arms them. Omitted ⇒ true ⇒ the pre-slice behaviour, unchanged.
  */
 export async function resolveAnchorFree(
   trackId: string,
   now: Date = new Date(),
-  options: { deezerCandidates?: DeezerIsrcCandidate[] } = {},
+  options: { deezerCandidates?: DeezerIsrcCandidate[]; spotifySearch?: boolean } = {},
 ): Promise<AnchorResolveResult> {
   const db = await getDb();
 
@@ -1183,13 +1332,10 @@ export async function resolveAnchorFree(
   // An unknown track has nothing to resolve — a clean miss, zero vendor calls (slice-1 behaviour).
   if (!row) {
     return {
-      anchored: false,
+      ...NO_SPOTIFY_OUTCOME,
       apifyEnabled,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "not-attempted",
-      source: null,
-      spotifySearchDone: false,
-      verifiedBy: null,
     };
   }
 
@@ -1221,49 +1367,77 @@ export async function resolveAnchorFree(
   }
 
   // RUNG 1 — the FREE ListenBrainz rung.
-  const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id);
+  const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id, now);
 
   if (listenbrainz.outcome === "anchored") {
     // A HIT already wrote the anchor + stamped the attempt — never re-stamp, regardless of the flag.
     return {
+      ...NO_SPOTIFY_OUTCOME,
       anchored: true,
       apifyEnabled,
       isrcRecoveredByDeezer,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
-      spotifySearchDone: false,
       verifiedBy: listenbrainz.verifiedBy,
     };
   }
 
-  // THE DARK GATE — off ⇒ zero Spotify search calls. Checked BEFORE either Spotify rung runs.
-  if (!(await anchorSpotifySearchAllowed(now))) {
+  // THE DARK GATE — off ⇒ zero Spotify search calls. Checked BEFORE either Spotify rung runs, and
+  // ANDed with the caller's own deferral (`options.spotifySearch`, the box's tick-level budget /
+  // night window / yield law), which can only ever subtract permission.
+  const callerDefers = options.spotifySearch === false;
+  // A YIELD IS NOT A SETTLED MISS. The rung declined to spend its by-id read into a tripped breaker,
+  // so nothing was asked of Spotify about this row and it must keep its turn — the same rail the
+  // throttle case below obeys. Without this the row could burn a lifetime attempt on a question that
+  // was never put (Apify off + search flag off + breaker tripped is a reachable state).
+  const listenbrainzYielded = listenbrainz.outcome === "yielded-on-breaker";
+
+  if (callerDefers || !(await anchorSpotifySearchAllowed(now))) {
     // The Spotify search rungs will not run this call. With Apify also OFF, this ListenBrainz miss is
-    // terminal for the row — but ONLY when the Spotify search flag is genuinely OFF (nothing pending).
-    // If that flag is ON we are merely inside the Friday-refresh window and a later tick WILL search,
-    // so the row is NOT exhausted and must keep its turn — do NOT stamp it.
-    if (!apifyEnabled && !(await isAnchorSpotifySearchEnabled())) {
+    // terminal for the row — but ONLY when the Spotify search flag is genuinely OFF (nothing pending)
+    // AND the ListenBrainz rung actually ran. If that flag is ON we are merely inside the
+    // Friday-refresh window, out of shared-app budget for the moment, or deferred by the caller's own
+    // tick budget — a later tick WILL search, so the row is NOT exhausted and must keep its turn.
+    if (
+      !apifyEnabled &&
+      !callerDefers &&
+      !listenbrainzYielded &&
+      !(await isAnchorSpotifySearchEnabled())
+    ) {
       await stampAnchorAttempt(db, trackId, now);
     }
 
     return {
-      anchored: false,
+      ...NO_SPOTIFY_OUTCOME,
       apifyEnabled,
       isrcRecoveredByDeezer,
       listenbrainzOutcome: listenbrainz.outcome,
-      source: null,
-      spotifySearchDone: false,
-      verifiedBy: null,
+      // A throttle anywhere in the anchor path arms the yield law, including on this rung's own
+      // by-id read — the box stops asking for Spotify rungs for the rest of the tick.
+      spotifyThrottled: Boolean(listenbrainz.throttled),
     };
   }
 
   // RUNGS 2/3 — the dark Spotify search rungs, fed the (possibly Deezer-recovered) ISRC.
-  const searchOutcome = await resolveViaSpotifySearch(trackId, isrc, rowArtists, row.title ?? "");
+  const searchOutcome = await resolveViaSpotifySearch(
+    trackId,
+    isrc,
+    rowArtists,
+    row.title ?? "",
+    now,
+  );
 
   // With Apify OFF, a FULL MISS after the Spotify search rungs is terminal — every rung available to
   // the row this call has now been spent — so back it off. (Apify ON ⇒ UNCHANGED: the miss stays
   // un-stamped for the Apify fallback's turn.)
-  if (!apifyEnabled && !searchOutcome.anchored) {
+  //
+  // A THROTTLE IS THE ONE EXCEPTION, and it is the yield law: a 429 means the question was never
+  // actually put to Spotify, so the row is deferred rather than exhausted and stamping it would
+  // spend a lifetime attempt on a call that did not happen. A ListenBrainz throttle counts too — the
+  // shared app pushed back either way.
+  const throttled = searchOutcome.spotifyThrottled || Boolean(listenbrainz.throttled);
+
+  if (!apifyEnabled && !searchOutcome.anchored && !throttled) {
     await stampAnchorAttempt(db, trackId, now);
   }
 
@@ -1272,6 +1446,7 @@ export async function resolveAnchorFree(
     apifyEnabled,
     isrcRecoveredByDeezer,
     listenbrainzOutcome: listenbrainz.outcome,
+    spotifyThrottled: throttled,
   };
 }
 

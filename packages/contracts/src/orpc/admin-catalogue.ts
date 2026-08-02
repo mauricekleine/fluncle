@@ -980,6 +980,17 @@ export const resolveAnchor = oc
        * the boundary (a clean 400) rather than trusted to be harmless. The `requeue_anchor` discipline.
        */
       deezerCandidates: z.array(DeezerIsrcCandidateSchema).max(DEEZER_CANDIDATE_LIMIT).optional(),
+      /**
+       * THE CALLER'S DEFERRAL of the Spotify SEARCH rungs for this row — `false` means "not on this
+       * one". The box owns three guards the server cannot see because each is a property of a TICK
+       * rather than of a call: the per-tick exact-ISRC ask budget, the night window, and the yield
+       * law (any 429 ends the tick's remaining asks). It is ANDed with the server's own gate exactly
+       * like every clause there, so it can only ever SUBTRACT permission — no request can talk the
+       * rungs INTO running, and the dark flag stays the one thing that arms them. Omitted ⇒ true ⇒
+       * the pre-slice behaviour. A row deferred this way is NOT exhausted: it stamps nothing and
+       * keeps its turn for a later tick.
+       */
+      spotifySearch: z.boolean().optional(),
       trackId: z.string().min(1),
     }),
   )
@@ -994,7 +1005,12 @@ export const resolveAnchor = oc
       apifyEnabled: z.boolean(),
       /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
       isrcRecoveredByDeezer: z.boolean(),
-      /** The ListenBrainz rung's exact terminal outcome, preserved so the box can count where candidates die. */
+      /**
+       * The ListenBrainz rung's exact terminal outcome, preserved so the box can count where
+       * candidates die. `yielded-on-breaker` is the rung declining to spend its ONE by-id Spotify
+       * read while the shared-app throttle breaker is tripped — distinct from `metadata-failed`,
+       * which is that read actually failing, because a yield is backpressure and a failure is a bug.
+       */
       listenbrainzOutcome: z.enum([
         "anchored",
         "empty-ids",
@@ -1004,12 +1020,21 @@ export const resolveAnchor = oc
         "no-mbid",
         "not-attempted",
         "request-failed",
+        "yielded-on-breaker",
       ]),
       ok: z.literal(true),
       /** Which rung anchored, or null on a miss. `spotify-*` only ever when the dark flag is on. */
       source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),
+      /** True iff an EXACT-ISRC search was spent this call — the unit the box's per-tick ask budget meters. */
+      spotifyIsrcAsked: z.boolean(),
       /** True iff a Spotify SEARCH was issued this call — the box's pacer signal. OFF flag ⇒ false. */
       spotifySearchDone: z.boolean(),
+      /**
+       * True iff a Spotify call in this call's anchor path came back 429 — the YIELD LAW's wire. A
+       * throttle is PASS-ENDING (the box stops asking for Spotify rungs for the rest of the tick) and
+       * never ROW-FAILING: the row stamps nothing and keeps its turn.
+       */
+      spotifyThrottled: z.boolean(),
       /** Which gate rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
       verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
     }),

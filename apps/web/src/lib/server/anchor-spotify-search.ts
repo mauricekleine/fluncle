@@ -42,9 +42,26 @@
 //      breaker state pauses the rungs), and it pauses NOTHING ELSE: the mint, publish, and the
 //      Frontier refresh never consult it. That is what makes the rungs safe to run unattended —
 //      "yields on the first 429" stops being a per-call hope and becomes an enforced pause.
+//
+//   4. THE SHARED CALL METER (./spotify-budget.ts). The breaker answers "has Spotify been pushing
+//      back?"; the meter answers "how much of this 30s window has the platform already spent?" —
+//      the question that decides whether a background sweep is about to collide with a live mint.
+//      The search rungs now CONSULT it (a spent window pauses them, the subordinate-consumer rule)
+//      and every anchor-path Spotify request RECORDS into it, including the ListenBrainz rung's
+//      by-id read, which used to draw on the shared app completely unseen.
+//
+// ── AND THE RUNG THAT IS NOT A SEARCH ────────────────────────────────────────────────────────────
+// The ListenBrainz rung's ONE by-id metadata read (`GET /v1/tracks/{id}`, lib/server/anchor.ts) is a
+// Spotify call this module did not used to govern at all — it is not a search, so none of the three
+// guards above saw it. Through a throttle window that meant 100% of free candidates died on that read
+// and their rows were re-bought from Apify. `anchorSpotifyBreakerAllows` is its gate now: the BREAKER
+// only, deliberately not the meter — see that function's own note for why pausing a free by-id read
+// on a busy window would spend money to save a call.
 
+import { logEvent } from "./log";
 import { spotifyAnchorSearchBreakerTripped } from "./spotify-anchor-breaker";
 import { getSetting, setSetting } from "./settings";
+import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
 
 /** The dark flag on the shared `settings` KV. DEFAULT FALSE — only the literal "true" enables it. */
 export const ANCHOR_SPOTIFY_SEARCH_ENABLED_KEY = "anchor_spotify_search_enabled";
@@ -108,20 +125,26 @@ export function isWithinFrontierRefreshWindow(now: Date): boolean {
 
 /**
  * Whether the Spotify search rungs may run RIGHT NOW: the dark flag is on AND `now` is outside the
- * Friday-morning refresh window AND the throttle breaker is not tripped. When this is false,
- * `resolveAnchorFree` issues ZERO Spotify search calls — the load-bearing safety property, checked
- * before either rung. `now` is injected so the decision is deterministic in tests (the caller passes
- * the real clock in production).
+ * Friday-morning refresh window AND the throttle breaker is not tripped AND the shared call meter
+ * still has budget in its window. When this is false, `resolveAnchorFree` issues ZERO Spotify search
+ * calls — the load-bearing safety property, checked before either rung. `now` is injected so the
+ * decision is deterministic in tests (the caller passes the real clock in production).
  *
- * ORDER IS DELIBERATE: the pure Friday window first (free), then the dark flag, then the breaker.
- * The flag is OFF by default, so a flag-OFF deployment pays EXACTLY the reads it paid before this
- * breaker existed — the breaker's `settings` reads are spent only once the rungs are actually armed,
- * which is also the only state in which they can matter.
+ * ORDER IS DELIBERATE: the pure Friday window first (free), then the dark flag, then the breaker,
+ * then the shared meter. The flag is OFF by default, so a flag-OFF deployment pays EXACTLY the reads
+ * it paid before either of those two existed — their `settings` reads are spent only once the rungs
+ * are actually armed, which is also the only state in which they can matter.
  *
- * All three are ANDed, so adding the breaker can only ever subtract permission. Callers are
- * unchanged: `anchor.ts` already treats a false here as "skip the Spotify rungs this call", and its
- * stamp rule reads the dark flag separately — so a breaker-closed gate correctly leaves the row
+ * All four are ANDed, so each addition can only ever subtract permission. Callers are unchanged:
+ * `anchor.ts` already treats a false here as "skip the Spotify rungs this call", and its stamp rule
+ * reads the dark flag separately — so a breaker- or budget-closed gate correctly leaves the row
  * un-stamped and it keeps its turn for a later tick.
+ *
+ * THE METER CLAUSE IS THE SUBORDINATION (`./spotify-budget.ts`). The search rungs draw on the ONE
+ * official app the mint, publish, and the Frontier refresh draw on, and they are the only consumer
+ * on it whose work has no deadline — so when the shared 30s window is spent, THIS is what pauses. It
+ * is FAIL-OPEN inside the meter (a KV fault reads as budget available), which is right: the breaker
+ * beside it is the fail-CLOSED half, and doubling the deny would pause the sweep on a store hiccup.
  */
 export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
   if (isWithinFrontierRefreshWindow(now)) {
@@ -132,5 +155,48 @@ export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
     return false;
   }
 
+  if (!(await anchorSpotifyBreakerAllows(now))) {
+    return false;
+  }
+
+  return isSpotifyCallBudgetAvailable(now.getTime());
+}
+
+/**
+ * Is the shared-app throttle breaker CLEAR right now — the one gate the anchor waterfall's other
+ * Spotify caller consults. The ListenBrainz rung's single by-id metadata read
+ * (`GET /v1/tracks/{id}`) hits the same official app the search rungs do, and until this existed it
+ * consulted nothing: through Spotify's daily throttle windows every LB candidate died on that read
+ * (`summary.failed == summary.lbMetadataFailed` across whole ticks) and the row fell to the PAID
+ * Apify rung with a free candidate in hand. Now it yields instead — the breaker is durable state, so
+ * one tripped read pauses the rung for the rest of the tick and the rows fall through UNSTAMPED,
+ * exactly as a miss does today.
+ *
+ * IT IS THE BREAKER ONLY, NEVER THE CALL METER, and the asymmetry with
+ * {@link anchorSpotifySearchAllowed} above is the whole point. A skipped SEARCH costs nothing (the
+ * row falls to Apify exactly as a search miss would), so that rung can afford to yield to the shared
+ * 30s window. A skipped BY-ID READ throws away a free anchor and buys a billed Apify search in its
+ * place — pausing it on a busy window would spend money to save a call, which is the leak this gate
+ * exists to close. So the by-id read yields only when the breaker says the call would be pushed back
+ * anyway, and otherwise runs and RECORDS itself into the shared meter
+ * ({@link recordAnchorSpotifyCall}) so the paths that DO pause see it.
+ */
+export async function anchorSpotifyBreakerAllows(now: Date): Promise<boolean> {
   return !(await spotifyAnchorSearchBreakerTripped(now.getTime()));
+}
+
+/**
+ * Record ONE anchor-path Spotify call into the shared fixed-window meter (`./spotify-budget.ts`) —
+ * the `fetchArtistImages` discipline: TOTAL by contract, so a `settings` fault is logged and
+ * swallowed rather than failing the call it is observing. Every Spotify request the anchor waterfall
+ * makes goes through here (the ListenBrainz rung's by-id read, the exact-ISRC search, the fuzzy
+ * search), so the meter's shared view counts the catalogue's draw instead of under-reporting it — and
+ * the user-facing paths that consult it get an honest number to pace against.
+ */
+export async function recordAnchorSpotifyCall(now: Date): Promise<void> {
+  try {
+    await recordSpotifyCall(now.getTime());
+  } catch (error) {
+    logEvent("warn", "anchor.call-meter-record-failed", { error });
+  }
 }

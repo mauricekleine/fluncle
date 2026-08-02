@@ -552,6 +552,66 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
 
     expect(ids.sort()).toEqual(["mb_real_name", "mb_with_calibre"]);
   });
+  // ── THE RULED-OUT-LABEL VETO (the capture ladder's tier −1, in the other metered queue) ────────
+  // Every offer this queue makes is a billed Apify search, so the operator's "not our lane" ruling
+  // has to be a PREDICATE here exactly as it is in the capture ladder. A veto that only sorts last
+  // is not a veto: the queue drains, and last eventually arrives.
+  it("excludes a row whose label the operator ruled out, and keeps every other ruling in", async () => {
+    const { countTrackWork, listTrackWork } = await import("./track-work");
+
+    for (const [slug, state] of [
+      ["ruled-out", "disabled"],
+      ["in-lane", "enabled"],
+      ["unruled", "undecided"],
+    ] as const) {
+      await db.execute({
+        args: [slug, slug, slug, state],
+        sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+              values (?, ?, ?, ?, '2026-08-02T00:00:00.000Z', '2026-08-02T00:00:00.000Z')`,
+      });
+    }
+
+    await seedUnanchored({ trackId: "mb_lbl_disabled" });
+    await seedUnanchored({ trackId: "mb_lbl_enabled" });
+    await seedUnanchored({ trackId: "mb_lbl_undecided" });
+    // …and a row with no label pointer at all: unlinked is not ruled out.
+    await seedUnanchored({ trackId: "mb_lbl_none" });
+    await db.execute("update tracks set label_id = 'ruled-out' where track_id = 'mb_lbl_disabled'");
+    await db.execute("update tracks set label_id = 'in-lane' where track_id = 'mb_lbl_enabled'");
+    await db.execute("update tracks set label_id = 'unruled' where track_id = 'mb_lbl_undecided'");
+
+    const work = await listTrackWork({ kind: "anchor", limit: 50 });
+
+    expect(work.map((item) => item.trackId).sort()).toEqual([
+      "mb_lbl_enabled",
+      "mb_lbl_none",
+      "mb_lbl_undecided",
+    ]);
+    // The COUNT narrows with the queue — a backlog number that advertises work the queue refuses to
+    // hand out is the exact failure the shared `kindClause` exists to prevent.
+    expect(await countTrackWork({ kind: "anchor" })).toBe(3);
+  });
+
+  it("the veto is a RULING, not a deletion — flipping the label back restores the row", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await db.execute({
+      args: [],
+      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+            values ('flip', 'Flip', 'flip', 'disabled', '2026-08-02T00:00:00.000Z', '2026-08-02T00:00:00.000Z')`,
+    });
+    await seedUnanchored({ trackId: "mb_flip" });
+    await db.execute("update tracks set label_id = 'flip' where track_id = 'mb_flip'");
+
+    expect(await listTrackWork({ kind: "anchor", limit: 50 })).toEqual([]);
+
+    // docs/label-entity.md's crawl-scope-never-storage rule: the row was never touched, only skipped.
+    await db.execute("update labels set seed_state = 'enabled' where id = 'flip'");
+
+    expect((await listTrackWork({ kind: "anchor", limit: 50 })).map((i) => i.trackId)).toEqual([
+      "mb_flip",
+    ]);
+  });
 });
 
 // ── THE ANCHOR REVIEW ────────────────────────────────────────────────────────────────────────

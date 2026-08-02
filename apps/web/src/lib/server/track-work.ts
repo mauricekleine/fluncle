@@ -48,11 +48,14 @@
 // queue exclude it in SQL — `capture_priority >= 0`. Sorting it last would not do: the
 // queue drains, and "last" eventually arrives. A veto that only reorders is not a veto.
 //
-// It is scoped to CAPTURE alone, deliberately. A ruling governs what Fluncle ACQUIRES
-// (docs/label-entity.md — a capture IS an acquisition), not what he may measure. If the
-// bytes are already bought, analysing and embedding them is free, and a vector is how the
-// Ear gets to disagree with the ladder. So `analyze`/`embed` carry no veto — the vetoed
-// row simply sorts last there, exactly as the-ear.md says.
+// It is scoped to the two METERED queues, deliberately: CAPTURE and ANCHOR. A ruling governs
+// what Fluncle SPENDS ON (docs/label-entity.md — a capture is an acquisition, and an anchor
+// offer is a billed Apify search), not what he may measure. If the bytes are already bought,
+// analysing and embedding them is free, and a vector is how the Ear gets to disagree with the
+// ladder. So `analyze`/`embed` carry no veto — the vetoed row simply sorts last there, exactly
+// as the-ear.md says. The two spellings differ because the columns do; see
+// `ANCHOR_RULED_OUT_LABEL_CLAUSE` for why the anchor reads the ruling itself rather than the
+// ladder's `capture_priority >= 0` mirror of it.
 //
 // ── AND THE ORDER IS NOT THE WHOLE BUDGET (./capture-budget.ts) ──────────────────────
 // The ladder above decides WHAT the metered GB buy. It has nothing to say about HOW MUCH,
@@ -508,6 +511,50 @@ export function anchorRefusalReason(row: AnchorEligibilityRow): AnchorRefusalRea
   return undefined;
 }
 
+/**
+ * THE ANCHOR'S RULED-OUT-LABEL VETO — the capture ladder's tier −1 exclusion, in the one other queue
+ * that spends money per row.
+ *
+ * A label the operator ruled out (`labels.seed_state = 'disabled'`, docs/label-entity.md) is "not our
+ * lane": the pre-audio ladder scores its tracks −1 and the CAPTURE queue excludes them in SQL
+ * (`t.capture_priority >= 0`, the arm below) rather than sorting them last, because a queue drains and
+ * "last" eventually arrives — a veto that only reorders is not a veto. The ANCHOR queue is the other
+ * metered queue (every offer is a billed Apify search) and it carried no such filter, so 764 live +
+ * 387 benched rows on ruled-out labels sat waiting to be paid for.
+ *
+ * WHY NOT `capture_priority >= 0` VERBATIM — capture's own spelling. Tier −1 IS this ruling
+ * (catalogue.ts `skipped-label`), but that column is an ARTIFACT of the `rank_catalogue` sweep: it
+ * carries the whole ladder, and NULL means "the Ear has not looked at this row yet", which is most of
+ * the anchor queue. Reusing it would silently gate anchoring on the ranking sweep having run —
+ * emptying the queue rather than narrowing it — and it folds the raw `tracks.label` STRING rather
+ * than the graph pointer. So this reads the same RULING off its source of truth,
+ * `tracks.label_id` → `labels.seed_state`, which needs no sweep to have run and cannot go stale.
+ *
+ * THE SHAPE IS AN UNCORRELATED `not in`, and that is load-bearing rather than stylistic. This clause
+ * does not only run in the worklist: the `/admin/funnel` folded scan interpolates it FOUR TIMES into
+ * one conditional-aggregate pass over `tracks` (funnel.ts), a pass whose whole performance story is
+ * that it reads out of the covering `tracks_funnel_scan_idx` and never touches a table row.
+ *   · A CORRELATED `not exists (… where l.id = t.label_id)` re-executes per arm PER ROW — four
+ *     `labels` seeks for every row in the table, forever, and it was measured locally to drop the
+ *     funnel's plan from `SCAN … USING COVERING INDEX` to a bare `SCAN t` outright.
+ *   · UNCORRELATED, the subquery has no outer reference, so SQLite materialises the ruled-out id set
+ *     ONCE per statement into an ephemeral index and every arm probes that in memory. The outer scan
+ *     stays covering (`t.label_id` is in the index — see schema.ts, where this clause's columns are
+ *     an explicit contract), and the per-row cost is a probe into a few hundred ids.
+ * `not in`'s NULL trap does not apply: `labels.id` is the PRIMARY KEY and cannot be NULL, so the
+ * subquery can never poison the predicate. An EMPTY set (no ruled-out labels) makes `not in` true and
+ * excludes nothing, which is right. A row with no `label_id` short-circuits on the first disjunct and
+ * passes, which is also right — an unlinked row is not a ruled-out one.
+ *
+ * DELIBERATELY NOT IN `anchorEligibilityClause`. That fragment is the identity envelope's `refused`
+ * twin and its five members are properties OF THE ROW; a label ruling is a property of the operator's
+ * current SCOPE, revocable with one `fluncle admin labels update`. Serving it as a permanent refusal
+ * on the wire would state as settled a thing that a ruling can undo tomorrow — the same reasoning
+ * that already keeps the catalogue scope and the temporal backoff out of that fragment.
+ */
+const ANCHOR_RULED_OUT_LABEL_CLAUSE = `(t.label_id is null
+              or t.label_id not in (select id from labels where seed_state = 'disabled'))`;
+
 export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string } {
   if (kind === "youtube-provenance") {
     // THE PROVENANCE BACKFILL'S WORKLIST (docs/agents/hermes/scripts/capture-sweep.ts § the
@@ -592,18 +639,27 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //   · ANCHORABLE AT ALL             — the sole credit is a real artist, not an `Unknown Artist` /
     //                                     `Various Artists` placeholder no search could ever match
     //                                     (`UNANCHORABLE_ARTISTS_JSON`).
-    // The last two are residual filters on the page `tracks_anchor_order_idx` hands back — the
-    // same class as `duration_ms > 0` / `dismissed_at is null` beside them, evaluated on rows the walk
-    // has already read, so the query PLAN is unchanged (no new index, no widened index predicate).
-    // `t.spotify_uri is null` below is the one clause that is NOT residual: it is the literal the
-    // partial index's predicate is matched against, so keep the two spelled the same (schema.ts).
+    //   · THE RULED-OUT-LABEL VETO      — the operator's "not our lane", the capture ladder's tier −1
+    //                                     in this queue. See `ANCHOR_RULED_OUT_LABEL_CLAUSE` above.
+    // Every clause but one is a residual filter on the page `tracks_anchor_order_idx` hands back —
+    // the same class as `duration_ms > 0` / `dismissed_at is null` beside them, evaluated on rows the
+    // walk has already read, so THIS query's plan is unchanged (no new index, no widened index
+    // predicate). `t.spotify_uri is null` is the exception: it is the literal the partial index's
+    // predicate is matched against, so keep the two spelled the same (schema.ts).
+    //
+    // THE FUNNEL IS THE OTHER READER, and it is why the veto's spelling matters more than it looks:
+    // `foldedFunnelScanStatement` interpolates this whole fragment four times into one covering scan
+    // of `tracks`, so a clause that reads a column `tracks_funnel_scan_idx` does not carry costs that
+    // scan its coverage. Growing that index alongside this clause is the ratified maintenance, not an
+    // afterthought — see the index's own note in schema.ts.
     const cutoff = new Date(
       Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString();
     // The five PERMANENT exclusions come from the shared `anchorEligibilityClause` above — the same
     // fragment the identity envelope negates for its `refused` state, so the queue and the wire can
     // never disagree about a row. What stays HERE is what is local to the worklist: its catalogue
-    // scope, the derived un-anchored predicate, and the temporal re-ask backoff (BOUND cutoff).
+    // scope, the derived un-anchored predicate, the temporal re-ask backoff (BOUND cutoff), and the
+    // ruled-out-label veto.
     const permanent = anchorEligibilityClause();
 
     return {
@@ -611,6 +667,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       sql: `f.track_id is null
             and t.spotify_uri is null
             and (t.spotify_anchor_attempted_at is null or t.spotify_anchor_attempted_at < ?)
+            and ${ANCHOR_RULED_OUT_LABEL_CLAUSE}
             and ${permanent.sql}`,
     };
   }

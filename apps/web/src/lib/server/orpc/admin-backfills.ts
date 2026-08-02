@@ -38,6 +38,38 @@ const BACKFILL_DEFAULT_LIMIT = 50;
 const BACKFILL_MAX_LIMIT = 500;
 
 /**
+ * The ISRC-REFRESH leg's cap (`backfill_recording_mbids`). Both the default AND the max, because the
+ * ceiling is the module's own (`MAX_ISRC_REFRESH_BATCH` in ../recording-mbids.ts, which clamps again):
+ * each re-read is a serialized ~1.1s MusicBrainz call inside the request, so the operator's env knob
+ * exists to spend LESS, never more.
+ */
+const ISRC_REFRESH_DEFAULT_LIMIT = 25;
+
+/**
+ * Parse that cap. NOT the shared `parseLimit`, and the reason is the one value that matters: it maps
+ * anything below 1 back to the FALLBACK, which here equals the max — so `?isrcRefreshLimit=0` would
+ * ask for the most re-reads instead of none, and the leg's own "0 means skip me" would be
+ * unreachable through the API. A knob whose off position is its maximum is a trap, so this floors at
+ * 0 and keeps the same tolerant shape otherwise: absent or unparseable ⇒ the default, above the
+ * ceiling ⇒ the ceiling, never a 400.
+ *
+ * Exported for its unit test: the trap it exists to avoid is invisible from the handler's outside.
+ */
+export function parseIsrcRefreshLimit(value: string | undefined): number {
+  if (value === undefined || value === "") {
+    return ISRC_REFRESH_DEFAULT_LIMIT;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return ISRC_REFRESH_DEFAULT_LIMIT;
+  }
+
+  return Math.min(parsed, ISRC_REFRESH_DEFAULT_LIMIT);
+}
+
+/**
  * Build the `admin-backfills` domain's handlers. Each reuses the live route logic
  * verbatim; only the auth gate is relocated to the procedure middleware.
  */
@@ -426,12 +458,17 @@ export function adminBackfillsHandlers(os: Implementer) {
           parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
           parseBool(query.dryRun),
           query.cursor ?? undefined,
+          parseIsrcRefreshLimit(query.isrcRefreshLimit),
         );
 
         return {
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,
+          isrcRefreshMissed: result.isrcRefreshMissed,
+          isrcRefreshMissedCount: result.isrcRefreshMissedCount,
+          isrcRefreshed: result.isrcRefreshed,
+          isrcRefreshedCount: result.isrcRefreshedCount,
           missed: result.missed,
           missedCount: result.missedCount,
           nextCursor: result.nextCursor,

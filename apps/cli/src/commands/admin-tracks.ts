@@ -650,6 +650,12 @@ export type RecordingMbidsBackfillResult = {
   dryRun: boolean;
   failed: Array<{ error: string; trackId: string }>;
   failedCount: number;
+  // Track ids re-read whose recording MusicBrainz still holds no ISRC for — stamped so they drain.
+  isrcRefreshMissed: string[];
+  isrcRefreshMissedCount: number;
+  // Track ids the ISRC-REFRESH leg gave an ISRC this pass (MBID → `?inc=isrcs` → fill-empty-only).
+  isrcRefreshed: string[];
+  isrcRefreshedCount: number;
   // Track ids whose ISRC MusicBrainz has no recording for — attempt-stamped so they drain.
   missed: string[];
   missedCount: number;
@@ -667,16 +673,22 @@ export type RecordingMbidsBackfillResult = {
 // API. The Worker fills crawler-born rows from their PK for free, then resolves findings/Spotify-born
 // rows' MBID by ISRC through the shared MusicBrainz client (1 req/s, circuit-broken on a throttle).
 // `--dry-run` reports both worklists without a vendor call or write. Pass the prior `nextCursor` to
-// resume the ISRC drain; the CLI loops until it comes back null.
+// resume the ISRC drain; the CLI loops until it comes back null. `isrcRefreshLimit` caps the RETURN
+// trip (MBID → `?inc=isrcs`), which the Worker runs only on a tick whose ISRC drain was idle.
 export async function backfillRecordingMbidsCommand(
   limit: number,
   dryRun: boolean,
   cursor?: string,
+  isrcRefreshLimit?: number,
 ): Promise<RecordingMbidsBackfillResult> {
   const params = new URLSearchParams({ dryRun: String(dryRun), limit: String(limit) });
 
   if (cursor) {
     params.set("cursor", cursor);
+  }
+
+  if (isrcRefreshLimit !== undefined) {
+    params.set("isrcRefreshLimit", String(isrcRefreshLimit));
   }
 
   return adminApiPost<RecordingMbidsBackfillResult>(

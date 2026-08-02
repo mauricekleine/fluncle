@@ -14,6 +14,14 @@
 // the findings/Spotify-born tail through the shared MusicBrainz client. New crawler rows already
 // carry the MBID at mint time, so this cron catches history up and drains the ISRC tail.
 //
+// AND THE RETURN TRIP (`--isrc-refresh-limit`). MusicBrainz GAINS ISRCs over time — an editor adds
+// one months after Fluncle crawled the release — and nothing ever re-read it, so ~9,895 benched
+// catalogue rows sit ISRC-less while HOLDING the recording MBID that would answer. An ISRC-less row
+// is the one the anchor waterfall must resolve down its low-precision FUZZY rung, so this leg is
+// straightforwardly worth the calls. The Worker runs it only on a tick whose ISRC drain was IDLE, so
+// the two legs never share one request's MusicBrainz budget; a row that gains an ISRC becomes an
+// exact-rung anchor candidate on its next ask, with no coupling between the two sweeps.
+//
 // THE WORKER-PACED MODEL (the `fluncle-backfill`/`fluncle-crawl` shape, verbatim). The box holds no
 // MusicBrainz budget; the Worker does. So the fill happens IN THE WORKER — this driver just PACES
 // it, one small bounded batch per tick via the `fluncle` CLI. The Worker carries the durable
@@ -43,6 +51,12 @@ import { spawnSync } from "node:child_process";
 
 const BATCH_LIMIT = Number(process.env.FLUNCLE_RECORDING_MBIDS_LIMIT ?? "25");
 
+// The ISRC-REFRESH leg's cap — the RETURN trip of the same key pair (recording MBID → `?inc=isrcs`),
+// which the Worker runs only on a tick whose ISRC drain was idle, so the two legs never share a
+// request's MusicBrainz budget. Same unit as BATCH_LIMIT (a serialized ~1.1s call each) and the
+// Worker clamps to its own 25 ceiling regardless, so this knob only ever spends LESS.
+const ISRC_REFRESH_LIMIT = Number(process.env.FLUNCLE_RECORDING_ISRC_REFRESH_LIMIT ?? "25");
+
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
 const log = (message: string) => console.error(`[recording-mbids-sweep] ${message}`);
@@ -53,6 +67,10 @@ const log = (message: string) => console.error(`[recording-mbids-sweep] ${messag
 
 type RecordingMbidsSummary = {
   failedCount?: number;
+  // The ISRC-REFRESH leg (MBID → `?inc=isrcs`): rows that GAINED an ISRC, and rows re-read whose
+  // recording MusicBrainz still holds none (stamped, so they sit out the refresh window).
+  isrcRefreshMissedCount?: number;
+  isrcRefreshedCount?: number;
   // Track ids whose ISRC MusicBrainz has no recording for — attempt-stamped so they drain. A clean
   // outcome, not a failure.
   missedCount?: number;
@@ -127,6 +145,10 @@ export function runRecordingMbidsSweep() {
     error: null as string | null,
     errors: 0,
     failed: 0,
+    // Rows re-read whose recording MusicBrainz still holds no ISRC — stamped, a clean outcome.
+    isrcRefreshMissed: 0,
+    // The RETURN trip: rows that GAINED an ISRC from a MusicBrainz re-read this tick.
+    isrcRefreshed: 0,
     // ISRCs MusicBrainz has no recording for — attempt-stamped, a clean terminal outcome.
     missed: 0,
     ok: true,
@@ -144,17 +166,33 @@ export function runRecordingMbidsSweep() {
       "recording-mbids",
       "--limit",
       String(BATCH_LIMIT),
+      "--isrc-refresh-limit",
+      String(ISRC_REFRESH_LIMIT),
     ]);
 
     summary.prefixStripped = pass.prefixStripped ?? 0;
     summary.resolved = pass.resolvedCount ?? 0;
     summary.missed = pass.missedCount ?? 0;
     summary.failed = pass.failedCount ?? 0;
+    summary.isrcRefreshed = pass.isrcRefreshedCount ?? 0;
+    summary.isrcRefreshMissed = pass.isrcRefreshMissedCount ?? 0;
     summary.throttled = pass.rateLimited ?? false;
-    // Prefix strips, MusicBrainz hits, and attempt-stamped misses are all durably handled tracks.
+    // Prefix strips, MusicBrainz hits, and attempt-stamped misses are all durably handled tracks —
+    // and so are the refresh leg's two outcomes, which are the same shape one key over.
     // Per-row failures were inspected but remain unproduced for a later retry.
-    summary.checked = summary.prefixStripped + summary.resolved + summary.missed + summary.failed;
-    summary.produced = summary.prefixStripped + summary.resolved + summary.missed;
+    summary.checked =
+      summary.prefixStripped +
+      summary.resolved +
+      summary.missed +
+      summary.failed +
+      summary.isrcRefreshed +
+      summary.isrcRefreshMissed;
+    summary.produced =
+      summary.prefixStripped +
+      summary.resolved +
+      summary.missed +
+      summary.isrcRefreshed +
+      summary.isrcRefreshMissed;
 
     if (summary.throttled) {
       log("MusicBrainz throttled the pass — stopped clean; the next tick resumes.");

@@ -18,6 +18,16 @@
 // rungs share the official app with user-facing mints, so the box PACES them under a 60/min ceiling
 // (`spotifySearchPaceMs`); when the flag is off they never run and the sweep is exactly slice 1.
 //
+// AND THE SPOTIFY RUNGS COME BACK AS A SUBORDINATE. The flag stays the operator's kill-switch, but
+// what it now unleashes is metered by three TICK-level guards this driver owns, because each is a
+// property of a whole tick that no single `resolve_anchor` call can see:
+//   · the EXACT-ISRC ASK BUDGET (`FLUNCLE_ANCHOR_ISRC_ASK_LIMIT`, 25/tick) — the Class-B lever,
+//   · the NIGHT WINDOW (`FLUNCLE_ANCHOR_ISRC_WINDOW_UTC`, `"0-8"`) — never over publishing hours,
+//   · the YIELD LAW — ANY 429 in the anchor path ends the tick's remaining Spotify asks. A throttle
+//     is PASS-ENDING and never ROW-FAILING: the deferred rows stamp nothing and keep their turn.
+// Each is expressed as `spotifySearch: false` on the rows it covers — a request field the server ANDs
+// into its own gate, so the box can only ever ask for LESS and never talk the rungs into running.
+//
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (anchor-sweep.sh) the host timer
 // docker-execs — see that file's header for the wire-up and ../anchor-timer/README.md for the
@@ -91,6 +101,37 @@ const APIFY_QUERY_CHUNK = Number(process.env.FLUNCLE_ANCHOR_APIFY_CHUNK ?? "15")
 
 /** The actor's per-query candidate cap — the pilot-verified value; more candidates = more spend. */
 const SEARCH_KEYWORD_LIMIT = Number(process.env.FLUNCLE_ANCHOR_KEYWORD_LIMIT ?? "3");
+
+// ── THE SPOTIFY SEARCH RUNGS' THREE TICK-LEVEL GUARDS (the subordinate-consumer contract) ─────────
+//
+// The dark flag `anchor_spotify_search_enabled` stays THE operator kill-switch and lives on the
+// server; nothing here can turn the rungs on. What lives HERE is what a tick knows and a single
+// `resolve_anchor` call cannot: how many exact-ISRC asks this tick has already spent, what hour it
+// is, and whether Spotify has thrown a 429 at us since the tick began. Each is sent as
+// `spotifySearch: false` on the rows it covers — a request field the server ANDs into its own gate,
+// so the box can only ever ask for LESS.
+//
+// The reason all three exist: the rungs draw on the ONE official Spotify app that also serves
+// publishing and user playlist flows, and a sustained sweep DID starve it (2026-07-18), which is why
+// they went dark in the first place. They come back as the app's SUBORDINATE consumer or not at all.
+
+/**
+ * The tick's ceiling on EXACT-ISRC asks (`findSpotifyTrackByIsrc`) — the Class-B lever, and the only
+ * Spotify ask worth metering by count because it is the one with a real hit rate. 25 an hour is a
+ * trickle by design: it drains the 5,141-row exact-ISRC backlog over weeks while never being the
+ * reason a publish waits. Once it is spent the whole Spotify leg is deferred for the rest of the
+ * tick (the box can only defer the leg, not one rung of it), which is the conservative direction.
+ */
+const ISRC_ASK_LIMIT = Number(process.env.FLUNCLE_ANCHOR_ISRC_ASK_LIMIT ?? "25");
+
+/**
+ * The NIGHT WINDOW, as UTC hours `start-end` (end EXCLUSIVE — the `FRONTIER_REFRESH_GATE_END_HOUR`
+ * convention). `"0-8"` = 00:00–08:00 UTC, which sits clear of publishing hours and of when anyone is
+ * actually listening. EMPTY = always allowed. A wrapping window (`"22-6"`) is understood. An
+ * unreadable value DENIES — the same default-deny discipline the breaker reads by, since the cost of
+ * being wrong is a paused optional sweep rather than a starved user-facing path.
+ */
+const ISRC_WINDOW_UTC = process.env.FLUNCLE_ANCHOR_ISRC_WINDOW_UTC ?? "0-8";
 
 /** This host timer runs hourly. Emitted so the run ledger judges freshness against the real cadence. */
 const ANCHOR_EXPECTED_INTERVAL_MS = 60 * 60 * 1000;
@@ -183,12 +224,37 @@ export type AnchorVerdict = {
     | "no-map"
     | "no-mbid"
     | "not-attempted"
-    | "request-failed";
+    | "request-failed"
+    | "yielded-on-breaker";
   /** Which free rung anchored (`resolve_anchor` only) — drives the per-rung tally. Null on the Apify path. */
   source?: "listenbrainz" | "spotify-isrc" | "spotify-search" | null;
+  /** True iff an EXACT-ISRC search was spent — the unit this tick's ask budget meters. */
+  spotifyIsrcAsked?: boolean;
   /** True iff `resolve_anchor` issued a Spotify SEARCH this call — the box's pacer signal (slice 2). */
   spotifySearchDone?: boolean;
-  verifiedBy: "isrc" | "search" | null;
+  /**
+   * True iff a Spotify call in the server's anchor path came back 429. THE YIELD LAW: one of these
+   * ends every remaining Spotify ask in the tick — a throttle is pass-ending, never row-failing.
+   */
+  spotifyThrottled?: boolean;
+  /**
+   * Which gate rung matched. `search-subset` is the ±1s proper-subset fallback — a DIFFERENT
+   * confidence from `search`, which is why the server persists them apart. The tally below folds it
+   * in with `search` (both are the verified-search gate), but the union must carry it or a future
+   * `switch` here would silently mis-read a real verdict.
+   */
+  verifiedBy: "isrc" | "search" | "search-subset" | null;
+};
+
+/**
+ * One rung-0 Deezer search's result: the hits that carried all four gate signals, plus how many the
+ * response held that did NOT and so were withheld. The count exists because the drop used to be
+ * invisible — an all-unusable response and an empty one both reached the Worker as `[]`.
+ */
+export type DeezerSearchResult = {
+  candidates: DeezerCandidatePayload[];
+  /** Hits dropped for a missing ISRC / title / artist / positive duration. */
+  droppedIncomplete: number;
 };
 
 /** One counted worklist read: the page itself plus the real whole-queue depth before the page runs. */
@@ -201,6 +267,15 @@ export type AnchorQueuePage = {
 export type AnchorSummary = {
   /** Failed Apify actor CHUNKS — the paid rung's failure denominator, never last-write-wins. */
   apifyActorErrors: number;
+  /**
+   * Rows whose query the Apify dataset came back WITHOUT — the actor returned, but no item carried
+   * this row's `target`. Those rows are POSTed an empty candidate list, so the Worker stamps a clean
+   * miss and backs the row off for `ANCHOR_REASK_AFTER_DAYS`, indistinguishable in every existing
+   * number from "Spotify genuinely has nothing". That is the BLACKOUT class: a row the actor never
+   * actually answered for, retired as though it had. Counted here so the class has a size before
+   * anything is done about it — this slice deliberately changes NO stamping behaviour, it measures.
+   */
+  apifyTargetOmitted: number;
   /** Rows anchored by the Apify FALLBACK via the exact-ISRC gate. */
   anchoredByIsrc: number;
   /** Rows anchored by the FREE ListenBrainz rung — the waterfall's cheapest win (no Apify spent). */
@@ -221,6 +296,15 @@ export type AnchorSummary = {
    * of. Those rows resolve normally, just unhelped (no ISRC recovered).
    */
   deezerSearchFailed: number;
+  /**
+   * Deezer HITS dropped before they were sent, for missing one of the four signals the Worker's gate
+   * reads (ISRC, title, artist, a positive duration). The drop is right — an unverifiable hit is not
+   * evidence — but until now it was silent: a search that returned five unusable hits reached the
+   * Worker as the same empty array a search that found nothing does, so a systematic upstream change
+   * (Deezer dropping `isrc` from search results, say) would read as "this catalogue is not on Deezer".
+   * Counted per HIT, not per row, so the number is the size of what was withheld.
+   */
+  deezerHitsDroppedIncomplete: number;
   /** The first run-failure message for diagnosis; item diagnostics stay in their counters/logs. */
   error: null | string;
   /** Run-level failures only: the sweep could not do its job and exits non-zero. */
@@ -252,6 +336,14 @@ export type AnchorSummary = {
   lbNotAttempted: number;
   /** ListenBrainz request/response failures (throw, non-2xx, malformed JSON, or non-array body). */
   lbRequestFailed: number;
+  /**
+   * Rows where the ListenBrainz rung DECLINED to spend its by-id Spotify read because the shared-app
+   * throttle breaker was tripped. Its own counter rather than more `lbMetadataFailed`, because the
+   * two mean opposite things: a failure is the rung breaking, a yield is the rung working. This is
+   * the number that used to hide inside `lbMetadataFailed` during Spotify's throttle windows and made
+   * a healthy rung under backpressure look like a dead one. NOT a `failed` — nothing went wrong.
+   */
+  lbYieldedOnBreaker: number;
   /** Rows that verified nothing on ANY rung (a clean full miss — stamped, backed off). */
   missed: number;
   ok: boolean;
@@ -261,6 +353,18 @@ export type AnchorSummary = {
   queueDepth: null | number;
   /** Rows this tick could not settle (a bad worklist row, or an anchor POST that threw). */
   skipped: number;
+  /** EXACT-ISRC asks the server reported spending this tick — what {@link ISRC_ASK_LIMIT} meters. */
+  spotifyIsrcAsks: number;
+  /** Rows whose Spotify leg was deferred because this tick's exact-ISRC ask budget was spent. */
+  spotifyDeferredBudget: number;
+  /** Rows whose Spotify leg was deferred because the clock was outside the night window. */
+  spotifyDeferredWindow: number;
+  /**
+   * Rows whose Spotify leg was deferred because a 429 earlier in this tick ended its asks — the yield
+   * law's visible half. A non-zero value with `spotifyIsrcAsks` small is the tell that Spotify pushed
+   * back early and the tick correctly got out of the way.
+   */
+  spotifyDeferredYield: number;
 };
 
 /** The injected effects — so the tick's mapping + routing are provable with stubs (no network). */
@@ -278,14 +382,19 @@ export type AnchorDeps = {
   resolveFree: (
     trackId: string,
     deezerCandidates?: DeezerCandidatePayload[],
+    options?: { spotifySearch?: boolean },
   ) => Promise<AnchorVerdict>;
   runActor: (queries: string[]) => Promise<ApifyResultItem[]>;
   /**
    * ONE Deezer search from THIS BOX's IP, for the rung-0 ISRC recovery. `null` means the search FAILED
    * (network, non-2xx, malformed body, or a quota answer that outlasted the retries) as distinct from
    * an honest empty result — the sweep tallies the two apart. Never throws.
+   *
+   * A bare ARRAY and a {@link DeezerSearchResult} are both accepted, the `fetchQueue` precedent: the
+   * result form carries the dropped-hit count alongside the candidates, and the array form is the
+   * same answer with nothing to report.
    */
-  searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | null>;
+  searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | DeezerSearchResult | null>;
   /** Pause for `ms`. Injected so the Spotify-search pacer can be driven by a fake clock in tests. */
   sleep: (ms: number) => Promise<void>;
 };
@@ -337,6 +446,10 @@ function tallyListenBrainzOutcome(summary: AnchorSummary, verdict: AnchorVerdict
       summary.lbRequestFailed += 1;
       recordFailure(summary);
       break;
+    case "yielded-on-breaker":
+      // NOT a `recordFailure`: the rung declined to spend a read into a wall. See the field's doc.
+      summary.lbYieldedOnBreaker += 1;
+      break;
     case "anchored":
     case undefined:
       break;
@@ -355,6 +468,60 @@ function tallyListenBrainzOutcome(summary: AnchorSummary, verdict: AnchorVerdict
  * Apify only) runs at full speed.
  */
 export const SPOTIFY_SEARCH_MIN_INTERVAL_MS = 2000;
+
+// ── THE NIGHT WINDOW (pure) ──────────────────────────────────────────────────
+//
+// Parsed once per tick and asked once per row. Pure so the window is proven against fixed clocks
+// rather than by waiting for 03:00, and so a malformed operator value is a tested outcome rather
+// than a surprise at runtime.
+
+/** A parsed {@link ISRC_WINDOW_UTC}: an hour range, "always" (empty value), or "invalid". */
+export type IsrcAskWindow = "always" | "invalid" | { endHour: number; startHour: number };
+
+/**
+ * Parse `start-end` UTC hours. `end` is EXCLUSIVE, so `"0-8"` is 00:00–08:00. An empty/absent value
+ * is `"always"` (no window). Anything else that is not two integers in 0..23 with a `-` between them
+ * is `"invalid"`, which {@link withinIsrcAskWindow} reads as DENY.
+ */
+export function parseIsrcAskWindow(raw: string | undefined): IsrcAskWindow {
+  const value = (raw ?? "").trim();
+
+  if (!value) {
+    return "always";
+  }
+
+  const match = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(value);
+  const startHour = Number(match?.[1]);
+  const endHour = Number(match?.[2]);
+
+  if (!match || !(startHour >= 0 && startHour <= 23) || !(endHour >= 0 && endHour <= 24)) {
+    return "invalid";
+  }
+
+  return { endHour, startHour };
+}
+
+/**
+ * Is `now` inside the parsed window? `"always"` ⇒ true, `"invalid"` ⇒ false (deny). A window whose
+ * start is greater than its end WRAPS across midnight (`"22-6"` = 22:00–06:00), and a start equal to
+ * its end is an EMPTY window (never open) rather than an all-day one — an operator who means "always"
+ * writes the empty string, so the degenerate range is read literally instead of guessed at.
+ */
+export function withinIsrcAskWindow(window: IsrcAskWindow, now: Date): boolean {
+  if (window === "always") {
+    return true;
+  }
+
+  if (window === "invalid") {
+    return false;
+  }
+
+  const hour = now.getUTCHours();
+
+  return window.startHour <= window.endHour
+    ? hour >= window.startHour && hour < window.endHour
+    : hour >= window.startHour || hour < window.endHour;
+}
 
 /**
  * How long to wait before the next `resolve_anchor` call so consecutive Spotify-search-bearing calls
@@ -450,12 +617,66 @@ export function groupCandidatesByTarget(
   return byTarget;
 }
 
+// ── THE SPOTIFY ASK STATE (one per timer firing, shared across pages) ────────
+//
+// The budget and the yield law are properties of a TICK — one firing of the host timer — not of a
+// page, so they live in a value `runAnchorSweep` mints once and threads through every page it runs.
+// A `runAnchorTick` called on its own (the tests, an attended single page) gets a fresh one, which is
+// the same thing when there is only one page.
+
+/** The tick's live Spotify-ask permission: how much budget is left, and whether we have yielded. */
+export type SpotifyAskState = {
+  /** The parsed night window. Asked per row against the injected clock. */
+  askWindow: IsrcAskWindow;
+  /** EXACT-ISRC asks the server has reported spending so far this tick. */
+  asksSpent: number;
+  /** The tick's ceiling on those asks — {@link ISRC_ASK_LIMIT} by default. */
+  limit: number;
+  /** Latched by the first 429 anywhere in the anchor path; never un-latches within the tick. */
+  yielded: boolean;
+};
+
+/** A fresh tick's ask state, off the operator's env (or explicit values, for the tests). */
+export function newSpotifyAskState(
+  limit: number = ISRC_ASK_LIMIT,
+  windowUtc: string | undefined = ISRC_WINDOW_UTC,
+): SpotifyAskState {
+  return {
+    askWindow: parseIsrcAskWindow(windowUtc),
+    asksSpent: 0,
+    limit: Number.isFinite(limit) && limit >= 0 ? Math.trunc(limit) : 0,
+    yielded: false,
+  };
+}
+
+/**
+ * May THIS row's `resolve_anchor` call use the Spotify search rungs? The three tick guards, in the
+ * order that reads best in a summary: the yield law first (a 429 has happened and nothing else
+ * matters), then the clock, then the budget. `null` means yes; a string names which guard deferred
+ * it, and is the counter to bump.
+ */
+export function spotifyAskDeferral(
+  state: SpotifyAskState,
+  now: Date,
+): "budget" | "window" | "yield" | null {
+  if (state.yielded) {
+    return "yield";
+  }
+
+  if (!withinIsrcAskWindow(state.askWindow, now)) {
+    return "window";
+  }
+
+  return state.asksSpent >= state.limit ? "budget" : null;
+}
+
 // ── One tick, with injected effects ──────────────────────────────────────────
 
 export async function runAnchorTick(
   limit: number,
   deps: AnchorDeps,
   actorChunkSize: number = APIFY_QUERY_CHUNK,
+  askState: SpotifyAskState = newSpotifyAskState(),
 ): Promise<AnchorSummary> {
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
@@ -464,7 +685,9 @@ export async function runAnchorTick(
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     apifyActorErrors: 0,
+    apifyTargetOmitted: 0,
     checked: 0,
+    deezerHitsDroppedIncomplete: 0,
     deezerSearchFailed: 0,
     error: null,
     errors: 0,
@@ -479,11 +702,16 @@ export async function runAnchorTick(
     lbNoMbid: 0,
     lbNotAttempted: 0,
     lbRequestFailed: 0,
+    lbYieldedOnBreaker: 0,
     missed: 0,
     ok: true,
     produced: 0,
     queueDepth: null,
     skipped: 0,
+    spotifyDeferredBudget: 0,
+    spotifyDeferredWindow: 0,
+    spotifyDeferredYield: 0,
+    spotifyIsrcAsks: 0,
   };
 
   let queue: AnchorWorkItem[];
@@ -523,6 +751,11 @@ export async function runAnchorTick(
   // PACING: when a call actually issued a Spotify search (`spotifySearchDone`), the next call waits so
   // consecutive search-bearing calls stay ≥ 2s apart — the 60/min ceiling on the shared official app
   // (see `spotifySearchPaceMs`). A flag-OFF sweep never searches, so it never waits.
+  //
+  // THE THREE TICK-LEVEL GUARDS ride the same loop, as one `spotifySearch: false` per covered row:
+  // the night window (asked once per row off the injected clock), the exact-ISRC ask budget, and the
+  // yield law. None of them can ARM the rungs — the server's dark flag is the only thing that does —
+  // so a tick where the flag is off spends the guards' bookkeeping and nothing else.
   const apifyRows: { anchorQuery: string; trackId: string }[] = [];
   let lastSearchStartMs: null | number = null;
   // The GLOBAL Apify kill-flag, learned from any verdict (all agree). Default true ⇒ a pre-slice-3
@@ -553,9 +786,15 @@ export async function runAnchorTick(
       if (hits === null) {
         summary.deezerSearchFailed += 1;
         recordFailure(summary);
+      } else if (Array.isArray(hits)) {
+        deezerCandidates = hits;
+      } else {
+        // The result form — the same candidates, plus how many hits were withheld as unverifiable.
+        deezerCandidates = hits.candidates;
+        summary.deezerHitsDroppedIncomplete += hits.droppedIncomplete;
       }
 
-      deezerCandidates = hits ?? [];
+      deezerCandidates ??= [];
     }
 
     const waitMs = spotifySearchPaceMs(lastSearchStartMs, deps.now());
@@ -565,12 +804,41 @@ export async function runAnchorTick(
     }
 
     const startMs = deps.now();
+    // THE TICK GUARDS, asked once per row. `deps.now()` is the real wall clock in production (and an
+    // injected one in the tests), so the night window reads the hour the same way either way.
+    const deferral = spotifyAskDeferral(askState, new Date(startMs));
+
+    if (deferral === "budget") {
+      summary.spotifyDeferredBudget += 1;
+    } else if (deferral === "window") {
+      summary.spotifyDeferredWindow += 1;
+    } else if (deferral === "yield") {
+      summary.spotifyDeferredYield += 1;
+    }
 
     try {
-      const verdict = await deps.resolveFree(row.trackId, deezerCandidates);
+      const verdict = await deps.resolveFree(
+        row.trackId,
+        deezerCandidates,
+        // Sent ONLY as a deferral. Omitting the option entirely on the allowed path keeps the
+        // request byte-identical to what a pre-slice server already accepts.
+        deferral === null ? undefined : { spotifySearch: false },
+      );
 
       if (verdict.spotifySearchDone) {
         lastSearchStartMs = startMs;
+      }
+
+      if (verdict.spotifyIsrcAsked) {
+        askState.asksSpent += 1;
+        summary.spotifyIsrcAsks += 1;
+      }
+
+      // THE YIELD LAW. A throttle ends the tick's remaining Spotify asks — it says nothing about
+      // this row, which stamps nothing and keeps its turn.
+      if (verdict.spotifyThrottled && !askState.yielded) {
+        askState.yielded = true;
+        deps.log("spotify throttled — yielding the rest of the tick's Spotify asks");
       }
 
       // The kill-flag is global, so any verdict tells the whole tick's answer.
@@ -654,6 +922,15 @@ export async function runAnchorTick(
 
     for (const row of batch) {
       const candidates = byTarget.get(row.anchorQuery) ?? [];
+
+      // THE BLACKOUT TELL. The actor run SUCCEEDED but its dataset carried no item for this row's
+      // query at all — as opposed to items that carried no usable Spotify track. Both reach the
+      // Worker as an empty candidate list and stamp an identical clean miss, so nothing downstream
+      // can tell "Spotify has nothing" from "the actor never answered". Counting is all this slice
+      // does: the stamping is deliberately unchanged until the class has a measured size.
+      if (!byTarget.has(row.anchorQuery)) {
+        summary.apifyTargetOmitted += 1;
+      }
 
       try {
         const verdict = await deps.report(row.trackId, candidates);
@@ -801,7 +1078,7 @@ const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
 
 /** One Deezer search attempt's outcome, so a throttle can be retried and a hard failure cannot. */
 type DeezerAttempt =
-  | { candidates: DeezerCandidatePayload[]; outcome: "ok" }
+  | ({ outcome: "ok" } & DeezerSearchResult)
   | { outcome: "failed" }
   | { outcome: "quota" };
 
@@ -856,6 +1133,7 @@ async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
   }
 
   const candidates: DeezerCandidatePayload[] = [];
+  let droppedIncomplete = 0;
 
   for (const hit of parsed.data) {
     const isrc = hit.isrc?.trim() ?? "";
@@ -864,8 +1142,12 @@ async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
 
     // A hit missing any of the four signals the Worker's gate reads cannot be verified, so it is
     // dropped HERE rather than sent as an unverifiable payload. Dropping is the box's only judgement
-    // and it is one-way: it can withhold evidence, never manufacture it.
+    // and it is one-way: it can withhold evidence, never manufacture it. It is also COUNTED: an
+    // all-dropped response and a genuinely empty one both leave as `[]`, so without this number a
+    // systematic upstream change (Deezer dropping `isrc` from search results) would read as a
+    // catalogue Deezer has never heard of.
     if (!isrc || !title || !artistName || typeof hit.duration !== "number" || hit.duration <= 0) {
+      droppedIncomplete += 1;
       continue;
     }
 
@@ -880,7 +1162,7 @@ async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
     });
   }
 
-  return { candidates, outcome: "ok" };
+  return { candidates, droppedIncomplete, outcome: "ok" };
 }
 
 /**
@@ -892,12 +1174,12 @@ async function attemptDeezerSearch(query: string): Promise<DeezerAttempt> {
 export async function searchDeezerOnBox(
   query: string,
   retryDelaysMs: number[] = DEEZER_QUOTA_RETRY_DELAYS_MS,
-): Promise<DeezerCandidatePayload[] | null> {
+): Promise<DeezerSearchResult | null> {
   for (let attempt = 0; ; attempt += 1) {
     const result = await attemptDeezerSearch(query);
 
     if (result.outcome === "ok") {
-      return result.candidates;
+      return { candidates: result.candidates, droppedIncomplete: result.droppedIncomplete };
     }
 
     const delay = result.outcome === "quota" ? retryDelaysMs[attempt] : undefined;
@@ -957,13 +1239,23 @@ async function reportAnchor(
  * ask Deezer nothing" — re-asking from the saturated shared edge is a known-dead request. Omitted for
  * a row the worklist gave no `deezerQuery`, which is a row that already carries an ISRC. The server
  * verifies these against the row and writes the ISRC itself; the box's opinion is never sent.
+ *
+ * `options.spotifySearch: false` is the tick's DEFERRAL of the Spotify search rungs for this row —
+ * the ask budget, the night window, or the yield law. It is sent only when one of them fires, so the
+ * allowed path's request body is byte-identical to what it has always been, and it can only ever
+ * subtract permission: the server's dark flag remains the one thing that arms the rungs.
  */
 async function resolveAnchorFree(
   trackId: string,
   deezerCandidates?: DeezerCandidatePayload[],
+  options?: { spotifySearch?: boolean },
 ): Promise<AnchorVerdict> {
   const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor/resolve`, {
-    body: JSON.stringify(deezerCandidates ? { deezerCandidates, trackId } : { trackId }),
+    body: JSON.stringify({
+      trackId,
+      ...(deezerCandidates ? { deezerCandidates } : {}),
+      ...(options?.spotifySearch === false ? { spotifySearch: false } : {}),
+    }),
     headers: {
       Authorization: `Bearer ${API_TOKEN}`,
       "Content-Type": "application/json",
@@ -987,7 +1279,9 @@ async function resolveAnchorFree(
     isrcRecoveredByDeezer: Boolean(body.isrcRecoveredByDeezer),
     listenbrainzOutcome: body.listenbrainzOutcome,
     source: body.source ?? null,
+    spotifyIsrcAsked: Boolean(body.spotifyIsrcAsked),
     spotifySearchDone: Boolean(body.spotifySearchDone),
+    spotifyThrottled: Boolean(body.spotifyThrottled),
     verifiedBy: body.verifiedBy ?? null,
   };
 }
@@ -1009,7 +1303,9 @@ export async function runAnchorSweep(
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     apifyActorErrors: 0,
+    apifyTargetOmitted: 0,
     checked: 0,
+    deezerHitsDroppedIncomplete: 0,
     deezerSearchFailed: 0,
     error: null as null | string,
     errors: 0,
@@ -1024,6 +1320,7 @@ export async function runAnchorSweep(
     lbNoMbid: 0,
     lbNotAttempted: 0,
     lbRequestFailed: 0,
+    lbYieldedOnBreaker: 0,
     missed: 0,
     ok: true,
     pages: 0,
@@ -1031,13 +1328,21 @@ export async function runAnchorSweep(
     pulled: 0,
     queueDepth: null as null | number,
     skipped: 0,
+    spotifyDeferredBudget: 0,
+    spotifyDeferredWindow: 0,
+    spotifyDeferredYield: 0,
+    spotifyIsrcAsks: 0,
   };
 
   let remaining = Math.max(0, Math.trunc(total));
+  // ONE ask state for the whole firing. The budget and the yield law are per-TICK, and a sweep's
+  // pages are internal bookkeeping — a per-page state would hand a `--limit 200` burn eight fresh
+  // budgets and defeat the ceiling entirely.
+  const askState = newSpotifyAskState();
 
   while (remaining > 0) {
     const ask = Math.min(pageLimit, remaining);
-    const page = await runAnchorTick(ask, deps);
+    const page = await runAnchorTick(ask, deps, APIFY_QUERY_CHUNK, askState);
     const pulled = page.checked;
 
     merged.pages += 1;
@@ -1059,15 +1364,24 @@ export async function runAnchorSweep(
     merged.lbNoMap += page.lbNoMap;
     merged.lbNotAttempted += page.lbNotAttempted;
     merged.lbRequestFailed += page.lbRequestFailed;
-    // The two diagnostics ride along field-wise but stay OUT of `pulled` — neither is a row outcome:
-    // a failed Deezer search still resolves its row, and a thrown free rung is already counted by
-    // whatever that row ends up as (an Apify verdict, or `skipped` when Apify is off).
+    merged.lbYieldedOnBreaker += page.lbYieldedOnBreaker;
+    // The diagnostics ride along field-wise but stay OUT of `pulled` — none is a row outcome: a
+    // failed Deezer search still resolves its row, a thrown free rung is already counted by whatever
+    // that row ends up as (an Apify verdict, or `skipped` when Apify is off), an omitted Apify target
+    // is already counted as `missed`, and a deferred Spotify leg is a row that simply took a
+    // different (cheaper) path through the same waterfall.
+    merged.apifyTargetOmitted += page.apifyTargetOmitted;
+    merged.deezerHitsDroppedIncomplete += page.deezerHitsDroppedIncomplete;
     merged.deezerSearchFailed += page.deezerSearchFailed;
     merged.failed += page.failed;
     merged.freeRungErrors += page.freeRungErrors;
     merged.errors += page.errors;
     merged.missed += page.missed;
     merged.skipped += page.skipped;
+    merged.spotifyDeferredBudget += page.spotifyDeferredBudget;
+    merged.spotifyDeferredWindow += page.spotifyDeferredWindow;
+    merged.spotifyDeferredYield += page.spotifyDeferredYield;
+    merged.spotifyIsrcAsks += page.spotifyIsrcAsks;
 
     if (!page.ok) {
       merged.ok = false;

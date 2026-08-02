@@ -315,6 +315,11 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
+/** `admin backfills recording-mbids` — the fill pass plus the ISRC-refresh leg's own cap. */
+type RecordingMbidsOptions = BackfillSyncOptions & {
+  isrcRefreshLimit?: string;
+};
+
 type CoverMastersOptions = BackfillSyncOptions & {
   kind?: string;
   retryNone?: boolean;
@@ -2853,8 +2858,11 @@ JSON field reference:
     .description("Fill MusicBrainz recording MBIDs (crawler PK strip + ISRC resolve) over tracks")
     .option("--dry-run", "Report the eligible worklist without any vendor call or write", false)
     .option("--limit <limit>", "Max ISRC lookups to process", "50")
+    // The RETURN trip's cap (MBID → `?inc=isrcs`), which the Worker runs only on a tick whose ISRC
+    // drain was idle. Server-clamped to 25 — the knob is there to spend less, never more.
+    .option("--isrc-refresh-limit <limit>", "Max MusicBrainz ISRC re-reads to process", "25")
     .option("--json", "Print JSON", false)
-    .action(async (options: BackfillSyncOptions) => {
+    .action(async (options: RecordingMbidsOptions) => {
       const { backfillRecordingMbidsCommand } = await import("./commands/admin-tracks");
       await runBackfillRecordingMbids(options, backfillRecordingMbidsCommand);
     });
@@ -5009,13 +5017,16 @@ async function runBackfillLabelImages(
 // lookups actually HANDLED (resolved + missed + failed); the loop drains the track-id cursor until
 // the cap is met, the worklist is exhausted, or MusicBrainz throttles.
 async function runBackfillRecordingMbids(
-  options: BackfillSyncOptions,
+  options: RecordingMbidsOptions,
   backfillRecordingMbidsCommand: typeof import("./commands/admin-tracks").backfillRecordingMbidsCommand,
 ): Promise<void> {
   const limit = parseListLimit(options.limit);
+  const isrcRefreshLimit = parseListLimit(options.isrcRefreshLimit);
   const resolved: string[] = [];
   const missed: string[] = [];
   const failed: Array<{ error: string; trackId: string }> = [];
+  const isrcRefreshed: string[] = [];
+  const isrcRefreshMissed: string[] = [];
   let cursor: string | undefined;
   let dryRun = options.dryRun;
   let prefixStripped = 0;
@@ -5023,12 +5034,22 @@ async function runBackfillRecordingMbids(
 
   while (resolved.length + missed.length + failed.length < limit) {
     const remaining = limit - (resolved.length + missed.length + failed.length);
-    const result = await backfillRecordingMbidsCommand(remaining, options.dryRun, cursor);
+    const result = await backfillRecordingMbidsCommand(
+      remaining,
+      options.dryRun,
+      cursor,
+      isrcRefreshLimit,
+    );
     dryRun = result.dryRun;
     prefixStripped += result.prefixStripped;
     resolved.push(...result.resolved);
     missed.push(...result.missed);
     failed.push(...result.failed);
+    // The refresh leg runs on the FIRST page only (it has no cursor of its own — its stamps advance
+    // it), so these accumulate at most one page's worth. Pushed rather than assigned anyway, so a
+    // future paged refresh needs no change here.
+    isrcRefreshed.push(...(result.isrcRefreshed ?? []));
+    isrcRefreshMissed.push(...(result.isrcRefreshMissed ?? []));
 
     if (!options.json) {
       const verb = result.dryRun ? "would resolve" : "resolved";
@@ -5055,6 +5076,10 @@ async function runBackfillRecordingMbids(
       dryRun,
       failed,
       failedCount: failed.length,
+      isrcRefreshMissed,
+      isrcRefreshMissedCount: isrcRefreshMissed.length,
+      isrcRefreshed,
+      isrcRefreshedCount: isrcRefreshed.length,
       missed,
       missedCount: missed.length,
       ok: true,
@@ -5074,6 +5099,9 @@ async function runBackfillRecordingMbids(
   const verb = dryRun ? "Would fill" : "Filled";
   console.log(
     `${verb} ${prefixStripped} recording MBID(s) from crawler PKs; ${resolved.length} by ISRC; ${missed.length} not in MusicBrainz; ${failed.length} failed.`,
+  );
+  console.log(
+    `${dryRun ? "Would re-read" : "Re-read"} ${isrcRefreshed.length + isrcRefreshMissed.length} recording(s) for ISRCs — ${isrcRefreshed.length} filled, ${isrcRefreshMissed.length} still none.`,
   );
 
   for (const item of failed) {
@@ -7965,6 +7993,7 @@ function normalizeCommanderError(error: unknown): unknown {
 // cli.test.ts scans the source and build-fails when a declared `<value>` option
 // is absent from this set — add every new value-taking option here.
 const stringOptions = new Set([
+  "--isrc-refresh-limit",
   "--against",
   "--analyzed-at",
   "--analyzed-from",

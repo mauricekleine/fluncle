@@ -826,6 +826,14 @@ const RecordingMbidsFailedSchema = z
  * missed, missedCount, failed, failedCount, nextCursor, rateLimited }` — `missed` is the ISRCs
  * MusicBrainz has no recording for (attempt-stamped so the worklist drains), `rateLimited` STOPS the
  * loop on a MusicBrainz throttle.
+ *
+ * AND THE RETURN TRIP (the ISRC refresh). MusicBrainz gains ISRCs over time and nothing re-read it,
+ * so ~9,895 benched rows sit ISRC-less while holding the recording MBID that would answer — and an
+ * ISRC-less row is the one the anchor waterfall has to resolve down its low-precision FUZZY rung. On
+ * a tick whose ISRC drain had nothing to do, this re-reads the stalest `?inc=isrcs` recordings and
+ * fills the ISRC empty-only, reporting `isrcRefreshed`/`isrcRefreshMissed`. `isrcRefreshLimit` caps
+ * it (≤25); a row that gains an ISRC becomes an exact-rung anchor candidate on its next ask, with no
+ * coupling between the two sweeps at all.
  */
 export const backfillRecordingMbids = oc
   .route({
@@ -842,6 +850,8 @@ export const backfillRecordingMbids = oc
       query: z.object({
         cursor: z.string().optional(),
         dryRun: z.string().optional(),
+        /** Cap on the ISRC-REFRESH leg's MusicBrainz re-reads this pass (server-clamped to ≤25). */
+        isrcRefreshLimit: z.string().optional(),
         limit: z.string().optional(),
       }),
     }),
@@ -851,6 +861,13 @@ export const backfillRecordingMbids = oc
       dryRun: z.boolean(),
       failed: z.array(RecordingMbidsFailedSchema),
       failedCount: z.number(),
+      // Track ids re-read whose recording MusicBrainz still holds no ISRC for — stamped, so they sit
+      // out the refresh window instead of being re-asked every tick.
+      isrcRefreshMissed: z.array(z.string()),
+      isrcRefreshMissedCount: z.number(),
+      // Track ids the ISRC-REFRESH leg gave an ISRC this pass (in a dry run, the rows it WOULD read).
+      isrcRefreshed: z.array(z.string()),
+      isrcRefreshedCount: z.number(),
       // Track ids whose ISRC MusicBrainz has no recording for — attempt-stamped so they drain.
       missed: z.array(z.string()),
       missedCount: z.number(),

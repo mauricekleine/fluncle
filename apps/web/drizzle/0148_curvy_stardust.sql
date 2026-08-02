@@ -1,0 +1,2 @@
+DROP INDEX `tracks_funnel_scan_idx`;--> statement-breakpoint
+CREATE INDEX `tracks_funnel_scan_idx` ON `tracks` (`is_catalogue`,`has_embedding`,`spotify_uri`,`source_audio_key`,`analyzed_from`,`dismissed_at`,`duplicate_of_track_id`,`nearest_finding_score`,`duration_ms`,`spotify_anchor_attempted_at`,`isrc`,`spotify_anchor_attempts`,`artists_json`,`label_id`);

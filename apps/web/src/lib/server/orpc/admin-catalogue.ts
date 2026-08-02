@@ -409,6 +409,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     try {
       const result = await resolveAnchorFree(input.trackId, new Date(), {
         deezerCandidates: input.deezerCandidates,
+        spotifySearch: input.spotifySearch,
       });
 
       return { ...result, ok: true as const };

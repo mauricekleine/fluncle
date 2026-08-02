@@ -162,7 +162,9 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: "isrc",
     });
     // The row already carried an ISRC, so the Deezer recovery rung is skipped entirely.
@@ -212,7 +214,9 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: "search",
     });
     expect(text((await anchorState("mb_search")).uri)).toBe("spotify:track:lbDribble");
@@ -257,7 +261,9 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "gate-rejected",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: null,
     });
     const state = await anchorState("mb_wrong");
@@ -281,7 +287,9 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: null,
     });
     expect(lookupSpotifyIdsByMbid).not.toHaveBeenCalled();
@@ -303,7 +311,9 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: null,
     });
     expect(fetchTrackMetadata).not.toHaveBeenCalled();
@@ -358,7 +368,12 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "metadata-failed",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      // The fixture's failure IS a 429, so the yield law reads it: a throttle on this rung's own
+      // by-id read is still a throttle in the anchor path. The outcome stays `metadata-failed`
+      // (the read was made and failed — distinct from `yielded-on-breaker`, where it was not made).
+      spotifyThrottled: true,
       verifiedBy: null,
     });
     expect((await anchorState("mb_sperr")).attempted).toBeNull();
@@ -386,7 +401,9 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: null,
     });
     const state = await anchorState("mb_apify_off");
@@ -413,7 +430,9 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: null,
     });
     // Byte-for-byte the pre-slice-3 behaviour: a free-rung miss does NOT stamp the re-ask backoff.
@@ -444,7 +463,9 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: "isrc",
     });
     const state = await anchorState("mb_apify_off_hit");
@@ -495,7 +516,9 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       isrcRecoveredByDeezer: true,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: "isrc",
     });
     const state = await anchorState("mb_dz");
@@ -530,7 +553,9 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: null,
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: null,
     });
     const state = await anchorState("mb_dzbad");
@@ -597,7 +622,9 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
+      spotifyIsrcAsked: false,
       spotifySearchDone: false,
+      spotifyThrottled: false,
       verifiedBy: "search",
     });
     expect(searchDeezerCandidates).toHaveBeenCalledTimes(1);

@@ -934,7 +934,12 @@ export const tracks = sqliteTable(
     // `lower(artists_json) not in (…)`), added because the clause grew them after the covering shape
     // was first proven. `artists_json` looks alarming in an index and is not — it averages 16 bytes
     // on prod (max 195, under 1 MB across the table), and `lower()` computes fine off the indexed
-    // value. The funnel integration test EXPLAINs the real statement and fails on any regression, so
+    // value. `label_id` is the same lesson once more: the anchor clause grew the ruled-out-label veto
+    // (track-work.ts `ANCHOR_RULED_OUT_LABEL_CLAUSE`, which excludes a row whose label the operator
+    // ruled out from the metered anchor queue), and without the pointer here the planner dropped the
+    // whole statement back to `SCAN t`. The veto's subquery is deliberately UNCORRELATED so it
+    // materialises once per arm instead of seeking `labels` per row — see that clause's own note.
+    // The funnel integration test EXPLAINs the real statement and fails on any regression, so
     // the contract is enforced rather than remembered.
     index("tracks_funnel_scan_idx").on(
       table.isCatalogue,
@@ -950,6 +955,7 @@ export const tracks = sqliteTable(
       table.isrc,
       table.spotifyAnchorAttempts,
       table.artistsJson,
+      table.labelId,
     ),
     // The `/fresh` window read ("what just came out"): `release_date BETWEEN <30d ago> AND
     // <today>` ordered `release_date DESC`. Over a table built to grow to five figures, an
