@@ -113,6 +113,7 @@ type AlbumFixture = {
 const KNOWN_ARTIST_ID = "sp_artist_known";
 
 type TrackFixture = {
+  artistIds?: string[];
   artistNames?: string[];
   durationMs?: number;
   id: string;
@@ -139,8 +140,15 @@ function albumBody(album: AlbumFixture): unknown {
 
 /** The SINGLE-track response (`GET /tracks/{id}`) — the track object is the top-level body. */
 function trackBody(track: TrackFixture): unknown {
+  const artistNames =
+    track.artistNames ??
+    (track.artistIds ? track.artistIds.map(() => "Test Artist") : ["Test Artist"]);
+
   return {
-    artists: (track.artistNames ?? ["Test Artist"]).map((name) => ({ name })),
+    artists: artistNames.map((name, index) => ({
+      ...(track.artistIds?.[index] ? { id: track.artistIds[index] } : {}),
+      name,
+    })),
     duration_ms: track.durationMs ?? 270_000,
     external_ids: track.isrc ? { isrc: track.isrc } : {},
     external_urls: { spotify: `https://open.spotify.com/track/${track.id}` },
@@ -218,6 +226,38 @@ async function seedArtist(client: Client, spotifyArtistId: string): Promise<void
     ],
     sql: `insert into artists (id, name, slug, spotify_artist_id, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+/** Insert a bridged or tap-blind artist rule directly for the integration fixture. */
+async function seedArtistRule(
+  client: Client,
+  rule: {
+    artistMbid: string;
+    artistSpotifyId?: null | string;
+    labelId?: null | string;
+    verdict: "allow" | "block";
+  },
+): Promise<void> {
+  const now = new Date().toISOString();
+  const labelKey = rule.labelId ?? "global";
+
+  await client.execute({
+    args: [
+      `rule_${labelKey}_${rule.artistMbid}`,
+      rule.artistMbid,
+      `Rule ${rule.artistMbid}`,
+      rule.artistSpotifyId ?? null,
+      rule.verdict,
+      rule.labelId ?? null,
+      "operator",
+      now,
+      now,
+    ],
+    sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, artist_spotify_id, verdict, label_id, source, created_at,
+             updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -325,12 +365,20 @@ describe("stripCopyrightPrefix", () => {
 describe("parseProbeTrack", () => {
   it("reads ISRC + duration + uri/url + artists off a SINGLE track body", () => {
     const track = parseProbeTrack(
-      trackBody({ durationMs: 300_000, id: "t1", isrc: "GB0000000001", title: "Foo" }),
+      trackBody({
+        artistIds: ["sp_art_1", "sp_art_2"],
+        artistNames: ["A", "B"],
+        durationMs: 300_000,
+        id: "t1",
+        isrc: "GB0000000001",
+        title: "Foo",
+      }),
     );
 
     expect(track).toMatchObject({
       durationMs: 300_000,
       isrc: "GB0000000001",
+      spotifyArtistIds: ["sp_art_1", "sp_art_2"],
       spotifyTrackId: "t1",
       spotifyUri: "spotify:track:t1",
       title: "Foo",
@@ -399,6 +447,187 @@ describe("probeLabelReleases", () => {
     expect(searchCalls).toHaveLength(1);
     expect(decodeURIComponent(searchCalls[0] ?? "")).toContain("Medschool");
     expect(spotify.calls.join("|")).not.toContain("Disabled");
+  });
+
+  it("drops a track whose FIRST Spotify credit is blocked by the probed label", async () => {
+    await seedEnabledLabel(db, { id: "lbl_scope", name: "Medschool", slug: "medschool" });
+    await seedArtistRule(db, {
+      artistMbid: "mb_blocked",
+      artistSpotifyId: "sp_blocked",
+      labelId: "lbl_scope",
+      verdict: "block",
+    });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb_scope",
+          name: "Scoped EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_blocked"],
+        },
+      ],
+      searchAlbumIds: ["alb_scope"],
+      tracks: [{ artistIds: ["sp_blocked"], id: "t_blocked", title: "Blocked" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.newRows).toBe(0);
+    expect(result.tracksSkippedArtistRule).toBe(1);
+    expect(await db.execute("select 1 from tracks where track_id = 'sp_t_blocked'")).toMatchObject({
+      rows: [],
+    });
+  });
+
+  it("drops a track whose FIRST Spotify credit is blocked globally", async () => {
+    await seedEnabledLabel(db, { id: "lbl_global", name: "Medschool", slug: "medschool" });
+    await seedArtistRule(db, {
+      artistMbid: "mb_global_blocked",
+      artistSpotifyId: "sp_global_blocked",
+      verdict: "block",
+    });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb_global",
+          name: "Global EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_global_blocked"],
+        },
+      ],
+      searchAlbumIds: ["alb_global"],
+      tracks: [{ artistIds: ["sp_global_blocked"], id: "t_global_blocked", title: "Blocked" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.newRows).toBe(0);
+    expect(result.tracksSkippedArtistRule).toBe(1);
+  });
+
+  it("keeps a track when the matching block rule has a null Spotify bridge", async () => {
+    await seedEnabledLabel(db, { id: "lbl_blind", name: "Medschool", slug: "medschool" });
+    await seedArtistRule(db, {
+      artistMbid: "mb_tap_blind",
+      artistSpotifyId: null,
+      labelId: "lbl_blind",
+      verdict: "block",
+    });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb_blind",
+          name: "Tap Blind EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_blind"],
+        },
+      ],
+      searchAlbumIds: ["alb_blind"],
+      tracks: [{ artistIds: ["sp_tap_blind"], id: "t_blind", title: "Kept" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.newRows).toBe(1);
+    expect(result.tracksSkippedArtistRule).toBe(0);
+  });
+
+  it("keeps a track when Spotify supplies no artist ids", async () => {
+    await seedEnabledLabel(db, { id: "lbl_no_ids", name: "Medschool", slug: "medschool" });
+    await seedArtistRule(db, {
+      artistMbid: "mb_no_ids",
+      artistSpotifyId: "sp_no_ids",
+      labelId: "lbl_no_ids",
+      verdict: "block",
+    });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb_no_ids",
+          name: "No IDs EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_no_ids"],
+        },
+      ],
+      searchAlbumIds: ["alb_no_ids"],
+      tracks: [{ id: "t_no_ids", title: "Kept" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.newRows).toBe(1);
+    expect(result.tracksSkippedArtistRule).toBe(0);
+  });
+
+  it("matches only the FIRST Spotify credit, so a blocked second credit is kept", async () => {
+    await seedEnabledLabel(db, { id: "lbl_first", name: "Medschool", slug: "medschool" });
+    await seedArtistRule(db, {
+      artistMbid: "mb_second",
+      artistSpotifyId: "sp_second",
+      labelId: "lbl_first",
+      verdict: "block",
+    });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb_first",
+          name: "Credit Order EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_second"],
+        },
+      ],
+      searchAlbumIds: ["alb_first"],
+      tracks: [{ artistIds: [KNOWN_ARTIST_ID, "sp_second"], id: "t_second", title: "Kept" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.newRows).toBe(1);
+    expect(result.tracksSkippedArtistRule).toBe(0);
+  });
+
+  it("does not apply allow rules to the tap", async () => {
+    await seedEnabledLabel(db, { id: "lbl_allow", name: "Medschool", slug: "medschool" });
+    await seedArtistRule(db, {
+      artistMbid: "mb_label_allow",
+      artistSpotifyId: "sp_allowed",
+      labelId: "lbl_allow",
+      verdict: "allow",
+    });
+    await seedArtistRule(db, {
+      artistMbid: "mb_global_allow",
+      artistSpotifyId: "sp_allowed",
+      verdict: "allow",
+    });
+
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb_allow",
+          name: "Allow EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t_allowed"],
+        },
+      ],
+      searchAlbumIds: ["alb_allow"],
+      tracks: [{ artistIds: ["sp_allowed"], id: "t_allowed", title: "Kept" }],
+    });
+
+    const result = await probeLabelReleases();
+
+    expect(result.newRows).toBe(1);
+    expect(result.tracksSkippedArtistRule).toBe(0);
   });
 
   it("mints ONLY the copyright-matching album (the fuzzy search is post-filtered)", async () => {

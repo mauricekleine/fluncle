@@ -300,6 +300,7 @@ export function adminBackfillsHandlers(os: Implementer) {
           skippedKnown: result.skippedKnown,
           skippedUndated: result.skippedUndated,
           skippedUngrounded: result.skippedUngrounded,
+          tracksSkippedArtistRule: result.tracksSkippedArtistRule,
         };
       } catch (error) {
         throw apiFault(error);

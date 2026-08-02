@@ -605,6 +605,9 @@ export const backfillLabelReleases = oc
       // Albums DROPPED for artist-grounding (no artist on the album is in our archive yet — a
       // homonym label, or a debut awaiting the MB backfill).
       skippedUngrounded: z.number(),
+      // Tracks dropped by a bridged FIRST-credit Spotify artist BLOCK rule. Optional so pinned
+      // consumers that predate the freshness-tap scope counter continue to parse old responses.
+      tracksSkippedArtistRule: z.number().optional(),
     }),
   );
 

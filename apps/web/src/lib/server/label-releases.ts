@@ -108,6 +108,7 @@ import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { relinkTracksToEntity } from "./hub-counts";
 import { labelFold } from "./labels";
+import { logEvent } from "./log";
 import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
 import { readSpotifyCallCount, recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } from "./spotify-budget";
 
@@ -201,6 +202,8 @@ export type ProbeAlbum = {
 /** A parsed full track (`GET /tracks/{id}`) — everything a valid catalogue row needs. */
 export type ProbeTrack = {
   artistNames: string[];
+  /** The track's Spotify artist ids, in Spotify's billed-credit order. */
+  spotifyArtistIds: string[];
   durationMs: number;
   isrc: null | string;
   spotifyTrackId: string;
@@ -243,6 +246,8 @@ export type LabelReleasesProbeResult = {
   /** Tracks skipped because they already exist in the archive (Spotify id / uri / ISRC / same-album
    *  title fold) — the dedupe contract, working. */
   skippedKnown: number;
+  /** Tracks dropped by a bridged FIRST-credit Spotify artist BLOCK rule for the probed label. */
+  tracksSkippedArtistRule: number;
   /** Albums DROPPED for carrying no `release_date` — a row /fresh could never surface, so never
    *  minted. Dropped BEFORE the two-signal gate (an undated album is unusable however it is
    *  attributed). Normally 0 on this vendor; the counter is the tripwire if that ever changes. */
@@ -331,7 +336,7 @@ export function parseProbeTrack(body: unknown): ProbeTrack | null {
   }
 
   const track = body as {
-    artists?: Array<{ name?: unknown }>;
+    artists?: Array<{ id?: unknown; name?: unknown }>;
     duration_ms?: unknown;
     external_ids?: { isrc?: unknown };
     external_urls?: { spotify?: unknown };
@@ -355,6 +360,9 @@ export function parseProbeTrack(body: unknown): ProbeTrack | null {
     durationMs:
       typeof duration === "number" && Number.isFinite(duration) ? Math.round(duration) : 0,
     isrc: asString(track.external_ids?.isrc),
+    spotifyArtistIds: (Array.isArray(track.artists) ? track.artists : [])
+      .map((artist) => asString(artist?.id))
+      .filter((id): id is string => Boolean(id)),
     spotifyTrackId,
     spotifyUri: asString(track.uri) ?? `spotify:track:${spotifyTrackId}`,
     spotifyUrl:
@@ -428,6 +436,7 @@ export function labelReleaseTrackId(spotifyTrackId: string): string {
  */
 async function writeLabelReleaseTracks(
   tracks: ProbeTrack[],
+  blocked: BlockedSpotifyArtists,
   ctx: {
     albumId: null | string;
     albumName: null | string;
@@ -435,9 +444,9 @@ async function writeLabelReleaseTracks(
     labelName: string;
     releaseDate: null | string;
   },
-): Promise<{ skipped: number; written: number; writtenIds: string[] }> {
+): Promise<{ skipped: number; skippedArtistRule: number; written: number; writtenIds: string[] }> {
   if (tracks.length === 0) {
-    return { skipped: 0, written: 0, writtenIds: [] };
+    return { skipped: 0, skippedArtistRule: 0, written: 0, writtenIds: [] };
   }
 
   const db = await getDb();
@@ -482,12 +491,18 @@ async function writeLabelReleaseTracks(
 
   let written = 0;
   let skipped = 0;
+  let skippedArtistRule = 0;
   const writtenIds: string[] = [];
   // One instant for the whole batch — these rows all came out of the same probe pass, so they were
   // all attempted at the same moment, and a per-row `new Date()` would only pretend otherwise.
   const writtenAt = new Date().toISOString();
 
   for (const track of tracks) {
+    if (isBlockedByArtistRule(track, blocked)) {
+      skippedArtistRule += 1;
+      continue;
+    }
+
     const trackId = labelReleaseTrackId(track.spotifyTrackId);
     const titleFold = foldTrackTitle(track.title);
 
@@ -572,7 +587,7 @@ async function writeLabelReleaseTracks(
     await linkTracksToArtistEntities(writtenIds);
   }
 
-  return { skipped, written, writtenIds };
+  return { skipped, skippedArtistRule, written, writtenIds };
 }
 
 /**
@@ -820,6 +835,65 @@ type LabelSignal = "continue" | "stop-budget" | "stop-meter" | "stop-rate" | "st
  *  pass-wide budget rather than a per-label one. */
 type FetchBudget = { fetches: number };
 
+type BlockedSpotifyArtists = {
+  global: Set<string>;
+  label: Set<string>;
+};
+
+/**
+ * Read only bridged BLOCK rules for the label being probed. A null bridge is deliberately absent
+ * from this query: the tap cannot identify it and must keep the track (the crawler remains exact).
+ * This is bounded to one small read per probed label and fails open if the advisory read is down.
+ */
+async function blockedSpotifyArtistsForLabel(labelId: string): Promise<BlockedSpotifyArtists> {
+  try {
+    const db = await getDb();
+    const result = await db.execute({
+      args: [labelId],
+      sql: `select artist_spotify_id, label_id from artist_rules
+            where verdict = 'block'
+              and artist_spotify_id is not null
+              and (label_id is null or label_id = ?)`,
+    });
+    const blocked: BlockedSpotifyArtists = { global: new Set(), label: new Set() };
+
+    for (const row of typedRows<{ artist_spotify_id: string; label_id: null | string }>(
+      result.rows,
+    )) {
+      if (row.label_id === null) {
+        blocked.global.add(row.artist_spotify_id);
+      } else {
+        blocked.label.add(row.artist_spotify_id);
+      }
+    }
+
+    return blocked;
+  } catch (error) {
+    // Fail-open is the tap's contract, but a broken advisory read must not be invisible.
+    logEvent("warn", "tap.artist-rules-read-failed", {
+      error: error instanceof Error ? error.message : String(error),
+      labelId,
+    });
+
+    return { global: new Set(), label: new Set() };
+  }
+}
+
+/** The tap uses the same FIRST-credit quantifier as the crawler, over Spotify's credit order. */
+function isBlockedByArtistRule(track: ProbeTrack, blocked: BlockedSpotifyArtists): boolean {
+  const firstSpotifyArtistId = track.spotifyArtistIds[0];
+
+  if (!firstSpotifyArtistId) {
+    return false;
+  }
+
+  if (blocked.label.has(firstSpotifyArtistId)) {
+    return true;
+  }
+
+  return blocked.global.has(firstSpotifyArtistId);
+}
+
 /**
  * Probe ONE label: search its fresh releases, copyright-filter the albums (each fetched as a SINGLE
  * `GET /albums/{id}` — the batch endpoint is 403 at our tier), and mint the tracks the archive does
@@ -951,6 +1025,9 @@ async function probeOneLabel(
   }
 
   result.albumsMatched += matched.length;
+  // Read the bounded blocked set once for this probed label. Allows are intentionally not read:
+  // the tap only probes enabled labels and only BLOCK rules can veto its write leg.
+  const blocked = await blockedSpotifyArtistsForLabel(label.id);
 
   // 4. Mint the un-held tracks of each matched album, each fetched as a SINGLE `GET /tracks/{id}`.
   for (const album of matched) {
@@ -1004,16 +1081,21 @@ async function probeOneLabel(
 
     // The album row, folded on the album-title slug (Spotify carries no release-group MBID).
     const albumId = (await ensureAlbum(album.name, null)) ?? null;
-    const { skipped, written, writtenIds } = await writeLabelReleaseTracks(probeTracks, {
-      albumId,
-      albumName: album.name,
-      labelId: label.id,
-      labelName: label.name,
-      releaseDate: album.releaseDate,
-    });
+    const { skipped, skippedArtistRule, written, writtenIds } = await writeLabelReleaseTracks(
+      probeTracks,
+      blocked,
+      {
+        albumId,
+        albumName: album.name,
+        labelId: label.id,
+        labelName: label.name,
+        releaseDate: album.releaseDate,
+      },
+    );
 
     result.newRows += written;
     result.skippedKnown += skipped;
+    result.tracksSkippedArtistRule += skippedArtistRule;
     result.newTrackIds.push(...writtenIds);
   }
 
@@ -1056,6 +1138,7 @@ export async function probeLabelReleases({
     skippedKnown: 0,
     skippedUndated: 0,
     skippedUngrounded: 0,
+    tracksSkippedArtistRule: 0,
   };
 
   const cap = Math.max(1, Math.min(limit, PROBE_LABELS_PER_PASS));
