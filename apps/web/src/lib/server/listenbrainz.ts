@@ -9,7 +9,7 @@
 // a hit costs nothing, and Apify is only spent when this rung misses. When Apify is down (its budget
 // or the actor), this rung still anchors its share — the waterfall's graceful-degradation half.
 //
-// ── THE ENDPOINT (verified live 2026-07-21) ──────────────────────────────────────────────────────
+// ── THE ENDPOINT ────────────────────────────────────────────────────────────────────────────────
 // `POST https://labs.api.listenbrainz.org/spotify-id-from-mbid/json`, body a JSON array of
 // `{ recording_mbid }` objects. It answers with an array, one entry per input, each carrying
 // `recording_mbid`, `artist_name`, `release_name`, `track_name`, and `spotify_track_ids` (an ARRAY —

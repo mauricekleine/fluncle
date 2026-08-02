@@ -6,7 +6,7 @@
 // truth. Everything downstream — `list_similar_tracks`, the `/mix` rail, a galaxy's
 // core-first order, the `fluncle-cluster` corpus read — ranks IN SQL against the blob.
 //
-// WHY THE RANKING MOVED INTO SQL. It used to store the vector as JSON too and pull every
+// WHY THE RANKING IS IN SQL. The vector is not stored as JSON or pulled for every
 // row's JSON into
 // the isolate and cosine-rank there. That path is dead (measured; the numbers live in
 // docs/local-database.md "Local is not production"): a 1024-d vector is 21,804 B as
@@ -30,7 +30,7 @@
 //      no ANN index here, by decision.
 //   4. NEVER fan a MULTI-probe scan out as `union all` branches over a CTE — the
 //      planner flattens the CTE and re-executes the candidate scan once per branch
-//      (12 probes = 12 full blob-dragging passes; 63 s hosted, measured 2026-07-18
+//      (12 probes = 12 full blob-dragging passes; 63 s hosted
 //      on /recommendations). Fold the probes into ONE pass instead:
 //      `min(vector_distance_cos(vec, ?), …)` in the select list — and mind that
 //      one-argument `min()` is the AGGREGATE, so a single probe binds bare.

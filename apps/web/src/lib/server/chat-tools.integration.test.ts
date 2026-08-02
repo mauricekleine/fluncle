@@ -737,7 +737,7 @@ describe("submit_track — the queue write", () => {
 
     expect(result.ok).toBe(true);
     expect(result.submission.title).toBe("Submitted Banger");
-    // The row actually landed in the submissions table (the DB half really ran).
+    // The row is present in the submissions table (the DB half really ran).
     const rows = await db.execute("select spotify_track_id, status from submissions");
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]?.spotify_track_id).toBe(TRACK_ID);

@@ -1,6 +1,6 @@
 // THE SPOTIFY SEARCH RUNGS' GATE — the dark flag + the mint-protection window (anchor slice 2).
 //
-// Slice 1 shipped the resolver waterfall as: FREE ListenBrainz rung → (miss) metered Apify search.
+// The resolver waterfall is: FREE ListenBrainz rung → (miss) metered Apify search.
 // Slice 2 inserts the FREE Spotify SEARCH rungs between them (lib/server/anchor.ts `resolveAnchorFree`):
 //   ListenBrainz → Spotify-ISRC-search → Spotify-fuzzy-search → Apify
 // so Apify shrinks to a true last resort — the ~75-85% cost cut.
@@ -8,7 +8,7 @@
 // ── WHY THE SPOTIFY RUNGS SHIP DARK ──────────────────────────────────────────────────────────────
 // The Spotify search rungs call the ONE official Spotify app that ALSO serves the user-facing paths:
 // the mint on a track add, publish, and the Frontier-playlist refresh. At catalogue scale a sustained
-// by-ISRC / fuzzy sweep DID earn 429s (measured 2026-07-18) — which is exactly why catalogue anchoring
+// by-ISRC / fuzzy sweep can earn 429s — which is exactly why catalogue anchoring
 // left Spotify for the box's Apify sweep in the first place. A STARVED FRIDAY MINT is user-facing
 // breakage, so re-introducing Spotify search here is the highest-stakes change in the slice, and it
 // carries two hard guardrails:
@@ -25,7 +25,7 @@
 //   2. THE FRIDAY-FRONTIER-REFRESH WINDOW. Even with the flag on, the Spotify rungs SKIP during the
 //      week's heaviest user-facing Spotify window so anchor search can never contend with a mint. The
 //      Frontier refresh is now a paced ~15-min drain (docs/agents/hermes/frontier-refresh-timer), but
-//      it was historically a Friday-07:00 BURST and Friday morning remains the peak (the weekly
+//      Friday morning remains the peak (the weekly
 //      Editions roll over on new-music Friday, and the newsletter follows). So the rungs are gated OFF
 //      across a conservative Friday-MORNING window in Amsterdam time — a named constant below, trivial
 //      to widen. The low req/min ceiling (enforced by the box sweep's pacer) plus the existing Spotify
@@ -48,11 +48,11 @@
 //      the question that decides whether a background sweep is about to collide with a live mint.
 //      The search rungs now CONSULT it (a spent window pauses them, the subordinate-consumer rule)
 //      and every anchor-path Spotify request RECORDS into it, including the ListenBrainz rung's
-//      by-id read, which used to draw on the shared app completely unseen.
+//      by-id read, which otherwise draws on the shared app completely unseen.
 //
 // ── AND THE RUNG THAT IS NOT A SEARCH ────────────────────────────────────────────────────────────
 // The ListenBrainz rung's ONE by-id metadata read (`GET /v1/tracks/{id}`, lib/server/anchor.ts) is a
-// Spotify call this module did not used to govern at all — it is not a search, so none of the three
+// Spotify call this module did not govern — it is not a search, so none of the three
 // guards above saw it. Through a throttle window that meant 100% of free candidates died on that read
 // and their rows were re-bought from Apify. `anchorSpotifyBreakerAllows` is its gate now: the BREAKER
 // only, deliberately not the meter — see that function's own note for why pausing a free by-id read

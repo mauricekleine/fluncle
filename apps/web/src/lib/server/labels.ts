@@ -290,7 +290,7 @@ async function adoptLabelMbLabelId(labelId: string, mbid: null | string): Promis
  * THE POINTER IS AN UNCONDITIONAL OVERWRITE, so this is also the RE-POINT path: a track already
  * pointed at label A can land on label B (a re-certify whose Deezer label resolved differently, an
  * adopted alias). `relinkTracksToEntity` is what makes that safe for the maintained hub counts — it
- * censuses the CURRENT pointer first, then debits the old label and credits the new one in the same
+ * censuses the CURRENT pointer first, then debits the source label and credits the new one in the same
  * batch as the UPDATE (keystone 2, lib/server/hub-counts.ts). A no-move re-link counts nothing.
  */
 export async function linkTrackToLabel(
@@ -462,7 +462,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
  * release is not evidence about that. Let the whole catalogue vote and a compilation's thirty
  * crawled rows outvote the one finding the page is ABOUT.
  *
- * It used to have a second, structural reason — a zero-finding label 404'd, so an uncertified
+ * It also has a structural reason — a zero-finding label 404'd, so an uncertified
  * winner would point the link (and an `@id` in the schema.org graph) at a page that was not
  * there. That reason is GONE: a label earns a page on its content now, so an uncertified
  * winner would resolve fine. The findings-only vote stays anyway, because it was always the
@@ -681,7 +681,7 @@ export async function maxLabelSitemapLastmod(minTracks: number): Promise<string 
   return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
 }
 
-// ── THE UNIFIED HUB: one catalogue-scale index per entity (ratified 2026-07-20) ───────────────
+// ── THE UNIFIED HUB: one catalogue-scale index per entity ─────────────────────────────────────
 //
 // `/labels`, `/albums`, and `/artists` are each ONE index of every entity Fluncle holds —
 // certified findings and the wider catalogue alike, alphabetical, in a single paginated list (the
@@ -726,7 +726,7 @@ export type LabelHubEntry = {
 // `labels`, `albums` and `artists` each carry two MAINTAINED integers — `renderable_track_count`
 // and `certified_finding_count`. Their canonical semantics live on `artists.certified_finding_count`
 // (schema.ts); the delta write side is lib/server/hub-counts.ts. They are the stored mirrors of the
-// aggregates every read in this section used to recompute over the growing tables:
+// aggregates every read in this section would otherwise recompute over the growing tables:
 //
 //   `HUB_CERTIFIED`        `sum(findings.log_id is not null)`  ⇒  `<entity>.certified_finding_count`
 //   `HUB_RENDERABLE`       certified + the findings-free rows  ⇒  `<entity>.renderable_track_count`
@@ -882,7 +882,7 @@ export class CatalogueHubPageOutOfRangeError extends Error {}
  * — plus its total and (optionally) its A–Z lane, from ONE pass over the gated set.
  *
  * ── WHY ONE PASS ────────────────────────────────────────────────────────────────────────────────
- * `/artists` and `/labels` used to run a page read AND a separate letter-lane read on every render:
+ * `/artists` and `/labels` run a page read AND a separate letter-lane read on every render:
  * two catalogue-scale grouped `having` scans per request, the second one purely to count entities
  * per initial. The gated set is a MATERIALIZED CTE walked once and consumed by three arms of one
  * compound select — the total, the page's slice, and the per-initial counts. `materialized` is
@@ -892,8 +892,8 @@ export class CatalogueHubPageOutOfRangeError extends Error {}
  * ── WHAT THE GATE ADMITS ────────────────────────────────────────────────────────────────────────
  * A CERTIFIED entity is always in (`certified_finding_count > 0`); an uncertified catalogue entity is
  * in only when its page clears the thin-content floor (`renderable_track_count >= floor`). That
- * disjunction is the whole ruling: the certified rows the editorial section used to carry, and the
- * floor-gated catalogue rows the second section used to, folded into ONE alphabetical list. Both
+ * disjunction is the whole ruling: the certified rows the editorial section carries, and the
+ * floor-gated catalogue rows the second section carries, folded into ONE alphabetical list. Both
  * terms are STORED columns on the entity row (keystone 2), so the CTE reads the small entity table
  * and touches no `tracks` / `track_artists` / `findings` at all — it carries each row's `certified`
  * flag (the certification light the tile reads) beside its renderable count straight off the row.
@@ -1505,7 +1505,7 @@ function toLabelSeedItem(row: LabelRow): LabelSeedItem {
  * The seed-set read — every label, or the labels in one seed state, name-sorted, WITHOUT counts.
  * `listLabels("enabled")` is the catalogue crawler's seed set (`crawl.ts`): the ONE sanctioned
  * consumer of `seed_state`. It is deliberately COUNTLESS — the whole-corpus finding aggregate this
- * read used to pay on every crawl tick was for a count the crawler never reads. The `/admin/labels`
+ * read on every crawl tick would be for a count the crawler never reads. The `/admin/labels`
  * station's finding counts come from {@link listLabelsPage} instead, bounded to the visible page.
  *
  * `mb_label_id` rides {@link LABEL_COLUMNS} itself now — one shared projection for every admin/seed
@@ -1530,7 +1530,7 @@ export async function listLabels(seedState?: LabelSeedState): Promise<LabelSeedI
 
 /**
  * The certified-finding aggregate the OPERATOR's station computes from the raw edge —
- * `sum(findings.log_id is not null)` per group. It is what every public hub read used to compute too
+ * `sum(findings.log_id is not null)` per group. It is what every public hub read would otherwise compute
  * (schema.ts still names it `HUB_CERTIFIED` when it describes what the stored counters mirror), and
  * the public side has moved OFF it onto `labels.certified_finding_count` (see
  * {@link hubInclusionWhere} and the keystone-2 note above). It survives here, deliberately, for the
@@ -1576,7 +1576,7 @@ async function labelFindingCountsByIds(labelIds: string[]): Promise<Map<string, 
  * `(seed_state, name)` index, `order by name` reads it in order, and `count(*) over ()` returns the
  * section total for the pager without a second query. Only the page's ≤{@link LABELS_ADMIN_PAGE_SIZE}
  * labels get their finding count, via {@link labelFindingCountsByIds} over the indexed `label_id`
- * edge — so the whole-corpus aggregate the old read paid on every load/focus is gone.
+ * edge — so the whole-corpus aggregate is absent from every load/focus.
  */
 export async function listLabelsPage(
   seedState: LabelSeedState,
@@ -1744,7 +1744,7 @@ export type LabelBioWorkItem = { id: string; name: string; slug: string };
  * Both arms are the shared hub gate ({@link hubInclusionWhere}) — the STORED
  * `certified_finding_count` / `renderable_track_count` on the label row, which is exactly the pair
  * `listLabelSitemapRows` and `/labels` now read. Two correlated per-row subqueries over
- * `tracks ⋈ findings` used to compute them on every tick; the worklist is a filtered read of the
+ * `tracks ⋈ findings` would otherwise compute them on every tick; the worklist is a filtered read of the
  * labels table now. Bounding the findings-free arm to the indexable floor caps the Firecrawl +
  * `claude -p` cost — a wide crawl mints thousands of stub labels, and only the ones with a real page
  * should ever enter the sweep.
@@ -1774,7 +1774,7 @@ export type LabelReviewRow = { anchorAt: string; labelId: string; name: string }
 /**
  * The most unruled labels the attention queue will ever carry.
  *
- * The queue used to take ALL of them, which was right when a new label arrived only on a
+ * The queue takes ALL of them, which is appropriate when a new label arrives only on a
  * publish — tens of rows, ever. The crawler changed the arithmetic: every imprint the walk
  * discovers mints an `undecided` row (that row IS the ruling queue — docs/catalogue-crawler.md,
  * "the widening loop"), so a wide crawl over 27 seed labels proposes HUNDREDS. Uncapped, that
@@ -1791,7 +1791,7 @@ export const LABEL_REVIEW_QUEUE_LIMIT = 25;
 /**
  * The attention-queue source: the oldest labels still awaiting the operator's ruling, capped
  * at {@link LABEL_REVIEW_QUEUE_LIMIT}. Oldest-first (the queue's anchor is when the label
- * first landed in the archive), so a banger on an unseen label surfaces a cockpit row instead
+ * first enters the archive), so a banger on an unseen label surfaces a cockpit row instead
  * of quietly sitting in a state nobody chose.
  */
 export async function listLabelReviewRows(): Promise<LabelReviewRow[]> {
@@ -1994,7 +1994,7 @@ async function getLabelMergeRow(slug: string): Promise<LabelMergeRow | undefined
  *    `discogs_label_id`, `image_key`, `founding_date`, `founded_location`, `parent_label_id`, and
  *    `lineage_state`, the canonical's existing value ALWAYS stands and the loser's fills only an
  *    EMPTY canonical slot (coalesce). This is load-bearing: a loser whose MBID mis-resolved to the
- *    wrong label (the 2026-07-18 "Polydor Records" → J-Pop division miss) must never overwrite the
+ *    wrong label (a "Polydor Records" → J-Pop division mismatch) must never overwrite the
  *    canonical's correct identity.
  * 3. RESOLVES `seed_state` by `ruled_at` precedence (the more recent operator ruling wins). When
  *    BOTH rows carry a non-null `ruled_at` AND their seed states disagree it throws

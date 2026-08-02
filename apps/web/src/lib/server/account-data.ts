@@ -260,13 +260,13 @@ export async function updatePrivateUsername(
     return jsonError(400, "invalid_request", "Invalid account settings");
   }
 
-  // The two-name model (X-shaped, operator-ratified 2026-07-16): `username` is the
+  // The two-name model: `username` is the
   // handle (normalized lowercase; its as-typed casing becomes `display_username`),
   // and `name` is the freeform display name (what Google fills, what the header
   // shows). An EMPTY submitted value falls back rather than failing: display casing
   // falls back to the handle as typed, and a cleared name falls back to the handle —
-  // the old code let an empty-string displayUsername through to the validator and
-  // then blamed the USERNAME for it (the "cosmonaut" incident).
+  // an empty-string displayUsername must fall back before validation rather than
+  // blaming the USERNAME for it.
   const usernameInput = typeof body.username === "string" ? body.username.trim() : "";
   const username = usernameInput.toLowerCase();
   const displayUsername =
@@ -959,8 +959,8 @@ function rowToItem(row: SavedSetRow): SavedSetItem {
 // ── Watched entities (the artists + labels a user keeps an eye on) ────────────
 // The saved-sets sibling, one table over. THE ACCOUNT NEVER GATES THE FEATURE: watching
 // only SAVES the entity to the account; every entity page stays fully usable signed-out.
-// The email digest that will READ these is deferred (operator ruling 2026-07-19) — this is
-// the substrate only, so `include_similar` is stored (default off) but has no consumer.
+// The email digest that will READ these is deferred (operator ruling) — this is the substrate only, so
+// `include_similar` is stored (default off) but has no consumer.
 
 type WatchRow = {
   created_at: string;

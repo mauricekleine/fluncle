@@ -121,7 +121,7 @@ function reviewArm(kind: EntityKind): string {
 }
 
 /**
- * Every entity whose bio landed ONLY because it was the final attempt, oldest acceptance first.
+ * Every entity whose bio was accepted ONLY because it was the final attempt, oldest acceptance first.
  *
  * Three arms, one round trip. Each arm is a seek of its table's PARTIAL
  * `<table>_bio_review_queue_idx` (which indexes only the lit rows) and carries its OWN

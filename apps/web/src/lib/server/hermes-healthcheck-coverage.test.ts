@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 // /status row from the box healthcheck prober's hardcoded AUTOMATION_CRONS list
 // (docs/agents/hermes/scripts/fluncle-healthcheck.ts) — the script runs baked on the box and
 // cannot import the workspace, so the list is a hand-kept mirror. Hand-kept mirrors drift:
-// cron.frontier-refresh and cron.cover-masters both shipped registered-but-unprobed (invisible
-// on /status, found 2026-07-17). This test makes that drift a build failure instead of a quiet
+// cron.frontier-refresh and cron.cover-masters are registered-but-unprobed (invisible
+// on /status). This test makes that drift a build failure instead of a quiet
 // hole in the board.
 //
 // The one sanctioned asymmetry: cron.healthcheck is the prober ITSELF — it has no output dir to

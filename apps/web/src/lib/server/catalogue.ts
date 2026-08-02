@@ -69,7 +69,7 @@ import { matchKey } from "./track-match";
  * Two questions live here, and they are cleanly separated. AUTHORIZATION — may we spend a
  * metered per-GB byte on this row at all? — is artist-driven: yes iff a credited artist is
  * QUALIFIED (identity, through the `track_artists` graph) OR its label is `enabled`. PRIORITY
- * — among the rows we MAY buy, who first? — keeps the old explainable ladder as an ordering
+ * — among the rows we MAY buy, who first? — keeps the explainable ladder as an ordering
  * hint. A row that fails authorization lands `unauthorized` (a negative tier, excluded from
  * the capture queue by the existing `capture_priority >= 0` predicate); a `disabled` label is
  * still the harder `skipped-label` veto, checked first.
@@ -83,7 +83,7 @@ export type CapturePriorityReason = {
  * The numeric tier for each rung — the stored `tracks.capture_priority`, high = capture sooner.
  *
  * THE VETO GETS ITS OWN TIER (−1), and that is load-bearing rather than cosmetic. It first
- * shipped collapsed into `none`'s 0, which made it invisible to SQL: the capture WORK QUEUE
+ * is distinct from `none`'s 0, which keeps it visible to SQL: the capture WORK QUEUE
  * (track-work.ts) could not tell "nothing ties this to the archive, so capture it last" from
  * "the operator ruled this label out, so never spend a metered per-GB byte on it". A veto that
  * only sorts last is not a veto — the queue drains, and last eventually arrives.
@@ -155,7 +155,7 @@ export const DUPLICATE_CAPTURE_TIER = -2;
 export { DUPLICATE_SIMILARITY } from "../catalogue-eligibility";
 
 /**
- * The LONG-FORM veto (operator ruling, 2026-07-13): a "track" at or above this duration is not a
+ * The LONG-FORM veto (operator ruling): a "track" at or above this duration is not a
  * track — it is a continuous DJ mix riding a MusicBrainz compilation release ("Drum&BassArena
  * Summer Selection 2012 (Continuous mix 1)", 78 minutes; "Ten Years of Med School (continuous
  * mix)", 60 minutes). The crawler mints them honestly (they ARE recordings on releases it walks),
@@ -174,7 +174,7 @@ export { DUPLICATE_SIMILARITY } from "../catalogue-eligibility";
 export { LONG_FORM_MS } from "../catalogue-eligibility";
 
 /**
- * The long-form veto's LOWER twin (the 2026-07-14 unmatched audit). Two classes below this
+ * The long-form veto's LOWER twin. Two classes below this
  * line, both guaranteed-unmatched spend: a sub-60s interlude/skit (a YouTube upload of it
  * rarely exists at that length, and it is worthless to The Ear anyway), and the
  * missing/zero-duration row — with no reference length the sweep's symmetric duration guard
@@ -199,7 +199,7 @@ export const MIN_TRACK_MS = 60_000;
  *     not "similar songs", it is the SAME MASTER. So a row scoring here against a finding with a
  *     DIFFERENT title is almost certainly WRONG AUDIO: the capture sweep matched the artist's
  *     already-logged hit instead of the track the row names (the Flowidus "Find Your Love"
- *     carrying "Shelter"'s audio, caught in the 2026-07-12 capture audit). That row is vetoed,
+ *     carrying "Shelter"'s audio). That row is vetoed,
  *     quarantined, and re-captured — never allowed to float to the top of the ear lens as a fake
  *     perfect find. A same-title near-1.0 is instead a TRUE duplicate (the crawler re-found a
  *     logged track, correct audio and all) and routes to the pre-audio duplicate handling.
@@ -211,7 +211,7 @@ export const MIN_TRACK_MS = 60_000;
 export const WRONG_AUDIO_QUARANTINE = 0.9995;
 
 /**
- * THE DIVERSITY DECAY (operator ruling, 2026-07-15): the ear's raw ranking is max-similarity,
+ * THE DIVERSITY DECAY (operator ruling): the ear's raw ranking is max-similarity,
  * which is structurally a sonic-clone magnet — an artist Fluncle has logged boosts ALL their
  * other tracks, and a page of eleven A-minor rollers from 2019 is a worse telescope than a
  * spread. So the ranked PAGE is re-ordered greedily: each candidate's raw score is decayed by
@@ -254,7 +254,7 @@ export const QUARANTINE_CLEARED = "quarantine-cleared";
  *
  *   1. the pre-audio ISRC match to a finding (`preAudioPriority`),
  *   2. the pre-audio + scored matchKey match to a finding — a logged track's folded title+artist
- *      twin, the 2026-07-15 "Drifting Away" ruling (`preAudioPriority` / the scored path),
+ *      twin, the "Drifting Away" ruling (`preAudioPriority` / the scored path),
  *   3. the near-1.0 post-embed same-title adjudication (the scored path),
  *   4. the catalogue↔catalogue dedup (`catalogueDuplicateOf` + `readCatalogueIdentity`),
  *
@@ -418,7 +418,7 @@ export type CaptureCandidate = { artistIds: string[]; artists: string[]; label: 
  *                      Metadata welcome, money withheld. Tier −3 (excluded by the same
  *                      `capture_priority >= 0` queue predicate as the veto).
  *
- * Among AUTHORIZED rows the old explainable ladder survives as the ORDERING hint:
+ * Among AUTHORIZED rows the explainable ladder survives as the ORDERING hint:
  *   3 · `artist`     — a credited artist is qualified (identity), OR an artist name is already
  *                      on a finding. The strongest signal: his ear has said yes to this artist.
  *   2 · `label`      — its label already carries a finding. A crate he digs in — but only a
@@ -430,7 +430,7 @@ export type CaptureCandidate = { artistIds: string[]; artists: string[]; label: 
  *
  * ── WHY AUTHORIZATION IS BY IDENTITY, AND WHAT CHANGED ──────────────────────────────────
  * `findingLabels` was the tier-2 AUTHORIZER; it is now a hint only. The counter-example is
- * live: a single Atlantic-UK finding used to lift EVERY crawled Atlantic-UK track to tier 2 and
+ * live: a single Atlantic-UK finding must not lift EVERY crawled Atlantic-UK track to tier 2 and
  * into the capture budget. A finding is evidence about an ARTIST, not a licence to buy a label's
  * whole catalogue — so `findingLabels` no longer opens the gate, and an un-`enabled` label with
  * a lone crossover finding no longer authorizes its label-mates. Matching is by `artists.id`
@@ -474,7 +474,7 @@ export function capturePriorityFor(
     return { priority: CAPTURE_TIER.unauthorized, reason: { kind: "unauthorized", name: null } };
   }
 
-  // PRIORITY (authorized rows only): the old explainable ladder, now a pure ordering hint.
+  // PRIORITY (authorized rows only): the explainable ladder, a pure ordering hint.
   // Tier 3 fires on the qualified identity OR the name-fold finding-artist hint — both are
   // valid ordering signals, and both are only reachable here, past the authorization gate.
   const nameOnFinding = candidate.artists.find((artist) =>
@@ -586,8 +586,8 @@ function ladderTierForRow(
  * steady-state churn collapses from "every day" to "only when qualification actually changes", which
  * is precisely when a global re-rank is WARRANTED.
  *
- * ── WHY A DIGEST OF THE SET, NOT ITS SIZE — THE SWAP HOLE (2026-07-26) ──────────────────
- * The first cut of `v5` folded only the set SIZE (`<count>`). That has a real, reachable hole: a
+ * ── WHY A DIGEST OF THE SET, NOT ITS SIZE — THE SWAP HOLE ────────────────────────────────
+ * A digest of only the set SIZE (`<count>`) has a real, reachable hole: a
  * MEMBERSHIP SWAP that leaves the size unchanged. The operator rules labels in BATCHES on
  * `/admin/labels` — several enable/disable flips in one sitting is his normal workflow. Between two
  * rank ticks, disabling label L (artist B drops below the weighted threshold, DE-qualifies) while
@@ -623,7 +623,7 @@ function ladderTierForRow(
  * the same mechanism, no bulk write, no manual invalidation. Bump it only when the ranking
  * DECISION changes for rows the corpus counts did not move: `v2` added catalogue-internal
  * duplicate detection (docs/the-ear.md § Duplicates), which must re-mark rows already ranked;
- * `v3` added the matchKey-vs-findings detector (the 2026-07-15 "Drifting Away" ruling), which
+ * `v3` includes the matchKey-vs-findings detector (the "Drifting Away" ruling), which
  * must re-mark an ALREADY-RANKED scored row that earlier ticks left as a discovery — a 0.94 twin
  * of a logged finding whose corpus counts never moved would otherwise keep its stale ear slot;
  * `v4` moved capture authorization from labels to the artist graph (RFC artist-primary-capture,
@@ -673,7 +673,7 @@ export type RankCatalogueSummary = {
   prioritized: number;
   /**
    * Catalogue rows QUARANTINED this tick — a scored row whose near-1.0 cross-title match to a
-   * finding means the capture landed the WRONG audio (docs/the-ear.md § Wrong audio). It is
+   * finding means the capture has the WRONG audio (docs/the-ear.md § Wrong audio). It is
    * vetoed from the ear lens, re-queued for capture, and never counted as a `scored` find.
    */
   quarantined: number;
@@ -748,7 +748,7 @@ function preAudioPriority(
   const cleared = candidate.capture_status === DUPLICATE_CLEARED;
   const isrcKey = cleared ? null : normalizeIsrc(candidate.isrc);
   const isrcDup = isrcKey ? (findingIsrcs.get(isrcKey) ?? null) : null;
-  // After the ISRC miss, the FOLDED TITLE+ARTIST identity (the 2026-07-15 "Drifting Away" ruling):
+  // After the ISRC miss, the FOLDED TITLE+ARTIST identity (the "Drifting Away" ruling):
   // a crawled row whose `matchKey` equals a certified finding's is the same song — a duplicate
   // regardless of ISRC (a YouTube rip carries none) and regardless of any later embedding score.
   const keyDup =
@@ -978,15 +978,14 @@ type FindingIdentity = {
  *     the row's own key to that finding's — EQUAL is a true duplicate (same recording, correct
  *     audio), DIFFERENT is wrong audio (the capture grabbed the artist's other, already-logged track).
  *   · `byMatchKey` (key → finding) is the DUPLICATE detector (docs/the-ear.md § Duplicates, the
- *     2026-07-15 "Drifting Away" ruling): a crawled row whose folded identity EQUALS a finding's is
+ *     "Drifting Away" ruling): a crawled row whose folded identity EQUALS a finding's is
  *     the same song — a duplicate regardless of ISRC (a YouTube rip carries none) and regardless of
  *     score (the rip scored a merely-0.94 twin). If two findings share an identity the SMALLEST
  *     `track_id` wins, the same stable canonical precedent `readCatalogueIdentity` uses, so the
  *     marker is idempotent across ticks.
  *
- * The two USED to be two functions issuing the byte-identical `findings join tracks` statement, and
- * a tick carrying a near-1.0 row ran both — the same rows read twice in one call, the shape Wave 1
- * retired for `readArchiveAffinity` (docs/db-scale-backlog "Shipped (live)" #4). The inverse fold is
+ * The two are one shared read rather than two functions issuing the byte-identical `findings join tracks`
+ * statement, so a tick carrying a near-1.0 row reads the same rows once. The inverse fold is
  * two lines of arithmetic over rows already in hand, so building both costs one read, not two.
  * Bounded by the FINDING count, like every affinity read.
  */
@@ -1277,7 +1276,7 @@ export async function rankCatalogue(
   // query, so `pair` became a nested loop that RE-EXECUTED the whole `finding_vec` arm once
   // per candidate — and with no `sqlite_stat1` to tell it `findings` is tiny, the planner
   // drove that arm off a full `SCAN` of `tracks`, dragging every 4 KB `embedding_blob` in
-  // the catalogue through the loop. Measured in prod (Sentry, 2026-07-18→20): p95 27.0 s,
+  // the catalogue through the loop. At catalogue scale: p95 27.0 s,
   // avg 11.3 s per call for 250 candidates × 80 findings — 20k cosines that are microseconds
   // of arithmetic behind hundreds of megabytes of blob I/O. It scaled with the CATALOGUE
   // (the thing the crawler grows), not with the archive it is ranking against.
@@ -1484,7 +1483,7 @@ export async function rankCatalogue(
       }
     }
 
-    // MATCHKEY-VS-FINDINGS DUPLICATE (the 2026-07-15 "Drifting Away" ruling, docs/the-ear.md §
+    // MATCHKEY-VS-FINDINGS DUPLICATE (the "Drifting Away" ruling, docs/the-ear.md §
     // Duplicates). Independent of the near-1.0 adjudication above and of the score entirely: a
     // scored row whose folded title+artist `matchKey` EQUALS a certified finding's is that logged
     // song, even when a YouTube-rip capture only scored a merely-0.94 twin (the exact live case —
@@ -1709,7 +1708,7 @@ async function countStale(corpus: string): Promise<number> {
  *   - `ear`        — closest to a finding (the telescope).
  *   - `capture`    — next to capture (the pre-audio ladder).
  *   - `quarantine` — the WRONG-AUDIO holding pen (docs/the-ear.md § Wrong audio): rows whose
- *     capture landed the wrong master, vetoed from the ear lens and re-queued for a fresh
+ *     capture has the wrong master, vetoed from the ear lens and re-queued for a fresh
  *     download. Its own quiet section so a bad capture never silently vanishes, each row carrying
  *     the honest reason and a force-clear the operator can use to overrule it.
  *   - `dismissed`  — the operator's "not for me" pile (docs/the-ear.md § The operator's actions):
@@ -1738,7 +1737,7 @@ export type CatalogueTrackItem = {
   /**
    * The capture state machine's verdict on this row (`pending` / `done` / `failed` /
    * `unmatched` / `wrong-audio` / the sticky cleared states), or null (never attempted) — the
-   * observability field the 2026-07-14 unmatched audit had to pull a prod snapshot for.
+   * observability field that exposes the capture state without a prod snapshot.
    */
   captureStatus: string | null;
   /**
@@ -2420,7 +2419,7 @@ const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image
  *
  * Each row is returned with its WHY: the `ear` rows carry the hydrated nearest finding (one
  * extra batched read, bounded by the page), and the `capture` rows carry the ladder rung that
- * put them there, re-derived through the SAME pure function the sweep used to write it.
+ * put them there, re-derived through the SAME pure function the sweep writes.
  */
 export async function listCatalogueTracks(
   lens: CatalogueLens,
@@ -2466,7 +2465,7 @@ export async function listCatalogueTracks(
           }
         : lens === "unmatched" || lens === "failed"
           ? {
-              // The OBSERVABILITY lenses (the 2026-07-14 unmatched audit's gap): the terminal
+              // The OBSERVABILITY lenses: the terminal
               // `unmatched` verdicts and the cooling `failed` retries, most-recently attempted
               // first — so "what is failing and why" is one read, not a prod snapshot. Read-only
               // windows onto the sweep's outcomes; the rescue (`requeue_unmatched_captures`) and
@@ -2601,7 +2600,7 @@ export async function listCatalogueTracks(
   // A row the ear itself marked "already in the archive" (the ≥ DUPLICATE_SIMILARITY display
   // band — a near-1.0 match on the finding it scored against) never occupies a ranked slot:
   // a known duplicate is not a discovery, and its perfect score would sit above every real
-  // one (the operator's ruling, 2026-07-15 — the Anwius "Trust" case). The marker itself
+  // one (the Anwius "Trust" case). The marker itself
   // stays display-only; only the EAR ranking excludes it. The survivors then pass through
   // the diversity decay (EAR_DIVERSITY_DECAY) before the page is cut.
   if (lens === "ear") {
@@ -2762,11 +2761,11 @@ export async function clearWrongAudio(trackId: string): Promise<boolean> {
 }
 
 /**
- * THE OPERATOR UNMATCHED RESCUE (`requeue_unmatched_captures`) — flip the terminal
- * `unmatched` verdicts back to `pending` after a MATCHER improvement (the 2026-07-14
- * search-ladder upgrade). `unmatched` is terminal so the metered budget never re-burns a
- * hopeless search; when the search itself gets better, the old verdicts describe the old
- * matcher, not the tracks. One deliberate operator act, not a sweep behavior.
+ * THE OPERATOR UNMATCHED RESCUE (`requeue_unmatched_captures`) — move terminal
+ * `unmatched` verdicts back to `pending` after a MATCHER improvement. `unmatched` is terminal so
+ * the metered budget never re-burns a hopeless search; when the search itself gets better, the
+ * existing verdicts describe the prior matcher, not the tracks. One deliberate operator act, not
+ * a sweep behavior.
  *
  * The duration vetoes are honored HERE too: a row the capture queue would refuse anyway
  * (missing duration, < MIN_TRACK_MS, ≥ LONG_FORM_MS) stays terminal — re-queueing it buys a

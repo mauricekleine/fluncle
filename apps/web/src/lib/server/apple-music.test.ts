@@ -302,9 +302,8 @@ describe("buildCatalogBundle", () => {
   });
 
   it("THE REAL SHAPE: albums arrive INLINED in relationships.albums.data with attributes — no included[] at all", async () => {
-    // Verified live 2026-07-12: Apple does NOT send a top-level `included[]` (contra
-    // generic JSON:API). The full album objects ride inside the relationship array.
-    // The first pilot read 0 albums on 43/43 hits against the included[]-only join —
+    // Apple does NOT send a top-level `included[]` (contra generic JSON:API). The full
+    // album objects ride inside the relationship array, so an included[]-only join finds none.
     // this is that bug, pinned.
     const { buildCatalogBundle } = await import("./apple-music");
 

@@ -1,6 +1,6 @@
 // The Beatport resolve, tested against REAL search extracts.
 //
-// The two fixtures are trimmed captures of live beatport.com search pages (2026-07-30), kept at
+// The two fixtures are trimmed captures of live beatport.com search pages, kept at
 // their real shape: Beatport's own `__NEXT_DATA__` island with genuine track ids and ISRCs, and the
 // absolute anchors the page rendered for them. Nothing about their STRUCTURE is synthetic — which is
 // the whole point, since every failure mode this module guards is a shape change on Beatport's side.

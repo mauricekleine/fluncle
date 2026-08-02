@@ -354,7 +354,7 @@ describe("admin roles (operator vs agent)", () => {
 // Bearer token (FLUNCLE_API_TOKEN) must NOT verify — only ADMIN_SESSION_SECRET
 // does. So a leaked Bearer token can never forge a {role:"admin"} cookie.
 describe("admin-session signing key is split from the API Bearer token", () => {
-  it("rejects a grant cookie forged with the API token (the old signing key)", async () => {
+  it("rejects a grant cookie forged with the API token", async () => {
     const forged = forge({ epoch: 0, iat: Date.now(), role: "admin" }, TOKEN);
 
     // The cookie carrier rejects it...

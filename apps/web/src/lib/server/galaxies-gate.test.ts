@@ -1,7 +1,7 @@
 // The public LAUNCH GATE (browse-by-feel RFC, decision 5) against a real in-memory
 // libSQL engine — the load-bearing guarantee: a PARTIAL map (any non-retired galaxy
 // still unnamed) renders NOTHING public, and every public read lights up together the
-// moment the last name lands. `getDb` is mocked to the per-test client; `./tracks` is
+// once every name exists. `getDb` is mocked to the per-test client; `./tracks` is
 // stubbed so the gate logic is tested without hydrating the full tracks schema (the
 // adjacency ranking still runs for real over the seeded centroids).
 import { type Client, createClient } from "@libsql/client";

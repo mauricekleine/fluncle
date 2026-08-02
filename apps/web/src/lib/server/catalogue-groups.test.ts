@@ -500,7 +500,7 @@ describe("the duplicate defence (a recording renders once)", () => {
 
 // ── The single-statement shape (P5) ─────────────────────────────────────────────────────
 //
-// Both grouped reads used to arrive in WAVES — the artist page in two statements, the label page
+// Both grouped reads arrive in WAVES — the artist page in two statements, the label page
 // in three — and every wave is a round trip from the Worker to Turso in Ireland, each repeating
 // the SAME indexed walk of the entity's rows. They are now ONE statement each, with the page of
 // groups cut by `dense_rank()` instead of `limit`/`offset` and the group aggregates carried by

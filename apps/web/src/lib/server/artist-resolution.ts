@@ -13,8 +13,8 @@
 //      by host. MB url-rels are human-curated → status="auto" (trusted). Also stamps
 //      `artists.mbid` + `artists.wikidata_qid`.
 //
-//      (ISRC-based MBID lookup was retired: DnB ISRCs are frequently absent from MB's
-//      index and the walk landed on empty/wrong MBIDs, resolving most artists to 0–1
+//      ISRC-based MBID lookup is unsuitable: DnB ISRCs are frequently absent from MB's
+//      index and the walk can land on empty/wrong MBIDs, resolving most artists to 0–1
 //      links. Name-search + Spotify cross-reference is the correct, durable identity.)
 //
 //   2. Firecrawl (gap-fill): fills every missing social platform except homepage (MB

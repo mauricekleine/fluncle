@@ -9,7 +9,7 @@ import { createIntegrationDb, seedArtist, seedCatalogueTrack } from "./integrati
 // THE BUG IT CLOSES. `linkTracksToArtistEntities` joined `artists a on a.name = credit.value
 // collate nocase` — a bare NAME, no identity. Two real-world acts sharing a name therefore landed
 // on ONE Fluncle `artists` row, and the impostor's tracks rendered on the real act's public page.
-// Measured on prod 2026-07-27 across the six namesake-walked labels: 225 impostor-side edges, of
+// Across the six namesake-walked labels: 225 impostor-side edges, of
 // which 181 were written by THIS name join, 29 by slice 0's punctuation fold, and 15 by the
 // mbid-keyed credit sweep — which refuses homonyms by construction and so wrote only genuine
 // crossovers. The crawler had each credit's MB artist id in hand the whole time and dropped it.

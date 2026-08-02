@@ -391,7 +391,7 @@ type AppleRawSong = {
     previews?: Array<{ url?: string }>;
   };
   // With `include=albums`, Apple INLINES the full album objects here — each entry
-  // carries `attributes` directly (verified live 2026-07-12: no top-level `included[]`
+  // carries `attributes` directly (there is no top-level `included[]`
   // arrives at all, contra generic JSON:API convention). The `AppleRawAlbum` shape
   // covers both the bare-ref and the inlined-attributes forms.
   relationships?: { albums?: { data?: AppleRawAlbum[] } };
@@ -515,9 +515,8 @@ function parseAlbum(raw: AppleRawAlbum): AppleAlbumCandidate | undefined {
  * Collect the album candidates for the picker: every album the response's songs
  * reference via `relationships.albums.data[]`. With `include=albums`, Apple INLINES
  * the full album objects there — each entry carries `attributes` directly. (Verified
- * live 2026-07-12 against the real API: NO top-level `included[]` arrives, contra the
- * generic JSON:API convention this first shipped against — the pilot read 0 albums on
- * 43/43 hits until this join was corrected.) A top-level `included[]` lookup is kept
+ * NO top-level `included[]` arrives, contra the generic JSON:API convention. A top-level
+ * `included[]` lookup is kept
  * as a fallback in case any response variant ever ships one. Exported pure — the
  * adversarial case (the primary song belongs to BOTH a distributor compilation and
  * its original album) is exactly what this feeds the picker. A bare ref with no

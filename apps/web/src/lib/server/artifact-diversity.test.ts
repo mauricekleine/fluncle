@@ -196,7 +196,7 @@ describe("measureFamily", () => {
 
 describe("measureRegisters", () => {
   // The register cut is what makes the observations' worst homogenisation legible: the
-  // formulaic closer, the "I…" opener, the "hope" crutch (the 2026-07-14 audit's hand-made
+  // formulaic closer, the "I…" opener, the "hope" crutch (the hand-made
   // numbers, as a function). These pin it on a corpus whose answers are hand-checkable.
   const CORPUS = [
     A(

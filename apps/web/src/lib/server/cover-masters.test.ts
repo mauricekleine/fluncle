@@ -139,7 +139,7 @@ describe("downloadCappedImage — the ≤1200 cap", () => {
   });
 
   it("a 503 THROWS (transient outage → the row lands failed + cooldown, never terminal none)", async () => {
-    // The 2026-07-19 archive.org outage regression: a retryable status must never read as
+    // A retryable archive.org status must never read as
     // "this source has no cover" — that converted a CAA outage into permanent give-ups.
     vi.stubGlobal(
       "fetch",

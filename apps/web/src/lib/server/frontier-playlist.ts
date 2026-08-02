@@ -522,10 +522,9 @@ async function syncFrontier(user: PublicUser, nowMs: number): Promise<FrontierSy
       return { ok: false, reason: "mint_cap_reached" };
     }
 
-    // `POST /me/playlists` — Spotify's Feb-2026 Web API migration RETIRED the
-    // `/users/{id}/playlists` create (bare 403 since 2026-03-09), which also
-    // retires the /me id pre-read the old URL needed. Probed live 2026-07-17:
-    // /me/playlists returns 201 on the same grant the old endpoint 403s.
+    // `POST /me/playlists` is the supported create path. Spotify rejects
+    // `/users/{id}/playlists` with 403, so no /me id pre-read is needed;
+    // /me/playlists returns 201 on the same grant.
     const created = (await (
       await step(
         "create",

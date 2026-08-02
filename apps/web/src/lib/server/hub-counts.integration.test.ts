@@ -91,7 +91,7 @@ describe("linkTrackToLabel / linkTrackToAlbum — the per-track link", () => {
     expect(await counts("labels", "lab-hospital")).toEqual({ certified: 0, renderable: 1 });
   });
 
-  it("RE-POINTS old → new: the old label is debited and the new one credited", async () => {
+  it("RE-POINTS a track: the source label is debited and the destination credited", async () => {
     await seedLabel(db, { id: "lab-old", name: "Old Imprint", slug: "old-imprint" });
     await seedLabel(db, { id: "lab-new", name: "New Imprint", slug: "new-imprint" });
     await seedTrack(db, { logId: "004.7.2A", trackId: "t-cert-0000000000000a" });

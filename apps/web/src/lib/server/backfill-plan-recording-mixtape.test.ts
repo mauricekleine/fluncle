@@ -8,7 +8,7 @@ import { createIntegrationDb, rowCount, seedTrack } from "./integration-db";
 // in-memory libSQL harness (integration-db applies every generated Drizzle migration,
 // including 0045 — the Deploy-2 cutover that dropped `recordings.tracklist_json`,
 // `mixtapes.planned_for`, and `mixtape_clips.mixtape_id`). The legacy-column steps
-// retired with those columns; the draft-retirement cutover then added the DRAIN.
+// are absent with those columns; the draft-retirement cutover adds the DRAIN.
 // What remains, and is under test here, runs on EVERY deploy (idempotent, guarded):
 //   - residual drafts → plan-recordings + their cues from `mixtape_tracks` (exact
 //     track_id), the draft members MERGED into the plan, then the draft DELETED —
@@ -22,7 +22,7 @@ import { createIntegrationDb, rowCount, seedTrack } from "./integration-db";
 
 const NOW = "2026-06-18T18:27:21.000Z";
 
-// Mixtape #1 — published, ALREADY linked to its recording (the shipped 019 state).
+// Mixtape #1 — published, ALREADY linked to its recording.
 const M1 = "mixtape-1";
 const M1_LOG = "019.F.1A";
 const REC_019 = "rec-019";

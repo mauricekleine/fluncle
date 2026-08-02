@@ -1,6 +1,6 @@
 // THE FRESHNESS TAP (D8) — Spotify as the day-one freshness feed for the archive.
 //
-// ── THE DOCTRINE AMENDMENT (operator-ratified 2026-07-19; vendor swapped 2026-07-20) ──────────
+// ── THE FRESHNESS VENDOR ───────────────────────────────────────────────────────────────────────
 // MusicBrainz WALKS the graph (crawl.ts): label → releases → artists → their releases, the whole
 // recording-centric catalogue. But MusicBrainz's editorial database lags a release by ~2 weeks,
 // so a Friday drop is invisible on /fresh until the volunteers enter it. So a second vendor taps
@@ -9,31 +9,28 @@
 // walks the graph and never certifies — it only taps freshness.
 //
 // ── WHY SPOTIFY, NOT APPLE ────────────────────────────────────────────────────────────────────
-// The first cut used Apple Music's `record-labels` catalog. Live probes (2026-07-19) measured its
-// seed-label coverage at 2/99 — only Hospital and one other resolved; RAM, Shogun, Viper, Critical,
+// Apple Music's `record-labels` catalog provides only 2/99 seed-label coverage — only Hospital and
+// one other resolve; RAM, Shogun, Viper, Critical,
 // UKF and the rest simply do not exist as Apple record-label entities. A search-based Apple
 // resolution was a MEASURED dead end. Spotify carries every seed label's fresh releases, and we
 // already hold its OAuth (the publish path), so the tap rides the existing Spotify client — no new
 // secret. Everything downstream of resolution (the dedupe contract, the mint path, the allowlist
 // gate, the sweep/cron shape) is unchanged; only the vendor and the resolution mechanism differ.
 //
-// ── THE ROUND TRIP: onto Apify, and back (2026-07-20) ─────────────────────────────────────────
-// For half a day the tap ran OFF this app, on the Apify actor `musicae~spotify-extended-scraper`
-// (the box-runs-actor / Worker-verifies split the catalogue ANCHOR still uses). The reason was
-// budget: this official app's tier is small and SHARED with the user-facing paths, and an unpaced
-// tap starved them. That move is REVERTED, because the actor's ALBUM mode broke Spotify-side the
-// same day — measured live: an album search, an album-by-id, and even a famous-album query all
-// returned `result:"0/N", albums:[]` while the actor's TRACK mode kept working and the actor's own
-// code was untouched (last modified 10 days prior). That signature is a rotated GraphQL
-// persisted-query hash on Spotify's side, which only the community maintainer can re-fix; it does
-// not self-heal on our schedule. The alternatives were measured dead too: `apiharvest`'s actors
-// 403 behind their residential proxy (2026-07-18), and the working TRACK mode cannot substitute —
+// ── WHY THE OFFICIAL ALBUM SEARCH ──────────────────────────────────────────────────────────────
+// The official app's tier is small and SHARED with the user-facing paths, and an unpaced
+// tap can starve them. The actor's ALBUM mode is unavailable: album search, album-by-id, and even a
+// famous-album query return `result:"0/N", albums:[]` while the actor's TRACK mode works. That
+// signature is a rotated GraphQL persisted-query hash on Spotify's side, which only the community
+// maintainer can re-fix; it does not self-heal on our schedule. The alternatives are unavailable:
+// `apiharvest`'s actors
+// 403 behind their residential proxy, and the working TRACK mode cannot substitute —
 // `label:"X" tag:new` returns nothing there (`tag:new` is ALBUM-only) and track results carry no
 // release_date, which is the one field this tap exists to get.
 // The official API's album search, by contrast, is a DOCUMENTED endpoint rather than a scraped
-// GraphQL op, it is stable, and it does support `label:"X" tag:new` (verified live). So the tap
-// comes home — and the budget problem that drove it away is solved properly now, by the shared
-// call meter (./spotify-budget.ts) rather than by a second vendor. See the BUDGET section below.
+// GraphQL op, it is stable, and it does support `label:"X" tag:new`. So the tap
+// The official API's album search is the freshness tap, and the shared call meter
+// (./spotify-budget.ts) protects the user-facing paths. See the BUDGET section below.
 // THE ANCHOR SWEEP IS UNAFFECTED: it uses the actor's TRACK mode, which still works, and stays.
 //
 // ── THE HARD CONSTRAINTS (never widened) ─────────────────────────────────────────────────────
@@ -133,7 +130,7 @@ const FAILURE_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const WORKLIST_OVERSCAN = PROBE_LABELS_PER_PASS * 4;
 
 /** Fresh albums the search asks for. Spotify DOCUMENTS a page cap of 50, but OUR app's limited
- *  tier rejects any search `limit` above 10 with a 400 (measured live 2026-07-20: 10 → 200, every
+ *  tier rejects any search `limit` above 10 with a 400 (10 → 200, every
  *  value 20–50 → 400) — the same family of quiet tier-cuts as the missing album `label` field. Ten
  *  is plenty: `tag:new` spans two weeks and even the busiest seed label ships fewer fresh records
  *  than that. */
@@ -145,7 +142,7 @@ const SEARCH_LIMIT = 10;
 const MAX_ALBUMS_PER_LABEL = 40;
 
 /**
- * SINGLES ONLY — the batch endpoints are GONE at our app tier. Measured live 2026-07-20:
+ * SINGLES ONLY — the batch endpoints are unavailable at our app tier:
  * `GET /v1/albums?ids=…` → 403 and `GET /v1/tracks?ids=…` → 403 (the same family of tier-cuts as the
  * missing album `label` field and the search `limit` ≤ 10 cap), while the SINGLE reads
  * `GET /v1/albums/{id}` and `GET /v1/tracks/{id}` both → 200 (the single album carries `copyrights`;

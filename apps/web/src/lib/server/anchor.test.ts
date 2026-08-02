@@ -25,7 +25,7 @@ describe("anchorSearchQuery", () => {
 
   // RETRIEVAL, not verification: the gate forgives these spellings, but only on a candidate we were
   // handed — and the platform hands back nothing when asked in the row's own spelling. Both rows are
-  // measured misses (2026-07-27), retrievable under the canonical spelling.
+  // measured misses, retrievable under the canonical spelling.
   it("asks in the spelling the platforms index", () => {
     expect(anchorSearchQuery(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
       "Minos Feels Like Before (Air.K & Cephei Remix)",
@@ -90,7 +90,7 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
   });
 
   it("anchors at 2.6s off — the calibrated window (same-recording drift P99 ≈ 5s, wrong-recording ≥21s)", () => {
-    // The measured 2026-07-26 false-miss: compilation master vs single master, Δ2.6s.
+    // The false-miss shape: compilation master vs single master, Δ2.6s.
     const candidates = [
       { ...base, artists: ["Donnie Dubson"], durationMs: 320_000, title: "Monday" },
     ];
@@ -211,7 +211,7 @@ describe("detectVersionMismatch — the one miss worth writing down", () => {
   const base = { spotifyTrackId: "suspect" };
 
   it("fires on the measured shape: same artists + base title + duration, DIFFERENT descriptor", () => {
-    // The real case (2026-07-26): a comp track whose MusicBrainz title omits the version. Our row
+    // The real case: a comp track whose MusicBrainz title omits the version. Our row
     // says plain "Typical Description" at 394s; streaming has plain at 313s and the remix at 394s.
     const candidates = [
       {

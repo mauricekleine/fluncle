@@ -7,7 +7,7 @@ import { createIntegrationDb } from "./integration-db";
 // REAL settings-KV flag. The whole point of the slice is a load-bearing safety property: when the dark
 // flag `anchor_spotify_search_enabled` is OFF (the default), `resolveAnchorFree` issues ZERO Spotify
 // SEARCH calls. So the two Spotify SEARCH edges (`findSpotifyTrackByIsrc`, `searchTrackCandidates`) are
-// spied here and asserted NOT CALLED whenever the gate is closed, and the flag is flipped through the
+// spied here and asserted NOT CALLED whenever the gate is closed, and the flag is set through the
 // real `setAnchorSpotifySearchEnabled` (writing the real `settings` row) rather than a mock — the
 // default-OFF must be proven, not assumed. The by-id metadata read + ListenBrainz are mocked as before;
 // the database, the verification gate, the stamping, and the flag read are the real thing. `now` is
@@ -386,7 +386,7 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
 
 // ── THE LISTENBRAINZ RUNG'S ONE SPOTIFY CALL ─────────────────────────────────────────────────────
 // The by-id metadata read (`GET /v1/tracks/{id}`) draws on the SAME official app the search rungs do,
-// and it used to consult nothing at all — so through Spotify's throttle windows every free candidate
+// and it consulted nothing at all — so through Spotify's throttle windows every free candidate
 // died on it and its row was re-bought from Apify (~1,400/day). These pin the two halves of the fix:
 // the read YIELDS to the throttle breaker, and it RECORDS into the shared call meter.
 describe("resolveAnchorFree — the ListenBrainz by-id read joins the breaker + the meter", () => {

@@ -50,7 +50,7 @@ type ClipRow = {
 /**
  * The most clip-distribution rows the attention queue will ever carry.
  *
- * The queue used to take EVERY dressed finding with a pending distribution leg — right when the
+ * The queue takes only dressed findings with a pending distribution leg — right when the
  * only clips in flight were the handful the operator was actively distributing, but a growing
  * catalogue of rendered-but-not-fully-distributed findings turns that into an unbounded list
  * serialized into the `/admin` SSR payload, the react-query cache, and one-per-line by

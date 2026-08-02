@@ -221,7 +221,7 @@ export async function getNamedGalaxyBySlug(
 // named. This is a RUNTIME check, not a build flag — so this code can merge while
 // the operator is still naming, and every public surface (the `/galaxies` lens, the
 // `list_galaxies`/`get_galaxy` API + CLI, the sitemap, the `/log` prose clause + the
-// OG card line) lights up the moment the LAST name lands. A partial map — one or more
+// OG card line) lights up once every name exists. A partial map — one or more
 // non-retired galaxies still unnamed — reads exactly like the pre-launch dark state.
 // Machine handles never render publicly regardless (they are not a name).
 

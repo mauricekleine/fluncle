@@ -540,7 +540,7 @@ describe("the identifiers and the other platforms", () => {
 
   it("serves Apple Music unsupported to a machine, and Tidal to everyone", async () => {
     // Apple: ADPLA §3.3.6(D) (MusicKit) does not permit serving these links to a third party, read
-    // verbatim 2026-07-29. Tidal: no integration exists at all. A row carrying a real Apple link
+    // verbatim. Tidal: no integration exists at all. A row carrying a real Apple link
     // still reads `unsupported`, which is the point of the gate.
     await insertTrack("ap-held", {
       appleDoneAt: "2026-05-01T00:00:00.000Z",

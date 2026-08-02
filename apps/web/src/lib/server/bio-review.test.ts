@@ -3,8 +3,7 @@
 // `getDb` is mocked to hand back the per-test client (the artists-board.test.ts precedent).
 //
 // What these pin — the whole point of the slice. The entity-bio sweep's third draft LANDS even when
-// the voice scan refuses it (the operator's ruling, kept), and the acceptance used to exist only as
-// a line in a cron's stderr: a review flag with no reader. So:
+// the voice scan refuses it, and the acceptance carries a review flag with a reader. So:
 //
 //   - a BYPASSED bio raises exactly ONE row, carrying its entity and the accepted reasons;
 //   - a CLEAN bio raises NONE (the false-positive case — a source that fires on good work is a

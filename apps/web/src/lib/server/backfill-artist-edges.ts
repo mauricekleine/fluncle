@@ -2,7 +2,7 @@
 // identities (RFC artist-primary-capture, slice 0).
 //
 // ── THE GAP ────────────────────────────────────────────────────────────────────────────────────
-// The `track_artists` graph is crawl-era-only (born 2026-07-15): only ~12.3k of ~37.5k tracks carry
+// The `track_artists` graph is crawl-era-only: only ~12.3k of ~37.5k tracks carry
 // edges. Older rows carry artist NAMES in `tracks.artists_json` but no identity link. Slice 1's
 // identity-keyed capture authorization (a track's audio may be bought iff a CREDITED ARTIST is
 // qualified) matches BY IDENTITY through this graph — so it needs the graph as full as honest
@@ -157,7 +157,7 @@ export function buildArtistFoldMap(
  * `fold()` collapses punctuation and diacritics, so `"K."` and `"K"` fold to the same key. That is
  * the right latitude for a row nobody has identified yet, and the wrong latitude for one that
  * carries an `mbid`: an MB artist id is a curated identity, and quietly attaching a DIFFERENTLY
- * SPELLED credit to it merges two acts. Measured on prod 2026-07-27: the J-pop act credited `"K."`
+ * SPELLED credit to it merges two acts. In the J-pop/drum & bass namesake case, the act credited `"K."`
  * had 23 tracks folded onto the Audio Couture / Subtitles drum & bass act `"K"` this exact way.
  *
  * So for a row with an `mbid`, this map holds the spellings it may still be matched on — its own

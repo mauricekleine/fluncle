@@ -57,8 +57,7 @@ const BIO_MIN_CHARS = 40;
 const BIO_MAX_CHARS = 500;
 
 /**
- * THE NAME EXEMPTION. The bio was the first family to get it (the operator's 2026-07-29 ruling on
- * the runaway rewrite loop); it now belongs to every voiced family, so the implementation, the
+ * THE NAME EXEMPTION. The rule belongs to every voiced family, so the implementation, the
  * full rationale, and its one accepted cost live beside the shared scan in ./observation.ts. It is
  * re-exported here because this module is where the exemption was born and where its tests read
  * it from — the bio's own gate is the single-name case, `maskEntityName(bio, entityName)`.
@@ -117,8 +116,8 @@ function scanBioProse(bio: string, entityName: string): VoiceGateViolation[] {
 /**
  * THE FINAL-ATTEMPT ACCEPTANCE — the one place the bio voice SCAN is allowed not to hard-fail.
  *
- * The operator's ruling (2026-07-29): an entity gets at most THREE authoring attempts — the
- * initial draft plus two rewrites — and the third draft LANDS rather than being discarded. The
+ * An entity gets at most THREE authoring attempts — the initial draft plus two rewrites — and the
+ * third draft is accepted rather than discarded. The
  * on-box `entity-bio-sweep` counts the attempts and asks for this by sending `finalAttempt` on
  * its third and last pass; nothing else in the app may call it.
  *
@@ -131,7 +130,7 @@ function scanBioProse(bio: string, entityName: string): VoiceGateViolation[] {
  *
  * WHAT IT BYPASSES: the voice SCAN only — the banned-identity-word / exclamation / "we"-as-company
  * checks. It returns the violations rather than swallowing them, so the caller can log the
- * acceptance distinctly and the operator can find and review every bio that landed this way.
+ * acceptance distinctly and the operator can find and review every bio accepted this way.
  *
  * WHAT IT STILL ENFORCES: `requireStorableBio` — a present, non-empty bio inside the length bounds.
  * Those are not voice judgments; they are what makes the paragraph a renderable paragraph, and

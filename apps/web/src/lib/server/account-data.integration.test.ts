@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
   // Seed a user with a row in EVERY table the deletion touches, then assert the
-  // post-state of all of them — not just the two the old mock asserted.
+  // post-state of all of them — not just the two mocked paths.
   async function seedFullUser(userId: string, email: string): Promise<void> {
     const trackId = `track-${userId}-0000000000`;
     const logId = `log-${userId}`;

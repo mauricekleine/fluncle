@@ -35,8 +35,8 @@
 // is wrong: it is NOT enough that no vector crosses the wire. `embedding_blob` is a ~4 KB
 // `F32_BLOB(1024)` that spills to overflow pages, and SQLite must WALK that chain to reach any
 // column stored after it — so arms reading `dismissed_at` / `nearest_finding_score` /
-// `spotify_anchor_attempted_at` / `isrc` used to drag every vector in the archive to count null
-// flags. Measured on hosted prod at 52k (2026-07-26): 9.5s cold, 0.38s warm, and a 15.08s span in
+// `spotify_anchor_attempted_at` / `isrc` drag every vector in the archive to count null
+// flags. At 52k, this is 9.5s cold, 0.38s warm, and a 15.08s span in
 // Sentry when the page cache had been evicted by a concurrent sweep; on a fresh 54,860-row prod
 // clone — the honest cold case — 12.6-19.9s. Covered, the same twelve arms read a 5 MB index instead
 // of a 125 MB table and land at 1.70s first-touch, 0.30s after. Live-on-every-load is affordable BECAUSE of that, not in
@@ -385,7 +385,7 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
 /**
  * THE ONE PASS, as a statement — the stage 7-col aggregate, the anchor-split 4-col, and the
  * anchor-backoff count folded into a SINGLE conditional-aggregate scan of `tracks`
- * (docs/db-scale-backlog Wave 1 #5, covered by Wave 2 #7). Each formerly-separate query's
+ * (docs/db-scale-backlog Wave 1 #5, covered by Wave 2 #7). Each query's
  * WHERE moves into its own `SUM(CASE WHEN …)` over the
  * unfiltered superset — a conditional sum over the whole table equals `COUNT(*) … WHERE P` for any
  * predicate P, so the numbers are identical BY CONSTRUCTION, in one scan instead of three (the fold
@@ -401,7 +401,7 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
  * `SCAN tracks USING COVERING INDEX tracks_funnel_scan_idx`: the arms read post-blob columns
  * (`dismissed_at`, `nearest_finding_score`, `spotify_anchor_attempted_at`, `isrc`), and reaching
  * those in a table row means walking each 4 KB vector's overflow chain — for a page whose numbers
- * never left the null flags. Measured on a 54,860-row clone of production (hosted, 2026-07-26):
+ * never leaves the null flags. On a 54,860-row clone of production:
  * 12.6-19.9s cold before, 1.70s first-touch and 0.30s after, off a 5 MB index rather than a 125 MB
  * table, every count identical. Writing the canonical form and rewriting it — rather than
  * hand-writing the mirror form — is what keeps this the SAME predicate as the sweeps, not a copy.

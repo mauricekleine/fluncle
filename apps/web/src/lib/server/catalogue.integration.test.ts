@@ -713,7 +713,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     });
 
     // cat-best stays BELOW the duplicate display band (≥ 0.995 never ranks — the
-    // operator's 2026-07-15 ruling): a strong find, not a copy.
+    // operator's ruling): a strong find, not a copy.
     await seedCatalogue("cat-best", { vector: blend(axis(1), axis(2), 0.15) });
     await seedCatalogue("cat-mid", { vector: blend(axis(0), axis(2), 0.25) });
     await seedCatalogue("cat-worst", { vector: blend(axis(0), axis(2), 0.5) });
@@ -756,7 +756,7 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     const page = await listCatalogueTracks("capture");
 
     expect(page.map((track) => track.trackId)).toEqual(["cat-artist", "cat-label", "cat-seed"]);
-    // The ladder rung is re-derived through the SAME pure function the sweep used to WRITE
+    // The ladder rung is re-derived through the SAME pure function the sweep writes
     // the tier, so the sort key and the explanation cannot drift apart.
     expect(page[0]?.captureReason).toEqual({ kind: "artist", name: "Krakota" });
     expect(page[1]?.captureReason).toEqual({ kind: "label", name: "Hospital Records" });
@@ -1057,7 +1057,7 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
     await seedFinding("finding-owned", { title: "Infinity", vector: axis(0) });
     // An ALTERNATE master lands in the display band: above DUPLICATE_SIMILARITY (a near-dup), but
     // below WRONG_AUDIO_QUARANTINE — a genuinely different recording, so never vetoed. The
-    // operator's ruling (2026-07-15, the Anwius "Trust" case): a known duplicate is not a
+    // operator's ruling (the Anwius "Trust" case): a known duplicate is not a
     // discovery, so the EAR ranking excludes it — its perfect score would sit above every
     // real find.
     await seedCatalogue("cat-identical", {
@@ -1117,7 +1117,7 @@ describe("duplicates — a crawled copy of a finding is flagged, never bought", 
   });
 });
 
-// ── The matchKey-vs-findings detector — a logged track's twin (the 2026-07-15 "Drifting Away" ruling)
+// ── The matchKey-vs-findings detector — a logged track's twin (the "Drifting Away" ruling)
 // A crawled catalogue row whose folded title+artist `matchKey` equals a certified finding's is that
 // same song — a DUPLICATE regardless of ISRC (a YouTube rip carries none) and regardless of embedding
 // score (the rip scored a merely-0.94 twin of the finding it copies). The ISRC-only pre-audio detector
@@ -1178,7 +1178,7 @@ describe("matchKey duplicate — a logged track's twin is flagged, ISRC-blind an
       await import("./catalogue");
 
     // The exact defect: a rip of the logged "Drifting Away" embedded to a merely-0.94 twin of the
-    // finding — far below the 0.995 post-embed band, so the old detectors sailed past it and it
+    // finding — far below the 0.995 post-embed band, so ISRC-only detectors sailed past it and it
     // ranked as a top discovery. The title+artist identity catches it regardless of the score.
     await seedFinding("finding-drifting", {
       artists: ["BOP", "Unquote"],
@@ -1354,9 +1354,9 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
 
     // The near-1.0 path is the one that needs BOTH folds of the same rows: `matchKey → finding`
     // (the duplicate detector, wanted on every tick) and `finding → matchKey` (the wrong-audio
-    // discriminator, wanted here). They used to be two functions issuing the byte-identical
+    // discriminator, wanted here). They are one shared read rather than two functions issuing the byte-identical
     // `findings join tracks` statement, so a tick like this one read the archive twice — the shape
-    // Wave 1 retired for `readArchiveAffinity` (docs/db-scale-backlog "Shipped (live)" #4).
+    // shared by `readArchiveAffinity`.
     await seedArtistRow("art-flowidus", "Flowidus", "flowidus");
     await seedFinding("finding-shelter", {
       artists: ["Flowidus"],

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 //
 // The scale audit's whole thesis is that this debt accrues SILENTLY: a query that
 // full-scans a growing table is not an error, it is a query that gets slower every
-// week. So the shapes the audit retired are made STRUCTURALLY un-reintroducible here,
+// week. So the excluded shapes are made STRUCTURALLY un-reintroducible here,
 // exactly the way orpc-coverage.test.ts makes an uncovered public route
 // un-mergeable. This file is executed by `bun run test`, which `deploy:gate` runs in
 // the Cloudflare build — a violation ABORTS the prod deploy.
@@ -389,7 +389,7 @@ function findOccurrences(source: string): readonly Occurrence[] {
     push("vector-index:libsql_vector_idx", match.index, match[0]);
   }
 
-  // (4) THE ENTITY-HUB GROUP-BY — the audit's shape (B), retired by Keystone 2's stored
+  // (4) THE ENTITY-HUB GROUP-BY — the shape excluded by Keystone 2's stored
   // `renderable_track_count` / `certified_finding_count` (#880/#886). Its signature is a
   // grouped scan of the growing tables whose INCLUSION decision is an aggregate in a
   // `having`, which is what makes the cost O(tracks) per hub page. Deliberately narrow:
@@ -580,7 +580,7 @@ const SCAN_ROOTS = ["lib/server", "db"];
 
 // Individual files OUTSIDE the roots whose SQL text is executed by lib/server consumers.
 // lib/catalogue-eligibility.ts is the client-safe home of REC_ELIGIBLE_WHERE (extracted
-// 2026-07-31 for the device-mirror sweep): the anti-join's TEXT lives here while every
+// for the device-mirror sweep): the anti-join's TEXT lives here while every
 // query that runs it stays in lib/server — scanning the file keeps the tracked Wave 3-1
 // debt visible instead of letting an extraction silently launder it out of this guardrail.
 const SCAN_FILES = ["lib/catalogue-eligibility.ts"];

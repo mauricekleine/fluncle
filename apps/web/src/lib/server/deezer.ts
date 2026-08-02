@@ -5,15 +5,15 @@
 // Best-effort: any failure resolves to an empty result so it never blocks a
 // publish. The backfill can retry later.
 //
-// ── WHAT WE KEEP (operator ruling 2026-07-30) ────────────────────────────────────────────────────
+// ── WHAT WE KEEP (operator ruling) ─────────────────────────────────────────────────────────────
 // All three of this file's Deezer reads have always come back carrying Deezer's own TRACK ID, and
-// all three used to drop it on the floor. They keep it now (`tracks.deezer_track_id`, schema.ts), so
+// all three retain it (`tracks.deezer_track_id`, schema.ts), so
 // `/identity` can serve `https://www.deezer.com/track/<id>` and Deezer joins the covered set. This
 // costs no extra request anywhere: the id was already in the response that was already being read.
 // Every one of them is GATED — an id is only ever handed back off an answer that passed a match
 // check, because an unverified id becomes a wrong link on a public page under a recording's name.
 //
-// ── THE ISRC-RECOVERY RUNG (`searchDeezerCandidates`, verified live 2026-07-22) ──────────────────
+// ── THE ISRC-RECOVERY RUNG (`searchDeezerCandidates`) ───────────────────────────────────────────
 // Deezer is a FREE, no-auth ISRC ORACLE. Its `GET /search/track?q=…` returns each hit already
 // carrying the recording's real `isrc`, its `duration`, its `title`, and its billed `artist.name` —
 // so ONE search request recovers the ISRC our own row lacks (the crawler's ISRC comes from
@@ -129,7 +129,7 @@ const DEEZER_TIMEOUT_MS = 10_000;
 const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 
 /**
- * THE QUOTA TRAP (the reason this rung recovered NOTHING from 2026-07-22 to 2026-07-29). Deezer does
+ * THE QUOTA TRAP. Deezer does
  * NOT signal a throttle with a 429, or with any non-2xx at all: it answers **HTTP 200** carrying an
  * ERROR BODY instead of a result set —
  * `{"error":{"type":"Exception","message":"Quota limit exceeded","code":4}}` — reproduced live by
@@ -218,7 +218,7 @@ type DeezerSearchAttempt =
  *
  * An empty list is a first-class "no recovery, fall to fuzzy" — but it is no longer SILENT. Every way
  * of arriving at `[]` OTHER than a genuine empty result set now logs, because the failure this client
- * shipped with was invisible precisely for want of one log line (see {@link DEEZER_QUOTA_ERROR_CODE}).
+ * was invisible precisely for want of one log line (see {@link DEEZER_QUOTA_ERROR_CODE}).
  *
  * Politeness: IDENTIFIED (the honest Fluncle User-Agent) and BOUNDED (a per-request deadline). Like the
  * sibling ListenBrainz rung it carries NO module-level pacing gate: the anchor waterfall makes exactly
@@ -596,7 +596,7 @@ export async function lookupDeezerTrackByIsrc(
   }
 
   // THE ERROR BODY, READ BEFORE THE TRACK — a 200 is not a result (see the quota note above). This
-  // is the branch the search client shipped without, and its absence made a platform-wide throttle
+  // is the branch the search client needs, and its absence made a platform-wide throttle
   // read as a per-row miss for a week.
   const error = (body as DeezerTrack).error;
 

@@ -11,7 +11,7 @@
 //
 // ── LITERAL, NEVER SIMILAR ─────────────────────────────────────────────────────────────
 // The feed answers "new releases from THIS entity" and nothing more — only the entity's own tracks,
-// never a widening to similar artists (ratified 2026-07-18; that expansion lives in a future email
+// never a widening to similar artists (that expansion lives in a future email
 // digest, not a feed). The predicate is the entity's own pointer: an artist via the `track_artists`
 // join (`getFindingsByArtist`'s shape), a label via the indexed `tracks.label_id` seek.
 //

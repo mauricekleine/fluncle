@@ -24,7 +24,7 @@ import { renderSitemap } from "./sitemap-test-kit";
 //      doorway page: a page whose stated subject is a thing that is not on it.
 //
 // ── THE FIX FOR (2) IS NOT A 404 ────────────────────────────────────────────────────────
-// It first shipped as one ("zero findings ⇒ the page 404s"), and that was too blunt. A label
+// The page must not 404 when it has zero findings. A label
 // with 700 crawled releases and no finding is a genuinely useful page — an honest record of
 // what that label put out — and throwing it away discards the whole point of having crawled
 // it. The page existing was never the problem. The HOLLOW RENDERING was.
@@ -78,7 +78,7 @@ async function seedLabel(
 
 // A crawled label is a DISCOGRAPHY, so the synthetic one is spread the way a real one is: many
 // artists, each with several records. This is what lets the scale test prove the GROUPING bound
-// rather than the old flat cap — a label of `CRAWLED_ARTISTS` artists over `CRAWLED_ALBUMS`
+// rather than a flat cap — a label of `CRAWLED_ARTISTS` artists over `CRAWLED_ALBUMS`
 // records, grouped by artist and paged, must still render a bounded page.
 const CRAWLED_ARTISTS = 30;
 const CRAWLED_ALBUMS = 80;
@@ -269,7 +269,7 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
     const { resolveLabelPageData } = await import("../../routes/-label-page-data");
 
     // Metalheadz has 400 crawled rows and no finding. It is a page: a real record of what the
-    // label put out. It used to 404.
+    // label put out. It remains a page.
     const data = await resolveLabelPageData("metalheadz", "name", 1);
 
     if (data.status !== "found") {
@@ -296,7 +296,7 @@ describe("a label earns a page on its content, not on Fluncle's", () => {
   });
 
   it("carries BOTH labels in the unified /labels index — certified lit, discovered unlit", async () => {
-    // The unified index (ratified 2026-07-20) is one catalogue-scale list of every label Fluncle
+    // The unified index is one catalogue-scale list of every label Fluncle
     // holds: Hospital reads CERTIFIED (it carries a finding), Metalheadz reads uncertified but is IN
     // — its 400 crawled rows clear the renderable floor. Alphabetical; the certification light rides
     // the `certified` flag, never a heading. The tile counts RENDERABLE tracks (findings + catalogue).
@@ -392,7 +392,7 @@ describe("the attention queue does not drown in discovered labels", () => {
     const rows = await listLabelReviewRows();
 
     expect(rows).toHaveLength(LABEL_REVIEW_QUEUE_LIMIT);
-    // Oldest-first: Metalheadz landed before the imprints seeded just now.
+    // Oldest-first: Metalheadz predates the imprints seeded in this test.
     expect(rows[0]?.name).toBe("Metalheadz");
   });
 });

@@ -1043,7 +1043,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       };
     };
 
-    // Not the old found:false — the entity resolves and names the artist.
+    // Not found:false — the entity resolves and names the artist.
     expect(result.artist).toBeDefined();
     expect(result.artist.name).toBe("Quiet One");
     expect(result.artist.slug).toBe("quiet-one");
@@ -1067,7 +1067,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
 
   it("get_artist still names a resolved artist even with an empty catalogue (never found:false)", async () => {
     // A resolved artist with neither findings nor catalogue is still NAMED — the entity carries his
-    // name (and socials/bio when present), never the old found:false. Naming an artist is allowed.
+    // name (and socials/bio when present), never found:false. Naming an artist is allowed.
     getArtistBySlug.mockResolvedValue({ id: "art-3", name: "Faint Trace", slug: "faint-trace" });
     countArtistFindings.mockResolvedValue(0);
     getFindingsByArtist.mockResolvedValue([]);
@@ -1190,7 +1190,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   it("get_label returns the UNLIT entity (name + catalogue, no findings) for a catalogue-only label", async () => {
     // He has certified nothing on this label, but the label row EXISTS and carries records in the
     // catalogue. The Unlit Rule silences uncertified TRACKS, never the label entity — so instead of
-    // the old found:false, get_label names the label and lists the records on it in the unlit
+    // found:false, get_label names the label and lists the records on it in the unlit
     // register. Mirrors the get_artist unlit-entity behaviour exactly.
     getLabelBySlug.mockResolvedValue({
       bio: "A young imprint out past the certified sectors.",
@@ -1242,7 +1242,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       };
     };
 
-    // Not the old found:false — the entity resolves and names the label.
+    // Not found:false — the entity resolves and names the label.
     expect(result.label).toBeDefined();
     expect(result.label.name).toBe("Empty Imprint");
     expect(result.label.slug).toBe("empty-imprint");
@@ -1264,7 +1264,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
 
   it("get_label still names a resolved label even with an empty catalogue (never found:false)", async () => {
     // A resolved label with neither findings nor catalogue is still NAMED — the entity carries its
-    // name (and aliases/bio when present), never the old found:false. Naming a label is allowed.
+    // name (and aliases/bio when present), never found:false. Naming a label is allowed.
     getLabelBySlug.mockResolvedValue({
       id: "lbl-3",
       logoImageUrl: undefined,

@@ -667,7 +667,7 @@ describe("the graph hover-card preview carries the entity's bio", () => {
     // No bio yet ⇒ the preview carries none (the card renders no bio row, no gap).
     const withoutBio = await getGraphPreview("label", "hospital-records");
     expect(withoutBio.bio).toBeUndefined();
-    // No signature line on a catalogue entity — retired by the Three Areas Rule; the card
+    // No signature line on a catalogue entity — excluded by the Three Areas Rule; the card
     // mirrors the page, and the page opens on the name (and the bio, once authored).
     expect(withoutBio.line).toBeUndefined();
 
@@ -933,7 +933,7 @@ describe("the unified hub ?page=N index", () => {
 });
 
 // The COVER a hub tile renders, and the WINDOW the unified index is served through. Two things the
-// hubs used to get wrong at once: every cover was hotlinked raw off whichever provider captured it
+// hubs can get wrong at once: every cover was hotlinked raw off whichever provider captured it
 // (the album's OWNED master on Fluncle's R2 was never consulted, though the sweep had resolved one),
 // and the list SSR'd whole — every entity, on every page, forever.
 describe("the hub tiles: the owned cover master + the 48-tile window", () => {

@@ -165,7 +165,7 @@ describe("label artist rules", () => {
     expect(mocks.mbFetch).not.toHaveBeenCalled();
   });
 
-  it("keeps the old set when the atomic replacement fails", async () => {
+  it("keeps the existing set when the atomic replacement fails", async () => {
     await seedLabel("lbl_atomic");
     mbMiss();
     await replaceLabelArtistRules("lbl_atomic", [

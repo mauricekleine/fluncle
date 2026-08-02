@@ -73,7 +73,7 @@ describe("capturePriorityFor — authorization (the artist-driven gate)", () => 
   });
 
   it("does NOT authorize label-mates off a finding on a NON-enabled label (the Atlantic-UK pin)", () => {
-    // THE COUNTER-EXAMPLE THIS RULE EXISTS FOR. One Atlantic-UK finding used to lift every
+    // THE COUNTER-EXAMPLE THIS RULE EXISTS FOR. One Atlantic-UK finding must not lift every
     // crawled Atlantic-UK track to tier 2 and into the budget. A finding lifts its ARTIST, never
     // its label's neighbours — so an un-enabled label carrying a finding no longer authorizes.
     expect(

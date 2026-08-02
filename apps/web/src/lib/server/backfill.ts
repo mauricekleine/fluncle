@@ -1,5 +1,5 @@
 // Admin-gated, idempotent, Worker-paced catalogue backfills for the two music-graph
-// writes that landed AFTER the synchronous add already existed:
+// writes not included in the synchronous add:
 //
 //   1. Last.fm `track.love` — endorse every already-published finding (a Loved
 //      Track, never a scrobble — no fabricated listening history). `lastfmLove`
@@ -1908,7 +1908,7 @@ async function drainCatalogueAlbumFacts(
 //   · found-but-unvouchable  → the failure STREAK only, like a transport failure. Deezer picked
 //     something whose duration disagrees — neither a hit nor a miss, so no receipt is written —
 //     but the streak must move or the `attempted_at is null` worklist re-serves the same
-//     unvouchable rows every tick forever (the 2026-08-01 starvation loop, observed live);
+//     unvouchable rows every tick forever;
 //   · a THROTTLE (quota code 4, arriving in an HTTP-200 body) → NOTHING, and the pass ENDS. This is
 //     the known ledger poison: the quota answer is indistinguishable from a miss to any client that
 //     only checks `data`, and stamping it would mark a whole tick's rows "not on Deezer" because a
@@ -2167,7 +2167,7 @@ export async function backfillDeezer(
     if (outcome.outcome === "unvouchable") {
       // Found, not vouched for. No RECEIPT is written (the ledger law holds: neither `absent` nor
       // `verified` is true of this row) — but the can't-conclude STREAK moves, because writing
-      // nothing at all proved to be a starvation loop in production (2026-08-01): the worklist's
+      // nothing at all causes a starvation loop: the worklist's
       // `attempted_at is null` predicate re-served the same top-priority unvouchable rows every
       // tick forever, and every row behind them starved. `failures` is exactly the right column —
       // it counts attempts that settled nothing, the envelope never reads it, and the

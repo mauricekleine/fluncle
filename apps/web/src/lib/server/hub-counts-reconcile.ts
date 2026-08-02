@@ -12,9 +12,8 @@
 //   - an OUT-OF-BAND write — the operator's catalogue-prune skill deletes tracks straight out of
 //     the database, and no server-side track-delete path exists at all.
 //
-// SLICE A'S OWN ROLLOUT PROVED THE NEED ON DAY ONE (2026-07-26): the deploy-window skew between
-// the one-time backfill and the first delta-maintained writes left 44 artists, 3 albums and 1
-// label reading wrong until a manual reconcile. This module is that manual reconcile, nightly.
+// A deploy-window skew between a one-time backfill and delta-maintained writes can leave hub counts
+// wrong until a manual reconcile. This module is that manual reconcile, nightly.
 //
 // ── THE SHAPE: TWO STATEMENTS PER TABLE, NEVER A LOOP ──────────────────────────────────────
 //
@@ -42,7 +41,7 @@
 // ── THE PINNED ARTISTS SOURCE ──────────────────────────────────────────────────────────────
 //
 // The artists source MUST be `track_artists ta JOIN tracks t ON t.track_id = ta.track_id`, never
-// raw `track_artists`. Production carries ORPHANED edges — 62 of them, measured 2026-07-26, left
+// raw `track_artists`. Production carries ORPHANED edges left
 // by out-of-band track deletion — and the hub read paths all join `tracks`. Counting raw edges
 // would "correct" the counters into disagreeing with what actually RENDERS: a fix that breaks the
 // page it was meant to protect. The join drops an orphan edge, which is precisely right, and the
@@ -141,7 +140,7 @@ const PASSES: ReconcilePass[] = [
   },
   {
     // THE PINNED SHAPE: the source joins `tracks`, so an ORPHANED edge (a `track_artists` row
-    // whose track was deleted out of band — 62 in prod, measured 2026-07-26) does NOT count. The
+    // whose track was deleted out of band) does NOT count. The
     // hub reads join `tracks` too, so a raw-edge count would correct these into disagreeing with
     // what renders. The zero pass carries the same join for the same reason.
     correct: `update artists

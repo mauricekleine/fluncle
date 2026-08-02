@@ -29,7 +29,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 // ── The certify announce fan-out's side-effect seams (publish.ts) ─────────────────────────
-// Certify now rides the same announce legs as the Spotify add (operator ruling, 2026-07-13), so
+// Certify rides the same announce legs as the Spotify add (operator ruling), so
 // the network-touching modules are stubbed with recorders. Partial mocks: everything else on
 // each module (ApiError, the parsers) stays real.
 const playlistAdds: string[] = [];
@@ -119,7 +119,7 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
   it("maintains is_catalogue as the materialized discriminator: catalogue=1, finding=0", async () => {
     // The keystone invariant (docs/db-scale-backlog Wave 2 #1): `is_catalogue = 1` iff a track has
     // NO findings row. The catalogue track is born 1 (the DDL default); the certified track carries
-    // a findings row, so seedTrack flipped it to 0 — exactly as publishTrack/certifyExistingTrack do.
+    // a findings row, so seedTrack sets it to 0 — exactly as publishTrack/certifyExistingTrack do.
     const catalogue = await db.execute({
       args: [CATALOGUE_ID],
       sql: "select is_catalogue from tracks where track_id = ?",
@@ -578,7 +578,7 @@ describe("certify in place — logging an existing catalogue track without creat
     expect(finding.rows[0]?.log_id).toBe(logId);
     expect(finding.rows[0]?.note).toBe("logged from the telescope");
 
-    // The catalogue discriminator flipped 1 → 0 in the SAME atomic write that minted the finding:
+    // The catalogue discriminator changes 1 → 0 in the SAME atomic write that mints the finding:
     // the row is now certified, so every consumer that reads `is_catalogue` treats it as such.
     const flag = await db.execute({
       args: [CATALOGUE_ID],
@@ -664,7 +664,7 @@ describe("certify in place — logging an existing catalogue track without creat
     }
   });
 
-  // ── The announce fan-out (operator ruling, 2026-07-13: a finding is a finding however it
+  // ── The announce fan-out (operator ruling): a finding is a finding however it
   // arrives, so certify rides the same legs as the Spotify add — presence resolved, never
   // assumed; a leg failure recorded, never unwinding the mint; missing legs resumable). ──
   it("fans out on mint — resolves presence by exact ISRC, adds to the playlist, posts to Telegram", async () => {
@@ -710,7 +710,7 @@ describe("certify in place — logging an existing catalogue track without creat
   it("recovers a missing ISRC before minting — an ISRC-less catalogue row is never born silent", async () => {
     const { certifyExistingTrack } = await import("./publish");
 
-    // The exact shape that used to mint SILENT: ISRC-less (the crawler's MusicBrainz ISRC is sparse
+    // The silent shape: ISRC-less (the crawler's MusicBrainz ISRC is sparse
     // for underground DnB) AND un-anchored. Once certified it left the anchor sweep's reach, so its
     // ISRC was never recovered and the app had no preview to resolve.
     await db.execute({
@@ -743,7 +743,7 @@ describe("certify in place — logging an existing catalogue track without creat
   it("REFUSES to certify without a Spotify anchor — 409, mints nothing, announces nothing", async () => {
     const { certifyExistingTrack } = await import("./publish");
 
-    // RULED 2026-07-15: the public playlist carries every banger, so only a Spotify-linked
+    // The public playlist carries every banger, so only a Spotify-linked
     // track can be certified. No stored identity, no ISRC → no lookup can run → refuse.
     await db.execute({
       args: [CATALOGUE_ID],

@@ -14,7 +14,7 @@
 // The obvious predicate is `where is_catalogue = 1 and <selective key>`. It is a TRAP: with no
 // `sqlite_stat1` on hosted Turso the planner picks `tracks_is_catalogue_idx` (which matches ~every
 // catalogue row) over the far more selective key, turning each restale into a FULL catalogue scan —
-// measured on a 65k-row scratch DB (2026-07-26) at 9.6 s (2.6k-track label) / 18.5 s (13k-track
+// On a 65k-row scratch DB this costs 9.6 s (2.6k-track label) / 18.5 s (13k-track
 // label) per ruling, and O(catalogue) as it grows: exactly the churn this change removes, moved onto
 // the ruling path. Dropping the guard lets the planner seek the SELECTIVE key instead — the `tracks`
 // PRIMARY KEY for the per-track form (measured 50 ms / 200-id chunk, plan `SEARCH … sqlite_autoindex_tracks_1`)

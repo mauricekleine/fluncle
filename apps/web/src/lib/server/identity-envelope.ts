@@ -33,7 +33,7 @@
 // so a caller resolving a shared ISRC can tell the returned rows apart at all.
 //
 // ── THE ARRAY IS NOT A CONVENIENCE ────────────────────────────────────────────────────────────
-// An ISRC is not unique in this archive (measured 2026-07-29: 468 of 33,472 ISRCs are shared, ~1.4%)
+// An ISRC is not unique in this archive (468 of 33,472 ISRCs are shared, ~1.4%)
 // and neither is a MusicBrainz recording id across birth paths. So a key lookup always answers with
 // an ARRAY, and each entry says how it stands to the others: `canonical` when it is the only answer,
 // `duplicate-of:<trackId>` when Fluncle has already ruled it a duplicate, and `ambiguous` when
@@ -58,7 +58,7 @@ export const IDENTITY_ATTRIBUTION =
 
 /**
  * WHETHER APPLE MUSIC LINKS ARE SERVED TO MACHINES. `false`, and the reason is a clause rather than
- * a hedge: ADPLA §3.3.6(D) (MusicKit), retrieved verbatim 2026-07-29, says "You agree not to call
+ * a hedge: ADPLA §3.3.6(D) (MusicKit), retrieved verbatim, says "You agree not to call
  * the MusicKit APIs … for purposes unrelated to facilitating access to Your end users' Apple Music
  * subscriptions" and "album art and music-related text from the MusicKit API may not be used
  * separately from music playback or managing playlists". Fluncle's Apple links come from that API

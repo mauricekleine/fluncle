@@ -7,7 +7,7 @@
 // It is a property of the WHOLE archive, so it is the same answer for every reader and it moves
 // only when a track is keyed. That is what makes ONE isolate-level memo correct for both of its
 // consumers (`getMixChainDepth`, the `/mix` depth gate; and `namedMoveKeys`, the rail's `key in (…)`
-// pre-filter — both in tracks.ts). They used to walk `tracks_key_idx` separately and only the gate
+// pre-filter — both in tracks.ts). They walk `tracks_key_idx` separately unless the shared memo
 // remembered its result, so every `/mix` rail paid a fresh full walk of an index that grows with the
 // catalogue to rebuild two dozen strings that had not moved.
 //

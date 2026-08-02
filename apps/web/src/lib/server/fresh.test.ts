@@ -285,7 +285,7 @@ describe("listFreshReleases", () => {
         `https://found.fluncle.com/albums/owned-record.jpg?v=${Date.parse("2026-07-01T00:00:00.000Z")}`,
     );
     expect(owned?.coverImageUrl).not.toContain("coverartarchive.org");
-    // No master resolved: the raw provider URL, byte-identical to the old behaviour.
+    // No master resolved: the raw provider URL remains unchanged.
     expect(raw?.coverImageUrl).toBe("https://coverartarchive.org/release/raw/front");
   });
 

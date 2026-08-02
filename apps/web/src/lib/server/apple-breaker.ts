@@ -3,7 +3,7 @@
 // ── THE FAILURE REGIME THAT MATTERS ──────────────────────────────────────────────────────────
 // The Apple Music client backs off on a 429 (rate limit) already. The regime it does NOT handle
 // is the one that actually darkens Fluncle: a developer-token SUSPENSION surfaces as a 401/403,
-// and the shipped client's response to that is to CLEAR the cached token and re-mint — i.e. to
+// and the client's response to that is to CLEAR the cached token and re-mint — i.e. to
 // retry HARDER. One undocumented budget is shared by every Apple-touching path (the two sweeps,
 // and later U4's live preview rung + U5's editorial fuel), and the U0 oracle is a designed single
 // point of failure: one bad token fails FIVE surfaces at once. A hard retry loop against a

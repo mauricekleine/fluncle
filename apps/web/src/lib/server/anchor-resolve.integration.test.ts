@@ -665,7 +665,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
   });
 
   // ── THE DEEZER LINK, KEPT (schema.ts § `deezer_track_id`) ────────────────────────────────────
-  // The hits this rung already fetches carry Deezer's own track id, and it used to be dropped. A hit
+  // The hits this rung already fetches carry Deezer's own track id, and the id is retained. A hit
   // that CLEARS the gate is this recording on Deezer, so its id is kept — in the same statement as
   // the ISRC, with the rung that cleared as its provenance. No extra request is made for it.
   it("keeps the verified hit's Deezer id with the rung that cleared", async () => {

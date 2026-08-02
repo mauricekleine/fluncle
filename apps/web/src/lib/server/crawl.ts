@@ -334,7 +334,7 @@ export function catalogueTrackId(recordingMbid: string): string {
 // `labelFold` (re-exported from ./labels), so the crawler's label dedup and the Apple
 // recordLabel corroboration agree by construction. A fold is a NAME test, never an identity
 // test: two unrelated labels fold the same (there are two "Hospital Records", London and US;
-// two "Radar Records", Belgian DnB and UK punk). Seed resolution used to take the first —
+// two "Radar Records", Belgian DnB and UK punk). Seed resolution must not take the first —
 // MusicBrainz returns them score-ordered — which is deterministic and WRONG whenever the
 // operator meant the other one. It now resolves on the ruled `labels.mb_label_id` and declines
 // to guess when the name alone is ambiguous; see `expandSeedLabel`.
@@ -425,7 +425,7 @@ async function settle(
  * yet been abandoned — so a transient 503 is retried by a later tick instead of
  * silently pruning a subtree.
  *
- * THE SPLIT (the 2026-07-16 starvation fix). A pure `hop asc` drain starves the
+ * THE SPLIT. A pure `hop asc` drain starves the
  * track-bearing kind: a wave of hop-1 ARTIST nodes (2,015 of them, measured live)
  * sorts ahead of every hop-2 RELEASE node, and each artist expansion enqueues ~9
  * more releases — so the frontier grew ~12k nodes in a day while `tracksWritten`
@@ -601,7 +601,7 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
  *     (or the row must carry no ruling yet). `label_slug` alone is not identity: a node minted
  *     from a namesake resolve (see `expandSeedLabel`'s namesake seal) carries the RIGHT slug and
  *     the WRONG MBID, so a slug-only join re-armed the wrong label's browse forever under the
- *     operator's correct ruling — measured live 2026-07-27, Radar Records at 7 attempts. A
+ *     operator's correct ruling. A
  *     mismatched node simply stops being re-armed; nothing it already stored is touched here.
  *   - `kind = 'label'` — never an artist or release node (those are re-reached BY the browse).
  *   - `state = 'done'` — a `failed` node is owned by its own exponential backoff; never disturb it.
@@ -660,7 +660,7 @@ async function rearmSeedLabels(): Promise<number> {
  *
  * `labels.scope_changed_at` is the durable request watermark. A matching, drained MusicBrainz
  * label node whose prior `done_at` predates it returns to the HEAD (`cursor = 0`), not the daily
- * subscription tail: releases refused by the old gate may live anywhere in the back catalogue.
+ * subscription tail: releases refused by the gate may live anywhere in the back catalogue.
  * The previous `done_at` stays on the node while this forward walk paginates; expansion resolves
  * the newer watermark from the label row on every tick, so process death cannot turn later pages
  * into an ordinary no-revival browse.
@@ -1088,7 +1088,7 @@ async function mb<T>(path: string): Promise<T | null> {
  * ── THE NAMESAKE SEAL: THE RULED IDENTITY IS THE AUTHORITY ─────────────────────────────
  * A label NAME is not an identity. Same-named labels fold identically (`labelFold` is
  * deliberately aggressive), so a free-text search's top-scoring hit is whichever namesake
- * MusicBrainz ranks first — not the one the operator ruled on. Measured live 2026-07-27: the
+ * MusicBrainz ranks first — not the one the operator ruled on. A
  * operator enabled the Belgian drum & bass "Radar Records" and the crawl walked the 1978 UK
  * punk label (MB score 100 vs 85), minting 303 new-wave tracks under his enabled ruling. Six
  * enabled seeds in all had been resolved to a namesake this way.

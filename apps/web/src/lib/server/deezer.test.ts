@@ -13,7 +13,7 @@ import {
 // thrown/timed-out fetch) resolves to `[]`, because to the anchor waterfall those are all the same
 // answer — "no recovery, fall to fuzzy". It normalizes only the fields the caller re-verifies against
 // the row (isrc + duration promoted to ms + title + billed artist name), and DROPS any hit missing one.
-// The response shape is pinned against the live API (verified 2026-07-22): each search hit already
+// The response shape is pinned against the live API: each search hit already
 // carries `isrc`, `duration` (seconds), `title`, and `artist.name`.
 
 // One search hit in the exact shape Deezer returns — the real ISRC lives ON the search result, so no

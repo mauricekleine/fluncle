@@ -201,7 +201,7 @@ export async function downloadCappedImage(url: string): Promise<FetchedImage | u
   const response = await fetch(url);
 
   if (!response.ok) {
-    // A retryable status is an OUTAGE, not an answer: during the 2026-07-19 archive.org 503 wave
+    // A retryable status is an OUTAGE, not an answer: an archive.org 503 wave can make
     // every walked CAA-only album fell through this `undefined` into terminal `none` — a transient
     // outage converted into a permanent give-up. Throw instead, so the caller's catch lands the
     // row `failed` (cooldown + retry, give-up only past MAX_FAILURES). A 404 stays a definitive

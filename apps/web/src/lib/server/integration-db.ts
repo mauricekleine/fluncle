@@ -54,7 +54,7 @@ let capturedDdl: Promise<string[]> | undefined;
  * `migrate()` replays every generated migration in order, which for a schema this old means
  * re-parsing 131 files and re-running the whole ALTER/CREATE history to arrive somewhere the
  * final DDL describes directly. That is ~107 ms, and 64 of the 66 files using this harness call
- * it from `beforeEach` — so it was paid PER TEST, 968 times: ~102 s of CPU (measured 2026-07-26)
+ * it from `beforeEach` — so it is paid PER TEST, 968 times: ~102 s of CPU
  * out of the suite's ~294 s, purely rebuilding the same schema. It also grew with every migration
  * added, which is the wrong direction for a number multiplied by a thousand.
  *

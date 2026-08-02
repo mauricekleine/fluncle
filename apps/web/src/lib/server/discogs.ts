@@ -36,7 +36,7 @@ import {
 const DISCOGS_API_ROOT = "https://api.discogs.com";
 // Discogs AND MusicBrainz both REJECT/limit generic User-Agents — an identifiable
 // one with contact info is mandatory (Discogs developer docs + MB rate-limit docs,
-// 2026-06-20). Same discipline as the Last.fm / Deezer lookups. The MB half of that
+// Same discipline as the Last.fm / Deezer lookups. The MB half of that
 // rule (and the 1 req/s gate, and the Retry-After handling) now lives in
 // ./musicbrainz.ts, the ONE MB client every caller shares.
 const USER_AGENT = MB_USER_AGENT;
@@ -76,11 +76,11 @@ function delay(ms: number): Promise<void> {
 }
 
 // A per-service serializer with BOTH properties the musicbrainz.ts gate learned across
-// 2026-07-18/19 (see the long comment there): SINGLE-FILE — each call runs after the previous
+// SINGLE-FILE — each call runs after the previous
 // settles, so concurrent callers share one honest rate budget — and WEDGE-IMMUNE — the wait on
 // the predecessor races a deadline on the CALLER'S OWN clock, because a predecessor whose
 // request context died (client timeout) can leave frozen timers/fetches the runtime never
-// settles. The old unbounded chain wedged label-images' isolates exactly that way (2026-07-20:
+// settles. An unbounded chain can wedge label-images' isolates exactly that way:
 // box ticks hit their poisoned isolate for hours while fresh connections resolved in seconds).
 // Slot pacing on top keeps the arrival gap honest even when a predecessor was raced past.
 function makeRateLimiter() {
@@ -122,7 +122,7 @@ function noop(): void {
 const throttleDiscogs = makeRateLimiter();
 
 /**
- * The two RELEASE facts a Discogs payload carries that Fluncle used to score and discard:
+ * The two RELEASE facts a Discogs payload carries that Fluncle reads:
  * the label's own catalogue number and the release's styles. Both are album-grained (see
  * `albums.discogs_catno` in db/schema.ts), so the resolver hands them up and the caller
  * decides where they land.

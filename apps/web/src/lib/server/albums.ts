@@ -208,7 +208,7 @@ export async function ensureAlbum(
  *
  * The label twin's re-point note applies verbatim (`linkTrackToLabel`, labels.ts): the pointer is
  * an unconditional overwrite, so `relinkTracksToEntity` censuses the current `album_id` first and
- * moves the maintained hub counts off the old album onto the new one in the same batch.
+ * moves the maintained hub counts off the source album onto the destination in the same batch.
  */
 export async function linkTrackToAlbum(
   trackId: string,
@@ -426,7 +426,7 @@ export type AlbumBioWorkItem = { id: string; name: string; slug: string };
  * Both arms are the shared hub gate (`hubInclusionWhere`, labels.ts) — the STORED
  * `certified_finding_count` / `renderable_track_count` on the album row, exactly the pair
  * `listAlbumSitemapRows` and `/albums` now read, instead of the two correlated per-row subqueries
- * over `tracks ⋈ findings` this used to compute on every tick. Bounding the findings-free arm to the
+ * over `tracks ⋈ findings` on every tick. Bounding the findings-free arm to the
  * indexable floor caps the Firecrawl + `claude -p` cost — a wide crawl mints thousands of stub
  * albums, and only the ones with a real page should ever enter the sweep.
  */
@@ -484,7 +484,7 @@ function albumCover(row: AlbumCoverRow): string | undefined {
  * here once it clears the floor.
  *
  * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
- * (keystone 2) — an indexed pre-filter on `albums` where it used to be a `having` over a grouped scan
+ * (keystone 2) — an indexed pre-filter on `albums` rather than a `having` over a grouped scan
  * of the whole corpus. The `tracks ⋈ findings` join SURVIVES for the two per-row columns a `<url>`
  * needs and the album row does not carry (`lastmod`, the freshest certified finding's date; the
  * fallback cover), but it now walks only the albums the floor already admitted.

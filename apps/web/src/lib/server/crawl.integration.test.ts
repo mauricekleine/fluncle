@@ -395,12 +395,12 @@ describe("the catalogue crawler", () => {
     for (const row of rows.rows) {
       // The release read carried BOTH answers, so both looks concluded here. The ISRC-LESS row
       // (rec-2) is the one that matters: it is stamped too, so it reads "MusicBrainz has none"
-      // rather than the ambiguous silence that used to be indistinguishable from "nobody looked".
+      // rather than ambiguous silence that is indistinguishable from "nobody looked".
       expect(row.isrc_attempted_at).not.toBeNull();
       expect(row.backfill_discogs_attempted_at).not.toBeNull();
       expect(Number(row.backfill_discogs_attempts)).toBe(1);
       expect(Number(row.backfill_discogs_failures)).toBe(0);
-      // This release DOES carry a discogs url-rel, so the look landed and is done.
+      // This release DOES carry a discogs url-rel, so the look concluded successfully.
       expect(row.in_release_id).toBe(6414598);
       expect(row.backfill_discogs_done_at).not.toBeNull();
     }
@@ -2020,7 +2020,7 @@ describe("the frontier drain — releases never starve behind a discovery wave",
     // "Med School" release is. Every other label is disabled so the frontier stays the shape below.
     await db.execute("update labels set seed_state = 'disabled' where slug != 'medschool'");
 
-    // THE LIVE STARVATION SHAPE (2026-07-16): a wave of hop-1 artist nodes, all OLDER
+    // THE STARVATION SHAPE: a wave of hop-1 artist nodes, all OLDER
     // than the hop-2 release, so a pure `hop asc, created_at asc` drain would spend the
     // entire batch expanding artists (which write no tracks) and the catalogue flatlines.
     const old = new Date(Date.now() - 60_000).toISOString();
@@ -2244,7 +2244,7 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
 
 // ── THE NAMESAKE SEAL: a ruled identity beats a name ────────────────────────────────────────────
 //
-// A label NAME is not an identity. Measured live 2026-07-27: the operator enabled the Belgian drum
+// A label NAME is not an identity. When the operator enables the Belgian drum
 // & bass "Radar Records"; the seed resolver's free-text search returned the 1978 UK PUNK namesake
 // first (MB score 100 vs 85), both names fold identically, so the crawl walked the punk label and
 // minted 303 new-wave tracks under his enabled ruling. And because the re-arm joined its nodes to

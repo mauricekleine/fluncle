@@ -8,7 +8,7 @@
 // a miss is fine, a wrong stamp is not.
 //
 // ── WHERE THE CANDIDATES COME FROM: THE RESOLVER WATERFALL ───────────────────────────────────
-// The candidates used to come from the Worker calling Spotify's own `search`/`tracks` endpoints
+// The candidates come from the resolver calling Spotify's own `search`/`tracks` endpoints
 // inside the crawl tick (`fillSpotifyAnchors`). That app is a dev-mode Spotify app on a tiny
 // permanent budget, and at catalogue scale it starved under sustained 429s. So ALL catalogue
 // anchor-filling moved OFF the official Spotify app onto a box sweep
@@ -95,7 +95,7 @@ import { canonicalizeSearchTitle, matchKey, normalizeArtists, splitTitle } from 
 
 /**
  * ±window on the row↔candidate duration match — one of the search rung's three verification
- * signals. 3000, calibrated 2026-07-26 against 397 ISRC-matched same-recording pairs (our MB
+ * signals. 3000, calibrated against 397 ISRC-matched same-recording pairs (our MB
  * duration vs Deezer's independent master): same-recording drift P95 ≈ 1.0–1.5s and 3s cuts the
  * false-miss rate by a third (2.0% → 1.3%), while every identity-passing candidate inside 5s in
  * the collision sample was a benign re-press of the SAME recording — the nearest genuinely
@@ -111,7 +111,7 @@ export const ANCHOR_DURATION_TOLERANCE_MS = 3000;
  * The TIGHT window the subset fallback demands (see `pickVerifiedCandidate`): a candidate that
  * credits only a SUBSET of the row's artists may still verify, but only this close in duration —
  * the loosened artist signal is paid for with a hardened duration signal. At ≤1s, 20 of 226
- * stable misses in the 2026-07-26 dry-run were recoverable (platforms crediting only the primary
+ * stable misses were recoverable (platforms crediting only the primary
  * artist on a collab — "LSB & DRS" listed as "LSB", Δ0.0s), with the same-recording drift P50 at
  * 0.13s comfortably inside.
  */
@@ -211,7 +211,7 @@ function closestTo<T extends { durationMs?: null | number }>(rowDurationMs: numb
  * duration wins; if none clear it, `undefined` and the row stays in rotation. A candidate with no
  * duration cannot be verified, so it is dropped.
  *
- * THE SUBSET FALLBACK (measured 2026-07-26, ~9% of stable misses): platforms routinely credit
+ * THE SUBSET FALLBACK (~9% of stable misses): platforms routinely credit
  * only the PRIMARY artist on a collab ("LSB & DRS — Could Be" listed under "LSB" alone), which
  * fails the artist-set equality forever. When no candidate clears the full gate, a candidate
  * whose artist set is a non-empty PROPER SUBSET of the row's may verify instead — same base
@@ -812,7 +812,7 @@ type ListenBrainzResolveResult = {
  * for the later rungs. The `AnchorTrackError` rails propagate (the caller maps them to status).
  *
  * ── THE BY-ID READ YIELDS TO THE BREAKER (the money leak this closes) ────────────────────────────
- * That one by-id read draws on the SAME official Spotify app the mint and publish do, and it used to
+ * That one by-id read draws on the SAME official Spotify app the mint and publish do, and it must
  * consult nothing at all: not the throttle breaker, not the shared call meter. Through Spotify's
  * daily throttle windows the consequence was total and silent — every LB candidate died on the read
  * (whole ticks where `summary.failed` equalled `summary.lbMetadataFailed` exactly, and the breaker

@@ -24,12 +24,8 @@ import { logEvent } from "./log";
 // jpeg-js (pure-JS encode, a quality ladder under Spotify's byte ceiling) → Base64. No network
 // leg at all.
 //
-// It was not always so, and the reason is LOAD-BEARING: two shipped attempts staged the PNG on
-// the world-served R2 and asked Cloudflare Images to convert it — first via a
-// `/cdn-cgi/image/…/<source>` URL, then via the documented `cf.image` fetch options — and BOTH
-// failed `transform_404` on every in-Worker call while the identical transforms worked from
-// outside (measured in prod, 2026-07-18). A Worker's subrequest to its own zone bypasses the
-// edge front-door, and that front-door is where BOTH the `/cdn-cgi/image/` interception AND the
+// Cloudflare Images transforms do not work from an in-Worker subrequest to the Worker's own zone.
+// The subrequest bypasses the edge front-door, and that front-door is where BOTH the `/cdn-cgi/image/` interception AND the
 // R2-custom-domain wiring live — so the Worker can neither invoke the transform nor even read
 // `found.fluncle.com` (captions.ts's same-zone fetch degrades the same way). Do not reintroduce
 // a same-zone fetch here; encode in-Worker.
@@ -64,7 +60,7 @@ async function defaultRasterize(html: string): Promise<FrontierRaster> {
   // The double await is REAL: workers-og's constructor RETURNS an async IIFE — a
   // Promise<Response> — on the svg format path (read from its dist; the png path returns a
   // streaming Response synchronously). Its types say `Response` either way, so without the
-  // cast+await this throws `.text is not a function` at runtime (measured in prod, 2026-07-18).
+  // cast+await this throws `.text is not a function` at runtime.
   const response = await (new ImageResponse(html, {
     fonts: brandFonts(),
     format: "svg",

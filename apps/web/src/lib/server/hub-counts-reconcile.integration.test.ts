@@ -195,7 +195,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 describe("reconcileHubCounts — the pinned artists source (orphaned edges)", () => {
   it("does NOT count a track_artists edge whose track is gone", async () => {
     await reconcileHubCounts();
-    // The measured production condition (62 orphaned edges, 2026-07-26): the track row is deleted
+    // The production condition: the track row is deleted
     // out of band and its `track_artists` edge survives. The hub reads join `tracks`, so counting
     // the raw edge would 'correct' the counter into disagreeing with what renders.
     await db.execute(`delete from tracks where track_id = 't-cat-00000000000000a'`);

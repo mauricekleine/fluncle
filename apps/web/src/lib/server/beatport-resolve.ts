@@ -26,7 +26,7 @@
 //
 // THE URL IS READ, NEVER CONSTRUCTED, and that is load-bearing rather than fussy. A Beatport track
 // URL is `/track/<slug>/<id>`, and the site serves the right track for a WRONG slug — but its
-// `<link rel="canonical">` then echoes the wrong slug straight back (measured 2026-07-30 against
+// `<link rel="canonical">` then echoes the wrong slug straight back (a wrong-slug request such as
 // `/track/x/19385810`, which answered with the real track and a canonical naming the fake slug).
 // So a fabricated URL is not self-correcting and cannot be validated by fetching it. The only
 // trustworthy source of the slug is a link Beatport rendered itself, which is exactly what this

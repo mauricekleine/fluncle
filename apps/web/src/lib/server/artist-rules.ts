@@ -195,7 +195,7 @@ export async function listLabelArtistRules(labelId: string): Promise<ArtistRule[
 
 /**
  * Replace one label's complete rule set atomically. Every remote identity walk finishes before the
- * transaction begins, so an MB miss cannot leave the old set half-deleted. The rule write stamps
+ * transaction begins, so an MB miss cannot leave the existing set half-deleted. The rule write stamps
  * the crawl re-arm watermark and `updated_at`, never the human seed-ruling stamp (`ruled_at`).
  */
 export async function replaceLabelArtistRules(

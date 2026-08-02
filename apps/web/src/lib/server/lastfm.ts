@@ -9,7 +9,7 @@
 // All write methods require authentication. Every authenticated call is signed:
 // `api_sig = md5( <all params name+value, alphabetized, concatenated> + shared_secret )`,
 // with the `format`/`callback` params excluded from the signature (verified
-// against last.fm/api via Context7, 2026-06-20). The call carries `api_key`,
+// against last.fm/api via Context7). The call carries `api_key`,
 // `sk` (session key), and `api_sig`; requests are POST, form-urlencoded.
 //
 // The three durable credentials are Worker secrets (env.ts): LASTFM_API_KEY,
@@ -33,7 +33,7 @@ type LastfmError = { error?: number; message?: string };
 // Last.fm error 29 = "Rate limit exceeded" (the JSON-body code; an HTTP 429 carries
 // it too). Errors 11 (service offline) and 16 (temporary) are also "try again
 // later" signals — the backfill treats all three as a retryable rate-limit/backoff
-// hit rather than a permanent failure. See docs (Context7 last_fm_api, 2026-06-22).
+// hit rather than a permanent failure. See docs (Context7 last_fm_api).
 const LASTFM_RETRYABLE_ERRORS = new Set([11, 16, 29]);
 
 /**

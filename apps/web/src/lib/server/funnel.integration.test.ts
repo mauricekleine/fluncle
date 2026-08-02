@@ -535,7 +535,7 @@ describe("the folded funnel scan == its three standalone reference scans (real S
 
     // THE PIN (docs/db-scale-backlog Wave 1 #5): the ONE folded pass produces the SAME numbers as the
     // three separate scans it replaced — the stage 7-col aggregate, the anchor-split 4-col, and the
-    // anchor-backoff count — each formerly-independent query's WHERE folded into its own CASE arm over
+    // anchor-backoff count — each query's WHERE folded into its own CASE arm over
     // the superset. Identical by construction; this proves it on a real engine, on a real seed.
     const folded = await runFoldedFunnelScan();
 

@@ -5,7 +5,7 @@
 // WHY IT EXISTS. Homogenisation — Fluncle's generated artifacts drifting toward a mean —
 // has been seen in two families independently (the notes: "shoulders" in 15/61; the
 // videos: the same vehicles), which is what makes it a PROPERTY, not a pair of bugs
-// (docs/planning/ROADMAP.md § "Homogenisation"). The note work shipped the first
+// (docs/planning/ROADMAP.md § "Homogenisation"). The note work defines the first
 // counter-measure (the vibe-neighbour layer + `gateNoteEcho`) AND the first metric
 // (`scoreNoteEcho` + the note-sweep `--dry-run` harness), so the claim stays falsifiable.
 // The roadmap's demand is explicit: EVERY generated artifact family wants an equivalent —
@@ -42,7 +42,7 @@ import {
   scoreNoteEcho,
 } from "./note";
 
-// The worn-through Texture descriptors the 2026-07-14 audit named
+// The worn-through Texture descriptors tracked by this metric
 // (docs/planning/homogenisation-evidence.md): the recycled palette the `context_distil`
 // prompt now warns against. Tracked in a fixed order so a re-measure lines up column-for-
 // column against the audit's numbers (rolling 34, breakbeats 27, liquid 25, introspective
@@ -367,7 +367,7 @@ export function measureFamily(
 // homogenisation is a REGISTER tic the whole-corpus mean barely moves: the closer is a
 // formula ("…enjoy cosmonauts" as the last words of 32/61), the opener is a register
 // (34/61 start on "I"/"This one"), and a crutch word recurs almost corpus-wide ("hope" in
-// 51/61). These are the cuts the 2026-07-14 audit made by hand; this makes them a function,
+// 51/61). These are the hand-defined cuts represented here; this makes them a function,
 // so "did the counter-measure break the formula?" is a number, not an eyeball. Pure and
 // deterministic, over the same `echoWords` stream the gate uses.
 
@@ -718,7 +718,7 @@ export function measureTextureVocab(
 // representational (07-14). Those axes are stored as flat category tags on the finding
 // (video_vehicle / video_grain / video_register / video_palette). This measures each as a
 // simple share-of-population distribution — and reports the NULL share honestly, because
-// `video_palette` (shipped in PR #702) is null on every render made before it existed.
+// `video_palette` is nullable because legacy renders may not carry it.
 
 /** One category value and how many artifacts carry it. */
 export type CategoryCount = {

@@ -376,7 +376,7 @@ describe("refresh (the mirror guard, minting open)", () => {
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
 
     expect(synced).toMatchObject({ ok: false });
-    // The edition (the shelf's source of truth) landed BEFORE the mirror was attempted, so a
+    // The edition (the shelf's source of truth) is persisted BEFORE the mirror is attempted, so a
     // Spotify hiccup never costs the shelf its data. No playlist row, though.
     expect(await editionCount("u1")).toBe(1);
     expect(await hasPlaylistRow("u1")).toBe(false);
@@ -561,7 +561,7 @@ describe("the shared Spotify budget — the mint defers instead of 429-ing (Slic
 
     // A distinct SUCCESS state, never a fault — the user never sees a 429.
     expect(synced).toEqual({ ok: true, status: "building" });
-    // The edition (the shelf's source of truth) still landed synchronously.
+    // The edition (the shelf's source of truth) is still persisted synchronously.
     expect(await editionCount("u1")).toBe(1);
     // No Spotify write fired on the hot path, and no playlist row was created.
     expect(spotifyCalls.some((call) => call.path === "/me/playlists")).toBe(false);
@@ -776,7 +776,7 @@ describe("putFrontierCover (the INERT-until-scope upload leg)", () => {
 });
 
 describe("the retired create endpoint (the Feb-2026 Spotify migration)", () => {
-  it("never calls /users/{id}/playlists — it 403s live since 2026-03-09", async () => {
+  it("never calls /users/{id}/playlists — Spotify rejects it with 403", async () => {
     const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
 
     settings.set("frontier.minting", "true");

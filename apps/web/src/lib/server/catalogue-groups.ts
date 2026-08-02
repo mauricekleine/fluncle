@@ -76,7 +76,7 @@
 // whose record we do not know, so it is given none.
 //
 // ── ONE STATEMENT, ONE WALK ────────────────────────────────────────────────────────────
-// Both reads used to arrive in WAVES: the artist page ran a `group by` for the page of groups
+// Both reads arrive in WAVES: the artist page runs a `group by` for the page of groups
 // and then a second statement for those groups' tracks; the label page ran three (a total, the
 // groups, the tracks). Every one of those waves is a Worker→Turso→Ireland round trip, and
 // `explain query plan` showed each wave repeating the SAME indexed walk of the entity's rows
@@ -85,7 +85,7 @@
 // anything. Two waves, twice the walk, and the artist page's cost tracked discography size.
 //
 // So both reads are now ONE statement that walks the entity's rows ONCE. The group aggregates
-// that the `group by` used to produce come from WINDOWS over that single walk instead
+// that the `group by` produces come from WINDOWS over that single walk instead
 // (`min(…) over (partition by group_key)`), the page of groups is cut by `dense_rank()` over
 // the same group order rather than `limit`/`offset`, and the per-group cap stays exactly where
 // it was — a `row_number()` partition, applied in the same `where` as the group window. The

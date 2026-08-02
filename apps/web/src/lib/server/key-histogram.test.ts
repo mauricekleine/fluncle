@@ -41,7 +41,7 @@ describe("readKeyHistogram", () => {
     ]);
 
     // Concurrent callers may each miss a cold cache; what must never happen is a fresh walk of a
-    // growing index on every LATER ask, which is what the rail used to pay per `/mix` load.
+    // growing index on every LATER ask, which is what the rail must avoid per `/mix` load.
     await readKeyHistogram();
     await readKeyHistogram();
 

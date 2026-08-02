@@ -159,7 +159,7 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
  * voice-gated the bio (`gateBioText`).
  *
  * `gateBypass` carries the voice-gate reasons the FINAL-ATTEMPT ACCEPTANCE accepted, when this
- * bio is one that landed despite the scan refusing it (./bio-review.ts). It rides the SAME
+ * bio is one that was accepted despite the scan refusing it (./bio-review.ts). It rides the SAME
  * statement as the bio so the review flag can never describe a different paragraph than the one
  * it flagged — and so a later bio that CLEARS the gate wipes the flag by construction rather
  * than by a follow-up nobody remembers to write.
@@ -350,7 +350,7 @@ export async function countArtistFindings(artistId: string): Promise<number> {
  * break the same invariant album-entity.md states.
  *
  * The floor is applied in SQL, never in the isolate, and it reads the STORED `renderable_track_count`
- * (keystone 2) — an indexed pre-filter on `artists` where it used to be a `having` over a grouped scan
+ * (keystone 2) — an indexed pre-filter on `artists` rather than a `having` over a grouped scan
  * of `track_artists ⋈ tracks`, the ~2×-`tracks` edge table and the most expensive of the three
  * sitemap walks. The join SURVIVES for the two per-row columns a `<url>` needs and the artist row does
  * not carry: `lastmod` (the freshest certified finding's date, undefined for an artist that carries
@@ -828,7 +828,7 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
  * tick rather than only after the next deploy's reconcile.
  *
  * ── SCOPED, AND NOW REQUIRED ─────────────────────────────────────────────────────────────────
- * `trackIds` used to be optional, with the unscoped form linking the WHOLE corpus in one
+ * `trackIds` is required; the unscoped form would link the WHOLE corpus in one
  * statement. Nothing called it that way (the crawler and the freshness tap both pass their
  * just-written batch), and the maintained artists hub counts (keystone 2) cannot be moved off an
  * unbounded write without dragging every new edge through the isolate — the shape AGENTS.md
@@ -845,12 +845,12 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
  * ── THE HOMONYM SEAL (`creditMbids`) ─────────────────────────────────────────────────────────
  * A bare name is not an identity. Folding one onto an `artists` row is how TWO real-world acts
  * that share a name end up on ONE Fluncle row — the CONFLATION class (docs/artist-relationship.md
- * § Conflated entities). Measured on prod 2026-07-27: of 225 edges joining a namesake-walked
+ * § Conflated entities). Of 225 edges joining a namesake-walked
  * label's tracks to an artist that also holds clean enabled-label tracks, 181 were written by THIS
  * function's name join and only 15 by the mbid-keyed credit sweep, which refuses them by design.
  *
  * The crawler HAS each credit's MusicBrainz artist id in hand when it writes the track (it is
- * already collecting them for the artist hop) and used to throw them away here. It now passes them
+ * already collecting them for the artist hop) and passes them
  * as `creditMbids` — per track, positionally aligned with `artists_json` — and this function
  * applies the SAME ladder `backfill-artist-credits.ts` ratified for the credit sweep:
  *
@@ -1648,7 +1648,7 @@ export function partitionFreshLinks(artists: readonly ArtistOverviewItem[]): Fre
 }
 
 // ── The `/admin/artists` board reads (paginated) ────────────────────────────────────────────
-// The board used to be ONE unbounded query — every artist × every social row, a correlated
+// The board is ONE bounded page query — every artist × every social row, a correlated
 // 3-table finding-count scalar subquery re-run PER OUTPUT ROW, ordered so the whole result had to
 // materialise and sort, serialized whole into the SSR document and refetched whole on every focus.
 // The crawler mints artists without end, so that read grew without bound (measured: a 24.8 MB SSR
@@ -1690,7 +1690,7 @@ function decodeArtistCursor(cursor: string | undefined): { id: string; name: str
   return { id: cursor.slice(at + 1), name: cursor.slice(0, at) };
 }
 
-// Escape LIKE metacharacters so a typed name matches as a literal substring (the old client
+// Escape LIKE metacharacters so a typed name matches as a literal substring
 // `includes`), not as a pattern — used with `like ? escape '\'`.
 function likeContains(term: string): string {
   return `%${term.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
@@ -1716,7 +1716,7 @@ function toOverviewBase(row: {
 // Attach each artist's socials (sorted by platform IN THE ISOLATE — the SQL no longer sorts them)
 // and its coordinate-bearing finding count. Two bounded batch reads over the ≤N page ids: the
 // socials by `artist_socials_artist_id_idx`, the counts GROUPED ONCE over `track_artists ⋈ findings`
-// (log_id not null) via `track_artists_artist_id_idx` — never the old per-output-row correlated
+// (log_id not null) via `track_artists_artist_id_idx` — never a per-output-row correlated
 // scalar. So the cost is per PAGE, not per artist × social.
 async function hydrateArtistOverview(
   base: readonly ArtistOverviewBase[],

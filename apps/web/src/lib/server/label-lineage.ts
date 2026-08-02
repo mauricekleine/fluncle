@@ -51,7 +51,7 @@ const MAX_FAILURES = 5;
 // so under cross-sweep contention (the crawler, recording-mbids, the artist sweep) each of this
 // pass's calls can queue for minutes behind another sweep's backlog — long enough to push a full
 // batch past the box CLI's 5-minute fetch timeout while the walk keeps running server-side
-// (observed 2026-07-18: the tick reported "timed out" yet the labels came back stamped). Spending
+// (the tick may report "timed out" yet the labels come back stamped). Spending
 // the budget is a pause, not a failure: the pass returns what it handled with a resume cursor, and
 // the CLI's drain loop issues a fresh request (with a fresh budget) for the rest.
 const RESPONSE_BUDGET_MS = 60_000;
