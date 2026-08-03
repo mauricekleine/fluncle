@@ -6,11 +6,17 @@ import {
   KEY_FILTER_OPTIONS,
   type TracksSearch,
   buildTracksHref,
+  parseTracksHubPayload,
   parseTracksSearch,
   tracksHead,
   tracksMastheadLine,
   tracksSearchHasFilters,
 } from "./tracks-search";
+
+/** A crafted RPC payload — whatever a direct HTTP caller sends, outside the loader's types. */
+function crafted(payload: unknown): { filters: TracksSearch; page: number } {
+  return payload as { filters: TracksSearch; page: number };
+}
 
 describe("tracksMastheadLine", () => {
   it("carries the held count as ONE composed string when the count is real", () => {
@@ -62,6 +68,16 @@ describe("parseTracksSearch", () => {
     });
   });
 
+  it("folds a sub-1 fraction to undefined — truncation before positivity, never a 0", () => {
+    // "?bpmMin=0.5" must drop, not truncate to a 0 the serverFn boundary rejects: the loader's
+    // URL → parse → serverFn round-trip has to stay accepted for every URL a reader can type.
+    expect(parseTracksSearch({ bpmMin: "0.5" }).bpmMin).toBeUndefined();
+    expect(parseTracksSearch({ yearMin: "0.9" }).yearMin).toBeUndefined();
+    // A fraction at or above 1 still truncates to its integer part.
+    expect(parseTracksSearch({ bpmMin: "170.7" }).bpmMin).toBe(170);
+    expect(parseTracksSearch({ bpmMax: "1.5" }).bpmMax).toBe(1);
+  });
+
   it("trims strings and drops the empties", () => {
     expect(parseTracksSearch({ key: "  A minor  ", label: "   " })).toMatchObject({
       key: "A minor",
@@ -79,6 +95,109 @@ describe("parseTracksSearch", () => {
       yearMax: undefined,
       yearMin: undefined,
     });
+  });
+});
+
+describe("parseTracksHubPayload — the serverFn boundary parses, never casts", () => {
+  it("round-trips the loader's legitimate shape untouched (every axis + page)", () => {
+    const filters: TracksSearch = {
+      bpmMax: 180,
+      bpmMin: 160,
+      galaxy: "green-sector",
+      key: "F minor",
+      label: "Hospital Records",
+      yearMax: 2026,
+      yearMin: 2015,
+    };
+
+    expect(parseTracksHubPayload({ filters, page: 3 })).toEqual({ filters, page: 3 });
+    // The bare hub (all axes absent) round-trips to parseTracksSearch's exact shape.
+    expect(parseTracksHubPayload({ filters: {}, page: 1 })).toEqual({
+      filters: parseTracksSearch({}),
+      page: 1,
+    });
+  });
+
+  it("strips the SearchFilters-only fields (artist/album/text) and any unknown key", () => {
+    const { filters } = parseTracksHubPayload(
+      crafted({
+        filters: { album: "Ancestors EP", artist: "netsky", bpmMin: 170, text: "hospital" },
+        page: 1,
+      }),
+    );
+
+    expect(filters).toEqual(parseTracksSearch({ bpmMin: "170" }));
+    expect("artist" in filters).toBe(false);
+    expect("album" in filters).toBe(false);
+    expect("text" in filters).toBe(false);
+  });
+
+  it("strips certified — the list_tracks API enumerator's filter, never this serverFn's", () => {
+    const { filters } = parseTracksHubPayload(crafted({ filters: { certified: true }, page: 1 }));
+
+    expect("certified" in filters).toBe(false);
+  });
+
+  it("rejects a known axis at the wrong type instead of coercing it into a clause", () => {
+    // A string "170" is a crafted payload: the loader sends parsed NUMBERS.
+    expect(() => parseTracksHubPayload(crafted({ filters: { bpmMin: "170" }, page: 1 }))).toThrow(
+      /bpmMin/,
+    );
+    expect(() => parseTracksHubPayload(crafted({ filters: { yearMax: 20.26 }, page: 1 }))).toThrow(
+      /yearMax/,
+    );
+    expect(() => parseTracksHubPayload(crafted({ filters: { key: 42 }, page: 1 }))).toThrow(/key/);
+    expect(() => parseTracksHubPayload(crafted({ filters: { label: "" }, page: 1 }))).toThrow(
+      /label/,
+    );
+    expect(() => parseTracksHubPayload(crafted({ filters: { galaxy: null }, page: 1 }))).toThrow(
+      /galaxy/,
+    );
+  });
+
+  it("accepts EVERY filter set parseTracksSearch can emit — the loader round-trip never rejects", () => {
+    // The lockstep property between the lenient URL parse and the strict payload boundary: whatever
+    // junk a URL carries, the parsed filters must pass the boundary untouched. One numeric axis and
+    // one string axis exercise both strict paths against the full junk vocabulary.
+    const rawValues = [
+      "0.5",
+      "0.9",
+      "1e-3",
+      "170.7",
+      "170",
+      "1e3",
+      "-4",
+      "0",
+      "",
+      "   ",
+      "NaN",
+      "Infinity",
+      "-Infinity",
+      "not-a-number",
+      "  A minor  ",
+      null,
+      undefined,
+      true,
+      ["170"],
+    ];
+
+    for (const bpmMin of rawValues) {
+      for (const key of rawValues) {
+        const filters = parseTracksSearch({ bpmMin, key });
+
+        expect(parseTracksHubPayload({ filters, page: 1 })).toEqual({ filters, page: 1 });
+      }
+    }
+  });
+
+  it("rejects a malformed envelope: a missing/non-object filters or a junk page", () => {
+    expect(() => parseTracksHubPayload(crafted(null))).toThrow(/filters/);
+    expect(() => parseTracksHubPayload(crafted({ filters: "bpmMin=170", page: 1 }))).toThrow(
+      /filters/,
+    );
+    expect(() => parseTracksHubPayload(crafted({ filters: {}, page: 0 }))).toThrow(/page/);
+    expect(() => parseTracksHubPayload(crafted({ filters: {}, page: 1.5 }))).toThrow(/page/);
+    expect(() => parseTracksHubPayload(crafted({ filters: {}, page: "2" }))).toThrow(/page/);
   });
 });
 
