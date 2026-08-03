@@ -204,14 +204,19 @@ const CARVE_OUT_ROUTES = new Set([
   "me/avatar",
   "mixtape-cover.$logId",
   "og.$logId",
+  // The hub-level Open Graph card for the four entity hubs — a binary/render carve-out
+  // exactly like `og.$logId`: it emits a 1200×630 PNG through workers-og, never RPC JSON.
+  // Like `og.set` it is BARE-ONLY (mounted at /api/og/hub with no /api/v1 twin), so only
+  // the bare walk below reaches it.
+  "og.hub",
   "preview.$idOrLogId",
   // The generated-spec + tooling surfaces are documents, not API operations.
   "openapi[.]json",
   "postman[.]json",
   // The set-level Open Graph card for a shared `/mix` link — a binary/render carve-out
   // exactly like `og.$logId`: it emits a 1200×630 PNG through workers-og, never RPC JSON.
-  // Listed on its own because it is the one BARE-ONLY public route (mounted at
-  // /api/og/set with no /api/v1 twin), so only the bare walk below reaches it.
+  // BARE-ONLY like `og.hub` (mounted at /api/og/set with no /api/v1 twin), so only the
+  // bare walk below reaches it.
   "og.set",
   // The machine-readable status read — the JSON sibling of the /status HTML
   // dashboard (../../routes/api/v1/status.ts). A public resource read like /api/health,

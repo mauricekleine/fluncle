@@ -104,6 +104,21 @@ describe("Cache-Control on the crawler-facing surfaces", () => {
     );
     expect(res.headers.get("Cache-Control")).not.toContain("immutable");
   });
+
+  // The hub card's render also hits Turso (the hub's count read) on top of the WASM
+  // raster, so the same long, non-immutable directive is load-bearing there too.
+  it("the hub OG card answers with the long, non-immutable Cache-Control", async () => {
+    const handler = await handlerFor(import("./api/og.hub"));
+    const res = await handler({
+      params: {},
+      request: new Request("https://www.fluncle.com/api/og/hub?hub=artists"),
+    });
+
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800",
+    );
+    expect(res.headers.get("Cache-Control")).not.toContain("immutable");
+  });
 });
 
 // The SSR HTML surfaces are the other half of the cache-header contract. They do not

@@ -172,16 +172,23 @@ export function tracksHead(search: TracksSearch, data: TracksHeadData | undefine
   const canonical = filtered || page <= 1 ? `${siteUrl}/tracks` : `${siteUrl}/tracks?page=${page}`;
   const { description, title } = tracksPagedMeta(filtered ? 1 : page);
 
+  // The hub's own Satori card (routes/api/og.hub.ts), with the /log head's full image
+  // shape (width/height/type + twitter:image) so every unfurler sizes it right.
+  const ogImage = `${siteUrl}/api/og/hub?hub=tracks`;
   const meta = [
     { title },
     { content: description, name: "description" },
     { content: title, property: "og:title" },
     { content: description, property: "og:description" },
-    { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+    { content: ogImage, property: "og:image" },
+    { content: "1200", property: "og:image:width" },
+    { content: "630", property: "og:image:height" },
+    { content: "image/png", property: "og:image:type" },
     { content: canonical, property: "og:url" },
     { content: "summary_large_image", name: "twitter:card" },
     { content: title, name: "twitter:title" },
     { content: description, name: "twitter:description" },
+    { content: ogImage, name: "twitter:image" },
   ];
 
   if (filtered) {

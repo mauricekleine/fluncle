@@ -30,11 +30,12 @@ const V1_DIR = `${API_DIR}/v1`;
 const V1_ONLY_ROUTES = new Set(["openapi[.]json", "postman[.]json", "status"]);
 
 // The bare-only counterpart: a route mounted at `/api/<x>` with no v1 twin, by written
-// ruling rather than by omission. `og.set` is the single instance — its reasoning is at
-// routes/api/og.set.ts:47-54, and orpc-coverage.test.ts has a dedicated regression test
-// for it. It does not import `aliasHandlers`, so it never enters this net; the constant
-// is here to make the exception legible rather than invisible.
-const BARE_ONLY_ROUTES = new Set(["og.set"]);
+// ruling rather than by omission. The Satori card routes with no /api/v1 twin are the
+// instances — the reasoning lives on each route's `serverHandlers` comment (og.set.ts,
+// og.hub.ts), and orpc-coverage.test.ts has a dedicated regression test for the bare
+// walk. They do not import `aliasHandlers`, so they never enter this net; the constant
+// is here to make the exceptions legible rather than invisible.
+const BARE_ONLY_ROUTES = new Set(["og.set", "og.hub"]);
 
 // Every `.ts` route file under `dir`, keyed by its path relative to that root, with the
 // `-`-prefixed helpers (TanStack's routeFileIgnorePrefix) and colocated `*.test.ts`
