@@ -6776,6 +6776,24 @@ async function runCatalogueRank(
   }
 }
 
+/**
+ * The unmatched observability row: the verdict and when the capture last tried, so the lens's
+ * order (newest attempt first) is readable off the line. JSON output bypasses this entirely.
+ */
+export function unmatchedRowLine(track: {
+  artists: string[];
+  captureStatus: null | string;
+  sourceAudioAttemptedAt?: null | string;
+  title: string;
+}): string {
+  const identity = `${track.artists.join(", ")} — ${track.title}`;
+  const attempted = track.sourceAudioAttemptedAt
+    ? `last tried ${track.sourceAudioAttemptedAt}`
+    : "never tried";
+
+  return `${track.captureStatus ?? "unmatched"}  ${identity.padEnd(52)} ${attempted}`;
+}
+
 async function runCatalogueList(
   options: CatalogueListOptions,
   catalogueListCommand: typeof import("./commands/admin-catalogue").catalogueListCommand,
@@ -6810,6 +6828,13 @@ async function runCatalogueList(
       console.log(`wrong-audio  ${identity.padEnd(52)} ${why}`);
       continue;
     }
+
+    // The observability window: the verdict + the attempt instant ARE the row's WHY.
+    if (options.lens === "unmatched") {
+      console.log(unmatchedRowLine(track));
+      continue;
+    }
+
     // The DUPLICATE WHY wins on either lens: this row is the same recording as a finding, so it
     // is "already in the archive" and (on capture) never bought. It names the finding it matched.
     const dup = track.duplicateOf;

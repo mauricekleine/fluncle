@@ -5,6 +5,7 @@ import {
   artistRuleLines,
   labelUpdateLines,
   parseTelemetryTimestamp,
+  unmatchedRowLine,
 } from "./cli";
 
 const cliPath = new URL("./cli.ts", import.meta.url).pathname;
@@ -173,6 +174,38 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(ARTIST_RULE_BOUNDARY).toBe(
       "Rules change what the next crawl takes. Everything already here stays.",
     );
+  });
+
+  test("the unmatched lens row carries the verdict and the attempt instant", () => {
+    const line = unmatchedRowLine({
+      artists: ["Test Artist"],
+      captureStatus: "unmatched",
+      sourceAudioAttemptedAt: "2026-07-14T00:00:00Z",
+      title: "Test Track",
+    });
+
+    expect(line).toContain("unmatched");
+    expect(line).toContain("Test Artist — Test Track");
+    expect(line).toContain("last tried 2026-07-14T00:00:00Z");
+  });
+
+  test("an unmatched row an older server sends without the stamp still renders honestly", () => {
+    // The contract field is additive-optional, so the line must survive its absence AND a null.
+    const absent = unmatchedRowLine({
+      artists: ["Test Artist"],
+      captureStatus: "unmatched",
+      title: "Test Track",
+    });
+    const nulled = unmatchedRowLine({
+      artists: ["Test Artist"],
+      captureStatus: null,
+      sourceAudioAttemptedAt: null,
+      title: "Test Track",
+    });
+
+    expect(absent).toContain("never tried");
+    expect(nulled).toContain("never tried");
+    expect(nulled.startsWith("unmatched")).toBe(true);
   });
 
   test("admin telemetry validates its page cap before fetching", async () => {

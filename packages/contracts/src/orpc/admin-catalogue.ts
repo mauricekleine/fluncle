@@ -156,6 +156,13 @@ export const CatalogueTrackItemSchema = z
     nearestFindingScore: z.number().nullable(),
     rankedAt: z.string().nullable(),
     releaseDate: z.string().nullable(),
+    /**
+     * ISO of the newest capture attempt — the instant the `unmatched`/`failed` lenses order by,
+     * or null (never attempted). ADDITIVE-OPTIONAL (the labels identity-fields pattern): nullable
+     * when a read carries it and absent from one that does not, so an older client and the
+     * pinned box CLI keep working unchanged.
+     */
+    sourceAudioAttemptedAt: z.string().nullable().optional(),
     spotifyUrl: z.string().nullable(),
     title: z.string(),
     trackId: z.string(),

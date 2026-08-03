@@ -2279,16 +2279,24 @@ describe("the long-form veto — a continuous mix never reaches a lens or the mo
     const unmatched = await listCatalogueTracks("unmatched");
     expect(unmatched.map((t) => t.trackId)).toEqual(["obs-unm-new", "obs-unm-old"]);
     expect(unmatched[0]?.captureStatus).toBe("unmatched");
+    // The attempt instant rides the DTO — the lens orders by it, so the lens can SHOW it.
+    expect(unmatched.map((t) => t.sourceAudioAttemptedAt)).toEqual([
+      "2026-07-14T00:00:00Z",
+      "2026-07-10T00:00:00Z",
+    ]);
 
     // The failed lens is catalogue-scoped: the failed FINDING never appears in it.
     const failed = await listCatalogueTracks("failed");
     expect(failed.map((t) => t.trackId)).toEqual(["obs-fail"]);
     expect(failed[0]?.captureStatus).toBe("failed");
+    expect(failed[0]?.sourceAudioAttemptedAt).toBe("2026-07-12T00:00:00Z");
 
     // The status rides every lens's DTO, so any view can say where a row stands.
     const capture = await listCatalogueTracks("capture");
     const pending = capture.find((t) => t.trackId === "obs-pending");
     expect(pending?.captureStatus).toBe("pending");
+    // A never-attempted row carries the null honestly rather than dropping the field.
+    expect(pending?.sourceAudioAttemptedAt).toBeNull();
   });
 });
 

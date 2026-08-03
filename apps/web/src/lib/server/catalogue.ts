@@ -1783,6 +1783,11 @@ export type CatalogueTrackItem = {
   nearestFindingScore: number | null;
   rankedAt: string | null;
   releaseDate: string | null;
+  /**
+   * ISO of the newest capture attempt on this row — the instant the `unmatched`/`failed`
+   * lenses order by, or null (never attempted). What lets those lenses SHOW their own order.
+   */
+  sourceAudioAttemptedAt: string | null;
   spotifyUrl: string | null;
   title: string;
   trackId: string;
@@ -2385,6 +2390,7 @@ type CatalogueRow = {
   nearest_finding_track_id: string | null;
   preview_url: string | null;
   release_date: string | null;
+  source_audio_attempted_at: string | null;
   spotify_url: string | null;
   title: string;
   track_id: string;
@@ -2401,7 +2407,7 @@ const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image
   ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
   ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_status,
   ct.capture_verification, ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at,
-  (ct.source_audio_key is not null) as has_captured_audio`;
+  ct.source_audio_attempted_at, (ct.source_audio_key is not null) as has_captured_audio`;
 
 /**
  * The Ear's read — and the reason the whole sweep exists.
@@ -2591,6 +2597,7 @@ export async function listCatalogueTracks(
       nearestFindingScore: row.nearest_finding_score,
       rankedAt: row.catalogue_ranked_at,
       releaseDate: row.release_date,
+      sourceAudioAttemptedAt: row.source_audio_attempted_at,
       spotifyUrl: row.spotify_url,
       title: row.title,
       trackId: row.track_id,
