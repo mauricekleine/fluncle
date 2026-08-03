@@ -104,6 +104,7 @@ import { linkTracksToArtistEntities } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { relinkTracksToEntity } from "./hub-counts";
+import { hasIsrc } from "./isrc";
 import { labelFold } from "./labels";
 import { logEvent } from "./log";
 import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
@@ -523,6 +524,8 @@ async function writeLabelReleaseTracks(
         track.durationMs,
         ctx.albumName,
         track.isrc,
+        // The presence mirror, in the same insert as the ISRC it mirrors (schema.ts § `has_isrc`).
+        hasIsrc(track.isrc),
         ctx.labelName,
         ctx.releaseDate,
         track.spotifyUri,
@@ -539,9 +542,9 @@ async function writeLabelReleaseTracks(
       // record is unnamed for the same reason and stays honest by it: no Discogs look happens on
       // this path at all, so the row is genuinely `unattempted` there, not `absent`.
       sql: `insert into tracks
-              (track_id, title, artists_json, duration_ms, album, isrc, label, release_date,
-               spotify_uri, spotify_url, isrc_attempted_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (track_id, title, artists_json, duration_ms, album, isrc, has_isrc, label,
+               release_date, spotify_uri, spotify_url, isrc_attempted_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (track_id) do nothing`,
     });
 

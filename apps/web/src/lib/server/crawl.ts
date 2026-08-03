@@ -77,6 +77,7 @@ import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { relinkTracksToEntity } from "./hub-counts";
+import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
@@ -891,6 +892,8 @@ async function writeCatalogueTracks(
         candidate.album,
         candidate.albumImageUrl,
         candidate.isrc,
+        // The presence mirror, in the same insert as the ISRC it mirrors (schema.ts § `has_isrc`).
+        hasIsrc(candidate.isrc),
         candidate.label,
         candidate.releaseDate,
         candidate.inReleaseId,
@@ -914,10 +917,10 @@ async function writeCatalogueTracks(
       ],
       sql: `insert into tracks
               (track_id, title, artists_json, duration_ms, album, album_image_url, isrc,
-               label, release_date, in_release_id, in_master_id, mb_recording_id,
+               has_isrc, label, release_date, in_release_id, in_master_id, mb_recording_id,
                isrc_attempted_at, backfill_discogs_attempted_at, backfill_discogs_done_at,
                backfill_discogs_attempts)
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             on conflict (track_id) do nothing`,
     });
 

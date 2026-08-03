@@ -49,16 +49,22 @@ async function seedUnanchored(row: {
   title?: string;
   trackId: string;
 }): Promise<void> {
+  const isrc = row.isrc ?? null;
+
+  // The presence mirror rides the same insert, the way every production writer pairs it
+  // (schema.ts § `has_isrc`) — the worklist's drain order leads with it, so a fixture that
+  // wrote only `isrc` would be testing a state the app cannot produce.
   await db.execute({
     args: [
       row.trackId,
       row.title ?? "Weightless",
       JSON.stringify(row.artists ?? ["Etherwood"]),
       row.durationMs ?? 261_901,
-      row.isrc ?? null,
+      isrc,
+      isrc?.trim() ? 1 : 0,
     ],
-    sql: `insert into tracks (track_id, title, artists_json, duration_ms, isrc)
-          values (?, ?, ?, ?, ?)`,
+    sql: `insert into tracks (track_id, title, artists_json, duration_ms, isrc, has_isrc)
+          values (?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -404,10 +410,44 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     expect(work[0]?.anchorQuery).toBe("Etherwood Embedded");
   });
 
+  it("sorts ISRC-bearing rows ahead of ISRC-less rows at equal embedding and score", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // Anchorability leads the drain order: at EQUAL sunk cost (both embedded, same score) the row
+    // the exact-ISRC rung can conclude on outranks the one it cannot — even though `mb_a-` loses
+    // the `track_id desc` tiebreak, so this fails if `has_isrc` ever stops being the first key.
+    await seedUnanchored({ isrc: "GBTST2600001", title: "Keyed", trackId: "mb_a-keyed" });
+    await embed("mb_a-keyed");
+    await seedUnanchored({ title: "Keyless", trackId: "mb_b-keyless" });
+    await embed("mb_b-keyless");
+    await db.execute(
+      "update tracks set nearest_finding_score = 0.5 where track_id in ('mb_a-keyed', 'mb_b-keyless')",
+    );
+
+    const work = await listTrackWork({ kind: "anchor", limit: 10 });
+
+    expect(work.map((item) => item.trackId)).toEqual(["mb_a-keyed", "mb_b-keyless"]);
+  });
+
+  it("puts an ISRC-bearing unembedded row ahead of an embedded ISRC-less one", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    // The whole point of the lead key: sunk cost no longer outranks anchorability. An embedded
+    // ISRC-less row at the head is a billed search that cannot conclude, so the unembedded row
+    // the ISRC rung CAN answer goes first.
+    await seedUnanchored({ title: "Sunk", trackId: "mb_b-sunk" });
+    await embed("mb_b-sunk");
+    await seedUnanchored({ isrc: "GBTST2600002", title: "Answerable", trackId: "mb_a-answerable" });
+
+    const work = await listTrackWork({ kind: "anchor", limit: 10 });
+
+    expect(work.map((item) => item.trackId)).toEqual(["mb_a-answerable", "mb_b-sunk"]);
+  });
+
   // THE ORDER BY'S SHAPE, pinned (docs/db-scale-backlog Wave 2 #4). The clause is written to be
-  // ONE REVERSE WALK of the plain-ASC `tracks_anchor_order_idx` — `(has_embedding,
-  // nearest_finding_score, track_id) where spotify_uri is null` — and each of the three tests
-  // below fixes one key of it, so a rewrite that quietly breaks the walk breaks a test instead.
+  // ONE REVERSE WALK of the plain-ASC `tracks_anchor_order_idx` — `(has_isrc, has_embedding,
+  // nearest_finding_score, track_id) where spotify_uri is null` — and the tests here each fix
+  // one key of it, so a rewrite that quietly breaks the walk breaks a test instead.
   it("sorts on the has_embedding MIRROR, not the vector itself", async () => {
     const { listTrackWork } = await import("./track-work");
 

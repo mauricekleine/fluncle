@@ -45,6 +45,7 @@
 // recording somebody else asked about last week.
 
 import { getDb, typedRows } from "./db";
+import { FILL_ISRC_SQL } from "./isrc";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
 
@@ -313,9 +314,10 @@ async function markIsrcRefreshed(trackId: string, isrc: null | string): Promise<
   const db = await getDb();
 
   await db.execute({
-    args: [isrc, new Date().toISOString(), trackId],
+    // The ISRC binds twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+    args: [isrc, isrc, new Date().toISOString(), trackId],
     sql: `update tracks
-          set isrc = coalesce(isrc, ?), isrc_attempted_at = ?
+          set ${FILL_ISRC_SQL}, isrc_attempted_at = ?
           where track_id = ?`,
   });
 }

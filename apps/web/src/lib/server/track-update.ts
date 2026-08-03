@@ -16,6 +16,7 @@ import { purgeLogCache } from "./edge-cache";
 import { purgeTrackEntityPages } from "./entity-cache-purge";
 import { type AdminRole } from "./env";
 import { type IdentityMethod } from "./identity-envelope";
+import { hasIsrc } from "./isrc";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 import { checkYoutubeOfficial } from "./youtube-official";
@@ -977,6 +978,11 @@ export async function updateTrack(
 
     sets.push("isrc = ?");
     args.push(update.isrc.trim());
+    // The presence mirror rides the same statement (schema.ts § `has_isrc`); the guard above
+    // makes the value non-empty, so this always writes 1 — spelled through the shared helper
+    // so the pairing is uniform across writers.
+    sets.push("has_isrc = ?");
+    args.push(hasIsrc(update.isrc));
   }
 
   if (update.logId !== undefined) {

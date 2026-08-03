@@ -223,9 +223,10 @@ async function writeChunked(
 }
 
 /**
- * THE TWO MAINTAINED MIRRORS ARE SEEDED EXPLICITLY, and this is load-bearing rather than tidy.
- * `is_catalogue` (Wave 2 keystone 1) and `has_embedding` (Wave 2 #4/#7) are stored columns the app
- * MAINTAINS on every write, and both carry a DDL default that is wrong for half the rows this
+ * THE MAINTAINED MIRRORS ARE SEEDED EXPLICITLY, and this is load-bearing rather than tidy.
+ * `is_catalogue` (Wave 2 keystone 1), `has_embedding` (Wave 2 #4/#7), and `has_isrc` (the anchor
+ * drain order's lead) are stored columns the app
+ * MAINTAINS on every write, and each carries a DDL default that is wrong for half the rows this
  * seeder makes: `is_catalogue` defaults to 1 (so every findings-backed row would land claiming to
  * be raw catalogue) and `has_embedding` defaults to 0 (so every row this seeder gives a vector
  * would land claiming to have none). Production has no such rows — the write sites keep both in
@@ -239,10 +240,11 @@ const TRACK_COLUMNS = `track_id, title, artists_json, duration_ms, release_date,
   label_id, album_id, album_image_url, capture_status, capture_priority, nearest_finding_score,
   nearest_finding_track_id, duplicate_of_track_id, catalogue_ranked_at, source_audio_key,
   analyzed_from, analyzed_at, embedding_blob, spotify_uri, isrc, apple_music_url,
-  backfill_apple_music_done_at, backfill_apple_music_attempted_at, is_catalogue, has_embedding`;
+  backfill_apple_music_done_at, backfill_apple_music_attempted_at, is_catalogue, has_embedding,
+  has_isrc`;
 
 const TRACK_SQL = `insert or ignore into tracks (${TRACK_COLUMNS})
-  values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 type Resolved = {
   albums: number;
@@ -343,10 +345,12 @@ function catalogueTrackArgs(index: number, nowMs: number, opts: Resolved): SeedV
     index % 20 === 0 ? `https://music.apple.com/us/song/${index}` : null,
     appleDone,
     appleAttempted,
-    // The two mirrors (see TRACK_COLUMNS). A catalogue row HAS no findings row, so `is_catalogue`
-    // is 1; `has_embedding` tracks the vector this same row was just given, never the DDL default.
+    // The maintained mirrors (see TRACK_COLUMNS). A catalogue row HAS no findings row, so
+    // `is_catalogue` is 1; `has_embedding` and `has_isrc` track the vector and the ISRC this same
+    // row was just given, never the DDL default.
     1,
     hasEmbedding ? 1 : 0,
+    index % 23 === 0 ? 0 : 1,
   ];
 }
 
@@ -383,10 +387,11 @@ function findingStatements(index: number, nowMs: number, opts: Resolved): SeedSt
     index % 4 === 0 ? `https://music.apple.com/us/song/f${index}` : null,
     index % 4 === 0 ? isoDaysBefore(nowMs, 10 + (index % 60)) : null,
     index % 3 === 0 ? isoDaysBefore(nowMs, 10 + (index % 200)) : null,
-    // The two mirrors (see TRACK_COLUMNS). This row gets a `findings` row below, so `is_catalogue`
-    // is 0 — the DDL default of 1 would make every certified row read as raw catalogue — and it is
-    // unconditionally embedded, so `has_embedding` is 1.
+    // The maintained mirrors (see TRACK_COLUMNS). This row gets a `findings` row below, so
+    // `is_catalogue` is 0 — the DDL default of 1 would make every certified row read as raw
+    // catalogue — and it is unconditionally embedded and ISRC-keyed, so both flags are 1.
     0,
+    1,
     1,
   ];
 

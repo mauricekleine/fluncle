@@ -70,6 +70,18 @@ describe("seedScale seeds the maintained mirrors, not their DDL defaults", () =>
     );
   });
 
+  it("keeps has_isrc equal to the ISRC's trimmed presence on every row", async () => {
+    // The anchor drain order leads with this mirror, so a seeder that left it at the DDL default
+    // would bench the worklist against a uniformly-0 first key — a walk that never ran.
+    expect(
+      await count(
+        `select count(*) as n from tracks where has_isrc <> (isrc is not null and trim(isrc) <> '')`,
+      ),
+    ).toBe(0);
+    expect(await count("select count(*) as n from tracks where has_isrc = 1")).toBeGreaterThan(0);
+    expect(await count("select count(*) as n from tracks where has_isrc = 0")).toBeGreaterThan(0);
+  });
+
   it("keeps is_catalogue equal to the findings anti-join on every row", async () => {
     expect(
       await count(

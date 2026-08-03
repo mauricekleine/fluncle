@@ -33,7 +33,7 @@
 // ── THE FLIP-ON REQUEUE — undoing the off-window priority inversion ────────────────────────────────
 // While the flag is OFF the free rungs stamp-and-back-off their full misses (`resolveAnchorFree`), so
 // every skipped row enters the 14-day `ANCHOR_REASK_AFTER_DAYS` backoff. But the anchor worklist is
-// PRIORITY-ORDERED (track-work.ts `ANCHOR_ORDER`: embedding-present, then closeness to findings), so the
+// PRIORITY-ORDERED (track-work.ts `ANCHOR_ORDER`: ISRC-present, then embedding-present, then closeness to findings), so the
 // rows skipped while OFF are the HIGHER-priority ones — and once budget returns they would still wait out
 // ~14 days while Apify works lower-priority rows first. That is a priority inversion, so flipping the flag
 // back ON re-queues exactly the off-window deferrals: it nulls the `spotify_anchor_attempted_at` stamp on

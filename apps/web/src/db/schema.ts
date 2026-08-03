@@ -532,6 +532,27 @@ export const tracks = sqliteTable(
     // places it here, alphabetically (before it). Neither matters — the covering index is what
     // the scan reads, and no hot path reads this column off a table row.
     hasEmbedding: integer("has_embedding", { mode: "boolean" }).notNull().default(false),
+    // ISRC PRESENCE, MATERIALIZED — the `has_embedding` shape applied to `isrc is not null and
+    // trim(isrc) <> ''` (the trim matters: legacy rows carry empty-string ISRCs, which is why
+    // `recording-mbids.ts` spells its own worklist the same way). It exists for ONE consumer: the
+    // anchor worklist's drain order leads with it (`ANCHOR_ORDER`, track-work.ts), because in
+    // practice anchoring concludes almost exclusively through the exact-ISRC rung — an ISRC-less
+    // row at the head of the queue is a billed Apify search that cannot conclude, spent ahead of a
+    // row that can. A btree cannot key on the expression (see `has_embedding` above — measured, not
+    // assumed), so the presence has to be a stored column for `tracks_anchor_order_idx` to walk.
+    //
+    // THE INVARIANT, AND WHY IT CANNOT DRIFT. Every statement that assigns `isrc` assigns this
+    // mirror in the same statement — the fill-empty writers through the shared `FILL_ISRC_SQL`
+    // fragment (lib/server/isrc.ts), the inserts and the generic update through `hasIsrc()`.
+    // `isrc-mirror.test.ts` scans the server source and fails the build on an `isrc` write that
+    // does not carry the pair, and `scripts/backfill-has-isrc.ts` reconciles drift in both
+    // directions on every deploy (`db:backfill`), same posture as `backfill-has-embedding.ts`.
+    // INTERNAL bookkeeping: never in a public DTO, never a lastmod bump.
+    //
+    // NOTE ON PHYSICAL POSITION: `ALTER TABLE ADD COLUMN` appends to the end of the record, so on
+    // an existing database this column sits LAST; a freshly created table places it here. Neither
+    // matters — the anchor worklist reads it out of the index walk, never off a hot table row.
+    hasIsrc: integer("has_isrc", { mode: "boolean" }).notNull().default(false),
     // The Discogs release the finding resolves to (read-only enrichment, best-effort,
     // matched by artist + title since Discogs has no ISRC search). inMasterId is the
     // master that groups a release's versions (Discogs returns it on the search hit);
@@ -1151,22 +1172,26 @@ export const tracks = sqliteTable(
     // the retry cap, the unanchorable credits) stay residual filters on the page the walk hands
     // back — same class as on the queue above.
     //
-    // WHY `has_embedding` LEADS: the drain order is "a row Fluncle already spent capture + embed
-    // money on is the one he most wants recommendable, so anchor it first" — the mirror IS the
-    // first sort key. It has to be a stored column, not the raw `embedding_blob is not null`
-    // expression: a btree cannot key on an expression, and the planner never chooses an index on
-    // that expression. The mirror is maintained in the same statement as every vector write (see
-    // `has_embedding` above), so this index is walking the truth, not a copy of it.
+    // WHY `has_isrc` LEADS: anchorability before sunk cost. Every offer this queue makes is a
+    // billed Apify search, and in practice a search concludes almost exclusively through the
+    // exact-ISRC rung — so an ISRC-less row served first is money spent on an ask that cannot
+    // conclude while an answerable row waits. `has_embedding` follows as the sunk-cost key ("a row
+    // Fluncle already spent capture + embed money on is the one he most wants recommendable"),
+    // then the Ear's ranking. Both leads are stored mirrors, not the raw expressions
+    // (`embedding_blob is not null` / `isrc is not null and trim(isrc) <> ''`): a btree cannot key
+    // on an expression, and the planner never chooses an index on one. Each mirror is maintained
+    // in the same statement as every write of its source column (see `has_embedding` / `has_isrc`
+    // above), so this index is walking the truth, not a copy of it.
     //
     // PLAIN ASC throughout (a `desc()` index would poison the drizzle snapshot into rebuilding
     // every index on the next migration — the ratified trap), and a plain btree, never the vector
-    // `libsql_vector_idx` that wedges hosted Turso. The query's `desc, desc, desc` reads it as ONE
-    // REVERSE WALK — which is exactly why `track_id` is here as the third column AND why the
-    // query's tiebreak is `desc` rather than `asc`: a mixed `desc, desc, asc` cannot ride the
+    // `libsql_vector_idx` that wedges hosted Turso. The query's `desc, desc, desc, desc` reads it
+    // as ONE REVERSE WALK — which is exactly why `track_id` is here as the last column AND why the
+    // query's tiebreak is `desc` rather than `asc`: a mixed `desc, …, asc` cannot ride the
     // composite and forces a temp B-tree over the whole un-anchored set. Same law as
     // `tracks_capture_priority_track_id_idx` below.
     index("tracks_anchor_order_idx")
-      .on(table.hasEmbedding, table.nearestFindingScore, table.trackId)
+      .on(table.hasIsrc, table.hasEmbedding, table.nearestFindingScore, table.trackId)
       .where(sql`${table.spotifyUri} is null`),
     // THE ANCHOR-REVIEW READ (the /admin attention queue's `anchor-review` source, anchor.ts
     // `listAnchorReviewRows`). PARTIAL for the anchor-fill queue's reason and then some: a

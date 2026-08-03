@@ -18,6 +18,7 @@ import {
   hubCountDeltaStatement,
 } from "./hub-counts";
 import { submitFindingToIndexNow } from "./indexnow";
+import { hasIsrc } from "./isrc";
 import { linkTrackToAlbum, storeAlbumDiscogsFactsForTrack } from "./albums";
 import { linkTrackToLabel } from "./labels";
 import { lastfmLove } from "./lastfm";
@@ -284,6 +285,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           track.releaseDate ?? null,
           track.durationMs,
           track.isrc ?? null,
+          // The presence mirror, in the same insert as the ISRC it mirrors (schema.ts § `has_isrc`).
+          hasIsrc(track.isrc),
           deezer.label ?? null,
           track.popularity ?? null,
           deezer.previewUrl ?? null,
@@ -333,6 +336,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             release_date,
             duration_ms,
             isrc,
+            has_isrc,
             label,
             popularity,
             preview_url,
@@ -349,7 +353,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             deezer_verified_at,
             deezer_verified_by,
             is_catalogue
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publish', 'publish', ?, ?, ?, ?)`,
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publish', 'publish', ?, ?, ?, ?)`,
       },
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.

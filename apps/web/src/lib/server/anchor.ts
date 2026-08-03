@@ -83,6 +83,7 @@ import {
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
 import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
+import { FILL_ISRC_SQL } from "./isrc";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 import { logEvent } from "./log";
 import {
@@ -614,6 +615,9 @@ export async function anchorTrack(
       // exact-ISRC anchor, or one already present) is never overwritten — the recovered value only
       // fills a NULL. This strengthens dedup (ISRC-equality is the strongest identity signal) and
       // lets a related pressing resolve via the exact ISRC rung instead of fuzzy search.
+      // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts): the second
+      // binding feeds the `has_isrc` mirror the same candidate the coalesce sees.
+      verified.isrc?.trim() ? verified.isrc.trim() : null,
       verified.isrc?.trim() ? verified.isrc.trim() : null,
       now,
       // THE PROVENANCE PAIR + THE HIT TIME (schema.ts § `spotify_anchor_source`). They ride the
@@ -632,7 +636,7 @@ export async function anchorTrack(
           set spotify_uri = ?,
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
-              isrc = coalesce(isrc, ?),
+              ${FILL_ISRC_SQL},
               spotify_anchor_attempted_at = ?,
               spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
               spotify_anchor_source = ?,
@@ -1187,6 +1191,8 @@ export async function recoverIsrcViaDeezer(
 
   await db.execute({
     args: [
+      // Bound twice — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+      recovered,
       recovered,
       now,
       deezerTrackId,
@@ -1198,7 +1204,7 @@ export async function recoverIsrcViaDeezer(
       trackId,
     ],
     sql: `update tracks
-          set isrc = coalesce(isrc, ?),
+          set ${FILL_ISRC_SQL},
               isrc_attempted_at = ?,
               deezer_track_id = coalesce(deezer_track_id, ?),
               deezer_verified_by = coalesce(deezer_verified_by, ?),
@@ -1797,6 +1803,8 @@ export async function resolveAnchorReview(
       `spotify:track:${spotifyId}`,
       `https://open.spotify.com/track/${spotifyId}`,
       review.candidate.albumImageUrl ?? null,
+      // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+      review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null,
       review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null,
       now.toISOString(),
       // `verified_by = 'operator'`, and `source` left NULL: no rung found this link — he did, off
@@ -1809,7 +1817,7 @@ export async function resolveAnchorReview(
           set spotify_uri = ?,
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
-              isrc = coalesce(isrc, ?),
+              ${FILL_ISRC_SQL},
               spotify_anchor_attempted_at = ?,
               spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
               spotify_anchor_source = null,

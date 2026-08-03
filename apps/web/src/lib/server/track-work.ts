@@ -334,33 +334,39 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
  * metered Apify anchor spend (docs/catalogue-crawler.md § the anchor). The anchor worklist is
  * catalogue-only (a finding's Spotify id is its identity), so there is no certified/findings
  * split here; the drain order is:
- *   1. EMBEDDED rows first (`has_embedding`) — a row Fluncle has already spent capture + embed
- *      money on is one he most wants recommendable, so anchor it first.
- *   2. Then `nearest_finding_score DESC` — the Ear's best un-anchored candidates, the ones
+ *   1. ISRC-BEARING rows first (`has_isrc`) — anchorability before sunk cost. In practice a
+ *      billed search concludes almost exclusively through the exact-ISRC rung, so an ISRC-less
+ *      row at the head is money spent on an ask that cannot conclude while an answerable row
+ *      waits behind it.
+ *   2. Then EMBEDDED rows (`has_embedding`) — a row Fluncle has already spent capture + embed
+ *      money on is one he most wants recommendable, so anchor it next.
+ *   3. Then `nearest_finding_score DESC` — the Ear's best un-anchored candidates, the ones
  *      closest to his taste, ahead of the unranked tail.
- *   3. Then `track_id` — a deterministic tiebreak so a batch is reproducible.
+ *   4. Then `track_id` — a deterministic tiebreak so a batch is reproducible.
  *
  * Every ordering column is read IN SQL (never selected into the isolate), and the whole clause is
- * ONE REVERSE WALK of `tracks_anchor_order_idx` — the plain-ASC `(has_embedding,
+ * ONE REVERSE WALK of `tracks_anchor_order_idx` — the plain-ASC `(has_isrc, has_embedding,
  * nearest_finding_score, track_id) where spotify_uri is null` partial index (schema.ts), whose
  * predicate is the same literal clause `kindClause("anchor")` carries. Three spellings here are
  * load-bearing:
  *
- *   · `t.has_embedding`, not `(t.embedding_blob is not null)`. A btree cannot key on an
- *     expression, so an expression spelling would force the sweep to materialise the whole un-anchored set,
- *     table-probe each row for the blob's null-ness and sort — hourly, over a set that grows with
- *     the catalogue. The mirror is written in the same statement as every vector (schema.ts §
- *     `has_embedding`), so this reads the truth rather than a copy of it.
+ *   · `t.has_isrc` / `t.has_embedding`, not the raw expressions (`isrc is not null and
+ *     trim(isrc) <> ''` / `embedding_blob is not null`). A btree cannot key on an expression, so
+ *     an expression spelling would force the sweep to materialise the whole un-anchored set,
+ *     table-probe each row and sort — hourly, over a set that grows with the catalogue. Each
+ *     mirror is written in the same statement as every write of its source column (schema.ts §
+ *     `has_embedding`, § `has_isrc`), so this reads the truth rather than a copy of it.
  *   · no `nulls last`. SQLite sorts NULL smallest, so a plain `desc` ALREADY puts the unranked
  *     tail last — the two spellings are exactly equivalent, and the plain one gives the planner
  *     nothing extra to reason about when matching the clause to the index.
- *   · `track_id desc`, not `asc`. A mixed `desc, desc, asc` cannot ride the composite as one
+ *   · `track_id desc`, not `asc`. A mixed `desc, …, asc` cannot ride the composite as one
  *     reverse walk and forces a temp B-tree over the entire un-anchored set. The tiebreak exists
  *     only for a deterministic order among otherwise-equal rows and its direction is arbitrary —
  *     nothing depends on it (there is no keyset pagination on this read, just LIMIT) — so it goes
  *     `desc`. Same law as the `/admin/catalogue` capture lens (catalogue.ts).
  */
-const ANCHOR_ORDER = `order by t.has_embedding desc,
+const ANCHOR_ORDER = `order by t.has_isrc desc,
+  t.has_embedding desc,
   t.nearest_finding_score desc,
   t.track_id desc`;
 
