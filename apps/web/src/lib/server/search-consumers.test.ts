@@ -24,13 +24,18 @@ const SOURCE_ROOTS = ["apps/web/src", "apps/cli/src", "apps/mobile/app", "apps/m
  * `/api/v1/search/archive` is the internal op and must not match, so the path may not be
  * followed by `/archive`. The helper markers cover the indirect callers — the web submit
  * dialog goes through `@/lib/submissions`, the mobile submit screen through `useTrackSearch`,
- * and mobile's hook itself through the `orpc.search_tracks` client op.
+ * and mobile's hook itself through the `orpc.search_tracks` client op. The module-import
+ * marker covers the server side: a file importing the capability (`lib/server/track-search`)
+ * skips every helper and holds the op itself, in any spelling — relative at any depth or the
+ * `@/` alias. It is import-shaped (requires `from "…"`) so prose mentioning track-search in a
+ * comment does not trip it.
  */
 const SPOTIFY_OP_MARKERS = [
   /\/api\/v1\/search(?!\/archive)/,
   /\borpc\.search_tracks\b/,
   /\buseTrackSearch\b/,
   /from ["']@\/lib\/submissions["']/,
+  /from ["'][^"']*\/track-search["']/,
 ];
 
 /**
@@ -48,6 +53,10 @@ const SUBMIT_FLOW_ALLOWLIST = [
   "apps/web/src/components/submit-track-dialog.tsx",
   // llms.txt + agent discovery: DOCUMENTS the op to agents as the submit path, calls nothing.
   "apps/web/src/lib/server/agent-discovery.ts",
+  // The MCP `search_tracks` tool — the op's second mount, importing the capability directly.
+  "apps/web/src/lib/server/mcp.ts",
+  // The oRPC `search_tracks` handler — the op's HTTP mount, importing the capability directly.
+  "apps/web/src/lib/server/orpc/search.ts",
   // The server-side capability behind the op — the implementation, not a consumer.
   "apps/web/src/lib/server/track-search.ts",
   // The web submit helper: the `searchTracks` fetch the dialog drives.
