@@ -1664,6 +1664,42 @@ describe("the scoped label re-arm — a widened ruling replays refused releases"
     expect(tracks.rows.map((row) => text(row.title))).toEqual([`Track from ${SCOPED_RELEASE}`]);
   });
 
+  it("an already-stored ISRC-less row's anchor stamp SURVIVES the label-scope re-arm", async () => {
+    const { crawlCatalogue } = await import("./crawl");
+    await prepareRefusedRelease();
+
+    // The exact row the revived release would re-store (`catalogueTrackId(recordingId)`), already
+    // present with a live anchor backoff and NO ISRC. The re-arm replays crawl SCOPE only — the
+    // storage insert is `on conflict (track_id) do nothing` — so the whole replay must leave the
+    // row's re-ask stamp and retry-cap counter standing: a label-scope re-arm is never a bulk
+    // anchor requeue, and an ISRC-less row especially must not re-enter the paid anchor queue.
+    await db.execute(
+      `insert into tracks (track_id, title, artists_json, duration_ms, isrc, has_isrc,
+         spotify_anchor_attempted_at, spotify_anchor_attempts)
+       values ('mb_recording-${SCOPED_RELEASE}', 'Track from ${SCOPED_RELEASE}', '["Test Artist"]',
+         270000, null, 0, '2026-07-26T12:00:00.000Z', 2)`,
+    );
+    await enableScopedLabel();
+
+    const rearm = await crawlCatalogue({ limit: 1, maxHop: 0 });
+    expect(rearm.releasesRearmed).toBe(1);
+    // The revived release settles: its store pass skips the held row rather than rewriting it.
+    await crawlCatalogue({ limit: 1, maxHop: 0 });
+    const settled = await db.execute({
+      args: [SCOPED_RELEASE_NODE],
+      sql: "select state from crawl_frontier where id = ?",
+    });
+    expect(settled.rows[0]?.state).toBe("done");
+
+    const row = await db.execute(
+      `select spotify_anchor_attempted_at as at, spotify_anchor_attempts as n, has_isrc
+       from tracks where track_id = 'mb_recording-${SCOPED_RELEASE}'`,
+    );
+    expect(row.rows[0]?.at).toBe("2026-07-26T12:00:00.000Z");
+    expect(Number(row.rows[0]?.n)).toBe(2);
+    expect(Number(row.rows[0]?.has_isrc)).toBe(0);
+  });
+
   it("a second re-arm pass is a no-op — the watermark terminates it", async () => {
     const { crawlCatalogue } = await import("./crawl");
     await prepareRefusedRelease();

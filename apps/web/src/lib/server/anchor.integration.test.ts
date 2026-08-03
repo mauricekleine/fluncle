@@ -348,20 +348,20 @@ describe("requeueAnchorStamps — the operator requeue", () => {
   it("clears the stamp but NEVER the attempts cap, and only on un-anchored stamped rows", async () => {
     const { requeueAnchorStamps } = await import("./anchor");
 
-    // A stamped, capped-progress row: eligible — stamp clears, attempts stay.
-    await seedUnanchored({ trackId: "mb_rq_eligible" });
+    // A stamped, capped-progress row WITH an ISRC: eligible — stamp clears, attempts stay.
+    await seedUnanchored({ isrc: "GBCJY1300173", trackId: "mb_rq_eligible" });
     await db.execute(
       `update tracks set spotify_anchor_attempted_at = '2026-07-26T12:00:00.000Z',
         spotify_anchor_attempts = 3 where track_id = 'mb_rq_eligible'`,
     );
     // An anchored row: skipped even when named.
-    await seedUnanchored({ trackId: "mb_rq_anchored" });
+    await seedUnanchored({ isrc: "GBCJY1300174", trackId: "mb_rq_anchored" });
     await db.execute(
       `update tracks set spotify_uri = 'spotify:track:done',
         spotify_anchor_attempted_at = '2026-07-26T12:00:00.000Z' where track_id = 'mb_rq_anchored'`,
     );
     // A never-stamped row: nothing to clear, counts zero.
-    await seedUnanchored({ trackId: "mb_rq_fresh" });
+    await seedUnanchored({ isrc: "GBCJY1300175", trackId: "mb_rq_fresh" });
 
     const requeued = await requeueAnchorStamps(["mb_rq_eligible", "mb_rq_anchored", "mb_rq_fresh"]);
     expect(requeued).toBe(1);
@@ -381,6 +381,26 @@ describe("requeueAnchorStamps — the operator requeue", () => {
     expect(await requeueAnchorStamps(["mb_rq_eligible", "mb_rq_anchored", "mb_rq_fresh"])).toBe(0);
     // And an empty list is a zero-write no-op.
     expect(await requeueAnchorStamps([])).toBe(0);
+  });
+
+  it("an ISRC-less previously-attempted row's stamp SURVIVES the requeue (dead weight stays backed off)", async () => {
+    const { requeueAnchorStamps } = await import("./anchor");
+
+    // Previously attempted, stamped, and ISRC-less: anchoring concludes off the ISRC anchor, so a
+    // bulk requeue naming this row must NOT put it back on the paid queue — its stamp stands.
+    await seedUnanchored({ isrc: null, trackId: "mb_rq_isrcless" });
+    await db.execute(
+      `update tracks set spotify_anchor_attempted_at = '2026-07-26T12:00:00.000Z',
+        spotify_anchor_attempts = 2 where track_id = 'mb_rq_isrcless'`,
+    );
+
+    expect(await requeueAnchorStamps(["mb_rq_isrcless"])).toBe(0);
+
+    const row = await db.execute(
+      "select spotify_anchor_attempted_at as at, spotify_anchor_attempts as n from tracks where track_id = 'mb_rq_isrcless'",
+    );
+    expect(row.rows[0]?.at).toBe("2026-07-26T12:00:00.000Z");
+    expect(Number(row.rows[0]?.n)).toBe(2);
   });
 });
 

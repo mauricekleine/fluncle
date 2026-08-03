@@ -1251,6 +1251,12 @@ async function stampAnchorAttempt(
  * cap) stays honest, so a requeue re-times a row's next try without re-arming its bounded spend —
  * and only un-anchored rows qualify (`spotify_uri is null`). Idempotent: already-clear rows and
  * anchored rows count zero. Returns the number of rows actually re-queued.
+ *
+ * ISRC-LESS ROWS ARE EXCLUDED (`has_isrc = 1`, the presence mirror — schema.ts): anchoring
+ * concludes off the ISRC anchor in practice, so re-arming a row without one re-bills a search that
+ * cannot conclude — a bulk requeue must never put that dead weight back on the paid queue. The
+ * "recovered ISRC" use case above is unharmed: a row whose ISRC was just recovered carries the
+ * mirror by the time it is named here (every ISRC write path maintains it in the same statement).
  */
 export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
   if (trackIds.length === 0) {
@@ -1265,7 +1271,8 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
           set spotify_anchor_attempted_at = null
           where track_id in (${placeholders})
             and spotify_uri is null
-            and spotify_anchor_attempted_at is not null`,
+            and spotify_anchor_attempted_at is not null
+            and has_isrc = 1`,
   });
 
   return result.rowsAffected;

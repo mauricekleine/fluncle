@@ -37,8 +37,10 @@
 // rows skipped while OFF are the HIGHER-priority ones — and once budget returns they would still wait out
 // ~14 days while Apify works lower-priority rows first. That is a priority inversion, so flipping the flag
 // back ON re-queues exactly the off-window deferrals: it nulls the `spotify_anchor_attempted_at` stamp on
-// every un-anchored row stamped at-or-after the moment the flag went OFF (recorded in `ANCHOR_APIFY_DISABLED_AT_KEY`),
-// so those rows re-enter the worklist and re-sort by `ANCHOR_ORDER` at their real priority immediately. It
+// every un-anchored ISRC-BEARING row stamped at-or-after the moment the flag went OFF (recorded in
+// `ANCHOR_APIFY_DISABLED_AT_KEY`), so those rows re-enter the worklist and re-sort by `ANCHOR_ORDER` at
+// their real priority immediately. ISRC-less deferrals stay stamped — anchoring concludes off the ISRC
+// anchor in practice, so re-arming them re-bills asks that cannot conclude (`requeueOffWindowDeferrals`). It
 // gives the row's RETRY-CAP attempt back at the same time (`spotify_anchor_attempts`, track-work.ts
 // `ANCHOR_MAX_ATTEMPTS`) — a deferral was never a real try, so it must not spend one of the row's finite tries.
 //
@@ -95,6 +97,15 @@ export async function isAnchorApifyEnabled(): Promise<boolean> {
  * deferral's stamp without undoing its bump would spend a row's finite tries on attempts Apify never
  * made — the cap would retire rows the paid rung had never once looked at. `max(… - 1, 0)` floors it,
  * so the arithmetic can never go negative even if a row is somehow re-queued twice.
+ *
+ * ISRC-LESS ROWS ARE EXCLUDED (`has_isrc = 1`, the presence mirror — schema.ts): anchoring
+ * concludes off the ISRC anchor in practice, so a bulk re-arm of ISRC-less deferrals would put a
+ * wall of asks that cannot conclude straight back on the paid queue. An excluded row keeps BOTH
+ * halves of its deferral write — the stamp (it waits out the ordinary re-ask window instead of
+ * jumping the queue) AND the counter bump. Keeping the bump is deliberate, and the honest-counter
+ * rule above bends for exactly this class: for a row whose asks cannot conclude, every counted
+ * deferral walks it toward the retry cap's retirement without another billed look — the cheap end
+ * for dead weight, where giving the attempt back would extend its paid treadmill instead.
  */
 async function requeueOffWindowDeferrals(): Promise<number> {
   const disabledAt = await getSetting(ANCHOR_APIFY_DISABLED_AT_KEY);
@@ -110,7 +121,8 @@ async function requeueOffWindowDeferrals(): Promise<number> {
           set spotify_anchor_attempted_at = null,
               spotify_anchor_attempts = max(coalesce(spotify_anchor_attempts, 0) - 1, 0)
           where spotify_uri is null
-            and spotify_anchor_attempted_at >= ?`,
+            and spotify_anchor_attempted_at >= ?
+            and has_isrc = 1`,
   });
 
   return result.rowsAffected;

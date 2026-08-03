@@ -20,25 +20,35 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-/** Insert ONE `tracks` row with a chosen anchor state — the columns the flip-ON requeue reads. */
+/**
+ * Insert ONE `tracks` row with a chosen anchor state — the columns the flip-ON requeue reads.
+ * ISRC-bearing by default (the requeue targets only `has_isrc = 1` rows; the mirror rides the same
+ * insert as its source column, the way every production writer pairs it — schema.ts § `has_isrc`);
+ * pass `isrc: null` to seed the excluded ISRC-less shape.
+ */
 async function seedRow(row: {
   attempts?: null | number;
   attemptedAt: null | string;
+  isrc?: null | string;
   spotifyUri: null | string;
   trackId: string;
 }): Promise<void> {
+  const isrc = row.isrc === undefined ? "GBCJY1300173" : row.isrc;
+
   await db.execute({
     args: [
       row.trackId,
       JSON.stringify(["Test Artist"]),
+      isrc,
+      isrc?.trim() ? 1 : 0,
       row.spotifyUri,
       row.attemptedAt,
       row.attempts ?? null,
     ],
     sql: `insert into tracks
-            (track_id, title, artists_json, duration_ms, spotify_uri, spotify_anchor_attempted_at,
-             spotify_anchor_attempts)
-          values (?, 'Test Track', ?, 270000, ?, ?, ?)`,
+            (track_id, title, artists_json, duration_ms, isrc, has_isrc, spotify_uri,
+             spotify_anchor_attempted_at, spotify_anchor_attempts)
+          values (?, 'Test Track', ?, 270000, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -212,5 +222,35 @@ describe("anchor_apify_disabled_at — the off-window marker + flip-ON requeue",
     expect(await attempts("deferred")).toBe(2);
     expect(await attempts("unstamped")).toBe(0);
     expect(await attempts("genuine-count")).toBe(2);
+  });
+
+  it("(f) an ISRC-less previously-attempted deferral SURVIVES the flip-ON — stamp AND counter stand", async () => {
+    const { ANCHOR_APIFY_DISABLED_AT_KEY, setAnchorApifyEnabled } = await import("./anchor-apify");
+    const { getSetting } = await import("./settings");
+
+    await setAnchorApifyEnabled(false);
+    const during = (await getSetting(ANCHOR_APIFY_DISABLED_AT_KEY)) ?? "";
+
+    // Deferred during the outage after real prior attempts, but ISRC-LESS: anchoring concludes off
+    // the ISRC anchor, so the bulk re-arm must NOT put this row back on the paid queue. Its stamp
+    // stands (the ordinary re-ask window paces it) and its counter keeps the deferral bump (each
+    // one walks dead weight toward the retry cap's retirement without another billed look).
+    await seedRow({
+      attemptedAt: during,
+      attempts: 2,
+      isrc: null,
+      spotifyUri: null,
+      trackId: "isrcless",
+    });
+    // An ISRC-bearing sibling deferred in the same window proves the requeue itself still ran.
+    await seedRow({ attemptedAt: during, attempts: 2, spotifyUri: null, trackId: "isrc-sibling" });
+
+    const requeued = await setAnchorApifyEnabled(true);
+
+    expect(requeued).toBe(1);
+    expect(await attemptedAt("isrcless")).toBe(during);
+    expect(await attempts("isrcless")).toBe(2);
+    expect(await attemptedAt("isrc-sibling")).toBeNull();
+    expect(await attempts("isrc-sibling")).toBe(1);
   });
 });

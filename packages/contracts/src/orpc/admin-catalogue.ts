@@ -409,8 +409,11 @@ export const requeueUnmatchedCaptures = oc
  *
  * Deliberately narrow: it clears ONLY the stamp — `spotify_anchor_attempts` (the lifetime cap,
  * #893) stays honest, so a requeue never resets a row's bounded spend; already-anchored rows are
- * skipped by the WHERE. Operator-only for the same reason as `requeue_unmatched_captures`: each
- * requeued row can re-arm metered Apify spend. Idempotent — a second call affects zero rows.
+ * skipped by the WHERE, and so are ISRC-LESS rows (`has_isrc = 1` — anchoring concludes off the
+ * ISRC anchor in practice, so re-arming a row without one re-bills a search that cannot conclude;
+ * a named ISRC-less row simply counts zero). Operator-only for the same reason as
+ * `requeue_unmatched_captures`: each requeued row can re-arm metered Apify spend. Idempotent — a
+ * second call affects zero rows.
  */
 export const requeueAnchor = oc
   .route({
@@ -1156,10 +1159,13 @@ export const setAnchorSearch = oc
  * `requeued` is how many catalogue rows the flip-ON re-queued. While the flag is OFF the free rungs
  * stamp-and-back-off their full misses, so the HIGHER-priority rows skipped during the outage would
  * otherwise wait out the full 14-day re-ask backoff while Apify works lower-priority rows first — a
- * priority inversion. Flipping back ON nulls the `spotify_anchor_attempted_at` stamp on exactly those
- * off-window deferrals (every stamp written while the box made ZERO Apify attempts) and gives their
- * retry-cap attempt back with it, so they re-enter the priority-ordered worklist immediately with their
- * full budget of tries; genuine prior backoffs, which all predate the off-window, are untouched. `requeued` is `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
+ * priority inversion. Flipping back ON nulls the `spotify_anchor_attempted_at` stamp on exactly the
+ * ISRC-BEARING off-window deferrals (every stamp written while the box made ZERO Apify attempts) and
+ * gives their retry-cap attempt back with it, so they re-enter the priority-ordered worklist immediately
+ * with their full budget of tries; genuine prior backoffs, which all predate the off-window, are
+ * untouched, and so are ISRC-less deferrals (`has_isrc = 1` — anchoring concludes off the ISRC anchor
+ * in practice, so a bulk re-arm of rows without one re-bills asks that cannot conclude). `requeued` is
+ * `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
  */
 export const setAnchorApify = oc
   .route({
