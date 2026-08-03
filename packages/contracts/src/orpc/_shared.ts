@@ -703,9 +703,11 @@ export const SubmissionSchema = z
  * whenever the set of types is known in advance.
  *
  * `video/*` is the widest shape any real caller sends: the recording dialog's picker is
- * `accept="video/*"` and passes `file.type` straight through, and both CLI legs send
- * `video/mp4` or nothing (each handler defaults to `video/mp4`). Parameters (`; codecs=…`)
- * are deliberately out — no caller produces one, and the object stores a bare type.
+ * `accept="video/*"` and forwards `file.type`, sending nothing when the browser cannot type
+ * the pick (`file.type || undefined`), so an untyped file falls to the default rather than
+ * tripping this gate; both CLI legs send `video/mp4` or nothing (each handler defaults to
+ * `video/mp4`). Parameters (`; codecs=…`) are deliberately out — no caller produces one,
+ * and the object stores a bare type.
  *
  * It REJECTS rather than falling back to the default, so a wrong type is a clean 400
  * instead of a silently mistyped world-served object. The subtype charset is RFC 6838's;
