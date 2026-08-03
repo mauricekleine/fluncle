@@ -110,6 +110,7 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 | `discovery.robots`          | `/robots.txt`                          | `text/plain`               | the crawl policy + Content-Signal (search/AI-input/AI-train all yes) + sitemap link                                               | tertiary  |
 | `discovery.mcp-server-card` | `/.well-known/mcp/server-card.json`    | `application/json`         | the SEP-2127 discovery card for the MCP endpoint                                                                                  | tertiary  |
 | `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                                    | tertiary  |
+| `discovery.agent-card`      | `/.well-known/agent-card.json`         | `application/json`         | the A2A agent card — Fluncle's actionable public skills (search, list, read, submit, subscribe)                                   | tertiary  |
 | `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                                                                      | tertiary  |
 | `discovery.oembed`          | `/oembed`                              | `application/json+oembed`  | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`)      | tertiary  |
 | `discovery.cli-installer`   | `/cli/latest.sh`                       | `text/x-shellscript`       | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary  |
@@ -307,6 +308,7 @@ The weight ladder within a context is unchanged — **`primary`** (the loud fron
 | `discovery.robots`          | tertiary  |           |           |           |
 | `discovery.mcp-server-card` | tertiary  |           |           |           |
 | `discovery.api-catalog`     | tertiary  |           |           |           |
+| `discovery.agent-card`      | tertiary  |           |           |           |
 | `discovery.agent-skills`    | tertiary  |           |           |           |
 | `discovery.oembed`          | tertiary  |           |           |           |
 | `discovery.docs-markdown`   | tertiary  |           |           |           |

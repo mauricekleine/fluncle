@@ -1062,6 +1062,19 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     apiFormat: "application/json",
+    exposedContent: [
+      "the A2A agent card — Fluncle's actionable public skills (search, list, read, submit, subscribe)",
+    ],
+    kind: "discovery",
+    name: "discovery.agent-card",
+    operatorNotes:
+      "The cross-vendor twin of `discovery.mcp-server-card`, served by handleAgentDiscovery (apps/web/src/lib/server/agent-discovery.ts) at the canonical A2A path AND the legacy short `/.well-known/agent.json` — same bytes, so only the canonical one is catalogued here. Its skills map 1:1 onto real public ops, with the MCP tool list as the source of truth.",
+    route: "/.well-known/agent-card.json",
+    url: `${SITE}/.well-known/agent-card.json`,
+    weights: { web: "tertiary" },
+  },
+  {
+    apiFormat: "application/json",
     exposedContent: ["the fluncle-api agent skill index (with the SKILL.md digest)"],
     kind: "discovery",
     name: "discovery.agent-skills",

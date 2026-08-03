@@ -391,7 +391,12 @@ function kindEntries(kind: SitemapKind, bags: SitemapBags): string[] {
         staticEntry(`${siteUrl}/about`),
         staticEntry(`${siteUrl}/privacy`),
         staticEntry(`${siteUrl}/terms`),
-        staticEntry(`${siteUrl}/galaxy`),
+        // NOT `/galaxy`: the game renders `noindex` (routes/galaxy.tsx — a client-only canvas, so a
+        // crawler sees chrome and no content). A sitemap is a submission for indexing, so listing a
+        // noindexed URL asks for the one thing the page refuses; Search Console reports it back as
+        // "Submitted URL marked 'noindex'". The OG card keeps the game shareable, and
+        // galaxy.fluncle.com serves the same noindexed document, so nothing here needs a `loc`.
+        // The `/galaxies` LENS index below is a different surface and is listed once its gate opens.
         // The always-on player — self-canonical and indexable like the rest, and listed
         // unconditionally because the stream is always live. The `loc` also does consolidation
         // work: radio.fluncle.com serves the identical document, so naming the www URL here is
