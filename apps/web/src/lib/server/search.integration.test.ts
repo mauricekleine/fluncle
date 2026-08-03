@@ -252,6 +252,75 @@ describe("tier 1 — a coordinate", () => {
   });
 });
 
+// ── Tier 1½ · a pasted Spotify link ──────────────────────────────────────────────────
+
+// The archive is Spotify-anchored: wherever an anchor has landed, `tracks.spotify_uri` holds
+// `spotify:track:<id>` (anchor.ts writes both columns in one statement). So a pasted share-sheet
+// URL — or the bare URI — is an IDENTITY the archive answers with one indexed seek, never a
+// Spotify call; an id the archive does not hold falls through to the ordinary tiers.
+describe("tier 1½ — a pasted Spotify link", () => {
+  const NINE_CLOUDS_ID = "1A2b3C4d5E6f7G8h9I0jKl";
+
+  beforeEach(async () => {
+    await db.execute({
+      args: [`spotify:track:${NINE_CLOUDS_ID}`, "certified-1991"],
+      sql: `update tracks set spotify_uri = ? where track_id = ?`,
+    });
+  });
+
+  it("resolves the URL form to the anchored track — locally, with no model call", async () => {
+    const result = await searchArchive({ q: `https://open.spotify.com/track/${NINE_CLOUDS_ID}` });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-1991"]);
+    expect(result.results[0]?.certified).toBe(true);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("tolerates the share sheet's query string", async () => {
+    const result = await searchArchive({
+      q: `https://open.spotify.com/track/${NINE_CLOUDS_ID}?si=AbCdEf123`,
+    });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-1991"]);
+  });
+
+  it("tolerates an intl path segment — the app localises the share URL", async () => {
+    const result = await searchArchive({
+      q: `https://open.spotify.com/intl-de/track/${NINE_CLOUDS_ID}`,
+    });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-1991"]);
+  });
+
+  it("resolves the bare spotify:track: URI form", async () => {
+    const result = await searchArchive({ q: `spotify:track:${NINE_CLOUDS_ID}` });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["certified-1991"]);
+  });
+
+  it("falls through on an id the archive does not hold — an honest miss, never an error", async () => {
+    const result = await searchArchive({
+      q: "https://open.spotify.com/track/0000000000000000000000",
+    });
+
+    // The link becomes text: no tier answers it, and nothing throws on the way down.
+    expect(result.results).toEqual([]);
+  });
+
+  it("carries the catalogue rule — an uncertified anchor resolves unlit, with no coordinate", async () => {
+    await db.execute({
+      args: ["spotify:track:9Z8y7X6w5V4u3T2s1R0qPo", "uncertified-netsky"],
+      sql: `update tracks set spotify_uri = ? where track_id = ?`,
+    });
+
+    const result = await searchArchive({ q: "spotify:track:9Z8y7X6w5V4u3T2s1R0qPo" });
+
+    expect(result.results.map((hit) => hit.trackId)).toEqual(["uncertified-netsky"]);
+    expect(result.results[0]?.certified).toBe(false);
+    expect(result.results[0]?.logId).toBeUndefined();
+  });
+});
+
 // ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
 
 // An artist, a label, and an album are ONE affordance — the thing you searched for, offered as

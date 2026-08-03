@@ -8,6 +8,9 @@
 //
 //   1. A COORDINATE (`004.7.2I`, `fluncle://004.7.2I`). A regex and one indexed lookup.
 //      This is a jump, not a search — it resolves to the `/log` page or to nothing.
+//   1½. A SPOTIFY LINK (`open.spotify.com/track/<id>`, `spotify:track:<id>`). A regex and one
+//      indexed `spotify_uri` seek — resolved LOCALLY, never a Spotify call. A miss falls
+//      through: the link becomes text, and the tiers below answer it honestly.
 //   2. An EXACT ENTITY (an artist / label / album named in full). One indexed lookup. All
 //      three have a page (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>`), so all three
 //      are a jump — one shape, one affordance, no second pattern.
@@ -1316,6 +1319,22 @@ async function runArtistSonic(filters: SearchFilters, limit: number): Promise<Se
   };
 }
 
+// ── Tier 1½ · a pasted Spotify link ──────────────────────────────────────────────────
+
+/**
+ * A Spotify track reference — the share-sheet URL (`https://open.spotify.com/track/<id>`,
+ * with `intl-*` path segments and query strings tolerated) or the bare `spotify:track:<id>`
+ * URI. The capture is Spotify's 22-char base62 track id. Anchored (`^…$`) on purpose: a link
+ * QUOTED inside a sentence is a sentence, and the tiers below own it.
+ */
+const SPOTIFY_TRACK_REFERENCE =
+  /^(?:spotify:track:|https:\/\/open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?track\/)([0-9A-Za-z]{22})(?:[?#].*)?$/;
+
+/** The Spotify track id a query IS, when it is one of the two reference forms — else null. */
+function parseSpotifyTrackId(q: string): string | null {
+  return SPOTIFY_TRACK_REFERENCE.exec(q)?.[1] ?? null;
+}
+
 // ── The resolver ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -1364,6 +1383,29 @@ export async function searchArchive(options: { q: string; limit?: number }): Pro
           results: [toHit(found)],
         }
       : empty("coordinate");
+  }
+
+  // ── 1½ · A pasted Spotify link. The archive is Spotify-anchored — every anchor path writes
+  // `tracks.spotify_uri` as `spotify:track:<id>` (anchor.ts) — so a share-sheet URL or a bare
+  // URI is an IDENTITY, not text: one seek on `tracks_spotify_uri_idx`, and NEVER a Spotify
+  // call. An id the archive does not hold falls through — the tiers below treat the link as
+  // the text it now is, and FTS-miss honestly.
+  const spotifyTrackId = parseSpotifyTrackId(q);
+
+  if (spotifyTrackId !== null) {
+    const db = await getDb();
+    const found = typedRow<SearchRow>(
+      (
+        await db.execute({
+          args: [`spotify:track:${spotifyTrackId}`],
+          sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.spotify_uri = ? limit 1`,
+        })
+      ).rows,
+    );
+
+    if (found) {
+      return { degraded: false, entities: [], kind: "token", results: [toHit(found)] };
+    }
   }
 
   // ── 2 · An exact entity name.

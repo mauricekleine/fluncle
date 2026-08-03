@@ -1,11 +1,13 @@
-// The `search` domain contract module. Owns TWO ops, and they look for different things
-// in different places:
+// The `search` domain contract module. Owns TWO ops, and the split is a boundary, not a
+// migration: each op is the ONLY search its side of the boundary calls.
 //
-//   - `search_tracks` → SPOTIFY. Candidates for the submit flow — music Fluncle does not
-//     have yet. It burns the operator's shared Spotify token, so it is rate-limited.
-//   - `search_archive` → FLUNCLE. The archive itself, and the public surface that becomes
-//     the primary navigation once the archive is deep. Four resolution tiers, an LLM only
-//     on the fourth, and a sonic tier no other drum & bass tool has.
+//   - `search_tracks` → SPOTIFY. The submit-funnel candidate search — music Fluncle does
+//     not have yet. It burns the operator's shared Spotify token, so it is rate-limited,
+//     and no browse surface calls it (search-consumers.test.ts locks the caller set).
+//   - `search_archive` → FLUNCLE. The archive/browse search every reading surface calls —
+//     web ⌘K, CLI, mobile, MCP. Four resolution tiers, an LLM only on the fourth, a sonic
+//     tier no other drum & bass tool has — and a pasted Spotify track link resolves
+//     LOCALLY, against the anchored `spotify_uri` column, never against Spotify.
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";

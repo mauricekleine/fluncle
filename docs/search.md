@@ -6,15 +6,18 @@ A feed carries sixty findings. It cannot carry an archive. Search is the surface
 
 A query is resolved by trying tiers **in order**, stopping at the first that answers. The order is a performance decision and a safety decision at once.
 
-| #   | Tier              | Example                              | What answers it                                                                 | Costs                              |
-| --- | ----------------- | ------------------------------------ | ------------------------------------------------------------------------------- | ---------------------------------- |
-| 1   | **Coordinate**    | `004.7.2I`, `fluncle://004.7.2I`     | A regex + one indexed lookup                                                    | —                                  |
-| 2   | **Exact entity**  | `Netsky`, `Hospital Records`         | One indexed lookup on `artists` / `labels` / `albums` / `galaxies` / `mixtapes` | —                                  |
-| 3   | **Bare token**    | `netsky`                             | FTS5 (bm25) + an entity prefix match                                            | ~114 ms at 100k (measured, hosted) |
-| 3½  | **Sonic phrase**  | `tracks that sound like Nine Clouds` | A regex → the anchor's MuQ vector → `vector_distance_cos`                       | one vector scan                    |
-| 4   | **Anything else** | `Andromedik tracks in A minor`       | A small LLM emits `SearchFilters`; **SQL** retrieves                            | one model call, 3s deadline        |
+| #   | Tier              | Example                                       | What answers it                                                                 | Costs                              |
+| --- | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------- |
+| 1   | **Coordinate**    | `004.7.2I`, `fluncle://004.7.2I`              | A regex + one indexed lookup                                                    | —                                  |
+| 1½  | **Spotify link**  | `open.spotify.com/track/…`, `spotify:track:…` | A regex + one indexed `spotify_uri` seek — never a Spotify call                 | —                                  |
+| 2   | **Exact entity**  | `Netsky`, `Hospital Records`                  | One indexed lookup on `artists` / `labels` / `albums` / `galaxies` / `mixtapes` | —                                  |
+| 3   | **Bare token**    | `netsky`                                      | FTS5 (bm25) + an entity prefix match                                            | ~114 ms at 100k (measured, hosted) |
+| 3½  | **Sonic phrase**  | `tracks that sound like Nine Clouds`          | A regex → the anchor's MuQ vector → `vector_distance_cos`                       | one vector scan                    |
+| 4   | **Anything else** | `Andromedik tracks in A minor`                | A small LLM emits `SearchFilters`; **SQL** retrieves                            | one model call, 3s deadline        |
 
 **Tiers 1–3½ are most of what anyone types, and none of them costs a model call.** That is the point of the ordering: the LLM is never on the hot path of a common query.
+
+Tier 1½ is the coordinate's cousin from someone else's world: the archive is Spotify-anchored (`tracks.spotify_uri` holds `spotify:track:<id>` wherever an anchor has landed), so a pasted share-sheet URL — `intl-*` path segments and query strings tolerated — or a bare `spotify:track:` URI resolves with one seek on `tracks_spotify_uri_idx`, never a call to Spotify. An id the archive does not hold falls through: the link becomes text, and the tiers below miss it honestly. Only the submit funnel's `search_tracks` op ever asks Spotify itself, and `search-consumers.test.ts` locks its caller set to the submit flow.
 
 ### Every graph node with a page is one affordance
 
