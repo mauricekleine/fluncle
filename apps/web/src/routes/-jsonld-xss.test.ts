@@ -117,4 +117,43 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
     expect(parsed.name).toBe(PAYLOAD);
     expect(parsed.description).toContain(evilNote);
   });
+
+  it("log page AudioObject neutralizes a </script> and emits only once an observation exists", () => {
+    const track = {
+      addedAt: "2026-06-03T18:21:00.000Z",
+      artists: ["Axwell"],
+      durationMs: 215_000,
+      logId: "004.7.2I",
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1765534200000",
+      observationDurationMs: 34_000,
+      observationGeneratedAt: "2026-06-12T09:30:00.000Z",
+      spotifyUrl: "https://open.spotify.com/track/abc",
+      title: PAYLOAD,
+      trackId: "abc",
+    };
+
+    const head = LogRoute.options.head?.({
+      loaderData: { related: [], status: "found", track } as never,
+    } as never) as HeadResult;
+    const audio = ldChildren(head).find((c) => c.includes("AudioObject"));
+
+    expect(audio).toBeDefined();
+    // The observation AudioObject rides the same jsonLdScript rail: no raw breakout
+    // survives into the inline <script>, and the payload round-trips intact.
+    expect(audio).not.toContain("</script>");
+    expect(audio).toContain("\\u003c/script\\u003e");
+    const parsed = JSON.parse(audio as string) as { name: string };
+    expect(parsed.name).toContain(PAYLOAD);
+
+    // A finding with no rendered observation emits no AudioObject at all.
+    const bareHead = LogRoute.options.head?.({
+      loaderData: {
+        related: [],
+        status: "found",
+        track: { ...track, observationAudioUrl: undefined },
+      } as never,
+    } as never) as HeadResult;
+
+    expect(ldChildren(bareHead).find((c) => c.includes("AudioObject"))).toBeUndefined();
+  });
 });

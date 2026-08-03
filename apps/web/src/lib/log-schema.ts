@@ -33,6 +33,12 @@ export type LogSchemaInput = LogProseInput & {
   // `https://musicbrainz.org/recording/<mbid>` `sameAs` + a `musicbrainz-recording-id`
   // `identifier` PropertyValue. Absent until a fill path lands it (the honest degrade).
   mbRecordingId?: string;
+  // The spoken observation's public artefacts (the version-busted R2 audio URL, its
+  // length, its generated-at stamp) — the fields the AudioObject schema reads. All
+  // three come straight off the detail DTO; absent until an observation is rendered.
+  observationAudioUrl?: string;
+  observationDurationMs?: number;
+  observationGeneratedAt?: string;
   spotifyUrl: string;
   tiktokUrl?: string;
   title: string;
@@ -297,6 +303,39 @@ export function videoObjectJsonLd(
     publisher: { "@id": fluncleEntityId },
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
+    url: logPageUrl(track.logId),
+  };
+}
+
+/**
+ * The finding's spoken observation as an AudioObject — the schema identity for the
+ * audio that already renders and streams on the page, the audio twin of
+ * `videoObjectJsonLd`. Emitted only when the finding carries a rendered observation
+ * (`observationAudioUrl`); `contentUrl` is the version-busted R2 URL the page itself
+ * streams. Deliberately carries no spoken-text field in any form — the observation
+ * script is internal authoring fuel (admin-only), and publishing it is an unruled
+ * canon question.
+ */
+export function observationAudioObjectJsonLd(track: LogSchemaInput): Record<string, unknown> {
+  return {
+    "@context": "https://schema.org",
+    "@type": "AudioObject",
+    contentUrl: track.observationAudioUrl,
+    // The observation is Fluncle's own artefact — reference the ONE canonical entity node as
+    // both its creator and publisher, so the audio reconciles to the same `@id` as the finding.
+    creator: { "@id": fluncleEntityId },
+    description: definitionalProse(track),
+    // The length + the generated-at stamp, each omitted cleanly when the finding lacks it
+    // (the honest degrade — never a null or a guessed value).
+    ...(track.observationDurationMs
+      ? { duration: formatIsoDuration(track.observationDurationMs) }
+      : {}),
+    encodingFormat: "audio/mpeg",
+    name: artistTitleLine(track),
+    publisher: { "@id": fluncleEntityId },
+    ...(track.observationGeneratedAt
+      ? { uploadDate: uploadDateIso(track.observationGeneratedAt) }
+      : {}),
     url: logPageUrl(track.logId),
   };
 }

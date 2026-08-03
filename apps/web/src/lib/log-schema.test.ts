@@ -13,6 +13,7 @@ import {
   musicPlaylistJsonLd,
   musicRecordingJsonLd,
   newsletterBreadcrumbsJsonLd,
+  observationAudioObjectJsonLd,
   recordLabelJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
@@ -481,6 +482,62 @@ describe("videoObjectJsonLd (the finding's video schema)", () => {
     });
 
     expect(dateOnly.uploadDate).toBe("2026-06-29T00:00:00.000Z");
+  });
+});
+
+describe("observationAudioObjectJsonLd (the finding's spoken observation schema)", () => {
+  const jsonLd = observationAudioObjectJsonLd({
+    ...track,
+    observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1765534200000",
+    observationDurationMs: 34_000,
+    observationGeneratedAt: "2026-06-12T09:30:00.000Z",
+  });
+
+  it("is an AudioObject pointing at the version-busted observation audio, named Artist — Title", () => {
+    expect(jsonLd["@type"]).toBe("AudioObject");
+    expect(jsonLd.contentUrl).toBe(
+      "https://found.fluncle.com/004.7.2I/observation.mp3?v=1765534200000",
+    );
+    expect(jsonLd.encodingFormat).toBe("audio/mpeg");
+    expect(jsonLd.name).toBe("Axwell, 1991 — Nobody Else - 1991 Remix");
+    expect(jsonLd.url).toBe("https://www.fluncle.com/log/004.7.2I");
+  });
+
+  it("is created + published BY the one canonical Fluncle entity node (@id)", () => {
+    expect(jsonLd.creator).toEqual({ "@id": fluncleEntityId });
+    expect(jsonLd.publisher).toEqual({ "@id": fluncleEntityId });
+  });
+
+  it("mirrors the visible prose and carries the ISO-8601 length + a zoned generated-at uploadDate", () => {
+    expect(jsonLd.description).toBe(definitionalProse(track));
+    expect(jsonLd.duration).toBe("PT0M34S");
+    // A full ISO 8601 datetime WITH a timezone — the same GSC rule the VideoObject's
+    // uploadDate obeys (a bare date trips "invalid datetime"/"missing a timezone").
+    expect(jsonLd.uploadDate).toBe("2026-06-12T09:30:00.000Z");
+  });
+
+  it("normalizes a bare-date generated-at stamp to a zoned datetime", () => {
+    const dateOnly = observationAudioObjectJsonLd({
+      ...track,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3",
+      observationGeneratedAt: "2026-06-29",
+    });
+
+    expect(dateOnly.uploadDate).toBe("2026-06-29T00:00:00.000Z");
+  });
+
+  it("omits duration and uploadDate when the finding lacks them (the degraded render)", () => {
+    const spare = observationAudioObjectJsonLd({
+      ...track,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3",
+    });
+
+    expect(spare).not.toHaveProperty("duration");
+    expect(spare).not.toHaveProperty("uploadDate");
+  });
+
+  it("carries NO transcript in any form (the observation script stays admin-only)", () => {
+    expect(Object.keys(jsonLd)).not.toContain("transcript");
   });
 });
 

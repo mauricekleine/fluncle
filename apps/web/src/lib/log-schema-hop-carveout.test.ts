@@ -20,6 +20,7 @@ import {
   musicGroupJsonLd,
   musicPlaylistJsonLd,
   musicRecordingJsonLd,
+  observationAudioObjectJsonLd,
   recordLabelJsonLd,
 } from "./log-schema";
 
@@ -86,6 +87,12 @@ describe("JSON-LD keeps the RAW Spotify link, never the hop", () => {
       { artists: ["Calibre"], logId: "004.7.2I", title: "Nobody Else" },
     ] as never),
     musicRecording: musicRecordingJsonLd(track, "https://img/cover.jpg"),
+    observationAudioObject: observationAudioObjectJsonLd({
+      ...track,
+      observationAudioUrl: "https://found.fluncle.com/004.7.2I/observation.mp3?v=1765534200000",
+      observationDurationMs: 34_000,
+      observationGeneratedAt: "2026-06-12T09:30:00.000Z",
+    }),
     recordLabel: recordLabelJsonLd({
       artists: [{ name: "Calibre", slug: "calibre" }],
       name: "Signature",

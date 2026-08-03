@@ -42,6 +42,7 @@ import {
   mixtapeAlbumJsonLd,
   mixtapeVideoObjectJsonLd,
   musicRecordingJsonLd,
+  observationAudioObjectJsonLd,
   videoObjectJsonLd,
 } from "@/lib/log-schema";
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "@/lib/media";
@@ -244,6 +245,12 @@ function logHead(loaderData: LogPageData | undefined) {
         },
       )
     : undefined;
+  // The spoken observation's AudioObject — the audio twin of the VideoObject above,
+  // emitted only when the finding carries a rendered observation. The builder reads
+  // the observation fields (URL, duration, generated-at) straight off the track DTO.
+  const observationSchema = track.observationAudioUrl
+    ? observationAudioObjectJsonLd({ ...track, galaxy, logId })
+    : undefined;
 
   // The pane's poster frame — this page's LCP element. The loader already holds everything the URL
   // is built from, so preload it: otherwise the browser only finds it on the `<video poster>`
@@ -299,6 +306,7 @@ function logHead(loaderData: LogPageData | undefined) {
       jsonLdScript(recording),
       jsonLdScript(breadcrumbs),
       ...(videoSchema ? [jsonLdScript(videoSchema)] : []),
+      ...(observationSchema ? [jsonLdScript(observationSchema)] : []),
     ],
   };
 }
