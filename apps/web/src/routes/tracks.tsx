@@ -51,6 +51,7 @@ import {
   KEY_FILTER_OPTIONS,
   type TracksSearch,
   buildTracksHref,
+  parseTracksHubPayload,
   parseTracksSearch,
   tracksHead,
   tracksMastheadLine,
@@ -123,7 +124,10 @@ function pageParam(value: unknown): number | undefined {
 // when — a `?galaxy=` is present, the gate must settle before the filter set is known, so that path
 // alone keeps its leading round trip. The gate is never weakened to save it.
 const fetchTracksHubPage = createServerFn({ method: "GET" })
-  .validator((data: { filters: TracksHubFilters; page: number }) => data)
+  // A real runtime parse, not an identity cast: the fn is directly reachable over HTTP, so the
+  // payload is allowlisted to the hub's own axes before anything compiles (`certified` included —
+  // stripped here, API-only; the decision and the field rules live on `parseTracksHubPayload`).
+  .validator(parseTracksHubPayload)
   .handler(async ({ data }): Promise<TracksFetchResult> => {
     // Fired first and awaited last: the option lists ride alongside the page read rather than ahead
     // of it.

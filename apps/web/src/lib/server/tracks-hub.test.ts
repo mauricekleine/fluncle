@@ -26,6 +26,7 @@ vi.mock("./db", async (importOriginal) => {
 
 import { CatalogueHubPageOutOfRangeError } from "./labels";
 import { createIntegrationDb } from "./integration-db";
+import { parseTracksHubPayload } from "../tracks-search";
 import {
   type TracksHubEntry,
   TRACKS_HUB_PAGE_SIZE,
@@ -356,6 +357,33 @@ describe("listTracksHubPage — the filters compose with the page", () => {
     const { items } = await listTracksHubPage({ galaxy: "whatever" }, 1);
 
     expect(items).toEqual([]);
+  });
+});
+
+// The serverFn boundary, proven at the COMPILE boundary: the route's validator
+// (`parseTracksHubPayload`) is the only gate between a direct RPC payload and `tracksHubClauses`,
+// so what survives it is exactly what compiles. `compileFilters` would happily compile
+// `artist`/`album`/`text` (the `SearchFilters`-only axes) into LIKE/FTS clauses if they reached it —
+// the parse guarantees they never do from this surface.
+describe("the /tracks serverFn boundary never compiles beyond the hub vocabulary", () => {
+  it("a crafted payload's artist/album/text produce NO clauses; the hub axes still compile", () => {
+    const payload = {
+      filters: { album: "Ancestors EP", artist: "netsky", bpmMin: 170, text: "hospital" },
+      page: 1,
+    } as unknown as Parameters<typeof parseTracksHubPayload>[0];
+
+    const clauses = tracksHubClauses(parseTracksHubPayload(payload).filters);
+
+    // Only the legitimate bpm axis compiles — no artists_json LIKE, no album compare, no FTS probe.
+    expect(clauses.map((clause) => clause.sql)).toEqual(["tracks.bpm >= ?"]);
+  });
+
+  it("a crafted certified flag is stripped, so no is_catalogue clause compiles here", () => {
+    const payload = { filters: { certified: true }, page: 1 } as unknown as Parameters<
+      typeof parseTracksHubPayload
+    >[0];
+
+    expect(tracksHubClauses(parseTracksHubPayload(payload).filters)).toEqual([]);
   });
 });
 

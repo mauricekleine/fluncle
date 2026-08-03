@@ -107,6 +107,90 @@ export function parseTracksSearch(search: Record<string, unknown>): TracksSearch
   };
 }
 
+/** A field the payload carries at the wrong type — the boundary rejects it (never coerces it into a
+    compiled clause), and the serverFn call fails instead of answering a question nobody legitimately
+    asked. */
+class TracksHubPayloadError extends Error {
+  constructor(field: string, requirement: string) {
+    super(`Invalid /tracks payload: ${field} must be ${requirement}`);
+    this.name = "TracksHubPayloadError";
+  }
+}
+
+/** A payload number bound (bpm/year): absent stays absent; anything but a positive integer NUMBER is
+    rejected — a string "170" is a crafted payload, never the loader (which sends parsed numbers). */
+function strictPositiveInt(value: unknown, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new TracksHubPayloadError(field, "a positive integer");
+  }
+
+  return value;
+}
+
+/** A payload string axis (key/label/galaxy): absent stays absent; anything but a non-empty string is
+    rejected. Not trimmed — the loader sends `parseTracksSearch`'s already-trimmed values. */
+function strictFilterString(value: unknown, field: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TracksHubPayloadError(field, "a non-empty string");
+  }
+
+  return value;
+}
+
+/**
+ * The `/tracks` serverFn's runtime validator — PARSE, don't cast. The serverFn is an RPC endpoint a
+ * crafted request can reach directly, so its payload is untrusted however the loader types it: the
+ * boundary rebuilds the filter set from an explicit allowlist of the hub's axes (the same seven
+ * `parseTracksSearch` whitelists), strips every unknown field (`artist`/`album`/`text` are
+ * `SearchFilters`-only and must never reach `compileFilters` from here), and REJECTS a known field
+ * at the wrong type rather than coercing it into a clause.
+ *
+ * `certified` is STRIPPED, deliberately: the web page never sets it — it is the `list_tracks` API
+ * enumerator's filter, contract-validated on that surface — so this boundary offers no second,
+ * uncontracted door to it.
+ *
+ * The parameter type is the loader's shape so in-app callers stay type-checked; the body trusts
+ * none of it.
+ */
+export function parseTracksHubPayload(payload: { filters: TracksSearch; page: number }): {
+  filters: TracksSearch;
+  page: number;
+} {
+  const record: Record<string, unknown> =
+    typeof payload === "object" && payload !== null ? { ...payload } : {};
+  const rawFilters = record["filters"];
+
+  if (typeof rawFilters !== "object" || rawFilters === null) {
+    throw new TracksHubPayloadError("filters", "an object");
+  }
+
+  const filters = rawFilters as Record<string, unknown>;
+  const page = record["page"];
+
+  if (typeof page !== "number" || !Number.isInteger(page) || page < 1) {
+    throw new TracksHubPayloadError("page", "an integer >= 1");
+  }
+
+  return {
+    filters: {
+      bpmMax: strictPositiveInt(filters["bpmMax"], "bpmMax"),
+      bpmMin: strictPositiveInt(filters["bpmMin"], "bpmMin"),
+      galaxy: strictFilterString(filters["galaxy"], "galaxy"),
+      key: strictFilterString(filters["key"], "key"),
+      label: strictFilterString(filters["label"], "label"),
+      yearMax: strictPositiveInt(filters["yearMax"], "yearMax"),
+      yearMin: strictPositiveInt(filters["yearMin"], "yearMin"),
+    },
+    page,
+  };
+}
+
 /** True when ANY filter axis is active — the bit the head keys `noindex` off. */
 export function tracksSearchHasFilters(search: TracksSearch): boolean {
   return Object.values(search).some((value) => value !== undefined);
