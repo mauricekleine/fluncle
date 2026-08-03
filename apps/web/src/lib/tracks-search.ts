@@ -72,11 +72,14 @@ export const KEY_FILTER_OPTIONS: string[] = KEY_PITCH_CLASSES.flatMap((pitch) =>
   `${pitch} minor`,
 ]);
 
-/** A positive integer a reader typed (a year or a BPM); junk / non-finite / ≤ 0 folds to undefined. */
+/** A positive integer a reader typed (a year or a BPM); junk / non-finite / < 1 folds to undefined.
+    Truncation comes BEFORE the positivity check: a sub-1 fraction ("0.5") truncates to 0 and drops,
+    so this parse can never emit a value `parseTracksHubPayload`'s strict boundary would reject — the
+    loader's URL → filters → serverFn round-trip must always be accepted. */
 function positiveIntParam(value: unknown): number | undefined {
-  const n = Number(value);
+  const n = Math.trunc(Number(value));
 
-  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : undefined;
+  return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 /** A trimmed non-empty string param (a key or a label / galaxy slug); empty / non-string → undefined. */

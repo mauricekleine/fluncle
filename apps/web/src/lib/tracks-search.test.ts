@@ -68,6 +68,16 @@ describe("parseTracksSearch", () => {
     });
   });
 
+  it("folds a sub-1 fraction to undefined — truncation before positivity, never a 0", () => {
+    // "?bpmMin=0.5" must drop, not truncate to a 0 the serverFn boundary rejects: the loader's
+    // URL → parse → serverFn round-trip has to stay accepted for every URL a reader can type.
+    expect(parseTracksSearch({ bpmMin: "0.5" }).bpmMin).toBeUndefined();
+    expect(parseTracksSearch({ yearMin: "0.9" }).yearMin).toBeUndefined();
+    // A fraction at or above 1 still truncates to its integer part.
+    expect(parseTracksSearch({ bpmMin: "170.7" }).bpmMin).toBe(170);
+    expect(parseTracksSearch({ bpmMax: "1.5" }).bpmMax).toBe(1);
+  });
+
   it("trims strings and drops the empties", () => {
     expect(parseTracksSearch({ key: "  A minor  ", label: "   " })).toMatchObject({
       key: "A minor",
@@ -143,6 +153,41 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
     expect(() => parseTracksHubPayload(crafted({ filters: { galaxy: null }, page: 1 }))).toThrow(
       /galaxy/,
     );
+  });
+
+  it("accepts EVERY filter set parseTracksSearch can emit — the loader round-trip never rejects", () => {
+    // The lockstep property between the lenient URL parse and the strict payload boundary: whatever
+    // junk a URL carries, the parsed filters must pass the boundary untouched. One numeric axis and
+    // one string axis exercise both strict paths against the full junk vocabulary.
+    const rawValues = [
+      "0.5",
+      "0.9",
+      "1e-3",
+      "170.7",
+      "170",
+      "1e3",
+      "-4",
+      "0",
+      "",
+      "   ",
+      "NaN",
+      "Infinity",
+      "-Infinity",
+      "not-a-number",
+      "  A minor  ",
+      null,
+      undefined,
+      true,
+      ["170"],
+    ];
+
+    for (const bpmMin of rawValues) {
+      for (const key of rawValues) {
+        const filters = parseTracksSearch({ bpmMin, key });
+
+        expect(parseTracksHubPayload({ filters, page: 1 })).toEqual({ filters, page: 1 });
+      }
+    }
   });
 
   it("rejects a malformed envelope: a missing/non-object filters or a junk page", () => {
