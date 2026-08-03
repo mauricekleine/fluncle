@@ -276,6 +276,16 @@ export type AnchorSummary = {
    * anything is done about it — this slice deliberately changes NO stamping behaviour, it measures.
    */
   apifyTargetOmitted: number;
+  /**
+   * Apify CANDIDATES that arrived WITHOUT a numeric `durationMs` — the actor's item carried no
+   * `track_duration_ms`, so `itemToCandidate` normalized it to `null`. The Worker's verified-search
+   * gate hard-requires a numeric duration, so for an ISRC-less row such a candidate is a GUARANTEED
+   * silent drop, indistinguishable in every miss number from "the gate judged it and said no" —
+   * an actor payload class that omits durations zeroes the whole search gate while the exact-ISRC
+   * rung runs at full strength. Counted per CANDIDATE at the point the candidates are handed to the
+   * Worker, so the class has a size; the POST and the stamping are deliberately unchanged.
+   */
+  apifyDurationMsOmitted: number;
   /** Rows anchored by the Apify FALLBACK via the exact-ISRC gate. */
   anchoredByIsrc: number;
   /** Rows anchored by the FREE ListenBrainz rung — the waterfall's cheapest win (no Apify spent). */
@@ -685,6 +695,7 @@ export async function runAnchorTick(
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     apifyActorErrors: 0,
+    apifyDurationMsOmitted: 0,
     apifyTargetOmitted: 0,
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
@@ -931,6 +942,14 @@ export async function runAnchorTick(
       if (!byTarget.has(row.anchorQuery)) {
         summary.apifyTargetOmitted += 1;
       }
+
+      // THE DURATIONLESS TELL. A candidate with no numeric duration can never clear the Worker's
+      // verified-search gate (it hard-requires one), so for an ISRC-less row it is a guaranteed
+      // drop that reads as an ordinary miss. Counted per candidate; the candidates are still
+      // POSTed unchanged and the Worker's gates keep rejecting them — this measures, it does not act.
+      summary.apifyDurationMsOmitted += candidates.filter(
+        (candidate) => typeof candidate.durationMs !== "number",
+      ).length;
 
       try {
         const verdict = await deps.report(row.trackId, candidates);
@@ -1303,6 +1322,7 @@ export async function runAnchorSweep(
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
     apifyActorErrors: 0,
+    apifyDurationMsOmitted: 0,
     apifyTargetOmitted: 0,
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
@@ -1371,6 +1391,7 @@ export async function runAnchorSweep(
     // is already counted as `missed`, and a deferred Spotify leg is a row that simply took a
     // different (cheaper) path through the same waterfall.
     merged.apifyTargetOmitted += page.apifyTargetOmitted;
+    merged.apifyDurationMsOmitted += page.apifyDurationMsOmitted;
     merged.deezerHitsDroppedIncomplete += page.deezerHitsDroppedIncomplete;
     merged.deezerSearchFailed += page.deezerSearchFailed;
     merged.failed += page.failed;

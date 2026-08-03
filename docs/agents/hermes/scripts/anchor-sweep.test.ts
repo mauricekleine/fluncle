@@ -892,7 +892,7 @@ describe("runAnchorTick", () => {
     expect(asked.length).toBe(2);
   });
 
-  // ── THE TWO OBSERVABILITY COUNTERS ─────────────────────────────────────────────────────────────
+  // ── THE OBSERVABILITY COUNTERS ─────────────────────────────────────────────────────────────────
   test("counts the rows whose query the Apify dataset came back WITHOUT", async () => {
     const summary = await runAnchorTick(
       50,
@@ -907,6 +907,52 @@ describe("runAnchorTick", () => {
     // STAMPING IS UNCHANGED — the row is still a clean miss. This slice measures the class, it does
     // not act on it.
     expect(summary.missed).toBe(3);
+  });
+
+  test("counts Apify candidates that arrive without a numeric durationMs", async () => {
+    const posted: { candidates: { durationMs?: null | number }[]; trackId: string }[] = [];
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([{ anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" }]),
+        report: (trackId, candidates) => {
+          posted.push({ candidates, trackId });
+
+          return Promise.resolve({ anchored: false, verifiedBy: null });
+        },
+        runActor: () =>
+          Promise.resolve([
+            APIFY_SAMPLE[0],
+            {
+              // The durationless shape: the actor answered for the query, but the item carries no
+              // `track_duration_ms` — `itemToCandidate` normalizes it to `durationMs: null`.
+              artists: [{ artist_name: "Azuro" }],
+              error: null,
+              success: true,
+              target: "Azuro Hold Tight",
+              tracks: [
+                {
+                  track_id: "3durationlessTrackId00",
+                  track_isrc: "QZK6L2216561",
+                  track_name: "Hold Tight - Extended",
+                },
+              ],
+            },
+          ]),
+      }),
+    );
+
+    expect(summary.apifyDurationMsOmitted).toBe(1);
+    // BEHAVIOUR IS UNCHANGED — both candidates still reach the Worker, the durationless one with
+    // its normalized `durationMs: null`, and the row is still a clean miss. The counter measures
+    // the class, it does not act on it.
+    expect(posted.length).toBe(1);
+    expect(posted[0].trackId).toBe("mb_hold");
+    expect(posted[0].candidates.map((candidate) => candidate.durationMs)).toEqual([319_112, null]);
+    expect(summary.missed).toBe(1);
+    // Distinct from the blackout tell: the actor DID answer for this query.
+    expect(summary.apifyTargetOmitted).toBe(0);
   });
 
   test("counts Deezer hits withheld for a missing gate signal", async () => {
@@ -1272,6 +1318,30 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.isrcRecoveredByDeezer).toBe(4);
     // No page's row carried a `deezerQuery`, so no search ran and nothing failed.
     expect(summary.deezerSearchFailed).toBe(0);
+  });
+
+  test("carries the durationless-candidate tally across pages", async () => {
+    const base = pagedDeps([rows("a", 2), rows("b", 2)]);
+    const summary = await runAnchorSweep(
+      4,
+      {
+        ...base,
+        resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+        // Every query gets one candidate with no `track_duration_ms` — 2 per page, 4 in the sweep.
+        runActor: (queries) =>
+          Promise.resolve(
+            queries.map((query) => ({
+              success: true,
+              target: query,
+              tracks: [{ track_id: `id-${query}` }],
+            })),
+          ),
+      },
+      2,
+    );
+
+    expect(summary.pages).toBe(2);
+    expect(summary.apifyDurationMsOmitted).toBe(4);
   });
 
   test("carries the ListenBrainz failure counters across pages", async () => {
