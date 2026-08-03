@@ -52,17 +52,24 @@ describe("the hub OG card", () => {
     }
   });
 
-  it.each([["?hub=galaxies"], ["?hub="], [""]])(
-    "404s an invalid hub (%s) before any DB read",
-    async (query) => {
-      const res = await getCard(query);
+  // The prototype keys probe the lookup itself: `HUB_CARDS` must resolve own keys only,
+  // or `?hub=constructor` walks up to Object.prototype and slips past the 404 guard.
+  it.each([
+    ["?hub=galaxies"],
+    ["?hub="],
+    [""],
+    ["?hub=constructor"],
+    ["?hub=__proto__"],
+    ["?hub=toString"],
+    ["?hub=hasOwnProperty"],
+  ])("404s an invalid hub (%s) before any DB read", async (query) => {
+    const res = await getCard(query);
 
-      expect(res.status).toBe(404);
-      for (const count of COUNTS) {
-        expect(count).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(res.status).toBe(404);
+    for (const count of COUNTS) {
+      expect(count).not.toHaveBeenCalled();
+    }
+  });
 
   it.each([
     ["artists", countIndexableArtists, "1,234 drum & bass artists, A to Z."],

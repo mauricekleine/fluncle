@@ -99,9 +99,10 @@ export const serverHandlers = {
   GET: async ({ request }: { request: Request }) => {
     const url = new URL(request.url);
     // Validate BEFORE any DB read: an unknown (or absent) hub never reaches Turso and
-    // never pays the WASM raster — it is a plain 404.
+    // never pays the WASM raster — it is a plain 404. Own keys only: a prototype key
+    // (`?hub=constructor`) must not resolve through the object literal's chain.
     const hub = url.searchParams.get("hub");
-    const card = hub === null ? undefined : HUB_CARDS[hub];
+    const card = hub !== null && Object.hasOwn(HUB_CARDS, hub) ? HUB_CARDS[hub] : undefined;
 
     if (!card) {
       return new Response("Not Found", { status: 404 });
