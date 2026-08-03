@@ -94,6 +94,7 @@ import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiMeAvatarRouteImport } from './routes/api/me/avatar'
 import { Route as ApiMixtapeCoverLogIdRouteImport } from './routes/api/mixtape-cover.$logId'
 import { Route as ApiOgLogIdRouteImport } from './routes/api/og.$logId'
+import { Route as ApiOgHubRouteImport } from './routes/api/og.hub'
 import { Route as ApiOgSetRouteImport } from './routes/api/og.set'
 import { Route as ApiPreviewIdOrLogIdRouteImport } from './routes/api/preview.$idOrLogId'
 import { Route as ApiV1ChatRouteImport } from './routes/api/v1/chat'
@@ -572,6 +573,11 @@ const ApiOgLogIdRoute = ApiOgLogIdRouteImport.update({
   path: '/api/og/$logId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiOgHubRoute = ApiOgHubRouteImport.update({
+  id: '/api/og/hub',
+  path: '/api/og/hub',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiOgSetRoute = ApiOgSetRouteImport.update({
   id: '/api/og/set',
   path: '/api/og/set',
@@ -946,6 +952,7 @@ export interface FileRoutesByFullPath {
   '/api/me/avatar': typeof ApiMeAvatarRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
+  '/api/og/hub': typeof ApiOgHubRoute
   '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/v1/chat': typeof ApiV1ChatRoute
@@ -1082,6 +1089,7 @@ export interface FileRoutesByTo {
   '/api/me/avatar': typeof ApiMeAvatarRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
+  '/api/og/hub': typeof ApiOgHubRoute
   '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/v1/chat': typeof ApiV1ChatRoute
@@ -1221,6 +1229,7 @@ export interface FileRoutesById {
   '/api/me/avatar': typeof ApiMeAvatarRoute
   '/api/mixtape-cover/$logId': typeof ApiMixtapeCoverLogIdRoute
   '/api/og/$logId': typeof ApiOgLogIdRoute
+  '/api/og/hub': typeof ApiOgHubRoute
   '/api/og/set': typeof ApiOgSetRoute
   '/api/preview/$idOrLogId': typeof ApiPreviewIdOrLogIdRoute
   '/api/v1/chat': typeof ApiV1ChatRoute
@@ -1361,6 +1370,7 @@ export interface FileRouteTypes {
     | '/api/me/avatar'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
+    | '/api/og/hub'
     | '/api/og/set'
     | '/api/preview/$idOrLogId'
     | '/api/v1/chat'
@@ -1497,6 +1507,7 @@ export interface FileRouteTypes {
     | '/api/me/avatar'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
+    | '/api/og/hub'
     | '/api/og/set'
     | '/api/preview/$idOrLogId'
     | '/api/v1/chat'
@@ -1635,6 +1646,7 @@ export interface FileRouteTypes {
     | '/api/me/avatar'
     | '/api/mixtape-cover/$logId'
     | '/api/og/$logId'
+    | '/api/og/hub'
     | '/api/og/set'
     | '/api/preview/$idOrLogId'
     | '/api/v1/chat'
@@ -1749,6 +1761,7 @@ export interface RootRouteChildren {
   ApiMeAvatarRoute: typeof ApiMeAvatarRoute
   ApiMixtapeCoverLogIdRoute: typeof ApiMixtapeCoverLogIdRoute
   ApiOgLogIdRoute: typeof ApiOgLogIdRoute
+  ApiOgHubRoute: typeof ApiOgHubRoute
   ApiOgSetRoute: typeof ApiOgSetRoute
   ApiPreviewIdOrLogIdRoute: typeof ApiPreviewIdOrLogIdRoute
   ApiV1ChatRoute: typeof ApiV1ChatRoute
@@ -2397,6 +2410,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiOgLogIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/og/hub': {
+      id: '/api/og/hub'
+      path: '/api/og/hub'
+      fullPath: '/api/og/hub'
+      preLoaderRoute: typeof ApiOgHubRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/og/set': {
       id: '/api/og/set'
       path: '/api/og/set'
@@ -2911,6 +2931,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMeAvatarRoute: ApiMeAvatarRoute,
   ApiMixtapeCoverLogIdRoute: ApiMixtapeCoverLogIdRoute,
   ApiOgLogIdRoute: ApiOgLogIdRoute,
+  ApiOgHubRoute: ApiOgHubRoute,
   ApiOgSetRoute: ApiOgSetRoute,
   ApiPreviewIdOrLogIdRoute: ApiPreviewIdOrLogIdRoute,
   ApiV1ChatRoute: ApiV1ChatRoute,

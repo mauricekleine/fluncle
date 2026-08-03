@@ -125,16 +125,24 @@ function pagedMeta(page: number): { description: string; title: string } {
 
 /** The base meta tag set for a canonical + title/description pair (shared by both views). */
 function metaTagsFor(canonical: string, meta: { description: string; title: string }) {
+  // The hub's own Satori card (routes/api/og.hub.ts), with the /log head's full image
+  // shape (width/height/type + twitter:image) so every unfurler sizes it right.
+  const ogImage = `${siteUrl}/api/og/hub?hub=artists`;
+
   return [
     { title: meta.title },
     { content: meta.description, name: "description" },
     { content: meta.title, property: "og:title" },
     { content: meta.description, property: "og:description" },
-    { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
+    { content: ogImage, property: "og:image" },
+    { content: "1200", property: "og:image:width" },
+    { content: "630", property: "og:image:height" },
+    { content: "image/png", property: "og:image:type" },
     { content: canonical, property: "og:url" },
     { content: "summary_large_image", name: "twitter:card" },
     { content: meta.title, name: "twitter:title" },
     { content: meta.description, name: "twitter:description" },
+    { content: ogImage, name: "twitter:image" },
   ];
 }
 
