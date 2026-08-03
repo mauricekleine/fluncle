@@ -87,17 +87,19 @@ import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } f
 export const TRACKS_HUB_PAGE_SIZE = 48;
 
 /**
- * The hub's filter axes. The shared six MIRROR `SearchFiltersSchema` VERBATIM
+ * The hub's filter axes. The shared six are `Pick`ed from the contract's `SearchFilters`
  * (`yearMin`/`yearMax`, `bpmMin`/`bpmMax`, `key`, `label`) — same names, same semantics, compiled by
- * the same `compileFilters` — so one filter vocabulary reads the same on `/search` and here.
+ * the same `compileFilters` — so one filter vocabulary reads the same on `/search` and here, typed
+ * from ONE source.
  *
  * `galaxy` (a galaxy SLUG) is the one extension beyond that schema. Because a galaxy lives on
  * `findings.galaxy_id`, filtering by it structurally narrows the list to certified findings — the
  * filtered list simply contains only lit rows, rendered honestly.
  */
-export type TracksHubFilters = {
-  bpmMax?: number;
-  bpmMin?: number;
+export type TracksHubFilters = Pick<
+  SearchFilters,
+  "bpmMax" | "bpmMin" | "key" | "label" | "yearMax" | "yearMin"
+> & {
   // The `list_tracks` API enumerator's tri-state certification filter (the machine twin's ONE filter):
   // `true` narrows to certified findings, `false` to the uncertified rows, `undefined` returns both.
   // Folded into the SAME compiled clause set as every other filter (one gate, no forked query); it reads
@@ -105,10 +107,6 @@ export type TracksHubFilters = {
   // `/tracks` page never sets it (its register split is visual, not a filter) — this is API-only.
   certified?: boolean;
   galaxy?: string;
-  key?: string;
-  label?: string;
-  yearMax?: number;
-  yearMin?: number;
 };
 
 /**
@@ -172,19 +170,6 @@ function galaxyClause(slug: string): Clause {
   };
 }
 
-/** The hub's filter set as the shared `SearchFilters` vocabulary — the subset `/search` compiles,
-    and the ONE place the mapping lives, so the clause builder and the id resolver see one object. */
-function sharedFilters(filters: TracksHubFilters): SearchFilters {
-  return {
-    bpmMax: filters.bpmMax,
-    bpmMin: filters.bpmMin,
-    key: filters.key,
-    label: filters.label,
-    yearMax: filters.yearMax,
-    yearMin: filters.yearMin,
-  };
-}
-
 /**
  * Resolve the hub's one name filter — the imprint — to its indexed `labels.id`, so the label clause
  * compiles to `tracks.label_id = ?` instead of `lower(tracks.label) = ?` (backlog Wave 3-2). ONE
@@ -195,7 +180,7 @@ function sharedFilters(filters: TracksHubFilters): SearchFilters {
 export async function resolveTracksHubEntities(
   filters: TracksHubFilters,
 ): Promise<ResolvedFilterEntities> {
-  return resolveFilterEntities(sharedFilters(filters));
+  return resolveFilterEntities(filters);
 }
 
 /** Assemble the where-clause set: the shared compiled filters + the galaxy extension. `resolved` is
@@ -205,9 +190,9 @@ export function tracksHubClauses(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
 ): Clause[] {
-  // The shared six, compiled by the SAME function `/search` uses. Only the shared subset is passed
-  // — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's filter vocabulary.
-  const clauses = compileFilters(sharedFilters(filters), resolved);
+  // The shared six, compiled by the SAME function `/search` uses. The hub type carries only that
+  // subset — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's vocabulary.
+  const clauses = compileFilters(filters, resolved);
 
   if (filters.galaxy) {
     clauses.push(galaxyClause(filters.galaxy));
