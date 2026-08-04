@@ -4,7 +4,7 @@
 // a Hermes gateway cron (a proxied yt-dlp fetch has an unbounded tail that would starve
 // the 5-min sweeps). For each track still needing a capture — a certified FINDING or, once
 // the operator opens the budget, an uncertified CATALOGUE row — it downloads the full song
-// ONCE (yt-dlp → a YouTube match, through a residential proxy on a per-track STICKY
+// ONCE (yt-dlp → a duration-gated public-stream match, through a residential proxy on a per-track STICKY
 // session), duration-guards the match against the track's Spotify length, stores the
 // bytes in the PRIVATE `fluncle-source-audio` R2 bucket (a finding under `<logId>/…`, a
 // catalogue row under `catalogue/<trackId>/…`), and writes the key + status back via the
@@ -72,7 +72,7 @@
 //   - The proxy session must be STICKY per track: `__sessid.<logId>` on the username pins
 //     one exit IP for the whole download, or googlevideo 403s the media-bytes fetch (the
 //     CDN IP-locks the URL to the player-JSON IP). A rotating session fails.
-//   - The match is a title/artist YouTube result, NOT Spotify's master, so a wrong-VERSION
+//   - The match is a title/artist public-stream result, NOT Spotify's master, so a wrong-VERSION
 //     match (remix/live/sped-up/nightcore/radio-edit) is the real failure mode — the
 //     DURATION GUARD (accept only within tolerance of the finding's durationMs) + a
 //     de-rank of remix/live markers catch it → `unmatched` on a mismatch.
@@ -98,7 +98,7 @@
 //     on the proxy exit, which no client fallback clears), re-roll the sticky session ONCE
 //     per run (`<id>.r1`, a fresh residential exit) and retry; search and download share
 //     the one re-roll, and a run challenged on both exits leaves the rest to backoff.
-//   - On a 403 that survives the sticky session, retry the download once with
+//   - On a YouTube 403 that survives the sticky session, retry the download once with
 //     `--extractor-args youtube:player_client=tv,web_safari` before marking `failed`. The
 //     challenge is tested FIRST and the 403 match is ANCHORED (`HTTP Error 403` /
 //     `status code 403`, never a bare `403`): a challenge stderr that also carries a 403 —
@@ -222,15 +222,16 @@ const TOLERANCE_PCT = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_PCT ?? "0.03"
 const DOWNLOAD_ATTEMPTS = Number(process.env.FLUNCLE_CAPTURE_DOWNLOAD_ATTEMPTS ?? "3");
 
 // How many differently-shaped SEARCHES to spend on a finding before declaring `unmatched`.
-// Default 2 = the primary `<artists> <title>` query PLUS one de-constrained fallback (primary
-// artist + a version-stripped title, `buildSearchQuery` variant 1). The fallback is BILLED ONLY
-// when the primary returned ZERO RAW candidates — the over-constrained multi-artist credit or the
-// odd-punctuation title that found nothing on YouTube — never when candidates came back and missed
-// the duration guard (then the song genuinely isn't there at that length). This is the ONLY
-// per-search cost knob: the ceiling is exactly this many billed proxy searches per finding, and the
-// walk never loops. Set to 1 to disable the fallback and restore the single-search behaviour.
-// 3 = the full search ladder (raw ytsearch → music search → normalized fallback on music).
-const QUERY_VARIANTS = Number(process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? "3");
+// Each later rung is billed only when every earlier one produced ZERO RANKED SURVIVORS after the
+// duration gate. This is the ONLY per-search cost knob: the ceiling is exactly this many billed
+// proxy searches per finding, and the walk never loops. Set to 1 to keep only the historic raw
+// YouTube search.
+// 4 = the full search ladder (raw ytsearch → music search → normalized fallback on music →
+// duration-gated SoundCloud search).
+export const DEFAULT_QUERY_VARIANTS = 4;
+const QUERY_VARIANTS = Number(
+  process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? String(DEFAULT_QUERY_VARIANTS),
+);
 
 // ── THE PROVENANCE PHASE'S BUDGET (see THE PROVENANCE PHASE below) ───────────────────
 //
@@ -375,7 +376,11 @@ export function buildStickyProxyUrl(options: {
  * works: a fresh sticky session (a new residential exit). Pure; pinned by tests.
  */
 export function isBotChallengeStderr(stderr: string): boolean {
-  return /Sign in to confirm|not a bot|Please sign in/i.test(stderr);
+  const soundCloudRateLimit =
+    /soundcloud/i.test(stderr) &&
+    /HTTP Error 429|status code 429|Too Many Requests|reached the API rate limit/i.test(stderr);
+
+  return /Sign in to confirm|not a bot|Please sign in/i.test(stderr) || soundCloudRateLimit;
 }
 
 /** What a failed yt-dlp download's stderr says about WHY, and so about what to try next. */
@@ -396,12 +401,20 @@ export type DownloadErrorFlags = {
  * is not hypothetical: per the yt-dlp wiki it is what a missing PO token produces.
  */
 export function classifyDownloadFailure(stderr: string): DownloadErrorFlags {
+  const soundCloudFailure = /soundcloud/i.test(stderr);
+  const soundCloudCandidateFailure =
+    soundCloudFailure &&
+    /HTTP Error 429|status code 429|Too Many Requests|reached the API rate limit|geo(?:graphically)? restricted|not available in your country|not publicly available|private track|track is private/i.test(
+      stderr,
+    );
+
   return {
     is403: /HTTP Error 403|status code 403/.test(stderr),
     isBotChallenge: isBotChallengeStderr(stderr),
-    // DRM-locked or bot-walled: this specific VIDEO can't be pulled, but another candidate
-    // for the same finding often can → the caller falls through to the next-ranked one.
-    isRecoverable: /DRM protected|Sign in to confirm|not a bot/i.test(stderr),
+    // A source-specific dead candidate must not abort the whole ladder. A SoundCloud rate limit
+    // also stays retryable after the sticky-session re-roll has been spent.
+    isRecoverable:
+      /DRM protected|Sign in to confirm|not a bot/i.test(stderr) || soundCloudCandidateFailure,
   };
 }
 
@@ -420,11 +433,12 @@ export type DownloadRecovery = "reroll" | "player-client-fallback" | "give-up";
 export function chooseDownloadRecovery(
   flags: DownloadErrorFlags,
   canReroll: boolean,
+  source: CaptureSearchSource = "youtube",
 ): DownloadRecovery {
   if (flags.isBotChallenge && canReroll) {
     return "reroll";
   }
-  if (flags.is403) {
+  if (flags.is403 && source !== "soundcloud") {
     return "player-client-fallback";
   }
   return "give-up";
@@ -804,6 +818,55 @@ export function normalizeSearchQuery(value: string): string {
     .replace(/\s+/g, " ");
 }
 
+export type CaptureSearchSource = "music" | "soundcloud" | "youtube";
+
+export type CaptureSearchRung = {
+  query: string;
+  source: CaptureSearchSource;
+};
+
+/**
+ * The one bounded search ladder used by capture and both provenance passes. SoundCloud is last:
+ * every YouTube and YouTube Music shape gets first refusal, and the duration guard still decides
+ * whether any search result is a survivor.
+ */
+export function buildCaptureSearchLadder(
+  finding: { artists?: readonly string[]; title?: string },
+  queryVariants = QUERY_VARIANTS,
+): CaptureSearchRung[] {
+  const primaryQuery = buildSearchQuery(finding, 0);
+  const fallbackQuery = normalizeSearchQuery(buildSearchQuery(finding, 1));
+
+  return [
+    { query: primaryQuery, source: "youtube" },
+    { query: primaryQuery, source: "music" },
+    ...(fallbackQuery && fallbackQuery !== primaryQuery
+      ? [{ query: fallbackQuery, source: "music" as const }]
+      : []),
+    { query: primaryQuery, source: "soundcloud" },
+  ].slice(0, Math.max(1, queryVariants));
+}
+
+/** The yt-dlp target for one ladder rung. */
+export function buildCaptureSearchTarget(source: CaptureSearchSource, query: string): string[] {
+  if (source === "music") {
+    return [
+      "--playlist-items",
+      "1:5",
+      `https://music.youtube.com/search?q=${encodeURIComponent(query)}`,
+    ];
+  }
+
+  return [`${source === "soundcloud" ? "scsearch5" : "ytsearch5"}:${query}`];
+}
+
+/** The stable extractor URL for a search result's source-local id. */
+export function buildCaptureDownloadUrl(source: CaptureSearchSource, id: string): string {
+  return source === "soundcloud"
+    ? `https://api.soundcloud.com/tracks/${encodeURIComponent(id)}`
+    : `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
+}
+
 /**
  * Normalize a YouTube channel name (or a release label) to a comparison key: lowercase, map
  * `&`→`and`, strip the boilerplate suffixes labels tack on (records/recordings/music/audio/
@@ -901,6 +964,8 @@ export type YtCandidate = {
   channelId?: string;
   durationSec: number;
   id: string;
+  /** Absent only in pure-helper tests and legacy callers, where YouTube remains the default. */
+  source?: CaptureSearchSource;
   title: string;
   verified?: boolean;
 };
@@ -956,6 +1021,26 @@ export function rankCandidates(
   );
 
   return scored.map(({ candidate, trust }) => ({ candidate, trust }));
+}
+
+/**
+ * Walk the bounded ladder until one rung produces duration-gated survivors. The callback keeps
+ * subprocess and proxy-session policy outside this pure control-flow seam, while tests can prove
+ * that a later source is never reached early.
+ */
+export function findFirstRankedCaptureRung(
+  rungs: readonly CaptureSearchRung[],
+  context: Parameters<typeof rankCandidates>[1],
+  search: (rung: CaptureSearchRung, step: number) => readonly YtCandidate[],
+): { ranked: ReturnType<typeof rankCandidates>; rung: CaptureSearchRung } | null {
+  for (const [step, rung] of rungs.entries()) {
+    const ranked = rankCandidates(search(rung, step), context);
+    if (ranked.length > 0) {
+      return { ranked, rung };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1304,21 +1389,14 @@ async function patchTrack(trackId: string, update: Record<string, unknown>): Pro
 function runYtSearch(
   proxyUrl: string,
   query: string,
-  source: "music" | "youtube" = "youtube",
+  source: CaptureSearchSource = "youtube",
 ): YtCandidate[] {
-  // Both sources resolve every entry fully (duration/channel/verified — the same billed
-  // shape). "youtube" is the historic ytsearch5. "music" searches the SAME inventory
+  // Every source returns the flat duration/id/title shape the ranker needs. "youtube" is the
+  // historic ytsearch5. "music" searches the SAME inventory
   // through music.youtube.com, where the auto-generated `<Artist> - Topic` art-tracks
   // that plain search buries rank first — measured 2026-07-14: it recovered 61% of the
   // catalogue's terminal-unmatched rows, duration-verified.
-  const target =
-    source === "music"
-      ? [
-          "--playlist-items",
-          "1:5",
-          `https://music.youtube.com/search?q=${encodeURIComponent(query)}`,
-        ]
-      : [`ytsearch5:${query}`];
+  const target = buildCaptureSearchTarget(source, query);
   const result = spawnSync(
     YT_DLP_BIN,
     [
@@ -1364,6 +1442,7 @@ function runYtSearch(
       channelId: naToUndefined(channelIdRaw),
       durationSec: Number(durationRaw),
       id,
+      source,
       title: titleParts.join("\t"),
       verified: verifiedRaw === "True",
     });
@@ -1371,13 +1450,14 @@ function runYtSearch(
   return candidates;
 }
 
-/** Download one video id's best audio into `dir`. Returns the produced file path + ext. */
+/** Download one candidate's best audio into `dir`. Returns the produced file path + ext. */
 function runYtDownload(
   proxyUrl: string,
-  videoId: string,
+  candidate: YtCandidate,
   dir: string,
   playerClientFallback: boolean,
 ): { ext: string; path: string } {
+  const source = candidate.source ?? "youtube";
   const base = join(dir, "audio");
   const args = [
     "--proxy",
@@ -1391,10 +1471,10 @@ function runYtDownload(
     "-o",
     `${base}.%(ext)s`,
   ];
-  if (playerClientFallback) {
+  if (playerClientFallback && source !== "soundcloud") {
     args.push("--extractor-args", "youtube:player_client=tv,web_safari");
   }
-  args.push(`https://www.youtube.com/watch?v=${videoId}`);
+  args.push(buildCaptureDownloadUrl(source, candidate.id));
 
   const result = spawnSync(YT_DLP_BIN, args, {
     encoding: "utf8",
@@ -1418,7 +1498,7 @@ function runYtDownload(
 }
 
 /**
- * Download ONE 30-second section of a video id — the catalogue ladder's probe, and the reason that
+ * Download ONE 30-second section of a candidate — the catalogue ladder's probe, and the reason that
  * ladder is affordable at 30,672 rows.
  *
  * `--download-sections` makes yt-dlp spawn ffmpeg, which does the fetching itself and over-reads the
@@ -1433,10 +1513,11 @@ function runYtDownload(
  */
 function runYtSection(
   proxyUrl: string,
-  videoId: string,
+  candidate: YtCandidate,
   dir: string,
   playerClientFallback: boolean,
 ): { ext: string; path: string } {
+  const source = candidate.source ?? "youtube";
   const base = join(dir, "section");
   const args = [
     "--proxy",
@@ -1453,11 +1534,11 @@ function runYtSection(
     `${base}.%(ext)s`,
   ];
 
-  if (playerClientFallback) {
+  if (playerClientFallback && source !== "soundcloud") {
     args.push("--extractor-args", "youtube:player_client=tv,web_safari");
   }
 
-  args.push(`https://www.youtube.com/watch?v=${videoId}`);
+  args.push(buildCaptureDownloadUrl(source, candidate.id));
 
   const result = spawnSync(YT_DLP_BIN, args, {
     encoding: "utf8",
@@ -1650,6 +1731,7 @@ export type VerifiedUpload = {
   digest: string;
   ext: string;
   path: string;
+  source: CaptureSearchSource;
   /** `match` = fingerprint-verified. `no-reference` = the honest abstain (nothing was compared). */
   verdict: "match" | "no-reference";
   videoId: string;
@@ -1679,7 +1761,6 @@ async function findVerifiedUpload(options: {
 }): Promise<VerifiedUpload | null> {
   const { dir, finding, memory, session } = options;
   const { trackId } = finding;
-  const primaryQuery = buildSearchQuery(finding, 0);
 
   // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
   // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
@@ -1693,42 +1774,32 @@ async function findVerifiedUpload(options: {
   //      unmatched set, duration-verified.
   //   3. the normalized de-constrained variant (primary artist + version-stripped title,
   //      typographic punctuation folded) on music — +20 rows the raw shape missed.
+  //   4. the raw query on SoundCloud, reached only after every YouTube rung produced zero
+  //      duration-gated survivors.
   const rankContext = {
     artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
     durationMs: finding.durationMs,
     label: finding.label,
     title: finding.title,
   };
-  const fallbackQuery = normalizeSearchQuery(buildSearchQuery(finding, 1));
-  const ladder: { query: string; source: "music" | "youtube" }[] = [
-    { query: primaryQuery, source: "youtube" },
-    { query: primaryQuery, source: "music" },
-    ...(fallbackQuery && fallbackQuery !== primaryQuery
-      ? [{ query: fallbackQuery, source: "music" as const }]
-      : []),
-  ].slice(0, Math.max(1, QUERY_VARIANTS));
+  const ladder = buildCaptureSearchLadder(finding);
 
-  let candidates: YtCandidate[] = [];
-  let ranked: ReturnType<typeof rankCandidates> = [];
-  for (const [step, rung] of ladder.entries()) {
+  const found = findFirstRankedCaptureRung(ladder, rankContext, (rung, step) => {
     if (step > 0) {
       log(
         `no accepted candidate yet — ladder step ${step + 1}/${ladder.length}: ${rung.source} search "${rung.query}"`,
       );
     }
     try {
-      candidates = runYtSearch(session.url, rung.query, rung.source);
+      return runYtSearch(session.url, rung.query, rung.source);
     } catch (error) {
       if (!(error as { isBotChallenge?: boolean }).isBotChallenge || !session.reroll("search")) {
         throw error;
       }
-      candidates = runYtSearch(session.url, rung.query, rung.source);
+      return runYtSearch(session.url, rung.query, rung.source);
     }
-    ranked = rankCandidates(candidates, rankContext);
-    if (ranked.length > 0) {
-      break;
-    }
-  }
+  });
+  const ranked = found?.ranked ?? [];
 
   // The ladder concluded and nothing survived the duration guard. The CALLER owns what that
   // means and what it writes: for capture it is a terminal `unmatched`, for the provenance
@@ -1783,11 +1854,15 @@ async function findVerifiedUpload(options: {
     try {
       let file: { ext: string; path: string };
       try {
-        file = runYtDownload(session.url, candidate.candidate.id, dir, false);
+        file = runYtDownload(session.url, candidate.candidate, dir, false);
       } catch (error) {
         const flags = error as DownloadErrorFlags;
         // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll`.
-        const recovery = chooseDownloadRecovery(flags, session.rerollable());
+        const recovery = chooseDownloadRecovery(
+          flags,
+          session.rerollable(),
+          candidate.candidate.source,
+        );
 
         // Metered whichever branch wins — a challenge the run cannot clear is still a
         // challenge, and its visibility must not ride on there being a re-roll left.
@@ -1799,9 +1874,9 @@ async function findVerifiedUpload(options: {
           // A fresh exit usually clears the challenge for the SAME candidate; if it
           // throws again the outer catch handles it as before (recoverable → next
           // candidate, since the run's one re-roll is now spent).
-          file = runYtDownload(session.url, candidate.candidate.id, dir, false);
+          file = runYtDownload(session.url, candidate.candidate, dir, false);
         } else if (recovery === "player-client-fallback") {
-          file = runYtDownload(session.url, candidate.candidate.id, dir, true);
+          file = runYtDownload(session.url, candidate.candidate, dir, true);
         } else {
           throw error;
         }
@@ -1853,6 +1928,7 @@ async function findVerifiedUpload(options: {
         digest: fileDigest,
         ext: file.ext,
         path: file.path,
+        source: candidate.candidate.source ?? "youtube",
         verdict,
         videoId: candidate.candidate.id,
       };
@@ -1988,7 +2064,7 @@ async function captureFinding(
     // the words "matched by audio fingerprint" on a page under a match that never happened.
     // The server re-checks this same condition (lib/server/track-update.ts) rather than
     // trusting the box, but the honest source is here.
-    if (accepted.verdict === "match") {
+    if (accepted.verdict === "match" && accepted.source !== "soundcloud") {
       update.youtubeVideoId = accepted.videoId;
     }
     if (memory.dirty) {
@@ -2055,8 +2131,8 @@ async function captureFinding(
 //      fingerprint across the LONGER one over every offset, so a clip taken from 0:30 of the
 //      candidate finds its place anywhere inside the archived master by construction.
 //
-//   3. THE RESIDUAL LADDER — the remaining search variants (music.youtube.com, then the normalized
-//      de-constrained query), flat, feeding whatever they return back through rungs 1 and 2. The
+//   3. THE RESIDUAL LADDER — the remaining search variants (music.youtube.com, the normalized
+//      de-constrained query, then SoundCloud), flat, feeding whatever they return back through rungs 1 and 2. The
 //      spike ran only variant 0 and the music rung rescued 2 of its 11 misses, so the variants earn
 //      their place; they cost a search each and nothing more.
 //
@@ -2115,27 +2191,28 @@ async function loadArchiveFingerprint(key: string, dir: string): Promise<null | 
 /** Buy one candidate's 30s section, answering a challenge/403 the way the full download does. */
 function downloadSection(
   session: ProxySession,
-  videoId: string,
+  candidate: YtCandidate,
   dir: string,
 ): { ext: string; path: string } {
+  const source = candidate.source ?? "youtube";
   try {
-    return runYtSection(session.url, videoId, dir, false);
+    return runYtSection(session.url, candidate, dir, false);
   } catch (error) {
     const flags = error as DownloadErrorFlags;
     // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll` — the same
     // ordering trap `chooseDownloadRecovery` exists to settle on the capture path.
-    const recovery = chooseDownloadRecovery(flags, session.rerollable());
+    const recovery = chooseDownloadRecovery(flags, session.rerollable(), source);
 
     if (flags.isBotChallenge) {
       session.reroll("download");
     }
 
     if (recovery === "reroll") {
-      return runYtSection(session.url, videoId, dir, false);
+      return runYtSection(session.url, candidate, dir, false);
     }
 
     if (recovery === "player-client-fallback") {
-      return runYtSection(session.url, videoId, dir, true);
+      return runYtSection(session.url, candidate, dir, true);
     }
 
     throw error;
@@ -2165,15 +2242,7 @@ async function proveCatalogueProvenance(
   const rejectedIds = rejectedVideoIds(parseRejectedSources(row.sourceAudioRejected));
   const archiveKey = row.sourceAudioKey ?? "";
 
-  const primaryQuery = buildSearchQuery(row, 0);
-  const fallbackQuery = normalizeSearchQuery(buildSearchQuery(row, 1));
-  const rungs: { query: string; source: "music" | "youtube" }[] = [
-    { query: primaryQuery, source: "youtube" },
-    { query: primaryQuery, source: "music" },
-    ...(fallbackQuery && fallbackQuery !== primaryQuery
-      ? [{ query: fallbackQuery, source: "music" as const }]
-      : []),
-  ].slice(0, Math.max(1, QUERY_VARIANTS));
+  const rungs = buildCaptureSearchLadder(row);
 
   // `undefined` = not looked for yet, `null` = looked for and unavailable. Fetched at most ONCE per
   // row, and only when a rung-2 candidate actually exists to compare against.
@@ -2200,7 +2269,7 @@ async function proveCatalogueProvenance(
       }
 
       // ── RUNG 1 ────────────────────────────────────────────────────────────────────────────────
-      const topic = pickTopicCandidate(candidates, row);
+      const topic = rung.source === "soundcloud" ? null : pickTopicCandidate(candidates, row);
 
       if (topic) {
         await patchTrack(trackId, {
@@ -2244,7 +2313,7 @@ async function proveCatalogueProvenance(
         let section: { ext: string; path: string };
 
         try {
-          section = downloadSection(session, candidate.id, dir);
+          section = downloadSection(session, candidate, dir);
         } catch (error) {
           transient = error;
           log(`section for ${candidate.id} unusable (DRM/bot-wall/403) — trying next`);
@@ -2258,6 +2327,12 @@ async function proveCatalogueProvenance(
         const result = sectionFp ? slidingWindowMatch(archiveFp, sectionFp) : null;
 
         if (result?.match) {
+          // This phase can only persist YouTube provenance. A SoundCloud match proves the audio
+          // source is usable for capture, but it must never be written into `youtube_video_id`.
+          if (rung.source === "soundcloud") {
+            continue;
+          }
+
           await patchTrack(trackId, {
             youtubeVerification: "archive-match",
             youtubeVideoId: candidate.id,
@@ -2398,7 +2473,7 @@ async function proveTrackProvenance(
       rmSync(accepted.path, { force: true });
     }
 
-    if (!accepted || accepted.verdict !== "match") {
+    if (!accepted || accepted.verdict !== "match" || accepted.source === "soundcloud") {
       await patchTrack(trackId, { youtubeVerification: "no-match" });
       return "none";
     }

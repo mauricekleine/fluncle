@@ -12,7 +12,10 @@ import { readFileSync } from "node:fs";
 import {
   bpmIsMissing,
   buildCaptureConfigFailureSummary,
+  buildCaptureDownloadUrl,
   buildCaptureFatalSummary,
+  buildCaptureSearchLadder,
+  buildCaptureSearchTarget,
   buildCaptureSummary,
   captureSessionSeed,
   filterRejectedCandidates,
@@ -24,8 +27,10 @@ import {
   classifyDownloadFailure,
   contentTypeForExt,
   createBotChallengeMeter,
+  DEFAULT_QUERY_VARIANTS,
   durationWithinTolerance,
   extractSourceAudioSha256,
+  findFirstRankedCaptureRung,
   hasForeignVersionMarker,
   isBotChallengeStderr,
   isTopicChannel,
@@ -285,6 +290,75 @@ describe("normalizeSearchQuery — the ASCII fold for the ladder's third rung", 
 
   test("leaves a plain ASCII query untouched", () => {
     expect(normalizeSearchQuery("Technimatic Mirror Image")).toBe("Technimatic Mirror Image");
+  });
+});
+
+describe("the shared capture search ladder", () => {
+  const finding = {
+    artists: ["Technimatic", "A Little Sound"],
+    durationMs: 240_000,
+    title: "Parallel (radio edit)",
+  };
+
+  test("the default slice keeps SoundCloud after every YouTube Music rung", () => {
+    expect(DEFAULT_QUERY_VARIANTS).toBe(4);
+    expect(buildCaptureSearchLadder(finding, DEFAULT_QUERY_VARIANTS)).toEqual([
+      {
+        query: "Technimatic A Little Sound Parallel (radio edit)",
+        source: "youtube",
+      },
+      {
+        query: "Technimatic A Little Sound Parallel (radio edit)",
+        source: "music",
+      },
+      { query: "Technimatic Parallel", source: "music" },
+      {
+        query: "Technimatic A Little Sound Parallel (radio edit)",
+        source: "soundcloud",
+      },
+    ]);
+  });
+
+  test("constructs ytsearch, YouTube Music, and scsearch targets", () => {
+    expect(buildCaptureSearchTarget("youtube", "Netsky Rio")).toEqual(["ytsearch5:Netsky Rio"]);
+    expect(buildCaptureSearchTarget("music", "Netsky Rio")).toEqual([
+      "--playlist-items",
+      "1:5",
+      "https://music.youtube.com/search?q=Netsky%20Rio",
+    ]);
+    expect(buildCaptureSearchTarget("soundcloud", "Netsky Rio")).toEqual(["scsearch5:Netsky Rio"]);
+  });
+
+  test("builds a source-specific URL for the candidate download", () => {
+    expect(buildCaptureDownloadUrl("youtube", "dQw4w9WgXcQ")).toBe(
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    );
+    expect(buildCaptureDownloadUrl("music", "dQw4w9WgXcQ")).toBe(
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    );
+    expect(buildCaptureDownloadUrl("soundcloud", "123998367")).toBe(
+      "https://api.soundcloud.com/tracks/123998367",
+    );
+  });
+
+  test("reaches SoundCloud only after all YouTube rungs return zero ranked survivors", () => {
+    const visited: string[] = [];
+    const rungs = buildCaptureSearchLadder(finding, DEFAULT_QUERY_VARIANTS);
+    const found = findFirstRankedCaptureRung(rungs, finding, (rung) => {
+      visited.push(rung.source);
+      return [
+        {
+          durationSec: rung.source === "soundcloud" ? 240 : 30,
+          id: rung.source,
+          source: rung.source,
+          title: "Parallel",
+        },
+      ];
+    });
+
+    expect(visited).toEqual(["youtube", "music", "music", "soundcloud"]);
+    expect(found?.rung.source).toBe("soundcloud");
+    expect(found?.ranked.map(({ candidate }) => candidate.id)).toEqual(["soundcloud"]);
   });
 });
 
@@ -583,6 +657,23 @@ describe("rankCandidates", () => {
     );
     expect(ranked).toEqual([]);
   });
+
+  test("rejects a 30-second SoundCloud preview for a full-length track", () => {
+    const ranked = rankCandidates(
+      [
+        {
+          durationSec: 30,
+          id: "soundcloud-preview",
+          source: "soundcloud",
+          title: "Some Song",
+        },
+      ],
+      { durationMs: 240_000 },
+      opts,
+    );
+
+    expect(ranked).toEqual([]);
+  });
 });
 
 describe("bpmIsMissing", () => {
@@ -761,6 +852,29 @@ describe("classifyDownloadFailure — the flags the recovery decision runs on", 
     expect(flags.isRecoverable).toBe(true);
     expect(flags.is403).toBe(false);
   });
+
+  test("a SoundCloud rate limit re-rolls the sticky session and remains recoverable", () => {
+    const flags = classifyDownloadFailure(
+      "ERROR: [soundcloud] 123998367: Unable to download JSON metadata: HTTP Error 429: Too Many Requests",
+    );
+
+    expect(flags.isBotChallenge).toBe(true);
+    expect(flags.isRecoverable).toBe(true);
+    expect(flags.is403).toBe(false);
+    expect(chooseDownloadRecovery(flags, true, "soundcloud")).toBe("reroll");
+    expect(chooseDownloadRecovery(flags, false, "soundcloud")).toBe("give-up");
+  });
+
+  test("SoundCloud geo-blocked and private tracks fall through to another candidate", () => {
+    for (const stderr of [
+      "ERROR: [soundcloud] 123: This track is not available in your country",
+      "ERROR: [soundcloud] 456: This private track is not publicly available",
+    ]) {
+      const flags = classifyDownloadFailure(stderr);
+      expect(flags.isBotChallenge).toBe(false);
+      expect(flags.isRecoverable).toBe(true);
+    }
+  });
 });
 
 describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403", () => {
@@ -796,6 +910,16 @@ describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403
 
     expect(chooseDownloadRecovery(flags, true)).toBe("player-client-fallback");
     expect(chooseDownloadRecovery(flags, false)).toBe("player-client-fallback");
+  });
+
+  test("a SoundCloud 403 never invokes the YouTube player-client fallback", () => {
+    const flags = classifyDownloadFailure(
+      "ERROR: [soundcloud] 123998367: Unable to download media: HTTP Error 403: Forbidden",
+    );
+
+    expect(flags.isRecoverable).toBe(false);
+    expect(chooseDownloadRecovery(flags, true, "soundcloud")).toBe("give-up");
+    expect(chooseDownloadRecovery(flags, false, "soundcloud")).toBe("give-up");
   });
 
   test("a plain challenge re-rolls once and then gives the candidate up", () => {
@@ -1038,9 +1162,9 @@ describe("the accepted upload's id rides the success PATCH", () => {
     // on duration and ranking alone and nothing was compared. The identity payload serves this id
     // under `method: "fingerprint"`, so an id from the abstain path would put "matched by audio
     // fingerprint" on a page under a match that never ran. The assignment is therefore gated on
-    // the verdict itself, not merely on reaching the success branch.
+    // the verdict itself and on the winner being a YouTube source.
     expect(source).toMatch(
-      /if \(accepted\.verdict === "match"\) \{\s*update\.youtubeVideoId = accepted\.videoId;/,
+      /if \(accepted\.verdict === "match" && accepted\.source !== "soundcloud"\) \{\s*update\.youtubeVideoId = accepted\.videoId;/,
     );
   });
 
@@ -1118,7 +1242,9 @@ describe("the PROVENANCE phase never touches a capture column", () => {
     // Without this the worklist hands the same row back on the next tick and spends the same
     // download again, forever. The report stamps only `youtube_verified_at`, server-side.
     expect(phase).toContain('youtubeVerification: "no-match"');
-    expect(phase).toMatch(/if \(!accepted \|\| accepted\.verdict !== "match"\)/);
+    expect(phase).toMatch(
+      /if \(!accepted \|\| accepted\.verdict !== "match" \|\| accepted\.source === "soundcloud"\)/,
+    );
   });
 
   test("a transient failure writes NOTHING at all", () => {
@@ -1267,9 +1393,12 @@ describe("flat search extraction — one seventh of the bytes, on every search t
 
   test("FULL RESOLUTION still happens, for the ONE candidate that wins", () => {
     // Flat extraction changes what a SEARCH costs and nothing about what a download does: the
-    // download fetches `watch?v=<id>` per id exactly as it always did, and the duration that
-    // decides anything is ffprobe'd off the real file rather than read from any listing.
-    expect(source).toContain("`https://www.youtube.com/watch?v=${videoId}`");
+    // download resolves the source-local id into an extractor URL, and the duration that decides
+    // anything is ffprobe'd off the real file rather than read from any listing. Both the full and
+    // section paths use the same source-aware helper.
+    expect(
+      source.match(/args\.push\(buildCaptureDownloadUrl\(source, candidate\.id\)\);/g),
+    ).toHaveLength(2);
     expect(source).toContain("const realDurationSec = probeDurationSec(file.path)");
   });
 });
