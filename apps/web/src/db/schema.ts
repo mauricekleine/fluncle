@@ -1042,7 +1042,7 @@ export const tracks = sqliteTable(
     // slice `get_crawl_status` reports as `anchorsPending`. The partial predicate keeps this index
     // tiny and — the nice part — SHRINKING as the anchors fill, instead of growing with the table.
     // (The anchor WORKLIST the box drains is wider — every un-anchored catalogue row — and rides
-    // `tracks_anchor_fill_queue_idx` below; see track-work.ts `kind: "anchor"`.)
+    // `tracks_anchor_order_idx` below; see track-work.ts `kind: "anchor"`.)
     index("tracks_anchor_queue_idx")
       .on(table.isrc)
       .where(sql`${table.spotifyUri} is null and ${table.isrc} is not null`),
@@ -1150,31 +1150,6 @@ export const tracks = sqliteTable(
     index("tracks_embed_queue_idx")
       .on(table.trackId)
       .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingBlob} is null`),
-    // THE SPOTIFY-ANCHOR-FILL WORKLIST (the box's Apify anchor sweep, docs/catalogue-crawler.md
-    // § the anchor). PARTIAL, exactly like the anchor + embed queues above: the worklist is the
-    // un-anchored catalogue (`spotify_uri is null`), a slice that SHRINKS as anchors fill rather
-    // than growing with the table. It indexes `nearest_finding_score` under that predicate so the
-    // sweep's ranked drain — the Ear's best un-anchored candidates first (`nearest_finding_score
-    // DESC`), the "the order IS the budget" law the capture ladder lives by — is an index walk of
-    // the ranked un-anchored rows, not a scan of the growing catalogue. It is a plain btree (never
-    // the vector `libsql_vector_idx` that wedges hosted Turso), so it builds like the queues beside
-    // it. The residual predicates the worklist adds (`duration_ms > 0`, `dismissed_at is null`,
-    // `duplicate_of_track_id is null`, the re-ask backoff) are cheap filters on the small page the
-    // index walk hands back — never a table scan. See track-work.ts `kind: "anchor"`.
-    //
-    // SUPERSEDED for that worklist by `tracks_anchor_order_idx` below, which carries the SAME
-    // partial predicate and leads with the `has_embedding` mirror the drain order actually sorts
-    // on first. This one is KEPT: it is not a prefix of the new index (the new one leads with a
-    // different column), so anything wanting `nearest_finding_score` order over the un-anchored
-    // slice without a `has_embedding` lead still needs it. Nothing in `apps/web/src` pins it by
-    // name (there is no `INDEXED BY` anywhere), and its only ORDER-BY consumer is the worklist
-    // that moves off it — which makes it a DROP CANDIDATE, gated like every schema change on a
-    // hosted `EXPLAIN QUERY PLAN` over its remaining `spotify_uri is null` readers (the
-    // `anchor-apify.ts` requeue UPDATE, funnel.ts's anchor arm), never on local evidence.
-    // Recorded in docs/db-scale-backlog.md § Index drop candidates.
-    index("tracks_anchor_fill_queue_idx")
-      .on(table.nearestFindingScore)
-      .where(sql`${table.spotifyUri} is null`),
     // THE ANCHOR WORKLIST'S DRAIN ORDER (docs/db-scale-backlog Wave 2 #4; the box's hourly Apify
     // sweep, docs/catalogue-crawler.md § the anchor). The queue above indexes the worklist's
     // SECOND sort key; this one indexes the whole ORDER BY, in order, so the sweep's page is an
@@ -3486,7 +3461,6 @@ export const artistSocials = sqliteTable(
     // `where reviewed_at is null` is a schema change and therefore a hosted-Turso question, not a
     // local one.
     index("artist_socials_unreviewed_idx").on(table.reviewedAt),
-    index("artist_socials_artist_id_idx").on(table.artistId),
     index("artist_socials_platform_idx").on(table.platform),
     // The candidate-links read per artist (`where artist_id = ? and status = 'candidate'`).
     // A PARTIAL index over just the rare `candidate` slice — most links are `auto`/`confirmed`,

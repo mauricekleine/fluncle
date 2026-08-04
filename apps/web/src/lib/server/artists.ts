@@ -1715,9 +1715,9 @@ function toOverviewBase(row: {
 
 // Attach each artist's socials (sorted by platform IN THE ISOLATE — the SQL no longer sorts them)
 // and its coordinate-bearing finding count. Two bounded batch reads over the ≤N page ids: the
-// socials by `artist_socials_artist_id_idx`, the counts GROUPED ONCE over `track_artists ⋈ findings`
-// (log_id not null) via `track_artists_artist_id_idx` — never a per-output-row correlated
-// scalar. So the cost is per PAGE, not per artist × social.
+// socials by the `artist_socials_artist_platform_idx` leading artist-id key, the counts GROUPED ONCE
+// over `track_artists ⋈ findings` (log_id not null) via `track_artists_artist_id_idx` — never a
+// per-output-row correlated scalar. So the cost is per PAGE, not per artist × social.
 async function hydrateArtistOverview(
   base: readonly ArtistOverviewBase[],
 ): Promise<ArtistOverviewItem[]> {
