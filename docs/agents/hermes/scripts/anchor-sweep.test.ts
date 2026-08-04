@@ -893,6 +893,27 @@ describe("runAnchorTick", () => {
   });
 
   // ── THE OBSERVABILITY COUNTERS ─────────────────────────────────────────────────────────────────
+  test("surfaces the Worker's free-rung durationless-candidate count", async () => {
+    const summary = await runAnchorTick(
+      50,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([{ anchorQuery: "Muffler Dribble", trackId: "mb_durationless" }]),
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: true,
+            freeDurationMsOmitted: 2,
+            source: "listenbrainz",
+            verifiedBy: "isrc",
+          }),
+      }),
+    );
+
+    expect(summary.freeDurationMsOmitted).toBe(2);
+    expect(summary.produced).toBe(1);
+    expect(summary.missed).toBe(0);
+  });
+
   test("counts the rows whose query the Apify dataset came back WITHOUT", async () => {
     const summary = await runAnchorTick(
       50,
@@ -1342,6 +1363,27 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
 
     expect(summary.pages).toBe(2);
     expect(summary.apifyDurationMsOmitted).toBe(4);
+  });
+
+  test("carries the free-rung durationless-candidate tally across pages", async () => {
+    const base = pagedDeps([rows("a", 2), rows("b", 2)]);
+    const summary = await runAnchorSweep(
+      4,
+      {
+        ...base,
+        resolveFree: () =>
+          Promise.resolve({
+            anchored: true,
+            freeDurationMsOmitted: 1,
+            source: "spotify-search",
+            verifiedBy: "search",
+          }),
+      },
+      2,
+    );
+
+    expect(summary.pages).toBe(2);
+    expect(summary.freeDurationMsOmitted).toBe(4);
   });
 
   test("carries the ListenBrainz failure counters across pages", async () => {

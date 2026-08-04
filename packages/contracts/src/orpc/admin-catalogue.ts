@@ -1013,6 +1013,8 @@ export const resolveAnchor = oc
        * Apify actor loop this tick, and a genuinely-exhausted full miss was already stamped-and-backed-off.
        */
       apifyEnabled: z.boolean(),
+      /** Free-rung candidates that arrived without a numeric duration; observation only. */
+      freeDurationMsOmitted: z.number().int().nonnegative(),
       /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
       isrcRecoveredByDeezer: z.boolean(),
       /**

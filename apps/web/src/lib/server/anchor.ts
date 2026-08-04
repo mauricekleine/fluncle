@@ -711,6 +711,8 @@ export type ListenBrainzAnchorOutcome =
 export type AnchorResolveResult = {
   anchored: boolean;
   apifyEnabled: boolean;
+  /** Free-rung candidates that arrived without a numeric duration, counted without filtering them. */
+  freeDurationMsOmitted: number;
   isrcRecoveredByDeezer: boolean;
   listenbrainzOutcome: ListenBrainzAnchorOutcome;
   source: AnchorResolveSource | null;
@@ -732,6 +734,7 @@ type FreeResolveOutcome = Omit<
 /** A Spotify-rung outcome with every field a miss carries — the shared "nothing happened" shape. */
 const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
   anchored: false,
+  freeDurationMsOmitted: 0,
   source: null,
   spotifyIsrcAsked: false,
   spotifySearchDone: false,
@@ -791,6 +794,8 @@ async function metadataCandidate(
 }
 
 type ListenBrainzResolveResult = {
+  /** The rung's single candidate lacked a numeric duration; absent when no candidate arrived. */
+  durationMsOmitted?: number;
   /**
    * True iff this rung's ONE by-id Spotify read came back 429. Carried up so the yield law sees a
    * throttle wherever in the anchor path it happened — the rung is free, but its read is not.
@@ -885,10 +890,17 @@ async function resolveViaListenBrainz(
   });
 
   if (!verdict.anchored || verdict.verifiedBy === null) {
-    return { outcome: "gate-rejected" };
+    return {
+      durationMsOmitted: typeof read.candidate.durationMs === "number" ? 0 : 1,
+      outcome: "gate-rejected",
+    };
   }
 
-  return { outcome: "anchored", verifiedBy: verdict.verifiedBy };
+  return {
+    durationMsOmitted: typeof read.candidate.durationMs === "number" ? 0 : 1,
+    outcome: "anchored",
+    verifiedBy: verdict.verifiedBy,
+  };
 }
 
 /**
@@ -944,6 +956,8 @@ async function resolveViaSpotifySearch(
   title: string,
   now: Date,
 ): Promise<FreeResolveOutcome> {
+  let freeDurationMsOmitted = 0;
+
   // RUNG 2 — the exact ISRC search, only for a row that carries one.
   if (isrc?.trim()) {
     const lookup = await findSpotifyTrackByIsrc(isrc);
@@ -976,6 +990,7 @@ async function resolveViaSpotifySearch(
       }
 
       if (read.candidate) {
+        freeDurationMsOmitted += typeof read.candidate.durationMs === "number" ? 0 : 1;
         const result = await anchorTrack(trackId, [read.candidate], {
           source: "spotify-isrc",
           stampOnMiss: false,
@@ -984,6 +999,7 @@ async function resolveViaSpotifySearch(
         if (result.anchored) {
           return {
             anchored: true,
+            freeDurationMsOmitted,
             source: "spotify-isrc",
             spotifyIsrcAsked: true,
             spotifySearchDone: true,
@@ -1008,6 +1024,7 @@ async function resolveViaSpotifySearch(
 
     return {
       ...NO_SPOTIFY_OUTCOME,
+      freeDurationMsOmitted,
       spotifyIsrcAsked: isrcAsked,
       spotifySearchDone: true,
       spotifyThrottled: isSpotifyThrottle(error),
@@ -1016,13 +1033,18 @@ async function resolveViaSpotifySearch(
     await recordAnchorSpotifyCall(now);
   }
 
-  const result = await anchorTrack(trackId, candidates.map(searchResultCandidate), {
+  const anchorCandidates = candidates.map(searchResultCandidate);
+  freeDurationMsOmitted += anchorCandidates.filter(
+    (candidate) => typeof candidate.durationMs !== "number",
+  ).length;
+  const result = await anchorTrack(trackId, anchorCandidates, {
     source: "spotify-search",
     stampOnMiss: false,
   });
 
   return {
     anchored: result.anchored,
+    freeDurationMsOmitted,
     source: result.anchored ? "spotify-search" : null,
     spotifyIsrcAsked: isrcAsked,
     spotifySearchDone: true,
@@ -1381,6 +1403,7 @@ export async function resolveAnchorFree(
 
   // RUNG 1 — the FREE ListenBrainz rung.
   const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id, now);
+  const listenbrainzDurationMsOmitted = listenbrainz.durationMsOmitted ?? 0;
 
   if (listenbrainz.outcome === "anchored") {
     // A HIT already wrote the anchor + stamped the attempt — never re-stamp, regardless of the flag.
@@ -1388,6 +1411,7 @@ export async function resolveAnchorFree(
       ...NO_SPOTIFY_OUTCOME,
       anchored: true,
       apifyEnabled,
+      freeDurationMsOmitted: listenbrainzDurationMsOmitted,
       isrcRecoveredByDeezer,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
@@ -1423,6 +1447,7 @@ export async function resolveAnchorFree(
     return {
       ...NO_SPOTIFY_OUTCOME,
       apifyEnabled,
+      freeDurationMsOmitted: listenbrainzDurationMsOmitted,
       isrcRecoveredByDeezer,
       listenbrainzOutcome: listenbrainz.outcome,
       // A throttle anywhere in the anchor path arms the yield law, including on this rung's own
@@ -1457,6 +1482,7 @@ export async function resolveAnchorFree(
   return {
     ...searchOutcome,
     apifyEnabled,
+    freeDurationMsOmitted: listenbrainzDurationMsOmitted + searchOutcome.freeDurationMsOmitted,
     isrcRecoveredByDeezer,
     listenbrainzOutcome: listenbrainz.outcome,
     spotifyThrottled: throttled,

@@ -161,6 +161,7 @@ describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: null,
@@ -222,6 +223,7 @@ describe("resolveAnchorFree — the Spotify ISRC rung (flag on, outside the wind
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: "spotify-isrc",
@@ -274,6 +276,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: "spotify-search",
@@ -332,6 +335,7 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: null,
@@ -344,6 +348,28 @@ describe("resolveAnchorFree — the Spotify fuzzy rung (flag on, outside the win
     expect(state.uri).toBeNull();
     // THE KEY GUARANTEE: a free-rung miss does NOT stamp the re-ask backoff — Apify keeps its turn.
     expect(state.attempted).toBeNull();
+  });
+
+  it("counts a durationless fuzzy candidate without changing its gate rejection", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      title: "Dribble",
+      trackId: "mb_fuzzy_durationless",
+    });
+    searchTrackCandidates.mockResolvedValue([searchResult({ durationMs: undefined })]);
+
+    const result = await resolveAnchorFree("mb_fuzzy_durationless", NON_FRIDAY);
+
+    expect(result.freeDurationMsOmitted).toBe(1);
+    expect(result.anchored).toBe(false);
+    expect(result.verifiedBy).toBeNull();
+    expect((await anchorState("mb_fuzzy_durationless")).attempted).toBeNull();
   });
 });
 
@@ -369,6 +395,7 @@ describe("resolveAnchorFree — ListenBrainz still wins first, even with the fla
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",

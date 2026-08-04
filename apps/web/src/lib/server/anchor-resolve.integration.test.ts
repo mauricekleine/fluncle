@@ -159,6 +159,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
@@ -211,6 +212,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
@@ -258,6 +260,7 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "gate-rejected",
       source: null,
@@ -270,6 +273,41 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
     expect(state.uri).toBeNull();
     // THE KEY GUARANTEE: a free-rung miss does NOT stamp the re-ask backoff.
     expect(state.attempted).toBeNull();
+  });
+
+  it("counts a durationless ListenBrainz candidate without changing its gate rejection", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+
+    await seedCatalogue({
+      artists: ["Muffler"],
+      durationMs: 200_000,
+      isrc: null,
+      mbid: "mbid-durationless",
+      title: "Dribble",
+      trackId: "mb_durationless",
+    });
+    lookupSpotifyIdsByMbid.mockResolvedValue({
+      artistName: "Muffler",
+      recordingMbid: "mbid-durationless",
+      spotifyTrackIds: ["lbDurationless"],
+      trackName: "Dribble",
+    });
+    fetchTrackMetadata.mockResolvedValue(
+      metadata({
+        artists: ["Muffler"],
+        durationMs: undefined,
+        isrc: null,
+        title: "Dribble",
+        trackId: "lbDurationless",
+      }),
+    );
+
+    const result = await resolveAnchorFree("mb_durationless");
+
+    expect(result.freeDurationMsOmitted).toBe(1);
+    expect(result.listenbrainzOutcome).toBe("gate-rejected");
+    expect(result.anchored).toBe(false);
+    expect((await anchorState("mb_durationless")).attempted).toBeNull();
   });
 });
 
@@ -284,6 +322,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
       source: null,
@@ -308,6 +347,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: null,
@@ -365,6 +405,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "metadata-failed",
       source: null,
@@ -398,6 +439,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: false,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
       source: null,
@@ -427,6 +469,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-mbid",
       source: null,
@@ -460,6 +503,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: false,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
@@ -513,6 +557,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: true,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",
@@ -550,6 +595,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     expect(result).toEqual({
       anchored: false,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "no-map",
       source: null,
@@ -619,6 +665,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     expect(result).toEqual({
       anchored: true,
       apifyEnabled: true,
+      freeDurationMsOmitted: 0,
       isrcRecoveredByDeezer: false,
       listenbrainzOutcome: "anchored",
       source: "listenbrainz",

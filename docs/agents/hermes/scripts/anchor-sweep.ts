@@ -213,6 +213,8 @@ export type AnchorVerdict = {
    * Optional / defaults true on the box (a pre-slice-3 server omits it ⇒ current Apify-runs behaviour).
    */
   apifyEnabled?: boolean;
+  /** Worker-counted free-rung candidates that arrived without a numeric duration. */
+  freeDurationMsOmitted?: number;
   /** True iff `resolve_anchor` recovered a verified ISRC from Deezer into an ISRC-less row this call. */
   isrcRecoveredByDeezer?: boolean;
   /** The free ListenBrainz rung's terminal outcome — optional only for an older server during rollout. */
@@ -329,6 +331,8 @@ export type AnchorSummary = {
    * and anchoring looks healthy, which is exactly how a dead free rung once stayed invisible for a
    * week. Not part of `pulled` — a thrown call is already counted by whatever the row ends up as.
    */
+  /** Worker-counted free-rung candidates that arrived without a numeric duration. */
+  freeDurationMsOmitted: number;
   freeRungErrors: number;
   /** Rows whose ISRC was recovered from Deezer's free oracle before anchoring (the recovery rate). */
   isrcRecoveredByDeezer: number;
@@ -704,6 +708,7 @@ export async function runAnchorTick(
     errors: 0,
     expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
     failed: 0,
+    freeDurationMsOmitted: 0,
     freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
     lbEmptyIds: 0,
@@ -855,6 +860,10 @@ export async function runAnchorTick(
       // The kill-flag is global, so any verdict tells the whole tick's answer.
       if (typeof verdict.apifyEnabled === "boolean") {
         apifyEnabled = verdict.apifyEnabled;
+      }
+
+      if (typeof verdict.freeDurationMsOmitted === "number") {
+        summary.freeDurationMsOmitted += verdict.freeDurationMsOmitted;
       }
 
       // Recovery is orthogonal to anchoring — count it whether or not this row then anchored (a
@@ -1331,6 +1340,7 @@ export async function runAnchorSweep(
     errors: 0,
     expectedIntervalMs: ANCHOR_EXPECTED_INTERVAL_MS,
     failed: 0,
+    freeDurationMsOmitted: 0,
     freeRungErrors: 0,
     isrcRecoveredByDeezer: 0,
     lbEmptyIds: 0,
@@ -1395,6 +1405,7 @@ export async function runAnchorSweep(
     merged.deezerHitsDroppedIncomplete += page.deezerHitsDroppedIncomplete;
     merged.deezerSearchFailed += page.deezerSearchFailed;
     merged.failed += page.failed;
+    merged.freeDurationMsOmitted += page.freeDurationMsOmitted;
     merged.freeRungErrors += page.freeRungErrors;
     merged.errors += page.errors;
     merged.missed += page.missed;
