@@ -266,8 +266,8 @@ const envKeys = [
 
 export type EnvKey = (typeof envKeys)[number];
 
-async function loadLocalEnv(): Promise<void> {
-  if (!import.meta.env.DEV || didLoadLocalEnv) {
+export async function loadLocalEnv(options: { force?: boolean } = {}): Promise<void> {
+  if ((!import.meta.env.DEV && !options.force) || didLoadLocalEnv) {
     return;
   }
 

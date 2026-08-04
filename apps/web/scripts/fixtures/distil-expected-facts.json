@@ -1,0 +1,8 @@
+[
+  {
+    "trackId": "...",
+    "expectedFacts": ["..."],
+    "forbiddenClaims": ["..."],
+    "appleFuel": false
+  }
+]
