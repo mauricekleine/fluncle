@@ -8,7 +8,7 @@ Everything below follows from that. When the two sides are close, you stop. You 
 
 ## The deploy-gate is the floor; the pin-watch pre-smoke is the ceiling
 
-The repo's CI deploy-gate is `bun run deploy:gate` = `format:check` + `lint` + `typecheck` + `test` (plus gitleaks + the Cloudflare build on the PR). A PR that edits a **repo-side** pin (`package.json` `packageManager`, a workflow `bun-version:`, an Actions SHA-pin) is fully validated by this gate — that real, automatic validation is what makes those edits safe to **merge** unattended.
+The repo's CI deploy-gate is `bun run deploy:gate` = repository `format:check` + Go `go:check` + `lint` + `typecheck` + `test` (plus `test:scripts`, gitleaks, and the Cloudflare build on the PR). A PR that edits a **repo-side** pin (`package.json` `packageManager`, a workflow `bun-version:`, an Actions SHA-pin) is fully validated by this gate — that real, automatic validation is what makes those edits safe to **merge** unattended.
 
 But the gate has a **blind spot**: it does **not** rebuild or run the Hermes image. A Dockerfile `FROM`/`npm -g` edit passes the gate trivially (the gate never touches the Dockerfile) and is unvalidated by CI. That blind spot is exactly what the on-box **`fluncle-pin-watch` pre-smoke** covers: after the merge, pin-watch rebuilds the image and smoke-checks it (exactly four checks: `fluncle version`, `claude --version`, an agent-tier read returning `{ok:true}`, and a publish-class command refused with a 403) BEFORE touching the live container — the validation CI could not do — and **auto-rolls-back on a failed smoke**. (The broader box.ascii-auth / `dig` / cron-roster probes belong to the separate `fluncle-healthcheck` cron, not pin-watch.) So:
 

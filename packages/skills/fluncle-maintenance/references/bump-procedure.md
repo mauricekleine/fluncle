@@ -4,10 +4,10 @@ A bump is two halves: **the repo edit** (committed, reviewed in git, CI-gated) a
 
 ## The two halves, and what validates each
 
-| Half           | Validated by                                                                                        | What ships it                                                                                                               |
-| -------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Repo edit**  | the CI deploy-gate (`format:check` + `lint` + `typecheck` + `test`) + gitleaks                      | merging the green PR to `main`.                                                                                             |
-| **Box deploy** | the **pin-watch pre-smoke** (CI never rebuilds the image — pin-watch is the validation it can't do) | the on-box `fluncle-pin-watch` timer: rebuild → pre-smoke → swap → auto-rollback on fail (`docs/agents/hermes/pin-watch/`). |
+| Half           | Validated by                                                                                                    | What ships it                                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Repo edit**  | the CI deploy-gate (`format:check` + Go `go:check` + `lint` + `typecheck` + `test` + `test:scripts`) + gitleaks | merging the green PR to `main`.                                                                                             |
+| **Box deploy** | the **pin-watch pre-smoke** (CI never rebuilds the image — pin-watch is the validation it can't do)             | the on-box `fluncle-pin-watch` timer: rebuild → pre-smoke → swap → auto-rollback on fail (`docs/agents/hermes/pin-watch/`). |
 
 Two of the six inventory items (`package.json` `packageManager`, the workflow `bun-version:` + the Actions SHA-pins) are **fully** repo-side — they ship the moment the PR merges; **no box step**. The other half (the Dockerfile `FROM` / `npm -g` pins) only reaches the box on a **rebuild** — and that rebuild is the on-box pin-watch timer's, not the routine's.
 

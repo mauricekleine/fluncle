@@ -24,6 +24,12 @@
       "cache": false,
       "persistent": true
     },
+    "lint": {
+      "cache": false
+    },
+    "format:check": {
+      "cache": false
+    },
     "test": {
       "dependsOn": ["^build"]
     },
