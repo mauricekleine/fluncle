@@ -325,14 +325,14 @@ export type AnchorSummary = {
   expectedIntervalMs: number;
   /** Individual row/rung failures that did not prevent the run from continuing. */
   failed: number;
+  /** Worker-counted free-rung candidates that arrived without a numeric duration. */
+  freeDurationMsOmitted: number;
   /**
    * Free-rung (`resolve_anchor`) calls that THREW. Counted UNCONDITIONALLY, because it is the tell
    * that a rung is broken: with Apify enabled these rows fall silently through to the paid fallback
    * and anchoring looks healthy, which is exactly how a dead free rung once stayed invisible for a
    * week. Not part of `pulled` — a thrown call is already counted by whatever the row ends up as.
    */
-  /** Worker-counted free-rung candidates that arrived without a numeric duration. */
-  freeDurationMsOmitted: number;
   freeRungErrors: number;
   /** Rows whose ISRC was recovered from Deezer's free oracle before anchoring (the recovery rate). */
   isrcRecoveredByDeezer: number;
