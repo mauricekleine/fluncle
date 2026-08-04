@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `isrc_recovery_attempted_at` text;

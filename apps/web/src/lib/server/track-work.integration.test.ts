@@ -156,7 +156,22 @@ async function seedEnabledLabel(name: string, slug: string): Promise<void> {
 
 /** Stamp a track's ISRC — the recording identity the duplicate detector matches on. */
 async function setIsrc(trackId: string, isrc: string): Promise<void> {
-  await db.execute({ args: [isrc, trackId], sql: `update tracks set isrc = ? where track_id = ?` });
+  await db.execute({
+    args: [isrc, trackId],
+    sql: `update tracks set isrc = ?, has_isrc = 1 where track_id = ?`,
+  });
+}
+
+/** Put a fixture into the un-anchored, ISRC-less state the free recovery pass considers. */
+async function makeIsrcRecoveryCandidate(trackId: string): Promise<void> {
+  await db.execute({
+    args: [trackId],
+    sql: `update tracks
+          set spotify_uri = null, spotify_url = null, isrc = null, has_isrc = 0,
+              duration_ms = 270000, dismissed_at = null, duplicate_of_track_id = null,
+              isrc_recovery_attempted_at = null
+          where track_id = ?`,
+  });
 }
 
 beforeEach(async () => {
@@ -229,6 +244,162 @@ describe("listTrackWork — the catalogue is workable", () => {
     expect(await ids("findings")).toEqual(["aaaaaaaaaaaaaaaaaaaaaa"]);
     expect(await ids("catalogue")).toEqual(["cat0000000000000000000"]);
     expect(await ids("all")).toEqual(["aaaaaaaaaaaaaaaaaaaaaa", "cat0000000000000000000"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// THE FREE ISRC-RECOVERY PASS. It sees the un-anchored, ISRC-less catalogue tail that the billed
+// anchor queue's ISRC-first order cannot reach, asks only Deezer, and hands recovered identities
+// back through the existing resolver. The stored presence mirror is part of the query-plan contract.
+// ─────────────────────────────────────────────────────────────────────────────────────────
+
+describe("listTrackWork — the isrc-recovery pass", () => {
+  it("selects only un-anchored, ISRC-less, verifiable catalogue rows", async () => {
+    const { ISRC_RECOVERY_REASK_AFTER_DAYS, listTrackWork } = await import("./track-work");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Calibre"],
+      title: "Even If",
+      trackId: "eligible000000000000000",
+    });
+    await makeIsrcRecoveryCandidate("eligible000000000000000");
+
+    // A finding can otherwise have the identical data shape, but catalogue-only is absolute.
+    await seedTrack(db, { logId: "004.7.2I", trackId: "finding0000000000000000" });
+    await makeIsrcRecoveryCandidate("finding0000000000000000");
+
+    // Still anchored: the ordinary catalogue fixture carries a Spotify URI.
+    await seedCatalogueTrack(db, { trackId: "anchored000000000000000" });
+
+    await seedCatalogueTrack(db, { trackId: "withisrc000000000000000" });
+    await makeIsrcRecoveryCandidate("withisrc000000000000000");
+    await setIsrc("withisrc000000000000000", "GBBKS2400001");
+
+    await seedCatalogueTrack(db, { trackId: "noduration0000000000000" });
+    await makeIsrcRecoveryCandidate("noduration0000000000000");
+    await db.execute({
+      args: ["noduration0000000000000"],
+      sql: `update tracks set duration_ms = 0 where track_id = ?`,
+    });
+
+    await seedCatalogueTrack(db, { trackId: "dismissed00000000000000" });
+    await makeIsrcRecoveryCandidate("dismissed00000000000000");
+    await db.execute({
+      args: ["dismissed00000000000000"],
+      sql: `update tracks set dismissed_at = '2026-07-01T00:00:00.000Z' where track_id = ?`,
+    });
+
+    await seedCatalogueTrack(db, { trackId: "duplicate00000000000000" });
+    await makeIsrcRecoveryCandidate("duplicate00000000000000");
+    await db.execute({
+      args: ["eligible000000000000000", "duplicate00000000000000"],
+      sql: `update tracks set duplicate_of_track_id = ? where track_id = ?`,
+    });
+
+    await seedCatalogueTrack(db, { trackId: "recentask000000000000000" });
+    await makeIsrcRecoveryCandidate("recentask000000000000000");
+    await db.execute({
+      args: [new Date().toISOString(), "recentask000000000000000"],
+      sql: `update tracks set isrc_recovery_attempted_at = ? where track_id = ?`,
+    });
+
+    await seedCatalogueTrack(db, { trackId: "staleask0000000000000000" });
+    await makeIsrcRecoveryCandidate("staleask0000000000000000");
+    await db.execute({
+      args: [
+        new Date(
+          Date.now() - (ISRC_RECOVERY_REASK_AFTER_DAYS + 1) * 24 * 60 * 60 * 1000,
+        ).toISOString(),
+        "staleask0000000000000000",
+      ],
+      sql: `update tracks set isrc_recovery_attempted_at = ? where track_id = ?`,
+    });
+
+    await seedCatalogueTrack(db, { trackId: "sharedask000000000000000" });
+    await makeIsrcRecoveryCandidate("sharedask000000000000000");
+    await db.execute({
+      args: [new Date().toISOString(), "sharedask000000000000000"],
+      sql: `update tracks set isrc_attempted_at = ? where track_id = ?`,
+    });
+
+    expect(
+      (await listTrackWork({ kind: "isrc-recovery" })).map((item) => item.trackId).sort(),
+    ).toEqual(["eligible000000000000000", "sharedask000000000000000", "staleask0000000000000000"]);
+  });
+
+  it("drains a clean-empty box search until the dedicated re-ask window expires", async () => {
+    const { recoverIsrcViaDeezer } = await import("./anchor");
+    const { listTrackWork } = await import("./track-work");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Calibre"],
+      title: "Even If",
+      trackId: "cleanempty00000000000000",
+    });
+    await makeIsrcRecoveryCandidate("cleanempty00000000000000");
+
+    expect((await listTrackWork({ kind: "isrc-recovery" })).map((item) => item.trackId)).toEqual([
+      "cleanempty00000000000000",
+    ]);
+
+    await recoverIsrcViaDeezer("cleanempty00000000000000", db, ["Calibre"], "Even If", 270_000, []);
+
+    expect(await listTrackWork({ kind: "isrc-recovery" })).toEqual([]);
+  });
+
+  it("applies the anchor queue's ruled-out-label veto", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedDisabledLabel("Outside Records", "outside-records");
+    await seedCatalogueTrack(db, {
+      label: "Outside Records",
+      trackId: "vetoed0000000000000000",
+    });
+    await makeIsrcRecoveryCandidate("vetoed0000000000000000");
+    await db.execute({
+      args: ["lbl-outside-records", "vetoed0000000000000000"],
+      sql: `update tracks set label_id = ? where track_id = ?`,
+    });
+
+    await seedCatalogueTrack(db, { trackId: "allowed0000000000000000" });
+    await makeIsrcRecoveryCandidate("allowed0000000000000000");
+
+    expect((await listTrackWork({ kind: "isrc-recovery" })).map((item) => item.trackId)).toEqual([
+      "allowed0000000000000000",
+    ]);
+  });
+
+  it("carries the server-owned Deezer query and no billed anchor query", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedCatalogueTrack(db, {
+      artists: ["Fred V & Grafix"],
+      title: "Major Happy",
+      trackId: "query000000000000000000",
+    });
+    await makeIsrcRecoveryCandidate("query000000000000000000");
+
+    const [item] = await listTrackWork({ kind: "isrc-recovery" });
+
+    expect(item?.deezerQuery).toBe('artist:"Fred V & Grafix" track:"Major Happy"');
+    expect(item?.anchorQuery).toBeUndefined();
+  });
+
+  it("has an explicit clause and can never fall through to the embed predicate", async () => {
+    const { kindClause } = await import("./track-work");
+
+    const recovery = kindClause("isrc-recovery");
+    const embed = kindClause("embed");
+
+    expect(recovery.sql).not.toBe(embed.sql);
+    expect(recovery.args).toHaveLength(1);
+    expect(recovery.sql).toContain("f.track_id is null");
+    expect(recovery.sql).toContain("t.spotify_uri is null");
+    expect(recovery.sql).toContain("t.has_isrc = 0");
+    expect(recovery.sql).toContain("t.isrc_recovery_attempted_at");
+    expect(recovery.sql).not.toContain("t.isrc_attempted_at");
+    expect(recovery.sql).not.toContain("t.backfill_deezer_attempted_at");
+    expect(recovery.sql).not.toContain("t.embedding_blob is null");
   });
 });
 

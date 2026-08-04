@@ -489,11 +489,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "CERTIFIED_FIRST — an ORDER BY expression (`case when … then 1 else 0 end asc`), not a filter. It sorts a page that other clauses already bounded; there is no anti-join scan to retire.",
   },
   {
-    count: 3,
+    count: 4,
     file: "lib/server/track-work.ts",
     pattern: "anti-join:findings-is-null",
     reason:
-      "The worklist scope + capture/analyze kindClauses. The findings join is load-bearing for the certified-first WORK_ORDER (`f.track_id is not null desc`), so it cannot be dropped; the residual scans are backlog items 12 / 14 / Wave-2 6 / Wave-3 4, all DEFERRED or gated on the operator opening catalogue capture.",
+      "The worklist scope + catalogue-only kindClauses. The findings join is load-bearing for the certified-first WORK_ORDER (`f.track_id is not null desc`), so it cannot be dropped. The ISRC-recovery arm pairs its anti-join with the partial-index predicate `t.spotify_uri is null` and leading-key seek `t.has_isrc = 0`, so `tracks_anchor_order_idx` bounds that pass; the other residual scans remain the owned backlog items documented by this guardrail.",
   },
   {
     count: 1,

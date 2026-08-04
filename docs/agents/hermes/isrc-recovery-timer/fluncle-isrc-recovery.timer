@@ -1,0 +1,14 @@
+[Unit]
+Description=fluncle-isrc-recovery timer — recover catalogue ISRCs through a free Deezer pass every hour on the host
+
+[Timer]
+# Per-firing jitter prevents the sweep roster from aligning into one write convoy.
+RandomizedDelaySec=90
+# Start on a free minute, then run one paced, bounded batch per hour. The worklist and its
+# re-ask backoff are durable, so a missed tick loses no work and an empty tick is a cheap no-op.
+OnBootSec=12min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

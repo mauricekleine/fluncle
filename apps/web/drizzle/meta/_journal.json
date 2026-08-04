@@ -1051,6 +1051,13 @@
       "when": 1785735207726,
       "tag": "0149_cultured_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 150,
+      "version": "6",
+      "when": 1785847714229,
+      "tag": "0150_stiff_stellaris",
+      "breakpoints": true
     }
   ]
 }

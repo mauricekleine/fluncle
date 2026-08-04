@@ -4,9 +4,9 @@
 // It is an INTEGRATION test because every claim here is SQL, and a mocked-DB test would pass while
 // any of it was broken:
 //
-//   - THE MIGRATION ITSELF — `tracks.isrc_attempted_at` and the four `tracks.backfill_discogs_*`
-//     columns. If the migration did not apply, every statement below naming them would throw here,
-//     which is the guard we want, since `deploy:gate` runs this suite;
+//   - THE MIGRATION ITSELF — `tracks.isrc_attempted_at`, `tracks.isrc_recovery_attempted_at`, and the
+//     four `tracks.backfill_discogs_*` columns. If a migration did not apply, every statement below
+//     naming them would throw here, which is the guard we want, since `deploy:gate` runs this suite;
 //   - THE WRITE PATHS — the stamp is only real if the SAME statement that fills (or declines to
 //     fill) the identifier writes it, on a HIT and on a CLEAN MISS alike. A stamp that only lands
 //     on hits would leave the honest negative — the whole point of the column — unsayable;
@@ -21,11 +21,18 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
+const searchDeezerCandidates = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
 
   return { ...actual, getDb: async () => holder.db };
+});
+
+vi.mock("./deezer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./deezer")>();
+
+  return { ...actual, searchDeezerCandidates };
 });
 
 import { backfillIdentityLedger } from "../../../scripts/backfill-identity-ledger";
@@ -37,6 +44,7 @@ let db: Client;
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
+  searchDeezerCandidates.mockReset();
 });
 
 /** The ledger columns as the envelope will read them. */
@@ -49,12 +57,14 @@ type LedgerRow = {
   in_release_id: null | number;
   isrc: null | string;
   isrc_attempted_at: null | string;
+  isrc_recovery_attempted_at: null | string;
 };
 
 async function ledger(trackId: string): Promise<LedgerRow> {
   const result = await db.execute({
     args: [trackId],
-    sql: `select isrc, isrc_attempted_at, in_release_id, in_master_id,
+    sql: `select isrc, isrc_attempted_at, isrc_recovery_attempted_at,
+                 in_release_id, in_master_id,
                  backfill_discogs_attempted_at, backfill_discogs_attempts,
                  backfill_discogs_done_at, backfill_discogs_failures
           from tracks where track_id = ?`,
@@ -108,6 +118,7 @@ describe("the migration", () => {
     // A row nobody has stamped is `unattempted`, not `absent` — the distinction the columns exist
     // to carry. The two counters read 0 from their DDL default, never null.
     expect(row.isrc_attempted_at).toBeNull();
+    expect(row.isrc_recovery_attempted_at).toBeNull();
     expect(row.backfill_discogs_attempted_at).toBeNull();
     expect(row.backfill_discogs_done_at).toBeNull();
     expect(row.backfill_discogs_attempts).toBe(0);
@@ -136,6 +147,7 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
 
     expect(after.isrc).toBe("GBABC1200002");
     expect(after.isrc_attempted_at).not.toBeNull();
+    expect(after.isrc_recovery_attempted_at).not.toBeNull();
   });
 
   it("stamps on a CLEAN MISS — Deezer answered, nothing cleared the gate", async () => {
@@ -158,9 +170,10 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
     // The honest negative: no ISRC, but we looked. Nothing else on the row moved.
     expect(after.isrc).toBeNull();
     expect(after.isrc_attempted_at).not.toBeNull();
+    expect(after.isrc_recovery_attempted_at).not.toBeNull();
   });
 
-  it("leaves the row UNTOUCHED when the search came back empty (a throttle is not an answer)", async () => {
+  it("stamps only the dedicated ledger when a box-supplied search came back clean-empty", async () => {
     await insertCatalogueTrack("mb_empty");
 
     const recovered = await recoverIsrcViaDeezer(
@@ -173,7 +186,31 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
     );
 
     expect(recovered).toBeUndefined();
-    expect((await ledger("mb_empty")).isrc_attempted_at).toBeNull();
+    const after = await ledger("mb_empty");
+
+    expect(after.isrc_attempted_at).toBeNull();
+    expect(after.isrc_recovery_attempted_at).not.toBeNull();
+  });
+
+  it("a Worker-self-fetched empty settles nothing — a throttle is not an answer", async () => {
+    await insertCatalogueTrack("mb_self_empty");
+    searchDeezerCandidates.mockResolvedValue([]);
+
+    const recovered = await recoverIsrcViaDeezer(
+      "mb_self_empty",
+      db,
+      row.artists,
+      row.title,
+      row.durationMs,
+    );
+
+    expect(recovered).toBeUndefined();
+    expect(searchDeezerCandidates).toHaveBeenCalledOnce();
+
+    const after = await ledger("mb_self_empty");
+
+    expect(after.isrc_attempted_at).toBeNull();
+    expect(after.isrc_recovery_attempted_at).toBeNull();
   });
 
   it("leaves the row UNTOUCHED when there is no identity to verify against", async () => {
@@ -185,6 +222,7 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
 
     expect(recovered).toBeUndefined();
     expect((await ledger("mb_unverifiable")).isrc_attempted_at).toBeNull();
+    expect((await ledger("mb_unverifiable")).isrc_recovery_attempted_at).toBeNull();
   });
 
   it("never overwrites a real ISRC, and re-stamps the attempt", async () => {
@@ -198,6 +236,7 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
 
     expect(after.isrc).toBe("GBABC1200005");
     expect(after.isrc_attempted_at).not.toBeNull();
+    expect(after.isrc_recovery_attempted_at).not.toBeNull();
   });
 });
 

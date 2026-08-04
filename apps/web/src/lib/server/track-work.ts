@@ -100,8 +100,12 @@ export type TrackWorkKind =
   | "anchor"
   | "capture"
   | "embed"
+  | "isrc-recovery"
   | "youtube-provenance"
   | "youtube-reverdict";
+
+/** The free Deezer pass shares the MusicBrainz ISRC refresh's three-week re-ask cadence. */
+export const ISRC_RECOVERY_REASK_AFTER_DAYS = 21;
 
 /**
  * THE PROVENANCE RE-ASK WINDOW. How long a captured row whose YouTube provenance came back
@@ -253,11 +257,11 @@ export type TrackWorkItem = {
   /**
    * The ready-made DEEZER search query (`deezerSearchQuery`: Deezer's `artist:"…" track:"…"` field
    * syntax over the row's first artist + its canonicalized title) — a DIFFERENT spelling from
-   * `anchorQuery`, which is the free-text ask the Spotify rungs use. Attached ONLY for an ANCHOR row
-   * that carries NO ISRC, because that is exactly the row the pre-anchor ISRC-recovery rung acts on;
-   * its presence is the server telling the box "search Deezer for this one, from your own IP". Absent
-   * for every other kind, for a row that already has an ISRC, and when the row has no usable
-   * artist/title to ask with.
+   * `anchorQuery`, which is the free-text ask the Spotify rungs use. Attached for every
+   * ISRC-RECOVERY row and for an ANCHOR row that carries NO ISRC, because those are exactly the rows
+   * the pre-anchor recovery rung acts on; its presence is the server telling the box "search Deezer
+   * for this one, from your own IP". Absent for other kinds, for an anchor row that already has an
+   * ISRC, and when the row has no usable artist/title to ask with.
    */
   deezerQuery?: string;
   durationMs: number;
@@ -624,6 +628,34 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     };
   }
 
+  if (kind === "isrc-recovery") {
+    // THE FREE ISRC-RECOVERY WORKLIST. This catalogue-only pass asks Deezer for recording identity
+    // before a row enters the billed anchor queue, so every predicate excludes a request that can
+    // never clear the server's duration + identity gate. `has_isrc` is the maintained presence
+    // mirror, not a re-spelled raw-ISRC expression: it is the leading key of the existing partial
+    // `tracks_anchor_order_idx`, under the identical `spotify_uri is null` scope.
+    //
+    // The dedicated recovery ledger is load-bearing here. `isrc_attempted_at` cannot express this
+    // pass: several paths write it, including the crawler at insert after its MusicBrainz look.
+    // `backfill_deezer_attempted_at` belongs to the separate ISRC-gated enrichment worklist, so this
+    // pass must not consume it either. A settling box-supplied search alone moves this watermark.
+    const cutoff = new Date(
+      Date.now() - ISRC_RECOVERY_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    return {
+      args: [cutoff],
+      sql: `f.track_id is null
+            and t.spotify_uri is null
+            and t.has_isrc = 0
+            and t.duration_ms > 0
+            and t.dismissed_at is null
+            and t.duplicate_of_track_id is null
+            and ${ANCHOR_RULED_OUT_LABEL_CLAUSE}
+            and (t.isrc_recovery_attempted_at is null or t.isrc_recovery_attempted_at < ?)`,
+    };
+  }
+
   if (kind === "anchor") {
     // THE ANCHOR WORKLIST (docs/catalogue-crawler.md § the anchor). Catalogue-only by construction
     // (`f.track_id is null` — a finding's Spotify id is its identity, never re-anchored), so
@@ -799,12 +831,17 @@ export async function listTrackWork(options: {
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
 
   const kindWhere = kindClause(kind);
-  // The `anchor` worklist rides its own budget-order (embedded + ranked first) and the re-verdict
-  // its round-robin (oldest-ruled first); every other kind — the provenance backfill included —
-  // rides the shared capture ladder, which is what puts the findings ahead of the catalogue and
-  // orders them newest-first.
+  // The anchor-family worklists ride the existing anchor index order; on `isrc-recovery`,
+  // `has_isrc` is fixed at 0, so `has_embedding` is the next indexed key and embedded rows come
+  // first without a new index. The re-verdict rides its round-robin (oldest-ruled first); every
+  // other kind — the provenance backfill included — rides the shared capture ladder, which is what
+  // puts the findings ahead of the catalogue and orders them newest-first.
   const order =
-    kind === "anchor" ? ANCHOR_ORDER : kind === "youtube-reverdict" ? REVERDICT_ORDER : WORK_ORDER;
+    kind === "anchor" || kind === "isrc-recovery"
+      ? ANCHOR_ORDER
+      : kind === "youtube-reverdict"
+        ? REVERDICT_ORDER
+        : WORK_ORDER;
   const db = await getDb();
   const result = await db.execute({
     args: [...kindWhere.args, page],
@@ -818,12 +855,14 @@ export async function listTrackWork(options: {
 
   const items: TrackWorkItem[] = typedRows<WorkRow>(result.rows).map((row) => {
     const artists = parseArtistsJson(row.artists_json);
-    // The ANCHOR-only Deezer ask, for an ISRC-LESS row only — the row the pre-anchor recovery rung
-    // acts on. Deezer's tokenless quota is per-IP and the Worker's shared edge IPs are saturated, so
-    // the BOX runs that search; the server still owns the SPELLING (deezer.ts `deezerSearchQuery`),
-    // so the sweep never invents a query, exactly as with `anchorQuery`.
+    // The recovery-kind Deezer ask, plus the ANCHOR ask for an ISRC-LESS row only. Deezer's
+    // tokenless quota is per-IP and the Worker's shared edge IPs are saturated, so the BOX runs
+    // that search; the server still owns the SPELLING (deezer.ts `deezerSearchQuery`), so the sweep
+    // never invents a query, exactly as with `anchorQuery`.
     const deezerQuery =
-      kind === "anchor" && !row.isrc?.trim() ? deezerSearchQuery(artists, row.title) : undefined;
+      kind === "isrc-recovery" || (kind === "anchor" && !row.isrc?.trim())
+        ? deezerSearchQuery(artists, row.title)
+        : undefined;
 
     return {
       artists,

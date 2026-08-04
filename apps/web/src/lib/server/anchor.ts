@@ -1068,11 +1068,12 @@ async function resolveViaSpotifySearch(
  * `artistName` folds into an artist set through `matchKey`). On any doubt, no recovery: the row simply
  * stays ISRC-less and falls to fuzzy, exactly as before this rung existed.
  *
- * EITHER CONCLUSION IS AN ATTEMPT, and stamps `isrc_attempted_at` (schema.ts) — a recovery and a
- * gate-clean refusal both answer the question. The ONE outcome that does not stamp is an empty
- * candidate list, since `searchDeezerCandidates` returns the same empty array for "Deezer has
- * nothing" and for a quota/network failure; the row stays honestly unattempted rather than wearing
- * a stamp we cannot stand behind.
+ * EITHER CONCLUSION IS AN ATTEMPT, and stamps the shared `isrc_attempted_at` (schema.ts) — a recovery
+ * and a gate-clean refusal both answer the question. That shared stamp stays untouched on an empty
+ * candidate list, since the Worker-self-fetched `searchDeezerCandidates` result cannot distinguish
+ * "Deezer has nothing" from quota/network failure. The dedicated `isrc_recovery_attempted_at` has a
+ * narrower signal: a BOX-SUPPLIED result stamps it on recovery, gate refusal, and present-but-empty
+ * clean miss, because the box sweep never calls the resolver for quota or transport outcomes.
  *
  * AND THE HIT'S DEEZER ID RIDES ALONG (`tracks.deezer_track_id`, schema.ts). A hit that cleared this
  * gate IS this recording on Deezer, so its id is kept in the same statement with the rung that
@@ -1082,10 +1083,11 @@ async function resolveViaSpotifySearch(
  * THIS IS ALSO THE ONE PLACE THE DEEZER LEDGER IS WRITTEN (`tracks.backfill_deezer_*`, schema.ts).
  * It is stamped by the two outcomes that settle whether Deezer carries this recording — a hit that
  * cleared the gate WITH an id, and a gate-clean refusal — and by nothing else. The two exits above
- * (an unverifiable row, an empty candidate list) stamp nothing, on exactly the reasoning that already
- * governs `isrc_attempted_at` here, and so does the legacy branch where a cleared hit arrives with no
- * id (see the write below). The ledger is what lets a checked-and-missed row say so: without it, a
- * row this rung had searched and found nothing for would still be reading "Not checked yet".
+ * (an unverifiable row, an empty candidate list) stamp nothing IN THIS ENRICHMENT LEDGER, on exactly
+ * the reasoning that governs the shared `isrc_attempted_at` here, and neither does the legacy branch
+ * where a cleared hit arrives with no id (see the write below). The dedicated box-recovery ledger is
+ * independent and does settle a supplied empty list. The enrichment ledger is what lets a
+ * checked-and-gate-refused row say so without consuming the separate ISRC-gated backfill worklist.
  *
  * A verified hit's ISRC is written FILL-EMPTY-ONLY (`coalesce(isrc, ?)`, mirroring the anchor-hit
  * write) — a real ISRC is never overwritten (defensive; we only reach here for an ISRC-less row) — and
@@ -1123,6 +1125,19 @@ export async function recoverIsrcViaDeezer(
     suppliedCandidates ?? (await searchDeezerCandidates({ artists: rowArtists, title: rowTitle }));
 
   if (candidates.length === 0) {
+    if (suppliedCandidates !== undefined) {
+      // A PRESENT empty list is a trustworthy clean miss only for the box-supplied path. The
+      // isrc-recovery sweep sends `[]` solely after an `ok` Deezer response; quota and transport
+      // outcomes never call `resolve_anchor`. The Worker-self-fetched client still collapses its
+      // empty and failed outcomes, so absence of supplied candidates must remain unstamped.
+      await db.execute({
+        args: [new Date().toISOString(), trackId],
+        sql: `update tracks
+              set isrc_recovery_attempted_at = ?
+              where track_id = ?`,
+      });
+    }
+
     return undefined;
   }
 
@@ -1153,9 +1168,10 @@ export async function recoverIsrcViaDeezer(
     // A GATE-CLEAN MISS, and therefore a concluded attempt: Deezer answered with candidates and not
     // one of them cleared the identity gate. Stamped (schema.ts § `isrc_attempted_at`) so the row
     // reads "looked, not there" rather than the ambiguous silence — the honest negative is the point
-    // of the column. Note where this sits: BELOW the empty-candidates return above, which is
-    // deliberately left unstamped, because `searchDeezerCandidates` hands back the same empty array
-    // for "Deezer has nothing" and for a quota/network failure, and a throttle is not an answer.
+    // of the column. Note where this sits: BELOW the empty-candidates return above. That return
+    // deliberately leaves THIS shared stamp untouched because `searchDeezerCandidates` hands back
+    // the same empty array for "Deezer has nothing" and for quota/network failure. The dedicated
+    // box-recovery ledger can distinguish a supplied clean-empty response and handles it above.
     //
     // THE DEEZER LEDGER RIDES THE SAME STATEMENT (schema.ts § `backfill_deezer_*`), because this is
     // the miss it was built for. The same candidates that failed the ISRC gate failed the DEEZER-ID
@@ -1167,13 +1183,15 @@ export async function recoverIsrcViaDeezer(
     // envelope prints). `done_at` stays null — nothing resolved — and `failures` stays 0, since this
     // branch IS the clean conclusion rather than the transport failure a streak would back off from.
     const missAt = new Date().toISOString();
+    const recoveryAttemptedAt = suppliedCandidates === undefined ? null : missAt;
 
     await db.execute({
-      args: [missAt, missAt, trackId],
+      args: [missAt, missAt, recoveryAttemptedAt, trackId],
       sql: `update tracks
             set isrc_attempted_at = ?,
                 backfill_deezer_attempted_at = ?,
-                backfill_deezer_attempts = backfill_deezer_attempts + 1
+                backfill_deezer_attempts = backfill_deezer_attempts + 1,
+                isrc_recovery_attempted_at = coalesce(?, isrc_recovery_attempted_at)
             where track_id = ?`,
     });
 
@@ -1199,17 +1217,19 @@ export async function recoverIsrcViaDeezer(
   // and binds the same value as `deezer_verified_at`, so the moment the link was won and the moment
   // the ledger says it resolved can never drift apart.
   //
-  // A CLEARED HIT THAT ARRIVED WITHOUT AN ID STAMPS NOTHING, and the reason is the receipt's
-  // vocabulary. That branch is a legacy-box-payload defence (`searchDeezerCandidates` sets the id
-  // from Deezer's numeric `id`, which it always sends), and on it Deezer demonstrably DOES carry the
-  // recording — the ISRC being written on this very line came out of that hit. Stamping would render
-  // the row "Not found · checked <date>", and on every other row of that page "Not found" means the
-  // look could not identify the recording on that platform, not that a payload omitted a field. No
-  // state fits: `absent` misstates the fact and `verified` has no link to show. So the row stays
-  // `unattempted`, the same reading this rung already gives every outcome it cannot stand behind.
+  // A CLEARED HIT THAT ARRIVED WITHOUT AN ID STAMPS NOTHING IN THE DEEZER-ENRICHMENT LEDGER, and the
+  // reason is the receipt's vocabulary. That branch is a legacy-box-payload defence
+  // (`searchDeezerCandidates` sets the id from Deezer's numeric `id`, which it always sends), and on
+  // it Deezer demonstrably DOES carry the recording — the ISRC being written on this very line came
+  // out of that hit. Stamping the enrichment ledger would render the row "Not found · checked
+  // <date>", and on every other row of that page "Not found" means the look could not identify the
+  // recording on that platform, not that a payload omitted a field. No enrichment state fits:
+  // `absent` misstates the fact and `verified` has no link to show. The dedicated box-recovery ledger
+  // still stamps this settling outcome when the candidates were supplied.
   const now = new Date().toISOString();
   const deezerTrackId = verified?.candidate.deezerTrackId ?? null;
   const deezerWonAt = deezerTrackId === null ? null : now;
+  const recoveryAttemptedAt = suppliedCandidates === undefined ? null : now;
 
   await db.execute({
     args: [
@@ -1217,6 +1237,7 @@ export async function recoverIsrcViaDeezer(
       recovered,
       recovered,
       now,
+      recoveryAttemptedAt,
       deezerTrackId,
       deezerTrackId === null ? null : (verified?.via ?? null),
       deezerWonAt,
@@ -1228,6 +1249,7 @@ export async function recoverIsrcViaDeezer(
     sql: `update tracks
           set ${FILL_ISRC_SQL},
               isrc_attempted_at = ?,
+              isrc_recovery_attempted_at = coalesce(?, isrc_recovery_attempted_at),
               deezer_track_id = coalesce(deezer_track_id, ?),
               deezer_verified_by = coalesce(deezer_verified_by, ?),
               deezer_verified_at = coalesce(deezer_verified_at, ?),

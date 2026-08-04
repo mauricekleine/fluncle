@@ -616,6 +616,18 @@ export const tracks = sqliteTable(
     // drop+recreate all ~125 indexes. NULL is "never attempted". Internal reliability state — no
     // public surface, no lastmod bump.
     isrcAttemptedAt: text("isrc_attempted_at"),
+    // THE FREE DEEZER-RECOVERY LEDGER. A timestamp means the box-supplied, tokenless Deezer
+    // recovery pass reached a settling answer for this row: recovered, gate-refused, or clean-empty.
+    // It is deliberately NOT `isrc_attempted_at`, whose multiple writers include the crawler's
+    // insert-time MusicBrainz look, and deliberately NOT `backfill_deezer_attempted_at`, whose
+    // ISRC-gated enrichment consumer must remain eligible if another source later fills the ISRC.
+    // This one owner lets the recovery worklist drain while retaining a 21-day re-ask window.
+    //
+    // NULLABLE with NO `.default()`, deliberately: adding it to the populated `tracks` table must
+    // generate one O(1) `alter table ... add column`, never the table rebuild that would recreate
+    // the table's ~125 indexes. NULL is "the box recovery pass has not settled yet". Internal
+    // reliability state — no public surface, no lastmod bump.
+    isrcRecoveryAttemptedAt: text("isrc_recovery_attempted_at"),
     key: text("key"),
     // The analyzer's confidence in `key` (0..1) and its source (analysis provenance, RFC
     // bpm-key-accuracy). `keySource` is the analyzer's `keySource` verbatim. `key` is NULL

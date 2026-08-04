@@ -676,6 +676,9 @@ export const listTracksAdmin = oc
  * the catalogue Spotify-anchor worklist (docs/catalogue-crawler.md § the anchor) — un-anchored
  * catalogue rows the box's Apify sweep fills via `anchor_track`; it carries no audio, so it is a
  * sibling of the three audio stages rather than one of them.
+ * `isrc-recovery` is the free Deezer-only pass over un-anchored, ISRC-less catalogue rows. A
+ * recovered ISRC makes the maintained `has_isrc` mirror true, which lets the row enter the billed
+ * anchor queue through its exact-ISRC head without this pass ever spending Apify.
  *
  * The two `youtube-*` kinds are the PROVENANCE BACKFILL's queues, both drained by budgeted phases
  * inside the `fluncle-capture` tick rather than by a timer of their own:
@@ -687,7 +690,15 @@ export const listTracksAdmin = oc
  *     the widened heuristic. Keyless oEmbed only, so it costs nothing and carries no brake.
  */
 export const TrackWorkKindSchema = z
-  .enum(["analyze", "anchor", "capture", "embed", "youtube-provenance", "youtube-reverdict"])
+  .enum([
+    "analyze",
+    "anchor",
+    "capture",
+    "embed",
+    "isrc-recovery",
+    "youtube-provenance",
+    "youtube-reverdict",
+  ])
   .meta({
     id: "TrackWorkKind",
   });
@@ -727,11 +738,12 @@ export const TrackWorkItemSchema = z
     certified: z.boolean(),
     /**
      * The ready-made DEEZER search query — Deezer's `artist:"…" track:"…"` FIELD syntax, a different
-     * spelling from `anchorQuery`'s free text. Present ONLY on an `anchor` row that carries NO ISRC:
-     * that is the row the pre-anchor ISRC-recovery rung acts on, and its presence is the server
-     * telling the box to run that search from its own IP (Deezer's tokenless quota is per-IP, and the
-     * Worker's shared Cloudflare edge IPs are saturated). The box hands the hits back as
-     * `resolve_anchor`'s `deezerCandidates`; the server still verifies and writes.
+     * spelling from `anchorQuery`'s free text. Present on an `isrc-recovery` row with a usable
+     * artist/title and on an `anchor` row that carries NO ISRC: those are the rows the pre-anchor
+     * ISRC-recovery rung acts on, and its presence is the server telling the box to run that search
+     * from its own IP (Deezer's tokenless quota is per-IP, and the Worker's shared Cloudflare edge
+     * IPs are saturated). The box hands the hits back as `resolve_anchor`'s `deezerCandidates`; the
+     * server still verifies and writes.
      */
     deezerQuery: z.string().optional(),
     durationMs: z.number(),

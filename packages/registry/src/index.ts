@@ -1475,6 +1475,23 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
+      "recover missing catalogue ISRCs through free Deezer search → feed the exact-ISRC Spotify anchor queue",
+    ],
+    kind: "cron",
+    name: "cron.isrc-recovery",
+    operatorNotes:
+      "hourly, run by a host systemd timer (docs/agents/hermes/isrc-recovery-timer/). Selects un-anchored catalogue rows whose stored has_isrc mirror is false, searches Deezer once with the server-supplied query, and POSTs up to five candidates to the existing agent-tier `resolve_anchor` op with `spotifySearch: false`. The Worker re-runs its shared identity + duration gate and writes only a verified ISRC; that stored mirror then feeds the row into cron.anchor's high-precision exact-ISRC head. This sweep NEVER calls `anchor_track` and spends zero Apify. Deezer is tokenless, so the box's existing FLUNCLE_API_TOKEN is the only secret. Requests are sequential and paced; HTTP-200 Deezer quota bodies are classified separately from genuine empty results, and a short quota streak aborts the rest of the tick visibly. Source: docs/agents/hermes/scripts/isrc-recovery-sweep.*.",
+    probeConfig: {
+      cadenceMs: 60 * MINUTE_MS,
+      cronName: "fluncle-isrc-recovery",
+      kind: "cron",
+    },
+    statusDescription: "recovers catalogue ISRCs before Spotify anchoring",
+    title: "ISRC recovery",
+    weights: { status: "hidden" },
+  },
+  {
+    exposedContent: [
       "mirror the anchored, explicitly allowlisted public catalogue into the shared read-only device replica",
     ],
     kind: "cron",

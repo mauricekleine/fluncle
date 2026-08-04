@@ -89,12 +89,14 @@ async function anchorState(trackId: string): Promise<{
   deezerTrackId: unknown;
   deezerVerifiedAt: unknown;
   deezerVerifiedBy: unknown;
+  isrcRecoveryAttemptedAt: unknown;
   isrc: unknown;
   uri: unknown;
 }> {
   const row = await db.execute({
     args: [trackId],
     sql: `select spotify_uri, spotify_anchor_attempted_at, isrc,
+                 isrc_recovery_attempted_at,
                  deezer_track_id, deezer_verified_at, deezer_verified_by,
                  backfill_deezer_attempted_at, backfill_deezer_attempts,
                  backfill_deezer_done_at, backfill_deezer_failures
@@ -111,6 +113,7 @@ async function anchorState(trackId: string): Promise<{
     deezerVerifiedAt: row.rows[0]?.deezer_verified_at,
     deezerVerifiedBy: row.rows[0]?.deezer_verified_by,
     isrc: row.rows[0]?.isrc,
+    isrcRecoveryAttemptedAt: row.rows[0]?.isrc_recovery_attempted_at,
     uri: row.rows[0]?.spotify_uri,
   };
 }
@@ -676,6 +679,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     });
     expect(searchDeezerCandidates).toHaveBeenCalledTimes(1);
     expect(text((await anchorState("mb_dzout")).isrc)).toBeFalsy();
+    expect((await anchorState("mb_dzout")).isrcRecoveryAttemptedAt).toBeNull();
   });
 });
 
@@ -706,7 +710,9 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     });
 
     expect(result.isrcRecoveredByDeezer).toBe(true);
-    expect(text((await anchorState("mb_box_ok")).isrc)).toBe("GBBOXDZ00001");
+    const state = await anchorState("mb_box_ok");
+    expect(text(state.isrc)).toBe("GBBOXDZ00001");
+    expect(state.isrcRecoveryAttemptedAt).not.toBeNull();
     // The Worker issued NO Deezer request of its own — the whole point of moving the fetch.
     expect(searchDeezerCandidates).not.toHaveBeenCalled();
   });
@@ -787,6 +793,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(state.deezerTrackId).toBeNull();
     expect(state.deezerVerifiedBy).toBeNull();
     expect(state.deezerVerifiedAt).toBeNull();
+    expect(state.isrcRecoveryAttemptedAt).not.toBeNull();
     // AND THE LEDGER RECORDS THE MISS, which is the whole reason it exists. Deezer answered, the
     // gate ruled, and Fluncle came away with nothing — so `/identity` must read "Not found · checked
     // <date>" here rather than going on claiming "Not checked yet". `done_at` stays null (nothing
@@ -798,7 +805,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(Number(state.deezerFailures)).toBe(0);
   });
 
-  it("leaves the Deezer ledger alone when the candidate list came back empty", async () => {
+  it("settles only the recovery ledger when the box supplied a clean-empty list", async () => {
     const { resolveAnchorFree } = await import("./anchor");
 
     await seedCatalogue({
@@ -811,11 +818,9 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     });
     lookupSpotifyIdsByMbid.mockResolvedValue(null);
 
-    // THE AMBIGUOUS EXIT, and the one the ledger must never dress up as an answer. An empty array is
-    // what `searchDeezerCandidates` returns for "Deezer has nothing" AND for a quota or network
-    // failure — the two are indistinguishable here — so a throttled tick must not leave the row
-    // claiming Deezer was checked and does not carry the recording. It stays honestly unattempted,
-    // the same reasoning that already keeps `isrc_attempted_at` off this branch.
+    // The box sends `[]` only after a valid empty Deezer response. Quota and transport outcomes do
+    // not call the resolver, so this signal settles the recovery pass without changing the separate
+    // Deezer-enrichment ledger's meaning.
     await resolveAnchorFree("mb_box_dzempty", new Date(), { deezerCandidates: [] });
 
     const state = await anchorState("mb_box_dzempty");
@@ -823,6 +828,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(state.deezerAttemptedAt).toBeNull();
     expect(Number(state.deezerAttempts)).toBe(0);
     expect(state.deezerDoneAt).toBeNull();
+    expect(state.isrcRecoveryAttemptedAt).not.toBeNull();
   });
 
   it("recovers the ISRC from a hit an older box sent without an id, and keeps no link", async () => {
