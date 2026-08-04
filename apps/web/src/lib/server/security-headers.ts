@@ -176,7 +176,13 @@ export const CONTENT_POLICY = [
   // This is a fallback path with a shelf life — `backfill_cover_masters` replaces each
   // CAA URL with an owned master (docs/album-artwork.md), and these two entries retire
   // with the last raw one.
-  "img-src 'self' data: blob: https://found.fluncle.com https://i.scdn.co https://coverartarchive.org https://archive.org https://*.archive.org https://lh3.googleusercontent.com https://queue.simpleanalyticscdn.com",
+  //
+  // radio.fluncle.com is the same-Worker observation station. It serves the shared
+  // document head, whose icon is the relative `/favicon.png`; browsers may retain that
+  // first-party icon URL while navigating into a canonical www /log document. Admit
+  // that concrete image host rather than every `*.fluncle.com` sibling: no other
+  // subdomain is a known cross-host image consumer, so the allowlist stays evidence-led.
+  "img-src 'self' data: blob: https://found.fluncle.com https://radio.fluncle.com https://i.scdn.co https://coverartarchive.org https://archive.org https://*.archive.org https://lh3.googleusercontent.com https://queue.simpleanalyticscdn.com",
   "media-src 'self' https://found.fluncle.com",
   [
     "connect-src 'self'",

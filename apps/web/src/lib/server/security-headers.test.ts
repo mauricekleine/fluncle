@@ -124,6 +124,15 @@ describe("securityHeadersFor", () => {
     expect(CONTENT_POLICY).toContain("https://*.archive.org");
   });
 
+  it("admits the radio favicon through img-src without wildcarding first-party hosts", () => {
+    const imgDirective = CONTENT_POLICY.split("; ").find((directive) =>
+      directive.startsWith("img-src "),
+    );
+
+    expect(imgDirective).toContain("https://radio.fluncle.com");
+    expect(imgDirective).not.toContain("https://*.fluncle.com");
+  });
+
   it("never grants 'unsafe-eval' — the one eval report is a probe that degrades", () => {
     // FLUNCLE-WEB-7 reports `blocked-uri: eval` from zod's JIT capability probe, which
     // wraps its `new Function` in a try/catch and falls back to the interpreted parser.
