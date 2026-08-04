@@ -1124,6 +1124,19 @@ describe("listTrackWork — the youtube-provenance backfill", () => {
     expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
   });
 
+  it("drops a row with banked SoundCloud evidence — its fingerprint proof is already settled", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await seedTrack(db, { logId: "004.7.2I", trackId: "aaaaaaaaaaaaaaaaaaaaaa" });
+    await withAudio("aaaaaaaaaaaaaaaaaaaaaa");
+    await db.execute({
+      args: ["soundcloud-preview-match", "aaaaaaaaaaaaaaaaaaaaaa"],
+      sql: `update tracks set source_verification = ? where track_id = ?`,
+    });
+
+    expect(await listTrackWork({ kind: "youtube-provenance" })).toEqual([]);
+  });
+
   it("keeps a WRONG-AUDIO row out — its re-capture will report an id for free", async () => {
     const { listTrackWork } = await import("./track-work");
 

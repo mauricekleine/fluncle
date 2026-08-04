@@ -262,7 +262,7 @@ describe("the certification rail — a catalogue track is measured, never spoken
     const result = await db.execute({
       args: [trackId],
       sql: `select bpm, key, features_json, analyzed_from,
-                   embedding_blob is not null as has_vector, source_audio_key
+                   embedding_blob is not null as has_vector, source_audio_key, source_verification
             from tracks where track_id = ?`,
     });
 
@@ -315,11 +315,17 @@ describe("the certification rail — a catalogue track is measured, never spoken
 
     await updateTrack(
       CATALOGUE_ID,
-      { captureStatus: "done", sourceAudioKey: `${CATALOGUE_ID}/abc.webm` },
+      {
+        captureStatus: "done",
+        sourceAudioKey: `${CATALOGUE_ID}/abc.webm`,
+        sourceVerification: "soundcloud-archive-match",
+      },
       { writer: "agent" },
     );
 
-    expect((await analysisOf(CATALOGUE_ID))?.source_audio_key).toBe(`${CATALOGUE_ID}/abc.webm`);
+    const row = await analysisOf(CATALOGUE_ID);
+    expect(row?.source_audio_key).toBe(`${CATALOGUE_ID}/abc.webm`);
+    expect(row?.source_verification).toBe("soundcloud-archive-match");
   });
 
   it("CANNOT get a NOTE — Fluncle does not write about a track he has not been to", async () => {

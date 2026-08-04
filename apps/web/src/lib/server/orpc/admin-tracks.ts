@@ -377,6 +377,15 @@ export function adminTracksHandlers(os: Implementer) {
         update.sourceAudioRejected = body.sourceAudioRejected;
       }
 
+      // SoundCloud provenance is banked beside the YouTube-only trio, never inside it. These are
+      // the only two claims the sweep can make; any other shape is an additive no-op.
+      if (
+        body.sourceVerification === "soundcloud-preview-match" ||
+        body.sourceVerification === "soundcloud-archive-match"
+      ) {
+        update.sourceVerification = body.sourceVerification;
+      }
+
       // The accepted upload's id, from a fingerprint gate. Trimmed and only taken when non-empty —
       // there is no "clear it" semantic here, because a sweep only ever reports an id it PROVED,
       // and an empty string would be a claim about nothing.

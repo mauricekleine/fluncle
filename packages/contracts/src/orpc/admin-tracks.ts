@@ -82,6 +82,9 @@ const UpdateTrackBodySchema = z.looseObject({
   // The bad-audio memory (docs/the-ear.md § Wrong audio) — a JSON array of rejected capture
   // sources. Agent-writable; the handler narrows it to a string.
   sourceAudioRejected: z.unknown().optional(),
+  // Banked fingerprint evidence from the provenance sweep's SoundCloud rung. LOOSE like the
+  // other capture side-channels: the handler admits only the two known match kinds.
+  sourceVerification: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
   // THE RE-VERDICT ASK (operator ruling 2026-07-31) — re-rule the officialness of the id this row
   // ALREADY holds, under whatever the current rule is. Carries no verdict and no id: the server

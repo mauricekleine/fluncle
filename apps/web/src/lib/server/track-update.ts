@@ -202,6 +202,11 @@ export type TrackUpdate = {
    * side-channel like `sourceAudioKey`; empty string clears it.
    */
   sourceAudioRejected?: string;
+  /**
+   * Banked fingerprint evidence from a SoundCloud provenance rung. The two values name the
+   * reference that was compared; neither is YouTube evidence and neither may move YouTube fields.
+   */
+  sourceVerification?: "soundcloud-archive-match" | "soundcloud-preview-match";
   /** The AI model that authored the video, in <provider>/<model> notation. */
   videoModel?: string;
   /** The reasoning/thinking effort the authoring model ran at (e.g. "high"). */
@@ -737,6 +742,21 @@ export async function updateTrack(
     args.push(update.sourceAudioBytes);
   }
 
+  // SoundCloud evidence is a recording-side measurement. Narrow again at the write boundary so a
+  // stale or direct caller cannot persist an invented verdict, and keep it entirely separate from
+  // the YouTube-only id/verdict/stamp columns below.
+  const sourceVerification =
+    update.sourceVerification === "soundcloud-preview-match" ||
+    update.sourceVerification === "soundcloud-archive-match"
+      ? update.sourceVerification
+      : undefined;
+  const askedSourceVerification = update.sourceVerification !== undefined;
+
+  if (sourceVerification !== undefined) {
+    sets.push("source_verification = ?");
+    args.push(sourceVerification);
+  }
+
   // THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id). The sweep reports the id
   // of the upload its fingerprint gate accepted; the SERVER decides whether that upload may ever
   // be shown, and stamps when it decided. The box is never trusted with permission.
@@ -1059,11 +1079,11 @@ export async function updateTrack(
   if (sets.length === 0 && findingSets.length === 0) {
     // The provenance guard dropped every field this write carried (an agent trying to
     // downgrade a rekordbox/operator-graded row with nothing else in the payload), or a
-    // YouTube-provenance ask was declined (a row that already holds an id, a re-verdict on
-    // a row already ruled official): a silent no-op success, NOT a no_fields error — the
+    // provenance ask was declined (a row that already holds a YouTube id, a re-verdict on a row
+    // already ruled official, or an unknown source verdict): a silent no-op success, NOT a no_fields error — the
     // on-box sweeps must keep succeeding, and for the provenance backfill a decline is the
     // NORMAL outcome, not an error. A genuinely empty update is still the 400.
-    if (guardDroppedFields || askedYoutube) {
+    if (guardDroppedFields || askedYoutube || askedSourceVerification) {
       return { fields: [], trackId };
     }
 

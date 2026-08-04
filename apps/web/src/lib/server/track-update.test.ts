@@ -743,6 +743,34 @@ describe("updateTrack — the PROVENANCE backfill's write path", () => {
   });
 });
 
+describe("updateTrack — SoundCloud provenance evidence", () => {
+  it("banks a preview fingerprint match without moving any YouTube or public-lastmod field", async () => {
+    await updateTrack("track-123", { sourceVerification: "soundcloud-preview-match" });
+
+    expect(lastUpdateSql).toContain("source_verification = ?");
+    expect(lastUpdateArgs).toContain("soundcloud-preview-match");
+    expect(lastUpdateSql).not.toContain("youtube_");
+    expect(lastUpdateSql).not.toContain("updated_at");
+    expect(checkYoutubeOfficial).not.toHaveBeenCalled();
+  });
+
+  it("banks an archive fingerprint match under its distinct claim", async () => {
+    await updateTrack("track-123", { sourceVerification: "soundcloud-archive-match" });
+
+    expect(lastUpdateSql).toContain("source_verification = ?");
+    expect(lastUpdateArgs).toContain("soundcloud-archive-match");
+    expect(lastUpdateSql).not.toContain("youtube_");
+  });
+
+  it("silently drops an unrecognised claim at the final server write boundary", async () => {
+    await expect(
+      updateTrack("track-123", { sourceVerification: "soundcloud-maybe-match" as never }),
+    ).resolves.toEqual({ fields: [], trackId: "track-123" });
+
+    expect(lastUpdateSql).toBe("");
+  });
+});
+
 describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   it("accepts the Topic rung's metadata proof and stores it as `search`, never `fingerprint`", async () => {
     // The rung matched artist, title and length on an `<Artist> - Topic` art-track channel and

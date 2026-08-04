@@ -1242,9 +1242,19 @@ describe("the PROVENANCE phase never touches a capture column", () => {
     // Without this the worklist hands the same row back on the next tick and spends the same
     // download again, forever. The report stamps only `youtube_verified_at`, server-side.
     expect(phase).toContain('youtubeVerification: "no-match"');
-    expect(phase).toMatch(
-      /if \(!accepted \|\| accepted\.verdict !== "match" \|\| accepted\.source === "soundcloud"\)/,
+    expect(phase).toMatch(/if \(!accepted \|\| accepted\.verdict !== "match"\)/);
+  });
+
+  test("a SoundCloud preview match banks its own evidence and returns before YouTube writes", () => {
+    const soundcloud = phase.slice(
+      phase.indexOf('if (accepted.source === "soundcloud")'),
+      phase.indexOf("// ONLY the id and its proof"),
     );
+
+    expect(soundcloud).toContain('sourceVerification: "soundcloud-preview-match"');
+    expect(soundcloud).toContain('return "found"');
+    expect(soundcloud).not.toContain("youtubeVerification");
+    expect(soundcloud).not.toContain("youtubeVideoId");
   });
 
   test("a transient failure writes NOTHING at all", () => {
@@ -1687,6 +1697,19 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
     // Neither borrows the capture sweep's field, and the sweep never rules on officialness.
     expect(ladder).not.toContain("captureVerification");
     expect(ladder).not.toContain("youtubeVideoOfficial");
+  });
+
+  test("a SoundCloud archive match banks source evidence, returns found, and never leaks an id", () => {
+    const start = ladder.indexOf('if (rung.source === "soundcloud")');
+    const soundcloud = ladder.slice(
+      start,
+      ladder.indexOf('youtubeVerification: "archive-match"', start + 1),
+    );
+
+    expect(soundcloud).toContain('sourceVerification: "soundcloud-archive-match"');
+    expect(soundcloud).toContain('return "found"');
+    expect(soundcloud).not.toContain("youtubeVerification");
+    expect(soundcloud).not.toContain("youtubeVideoId");
   });
 
   test("the reference is the row's own archive, which costs no vendor bandwidth", () => {

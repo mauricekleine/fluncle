@@ -708,6 +708,9 @@ export const tracks = sqliteTable(
     // quarantine + the operator's `flag_wrong_audio` when they rewind a row. Null until the first
     // rejection. Internal, like the rest of the capture side-channel — no public surface, no lastmod.
     sourceAudioRejected: text("source_audio_rejected"),
+    // Banked fingerprint evidence from a non-YouTube capture source. This stays beside the
+    // YouTube provenance trio because a SoundCloud match can never authorize a YouTube id.
+    sourceVerification: text("source_verification"),
     // THE ANCHOR RE-ASK STAMP (docs/catalogue-crawler.md § the anchor). ISO of the last
     // Spotify-anchor ATTEMPT on a catalogue row, stamped on EVERY attempt — a hit AND a
     // miss — by the agent-tier `anchor_track` op the box's Apify anchor sweep POSTs to. It

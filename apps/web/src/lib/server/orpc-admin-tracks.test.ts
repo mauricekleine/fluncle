@@ -475,6 +475,23 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     },
   );
 
+  it.each(["soundcloud-preview-match", "soundcloud-archive-match"] as const)(
+    "forwards the exact SoundCloud provenance verdict %s",
+    async (sourceVerification) => {
+      updateTrack.mockResolvedValueOnce({ fields: ["source_verification"], trackId: TRACK_ID });
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(patch(AGENT_TOKEN, { sourceVerification }));
+
+      expect(response?.status).toBe(200);
+      expect(updateTrack).toHaveBeenCalledWith(
+        TRACK_ID,
+        { sourceVerification },
+        { writer: "agent" },
+      );
+    },
+  );
+
   it("pins every sweep-emitted verdict to the handler's domain-owned vocabulary", () => {
     const source = readFileSync(
       new URL("../../../../../docs/agents/hermes/scripts/capture-sweep.ts", import.meta.url),
@@ -488,6 +505,25 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
 
     expect(emittedSet.every((verdict) => isYoutubeVerification(verdict))).toBe(true);
     expect(emittedSet).toEqual(acceptedSet);
+  });
+
+  it("drops an unrecognised SoundCloud provenance verdict while preserving valid fields", async () => {
+    updateTrack.mockResolvedValueOnce({ fields: ["source_audio_key"], trackId: TRACK_ID });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      patch(AGENT_TOKEN, {
+        sourceAudioKey: "004.7.2I/abc123.opus",
+        sourceVerification: "soundcloud-maybe-match",
+      }),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateTrack).toHaveBeenCalledWith(
+      TRACK_ID,
+      { sourceAudioKey: "004.7.2I/abc123.opus" },
+      { writer: "agent" },
+    );
   });
 
   it.each([

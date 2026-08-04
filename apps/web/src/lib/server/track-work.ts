@@ -576,6 +576,8 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
     //     history, never a second acquisition path; a row with no audio belongs to `capture`.
     //   · `youtube_video_id is null`     — fill-empty-only, expressed as a queue so a row that has
     //     an id is never re-bought.
+    //   · `source_verification is null`  — a banked SoundCloud fingerprint match already proved
+    //     the recording, so the same metered search must not be bought again.
     //   · `capture_status <> 'wrong-audio'` — a quarantined row is already queued for a full
     //     re-capture, which will report its own id for free. Spending a second download on it here
     //     buys nothing (same guard, same reason, as `analyze`/`embed`).
@@ -602,6 +604,7 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
       args: [cutoff],
       sql: `t.source_audio_key is not null
             and t.youtube_video_id is null
+            and t.source_verification is null
             and coalesce(t.capture_status, '') <> 'wrong-audio'
             and coalesce(t.youtube_provenance_failures, 0) < ${YOUTUBE_PROVENANCE_MAX_FAILURES}
             and (t.youtube_verified_at is null or t.youtube_verified_at < ?)`,

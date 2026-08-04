@@ -2327,10 +2327,18 @@ async function proveCatalogueProvenance(
         const result = sectionFp ? slidingWindowMatch(archiveFp, sectionFp) : null;
 
         if (result?.match) {
-          // This phase can only persist YouTube provenance. A SoundCloud match proves the audio
-          // source is usable for capture, but it must never be written into `youtube_video_id`.
           if (rung.source === "soundcloud") {
-            continue;
+            // The fingerprint proved the recording against its own archive. Bank that evidence
+            // beside the YouTube-only trio and stop: continuing would re-spend searches on a row
+            // whose audio provenance is already settled.
+            await patchTrack(trackId, { sourceVerification: "soundcloud-archive-match" });
+            counts.segmentVerified += 1;
+
+            if (step > 0) {
+              counts.residualRescued += 1;
+            }
+
+            return "found";
           }
 
           await patchTrack(trackId, {
@@ -2418,9 +2426,9 @@ async function proveCatalogueProvenance(
 //
 // So this phase is PROVENANCE-ONLY, and the rail is absolute: it never sends `sourceAudioKey`,
 // `captureStatus`, `captureVerification`, `sourceAudioBytes`, `sourceAudioRejected`, or any other
-// capture column. The candidate file is deleted the moment the verdict is read. The only thing it
-// can move is the YouTube trio, and it moves that through its OWN verdict field
-// (`youtubeVerification`) precisely so it cannot borrow capture's — sending
+// capture column. The candidate file is deleted the moment the verdict is read. A YouTube match
+// moves the YouTube trio through its OWN verdict field (`youtubeVerification`); a SoundCloud match
+// moves only the sibling `sourceVerification`. Neither can borrow capture's — sending
 // `captureVerification: "preview-match"` from a sweep that stored nothing would be a lie about the
 // archive, and the honest field costs one line.
 //
@@ -2473,9 +2481,16 @@ async function proveTrackProvenance(
       rmSync(accepted.path, { force: true });
     }
 
-    if (!accepted || accepted.verdict !== "match" || accepted.source === "soundcloud") {
+    if (!accepted || accepted.verdict !== "match") {
       await patchTrack(trackId, { youtubeVerification: "no-match" });
       return "none";
+    }
+
+    if (accepted.source === "soundcloud") {
+      // SoundCloud proved the audio, not a YouTube upload. Bank the proof in its sibling field and
+      // return before the YouTube no-match/id branches can mislabel or leak it.
+      await patchTrack(trackId, { sourceVerification: "soundcloud-preview-match" });
+      return "found";
     }
 
     // ONLY the id and its proof. No capture column appears in this body, by construction — the
