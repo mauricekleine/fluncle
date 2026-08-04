@@ -72,14 +72,23 @@ export const KEY_FILTER_OPTIONS: string[] = KEY_PITCH_CLASSES.flatMap((pitch) =>
   `${pitch} minor`,
 ]);
 
-/** A positive integer a reader typed (a year or a BPM); junk / non-finite / < 1 folds to undefined.
-    Truncation comes BEFORE the positivity check: a sub-1 fraction ("0.5") truncates to 0 and drops,
-    so this parse can never emit a value `parseTracksHubPayload`'s strict boundary would reject — the
-    loader's URL → filters → serverFn round-trip must always be accepted. */
-function positiveIntParam(value: unknown): number | undefined {
+type IntBounds = { max: number; min: number };
+
+const BPM_BOUNDS: IntBounds = { max: 300, min: 1 };
+const YEAR_BOUNDS: IntBounds = { max: 2100, min: 1900 };
+
+/** The URL parser and the serverFn boundary share this page ceiling, so a supported URL never sends
+    a page the boundary rejects. Ten thousand 48-row pages leave room beyond the hub's real archive
+    while bounding the numbered pager's offset work. */
+export const TRACKS_HUB_MAX_PAGE = 10_000;
+
+/** A bounded integer a reader typed (a year or a BPM); junk / non-finite / out-of-range values fold to
+    undefined. Truncation comes BEFORE the bound check so a fractional URL never emits a value the
+    serverFn boundary rejects — the loader's URL → filters → serverFn round-trip stays accepted. */
+function boundedIntParam(value: unknown, bounds: IntBounds): number | undefined {
   const n = Math.trunc(Number(value));
 
-  return Number.isInteger(n) && n > 0 ? n : undefined;
+  return Number.isSafeInteger(n) && n >= bounds.min && n <= bounds.max ? n : undefined;
 }
 
 /** A trimmed non-empty string param (a key or a label / galaxy slug); empty / non-string → undefined. */
@@ -100,13 +109,13 @@ function stringParam(value: unknown): string | undefined {
  */
 export function parseTracksSearch(search: Record<string, unknown>): TracksSearch {
   return {
-    bpmMax: positiveIntParam(search["bpmMax"]),
-    bpmMin: positiveIntParam(search["bpmMin"]),
+    bpmMax: boundedIntParam(search["bpmMax"], BPM_BOUNDS),
+    bpmMin: boundedIntParam(search["bpmMin"], BPM_BOUNDS),
     galaxy: stringParam(search["galaxy"]),
     key: stringParam(search["key"]),
     label: stringParam(search["label"]),
-    yearMax: positiveIntParam(search["yearMax"]),
-    yearMin: positiveIntParam(search["yearMin"]),
+    yearMax: boundedIntParam(search["yearMax"], YEAR_BOUNDS),
+    yearMin: boundedIntParam(search["yearMin"], YEAR_BOUNDS),
   };
 }
 
@@ -120,27 +129,38 @@ class TracksHubPayloadError extends Error {
   }
 }
 
-/** A payload number bound (bpm/year): absent stays absent; anything but a positive integer NUMBER is
-    rejected — a string "170" is a crafted payload, never the loader (which sends parsed numbers). */
-function strictPositiveInt(value: unknown, field: string): number | undefined {
+/** A payload number bound (bpm/year): absent stays absent; anything but a safe integer within the
+    axis's deliberate bounds is rejected — a string "170" is a crafted payload, never the loader. */
+function strictBoundedInt(value: unknown, field: string, bounds: IntBounds): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new TracksHubPayloadError(field, "a positive integer");
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < bounds.min ||
+    value > bounds.max
+  ) {
+    throw new TracksHubPayloadError(field, "an integer in the supported range");
   }
 
   return value;
 }
 
 /** A payload string axis (key/label/galaxy): absent stays absent; anything but a non-empty string is
-    rejected. Not trimmed — the loader sends `parseTracksSearch`'s already-trimmed values. */
+    rejected. The direct payload must carry the already-trimmed value that `parseTracksSearch` emits;
+    a second normalization step here would make the serverFn accept a shape the loader never sends. */
 function strictFilterString(value: unknown, field: string): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new TracksHubPayloadError(field, "a non-empty string");
+  if (typeof value !== "string") {
+    throw new TracksHubPayloadError(field, "a trimmed non-empty string");
+  }
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0 || trimmed !== value) {
+    throw new TracksHubPayloadError(field, "a trimmed non-empty string");
   }
 
   return value;
@@ -169,26 +189,31 @@ export function parseTracksHubPayload(payload: { filters: TracksSearch; page: nu
     typeof payload === "object" && payload !== null ? { ...payload } : {};
   const rawFilters = record["filters"];
 
-  if (typeof rawFilters !== "object" || rawFilters === null) {
+  if (typeof rawFilters !== "object" || rawFilters === null || Array.isArray(rawFilters)) {
     throw new TracksHubPayloadError("filters", "an object");
   }
 
   const filters = rawFilters as Record<string, unknown>;
   const page = record["page"];
 
-  if (typeof page !== "number" || !Number.isInteger(page) || page < 1) {
-    throw new TracksHubPayloadError("page", "an integer >= 1");
+  if (
+    typeof page !== "number" ||
+    !Number.isSafeInteger(page) ||
+    page < 1 ||
+    page > TRACKS_HUB_MAX_PAGE
+  ) {
+    throw new TracksHubPayloadError("page", "an integer in the supported range");
   }
 
   return {
     filters: {
-      bpmMax: strictPositiveInt(filters["bpmMax"], "bpmMax"),
-      bpmMin: strictPositiveInt(filters["bpmMin"], "bpmMin"),
+      bpmMax: strictBoundedInt(filters["bpmMax"], "bpmMax", BPM_BOUNDS),
+      bpmMin: strictBoundedInt(filters["bpmMin"], "bpmMin", BPM_BOUNDS),
       galaxy: strictFilterString(filters["galaxy"], "galaxy"),
       key: strictFilterString(filters["key"], "key"),
       label: strictFilterString(filters["label"], "label"),
-      yearMax: strictPositiveInt(filters["yearMax"], "yearMax"),
-      yearMin: strictPositiveInt(filters["yearMin"], "yearMin"),
+      yearMax: strictBoundedInt(filters["yearMax"], "yearMax", YEAR_BOUNDS),
+      yearMin: strictBoundedInt(filters["yearMin"], "yearMin", YEAR_BOUNDS),
     },
     page,
   };

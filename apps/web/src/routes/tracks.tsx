@@ -49,6 +49,7 @@ import {
 } from "@/lib/server/tracks-hub";
 import {
   KEY_FILTER_OPTIONS,
+  TRACKS_HUB_MAX_PAGE,
   type TracksSearch,
   buildTracksHref,
   parseTracksHubPayload,
@@ -104,11 +105,13 @@ type TracksLoaderData = {
   years: TracksHubYearLaneEntry[];
 };
 
-/** A page param the reader typed: junk / absent / < 1 folds to undefined (the bare page-1 view). */
+/** A page param the reader typed: junk / absent / out-of-range folds to undefined (the bare page-1
+    view). The cap mirrors the serverFn payload boundary so URL navigation cannot create a rejected
+    loader call. */
 function pageParam(value: unknown): number | undefined {
-  const n = Number(value);
+  const n = Math.trunc(Number(value));
 
-  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
+  return Number.isSafeInteger(n) && n >= 1 && n <= TRACKS_HUB_MAX_PAGE ? n : undefined;
 }
 
 // The page fetch — the SAME serverFn the loader calls (no oRPC op; the hub reads through

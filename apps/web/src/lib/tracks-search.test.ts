@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   KEY_FILTER_OPTIONS,
+  TRACKS_HUB_MAX_PAGE,
   type TracksSearch,
   buildTracksHref,
   parseTracksHubPayload,
@@ -85,6 +86,18 @@ describe("parseTracksSearch", () => {
     });
   });
 
+  it("folds implausible numeric magnitudes to undefined", () => {
+    expect(
+      parseTracksSearch({ bpmMax: "301", bpmMin: "300", yearMax: "2101", yearMin: "1900" }),
+    ).toMatchObject({
+      bpmMax: undefined,
+      bpmMin: 300,
+      yearMax: undefined,
+      yearMin: 1900,
+    });
+    expect(parseTracksSearch({ bpmMin: String(Number.MAX_SAFE_INTEGER) }).bpmMin).toBeUndefined();
+  });
+
   it("ignores unknown params entirely", () => {
     expect(parseTracksSearch({ page: "2", q: "netsky" })).toEqual({
       bpmMax: undefined,
@@ -110,7 +123,10 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
       yearMin: 2015,
     };
 
-    expect(parseTracksHubPayload({ filters, page: 3 })).toEqual({ filters, page: 3 });
+    const payload = { filters, page: 3 };
+
+    expect(parseTracksHubPayload(payload)).toStrictEqual(payload);
+    expect(JSON.stringify(parseTracksHubPayload(payload))).toBe(JSON.stringify(payload));
     // The bare hub (all axes absent) round-trips to parseTracksSearch's exact shape.
     expect(parseTracksHubPayload({ filters: {}, page: 1 })).toEqual({
       filters: parseTracksSearch({}),
@@ -153,6 +169,63 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
     expect(() => parseTracksHubPayload(crafted({ filters: { galaxy: null }, page: 1 }))).toThrow(
       /galaxy/,
     );
+  });
+
+  it("rejects array-shaped filters and nested-array field values", () => {
+    expect(() => parseTracksHubPayload(crafted({ filters: [], page: 1 }))).toThrow(/filters/);
+    expect(() => parseTracksHubPayload(crafted({ filters: [{ bpmMin: 170 }], page: 1 }))).toThrow(
+      /filters/,
+    );
+    expect(() => parseTracksHubPayload(crafted({ filters: { bpmMin: [170] }, page: 1 }))).toThrow(
+      /bpmMin/,
+    );
+    expect(() =>
+      parseTracksHubPayload(crafted({ filters: { key: ["F minor"] }, page: 1 })),
+    ).toThrow(/key/);
+  });
+
+  it("rejects padded strings instead of accepting a non-canonical direct payload", () => {
+    expect(parseTracksSearch({ galaxy: "  green-sector  ", key: " F minor " })).toMatchObject({
+      galaxy: "green-sector",
+      key: "F minor",
+    });
+
+    for (const field of ["galaxy", "key", "label"] as const) {
+      expect(() =>
+        parseTracksHubPayload(crafted({ filters: { [field]: ` ${field} ` }, page: 1 })),
+      ).toThrow(new RegExp(field));
+    }
+  });
+
+  it("rejects extreme and unsafe integers, while accepting each deliberate ceiling", () => {
+    const bounded = {
+      filters: { bpmMax: 300, bpmMin: 1, yearMax: 2100, yearMin: 1900 },
+      page: TRACKS_HUB_MAX_PAGE,
+    };
+
+    expect(parseTracksHubPayload(bounded)).toMatchObject(bounded);
+
+    for (const [field, value] of [
+      ["bpmMin", 0],
+      ["bpmMax", 301],
+      ["yearMin", 1899],
+      ["yearMax", 2101],
+      ["bpmMin", Number.MAX_SAFE_INTEGER + 1],
+      ["yearMax", Number.MAX_VALUE],
+      ["yearMin", Infinity],
+      ["bpmMax", NaN],
+    ] as const) {
+      expect(() =>
+        parseTracksHubPayload(crafted({ filters: { [field]: value }, page: 1 })),
+      ).toThrow(new RegExp(field));
+    }
+
+    expect(() =>
+      parseTracksHubPayload(crafted({ filters: {}, page: TRACKS_HUB_MAX_PAGE + 1 })),
+    ).toThrow(/page/);
+    expect(() =>
+      parseTracksHubPayload(crafted({ filters: {}, page: Number.MAX_SAFE_INTEGER + 1 })),
+    ).toThrow(/page/);
   });
 
   it("accepts EVERY filter set parseTracksSearch can emit — the loader round-trip never rejects", () => {
