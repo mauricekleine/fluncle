@@ -574,6 +574,7 @@ export async function distilContextNote(
   }
 
   const model = (await readOptionalEnv("OPENROUTER_CONTEXT_MODEL")) ?? DEFAULT_CONTEXT_DISTIL_MODEL;
+  const reasoningEffort = await readOptionalEnv("OPENROUTER_CONTEXT_EFFORT");
 
   // The system prompt, resolved from the registry: the operator's override if one is on
   // file, else the baked default (`CONTEXT_DISTIL_SYSTEM_PROMPT`). Total by contract — it
@@ -601,6 +602,7 @@ export async function distilContextNote(
           { content: userContent, role: "user" },
         ],
         model,
+        ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
         temperature: 0.2,
         // Ask OpenRouter to return the ACTUAL billed cost in the response's `usage.cost`
         // (credits = USD). Model-agnostic pricing straight from the vendor — no per-MTok

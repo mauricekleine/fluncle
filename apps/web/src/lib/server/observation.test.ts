@@ -344,16 +344,19 @@ const SOUPY_FIRECRAWL = {
 };
 
 describe("distilContextNote", () => {
+  const ORIGINAL_EFFORT = process.env.OPENROUTER_CONTEXT_EFFORT;
   const ORIGINAL_KEY = process.env.OPENROUTER_API_KEY;
   const ORIGINAL_MODEL = process.env.OPENROUTER_CONTEXT_MODEL;
 
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = "test-openrouter-key";
+    delete process.env.OPENROUTER_CONTEXT_EFFORT;
     delete process.env.OPENROUTER_CONTEXT_MODEL;
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    process.env.OPENROUTER_CONTEXT_EFFORT = ORIGINAL_EFFORT;
     process.env.OPENROUTER_API_KEY = ORIGINAL_KEY;
     process.env.OPENROUTER_CONTEXT_MODEL = ORIGINAL_MODEL;
   });
@@ -403,6 +406,29 @@ describe("distilContextNote", () => {
     await distilContextNote({ query: "q", snippets: ["a snippet"], sources: [] });
 
     expect((bodies[calls[0] ?? ""] as { model: string }).model).toBe("openai/gpt-4o-mini");
+  });
+
+  it("sends no reasoning field when OPENROUTER_CONTEXT_EFFORT is unset", async () => {
+    const { bodies, calls } = mockFetch([
+      { body: { choices: [{ message: { content: "A note." } }] }, match: OPENROUTER_MATCH },
+    ]);
+
+    await distilContextNote({ query: "q", snippets: ["a snippet"], sources: [] });
+
+    expect((bodies[calls[0] ?? ""] as Record<string, unknown>).reasoning).toBeUndefined();
+  });
+
+  it("pins the reasoning effort when OPENROUTER_CONTEXT_EFFORT is set", async () => {
+    process.env.OPENROUTER_CONTEXT_EFFORT = "low";
+    const { bodies, calls } = mockFetch([
+      { body: { choices: [{ message: { content: "A note." } }] }, match: OPENROUTER_MATCH },
+    ]);
+
+    await distilContextNote({ query: "q", snippets: ["a snippet"], sources: [] });
+
+    expect((bodies[calls[0] ?? ""] as Record<string, unknown>).reasoning).toEqual({
+      effort: "low",
+    });
   });
 
   it("returns null with no snippets (nothing to distil — never calls the vendor)", async () => {

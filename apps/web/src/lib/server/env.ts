@@ -224,6 +224,9 @@ const envKeys = [
   // distil model; absent, it defaults to `anthropic/claude-haiku-4.5`.
   "OPENROUTER_API_KEY",
   "OPENROUTER_CONTEXT_MODEL",
+  // OPTIONAL reasoning-effort pin for context distillation. Absent sends no
+  // `reasoning` field, preserving the provider/model default.
+  "OPENROUTER_CONTEXT_EFFORT",
   // The same key drives search's fourth tier — the model that turns a natural-language query
   // into a filter object (lib/server/search-llm.ts). OPENROUTER_SEARCH_MODEL is the OPTIONAL,
   // non-secret override for THAT model (default `anthropic/claude-haiku-4.5`), kept separate
