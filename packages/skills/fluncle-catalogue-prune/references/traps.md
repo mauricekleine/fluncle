@@ -4,7 +4,7 @@ Every one of these was a real false-positive caught by a dry-run during the pass
 
 ## The model
 
-- **Storage is enabled-label-only.** A catalogue track should exist only if its release label is an operator-`enabled` seed label (`labels.seed_state`). The crawler's write-gate enforces this going forward (`apps/web/src/lib/server/crawl.ts`, `isEnabledLabel`); this skill cleans what predates it. Canon: `docs/catalogue-crawler.md`, `docs/label-entity.md`.
+- **Storage is enabled-label-only.** A catalogue track should exist only if its release label is an operator-`enabled` seed label (`labels.seed_state`). The crawler's write-gate enforces this going forward (`apps/web/src/lib/server/crawl.ts`, which reads `labels.seed_state = 'enabled'` at the storage gate); this skill cleans what predates it. Canon: `docs/catalogue-crawler.md`, `docs/label-entity.md`.
 - **A catalogue track = a `tracks` row with no `findings` row.** A findings-bearing artist/track is Maurice's actual logged work — never prune it. The scripts exclude anything with a finding by construction.
 
 ## Signal traps (why there is no auto-classifier)

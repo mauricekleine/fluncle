@@ -1,6 +1,6 @@
 # fluncle-studio-clip-timer — the Fluncle Studio clip-cut sweep on a host timer
 
-The rave-02 host trigger for the `--no-agent` **Fluncle Studio clip-cut** sweep. `fluncle-studio-clip` (#215) cuts a published mixtape set into the framed **9:16 clips** the Studio library hands off — a deterministic ffmpeg job (trim + 9:16 crop + brand frame) → PUT `<clipId>/footage.mp4` to R2 → finalize, cap 1 clip/tick, zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 15m.
+The rave-02 host trigger for the `--no-agent` **Fluncle Studio clip-cut** sweep. `fluncle-studio-clip` (#215) cuts a published mixtape set into the framed **9:16 clips** the Studio library hands off — a deterministic ffmpeg job (trim + 9:16 crop, no baked text) → PUT `<clipId>/footage.mp4` to R2 → finalize, cap 1 clip/tick, zero LLM tokens. A host systemd timer `docker exec`s the baked sweep inside the `hermes` container every 15m.
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/clip-sweep.sh`](../scripts/clip-sweep.sh) → [`../scripts/clip-sweep.ts`](../scripts/clip-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch (Unit A). The host timer only triggers it.
 

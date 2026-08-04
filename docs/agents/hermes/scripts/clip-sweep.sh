@@ -19,8 +19,8 @@
 # `presign_clip_upload` / `finalize_clip_cut`) — no provider credentials.
 #
 # PRODUCTION PRE-REQS (see docs/fluncle-studio.md § box deploy):
-#   - `ffmpeg` installed on the box (apt-get install -y ffmpeg) + a font for the brand
-#     frame (fontconfig + e.g. fonts-dejavu-core, or set CLIP_FONT_FILE to a .ttf path).
+#   - `ffmpeg` installed on the box (apt-get install -y ffmpeg). The cut bakes no text,
+#     so it needs no font.
 #   - the baked `bun` + `fluncle` CLI (already in the image).
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../studio-clip-timer/, installed by
@@ -42,9 +42,9 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
-# Optional config (CLIP_FONT_FILE for the brand-frame font; CLIP_BATCH_CAP to widen the
-# per-tick batch) can live in the shared 0600 secrets file the other sweeps source. It is
-# NOT required — the cut runs with fontconfig's default font and a batch of 1 otherwise.
+# Optional config (CLIP_BATCH_CAP to widen the per-tick batch) can live in the shared
+# 0600 secrets file the other sweeps source. It is NOT required — the cut runs with a
+# batch of 1 otherwise.
 CLIP_ENV_FILE="${CLIP_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${CLIP_ENV_FILE}" ]; then
   set -a

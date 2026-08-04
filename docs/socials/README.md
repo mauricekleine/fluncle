@@ -1,6 +1,6 @@
 # Social Accounts & Channels
 
-The map of where Fluncle exists off-repo: handles, links, profile assets, and bios. Bios are copy surfaces and follow VOICE.md; the canonical platform bio, mirrored as `fluncleBio` in `apps/web/src/lib/identity.ts`, is the tagline plus the address on its own line:
+The map of where Fluncle exists off-repo: handles, links, profile assets, and bios. Bios are copy surfaces and follow VOICE.md; the canonical platform bio — authored here, opening with the same tagline that opens `fluncleDescription` in `apps/web/src/lib/identity.ts` — is that tagline plus the address on its own line:
 
 ```
 Drum & bass bangers from another dimension.
