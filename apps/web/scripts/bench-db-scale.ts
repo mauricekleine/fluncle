@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * THROWAWAY HOSTED-SCALE PROOF ENGINE — the per-item gate for the DB-scale backlog
- * (docs/db-scale-backlog.md, Wave 1 items 6 + 8–19). NOT a test, NOT wired into CI. Modelled 1:1 on
+ * (docs/db-scale-backlog.md, Wave 1 items 6 + 8–23). NOT a test, NOT wired into CI. Modelled 1:1 on
  * `bench-tracks-hub.ts` (same client/migrate/guard/`percentile`/`timeIt`/`explain` machinery).
  *
  * ── WHO RUNS THIS, AND WHY ────────────────────────────────────────────────────
@@ -16,15 +16,14 @@
  *   1. Runs the CURRENT (baseline) query — the REAL production shape (the year clause is the actual
  *      `compileFilters` builder from `../src/lib/server/search`; every other shape is replicated
  *      verbatim from its server module, cited per item), captures p50 + `EXPLAIN QUERY PLAN`.
- *   2. Applies the fix — either a runtime `create index` (timed, so we see it does not wedge at 150k)
- *      or, for the pure REWRITE items (8 split-OR, 9 count−count, 10 sargable year-range), the
- *      rewritten SQL — then captures p50 + EXPLAIN again.
- *   3. Emits a verdict row (speedup, plan scan→seek, whether the named index was picked up).
+ *   2. Applies the fix — a runtime `create index`, a ruled `drop index`, or, for the pure REWRITE
+ *      items (8 split-OR, 9 count−count, 10 sargable year-range), the rewritten SQL — then captures
+ *      p50 + EXPLAIN again. DDL is timed so its hosted cost is evidence too.
+ *   3. Emits a verdict row (speedup, plan scan→seek, whether the expected plan transition occurred).
  *
- * The index items create PLAIN-ASC btree indexes at runtime (never `libsql_vector_idx`, which wedges
- * a populated hosted table — docs/local-database.md); each candidate index was verified absent from
- * schema.ts. Every named index is dropped before its baseline and (re-)created for its after read, so
- * a re-run over an already-indexed DB still measures a clean before/after.
+ * The index items use PLAIN-ASC btree indexes at runtime (never `libsql_vector_idx`, which wedges a
+ * populated hosted table — docs/local-database.md). Every proof restores its own baseline DDL, so a
+ * re-run over an already-used DB still measures a clean before/after.
  *
  * ── USAGE ─────────────────────────────────────────────────────────────────────
  *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
@@ -34,7 +33,7 @@
  * Optional env:
  *   BENCH_SCALE=150000       total tracks to seed (the seeder's per-table knobs live in scale-seed.ts)
  *   BENCH_ITERATIONS=12      samples per shape for the p50
- *   BENCH_ONLY=12,15,19      run only these item numbers (default: all)
+ *   BENCH_ONLY=13,21,22,23   run only these item numbers (default: all)
  *   BENCH_SKIP_SEED=1        skip the seed phase and bench an already-seeded DB (iterate on benches)
  *
  * The operator CREATES the scratch DB before and DESTROYS it after — this only measures. It NEVER
@@ -118,7 +117,15 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
 
 type Query = { args: (null | number | string)[]; sql: string };
 
-type IndexSpec = { ddl: string; name: string };
+type IndexSpec = {
+  /** DDL applied between the before and after reads. Existing proofs create; drop proofs remove. */
+  ddl: string;
+  /** Exact DDL that restores an existing index before a drop proof's baseline. */
+  baselineDdl?: string;
+  expected?: "load-bearing" | "redundant";
+  mode?: "create" | "drop";
+  name: string;
+};
 
 type Proof = {
   /** The read(s) after the fix — index items re-run the baseline; rewrite items run the new SQL. */
@@ -256,18 +263,21 @@ const PROOFS: Proof[] = [
     title: "analyze worklist: captured-row scan → tracks_analyze_queue_idx seek",
   },
   {
-    // backfill.ts:1001 listCatalogueAppleWork — full tracks scan + findings anti-join + filesort on
-    // coalesce(capture_priority,0). Fix: partial index + drop coalesce so the index serves the order.
-    after: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql(false) }],
-    baseline: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql(true) }],
+    // backfill.ts listCatalogueAppleWork — the shipped catalogue discriminator + cooldown shape.
+    // The query deliberately admits NULL capture_priority rows, so the partial composite cannot
+    // serve it. Trial-drop the plain index to prove why it remains load-bearing.
+    after: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
+    baseline: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     index: {
-      ddl: `create index if not exists tracks_catalogue_apple_queue_idx on tracks(capture_priority, track_id)
-            where apple_music_url is null and backfill_apple_music_done_at is null and isrc is not null`,
-      name: "tracks_catalogue_apple_queue_idx",
+      baselineDdl: `create index if not exists tracks_capture_priority_idx on tracks(capture_priority)`,
+      ddl: `drop index if exists tracks_capture_priority_idx`,
+      expected: "load-bearing",
+      mode: "drop",
+      name: "tracks_capture_priority_idx",
     },
     item: 13,
     rewrite: false,
-    title: "catalogue Apple worklist: scan+filesort → partial index (coalesce dropped)",
+    title: "catalogue Apple worklist: tracks_capture_priority_idx keep proof",
   },
   {
     // catalogue.ts:2401-2412 quarantine lens — `capture_status = ?` is unindexed → full anti-join scan
@@ -372,6 +382,58 @@ const PROOFS: Proof[] = [
     title:
       "search name filters: JSON LIKE + lower() scans → track_artists / label_id / album_id / key seeks",
   },
+  {
+    // backfill.ts listDeezerWork catalogue arm — the second metadata worklist with the same
+    // deliberate nullable-priority order. Trial-drop the plain index independently so this proof
+    // cannot inherit item 13's DDL state.
+    after: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
+    baseline: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
+    index: {
+      baselineDdl: `create index if not exists tracks_capture_priority_idx on tracks(capture_priority)`,
+      ddl: `drop index if exists tracks_capture_priority_idx`,
+      expected: "load-bearing",
+      mode: "drop",
+      name: "tracks_capture_priority_idx",
+    },
+    item: 21,
+    rewrite: false,
+    title: "catalogue Deezer worklist: tracks_capture_priority_idx keep proof",
+  },
+  {
+    // artists.ts getPublicArtistSocials + hydrateArtistOverview — equality and bounded IN reads.
+    // The single-column index is a strict prefix of the unique artist/platform composite; trial
+    // dropping it must leave both reads as indexed seeks through the composite.
+    after: artistSocialReads(),
+    baseline: artistSocialReads(),
+    index: {
+      baselineDdl: `create index if not exists artist_socials_artist_id_idx on artist_socials(artist_id)`,
+      ddl: `drop index if exists artist_socials_artist_id_idx`,
+      expected: "redundant",
+      mode: "drop",
+      name: "artist_socials_artist_id_idx",
+    },
+    item: 22,
+    rewrite: false,
+    title: "artist socials: single-column artist_id index → unique composite prefix",
+  },
+  {
+    // anchor-apify.ts requeueOffWindowDeferrals, anchor.ts listAnchorReviewRows, and crawl.ts's
+    // anchorsPending gauge — every residual spotify_uri-null reader after the ranked worklist moved
+    // to tracks_anchor_order_idx. Trial-drop the old score-only queue and prove their own indexes hold.
+    after: anchorResidualReads(),
+    baseline: anchorResidualReads(),
+    index: {
+      baselineDdl: `create index if not exists tracks_anchor_fill_queue_idx on tracks(nearest_finding_score)
+                    where spotify_uri is null`,
+      ddl: `drop index if exists tracks_anchor_fill_queue_idx`,
+      expected: "redundant",
+      mode: "drop",
+      name: "tracks_anchor_fill_queue_idx",
+    },
+    item: 23,
+    rewrite: false,
+    title: "residual anchor reads: score-only fill index drop proof",
+  },
 ];
 
 /**
@@ -427,24 +489,81 @@ function analyzeWorklistSql(): string {
           limit ?`;
 }
 
-function appleWorklistSql(coalesceOrder: boolean): string {
-  const order = coalesceOrder
-    ? `order by coalesce(t.capture_priority, 0) desc, t.track_id`
-    : `order by t.capture_priority desc, t.track_id`;
-
+function appleWorklistSql(): string {
   return `select t.track_id, t.isrc, t.album_id,
                  t.backfill_apple_music_attempted_at as attempted_at,
                  t.backfill_apple_music_failures as failures
           from tracks t
-          left join findings f on f.track_id = t.track_id
-          where f.track_id is null
+          where t.is_catalogue = 1
             and t.apple_music_url is null
             and t.isrc is not null and trim(t.isrc) <> ''
             and t.backfill_apple_music_done_at is null
             and (t.backfill_apple_music_attempted_at is null
                  or t.backfill_apple_music_attempted_at < ?)
-          ${order}
+          order by t.capture_priority desc, t.track_id
           limit ?`;
+}
+
+function deezerCatalogueWorklistSql(): string {
+  return `select t.track_id, t.isrc, t.duration_ms
+          from tracks t
+          where t.is_catalogue = 1
+            and t.deezer_track_id is null
+            and t.backfill_deezer_attempted_at is null
+            and t.backfill_deezer_failures < ?
+            and t.isrc is not null and trim(t.isrc) <> ''
+            and t.duration_ms > 0
+          order by t.capture_priority desc, t.track_id
+          limit ?`;
+}
+
+function artistSocialReads(): Query[] {
+  const artistIds = ["artist-0", "artist-1", "artist-2", "artist-3"];
+  const placeholders = artistIds.map(() => "?").join(", ");
+
+  return [
+    {
+      args: [artistIds[0] ?? "artist-0"],
+      sql: `select platform, url, status from artist_socials where artist_id = ?`,
+    },
+    {
+      args: artistIds,
+      sql: `select artist_id, id, platform, url, source, status, created_at, reviewed_at
+            from artist_socials
+            where artist_id in (${placeholders})`,
+    },
+  ];
+}
+
+function anchorResidualReads(): Query[] {
+  return [
+    {
+      args: [SEED_NOW],
+      sql: `update tracks
+            set spotify_anchor_attempted_at = null,
+                spotify_anchor_attempts = max(coalesce(spotify_anchor_attempts, 0) - 1, 0)
+            where spotify_uri is null
+              and spotify_anchor_attempted_at >= ?
+              and has_isrc = 1`,
+    },
+    {
+      args: [25],
+      sql: `select track_id, title, artists_json, album_image_url, duration_ms,
+                   mb_recording_id, anchor_review_json
+            from tracks
+            where anchor_review_json is not null
+              and spotify_uri is null
+              and dismissed_at is null
+            order by track_id asc
+            limit ?`,
+    },
+    {
+      args: [],
+      sql: `select count(*) as n from tracks
+            where isrc is not null and spotify_uri is null
+              and not exists (select 1 from findings where findings.track_id = tracks.track_id)`,
+    },
+  ];
 }
 
 function captureLensSql(): string {
@@ -571,49 +690,62 @@ function planLabel(plan: string): string {
 type Verdict = {
   afterP50: number;
   baselineP50: number;
-  createMs: null | number;
-  indexUsed: boolean;
+  ddlMs: null | number;
   item: number;
   planAfter: string;
   planBefore: string;
+  proofPassed: boolean;
   title: string;
 };
 
 async function proveItem(proof: Proof): Promise<Verdict> {
-  // An index item is dropped before its baseline so a re-run (BENCH_SKIP_SEED) still gets a clean
-  // before/after; a rewrite item touches no index.
+  // Every index proof restores its own baseline state so BENCH_SKIP_SEED and repeated index names
+  // remain deterministic. Create proofs start absent; drop proofs start present.
   if (proof.index) {
-    await client.execute(`drop index if exists ${proof.index.name}`);
+    if (proof.index.mode === "drop") {
+      const baselineDdl = proof.index.baselineDdl;
+
+      if (!baselineDdl) {
+        fail(`item ${proof.item} drop proof is missing baselineDdl`);
+      }
+
+      await client.execute(baselineDdl);
+    } else {
+      await client.execute(`drop index if exists ${proof.index.name}`);
+    }
   }
 
   const planBefore = await explain(proof.baseline);
   const baselineP50 = await measure(proof.baseline);
 
-  let createMs: null | number = null;
+  let ddlMs: null | number = null;
 
   if (proof.index) {
     const ddl = proof.index.ddl;
 
-    createMs = await timeIt(() => client.execute(ddl));
+    ddlMs = await timeIt(() => client.execute(ddl));
   }
 
   const planAfter = await explain(proof.after);
   const afterP50 = await measure(proof.after);
 
-  // For an index item, "used" = the named index appears in the after plan. For a rewrite, "used" =
-  // the rewrite reached a seek (moved off the baseline's full scan).
-  const indexUsed = proof.index
-    ? planAfter.includes(proof.index.name)
+  const proofPassed = proof.index
+    ? proof.index.mode === "drop"
+      ? proof.index.expected === "load-bearing"
+        ? planBefore.includes(proof.index.name) &&
+          (hasFullScan(planAfter) || planAfter.includes("TEMP B-TREE FOR ORDER BY"))
+        : !planAfter.includes(proof.index.name) && !hasFullScan(planAfter)
+      : planAfter.includes(proof.index.name)
     : hasFullScan(planBefore) && !hasFullScan(planAfter);
 
   return {
     afterP50,
     baselineP50,
-    createMs,
-    indexUsed,
+    ddlMs,
     item: proof.item,
     planAfter,
     planBefore,
+    proofPassed,
     title: proof.title,
   };
 }
@@ -663,8 +795,8 @@ async function main(): Promise<void> {
     "speedup".padStart(8),
     "before".padStart(6),
     "after".padStart(6),
-    "idx".padStart(4),
-    "create_ms".padStart(10),
+    "gate".padStart(4),
+    "ddl_ms".padStart(10),
   ].join("  ");
 
   console.log(`\n── verdict ${"─".repeat(Math.max(0, 78 - 11))}`);
@@ -680,8 +812,8 @@ async function main(): Promise<void> {
         formatSpeedup(verdict.baselineP50, verdict.afterP50).padStart(8),
         planLabel(verdict.planBefore).padStart(6),
         planLabel(verdict.planAfter).padStart(6),
-        (verdict.indexUsed ? "Y" : "N").padStart(4),
-        (verdict.createMs === null ? "rewrite" : `${verdict.createMs.toFixed(0)} ms`).padStart(10),
+        (verdict.proofPassed ? "Y" : "N").padStart(4),
+        (verdict.ddlMs === null ? "rewrite" : `${verdict.ddlMs.toFixed(0)} ms`).padStart(10),
       ].join("  "),
     );
   }
@@ -695,8 +827,9 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    "\nProof engine complete. A row is a WIN when speedup > 1 AND before=scan → after=seek. Verify " +
-      "each candidate index's plan_after actually names it (idx=Y) before promoting the fix.",
+    "\nProof engine complete. gate=Y means a created index was selected, a ruled drop stayed off " +
+      "full scans, or a keep proof degraded when its named index was trial-dropped. Read every " +
+      "before/after plan before promoting schema DDL.",
   );
   process.exit(0);
 }

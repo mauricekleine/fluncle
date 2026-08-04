@@ -1660,9 +1660,10 @@ async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCand
             and t.backfill_apple_music_done_at is null
             and (t.backfill_apple_music_attempted_at is null
                  or t.backfill_apple_music_attempted_at < ?)
-          -- Plain desc (no coalesce wrapper) rides tracks_capture_priority_idx and sorts NULLs last:
-          -- functionally equivalent to coalesce-as-0 for a priority worklist (NULL/0 rows are lowest
-          -- and taken last, top-priority rows unaffected). docs/db-scale-backlog Wave 1 #13.
+          -- The full tracks_capture_priority_idx is load-bearing: the partial composite cannot serve
+          -- this query because there is deliberately no capture_priority-is-not-null predicate.
+          -- Metadata backfill stays independent of the ranking rail, so never-ranked NULL rows remain
+          -- eligible after ranked rows drain. Plain desc sorts those NULLs last.
           order by t.capture_priority desc, t.track_id
           limit ?`,
   });
@@ -2014,8 +2015,10 @@ async function listDeezerWork(limit: number): Promise<DeezerCandidate[]> {
 
   const catalogue = await db.execute({
     args: [DEEZER_MAX_FAILURES, limit - candidates.length],
-    // Plain desc (no coalesce wrapper) rides tracks_capture_priority_idx and sorts NULLs last —
-    // the spelling listCatalogueAppleWork settled on, kept identical here on purpose.
+    // The full tracks_capture_priority_idx is load-bearing: the partial composite cannot serve this
+    // query because there is deliberately no capture_priority-is-not-null predicate. Metadata
+    // backfill stays independent of the ranking rail, so never-ranked NULL rows remain eligible
+    // after ranked rows drain. Plain desc sorts those NULLs last.
     sql: `select t.track_id, t.isrc, t.duration_ms
           from tracks t
           where t.is_catalogue = 1
