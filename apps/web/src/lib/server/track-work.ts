@@ -645,9 +645,19 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
 
     return {
       args: [cutoff],
+      // `spotify_anchor_attempted_at is null` — FRESH ROWS ONLY, and this one is measured rather
+      // than assumed. Without it the queue is a superset that also holds every row the billed anchor
+      // sweep already tried and missed, and because those rows carry embeddings and high Ear scores
+      // they sort AHEAD of the fresh ones under `ANCHOR_ORDER`: a live 300-row head was 100% already-
+      // missed, 0% fresh. That is the same starvation this pass exists to cure, one layer down.
+      // The two populations also recover at wildly different rates — 68% on fresh rows against 1%
+      // on the residue (both measured against the production gate) — so the residue is deliberately
+      // OUT OF SCOPE rather than merely deprioritized: it would spend ~121 ticks of requests to reach
+      // the population worth asking. A row enters this queue exactly once, before it is ever billed.
       sql: `f.track_id is null
             and t.spotify_uri is null
             and t.has_isrc = 0
+            and t.spotify_anchor_attempted_at is null
             and t.duration_ms > 0
             and t.dismissed_at is null
             and t.duplicate_of_track_id is null

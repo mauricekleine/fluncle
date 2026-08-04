@@ -322,6 +322,18 @@ describe("listTrackWork — the isrc-recovery pass", () => {
       sql: `update tracks set isrc_attempted_at = ? where track_id = ?`,
     });
 
+    // ALREADY BILLED, so out of scope. A row the anchor sweep has attempted has had its identity
+    // looked for and missed; measured against production, that residue recovers at ~1% where a fresh
+    // row recovers at ~68%. It also sorts AHEAD of fresh rows under ANCHOR_ORDER (it carries an
+    // embedding and an Ear score), so admitting it starves the population worth asking — the exact
+    // failure this pass exists to cure. This row must never be offered.
+    await seedCatalogueTrack(db, { trackId: "anchortried00000000000" });
+    await makeIsrcRecoveryCandidate("anchortried00000000000");
+    await db.execute({
+      args: [new Date().toISOString(), "anchortried00000000000"],
+      sql: `update tracks set spotify_anchor_attempted_at = ? where track_id = ?`,
+    });
+
     expect(
       (await listTrackWork({ kind: "isrc-recovery" })).map((item) => item.trackId).sort(),
     ).toEqual(["eligible000000000000000", "sharedask000000000000000", "staleask0000000000000000"]);
