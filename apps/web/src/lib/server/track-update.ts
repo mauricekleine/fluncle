@@ -2,6 +2,21 @@ import { type TrackUpdateResult } from "@fluncle/contracts";
 
 export type { TrackUpdateResult };
 
+/** The complete vocabulary written by the capture/provenance sweeps. */
+export const YOUTUBE_VERIFICATION_VALUES = [
+  "archive-match",
+  "inconclusive",
+  "metadata-match",
+  "no-match",
+  "preview-match",
+] as const;
+
+export type YoutubeVerification = (typeof YOUTUBE_VERIFICATION_VALUES)[number];
+
+export function isYoutubeVerification(value: unknown): value is YoutubeVerification {
+  return YOUTUBE_VERIFICATION_VALUES.some((candidate) => candidate === value);
+}
+
 // Generic admin track update — the write-back path for both the async enrichment
 // agent and manual operator curation. Writes an
 // ALLOW-LIST of curation/enrichment fields only; identity fields (title, artists,
@@ -251,12 +266,7 @@ export type TrackUpdate = {
    * Deliberately SEPARATE from `captureVerification`: that field is the stored audio's provenance
    * and moves capture columns, and this sweep must never move one.
    */
-  youtubeVerification?:
-    | "archive-match"
-    | "inconclusive"
-    | "metadata-match"
-    | "no-match"
-    | "preview-match";
+  youtubeVerification?: YoutubeVerification;
   /**
    * THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id) — the id of the upload a
    * fingerprint gate verified for this recording. Internal capture side-channel like
@@ -765,7 +775,7 @@ export async function updateTrack(
   // proof says "matched by audio fingerprint"; the Topic rung's metadata proof says "matched by
   // artist, title, and length" and must not be able to borrow the other. An UNKNOWN verdict maps to
   // nothing and so proves nothing — fail closed, exactly as a bare id does.
-  const YOUTUBE_PROOF_METHODS: Record<string, IdentityMethod> = {
+  const YOUTUBE_PROOF_METHODS: Partial<Record<YoutubeVerification, IdentityMethod>> = {
     "archive-match": "fingerprint",
     "metadata-match": "search",
     "preview-match": "fingerprint",

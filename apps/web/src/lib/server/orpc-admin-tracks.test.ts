@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-test-kit";
+import { isYoutubeVerification, YOUTUBE_VERIFICATION_VALUES } from "./track-update";
 
 // The ADMIN wave's pilot parity + auth proof: the `admin-tracks` ops driven
 // end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL admin
@@ -53,10 +55,15 @@ vi.mock("cloudflare:workers", () => ({
   },
 }));
 
-vi.mock("./track-update", () => ({
-  fillEmptyNote: (...args: unknown[]) => fillEmptyNote(...args),
-  updateTrack: (...args: unknown[]) => updateTrack(...args),
-}));
+vi.mock("./track-update", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./track-update")>();
+
+  return {
+    ...actual,
+    fillEmptyNote: (...args: unknown[]) => fillEmptyNote(...args),
+    updateTrack: (...args: unknown[]) => updateTrack(...args),
+  };
+});
 
 vi.mock("./backfill", () => ({
   recordNoteAttempt: (...args: unknown[]) => recordNoteAttempt(...args),
@@ -449,6 +456,38 @@ describe("oRPC update_track (PATCH /admin/tracks/{trackId})", () => {
     const [, update] = updateTrack.mock.calls[0] as [string, Record<string, unknown>];
     expect("captureStatus" in update).toBe(false);
     expect(update.sourceAudioKey).toBe("004.7.2I/abc123.opus");
+  });
+
+  it.each(YOUTUBE_VERIFICATION_VALUES)(
+    "forwards the sweep verdict %s to updateTrack",
+    async (youtubeVerification) => {
+      updateTrack.mockResolvedValueOnce({ fields: ["youtube_verification"], trackId: TRACK_ID });
+
+      const { handleOrpc } = await import("./orpc");
+      const response = await handleOrpc(patch(AGENT_TOKEN, { youtubeVerification }));
+
+      expect(response?.status).toBe(200);
+      expect(updateTrack).toHaveBeenCalledWith(
+        TRACK_ID,
+        { youtubeVerification },
+        { writer: "agent" },
+      );
+    },
+  );
+
+  it("pins every sweep-emitted verdict to the handler's domain-owned vocabulary", () => {
+    const source = readFileSync(
+      new URL("../../../../../docs/agents/hermes/scripts/capture-sweep.ts", import.meta.url),
+      "utf8",
+    );
+    const emitted = [...source.matchAll(/youtubeVerification:\s*"([^"]+)"/g)].map(
+      (match) => match[1] ?? "",
+    );
+    const emittedSet = [...new Set(emitted)].sort((a, b) => a.localeCompare(b));
+    const acceptedSet = [...YOUTUBE_VERIFICATION_VALUES].sort((a, b) => a.localeCompare(b));
+
+    expect(emittedSet.every((verdict) => isYoutubeVerification(verdict))).toBe(true);
+    expect(emittedSet).toEqual(acceptedSet);
   });
 
   it.each([

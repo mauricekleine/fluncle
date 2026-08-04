@@ -44,7 +44,12 @@ import {
 } from "../observation-rejections";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
-import { fillEmptyNote, type TrackUpdate, updateTrack } from "../track-update";
+import {
+  fillEmptyNote,
+  isYoutubeVerification,
+  type TrackUpdate,
+  updateTrack,
+} from "../track-update";
 import { countTrackWork, listTrackWork } from "../track-work";
 import { purgeVideoCache } from "../video-cache";
 import {
@@ -380,10 +385,11 @@ export function adminTracksHandlers(os: Implementer) {
       }
 
       // The PROVENANCE backfill's verdict — the alternative proof for the id above, from a sweep
-      // that fingerprinted a candidate and then discarded it rather than storing it. Narrowed to
-      // the 2-value enum; `updateTrack` decides what each one is allowed to move, and neither one
-      // moves a capture column.
-      if (body.youtubeVerification === "preview-match" || body.youtubeVerification === "no-match") {
+      // that fingerprinted or metadata-matched a candidate and then discarded it rather than
+      // storing it. The domain-owned guard keeps this boundary on the complete sweep vocabulary;
+      // `updateTrack` decides what each verdict is allowed to move, and neither one moves a
+      // capture column.
+      if (isYoutubeVerification(body.youtubeVerification)) {
         update.youtubeVerification = body.youtubeVerification;
       }
 
