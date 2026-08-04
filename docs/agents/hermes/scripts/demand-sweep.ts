@@ -60,7 +60,7 @@ function unwrapSummary(response: RecordDemandResponse): RecordDemandSummary {
 
 // ---------------------------------------------------------------------------
 // Shell helper — synchronous, fail-loud where it matters (the reach-sweep contract). Appends
-// `--json` so the CLI emits a machine wrapper; parse-first so a CLI error payload is surfaced as
+// `--json` so the CLI emits a machine-readable wrapper; parse-first so a CLI error payload is surfaced as
 // a thrown error, not swallowed.
 // ---------------------------------------------------------------------------
 

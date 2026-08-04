@@ -504,7 +504,7 @@ async function withLedger<T>(
  */
 const runEvents = (calls: LedgerCall[]) => calls.filter((call) => call.path === RUN_EVENT_ENDPOINT);
 
-/** The one posted the ledger received, plus its `summary_raw` parsed back into an object. */
+/** The one run record the ledger received, plus its `summary_raw` parsed back into an object. */
 function received(calls: LedgerCall[]): { posted: PostedRun; summary: Summary } {
   const call = runEvents(calls)[0];
 
@@ -809,7 +809,7 @@ describe("timer-watchdog reports a run", () => {
     expect(summary).toMatchObject({ checked: 4, produced: 0, queue_depth: 0 });
   });
 
-  test("posts the posted, with the token read off the live container", async () => {
+  test("posts the run record, with the token read off the live container", async () => {
     const { calls } = await withLedger(async (base, calls) => {
       await runWatchdog(
         { containerEnv: { FLUNCLE_API_TOKEN: "container-agent-token" }, timers: HEALTHY },

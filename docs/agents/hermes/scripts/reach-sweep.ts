@@ -47,7 +47,7 @@ type ReachCollectResult = {
 
 // ---------------------------------------------------------------------------
 // Shell helper — synchronous, fail-loud where it matters (the rank-sweep contract, minus the
-// loop). Appends `--json` so the CLI emits a machine wrapper; parse-first so a CLI error
+// loop). Appends `--json` so the CLI emits a machine-readable wrapper; parse-first so a CLI error
 // payload is surfaced as a thrown error, not swallowed.
 // ---------------------------------------------------------------------------
 
