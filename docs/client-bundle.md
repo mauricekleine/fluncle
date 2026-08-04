@@ -21,7 +21,7 @@ The eager-chunk gate covers route-critical imports and shared helpers that can p
 ### The two fixes
 
 1. **A value the `head`/`loader`/`validateSearch` genuinely needs** → put it in a client-safe module and re-export it from the server one. Exemplars: [`lib/catalogue.ts`](../apps/web/src/lib/catalogue.ts) (the sort vocabulary, the page bounds, the group shapes, `pageNumbers`) re-exported by `lib/server/catalogue-groups.ts`; [`lib/galaxies.ts`](../apps/web/src/lib/galaxies.ts) (one thin-content floor) re-exported by `lib/server/galaxies-map.ts`. The SQL and the reads never move.
-2. **The data resolution itself** → a `routes/-<entity>-page-data.ts` sibling, reached by a **dynamic import inside the handler body**. Exemplars: `-album-page-data.ts`, `-artist-page-data.ts`, `-label-page-data.ts`. The resolver stays exported and side-effect-free, so its unit test drives it directly against a real database exactly as before.
+2. **The data resolution itself** → a `routes/-<entity>-page-data.ts` sibling, reached by a **dynamic import inside the handler body**. Exemplars: `-album-page-data.ts`, `-artist-page-data.ts`, `-label-page-data.ts`. The resolver stays exported and side-effect-free, so its unit test drives it directly against a real database exactly as before. The read-path lock in [`search-consumers.test.ts`](../apps/web/src/lib/server/search-consumers.test.ts) recognizes literal dynamic imports of `lib/server/track-search` too: the import is bundle-safe, but it still counts as a Spotify read-path consumer.
 
 A loader that awaits a heavy route-specific module must dynamically import it inside the loader. The `/docs` routes are the exemplar.
 

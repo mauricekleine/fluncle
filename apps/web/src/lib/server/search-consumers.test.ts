@@ -27,15 +27,19 @@ const SOURCE_ROOTS = ["apps/web/src", "apps/cli/src", "apps/mobile/app", "apps/m
  * and mobile's hook itself through the `orpc.search_tracks` client op. The module-import
  * marker covers the server side: a file importing the capability (`lib/server/track-search`)
  * skips every helper and holds the op itself, in any spelling — relative at any depth or the
- * `@/` alias. It is import-shaped (requires `from "…"`) so prose mentioning track-search in a
- * comment does not trip it.
+ * `@/` alias. The static marker is import-shaped (requires `from "…"`), while the dynamic marker
+ * requires an actual `import("…")` call with a string literal. That call shape avoids prose that
+ * merely mentions the module, non-import parentheses, and dynamic imports of unrelated modules.
  */
+const DYNAMIC_TRACK_SEARCH_IMPORT_MARKER = /\bimport\s*\(\s*["'][^"']*\/track-search["']\s*\)/;
+
 const SPOTIFY_OP_MARKERS = [
   /\/api\/v1\/search(?!\/archive)/,
   /\borpc\.search_tracks\b/,
   /\buseTrackSearch\b/,
   /from ["']@\/lib\/submissions["']/,
   /from ["'][^"']*\/track-search["']/,
+  DYNAMIC_TRACK_SEARCH_IMPORT_MARKER,
 ];
 
 /**
@@ -96,14 +100,42 @@ function sourceFiles(dir: string): string[] {
   return files;
 }
 
+function referencesSpotifyOp(content: string): boolean {
+  return SPOTIFY_OP_MARKERS.some((marker) => marker.test(content));
+}
+
 describe("the read path is internal-only — every Spotify-op caller is submit flow", () => {
+  it("recognizes literal dynamic track-search imports and rejects lookalikes", () => {
+    const mockBrowseRoute = `
+      export async function load() {
+        return await import("@/lib/server/track-search");
+      }
+    `;
+    const mockRelativeBrowseRoute = `
+      export async function load() {
+        return await import
+        (
+          "../lib/server/track-search"
+        );
+      }
+    `;
+
+    expect(referencesSpotifyOp(mockBrowseRoute)).toBe(true);
+    expect(referencesSpotifyOp(mockRelativeBrowseRoute)).toBe(true);
+    expect(
+      DYNAMIC_TRACK_SEARCH_IMPORT_MARKER.test("// prose mentions lib/server/track-search"),
+    ).toBe(false);
+    expect(DYNAMIC_TRACK_SEARCH_IMPORT_MARKER.test('load("@/lib/server/track-search")')).toBe(
+      false,
+    );
+    expect(DYNAMIC_TRACK_SEARCH_IMPORT_MARKER.test('await import("@/lib/server/search")')).toBe(
+      false,
+    );
+  });
+
   it("finds exactly the allowlisted submit-flow files referencing the Spotify op", () => {
     const callers = SOURCE_ROOTS.flatMap((root) => sourceFiles(join(REPO_ROOT, root)))
-      .filter((file) =>
-        SPOTIFY_OP_MARKERS.some((marker) =>
-          marker.test(readFileSync(join(REPO_ROOT, file), "utf8")),
-        ),
-      )
+      .filter((file) => referencesSpotifyOp(readFileSync(join(REPO_ROOT, file), "utf8")))
       .sort();
 
     expect(
@@ -124,7 +156,7 @@ describe("the read path is internal-only — every Spotify-op caller is submit f
       const content = readFileSync(join(REPO_ROOT, file), "utf8");
 
       expect(
-        SPOTIFY_OP_MARKERS.some((marker) => marker.test(content)),
+        referencesSpotifyOp(content),
         `${file} no longer references the Spotify op — remove it from SUBMIT_FLOW_ALLOWLIST`,
       ).toBe(true);
     }
