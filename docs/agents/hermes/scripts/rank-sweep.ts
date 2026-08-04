@@ -77,12 +77,12 @@ type RankSummary = {
   scored?: number;
 };
 
-// The CLI prints the rank tick as an ENVELOPE — `{"ok":true,"summary":{…}}` — with the
+// The CLI prints the rank tick as an WRAPPER — `{"ok":true,"summary":{…}}` — with the
 // counts nested under `summary`. This sweep originally read them at the TOP level, so
 // every count parsed as `undefined ?? 0`: the tick reported zeros AND `remaining = 0`
 // broke the drain loop after ONE call of its MAX_CALLS budget — the 2026-07-14 silent
 // 1/8th-pace regression (the server ranked; the sweep just couldn't see it). Unwrap the
-// envelope, and keep the flat read as a fallback so either shape parses.
+// wrapper, and keep the flat read as a fallback so either shape parses.
 type RankResponse = RankSummary & { summary?: RankSummary };
 
 function unwrapRankSummary(response: RankResponse): RankSummary {

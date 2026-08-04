@@ -292,7 +292,7 @@ describe("queue read", () => {
     });
   });
 
-  test("a successful error envelope is a malformed response, not an empty queue", () => {
+  test("a successful error wrapper is a malformed response, not an empty queue", () => {
     const tick = runTick({
       queueResponse: '{"ok":false,"error":"rate limited"}',
       restoringCalls: 0,

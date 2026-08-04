@@ -122,12 +122,12 @@ type Mixtape = {
   note?: string;
 };
 
-// The `claude -p --output-format json` envelope. `usage` / `total_cost_usd` /
+// The `claude -p --output-format json` reply. `usage` / `total_cost_usd` /
 // `modelUsage` carry the authoring spend — read after the parse and emitted as one
 // `subsidized` anthropic row (COST-01 §5), zero new claude flags.
 type ClaudeUsage = { input_tokens?: number; output_tokens?: number };
 
-type ClaudeEnvelope = {
+type ClaudeReply = {
   is_error?: boolean;
   modelUsage?: Record<string, unknown>;
   result?: string;
@@ -147,7 +147,7 @@ type Authored = { content?: AuthoredContent; subject?: string };
 
 // The authored edition plus its MEASURED authoring spend (the COST-01 §5 `newsletter`
 // row): the total_cost_usd the CLI computed, the model, and the token count. `usd` is
-// null only if the envelope carried no `total_cost_usd` (then the row is unpriced,
+// null only if the reply carried no `total_cost_usd` (then the row is unpriced,
 // never $0). The newsletter is a non-finding, so its ledger row is `global`-scoped.
 type AuthoredEdition = Authored & {
   model: string;
@@ -552,29 +552,29 @@ async function authorEdition(
     return null;
   }
 
-  let envelope: ClaudeEnvelope;
+  let reply: ClaudeReply;
 
   try {
-    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+    reply = JSON.parse(stdout) as ClaudeReply;
   } catch {
-    log(`claude -p did not return JSON envelope: ${stdout.slice(0, 200)}`);
+    log(`claude -p did not return JSON reply: ${stdout.slice(0, 200)}`);
 
     return null;
   }
 
-  if (envelope.is_error) {
-    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+  if (reply.is_error) {
+    const detail = `${reply.subtype ?? ""} ${reply.result ?? ""}`;
 
     if (looksLikeAuthFailure(detail)) {
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
-    log(`claude -p returned is_error (${envelope.subtype ?? "?"})`);
+    log(`claude -p returned is_error (${reply.subtype ?? "?"})`);
 
     return null;
   }
 
-  const raw = typeof envelope.result === "string" ? envelope.result : "";
+  const raw = typeof reply.result === "string" ? reply.result : "";
   let authored: Authored;
 
   try {
@@ -608,7 +608,7 @@ async function authorEdition(
     content,
     promptVersion,
     subject,
-    ...parseAuthoringSpend(envelope, NEWSLETTER_CLAUDE_MODEL),
+    ...parseAuthoringSpend(reply, NEWSLETTER_CLAUDE_MODEL),
   };
 }
 

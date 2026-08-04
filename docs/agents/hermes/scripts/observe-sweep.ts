@@ -27,7 +27,7 @@
 //         finding's data interpolated inline) and run `claude -p` — Claude Code,
 //         SUBSCRIPTION auth, NOT OpenRouter — with READ-ONLY tools (`Read,Glob,Grep`)
 //         so it can load the installed `copywriting-fluncle` skill for the voice.
-//         The JSON envelope's `.result` field is the script.
+//         The JSON reply's `.result` field is the script.
 //      c. DELIVER (deterministic): write the script to a temp file, then
 //         `fluncle admin tracks observe <id> --script-file <tmp> --json` → the Worker
 //         RE-SCANS (the voice gate), renders Cartesia, stores. The SCRIPT posts it,
@@ -177,7 +177,7 @@ export type Neighbor = { logId: string; script: string };
 // `GET /api/v1/admin/tracks/{id}/observation-neighbours` → the lean neighbourhood read.
 type NeighboursResponse = { neighbours?: Neighbor[] };
 
-// The `claude -p --output-format json` envelope. We take `.result` as the script;
+// The `claude -p --output-format json` reply. We take `.result` as the script;
 // `is_error`/`subtype` distinguish a clean run from an error. `usage` /
 // `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
 // and emitted as one `subsidized` anthropic row (COST-01 §5), zero new claude flags.
@@ -186,7 +186,7 @@ type ClaudeUsage = {
   output_tokens?: number;
 };
 
-type ClaudeEnvelope = {
+type ClaudeReply = {
   is_error?: boolean;
   modelUsage?: Record<string, unknown>;
   result?: string;
@@ -276,7 +276,7 @@ function isWorkerRejection(detail: string): boolean {
 
 // The authored script plus its MEASURED authoring spend (the COST-01 §5 `observe`
 // row): the total_cost_usd the CLI computed, the model, and the token count. `usd` is
-// null only if the envelope carried no `total_cost_usd` (then the row is unpriced,
+// null only if the reply carried no `total_cost_usd` (then the row is unpriced,
 // never $0).
 type AuthoredScript = {
   model: string;
@@ -552,31 +552,31 @@ async function authorScript(
     return null;
   }
 
-  let envelope: ClaudeEnvelope;
+  let reply: ClaudeReply;
 
   try {
-    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+    reply = JSON.parse(stdout) as ClaudeReply;
   } catch {
     log(`claude -p did not return JSON: ${stdout.slice(0, 200)}`);
 
     return null;
   }
 
-  // An `is_error` envelope can still carry an auth signature (e.g. an auth error
+  // An `is_error` reply can still carry an auth signature (e.g. an auth error
   // surfaced as a clean JSON result rather than a non-zero exit) — check it too.
-  if (envelope.is_error) {
-    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+  if (reply.is_error) {
+    const detail = `${reply.subtype ?? ""} ${reply.result ?? ""}`;
 
     if (looksLikeAuthFailure(detail)) {
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
-    log(`claude -p returned is_error (${envelope.subtype ?? "?"}) — leaving finding queued`);
+    log(`claude -p returned is_error (${reply.subtype ?? "?"}) — leaving finding queued`);
 
     return null;
   }
 
-  const script = typeof envelope.result === "string" ? envelope.result.trim() : "";
+  const script = typeof reply.result === "string" ? reply.result.trim() : "";
 
   if (!script) {
     log("claude -p returned an empty script — leaving finding queued");
@@ -587,7 +587,7 @@ async function authorScript(
   // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
   // authoritative, the token count is the informational quantity, the model comes off
   // modelUsage else the one we asked for).
-  return { promptVersion, script, ...parseAuthoringSpend(envelope, OBSERVE_CLAUDE_MODEL) };
+  return { promptVersion, script, ...parseAuthoringSpend(reply, OBSERVE_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------

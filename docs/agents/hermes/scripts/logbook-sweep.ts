@@ -150,7 +150,7 @@ export type Spent = {
   title?: string;
 };
 
-type ClaudeEnvelope = {
+type ClaudeReply = {
   is_error?: boolean;
   result?: string;
   subtype?: string;
@@ -562,29 +562,29 @@ async function authorEntry(
     return null;
   }
 
-  let envelope: ClaudeEnvelope;
+  let reply: ClaudeReply;
 
   try {
-    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+    reply = JSON.parse(stdout) as ClaudeReply;
   } catch {
     log(`claude -p did not return JSON: ${stdout.slice(0, 200)}`);
 
     return null;
   }
 
-  if (envelope.is_error) {
-    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+  if (reply.is_error) {
+    const detail = `${reply.subtype ?? ""} ${reply.result ?? ""}`;
 
     if (looksLikeAuthFailure(detail)) {
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
-    log(`claude -p returned is_error (${envelope.subtype ?? "?"}) — leaving day queued`);
+    log(`claude -p returned is_error (${reply.subtype ?? "?"}) — leaving day queued`);
 
     return null;
   }
 
-  const result = typeof envelope.result === "string" ? envelope.result.trim() : "";
+  const result = typeof reply.result === "string" ? reply.result.trim() : "";
 
   if (!result) {
     log("claude -p returned an empty entry — leaving day queued");

@@ -2,7 +2,7 @@
 //
 // The contract worth pinning is the SINGLE COLLECT: unlike rank (which loops while a backlog
 // drains), a daily snapshot is one idempotent `fluncle admin reach collect` call. So the sweep
-// makes exactly one call, folds the envelope into a one-line JSON summary (inserted / landed /
+// makes exactly one call, folds the wrapper into a one-line JSON summary (inserted / landed /
 // skipped / failed), stays `ok` when individual platforms fault or cleanly skip,
 // and reports `ok:false` when the collect genuinely fails.
 //

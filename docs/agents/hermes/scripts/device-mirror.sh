@@ -24,7 +24,7 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # Host timers send stdout to journald rather than the gateway cron-output tree. Wrap the payload
-# so the same summary becomes both the freshness marker and the best-effort run-ledger envelope.
+# so the same summary becomes both the freshness marker and the best-effort run-ledger payload.
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"
 emit_cron_output device-mirror -- "${BUN_BIN}" "${SCRIPT_DIR}/device-mirror.ts" "$@"

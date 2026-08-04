@@ -208,7 +208,7 @@ export function computeAssignment(entries: LedgerEntry[]): Assignment {
 }
 
 /** Parse the vehicles-ledger stdin payload into entries, or null when malformed (the
- *  fail-open signal). Accepts the `{ ok, vehicles: [...] }` envelope the CLI emits, and a
+ *  fail-open signal). Accepts the `{ ok, vehicles: [...] }` wrapper the CLI emits, and a
  *  bare array as a lenient fallback. */
 export function parseLedger(raw: string): LedgerEntry[] | null {
   let parsed: unknown;

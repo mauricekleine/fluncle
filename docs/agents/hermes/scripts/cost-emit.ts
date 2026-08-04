@@ -64,7 +64,7 @@ export type CostSource = "measured" | "estimated";
 /**
  * The semantic facts a box sweep supplies — everything EXCEPT the `id` (this helper
  * derives it) and the Worker-set `createdAt` / priced `estimatedUsd`. `usd` is sent
- * only by `anthropic` rows (the `claude -p` envelope's `total_cost_usd`); every
+ * only by `anthropic` rows (the `claude -p` reply's `total_cost_usd`); every
  * other vendor omits it and the Worker prices from `cost-rates.ts`.
  */
 export type BoxCostEvent = {
@@ -106,33 +106,33 @@ const DEFAULT_BASE_URL = "https://www.fluncle.com";
 
 const log = (message: string) => console.error(`[cost-emit] ${message}`);
 
-// The cost-bearing fields of a `claude -p --output-format json` envelope (the three
+// The cost-bearing fields of a `claude -p --output-format json` reply (the three
 // authoring sweeps note/observe/newsletter each have a superset type; this is the
 // subset the spend is read from). `total_cost_usd` is the CLI's own figure at the
 // actual model's actual rate; `modelUsage` is keyed by model name; `usage` carries
 // the token split.
-export type ClaudeAuthoringEnvelope = {
+export type ClaudeAuthoringReply = {
   modelUsage?: Record<string, unknown>;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number };
 };
 
 /**
- * Pull the MEASURED authoring spend out of a `claude -p` envelope for the
+ * Pull the MEASURED authoring spend out of a `claude -p` reply for the
  * `subsidized` anthropic ledger row (COST-01 §5): the total token count (quantity),
  * the model (first `modelUsage` key, else the model we asked for), and the CLI's own
- * `total_cost_usd` (authoritative; `null` when the envelope omits it → the row is
- * unpriced, never $0). Pure — one place the claude-envelope shape is read, so the
+ * `total_cost_usd` (authoritative; `null` when the reply omits it → the row is
+ * unpriced, never $0). Pure — one place the claude-reply shape is read, so the
  * three sweeps can't drift and one test covers them all.
  */
 export function parseAuthoringSpend(
-  envelope: ClaudeAuthoringEnvelope,
+  reply: ClaudeAuthoringReply,
   fallbackModel: string,
 ): { model: string; tokens: number; usd: number | null } {
-  const usage = envelope.usage;
+  const usage = reply.usage;
   const tokens = (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0);
-  const model = Object.keys(envelope.modelUsage ?? {})[0] ?? fallbackModel;
-  const usd = typeof envelope.total_cost_usd === "number" ? envelope.total_cost_usd : null;
+  const model = Object.keys(reply.modelUsage ?? {})[0] ?? fallbackModel;
+  const usd = typeof reply.total_cost_usd === "number" ? reply.total_cost_usd : null;
 
   return { model, tokens, usd };
 }

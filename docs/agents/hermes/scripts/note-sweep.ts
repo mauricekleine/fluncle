@@ -29,7 +29,7 @@
 //         doctrine for a one-line editorial note, with the finding's data interpolated
 //         inline) and run `claude -p` — Claude Code, SUBSCRIPTION auth, NOT OpenRouter
 //         — with READ-ONLY tools (`Read,Glob,Grep`) so it can load the installed
-//         `copywriting-fluncle` skill for the voice. The JSON envelope's `.result` is
+//         `copywriting-fluncle` skill for the voice. The JSON reply's `.result` is
 //         the note.
 //      c. DELIVER (deterministic): write the note to a temp file, then
 //         `fluncle admin tracks note <id> --script-file <tmp> --json` → the Worker
@@ -211,7 +211,7 @@ type SimilarResponse = { findings?: Finding[] };
 // A `track get` can resolve to a finding OR a mixtape; we only ever queue findings.
 type TrackGetResponse = { mixtape?: unknown; track?: Finding };
 
-// The `claude -p --output-format json` envelope. We take `.result` as the note;
+// The `claude -p --output-format json` reply. We take `.result` as the note;
 // `is_error`/`subtype` distinguish a clean run from an error. `usage` /
 // `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
 // and emitted as one `subsidized` anthropic row (COST-01 §5), zero new claude flags.
@@ -220,7 +220,7 @@ type ClaudeUsage = {
   output_tokens?: number;
 };
 
-type ClaudeEnvelope = {
+type ClaudeReply = {
   is_error?: boolean;
   modelUsage?: Record<string, unknown>;
   result?: string;
@@ -282,7 +282,7 @@ function isWorkerRejection(detail: string): boolean {
 
 // The authored note plus its MEASURED authoring spend (the COST-01 §5 `note` row):
 // the total_cost_usd the CLI computed, the model, and the token count. `usd` is null
-// only if the envelope carried no `total_cost_usd` (then the row is unpriced, never $0).
+// only if the reply carried no `total_cost_usd` (then the row is unpriced, never $0).
 type AuthoredNote = {
   model: string;
   note: string;
@@ -577,31 +577,31 @@ async function authorNote(
     return null;
   }
 
-  let envelope: ClaudeEnvelope;
+  let reply: ClaudeReply;
 
   try {
-    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+    reply = JSON.parse(stdout) as ClaudeReply;
   } catch {
     log(`claude -p did not return JSON: ${stdout.slice(0, 200)}`);
 
     return null;
   }
 
-  // An `is_error` envelope can still carry an auth signature (e.g. an auth error
+  // An `is_error` reply can still carry an auth signature (e.g. an auth error
   // surfaced as a clean JSON result rather than a non-zero exit) — check it too.
-  if (envelope.is_error) {
-    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+  if (reply.is_error) {
+    const detail = `${reply.subtype ?? ""} ${reply.result ?? ""}`;
 
     if (looksLikeAuthFailure(detail)) {
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
-    log(`claude -p returned is_error (${envelope.subtype ?? "?"}) — leaving finding queued`);
+    log(`claude -p returned is_error (${reply.subtype ?? "?"}) — leaving finding queued`);
 
     return null;
   }
 
-  const note = typeof envelope.result === "string" ? envelope.result.trim() : "";
+  const note = typeof reply.result === "string" ? reply.result.trim() : "";
 
   if (!note) {
     log("claude -p returned an empty note — leaving finding queued");
@@ -612,7 +612,7 @@ async function authorNote(
   // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
   // authoritative, the token count is the informational quantity, the model comes off
   // modelUsage else the one we asked for).
-  return { note, promptVersion, ...parseAuthoringSpend(envelope, NOTE_CLAUDE_MODEL) };
+  return { note, promptVersion, ...parseAuthoringSpend(reply, NOTE_CLAUDE_MODEL) };
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +724,7 @@ function deliverNote(
  */
 export function readEchoedPhrase(output: string): string | undefined {
   // The quotes arrive raw from a human-readable error and BACKSLASH-ESCAPED from a JSON
-  // one (`--json` prints the error envelope), so tolerate both.
+  // one (`--json` prints the error reply), so tolerate both.
   const match = /it lifts \\?"([^"\\]+)\\?"/.exec(output);
 
   return match?.[1];

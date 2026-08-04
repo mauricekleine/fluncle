@@ -83,14 +83,14 @@ type PendingSubmission = {
   triageVerdict?: string;
 };
 
-// The `admin submissions --json` envelope.
+// The `admin submissions --json` reply.
 type SubmissionsResponse = { submissions?: PendingSubmission[] };
 
 // A `track get` can resolve to a finding OR a mixtape; either presence means the
 // spotify id already maps to something in the archive → already logged.
 type TrackGetResponse = { mixtape?: unknown; track?: unknown };
 
-type ClaudeEnvelope = {
+type ClaudeReply = {
   is_error?: boolean;
   result?: string;
   subtype?: string;
@@ -493,29 +493,29 @@ async function authorVerdict(
     return null;
   }
 
-  let envelope: ClaudeEnvelope;
+  let reply: ClaudeReply;
 
   try {
-    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+    reply = JSON.parse(stdout) as ClaudeReply;
   } catch {
     log(`claude -p did not return JSON: ${stdout.slice(0, 200)}`);
 
     return null;
   }
 
-  if (envelope.is_error) {
-    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+  if (reply.is_error) {
+    const detail = `${reply.subtype ?? ""} ${reply.result ?? ""}`;
 
     if (looksLikeAuthFailure(detail)) {
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
-    log(`claude -p returned is_error (${envelope.subtype ?? "?"}) — leaving submission un-triaged`);
+    log(`claude -p returned is_error (${reply.subtype ?? "?"}) — leaving submission un-triaged`);
 
     return null;
   }
 
-  const verdict = typeof envelope.result === "string" ? envelope.result.trim() : "";
+  const verdict = typeof reply.result === "string" ? reply.result.trim() : "";
 
   if (!verdict) {
     log("claude -p returned an empty verdict — leaving submission un-triaged");

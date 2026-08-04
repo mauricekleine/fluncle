@@ -1983,7 +1983,7 @@ async function captureFinding(
 
     // ONLY A REAL MATCH REPORTS AN ID. `verification` is `unverified` on the abstain path —
     // the track had no preview reference (or fpcalc was absent), so the bytes were accepted on
-    // duration and ranking alone and NOTHING was fingerprinted. The identity envelope serves
+    // duration and ranking alone and NOTHING was fingerprinted. The identity payload serves
     // this id under `method: "fingerprint"`, so shipping one from the abstain path would put
     // the words "matched by audio fingerprint" on a page under a match that never happened.
     // The server re-checks this same condition (lib/server/track-update.ts) rather than

@@ -12,7 +12,7 @@ A recording owns its R2 key and ordered cues in `recording_cues`, and carries no
 
 ### `/admin/studio/<recordingId>` — the Studio, keyed on a recording
 
-The Studio editor is keyed on a **recording** (loaded via `get_recording`). The preview sources the recording's owned key directly (`${FOUND_BASE}/${recording.r2Key}`); clips are created against the recording. It degrades gracefully for a raw recording: **no cover** → a neutral poster (no card image); **no energy envelope** (recordings carry no `<logId>/studio-envelope.json`) → the drop-suggestion lane is absent, manual in/out only; the **"Re-sync from cues"** live-distribution block appears only once the recording is promoted (its linked published mixtape exists).
+The Studio editor is keyed on a **recording** (loaded via `get_recording`). The preview sources the recording's owned key directly (`${FOUND_BASE}/${recording.r2Key}`); clips are created against the recording. It degrades gracefully for a raw recording: **no cover** → a neutral poster (no card image); **no energy analysis** (recordings carry no per-log energy sidecar in R2 — the `<logId>/studio-*.json` artifact belongs to a promoted mixtape) → the drop-suggestion lane is absent, manual in/out only; the **"Re-sync from cues"** live-distribution block appears only once the recording is promoted (its linked published mixtape exists).
 
 `RecordingCueRail` authors recording cues. `/admin/clips` is the cross-recording clip library and exposes scheduled distribution.
 

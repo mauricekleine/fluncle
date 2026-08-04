@@ -150,9 +150,9 @@ run_event_now() {
 }
 # <<< END MIRRORED BLOCK: record_run_event <<<
 
-# Print the run's summary line and POST its envelope, exactly once, whatever exit path got
+# Print the run's summary line and POST its run record, exactly once, whatever exit path got
 # here — including the `set -e` aborts, which is where the interesting failures are. The
-# summary line uses the ledger's canonical counter names; the POST envelope has its own
+# summary line uses the ledger's canonical counter names; the POST payload has its own
 # snake_case contract fields.
 #
 # THE LINE CARRIES NO `ok`, deliberately: the Worker derives the verdict from the exit code and

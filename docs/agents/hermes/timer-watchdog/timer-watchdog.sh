@@ -177,11 +177,11 @@ run_event_now() {
 }
 # <<< END MIRRORED BLOCK: record_run_event <<<
 
-# Print the run's summary line and POST its envelope, exactly once, whatever exit path got
+# Print the run's summary line and POST its run record, exactly once, whatever exit path got
 # here. Runs from an EXIT trap so a `return 1` deep in the script cannot skip it — the shape
 # that leaves a ledger row missing is the shape that reads as a missed run.
 #
-# The summary line uses the ledger's canonical counter names. The POST envelope has its own
+# The summary line uses the ledger's canonical counter names. The POST payload has its own
 # snake_case contract fields; `summary_raw` carries this line unchanged.
 #
 # THE LINE CARRIES NO `ok`. This unit was written fresh with the ledger, so it never inherits

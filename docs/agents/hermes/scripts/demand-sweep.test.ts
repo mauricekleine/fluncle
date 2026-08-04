@@ -41,7 +41,7 @@ function deps(demand: DemandDeps["demand"]): DemandDeps {
 }
 
 describe("demand-sweep runs ONE tick, retrying once", () => {
-  test("a configured tick folds the envelope into a one-line summary, one attempt", () => {
+  test("a configured tick folds the wrapper into a one-line summary, one attempt", () => {
     let calls = 0;
     const summary = runDemand(
       deps(() => {
@@ -135,7 +135,7 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
   });
 });
 
-describe("demand-sweep parses the CLI envelope", () => {
+describe("demand-sweep parses the CLI wrapper", () => {
   let dir: string;
 
   beforeAll(() => {

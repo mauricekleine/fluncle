@@ -35,7 +35,7 @@ const RETRY_DELAY_MS = Number(process.env.FLUNCLE_DEMAND_RETRY_DELAY_MS ?? "5000
 const log = (message: string) => console.error(`[demand-sweep] ${message}`);
 
 // ---------------------------------------------------------------------------
-// Types — only the fields we consume from the `record_demand` envelope
+// Types — only the fields we consume from the `record_demand` wrapper
 // (apps/cli/src/commands/admin-catalogue.ts → RecordDemandSummary).
 // ---------------------------------------------------------------------------
 
@@ -51,16 +51,16 @@ type RecordDemandSummary = {
 
 type RecordDemandResponse = RecordDemandSummary & { summary?: RecordDemandSummary };
 
-// The CLI prints the demand tick as an ENVELOPE — `{"ok":true,"summary":{…}}` — with the counts
+// The CLI prints the demand tick as an WRAPPER — `{"ok":true,"summary":{…}}` — with the counts
 // nested under `summary`. Unwrap it, keeping the flat read as a fallback so either shape parses
-// (the rank-sweep envelope lesson).
+// (the rank-sweep wrapper lesson).
 function unwrapSummary(response: RecordDemandResponse): RecordDemandSummary {
   return response.summary ?? response;
 }
 
 // ---------------------------------------------------------------------------
 // Shell helper — synchronous, fail-loud where it matters (the reach-sweep contract). Appends
-// `--json` so the CLI emits a machine envelope; parse-first so a CLI error payload is surfaced as
+// `--json` so the CLI emits a machine wrapper; parse-first so a CLI error payload is surfaced as
 // a thrown error, not swallowed.
 // ---------------------------------------------------------------------------
 
@@ -100,7 +100,7 @@ export function fluncleJson<T>(args: string[]): T {
 }
 
 // The CLI's own failure payload (`{ code, message, ok: false }`). Distinguishable from a demand
-// envelope, which carries no `code`/`message` pair.
+// wrapper, which carries no `code`/`message` pair.
 function isCliErrorPayload(value: unknown): value is { code: string; message: string } {
   return (
     typeof value === "object" &&

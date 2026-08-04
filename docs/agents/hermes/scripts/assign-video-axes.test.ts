@@ -138,7 +138,7 @@ describe("assignPaletteAvoid", () => {
 });
 
 describe("parseLedger — fail-open on malformed input", () => {
-  test("accepts the { ok, vehicles: [...] } envelope", () => {
+  test("accepts the { ok, vehicles: [...] } wrapper", () => {
     const raw = JSON.stringify({ ok: true, vehicles: [entry("grainDither", "abstract")] });
     const parsed = parseLedger(raw);
     expect(parsed).not.toBeNull();
@@ -154,7 +154,7 @@ describe("parseLedger — fail-open on malformed input", () => {
     expect(parseLedger("not json {")).toBeNull();
   });
 
-  test("returns null when neither an array nor a vehicles envelope", () => {
+  test("returns null when neither an array nor a vehicles wrapper", () => {
     expect(parseLedger(JSON.stringify({ ok: true }))).toBeNull();
   });
 

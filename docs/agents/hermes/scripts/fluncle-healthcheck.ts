@@ -1080,7 +1080,7 @@ export const STRAIN_PHRASES = [
   { level: "item", phrase: "error on " },
   // One entity/finding/day exhausted its authoring budget; the sweep moves to the next item.
   { level: "item", phrase: "giving up" },
-  // Claude's error envelope leaves one authoring target queued; it does not abort the sweep.
+  // Claude's error reply leaves one authoring target queued; it does not abort the sweep.
   { level: "item", phrase: "is_error" },
   // These are all continuation/backoff or per-item rejection diagnostics in their producers.
   { level: "item", phrase: "rate-limited" },

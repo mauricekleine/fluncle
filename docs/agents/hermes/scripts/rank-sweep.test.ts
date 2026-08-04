@@ -40,7 +40,7 @@ case "$(cat "$DIR/mode")" in
   endless) printf '{"ok":true,"summary":{"scored":250,"prioritized":0,"remaining":9999,"corpus":"60:60"}}\\n' ;;
   # An unchanged archive: one cheap scoped COUNT, nothing to do.
   idle) printf '{"ok":true,"summary":{"scored":0,"prioritized":0,"remaining":0,"corpus":"60:60"}}\\n' ;;
-  # The pre-envelope flat shape — the unwrap keeps it parseable as a fallback.
+  # The pre-wrapper flat shape — the unwrap keeps it parseable as a fallback.
   flat) printf '{"ok":true,"scored":42,"prioritized":7,"remaining":0,"corpus":"60:60"}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars","ok":false}\\n'; exit 1 ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
@@ -137,7 +137,7 @@ describe("rank-sweep drains the stale set", () => {
     expect(summary).not.toHaveProperty("queue_depth");
   });
 
-  test("the pre-envelope FLAT payload still parses (the unwrap fallback)", () => {
+  test("the pre-wrapper FLAT payload still parses (the unwrap fallback)", () => {
     mode("flat");
     const summary = run();
 

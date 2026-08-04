@@ -1035,7 +1035,7 @@ describe("the accepted upload's id rides the success PATCH", () => {
 
   test("only a REAL match reports an id — the abstain path stays silent", () => {
     // The verdict is `no-reference` when the track had no preview reference: the bytes were kept
-    // on duration and ranking alone and nothing was compared. The identity envelope serves this id
+    // on duration and ranking alone and nothing was compared. The identity payload serves this id
     // under `method: "fingerprint"`, so an id from the abstain path would put "matched by audio
     // fingerprint" on a page under a match that never ran. The assignment is therefore gated on
     // the verdict itself, not merely on reaching the success branch.

@@ -2,7 +2,7 @@
 
 The evidence behind Fluncle's identity surface, kept after the build shipped. Non-canonical planning input: the measured numbers, queries, and clauses the decisions rest on, committed so they outlive the session that gathered them (four research threads + two sub-verifications + a four-role adversarial panel, all 2026-07-29). Anything below not re-verifiable from this file or the cited primary source should be treated as UNVERIFIED before it carries a new decision.
 
-What was built off this evidence is documented where it lives: the envelope and its five states in `apps/web/src/lib/server/identity-envelope.ts`, the dials in `identity-dials.ts`, the reader page at [/docs/identity](../../apps/web/content/docs/identity.mdx), and the surviving tail in [ROADMAP.md](./ROADMAP.md). The RFC these numbers were gathered for was pruned on ship (git history holds it).
+What was built off this evidence is documented where it lives: the identity payload and its five states in the serializer module beside `apps/web/src/lib/server/identity-dials.ts` (the dials), the reader page at [/docs/identity](../../apps/web/content/docs/identity.mdx), and the surviving tail in [ROADMAP.md](./ROADMAP.md). The RFC these numbers were gathered for was pruned on ship (git history holds it).
 
 ## The market facts (all verified at primary sources, 2026-07-29)
 
@@ -162,7 +162,7 @@ Run against a hosted Turso scratch FORK of prod (never `turso dev` — the local
 
 - **The MBID value index build: 104s at 66,096 rows.** `create index tracks_mb_recording_id_idx on tracks (mb_recording_id)`. The cost is not the column, it is the column's POSITION: `mb_recording_id` sits post-`embedding_blob` (cid 28 of 62, Q0), so the build drags every row's 4 KB vector overflow pages to read one text field. Operational consequence, carried verbatim into the shipping PR: the migration auto-applies in the CF build and holds the single writer ~2 min; merge at a quiet hour; reads proceed under WAL, sweeps retry.
 - **The plans, confirmed by `EXPLAIN QUERY PLAN` on the fork:** `where mb_recording_id = ?` → `SEARCH tracks USING INDEX tracks_mb_recording_id_idx`; `where isrc = ?` → `SEARCH tracks USING INDEX tracks_isrc_idx` (the pre-existing index, which is why the ISRC key needs no new one — and why the key must be normalized in the isolate rather than wrapped in `upper()` in SQL).
-- **A keyed identity read: 239 ms wall including network, sub-ms server-side seek.** The wall time is the round trip; the database work is the index seek plus one row fetch, which is the shape the whole envelope was designed around (explicit column list, no blob).
+- **A keyed identity read: 239 ms wall including network, sub-ms server-side seek.** The wall time is the round trip; the database work is the index seek plus one row fetch, which is the shape the whole identity payload was designed around (explicit column list, no blob).
 - **The dial write load: 40 sequential counter upserts in 1.10 s over one connection** (~27 ms each, network-dominated). Two rows per metered request (a burst window and a daily window) is therefore ~55 ms of writes on a read that already costs 239 ms — acceptable, and the reason the dials ride the existing atomic limiter rather than anything new.
 
 ### ADPLA §3.3.6(D) — RETRIEVED 2026-07-29 (the clause the RFC left open)

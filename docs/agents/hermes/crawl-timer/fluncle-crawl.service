@@ -28,7 +28,7 @@ ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_CRAWL
 # 300s, and the sweep retries a timed-out call once, so a slow-MusicBrainz tick can legitimately
 # spend 300s (dead first call) + up to 300s (retry) — a 600s ceiling kills exactly that tick
 # mid-retry, before it can write its /status marker or an honest failure. 900s fits the full
-# retry envelope with margin. Past the 10-min cadence an over-long pass just eats the next
+# retry window with margin. Past the 10-min cadence an over-long pass just eats the next
 # trigger (systemd never starts a new tick while one is active) and self-heals — this is a
 # backstop, never the normal path.
 TimeoutStartSec=900

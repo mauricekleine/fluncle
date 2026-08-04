@@ -450,7 +450,7 @@ describe("each unit's declared interval matches its own .timer", () => {
 // ---------------------------------------------------------------------------
 
 type LedgerCall = { auth: string; body: string; path: string };
-type Envelope = {
+type PostedRun = {
   ended_at: string;
   exit_code: number;
   started_at: string;
@@ -504,17 +504,17 @@ async function withLedger<T>(
  */
 const runEvents = (calls: LedgerCall[]) => calls.filter((call) => call.path === RUN_EVENT_ENDPOINT);
 
-/** The one envelope the ledger received, plus its `summary_raw` parsed back into an object. */
-function received(calls: LedgerCall[]): { envelope: Envelope; summary: Summary } {
+/** The one posted the ledger received, plus its `summary_raw` parsed back into an object. */
+function received(calls: LedgerCall[]): { posted: PostedRun; summary: Summary } {
   const call = runEvents(calls)[0];
 
   if (!call) {
     throw new Error("the ledger received no run event at all");
   }
 
-  const envelope = JSON.parse(call.body) as Envelope;
+  const posted = JSON.parse(call.body) as PostedRun;
 
-  return { envelope, summary: JSON.parse(envelope.summary_raw) as Summary };
+  return { posted, summary: JSON.parse(posted.summary_raw) as Summary };
 }
 
 function writeStub(dir: string, name: string, body: string): void {
@@ -809,7 +809,7 @@ describe("timer-watchdog reports a run", () => {
     expect(summary).toMatchObject({ checked: 4, produced: 0, queue_depth: 0 });
   });
 
-  test("posts the envelope, with the token read off the live container", async () => {
+  test("posts the posted, with the token read off the live container", async () => {
     const { calls } = await withLedger(async (base, calls) => {
       await runWatchdog(
         { containerEnv: { FLUNCLE_API_TOKEN: "container-agent-token" }, timers: HEALTHY },
@@ -822,10 +822,10 @@ describe("timer-watchdog reports a run", () => {
     expect(runEvents(calls)).toHaveLength(1);
     expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
 
-    const { envelope, summary } = received(calls);
+    const { posted, summary } = received(calls);
 
-    expect(envelope.unit).toBe("fluncle-timer-watchdog");
-    expect(envelope.exit_code).toBe(0);
+    expect(posted.unit).toBe("fluncle-timer-watchdog");
+    expect(posted.exit_code).toBe(0);
     expect(summary.checked).toBe(3);
   });
 
@@ -994,9 +994,9 @@ describe("secrets-sync reports a run", () => {
     expect(runEvents(calls)).toHaveLength(1);
     expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
 
-    const { envelope, summary } = received(calls);
+    const { posted, summary } = received(calls);
 
-    expect(envelope.unit).toBe("fluncle-secrets-sync");
+    expect(posted.unit).toBe("fluncle-secrets-sync");
     expect(summary).toMatchObject({ errors: 0, produced: 2 });
     expect("ok" in summary).toBe(false);
   });
@@ -1016,13 +1016,13 @@ describe("secrets-sync reports a run", () => {
     expect(code).not.toBe(0);
     expect(runEvents(calls)[0]?.auth).toBe("Bearer container-agent-token");
 
-    const { envelope, summary } = received(calls);
+    const { posted, summary } = received(calls);
 
-    expect(envelope.exit_code).not.toBe(0);
+    expect(posted.exit_code).not.toBe(0);
     // Two targets promised, none written: the shortfall is the backlog, and the exit code the
-    // envelope carries is what the ledger derives a false verdict from.
+    // posted carries is what the ledger derives a false verdict from.
     expect(summary).toMatchObject({ checked: 2, produced: 0, queue_depth: 2 });
-    expect(derivedOk(envelope.exit_code, summary.errors)).toBe(false);
+    expect(derivedOk(posted.exit_code, summary.errors)).toBe(false);
   });
 
   test("a missing container token is visible but does not fail the credential refresh", async () => {
@@ -1301,10 +1301,10 @@ describe("sonar-freshen reports a run", () => {
 
     expect(runEvents(calls)[0]?.auth).toBe("Bearer sonar-agent-token");
 
-    const { envelope } = received(calls);
+    const { posted } = received(calls);
 
-    expect(envelope.unit).toBe("fluncle-sonar-freshen");
-    expect(envelope.exit_code).toBe(0);
+    expect(posted.unit).toBe("fluncle-sonar-freshen");
+    expect(posted.exit_code).toBe(0);
   }, 60_000);
 
   // The ledger's alarm conjunction on this unit: a build is published, the box did not take

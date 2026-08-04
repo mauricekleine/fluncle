@@ -247,7 +247,7 @@ describe("emit_cron_output — the marker's shape", () => {
 // ---------------------------------------------------------------------------
 
 type LedgerCall = { auth: string; body: string; method: string; path: string };
-type LedgerEnvelope = {
+type LedgerRecord = {
   ended_at: string;
   exit_code: number;
   started_at: string;
@@ -305,18 +305,18 @@ const ledgerEnv = (base: string, extra: Record<string, string> = {}) => ({
   ...extra,
 });
 
-function envelopeOf(calls: LedgerCall[]): LedgerEnvelope {
+function recordOf(calls: LedgerCall[]): LedgerRecord {
   const call = calls[0];
 
   if (!call) {
     throw new Error("the ledger received no request at all");
   }
 
-  return JSON.parse(call.body) as LedgerEnvelope;
+  return JSON.parse(call.body) as LedgerRecord;
 }
 
 describe("emit_cron_output — the run-ledger POST", () => {
-  test("posts the run envelope: the agent bearer, the path, and the five fields", async () => {
+  test("posts the run record: the agent bearer, the path, and the five fields", async () => {
     const { calls, code } = await withLedger("accepts", async (base, calls) => {
       const run = await emitAsync("backup", `echo '{"ok":true,"tableCount":74}'`, {
         env: ledgerEnv(base),
@@ -331,17 +331,17 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(calls[0]?.path).toBe(RUN_EVENT_ENDPOINT);
     expect(calls[0]?.auth).toBe("Bearer fixture-agent-token");
 
-    const envelope = envelopeOf(calls);
+    const record = recordOf(calls);
 
     // `unit` is the systemd unit stem, matching the marker's `# Cron Job:` header — one name
     // for the job across both consumers.
-    expect(envelope.unit).toBe("fluncle-backup");
-    expect(envelope.exit_code).toBe(0);
-    expect(envelope.summary_raw).toBe('{"ok":true,"tableCount":74}');
-    expect(envelope.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-    expect(envelope.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(record.unit).toBe("fluncle-backup");
+    expect(record.exit_code).toBe(0);
+    expect(record.summary_raw).toBe('{"ok":true,"tableCount":74}');
+    expect(record.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(record.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     // Box time, and there is exactly one field for it — the Worker stamps its own write time.
-    expect(Object.keys(envelope).sort()).toEqual([
+    expect(Object.keys(record).sort()).toEqual([
       "ended_at",
       "exit_code",
       "started_at",
@@ -363,11 +363,11 @@ describe("emit_cron_output — the run-ledger POST", () => {
       return { calls };
     });
 
-    const envelope = envelopeOf(calls);
+    const record = recordOf(calls);
 
-    expect(envelope.summary_raw).toBe('{"ok":true,"errors":2,"triaged":0}');
-    expect("ok" in envelope).toBe(false);
-    expect(JSON.parse(envelope.summary_raw)).toMatchObject({ errors: 2, ok: true });
+    expect(record.summary_raw).toBe('{"ok":true,"errors":2,"triaged":0}');
+    expect("ok" in record).toBe(false);
+    expect(JSON.parse(record.summary_raw)).toMatchObject({ errors: 2, ok: true });
   });
 
   test("summary_raw is the LAST NON-EMPTY stdout line, not the first and not a blank", async () => {
@@ -386,7 +386,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
       return { calls };
     });
 
-    expect(envelopeOf(calls).summary_raw).toBe('{"ok":true,"crawled":3}');
+    expect(recordOf(calls).summary_raw).toBe('{"ok":true,"crawled":3}');
   });
 
   test("a stderr log line can never pose as the summary", async () => {
@@ -403,7 +403,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
       return { calls };
     });
 
-    expect(envelopeOf(calls).summary_raw).toBe('{"ok":true,"noted":2}');
+    expect(recordOf(calls).summary_raw).toBe('{"ok":true,"noted":2}');
   });
 
   test("the exit code travels, so a failed run is a row rather than a silence", async () => {
@@ -417,12 +417,12 @@ describe("emit_cron_output — the run-ledger POST", () => {
 
     expect(code).toBe(17);
 
-    const envelope = envelopeOf(calls);
+    const record = recordOf(calls);
 
-    expect(envelope.exit_code).toBe(17);
+    expect(record.exit_code).toBe(17);
     // The run printed no summary at all; the ledger records that honestly instead of inventing
     // one — an empty `summary_raw` is what `missing_fields` is built from.
-    expect(envelope.summary_raw).toBe("");
+    expect(record.summary_raw).toBe("");
   });
 
   test("a summary carrying quotes, backslashes and a raw tab still arrives as valid JSON", async () => {
@@ -440,12 +440,12 @@ describe("emit_cron_output — the run-ledger POST", () => {
       return { calls };
     });
 
-    // The envelope parses at all — it would not if any of the three leaked through unescaped,
-    // which is the actual assertion; `envelopeOf` does the JSON.parse.
-    const envelope = envelopeOf(calls);
+    // The record parses at all — it would not if any of the three leaked through unescaped,
+    // which is the actual assertion; `recordOf` does the JSON.parse.
+    const record = recordOf(calls);
 
     // And the line survives byte for byte, so the ledger holds what the sweep really said.
-    expect(envelope.summary_raw).toBe(messy);
+    expect(record.summary_raw).toBe(messy);
   });
 
   test("no token ⇒ NO request at all (the box posts nothing it cannot authorize)", async () => {

@@ -29,7 +29,7 @@ const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const log = (message: string) => console.error(`[reach-sweep] ${message}`);
 
 // ---------------------------------------------------------------------------
-// Types — only the fields we consume from the `record_platform_stats` envelope
+// Types — only the fields we consume from the `record_platform_stats` wrapper
 // (apps/cli/src/commands/admin-reach.ts → ReachCollectResult).
 // ---------------------------------------------------------------------------
 
@@ -47,7 +47,7 @@ type ReachCollectResult = {
 
 // ---------------------------------------------------------------------------
 // Shell helper — synchronous, fail-loud where it matters (the rank-sweep contract, minus the
-// loop). Appends `--json` so the CLI emits a machine envelope; parse-first so a CLI error
+// loop). Appends `--json` so the CLI emits a machine wrapper; parse-first so a CLI error
 // payload is surfaced as a thrown error, not swallowed.
 // ---------------------------------------------------------------------------
 
@@ -84,7 +84,7 @@ export function fluncleJson<T>(args: string[]): T {
 }
 
 // The CLI's own failure payload (`{ code, message, ok: false }`). Distinguishable from a
-// collect envelope, which carries no `code`/`message` pair.
+// collect wrapper, which carries no `code`/`message` pair.
 function isCliErrorPayload(value: unknown): value is { code: string; message: string } {
   return (
     typeof value === "object" &&

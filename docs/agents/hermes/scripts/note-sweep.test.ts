@@ -33,7 +33,7 @@ const CLAUDE_STUB = join(RIG, "claude");
 mkdirSync(CONTROL, { recursive: true });
 
 // A stub `claude -p`: consumes the prompt on stdin, records the invocation, and emits the real JSON
-// envelope shape. `claude-verdict: down` makes it fail the way a flaky model does — a non-zero exit
+// reply shape. `claude-verdict: down` makes it fail the way a flaky model does — a non-zero exit
 // with no draft, which must NOT cost the finding an attempt.
 writeFileSync(
   CLAUDE_STUB,

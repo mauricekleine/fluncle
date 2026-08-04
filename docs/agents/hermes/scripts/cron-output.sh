@@ -68,7 +68,7 @@
 # "how much did it produce, out of how much backlog, over how many runs" — and that is the
 # question seven days of a silently-broken Deezer rung went unanswered on, with
 # `isrcRecoveredByDeezer: 0` printed in every tick summary and read by nobody. So every run
-# through this wrapper now also POSTs its envelope — unit, start, end, exit code, and the
+# through this wrapper now also POSTs its run record — unit, start, end, exit code, and the
 # sweep's own summary LINE, verbatim — to the `run_events` ledger. The Worker owns the schema:
 # it DERIVES `ok` (never trusts a caller's), normalizes the counters it recognises, and records
 # the mandatory ones the summary did not carry as `missing_fields` — which is the upgrade queue

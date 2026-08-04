@@ -35,7 +35,7 @@
 //      b. AUTHOR (the ONE agentic step): run `claude -p` on the Worker-supplied `prompt` —
 //         Claude Code, SUBSCRIPTION auth, NOT OpenRouter — with READ-ONLY tools
 //         (`Read,Glob,Grep`) so it can load the installed `copywriting-fluncle` skill for
-//         the voice. The JSON envelope's `.result` is the bio.
+//         the voice. The JSON reply's `.result` is the bio.
 //      c. DELIVER (deterministic): write the bio to a temp file, then
 //         `fluncle admin <kind>s describe <slug> --bio-file <tmp> --prompt-version <v> --json`
 //         → the Worker RE-SCANS (the voice gate, `gateBioText`) and FILLS AN EMPTY BIO ONLY.
@@ -200,12 +200,12 @@ type BioResult = {
   voiceViolations?: string[];
 };
 
-// The `claude -p --output-format json` envelope. We take `.result` as the bio;
+// The `claude -p --output-format json` reply. We take `.result` as the bio;
 // `is_error`/`subtype` distinguish a clean run from an error. `usage` /
 // `total_cost_usd` / `modelUsage` carry the authoring spend — read after the parse
 // (via the shared `parseAuthoringSpend`) and emitted as one `subsidized` anthropic
 // row (COST-01 §5), the note/observe pattern, zero new claude flags.
-type ClaudeEnvelope = {
+type ClaudeReply = {
   is_error?: boolean;
   modelUsage?: Record<string, unknown>;
   result?: string;
@@ -295,7 +295,7 @@ export function buildBioFatalSummary(): Record<string, unknown> {
 // 0 = registry default, null = the baked-in fallback wrote it — stamped on the artifact
 // via `--prompt-version` so a bio authored during an outage stays legible as such), and
 // its MEASURED authoring spend (the COST-01 §5 `bio` row): the CLI's own total_cost_usd,
-// the model, and the token count. `usd` is null only when the envelope carried no
+// the model, and the token count. `usd` is null only when the reply carried no
 // `total_cost_usd` (then the row is unpriced, never $0).
 type AuthoredBio = {
   bio: string;
@@ -628,9 +628,9 @@ export function readBioRejection(output: string): string | undefined {
 
   return (
     raw
-      // A JSON envelope escapes the reason's own quotes; put them back before trimming the tail.
+      // A JSON reply escapes the reason's own quotes; put them back before trimming the tail.
       .replace(/\\"/g, '"')
-      // …then drop whatever the envelope wrapped around it (`…"}` / `…","code":…`).
+      // …then drop whatever the reply wrapped around it (`…"}` / `…","code":…`).
       .replace(/"\s*[,}].*$/, "")
       .trim()
   );
@@ -716,10 +716,10 @@ async function authorBio(
     return null;
   }
 
-  let envelope: ClaudeEnvelope;
+  let reply: ClaudeReply;
 
   try {
-    envelope = JSON.parse(stdout) as ClaudeEnvelope;
+    reply = JSON.parse(stdout) as ClaudeReply;
   } catch {
     log(
       `claude -p did not return JSON, no attempt spent — retrying next tick: ${stdout.slice(0, 200)}`,
@@ -728,23 +728,23 @@ async function authorBio(
     return null;
   }
 
-  // An `is_error` envelope can still carry an auth signature (an auth error surfaced as a
+  // An `is_error` reply can still carry an auth signature (an auth error surfaced as a
   // clean JSON result rather than a non-zero exit) — check it too.
-  if (envelope.is_error) {
-    const detail = `${envelope.subtype ?? ""} ${envelope.result ?? ""}`;
+  if (reply.is_error) {
+    const detail = `${reply.subtype ?? ""} ${reply.result ?? ""}`;
 
     if (looksLikeAuthFailure(detail)) {
       throw new ClaudeAuthError(detail.trim().slice(-300));
     }
 
     log(
-      `claude -p returned is_error (${envelope.subtype ?? "?"}), no attempt spent — retrying next tick`,
+      `claude -p returned is_error (${reply.subtype ?? "?"}), no attempt spent — retrying next tick`,
     );
 
     return null;
   }
 
-  const bio = typeof envelope.result === "string" ? envelope.result.trim() : "";
+  const bio = typeof reply.result === "string" ? reply.result.trim() : "";
 
   if (!bio) {
     log("claude -p returned an empty bio, no attempt spent — retrying next tick");
@@ -755,7 +755,7 @@ async function authorBio(
   // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
   // authoritative, the token count is the informational quantity, the model comes off
   // modelUsage else the one we asked for).
-  return { bio, promptVersion, ...parseAuthoringSpend(envelope, modelForKind(kind)) };
+  return { bio, promptVersion, ...parseAuthoringSpend(reply, modelForKind(kind)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,7 +1282,7 @@ async function main(): Promise<void> {
   }
 
   // `describe --queue --json` returns a BARE ARRAY of `{ id, name, slug }` (the CLI
-  // unwraps the `{ ok, <kind>s }` envelope before printing).
+  // unwraps the `{ ok, <kind>s }` reply before printing).
   const queue = fluncleJson<QueueRow[]>([
     "admin",
     group,

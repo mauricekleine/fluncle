@@ -80,7 +80,7 @@ describe("costEventId (mirrors the server scheme)", () => {
   });
 });
 
-describe("parseAuthoringSpend (claude -p envelope → spend)", () => {
+describe("parseAuthoringSpend (claude -p reply → spend)", () => {
   test("reads tokens, the modelUsage key, and total_cost_usd", () => {
     expect(
       parseAuthoringSpend(
@@ -94,7 +94,7 @@ describe("parseAuthoringSpend (claude -p envelope → spend)", () => {
     ).toEqual({ model: "claude-sonnet-4-6", tokens: 1500, usd: 0.042 });
   });
 
-  test("falls back to the asked-for model and null usd when the envelope omits them", () => {
+  test("falls back to the asked-for model and null usd when the reply omits them", () => {
     expect(parseAuthoringSpend({ usage: { input_tokens: 10 } }, "claude-sonnet-4-6")).toEqual({
       model: "claude-sonnet-4-6",
       tokens: 10,
@@ -102,7 +102,7 @@ describe("parseAuthoringSpend (claude -p envelope → spend)", () => {
     });
   });
 
-  test("an empty envelope is zero tokens, null usd (unpriced, never $0)", () => {
+  test("an empty reply is zero tokens, null usd (unpriced, never $0)", () => {
     expect(parseAuthoringSpend({}, "m")).toEqual({ model: "m", tokens: 0, usd: null });
   });
 });

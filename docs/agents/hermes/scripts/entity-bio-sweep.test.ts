@@ -38,7 +38,7 @@ const CLAUDE_STUB = join(RIG, "claude");
 mkdirSync(CONTROL, { recursive: true });
 
 // A stub `claude -p`: consumes the prompt on stdin, records the invocation (and the prompt, so a
-// test can prove the rewrite feedback reached the model), and emits the real JSON envelope shape.
+// test can prove the rewrite feedback reached the model), and emits the real JSON reply shape.
 // `claude-verdict: down` makes it fail the way a flaky model does — a non-zero exit with no
 // draft, which must NOT cost the entity an attempt.
 writeFileSync(

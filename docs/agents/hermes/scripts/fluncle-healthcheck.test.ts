@@ -582,7 +582,7 @@ describe("the strain vocabulary against the real box output", () => {
     // `error on <id>: …` and `unexpected error on <id>: …` are the shared per-item catch in
     // ~10 sweeps — the single most common way a sweep says "this one did not get done". They
     // were MISSED by the first draft of the vocabulary; an audit over all 238 `log()` string
-    // literals in this directory is what surfaced them. Same for claude's own error envelope,
+    // literals in this directory is what surfaced them. Same for claude's own error reply,
     // which is the signature of an authoring tick that left its item queued.
     expect(countDistressLines("> [note-sweep] error on 241.7.3A: Firecrawl 502", 1)).toBe(1);
     expect(countDistressLines("> [capture-sweep] unexpected error on mb_x: socket closed", 1)).toBe(

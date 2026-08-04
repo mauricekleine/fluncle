@@ -88,7 +88,7 @@ const BATCH = Number(process.env.FLUNCLE_VERIFY_BATCH ?? "20");
 
 const log = (message: string) => console.error(`[verify-captures] ${message}`);
 
-// ── Types (the two ops' envelopes — only the fields consumed) ────────────────
+// ── Types (the two ops' payloads — only the fields consumed) ────────────────
 
 export type VerifyWorkItem = {
   artists?: string[];

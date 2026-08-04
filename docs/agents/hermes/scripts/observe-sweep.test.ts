@@ -181,7 +181,7 @@ describe("readEchoedMove", () => {
     ).toBe("my shoulders went before");
   });
 
-  test("tolerates the JSON-escaped quoting the --json envelope emits", () => {
+  test("tolerates the JSON-escaped quoting the --json wrapper emits", () => {
     expect(
       readEchoedMove(
         '{"message":"it lifts \\"the drop landed sideways\\" straight from 012.1.0A"}',
