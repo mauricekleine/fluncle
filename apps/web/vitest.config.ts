@@ -24,16 +24,16 @@ export default defineConfig({
       include: ["src/**/*.{ts,tsx}"],
       provider: "v8",
       reporter: ["text", "html"],
-      // Ratchet floors: ~4 points below today's measured coverage
-      // (stmts 52.0 / branch 45.6 / funcs 46.0 / lines 52.1, measured 2026-07-28) so the
-      // gate blocks regressions without failing the current suite. Raise these as coverage
-      // grows — they had drifted ~8 points slack before this pass, which is a regression
-      // budget nobody chose.
+      // Ratchet floors: `floor(measured − 4)` per metric, so the gate blocks a regression
+      // without failing the current suite. Re-measure with `bun run --cwd apps/web test`
+      // (the summary it prints IS the input) and re-ratchet whenever coverage has grown a
+      // few points — slack here is a regression budget nobody chose. Measured against the
+      // floors below: stmts 54.56 / branch 48.42 / funcs 48.24 / lines 54.70.
       thresholds: {
-        branches: 41,
-        functions: 42,
-        lines: 48,
-        statements: 48,
+        branches: 44,
+        functions: 44,
+        lines: 50,
+        statements: 50,
       },
     },
     environment: "node",

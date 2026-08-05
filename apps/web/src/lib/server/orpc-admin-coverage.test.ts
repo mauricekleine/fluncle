@@ -822,5 +822,15 @@ describe("oRPC admin-route contract coverage", () => {
         true,
       );
     }
+
+    // The prefix list was outside this guard, and a stale prefix is the worse half: it
+    // exempts a whole subtree rather than one file, so the next route to land under a
+    // retired OAuth provider's path would be carved out by an entry nobody meant to keep.
+    for (const prefix of ADMIN_CARVE_OUT_ROUTE_PREFIXES) {
+      expect(
+        [...present].some((basename) => basename.startsWith(prefix)),
+        `carve-out prefix "${prefix}" no longer matches any route`,
+      ).toBe(true);
+    }
   });
 });

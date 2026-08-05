@@ -252,19 +252,29 @@ describe("startVjTransitionListener (the never-crash rail, over a real ephemeral
     listener = null;
   });
 
-  /** Fire one datagram at the bound listener and wait a beat for delivery. */
+  /** Fire one datagram at the bound listener; resolves once the socket has taken it. */
   function send(port: number, body: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      client.send(Buffer.from(body), port, "127.0.0.1", (err) =>
-        err ? reject(err) : setTimeout(resolve, 20),
-      );
+      client.send(Buffer.from(body), port, "127.0.0.1", (err) => (err ? reject(err) : resolve()));
     });
   }
 
   test("a valid datagram calls onTransition; malformed ones are ignored silently", async () => {
     const received: number[] = [];
+    // Delivery is asynchronous with no promise of its own, so the callback IS the settle:
+    // the first `onTransition` resolves `delivered`. Loopback keeps datagrams from one
+    // socket in send order, so the two ignored ones are already handled by then — and a
+    // regression that accepted either would resolve this with the WRONG deck, not hide it.
+    let deliver: () => void = () => {};
+    const delivered = new Promise<void>((resolve) => {
+      deliver = resolve;
+    });
+
     listener = await startVjTransitionListener({
-      onTransition: (msg) => received.push(msg.deck),
+      onTransition: (msg) => {
+        received.push(msg.deck);
+        deliver();
+      },
       port: 0,
     });
     expect(listener.port).toBeGreaterThan(0);
@@ -272,8 +282,7 @@ describe("startVjTransitionListener (the never-crash rail, over a real ephemeral
     await send(listener.port, "garbage not json"); // ignored
     await send(listener.port, '{"type":"heartbeat","deck":1}'); // wrong type, ignored
     await send(listener.port, '{"type":"transition","deck":2}'); // the only valid one
-    // Give the loop a final tick to flush.
-    await new Promise((r) => setTimeout(r, 30));
+    await delivered;
 
     expect(received).toEqual([2]);
     await new Promise<void>((r) => client.close(() => r()));

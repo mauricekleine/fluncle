@@ -387,6 +387,28 @@ describe("oRPC public-route contract coverage", () => {
     }
   });
 
+  it("every carve-out still maps to a real route (no stale carve-out)", () => {
+    // The mirror of the admin sibling's stale-carve-out guard. Without it the carve-out
+    // lists are write-only: a deleted or renamed route leaves its entry behind, and the
+    // leftover then EXEMPTS whatever lands on that basename next — the net going quietly
+    // slack rather than failing. Prefixes are checked too, because a stale prefix exempts
+    // a whole subtree rather than one file.
+    const present = new Set(PUBLIC_ROUTE_DIRS.flatMap((dir) => listRouteBasenames(dir)));
+
+    for (const carved of CARVE_OUT_ROUTES) {
+      expect(present.has(carved), `carve-out "${carved}" no longer maps to a real route`).toBe(
+        true,
+      );
+    }
+
+    for (const prefix of CARVE_OUT_ROUTE_PREFIXES) {
+      expect(
+        [...present].some((basename) => basename.startsWith(prefix)),
+        `carve-out prefix "${prefix}" no longer matches any route`,
+      ).toBe(true);
+    }
+  });
+
   // The net is only worth having if it would actually catch the thing it was blind to.
   // Prove the bare walk reaches a bare-only route (og.set today), so a future public
   // route mounted at /api/<x> with no /api/v1/<x> twin cannot slip in unexamined.
