@@ -78,6 +78,8 @@ bun run check:fix
 
 Root scripts are orchestrated with Turborepo. `oxlint` and `oxfmt` run from the root with workspace-aware configs. `apps/raycast` is the exception: Raycast's CLI owns extension formatting, and `ray lint` runs its own Prettier check over `src/**`.
 
+Hosted checks and deploy builds use `bun install --frozen-lockfile`, so a package manifest change without a matching `bun.lock` fails before it can ship.
+
 ## Environment
 
 Fluncle has two environment surfaces:
