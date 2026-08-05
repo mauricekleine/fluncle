@@ -66,7 +66,7 @@ Default `--if-stale` (the timer); `--force` runs it unconditionally (the operato
 4. **Capture** the running container's runtime env into a `0600` tmpfs file (the rollback-reversibility step) + record the current image as the rollback target.
 5. **Quiesce the sweep timers** (only once a rebuild is committed to — see [§ Serializing the rebuild against the sweeps](#serializing-the-rebuild-against-the-sweeps)): stop the active `fluncle-*.timer` sweeps, drain any sweep already mid-run, and arm an EXIT trap that **guarantees** they are restarted on every exit path.
 6. **Build** the new image (`fluncle-hermes:v<date>-<sha>`), repo-root context, `-f docs/agents/hermes/Dockerfile`.
-7. **Pre-smoke the NEW image in throwaway `--rm` containers — before the live one is touched:** `fluncle version` == the pin; `claude --version` == the pin; an agent-token read returns `{ok:true}`; a publish-class command is **refused** (role boundary intact). Any failure → abort, alert, **the live box is never touched**.
+7. **Pre-smoke the NEW image in throwaway containers — before the live one is touched:** `fluncle version` == the pin; `claude --version` == the pin; an agent-token read returns `{ok:true}`; a publish-class command is **refused** (role boundary intact); and a tokenless gateway boots on a scratch `tmpfs` home — the s6 bootstrap seeds its default config — and reaches a running, hermes-writable state (pid file written, still up after a settle) under the production security flags. Any failure → abort, alert, **the live box is never touched**.
 8. **Swap** (the only moment the live container changes): stop+rm, `docker run` the new image with the captured env + the canonical `§ Run` flags.
 9. **Post-swap smoke:** the gateway is `Running` and `fluncle` answers.
 10. **On any post-swap failure → ROLLBACK:** restore the previous image, confirm it's up, alert loudly. If the rollback itself fails, fire the loudest alert and stop for a human. **The box is never left broken.**
@@ -99,6 +99,8 @@ systemctl list-timers pin-watch.timer
 ```
 
 The script is idempotent and a no-op when current, so the timer is safe to run as often as you like.
+
+The tokenless gateway smoke cannot open a second Discord connection and never mounts the real `/opt/data`; that is what makes it safe for both normal and `--dry-run` rebuilds. It proves image boot, the s6 bootstrap (UID remap, volume chown, default-config seeding), the privilege drop, gateway imports, and writes to fresh scratch state. Two things it deliberately does not prove: the versioned `config.yaml` (Hermes rewrites its config in place at boot, so mounting it read-only would break the seeding path — a config edit is validated by the attended `--dry-run` pilot instead), and that a future `USER hermes` image can write the existing production mount — that cutover still needs the stopped-container `chown -R 10000:10000` and an attended start against the real mount.
 
 ## Testing the rollback rail
 

@@ -94,6 +94,9 @@ To change the voice: edit `SOUL.md` (or the `copywriting-fluncle` skill) in the 
 
 ```bash
 docker run -d --name hermes --restart unless-stopped \
+  --security-opt no-new-privileges --cap-drop ALL \
+  --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --cap-add KILL --cap-add SETGID --cap-add SETUID \
   --memory=4g --cpus=2 --shm-size=1g \
   --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
   -v ~/.hermes:/opt/data \
@@ -102,6 +105,7 @@ docker run -d --name hermes --restart unless-stopped \
 ```
 
 - **Never mount the Docker socket** — it would hand the agent host root and moot every file-permission control. No in-scope job needs it.
+- The capability allow-list is for the inherited s6 entrypoint only: it repairs `/opt/data` ownership, drops the main program to `hermes`, and supervises that process. The gateway needs no network, mount, setcap, or raw-socket capability.
 - For a Discord-only bot, publish **no** ports (the gateway dials out over the Discord WebSocket). If the API (`8642`) or dashboard (`9119`) is ever needed, bind to `127.0.0.1`/`tailscale0` only.
 - Disable Tailscale node-key expiry on the box (no public fallback → an expired key is a total lockout).
 
@@ -161,9 +165,9 @@ A chat reply is a live Fluncle surface. Before public exposure, the pinned model
 - The boundary is the **server-side role**: the box holds only the `agent`-scoped token, and publish-/irreversible-class actions are refused at the Worker for that role. The private no-public-TCP box shrinks the network surface.
 - Indirect prompt injection needs no compromised account (the agent browses untrusted web content) — but an injected `fluncle admin tracks publish …` is refused by the Worker no matter how it is dispatched (the CLI, raw `curl` with the printenv'd token), because the token is `agent`-scoped. There is no local wrapper to bypass; there is nothing the token can do that the server allows.
 - **Residual surface:** a fully-compromised root agent is bounded to the agent role — reads (incl. `enrich-queue`), analysis write-back (`track update`), a TikTok inbox draft. All reversible/internal, none public without the operator. Anyone on the Discord allow-list can trigger those same agent-allowed writes (not just reads); all publish-class is blocked for everyone but the operator. (The enrich sweep itself runs `--no-agent`, off the agent brain, so it is not part of this surface.)
-- The scoped credential is the publish boundary even while the agent runs as root. Non-root execution remains optional defense in depth.
+- The scoped credential remains the publish boundary. Every host-timer sweep already enters the container as `hermes`; the remaining root surface is the gateway container's s6 bootstrap, now bounded by `no-new-privileges` and a minimal capability allow-list. Removing that bootstrap privilege with `USER hermes` is a later attended change: stop the container, run `chown -R 10000:10000` over the `/opt/data` host directory, then start and verify the new image before restoring unattended self-deploys.
 - Back up `~/.hermes` as an encrypted/snapshot copy only (it holds `.env` + memory) — never a plaintext off-box tarball.
 
 ## Status
 
-Live for the internal crew: pinned image with the `fluncle` CLI (ungated; the Worker is the boundary); secrets via `op` → the root-owned secret env-file; Discord app online (both privileged intents, a tight allow-list); model pinned (`z-ai/glm-5.2`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. The publish boundary is server-side: the Worker rejects publish- and irreversible-class actions made with the box's agent-scoped token. Open (tracked in [ROADMAP.md](../planning/ROADMAP.md), now optional defense-in-depth rather than a public-readiness blocker): non-root-in-container hardening. The host-timer roster includes the pure sweeps, the hybrid note/observation/newsletter sweeps, and the render conductor. The gateway contains no automation jobs. The `/status` prober (`fluncle-healthcheck`) and the image self-deploy (`pin-watch`) run from host systemd timers, not the gateway.
+Live for the internal crew: pinned image with the `fluncle` CLI (ungated; the Worker is the boundary); secrets via `op` → the root-owned secret env-file; Discord app online (both privileged intents, a tight allow-list); model pinned (`z-ai/glm-5.2`); Fluncle voice via `SOUL.md` + the `copywriting-fluncle` skill, voice-gated. The publish boundary is server-side: the Worker rejects publish- and irreversible-class actions made with the box's agent-scoped token. The long-lived container has `no-new-privileges` plus a minimal s6 bootstrap capability allow-list; the attended `USER hermes` cutover remains tracked in [ROADMAP.md](../planning/ROADMAP.md). The host-timer roster includes the pure sweeps, the hybrid note/observation/newsletter sweeps, and the render conductor. The gateway contains no automation jobs. The `/status` prober (`fluncle-healthcheck`) and the image self-deploy (`pin-watch`) run from host systemd timers, not the gateway.

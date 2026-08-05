@@ -35,6 +35,18 @@ LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
 KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-2}"  # running + 1 rollback; each hermes image is ~10GB, so 4 fills the 38GB box
 SWEEP_DRAIN_TIMEOUT="${PINWATCH_SWEEP_DRAIN_TIMEOUT:-300}"  # max seconds to wait for an in-flight sweep to finish before the rebuild proceeds anyway
 
+# The inherited s6 bootstrap needs CHOWN/DAC_OVERRIDE/FOWNER for /opt/data, SETUID/SETGID to enter hermes, and KILL to supervise that uid.
+CONTAINER_SECURITY_ARGS=(
+  --security-opt no-new-privileges
+  --cap-drop ALL
+  --cap-add CHOWN
+  --cap-add DAC_OVERRIDE
+  --cap-add FOWNER
+  --cap-add KILL
+  --cap-add SETGID
+  --cap-add SETUID
+)
+
 MODE="--if-stale"
 case "${1:-}" in
   --force) MODE="--force" ;;             # rebuild regardless of drift (the operator pilot)
@@ -148,6 +160,13 @@ fi
 # a sweep (~daily). So before the first `docker build` we STOP the active sweep timers,
 # drain any sweep already mid-run, and GUARANTEE a restart via the EXIT trap.
 STOPPED_TIMERS=()
+GATEWAY_SMOKE_CONTAINER=""
+
+cleanup_gateway_smoke() {
+  [ -n "$GATEWAY_SMOKE_CONTAINER" ] || return 0
+  docker rm -f "$GATEWAY_SMOKE_CONTAINER" >/dev/null 2>&1 || true
+  GATEWAY_SMOKE_CONTAINER=""
+}
 
 # The rebake LOCK — the half of the quiesce that covers what stopping timers cannot: a
 # MANUAL `systemctl start fluncle-<job>.service` walking into the build/swap window. The
@@ -228,7 +247,7 @@ quiesce_sweeps() {
 
   # Arm the restart guard BEFORE stopping anything (compose with the ENVTMP cleanup
   # trap set in step 3), so every exit path from here restores the timers.
-  trap 'restore_sweep_timers; rm -f "$ENVTMP"' EXIT
+  trap 'cleanup_gateway_smoke; restore_sweep_timers; rm -f "$ENVTMP"' EXIT
 
   # Drop the rebake lock into the live container's /opt/data mount (resolved from the
   # container, never assumed — the script runs as root, `~` would be /root). Best-effort:
@@ -343,7 +362,7 @@ log "pins or baked content drifted (or --force) — rebuilding"
 OLD_IMAGE="$(docker inspect "$CONTAINER" --format '{{.Config.Image}}')"
 ENVTMP="$(mktemp -p "${XDG_RUNTIME_DIR:-/dev/shm}" pinwatch-env.XXXXXX)"
 chmod 600 "$ENVTMP"
-trap 'rm -f "$ENVTMP"' EXIT
+trap 'cleanup_gateway_smoke; rm -f "$ENVTMP"' EXIT
 comm -23 \
   <(docker inspect "$CONTAINER"  --format '{{range .Config.Env}}{{println .}}{{end}}' | sort) \
   <(docker inspect "$OLD_IMAGE"  --format '{{range .Config.Env}}{{println .}}{{end}}' | sort) \
@@ -387,19 +406,52 @@ docker build --build-arg FLUNCLE_BAKED_FP="$WANT_FP" -f "$REPO_DIR/$DOCKERFILE" 
 
 # ── 5. PRE-SMOKE the new image in throwaway containers (live box untouched) ────
 presmoke_fail() { alert "🛠️ pin-watch: PRE-SMOKE FAILED ($1) for $NEW_IMAGE — box untouched, staying on $OLD_IMAGE"; post_health degraded "a tool update failed validation; box untouched on the current tools"; die "pre-smoke failed: $1"; }
-GOT_FLUNCLE="$(docker run --rm --entrypoint fluncle "$NEW_IMAGE" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+GOT_FLUNCLE="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint fluncle "$NEW_IMAGE" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ "$GOT_FLUNCLE" = "$WANT_FLUNCLE" ] || presmoke_fail "fluncle version $GOT_FLUNCLE != $WANT_FLUNCLE"
-GOT_CLAUDE="$(docker run --rm --entrypoint claude "$NEW_IMAGE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+GOT_CLAUDE="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint claude "$NEW_IMAGE" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ "$GOT_CLAUDE" = "$WANT_CLAUDE" ] || presmoke_fail "claude version $GOT_CLAUDE != $WANT_CLAUDE"
 # gh (the nightly-audit agents' PR driver) must be present + runnable in the new image. It's a
 # manual-watch pin (not auto-bumped), so this just guards that a rebuild never ships a broken gh.
-docker run --rm --entrypoint gh "$NEW_IMAGE" --version >/dev/null 2>&1 || presmoke_fail "gh --version failed (audit PR driver missing)"
+docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint gh "$NEW_IMAGE" --version >/dev/null 2>&1 || presmoke_fail "gh --version failed (audit PR driver missing)"
 # agent-allowed read with the agent token + live API (expect ok:true)
-docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tracks enrich --queue --json --limit 1 2>/dev/null | grep -Eq '"ok" *: *true' || presmoke_fail "agent read did not return ok:true"
+docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin tracks enrich --queue --json --limit 1 2>/dev/null | grep -Eq '"ok" *: *true' || presmoke_fail "agent read did not return ok:true"
 # the server boundary: a publish-class command with the agent token MUST be refused
-if docker run --rm --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin add 'https://open.spotify.com/track/0000000000000000pinwatch' >/dev/null 2>&1; then
+if docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env-file "$ENVTMP" --entrypoint fluncle "$NEW_IMAGE" admin add 'https://open.spotify.com/track/0000000000000000pinwatch' >/dev/null 2>&1; then
   presmoke_fail "publish-class command was NOT refused (role boundary regression)"
 fi
+# Gateway startup without the live env or data mount: state lands on a scratch tmpfs and no
+# platform token exists, so no Discord connection can open. No config is mounted on purpose —
+# the s6 bootstrap SEEDS a default config into an empty HERMES_HOME (and Hermes rewrites its
+# config in place at boot, so a read-only bind here would EROFS the seeding path). Readiness is
+# asserted on observable state rather than a log string (the CLI's no-platform message is not
+# emitted on the `gateway run` path): the pid file `start_gateway` writes into HERMES_HOME,
+# plus the container still running after a settle. That proves image boot, the s6 bootstrap
+# (UID remap, volume chown, config seeding), the privilege drop, gateway imports, and
+# fresh-state writes under the production security flags.
+GATEWAY_SMOKE_CONTAINER="pinwatch-gateway-smoke-$$"
+docker run -d --name "$GATEWAY_SMOKE_CONTAINER" \
+  "${CONTAINER_SECURITY_ARGS[@]}" \
+  --tmpfs /opt/data:rw,noexec,nosuid,nodev,size=64m \
+  "$NEW_IMAGE" gateway run --no-supervise >/dev/null 2>&1 || presmoke_fail "tokenless gateway container did not start"
+gateway_smoke_ready=0
+for _ in $(seq 1 60); do
+  if docker exec "$GATEWAY_SMOKE_CONTAINER" test -s /opt/data/gateway.pid 2>/dev/null; then
+    gateway_smoke_ready=1
+    break
+  fi
+  [ "$(docker inspect "$GATEWAY_SMOKE_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ] || break
+  sleep 1
+done
+# Settle: a pid file alone could precede an early exit (e.g. the respawn-storm backoff path);
+# the gateway must still be up a beat later, and the scratch home must be hermes-writable.
+sleep 3
+if [ "$gateway_smoke_ready" != "1" ] \
+  || [ "$(docker inspect "$GATEWAY_SMOKE_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" != "true" ] \
+  || ! docker exec -u hermes "$GATEWAY_SMOKE_CONTAINER" test -w /opt/data; then
+  cleanup_gateway_smoke
+  presmoke_fail "tokenless gateway did not reach a running, hermes-writable state"
+fi
+cleanup_gateway_smoke
 # embed + cluster engines: prove the MuQ interpreter resolves + the whole stack imports, in a
 # hard-capped throwaway container. NOT a full forward — the box has zero swap and the live
 # container is up, so an uncapped MuQ load could OOM the live agent. This catches the actual
@@ -408,7 +460,7 @@ fi
 # import guard extends to them — a rebuild that ships a broken cluster stack fails pre-smoke
 # and rolls back. A hang (timeout) is treated as a pre-smoke failure so a wedged build can't swap.
 # shellcheck disable=SC2016  # single-quoted on purpose: $(readlink)/import run in the CONTAINER's sh, not the host
-timeout 120 docker run --rm --memory=3g --memory-swap=3g --entrypoint sh "$NEW_IMAGE" -c \
+timeout 120 docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --memory=3g --memory-swap=3g --entrypoint sh "$NEW_IMAGE" -c \
   'test -e "$(readlink -f /opt/muq-venv/bin/python)" && /opt/muq-venv/bin/python -c "import torch, muq, sklearn, scipy"' \
   >/dev/null 2>&1 || presmoke_fail "embed/cluster engine broken (interpreter/import)"
 log "pre-smoke passed"
@@ -425,6 +477,7 @@ run_container() {
   # and the newsletter slips to 17:00 Amsterdam (summer). Keep it pinned so every
   # auto-rebuild preserves 15:00 Amsterdam across the DST flip (see cron/README.md).
   docker run -d --name "$CONTAINER" --restart "${RESTART:-unless-stopped}" \
+    "${CONTAINER_SECURITY_ARGS[@]}" \
     --memory=4g --cpus=2 --shm-size=1g \
     -e TZ=Europe/Amsterdam \
     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
