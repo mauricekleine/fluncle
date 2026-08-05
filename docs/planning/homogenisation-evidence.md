@@ -8,6 +8,34 @@ One dated entry per observed occurrence: the artifact family (notes / observatio
 
 ## The ledger
 
+### 2026-08-05 · Covers — the family with no metric gets one (whole-corpus harness, first numbers)
+
+The 07-14 fix map's open item, closed on the measurement side: `judge:covers` (`packages/video/src/pipeline/measure-cover-diversity.ts`) measures the cover corpus all-pairs. A cover is a SEPARATELY rendered artifact — `render-cover.ts` composes the `<Cover>` still over a late footage frame — and both shipped image judges hard-code `poster.jpg`, which is exactly why nothing had ever looked at one. The harness is deliberately the other shape from those judges: whole-corpus rather than subject-vs-neighbours, and gate-free (exit 0 always, no writes, no generation path touched). It reuses the poster metric's `featureOf` + `diversityDistance` and palette-summary's closed hue-bucket vocabulary, so a cover number is comparable with a poster number instead of living in its own units.
+
+First run, live prod, 40 covers / 780 pairs (`bun run --cwd packages/video judge:covers -- --limit 40`):
+
+- **Mean pairwise distance 0.289** (min 0.078 — `047.6.5I ↔ 032.0.6R`; max 0.455). Every cover offered by the feed resolved; none unreachable.
+- **The headline is the component split: mean EDGE distance 0.031 across all 780 pairs**, against colour 0.849 and luma 0.501. The edge-orientation histogram is the structural fingerprint that carries 0.60 of the combined distance and is THE discriminator on posters — on covers it is a near-constant, because a cover's structure is the fixed `<Cover>` layout (the type block, the grid, the frame) and not the art underneath it. The metric that catches laundering-by-recolor on a poster is measuring almost nothing on a cover; what actually varies here is colour and tone.
+- **615 of 780 pairs sit under 0.35, and that number is an ARTIFACT rather than a verdict.** `DIVERSITY_MIN` was calibrated on posters (a same-primitive recolored pair against a genuinely distinct one); handing it a family whose structural axis is a designed constant guarantees a low combined score. The harness reports the count as "echoing pairs" in advisory vocabulary and says so in its own output — useful for comparing one cover run against the next, never for judging a cover.
+- **Palette spread is the honest good news: 8 of the 9 closed buckets are in use** across the 40 defining buckets — amber-warm 9, teal-cool 8, red-hot 6, magenta-cool 5, neutral-mono 5, green-cool 3, blue-cool 2, indigo-cool 1, yellow-warm 1. No basin: the amber concentration that condemned the 07-13 poster strip is not the cover corpus's shape (amber is 23% of covers, and the defining bucket is read from the most chromatic dominant swatch precisely so the near-black cosmos field cannot answer for the whole image).
+
+**What this adds to the fix map:** covers do not want the poster's structural question at all — their structure is fixed by the composition, so the answerable cover question is palette and tone, which the harness now reports directly. If a cover line is ever wanted it must be calibrated on covers.
+
+**Honesty note:** one run, no trend, and no counter-measure — this entry is a first number, not a fix. It reads the 40 most recent findings that carry a video; re-run the command for a fresh number as more covers ship.
+
+### 2026-08-05 · Sprites — a looking pass over all ten, and why there is no drift axis here
+
+The other never-observed family, looked at directly rather than measured: every PNG under `packages/sprites/assets/` opened and eyeballed — galaxy (asteroid, earth, roadster, ship, ufo), probes (probe, telescope), void (accretion, discman, event-horizon). That is n=10 and the complete roster; `SPRITES` in `packages/sprites/src/index.ts` is the closed list.
+
+- **There is no drift-over-time axis to measure.** The sprites are a fixed hand-curated roster committed to the repo, not an artifact regenerated per finding — no sweep authors one, and the corpus does not grow. Homogenisation as this ledger defines it (a generator sliding toward its own mean as it produces more) cannot occur here, so the absence of a metric is correct rather than a gap.
+- **The sameness that is present is the SPEC.** The package states the constraint outright — one family, one shared perspective, light, and palette, every asset quantized to the 17-colour canon ramp (`SPRITE_PALETTE`, mirroring DESIGN.md). A shared look across ten assets meant to sit in one game is the intended outcome.
+- **What still reads samey by eye, recorded for honesty:** `probes/probe` and `probes/telescope` are a matched pair beyond the shared ramp — same cream body with brass accents, same side-on mounting, same big-instrument-on-a-frame silhouette; at thumbnail size they are genuinely hard to tell apart. `void/accretion` and `void/event-horizon` share one filled-disc-with-a-ring silhouette, though there the two ARE the same object seen two ways. And 5 of the 10 are round silhouettes (earth, ufo, asteroid, accretion, event-horizon), which is subject-driven and noted rather than charged.
+- **No action proposed.** With a locked family and n=10 the probe/telescope rhyme is a taste call for whenever a sprite is next re-cut, not evidence of a drifting generator.
+
+### 2026-08-05 · Clip captions — closed: a fixed template has no drift surface
+
+`buildCaption` (`packages/video/src/pipeline/caption.ts`) assembles a deterministic fixed template from stored facts — `Artist — Title (Year)`, the label, `Found <date>: fluncle://<logId>`, a constant hashtag base — with no model anywhere in the path, so every caption is identical by design in everything but its data and the family has nothing that can drift. Closed, not watched.
+
 ### 2026-07-18 · Observations — the REPAIR BATCH (36 re-renders, −67% echoing pairs), and the second-order attractor it exposed
 
 The pre-rail observation corpus was repaired in place (operator-approved): the worst offenders re-authored under the rails and force re-rendered (`observe_track --force`), selected by greedy cover over the echo graph (the gate's own `scoreNoteEcho`, pairwise over all 78 stored scripts, computed from the public `observation.json` corpus).
@@ -114,5 +142,5 @@ Learned during the video-overhaul and batch-render runs, written down before thi
 
 ## What the ledger still wants
 
-- **A metric per family.** Notes have `scoreNoteEcho`; observations, newsletter why-lines, the context-note Texture vocabulary, and the stored video axes are all one harness command as of the 07-18 after-numbers entry; videos additionally carry the palette-histogram gate + a per-render palette tag (exactly the check that would have caught the 07-13 strip). Covers and sprites still have nothing. "An anti-sameness effort with no metric is folklore" (ROADMAP).
-- **Entries from families not yet observed** (covers, sprites, clip captions) — absence of evidence there is so far just absence of looking.
+- **A metric per family.** Notes have `scoreNoteEcho`; observations, newsletter why-lines, the context-note Texture vocabulary, and the stored video axes are all one harness command as of the 07-18 after-numbers entry; videos additionally carry the palette-histogram gate + a per-render palette tag (exactly the check that would have caught the 07-13 strip). Covers have one as of the 08-05 entry (`judge:covers`, whole-corpus and advisory — with the caveat written into it that the poster-calibrated 0.35 floor does not transfer to covers). Sprites have none and want none: a locked ten-asset roster nothing regenerates has no drift to catch. "An anti-sameness effort with no metric is folklore" (ROADMAP).
+- **Families never looked at: none left.** The last three — covers, sprites, clip captions — all have entries as of 08-05: covers measured, sprites looked at and ruled an intentionally locked family, captions closed as a fixed template with no model in the path. What remains is re-measurement, and the entries name their own: the newsletter at ≥4 sent editions, and a second `judge:covers` run once a meaningful batch of new covers has shipped.
