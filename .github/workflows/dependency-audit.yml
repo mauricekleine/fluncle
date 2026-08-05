@@ -1,21 +1,21 @@
 name: Dependency Audit
 
-# Dependabot does not parse bun.lock, so its clean alert queue misses advisories
-# that Bun can see. This workflow closes that blind spot.
+# Dependabot does not parse bun.lock, so its alert queue misses advisories that
+# Bun can see. This workflow closes that blind spot.
 #
-# This is deliberately REPORT-ONLY: advisory drift can turn main red without a
-# code change, and known findings tend to sit in transitive dev/build tooling,
-# some behind deliberate Renovate holds. The `--ignore` allowlist lives in the
+# This check is BLOCKING: a non-allowlisted advisory at or above `high` fails it.
+# Advisory drift can therefore redden a branch with no code change behind it —
+# that is the point, and the fix is a parent bump or a newly justified allowlist
+# entry, never a quiet threshold change. The `--ignore` allowlist lives in the
 # root `audit` script (package.json) so local runs and CI report the same set;
-# every entry's justification, the severity policy, and the blocking-flip
-# procedure live in the fluncle-maintenance skill (packages/skills/
-# fluncle-maintenance, "Dependency vulnerability posture"). To make this
-# blocking (operator): drain the remaining non-allowlisted high advisories via
-# parent bumps, then remove continue-on-error.
+# every entry's justification and the severity policy live in the
+# fluncle-maintenance skill (packages/skills/fluncle-maintenance, "Dependency
+# vulnerability posture"). Marking this check REQUIRED is a separate branch
+# protection setting, not a change to this file.
 #
 # `bun audit` reads bun.lock directly, so this job does not need an install step.
-# The registry request is reported separately from findings so an npm availability
-# failure cannot masquerade as a security result.
+# The summary step runs even when the audit fails, and reports a registry
+# availability failure separately from findings so the two are never confused.
 
 on:
   pull_request:
@@ -47,26 +47,34 @@ jobs:
         with:
           bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
 
-      - name: Audit dependencies (report only)
-        continue-on-error: true
-        run: |
-          set +e
-          audit_output="${RUNNER_TEMP}/bun-audit.json"
-          audit_error="${RUNNER_TEMP}/bun-audit.stderr"
-          bun run audit -- --json > "$audit_output" 2> "$audit_error"
-          audit_status=$?
-          set -e
+      - name: Audit dependencies
+        id: audit
+        env:
+          AUDIT_OUTPUT: ${{ runner.temp }}/bun-audit.json
+          AUDIT_ERROR: ${{ runner.temp }}/bun-audit.stderr
+        run: bun run audit -- --json > "$AUDIT_OUTPUT" 2> "$AUDIT_ERROR"
 
+      - name: Report audit findings
+        if: always() && steps.audit.outcome != 'skipped'
+        env:
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+          AUDIT_OUTPUT: ${{ runner.temp }}/bun-audit.json
+          AUDIT_ERROR: ${{ runner.temp }}/bun-audit.stderr
+        run: |
           {
             echo "## Dependency audit"
             echo
-            echo "This workflow is report-only. Findings do not block merges or turn \`main\` red."
+            echo "This check blocks. A non-allowlisted advisory at or above \`high\` fails it."
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if jq -e 'type == "object" and all(.[]; type == "array")' "$audit_output" > /dev/null 2>&1; then
+          if [ ! -s "$AUDIT_OUTPUT" ] && [ "$AUDIT_OUTCOME" = "success" ]; then
+            # A clean `bun audit --json` prints nothing at all, so an empty file on a
+            # passing step is the all-clear — not a malformed advisory response.
+            echo "No advisories at or above the threshold. Nothing to report." >> "$GITHUB_STEP_SUMMARY"
+          elif jq -e 'type == "object" and all(.[]; type == "array")' "$AUDIT_OUTPUT" > /dev/null 2>&1; then
             {
-              echo "The npm advisory response parsed successfully (audit exit code: \`$audit_status\`)."
+              echo "The npm advisory response parsed successfully (audit outcome: \`$AUDIT_OUTCOME\`)."
               echo
               echo "| Severity | Advisories |"
               echo "| --- | ---: |"
@@ -74,23 +82,19 @@ jobs:
                 [.. | objects | .severity? | select(type == "string") | ascii_downcase] as $severities
                 | ["critical", "high", "moderate", "low"][] as $severity
                 | "| \(($severity[0:1] | ascii_upcase) + $severity[1:]) | \([$severities[] | select(. == $severity)] | length) |"
-              ' "$audit_output"
-              echo
-              echo "Configured blocking threshold: \`high\` (currently observed only; the step is non-blocking)."
+              ' "$AUDIT_OUTPUT"
             } >> "$GITHUB_STEP_SUMMARY"
           else
             {
-              echo "The npm registry request did not return a valid advisory response (audit exit code: \`$audit_status\`). This is an audit availability failure, not a security finding."
+              echo "The npm registry request did not return a valid advisory response (audit outcome: \`$AUDIT_OUTCOME\`). This is an audit availability failure, not a security finding."
               echo
               echo "<details><summary>Raw audit output (first 200 lines per stream)</summary>"
               echo
               echo '````text'
-              sed -n '1,200p' "$audit_error"
-              sed -n '1,200p' "$audit_output"
+              sed -n '1,200p' "$AUDIT_ERROR"
+              sed -n '1,200p' "$AUDIT_OUTPUT"
               echo '````'
               echo
               echo "</details>"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-
-          exit "$audit_status"
