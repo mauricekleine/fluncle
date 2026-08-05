@@ -58,8 +58,8 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "go:check": "turbo run lint format:check --filter=@fluncle/ssh --filter=@fluncle/dns",
-    "lint": "oxlint --ignore-path .prettierignore --type-aware --deny-warnings --report-unused-disable-directives",
-    "lint:fix": "oxlint --fix --ignore-path .prettierignore --type-aware --deny-warnings --report-unused-disable-directives",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
     "skills:install": "bun run scripts/install-skills.ts",
     "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
@@ -86,8 +86,10 @@
   },
   "lint-staged": {
     "*": [
-      "oxlint --fix --ignore-path .prettierignore --no-error-on-unmatched-pattern --deny-warnings",
       "oxfmt --write --ignore-path .prettierignore --no-error-on-unmatched-pattern"
+    ],
+    "**/*.{js,jsx,ts,tsx}": [
+      "oxlint --fix"
     ]
   },
   "engines": {

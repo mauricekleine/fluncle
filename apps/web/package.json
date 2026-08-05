@@ -21,7 +21,7 @@
     "deploy:cf": "bun run db:migrate && bun run db:backfill && wrangler deploy && bun scripts/purge-edge-cache.ts && bun run db:migrate:telemetry",
     "dev": "bun run scripts/dev.ts",
     "dev:vite": "bun run scripts/copy-sprites.ts && vite dev --host 127.0.0.1 --port 3000",
-    "lint": "oxlint --ignore-path ../../.prettierignore --type-aware --deny-warnings",
+    "lint": "oxlint",
     "postinstall": "fumadocs-mdx",
     "preview": "bun run build && wrangler dev",
     "probe": "bun run scripts/post-deploy-probe.ts",
