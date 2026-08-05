@@ -14,8 +14,15 @@ name: Dependency Audit
 # protection setting, not a change to this file.
 #
 # `bun audit` reads bun.lock directly, so this job does not need an install step.
-# The summary step runs even when the audit fails, and reports a registry
-# availability failure separately from findings so the two are never confused.
+#
+# The two steps below are deliberately two invocations, and they are not
+# interchangeable. `bun audit --json` silently ignores BOTH --audit-level and
+# --ignore: it dumps every advisory at every severity, allowlisted ones included,
+# and exits non-zero whenever it finds any. Its exit status therefore says
+# nothing about policy and must never be the gate. So the report step runs JSON
+# for its severity table, and the gate step runs the plain `audit` script that
+# actually carries the policy. Reporting goes first so a red gate always arrives
+# with its table already attached.
 
 on:
   pull_request:
@@ -47,35 +54,28 @@ jobs:
         with:
           bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
 
-      - name: Audit dependencies
-        id: audit
-        env:
-          AUDIT_OUTPUT: ${{ runner.temp }}/bun-audit.json
-          AUDIT_ERROR: ${{ runner.temp }}/bun-audit.stderr
-        run: bun run audit -- --json > "$AUDIT_OUTPUT" 2> "$AUDIT_ERROR"
-
       - name: Report audit findings
-        if: always() && steps.audit.outcome != 'skipped'
         env:
-          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
-          AUDIT_OUTPUT: ${{ runner.temp }}/bun-audit.json
           AUDIT_ERROR: ${{ runner.temp }}/bun-audit.stderr
+          AUDIT_OUTPUT: ${{ runner.temp }}/bun-audit.json
         run: |
+          # Reporting only — this step never gates, so its status is captured rather
+          # than raised. `bun audit --json` exits non-zero on any finding at any
+          # severity and honours neither the threshold nor the allowlist.
+          json_status=0
+          bun audit --json > "$AUDIT_OUTPUT" 2> "$AUDIT_ERROR" || json_status=$?
+
           {
             echo "## Dependency audit"
             echo
-            echo "This check blocks. A non-allowlisted advisory at or above \`high\` fails it."
+            echo "Every advisory Bun can see, at every severity, allowlisted entries included. The gate is the next step — \`bun run audit\`, which applies \`--audit-level=high\` minus the \`--ignore\` allowlist. Counts here can be non-zero on a passing check."
             echo
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ ! -s "$AUDIT_OUTPUT" ] && [ "$AUDIT_OUTCOME" = "success" ]; then
-            # A clean `bun audit --json` prints nothing at all, so an empty file on a
-            # passing step is the all-clear — not a malformed advisory response.
-            echo "No advisories at or above the threshold. Nothing to report." >> "$GITHUB_STEP_SUMMARY"
+          if [ ! -s "$AUDIT_OUTPUT" ] && [ "$json_status" -eq 0 ]; then
+            echo "No advisories at any severity. Nothing to report." >> "$GITHUB_STEP_SUMMARY"
           elif jq -e 'type == "object" and all(.[]; type == "array")' "$AUDIT_OUTPUT" > /dev/null 2>&1; then
             {
-              echo "The npm advisory response parsed successfully (audit outcome: \`$AUDIT_OUTCOME\`)."
-              echo
               echo "| Severity | Advisories |"
               echo "| --- | ---: |"
               jq -r '
@@ -86,7 +86,7 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           else
             {
-              echo "The npm registry request did not return a valid advisory response (audit outcome: \`$AUDIT_OUTCOME\`). This is an audit availability failure, not a security finding."
+              echo "The npm registry request did not return a valid advisory response. This is an audit availability failure, not a security finding — read the gate step below for the verdict."
               echo
               echo "<details><summary>Raw audit output (first 200 lines per stream)</summary>"
               echo
@@ -98,3 +98,8 @@ jobs:
               echo "</details>"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # The gate. Its exit code is this check. Never add `--json` here — see the
+      # header comment: JSON mode discards the threshold and the allowlist.
+      - name: Audit dependencies
+        run: bun run audit
