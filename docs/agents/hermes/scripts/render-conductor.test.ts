@@ -266,7 +266,7 @@ describe("await_box_ready", () => {
 
   test("a box that answers straight away never logs a duration across a clock boundary", () => {
     const tick = runTick({
-      nowSequence: [4070908800, 4070908800, 4070908801, 4070908801],
+      nowSequence: [4070908800, 4070908800, 4070908800, 4070908801],
       restoringCalls: 0,
     });
 
