@@ -62,9 +62,11 @@ Monitoring, not work. Collapsed here so it stops occupying build sections.
 
 ## Next — freeze-safe work: reliability, hygiene, and the overhaul's prerequisites
 
-### Dependency vulnerability posture — both feeds live, two accepted survivors
+### Dependency vulnerability posture — two operator toggles left
 
-Both halves of the watch are running: Dependabot (0 open) and the report-only `bun audit` CI workflow (`dependency-audit.yml` — PRs, main pushes, weekly), which covers the `bun.lock` transitive surface Dependabot cannot parse. The lockfile-regeneration pass drained its queue to **two accepted survivors**: sharp (miniflare pins it exact; arrives with routine wrangler bumps) and adm-zip (unreachable — unpacks only onnxruntime's own archives at install; the documented `--ignore` candidate). What is ahead: the standing policy — what severity auto-merges, what waits for `minimumReleaseAge`, and who reads the two feeds — and the operator's blocking-flip decision (triage survivors into a justified `--ignore` allowlist, drop `continue-on-error`, optionally mark the check required — a PR-gate contract change).
+Both feeds are live and the policy that reads them is written down. The standing severity ladder (reachability first), the justified `--ignore` allowlist and its two entries, and the rule for each feed live in the `fluncle-maintenance` skill under "Dependency vulnerability posture"; the allowlist itself lives in the root `audit` script so a local run and CI report the same residual set. That residual is clean: `bun run audit` exits 0 at `--audit-level=high` against sharp (unforceable from this tree while miniflare pins it exact) and adm-zip (unreachable — it unpacks only onnxruntime's own archives at install). Dependabot's whole feed here is `.deepsec/pnpm-lock.yaml`, the one manifest it can parse — a local scanner workspace, never deployed, drained by the maintenance pass like any other chain.
+
+What is left is exactly two operator toggles, both PR-gate contract changes rather than code. Dropping `continue-on-error` from `dependency-audit.yml` — the diff is open and held at [#1129](https://github.com/mauricekleine/fluncle/pull/1129), and after it an upstream advisory can redden a branch with no commit behind it. Then, optionally, marking "Audit bun.lock dependencies" a required check in branch protection, which is the toggle that actually makes it stop a merge.
 
 ### Housekeeping follow-ups — operator decisions pending (2026-07-26 sweep)
 
