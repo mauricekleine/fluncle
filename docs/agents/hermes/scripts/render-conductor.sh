@@ -354,7 +354,7 @@ render_produced_video() {
 BOX_READY_TIMEOUT="${BOX_READY_TIMEOUT:-75}"  # max seconds to wait out a restoring box
 BOX_READY_INTERVAL="${BOX_READY_INTERVAL:-5}" # seconds between readiness probes
 await_box_ready() {
-  local id="$1" out rc began waited
+  local id="$1" out rc began waited saw_restore=0
   [ -n "$id" ] || return 1
   began="$(now)"
   while :; do
@@ -362,7 +362,7 @@ await_box_ready() {
     rc=$?
     waited="$(($(now) - began))"
     if [ "$rc" = "0" ]; then
-      [ "$waited" -gt 0 ] && log "box $id ready after ${waited}s"
+      [ "$saw_restore" = "1" ] && log "box $id ready after ${waited}s"
       return 0
     fi
     printf '%s\n' "$out" >>"$LOG_FILE"
@@ -370,6 +370,7 @@ await_box_ready() {
       log "box $id readiness probe failed with something other than a restore (rc=$rc) — proceeding"
       return 1
     fi
+    saw_restore=1
     if [ "$waited" -ge "$BOX_READY_TIMEOUT" ]; then
       log "box $id still restoring after ${waited}s — giving up the wait"
       return 1

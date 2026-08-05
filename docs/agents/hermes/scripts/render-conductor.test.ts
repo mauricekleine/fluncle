@@ -33,6 +33,7 @@ const QUEUE_HEAD = "001.1.1A";
 type Tick = {
   doneResult?: string;
   initialState?: "idle" | "rendering";
+  nowSequence?: readonly number[];
   queueExitCode?: number;
   queueResponse?: string;
   queueStderr?: string;
@@ -105,6 +106,14 @@ if [ "\${1:-}" = "-u" ] && [ "\${2:-}" = "-d" ]; then
   printf '4070908800\\n'
   exit 0
 fi
+if [ "\${1:-}" = "+%s" ] && [ -f "$STUB_DIR/now-sequence" ]; then
+  index="$(cat "$STUB_DIR/now-index" 2>/dev/null || printf 1)"
+  value="$(sed -n "\${index}p" "$STUB_DIR/now-sequence")"
+  [ -n "$value" ] || value="$(tail -n 1 "$STUB_DIR/now-sequence")"
+  printf '%s\\n' "$value"
+  printf '%s\\n' "$((index + 1))" >"$STUB_DIR/now-index"
+  exit 0
+fi
 exec /bin/date "$@"
 `;
 
@@ -122,6 +131,7 @@ function write(path: string, body: string) {
 function runTick({
   doneResult = "",
   initialState = "idle",
+  nowSequence = [],
   queueExitCode = 0,
   queueResponse = `{"ok":true,"tracks":[{"logId":"${QUEUE_HEAD}"}]}`,
   queueStderr = "",
@@ -137,6 +147,9 @@ function runTick({
     mkdirSync(stateDir, { recursive: true });
     mkdirSync(stub, { recursive: true });
     writeFileSync(join(stub, "restoring"), String(restoringCalls));
+    if (nowSequence.length > 0) {
+      writeFileSync(join(stub, "now-sequence"), `${nowSequence.join("\n")}\n`);
+    }
     write(join(stub, "box"), BOX_STUB);
     write(join(stub, "date"), DATE_STUB);
     write(join(stub, "fluncle"), FLUNCLE_STUB);
@@ -209,10 +222,14 @@ function lastJsonLine(stdout: string): Record<string, unknown> {
 
 describe("await_box_ready", () => {
   test("a box that restores and then answers renders, and is never condemned", () => {
-    const tick = runTick({ readyTimeout: 30, restoringCalls: 2 });
+    const tick = runTick({
+      nowSequence: [4070908800, 4070908800, 4070908800, 4070908801, 4070908802, 4070908802],
+      readyTimeout: 30,
+      restoringCalls: 2,
+    });
 
     expect(tick.log).toContain(`box ${BOX_ID} restoring — waiting`);
-    expect(tick.log).toMatch(/box box-under-test ready after \d+s/);
+    expect(tick.log).toContain(`box ${BOX_ID} ready after 2s`);
     // The bug: this tick used to end here instead.
     expect(tick.log).not.toContain("condemned");
     expect(tick.orphans.trim()).toBe("");
@@ -247,8 +264,11 @@ describe("await_box_ready", () => {
     });
   });
 
-  test("a box that answers straight away waits for nothing", () => {
-    const tick = runTick({ restoringCalls: 0 });
+  test("a box that answers straight away never logs a duration across a clock boundary", () => {
+    const tick = runTick({
+      nowSequence: [4070908800, 4070908800, 4070908801, 4070908801],
+      restoringCalls: 0,
+    });
 
     expect(tick.log).not.toContain("restoring");
     expect(tick.log).not.toContain("ready after");
