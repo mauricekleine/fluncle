@@ -423,10 +423,12 @@ export type ArtistHubEntry = {
 };
 
 /** The ARTISTS hub's `?page=N` + A–Z reads, over every floor-clearing artist (certified + catalogue). */
-const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
+export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
   alias: "a",
   entity: "artists a",
   floor: ARTIST_INDEX_MIN_FINDINGS,
+  hub: "artists",
+  idExpr: "a.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     // The OWNED avatar master (RFC U3b) when resolved, else the raw Spotify image_url.
@@ -473,6 +475,8 @@ const ARTISTS_BROWSE_QUERY: CatalogueBrowseQuery = {
   alias: ARTISTS_HUB_QUERY.alias,
   entity: ARTISTS_HUB_QUERY.entity,
   floor: ARTISTS_HUB_QUERY.floor,
+  hub: ARTISTS_HUB_QUERY.hub,
+  idExpr: ARTISTS_HUB_QUERY.idExpr,
   nameExpr: "a.name",
   slugExpr: ARTISTS_HUB_QUERY.slugExpr,
 };

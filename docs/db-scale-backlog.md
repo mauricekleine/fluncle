@@ -151,14 +151,14 @@ The consumer half shipped in ONE PR because the rewrite alone is plan-neutral (a
 - residual: an artist with SOME edges but not all reads what the graph holds (which is what `/artist/<slug>`'s catalogue list already shows); the `fluncle-artist-edges` + `fluncle-artist-credits` crons are what converge it.
 - proof still owed: hosted-scratch p50 + EXPLAIN on the three seeks vs the scans they replace, at 150k.
 
-**3. tracks-hub numbered pager: keyset/seek pagination for the deep tail** · **needs hosted proof**
+**3. tracks-hub numbered pager: keyset/seek pagination for the deep tail** · **entity plans need hosted proof**
 `tier=design · tracks · T6, T1`
-**STATUS: DESIGN — recommended, pending a decision.**
+**STATUS: BUILT (2026-08-06); the crawler incident depth is hosted-proven, and the entity-hub plans remain the pre-merge gate.**
 
-- loc: apps/web/src/lib/server/tracks-hub.ts:445 (tracksHubIdPageQuery), executed :507
-- shape: Numbered ?page=N via OFFSET over the whole archive: 48k→~1000 pages now, 150k→~3100 pages; a crawler following the pager to the tail walks up to ~144k index entries per request (O(offset)). The hosted ship-bench only proved 25k / offset ~20k unfiltered — 150k tails + a non-sargable filter were never proven.
-- impact: MEDIUM-HIGH — the crawler-facing pagination scale wall.
-- fix: Give the crawl-facing deep tail keyset/seek pagination: a cursor on (release_date, track_id) with `where (release_date, track_id) < (?, ?)` rides tracks_release_date_idx with zero offset walk; or cap max reachable ?page and route the tail through year-lane jumps + filters. If numbered OFFSET is kept as a deliberate choice, re-prove at 150k WITH a non-sargable filter active.
+- incident evidence: Googlebot's `/tracks?page=1815` bare-id slice (`limit 48 offset 87072`) took 5,847 ms hosted and crossed the origin timeout under load; the replacement seek from `(release_date, track_id)` took 33 ms at the same depth and its hosted plan was `MULTI-INDEX OR` over `tracks_release_date_idx`.
+- built: `hub-page-anchors.ts` owns one order spelling across SQL window extraction, offset, and seek; a 450-row shallow threshold; nearest-anchor remainder math; the release-date NULL zone; compact persisted unfiltered anchors keyed by `(hub, clause_hash)`; cheap count + first-id fingerprints; and best-effort detached refresh. `/tracks` uses persisted anchors for its unfiltered crawler highway and exact-clause in-isolate anchors for filtered deep pages. `/labels`, `/albums`, and `/artists` use the same primitive for their unfiltered hub and browse pagers; their seek is a single gated-CTE consumer rather than `union all` branches.
+- drift contract: stale anchors serve immediately, and the remainder keeps pages beyond the stored tail reachable; concurrent corpus changes can move rows between adjacent numbered pages until refresh, but the numbered URL space and past-end 404 behavior are unchanged.
+- re-runnable proof: with the scratch-db pair (`SCRATCH_TURSO_DATABASE_URL` and its auth token) exported, `BENCH_CATALOGUE=100000 BENCH_ENTITIES=25000 bun run apps/web/scripts/bench-tracks-hub.ts --seek-vs-offset` measures deep unfiltered and filtered track offsets vs seeks, both anchor extractions, and the hub + browse shapes for labels/albums/artists with EXPLAIN plans. Before merge, prove each entity seek still stays inside the intended gated scan on hosted Turso; local libSQL is correctness evidence only.
 
 **4. Capture worklist: split the finding∨catalogue OR into two ordered streams merged in the isolate** · **needs hosted proof**
 `tier=design · tracks · T1, T6, T3`

@@ -4264,3 +4264,20 @@ export const exchangeRates = sqliteTable("exchange_rates", {
   ratesDate: text("rates_date").notNull(),
   ratesJson: text("rates_json").notNull(),
 });
+
+// The sparse seek boundaries behind the public numbered hub pagers. One compact JSON document per
+// exact `(hub, clause-set)` shape keeps every boundary read to a single small PK lookup; filtered
+// `/tracks` combinations stay in-isolate and never enter this table. `fingerprint` detects corpus
+// drift without hashing or reading the corpus, while `computed_at` is operational evidence rather
+// than an expiry gate — stale boundaries remain usable as a nearest-anchor + offset remainder.
+export const hubPageAnchors = sqliteTable(
+  "hub_page_anchors",
+  {
+    anchorsJson: text("anchors_json").notNull(),
+    clauseHash: text("clause_hash").notNull(),
+    computedAt: text("computed_at").notNull(),
+    fingerprint: text("fingerprint").notNull(),
+    hub: text("hub").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.hub, table.clauseHash] })],
+);

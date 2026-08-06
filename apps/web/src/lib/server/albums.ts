@@ -550,10 +550,12 @@ export type AlbumHubEntry = {
 };
 
 /** The ALBUMS hub's `?page=N` read, over every floor-clearing record (certified + catalogue). */
-const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
+export const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
   alias: "albums",
   entity: "albums",
   floor: ALBUM_INDEX_MIN_TRACKS,
+  hub: "albums",
+  idExpr: "albums.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     coverImageUrl: albumCover(row),
@@ -598,6 +600,8 @@ const ALBUMS_BROWSE_QUERY: CatalogueBrowseQuery = {
   alias: ALBUMS_HUB_QUERY.alias,
   entity: ALBUMS_HUB_QUERY.entity,
   floor: ALBUMS_HUB_QUERY.floor,
+  hub: ALBUMS_HUB_QUERY.hub,
+  idExpr: ALBUMS_HUB_QUERY.idExpr,
   nameExpr: "albums.name",
   slugExpr: ALBUMS_HUB_QUERY.slugExpr,
 };

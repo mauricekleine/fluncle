@@ -9,9 +9,8 @@
  * credentials for a throwaway database, which are operator-only. `turso dev` is NOT evidence here —
  * docs/local-database.md "Local is not production": the exact behaviours that decide whether a
  * growing-table scan survives (the index-vs-scan plan, a correlated re-scan) diverge between sqld
- * and hosted, and the local one is misleading in the DANGEROUS direction. An agent may (and this
- * build did) self-check the SQL shapes against local `turso dev` for CORRECTNESS only — never for a
- * performance number.
+ * and hosted, and the local one is misleading in the DANGEROUS direction. An agent may self-check
+ * the SQL shapes against local `turso dev` for CORRECTNESS only — never for a performance number.
  *
  * ── WHAT IT MEASURES ──────────────────────────────────────────────────────────
  *   1. A 25k-catalogue-row archive (+ a few thousand findings) with realistic release_date / bpm /
@@ -35,8 +34,11 @@
  *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
  *   bun run apps/web/scripts/bench-tracks-hub.ts
  *
+ * Seek-vs-offset proof (deep unfiltered + filtered tracks, anchor extraction, and all entity hub
+ * + browse shapes): append `--seek-vs-offset`.
+ *
  * Optional env (seed volumes — dial down for a faster smoke, up for the real gate):
- *   BENCH_CATALOGUE=25000   BENCH_FINDINGS=2000   BENCH_ITERATIONS=12
+ *   BENCH_CATALOGUE=25000   BENCH_FINDINGS=2000   BENCH_ENTITIES=25000   BENCH_ITERATIONS=12
  *
  * The operator CREATES the scratch DB before, and DESTROYS it after — this script only measures. It
  * NEVER points at `fluncle` or `fluncle-dev` (it refuses a URL containing either name as a guard).
@@ -47,16 +49,30 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
 
 import { ensureSearchIndex } from "../src/db/search-index";
+import { ALBUMS_HUB_QUERY } from "../src/lib/server/albums";
+import { ARTISTS_HUB_QUERY } from "../src/lib/server/artists";
+import { hubPageAnchorsFromRows } from "../src/lib/server/hub-page-anchors";
+import {
+  CATALOGUE_HUB_DEFAULT_LIMIT,
+  CATALOGUE_BROWSE_PAGE_SIZE,
+  LABELS_HUB_QUERY,
+  catalogueEntityAnchorExtractionQuery,
+  catalogueEntityOffsetPageQuery,
+  catalogueEntitySeekPageQuery,
+} from "../src/lib/server/labels";
 import {
   TRACKS_HUB_PAGE_SIZE,
+  tracksHubAnchorExtractionQuery,
   tracksHubCountQuery,
   tracksHubHydrateQuery,
   tracksHubIdPageQuery,
+  tracksHubSeekIdPageQuery,
   tracksHubYearLaneQuery,
 } from "../src/lib/server/tracks-hub";
 
 /** The absolute ship-gate budget — every hub query shape's p50 must be under this, hosted. */
 const BUDGET_MS = 800;
+const ANCHOR_BUILD_BUDGET_MS = 2_500;
 
 // The 24 canonical scale spellings (mirrors the hub's KEY_FILTER_OPTIONS) — the realistic key domain.
 const KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"].flatMap((pitch) => [
@@ -89,7 +105,9 @@ if (/fluncle(-dev)?\b/.test(url) || url.includes("127.0.0.1") || url.startsWith(
 
 const catalogueCount = envInt("BENCH_CATALOGUE", 25_000);
 const findingsCount = envInt("BENCH_FINDINGS", 2_000);
+const entityCount = envInt("BENCH_ENTITIES", 25_000);
 const iterations = envInt("BENCH_ITERATIONS", 12);
+const seekVsOffset = process.argv.includes("--seek-vs-offset");
 
 const client = createClient({ authToken, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
@@ -207,6 +225,47 @@ async function seedFindings(count: number): Promise<void> {
   process.stdout.write("\n");
 }
 
+/** Seed the three small entity tables with identical alphabetical depth and a passing hub gate. */
+async function seedEntities(count: number): Promise<void> {
+  const chunk = 300;
+
+  for (let start = 0; start < count; start += chunk) {
+    const end = Math.min(count, start + chunk);
+    const statements = [];
+
+    for (let index = start; index < end; index += 1) {
+      const suffix = String(index).padStart(6, "0");
+      const now = "2026-01-01T00:00:00.000Z";
+
+      statements.push(
+        {
+          args: [`label-${suffix}`, `Label ${suffix}`, `label-${suffix}`, now, now],
+          sql: `insert or ignore into labels
+                (id, name, slug, created_at, updated_at, renderable_track_count)
+                values (?, ?, ?, ?, ?, 3)`,
+        },
+        {
+          args: [`album-${suffix}`, `Album ${suffix}`, `album-${suffix}`, now, now],
+          sql: `insert or ignore into albums
+                (id, name, slug, created_at, updated_at, renderable_track_count)
+                values (?, ?, ?, ?, ?, 3)`,
+        },
+        {
+          args: [`artist-${suffix}`, `Artist ${suffix}`, `artist-${suffix}`, now, now],
+          sql: `insert or ignore into artists
+                (id, name, slug, created_at, updated_at, renderable_track_count)
+                values (?, ?, ?, ?, ?, 3)`,
+        },
+      );
+    }
+
+    await client.batch(statements, "write");
+    process.stdout.write(`\r  entities ${end}/${count}`);
+  }
+
+  process.stdout.write("\n");
+}
+
 /** A libSQL cell → string (a raw `Value` may be an object), for the EXPLAIN dump. */
 function cell(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
@@ -218,6 +277,16 @@ async function explain(sql: string, args: (number | string)[]): Promise<string> 
   return result.rows.map((row) => cell(row.detail)).join("\n      ");
 }
 
+type BenchShape = {
+  args: (number | string)[];
+  /** Override for background window builds; request-path reads use the default budget. */
+  budgetMs?: number;
+  /** Baseline offsets are comparisons, not ship gates. */
+  gate?: boolean;
+  name: string;
+  sql: string;
+};
+
 async function main(): Promise<void> {
   console.log("bench-tracks-hub — applying migrations to the scratch DB…");
   await migrate(drizzle(client), { migrationsFolder });
@@ -227,6 +296,11 @@ async function main(): Promise<void> {
   await seedCatalogue(catalogueCount);
   console.log(`Seeding ${findingsCount} findings…`);
   await seedFindings(findingsCount);
+
+  if (seekVsOffset) {
+    console.log(`Seeding ${entityCount} rows into each entity hub…`);
+    await seedEntities(entityCount);
+  }
 
   // The numbered-page model (the 2026-07-19 late-row-lookup follow-up): step 1 pages the bare ids
   // (`limit ? offset ?`, no SELECT-list subqueries — the shape the OFFSET walk pays), step 2
@@ -245,9 +319,13 @@ async function main(): Promise<void> {
   // wants only the SQL + its args.
   const yearLane = tracksHubYearLaneQuery({});
 
-  const shapes: { args: (number | string)[]; name: string; sql: string }[] = [
+  const shapes: BenchShape[] = [
     { name: "id page 1 (unfiltered)", ...tracksHubIdPageQuery({}, limit, 0) },
-    { name: `id page @ offset ${deepOffset}`, ...tracksHubIdPageQuery({}, limit, deepOffset) },
+    {
+      gate: !seekVsOffset,
+      name: `id page @ offset ${deepOffset}`,
+      ...tracksHubIdPageQuery({}, limit, deepOffset),
+    },
     { name: "hydrate 48 ids", ...tracksHubHydrateQuery(hydrateIds) },
     { name: "count(*) (unfiltered)", ...tracksHubCountQuery({}) },
     // The year fast lane — the hub's OTHER whole-set scan, and the one the `findings` join was
@@ -274,6 +352,97 @@ async function main(): Promise<void> {
     },
   ];
 
+  if (seekVsOffset) {
+    const deepPage = deepOffset / limit + 1;
+    const unfilteredExtraction = tracksHubAnchorExtractionQuery({});
+    const unfilteredAnchorResult = await client.execute(unfilteredExtraction);
+    const unfilteredAnchors = hubPageAnchorsFromRows(
+      unfilteredAnchorResult.rows as unknown as Record<string, unknown>[],
+      "rd",
+      limit,
+    );
+    const filtered = { bpmMax: 180, bpmMin: 170 };
+    const filteredCountResult = await client.execute(tracksHubCountQuery(filtered));
+    const filteredTotal = Number(filteredCountResult.rows[0]?.total ?? 0);
+    const filteredOffset = Math.floor((filteredTotal * 0.8) / limit) * limit;
+    const filteredPage = filteredOffset / limit + 1;
+    const filteredExtraction = tracksHubAnchorExtractionQuery(filtered);
+    const filteredAnchorResult = await client.execute(filteredExtraction);
+    const filteredAnchors = hubPageAnchorsFromRows(
+      filteredAnchorResult.rows as unknown as Record<string, unknown>[],
+      "rd",
+      limit,
+    );
+
+    shapes.push(
+      {
+        budgetMs: ANCHOR_BUILD_BUDGET_MS,
+        name: "anchors (tracks unfiltered)",
+        ...unfilteredExtraction,
+      },
+      {
+        name: `seek tracks page ${deepPage}`,
+        ...tracksHubSeekIdPageQuery({}, deepPage, unfilteredAnchors),
+      },
+      {
+        gate: false,
+        name: `offset tracks filtered @ ${filteredOffset}`,
+        ...tracksHubIdPageQuery(filtered, limit, filteredOffset),
+      },
+      {
+        budgetMs: ANCHOR_BUILD_BUDGET_MS,
+        name: "anchors (tracks filtered)",
+        ...filteredExtraction,
+      },
+      {
+        name: `seek tracks filtered page ${filteredPage}`,
+        ...tracksHubSeekIdPageQuery(filtered, filteredPage, filteredAnchors),
+      },
+    );
+
+    const entityQueries = [
+      { name: "labels", query: LABELS_HUB_QUERY },
+      { name: "albums", query: ALBUMS_HUB_QUERY },
+      { name: "artists", query: ARTISTS_HUB_QUERY },
+    ];
+    const entitySurfaces = [
+      { name: "hub", pageSize: CATALOGUE_HUB_DEFAULT_LIMIT },
+      { name: "browse", pageSize: CATALOGUE_BROWSE_PAGE_SIZE },
+    ];
+
+    for (const entity of entityQueries) {
+      for (const surface of entitySurfaces) {
+        const pageSize = surface.pageSize;
+        const offset = Math.floor((entityCount * 0.8) / pageSize) * pageSize;
+        const page = offset / pageSize + 1;
+        const extraction = catalogueEntityAnchorExtractionQuery(entity.query, pageSize);
+        const anchorResult = await client.execute(extraction);
+        const anchors = hubPageAnchorsFromRows(
+          anchorResult.rows as unknown as Record<string, unknown>[],
+          "slug",
+          pageSize,
+        );
+
+        shapes.push(
+          {
+            gate: false,
+            name: `offset ${entity.name} ${surface.name} @ ${offset}`,
+            ...catalogueEntityOffsetPageQuery(entity.query, pageSize, offset),
+          },
+          {
+            budgetMs: ANCHOR_BUILD_BUDGET_MS,
+            name: `anchors (${entity.name} ${surface.name})`,
+            ...extraction,
+          },
+          {
+            name: `seek ${entity.name} ${surface.name} page ${page}`,
+            ...catalogueEntitySeekPageQuery(entity.query, pageSize, page, anchors),
+          },
+        );
+      }
+    }
+  }
+
   let allWithinBudget = true;
 
   console.log("\n── p50 per shape ────────────────────────────────────────────────");
@@ -285,13 +454,14 @@ async function main(): Promise<void> {
     }
 
     const p50 = percentile(samples, 50);
-    const within = p50 < BUDGET_MS;
-    allWithinBudget &&= within;
+    const budgetMs = shape.budgetMs ?? BUDGET_MS;
+    const within = p50 < budgetMs;
+    allWithinBudget &&= shape.gate === false || within;
 
     console.log(
       `  ${shape.name.padEnd(30)} p50 ${p50.toFixed(1).padStart(7)} ms  ${
         within ? "✓ under" : "✗ OVER"
-      } ${BUDGET_MS} ms`,
+      } ${budgetMs} ms${shape.gate === false ? " (comparison only)" : ""}`,
     );
   }
 
@@ -299,6 +469,13 @@ async function main(): Promise<void> {
   for (const shape of shapes) {
     const plan = await explain(shape.sql, shape.args);
     console.log(`  ${shape.name}:\n      ${plan}`);
+    const isEntityShape = /\b(?:labels|albums|artists)\b/.test(shape.name);
+
+    if (isEntityShape) {
+      console.log("  → entity gated-CTE plan captured; inspect the hosted seek before merge.\n");
+      continue;
+    }
+
     // The primary order must ride the release_date index (a reverse scan), never a full table scan.
     const ridesReleaseIndex = /tracks_release_date_idx/.test(plan);
     const fullScan = /SCAN tracks\b(?! USING)/.test(plan);

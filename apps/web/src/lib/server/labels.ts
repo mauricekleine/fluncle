@@ -34,6 +34,21 @@ import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankByLabelStatement } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
 import {
+  type HubOrderedPageShape,
+  type HubPageAnchor,
+  hubAnchorExtractionQuery,
+  hubClauseHash,
+  hubCorpusFingerprint,
+  hubOffsetPageQuery,
+  hubPageAnchorsFromRows,
+  hubSeekPageQuery,
+  isShallowHubPage,
+  loadPersistedHubPageAnchors,
+  persistHubPageAnchors,
+  persistedAnchorDecision,
+  scheduleHubPageAnchorRefresh,
+} from "./hub-page-anchors";
+import {
   type HubCountCensusRow,
   type HubCountDelta,
   hubCountDeltaStatement,
@@ -692,7 +707,7 @@ export async function maxLabelSitemapLastmod(minTracks: number): Promise<string 
 //
 // Each row carries its name, slug, cover, its RENDERABLE track count (findings + the quieter rows,
 // the superset noun the tile prints), and a `certified` flag (≥1 coordinate-bearing finding). ONE
-// navigation model serves humans and crawlers alike — every page SSRs one OFFSET slice behind a
+// navigation model serves humans and crawlers alike — every page SSRs one bounded slice behind a
 // `?page=N` pager, so every tile is reachable as a real <a> and nothing depends on running JS.
 
 /** The hub read's page size, shared by all three entity indexes. */
@@ -795,19 +810,24 @@ type CatalogueHubRow = {
  * table when it qualifies a column (`labels`, `a`), which is what the count columns and
  * {@link hubInclusionWhere} are prefixed with. `select` adds the tile columns, `mapRow` reads them.
  */
-export type CatalogueHubQuery<Entry> = {
+export type CatalogueEntityPageQuery = {
   alias: string;
   entity: string;
   floor: number;
+  hub: "albums" | "artists" | "labels";
+  idExpr: string;
+  nameExpr: string;
+  slugExpr: string;
+};
+
+export type CatalogueHubQuery<Entry> = CatalogueEntityPageQuery & {
   mapRow: (row: CatalogueHubRow) => Entry;
   /**
    * The entity's display-name column (e.g. `labels.name`, `a.name`) — the column the optional NAME
    * FILTER matches against (`where <nameExpr> like ?`). It is a bare grouped column of the entity
    * table, never reader input, so it interpolates into the gated scan the same way `from`/`groupBy` do.
    */
-  nameExpr: string;
   select: string;
-  slugExpr: string;
 };
 
 /**
@@ -877,17 +897,236 @@ export type CatalogueHubLetter = { letter: string; page: number };
  */
 export class CatalogueHubPageOutOfRangeError extends Error {}
 
+/** One literal owns every entity boundary window, offset page, and seek page order. */
+export const ENTITY_HUB_ORDER_BY = "g.slug asc, g.id asc";
+
+/** The strict alphabetical suffix after one entity boundary. Slugs are non-null. */
+export function entityHubSeekClause(anchor: HubPageAnchor) {
+  return {
+    args: [anchor.key ?? "", anchor.key ?? "", anchor.id],
+    sql: `(g.slug > ? or (g.slug = ? and g.id > ?))`,
+  };
+}
+
+function catalogueEntityPageShape(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+  projection: string,
+  withName = false,
+): HubOrderedPageShape {
+  const nameSelect = withName ? `, ${query.nameExpr} as name` : "";
+
+  return {
+    clauses: [],
+    from: "gated g",
+    idExpr: "g.id",
+    keyAlias: "slug",
+    keyExpr: "g.slug",
+    orderBy: ENTITY_HUB_ORDER_BY,
+    pageSize,
+    prefix: {
+      args: [query.floor],
+      sql: `with gated as materialized (
+              select ${query.idExpr} as id, ${query.slugExpr} as slug${nameSelect},
+                     ${query.alias}.renderable_track_count as track_count,
+                     (${query.alias}.certified_finding_count > 0) as certified
+              from ${query.entity}
+              where ${hubInclusionWhere(query.alias)}
+            )`,
+    },
+    projection,
+    seekAfter: entityHubSeekClause,
+  };
+}
+
+/** SQL-only sparse boundary extraction for one entity list. */
+export function catalogueEntityAnchorExtractionQuery(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+) {
+  return hubAnchorExtractionQuery(
+    catalogueEntityPageShape(query, pageSize, "g.id as id, g.slug as slug"),
+  );
+}
+
+/** Direct entity offset shape, exported for the hosted proof artifact. */
+export function catalogueEntityOffsetPageQuery(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+  offset: number,
+) {
+  return hubOffsetPageQuery(
+    catalogueEntityPageShape(query, pageSize, "g.id as id, g.slug as slug"),
+    pageSize,
+    offset,
+  );
+}
+
+/** Entity seek shape with the predicate in the single gated-CTE consumer, never UNION branches. */
+export function catalogueEntitySeekPageQuery(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+  page: number,
+  anchors: HubPageAnchor[],
+) {
+  return hubSeekPageQuery(
+    catalogueEntityPageShape(query, pageSize, "g.id as id, g.slug as slug"),
+    page,
+    anchors,
+  );
+}
+
+function catalogueEntityCountQuery(query: CatalogueEntityPageQuery) {
+  return {
+    args: [query.floor],
+    sql: `select count(*) as total
+          from ${query.entity}
+          where ${hubInclusionWhere(query.alias)}`,
+  };
+}
+
+function entityAnchorAddress(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+  surface: "browse" | "hub",
+): { clauseHash: string; hub: string } {
+  return {
+    clauseHash: hubClauseHash(
+      JSON.stringify({
+        entity: query.entity,
+        floor: query.floor,
+        orderBy: ENTITY_HUB_ORDER_BY,
+        pageSize,
+        where: hubInclusionWhere(query.alias),
+      }),
+    ),
+    hub: `${query.hub}-${surface}`,
+  };
+}
+
+async function refreshCatalogueEntityAnchors(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+  surface: "browse" | "hub",
+): Promise<void> {
+  const db = await getDb();
+  const anchorQuery = catalogueEntityAnchorExtractionQuery(query, pageSize);
+  const countQuery = catalogueEntityCountQuery(query);
+  const firstQuery = catalogueEntityOffsetPageQuery(query, 1, 0);
+  const [anchorResult, countResult, firstResult] = await Promise.all([
+    db.execute(anchorQuery),
+    db.execute(countQuery),
+    db.execute(firstQuery),
+  ]);
+  const anchors = hubPageAnchorsFromRows(
+    typedRows<Record<string, unknown>>(anchorResult.rows),
+    "slug",
+    pageSize,
+  );
+  const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
+  const firstId = typedRows<{ id: string }>(firstResult.rows)[0]?.id;
+  const address = entityAnchorAddress(query, pageSize, surface);
+
+  await persistHubPageAnchors(
+    address.hub,
+    address.clauseHash,
+    anchors,
+    hubCorpusFingerprint(total, firstId),
+  );
+}
+
+function scheduleCatalogueEntityAnchorRefresh(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+  surface: "browse" | "hub",
+): void {
+  const address = entityAnchorAddress(query, pageSize, surface);
+
+  scheduleHubPageAnchorRefresh(`${address.hub}:${address.clauseHash}`, () =>
+    refreshCatalogueEntityAnchors(query, pageSize, surface),
+  );
+}
+
+async function anchoredCatalogueEntityRows(
+  query: CatalogueEntityPageQuery,
+  page: number,
+  pageSize: number,
+  surface: "browse" | "hub",
+  projection: string,
+  withName = false,
+): Promise<{ rows: Record<string, unknown>[]; total: number } | undefined> {
+  const address = entityAnchorAddress(query, pageSize, surface);
+  const stored = await loadPersistedHubPageAnchors(address.hub, address.clauseHash);
+
+  if (!stored) {
+    scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface);
+    return undefined;
+  }
+
+  const db = await getDb();
+  const countQuery = catalogueEntityCountQuery(query);
+  const firstQuery = catalogueEntityOffsetPageQuery(query, 1, 0);
+  const [countResult, firstResult] = await Promise.all([
+    db.execute(countQuery),
+    db.execute(firstQuery),
+  ]);
+  const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
+  const firstId = typedRows<{ id: string }>(firstResult.rows)[0]?.id;
+  const decision = persistedAnchorDecision(
+    page,
+    pageSize,
+    stored,
+    hubCorpusFingerprint(total, firstId),
+  );
+
+  if (decision.refresh) {
+    scheduleCatalogueEntityAnchorRefresh(query, pageSize, surface);
+  }
+
+  const pageQuery = hubSeekPageQuery(
+    catalogueEntityPageShape(query, pageSize, projection, withName),
+    page,
+    stored.anchors,
+  );
+  const pageResult = await db.execute(pageQuery);
+
+  return { rows: typedRows<Record<string, unknown>>(pageResult.rows), total };
+}
+
+async function catalogueEntityLetterPages(
+  query: CatalogueEntityPageQuery,
+  pageSize: number,
+): Promise<CatalogueHubLetter[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [query.floor],
+    sql: `select substr(${query.slugExpr}, 1, 1) as letter, count(*) as n
+          from ${query.entity}
+          where ${hubInclusionWhere(query.alias)}
+          group by substr(${query.slugExpr}, 1, 1)
+          order by substr(${query.slugExpr}, 1, 1) asc`,
+  });
+
+  return letterPages(
+    typedRows<{ letter: string; n: number }>(result.rows).map((row) => ({
+      letter: row.letter,
+      n: Number(row.n),
+    })),
+    pageSize,
+  );
+}
+
 /**
- * One OFFSET page of the WHOLE entity index — certified findings + the wider catalogue, alphabetical
- * — plus its total and (optionally) its A–Z lane, from ONE pass over the gated set.
+ * One numbered page of the WHOLE entity index — certified findings + the wider catalogue,
+ * alphabetical — plus its total and (optionally) its A–Z lane.
  *
- * ── WHY ONE PASS ────────────────────────────────────────────────────────────────────────────────
- * `/artists` and `/labels` run a page read AND a separate letter-lane read on every render:
- * two catalogue-scale grouped `having` scans per request, the second one purely to count entities
- * per initial. The gated set is a MATERIALIZED CTE walked once and consumed by three arms of one
- * compound select — the total, the page's slice, and the per-initial counts. `materialized` is
- * load-bearing: a plain CTE is flattened and RE-EXECUTED per `union all` branch (the trap AGENTS.md
- * records), which is exactly the two-scan cost this removes.
+ * ── THE SERVING LADDER ──────────────────────────────────────────────────────────────────────────
+ * Shallow pages, name-filtered pages, and the first deep request with no stored boundaries use the
+ * materialized gated CTE's direct offset slice. A deep unfiltered page with boundaries uses a
+ * separate single-consumer gated CTE: one plain `(slug,id)` seek predicate, no `union all` branches,
+ * plus the nearest-anchor offset remainder. Missing boundaries schedule a best-effort build; stale
+ * boundaries serve and schedule refresh. Labels and artists read their A–Z lane separately only on
+ * this deep path; every scan is over the small entity table and its stored counters, never tracks.
  *
  * ── WHAT THE GATE ADMITS ────────────────────────────────────────────────────────────────────────
  * A CERTIFIED entity is always in (`certified_finding_count > 0`); an uncertified catalogue entity is
@@ -899,7 +1138,7 @@ export class CatalogueHubPageOutOfRangeError extends Error {}
  * flag (the certification light the tile reads) beside its renderable count straight off the row.
  *
  * ── WHY THE TILES ARE A SECOND STATEMENT ────────────────────────────────────────────────────────
- * The gated scan carries only slug + renderable count + certified. The tile columns (name, cover,
+ * The gated scan carries only id + slug + renderable count + certified. The tile columns (name, cover,
  * owned-master key) come off a plain indexed `where slug in (…)` lookup of the ≤48 slugs the page
  * actually shows, so the per-row cover subqueries — the one part that still reaches into `tracks` —
  * run 48 times rather than once per entity in the gated set.
@@ -907,7 +1146,8 @@ export class CatalogueHubPageOutOfRangeError extends Error {}
  * A page past the end is NOT an error here: it returns an empty slice with the honest `total` and
  * `pageCount`, and the ROUTE decides the 404 off `page > pageCount`. Nothing is ever clamped to page 1.
  *
- * The fragments are constants from the callers; only the floor, page size, and offset are bound.
+ * The fragments are constants from the callers; only the floor, boundary, page size, and remainder
+ * are bound.
  */
 export async function listHubPage<Entry>(
   query: CatalogueHubQuery<Entry>,
@@ -917,13 +1157,50 @@ export async function listHubPage<Entry>(
 ): Promise<CatalogueHubNumberedPage<Entry>> {
   const db = await getDb();
   const limit = CATALOGUE_HUB_DEFAULT_LIMIT;
+  const term = typeof nameFilter === "string" ? nameFilter.trim() : "";
+
+  if (!term && !isShallowHubPage(page, limit)) {
+    const anchored = await anchoredCatalogueEntityRows(
+      query,
+      page,
+      limit,
+      "hub",
+      "g.id as id, g.slug as slug, g.track_count as n, g.certified as cert",
+    );
+
+    if (anchored) {
+      const sliced = (
+        anchored.rows as unknown as { cert: number; id: string; n: number; slug: string }[]
+      ).sort((left, right) =>
+        left.slug < right.slug
+          ? -1
+          : left.slug > right.slug
+            ? 1
+            : left.id < right.id
+              ? -1
+              : left.id > right.id
+                ? 1
+                : 0,
+      );
+      const letters = withLetters ? await catalogueEntityLetterPages(query, limit) : [];
+
+      return {
+        items: await hubTiles(query, sliced),
+        letters,
+        page,
+        pageCount: Math.max(Math.ceil(anchored.total / limit), 1),
+        total: anchored.total,
+      };
+    }
+  }
+
   // Arm 1 is the total (always exactly one row, so an empty page still reports an honest size);
   // arm 2 is the page's slice, carrying `certified`; arm 3 is the A–Z lane's per-initial counts.
   // `kind` discriminates; `slug`/`n`/`cert` are one column shape across all three arms (the total
   // and letter arms carry a 0 placeholder in `cert`).
   const letterArm = withLetters
     ? `union all
-       select 'letter' as kind, substr(g.slug, 1, 1) as slug, count(*) as n, 0 as cert
+       select 'letter' as kind, '' as id, substr(g.slug, 1, 1) as slug, count(*) as n, 0 as cert
        from gated g group by substr(g.slug, 1, 1)`
     : "";
 
@@ -933,35 +1210,47 @@ export async function listHubPage<Entry>(
   // `hubInclusionWhere`, which parenthesizes its `or` so this `and` cannot widen it): a name match
   // that does not clear the floor is still out. The pattern's `?` sits ahead of the floor `?`, so its
   // bind arg leads.
-  const term = typeof nameFilter === "string" ? nameFilter.trim() : "";
   const nameWhere = term ? `${query.nameExpr} like ? escape '\\' and ` : "";
   const nameArgs = term ? [`%${escapeLikePattern(term)}%`] : [];
 
   const result = await db.execute({
     args: [...nameArgs, query.floor, limit, (page - 1) * limit],
     sql: `with gated as materialized (
-            select ${query.slugExpr} as slug,
+            select ${query.idExpr} as id, ${query.slugExpr} as slug,
                    ${query.alias}.renderable_track_count as track_count,
                    (${query.alias}.certified_finding_count > 0) as certified
             from ${query.entity}
             where ${nameWhere}${hubInclusionWhere(query.alias)}
           )
-          select 'total' as kind, '' as slug, (select count(*) from gated) as n, 0 as cert
+          select 'total' as kind, '' as id, '' as slug, (select count(*) from gated) as n, 0 as cert
           union all
           select * from (
-            select 'row' as kind, g.slug as slug, g.track_count as n, g.certified as cert
-            from gated g order by g.slug asc limit ? offset ?
+            select 'row' as kind, g.id as id, g.slug as slug, g.track_count as n,
+                   g.certified as cert
+            from gated g order by ${ENTITY_HUB_ORDER_BY} limit ? offset ?
           )
           ${letterArm}`,
   });
 
-  const rows = typedRows<{ cert: number; kind: string; n: number; slug: string }>(result.rows);
+  const rows = typedRows<{ cert: number; id: string; kind: string; n: number; slug: string }>(
+    result.rows,
+  );
   const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
   // A compound select gives no cross-arm order guarantee, so the arms are split and re-sorted
   // here — over 48 slugs and ~27 letters, never a growing set.
   const sliced = rows
     .filter((row) => row.kind === "row")
-    .sort((left, right) => (left.slug < right.slug ? -1 : left.slug > right.slug ? 1 : 0));
+    .sort((left, right) =>
+      left.slug < right.slug
+        ? -1
+        : left.slug > right.slug
+          ? 1
+          : left.id < right.id
+            ? -1
+            : left.id > right.id
+              ? 1
+              : 0,
+    );
   const letters = letterPages(
     rows
       .filter((row) => row.kind === "letter")
@@ -1071,26 +1360,21 @@ export type CatalogueBrowsePage = {
  * is the entity table with its alias if it has one (the gated scan's only table); `alias` is how the
  * read qualifies a column of it. `nameExpr`/`slugExpr` are bare columns off that table.
  */
-export type CatalogueBrowseQuery = {
-  alias: string;
-  entity: string;
-  floor: number;
-  nameExpr: string;
-  slugExpr: string;
-};
+export type CatalogueBrowseQuery = CatalogueEntityPageQuery;
 
 /** How many rows one browse page carries — a bounded, documented slice of a catalogue-scale index. */
 export const CATALOGUE_BROWSE_PAGE_SIZE = 50;
 
 /**
  * One numbered page of the full A–Z browse — every entity `listHubPage` would list (certified +
- * floor-clearing catalogue), from ONE pass over the gated set. It reuses {@link hubInclusionWhere}
+ * floor-clearing catalogue). It reuses {@link hubInclusionWhere}
  * (the ONE gate `listHubPage` drives off, so the MCP browse and the web hubs can never disagree on
  * which entities exist) and the same `materialized` CTE shape, but keeps a lighter projection than
  * the web hub: the entity NAME is a bare column of the entity table, so there is no second tile
  * lookup and no cover subquery an agent would only discard — which makes this whole read a filtered
- * slice of the entity table and nothing else. A page past the end returns an empty slice with the
- * honest total.
+ * slice of the entity table and nothing else. The same shallow-offset / persisted-seek ladder serves
+ * the browse page size independently from the web hub's page size. A page past the end returns an
+ * empty slice with the honest total.
  */
 export async function listCatalogueBrowsePage(
   query: CatalogueBrowseQuery,
@@ -1098,6 +1382,55 @@ export async function listCatalogueBrowsePage(
 ): Promise<CatalogueBrowsePage> {
   const db = await getDb();
   const limit = CATALOGUE_BROWSE_PAGE_SIZE;
+
+  if (!isShallowHubPage(page, limit)) {
+    const anchored = await anchoredCatalogueEntityRows(
+      query,
+      page,
+      limit,
+      "browse",
+      `g.id as id, g.slug as slug, g.name as name, g.track_count as track_count,
+       g.certified as certified`,
+      true,
+    );
+
+    if (anchored) {
+      const items = (
+        anchored.rows as unknown as {
+          certified: number;
+          id: string;
+          name: string;
+          slug: string;
+          track_count: number;
+        }[]
+      )
+        .sort((left, right) =>
+          left.slug < right.slug
+            ? -1
+            : left.slug > right.slug
+              ? 1
+              : left.id < right.id
+                ? -1
+                : left.id > right.id
+                  ? 1
+                  : 0,
+        )
+        .map((row) => ({
+          certified: Number(row.certified) > 0,
+          name: row.name,
+          slug: row.slug,
+          trackCount: Number(row.track_count),
+        }));
+
+      return {
+        items,
+        page,
+        pageCount: Math.max(Math.ceil(anchored.total / limit), 1),
+        total: anchored.total,
+      };
+    }
+  }
+
   const result = await db.execute({
     args: [query.floor, limit, (page - 1) * limit],
     // Arm 1 is the total (always one row, so an empty page still reports an honest size); arm 2 is
@@ -1105,24 +1438,25 @@ export async function listCatalogueBrowsePage(
     // no cross-arm order, so the rows are re-sorted below over the ≤ page-size slice, never a
     // growing set. The gate is `hubInclusionWhere`, shared verbatim with `listHubPage`.
     sql: `with gated as materialized (
-            select ${query.slugExpr} as slug, ${query.nameExpr} as name,
+            select ${query.idExpr} as id, ${query.slugExpr} as slug, ${query.nameExpr} as name,
                    ${query.alias}.renderable_track_count as track_count,
                    (${query.alias}.certified_finding_count > 0) as certified
             from ${query.entity}
             where ${hubInclusionWhere(query.alias)}
           )
-          select 'total' as kind, '' as slug, '' as name, 0 as track_count, 0 as certified,
+          select 'total' as kind, '' as id, '' as slug, '' as name, 0 as track_count, 0 as certified,
                  (select count(*) from gated) as n
           union all
           select * from (
-            select 'row' as kind, g.slug as slug, g.name as name, g.track_count as track_count,
-                   g.certified as certified, 0 as n
-            from gated g order by g.slug asc limit ? offset ?
+            select 'row' as kind, g.id as id, g.slug as slug, g.name as name,
+                   g.track_count as track_count, g.certified as certified, 0 as n
+            from gated g order by ${ENTITY_HUB_ORDER_BY} limit ? offset ?
           )`,
   });
 
   const rows = typedRows<{
     certified: number;
+    id: string;
     kind: string;
     n: number;
     name: string;
@@ -1132,7 +1466,17 @@ export async function listCatalogueBrowsePage(
   const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
   const items = rows
     .filter((row) => row.kind === "row")
-    .sort((left, right) => (left.slug < right.slug ? -1 : left.slug > right.slug ? 1 : 0))
+    .sort((left, right) =>
+      left.slug < right.slug
+        ? -1
+        : left.slug > right.slug
+          ? 1
+          : left.id < right.id
+            ? -1
+            : left.id > right.id
+              ? 1
+              : 0,
+    )
     .map((row) => ({
       certified: Number(row.certified) > 0,
       name: row.name,
@@ -1149,10 +1493,12 @@ export async function listCatalogueBrowsePage(
 }
 
 /** The LABELS hub's `?page=N` + A–Z reads, over every floor-clearing label (certified + catalogue). */
-const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
+export const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   alias: "labels",
   entity: "labels",
   floor: LABEL_INDEX_MIN_TRACKS,
+  hub: "labels",
+  idExpr: "labels.id",
   mapRow: (row) => ({
     certified: Boolean(row.certified),
     coverImageUrl: coverFromJson(row.cover_json),
@@ -1194,6 +1540,8 @@ const LABELS_BROWSE_QUERY: CatalogueBrowseQuery = {
   alias: LABELS_HUB_QUERY.alias,
   entity: LABELS_HUB_QUERY.entity,
   floor: LABELS_HUB_QUERY.floor,
+  hub: LABELS_HUB_QUERY.hub,
+  idExpr: LABELS_HUB_QUERY.idExpr,
   nameExpr: "labels.name",
   slugExpr: LABELS_HUB_QUERY.slugExpr,
 };

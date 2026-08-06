@@ -1072,6 +1072,13 @@
       "when": 1785876281895,
       "tag": "0152_curly_toxin",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "6",
+      "when": 1786016532859,
+      "tag": "0153_public_the_hand",
+      "breakpoints": true
     }
   ]
 }

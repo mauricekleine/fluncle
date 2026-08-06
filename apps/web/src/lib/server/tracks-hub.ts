@@ -19,16 +19,16 @@
 // ── WHY IT SCALES ──────────────────────────────────────────────────────────────────────
 // Unlike `/fresh` (a 30-day window), this is the UNBOUNDED archive, so it cannot fold the whole
 // table into the isolate. It is NUMBERED-page paginated (the `/labels` + `/albums` + `/artists` hub
-// precedent, #731): the primary sort (`release_date desc`) rides the `tracks_release_date_idx` btree
-// as a reverse scan, and each page is a `limit ? offset ?` slice of it — a real `?page=N` URL a
-// crawler follows, no keyset cursor and nothing that loads on scroll. The total (for the pager +
-// the CollectionPage `numberOfItems`) is a separate `count(*)` over the same filtered set, run in
-// parallel. TRACK_SELECT is a NAMED column list — never `select *` — so the wide embedding BLOBs on
-// `tracks` never cross into the isolate at 30k rows (AGENTS.md's database rule). The filter
-// predicates are the same compiled vocabulary `/search` uses (`compileFilters`), plus the BPM-range
-// filter that motivated `tracks_bpm_idx`. The offset walk over a growing table is the tradeoff a
-// numbered pager makes; it must be proven against HOSTED Turso (a scratch DB) before any scale
-// claim, never `turso dev` (docs/local-database.md, "Local is not production").
+// precedent, #731), but a page number does not require an unbounded OFFSET walk. The first ten pages
+// use a direct bounded offset. Every deeper unfiltered page seeks from a persisted sparse boundary;
+// a missing boundary set falls back once and schedules its build, while a stale set seeks
+// immediately and schedules a refresh. Deep filtered pages build the same SQL-only boundary window
+// once per exact clause-set memo. The nearest boundary plus an offset remainder preserves tail
+// reachability when a stored set predates corpus growth. The primary sort rides
+// `tracks_release_date_idx`; TRACK_SELECT stays a NAMED column list, so neither boundary extraction
+// nor hydration brings the wide embedding BLOBs across the isolate. The total remains a separate
+// memoized `count(*)`. Hosted Turso is still the only performance proof
+// (`scripts/bench-tracks-hub.ts --seek-vs-offset`); local libSQL proves correctness only.
 //
 // ── THE JOIN IS PAID ONLY WHEN IT IS READ ──────────────────────────────────────────────
 // `findings.track_id` is the PRIMARY KEY of `findings`, so `left join findings` is strictly
@@ -69,6 +69,22 @@ import {
   type LeadArtistRow,
   leadArtistAvatarUrl,
 } from "./fresh";
+import {
+  type HubOrderedPageShape,
+  type HubPageAnchor,
+  hubAnchorExtractionQuery,
+  hubClauseHash,
+  hubClauseSetKey,
+  hubCorpusFingerprint,
+  hubOffsetPageQuery,
+  hubPageAnchorsFromRows,
+  hubSeekPageQuery,
+  isShallowHubPage,
+  loadPersistedHubPageAnchors,
+  persistHubPageAnchors,
+  persistedAnchorDecision,
+  scheduleHubPageAnchorRefresh,
+} from "./hub-page-anchors";
 import { type CatalogueHubNumberedPage, CatalogueHubPageOutOfRangeError } from "./labels";
 import {
   type Clause,
@@ -85,6 +101,9 @@ import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } f
 /** A browse page's size — a reading surface, not an infinite feed. Shared with the year fast lane's
     year → page mapping, so a year links to exactly the page its first release lands on. */
 export const TRACKS_HUB_PAGE_SIZE = 48;
+
+/** One literal owns the window rank, offset page, and seek page order. */
+export const TRACKS_HUB_ORDER_BY = "tracks.release_date desc, tracks.track_id desc";
 
 /**
  * The hub's filter axes. The shared six are `Pick`ed from the contract's `SearchFilters`
@@ -232,6 +251,68 @@ function findingsJoinFor(clauses: Clause[]): string {
     : "";
 }
 
+/**
+ * The strict suffix after one release-date boundary. Empty-string dates are ordinary TEXT values:
+ * they use this non-null branch, sort after every ISO date in DESC order, and before the NULL zone.
+ * A boundary inside the real NULL zone has its own predicate because `release_date = null` is never
+ * true in SQL.
+ */
+export function tracksHubSeekClause(anchor: HubPageAnchor): Clause {
+  if (anchor.key === null) {
+    return {
+      args: [anchor.id],
+      sql: `tracks.release_date is null and tracks.track_id < ?`,
+    };
+  }
+
+  return {
+    args: [anchor.key, anchor.key, anchor.id],
+    sql: `(tracks.release_date < ?
+           or (tracks.release_date = ? and tracks.track_id < ?)
+           or tracks.release_date is null)`,
+  };
+}
+
+function tracksHubOrderedShape(
+  clauses: Clause[],
+  projection = "tracks.track_id as track_id",
+): HubOrderedPageShape {
+  return {
+    clauses,
+    from: `tracks ${findingsJoinFor(clauses)}`,
+    idExpr: "tracks.track_id",
+    keyAlias: "rd",
+    keyExpr: "tracks.release_date",
+    orderBy: TRACKS_HUB_ORDER_BY,
+    pageSize: TRACKS_HUB_PAGE_SIZE,
+    projection,
+    seekAfter: tracksHubSeekClause,
+  };
+}
+
+/** The exact compiled clause-set key also used by the filtered aggregate/anchor memo. */
+export function tracksHubClauseKey(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities = {},
+): string {
+  return hubClauseSetKey(tracksHubClauses(filters, resolved));
+}
+
+function tracksHubPersistedClauseHash(): string {
+  return hubClauseHash(
+    JSON.stringify({
+      clauses: hubClauseSetKey([]),
+      orderBy: TRACKS_HUB_ORDER_BY,
+      pageSize: TRACKS_HUB_PAGE_SIZE,
+    }),
+  );
+}
+
+export const TRACKS_HUB_ANCHOR_ADDRESS = {
+  clauseHash: tracksHubPersistedClauseHash(),
+  hub: "tracks",
+} as const;
+
 /** The window a page-independent aggregate (the pager total, the year lane) may be served stale
     within — matched to the bare hub's edge-cache freshness window. */
 const HUB_AGGREGATE_TTL_MS = 60_000;
@@ -290,7 +371,7 @@ export function resetTracksHubAggregateCache(): void {
 /** The memo key for a filter set — the compiled clause set, which is exactly what the SQL and its
     bound args are built from, so two filter objects that compile identically share one entry. */
 function aggregateKey(kind: string, clauses: Clause[]): string {
-  return `${kind}:${JSON.stringify(clauses.map((clause) => [clause.sql, clause.args]))}`;
+  return `${kind}:${hubClauseSetKey(clauses)}`;
 }
 
 /** The `track_artists → artists` JSON subquery: `[{name, slug}]` for the row's artists, one indexed
@@ -412,24 +493,26 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
 
 /**
  * ONE numbered page of the `/tracks` hub: every track (findings + catalogue) that survives the
- * filters, newest release first, as a `limit ? offset ?` slice riding `tracks_release_date_idx`.
+ * filters, newest release first, as a shallow offset or anchored seek riding
+ * `tracks_release_date_idx`.
  * Throws {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty result
  * is a legitimate empty page, never a throw) so the route can 404 rather than clamp — a `?page=99`
  * on a 3-page hub is NOT a second URL for page 1's rows. The `count(*)` for the total runs in
  * parallel over the same filtered set.
  *
- * ── LATE ROW LOOKUP: page the IDS, then hydrate exactly 48 ─────────────────────────────
- * SQLite evaluates SELECT-list scalar subqueries for every row it MATERIALIZES, and `offset` skips
- * rows AFTER materialization — so a one-step read that carries `TRACK_SELECT`'s per-row subqueries
- * (album/label/galaxy slugs, the lead-artist join, the artist-slug JSON) pays them for every
- * offset-skipped row too: page 300 executes ~14,400 subquery sets, not 48 (3.7 s at page 2,
- * 9.3 s at page 300, vs 1.3 s at page 1). So the read is TWO steps:
+ * ── LATE ROW LOOKUP + SEEK LADDER: page IDS, then hydrate exactly 48 ──────────────────
+ * SQLite evaluates SELECT-list scalar subqueries for every materialized row before OFFSET skips
+ * it, so every path first pages bare ids and hydrates only the selected rows. The id path is:
  *
- *   1. Page the bare ids — `select track_id … order by release_date desc … limit ? offset ?`, no
- *      SELECT-list subqueries, so the offset walk touches only the `tracks_release_date_idx` order
- *      and the filter predicates.
- *   2. Hydrate exactly those ≤48 ids with the full column set (`where track_id in (…)`), re-ordered
- *      in code by the step-1 position (the `in` clause returns rows in arbitrary order).
+ *   1. A page whose offset is at most 450 rows uses the direct ordered slice.
+ *   2. A deeper unfiltered page loads persisted anchors. Missing anchors use the direct slice once
+ *      and schedule a detached build; stale anchors serve immediately and schedule refresh.
+ *   3. A deeper filtered page extracts anchors in SQL once per exact compiled-clause memo.
+ *   4. Seek starts strictly after the largest boundary at or before the requested page and applies
+ *      `(page - boundaryPage) * 48` as the remainder. A fresh set has remainder zero; an older set
+ *      still reaches pages beyond its last boundary. Empty-string release dates are normal TEXT;
+ *      actual NULL boundaries use the dedicated NULL-zone predicate.
+ *   5. Hydrate exactly those ≤48 ids with the full column set and restore the id-page order in code.
  */
 /** The filtered `count(*)` — the pager's total, over the same clause set as the id page. */
 export function tracksHubCountQuery(
@@ -466,17 +549,36 @@ export function tracksHubIdPageQuery(
   resolved: ResolvedFilterEntities = {},
 ): { args: (number | string)[]; sql: string } {
   const clauses = tracksHubClauses(filters, resolved);
-  const { args, where } = whereFor(clauses);
+  const query = hubOffsetPageQuery(tracksHubOrderedShape(clauses), limit, offset);
 
   return {
-    args: [...args, limit, offset],
-    sql: `select tracks.track_id as track_id
-          from tracks
-          ${findingsJoinFor(clauses)}
-          ${where}
-          order by tracks.release_date desc, tracks.track_id desc
-          limit ? offset ?`,
+    args: query.args,
+    sql: query.sql,
   };
+}
+
+/** The SQL-only sparse boundary extraction used by persisted and filtered in-isolate anchors. */
+export function tracksHubAnchorExtractionQuery(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities = {},
+): { args: (number | string)[]; sql: string } {
+  return hubAnchorExtractionQuery(tracksHubOrderedShape(tracksHubClauses(filters, resolved)));
+}
+
+/** Step 1 as an anchored seek plus the nearest-boundary offset remainder. */
+export function tracksHubSeekIdPageQuery(
+  filters: TracksHubFilters,
+  page: number,
+  anchors: HubPageAnchor[],
+  resolved: ResolvedFilterEntities = {},
+): { args: (number | string)[]; remainder: number; sql: string } {
+  const query = hubSeekPageQuery(
+    tracksHubOrderedShape(tracksHubClauses(filters, resolved)),
+    page,
+    anchors,
+  );
+
+  return { args: query.args, remainder: query.remainder, sql: query.sql };
 }
 
 /**
@@ -515,6 +617,54 @@ async function countTracksHub(
   });
 }
 
+async function extractTracksHubAnchors(
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities,
+): Promise<HubPageAnchor[]> {
+  const db = await getDb();
+  const query = tracksHubAnchorExtractionQuery(filters, resolved);
+  const result = await db.execute(query);
+
+  return hubPageAnchorsFromRows(
+    typedRows<Record<string, unknown>>(result.rows),
+    "rd",
+    TRACKS_HUB_PAGE_SIZE,
+  );
+}
+
+async function refreshPersistedTracksHubAnchors(): Promise<void> {
+  const db = await getDb();
+  const anchorQuery = tracksHubAnchorExtractionQuery({});
+  const countQuery = tracksHubCountQuery({});
+  const firstQuery = tracksHubIdPageQuery({}, 1, 0);
+  const [anchorResult, countResult, firstResult] = await Promise.all([
+    db.execute(anchorQuery),
+    db.execute(countQuery),
+    db.execute(firstQuery),
+  ]);
+  const anchors = hubPageAnchorsFromRows(
+    typedRows<Record<string, unknown>>(anchorResult.rows),
+    "rd",
+    TRACKS_HUB_PAGE_SIZE,
+  );
+  const total = Number(typedRows<{ total: number }>(countResult.rows)[0]?.total ?? 0);
+  const firstId = typedRows<{ track_id: string }>(firstResult.rows)[0]?.track_id;
+
+  await persistHubPageAnchors(
+    TRACKS_HUB_ANCHOR_ADDRESS.hub,
+    TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+    anchors,
+    hubCorpusFingerprint(total, firstId),
+  );
+}
+
+function scheduleTracksHubAnchorRefresh(): void {
+  scheduleHubPageAnchorRefresh(
+    `${TRACKS_HUB_ANCHOR_ADDRESS.hub}:${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}`,
+    refreshPersistedTracksHubAnchors,
+  );
+}
+
 export async function listTracksHubPage(
   filters: TracksHubFilters,
   page: number,
@@ -524,13 +674,59 @@ export async function listTracksHubPage(
   // The imprint name → `labels.id`, ONCE for both reads below, so the pager total and the id slice
   // compile the same clause set (the memo key is that clause set) and both ride `tracks_label_id_idx`.
   const resolved = await resolveTracksHubEntities(filters);
+  const clauses = tracksHubClauses(filters, resolved);
+  const totalPromise = countTracksHub(filters, resolved);
+  let total: number;
+  let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
-  // Step 1 (+ the total, in parallel): the id slice. The total is page-independent, so it rides the
-  // TTL memo — a walk down the pager pays that full-set aggregate once, not once per page.
-  const [total, idsResult] = await Promise.all([
-    countTracksHub(filters, resolved),
-    db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved)),
-  ]);
+  if (isShallowHubPage(page, limit)) {
+    // The bounded front of the pager stays on today's direct offset path; the total remains
+    // page-independent and memoized.
+    [total, idsResult] = await Promise.all([
+      totalPromise,
+      db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved)),
+    ]);
+  } else if (clauses.length > 0) {
+    // Filter combinations are unbounded, so their anchors live only in the existing exact-clause
+    // TTL memo. The first deep request pays one SQL window extraction; later pages seek from it.
+    const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
+      extractTracksHubAnchors(filters, resolved),
+    );
+    const result = await Promise.all([totalPromise, anchorsPromise]);
+    total = result[0];
+    idsResult = await db.execute(tracksHubSeekIdPageQuery(filters, page, result[1], resolved));
+  } else {
+    // The crawler highway persists its sparse boundary set. A missing record deliberately falls
+    // back to the old offset once while a detached rebuild starts; a stale record serves by seek
+    // immediately and self-heals in the same non-blocking way.
+    const firstQuery = tracksHubIdPageQuery({}, 1, 0);
+    const [resolvedTotal, stored, firstResult] = await Promise.all([
+      totalPromise,
+      loadPersistedHubPageAnchors(
+        TRACKS_HUB_ANCHOR_ADDRESS.hub,
+        TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+      ),
+      db.execute(firstQuery),
+    ]);
+    total = resolvedTotal;
+    const firstId = typedRows<{ track_id: string }>(firstResult.rows)[0]?.track_id;
+    const decision = persistedAnchorDecision(
+      page,
+      limit,
+      stored,
+      hubCorpusFingerprint(total, firstId),
+    );
+
+    if (decision.refresh) {
+      scheduleTracksHubAnchorRefresh();
+    }
+
+    idsResult = await db.execute(
+      decision.mode === "seek" && stored
+        ? tracksHubSeekIdPageQuery(filters, page, stored.anchors, resolved)
+        : tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved),
+    );
+  }
 
   const ids = typedRows<{ track_id: string }>(idsResult.rows).map((row) => row.track_id);
 

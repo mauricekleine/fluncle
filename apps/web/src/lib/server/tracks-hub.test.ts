@@ -5,8 +5,9 @@
 //      uncertified catalogue row comes back unlit (no coordinate). Structural, via the flag.
 //   2. THE ORDER. Newest RELEASE first (never found date), track_id the stable tiebreak, undated
 //      rows LAST (SQLite's native `desc` null placement).
-//   3. NUMBERED PAGINATION. Every page is a `limit/offset` slice; a page past the end throws so the
-//      route 404s (never clamps), and page 1 of an empty set is a legitimate empty page.
+//   3. NUMBERED PAGINATION. Shallow offsets and deep anchored seeks preserve one numbered URL
+//      space; a page past the end throws so the route 404s (never clamps), and page 1 of an empty set
+//      is a legitimate empty page.
 //   4. THE FILTERS. The shared `compileFilters` vocabulary (bpm/key/year/label) + the galaxy
 //      extension, which narrows the list to certified findings — composing with the page slice.
 //   5. THE LINKED ROW. Artist credits resolve to `/artist/<slug>` via `track_artists`; the imprint
@@ -26,9 +27,15 @@ vi.mock("./db", async (importOriginal) => {
 
 import { CatalogueHubPageOutOfRangeError } from "./labels";
 import { createIntegrationDb } from "./integration-db";
+import {
+  hubCorpusFingerprint,
+  hubPageAnchorsFromRows,
+  persistHubPageAnchors,
+} from "./hub-page-anchors";
 import { parseTracksHubPayload } from "../tracks-search";
 import {
   type TracksHubEntry,
+  TRACKS_HUB_ANCHOR_ADDRESS,
   TRACKS_HUB_PAGE_SIZE,
   countAllTracks,
   listTracksHubPage,
@@ -36,6 +43,7 @@ import {
   resetTracksHubAggregateCache,
   resolveTracksHubEntities,
   tracksHubClauses,
+  tracksHubAnchorExtractionQuery,
   tracksHubCountQuery,
   tracksHubIdPageQuery,
   tracksHubYearLaneQuery,
@@ -237,6 +245,57 @@ describe("listTracksHubPage — numbered pagination", () => {
     await seedTrack({ releaseDate: "2022-01-01", trackId: "only" });
 
     await expect(listTracksHubPage({}, 2)).rejects.toBeInstanceOf(CatalogueHubPageOutOfRangeError);
+  });
+
+  it("serves a deep filtered page from memoized anchors and keeps the past-end 404", async () => {
+    for (let index = 0; index < 482; index += 1) {
+      await seedTrack({
+        bpm: 174,
+        releaseDate: "2024-01-01",
+        trackId: `deep-${String(index).padStart(3, "0")}`,
+      });
+    }
+
+    const page10 = await listTracksHubPage({ bpmMin: 170 }, 10);
+    const page11 = await listTracksHubPage({ bpmMin: 170 }, 11);
+    const adjacent = [...ids(page10.items), ...ids(page11.items)];
+
+    expect(page10.items).toHaveLength(48);
+    expect(page11.items).toHaveLength(2);
+    expect(new Set(adjacent).size).toBe(adjacent.length);
+    await expect(listTracksHubPage({ bpmMin: 170 }, 12)).rejects.toBeInstanceOf(
+      CatalogueHubPageOutOfRangeError,
+    );
+  });
+
+  it("serves the deep unfiltered crawler path from its persisted boundary set", async () => {
+    for (let index = 0; index < 482; index += 1) {
+      await seedTrack({
+        releaseDate: "2024-01-01",
+        trackId: `persisted-${String(index).padStart(3, "0")}`,
+      });
+    }
+
+    const extraction = await db.execute(tracksHubAnchorExtractionQuery({}));
+    const anchors = hubPageAnchorsFromRows(
+      extraction.rows as unknown as Record<string, unknown>[],
+      "rd",
+      TRACKS_HUB_PAGE_SIZE,
+    );
+    const first = await db.execute(tracksHubIdPageQuery({}, 1, 0));
+    const firstId = (first.rows as unknown as { track_id: string }[])[0]?.track_id;
+
+    await persistHubPageAnchors(
+      TRACKS_HUB_ANCHOR_ADDRESS.hub,
+      TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+      anchors,
+      hubCorpusFingerprint(482, firstId),
+    );
+
+    const page11 = await listTracksHubPage({}, 11);
+
+    expect(page11.items).toHaveLength(2);
+    expect(page11.total).toBe(482);
   });
 
   it("page 1 of an empty result is a legitimate empty page, never a throw", async () => {
