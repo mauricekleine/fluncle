@@ -927,6 +927,60 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
     ]);
   });
 
+  // ── the two RANKS of the artist filter resolve, asked as two statements ────────────────────
+  //
+  // A primary name or slug is rank 0 and an AKA is rank 1, and the resolver asks them in that order
+  // so rank 0 can be an indexed seek instead of a scan of the growing `artists` table. These pin the
+  // behaviour that ordering encodes — the alias still resolves, it never outranks a primary name,
+  // and the count guard holds on both ranks.
+
+  it("resolves a trusted AKA to the same artist the primary name resolves to", async () => {
+    await seedArtistEntities([{ name: "Lexurus", slug: "lexurus" }], ["certified-andromedik"]);
+    await db.execute({
+      args: [],
+      sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, source, kind, status, created_at)
+            values ('aka-lex', 'ax0', 'Lex', 'lex', 'musicbrainz', 'name', 'auto', '2026-07-01')`,
+    });
+
+    const byAlias = await resolveFilterEntities({ artist: "Lex" });
+
+    expect(byAlias).toEqual(await resolveFilterEntities({ artist: "Lexurus" }));
+    expect(byAlias).toEqual({ artistId: "ax0" });
+  });
+
+  it("lets a PRIMARY name outrank another artist's AKA for the same spelling", async () => {
+    // `ax0` is credited on the track and answers to "Lexurus" by name; `ax1` carries "Lexurus" only
+    // as an AKA. Rank 0 is asked first, so the primary wins however the two rows are stored.
+    await seedArtistEntities(
+      [
+        { name: "Lexurus", slug: "lexurus" },
+        { name: "Andromedik", slug: "andromedik" },
+      ],
+      ["certified-andromedik"],
+    );
+    await db.execute({
+      args: [],
+      sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, source, kind, status, created_at)
+            values ('aka-clash', 'ax1', 'Lexurus', 'lexurus', 'musicbrainz', 'name', 'auto', '2026-07-01')`,
+    });
+
+    expect(await resolveFilterEntities({ artist: "Lexurus" })).toEqual({ artistId: "ax0" });
+  });
+
+  it("holds the count guard on the AKA rank — an edgeless artist resolves no id", async () => {
+    // `a1` (the fixture's Netsky row) has no edges, so neither rank may hand back its id.
+    await db.execute({
+      args: [],
+      sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, source, kind, status, created_at)
+            values ('aka-edgeless', 'a1', 'Boy Wonder', 'boy-wonder', 'musicbrainz', 'name', 'auto', '2026-07-01')`,
+    });
+
+    expect(await resolveFilterEntities({ artist: "Boy Wonder" })).toEqual({});
+    expect(await compiledSql({ artist: "Boy Wonder" })).toContain(
+      "lower(tracks.artists_json) like",
+    );
+  });
+
   it("reads the GRAPH on the model's tier too — the emitted name is resolved, not scanned", async () => {
     await seedArtistEntities([], ["certified-netsky", "uncertified-netsky"]);
     // Drop ONE edge while the raw `artists_json` still credits Netsky on both rows. A filter that

@@ -735,27 +735,34 @@ async function rearmAllowedArtists(): Promise<number> {
 
   const now = new Date().toISOString();
 
-  for (const artistMbid of artistMbids) {
-    await db.execute({
-      args: [frontierId("musicbrainz", "artist", artistMbid), artistMbid, now, now],
-      sql: `insert into crawl_frontier
-              (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor,
-               created_at, updated_at)
-            values (?, 'artist', 'musicbrainz', ?, 0, null, null, 'pending', 0, ?, ?)
-            on conflict (id) do update set
-              state = case when crawl_frontier.state = 'failed' then 'failed' else 'pending' end,
-              cursor = 0, hop = 0, parent_id = null,
-              label_slug = null, updated_at = excluded.updated_at
-            where crawl_frontier.state in ('done', 'failed', 'pending')`,
-    });
-  }
-
-  await db.execute({
-    args: [now, ...artistMbids],
-    sql: `update artist_rules set rearmed_at = ?
-          where verdict = 'allow' and rearmed_at is null
-            and artist_mbid in (${artistMbids.map(() => "?").join(", ")})`,
-  });
+  // ONE batch, not a statement per identity: the selection is already capped at
+  // `REARM_ALLOWED_BATCH`, so this was a bounded N+1 rather than an unbounded one — but it still
+  // spent that many sequential round-trips inside a tick that fires 144×/day, and it left the node
+  // writes and the stamp able to half-apply. Batched, the pass is one write transaction, so a tick
+  // that dies mid-way re-arms the same identities next time instead of stamping some of them.
+  await db.batch(
+    [
+      ...artistMbids.map((artistMbid) => ({
+        args: [frontierId("musicbrainz", "artist", artistMbid), artistMbid, now, now],
+        sql: `insert into crawl_frontier
+                (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor,
+                 created_at, updated_at)
+              values (?, 'artist', 'musicbrainz', ?, 0, null, null, 'pending', 0, ?, ?)
+              on conflict (id) do update set
+                state = case when crawl_frontier.state = 'failed' then 'failed' else 'pending' end,
+                cursor = 0, hop = 0, parent_id = null,
+                label_slug = null, updated_at = excluded.updated_at
+              where crawl_frontier.state in ('done', 'failed', 'pending')`,
+      })),
+      {
+        args: [now, ...artistMbids],
+        sql: `update artist_rules set rearmed_at = ?
+              where verdict = 'allow' and rearmed_at is null
+                and artist_mbid in (${artistMbids.map(() => "?").join(", ")})`,
+      },
+    ],
+    "write",
+  );
 
   logEvent("info", "crawl.artists-rearmed", { count: artistMbids.length, mode: "forward" });
   return artistMbids.length;

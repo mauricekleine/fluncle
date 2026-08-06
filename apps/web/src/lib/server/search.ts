@@ -344,8 +344,16 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
  * a tie the primary name's way: an artist the query names DIRECTLY outranks one it reaches only
  * through an alias, so a name that is one artist's primary and another's AKA still lands on the
  * primary. Matched on `lower(alias)` — the same case-insensitive raw compare the name uses, not
- * the slug — and correlated by `artist_id` (`artist_aliases_artist_id_idx`), over an `artists`
- * table that stays archive-sized, so the read is bounded however deep the catalogue gets.
+ * the slug — and correlated by `artist_id` (`artist_aliases_artist_id_idx`).
+ *
+ * SCALE CAVEAT, deliberately recorded rather than fixed here: `artists` is NOT archive-sized. The
+ * credit sweep mints a row per unmatched MusicBrainz credit (`mintArtistByMbid`), so the table
+ * tracks the crawl, and `lower(<name>) <predicate> or exists (<alias probe>)` cannot be served by
+ * any index — a correlated `exists` is not an indexable `or` arm, so the planner scans every artist
+ * and probes the aliases per row. `resolveFilterArtistId` below shows the shape that fixes it (ask
+ * the two ranks as two statements, so rank 0 is a seek); doing the same here has to split a LIMIT
+ * across the two ranks and de-duplicate an artist matched both ways, which is why it is filed in
+ * docs/audit-backlog.md rather than done in passing.
  *
  * AND SO DOES A LABEL. `label_aliases` is the structural twin of `artist_aliases` — the same fold
  * an operator's label MERGE writes (the loser's name becomes a `confirmed` alias of the winner) and
@@ -733,11 +741,28 @@ export async function resolveFilterEntities(
 }
 
 /**
- * One artist NAME (or slug, or a trusted AKA) → `artists.id`, or `undefined`. Bounded: one read of
- * the archive-sized `artists` table, riding `artists_name_nocase_idx` / the slug unique index, with
- * `artist_aliases` correlated by `artist_id`. `name_rank` breaks a tie the primary name's way, the
- * same rule the entity tier and `resolveArtistCentroids` hold. `renderable_track_count > 0` is the
- * count guard: no edges, no id, and the caller keeps the substring fallback.
+ * One artist NAME (or slug, or a trusted AKA) → `artists.id`, or `undefined`. `renderable_track_count
+ * > 0` is the count guard: no edges, no id, and the caller keeps the substring fallback.
+ *
+ * ── WHY THIS IS TWO STATEMENTS AND NOT ONE `or` ─────────────────────────────────────────────────
+ * `artists` is a GROWING table — the credit sweep mints a row per unmatched MusicBrainz credit
+ * (`mintArtistByMbid`), so it tracks the crawl rather than the archive (`scripts/lib/scale-seed.ts`
+ * seeds 30,000 of them for the 150k regime). One `where … or … or exists (…)` over it is therefore a
+ * full scan with a correlated `artist_aliases` probe per row, on the single most common search shape
+ * there is, and no index can serve it: an `or` arm that is a correlated `exists` is not indexable, so
+ * SQLite cannot build a multi-index OR and falls back to the scan — and `lower(artists.name)` wraps
+ * the column, which defeats `artists_name_nocase_idx` even on its own.
+ *
+ * So the two RANKS are asked separately, in rank order, which is exactly what `order by name_rank asc
+ * … limit 1` meant: a primary name or slug wins outright, and the alias is consulted ONLY when
+ * nothing claims the name directly. Rank 0 is now two indexable equalities — `name = ? collate
+ * nocase` rides `artists_name_nocase_idx`, `slug = ?` rides the slug unique index — so the common
+ * case is a seek. Rank 1 drives FROM `artist_aliases` and PK-joins `artists`, instead of scanning
+ * every artist to ask whether one of its aliases matches.
+ *
+ * `name = ? collate nocase` is exactly `lower(name) = ?` for this needle, not an approximation of it:
+ * SQLite's `lower()` and its NOCASE collation both fold ASCII A–Z and nothing else, so the two agree
+ * character for character on every input (a non-ASCII capital matches under neither).
  */
 async function resolveFilterArtistId(name: string): Promise<string | undefined> {
   const needle = name.trim().toLowerCase();
@@ -748,25 +773,40 @@ async function resolveFilterArtistId(name: string): Promise<string | undefined> 
 
   const slug = slugify(name);
   const db = await getDb();
-  const result = await db.execute({
-    // Binds in SQL-text order: the name_rank case (name, slug), then the where (name, slug, alias).
-    args: [needle, slug, needle, slug, needle],
-    sql: `select artists.id as id,
-                 case when lower(artists.name) = ? or artists.slug = ? then 0 else 1 end as name_rank
+  // Rank 0 — the artist claims the typed string as its own name or slug. Both `or` arms are plain
+  // equalities on indexed columns, so this is a seek pair rather than a scan.
+  const primary = await db.execute({
+    args: [needle, slug],
+    sql: `select artists.id as id
           from artists
           where artists.renderable_track_count > 0
-            and (lower(artists.name) = ?
-                 or artists.slug = ?
-                 or exists (select 1 from artist_aliases
-                            where artist_aliases.artist_id = artists.id
-                              and artist_aliases.kind = 'name'
-                              and artist_aliases.status in ('auto', 'confirmed')
-                              and lower(artist_aliases.alias) = ?))
-          order by name_rank asc, length(artists.name) asc, artists.name asc
+            and (artists.name = ? collate nocase or artists.slug = ?)
+          order by length(artists.name) asc, artists.name asc
+          limit 1`,
+  });
+  const primaryId = typedRow<{ id: string }>(primary.rows)?.id;
+
+  if (primaryId !== undefined) {
+    return primaryId;
+  }
+
+  // Rank 1 — a trusted AKA (`kind='name'`, `status in ('auto','confirmed')`), the same trust the
+  // entity tier resolves an alias by. Driven from the alias rows, so the count guard and the tiebreak
+  // read the joined artist by primary key.
+  const alias = await db.execute({
+    args: [needle],
+    sql: `select artists.id as id
+          from artist_aliases
+          join artists on artists.id = artist_aliases.artist_id
+          where artist_aliases.kind = 'name'
+            and artist_aliases.status in ('auto', 'confirmed')
+            and lower(artist_aliases.alias) = ?
+            and artists.renderable_track_count > 0
+          order by length(artists.name) asc, artists.name asc
           limit 1`,
   });
 
-  return typedRow<{ id: string }>(result.rows)?.id;
+  return typedRow<{ id: string }>(alias.rows)?.id;
 }
 
 /**
