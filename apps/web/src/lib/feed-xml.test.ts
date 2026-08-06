@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { escapeXml } from "./feed-xml";
 
-// The one escaper the three syndication feeds share (atom.xml / rss.xml / podcast.xml),
-// so what it does and what it deliberately does NOT do is pinned in one place.
+// The one escaper the syndication feeds share (atom.xml / rss.xml / podcast.xml, and
+// fresh.xml via lib/fresh-feed-rss.ts), so what it does and what it deliberately does
+// NOT do is pinned in one place.
 
 describe("escapeXml", () => {
   it('escapes the four characters that break XML text and "…" attributes', () => {
@@ -20,9 +21,10 @@ describe("escapeXml", () => {
   });
 
   it("leaves the apostrophe alone — every call site is text or a double-quoted attribute", () => {
-    // Callers interpolate into `<title>…</title>` and `href="…"` only (routes/atom[.]xml.ts,
-    // rss[.]xml.ts, podcast[.]xml.ts), where a bare `'` is valid XML. Escaping it would put
-    // `&apos;` in front of readers for no gain — a track called "Don't" stays readable.
+    // Callers interpolate into element text and double-quoted attributes only (`<title>…`,
+    // `href="…"`, `url="…"` across the four feeds), where a bare `'` is valid XML. Escaping
+    // it would put `&apos;` in front of readers for no gain — a track called "Don't" stays
+    // readable.
     expect(escapeXml("Don't Stop")).toBe("Don't Stop");
   });
 
