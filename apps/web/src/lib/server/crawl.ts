@@ -735,11 +735,11 @@ async function rearmAllowedArtists(): Promise<number> {
 
   const now = new Date().toISOString();
 
-  // ONE batch, not a statement per identity: the selection is already capped at
-  // `REARM_ALLOWED_BATCH`, so this was a bounded N+1 rather than an unbounded one — but it still
-  // spent that many sequential round-trips inside a tick that fires 144×/day, and it left the node
-  // writes and the stamp able to half-apply. Batched, the pass is one write transaction, so a tick
-  // that dies mid-way re-arms the same identities next time instead of stamping some of them.
+  // ONE batch, not a statement per identity. The selection is capped at `REARM_ALLOWED_BATCH`, so
+  // a statement-per-identity loop is a bounded N+1 rather than an unbounded one — but it still
+  // spends that many sequential round-trips inside a tick that fires 144×/day, and it lets the node
+  // writes and the stamp half-apply. As ONE write transaction, a tick that dies mid-way re-arms the
+  // same identities next time instead of stamping some of them.
   await db.batch(
     [
       ...artistMbids.map((artistMbid) => ({

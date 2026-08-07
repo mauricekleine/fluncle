@@ -753,9 +753,9 @@ export async function resolveFilterEntities(
  * SQLite cannot build a multi-index OR and falls back to the scan — and `lower(artists.name)` wraps
  * the column, which defeats `artists_name_nocase_idx` even on its own.
  *
- * So the two RANKS are asked separately, in rank order, which is exactly what `order by name_rank asc
- * … limit 1` meant: a primary name or slug wins outright, and the alias is consulted ONLY when
- * nothing claims the name directly. Rank 0 is now two indexable equalities — `name = ? collate
+ * So the two RANKS are asked separately, in rank order, which is all a `name_rank` tiebreak over one
+ * `limit 1` ever expressed: a primary name or slug wins outright, and the alias is consulted ONLY
+ * when nothing claims the name directly. Rank 0 is two indexable equalities — `name = ? collate
  * nocase` rides `artists_name_nocase_idx`, `slug = ?` rides the slug unique index — so the common
  * case is a seek. Rank 1 drives FROM `artist_aliases` and PK-joins `artists`, instead of scanning
  * every artist to ask whether one of its aliases matches.
