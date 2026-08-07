@@ -429,7 +429,7 @@ body::before {
    without shouting (DESIGN.md). The stars are sparse Starlight-Cream dots, kept
    faint so the title + label still hold WCAG AA over them (Legible Sky). */
 .track-row-checkpoint {
-  --checkpoint-star: rgb(244 234 215 / 0.7);
+  --checkpoint-star: color-mix(in oklch, var(--starlight-cream) 70%, transparent);
   /* Deeper than the plate — a darker window into space, the starfield popping
      against it (var(--background) is the darkest token, the deep field). */
   background-color: color-mix(in oklch, var(--background) 85%, #000);
@@ -5078,6 +5078,12 @@ a.catalogue-letter:focus-visible {
 [data-slot="sidebar-inner"] {
   background: color-mix(in oklch, var(--card) 88%, transparent);
   border-radius: calc(var(--radius) * 1.4);
+  /* The floating variant ships a neutral `shadow-sm` with its rounded panel; drop
+     it the way the drawer and the hover card drop theirs. Depth here is what shows
+     through the glass, and a drop shadow is prohibited outright (DESIGN §4
+     Through-the-Glass) — the plate beside it carries none either, which is exactly
+     the continuity this block is aligning. */
+  box-shadow: none;
   outline: 1px solid color-mix(in oklch, var(--border) 40%, transparent);
   outline-offset: 4px;
 }

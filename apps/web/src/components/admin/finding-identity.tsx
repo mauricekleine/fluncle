@@ -165,9 +165,12 @@ function Cover({
           loading="lazy"
           src={src}
         />
+        {/* A warm hairline ring, never an elevation drop shadow (DESIGN §4
+            Through-the-Glass, §2 Warm Dark) — it separates the gold disc from bright
+            cover art without a neutral black. Same recipe as `.cover-story-badge`. */}
         <span
           aria-hidden="true"
-          className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
+          className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_0_0_1px_color-mix(in_oklch,var(--deep-field)_70%,transparent)]"
         >
           <PlayIcon className="size-2.5" weight="fill" />
         </span>

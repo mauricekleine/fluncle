@@ -16,7 +16,7 @@ import { BrandIcon } from "@/components/brand-icon";
 //
 // Use these (or `<BrandIcon icon={si…} />` directly when rendering inline, as the
 // Spotify mark is) for any THIRD-PARTY PLATFORM LOGO. Phosphor is for INTERFACE icons
-// only — see DESIGN.md, "Platform icons vs interface icons".
+// only — see DESIGN.md §5, "Iconography".
 
 type PlatformIconProps = { className?: string; weight?: string };
 
