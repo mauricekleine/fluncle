@@ -111,7 +111,7 @@
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "de3006e8f0ef01f7be02a240d090f1d2a704c7839bd9a104e61c47b40f96779c"
+      "computedHash": "53b75d91508399ec970746bc28c3d80d6807129a56c2b1ba3773eab64bac6676"
     },
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",
