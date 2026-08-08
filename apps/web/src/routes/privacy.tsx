@@ -62,7 +62,7 @@ function PrivacyPage() {
           <h2>Accounts</h2>
           <p className="log-privacy-intro">
             You never need an account to browse fluncle.com. An account only exists to save your own
-            things and carry them between devices.
+            tracks and sets, and carry them between devices.
           </p>
           <dl>
             <div className="log-about-definition">
@@ -87,7 +87,7 @@ function PrivacyPage() {
               <dd>
                 The tracks you save, the sets you build, the artists and labels you watch, your
                 settings, your progress in the Galaxy game, and any tracks you submit while signed
-                in. This is yours; it is used to show you your own things, not to profile you.
+                in. This is yours; it is used to show it back to you, not to profile you.
               </dd>
             </div>
             <div className="log-about-definition">

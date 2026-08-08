@@ -145,7 +145,7 @@ export const searchArchive = oc
     method: "GET",
     operationId: "searchArchive",
     path: "/search/archive",
-    summary: "Search Fluncle's archive — coordinate, entity, full-text, or natural language",
+    summary: "Search Fluncle's archive by coordinate, entity, full-text, or natural language",
     tags: ["Search"],
   })
   .input(
