@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 
+import { colors } from "@fluncle/tokens";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   type ErrorComponentProps,
@@ -134,7 +135,12 @@ export const Route = createRootRoute({
         name: "viewport",
       },
       {
-        content: "#090a0b",
+        // The browser chrome painted in Deep Field, so the UA's own bar joins the
+        // night sky instead of framing it. A meta tag cannot read a CSS var, so the
+        // hex is read from `@fluncle/tokens` (the generated mirror of DESIGN.md)
+        // rather than hand-copied — the same rule the OG cards and the oEmbed card
+        // follow, and the reason none of them can drift off-palette.
+        content: colors.deepField,
         name: "theme-color",
       },
       {

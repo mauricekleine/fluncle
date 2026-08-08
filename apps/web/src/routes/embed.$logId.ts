@@ -36,6 +36,7 @@ const EMBED_HEADERS = {
 const COLOR = {
   bg: colors.deepField,
   cream: colors.starlightCream,
+  glow: colors.eclipseGlow,
   gold: colors.eclipseGold,
   ink: colors.inkOnGold,
   rule: colors.ruleDark,
@@ -100,7 +101,7 @@ a{color:inherit;text-decoration:none}
 .meta-label{color:${COLOR.cream};font-weight:700}
 .actions{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:8px}
 .action-primary{display:inline-flex;align-items:center;padding:7px 14px;border-radius:999px;background:${COLOR.gold};color:${COLOR.ink};font-size:13px;font-weight:800}
-.action-primary:hover{background:#ffd057}
+.action-primary:hover{background:${COLOR.glow}}
 .action-quiet{font-size:13px;font-weight:700;color:${COLOR.stardust};border-bottom:1px solid ${COLOR.rule};padding-bottom:1px}
 .action-quiet:hover{color:${COLOR.cream}}
 :focus-visible{outline:2px solid ${COLOR.gold};outline-offset:2px;border-radius:4px}

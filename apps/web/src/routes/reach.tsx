@@ -68,9 +68,9 @@ type PlatformDef = {
 };
 
 // Every platform the console knows (display order is alphabetical, applied at render).
-// `slug` is the `?platform=` value; icons are the OFFICIAL simple-icons marks (DESIGN.md
-// "Platform icons vs interface icons") — the newsletter is Fluncle's own surface, so it
-// carries a Phosphor interface glyph instead of a brand mark.
+// `slug` is the `?platform=` value; icons are the OFFICIAL simple-icons marks (DESIGN.md §5
+// "Iconography") — the newsletter is Fluncle's own surface, so it carries a Phosphor
+// interface glyph instead of a brand mark.
 const PLATFORMS: PlatformDef[] = [
   { icon: siSpotify, label: "Spotify", slug: "spotify" },
   { icon: siYoutube, label: "YouTube", slug: "youtube" },
