@@ -1040,6 +1040,39 @@ function pickLabelImageUri(images: DiscogsImage[] | undefined): string | undefin
   return (primary ?? images[0])?.uri;
 }
 
+// The declared MIME rides all the way into R2 as the object's `contentType`, so it decides how a
+// browser later interprets the bytes. `image/*` is therefore too wide: it admits `image/svg+xml`,
+// which is a script-bearing document rather than a raster, and Discogs never serves one for a
+// label logo. Only these four may be stored, and each must be BACKED by its own magic bytes —
+// the URI allowlist constrains a string the caller also supplies, so it says nothing about content.
+const LABEL_IMAGE_SIGNATURES: { bytes: number[]; mime: string }[] = [
+  { bytes: [0xff, 0xd8, 0xff], mime: "image/jpeg" },
+  { bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], mime: "image/png" },
+  { bytes: [0x47, 0x49, 0x46, 0x38], mime: "image/gif" },
+  // WEBP is RIFF....WEBP — the four size bytes at offset 4 are skipped, hence the offset pair.
+  { bytes: [0x52, 0x49, 0x46, 0x46], mime: "image/webp" },
+];
+
+/** The MIME the bytes actually ARE, or undefined when they match no allowed raster format. */
+function sniffLabelImageMime(bytes: ArrayBuffer): string | undefined {
+  const head = new Uint8Array(bytes);
+
+  const match = LABEL_IMAGE_SIGNATURES.find(
+    (candidate) =>
+      head.length >= candidate.bytes.length &&
+      candidate.bytes.every((byte, index) => head[index] === byte),
+  );
+
+  if (match?.mime !== "image/webp") {
+    return match?.mime;
+  }
+
+  // RIFF alone is a container family (WAV, AVI); only the WEBP form-type makes it an image.
+  const isWebp = [0x57, 0x45, 0x42, 0x50].every((byte, index) => head[8 + index] === byte);
+
+  return isWebp ? "image/webp" : undefined;
+}
+
 function decodeBase64Image(value: string): ArrayBuffer | undefined {
   try {
     const decoded = atob(value);
@@ -1103,15 +1136,20 @@ export function verifyDiscogsLabelEvidence(
     return { kind: "invalid" };
   }
 
-  const mime = suppliedImage.mime.split(";")[0]?.trim().toLowerCase();
+  const bytes = decodeBase64Image(suppliedImage.bytesBase64);
 
-  if (!mime?.startsWith("image/")) {
+  if (!bytes) {
     return { kind: "invalid" };
   }
 
-  const bytes = decodeBase64Image(suppliedImage.bytesBase64);
+  // The bytes decide the type; the caller's declared MIME is not consulted at all. Storing the
+  // SNIFFED value is what carries the safety property, so a payload whose header disagrees with
+  // its content is already defused rather than needing to be rejected — and not rejecting it
+  // keeps a benign spelling (`image/jpg`) from failing every label closed, which would read as
+  // "Discogs has no logos" and rebuild the exact silent-zero this whole change exists to remove.
+  const sniffed = sniffLabelImageMime(bytes);
 
-  return bytes ? { image: { bytes, mime }, kind: "image" } : { kind: "invalid" };
+  return sniffed ? { image: { bytes, mime: sniffed }, kind: "image" } : { kind: "invalid" };
 }
 
 /**

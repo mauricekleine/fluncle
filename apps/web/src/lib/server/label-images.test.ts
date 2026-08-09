@@ -94,7 +94,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
           },
           discogsLabelId: 1111,
           image: {
-            bytesBase64: "AQID",
+            bytesBase64: "/9j/4AAQ",
             mime: "image/jpeg",
             uri: "https://i.discogs.com/logo.jpg",
           },
@@ -123,7 +123,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
           },
           discogsLabelId: 1111,
           image: {
-            bytesBase64: "AQID",
+            bytesBase64: "/9j/4AAQ",
             mime: "image/jpeg",
             uri: "https://i.discogs.com/other.jpg",
           },
