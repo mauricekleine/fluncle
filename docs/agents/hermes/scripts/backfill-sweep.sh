@@ -11,10 +11,9 @@
 # would be fed to Python. This thin wrapper is the bash entry; all the JSON work
 # lives in the bun orchestrator beside it. Its stdout is the cron's run output.
 #
-# THE WORKER-PACED MODEL: the box holds NO Discogs/Last.fm vendor keys; the Worker
-# does. So the backfill API calls happen in the Worker — this driver just paces one
-# small bounded batch of each source per tick via the `fluncle` CLI, and the Worker
-# carries the per-finding reliability state + Retry-After backoff.
+# Discogs is split: this box performs only the paced vendor reads, then returns bounded evidence to
+# the agent-tier operations; the Worker still decides every match and owns every write. Other legs
+# retain their CLI path. The named Discogs token comes from the existing sweep environment.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../backfill-timer/, installed by
 # ../install-host-timers.sh), NOT a gateway `hermes cron create`. The backfills are AGENT
@@ -27,16 +26,23 @@ set -euo pipefail
 # omits /usr/local/bin (the bun + fluncle symlinks) and /root/.bun/bin, so a bare
 # `bun`/`fluncle` is "not found" → exit 127 (the runner's env, not the image's; a
 # manual `bash backfill-sweep.sh` works because it inherits the container's full PATH).
-# Prepend the known install dirs so this wrapper's `bun` AND the orchestrator's
-# `fluncle`/`bun` spawns resolve regardless of the runner's PATH.
+# Prepend the known install dirs so this wrapper's `bun` and the orchestrator's remaining CLI
+# spawns resolve regardless of the runner's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# Belt-and-suspenders: the cron runner's exec context loses the PATH export above,
-# so pin ABSOLUTE paths for the interpreter + the CLI. The orchestrator reads
-# BUN_BIN/FLUNCLE_BIN, so its `bun`/`fluncle` spawns resolve with zero PATH
-# dependence; the wrapper itself execs bun by absolute path too.
+# Belt-and-suspenders: pin absolute paths for the interpreter and the remaining CLI legs.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
+
+# Source the shared 0600 sweep environment so the agent token and box-side Discogs token are
+# exported to the Bun driver. The host timer supplies only HOME; secrets never ride the unit.
+BACKFILL_ENV_FILE="${BACKFILL_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
+if [ -r "${BACKFILL_ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "${BACKFILL_ENV_FILE}"
+  set +a
+fi
 
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

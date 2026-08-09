@@ -133,8 +133,14 @@ const STATE_DIR =
   process.env.ENTITY_BIO_STATE_DIR ??
   join(process.env.HOME ?? "/opt/data/home", ".entity-bio-sweep");
 
-const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
-const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
+// Read at CALL time, never captured at module load. A module-scope const freezes whichever
+// environment existed when this file was FIRST evaluated, and with one shared module cache that
+// moment is decided by whoever imported it first — a sibling test's STATIC import evaluates this
+// module before any later dynamic import can set the stub, and the winner of that race is
+// directory read order, which is alphabetical on APFS and hash-ordered on ext4. Reading the
+// variable where it is used removes the ordering dependency instead of documenting it.
+const fluncleBin = (): string => process.env.FLUNCLE_BIN ?? "fluncle";
+const claudeBin = (): string => process.env.CLAUDE_BIN ?? "claude";
 // Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
 // backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
 // Set here (not in the album/artist/label-bio-sweep.sh wrappers) so the shared path covers all three.
@@ -521,7 +527,7 @@ function run(
 }
 
 function fluncleJson<T>(args: string[]): T {
-  const { code, stderr, stdout } = run(FLUNCLE_BIN, [...args, "--json"]);
+  const { code, stderr, stdout } = run(fluncleBin(), [...args, "--json"]);
 
   if (code !== 0) {
     throw new Error(`fluncle ${args.join(" ")} exited ${code}: ${stderr.trim()}`);
@@ -697,7 +703,7 @@ async function authorBio(
     args.push("--effort", ENTITY_BIO_CLAUDE_EFFORT);
   }
 
-  const { code, stderr, stdout } = run(CLAUDE_BIN, args, prompt);
+  const { code, stderr, stdout } = run(claudeBin(), args, prompt);
 
   if (code !== 0) {
     const combined = `${stdout}\n${stderr}`;
@@ -842,7 +848,7 @@ function deliverBio(input: {
   try {
     writeFileSync(bioPath, bio, "utf8");
 
-    const { code, stderr, stdout } = run(FLUNCLE_BIN, [
+    const { code, stderr, stdout } = run(fluncleBin(), [
       "admin",
       group,
       "describe",

@@ -11,14 +11,222 @@
 // never 400 on a malformed value, so the contract must not coerce (coercion would
 // reject `?limit=abc`). The handler reproduces the exact parse logic.
 //
-// These are query-only POSTs (the live routes carry their params on the URL, with
-// NO request body). oRPC's compact input mode sources a POST's input from the
-// BODY, so it would drop the query string; `inputStructure: "detailed"` makes the
-// `query` explicit, so the params reach the handler and a bodyless POST is valid.
-// The OUTPUT stays compact (the body is the envelope directly).
+// These POSTs carry their controls on the query string and the box-side Discogs split may also
+// carry bounded evidence in the body. oRPC's compact input mode cannot represent both, so
+// `inputStructure: "detailed"` keeps the query explicit while allowing a bodyless preparation
+// request or a schema-validated candidate submission. The output stays compact.
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+
+// The Discogs FETCH can run on the box while every verdict + write stays in the Worker. These caps
+// mirror the existing Worker pass ceilings and Discogs query fan-out: three finding rows, three
+// queries per finding, four releases per query; 25 album-fact rows; four label-image rows. Every
+// nested value is bounded too because the box supplies evidence, never authority.
+export const DISCOGS_RELEASE_WORK_LIMIT = 3;
+export const DISCOGS_SEARCH_QUERY_LIMIT = 3;
+export const DISCOGS_RELEASES_PER_TRACK_LIMIT = 12;
+export const DISCOGS_FACTS_WORK_LIMIT = 25;
+export const DISCOGS_LABEL_WORK_LIMIT = 4;
+
+const DISCOGS_ID_MAX = Number.MAX_SAFE_INTEGER;
+const DISCOGS_TEXT_MAX = 500;
+const DISCOGS_URI_MAX = 2_048;
+const DISCOGS_QUERY_MAX = 2_048;
+const DISCOGS_ARTIST_LIMIT = 20;
+const DISCOGS_LABEL_LIMIT = 20;
+const DISCOGS_STYLE_LIMIT = 50;
+const DISCOGS_FORMAT_LIMIT = 20;
+const DISCOGS_TRACKLIST_LIMIT = 500;
+const DISCOGS_LABEL_DETAIL_IMAGE_LIMIT = 20;
+const MAX_LABEL_IMAGE_BYTES = 5_000_000;
+// Four base64 characters carry three bytes. Padding needs at most two extra characters.
+const MAX_LABEL_IMAGE_BASE64_CHARS = Math.ceil((MAX_LABEL_IMAGE_BYTES * 4) / 3) + 2;
+
+const DiscogsIdSchema = z.number().int().positive().max(DISCOGS_ID_MAX);
+const DiscogsTextSchema = z.string().max(DISCOGS_TEXT_MAX);
+
+/** A normalized Discogs release detail: exactly the fields the Worker's existing gate reads. */
+export const DiscogsReleaseEvidenceSchema = z
+  .object({
+    artists: z.array(z.object({ name: DiscogsTextSchema.optional() })).max(DISCOGS_ARTIST_LIMIT),
+    formats: z.array(z.object({ name: DiscogsTextSchema.optional() })).max(DISCOGS_FORMAT_LIMIT),
+    id: DiscogsIdSchema,
+    labels: z
+      .array(
+        z.object({
+          catno: DiscogsTextSchema.optional(),
+          name: DiscogsTextSchema.optional(),
+        }),
+      )
+      .max(DISCOGS_LABEL_LIMIT),
+    masterId: DiscogsIdSchema.optional(),
+    /** The search hit's master id, retained when the release detail omits it. */
+    searchMasterId: DiscogsIdSchema.optional(),
+    styles: z.array(DiscogsTextSchema).max(DISCOGS_STYLE_LIMIT),
+    title: DiscogsTextSchema.optional(),
+    tracklist: z
+      .array(z.object({ title: DiscogsTextSchema.optional() }))
+      .max(DISCOGS_TRACKLIST_LIMIT),
+    year: z.number().int().min(1_000).max(9_999).optional(),
+  })
+  .meta({ id: "DiscogsReleaseEvidence" });
+
+/** One explicit box result keyed to the DB-owned finding, including a clean empty search. */
+export const DiscogsReleaseCandidateSchema = z
+  .object({
+    releases: z.array(DiscogsReleaseEvidenceSchema).max(DISCOGS_RELEASES_PER_TRACK_LIMIT),
+    trackId: z.string().min(1).max(DISCOGS_TEXT_MAX),
+  })
+  .meta({ id: "DiscogsReleaseCandidate" });
+
+const DiscogsReleaseCandidateBatchSchema = z
+  .array(DiscogsReleaseCandidateSchema)
+  .max(DISCOGS_RELEASE_WORK_LIMIT)
+  .superRefine((entries, context) => {
+    const trackIds = new Set<string>();
+
+    for (const entry of entries) {
+      if (trackIds.has(entry.trackId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Discogs candidate track ids must be unique",
+        });
+        return;
+      }
+
+      trackIds.add(entry.trackId);
+    }
+  });
+
+/** The Worker's exact Discogs searches for one release-id work row. */
+export const DiscogsReleaseWorkSchema = z
+  .object({
+    queries: z.array(z.string().min(1).max(DISCOGS_QUERY_MAX)).max(DISCOGS_SEARCH_QUERY_LIMIT),
+    trackId: z.string().min(1).max(DISCOGS_TEXT_MAX),
+  })
+  .meta({ id: "DiscogsReleaseWork" });
+
+/** One album-facts work row; the Worker will accept evidence only for this DB release id. */
+export const DiscogsFactsWorkSchema = z
+  .object({
+    releaseId: DiscogsIdSchema,
+    slug: z.string().min(1).max(DISCOGS_TEXT_MAX),
+  })
+  .meta({ id: "DiscogsFactsWork" });
+
+/** One supplied release payload for the album-facts drain, keyed by its DB-owned album slug. */
+export const DiscogsFactsCandidateSchema = z
+  .object({
+    release: DiscogsReleaseEvidenceSchema,
+    slug: z.string().min(1).max(DISCOGS_TEXT_MAX),
+  })
+  .meta({ id: "DiscogsFactsCandidate" });
+
+const DiscogsFactsCandidateBatchSchema = z
+  .array(DiscogsFactsCandidateSchema)
+  .max(DISCOGS_FACTS_WORK_LIMIT)
+  .superRefine((entries, context) => {
+    const slugs = new Set<string>();
+
+    for (const entry of entries) {
+      if (slugs.has(entry.slug)) {
+        context.addIssue({
+          code: "custom",
+          message: "Discogs facts candidate slugs must be unique",
+        });
+        return;
+      }
+
+      slugs.add(entry.slug);
+    }
+  });
+
+const DiscogsLabelDetailImageSchema = z.object({
+  type: z.enum(["primary", "secondary"]).optional(),
+  uri: z.string().min(1).max(DISCOGS_URI_MAX).optional(),
+});
+
+const DiscogsLabelImageBytesSchema = z.object({
+  bytesBase64: z
+    .string()
+    .min(1)
+    .max(MAX_LABEL_IMAGE_BASE64_CHARS)
+    .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  mime: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^image\/[A-Za-z0-9.+-]+$/),
+  uri: z.string().min(1).max(DISCOGS_URI_MAX),
+});
+
+/** Box-fetched Discogs label detail plus, when one exists, its separately downloaded image. */
+export const DiscogsLabelCandidateSchema = z
+  .object({
+    detail: z.object({
+      id: DiscogsIdSchema,
+      images: z.array(DiscogsLabelDetailImageSchema).max(DISCOGS_LABEL_DETAIL_IMAGE_LIMIT),
+    }),
+    discogsLabelId: DiscogsIdSchema,
+    image: DiscogsLabelImageBytesSchema.optional(),
+    slug: z.string().min(1).max(DISCOGS_TEXT_MAX),
+  })
+  .superRefine((candidate, context) => {
+    if (candidate.detail.id !== candidate.discogsLabelId) {
+      context.addIssue({
+        code: "custom",
+        message: "Discogs label detail id must match its work id",
+      });
+    }
+  })
+  .meta({ id: "DiscogsLabelCandidate" });
+
+const DiscogsLabelCandidateBatchSchema = z
+  .array(DiscogsLabelCandidateSchema)
+  .max(DISCOGS_LABEL_WORK_LIMIT)
+  .superRefine((entries, context) => {
+    const slugs = new Set<string>();
+    const base64Chars = entries.reduce(
+      (total, entry) => total + (entry.image?.bytesBase64.length ?? 0),
+      0,
+    );
+
+    if (base64Chars > MAX_LABEL_IMAGE_BASE64_CHARS * DISCOGS_LABEL_WORK_LIMIT) {
+      context.addIssue({
+        code: "custom",
+        message: "Discogs label-image candidate batch exceeds its decoded-image budget",
+      });
+    }
+
+    for (const entry of entries) {
+      if (slugs.has(entry.slug)) {
+        context.addIssue({
+          code: "custom",
+          message: "Discogs label candidate slugs must be unique",
+        });
+        return;
+      }
+
+      slugs.add(entry.slug);
+    }
+  });
+
+/** A label whose MusicBrainz-first preparation established that Discogs evidence is needed. */
+export const DiscogsLabelWorkSchema = z
+  .object({
+    discogsLabelId: DiscogsIdSchema,
+    slug: z.string().min(1).max(DISCOGS_TEXT_MAX),
+  })
+  .meta({ id: "DiscogsLabelWork" });
+
+export type DiscogsReleaseEvidence = z.infer<typeof DiscogsReleaseEvidenceSchema>;
+export type DiscogsReleaseCandidate = z.infer<typeof DiscogsReleaseCandidateSchema>;
+export type DiscogsReleaseWork = z.infer<typeof DiscogsReleaseWorkSchema>;
+export type DiscogsFactsCandidate = z.infer<typeof DiscogsFactsCandidateSchema>;
+export type DiscogsFactsWork = z.infer<typeof DiscogsFactsWorkSchema>;
+export type DiscogsLabelCandidate = z.infer<typeof DiscogsLabelCandidateSchema>;
+export type DiscogsLabelWork = z.infer<typeof DiscogsLabelWorkSchema>;
 
 // The row shapes are ported VERBATIM from the live `backfill.ts` result types so
 // the success bodies stay byte-for-byte for the CLI's `fluncle admin backfill`.
@@ -79,7 +287,13 @@ export const backfillDiscogs = oc
   })
   .input(
     z.object({
+      body: z
+        .object({
+          discogsCandidates: DiscogsReleaseCandidateBatchSchema.optional(),
+        })
+        .optional(),
       query: z.object({
+        boxFetch: z.string().optional(),
         cursor: z.string().optional(),
         dryRun: z.string().optional(),
         limit: z.string().optional(),
@@ -88,6 +302,7 @@ export const backfillDiscogs = oc
   )
   .output(
     z.object({
+      discogsWork: z.array(DiscogsReleaseWorkSchema).max(DISCOGS_RELEASE_WORK_LIMIT),
       dryRun: z.boolean(),
       nextCursor: z.string().nullable(),
       ok: z.literal(true),
@@ -146,7 +361,8 @@ const DiscogsFactsFailedSchema = z
  * leaves the worklist the moment it is ruled. `none` is the releases that genuinely carry no number
  * (terminal — a pressing does not grow one later); `failed` is a lookup that errored, where nothing
  * was learned and a later tick retries. It writes catalogue metadata only, never a certification, so
- * it stays agent-allowed. A NO-OP until `DISCOGS_USER_TOKEN` is provisioned (`configured: false`).
+ * it stays agent-allowed. `configured` covers either the legacy Worker token or an explicit
+ * box-fetch pass.
  */
 export const backfillDiscogsFacts = oc
   .route({
@@ -159,7 +375,13 @@ export const backfillDiscogsFacts = oc
   })
   .input(
     z.object({
+      body: z
+        .object({
+          discogsCandidates: DiscogsFactsCandidateBatchSchema.optional(),
+        })
+        .optional(),
       query: z.object({
+        boxFetch: z.string().optional(),
         dryRun: z.string().optional(),
         limit: z.string().optional(),
       }),
@@ -167,8 +389,9 @@ export const backfillDiscogsFacts = oc
   )
   .output(
     z.object({
-      // False when DISCOGS_USER_TOKEN is unset — the leg was a no-op this tick.
+      // False when neither the legacy Worker fetch nor the box-fetch split is configured.
       configured: z.boolean(),
+      discogsWork: z.array(DiscogsFactsWorkSchema).max(DISCOGS_FACTS_WORK_LIMIT),
       dryRun: z.boolean(),
       failed: z.array(DiscogsFactsFailedSchema),
       failedCount: z.number(),
@@ -643,7 +866,13 @@ export const backfillLabelImages = oc
   })
   .input(
     z.object({
+      body: z
+        .object({
+          discogsCandidates: DiscogsLabelCandidateBatchSchema.optional(),
+        })
+        .optional(),
       query: z.object({
+        boxFetch: z.string().optional(),
         cursor: z.string().optional(),
         dryRun: z.string().optional(),
         limit: z.string().optional(),
@@ -652,6 +881,7 @@ export const backfillLabelImages = oc
   )
   .output(
     z.object({
+      discogsWork: z.array(DiscogsLabelWorkSchema).max(DISCOGS_LABEL_WORK_LIMIT),
       dryRun: z.boolean(),
       failed: z.array(LabelImagesBackfillFailedSchema),
       failedCount: z.number(),

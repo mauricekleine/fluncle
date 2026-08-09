@@ -1,156 +1,194 @@
-// Unit tests for label-images-sweep.ts — the `--no-agent` label-image resolve cron's orchestrator.
-//
-// The sweep is a PURE trigger (zero LLM tokens): it drives ONE bounded `fluncle admin backfills
-// label-images` pass and reports it. So the contract worth pinning is exactly crawl-sweep's /
-// backfill-sweep's — parse-first, so a pass that stopped on the vendor circuit breaker is RECORDED
-// with its real counts rather than discarded as a crash — plus the summary the cron output (and
-// the /status marker) is read from.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/label-images-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is side-effect
-// free (no fluncle spawn, no network). The fluncle CLI itself is stubbed with a tiny executable
-// selected via FLUNCLE_BIN (read at module load, hence the dynamic import in beforeAll).
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 
-// The stub fluncle: a mode FILE beside it selects the response shape. (The sweep builds its own
-// argv, so the mode cannot ride on an arg the way backfill-sweep's does — and Bun's spawnSync
-// snapshots the environment, so it cannot ride on an env var either.)
-const STUB = `#!/bin/bash
-case "$(cat "$(dirname "$0")/mode")" in
-  throttled) printf '{"ok":true,"dryRun":false,"resolved":["hospital"],"resolvedCount":1,"none":[],"noneCount":0,"failed":[],"failedCount":0,"rateLimited":true}\\n' ;;
-  partial) printf '{"ok":false,"dryRun":false,"resolved":["hospital"],"resolvedCount":1,"none":["shogun-audio"],"noneCount":1,"failed":[{"error":"boom","slug":"critical-music"}],"failedCount":1,"rateLimited":false}\\n'; exit 1 ;;
-  cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
-  crash) printf 'boom\\n' >&2; exit 1 ;;
-  *) printf '{"ok":true,"dryRun":false,"resolved":["hospital","metalheadz"],"resolvedCount":2,"none":["shogun-audio"],"noneCount":1,"failed":[],"failedCount":0,"rateLimited":false}\\n' ;;
-esac
-`;
+import { type LabelImagesSweepEffects, runLabelImagesSweep } from "./label-images-sweep";
 
-let dir: string;
-let fluncleJson: typeof import("./label-images-sweep").fluncleJson;
-let runLabelImagesSweep: typeof import("./label-images-sweep").runLabelImagesSweep;
-
-/** Point the stub at one of its canned responses. */
-function mode(name: string): void {
-  writeFileSync(join(dir, "mode"), name);
-}
-
-beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), "label-images-sweep-"));
-  const bin = join(dir, "fluncle");
-  writeFileSync(bin, STUB);
-  chmodSync(bin, 0o755);
-  process.env.FLUNCLE_BIN = bin;
-  mode("ok");
-
-  ({ fluncleJson, runLabelImagesSweep } = await import("./label-images-sweep"));
-});
-
-afterAll(() => {
-  rmSync(dir, { force: true, recursive: true });
-});
-
-type Pass = {
-  failedCount?: number;
-  noneCount?: number;
-  ok?: boolean;
-  rateLimited?: boolean;
-  resolvedCount?: number;
+const env = {
+  DISCOGS_USER_TOKEN: "discogs-test-token",
+  FLUNCLE_API_BASE_URL: "https://worker.example",
+  FLUNCLE_API_TOKEN: "agent-test-token",
 };
 
-describe("label-images-sweep's fluncleJson", () => {
-  test("returns a clean pass summary", () => {
-    mode("ok");
-    const pass = fluncleJson<Pass>(["admin", "backfills", "label-images", "--limit", "6"]);
+function workerFetch(responses: object[], bodies: unknown[]): typeof globalThis.fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const inputUrl =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(inputUrl);
+    expect(url.origin).toBe("https://worker.example");
+    expect(url.pathname).toBe("/api/v1/admin/backfill/label-images");
+    expect(url.searchParams.get("boxFetch")).toBe("true");
+    expect(url.searchParams.get("limit")).toBe("4");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer agent-test-token");
+    if (init?.body !== undefined && typeof init.body !== "string") {
+      throw new Error("expected a JSON string request body");
+    }
 
-    expect(pass.ok).toBe(true);
-    expect(pass.resolvedCount).toBe(2);
-    expect(pass.noneCount).toBe(1);
-    expect(pass.rateLimited).toBe(false);
-  });
+    bodies.push(init?.body === undefined ? undefined : JSON.parse(init.body));
 
-  test("RECORDS a pass that stopped on a vendor circuit breaker", () => {
-    // The pass did real work (one logo resolved) and then a vendor throttled us. That is a
-    // throttled tick, not a crash: its counts must survive, and `rateLimited` must reach the cron
-    // output so a "1 resolved" tick does not read as a drained worklist.
-    mode("throttled");
-    const pass = fluncleJson<Pass>(["admin", "backfills", "label-images"]);
+    const response = responses.shift();
 
-    expect(pass.rateLimited).toBe(true);
-    expect(pass.resolvedCount).toBe(1);
-  });
+    if (response === undefined) {
+      throw new Error("unexpected Worker call");
+    }
 
-  test("RECORDS a partial batch (per-label failure, exit 1) rather than discarding it", () => {
-    // The CLI exits 1 when any label failed, but still prints its full summary. That partial
-    // summary must be RECORDED (some resolved, some floored, some failed), not thrown as a crash.
-    mode("partial");
-    const pass = fluncleJson<Pass>(["admin", "backfills", "label-images"]);
+    return Response.json(response);
+  }) as typeof globalThis.fetch;
+}
 
-    expect(pass.resolvedCount).toBe(1);
-    expect(pass.noneCount).toBe(1);
-    expect(pass.failedCount).toBe(1);
-  });
+describe("label image box-side Discogs split", () => {
+  test("prepares in the Worker, fetches on the box, and submits bounded evidence for the verdict", async () => {
+    const bodies: unknown[] = [];
+    const candidate = {
+      detail: {
+        id: 22,
+        images: [{ type: "primary" as const, uri: "https://img.example/logo.png" }],
+      },
+      discogsLabelId: 22,
+      image: {
+        bytesBase64: "AQID",
+        mime: "image/png",
+        uri: "https://img.example/logo.png",
+      },
+      slug: "hospital",
+    };
+    const seen: { token?: string; work?: unknown } = {};
+    const effects: LabelImagesSweepEffects = {
+      createFetcher: (token) => {
+        seen.token = token;
+        return {
+          fetchLabelCandidates: async (work) => {
+            seen.work = work;
+            return { candidates: [candidate], ok: true, rateLimited: false };
+          },
+        };
+      },
+      env,
+      fetch: workerFetch(
+        [
+          {
+            discogsWork: [{ discogsLabelId: 22, slug: "hospital" }],
+            failedCount: 0,
+            noneCount: 0,
+            ok: true,
+            rateLimited: false,
+            resolvedCount: 0,
+          },
+          {
+            discogsWork: [],
+            failedCount: 0,
+            noneCount: 0,
+            ok: true,
+            rateLimited: false,
+            resolvedCount: 1,
+          },
+        ],
+        bodies,
+      ),
+    };
 
-  test("reports a retryable per-label failure as failed, never as a clean absence", () => {
-    mode("partial");
+    const summary = await runLabelImagesSweep(effects);
 
-    const summary = runLabelImagesSweep();
-
+    expect(seen.token).toBe("discogs-test-token");
+    expect(seen.work).toEqual([{ discogsLabelId: 22, slug: "hospital" }]);
+    expect(bodies).toEqual([undefined, { discogsCandidates: [candidate] }]);
     expect(summary).toMatchObject({
-      checked: 3,
+      checked: 1,
       errors: 0,
-      failed: 1,
-      none: 1,
-      ok: false,
-      produced: 2,
+      ok: true,
+      produced: 1,
       resolved: 1,
+      resolvedCount: 1,
       throttled: false,
     });
   });
 
-  test("emits canonical counters and omits queue depth because the bounded pass has no backlog count", () => {
-    mode("ok");
-
-    const summary = runLabelImagesSweep();
-
-    expect(summary).toMatchObject({ checked: 3, errors: 0, produced: 3 });
-    // The response only carries this bounded pass's outcomes. Its limit is not a remaining
-    // backlog, and the sweep must not add a count call merely to manufacture queue_depth.
-    expect(summary).not.toHaveProperty("queue_depth");
-    expect(summary).not.toHaveProperty("expected_interval_ms");
-  });
-
-  test("a command failure reports one run error without guessing work counters", () => {
-    mode("cli-error");
-
-    const summary = runLabelImagesSweep();
-
-    expect(summary).toMatchObject({
-      checked: null,
-      errors: 1,
-      failed: 0,
-      ok: false,
-      produced: null,
+  test("a preparation-only outcome needs no Discogs or second Worker call", async () => {
+    const bodies: unknown[] = [];
+    let created = false;
+    const summary = await runLabelImagesSweep({
+      createFetcher: () => {
+        created = true;
+        throw new Error("unused");
+      },
+      env,
+      fetch: workerFetch(
+        [
+          {
+            discogsWork: [],
+            failedCount: 0,
+            noneCount: 1,
+            ok: true,
+            rateLimited: false,
+            resolvedCount: 0,
+          },
+        ],
+        bodies,
+      ),
     });
+
+    expect(created).toBe(false);
+    expect(bodies).toEqual([undefined]);
+    expect(summary).toMatchObject({ checked: 1, none: 1, ok: true, produced: 1 });
   });
 
-  test("throws on the CLI's own error payload (a failed command, not a partial pass)", () => {
-    mode("cli-error");
+  test("a Discogs throttle submits no partial evidence and remains a clean yielded tick", async () => {
+    const bodies: unknown[] = [];
+    const summary = await runLabelImagesSweep({
+      createFetcher: () => ({
+        fetchLabelCandidates: async () => ({
+          candidates: [],
+          error: "Discogs rate limit reached",
+          ok: false,
+          rateLimited: true,
+        }),
+      }),
+      env,
+      fetch: workerFetch(
+        [
+          {
+            discogsWork: [{ discogsLabelId: 22, slug: "hospital" }],
+            failedCount: 0,
+            noneCount: 0,
+            ok: true,
+            rateLimited: false,
+            resolvedCount: 0,
+          },
+        ],
+        bodies,
+      ),
+    });
 
-    expect(() => fluncleJson<Pass>(["admin", "backfills", "label-images"])).toThrow(
-      /missing_token/,
-    );
+    expect(bodies).toEqual([undefined]);
+    expect(summary).toMatchObject({ errors: 0, ok: true, resolved: 0, throttled: true });
   });
 
-  test("throws when the CLI crashes with no parseable JSON", () => {
-    mode("crash");
+  test("a Discogs transport failure submits nothing and fails loudly", async () => {
+    const bodies: unknown[] = [];
+    const summary = await runLabelImagesSweep({
+      createFetcher: () => ({
+        fetchLabelCandidates: async () => ({
+          candidates: [],
+          error: "network failed",
+          ok: false,
+          rateLimited: false,
+        }),
+      }),
+      env,
+      fetch: workerFetch(
+        [
+          {
+            discogsWork: [{ discogsLabelId: 22, slug: "hospital" }],
+            failedCount: 0,
+            noneCount: 0,
+            ok: true,
+            rateLimited: false,
+            resolvedCount: 0,
+          },
+        ],
+        bodies,
+      ),
+    });
 
-    expect(() => fluncleJson<Pass>(["admin", "backfills", "label-images"])).toThrow(/exited 1/);
+    expect(bodies).toEqual([undefined]);
+    expect(summary).toMatchObject({ error: "network failed", errors: 1, ok: false });
   });
 });

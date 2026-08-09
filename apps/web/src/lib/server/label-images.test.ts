@@ -80,6 +80,69 @@ afterEach(() => {
 });
 
 describe("resolveLabelImages — the fallback ladder", () => {
+  it("accepts box evidence only after repeating the label-id and primary-image checks", async () => {
+    seedWorklist([{ ...HOSPITAL, discogs_label_id: 1111, mb_label_id: "mbid-hospital" }]);
+    mbFetch.mockResolvedValueOnce({ data: { relations: [] }, rateLimited: false });
+    const { bucket, put } = fakeBucket();
+    const result = await resolveLabelImages(bucket, 4, false, undefined, {
+      boxFetch: true,
+      discogsCandidates: [
+        {
+          detail: {
+            id: 1111,
+            images: [{ type: "primary", uri: "https://i.discogs.com/logo.jpg" }],
+          },
+          discogsLabelId: 1111,
+          image: {
+            bytesBase64: "/9j/4AAQ",
+            mime: "image/jpeg",
+            uri: "https://i.discogs.com/logo.jpg",
+          },
+          slug: "hospital-records",
+        },
+      ],
+    });
+
+    expect(result.resolved).toEqual(["hospital-records"]);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(fetchDiscogsLabelImage).not.toHaveBeenCalled();
+    expect(writtenSql().some((sql) => sql.includes("image_state = 'resolved'"))).toBe(true);
+  });
+
+  it("rejects cross-wired box image bytes without writing a logo or terminal none verdict", async () => {
+    seedWorklist([{ ...HOSPITAL, discogs_label_id: 1111, mb_label_id: "mbid-hospital" }]);
+    mbFetch.mockResolvedValueOnce({ data: { relations: [] }, rateLimited: false });
+    const { bucket, put } = fakeBucket();
+    const result = await resolveLabelImages(bucket, 4, false, undefined, {
+      boxFetch: true,
+      discogsCandidates: [
+        {
+          detail: {
+            id: 1111,
+            images: [{ type: "primary", uri: "https://i.discogs.com/primary.jpg" }],
+          },
+          discogsLabelId: 1111,
+          image: {
+            bytesBase64: "/9j/4AAQ",
+            mime: "image/jpeg",
+            uri: "https://i.discogs.com/other.jpg",
+          },
+          slug: "hospital-records",
+        },
+      ],
+    });
+
+    expect(result.failed).toEqual([
+      {
+        error: "Discogs label evidence failed Worker verification",
+        slug: "hospital-records",
+      },
+    ]);
+    expect(result.none).toEqual([]);
+    expect(put).not.toHaveBeenCalled();
+    expect(writtenSql().some((sql) => sql.includes("image_state = 'none'"))).toBe(false);
+  });
+
   it("resolves a label's logo via Discogs and stores it in R2", async () => {
     seedWorklist([HOSPITAL]);
     // MB label search → MBID, then its url-rels → a curated Discogs label relation.

@@ -11,6 +11,15 @@
 import assert from "node:assert/strict";
 
 import { DEEZER_CANDIDATE_LIMIT, resolveAnchor } from "./admin-catalogue";
+import {
+  backfillDiscogs,
+  backfillDiscogsFacts,
+  backfillLabelImages,
+  DISCOGS_FACTS_WORK_LIMIT,
+  DISCOGS_LABEL_WORK_LIMIT,
+  DISCOGS_RELEASES_PER_TRACK_LIMIT,
+  DISCOGS_RELEASE_WORK_LIMIT,
+} from "./admin-backfills";
 import { recordCost } from "./admin-costs";
 import { updateArtistRule } from "./admin-artist-rules";
 import { replaceLabelArtistRules } from "./admin-labels";
@@ -45,6 +54,148 @@ function accepts(op: unknown, input: unknown): boolean {
   assert.ok(!(result instanceof Promise), "validation is synchronous");
 
   return result.issues === undefined;
+}
+
+// ── Discogs box evidence: explicit, bounded, and identity-keyed at the edge ───────────────
+{
+  const release = (id: number) => ({
+    artists: [{ name: "Calibre" }],
+    formats: [{ name: "Vinyl" }],
+    id,
+    labels: [{ catno: "SIG001", name: "Signature" }],
+    styles: ["Drum n Bass"],
+    title: "Release",
+    tracklist: [{ title: "Track" }],
+    year: 2026,
+  });
+  const grouped = (trackId: string, releaseCount = 0) => ({
+    releases: Array.from({ length: releaseCount }, (_, index) => release(index + 1)),
+    trackId,
+  });
+  const discogsInput = (discogsCandidates: unknown[]) => ({
+    body: { discogsCandidates },
+    query: { boxFetch: "true" },
+  });
+
+  assert.equal(
+    accepts(backfillDiscogs, discogsInput([grouped("trk_empty")])),
+    true,
+    "an explicit empty release group is the box's clean no-hit verdict",
+  );
+  assert.equal(
+    accepts(
+      backfillDiscogs,
+      discogsInput(
+        Array.from({ length: DISCOGS_RELEASE_WORK_LIMIT }, (_, index) =>
+          grouped(`trk_${index}`, DISCOGS_RELEASES_PER_TRACK_LIMIT),
+        ),
+      ),
+    ),
+    true,
+    "release groups at both work and per-track caps are accepted",
+  );
+  assert.equal(
+    accepts(
+      backfillDiscogs,
+      discogsInput(
+        Array.from({ length: DISCOGS_RELEASE_WORK_LIMIT + 1 }, (_, index) =>
+          grouped(`trk_${index}`),
+        ),
+      ),
+    ),
+    false,
+    "one release work group past the cap is rejected",
+  );
+  assert.equal(
+    accepts(
+      backfillDiscogs,
+      discogsInput([grouped("trk_over", DISCOGS_RELEASES_PER_TRACK_LIMIT + 1)]),
+    ),
+    false,
+    "one release past a track's candidate cap is rejected",
+  );
+  assert.equal(
+    accepts(backfillDiscogs, discogsInput([grouped("trk_duplicate"), grouped("trk_duplicate")])),
+    false,
+    "duplicate track groups cannot make an empty result ambiguous",
+  );
+  assert.equal(
+    accepts(backfillDiscogs, discogsInput([{ releases: [release(0)], trackId: "trk_bad" }])),
+    false,
+    "a non-positive Discogs id is rejected before the scorer",
+  );
+
+  const factsCandidate = (index: number) => ({
+    release: release(index + 1),
+    slug: `album-${index}`,
+  });
+  assert.equal(
+    accepts(backfillDiscogsFacts, {
+      body: {
+        discogsCandidates: Array.from({ length: DISCOGS_FACTS_WORK_LIMIT }, (_, index) =>
+          factsCandidate(index),
+        ),
+      },
+      query: { boxFetch: "true" },
+    }),
+    true,
+    "facts evidence at the worklist cap is accepted",
+  );
+  assert.equal(
+    accepts(backfillDiscogsFacts, {
+      body: {
+        discogsCandidates: Array.from({ length: DISCOGS_FACTS_WORK_LIMIT + 1 }, (_, index) =>
+          factsCandidate(index),
+        ),
+      },
+      query: { boxFetch: "true" },
+    }),
+    false,
+    "one facts candidate past the cap is rejected",
+  );
+
+  const labelCandidate = (index: number) => ({
+    detail: { id: index + 1, images: [] },
+    discogsLabelId: index + 1,
+    slug: `label-${index}`,
+  });
+  assert.equal(
+    accepts(backfillLabelImages, {
+      body: {
+        discogsCandidates: Array.from({ length: DISCOGS_LABEL_WORK_LIMIT }, (_, index) =>
+          labelCandidate(index),
+        ),
+      },
+      query: { boxFetch: "true" },
+    }),
+    true,
+    "label evidence at the batch cap is accepted",
+  );
+  assert.equal(
+    accepts(backfillLabelImages, {
+      body: {
+        discogsCandidates: [{ ...labelCandidate(0), detail: { id: 2, images: [] } }],
+      },
+      query: { boxFetch: "true" },
+    }),
+    false,
+    "cross-wired label detail is rejected before the Worker ladder",
+  );
+  assert.equal(
+    accepts(backfillLabelImages, {
+      body: {
+        discogsCandidates: [
+          {
+            ...labelCandidate(0),
+            image: { bytesBase64: "AQID", mime: "text/html", uri: "https://example.test/a" },
+          },
+        ],
+      },
+      query: { boxFetch: "true" },
+    }),
+    false,
+    "a non-image MIME type is rejected at the contract boundary",
+  );
 }
 
 // ── update_artist_rule: at least one drift-audit stamp, including explicit nulls ─────────

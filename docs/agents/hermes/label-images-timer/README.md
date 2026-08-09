@@ -8,15 +8,15 @@ It **certifies nothing** and **publishes nothing** — a label logo is internal,
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/label-images-sweep.sh`](../scripts/label-images-sweep.sh) → [`../scripts/label-images-sweep.ts`](../scripts/label-images-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch.
 
-## The model: Worker-paced, and the schedule is the loop
+## The model: box fetch, Worker verdict
 
-The box holds no Discogs key and no MusicBrainz budget; the Worker does. So the resolve walk happens IN THE WORKER (`backfill_label_images`, agent tier) and this driver only paces it — the `fluncle-crawl`/`fluncle-backfill` shape, verbatim. The Worker carries the durable per-label reliability state (`image_state` / `image_attempted_at` / `image_failures`), the ~1 req/s MusicBrainz gate, the authed Discogs gate, and the rate-limit circuit breaker.
+Discogs and other per-IP-limited vendors must not be fetched through shared Worker egress. The Worker prepares each trusted label identity through MusicBrainz and returns bounded Discogs work; the box performs only the paced Discogs detail and image reads from its own egress; the candidates return through the same agent-tier operation. The Worker re-reads the label, verifies the Discogs id and selected image, runs the Wikidata fallback when needed, and owns every R2 and database write. A transport failure or throttle submits no partial candidates, so it can never become an honest-looking absence verdict.
 
-That split makes the **cadence, not the batch size, the real throttle.** Every scrap of state is on the `labels` row, so "run again" and "resume" are the same command: a `resolved`/`none` label is terminal and skipped forever; a transient failure backs off on a cooldown; a persistent one gives up (→ `none`) so it is never retried forever. A reboot mid-worklist costs nothing.
+This is the standing integration rule: when a vendor meters by source IP, keep trusted work preparation, matching, and writes in the Worker, but place the paced vendor fetch on the box and return only bounded schema-validated evidence. Every scrap of durable state remains on the `labels` row, so a reboot mid-worklist costs nothing.
 
-- `FLUNCLE_LABEL_IMAGES_LIMIT` (default `6`) — labels handled per tick. The CLI loops the slug cursor internally up to this cap (or until the worklist drains, or a vendor throttles); each label is a few paced ~1.1s Worker calls, so a tick is under a minute.
+- `FLUNCLE_LABEL_IMAGES_LIMIT` (default `4`) — labels handled per tick. One prepare/fetch/verdict cycle is a single bounded pass; each Discogs request shares the box helper's 1.1s floor.
 
-At 6 labels every 60 minutes — against a crawl that mints only tens of new labels a day — the worklist stays drained with wide headroom, and a tick that finds every label resolved/none is a cheap no-op.
+At 4 labels every 60 minutes — against a crawl that mints only tens of new labels a day — the worklist stays drained with wide headroom, and a tick that finds every label resolved/none is a cheap no-op.
 
 Check on it any time:
 
@@ -30,7 +30,7 @@ Every automation cron runs off repo-checked-in host timers so the SCHEDULE is co
 
 ## Activation (OPERATOR-GATED — the repo half ships; the box enable does not)
 
-The repo carries the scripts, the timer units, and this doc. Enabling it on the box is one manual pass — **no new secret**: `backfill_label_images` is AGENT tier, so the box's existing agent-scoped token drives it.
+The repo carries the scripts, the timer units, and this doc. `backfill_label_images` is agent tier, so the existing agent-scoped token drives the Worker calls; `DISCOGS_USER_TOKEN` is supplied by the existing sweep-secrets environment for the box-only vendor reads.
 
 ```bash
 # On the rave-02 HOST, from a repo checkout, as root:

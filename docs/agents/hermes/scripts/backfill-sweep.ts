@@ -7,23 +7,20 @@
 // (backfill-sweep.sh) the cron runner execs on a schedule — see that file's header
 // for the `host-timer` wire-up and ../cron/README.md for the cron model.
 //
-// THE WORKER-PACED MODEL. The box holds NO Discogs/Last.fm vendor keys (those live
-// in the Worker). So the backfill API calls happen IN THE WORKER; this box driver
-// just PACES it — one small, bounded batch per tick via the `fluncle` CLI. The
-// Worker carries the reliability state (per-finding cooldown/done columns) and the
-// Retry-After backoff, so this driver stays dumb: drive a bounded `--limit` of each
-// source, ship the summary, and let the next tick resume from the durable state.
-// Pure HTTP driving, zero LLM tokens.
+// THE DISCOGS SPLIT. The box performs only paced Discogs reads from its own egress. Bounded release
+// evidence returns through the existing agent operations; the Worker re-reads identity, applies the
+// existing gate, and owns every reliability/facts write. All non-Discogs legs retain their existing
+// CLI path. Pure HTTP driving, zero LLM tokens.
 //
 // The loop, idempotent by construction (the Worker skips already-done + cooling-down
 // findings server-side), fast no-op once the catalogue is drained:
 //
-//   1. `fluncle admin backfills discogs         --limit <N> --json`  → one paced batch.
+//   1. Discogs ids: Worker prepare → box fetch → Worker verdict.
 //   2. `fluncle admin backfills lastfm          --limit <N> --json`  → one paced batch.
 //   3. `fluncle admin backfills apple-music     --limit <N> --json`  → one paced batch.
 //   4. `fluncle admin backfills apple-catalogue --limit <M> --json`  → one batched pass.
 //   5. `fluncle admin backfills beatport        --limit <B> --json`  → one paced batch.
-//   6. `fluncle admin backfills discogs-facts   --limit <F> --json`  → one paced batch.
+//   6. Discogs facts: Worker prepare → box fetch → Worker verdict.
 //   7. `fluncle admin backfills deezer          --limit <D> --json`  → one paced batch.
 //
 // The apple-music leg is a NO-OP until the Worker's MusicKit secrets are provisioned
@@ -49,8 +46,7 @@
 // LAST: leg 1's release-ID resolves are the ones a finding's public `sameAs` depends on, so they get
 // first call on the Discogs rate window and this leg drains whatever survives. It is ALBUM-grained
 // (ten findings off one record cost one lookup), self-draining (an album leaves the worklist the
-// moment it is ruled `resolved` or `none`), and cursorless. It is a NO-OP without the Worker's
-// Discogs token (`configured: false`).
+// moment it is ruled `resolved` or `none`), and cursorless. Both legs share one box-side pacer.
 //
 // LEG 5 NOW CARRIES A SECOND TIER. Beatport drains the certified feed first and, on the pass that
 // exhausts it, scrapes a small capped batch of CATALOGUE rows — the forward-accretion half, so a
@@ -70,18 +66,20 @@
 
 import { spawnSync } from "node:child_process";
 
+import {
+  createDiscogsFetcher,
+  type DiscogsBatchResult,
+  type DiscogsFactsCandidate,
+  type DiscogsFactsWork,
+  type DiscogsReleaseCandidate,
+  type DiscogsReleaseWork,
+  postDiscogsAgentOperation,
+} from "./discogs-fetch";
+
 // ---------------------------------------------------------------------------
-// Config — a small bounded batch per source per tick so one tick stays well
-// inside both the Worker request budget and the cron's 120s timeout. The Worker
-// clamps each request to a 3-finding server pass AND stops the run (signalling the
-// CLI to stop looping the cursor) the moment the vendor rate-limit circuit breaker
-// trips — so a throttled tick bails after one short pass instead of grinding the
-// cursor back into the same 429 wall for 300s+ (the timeout that errored this cron
-// every tick). With that bail in place, 3 = exactly one server pass per source
-// (~36s worst case for Discogs: ~10 paced ~1.1s lookups per unresolved finding),
-// leaving wide headroom under the 120s timeout. The 30-minute cadence (see
-// backfill-sweep.sh) lets the per-minute vendor budget recover between ticks; the
-// reliability cooldown keeps a drained catalogue quiet.
+// Config — each Discogs prepare response is bounded to three findings and the helper serializes
+// every search/detail request behind one 1.1s gate. The 30-minute timer is the outer loop; durable
+// Worker state makes a drained catalogue cheap and resumable.
 // ---------------------------------------------------------------------------
 
 const BATCH_LIMIT = Number(process.env.FLUNCLE_BACKFILL_LIMIT ?? "3");
@@ -126,6 +124,7 @@ const log = (message: string) => console.error(`[backfill-sweep] ${message}`);
 // ---------------------------------------------------------------------------
 
 type DiscogsSummary = {
+  discogsWork?: DiscogsReleaseWork[];
   ok?: boolean;
   // True when the resolver's Discogs OR MusicBrainz leg hit its circuit breaker.
   rateLimited?: boolean;
@@ -207,8 +206,9 @@ type DeezerSummary = {
 };
 
 type DiscogsFactsSummary = {
-  // False when the Worker's Discogs token is unset — the leg was a no-op this tick.
+  // False when neither the legacy Worker fetch nor the box-fetch split is configured.
   configured?: boolean;
+  discogsWork?: DiscogsFactsWork[];
   // Albums whose release lookup errored (nothing learned; they back off and retry). Distinct from
   // `noneCount`, which is a concluded "this release carries no catalogue number".
   failedCount?: number;
@@ -216,6 +216,30 @@ type DiscogsFactsSummary = {
   ok?: boolean;
   rateLimited?: boolean;
   resolvedCount?: number;
+};
+
+type BackfillEnvironment = {
+  DISCOGS_USER_TOKEN?: string;
+  FLUNCLE_API_BASE_URL?: string;
+  FLUNCLE_API_TOKEN?: string;
+};
+
+type BackfillDiscogsFetcher = {
+  fetchFactsCandidates: (
+    work: DiscogsFactsWork[],
+  ) => Promise<DiscogsBatchResult<DiscogsFactsCandidate>>;
+  fetchReleaseCandidates: (
+    work: DiscogsReleaseWork[],
+  ) => Promise<DiscogsBatchResult<DiscogsReleaseCandidate>>;
+};
+
+export type BackfillSweepEffects = {
+  createFetcher?: (
+    token: string,
+    options: { fetch?: typeof globalThis.fetch },
+  ) => BackfillDiscogsFetcher;
+  env?: BackfillEnvironment;
+  fetch?: typeof globalThis.fetch;
 };
 
 // ---------------------------------------------------------------------------
@@ -280,7 +304,18 @@ function isCliErrorPayload(value: unknown): value is { code: string; message: st
 // Apple meter). Returns the summary; the entrypoint prints it.
 // ---------------------------------------------------------------------------
 
-export function runBackfillSweep() {
+export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
+  const env = effects.env ?? process.env;
+  const apiToken = env.FLUNCLE_API_TOKEN ?? "";
+  const discogsToken = env.DISCOGS_USER_TOKEN ?? "";
+  const agentBaseUrl = env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
+  let discogsFetcher: BackfillDiscogsFetcher | undefined;
+  const getDiscogsFetcher = (): BackfillDiscogsFetcher => {
+    discogsFetcher ??= (effects.createFetcher ?? createDiscogsFetcher)(discogsToken, {
+      fetch: effects.fetch,
+    });
+    return discogsFetcher;
+  };
   const summary = {
     "apple-catalogue": {
       albumFacts: 0,
@@ -347,20 +382,51 @@ export function runBackfillSweep() {
   const limit = ["--limit", String(BATCH_LIMIT)];
 
   try {
-    const discogs = fluncleJson<DiscogsSummary>(["admin", "backfills", "discogs", ...limit]);
-    summary.discogs.resolved = discogs.resolvedCount ?? 0;
-    summary.discogs.unresolved = discogs.unresolvedCount ?? 0;
-    summary.discogs.skipped = discogs.skippedCount ?? 0;
+    const addDiscogsPass = (pass: DiscogsSummary): void => {
+      summary.discogs.resolved += pass.resolvedCount ?? 0;
+      summary.discogs.unresolved += pass.unresolvedCount ?? 0;
+      summary.discogs.skipped += pass.skippedCount ?? 0;
+      summary.discogs.throttled ||= pass.rateLimited === true && pass.rateLimitedBy === "discogs";
+      summary.musicbrainz.throttled ||=
+        pass.rateLimited === true && pass.rateLimitedBy === "musicbrainz";
+      summary.ok &&= pass.ok !== false;
+    };
+    const common = {
+      baseUrl: agentBaseUrl,
+      fetch: effects.fetch,
+      query: { boxFetch: true, limit: BATCH_LIMIT },
+    };
+    const prepared = await postDiscogsAgentOperation<DiscogsSummary>(
+      "/admin/backfill/discogs",
+      apiToken,
+      common,
+    );
+    addDiscogsPass(prepared);
+    const work = prepared.rateLimited ? [] : (prepared.discogsWork ?? []);
+
+    if (work.length > 0) {
+      const fetched = await getDiscogsFetcher().fetchReleaseCandidates(work);
+
+      if (!fetched.ok) {
+        summary.discogs.throttled = fetched.rateLimited;
+
+        if (!fetched.rateLimited) {
+          summary.ok = false;
+          summary.errors += 1;
+          summary.discogs.error = fetched.error;
+        }
+      } else {
+        const decided = await postDiscogsAgentOperation<DiscogsSummary>(
+          "/admin/backfill/discogs",
+          apiToken,
+          { ...common, body: { discogsCandidates: fetched.candidates } },
+        );
+        addDiscogsPass(decided);
+      }
+    }
+
     summary.checked += summary.discogs.resolved + summary.discogs.unresolved;
     summary.produced += summary.discogs.resolved;
-    summary.discogs.throttled = discogs.rateLimited === true && discogs.rateLimitedBy === "discogs";
-    summary.musicbrainz.throttled =
-      discogs.rateLimited === true && discogs.rateLimitedBy === "musicbrainz";
-
-    if (discogs.ok === false) {
-      summary.ok = false;
-      log("discogs backfill reported a failed pass");
-    }
   } catch (error) {
     summary.ok = false;
     summary.errors += 1;
@@ -513,25 +579,49 @@ export function runBackfillSweep() {
   // release-ID resolves (which a finding's public `sameAs` depends on) get first call on it. Its
   // failure is contained here like every other leg's, so it can never abort the sweep.
   try {
-    const facts = fluncleJson<DiscogsFactsSummary>([
-      "admin",
-      "backfills",
-      "discogs-facts",
-      "--limit",
-      String(DISCOGS_FACTS_BATCH_LIMIT),
-    ]);
-    summary["discogs-facts"].configured = facts.configured ?? false;
-    summary["discogs-facts"].resolved = facts.resolvedCount ?? 0;
-    summary["discogs-facts"].none = facts.noneCount ?? 0;
-    summary["discogs-facts"].failed = facts.failedCount ?? 0;
-    summary["discogs-facts"].throttled = facts.rateLimited ?? false;
+    const addFactsPass = (pass: DiscogsFactsSummary): void => {
+      summary["discogs-facts"].configured ||= pass.configured ?? false;
+      summary["discogs-facts"].resolved += pass.resolvedCount ?? 0;
+      summary["discogs-facts"].none += pass.noneCount ?? 0;
+      summary["discogs-facts"].failed += pass.failedCount ?? 0;
+      summary["discogs-facts"].throttled ||= pass.rateLimited ?? false;
+    };
+    const common = {
+      baseUrl: agentBaseUrl,
+      fetch: effects.fetch,
+      query: { boxFetch: true, limit: DISCOGS_FACTS_BATCH_LIMIT },
+    };
+    const prepared = await postDiscogsAgentOperation<DiscogsFactsSummary>(
+      "/admin/backfill/discogs-facts",
+      apiToken,
+      common,
+    );
+    addFactsPass(prepared);
+    const work = prepared.rateLimited ? [] : (prepared.discogsWork ?? []);
 
-    if (facts.ok === false) {
-      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
-      // some read, some failed — distinct from the catch below, which is the whole leg erroring.
-      log(`discogs-facts backfill partial: ${summary["discogs-facts"].failed} album(s) failed`);
+    if (work.length > 0) {
+      const fetched = await getDiscogsFetcher().fetchFactsCandidates(work);
+
+      if (!fetched.ok) {
+        summary["discogs-facts"].throttled = fetched.rateLimited;
+
+        if (!fetched.rateLimited) {
+          summary.ok = false;
+          summary.errors += 1;
+          summary["discogs-facts"].error = fetched.error;
+        }
+      } else {
+        const decided = await postDiscogsAgentOperation<DiscogsFactsSummary>(
+          "/admin/backfill/discogs-facts",
+          apiToken,
+          { ...common, body: { discogsCandidates: fetched.candidates } },
+        );
+        addFactsPass(decided);
+      }
     }
   } catch (error) {
+    summary.ok = false;
+    summary.errors += 1;
     summary["discogs-facts"].error = error instanceof Error ? error.message : String(error);
     log(`discogs-facts backfill failed: ${summary["discogs-facts"].error}`);
   }
@@ -583,7 +673,7 @@ export function backfillSweepExitCode(summary: { ok: boolean }): 0 | 1 {
 // The cron runs this file directly; the guard keeps importing `fluncleJson` and
 // `runBackfillSweep` for the tests (backfill-sweep.test.ts) side-effect free.
 if (import.meta.main) {
-  const summary = runBackfillSweep();
+  const summary = await runBackfillSweep();
   console.log(JSON.stringify(summary));
   process.exitCode = backfillSweepExitCode(summary);
 }

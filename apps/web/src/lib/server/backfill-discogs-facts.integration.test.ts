@@ -96,6 +96,67 @@ beforeEach(async () => {
 });
 
 describe("backfillDiscogsFacts (integration)", () => {
+  it("prepares box work without a Discogs call or ledger write", async () => {
+    await seedAlbum(db, { id: "alb-box", name: "Box", slug: "box" });
+    await seedTrack(db, { logId: "241.7.box", trackId: "t-box" });
+    await linkTrack(db, "t-box", "alb-box", 77);
+
+    const result = await backfillDiscogsFacts(10, false, { boxFetch: true });
+
+    expect(result.discogsWork).toEqual([{ releaseId: 77, slug: "box" }]);
+    expect(fetchDiscogsReleaseFacts).not.toHaveBeenCalled();
+    expect((await albumFacts(db, "alb-box")).discogs_state).toBe("pending");
+    expect((await albumFacts(db, "alb-box")).attempted_at).toBeNull();
+  });
+
+  it("accepts box facts only when the release id still matches the DB row", async () => {
+    await seedAlbum(db, { id: "alb-box", name: "Box", slug: "box" });
+    await seedTrack(db, { logId: "241.7.box", trackId: "t-box" });
+    await linkTrack(db, "t-box", "alb-box", 77);
+
+    const mismatch = await backfillDiscogsFacts(10, false, {
+      boxFetch: true,
+      discogsCandidates: [
+        {
+          release: {
+            artists: [],
+            formats: [],
+            id: 78,
+            labels: [{ catno: "WRONG" }],
+            styles: [],
+            tracklist: [],
+          },
+          slug: "box",
+        },
+      ],
+    });
+
+    expect(mismatch.failedCount).toBe(1);
+    expect((await albumFacts(db, "alb-box")).discogs_state).toBe("pending");
+    expect((await albumFacts(db, "alb-box")).attempted_at).toBeNull();
+
+    const resolved = await backfillDiscogsFacts(10, false, {
+      boxFetch: true,
+      discogsCandidates: [
+        {
+          release: {
+            artists: [],
+            formats: [],
+            id: 77,
+            labels: [{ catno: "BOX001" }],
+            styles: ["Drum n Bass"],
+            tracklist: [],
+          },
+          slug: "box",
+        },
+      ],
+    });
+
+    expect(resolved.resolved).toEqual([{ catno: "BOX001", slug: "box" }]);
+    expect((await albumFacts(db, "alb-box")).discogs_catno).toBe("BOX001");
+    expect(fetchDiscogsReleaseFacts).not.toHaveBeenCalled();
+  });
+
   it("buys ONE lookup per record, stores the number, and drains on the next pass", async () => {
     await seedAlbum(db, { id: "alb-ram", name: "Gate EP", slug: "gate-ep" });
     // Three findings off the SAME record, each with its own resolved Discogs release id. A

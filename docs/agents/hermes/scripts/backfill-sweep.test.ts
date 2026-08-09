@@ -18,7 +18,15 @@
 // tiny executable selected via FLUNCLE_BIN (read at module load, hence the dynamic import in
 // beforeAll).
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,7 +103,9 @@ esac
 }
 
 let fluncleJson: <T>(args: string[]) => T;
-let runBackfillSweep: () => Record<string, unknown>;
+let runBackfillSweepImpl: (
+  effects: import("./backfill-sweep").BackfillSweepEffects,
+) => Promise<Record<string, unknown>>;
 let backfillSweepExitCode: (summary: { ok: boolean }) => 0 | 1;
 let stubDir: string;
 let callsFile: string;
@@ -118,12 +128,10 @@ beforeAll(async () => {
   );
   chmodSync(stub, 0o755);
   process.env.FLUNCLE_BIN = stub;
-  ({ backfillSweepExitCode, fluncleJson, runBackfillSweep } =
-    (await import("./backfill-sweep")) as unknown as {
-      backfillSweepExitCode: (summary: { ok: boolean }) => 0 | 1;
-      fluncleJson: <T>(args: string[]) => T;
-      runBackfillSweep: () => Record<string, unknown>;
-    });
+  const sweep = await import("./backfill-sweep");
+  backfillSweepExitCode = sweep.backfillSweepExitCode;
+  fluncleJson = sweep.fluncleJson;
+  runBackfillSweepImpl = sweep.runBackfillSweep as typeof runBackfillSweepImpl;
 });
 
 afterEach(() => {
@@ -145,6 +153,134 @@ function recordedCalls(): string[] {
   }
 
   return readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
+}
+
+/** Run the async sweep with direct Worker HTTP and Discogs vendor reads fully stubbed. */
+async function runBackfillSweep(): Promise<Record<string, unknown>> {
+  const seenOperations = new Set<string>();
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const inputUrl =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(inputUrl);
+    const operation = url.pathname.endsWith("/discogs-facts") ? "discogs-facts" : "discogs";
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer agent-test-token");
+    expect(url.searchParams.get("boxFetch")).toBe("true");
+    expect(url.searchParams.get("limit")).toBe(operation === "discogs" ? "3" : "10");
+
+    if (init?.body !== undefined) {
+      expect(typeof init.body).toBe("string");
+      const parsed = JSON.parse(init.body as string) as { discogsCandidates?: unknown[] };
+      expect(Array.isArray(parsed.discogsCandidates)).toBe(true);
+    }
+
+    if (!seenOperations.has(operation)) {
+      appendFileSync(
+        callsFile,
+        `admin backfills ${operation} --limit ${operation === "discogs" ? "3" : "10"} --json\n`,
+      );
+      seenOperations.add(operation);
+    }
+
+    if (operation === "discogs-facts") {
+      const mode = existsSync(discogsFactsModeFile)
+        ? readFileSync(discogsFactsModeFile, "utf8")
+        : "ok";
+
+      if (mode === "crash") {
+        throw new Error("discogs facts boom");
+      }
+
+      if (mode === "unconfigured") {
+        return Response.json({
+          configured: false,
+          discogsWork: [],
+          failedCount: 0,
+          noneCount: 0,
+          ok: true,
+          rateLimited: false,
+          resolvedCount: 0,
+        });
+      }
+
+      if (init?.body === undefined) {
+        return Response.json({
+          configured: true,
+          discogsWork: [{ releaseId: 7, slug: "album" }],
+          failedCount: 0,
+          noneCount: 0,
+          ok: true,
+          rateLimited: false,
+          resolvedCount: 0,
+        });
+      }
+
+      return Response.json({
+        configured: true,
+        discogsWork: [],
+        failedCount: 19,
+        noneCount: 18,
+        ok: true,
+        rateLimited: true,
+        resolvedCount: 17,
+      });
+    }
+
+    if (init?.body === undefined) {
+      return Response.json({
+        discogsWork: [{ queries: ["track=Tune&type=release"], trackId: "trk_1" }],
+        ok: true,
+        rateLimited: false,
+        rateLimitedBy: null,
+        resolvedCount: 0,
+        skippedCount: 0,
+        unresolvedCount: 0,
+      });
+    }
+
+    return Response.json({
+      discogsWork: [],
+      ok: true,
+      rateLimited: true,
+      rateLimitedBy: "musicbrainz",
+      resolvedCount: 1,
+      skippedCount: 3,
+      unresolvedCount: 2,
+    });
+  }) as typeof globalThis.fetch;
+
+  return runBackfillSweepImpl({
+    createFetcher: () => ({
+      fetchFactsCandidates: async () => ({
+        candidates: [
+          {
+            release: {
+              artists: [],
+              formats: [],
+              id: 7,
+              labels: [],
+              styles: [],
+              tracklist: [],
+            },
+            slug: "album",
+          },
+        ],
+        ok: true,
+        rateLimited: false,
+      }),
+      fetchReleaseCandidates: async () => ({
+        candidates: [{ releases: [], trackId: "trk_1" }],
+        ok: true,
+        rateLimited: false,
+      }),
+    }),
+    env: {
+      DISCOGS_USER_TOKEN: "discogs-test-token",
+      FLUNCLE_API_BASE_URL: "https://worker.example",
+      FLUNCLE_API_TOKEN: "agent-test-token",
+    },
+    fetch,
+  });
 }
 
 describe("fluncleJson parse-first contract", () => {
@@ -182,8 +318,8 @@ describe("fluncleJson parse-first contract", () => {
 });
 
 describe("the tick's legs", () => {
-  test("the catalogue Apple leg runs LAST, after the certified apple-music leg", () => {
-    runBackfillSweep();
+  test("the catalogue Apple leg runs LAST, after the certified apple-music leg", async () => {
+    await runBackfillSweep();
 
     const sources = recordedCalls().map((call) => call.split(" ")[2]);
 
@@ -198,16 +334,16 @@ describe("the tick's legs", () => {
     ]);
   });
 
-  test("the catalogue leg asks for one server pass — --limit 100, the server's own ceiling", () => {
-    runBackfillSweep();
+  test("the catalogue leg asks for one server pass — --limit 100, the server's own ceiling", async () => {
+    await runBackfillSweep();
 
     const catalogue = recordedCalls().find((call) => call.includes("apple-catalogue"));
 
     expect(catalogue).toBe("admin backfills apple-catalogue --limit 100 --json");
   });
 
-  test("the catalogue counts land in the summary under their own key", () => {
-    const summary = runBackfillSweep();
+  test("the catalogue counts land in the summary under their own key", async () => {
+    const summary = await runBackfillSweep();
 
     expect(summary["apple-catalogue"]).toEqual({
       albumFacts: 12,
@@ -221,8 +357,8 @@ describe("the tick's legs", () => {
     });
   });
 
-  test("the new leg does not disturb the three that were already there", () => {
-    const summary = runBackfillSweep();
+  test("the new leg does not disturb the three that were already there", async () => {
+    const summary = await runBackfillSweep();
 
     expect(summary.discogs).toEqual({
       error: null,
@@ -250,10 +386,10 @@ describe("the tick's legs", () => {
     });
   });
 
-  test("an unconfigured catalogue leg is a recorded no-op, not a failed tick", () => {
+  test("an unconfigured catalogue leg is a recorded no-op, not a failed tick", async () => {
     writeFileSync(modeFile, "unconfigured");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect(summary["apple-catalogue"]).toEqual({
       albumFacts: 0,
@@ -270,10 +406,10 @@ describe("the tick's legs", () => {
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
   });
 
-  test("a catalogue leg that crashes records its error and makes the tick report failure", () => {
+  test("a catalogue leg that crashes records its error and makes the tick report failure", async () => {
     writeFileSync(modeFile, "crash");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect((summary["apple-catalogue"] as { error: null | string }).error).toContain("apple boom");
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
@@ -281,16 +417,16 @@ describe("the tick's legs", () => {
     expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(1);
   });
 
-  test("the Beatport leg asks for the smallest batch in the sweep — one rendered scrape each", () => {
-    runBackfillSweep();
+  test("the Beatport leg asks for the smallest batch in the sweep — one rendered scrape each", async () => {
+    await runBackfillSweep();
 
     const beatport = recordedCalls().find((call) => call.includes("beatport"));
 
     expect(beatport).toBe("admin backfills beatport --limit 10 --json");
   });
 
-  test("the Beatport counts land in the summary under their own key", () => {
-    const summary = runBackfillSweep();
+  test("the Beatport counts land in the summary under their own key", async () => {
+    const summary = await runBackfillSweep();
 
     expect(summary.beatport).toEqual({
       catalogueFailed: 22,
@@ -305,11 +441,11 @@ describe("the tick's legs", () => {
     });
   });
 
-  test("the Beatport CATALOGUE tier is tallied apart from the certified one", () => {
+  test("the Beatport CATALOGUE tier is tallied apart from the certified one", async () => {
     // The two tiers are different money — ~85 certified rows versus a five-figure catalogue where
     // every row is a Firecrawl credit — so the operator has to be able to read the catalogue spend
     // on its own line rather than inferring it from a merged total.
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
     const beatport = summary.beatport as Record<string, number>;
 
     expect(beatport.resolved).toBe(13);
@@ -318,8 +454,8 @@ describe("the tick's legs", () => {
     expect(beatport.catalogueFailed).toBe(22);
   });
 
-  test("canonical counters use handled rows, exclude reliability skips, and omit queue depth", () => {
-    const summary = runBackfillSweep();
+  test("canonical counters use handled rows, exclude reliability skips, and omit queue depth", async () => {
+    const summary = await runBackfillSweep();
 
     // checked:
     //   Discogs 1 resolved + 2 unresolved
@@ -338,11 +474,11 @@ describe("the tick's legs", () => {
     expect(summary).not.toHaveProperty("queue_depth");
   });
 
-  test("measured zero canonical counters survive as zero, never null", () => {
+  test("measured zero canonical counters survive as zero, never null", async () => {
     writeFileSync(modeFile, "unconfigured");
     writeFileSync(beatportModeFile, "unconfigured");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     // The configured legs still did measured work, while the two unconfigured legs contribute real
     // zeroes rather than unknown/null values. Deezer has no key to be unconfigured BY, so it keeps
@@ -352,10 +488,10 @@ describe("the tick's legs", () => {
     expect(summary.errors).toBe(0);
   });
 
-  test("an unconfigured Beatport leg is a recorded no-op, not a failed tick", () => {
+  test("an unconfigured Beatport leg is a recorded no-op, not a failed tick", async () => {
     writeFileSync(beatportModeFile, "unconfigured");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect(summary.beatport).toEqual({
       catalogueFailed: 0,
@@ -371,13 +507,13 @@ describe("the tick's legs", () => {
     expect(summary.ok).toBe(true);
   });
 
-  test("a Beatport leg that crashes records its error and leaves every earlier leg intact", () => {
+  test("a Beatport leg that crashes records its error and leaves every earlier leg intact", async () => {
     // The containment that matters: Beatport is the newest and slowest leg, and it reaches a
     // Cloudflare-walled site through a third party. It must never be able to cost the sweep the
     // four legs that ran before it.
     writeFileSync(beatportModeFile, "crash");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect((summary.beatport as { error: null | string }).error).toContain("beatport boom");
     expect((summary["apple-music"] as { resolved: number }).resolved).toBe(6);
@@ -391,12 +527,12 @@ describe("the tick's legs", () => {
     expect(backfillSweepExitCode(summary as { ok: boolean })).toBe(0);
   });
 
-  test("the Discogs-facts leg runs AFTER the Discogs one and asks for its own small batch", () => {
+  test("the Discogs-facts leg runs AFTER the Discogs one and asks for its own small batch", async () => {
     // The order is the priority: this leg shares leg 1's Discogs rate window, and leg 1's
     // release-ID resolves (which a finding's public `sameAs` depends on) must get first call on it.
     // It is no longer the sweep's LAST leg — Deezer is — but its position relative to Discogs is
     // the part that carries meaning, so that is what this pins.
-    runBackfillSweep();
+    await runBackfillSweep();
 
     const calls = recordedCalls();
     const sources = calls.map((call) => call.split(" ")[2]);
@@ -406,8 +542,8 @@ describe("the tick's legs", () => {
     expect(sources.indexOf("discogs-facts")).toBeGreaterThan(sources.indexOf("discogs"));
   });
 
-  test("the Discogs-facts counts land in the summary under their own key", () => {
-    const summary = runBackfillSweep();
+  test("the Discogs-facts counts land in the summary under their own key", async () => {
+    const summary = await runBackfillSweep();
 
     expect(summary["discogs-facts"]).toEqual({
       configured: true,
@@ -419,10 +555,10 @@ describe("the tick's legs", () => {
     });
   });
 
-  test("an unconfigured Discogs-facts leg is a recorded no-op, not a failed tick", () => {
+  test("an unconfigured Discogs-facts leg is a recorded no-op, not a failed tick", async () => {
     writeFileSync(discogsFactsModeFile, "unconfigured");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect(summary["discogs-facts"]).toEqual({
       configured: false,
@@ -435,10 +571,10 @@ describe("the tick's legs", () => {
     expect(summary.ok).toBe(true);
   });
 
-  test("a Discogs-facts leg that crashes records its error and leaves every earlier leg intact", () => {
+  test("a Discogs-facts leg that crashes records its error and leaves every earlier leg intact", async () => {
     writeFileSync(discogsFactsModeFile, "crash");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect((summary["discogs-facts"] as { error: null | string }).error).toContain(
       "discogs facts boom",
@@ -447,11 +583,11 @@ describe("the tick's legs", () => {
     expect((summary.beatport as { resolved: number }).resolved).toBe(13);
   });
 
-  test("the Deezer leg runs LAST and asks for its own per-IP-safe batch", () => {
+  test("the Deezer leg runs LAST and asks for its own per-IP-safe batch", async () => {
     // It shares no budget with any leg above (its own vendor, and no key at all), so its position
     // carries no priority meaning — but the LIMIT does: Deezer's quota is per-IP and the Worker
     // egresses from Cloudflare's shared edge, so the batch stays modest by design.
-    runBackfillSweep();
+    await runBackfillSweep();
 
     const calls = recordedCalls();
     const deezer = calls.find((call) => call.includes("deezer"));
@@ -460,8 +596,8 @@ describe("the tick's legs", () => {
     expect(calls.at(-1)).toBe(deezer);
   });
 
-  test("the Deezer counts land in the summary under their own key", () => {
-    const summary = runBackfillSweep();
+  test("the Deezer counts land in the summary under their own key", async () => {
+    const summary = await runBackfillSweep();
 
     expect(summary.deezer).toEqual({
       error: null,
@@ -473,13 +609,13 @@ describe("the tick's legs", () => {
     });
   });
 
-  test("a throttled Deezer leg reads as THROTTLED, not as a silent zero", () => {
+  test("a throttled Deezer leg reads as THROTTLED, not as a silent zero", async () => {
     // Deezer signals its quota inside an HTTP-200 body, which is exactly how this failure hid for a
     // week the last time: a throttle that reads as "nothing found" is indistinguishable from a
     // drained worklist. The tick must be able to say which happened.
     writeFileSync(deezerModeFile, "throttled");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect(summary.deezer).toEqual({
       error: null,
@@ -493,10 +629,10 @@ describe("the tick's legs", () => {
     expect(summary.ok).toBe(true);
   });
 
-  test("a Deezer leg that crashes records its error and leaves every earlier leg intact", () => {
+  test("a Deezer leg that crashes records its error and leaves every earlier leg intact", async () => {
     writeFileSync(deezerModeFile, "crash");
 
-    const summary = runBackfillSweep();
+    const summary = await runBackfillSweep();
 
     expect((summary.deezer as { error: null | string }).error).toContain("deezer boom");
     expect((summary.discogs as { resolved: number }).resolved).toBe(1);

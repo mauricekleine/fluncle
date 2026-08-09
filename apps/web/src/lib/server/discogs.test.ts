@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRateLimitForTests,
+  discogsLabelImageFromEvidence,
   discogsReleaseUrl,
   discogsResolveRelease,
   fetchDiscogsLabelImage,
   fetchDiscogsReleaseFacts,
   parseDiscogsLabelUrl,
+  scoreDiscogsReleaseCandidates,
 } from "@/lib/server/discogs";
 
 describe("discogsReleaseUrl", () => {
@@ -44,6 +46,160 @@ function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Res
 const DISCOGS_SEARCH = "/database/search";
 const DISCOGS_RELEASE = "/releases/";
 const MB_ISRC = "musicbrainz.org/ws/2/isrc/";
+
+describe("box-fetched Discogs evidence", () => {
+  it("runs release evidence through the existing score and tracklist gate", () => {
+    const result = scoreDiscogsReleaseCandidates(
+      {
+        album: "Shelf Life 7",
+        artists: ["Calibre"],
+        label: "Hospital Records",
+        releaseDate: "2026-01-01",
+        title: "Funny Games",
+      },
+      [
+        {
+          artists: [{ name: "Someone Else" }],
+          formats: [{ name: "Vinyl" }],
+          id: 1,
+          labels: [{ name: "Other" }],
+          styles: ["Drum n Bass"],
+          title: "Wrong",
+          tracklist: [{ title: "Wrong Track" }],
+          year: 2026,
+        },
+        {
+          artists: [{ name: "Calibre" }],
+          formats: [{ name: "Vinyl" }],
+          id: 2,
+          labels: [{ catno: "NHS001", name: "Hospital Records" }],
+          searchMasterId: 9,
+          styles: ["Drum n Bass"],
+          title: "Shelf Life 7",
+          tracklist: [{ title: "Funny Games" }],
+          year: 2026,
+        },
+      ],
+    );
+
+    expect(result).toEqual({
+      catno: "NHS001",
+      masterId: 9,
+      releaseId: 2,
+      styles: ["Drum n Bass"],
+    });
+    expect(
+      scoreDiscogsReleaseCandidates({ artists: ["Calibre"], title: "Funny Games" }, [
+        {
+          artists: [{ name: "Someone Else" }],
+          formats: [],
+          id: 3,
+          labels: [],
+          styles: [],
+          title: "Unrelated",
+          tracklist: [{ title: "Another Tune" }],
+        },
+      ]),
+    ).toEqual({});
+  });
+
+  it("repeats the primary-image decision and rejects cross-wired box bytes", () => {
+    const candidate = {
+      detail: {
+        id: 11,
+        images: [
+          { type: "secondary" as const, uri: "https://i.discogs.com/secondary.jpg" },
+          { type: "primary" as const, uri: "https://i.discogs.com/primary.jpg" },
+        ],
+      },
+      discogsLabelId: 11,
+      image: {
+        bytesBase64: "/9j/4AAQ",
+        mime: "image/jpeg",
+        uri: "https://i.discogs.com/primary.jpg",
+      },
+      slug: "hospital",
+    };
+
+    const accepted = discogsLabelImageFromEvidence(candidate);
+    expect(accepted?.mime).toBe("image/jpeg");
+    expect(accepted?.bytes.byteLength).toBe(6);
+    expect(
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        image: { ...candidate.image, uri: "https://i.discogs.com/secondary.jpg" },
+      }),
+    ).toBeUndefined();
+    expect(
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        detail: { ...candidate.detail, id: 12 },
+      }),
+    ).toBeUndefined();
+    expect(
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        detail: {
+          ...candidate.detail,
+          images: [{ type: "primary", uri: "https://attacker.example/logo.jpg" }],
+        },
+        image: { ...candidate.image, uri: "https://attacker.example/logo.jpg" },
+      }),
+    ).toBeUndefined();
+  });
+
+  // The URI allowlist checks a string the SAME caller supplies, so on its own it proves nothing
+  // about the bytes — every payload below carries a perfectly well-formed discogs.com URI. What
+  // stops them is the content itself, because the stored MIME becomes the object's contentType
+  // in public R2 and therefore decides how a browser will later interpret what it downloads.
+  it("stores the type the bytes ARE, never the type the box claims", () => {
+    const candidate = {
+      detail: {
+        id: 11,
+        images: [{ type: "primary" as const, uri: "https://i.discogs.com/l.jpg" }],
+      },
+      discogsLabelId: 11,
+      image: { bytesBase64: "/9j/4AAQ", mime: "image/jpeg", uri: "https://i.discogs.com/l.jpg" },
+      slug: "hospital",
+    };
+
+    const withBytes = (bytesBase64: string, mime = "image/jpeg") =>
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        image: { ...candidate.image, bytesBase64, mime },
+      });
+
+    // An SVG is a script-bearing document, not a raster. Discogs never serves one for a logo, and
+    // storing it would put caller-authored markup behind Fluncle's own hostname.
+    expect(
+      withBytes(
+        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=",
+        "image/svg+xml",
+      ),
+    ).toBeUndefined();
+    // …and relabelling that same SVG as a JPEG does not launder it.
+    expect(
+      withBytes(
+        "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=",
+      ),
+    ).toBeUndefined();
+
+    expect(withBytes("AQID")).toBeUndefined();
+    expect(withBytes("")).toBeUndefined();
+
+    // RIFF alone is a container family; a WAV wearing an image MIME is not a WEBP.
+    expect(withBytes("UklGRiQAAABXQVZF", "image/webp")).toBeUndefined();
+    expect(withBytes("UklGRiQAAABXRUJQ", "image/webp")?.mime).toBe("image/webp");
+
+    expect(withBytes("iVBORw0KGgoAAA==", "image/png")?.mime).toBe("image/png");
+    expect(withBytes("R0lGODlh", "image/gif")?.mime).toBe("image/gif");
+
+    // A benign header/content spelling mismatch is defused by storing the sniffed type rather
+    // than by failing the label closed — a strict equality here would resolve nothing at all the
+    // first time a vendor spelled it `image/jpg`.
+    expect(withBytes("iVBORw0KGgoAAA==", "image/jpg")?.mime).toBe("image/png");
+  });
+});
 
 describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
   const ORIGINAL_TOKEN = process.env.DISCOGS_USER_TOKEN;

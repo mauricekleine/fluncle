@@ -84,9 +84,14 @@ export function adminBackfillsHandlers(os: Implementer) {
         parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
         parseBool(query.dryRun),
         query.cursor ?? undefined,
+        {
+          boxFetch: parseBool(query.boxFetch),
+          discogsCandidates: input.body?.discogsCandidates,
+        },
       );
 
       return {
+        discogsWork: result.discogsWork ?? [],
         dryRun: result.dryRun,
         nextCursor: result.nextCursor,
         ok: true as const,
@@ -108,7 +113,8 @@ export function adminBackfillsHandlers(os: Implementer) {
   // `backfill_discogs`. It takes a release id that sweep already resolved and reads the album's
   // catalogue number + styles off the release, writing catalogue metadata onto the `albums` row
   // (no publish, no certification), so the box's agent-token cron drives it. Album-grained and
-  // self-draining — no cursor. A NO-OP until DISCOGS_USER_TOKEN is provisioned (configured:false).
+  // self-draining — no cursor. The box-fetch path is configured by its explicit request flag;
+  // legacy Worker-fetch callers still require the Worker token.
   const backfillDiscogsFactsHandler = os.backfill_discogs_facts
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -117,10 +123,15 @@ export function adminBackfillsHandlers(os: Implementer) {
         const result = await backfillDiscogsFacts(
           parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
           parseBool(query.dryRun),
+          {
+            boxFetch: parseBool(query.boxFetch),
+            discogsCandidates: input.body?.discogsCandidates,
+          },
         );
 
         return {
           configured: result.configured,
+          discogsWork: result.discogsWork ?? [],
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,
@@ -353,9 +364,14 @@ export function adminBackfillsHandlers(os: Implementer) {
           parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
           parseBool(query.dryRun),
           query.cursor ?? undefined,
+          {
+            boxFetch: parseBool(query.boxFetch),
+            discogsCandidates: input.body?.discogsCandidates,
+          },
         );
 
         return {
+          discogsWork: result.discogsWork ?? [],
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,
