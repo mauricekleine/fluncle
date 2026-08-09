@@ -81,7 +81,7 @@ function TermsPage() {
             <div className="log-about-definition">
               <dt>If you build on the API</dt>
               <dd>
-                Two things come with it. Say the data came from Fluncle and link back to
+                Two conditions come with it. Say the data came from Fluncle and link back to
                 fluncle.com. And wherever you show a link to Spotify or another platform, name that
                 platform and link to it the way its own rules ask. Fluncle passes that duty on
                 because it was passed to him.

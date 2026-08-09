@@ -363,7 +363,7 @@ const ERROR_SCHEMA: SchemaValue = {
 
 const ERROR_RESPONSE: ResponseValue = {
   content: { "application/json": { schema: { $ref: ERROR_SCHEMA_REF } } },
-  description: "Fault — the `{ code, message, ok: false }` envelope, with the class in the status.",
+  description: "Fault: the `{ code, message, ok: false }` envelope, with the class in the status.",
 };
 
 /**
