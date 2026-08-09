@@ -3967,27 +3967,6 @@ a.catalogue-letter:focus-visible {
   gap: 0.6rem;
 }
 
-.account-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.account-metric {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.75rem;
-}
-
-.account-metric strong {
-  color: var(--starlight-cream);
-  display: block;
-  font-family: "Oxanium", ui-sans-serif, system-ui, sans-serif;
-  font-size: 1.25rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.account-metric span,
 .account-list span {
   color: var(--stardust);
   font-size: 0.78rem;
@@ -4158,12 +4137,6 @@ a.catalogue-letter:focus-visible {
 
 .account-collection-cta:hover {
   color: var(--eclipse-glow);
-}
-
-@media (max-width: 520px) {
-  .account-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ── galaxy door (B2) — the voyage sentence + collection meters (account redesign

@@ -7,6 +7,7 @@ import { type TracksHubEntry, type TracksHubFilters } from "./server/tracks-hub"
 import { siteUrl } from "./fluncle-links";
 import { jsonLdScript } from "./json-ld";
 import { logPageUrl } from "./log-schema";
+import { textParam } from "./search-params";
 
 /** The URL-carried filter state. Mirrors `TracksHubFilters` — the same names the search box uses. */
 export type TracksSearch = TracksHubFilters;
@@ -91,17 +92,6 @@ function boundedIntParam(value: unknown, bounds: IntBounds): number | undefined 
   return Number.isSafeInteger(n) && n >= bounds.min && n <= bounds.max ? n : undefined;
 }
 
-/** A trimmed non-empty string param (a key or a label / galaxy slug); empty / non-string → undefined. */
-function stringParam(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 /**
  * Parse the raw search record into the clean filter state. Pure so the coercion (junk params → clean
  * defaults) is unit-tested without a router. Every axis is optional; an absent or unparseable value
@@ -111,9 +101,9 @@ export function parseTracksSearch(search: Record<string, unknown>): TracksSearch
   return {
     bpmMax: boundedIntParam(search["bpmMax"], BPM_BOUNDS),
     bpmMin: boundedIntParam(search["bpmMin"], BPM_BOUNDS),
-    galaxy: stringParam(search["galaxy"]),
-    key: stringParam(search["key"]),
-    label: stringParam(search["label"]),
+    galaxy: textParam(search["galaxy"]),
+    key: textParam(search["key"]),
+    label: textParam(search["label"]),
     yearMax: boundedIntParam(search["yearMax"], YEAR_BOUNDS),
     yearMin: boundedIntParam(search["yearMin"], YEAR_BOUNDS),
   };

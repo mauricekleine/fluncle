@@ -563,20 +563,29 @@ export const CONTRACT_OPERATION_NAMES = Object.keys(contract) as Array<keyof typ
  * A pathless op THROWS rather than being skipped — a silently-dropped op would
  * fall out of both nets at once, which is the exact failure the nets exist to
  * prevent.
+ *
+ * `operationId` rides along OPTIONALLY — it is the third derived name Convention B
+ * pins (docs/naming-conventions.md: the camelCase spelling of the op, the one a
+ * generated client mints its method from), and orpc-naming.test.ts asserts both its
+ * presence and its derivation. It is deliberately NOT thrown on here: the two
+ * coverage nets partition the surface by PATH, so a missing `operationId` must fail
+ * the naming test rather than break the nets' enumeration.
  */
-export const CONTRACT_OPERATION_ROUTES: Record<string, { method: string; path: string }> =
-  Object.fromEntries(
-    Object.entries(contract).map(([name, op]) => {
-      if (!isContractProcedure(op)) {
-        throw new Error(`contract op "${name}" is not a contract procedure`);
-      }
+export const CONTRACT_OPERATION_ROUTES: Record<
+  string,
+  { method: string; operationId?: string; path: string }
+> = Object.fromEntries(
+  Object.entries(contract).map(([name, op]) => {
+    if (!isContractProcedure(op)) {
+      throw new Error(`contract op "${name}" is not a contract procedure`);
+    }
 
-      const { method, path } = op["~orpc"].route;
+    const { method, operationId, path } = op["~orpc"].route;
 
-      if (!method || !path) {
-        throw new Error(`contract op "${name}" declares no method + path`);
-      }
+    if (!method || !path) {
+      throw new Error(`contract op "${name}" declares no method + path`);
+    }
 
-      return [name, { method, path }];
-    }),
-  );
+    return [name, { method, operationId, path }];
+  }),
+);

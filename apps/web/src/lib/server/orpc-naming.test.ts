@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CONTRACT_OPERATION_NAMES } from "@fluncle/contracts/orpc";
+import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
 
 // Turns the ratified `verb_noun` cross-surface naming convention from a
 // review-only rule into a BUILD-FAIL check. The contract registry
@@ -268,6 +268,33 @@ describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {
         APPROVED_VERBS.has(verb),
         `op "${op}" leads with the unapproved verb "${verb}" — reuse a verb from the convention's closed set or add it to APPROVED_VERBS deliberately`,
       ).toBe(true);
+    }
+  });
+
+  // The second half of the convention: a canonical op name is not just well-shaped, it DERIVES
+  // the other surfaces' spellings by a fixed rule. `operationId` is the one derivation that lives
+  // inside the contract itself (docs/naming-conventions.md § "Pick the canonical op"), and it is
+  // hand-written per op — so nothing but this stops a new op from shipping a spelling a generated
+  // client would mint a differently-named method from.
+  it("every contract op derives its operationId as the camelCase spelling of its name", () => {
+    for (const op of opNames) {
+      const route = CONTRACT_OPERATION_ROUTES[op];
+
+      if (!route) {
+        expect.fail(`op "${op}" declares no route`);
+      }
+
+      const expected = op
+        .split("_")
+        .map((segment, index) =>
+          index === 0 ? segment : `${segment.slice(0, 1).toUpperCase()}${segment.slice(1)}`,
+        )
+        .join("");
+
+      expect(
+        route.operationId,
+        `op "${op}" must declare operationId "${expected}" (Convention B derives it from the op name)`,
+      ).toBe(expected);
     }
   });
 });
