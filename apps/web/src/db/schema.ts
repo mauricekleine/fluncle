@@ -937,6 +937,31 @@ export const tracks = sqliteTable(
     index("tracks_is_catalogue_idx")
       .on(table.isCatalogue)
       .where(sql`${table.isCatalogue} = 1`),
+    // THE FRESH CATALOGUE WINDOW. `is_catalogue` stopped discriminating: the crawler grew the
+    // catalogue into 99,637 of 99,729 rows, so the partial index above now matches 99.9% of the
+    // table and selects essentially everything. `/fresh`'s unlit half asks for a DATE WINDOW off
+    // that near-total set and orders by it (`is_catalogue = 1 and release_date between ? and ?
+    // order by release_date desc, track_id desc limit ?`), and with only the two single-column
+    // indexes to choose from the planner took `tracks_is_catalogue_idx` and then sorted the whole
+    // catalogue to return 24 rows — `USE TEMP B-TREE FOR ORDER BY` over ~100k rows.
+    //
+    // That is a PLAN COIN-FLIP, not a slow query, which is why it read as random: hosted Turso
+    // carries no ANALYZE statistics, so the same SQL measured 189ms / 756ms / 14,024ms in
+    // production within one hour (Sentry `db.query` spans on `GET /fresh`), and 2,605ms / 170ms /
+    // 213ms / 176ms back-to-back on a direct connection. Forcing the range path instead measured
+    // 45/53/41/59ms — flat, because a date seek early-terminates at the LIMIT.
+    //
+    // This composite serves the range AND both ORDER BY terms from one structure, so the seek is
+    // the cheapest path by construction rather than by the planner's guess, and the residual
+    // `TEMP B-TREE FOR LAST TERM` disappears with `track_id` carried here. Leading column is
+    // `release_date` because it is the seekable predicate; `track_id` follows only as the tiebreak.
+    // PARTIAL on the same `is_catalogue = 1` as its neighbour — the lit half reads through
+    // `findings`, never here. Plain ASC (SQLite walks a btree backwards for the DESC order; a
+    // `desc()` index would poison the drizzle snapshot into rebuilding every index — the ratified
+    // trap), and a plain btree, never `libsql_vector_idx`.
+    index("tracks_fresh_catalogue_idx")
+      .on(table.releaseDate, table.trackId)
+      .where(sql`${table.isCatalogue} = 1`),
     // THE FUNNEL STAGE SCAN, COVERED (docs/db-scale-backlog Wave 2 #7). `/admin/funnel`'s
     // folded pass (`runFoldedFunnelScan`) is one conditional aggregate over the WHOLE catalogue —
     // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the

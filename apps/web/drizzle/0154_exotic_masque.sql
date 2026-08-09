@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_fresh_catalogue_idx` ON `tracks` (`release_date`,`track_id`) WHERE "tracks"."is_catalogue" = 1;
