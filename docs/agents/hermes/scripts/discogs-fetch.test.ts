@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { createDiscogsFetcher } from "./discogs-fetch";
 
@@ -46,6 +48,17 @@ function harness(plans: PlannedResponse[]) {
 }
 
 describe("box-side Discogs fetch", () => {
+  test("both Discogs sweep entries export the shared secret environment", () => {
+    for (const name of ["backfill", "label-images"]) {
+      const source = readFileSync(join(import.meta.dir, `${name}-sweep.sh`), "utf8");
+
+      expect(source).toContain(".fluncle-secrets.env");
+      expect(source).toContain("set -a");
+      expect(source).toContain("# shellcheck source=/dev/null");
+      expect(source).toContain("set +a");
+    }
+  });
+
   test("paces every request and sends the authenticated identifiable headers", async () => {
     const fake = harness([
       { body: { results: [{ id: 41, master_id: 91 }] } },

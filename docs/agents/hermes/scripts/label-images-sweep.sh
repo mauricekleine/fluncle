@@ -33,6 +33,16 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 # Belt-and-suspenders: pin the absolute interpreter path.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
+# Source the shared 0600 sweep environment so the agent token and box-side Discogs token are
+# exported to the Bun driver. The host timer supplies only HOME; secrets never ride the unit.
+LABEL_IMAGES_ENV_FILE="${LABEL_IMAGES_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
+if [ -r "${LABEL_IMAGES_ENV_FILE}" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "${LABEL_IMAGES_ENV_FILE}"
+  set +a
+fi
+
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
