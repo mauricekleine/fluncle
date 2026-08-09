@@ -969,6 +969,31 @@ export const tracks = sqliteTable(
     // DESC order; a `desc()` index would poison the drizzle snapshot into rebuilding every index —
     // the ratified trap), and a plain btree, never `libsql_vector_idx`. It builds in ~4s at 100k rows.
     index("tracks_fresh_catalogue_idx").on(table.isCatalogue, table.releaseDate, table.trackId),
+    // THE ACTIVE-CATALOGUE WALK — the same collapse as the index above, on the sweep side. Every
+    // "walk the live catalogue in track_id order" read pairs `is_catalogue = 1` with
+    // `dismissed_at is null`, and neither predicate discriminates on its own now that the catalogue
+    // is 99.9% of `tracks`. `rankCatalogue`'s stale pick (catalogue.ts) is the hot one: it wants at
+    // most 250 rows and was taking `tracks_is_catalogue_idx` plus `USE TEMP B-TREE FOR ORDER BY`
+    // over the whole table to get them. Measured on prod, same query, same rows:
+    //
+    //   before: 19,131 / 19,842 / 17,331ms   SEARCH … tracks_is_catalogue_idx + TEMP B-TREE
+    //   after:       66 /     52 /     62ms   SEARCH … (is_catalogue=? AND dismissed_at=?)
+    //
+    // Note it is NOT a coin-flip like the fresh one — this shape lost every time, which is why
+    // `POST /api/v1/admin/catalogue/rank` sat at 80–113s in Sentry across its whole span history.
+    // `dismissed_at` is second because it is the other equality (`is null`); `track_id` is third so
+    // the ORDER BY comes off the index and the sweep can early-terminate at its batch cap.
+    //
+    // It does NOT cover every catalogue sweep read: `readCatalogueIdentity` adds a
+    // `source_audio_key is not null` boundary and was measured STILL taking the old plan with this
+    // index present (15–24s), so it needs its own and is not silently fixed by this one. Probe
+    // before adding it — an index the planner ignores is worse than none, because it costs writes
+    // and buys nothing.
+    index("tracks_catalogue_active_track_id_idx").on(
+      table.isCatalogue,
+      table.dismissedAt,
+      table.trackId,
+    ),
     // THE FUNNEL STAGE SCAN, COVERED (docs/db-scale-backlog Wave 2 #7). `/admin/funnel`'s
     // folded pass (`runFoldedFunnelScan`) is one conditional aggregate over the WHOLE catalogue —
     // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the

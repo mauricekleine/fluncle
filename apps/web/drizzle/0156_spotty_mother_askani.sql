@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_catalogue_active_track_id_idx` ON `tracks` (`is_catalogue`,`dismissed_at`,`track_id`);
