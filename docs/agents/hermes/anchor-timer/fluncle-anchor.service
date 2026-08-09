@@ -15,20 +15,22 @@ Type=oneshot
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). Secrets (the agent token + APIFY_API_TOKEN) come from the shared op-injected
 # ${HOME}/.fluncle-secrets.env the wrapper sources.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=100 hermes bash /opt/hermes-scripts/anchor-sweep.sh
-# One tick drains 100 rows (`FLUNCLE_ANCHOR_BATCH`) — the sweep PAGES the worklist in ≤200-row reads
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 hermes bash /opt/hermes-scripts/anchor-sweep.sh
+# One tick drains 250 rows (`FLUNCLE_ANCHOR_BATCH`) — the sweep PAGES the worklist in ≤200-row reads
 # (the server clamp), so the batch may exceed one read's cap (anchor-sweep.ts `runAnchorSweep`).
-# The rungs themselves cost no Apify dollars; what bounds the batch is the SHARED Spotify app.
+# Safe to run large because the FREE rungs resolve most rows at zero Apify cost, and 250 is the hard
+# ceiling: `list_track_work` validates `limit` at `.max(250)`.
 #
-# THE BATCH IS A BURST, AND THE BURST IS WHAT THE BREAKER SEES. Every ListenBrainz candidate spends
-# one Spotify by-id read on the shared official app, so a tick's row count IS its burst against that
-# app's rate budget. Past roughly this size the burst trips the shared throttle breaker
-# (lib/server/spotify-anchor-breaker.ts — 5 × 429 inside a 10-minute window), and that breaker's
-# cooldown is ONE HOUR: exactly this timer's cadence, so a single trip costs the whole NEXT tick
-# rather than the rest of this one. A tripped breaker also gates BOTH free rungs at once — the LB
-# by-id read AND the exact-ISRC ask — so a tick under a tripped breaker anchors nothing at all.
-# Fewer rows that resolve beat more rows that yield: raise this only against a ledger window showing
-# `lbYieldedOnBreaker` at zero across a full day.
+# THIS SWEEP IS THE BREAKER'S VICTIM, NOT ITS CAUSE — so do NOT tune this number against it. Every
+# ListenBrainz candidate spends one Spotify by-id read on the SHARED official app, and that read
+# CONSULTS the throttle breaker (lib/server/spotify-anchor-breaker.ts — 5 × 429 inside a 10-minute
+# window) and yields when it is tripped. The cooldown is ONE HOUR, exactly this timer's cadence, so a
+# trip by ANY Spotify caller costs this sweep an entire tick, and a tripped breaker gates BOTH free
+# rungs at once (the LB by-id read AND the exact-ISRC ask) — such a tick anchors nothing at all.
+# `fluncle-isrc-recovery` drives the SAME `resolve_anchor` op at its own hourly batch and lands ~10
+# minutes ahead of this tick, so it reaches the shared budget first. When this sweep reports
+# `lbYieldedOnBreaker` across a whole tick, the lever is the OTHER caller's pacing or the two units'
+# relative schedule — never this batch, which only decides how many rows a HEALTHY tick drains.
 #
 # Put the value HERE, never in a `fluncle-anchor.service.d/` drop-in: a drop-in wins silently, and
 # then reading this unit tells you the wrong thing.
