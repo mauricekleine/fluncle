@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRateLimitForTests,
+  discogsLabelImageFromEvidence,
   discogsReleaseUrl,
   discogsResolveRelease,
   fetchDiscogsLabelImage,
   fetchDiscogsReleaseFacts,
   parseDiscogsLabelUrl,
+  scoreDiscogsReleaseCandidates,
 } from "@/lib/server/discogs";
 
 describe("discogsReleaseUrl", () => {
@@ -44,6 +46,108 @@ function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Res
 const DISCOGS_SEARCH = "/database/search";
 const DISCOGS_RELEASE = "/releases/";
 const MB_ISRC = "musicbrainz.org/ws/2/isrc/";
+
+describe("box-fetched Discogs evidence", () => {
+  it("runs release evidence through the existing score and tracklist gate", () => {
+    const result = scoreDiscogsReleaseCandidates(
+      {
+        album: "Shelf Life 7",
+        artists: ["Calibre"],
+        label: "Hospital Records",
+        releaseDate: "2026-01-01",
+        title: "Funny Games",
+      },
+      [
+        {
+          artists: [{ name: "Someone Else" }],
+          formats: [{ name: "Vinyl" }],
+          id: 1,
+          labels: [{ name: "Other" }],
+          styles: ["Drum n Bass"],
+          title: "Wrong",
+          tracklist: [{ title: "Wrong Track" }],
+          year: 2026,
+        },
+        {
+          artists: [{ name: "Calibre" }],
+          formats: [{ name: "Vinyl" }],
+          id: 2,
+          labels: [{ catno: "NHS001", name: "Hospital Records" }],
+          searchMasterId: 9,
+          styles: ["Drum n Bass"],
+          title: "Shelf Life 7",
+          tracklist: [{ title: "Funny Games" }],
+          year: 2026,
+        },
+      ],
+    );
+
+    expect(result).toEqual({
+      catno: "NHS001",
+      masterId: 9,
+      releaseId: 2,
+      styles: ["Drum n Bass"],
+    });
+    expect(
+      scoreDiscogsReleaseCandidates({ artists: ["Calibre"], title: "Funny Games" }, [
+        {
+          artists: [{ name: "Someone Else" }],
+          formats: [],
+          id: 3,
+          labels: [],
+          styles: [],
+          title: "Unrelated",
+          tracklist: [{ title: "Another Tune" }],
+        },
+      ]),
+    ).toEqual({});
+  });
+
+  it("repeats the primary-image decision and rejects cross-wired box bytes", () => {
+    const candidate = {
+      detail: {
+        id: 11,
+        images: [
+          { type: "secondary" as const, uri: "https://i.discogs.com/secondary.jpg" },
+          { type: "primary" as const, uri: "https://i.discogs.com/primary.jpg" },
+        ],
+      },
+      discogsLabelId: 11,
+      image: {
+        bytesBase64: "AQID",
+        mime: "image/jpeg",
+        uri: "https://i.discogs.com/primary.jpg",
+      },
+      slug: "hospital",
+    };
+
+    const accepted = discogsLabelImageFromEvidence(candidate);
+    expect(accepted?.mime).toBe("image/jpeg");
+    expect(accepted?.bytes.byteLength).toBe(3);
+    expect(
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        image: { ...candidate.image, uri: "https://i.discogs.com/secondary.jpg" },
+      }),
+    ).toBeUndefined();
+    expect(
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        detail: { ...candidate.detail, id: 12 },
+      }),
+    ).toBeUndefined();
+    expect(
+      discogsLabelImageFromEvidence({
+        ...candidate,
+        detail: {
+          ...candidate.detail,
+          images: [{ type: "primary", uri: "https://attacker.example/logo.jpg" }],
+        },
+        image: { ...candidate.image, uri: "https://attacker.example/logo.jpg" },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
   const ORIGINAL_TOKEN = process.env.DISCOGS_USER_TOKEN;

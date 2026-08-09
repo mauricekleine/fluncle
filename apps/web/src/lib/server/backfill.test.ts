@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // these tests isolate the gate/backoff logic and the per-source state writes.
 
 const listTracks = vi.fn();
+const getTracksByIds = vi.fn();
 const discogsResolveRelease = vi.fn();
 const lastfmLove = vi.fn();
 const appleMusicLookupByIsrc = vi.fn();
@@ -61,12 +62,17 @@ vi.mock("./db", () => ({
 vi.mock("./tracks", async () => {
   const actual = await vi.importActual<typeof import("./tracks")>("./tracks");
 
-  return { ...actual, listTracks: (...a: unknown[]) => listTracks(...a) };
+  return {
+    ...actual,
+    getTracksByIds: (...a: unknown[]) => getTracksByIds(...a),
+    listTracks: (...a: unknown[]) => listTracks(...a),
+  };
 });
-vi.mock("./discogs", () => ({
-  discogsReleaseUrl: (id: number) => `https://www.discogs.com/release/${id}`,
-  discogsResolveRelease: (...a: unknown[]) => discogsResolveRelease(...a),
-}));
+vi.mock("./discogs", async () => {
+  const actual = await vi.importActual<typeof import("./discogs")>("./discogs");
+
+  return { ...actual, discogsResolveRelease: (...a: unknown[]) => discogsResolveRelease(...a) };
+});
 vi.mock("./lastfm", () => ({ lastfmLove: (...a: unknown[]) => lastfmLove(...a) }));
 vi.mock("./apple-music", () => ({
   appleCatalogLookupByIsrc: (...a: unknown[]) => appleCatalogLookupByIsrc(...a),
@@ -104,9 +110,51 @@ beforeEach(() => {
   vi.clearAllMocks();
   reliabilityRows.clear();
   writes.length = 0;
+  getTracksByIds.mockResolvedValue({});
 });
 
 describe("backfillDiscogsIds — reliability gate", () => {
+  it("scores box-fetched releases in the Worker before writing ids", async () => {
+    getTracksByIds.mockResolvedValueOnce({ "1": finding("1") });
+    const { backfillDiscogsIds } = await import("./backfill");
+    const result = await backfillDiscogsIds(10, false, undefined, {
+      boxFetch: true,
+      discogsCandidates: [
+        {
+          releases: [
+            {
+              artists: [{ name: "Artist" }],
+              formats: [{ name: "Vinyl" }],
+              id: 42,
+              labels: [],
+              styles: [],
+              title: "Title",
+              tracklist: [{ title: "Title" }],
+            },
+          ],
+          trackId: "1",
+        },
+      ],
+    });
+
+    expect(result.resolved).toEqual([{ logId: "LOG-1", releaseId: 42, source: "discogs" }]);
+    expect(discogsResolveRelease).not.toHaveBeenCalled();
+    expect(writes.some((write) => write.sql.includes("in_release_id = ?"))).toBe(true);
+  });
+
+  it("does not turn an omitted box result into a clean miss or reliability write", async () => {
+    const { backfillDiscogsIds } = await import("./backfill");
+    const result = await backfillDiscogsIds(10, false, undefined, {
+      boxFetch: true,
+      discogsCandidates: [],
+    });
+
+    expect(result.unresolved).toEqual([]);
+    expect(result.resolved).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(discogsResolveRelease).not.toHaveBeenCalled();
+  });
+
   it("skips a finding already marked done (done_at set), no resolve, no write", async () => {
     reliabilityRows.set("1", {
       attempted_at: null,

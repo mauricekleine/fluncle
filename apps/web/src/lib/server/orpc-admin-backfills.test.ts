@@ -96,6 +96,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({
+      discogsWork: [],
       dryRun: false,
       nextCursor: "cur-2",
       ok: true,
@@ -109,7 +110,10 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       unresolvedCount: 1,
     });
     // The query params parsed in-handler (limit clamped, dryRun=1 → true, cursor).
-    expect(backfillDiscogsIds).toHaveBeenCalledWith(10, true, "cur-1");
+    expect(backfillDiscogsIds).toHaveBeenCalledWith(10, true, "cur-1", {
+      boxFetch: false,
+      discogsCandidates: undefined,
+    });
   });
 });
 

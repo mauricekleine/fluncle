@@ -11,14 +11,13 @@
 //      the gate at the time). `discogsResolveRelease` stores NOTHING below the
 //      0.9 confidence gate, so an unresolved finding correctly stays null.
 //
-// Both are Worker-owned (the Worker holds LASTFM_* / DISCOGS_USER_TOKEN) and
-// best-effort PER FINDING: one bad finding counts as a failure and the sweep
-// continues. Neither triggers the publish fan-out (no Spotify playlist add, no
-// Telegram) — this is a side-channel repair over rows that are already published.
+// Both are Worker-owned and best-effort PER FINDING: one bad finding counts as a failure and the
+// sweep continues. Discogs vendor reads are normally fetched by the box and returned as bounded
+// evidence; the Worker still owns every match verdict and write. Neither triggers the publish
+// fan-out — this is a side-channel repair over rows that are already published.
 //
-// ── Reliability (the "Worker-paced" model) ──────────────────────────────────
-// The box holds NO vendor keys, so the API calls happen HERE (in the Worker); the
-// box `--no-agent` cron just drives one small batch per tick via the CLI. To keep
+// ── Reliability ───────────────────────────────────────────────────────────────
+// The box paces the Discogs reads while the Worker retains durable state and all writes. To keep
 // from re-storming a vendor API across ticks, each finding carries per-source
 // reliability state in the `tracks` row (backfill_{discogs,lastfm}_{attempted_at,
 // attempts,failures,done_at}). Before any vendor call the sweep SKIPS a finding
@@ -67,6 +66,7 @@ import { lastfmLove } from "./lastfm";
 import {
   decodeTrackCursor,
   encodeTrackCursor,
+  getTracksByIds,
   listTracks,
   type TrackListItem,
 } from "./tracks";
@@ -572,139 +572,155 @@ export async function backfillDiscogsIds(
   let first = true;
   let rateLimited = false;
   let rateLimitedBy: DiscogsThrottleVendor | null = null;
-  const suppliedByTrack = new Map<string, DiscogsReleaseCandidate["release"][]>();
-
-  for (const candidate of options.discogsCandidates ?? []) {
-    const releases = suppliedByTrack.get(candidate.trackId) ?? [];
-    releases.push(candidate.release);
-    suppliedByTrack.set(candidate.trackId, releases);
-  }
+  const suppliedByTrack = new Map(
+    (options.discogsCandidates ?? []).map((candidate) => [candidate.trackId, candidate.releases]),
+  );
 
   const visit = async (track: TrackListItem): Promise<boolean | "stop"> => {
-      // Already has a release id (discogsReleaseUrl present) → idempotent skip; it
-      // doesn't count toward the limit so a full backfill keeps making progress.
-      if (track.discogsReleaseUrl) {
+    // Already has a release id (discogsReleaseUrl present) → idempotent skip; it
+    // doesn't count toward the limit so a full backfill keeps making progress.
+    if (track.discogsReleaseUrl) {
+      return false;
+    }
+
+    if (!track.artists[0]?.trim() || !track.title.trim()) {
+      // Nothing to resolve on — skip without burning the budget.
+      return false;
+    }
+
+    const logId = track.logId ?? track.trackId;
+
+    // Reliability gate: already resolved (done), or cooling down → skip. This is
+    // what stops the 429-storm: a finding tried this window is not re-resolved.
+    const state = await readReliability(track.trackId, "discogs");
+
+    if (shouldSkip(state, now)) {
+      skipped.push(logId);
+      return false;
+    }
+
+    if (dryRun) {
+      // Preview the set without resolving, writing, or recording state.
+      unresolved.push(logId);
+      return true;
+    }
+
+    const input = {
+      album: track.album,
+      artists: track.artists,
+      isrc: track.isrc,
+      label: track.label,
+      releaseDate: track.releaseDate,
+      title: track.title,
+    };
+
+    const supplied = suppliedByTrack.get(track.trackId);
+
+    let enrichment: DiscogsEnrichment;
+
+    if (options.discogsCandidates !== undefined) {
+      // Missing is not empty: only an explicit group proves the box completed this row. A partial
+      // batch therefore cannot stamp an omitted finding as a clean no-match.
+      if (supplied === undefined) {
         return false;
       }
 
-      if (!track.artists[0]?.trim() || !track.title.trim()) {
-        // Nothing to resolve on — skip without burning the budget.
-        return false;
-      }
-
-      const logId = track.logId ?? track.trackId;
-
-      // Reliability gate: already resolved (done), or cooling down → skip. This is
-      // what stops the 429-storm: a finding tried this window is not re-resolved.
-      const state = await readReliability(track.trackId, "discogs");
-
-      if (shouldSkip(state, now)) {
-        skipped.push(logId);
-        return false;
-      }
-
-      if (dryRun) {
-        // Preview the set without resolving, writing, or recording state.
-        unresolved.push(logId);
-        return true;
-      }
-
-      const input = {
-        album: track.album,
-        artists: track.artists,
-        isrc: track.isrc,
-        label: track.label,
-        releaseDate: track.releaseDate,
-        title: track.title,
-      };
-
-      // Group the flat, keyed evidence against the row as the DB holds it now. When the candidates
-      // field is present, an empty group is the box's clean no-hit answer for this work row.
-      const supplied = suppliedByTrack.get(track.trackId) ?? [];
-
-      let enrichment: DiscogsEnrichment;
-
-      if (options.discogsCandidates !== undefined) {
-        // The scorer reads the row as it exists NOW and runs the identical tracklist/confidence
-        // gate as Worker-fetched releases. No Discogs request occurs on this branch.
-        enrichment = scoreDiscogsReleaseCandidates(input, supplied);
-      } else if (options.boxFetch) {
-        // Preparation keeps the resolver's MusicBrainz-first identity leg. It deliberately stops
-        // before Discogs: a direct RELEASE relation can resolve here, while master-only still needs
-        // a concrete release and therefore becomes box work.
-        const preparation = await prepareDiscogsRelease(input);
-        enrichment = preparation.enrichment;
-
-        if (enrichment.rateLimited) {
-          rateLimited = true;
-          rateLimitedBy = enrichment.rateLimitedBy ?? null;
-          return "stop";
-        }
-
-        if (!enrichment.releaseId) {
-          discogsWork.push({ queries: preparation.queries, trackId: track.trackId });
-          return true;
-        }
-      } else {
-        // Pace legacy Worker-fetch calls (skip the wait before the first one).
-        if (!first) {
-          await delay(DISCOGS_DELAY_MS);
-        }
-        first = false;
-
-        // The legacy branch remains unchanged for callers that do not opt into the split.
-        enrichment = await discogsResolveRelease(input);
-      }
+      // The scorer reads the row as it exists NOW and runs the identical tracklist/confidence
+      // gate as Worker-fetched releases. No Discogs request occurs on this branch.
+      enrichment = scoreDiscogsReleaseCandidates(input, supplied);
+    } else if (options.boxFetch) {
+      // Preparation keeps the resolver's MusicBrainz-first identity leg. It deliberately stops
+      // before Discogs: a direct RELEASE relation can resolve here, while master-only still needs
+      // a concrete release and therefore becomes box work.
+      const preparation = await prepareDiscogsRelease(input);
+      enrichment = preparation.enrichment;
 
       if (enrichment.rateLimited) {
-        // Circuit breaker: Discogs is actively rate-limiting. Stop the whole run
-        // here rather than marching the next finding into the same 429 wall — the
-        // storm #119 missed (per-finding cooldown only helps the NEXT run; nothing
-        // stopped the current one). Do NOT cool this finding down: it was budget-
-        // throttled, not unresolvable, so the next 30m tick retries it with a fresh
-        // rate-limit window (the resolved findings above are already `done`-gated).
-        // The flag tells the CLI to STOP LOOPING the cursor (not just this pass) —
-        // otherwise it re-fires the same throttled cursor and grinds to a timeout.
         rateLimited = true;
         rateLimitedBy = enrichment.rateLimitedBy ?? null;
         return "stop";
       }
 
       if (!enrichment.releaseId) {
-        // A clean no-match is a TRIED (base cooldown, streak reset) so an
-        // unresolvable finding isn't re-hit every tick.
-        await recordAttempt(track.trackId, "discogs", "tried");
-        unresolved.push(logId);
+        discogsWork.push({ queries: preparation.queries, trackId: track.trackId });
         return true;
       }
-
-      await setDiscogsIds(track.trackId, enrichment.releaseId, enrichment.masterId);
-      await recordAttempt(track.trackId, "discogs", "done");
-
-      // CAPTURE ON RESOLVE, the publish path's twin (publish.ts). The scored search leg held the
-      // release payload, so its catno + styles are already in hand — store them at the album grain
-      // rather than throwing away a fact we paid for. A MusicBrainz-bridge resolve carries none and
-      // leaves the album `pending` for `backfillDiscogsFacts` below. Fill-empty-only in SQL.
-      if (enrichment.catno !== undefined || enrichment.styles !== undefined) {
-        await storeAlbumDiscogsFactsForTrack(track.trackId, {
-          catno: enrichment.catno,
-          styles: enrichment.styles,
-        });
+    } else {
+      // Pace legacy Worker-fetch calls (skip the wait before the first one).
+      if (!first) {
+        await delay(DISCOGS_DELAY_MS);
       }
+      first = false;
 
-      resolved.push({
-        logId,
-        masterId: enrichment.masterId,
-        releaseId: enrichment.releaseId,
-        // The resolver doesn't surface which leg matched (MB bridge vs scored
-        // search), so the source is the resolver itself.
-        source: "discogs",
-      });
+      // The legacy branch remains unchanged for callers that do not opt into the split.
+      enrichment = await discogsResolveRelease(input);
+    }
 
+    if (enrichment.rateLimited) {
+      // Circuit breaker: Discogs is actively rate-limiting. Stop the whole run
+      // here rather than marching the next finding into the same 429 wall — the
+      // storm #119 missed (per-finding cooldown only helps the NEXT run; nothing
+      // stopped the current one). Do NOT cool this finding down: it was budget-
+      // throttled, not unresolvable, so the next 30m tick retries it with a fresh
+      // rate-limit window (the resolved findings above are already `done`-gated).
+      // The flag tells the CLI to STOP LOOPING the cursor (not just this pass) —
+      // otherwise it re-fires the same throttled cursor and grinds to a timeout.
+      rateLimited = true;
+      rateLimitedBy = enrichment.rateLimitedBy ?? null;
+      return "stop";
+    }
+
+    if (!enrichment.releaseId) {
+      // A clean no-match is a TRIED (base cooldown, streak reset) so an
+      // unresolvable finding isn't re-hit every tick.
+      await recordAttempt(track.trackId, "discogs", "tried");
+      unresolved.push(logId);
       return true;
+    }
+
+    await setDiscogsIds(track.trackId, enrichment.releaseId, enrichment.masterId);
+    await recordAttempt(track.trackId, "discogs", "done");
+
+    // CAPTURE ON RESOLVE, the publish path's twin (publish.ts). The scored search leg held the
+    // release payload, so its catno + styles are already in hand — store them at the album grain
+    // rather than throwing away a fact we paid for. A MusicBrainz-bridge resolve carries none and
+    // leaves the album `pending` for `backfillDiscogsFacts` below. Fill-empty-only in SQL.
+    if (enrichment.catno !== undefined || enrichment.styles !== undefined) {
+      await storeAlbumDiscogsFactsForTrack(track.trackId, {
+        catno: enrichment.catno,
+        styles: enrichment.styles,
+      });
+    }
+
+    resolved.push({
+      logId,
+      masterId: enrichment.masterId,
+      releaseId: enrichment.releaseId,
+      // The resolver doesn't surface which leg matched (MB bridge vs scored
+      // search), so the source is the resolver itself.
+      source: "discogs",
+    });
+
+    return true;
   };
 
-  const nextCursor = await runPublishedFindingPass(startCursor, batchLimit(limit), visit);
+  let nextCursor: string | null;
+
+  if (options.discogsCandidates !== undefined) {
+    const tracks = await getTracksByIds([...suppliedByTrack.keys()]);
+
+    for (const trackId of suppliedByTrack.keys()) {
+      const track = tracks[trackId];
+
+      if (track !== undefined && (await visit(track)) === "stop") {
+        break;
+      }
+    }
+
+    nextCursor = null;
+  } else {
+    nextCursor = await runPublishedFindingPass(startCursor, batchLimit(limit), visit);
+  }
 
   return {
     discogsWork,
@@ -807,8 +823,7 @@ type DiscogsFactsWorkRow = {
 
 /** One bounded Discogs-facts pass's numbers. No cursor — the worklist self-drains by state. */
 export type DiscogsFactsBackfillResult = {
-  // False when DISCOGS_USER_TOKEN is unset — the leg is a NO-OP this tick (nothing read, nothing
-  // stamped), so the cron output reads honestly as "unconfigured" rather than a silent "0 resolved".
+  // False when neither a legacy Worker token nor the box-fetch request arms this pass.
   configured: boolean;
   discogsWork: DiscogsFactsWork[];
   dryRun: boolean;
@@ -923,12 +938,15 @@ export async function backfillDiscogsFacts(
   });
 
   // Read the token FIRST, so `configured` is honest on every return path including a dry run — a
-  // preview that reports "configured" on a Worker with no Discogs token would tell the operator the
-  // sweep is armed when the very next live tick will do nothing. The preview itself still runs
-  // unconfigured (the worklist is a pure DB read), which is exactly what makes it useful there.
+  // A legacy preview with no Worker token remains unconfigured; an explicit box-fetch request is
+  // armed because its vendor token stays outside this process.
   const token = await readOptionalEnv("DISCOGS_USER_TOKEN");
   const configured =
     Boolean(token) || options.boxFetch === true || options.discogsCandidates !== undefined;
+
+  if (options.discogsCandidates !== undefined && options.discogsCandidates.length === 0) {
+    return summarize({});
+  }
 
   const page = Math.max(1, Math.min(limit, DISCOGS_FACTS_MAX_BATCH));
   const suppliedSlugs = options.discogsCandidates?.map((candidate) => candidate.slug);

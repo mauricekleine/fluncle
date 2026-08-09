@@ -113,7 +113,8 @@ export function adminBackfillsHandlers(os: Implementer) {
   // `backfill_discogs`. It takes a release id that sweep already resolved and reads the album's
   // catalogue number + styles off the release, writing catalogue metadata onto the `albums` row
   // (no publish, no certification), so the box's agent-token cron drives it. Album-grained and
-  // self-draining — no cursor. A NO-OP until DISCOGS_USER_TOKEN is provisioned (configured:false).
+  // self-draining — no cursor. The box-fetch path is configured by its explicit request flag;
+  // legacy Worker-fetch callers still require the Worker token.
   const backfillDiscogsFactsHandler = os.backfill_discogs_facts
     .use(adminAuth)
     .handler(async ({ input }) => {

@@ -25,7 +25,7 @@
 // at ~1 req/sec. Both are best-effort: any failure resolves to {} and never blocks
 // the add — same side-channel discipline as enrichFromDeezer / lastfmLove.
 
-import type { DiscogsLabelCandidate, DiscogsReleaseEvidence } from "@fluncle/contracts/orpc";
+import { type DiscogsLabelCandidate, type DiscogsReleaseEvidence } from "@fluncle/contracts/orpc";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import {
@@ -500,17 +500,15 @@ function normalizeReleaseEvidence(
   }
 
   const masterId =
-    typeof release.master_id === "number" && release.master_id > 0
-      ? release.master_id
-      : undefined;
+    typeof release.master_id === "number" && release.master_id > 0 ? release.master_id : undefined;
 
   return {
-    artists: (release.artists ?? []).map((artist) => ({
-      ...(artist.name === undefined ? {} : { name: artist.name }),
-    })),
-    formats: (release.formats ?? []).map((format) => ({
-      ...(format.name === undefined ? {} : { name: format.name }),
-    })),
+    artists: (release.artists ?? []).map((artist) =>
+      artist.name === undefined ? {} : { name: artist.name },
+    ),
+    formats: (release.formats ?? []).map((format) =>
+      format.name === undefined ? {} : { name: format.name },
+    ),
     id: release.id,
     labels: (release.labels ?? []).map((label) => ({
       ...(label.catno === undefined ? {} : { catno: label.catno }),
@@ -520,9 +518,9 @@ function normalizeReleaseEvidence(
     ...(searchMasterId === undefined || searchMasterId <= 0 ? {} : { searchMasterId }),
     styles: release.styles ?? [],
     ...(release.title === undefined ? {} : { title: release.title }),
-    tracklist: (release.tracklist ?? []).map((track) => ({
-      ...(track.title === undefined ? {} : { title: track.title }),
-    })),
+    tracklist: (release.tracklist ?? []).map((track) =>
+      track.title === undefined ? {} : { title: track.title },
+    ),
     ...(release.year === undefined ? {} : { year: release.year }),
   };
 }
@@ -837,9 +835,7 @@ async function resolveViaDiscogsSearch(
       seen.add(hit.id);
 
       const rawRelease = await discogsFetch<DiscogsRelease>(`/releases/${hit.id}`, token, signal);
-      const release = rawRelease
-        ? normalizeReleaseEvidence(rawRelease, hit.master_id)
-        : undefined;
+      const release = rawRelease ? normalizeReleaseEvidence(rawRelease, hit.master_id) : undefined;
 
       if (!release) {
         continue;
@@ -1064,6 +1060,18 @@ function decodeBase64Image(value: string): ArrayBuffer | undefined {
   }
 }
 
+function isDiscogsImageUri(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "discogs.com" || url.hostname.endsWith(".discogs.com"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Verify box-fetched label detail + bytes without trusting its selected image. The Worker repeats
  * Discogs's primary-else-first choice, requires the downloaded URI to be that exact choice, and
@@ -1072,26 +1080,38 @@ function decodeBase64Image(value: string): ArrayBuffer | undefined {
 export function discogsLabelImageFromEvidence(
   evidence: DiscogsLabelCandidate,
 ): DiscogsLabelImage | undefined {
+  const result = verifyDiscogsLabelEvidence(evidence);
+  return result.kind === "image" ? result.image : undefined;
+}
+
+/** Distinguish a verified no-image detail from malformed or cross-wired supplied evidence. */
+export function verifyDiscogsLabelEvidence(
+  evidence: DiscogsLabelCandidate,
+): { kind: "image"; image: DiscogsLabelImage } | { kind: "none" } | { kind: "invalid" } {
   if (evidence.detail.id !== evidence.discogsLabelId) {
-    return undefined;
+    return { kind: "invalid" };
   }
 
   const selectedUri = pickLabelImageUri(evidence.detail.images);
   const suppliedImage = evidence.image;
 
-  if (!selectedUri || !suppliedImage || suppliedImage.uri !== selectedUri) {
-    return undefined;
+  if (!selectedUri) {
+    return suppliedImage === undefined ? { kind: "none" } : { kind: "invalid" };
+  }
+
+  if (!isDiscogsImageUri(selectedUri) || !suppliedImage || suppliedImage.uri !== selectedUri) {
+    return { kind: "invalid" };
   }
 
   const mime = suppliedImage.mime.split(";")[0]?.trim().toLowerCase();
 
   if (!mime?.startsWith("image/")) {
-    return undefined;
+    return { kind: "invalid" };
   }
 
   const bytes = decodeBase64Image(suppliedImage.bytesBase64);
 
-  return bytes ? { bytes, mime } : undefined;
+  return bytes ? { image: { bytes, mime }, kind: "image" } : { kind: "invalid" };
 }
 
 /**

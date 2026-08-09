@@ -13,23 +13,23 @@
 //      what it renders today (the freshest finding's cover). A tiny artist-run label with no
 //      Discogs/Wikidata image degrades gracefully, never to an empty card.
 //
-// ── WHY WORKER-PACED (the shipped `fluncle-backfill` discipline) ─────────────────────────────
-// The box holds no vendor keys, so the MusicBrainz walk + the authed Discogs fetches happen HERE
-// (in the Worker) and the box `--no-agent` cron just drives one small batch per tick. MB is the
-// shared 1 req/s client (musicbrainz.ts); Discogs is the shared authed gate (discogs.ts). Both
-// report `rateLimited` honestly, and this sweep trips a circuit breaker on it — it STOPS the pass
+// ── SPLIT VENDOR FETCH (the shipped Deezer discipline) ────────────────────────────────────────
+// MusicBrainz preparation stays in the Worker. The box performs only the paced Discogs detail and
+// image reads, then returns bounded evidence through this operation. The Worker re-reads identity,
+// chooses the accepted image, and owns every R2/DB write. Both tiers report `rateLimited` honestly,
+// and this sweep trips a circuit breaker on it — it STOPS the pass
 // rather than marching the next label into the same wall. Per-label reliability lives on the row
 // (`image_state` / `image_attempted_at` / `image_failures`): a resolved/none label is terminal
 // and skipped forever; a transient failure backs off on a cooldown and is retried. `none` is
 // reserved for a trustworthy absence verdict — a vendor outage must never masquerade as one.
 // Idempotent by construction — a second run over a fully-resolved archive fetches nothing.
 
-import type { DiscogsLabelCandidate, DiscogsLabelWork } from "@fluncle/contracts/orpc";
+import { type DiscogsLabelCandidate, type DiscogsLabelWork } from "@fluncle/contracts/orpc";
 import {
-  discogsLabelImageFromEvidence,
   type DiscogsLabelImage,
   fetchDiscogsLabelImage,
   parseDiscogsLabelUrl,
+  verifyDiscogsLabelEvidence,
 } from "./discogs";
 import { getDb, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
@@ -493,15 +493,19 @@ async function resolveOneLabel(
     // 3. Discogs label image — the primary source.
     if (discogsLabelId !== null && discogs.candidatesPresent) {
       const supplied = discogs.supplied;
-      const image =
+      const evidence =
         supplied?.discogsLabelId === discogsLabelId
-          ? discogsLabelImageFromEvidence(supplied)
-          : undefined;
+          ? verifyDiscogsLabelEvidence(supplied)
+          : { kind: "invalid" as const };
 
-      if (image) {
-        const imageKey = await storeLogo(bucket, row.slug, image);
+      if (evidence.kind === "image") {
+        const imageKey = await storeLogo(bucket, row.slug, evidence.image);
 
         return { imageKey, kind: "resolved", source: "discogs" };
+      }
+
+      if (evidence.kind === "invalid") {
+        return { error: "Discogs label evidence failed Worker verification", kind: "failed" };
       }
     } else if (discogsLabelId !== null && discogs.boxFetch) {
       // The Discogs rung must be resolved before the ladder can honestly conclude `none` or move
@@ -568,6 +572,22 @@ export async function resolveLabelImages(
 ): Promise<LabelImagesResolveResult> {
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
   const candidateSlugs = options.discogsCandidates?.map((candidate) => candidate.slug);
+
+  if (options.discogsCandidates !== undefined && candidateSlugs?.length === 0) {
+    return {
+      discogsWork: [],
+      dryRun,
+      failed: [],
+      failedCount: 0,
+      nextCursor: null,
+      none: [],
+      noneCount: 0,
+      rateLimited: false,
+      resolved: [],
+      resolvedCount: 0,
+    };
+  }
+
   const rows = await listPendingLabels(
     batchLimit,
     candidateSlugs && candidateSlugs.length > 0 ? undefined : cursor,
