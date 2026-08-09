@@ -16,11 +16,11 @@
 # so observe-sweep.sh reads the token from a 0600 file instead — see
 # docs/agents/hermes/cron/README.md § Operational gotchas (do not re-debug these).
 #
-# DURABILITY (RFC Unit B): the base is DIGEST-PINNED (not the mutable :v2026.7.30 tag) so a
+# DURABILITY (RFC Unit B): the base is DIGEST-PINNED (not the mutable :v2026.8.3 tag) so a
 # cached venv layer can never sit on a silently-drifted base — the flake that once shipped a
 # broken embed engine. To bump the base deliberately, re-resolve the digest + update this line:
-#   docker inspect nousresearch/hermes-agent:v2026.7.30 --format '{{index .RepoDigests 0}}'
-FROM nousresearch/hermes-agent@sha256:b869e64d6496d4763d5e4fb675b5f504cb23b0e35ec9b790481a56118602b10f
+#   docker inspect nousresearch/hermes-agent:v2026.8.3 --format '{{index .RepoDigests 0}}'
+FROM nousresearch/hermes-agent@sha256:16788311e2fa3035456bdc1bafb8ec2b1777db64ebf020af9bb7eb73c3712c9e
 
 # Enrichment toolchain (docs/agents/hermes/cron/README.md): the
 # fluncle-track-enrichment skill's analyze-track.ts is `#!/usr/bin/env bun` and
