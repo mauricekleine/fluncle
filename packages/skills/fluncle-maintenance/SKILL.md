@@ -68,6 +68,7 @@ This skill owns the standing policy for dependency vulnerabilities — the count
 
 - `GHSA-f88m-g3jw-g9cj` (sharp, libvips CVEs): build-time image tooling; miniflare pins sharp exact, so the fix arrives with routine wrangler bumps and cannot be forced from this tree.
 - `GHSA-xcpc-8h2w-3j85` (adm-zip, crafted-ZIP memory allocation): unreachable — it unpacks only onnxruntime's own archives at install time, never untrusted input.
+- `GHSA-w3rx-r6r6-pgpr` + `GHSA-5p2g-fcmc-qvqq` (image-size, DoS via infinite loops in the ICNS and JXL/HEIF parsers): **no patched version exists** — both advisories carry `first_patched_version: null` against a `<= 2.0.2` range while 2.0.2 is the newest published release, so no parent bump and no override can reach a fix. Unreachable besides: it arrives only through the mobile build chain (`expo`, `react-native`, `react-native-worklets`) and parses the app's own bundled assets, never untrusted input. Drop both entries the moment upstream publishes a fixed release — re-check `first_patched_version` on every pass.
 
 **The blocking flip (operator-gated).** `dependency-audit.yml` currently carries `continue-on-error: true`. The flip — removing it, and optionally marking the check required — is the operator's PR-gate contract change, and its precondition is a clean residual: every non-allowlisted high drained via parent bumps. Advisory drift can redden `main` without a code change, so the flip is deliberately his call, not a pass's.
 
