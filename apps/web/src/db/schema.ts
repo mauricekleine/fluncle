@@ -951,17 +951,24 @@ export const tracks = sqliteTable(
     // 213ms / 176ms back-to-back on a direct connection. Forcing the range path instead measured
     // 45/53/41/59ms — flat, because a date seek early-terminates at the LIMIT.
     //
-    // This composite serves the range AND both ORDER BY terms from one structure, so the seek is
-    // the cheapest path by construction rather than by the planner's guess, and the residual
-    // `TEMP B-TREE FOR LAST TERM` disappears with `track_id` carried here. Leading column is
-    // `release_date` because it is the seekable predicate; `track_id` follows only as the tiebreak.
-    // PARTIAL on the same `is_catalogue = 1` as its neighbour — the lit half reads through
-    // `findings`, never here. Plain ASC (SQLite walks a btree backwards for the DESC order; a
-    // `desc()` index would poison the drizzle snapshot into rebuilding every index — the ratified
-    // trap), and a plain btree, never `libsql_vector_idx`.
-    index("tracks_fresh_catalogue_idx")
-      .on(table.releaseDate, table.trackId)
-      .where(sql`${table.isCatalogue} = 1`),
+    // IT LEADS WITH `is_catalogue`, AND THAT IS LOAD-BEARING — the same lesson `tracks_funnel_scan_idx`
+    // records below, re-learned here at the cost of a deploy. Shipped first as
+    // `(release_date, track_id)` PARTIAL on `is_catalogue = 1`, this index was simply never chosen:
+    // the planner kept `SEARCH tracks USING INDEX tracks_is_catalogue_idx (is_catalogue=?)` plus the
+    // temp B-tree, because with no statistics SQLite prefers an equality seek it can see over a range
+    // on an index whose predicate is hidden in a `where` clause. Demoting the discriminator to a
+    // partial predicate hides it. Measured on prod, same query, same rows:
+    //
+    //   partial (release_date, track_id):        SEARCH … tracks_is_catalogue_idx + TEMP B-TREE
+    //   leading (is_catalogue, release_date, …): SEARCH … (is_catalogue=? AND release_date>? AND <?)
+    //                                            no temp B-tree — 58/45/43/42/44ms
+    //
+    // So `is_catalogue` is a COLUMN here, not a `where`: it makes the equality visible, `release_date`
+    // then serves the range, and `track_id` carries the ORDER BY's last term so nothing is sorted at
+    // all. NOT partial, for exactly that reason. Plain ASC (SQLite walks a btree backwards for the
+    // DESC order; a `desc()` index would poison the drizzle snapshot into rebuilding every index —
+    // the ratified trap), and a plain btree, never `libsql_vector_idx`. It builds in ~4s at 100k rows.
+    index("tracks_fresh_catalogue_idx").on(table.isCatalogue, table.releaseDate, table.trackId),
     // THE FUNNEL STAGE SCAN, COVERED (docs/db-scale-backlog Wave 2 #7). `/admin/funnel`'s
     // folded pass (`runFoldedFunnelScan`) is one conditional aggregate over the WHOLE catalogue —
     // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the
