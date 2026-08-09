@@ -25,6 +25,7 @@
 // at ~1 req/sec. Both are best-effort: any failure resolves to {} and never blocks
 // the add — same side-channel discipline as enrichFromDeezer / lastfmLove.
 
+import type { DiscogsLabelCandidate, DiscogsReleaseEvidence } from "@fluncle/contracts/orpc";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import {
@@ -486,9 +487,45 @@ type DiscogsRelease = {
 };
 
 type ScoredCandidate = {
-  release: DiscogsRelease;
+  release: DiscogsReleaseEvidence;
   score: number;
 };
+
+function normalizeReleaseEvidence(
+  release: DiscogsRelease,
+  searchMasterId?: number,
+): DiscogsReleaseEvidence | undefined {
+  if (typeof release.id !== "number" || release.id <= 0) {
+    return undefined;
+  }
+
+  const masterId =
+    typeof release.master_id === "number" && release.master_id > 0
+      ? release.master_id
+      : undefined;
+
+  return {
+    artists: (release.artists ?? []).map((artist) => ({
+      ...(artist.name === undefined ? {} : { name: artist.name }),
+    })),
+    formats: (release.formats ?? []).map((format) => ({
+      ...(format.name === undefined ? {} : { name: format.name }),
+    })),
+    id: release.id,
+    labels: (release.labels ?? []).map((label) => ({
+      ...(label.catno === undefined ? {} : { catno: label.catno }),
+      ...(label.name === undefined ? {} : { name: label.name }),
+    })),
+    ...(masterId === undefined ? {} : { masterId }),
+    ...(searchMasterId === undefined || searchMasterId <= 0 ? {} : { searchMasterId }),
+    styles: release.styles ?? [],
+    ...(release.title === undefined ? {} : { title: release.title }),
+    tracklist: (release.tracklist ?? []).map((track) => ({
+      ...(track.title === undefined ? {} : { title: track.title }),
+    })),
+    ...(release.year === undefined ? {} : { year: release.year }),
+  };
+}
 
 function discogsFetch<T>(
   path: string,
@@ -561,7 +598,7 @@ function discogsFetch<T>(
  * actually contain the track title. The gate is what kills the VA-compilation /
  * wrong-release matches Discogs' own ranking surfaces.
  */
-function scoreRelease(input: DiscogsResolveInput, release: DiscogsRelease): number {
+function scoreRelease(input: DiscogsResolveInput, release: DiscogsReleaseEvidence): number {
   // The gate: the title must appear in the tracklist (or, for a single named after
   // its A-side, in the release title). Without a tracklist we cannot confirm.
   const trackTitles = (release.tracklist ?? [])
@@ -634,7 +671,7 @@ function scoreRelease(input: DiscogsResolveInput, release: DiscogsRelease): numb
  * literal `"none"` for a release with no number at all, so that string is dropped rather than
  * stored — printing "none" beside a record would be a lie dressed as a fact.
  */
-function releaseFacts(release: DiscogsRelease): DiscogsReleaseFacts {
+export function releaseFacts(release: DiscogsReleaseEvidence): DiscogsReleaseFacts {
   const catno = (release.labels ?? [])
     .map((label) => label.catno?.trim() ?? "")
     .find((value) => value.length > 0 && value.toLowerCase() !== "none");
@@ -697,6 +734,69 @@ function searchVariants(input: DiscogsResolveInput): URLSearchParams[] {
   return variants;
 }
 
+/** The bounded, Worker-owned query spellings handed to a box fetcher. */
+export function discogsSearchQueries(input: DiscogsResolveInput): string[] {
+  return searchVariants(input).map((variant) => variant.toString());
+}
+
+/**
+ * Run only the MusicBrainz-first identity preparation used by the resolver. It intentionally makes
+ * no Discogs request. A release relation can be accepted directly; a master-only relation remains
+ * useful context to the legacy publish path but is not sufficient for the release-id backfill.
+ */
+export async function prepareDiscogsRelease(
+  input: DiscogsResolveInput,
+): Promise<{ enrichment: DiscogsEnrichment; queries: string[] }> {
+  const signal: RateLimitSignal = { hit: false };
+
+  try {
+    const enrichment = (await resolveViaMusicBrainz(input, signal)) ?? rateLimitedOutcome(signal);
+
+    return { enrichment, queries: discogsSearchQueries(input) };
+  } catch (error) {
+    logEvent("error", "discogs.prepare-failed", { error, title: input.title });
+
+    return { enrichment: rateLimitedOutcome(signal), queries: discogsSearchQueries(input) };
+  }
+}
+
+/**
+ * Apply the exact existing scoreRelease + tracklist + confidence gate to box-supplied releases.
+ * The best confident RELEASE wins; a master id can ride along but can never replace releaseId.
+ */
+export function scoreDiscogsReleaseCandidates(
+  input: DiscogsResolveInput,
+  releases: DiscogsReleaseEvidence[],
+): DiscogsEnrichment {
+  const seen = new Set<number>();
+  let best: ScoredCandidate | undefined;
+
+  for (const release of releases) {
+    if (seen.has(release.id)) {
+      continue;
+    }
+
+    seen.add(release.id);
+    const score = scoreRelease(input, release);
+
+    if (score > 0 && (!best || score > best.score)) {
+      best = { release, score };
+    }
+  }
+
+  if (!best || best.score < CONFIDENCE_THRESHOLD) {
+    return {};
+  }
+
+  const masterId = best.release.masterId ?? best.release.searchMasterId;
+
+  return {
+    ...releaseFacts(best.release),
+    ...(masterId === undefined ? {} : { masterId }),
+    releaseId: best.release.id,
+  };
+}
+
 /**
  * Discogs fallback: run the query variants, fetch + score each unique candidate
  * release, and return the single best scored candidate. The GATE lives in
@@ -736,15 +836,13 @@ async function resolveViaDiscogsSearch(
 
       seen.add(hit.id);
 
-      const release = await discogsFetch<DiscogsRelease>(`/releases/${hit.id}`, token, signal);
+      const rawRelease = await discogsFetch<DiscogsRelease>(`/releases/${hit.id}`, token, signal);
+      const release = rawRelease
+        ? normalizeReleaseEvidence(rawRelease, hit.master_id)
+        : undefined;
 
-      if (!release?.id) {
+      if (!release) {
         continue;
-      }
-
-      // Discogs search hits sometimes carry master_id the release detail omits.
-      if (!release.master_id && hit.master_id) {
-        release.master_id = hit.master_id;
       }
 
       const score = scoreRelease(input, release);
@@ -826,10 +924,7 @@ export async function discogsResolveRelease(
     }
 
     const { release } = best;
-    const masterId =
-      typeof release.master_id === "number" && release.master_id > 0
-        ? release.master_id
-        : undefined;
+    const masterId = release.masterId ?? release.searchMasterId;
 
     return {
       // The catno + styles ride the SAME payload the scoring already fetched — zero extra
@@ -876,7 +971,8 @@ export async function fetchDiscogsReleaseFacts(
   const signal: RateLimitSignal = { hit: false };
 
   try {
-    const release = await discogsFetch<DiscogsRelease>(`/releases/${releaseId}`, token, signal);
+    const rawRelease = await discogsFetch<DiscogsRelease>(`/releases/${releaseId}`, token, signal);
+    const release = rawRelease ? normalizeReleaseEvidence(rawRelease) : undefined;
 
     if (signal.hit) {
       return { found: false, rateLimited: true };
@@ -946,6 +1042,56 @@ function pickLabelImageUri(images: DiscogsImage[] | undefined): string | undefin
   const primary = images.find((image) => image.type === "primary");
 
   return (primary ?? images[0])?.uri;
+}
+
+function decodeBase64Image(value: string): ArrayBuffer | undefined {
+  try {
+    const decoded = atob(value);
+
+    if (decoded.length === 0 || decoded.length > MAX_LABEL_IMAGE_BYTES) {
+      return undefined;
+    }
+
+    const bytes = new Uint8Array(decoded.length);
+
+    for (let index = 0; index < decoded.length; index += 1) {
+      bytes[index] = decoded.charCodeAt(index);
+    }
+
+    return bytes.buffer;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Verify box-fetched label detail + bytes without trusting its selected image. The Worker repeats
+ * Discogs's primary-else-first choice, requires the downloaded URI to be that exact choice, and
+ * accepts only nonempty image bytes inside the same 5 MB ceiling as the legacy fetcher.
+ */
+export function discogsLabelImageFromEvidence(
+  evidence: DiscogsLabelCandidate,
+): DiscogsLabelImage | undefined {
+  if (evidence.detail.id !== evidence.discogsLabelId) {
+    return undefined;
+  }
+
+  const selectedUri = pickLabelImageUri(evidence.detail.images);
+  const suppliedImage = evidence.image;
+
+  if (!selectedUri || !suppliedImage || suppliedImage.uri !== selectedUri) {
+    return undefined;
+  }
+
+  const mime = suppliedImage.mime.split(";")[0]?.trim().toLowerCase();
+
+  if (!mime?.startsWith("image/")) {
+    return undefined;
+  }
+
+  const bytes = decodeBase64Image(suppliedImage.bytesBase64);
+
+  return bytes ? { bytes, mime } : undefined;
 }
 
 /**

@@ -160,7 +160,32 @@ export {
   AttentionSourceSchema,
   getAttention,
 } from "./admin-attention";
-export { backfillDiscogs, backfillLabelImages, backfillLastfm } from "./admin-backfills";
+export {
+  backfillDiscogs,
+  backfillDiscogsFacts,
+  backfillLabelImages,
+  backfillLastfm,
+  DISCOGS_FACTS_WORK_LIMIT,
+  DISCOGS_LABEL_WORK_LIMIT,
+  DISCOGS_RELEASE_CANDIDATE_BATCH_LIMIT,
+  DISCOGS_RELEASES_PER_TRACK_LIMIT,
+  DISCOGS_RELEASE_WORK_LIMIT,
+  DISCOGS_SEARCH_QUERY_LIMIT,
+  DiscogsFactsCandidateSchema,
+  type DiscogsFactsCandidate,
+  DiscogsFactsWorkSchema,
+  type DiscogsFactsWork,
+  DiscogsLabelCandidateSchema,
+  type DiscogsLabelCandidate,
+  DiscogsLabelWorkSchema,
+  type DiscogsLabelWork,
+  DiscogsReleaseCandidateSchema,
+  type DiscogsReleaseCandidate,
+  DiscogsReleaseEvidenceSchema,
+  type DiscogsReleaseEvidence,
+  DiscogsReleaseWorkSchema,
+  type DiscogsReleaseWork,
+} from "./admin-backfills";
 export { adminBiosContract, BioEntityKindSchema, resolveBioReview } from "./admin-bios";
 export {
   adminCatalogueContract,

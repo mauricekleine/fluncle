@@ -84,9 +84,14 @@ export function adminBackfillsHandlers(os: Implementer) {
         parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
         parseBool(query.dryRun),
         query.cursor ?? undefined,
+        {
+          boxFetch: parseBool(query.boxFetch),
+          discogsCandidates: input.body?.discogsCandidates,
+        },
       );
 
       return {
+        discogsWork: result.discogsWork ?? [],
         dryRun: result.dryRun,
         nextCursor: result.nextCursor,
         ok: true as const,
@@ -117,10 +122,15 @@ export function adminBackfillsHandlers(os: Implementer) {
         const result = await backfillDiscogsFacts(
           parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
           parseBool(query.dryRun),
+          {
+            boxFetch: parseBool(query.boxFetch),
+            discogsCandidates: input.body?.discogsCandidates,
+          },
         );
 
         return {
           configured: result.configured,
+          discogsWork: result.discogsWork ?? [],
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,
@@ -353,9 +363,14 @@ export function adminBackfillsHandlers(os: Implementer) {
           parseLimit(query.limit, BACKFILL_DEFAULT_LIMIT, BACKFILL_MAX_LIMIT),
           parseBool(query.dryRun),
           query.cursor ?? undefined,
+          {
+            boxFetch: parseBool(query.boxFetch),
+            discogsCandidates: input.body?.discogsCandidates,
+          },
         );
 
         return {
+          discogsWork: result.discogsWork ?? [],
           dryRun: result.dryRun,
           failed: result.failed,
           failedCount: result.failedCount,

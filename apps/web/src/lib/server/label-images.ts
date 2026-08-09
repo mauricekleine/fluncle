@@ -24,7 +24,13 @@
 // reserved for a trustworthy absence verdict — a vendor outage must never masquerade as one.
 // Idempotent by construction — a second run over a fully-resolved archive fetches nothing.
 
-import { type DiscogsLabelImage, fetchDiscogsLabelImage, parseDiscogsLabelUrl } from "./discogs";
+import type { DiscogsLabelCandidate, DiscogsLabelWork } from "@fluncle/contracts/orpc";
+import {
+  discogsLabelImageFromEvidence,
+  type DiscogsLabelImage,
+  fetchDiscogsLabelImage,
+  parseDiscogsLabelUrl,
+} from "./discogs";
 import { getDb, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
@@ -70,12 +76,14 @@ export function labelLogoKey(slug: string, mime: string): string {
 
 /** One label's resolve outcome — the state machine the pass folds each label into. */
 type ResolveOutcome =
+  | { kind: "discogs-work"; discogsLabelId: number }
   | { kind: "resolved"; imageKey: string; source: "discogs" | "wikidata" }
   | { kind: "none" }
   | { kind: "failed"; error: string }
   | { kind: "rate-limited" };
 
 export type LabelImagesResolveResult = {
+  discogsWork: DiscogsLabelWork[];
   dryRun: boolean;
   // Slugs given a logo this pass (or, in a dry run, the eligible worklist it WOULD resolve).
   resolved: string[];
@@ -308,23 +316,25 @@ type LabelWorkRow = {
 async function listPendingLabels(
   limit: number,
   cursor: string | undefined,
+  slugs?: string[],
 ): Promise<LabelWorkRow[]> {
+  if (slugs?.length === 0) {
+    return [];
+  }
+
   const db = await getDb();
   const cooldownBefore = new Date(Date.now() - COOLDOWN_MS).toISOString();
+  const slugFilter = slugs ? `and slug in (${slugs.map(() => "?").join(", ")})` : "";
+  const cursorFilter = cursor ? "and slug > ?" : "";
 
   const result = await db.execute({
-    args: cursor ? [cooldownBefore, cursor, limit] : [cooldownBefore, limit],
-    sql: cursor
-      ? `select slug, name, mb_label_id, discogs_label_id, image_failures
+    args: [cooldownBefore, ...(slugs ?? []), ...(cursor ? [cursor] : []), limit],
+    sql: `select slug, name, mb_label_id, discogs_label_id, image_failures
          from labels
          where image_state = 'pending'
            and (image_attempted_at is null or image_attempted_at < ?)
-           and slug > ?
-         order by slug asc limit ?`
-      : `select slug, name, mb_label_id, discogs_label_id, image_failures
-         from labels
-         where image_state = 'pending'
-           and (image_attempted_at is null or image_attempted_at < ?)
+           ${slugFilter}
+           ${cursorFilter}
          order by slug asc limit ?`,
   });
 
@@ -436,6 +446,11 @@ async function resolveOneLabel(
   row: LabelWorkRow,
   bucket: Pick<R2Bucket, "put">,
   discogsToken: string | undefined,
+  discogs: {
+    boxFetch: boolean;
+    candidatesPresent: boolean;
+    supplied?: DiscogsLabelCandidate;
+  },
 ): Promise<ResolveOutcome> {
   try {
     let mbid = row.mb_label_id;
@@ -476,7 +491,23 @@ async function resolveOneLabel(
     }
 
     // 3. Discogs label image — the primary source.
-    if (discogsLabelId !== null && discogsToken) {
+    if (discogsLabelId !== null && discogs.candidatesPresent) {
+      const supplied = discogs.supplied;
+      const image =
+        supplied?.discogsLabelId === discogsLabelId
+          ? discogsLabelImageFromEvidence(supplied)
+          : undefined;
+
+      if (image) {
+        const imageKey = await storeLogo(bucket, row.slug, image);
+
+        return { imageKey, kind: "resolved", source: "discogs" };
+      }
+    } else if (discogsLabelId !== null && discogs.boxFetch) {
+      // The Discogs rung must be resolved before the ladder can honestly conclude `none` or move
+      // to Wikidata. Return the trusted DB identity without touching Discogs or the image ledger.
+      return { discogsLabelId, kind: "discogs-work" };
+    } else if (discogsLabelId !== null && discogsToken) {
       const { image, rateLimited } = await fetchDiscogsLabelImage(discogsLabelId, discogsToken);
 
       if (rateLimited) {
@@ -530,10 +561,20 @@ export async function resolveLabelImages(
   limit: number,
   dryRun: boolean,
   cursor?: string,
+  options: {
+    boxFetch?: boolean;
+    discogsCandidates?: DiscogsLabelCandidate[];
+  } = {},
 ): Promise<LabelImagesResolveResult> {
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
-  const rows = await listPendingLabels(batchLimit, cursor);
+  const candidateSlugs = options.discogsCandidates?.map((candidate) => candidate.slug);
+  const rows = await listPendingLabels(
+    batchLimit,
+    candidateSlugs && candidateSlugs.length > 0 ? undefined : cursor,
+    candidateSlugs && candidateSlugs.length > 0 ? candidateSlugs : undefined,
+  );
 
+  const discogsWork: DiscogsLabelWork[] = [];
   const resolved: string[] = [];
   const none: string[] = [];
   const failed: Array<{ error: string; slug: string }> = [];
@@ -546,9 +587,22 @@ export async function resolveLabelImages(
     }
   } else {
     const discogsToken = await readOptionalEnv("DISCOGS_USER_TOKEN");
+    const suppliedBySlug = new Map(
+      (options.discogsCandidates ?? []).map((candidate) => [candidate.slug, candidate]),
+    );
 
     for (const row of rows) {
-      const outcome = await resolveOneLabel(row, bucket, discogsToken);
+      const supplied = suppliedBySlug.get(row.slug);
+      const outcome = await resolveOneLabel(row, bucket, discogsToken, {
+        boxFetch: options.boxFetch === true,
+        candidatesPresent: options.discogsCandidates !== undefined,
+        ...(supplied === undefined ? {} : { supplied }),
+      });
+
+      if (outcome.kind === "discogs-work") {
+        discogsWork.push({ discogsLabelId: outcome.discogsLabelId, slug: row.slug });
+        continue;
+      }
 
       if (outcome.kind === "rate-limited") {
         // Circuit breaker: a vendor is actively throttling. Stop the pass; do NOT cool this
@@ -587,6 +641,7 @@ export async function resolveLabelImages(
   const nextCursor = rateLimited || rows.length < batchLimit ? null : lastSlug;
 
   return {
+    discogsWork,
     dryRun,
     failed,
     failedCount: failed.length,

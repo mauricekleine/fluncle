@@ -28,6 +28,12 @@
 // is recorded so the next tick resumes from a clean, durable state.
 
 import {
+  type DiscogsFactsCandidate,
+  type DiscogsFactsWork,
+  type DiscogsReleaseCandidate,
+  type DiscogsReleaseWork,
+} from "@fluncle/contracts/orpc";
+import {
   type AppleCatalogBundle,
   appleCatalogLookupByIsrc,
   appleCatalogLookupByIsrcs,
@@ -48,13 +54,22 @@ import { resolveBeatportUrl } from "./beatport-resolve";
 import { getDb, typedRows } from "./db";
 import { lookupDeezerTrackByIsrc } from "./deezer";
 import {
+  type DiscogsEnrichment,
   type DiscogsThrottleVendor,
   discogsResolveRelease,
   fetchDiscogsReleaseFacts,
+  prepareDiscogsRelease,
+  releaseFacts,
+  scoreDiscogsReleaseCandidates,
 } from "./discogs";
 import { readOptionalEnv } from "./env";
 import { lastfmLove } from "./lastfm";
-import { decodeTrackCursor, encodeTrackCursor, listTracks, type TrackListItem } from "./tracks";
+import {
+  decodeTrackCursor,
+  encodeTrackCursor,
+  listTracks,
+  type TrackListItem,
+} from "./tracks";
 
 // One DB page per pass. The batch pages with the same cursor the public feed uses
 // until it has visited `limit` eligible findings (or run out of rows).
@@ -121,6 +136,7 @@ export type LastfmBackfillResult = BackfillPass<{
 }>;
 
 export type DiscogsBackfillResult = BackfillPass<{
+  discogsWork: DiscogsReleaseWork[];
   dryRun: boolean;
   rateLimitedBy: DiscogsThrottleVendor | null;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
@@ -543,7 +559,12 @@ export async function backfillDiscogsIds(
   limit: number,
   dryRun: boolean,
   startCursor?: string,
+  options: {
+    boxFetch?: boolean;
+    discogsCandidates?: DiscogsReleaseCandidate[];
+  } = {},
 ): Promise<DiscogsBackfillResult> {
+  const discogsWork: DiscogsReleaseWork[] = [];
   const resolved: DiscogsBackfillResult["resolved"] = [];
   const unresolved: string[] = [];
   const skipped: string[] = [];
@@ -551,11 +572,15 @@ export async function backfillDiscogsIds(
   let first = true;
   let rateLimited = false;
   let rateLimitedBy: DiscogsThrottleVendor | null = null;
+  const suppliedByTrack = new Map<string, DiscogsReleaseCandidate["release"][]>();
 
-  const nextCursor = await runPublishedFindingPass(
-    startCursor,
-    batchLimit(limit),
-    async (track) => {
+  for (const candidate of options.discogsCandidates ?? []) {
+    const releases = suppliedByTrack.get(candidate.trackId) ?? [];
+    releases.push(candidate.release);
+    suppliedByTrack.set(candidate.trackId, releases);
+  }
+
+  const visit = async (track: TrackListItem): Promise<boolean | "stop"> => {
       // Already has a release id (discogsReleaseUrl present) → idempotent skip; it
       // doesn't count toward the limit so a full backfill keeps making progress.
       if (track.discogsReleaseUrl) {
@@ -584,23 +609,52 @@ export async function backfillDiscogsIds(
         return true;
       }
 
-      // Pace the calls (skip the wait before the first one).
-      if (!first) {
-        await delay(DISCOGS_DELAY_MS);
-      }
-      first = false;
-
-      // discogsResolveRelease never throws; {} = unresolved (below the gate or no
-      // token). `rateLimited` distinguishes "throttled" from "no match" so we can
-      // back off the former hard instead of re-hitting it next tick.
-      const enrichment = await discogsResolveRelease({
+      const input = {
         album: track.album,
         artists: track.artists,
         isrc: track.isrc,
         label: track.label,
         releaseDate: track.releaseDate,
         title: track.title,
-      });
+      };
+
+      // Group the flat, keyed evidence against the row as the DB holds it now. When the candidates
+      // field is present, an empty group is the box's clean no-hit answer for this work row.
+      const supplied = suppliedByTrack.get(track.trackId) ?? [];
+
+      let enrichment: DiscogsEnrichment;
+
+      if (options.discogsCandidates !== undefined) {
+        // The scorer reads the row as it exists NOW and runs the identical tracklist/confidence
+        // gate as Worker-fetched releases. No Discogs request occurs on this branch.
+        enrichment = scoreDiscogsReleaseCandidates(input, supplied);
+      } else if (options.boxFetch) {
+        // Preparation keeps the resolver's MusicBrainz-first identity leg. It deliberately stops
+        // before Discogs: a direct RELEASE relation can resolve here, while master-only still needs
+        // a concrete release and therefore becomes box work.
+        const preparation = await prepareDiscogsRelease(input);
+        enrichment = preparation.enrichment;
+
+        if (enrichment.rateLimited) {
+          rateLimited = true;
+          rateLimitedBy = enrichment.rateLimitedBy ?? null;
+          return "stop";
+        }
+
+        if (!enrichment.releaseId) {
+          discogsWork.push({ queries: preparation.queries, trackId: track.trackId });
+          return true;
+        }
+      } else {
+        // Pace legacy Worker-fetch calls (skip the wait before the first one).
+        if (!first) {
+          await delay(DISCOGS_DELAY_MS);
+        }
+        first = false;
+
+        // The legacy branch remains unchanged for callers that do not opt into the split.
+        enrichment = await discogsResolveRelease(input);
+      }
 
       if (enrichment.rateLimited) {
         // Circuit breaker: Discogs is actively rate-limiting. Stop the whole run
@@ -648,10 +702,12 @@ export async function backfillDiscogsIds(
       });
 
       return true;
-    },
-  );
+  };
+
+  const nextCursor = await runPublishedFindingPass(startCursor, batchLimit(limit), visit);
 
   return {
+    discogsWork,
     dryRun,
     // On a throttle-stop, NULL the cursor so even the currently-deployed CLI (which
     // breaks only on a null cursor, not the newer `rateLimited` flag) stops looping
@@ -741,7 +797,7 @@ async function setDiscogsIds(
 // `albums` rather than reusing the per-track `backfill_*` columns.
 
 /** One album awaiting its Discogs facts, with the release to read and the ledger the gate needs. */
-type DiscogsFactsCandidate = {
+type DiscogsFactsWorkRow = {
   albumId: string;
   attemptedAt: null | string;
   failures: number;
@@ -754,6 +810,7 @@ export type DiscogsFactsBackfillResult = {
   // False when DISCOGS_USER_TOKEN is unset — the leg is a NO-OP this tick (nothing read, nothing
   // stamped), so the cron output reads honestly as "unconfigured" rather than a silent "0 resolved".
   configured: boolean;
+  discogsWork: DiscogsFactsWork[];
   dryRun: boolean;
   // Albums whose release lookup ERRORED — nothing was learned, the streak scales their cooldown.
   failed: Array<{ error: string; slug: string }>;
@@ -780,11 +837,19 @@ const DISCOGS_FACTS_MAX_BATCH = 25;
  * for the same releases. The precise failure-scaled cooldown is refined per row in TS, exactly as
  * `listCatalogueAppleWork` does — the SQL applies only the cheap base cutoff.
  */
-async function listDiscogsFactsWork(limit: number): Promise<DiscogsFactsCandidate[]> {
+async function listDiscogsFactsWork(
+  limit: number,
+  slugs?: string[],
+): Promise<DiscogsFactsWorkRow[]> {
+  if (slugs?.length === 0) {
+    return [];
+  }
+
   const db = await getDb();
   const cutoff = new Date(Date.now() - COOLDOWN_BASE_MS).toISOString();
+  const slugClause = slugs ? `and a.slug in (${slugs.map(() => "?").join(", ")})` : "";
   const result = await db.execute({
-    args: [cutoff, limit],
+    args: slugs ? [cutoff, ...slugs, limit] : [cutoff, limit],
     sql: `select a.id as album_id, a.slug as slug,
                  a.discogs_attempted_at as attempted_at,
                  a.discogs_failures as failures,
@@ -794,6 +859,7 @@ async function listDiscogsFactsWork(limit: number): Promise<DiscogsFactsCandidat
           where t.in_release_id is not null
             and a.discogs_state = 'pending'
             and (a.discogs_attempted_at is null or a.discogs_attempted_at < ?)
+            ${slugClause}
           group by a.id
           order by a.id
           limit ?`,
@@ -831,7 +897,12 @@ async function listDiscogsFactsWork(limit: number): Promise<DiscogsFactsCandidat
 export async function backfillDiscogsFacts(
   limit: number,
   dryRun: boolean,
+  options: {
+    boxFetch?: boolean;
+    discogsCandidates?: DiscogsFactsCandidate[];
+  } = {},
 ): Promise<DiscogsFactsBackfillResult> {
+  const discogsWork: DiscogsFactsWork[] = [];
   const resolved: DiscogsFactsBackfillResult["resolved"] = [];
   const none: string[] = [];
   const failed: DiscogsFactsBackfillResult["failed"] = [];
@@ -839,6 +910,7 @@ export async function backfillDiscogsFacts(
 
   const summarize = (over: Partial<DiscogsFactsBackfillResult>): DiscogsFactsBackfillResult => ({
     configured,
+    discogsWork,
     dryRun,
     failed,
     failedCount: failed.length,
@@ -855,10 +927,15 @@ export async function backfillDiscogsFacts(
   // sweep is armed when the very next live tick will do nothing. The preview itself still runs
   // unconfigured (the worklist is a pure DB read), which is exactly what makes it useful there.
   const token = await readOptionalEnv("DISCOGS_USER_TOKEN");
-  const configured = Boolean(token);
+  const configured =
+    Boolean(token) || options.boxFetch === true || options.discogsCandidates !== undefined;
 
   const page = Math.max(1, Math.min(limit, DISCOGS_FACTS_MAX_BATCH));
-  const candidates = await listDiscogsFactsWork(page);
+  const suppliedSlugs = options.discogsCandidates?.map((candidate) => candidate.slug);
+  const candidates = await listDiscogsFactsWork(
+    page,
+    suppliedSlugs && suppliedSlugs.length > 0 ? suppliedSlugs : undefined,
+  );
 
   // The precise failure-scaled cooldown, refined per row (the SQL applied only the base cutoff).
   // `isDone: false` because a done album is not in the worklist at all — the `pending` predicate
@@ -879,6 +956,49 @@ export async function backfillDiscogsFacts(
     // Preview the eligible set (as `none` — the "would be read" set) without a single vendor call.
     for (const candidate of eligible) {
       none.push(candidate.slug);
+    }
+
+    return summarize({});
+  }
+
+  if (options.boxFetch && options.discogsCandidates === undefined) {
+    for (const candidate of eligible) {
+      discogsWork.push({ releaseId: candidate.releaseId, slug: candidate.slug });
+    }
+
+    return summarize({});
+  }
+
+  if (options.discogsCandidates !== undefined) {
+    const suppliedBySlug = new Map(
+      options.discogsCandidates.map((candidate) => [candidate.slug, candidate]),
+    );
+
+    for (const candidate of eligible) {
+      const supplied = suppliedBySlug.get(candidate.slug);
+
+      if (!supplied) {
+        continue;
+      }
+
+      // Re-read identity wins. Stale or cross-wired evidence is reported but cannot mutate either
+      // the album ledger or its facts.
+      if (supplied.release.id !== candidate.releaseId) {
+        failed.push({
+          error: `Discogs release evidence did not match DB release ${candidate.releaseId}`,
+          slug: candidate.slug,
+        });
+        continue;
+      }
+
+      const facts = releaseFacts(supplied.release);
+      await storeAlbumDiscogsFacts(candidate.albumId, facts);
+
+      if (facts.catno) {
+        resolved.push({ catno: facts.catno, slug: candidate.slug });
+      } else {
+        none.push(candidate.slug);
+      }
     }
 
     return summarize({});
