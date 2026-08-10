@@ -38,6 +38,16 @@ export function parseCatalogueSort(value: unknown): CatalogueSort {
     : CATALOGUE_SORT_DEFAULT;
 }
 
+/**
+ * The `validateSearch` half of the same vocabulary: only a known sort survives, so a junk value
+ * stays IMPLICIT in the URL rather than being spelled out as the default. The distinction from
+ * `parseCatalogueSort` is the fold — that one resolves to a real sort for the loader, this one
+ * narrows what the URL is allowed to carry, and a page's `loaderDeps` applies the default after.
+ */
+export function catalogueSortParam(value: unknown): CatalogueSort | undefined {
+  return CATALOGUE_SORTS.includes(value as CatalogueSort) ? (value as CatalogueSort) : undefined;
+}
+
 /** Groups rendered per page. The pager carries the rest; nothing is unreachable. */
 export const GRAPH_GROUP_PAGE_SIZE = 12;
 

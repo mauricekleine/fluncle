@@ -11,6 +11,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
+import { pageParam, textParam } from "@/lib/search-params";
 import {
   type ArtistHubEntry,
   artistNamesBySlugs,
@@ -211,9 +212,9 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/artists/")({
   validateSearch: (search: Record<string, unknown>): ArtistsSearch => ({
-    like: qParam(search["like"]),
+    like: textParam(search["like"]),
     page: pageParam(search["page"]),
-    q: qParam(search["q"]),
+    q: textParam(search["q"]),
   }),
   loaderDeps: ({ search }) => ({ like: search.like, page: search.page, q: search.q }),
   loader: async ({ deps }): Promise<ArtistsPageData> => {
@@ -240,24 +241,6 @@ export const Route = createFileRoute("/artists/")({
 });
 
 type ArtistsSearch = { like?: string; page?: number; q?: string };
-
-/** A page param the reader typed: junk or an absent value folds to undefined (the param-free view). */
-function pageParam(value: unknown): number | undefined {
-  const n = Number(value);
-
-  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
-}
-
-/** A trimmed non-empty string param (`?q=` / `?like=`); empty / non-string folds to undefined. */
-function qParam(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 // One composed string (not JSX fragments) so the count is a single SSR text node. The count clause
 // drops at ≤ 1 ("1 drum & bass artists" is not a sentence).

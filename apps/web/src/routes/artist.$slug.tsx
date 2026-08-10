@@ -33,7 +33,8 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { albumCoverAtSize } from "@/lib/media";
-import { type CatalogueSort, cataloguePageHref } from "@/lib/catalogue";
+import { type CatalogueSort, cataloguePageHref, catalogueSortParam } from "@/lib/catalogue";
+import { pageParam } from "@/lib/search-params";
 import { type ArtistPageData, type ArtistSocialLink } from "./-artist-page-data";
 
 // A confirmed/auto social — the brand mark + a plain label, from simple-icons
@@ -234,7 +235,7 @@ export const ARTIST_CATALOGUE_SORT_DEFAULT: CatalogueSort = "recent";
 export const Route = createFileRoute("/artist/$slug")({
   validateSearch: (search: Record<string, unknown>): ArtistSearch => ({
     page: pageParam(search["page"]),
-    sort: sortParam(search["sort"]),
+    sort: catalogueSortParam(search["sort"]),
   }),
   // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
   // implicit (a bare `/artist/<slug>` is the canonical, crawlable view). `validateSearch` has
@@ -263,18 +264,6 @@ export const Route = createFileRoute("/artist/$slug")({
 // Both params OPTIONAL, so a plain `<Link to="/artist/$slug">` anywhere still type-checks with
 // no `search` prop (the `HomeSearch.story?` precedent).
 type ArtistSearch = { page?: number; sort?: CatalogueSort };
-
-/** A page param the reader typed: junk or an absent value folds to undefined (default 1). */
-function pageParam(value: unknown): number | undefined {
-  const n = Number(value);
-
-  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
-}
-
-/** A sort param the reader typed: only a known sort survives, so a junk value stays implicit. */
-function sortParam(value: unknown): CatalogueSort | undefined {
-  return value === "name" || value === "recent" ? value : undefined;
-}
 
 function SocialLink({ social }: { social: ArtistSocialLink }) {
   const label = SOCIAL_LABEL[social.platform];

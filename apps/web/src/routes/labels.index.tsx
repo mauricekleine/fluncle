@@ -9,6 +9,7 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, COVER_TILE_SIZE } from "@/lib/media";
+import { pageParam, textParam } from "@/lib/search-params";
 import {
   type CatalogueHubNumberedPage,
   type LabelHubEntry,
@@ -155,7 +156,7 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
 export const Route = createFileRoute("/labels/")({
   validateSearch: (search: Record<string, unknown>): LabelsSearch => ({
     page: pageParam(search["page"]),
-    q: qParam(search["q"]),
+    q: textParam(search["q"]),
   }),
   loaderDeps: ({ search }) => ({ page: search.page, q: search.q }),
   loader: async ({ deps }): Promise<LabelsPageData> => {
@@ -173,24 +174,6 @@ export const Route = createFileRoute("/labels/")({
 });
 
 type LabelsSearch = { page?: number; q?: string };
-
-/** A page param the reader typed: junk or an absent value folds to undefined (the param-free view). */
-function pageParam(value: unknown): number | undefined {
-  const n = Number(value);
-
-  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
-}
-
-/** A trimmed non-empty name search; empty / non-string folds to undefined (the bare hub). */
-function qParam(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 // One composed string (not JSX fragments) so the count is a single SSR text node. The count clause
 // drops at ≤ 1 ("1 drum & bass labels" is not a sentence).

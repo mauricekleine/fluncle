@@ -1,8 +1,8 @@
 // The shared vocabulary of the account area: the honest types every door and the
-// route agree on (one home for `Me`, never re-declared per module), plus the three
-// tiny primitives the doors reuse (a labelled field, a metric, an empty-or-list
-// wrapper). The section KIT (Class A–D enclosures) lives next door in kit.tsx; this
-// module is the plumbing beneath it.
+// route agree on (one home for `Me`, never re-declared per module), plus the two
+// tiny primitives the doors reuse (a labelled field, an empty-or-list wrapper).
+// The section KIT (Class A–D enclosures) lives next door in kit.tsx; this module
+// is the plumbing beneath it.
 
 import { cloneElement, isValidElement, useId } from "react";
 import { Label } from "@fluncle/ui/components/label";
@@ -174,15 +174,6 @@ export function Field({
           {hint}
         </p>
       ) : null}
-    </div>
-  );
-}
-
-export function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="account-metric">
-      <strong>{value}</strong>
-      <span>{label}</span>
     </div>
   );
 }

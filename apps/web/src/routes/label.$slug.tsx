@@ -18,9 +18,11 @@ import {
   CATALOGUE_SORT_DEFAULT,
   type CatalogueSort,
   cataloguePageHref,
+  catalogueSortParam,
   flattenArtistGroups,
   parseCatalogueSort,
 } from "@/lib/catalogue";
+import { pageParam } from "@/lib/search-params";
 import { type LabelPageData } from "./-label-page-data";
 
 // The label page — one label's place in the archive, and the third node of the graph
@@ -188,7 +190,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
 export const Route = createFileRoute("/label/$slug")({
   validateSearch: (search: Record<string, unknown>): LabelSearch => ({
     page: pageParam(search["page"]),
-    sort: sortParam(search["sort"]),
+    sort: catalogueSortParam(search["sort"]),
   }),
   // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
   // implicit. `parseCatalogueSort` folds anything to the default A–Z.
@@ -213,18 +215,6 @@ export const Route = createFileRoute("/label/$slug")({
   component: LabelPage,
   notFoundComponent: StoryNotFoundState,
 });
-
-/** A page param the reader typed: junk or an absent value folds to undefined (default 1). */
-function pageParam(value: unknown): number | undefined {
-  const n = Number(value);
-
-  return Number.isFinite(n) && n >= 1 ? Math.trunc(n) : undefined;
-}
-
-/** A sort param the reader typed: only a known sort survives, so a junk value stays implicit. */
-function sortParam(value: unknown): CatalogueSort | undefined {
-  return value === "name" || value === "recent" ? value : undefined;
-}
 
 /**
  * The label's dossier dateline (reference register): "Founded 1996 · London" (date + place),
