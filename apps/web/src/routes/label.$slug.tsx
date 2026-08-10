@@ -17,8 +17,8 @@ import { albumCoverAtSize } from "@/lib/media";
 import {
   CATALOGUE_SORT_DEFAULT,
   type CatalogueSort,
-  catalogueSortParam,
   cataloguePageHref,
+  catalogueSortParam,
   flattenArtistGroups,
   parseCatalogueSort,
 } from "@/lib/catalogue";

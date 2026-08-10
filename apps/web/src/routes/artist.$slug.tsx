@@ -33,7 +33,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { albumCoverAtSize } from "@/lib/media";
-import { type CatalogueSort, catalogueSortParam, cataloguePageHref } from "@/lib/catalogue";
+import { type CatalogueSort, cataloguePageHref, catalogueSortParam } from "@/lib/catalogue";
 import { pageParam } from "@/lib/search-params";
 import { type ArtistPageData, type ArtistSocialLink } from "./-artist-page-data";
 
