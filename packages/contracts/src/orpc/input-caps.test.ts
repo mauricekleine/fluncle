@@ -10,7 +10,12 @@
 
 import assert from "node:assert/strict";
 
-import { DEEZER_CANDIDATE_LIMIT, resolveAnchor } from "./admin-catalogue";
+import {
+  ANCHOR_CANDIDATE_LIMIT,
+  DEEZER_CANDIDATE_LIMIT,
+  anchorTrack,
+  resolveAnchor,
+} from "./admin-catalogue";
 import {
   backfillDiscogs,
   backfillDiscogsFacts,
@@ -414,6 +419,128 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(resolveAnchor, { deezerCandidates: [{ isrc: "GBTESTDZ0001" }], trackId: "mb_1" }),
     false,
     "a hit missing the gate's signals is rejected",
+  );
+}
+
+// ── anchor_track: the box's Apify hits, bounded on every axis ─────────────────────────────
+//
+// The Spotify twin of `resolve_anchor` above, and its stated precedent — same untrusted-box posture,
+// so the same bounds. The sweep sends 3 candidates per row (`SEARCH_KEYWORD_LIMIT`, anchor-sweep.ts)
+// and at most 45 in the pathological same-query chunk, so the caps sit far above every real tick.
+// `artists` is the one that is not merely a size: a verified candidate's artist list is WRITTEN into
+// the artist graph by stable id, so an unbounded one is a write amplifier.
+{
+  const hit = (over: Record<string, unknown> = {}) => ({
+    artists: [{ id: "0TnOYISbd1XYRBk9myaseg", name: "Muffler" }],
+    durationMs: 201_000,
+    isrc: "GBTESTDZ0001",
+    spotifyTrackId: "0TnOYISbd1XYRBk9myasez",
+    title: "Dribble",
+    ...over,
+  });
+
+  assert.equal(
+    accepts(anchorTrack, { trackId: "trk_1" }),
+    true,
+    "no candidates at all is the clean-miss shape the sweep POSTs on a blackout",
+  );
+  assert.equal(
+    accepts(anchorTrack, { candidates: [], trackId: "trk_1" }),
+    true,
+    "an EMPTY list is a first-class answer — the actor ran and found nothing",
+  );
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: Array.from({ length: ANCHOR_CANDIDATE_LIMIT }, () => hit()),
+      trackId: "trk_1",
+    }),
+    true,
+    "a payload AT the candidate cap is accepted",
+  );
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: Array.from({ length: ANCHOR_CANDIDATE_LIMIT + 1 }, () => hit()),
+      trackId: "trk_1",
+    }),
+    false,
+    "one candidate past the cap is rejected",
+  );
+
+  // The artist list — the axis that reaches the graph.
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [hit({ artists: Array.from({ length: 20 }, () => ({ name: "Artist" })) })],
+      trackId: "trk_1",
+    }),
+    true,
+    "an artist list AT the cap is accepted",
+  );
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [hit({ artists: Array.from({ length: 21 }, () => ({ name: "Artist" })) })],
+      trackId: "trk_1",
+    }),
+    false,
+    "one artist past the cap is rejected",
+  );
+
+  // The strings, generous enough that a real remix title or billing can never trip them.
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [hit({ artists: [{ name: "a".repeat(300) }], title: "b".repeat(300) })],
+      trackId: "trk_1",
+    }),
+    true,
+    "strings AT the text cap are accepted",
+  );
+  assert.equal(
+    accepts(anchorTrack, { candidates: [hit({ title: "b".repeat(301) })], trackId: "trk_1" }),
+    false,
+    "an oversized title is rejected",
+  );
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [hit({ artists: [{ name: "a".repeat(301) }] })],
+      trackId: "trk_1",
+    }),
+    false,
+    "an oversized artist name is rejected",
+  );
+  assert.equal(
+    accepts(anchorTrack, { candidates: [hit({ isrc: "c".repeat(65) })], trackId: "trk_1" }),
+    false,
+    "an oversized isrc is rejected",
+  );
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [hit({ spotifyTrackId: "d".repeat(65) })],
+      trackId: "trk_1",
+    }),
+    false,
+    "an oversized spotifyTrackId is rejected",
+  );
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [
+        hit({
+          spotifyTrackId: undefined,
+          url: `https://open.spotify.com/track/${"e".repeat(2048)}`,
+        }),
+      ],
+      trackId: "trk_1",
+    }),
+    false,
+    "an oversized url is rejected",
+  );
+
+  // …and the id-carrier rule still stands: a candidate the server cannot anchor to is refused.
+  assert.equal(
+    accepts(anchorTrack, {
+      candidates: [{ artists: [], durationMs: 201_000, isrc: "GBTESTDZ0001", title: "Dribble" }],
+      trackId: "trk_1",
+    }),
+    false,
+    "a candidate carrying no id, uri, or url is rejected",
   );
 }
 
