@@ -186,21 +186,23 @@ export const Route = createRootRoute({
         content: "Fluncle",
         property: "og:site_name",
       },
+      // `twitter:card` is the ONE X tag the root may set: the card TYPE has no Open Graph
+      // equivalent, so a page that wants the wide card overrides it with
+      // `summary_large_image` (the graph pages, the hub indexes, /log) and everything else
+      // inherits `summary`, which is the right shape for the square cover above.
+      //
+      // The root sets NO `twitter:title` / `twitter:description` / `twitter:image`, and that
+      // absence is load-bearing. `HeadContent` merges the matched routes deepest-first and
+      // dedupes by `name ?? property`, so any tag the root declares is emitted on every page
+      // that does not override it — and X reads `twitter:*` in PREFERENCE to `og:*`. A
+      // site-level `twitter:title` here therefore shadows each page's own `og:title` on the one
+      // surface that outranks it, which is how /about, /mixtapes, /log and the rest came to
+      // unfurl under the site's title instead of their own. Omitting the three lets X fall back
+      // to `og:title` / `og:description` / `og:image` — per page, by construction. The homepage
+      // is unaffected: its fallback resolves to the very strings this block used to repeat.
       {
         content: "summary",
         name: "twitter:card",
-      },
-      {
-        content: title,
-        name: "twitter:title",
-      },
-      {
-        content: description,
-        name: "twitter:description",
-      },
-      {
-        content: coverUrl,
-        name: "twitter:image",
       },
     ],
     scripts: [
