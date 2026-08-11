@@ -769,26 +769,71 @@ export const getCrawlStatus = oc
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * THE ANCHOR PAYLOAD'S WIRE CAPS. `anchor_track` takes its candidates from the box's Apify sweep,
+ * and the box is a source this domain deliberately does NOT trust — the server re-runs the whole
+ * verification on every hit. An untrusted source's payload is bounded at the contract edge so a
+ * malformed one fails as a clean 400 instead of reaching the handler, exactly as the sibling
+ * {@link DeezerIsrcCandidateSchema} already is. Bounds only; the gate is unchanged.
+ *
+ * The array cap is sized off what the real caller can produce. `docs/agents/hermes/scripts/anchor-sweep.ts`
+ * asks the actor for `SEARCH_KEYWORD_LIMIT` candidates per query (3) and groups one actor run's items
+ * by query string, so a row's list is 3 in the ordinary case and at most `APIFY_QUERY_CHUNK` ×
+ * `SEARCH_KEYWORD_LIMIT` (15 × 3 = 45) in the pathological case where every row in a chunk folds to
+ * the same query. 100 clears that with room, so the cap cannot bite a legitimate tick — and one past
+ * it REJECTS rather than truncating, because a silently-trimmed candidate list reaches the gate as a
+ * clean miss, indistinguishable from "Spotify has nothing".
+ */
+export const ANCHOR_CANDIDATE_LIMIT = 100;
+
+/** Mirrors `DISCOGS_ARTIST_LIMIT` (admin-backfills.ts) — the same bound on the same box-supplied shape. */
+const ANCHOR_ARTIST_LIMIT = 20;
+
+/** Deliberately generous, like the Deezer text cap below: far above any real title or billing. */
+const ANCHOR_TEXT_MAX = 300;
+
+/** An ISRC is 12 characters; the headroom absorbs a hyphenated or padded variant and nothing more. */
+const ANCHOR_ISRC_MAX = 64;
+
+/** A Spotify id is 22 base62 chars; `spotify:track:<id>` is 36. The headroom is room to grow, nothing else. */
+const ANCHOR_ID_MAX = 64;
+
+/** A `?si=`-tailed open.spotify.com link, plus room — the `DISCOGS_URI_MAX` bound, one domain over. */
+const ANCHOR_URL_MAX = 2_048;
+
+/**
  * One Spotify candidate the box's Apify sweep found for a catalogue row. The server RE-RUNS
  * verification against it (never trusting the box's own match), so it carries every signal the
  * two rungs read: the id (as `spotifyTrackId`, or a `uri`/`url` the server parses one from), the
  * `isrc` for the exact rung, and `title`/`artists`/`durationMs` for the verified search triple.
+ *
+ * EVERY FIELD IS BOUNDED, for the reason spelled out on {@link ANCHOR_CANDIDATE_LIMIT}. `artists`
+ * matters most: a verified candidate's artist list is WRITTEN — the handler links each entry to the
+ * row by its stable Spotify id — so an unbounded one is a write amplifier into the artist graph, not
+ * just a big body. Its cap mirrors `DISCOGS_ARTIST_LIMIT` (20), the same bound on the same shape.
  */
 export const AnchorCandidateSchema = z
   .object({
     /** The album/track cover URL, coalesced onto the row when the row has none. */
-    albumImageUrl: z.string().nullish(),
+    albumImageUrl: z.string().max(ANCHOR_URL_MAX).nullish(),
     /** The candidate's Spotify artists — `name` verifies the triple, `id` links the entity by stable id. */
-    artists: z.array(z.object({ id: z.string().nullish(), name: z.string() })).default([]),
+    artists: z
+      .array(
+        z.object({
+          id: z.string().max(ANCHOR_ID_MAX).nullish(),
+          name: z.string().max(ANCHOR_TEXT_MAX),
+        }),
+      )
+      .max(ANCHOR_ARTIST_LIMIT)
+      .default([]),
     durationMs: z.number().nullish(),
-    isrc: z.string().nullish(),
+    isrc: z.string().max(ANCHOR_ISRC_MAX).nullish(),
     /** The bare Spotify track id. Provide this, OR `uri`/`url` for the server to parse one from. */
-    spotifyTrackId: z.string().optional(),
-    title: z.string().default(""),
+    spotifyTrackId: z.string().max(ANCHOR_ID_MAX).optional(),
+    title: z.string().max(ANCHOR_TEXT_MAX).default(""),
     /** `spotify:track:<id>` — an alternative to `spotifyTrackId`. */
-    uri: z.string().optional(),
+    uri: z.string().max(ANCHOR_URL_MAX).optional(),
     /** `https://open.spotify.com/track/<id>` — an alternative to `spotifyTrackId`. */
-    url: z.string().optional(),
+    url: z.string().max(ANCHOR_URL_MAX).optional(),
   })
   // A candidate with NONE of the three id carriers cannot be anchored to — reject the malformed
   // payload at the boundary rather than silently dropping it in the handler.
@@ -827,7 +872,7 @@ export const anchorTrack = oc
   })
   .input(
     z.object({
-      candidates: z.array(AnchorCandidateSchema).default([]),
+      candidates: z.array(AnchorCandidateSchema).max(ANCHOR_CANDIDATE_LIMIT).default([]),
       trackId: z.string().min(1),
     }),
   )
