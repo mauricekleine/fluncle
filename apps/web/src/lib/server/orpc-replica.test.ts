@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { apiUrl, get, readJson } from "./orpc-test-kit";
+import { apiUrl, get, readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 const assertRateLimit = vi.fn<(options: unknown) => Promise<void>>();
 
@@ -29,6 +29,8 @@ function configureReplica(): void {
   process.env.TURSO_PLATFORM_ORG = "test-organization";
   process.env.TURSO_PLATFORM_TOKEN = "test-platform-token";
 }
+
+warmOrpcRouter();
 
 beforeEach(() => {
   for (const key of ENV_KEYS) {

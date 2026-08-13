@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 import { isYoutubeVerification, YOUTUBE_VERIFICATION_VALUES } from "./track-update";
 
 // The ADMIN wave's pilot parity + auth proof: the `admin-tracks` ops driven
@@ -157,24 +163,13 @@ const LIST_ITEM = {
   trackId: TRACK_ID,
 };
 
-// The cold import of `./orpc` is warmed HERE, in the hook, rather than being charged to
-// whichever test happens to run first.
-//
-// Every test in this file reaches the router the same way — `await import("./orpc")`, 102
-// times — and 101 of those hit the module cache and cost nothing. The first one drags the
-// whole app graph in (the router + every contract + the server modules it re-exports), and
-// on a loaded Cloudflare build box can exceed the 20,000 ms `testTimeout`, failing
-// `deploy:gate` even when the test itself is not slow. It is a module load wearing a test's
-// timeout, while the sibling oRPC files pay 2.5–8 s for the identical import, so which
-// file loses is a scheduling lottery, not a property of the code under test. The import
-// therefore belongs in a hook with its own budget.
-// A hook has its own budget, so charging the import to `beforeAll` (with room for a badly
-// contended box) takes the load off the per-test clock entirely: the tests then measure only
-// what they actually exercise. Sibling oRPC test files still carry the original shape.
-beforeAll(async () => {
-  setAdminTokenEnv();
-  await import("./orpc");
-}, 120_000);
+// The auth spine reads the token env, so it is seeded before the graph is warmed below.
+beforeAll(setAdminTokenEnv);
+
+// The cold import of `./orpc` is warmed in a hook rather than charged to whichever test runs
+// first — see `warmOrpcRouter` in ./orpc-test-kit for why. This file is the heaviest case:
+// 107 tests reach the router the same way, and 106 of them hit the module cache for free.
+warmOrpcRouter();
 
 beforeEach(() => {
   recordNoteRejection.mockReset();

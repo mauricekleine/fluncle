@@ -1,5 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  req,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // The `admin-logbook` auth proof, driven end-to-end through `handleOrpc` so the REAL
 // admin auth spine (../orpc-auth) runs; only the `logbook` data layer is mocked. The
@@ -35,6 +42,8 @@ const ENTRY = {
 };
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 
 beforeEach(() => {
   createLogbookEntry.mockReset();

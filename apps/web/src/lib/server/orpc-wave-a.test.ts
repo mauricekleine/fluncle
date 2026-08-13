@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { get, MIXTAPE, postJson, readJson, TRACK } from "./orpc-test-kit";
+import { get, MIXTAPE, postJson, readJson, TRACK, warmOrpcRouter } from "./orpc-test-kit";
 
 // Wave A — the five public-unauthenticated ops fanned out off the pilot's
 // per-domain pattern. As in orpc.test.ts, the underlying server helpers are
@@ -60,6 +60,8 @@ vi.mock("./rate-limit", async (importOriginal) => {
     assertRateLimit: async () => undefined,
   };
 });
+
+warmOrpcRouter();
 
 beforeEach(async () => {
   listMixtapes.mockReset();

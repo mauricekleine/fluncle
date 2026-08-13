@@ -1,6 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ADMIN_COOKIE_NAME, ADMIN_GRANT_EPOCH_KEY, requireAdminMutationOrigin } from "./env";
-import { AGENT_TOKEN, apiUrl, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  apiUrl,
+  OPERATOR_TOKEN,
+  readJson,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // The ADMIN MUTATION ORIGIN GUARD, both halves: the pure helper (env.ts) and the
 // oRPC middleware that applies it (orpc-auth.ts `adminAuth`).
@@ -45,6 +52,8 @@ beforeAll(() => {
   setAdminTokenEnv();
   process.env.ADMIN_SESSION_SECRET = SESSION_SECRET;
 });
+
+warmOrpcRouter();
 
 beforeEach(() => {
   epochValue = undefined;

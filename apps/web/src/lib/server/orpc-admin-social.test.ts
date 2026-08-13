@@ -1,5 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  req,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // The admin wave's `admin-social` parity + auth proof, driven end-to-end through
 // `handleOrpc`. The security-critical piece is the FIELD-LEVEL operator guard on
@@ -71,6 +78,8 @@ const TRACK = {
 };
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 
 beforeEach(() => {
   getTrackByIdOrLogId.mockReset();

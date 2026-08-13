@@ -33,7 +33,7 @@ vi.mock("./public-auth", async (importOriginal) => {
 });
 
 import { createIntegrationDb } from "./integration-db";
-import { readJson } from "./orpc-test-kit";
+import { readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 let db: Client;
 
@@ -41,6 +41,8 @@ let db: Client;
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const BASE = "https://www.fluncle.com/api/v1";
+
+warmOrpcRouter();
 
 beforeEach(async () => {
   db = await createIntegrationDb();

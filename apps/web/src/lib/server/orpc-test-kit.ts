@@ -8,6 +8,8 @@
 //
 // `readJson` lives here too (re-exported from orpc-test-helpers) so the suites
 // have a single import for everything test-shaped.
+import { beforeAll } from "vitest";
+
 export { readJson } from "./orpc-test-helpers";
 
 // The canonical API origin every suite hits. Handlers key auth/CSRF/rate-limit on
@@ -24,6 +26,26 @@ export const AGENT_TOKEN = "test-token-admin-agent";
 export function setAdminTokenEnv(): void {
   process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
   process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
+}
+
+// Warm the `./orpc` app graph in a hook instead of inside the first test.
+//
+// Every suite here reaches the router the same way — `await import("./orpc")` inside a test —
+// and all but the first of those hit the module cache and cost nothing. The first one drags the
+// whole graph in (the router + every contract + the server modules it re-exports), which is a
+// MODULE LOAD WEARING A TEST'S TIMEOUT: ~4 s on an idle box, and on a contended Cloudflare build
+// box enough to blow the 20 s `testTimeout` in `vitest.config.ts` and fail `deploy:gate` for a
+// reason that has nothing to do with the code under test. Which suite loses is a scheduling
+// lottery, not a property of the suite.
+//
+// A hook carries its own budget, so charging the import here (with room for a badly contended
+// box) takes the load off the per-test clock entirely and leaves each test measuring only what
+// it exercises. Call once at a suite's top level, AFTER any `beforeAll` that seeds the
+// environment the graph reads — hooks run in registration order.
+export function warmOrpcRouter(): void {
+  beforeAll(async () => {
+    await import("./orpc");
+  }, 120_000);
 }
 
 // Prefix a `/...` path with the API base. `apiUrl("/tracks")` →

@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
 
 // The `anchor_track` handler, driven end-to-end through `handleOrpc` against
 // `/api/v1/admin/catalogue/anchor`, so the REAL admin auth spine runs and the box's agent token is
@@ -22,6 +22,8 @@ const PATH = "/admin/catalogue/anchor";
 beforeAll(() => {
   setAdminTokenEnv();
 });
+
+warmOrpcRouter();
 
 beforeEach(() => {
   anchorTrackMock.mockReset();
