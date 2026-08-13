@@ -1,0 +1,2 @@
+CREATE INDEX `tracks_catalogue_ear_idx` ON `tracks` (`is_catalogue`,`dismissed_at`,`nearest_finding_score`,`track_id`);--> statement-breakpoint
+CREATE INDEX `tracks_catalogue_capture_idx` ON `tracks` (`is_catalogue`,`dismissed_at`,`capture_priority`,`track_id`);

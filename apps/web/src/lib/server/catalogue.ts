@@ -2448,6 +2448,14 @@ export async function listCatalogueTracks(
           args: [fetchLimit],
           // `duration_ms < LONG_FORM_MS` is the long-form veto (see the constant): a continuous
           // mix's centroid-like vector would otherwise sit at the very top of the telescope.
+          //
+          // The tiebreak is `track_id DESC` for the capture lens's reason, measured here too: the
+          // whole `order by … DESC, … DESC` is ONE reverse walk of the ASC
+          // `tracks_catalogue_ear_idx`, so it stops at LIMIT. With the tiebreak ASC the direction
+          // is mixed, no single index serves it, and the plan keeps `USE TEMP B-TREE FOR LAST TERM
+          // OF ORDER BY` — measured on prod, the DESC form drops that line entirely. The direction
+          // is arbitrary (it only orders rows of EQUAL score) and nothing pages on this lens: the
+          // query takes a bare `limit`, no offset and no keyset cursor, so nothing depends on it.
           sql: `select ${CATALOGUE_SELECT}
                 from tracks ct
                 where ct.is_catalogue = 1
@@ -2455,7 +2463,7 @@ export async function listCatalogueTracks(
                   and ct.nearest_finding_score is not null
                   and ct.duplicate_of_track_id is null
                   and ct.duration_ms < ${LONG_FORM_MS}
-                order by ct.nearest_finding_score desc, ct.track_id asc
+                order by ct.nearest_finding_score desc, ct.track_id desc
                 limit ?`,
         }
       : lens === "quarantine"

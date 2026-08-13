@@ -994,6 +994,41 @@ export const tracks = sqliteTable(
       table.dismissedAt,
       table.trackId,
     ),
+    // THE TWO /admin/catalogue LENS READS, which the index above does NOT reach. Both walk the live
+    // catalogue and then RANK it — `ear` by nearest-finding score, the capture queue by capture
+    // priority — so `(is_catalogue, dismissed_at, track_id)` gives them the seek and then leaves
+    // them sorting ~100k rows in a temp B-tree for their 60. That sort is what put 70–124s
+    // `db.query` spans inside `POST /api/v1/admin/catalogue/rank`, and because libSQL has a single
+    // writer it starved the whole sweep fleet: unrelated crons died on `The operation timed out.`
+    //
+    // Each carries its ranking column as the third entry, so the range and the ORDER BY come off
+    // one structure. Measured on prod (plan only — EXECUTING these to time them is itself an
+    // outage, which is how the fleet got starved in the first place):
+    //
+    //   ear     before: … tracks_catalogue_active_track_id_idx + USE TEMP B-TREE FOR ORDER BY
+    //           after:  … (is_catalogue=? AND dismissed_at=? AND nearest_finding_score>?), no sort
+    //   capture before: … tracks_catalogue_active_track_id_idx + USE TEMP B-TREE FOR ORDER BY
+    //           after:  … (is_catalogue=? AND dismissed_at=? AND capture_priority>?), no sort
+    //
+    // BOTH depend on their lens ordering `DESC, DESC` so the read is one reverse walk of the ASC
+    // index. A mixed `DESC, ASC` tiebreak keeps a `TEMP B-TREE FOR LAST TERM` — that is exactly
+    // what the ear lens had, and its tiebreak was flipped to DESC alongside this index. If either
+    // lens's tiebreak direction is ever changed back, the sort returns and so does the wall.
+    //
+    // These build in 50–130s at ~110k rows (not the ~4s the earlier ones took) and the time is
+    // growing with the table, so treat a migration carrying them as a minutes-long step.
+    index("tracks_catalogue_ear_idx").on(
+      table.isCatalogue,
+      table.dismissedAt,
+      table.nearestFindingScore,
+      table.trackId,
+    ),
+    index("tracks_catalogue_capture_idx").on(
+      table.isCatalogue,
+      table.dismissedAt,
+      table.capturePriority,
+      table.trackId,
+    ),
     // THE FUNNEL STAGE SCAN, COVERED (docs/db-scale-backlog Wave 2 #7). `/admin/funnel`'s
     // folded pass (`runFoldedFunnelScan`) is one conditional aggregate over the WHOLE catalogue —
     // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the
