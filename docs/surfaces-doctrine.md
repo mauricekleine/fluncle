@@ -156,7 +156,7 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | `cli.login`          | `fluncle login`          | link this device to your Fluncle account, so your Galaxy progress syncs (the RFC 8628 flow via `/device`)         | secondary |
 | `cli.me`             | `fluncle me`             | your account and Galaxy progress (sign in with `fluncle login`)                                                   | secondary |
 | `cli.logout`         | `fluncle logout`         | unlink this device from your account                                                                              | tertiary  |
-| `cli.tracks-get`     | `fluncle tracks get`     | look up one finding by id or Log ID (group alias `track`)                                                         | tertiary  |
+| `cli.tracks-get`     | `fluncle tracks get`     | look up one finding by id or Log ID                                                                               | tertiary  |
 | `cli.tracks-similar` | `fluncle tracks similar` | the findings that sound nearest to one (the sonic neighbourhood, off the MuQ audio embedding), each with its note | tertiary  |
 | `cli.about`          | `fluncle about`          | Fluncle, and where to find him                                                                                    | tertiary  |
 | `cli.version`        | `fluncle version`        | print or check the version (`--check` hits the latest GitHub release)                                             | tertiary  |

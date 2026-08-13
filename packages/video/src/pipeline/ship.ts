@@ -166,12 +166,12 @@ export function resolveTrack(input: string): CaptionTrack & { trackId: string } 
   });
 
   if (result.error) {
-    throw new Error(`fluncle track get failed to spawn: ${result.error.message}`);
+    throw new Error(`fluncle tracks get failed to spawn: ${result.error.message}`);
   }
   if (result.status !== 0) {
     const stderr = (result.stderr ?? "").trim();
     throw new Error(
-      `fluncle track get exited with ${result.status ?? "unknown"}${stderr ? `\n${stderr.slice(-2000)}` : ""}`,
+      `fluncle tracks get exited with ${result.status ?? "unknown"}${stderr ? `\n${stderr.slice(-2000)}` : ""}`,
     );
   }
 
@@ -180,11 +180,11 @@ export function resolveTrack(input: string): CaptionTrack & { trackId: string } 
     parsed = JSON.parse(result.stdout) as typeof parsed;
   } catch (error) {
     throw new Error(
-      `fluncle track get returned invalid JSON: ${error instanceof Error ? error.message : String(error)}\n${result.stdout.slice(0, 200)}`,
+      `fluncle tracks get returned invalid JSON: ${error instanceof Error ? error.message : String(error)}\n${result.stdout.slice(0, 200)}`,
     );
   }
   if (!parsed.ok || !parsed.track) {
-    throw new Error(`fluncle track get failed: ${result.stdout.slice(0, 200)}`);
+    throw new Error(`fluncle tracks get failed: ${result.stdout.slice(0, 200)}`);
   }
   return parsed.track;
 }
@@ -616,7 +616,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   log("note.txt");
-  // Prefer the stored release_date (from track get); fall back to Deezer for any
+  // Prefer the stored release_date (from `tracks get`); fall back to Deezer for any
   // track not yet backfilled.
   const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
   const note = buildNoteText(track, year);

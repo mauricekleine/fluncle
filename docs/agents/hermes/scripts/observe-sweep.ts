@@ -160,7 +160,7 @@ type QueueFinding = {
   trackId?: string;
 };
 
-// The raw `track get` finding (a TrackListItem): the metadata the authoring step
+// The raw `tracks get` finding (a TrackListItem): the metadata the authoring step
 // grounds the script in. Every field optional — we narrow before use.
 type Finding = {
   artists?: string[];
@@ -172,7 +172,7 @@ type Finding = {
   trackId?: string;
 };
 
-// A `track get` can resolve to a finding OR a mixtape; we only ever queue findings.
+// A `tracks get` can resolve to a finding OR a mixtape; we only ever queue findings.
 type TrackGetResponse = { mixtape?: unknown; track?: Finding };
 
 // One member of the finding's sonic neighbourhood: a nearby finding's Log ID and the
@@ -855,9 +855,9 @@ export async function observeOne(queued: QueueFinding, budget?: Budget): Promise
     return { cost: null, outcome: "exhausted" };
   }
 
-  // (a) Gather the finding's identity metadata. `track get` is the SINGULAR public
-  // read; it returns the raw finding (galaxy intact). A mixtape arm can't
-  // appear here (the queue is findings), but guard anyway.
+  // (a) Gather the finding's identity metadata. `tracks get` is the public read
+  // (the group is PLURAL per Convention B); it returns the raw finding (galaxy
+  // intact). A mixtape arm can't appear here (the queue is findings), but guard anyway.
   const response = fluncleJson<TrackGetResponse>(["tracks", "get", id]);
   const finding = response.track;
 

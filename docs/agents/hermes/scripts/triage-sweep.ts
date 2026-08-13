@@ -86,7 +86,7 @@ type PendingSubmission = {
 // The `admin submissions --json` reply.
 type SubmissionsResponse = { submissions?: PendingSubmission[] };
 
-// A `track get` can resolve to a finding OR a mixtape; either presence means the
+// A `tracks get` can resolve to a finding OR a mixtape; either presence means the
 // spotify id already maps to something in the archive → already logged.
 type TrackGetResponse = { mixtape?: unknown; track?: unknown };
 

@@ -1276,7 +1276,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle tracks get",
-    exposedContent: ["look up one finding by id or Log ID (group alias `track`)"],
+    exposedContent: ["look up one finding by id or Log ID"],
     kind: "cli",
     name: "cli.tracks-get",
     weights: { cli: "tertiary" },

@@ -339,9 +339,9 @@ async function enrichOne(finding: QueueFinding): Promise<EnrichResult> {
   }
 
   // (a) Re-read the finding to get the canonical artist/title/isrc/trackId/sourceAudioKey.
-  // The queue payload already carries them, but a fresh `track get` is the source of truth
-  // and tolerates the queue surface changing shape under us. NOTE: the public lookup is the
-  // SINGULAR `track get` (only the admin group is plural).
+  // The queue payload already carries them, but a fresh `tracks get` is the source of truth
+  // and tolerates the queue surface changing shape under us. NOTE: the public lookup group is
+  // PLURAL (`tracks get`) per Convention B; there is no singular `track` alias.
   const finder = fluncleJson<QueueFinding>(["tracks", "get", id]);
   const trackId = finder.trackId ?? finding.trackId;
   const artist = finder.artists?.[0] ?? finding.artists?.[0];
