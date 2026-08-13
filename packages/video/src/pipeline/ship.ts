@@ -616,7 +616,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   log("note.txt");
-  // Prefer the stored release_date (from track get); fall back to Deezer for any
+  // Prefer the stored release_date (from `tracks get`); fall back to Deezer for any
   // track not yet backfilled.
   const year = yearFromReleaseDate(track.releaseDate) ?? (await fetchReleaseYear(track.isrc));
   const note = buildNoteText(track, year);
