@@ -1,5 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  req,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // The clip drip-feed ops, driven end-to-end through `handleOrpc`. Proves:
 //   - the auth tiers: drip_clips + list_clip_posts are ADMIN (the AGENT box token
@@ -67,6 +74,8 @@ vi.mock("./clips", () => ({
 }));
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
 
 // COST-01 `record_cost` driven end-to-end through `handleOrpc` against
 // `/api/v1/admin/costs/events`, so the REAL admin auth spine runs and only the db
@@ -16,6 +16,8 @@ vi.mock("./db", () => ({
 }));
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 
 beforeEach(() => {
   insertedIds.clear();

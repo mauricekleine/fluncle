@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readJson } from "./orpc-test-kit";
+import { readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 // Wave B — the CSRF/origin guard ORDERING proof for the `/me` mutation tier.
 // Unlike orpc-wave-b.test.ts (which stubs `requireAccountMutation` wholesale to
@@ -46,6 +46,8 @@ vi.mock("./account-data", async (importOriginal) => {
 
 const USER = { createdAt: "2026-01-01T00:00:00.000Z", id: "user-1", username: "fan" };
 const URL = "https://www.fluncle.com/api/v1/me/saved-findings";
+
+warmOrpcRouter();
 
 beforeEach(() => {
   requirePublicUser.mockReset();

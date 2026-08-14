@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, rowCount } from "./integration-db";
-import { readJson } from "./orpc-test-kit";
+import { readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 // The two anonymous PUBLIC WRITE rails — `submit_track` (POST /submissions) and
 // `subscribe_newsletter` (POST /newsletter) — driven END TO END through the REAL
@@ -130,6 +130,8 @@ function validSubmission(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+warmOrpcRouter();
 
 beforeEach(async () => {
   db = await createIntegrationDb();

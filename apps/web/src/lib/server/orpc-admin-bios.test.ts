@@ -1,5 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  req,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // The entity-bio engine driven end-to-end through `handleOrpc` against
 // `/api/v1/admin/{artists,labels}/{slug}/bio`, so the REAL admin auth spine
@@ -105,6 +112,8 @@ vi.mock("./tracks", async (importOriginal) => {
 beforeAll(() => {
   setAdminTokenEnv();
 });
+
+warmOrpcRouter();
 
 const ARTIST = { id: "artist-1", mbid: undefined, name: "Calibre", slug: "calibre" };
 const LABEL = { id: "label-1", logoImageUrl: undefined, name: "Signature", slug: "signature" };

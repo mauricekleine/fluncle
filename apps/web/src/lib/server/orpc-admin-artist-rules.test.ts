@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import { OPERATOR_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
 
 const addArtistRule = vi.hoisted(() => vi.fn());
 const replaceLabelArtistRules = vi.hoisted(() => vi.fn());
@@ -12,6 +12,8 @@ vi.mock("./artist-rules", async (importOriginal) => {
 });
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 beforeEach(() => vi.clearAllMocks());
 
 describe("add_artist_rule — POST /admin/artist-rules", () => {

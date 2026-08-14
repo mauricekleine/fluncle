@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SENTRY_RELEASE } from "../sentry-config";
-import { get, MIXTAPE, readJson, TRACK } from "./orpc-test-kit";
+import { get, MIXTAPE, readJson, TRACK, warmOrpcRouter } from "./orpc-test-kit";
 
 // The proof route + the rails seam. `resolveLogPageTarget` is mocked — the
 // handler's job is to shape the contract response and the 404, not to touch
@@ -66,6 +66,8 @@ vi.mock("./galaxies-map", async (importOriginal) => {
     isGalaxyMapFullyNamed: (...args: unknown[]) => isGalaxyMapFullyNamed(...args),
   };
 });
+
+warmOrpcRouter();
 
 beforeEach(() => {
   resolveLogPageTarget.mockReset();

@@ -1,5 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, req, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  req,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // `record_run` driven end-to-end through `handleOrpc` against the SERVED path
 // `/api/v1/admin/telemetry/runs`, so the REAL admin auth spine runs and only the telemetry
@@ -34,6 +41,8 @@ vi.mock("./db", () => ({
 }));
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 
 beforeEach(() => {
   rows.length = 0;

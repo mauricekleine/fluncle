@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BASE, get, jsonRequest as body, readJson } from "./orpc-test-kit";
+import { BASE, get, jsonRequest as body, readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 // Wave B — the thirteen `/me` PRIVATE-SESSION ops fanned out off the user-auth
 // tier (orpc-auth.ts). As in orpc-wave-a.test.ts, the underlying server helpers
@@ -82,6 +82,8 @@ function signIn(): void {
   requirePublicUser.mockResolvedValue(USER);
   requireAccountMutation.mockResolvedValue(USER);
 }
+
+warmOrpcRouter();
 
 beforeEach(() => {
   for (const fn of [

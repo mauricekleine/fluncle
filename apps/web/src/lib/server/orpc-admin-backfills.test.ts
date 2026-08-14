@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readJson } from "./orpc-test-helpers";
+import { warmOrpcRouter } from "./orpc-test-kit";
 
 // The admin wave's `admin-backfills` parity + auth proof: the maintenance sweeps
 // driven end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL
@@ -25,6 +26,8 @@ beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = OPERATOR_TOKEN;
   process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
 });
+
+warmOrpcRouter();
 
 beforeEach(() => {
   backfillDiscogsIds.mockReset();

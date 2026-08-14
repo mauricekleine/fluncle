@@ -1,5 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AGENT_TOKEN, OPERATOR_TOKEN, readJson, setAdminTokenEnv } from "./orpc-test-kit";
+import {
+  AGENT_TOKEN,
+  OPERATOR_TOKEN,
+  readJson,
+  setAdminTokenEnv,
+  warmOrpcRouter,
+} from "./orpc-test-kit";
 
 // The mixability ops driven end-to-end through `handleOrpc` (RFC mixability-engine):
 //   - list_mixable_tracks (GET /tracks/{idOrLogId}/mixable) — public-unauth, the /mix
@@ -38,6 +44,8 @@ const CERTIFIED_ITEM = {
 };
 
 beforeAll(setAdminTokenEnv);
+
+warmOrpcRouter();
 
 beforeEach(() => {
   getMixableTracks.mockReset();
