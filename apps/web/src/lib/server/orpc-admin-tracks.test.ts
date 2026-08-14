@@ -168,7 +168,8 @@ beforeAll(setAdminTokenEnv);
 
 // The cold import of `./orpc` is warmed in a hook rather than charged to whichever test runs
 // first — see `warmOrpcRouter` in ./orpc-test-kit for why. This file is the heaviest case:
-// 107 tests reach the router the same way, and 106 of them hit the module cache for free.
+// 105 call sites reach the router the same way, and all but the first hit the module cache
+// for free.
 warmOrpcRouter();
 
 beforeEach(() => {
