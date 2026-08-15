@@ -55,7 +55,7 @@
    sidebar, the TOC rail, the margins). The blur softens bright spots further;
    the measured worst case lands ~4.9:1 muted / ~7.8:1 body, AA with margin. */
 #nd-page {
-  background: color-mix(in oklch, #10100d 80%, transparent);
+  background: color-mix(in oklch, var(--sleeve-black) 80%, transparent);
   border: 1px solid var(--color-fd-border);
   border-radius: var(--radius-lg, 0.75rem);
   margin-block: 1.25rem;
@@ -68,7 +68,7 @@
     backdrop-filter: blur(18px) saturate(125%);
     /* With the blur softening bright backdrop spots, a lighter scrim keeps the
        cosmos more present while still holding AA (see the measured ~4.9:1). */
-    background: color-mix(in oklch, #10100d 62%, transparent);
+    background: color-mix(in oklch, var(--sleeve-black) 62%, transparent);
   }
 }
 
@@ -96,7 +96,7 @@
   #nd-sidebar {
     -webkit-backdrop-filter: blur(18px) saturate(125%);
     backdrop-filter: blur(18px) saturate(125%);
-    background: color-mix(in oklch, #10100d 42%, transparent);
+    background: color-mix(in oklch, var(--sleeve-black) 42%, transparent);
   }
 }
 
@@ -129,7 +129,7 @@
 
 #nd-docs-layout article a {
   color: var(--color-fd-accent-foreground);
-  text-decoration-color: color-mix(in oklch, #f5b800 40%, transparent);
+  text-decoration-color: color-mix(in oklch, var(--eclipse-gold) 40%, transparent);
   text-underline-offset: 0.2em;
 }
 
@@ -151,7 +151,7 @@
    bordered box. Headings get their own quiet hover below instead. */
 #nd-docs-layout article a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a),
 #nd-docs-layout a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a) {
-  background: color-mix(in oklch, #10100d 55%, transparent);
+  background: color-mix(in oklch, var(--sleeve-black) 55%, transparent);
   border: 1px solid var(--color-fd-border);
   border-radius: 0.625rem;
   box-shadow: none;
@@ -162,8 +162,12 @@
 }
 
 #nd-docs-layout a[data-card]:not(:where(h1, h2, h3, h4, h5, h6) > a):hover {
-  background: color-mix(in oklch, #f5b800 8%, color-mix(in oklch, #10100d 55%, transparent));
-  border-color: color-mix(in oklch, #f5b800 38%, transparent);
+  background: color-mix(
+    in oklch,
+    var(--eclipse-gold) 8%,
+    color-mix(in oklch, var(--sleeve-black) 55%, transparent)
+  );
+  border-color: color-mix(in oklch, var(--eclipse-gold) 38%, transparent);
 }
 
 /* The card title heats to the Glow on hover (it follows the link color). */
@@ -208,7 +212,7 @@
 /* Only inline code keeps a faint Tape-Black pane so it reads as a token in
    running prose. */
 #nd-docs-layout article :not(pre) > code {
-  background: color-mix(in oklch, #171611 60%, transparent);
+  background: color-mix(in oklch, var(--tape-black) 60%, transparent);
   border: 1px solid var(--color-fd-border);
   color: var(--color-fd-foreground);
 }

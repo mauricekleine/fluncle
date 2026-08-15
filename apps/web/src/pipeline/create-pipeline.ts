@@ -465,7 +465,7 @@ const STYLES = `
   -webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px)}
 .fpl .zoomctl button{all:unset;cursor:pointer;color:var(--cream-dim);font-size:16px;line-height:1;width:28px;height:28px;
   display:grid;place-items:center;border-radius:7px;transition:background .1s}
-.fpl .zoomctl button:hover{background:#ffffff12;color:var(--cream)}
+.fpl .zoomctl button:hover{background:#f4ead712;color:var(--cream)}
 .fpl .zoomctl button:focus-visible{outline:2px solid var(--gold-2);outline-offset:1px}
 .fpl .zoomctl .zlabel{font-size:11px;font-weight:600;color:var(--faint);width:44px;font-variant-numeric:tabular-nums}
 .fpl .zoomctl .zlabel:hover{color:var(--cream-dim);background:transparent}
@@ -484,17 +484,21 @@ const STYLES = `
   display:flex;flex-direction:column}
 .fpl .card .main{display:flex;gap:9px;align-items:flex-start}
 .fpl .card .body{flex:1;min-width:0}
-.fpl .card .spr{width:42px;height:42px;flex:none;border-radius:5px;background:#0000002e;display:grid;place-items:center;
+.fpl .card .spr{width:42px;height:42px;flex:none;border-radius:5px;background:#090a0b2e;display:grid;place-items:center;
   font-size:15px;opacity:.96}
 .fpl .card .spr img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
 .fpl .card .lb{font-size:12.5px;font-weight:600;letter-spacing:-.005em;line-height:1.22}
 .fpl .card .wh{font-size:10.5px;color:var(--cream-dim);margin-top:2px}
 .fpl .card .row{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
-.fpl .chip{font-size:9.5px;letter-spacing:.02em;padding:1px 5px;border-radius:999px;background:#ffffff10;
+/* Veils and scrims lean warm — a lift is Starlight Cream at low alpha, a scrim is Deep
+   Field, never neutral white or pure black (DESIGN.md §2, The Warm Dark Rule). The
+   Lore-Art Paint Exemption buys this surface hue diversity for its node tints; it does
+   not exempt the neutrals. */
+.fpl .chip{font-size:9.5px;letter-spacing:.02em;padding:1px 5px;border-radius:999px;background:#f4ead710;
   color:var(--cream-dim);white-space:nowrap}
-.fpl .chip.svc{background:#ffffff14;color:var(--cream);display:inline-flex;align-items:center;gap:3px}
+.fpl .chip.svc{background:#f4ead714;color:var(--cream);display:inline-flex;align-items:center;gap:3px}
 .fpl .chip .ico{width:12px;height:12px;opacity:1;flex:none}
-.fpl .chip.cad{background:#00000040;color:var(--cream-dim);position:absolute;right:9px;bottom:8px;
+.fpl .chip.cad{background:#090a0b40;color:var(--cream-dim);position:absolute;right:9px;bottom:8px;
   display:inline-flex;align-items:center}
 .fpl .card.has-cad{padding-bottom:30px}
 @keyframes fpl-hbpulse{0%{box-shadow:0 0 0 0 var(--pc)}70%{box-shadow:0 0 0 5px transparent}100%{box-shadow:0 0 0 0 transparent}}
@@ -518,6 +522,15 @@ const STYLES = `
 @media (prefers-reduced-motion: reduce){
   .fpl .listener{animation:none}
   .fpl .wave{animation:none;opacity:.45;transform:none}
+  /* The cron heartbeat: the pulse ring stops, the dot keeps its status colour — the
+     meaning rides the hue, never the motion. Every ambient movement on this surface is
+     gated (DESIGN.md §5); a board can carry a dot per cron, so an ungated pulse would be
+     dozens of them at once. */
+  .fpl .hb,.fpl .hbstat .dot{animation:none}
+  /* Floats are grounded, colour states are kept (DESIGN.md §5) — the kiosk still heats
+     its glow and label on hover, it just no longer lifts. */
+  .fpl .kiosk{transition:none}
+  .fpl .kiosk:hover{transform:none}
 }
 .fpl .hint .coarse{display:none}
 @media (pointer: coarse){
