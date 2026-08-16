@@ -1647,14 +1647,17 @@ func (m model) renderMixtapeDetail() string {
 	}
 
 	// Listen links. Mixtapes carry their audio — surface every deck that has one.
+	// "Listen on <platform>" / "Watch on <platform>" are the ratified strings for these
+	// actions across the app (VOICE.md's Chrome Rule: one action, one label); the web log
+	// page and the embed card name the same three links the same way.
 	if mx.ExternalUrls.Mixcloud != "" {
-		lines = append(lines, "", readingStyle.Render(terminalLink("Hear it on Mixcloud", mx.ExternalUrls.Mixcloud)))
+		lines = append(lines, "", readingStyle.Render(terminalLink("Listen on Mixcloud", mx.ExternalUrls.Mixcloud)))
 	}
 	if mx.ExternalUrls.Youtube != "" {
 		lines = append(lines, "", readingStyle.Render(terminalLink("Watch on YouTube", mx.ExternalUrls.Youtube)))
 	}
 	if mx.ExternalUrls.Soundcloud != "" {
-		lines = append(lines, "", readingStyle.Render(terminalLink("Hear it on SoundCloud", mx.ExternalUrls.Soundcloud)))
+		lines = append(lines, "", readingStyle.Render(terminalLink("Listen on SoundCloud", mx.ExternalUrls.Soundcloud)))
 	}
 
 	lines = append(lines, "", helpLine("q back", "ctrl+c quit"))

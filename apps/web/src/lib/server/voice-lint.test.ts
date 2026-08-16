@@ -98,6 +98,10 @@ const SCAN_ROOTS = [
   "apps/web/src/routes",
   "apps/web/src/components",
   "apps/mobile/src",
+  // The Expo Router SCREENS. `apps/mobile/src` holds the app's components and state, but
+  // every routed screen — the feed, the archive, the decks, the radio, submit, account —
+  // lives here, so the mobile UI's own copy sat outside the net while its parts were in it.
+  "apps/mobile/app",
   "apps/extension/src",
   "apps/cli/src",
   // The MCP tool descriptions: a PUBLIC agent surface — an assistant reads these
@@ -429,6 +433,7 @@ describe("voice lint", () => {
     expect(scanned.has("apps/web/src/routes/privacy.tsx")).toBe(true);
     expect(scanned.has("apps/web/src/components/search/search-command.tsx")).toBe(true);
     expect(scanned.has("apps/mobile/src/lib/feed-state.ts")).toBe(true);
+    expect(scanned.has("apps/mobile/app/(tabs)/archive.tsx")).toBe(true);
     expect(scanned.has("apps/extension/src/copy.ts")).toBe(true);
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/tools/specs.ts")).toBe(true);

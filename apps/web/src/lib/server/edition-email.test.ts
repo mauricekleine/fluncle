@@ -55,6 +55,20 @@ describe("renderEditionEmailHtml — finding hydration", () => {
     expect(html).toContain("<h2>Astral</h2>");
   });
 
+  it("sets the why apart without a second em dash (VOICE.md §6 sanctions only Artist — Title)", async () => {
+    getTracksByLogIds.mockResolvedValue({ "021.7.1A": track() });
+
+    const html = await renderEditionEmailHtml(
+      edition({
+        galaxies: [{ findings: [{ logId: "021.7.1A", why: "the snare alone" }], galaxy: "" }],
+      }),
+    );
+
+    // One em dash in the whole letter, and it is the tracklist separator inside the label.
+    expect(html.match(/—/g)).toHaveLength(1);
+    expect(html).toContain("</a><br /><span");
+  });
+
   it("batches all referenced logIds into ONE read (no N+1)", async () => {
     getTracksByLogIds.mockResolvedValue({});
 

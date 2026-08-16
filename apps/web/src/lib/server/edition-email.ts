@@ -119,7 +119,14 @@ export async function renderEditionEmailHtml(edition: EditionDTO): Promise<strin
       const track = tracksByLogId[finding.logId];
       const href = logPageUrl(finding.logId);
       const label = track ? trackLabel(track) : finding.logId;
-      const why = finding.why?.trim() ? ` — ${escapeHtml(finding.why)}` : "";
+      // The web twin sets the "why" apart typographically instead of punctuating it (a
+      // quiet span under the label, `.log-newsletter-why`); the email has no stylesheet,
+      // so it does the same with a break and an inline colour. NOT a dash join: the label
+      // above already spends the one em dash VOICE.md §6 sanctions (`Artist — Title`), and
+      // the email is a crew surface, outside the operator tier's clause-join carve-out.
+      const why = finding.why?.trim()
+        ? `<br /><span style="color:#555">${escapeHtml(finding.why)}</span>`
+        : "";
       parts.push(`<li><a href="${escapeHtml(href)}">${escapeHtml(label)}</a>${why}</li>`);
     }
 
