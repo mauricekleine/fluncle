@@ -428,7 +428,7 @@ const WORLDW = B(22.9),
   WORLDH = 1000;
 const SVGNS = "http://www.w3.org/2000/svg";
 
-const STYLES = `
+export const STYLES = `
 .fpl{--bg:#090a0b;--panel:#10100d;--line:#241f18;--cream:#f4ead7;--cream-dim:#b7ab95;--faint:#6e6657;
   --gold:#ffd057;--gold-2:#b88a00;--red:#ff6b57;--m-worker:#e8833a;--m-rave02:#6f9bd6;--m-rave03:#e070c8;
   --m-vps01:#63d69a;--m-m5:#4fb39a;--m-m2:#e0897d;--m-browser:#a8a08f;
@@ -525,12 +525,10 @@ const STYLES = `
   /* The cron heartbeat: the pulse ring stops, the dot keeps its status colour — the
      meaning rides the hue, never the motion. Every ambient movement on this surface is
      gated (DESIGN.md §5); a board can carry a dot per cron, so an ungated pulse would be
-     dozens of them at once. */
-  .fpl .hb,.fpl .hbstat .dot{animation:none}
-  /* Floats are grounded, colour states are kept (DESIGN.md §5) — the kiosk still heats
-     its glow and label on hover, it just no longer lifts. */
-  .fpl .kiosk{transition:none}
-  .fpl .kiosk:hover{transform:none}
+     dozens of them at once. The status classes are named one by one on purpose: the
+     animation is declared on .hb.ok / .hb.warn / .hb.down, so a bare .fpl .hb here would
+     be a class short of its target and would never land. */
+  .fpl .hb.ok,.fpl .hb.warn,.fpl .hb.down,.fpl .hbstat .dot{animation:none}
 }
 .fpl .hint .coarse{display:none}
 @media (pointer: coarse){
@@ -559,6 +557,14 @@ const STYLES = `
 .fpl .kiosk .lb{font-size:11px;font-weight:600;color:color-mix(in srgb,var(--tint) 66%,var(--cream))}
 .fpl .kiosk .wh{font-size:9.5px;color:var(--faint)}
 .fpl .kiosk:hover .wh{color:var(--cream-dim)}
+/* Floats are grounded, colour states are kept (DESIGN.md §5) — the kiosk still heats its
+   glow and label on hover, it just no longer lifts. This block trails the kiosk rules it
+   overrides rather than joining the reduced-motion block above: the two selectors tie on
+   specificity, so source order is what decides them. */
+@media (prefers-reduced-motion: reduce){
+  .fpl .kiosk{transition:none}
+  .fpl .kiosk:hover{transform:none}
+}
 `;
 
 const CHROME = `
