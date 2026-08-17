@@ -385,7 +385,7 @@ function TasteStep({
           {({ pressed }) => (
             <View style={[styles.cta, pressed ? styles.ctaPressed : null]}>
               <Text style={[font.label, styles.ctaText]}>
-                {taste.length > 0 ? "Pick an opener" : "Skip — search a track"}
+                {taste.length > 0 ? "Pick an opener" : "Skip and search a track"}
               </Text>
             </View>
           )}

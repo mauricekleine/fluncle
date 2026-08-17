@@ -281,7 +281,7 @@ function SearchResults({
       ) : null}
       {data?.degraded ? (
         <Text style={[font.body, styles.note]}>
-          Reading by name only right now — showing the closest words.
+          Reading by name only right now. These are the closest words I&apos;ve got.
         </Text>
       ) : null}
       {entityGroups.map((group) => (

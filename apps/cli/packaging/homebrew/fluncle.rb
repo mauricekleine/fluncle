@@ -12,7 +12,9 @@
 # with the checksum of the matching release asset (see README for a one-liner,
 # or use `brew bump-formula-pr`).
 class Fluncle < Formula
-  desc "Drum & bass bangers from another dimension — the Fluncle CLI"
+  # A colon, not an em dash: `brew info fluncle` prints this to a stranger, and VOICE.md §6
+  # sanctions exactly one em dash (the `Artist — Title` tracklist separator).
+  desc "Drum & bass bangers from another dimension: the Fluncle CLI"
   homepage "https://www.fluncle.com"
   version "0.1.0"
   license "Apache-2.0"
