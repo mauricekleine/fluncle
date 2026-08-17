@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { cronSurfaces, type CronSchedule } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
+import { elapsedShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   estimateNextRun,
@@ -429,26 +430,6 @@ function uptimePercent(samples: ServiceCheckSampleRow[]): number | null {
   const ok = samples.filter((sample) => sample.status === "ok").length;
 
   return Math.round((ok / samples.length) * 1000) / 10;
-}
-
-// "3h" / "12m" / "2d" elapsed since `fromIso` (whole units, terse), or "moments" under
-// a minute — for the bar's left-edge "<window> ago" label.
-function elapsedShort(fromIso: string, nowIso: string): string {
-  const ms = new Date(nowIso).getTime() - new Date(fromIso).getTime();
-
-  if (!Number.isFinite(ms) || ms < 60_000) {
-    return "moments";
-  }
-
-  const minutes = Math.floor(ms / 60_000);
-
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
 
 // Sort by a fixed order array; an unranked (unknown) service sorts after every ranked

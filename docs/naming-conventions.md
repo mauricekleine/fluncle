@@ -50,65 +50,65 @@ oRPC contracts are served under `/api/v1/*`. File-route handlers may expose `/ap
 
 Public + private (`/me`) operations, with their OpenAPI `operationId`:
 
-| Method + path                            | operationId                                               | Shape                                                                               |
-| ---------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `GET /tracks`                            | `listTracks`                                              | verb+Noun, camelCase                                                                |
-| `GET /tracks/random`                     | `getRandomTrack`                                          | verb+Noun                                                                           |
-| `GET /tracks/{idOrLogId}`                | (not in spec)                                             |                                                                                     |
-| `GET /search`                            | `searchTracks`                                            | verb+Noun                                                                           |
-| `GET /search/archive`                    | `searchArchive`                                           | the four-tier archive search (coordinate → entity → FTS → NL filters); CLI `search` |
-| `GET /albums`, `GET /albums/{slug}`      | `listAlbums` / `getAlbum`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `albums`                  |
-| `GET /labels`, `GET /labels/{slug}`      | `listLabels` / `getLabel`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `labels`                  |
-| `GET /artists`, `GET /artists/{slug}`    | `listArtists` / `getArtist`                               | catalogue-scoped now (was findings-only); list is A–Z + paginated; CLI `artists`    |
-| `GET /artists/similar`                   | `listSimilarArtists`                                      | sounds-like-these multi-artist read (?slugs=a,b); literal path wins over {slug}     |
-| `POST /submissions`                      | `submitTrack`                                             | **operationId noun ≠ path noun** (`submissions` vs `Track`)                         |
-| `POST /newsletter`                       | `subscribeNewsletter`                                     | verb+Noun                                                                           |
-| `GET /me`                                | `getCurrentPrivateUser`                                   | the `Private` infix marks the cookie-auth tier                                      |
-| `GET /me/csrf`                           | `getPrivateMutationToken`                                 | **operationId noun ≠ path noun** (`csrf` vs `MutationToken`)                        |
-| `GET/PUT /me/galaxy-progress`            | `getPrivateGalaxyProgress` / `mergePrivateGalaxyProgress` | PUT verb is `merge`, not `update`                                                   |
-| `GET/POST /me/saved-findings`            | `listPrivateSavedFindings` / `savePrivateFinding`         | **noun is `findings`, not `tracks`**                                                |
-| `DELETE /me/saved-findings/{trackId}`    | (not in spec)                                             | path param is `trackId`, resource is `findings`                                     |
-| `GET /me/submissions`                    | `listPrivateSubmissions`                                  |                                                                                     |
-| `GET /replica/token`                     | `getReplicaToken`                                         | short-lived read-only credential for the shared device replica                      |
-| `POST /me/export`, `GET /me/export/{id}` | `exportPrivateAccountData`                                |                                                                                     |
-| `POST /me/delete`                        | `deletePrivateAccount`                                    | **`POST` on a `/delete` path**, not `DELETE /me`                                    |
-| `PATCH /me/profile`                      | (not in spec)                                             |                                                                                     |
-| `GET/PATCH /me/preferences`              | `getPrivatePreferences` / `updatePrivatePreferences`      | cross-device prefs (key notation); PATCH partial-merges                             |
-| `GET /health`                            | `getHealth`                                               |                                                                                     |
+| Method + path                                  | operationId                                               | Shape                                                                               |
+| ---------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `GET /tracks`                                  | `listTracks`                                              | verb+Noun, camelCase                                                                |
+| `GET /tracks/random`                           | `getRandomTrack`                                          | verb+Noun                                                                           |
+| `GET /tracks/{idOrLogId}`                      | `getTrack`                                                | verb+Noun; one param resolves either a Spotify id or a Log ID coordinate            |
+| `GET /search`                                  | `searchTracks`                                            | verb+Noun                                                                           |
+| `GET /search/archive`                          | `searchArchive`                                           | the four-tier archive search (coordinate → entity → FTS → NL filters); CLI `search` |
+| `GET /albums`, `GET /albums/{slug}`            | `listAlbums` / `getAlbum`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `albums`                  |
+| `GET /labels`, `GET /labels/{slug}`            | `listLabels` / `getLabel`                                 | catalogue-scoped list (A–Z, paginated) + by-slug get; CLI `labels`                  |
+| `GET /artists`, `GET /artists/{slug}`          | `listArtists` / `getArtist`                               | catalogue-scoped now (was findings-only); list is A–Z + paginated; CLI `artists`    |
+| `GET /artists/similar`                         | `listSimilarArtists`                                      | sounds-like-these multi-artist read (?slugs=a,b); literal path wins over {slug}     |
+| `POST /submissions`                            | `submitTrack`                                             | **operationId noun ≠ path noun** (`submissions` vs `Track`)                         |
+| `POST /newsletter`                             | `subscribeNewsletter`                                     | verb+Noun                                                                           |
+| `GET /me`                                      | `getCurrentPrivateUser`                                   | the `Private` infix marks the cookie-auth tier                                      |
+| `GET /me/csrf`                                 | `getPrivateMutationToken`                                 | **operationId noun ≠ path noun** (`csrf` vs `MutationToken`)                        |
+| `GET/PUT /me/galaxy-progress`                  | `getPrivateGalaxyProgress` / `mergePrivateGalaxyProgress` | PUT verb is `merge`, not `update`                                                   |
+| `GET/POST /me/saved-findings`                  | `listPrivateSavedFindings` / `savePrivateFinding`         | **noun is `findings`, not `tracks`**                                                |
+| `DELETE /me/saved-findings/{trackId}`          | `unsavePrivateFinding`                                    | path param is `trackId`, resource is `findings`; verb is `unsave`, not `delete`     |
+| `GET /me/submissions`                          | `listPrivateSubmissions`                                  |                                                                                     |
+| `GET /replica/token`                           | `getReplicaToken`                                         | short-lived read-only credential for the shared device replica                      |
+| `POST /me/export`, `GET /me/export/{exportId}` | `exportPrivateAccountData` / `getPrivateAccountExport`    | POST starts the export, GET reads one back by its id                                |
+| `POST /me/delete`                              | `deletePrivateAccount`                                    | **`POST` on a `/delete` path**, not `DELETE /me`                                    |
+| `PATCH /me/profile`                            | `updatePrivateProfile`                                    | PATCH partial-merges                                                                |
+| `GET/PATCH /me/preferences`                    | `getPrivatePreferences` / `updatePrivatePreferences`      | cross-device prefs (key notation); PATCH partial-merges                             |
+| `GET /health`                                  | `getHealth`                                               |                                                                                     |
 
 Admin operations (cookie-or-bearer, **not in the public OpenAPI spec**), expressed as method + path:
 
-| Operation                                             | Method + path                                                                                                                           |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Update a track (BPM/key/features/status/video/note)   | `PATCH /admin/tracks/{trackId}`                                                                                                         |
-| Upload a video bundle                                 | `POST /admin/tracks/{trackId}/video` (+ `…/video/uploads`, `…/video/finalize`)                                                          |
-| Show per-platform social status                       | `GET /admin/tracks/{trackId}/social`                                                                                                    |
-| Update one platform's status                          | `PATCH /admin/tracks/{trackId}/social/{platform}`                                                                                       |
-| Push a draft to a platform                            | `POST /admin/tracks/{trackId}/social/{platform}/draft`                                                                                  |
-| Capture missing post URLs (the sweep)                 | `POST /admin/social/posts/capture` (`capture_post_urls`; collection-level action, no track id)                                          |
-| Advance rendered findings into publish (the tick)     | `POST /admin/social/publish/advance` (`advance_publish_queue`; collection-level action, no track id)                                    |
-| Pause / resume the publish auto-advance (kill switch) | `PUT /admin/social/publish/advance/state` (`set_publish_advance`; **operator** tier — the box may tick it, never turn it on)            |
-| Record an observation                                 | `POST /admin/tracks/{trackId}/observe` (**verb segment on a REST path**)                                                                |
-| Archive a preview                                     | `POST /admin/tracks/{trackId}/preview` (single-word action; `…/preview-archive` retired)                                                |
-| List mixtapes                                         | `GET /admin/mixtapes` (create/publish/members/delete retired — a mixtape is born via `promote_recording`)                               |
-| Update a mixtape                                      | `PATCH /admin/mixtapes/{mixtapeId}`                                                                                                     |
-| List the sonic-galaxy map (naming view + cron read)   | `GET /admin/galaxies` (`list_galaxies_admin`)                                                                                           |
-| List one label's artist acquisition rules             | `GET /admin/labels/{id}/artists` (`list_label_artist_rules`; admin tier)                                                                |
-| Replace one label's complete artist-rule set          | `PUT /admin/labels/{id}/artists` (`replace_label_artist_rules`; operator tier)                                                          |
-| List global artist acquisition rules                  | `GET /admin/artist-rules` (`list_artist_rules`; admin tier)                                                                             |
-| Add / remove a global artist acquisition rule         | `POST /admin/artist-rules` / `DELETE /admin/artist-rules/{id}` (`add_artist_rule` / `remove_artist_rule`; operator tier)                |
-| Stamp an artist rule's MusicBrainz drift audit        | `PATCH /admin/artist-rules/{id}` (`update_artist_rule`; operator tier; script-consumed bookkeeping, not a scope change)                 |
-| Name / rename / request-split a galaxy                | `PATCH /admin/galaxies/{id}` (`update_galaxy`; **operator** tier — naming is publish-class)                                             |
-| Write the galaxy map (the `fluncle-cluster` cron)     | `PUT /admin/galaxies/map` (`update_galaxy_map`; the Worker mints ids/handles for `id: null` rows)                                       |
-| List track embeddings (the cluster engine's input)    | `GET /admin/tracks/embeddings` (`list_track_embeddings`; cursor-paginated)                                                              |
-| Record the daily catalogue-funnel snapshot            | `POST /admin/funnel/snapshot` (`record_catalogue_snapshot`; agent tier — the box's daily funnel-snapshot cron POSTs a bare trigger)     |
-| Read the catalogue funnel (live pipeline + series)    | `GET /admin/funnel` (`get_funnel`)                                                                                                      |
-| Read the telemetry run ledger                         | `GET /admin/telemetry/runs` (`read_run_ledger`; operator tier — filtered raw rows plus whole-window per-unit aggregates, no verdicts)   |
-| Record one sweep run in the telemetry ledger          | `POST /admin/telemetry/runs` (`record_run`; agent tier — the box's cron wrapper POSTs one run record per tick; the Worker derives `ok`) |
-| Reconcile the maintained hub counts (drift backstop)  | `POST /admin/hub-counts/reconcile` (`reconcile_hub_counts`; agent tier — the box's nightly cron POSTs a bare trigger)                   |
-| YouTube / Mixcloud distribution                       | `…/youtube/initiate`, `…/youtube/finalize`, `…/youtube/publish`, `…/mixcloud/finalize` (**verb segments**)                              |
-| Read one pipeline stage's worklist (the box sweeps)   | `GET /admin/tracks/work` (`list_track_work`; the catalogue-aware queue for capture/analysis/embedding — there is no enrich POST)        |
-| Backfill                                              | `POST /admin/backfill/lastfm`, `…/backfill/discogs`                                                                                     |
+| Operation                                             | Method + path                                                                                                                             |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Update a track (BPM/key/features/status/video/note)   | `PATCH /admin/tracks/{trackId}`                                                                                                           |
+| Upload a video bundle                                 | `POST /admin/tracks/{trackId}/video/uploads` then `…/video/finalize` (presign + finalize JSON; the bare `…/video` multipart POST is gone) |
+| Show per-platform social status                       | `GET /admin/tracks/{trackId}/social`                                                                                                      |
+| Update one platform's status                          | `PATCH /admin/tracks/{trackId}/social/{platform}`                                                                                         |
+| Push a draft to a platform                            | `POST /admin/tracks/{trackId}/social/{platform}/draft`                                                                                    |
+| Capture missing post URLs (the sweep)                 | `POST /admin/social/posts/capture` (`capture_post_urls`; collection-level action, no track id)                                            |
+| Advance rendered findings into publish (the tick)     | `POST /admin/social/publish/advance` (`advance_publish_queue`; collection-level action, no track id)                                      |
+| Pause / resume the publish auto-advance (kill switch) | `PUT /admin/social/publish/advance/state` (`set_publish_advance`; **operator** tier — the box may tick it, never turn it on)              |
+| Record an observation                                 | `POST /admin/tracks/{trackId}/observe` (**verb segment on a REST path**)                                                                  |
+| Archive a preview                                     | `POST /admin/tracks/{trackId}/preview` (single-word action; `…/preview-archive` retired)                                                  |
+| List mixtapes                                         | `GET /admin/mixtapes` (create/publish/members/delete retired — a mixtape is born via `promote_recording`)                                 |
+| Update a mixtape                                      | `PATCH /admin/mixtapes/{mixtapeId}`                                                                                                       |
+| List the sonic-galaxy map (naming view + cron read)   | `GET /admin/galaxies` (`list_galaxies_admin`)                                                                                             |
+| List one label's artist acquisition rules             | `GET /admin/labels/{id}/artists` (`list_label_artist_rules`; admin tier)                                                                  |
+| Replace one label's complete artist-rule set          | `PUT /admin/labels/{id}/artists` (`replace_label_artist_rules`; operator tier)                                                            |
+| List global artist acquisition rules                  | `GET /admin/artist-rules` (`list_artist_rules`; admin tier)                                                                               |
+| Add / remove a global artist acquisition rule         | `POST /admin/artist-rules` / `DELETE /admin/artist-rules/{id}` (`add_artist_rule` / `remove_artist_rule`; operator tier)                  |
+| Stamp an artist rule's MusicBrainz drift audit        | `PATCH /admin/artist-rules/{id}` (`update_artist_rule`; operator tier; script-consumed bookkeeping, not a scope change)                   |
+| Name / rename / request-split a galaxy                | `PATCH /admin/galaxies/{id}` (`update_galaxy`; **operator** tier — naming is publish-class)                                               |
+| Write the galaxy map (the `fluncle-cluster` cron)     | `PUT /admin/galaxies/map` (`update_galaxy_map`; the Worker mints ids/handles for `id: null` rows)                                         |
+| List track embeddings (the cluster engine's input)    | `GET /admin/tracks/embeddings` (`list_track_embeddings`; cursor-paginated)                                                                |
+| Record the daily catalogue-funnel snapshot            | `POST /admin/funnel/snapshot` (`record_catalogue_snapshot`; agent tier — the box's daily funnel-snapshot cron POSTs a bare trigger)       |
+| Read the catalogue funnel (live pipeline + series)    | `GET /admin/funnel` (`get_funnel`)                                                                                                        |
+| Read the telemetry run ledger                         | `GET /admin/telemetry/runs` (`read_run_ledger`; operator tier — filtered raw rows plus whole-window per-unit aggregates, no verdicts)     |
+| Record one sweep run in the telemetry ledger          | `POST /admin/telemetry/runs` (`record_run`; agent tier — the box's cron wrapper POSTs one run record per tick; the Worker derives `ok`)   |
+| Reconcile the maintained hub counts (drift backstop)  | `POST /admin/hub-counts/reconcile` (`reconcile_hub_counts`; agent tier — the box's nightly cron POSTs a bare trigger)                     |
+| YouTube / Mixcloud distribution                       | `…/youtube/initiate`, `…/youtube/finalize`, `…/youtube/publish`, `…/mixcloud/finalize` (**verb segments**)                                |
+| Read one pipeline stage's worklist (the box sweeps)   | `GET /admin/tracks/work` (`list_track_work`; the catalogue-aware queue for capture/analysis/embedding — there is no enrich POST)          |
+| Backfill                                              | `POST /admin/backfill/lastfm`, `…/backfill/discogs`                                                                                       |
 
 So the API is mostly clean REST (method = verb, path = resource), with a recurring exception: **action sub-resources** (`/observe`, `/preview`, `/draft`, `/capture`, `/youtube/finalize`) where a verb is pushed into the path because the operation isn't a plain CRUD on a resource. Convention B closed the question of casing: an action segment is a single lowercase word, which is why the old kebab compounds (`enrich-sweep`, `preview-archive`) are gone rather than documented.
 

@@ -341,8 +341,10 @@ export const listSimilarArtistsSpec = defineSpec({
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Koven)."),
   }),
   name: "list_similar_artists",
-  // MCP + chat only: the neighbour read is not on a public HTTP op yet (only the artist-page
-  // loader), and this PR adds none — the same codified asymmetry as get_status.
+  // MCP + chat only. A public HTTP neighbour read does exist (`list_similar_artists`,
+  // GET /artists/similar), but it is a DIFFERENT operation: it takes one to MAX artist SLUGS and
+  // answers "sounds like all of these", where this tool takes a single artist NAME an agent has in
+  // hand. Same verb, same noun, two addressings — the tool never became a transport of the op.
   project: { chat: "neighbourList", mcp: "neighbourList" },
   tier: "lore-canon",
   title: "Artists like this one",

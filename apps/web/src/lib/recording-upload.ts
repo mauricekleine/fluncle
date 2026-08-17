@@ -293,7 +293,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function readApiError(response: Response): Promise<string> {
+export async function readApiError(response: Response): Promise<string> {
   try {
     const body = (await response.clone().json()) as { message?: unknown };
 

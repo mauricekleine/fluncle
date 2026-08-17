@@ -2,11 +2,13 @@
 // key actions as in-page tools for agent-driving browsers. Registration is
 // best-effort; browsers without navigator.modelContext skip it silently.
 //
-// This mirrors the server MCP's TOOL set (lib/server/mcp.ts); keep the two in
-// step when the tools change. The server MCP also speaks resources (the archive
-// as a readable corpus) and prompts (Fluncle-voiced starting points), but
-// navigator.modelContext has no resource/prompt primitive — so the browser read
-// path is the get_track tool below, and resources/prompts stay server-MCP only.
+// The TOOL set is not mirrored by hand: name, description, and input schema come from the
+// shared spec registry (./server/tools/specs), the same one the server MCP (lib/server/mcp.ts)
+// and ChatDnB read, so the three surfaces cannot drift into three spellings of a verb. Only the
+// `fetch('/api/…')` bodies below are browser-specific. The server MCP also speaks resources (the
+// archive as a readable corpus) and prompts (Fluncle-voiced starting points), but
+// navigator.modelContext has no resource/prompt primitive — so the browser read path is the
+// get_track tool below, and resources/prompts stay server-MCP only.
 
 import { SHARED_TOOL_SPECS, toWebMcpTool } from "./server/tools/specs";
 
