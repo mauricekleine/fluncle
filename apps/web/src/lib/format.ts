@@ -105,3 +105,27 @@ export function formatIsoDuration(durationMs: number): string {
 
   return `PT${minutes}M${seconds}S`;
 }
+
+/**
+ * "3h" / "12m" / "2d" elapsed since `fromIso`, whole units and terse per VOICE.md's tabular
+ * register, or "moments" under a minute. One definition for both readouts that speak this way:
+ * the public /status uptime bar's "<window> ago" edge label and the admin renders board's
+ * age column.
+ */
+export function elapsedShort(fromIso: string, nowIso: string): string {
+  const ms = new Date(nowIso).getTime() - new Date(fromIso).getTime();
+
+  if (!Number.isFinite(ms) || ms < 60_000) {
+    return "moments";
+  }
+
+  const minutes = Math.floor(ms / 60_000);
+
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}

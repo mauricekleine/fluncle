@@ -6,7 +6,8 @@
 // (VOICE.md's Found Rule). This mirrors the whole-archive /fresh.xml item contract verbatim, scoped.
 
 import { escapeXml } from "./feed-xml";
-import { logPageUrl, siteUrl } from "./fluncle-links";
+import { siteUrl } from "./fluncle-links";
+import { itemId, itemLink, itemTitle, releaseInstant } from "./fresh-feed-item";
 import { type FreshTrack } from "./server/fresh";
 
 /** The site cover, reused for the feed-level image. */
@@ -35,39 +36,6 @@ export function entityFreshChannel(
         description: `The freshest on ${name}, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.`,
         title: `New releases on ${name} · Fluncle`,
       };
-}
-
-/** `Artist, Artist — Title` — the tracklist line every feed leads its item with. */
-function itemTitle(track: FreshTrack): string {
-  return `${track.artists.join(", ")} — ${track.title}`;
-}
-
-/**
- * Where an item points. A certified finding's home is its own /log page (the citation surface the
- * archive owns); an uncertified row has no coordinate, so it links OUT to Spotify only, and a
- * certified straggler with no coordinate yet falls back to Spotify too. `undefined` when there is
- * nowhere honest to point — the item renders as a plain titled row.
- */
-function itemLink(track: FreshTrack): string | undefined {
-  if (track.certified && track.logId) {
-    return logPageUrl(track.logId);
-  }
-  return track.spotifyUrl;
-}
-
-/** A stable, unique guid: the permalink when one exists, else a deterministic release urn (an
-    uncertified row has no coordinate to borrow — the Unlit Rule holds even in the id). */
-function itemId(track: FreshTrack, link: string | undefined): string {
-  return link ?? `urn:fluncle:release:${track.releaseDate}:${encodeURIComponent(itemTitle(track))}`;
-}
-
-/** Parse a `YYYY-MM-DD` release date as a UTC day. `undefined` when the value is absent/unparseable. */
-function releaseInstant(releaseDate: string): Date | undefined {
-  if (!releaseDate) {
-    return undefined;
-  }
-  const parsed = new Date(`${releaseDate}T00:00:00Z`);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
 /** Render the two-tier RSS 2.0 document for one entity's fresh tracks. */

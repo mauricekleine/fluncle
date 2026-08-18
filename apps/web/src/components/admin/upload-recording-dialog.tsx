@@ -22,6 +22,7 @@ import { Progress, ProgressLabel, ProgressValue } from "@fluncle/ui/components/p
 import {
   isAbortError,
   presignRecordingUpload,
+  readApiError,
   type UploadProgress,
   uploadFileToPresign,
 } from "@/lib/recording-upload";
@@ -401,20 +402,4 @@ function formatBytes(bytes: number): string {
   }
 
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-async function readApiError(response: Response): Promise<string> {
-  try {
-    const body = (await response.clone().json()) as { message?: unknown };
-
-    if (typeof body.message === "string" && body.message.trim()) {
-      return body.message;
-    }
-  } catch {
-    // Fall through to text/status below.
-  }
-
-  const text = await response.text().catch(() => "");
-
-  return text.trim() || response.statusText || `Request failed (${response.status})`;
 }

@@ -1,8 +1,8 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
-import { type ReactNode } from "react";
 import { ChatConversation } from "@/components/chat/chat-conversation";
+import { GateNotice } from "@/components/gate-notice";
 import { siteUrl } from "@/lib/fluncle-links";
 import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
 import { Button } from "@fluncle/ui/components/button";
@@ -125,22 +125,5 @@ function ChatDoor() {
         )}
       </article>
     </main>
-  );
-}
-
-/**
- * The quiet gate notice: a lede, one line of context, and the single literal control that
- * opens the way (the Chrome Rule: the prose carries the voice, the button names the
- * action). An outline control, never a gold fill — One Sun.
- */
-function GateNotice({ action, body, lede }: { action: ReactNode; body: string; lede: string }) {
-  return (
-    <div className="flex flex-col items-start gap-4 py-10">
-      <div className="space-y-1.5">
-        <p className="text-base text-foreground">{lede}</p>
-        <p className="text-sm text-muted-foreground">{body}</p>
-      </div>
-      {action}
-    </div>
   );
 }

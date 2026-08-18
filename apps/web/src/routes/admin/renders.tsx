@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type ReactNode, useState } from "react";
+import { elapsedShort } from "@/lib/format";
 import { readError } from "@/lib/read-error";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
@@ -665,24 +666,4 @@ async function postVideoAction(trackId: string, action: "purge" | "requeue"): Pr
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-}
-
-// "3h" / "12m" / "2d" elapsed since `fromIso` (whole units, terse per VOICE.md's
-// tabular register), or "moments" under a minute.
-function elapsedShort(fromIso: string, nowIso: string): string {
-  const ms = new Date(nowIso).getTime() - new Date(fromIso).getTime();
-
-  if (!Number.isFinite(ms) || ms < 60_000) {
-    return "moments";
-  }
-
-  const minutes = Math.floor(ms / 60_000);
-
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
