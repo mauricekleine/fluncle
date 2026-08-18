@@ -342,7 +342,8 @@ export const listSimilarArtistsSpec = defineSpec({
   }),
   name: "list_similar_artists",
   // MCP + chat only. A public HTTP neighbour read does exist (`list_similar_artists`,
-  // GET /artists/similar), but it is a DIFFERENT operation: it takes one to MAX artist SLUGS and
+  // GET /artists/similar), but it is a DIFFERENT operation: it takes one to
+  // MAX_SIMILAR_ARTISTS_INPUT (6) artist SLUGS — not this tool's SIMILAR_ARTISTS_MAX — and
   // answers "sounds like all of these", where this tool takes a single artist NAME an agent has in
   // hand. Same verb, same noun, two addressings — the tool never became a transport of the op.
   project: { chat: "neighbourList", mcp: "neighbourList" },
