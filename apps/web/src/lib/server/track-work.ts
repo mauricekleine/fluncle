@@ -354,12 +354,13 @@ const WORK_ORDER = `order by (f.track_id is not null) desc,
  * predicate is the same literal clause `kindClause("anchor")` carries. Three spellings here are
  * load-bearing:
  *
- *   · `t.has_isrc` / `t.has_embedding`, not the raw expressions (`isrc is not null and
- *     trim(isrc) <> ''` / `embedding_blob is not null`). A btree cannot key on an expression, so
- *     an expression spelling would force the sweep to materialise the whole un-anchored set,
- *     table-probe each row and sort — hourly, over a set that grows with the catalogue. Each
- *     mirror is written in the same statement as every write of its source column (schema.ts §
- *     `has_embedding`, § `has_isrc`), so this reads the truth rather than a copy of it.
+ *   · `t.has_isrc` / `t.has_embedding`, not the raw facts they stand for (`isrc is not null and
+ *     trim(isrc) <> ''` / a `track_embeddings` row exists). A btree cannot key on an expression
+ *     or on another table, so either spelling would force the sweep to materialise the whole
+ *     un-anchored set, table-probe each row and sort — hourly, over a set that grows with the
+ *     catalogue. Each mirror is written in the same statement (or the same write BATCH) as every
+ *     write of what it mirrors (schema.ts § `has_embedding`, § `has_isrc`), so this reads the
+ *     truth rather than a copy of it.
  *   · no `nulls last`. SQLite sorts NULL smallest, so a plain `desc` ALREADY puts the unranked
  *     tail last — the two spellings are exactly equivalent, and the plain one gives the planner
  *     nothing extra to reason about when matching the clause to the index.
@@ -782,10 +783,15 @@ export function kindClause(kind: TrackWorkKind): { args: string[]; sql: string }
 
   return {
     args: [],
-    // The `wrong-audio` guard: the quarantine nulled the vector but kept the bad key, so this
+    // The `wrong-audio` guard: the quarantine dropped the vector but kept the bad key, so this
     // row must NOT re-embed the poisoned bytes (docs/the-ear.md § Wrong audio).
+    //
+    // `has_embedding = 0` rather than a `track_embeddings` anti-join, and that spelling is a
+    // CONTRACT with `tracks_embed_queue_idx` (schema.ts), whose partial predicate carries the
+    // same two clauses literally: SQLite only considers a partial index when the query's WHERE
+    // provably implies its predicate, and a cross-table `not exists` never can.
     sql: `t.source_audio_key is not null
-          and t.embedding_blob is null
+          and t.has_embedding = 0
           and t.capture_status <> 'wrong-audio'`,
   };
 }

@@ -1,7 +1,12 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 // THE SIMILAR-ARTISTS ENGINE, PROVEN — against the REAL schema, with vectors we control.
 //
@@ -69,10 +74,7 @@ async function link(trackId: string, artistId: string): Promise<void> {
 
 /** The write the agent-tier `update_track` path performs: validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 /**
@@ -215,7 +217,7 @@ describe("rankArtists — the sweep", () => {
     expect(await centroidCount()).toBe(2);
 
     // Clear A's only embedding (the wrong-audio path) → A becomes an orphan.
-    await db.execute(`update tracks set embedding_blob = null where track_id = 'a-find'`);
+    await seedEmbedding(db, "a-find", null);
 
     const summary = await rankArtists(100, NOW);
     expect(summary.centroidsRemoved).toBe(1);

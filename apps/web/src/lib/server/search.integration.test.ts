@@ -87,13 +87,22 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       track.releaseDate ?? null,
       `https://open.spotify.com/track/${track.trackId}`,
       180_000,
-      embedding ? new Uint8Array(embedding.buffer) : null,
+      embedding ? 1 : 0,
     ],
     sql: `insert into tracks
       (track_id, title, artists_json, album, label, key, bpm, release_date, spotify_url,
-       duration_ms, embedding_blob)
+       duration_ms, has_embedding)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
+
+  // The vector rides in the satellite, keyed 1:1 — and its presence is what the `has_embedding`
+  // mirror above claims, so the two are written together exactly as the pipeline writes them.
+  if (embedding) {
+    await client.execute({
+      args: [track.trackId, new Uint8Array(embedding.buffer)],
+      sql: `insert into track_embeddings (track_id, embedding_blob) values (?, ?)`,
+    });
+  }
 
   if (track.logId !== undefined) {
     await client.execute({
@@ -1377,7 +1386,8 @@ describe("the compound sonic tier — sound like several artists", () => {
     expect(scan).toBeDefined();
     const sql = scan?.sql ?? "";
 
-    expect(sql).toContain("vector_distance_cos(tracks.embedding_blob, ?)");
+    expect(sql).toContain("vector_distance_cos(emb.embedding_blob, ?)");
+    expect(sql).toContain("join track_embeddings emb on emb.track_id = tracks.track_id");
     expect(sql).toContain("tracks.key in"); // the btree pre-filter, in the same statement
     expect(sql).not.toContain("lower(tracks.key)"); // …and it is the BARE column, so the btree serves it
     expect(sql).toContain("order by dist asc");

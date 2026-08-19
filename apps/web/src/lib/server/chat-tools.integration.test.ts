@@ -15,7 +15,13 @@ import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linkTrackToAlbum } from "./albums";
 import { rankArtists } from "./artist-dossier";
-import { createIntegrationDb, seedArtist, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedArtist,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 import { linkTrackToLabel } from "./labels";
 
 // ── The mocked externals ───────────────────────────────────────────────────────────────
@@ -145,10 +151,7 @@ function blend(from: number[], toward: number[], weight: number): number[] {
 
 /** The write the embed pipeline performs: validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 /** A request carrying an IP, so the write tools' rate-limit key resolves (no session needed). */

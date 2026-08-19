@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cosineSimilarity, EMBEDDING_DIMS, readEmbeddingBlob, toVectorProbe } from "./embedding";
-import { createIntegrationDb, seedTrack } from "./integration-db";
+import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 import { parseKey, toCamelot } from "../key-camelot";
 import {
   applyTaste,
@@ -81,18 +81,17 @@ async function seed(rows: MixSeed[]): Promise<void> {
       args: [
         row.key,
         row.bpm,
-        row.embedding ? JSON.stringify(row.embedding) : null,
         // A distinct, deterministic texture vector per finding (the plateau tiebreak).
         JSON.stringify({ centroidHz: 1000 + index, highRatio: index / 100, onsetRate: index }),
         row.trackId,
       ],
-      // `vector32(NULL)` throws, so an un-embedded fixture writes a null blob explicitly.
       sql: `update tracks
-            set key = ?1, bpm = ?2,
-                embedding_blob = case when ?3 is null then null else vector32(?3) end,
-                features_json = ?4
-            where track_id = ?5`,
+            set key = ?1, bpm = ?2, features_json = ?3
+            where track_id = ?4`,
     });
+    // The vector goes through the pipeline's own write (satellite row + `has_embedding`), so
+    // the fixture cannot seed a state production never reaches. `null` = an un-embedded row.
+    await seedEmbedding(db, row.trackId, row.embedding ?? null);
     await db.execute({
       args: [row.galaxyId ?? null, row.trackId],
       sql: `update findings set galaxy_id = ? where track_id = ?`,
@@ -210,15 +209,15 @@ describe("getMixableTracks", () => {
     expect(first?.reason).toMatchObject({ kind: expect.any(String) });
   });
 
-  it("scores a candidate with no blob as vector-less", async () => {
-    // The scan reads the native `embedding_blob` column and the DB does the cosine in SQL. A
-    // candidate with no blob keeps its place on the rail (key+BPM still mix) but its sonic term
-    // goes null, exactly as an un-embedded row. Safe: the write path always sets the blob
-    // (track-update.ts), so this state does not occur outside a test.
+  it("scores a candidate with no vector as vector-less", async () => {
+    // The scan LEFT JOINs `track_embeddings` and the DB does the cosine in SQL. A candidate with
+    // no satellite row keeps its place on the rail (key+BPM still mix) but its sonic term goes
+    // null. This is the real un-embedded state, reached the way the quarantine paths reach it.
     const rows = corpus();
 
     await seed(rows);
-    await db.execute(`update tracks set embedding_blob = null where track_id in ('t_01','t_02')`);
+    await seedEmbedding(db, "t_01", null);
+    await seedEmbedding(db, "t_02", null);
 
     const fromSql = (await getMixableTracks("t_00", { limit: 12 })).map(
       (candidate) => candidate.trackId,
@@ -351,7 +350,9 @@ describe("the seeded vector round-trips through vector32/readEmbeddingBlob", () 
   it("writes the same float32s the JSON held", async () => {
     await seed(corpus());
 
-    const row = await db.execute(`select embedding_blob from tracks where track_id = 't_00'`);
+    const row = await db.execute(
+      `select embedding_blob from track_embeddings where track_id = 't_00'`,
+    );
     // The driver hands a blob back as an ArrayBuffer, NOT a Uint8Array — the quirk
     // `readEmbeddingBlob` exists to absorb.
     expect(Object.prototype.toString.call(row.rows[0]?.embedding_blob)).toBe(

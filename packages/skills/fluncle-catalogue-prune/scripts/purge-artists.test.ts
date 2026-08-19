@@ -308,7 +308,10 @@ describe("--confirm runs the shared cascade", () => {
     expect(s.batches).toHaveLength(1);
     expect(s.batches[0]?.mode).toBe("write");
     expect(s.batches[0]?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");
-    expect(s.batches[0]?.stmts[1]?.sql).toBe("delete from tracks where track_id in (?,?)");
+    expect(s.batches[0]?.stmts[1]?.sql).toBe(
+      "delete from track_embeddings where track_id in (?,?)",
+    );
+    expect(s.batches[0]?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
   });
 });
 

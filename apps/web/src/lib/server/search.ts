@@ -1031,11 +1031,12 @@ async function resolveAnchor(
   const db = await getDb();
   const result = await db.execute({
     args: [match],
-    sql: `select ${SEARCH_SELECT}, tracks.embedding_blob
+    sql: `select ${SEARCH_SELECT}, emb.embedding_blob
           from tracks_fts
           join tracks on tracks.track_id = tracks_fts.track_id
+          join track_embeddings emb on emb.track_id = tracks.track_id
           left join findings on findings.track_id = tracks.track_id
-          where tracks_fts match ? and tracks.embedding_blob is not null
+          where tracks_fts match ?
           order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
           limit 1`,
   });
@@ -1073,8 +1074,9 @@ async function resolveAnchor(
  * exact lever the spike measured (100k: 1,883 ms → 207 ms behind a key/BPM pre-filter). It is
  * the same `compileFilters` the non-sonic path uses; nothing special is written for it.
  *
- * `where vec is not null` sits INSIDE the subquery for a reason: `vector_distance_cos` THROWS
- * on a NULL, so an un-embedded row must be gone before the ranking sees it.
+ * The `track_embeddings` join is INNER for a reason: `vector_distance_cos` THROWS on a NULL, so
+ * an un-embedded row must be gone before the ranking sees it — and a row's ABSENCE from the
+ * satellite is exactly what "un-embedded" means.
  *
  * AND THE ORDER IS PURE DISTANCE — no certified-first tier break, unlike every other tier
  * here. That asymmetry is deliberate and it is arithmetic: bm25 is CORPUS-relative (a text
@@ -1100,8 +1102,8 @@ async function resolveAnchor(
  * `columnFilters` are the OTHER filters the query carried (key/BPM/year/label), compiled to the
  * SAME `compileFilters` the non-sonic path uses and applied BEFORE the vector distance — "like X on
  * Hospital Records" narrows the candidate set before the scan touches a vector (the spike's
- * measured 1,883 ms → 207 ms lever). ONE pass, no union-all fan-out. `where embedding_blob is not
- * null` sits in the scan because `vector_distance_cos` THROWS on a NULL. The order is PURE DISTANCE
+ * measured 1,883 ms → 207 ms lever). ONE pass, no union-all fan-out. The `track_embeddings` join is
+ * INNER because `vector_distance_cos` THROWS on a NULL. The order is PURE DISTANCE
  * — no certified-first break, because a cosine distance is a property of two vectors and is honest
  * across both registers (unlike corpus-relative bm25); the Unlit Rule keeps them readable apart.
  */
@@ -1138,7 +1140,11 @@ export async function rankTracksByVector(
   const where = [
     ...clauses.map((clause) => clause.sql),
     ...(excludeTrackId ? ["tracks.track_id != ?"] : []),
-    `tracks.embedding_blob is not null`,
+    // The satellite join below is INNER, so membership in `track_embeddings` already IS the
+    // old `embedding_blob is not null` guard. This clause keeps the `where` non-empty when a
+    // query carries no filters and no exclusion (a bare `where` is a syntax error), and it
+    // stays index-cheap: `has_embedding` is on the row the scan already has.
+    `tracks.has_embedding = 1`,
   ].join(" and ");
 
   const db = await getDb();
@@ -1152,8 +1158,9 @@ export async function rankTracksByVector(
         ...(excludeTrackId ? [excludeTrackId] : []),
         limit,
       ],
-      sql: `select ${SEARCH_SELECT}, vector_distance_cos(tracks.embedding_blob, ?) as dist
+      sql: `select ${SEARCH_SELECT}, vector_distance_cos(emb.embedding_blob, ?) as dist
           from ${SEARCH_FROM}
+          join track_embeddings emb on emb.track_id = tracks.track_id
           where ${where}
           order by dist asc, tracks.track_id asc
           limit ?`,

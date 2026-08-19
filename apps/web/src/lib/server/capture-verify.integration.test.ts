@@ -8,7 +8,12 @@ import {
   verifyCapture,
   WRONG_AUDIO_STATUS,
 } from "./catalogue";
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 // THE CAPTURE-VERIFICATION ROUTING, PROVEN — against the real schema (docs/the-ear.md § Wrong
 // audio). The box's verify-captures sweep only ever reports a plain verdict; everything that
@@ -40,12 +45,11 @@ async function capture(trackId: string, sha: string): Promise<void> {
 
 /** Give a row a (stand-in) vector, so a quarantine has something real to drop. */
 async function embed(trackId: string): Promise<void> {
-  const vector = JSON.stringify(Array.from({ length: 1024 }, (_, index) => (index === 0 ? 1 : 0)));
-
-  await db.execute({
-    args: [vector, trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(
+    db,
+    trackId,
+    Array.from({ length: 1024 }, (_, index) => (index === 0 ? 1 : 0)),
+  );
 }
 
 type Row = {
@@ -60,9 +64,13 @@ type Row = {
 async function readRow(trackId: string): Promise<Row> {
   const result = await db.execute({
     args: [trackId],
-    sql: `select capture_status, capture_verification, capture_verified_at, capture_priority,
-                 embedding_blob, source_audio_rejected
-          from tracks where track_id = ?`,
+    // LEFT JOIN the satellite: a quarantined row has no `track_embeddings` row at all, so the
+    // null this reports IS "the poisoned vector is gone".
+    sql: `select t.capture_status, t.capture_verification, t.capture_verified_at,
+                 t.capture_priority, emb.embedding_blob, t.source_audio_rejected
+          from tracks t
+          left join track_embeddings emb on emb.track_id = t.track_id
+          where t.track_id = ?`,
   });
 
   return result.rows[0] as unknown as Row;

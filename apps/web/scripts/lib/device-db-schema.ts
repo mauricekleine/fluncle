@@ -3,7 +3,8 @@
  *
  * This mapping is a security boundary: a mobile device connects directly to the derived
  * public-catalogue database, so a source column ships only when it is named here. Keep source-only
- * selection inputs (most importantly `embedding_blob`) out even when a cut predicate reads them.
+ * selection inputs (most importantly the MuQ vector) out even when a cut predicate reads them —
+ * and the vector's own table, `track_embeddings`, is absent from this map entirely.
  */
 export const DEVICE_DB_COLUMNS = {
   albums: [

@@ -15,6 +15,12 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
 import { backfillHubCounts } from "../../../scripts/backfill-hub-counts";
 import { ensureSearchIndex } from "../../db/search-index";
+import {
+  CLEAR_EMBEDDING_SQL,
+  clearEmbeddingSatellite,
+  SET_EMBEDDING_SQL,
+  writeEmbeddingSatellite,
+} from "./embedding";
 import { resetKeyHistogramCache } from "./key-histogram";
 
 const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.url));
@@ -229,12 +235,15 @@ export async function seedCatalogueTrack(
 }
 
 /**
- * THE EMBED WRITE, as the pipeline performs it — the ranked `F32_BLOB` AND its `has_embedding`
- * mirror, together (schema.ts § `has_embedding`). Fixtures must go through this rather than a bare
- * `set embedding_blob = vector32(?)`: the mirror is what `/admin/funnel`'s covering stage scan reads,
- * so a fixture that writes only the blob seeds a state production cannot reach, and the funnel's
- * fold-equivalence test rightly fails on it. Pass `null` to CLEAR both halves (the quarantine paths'
- * `CLEAR_EMBEDDING_SQL`).
+ * THE EMBED WRITE, as the pipeline performs it — the `track_embeddings` satellite row AND its
+ * `has_embedding` mirror, in ONE write batch (schema.ts § `has_embedding`). Fixtures must go
+ * through this rather than a bare satellite insert: the mirror is what `/admin/funnel`'s covering
+ * stage scan and both partial queue indexes read, so a fixture that writes only the vector seeds a
+ * state production cannot reach, and the funnel's fold-equivalence test rightly fails on it. Pass
+ * `null` to CLEAR both halves (the quarantine paths' shape).
+ *
+ * It drives the SAME shared statements the Worker writes through (embedding.ts), so a fixture and
+ * production cannot diverge — including the clear's mirror-driven delete ordering.
  */
 export async function seedEmbedding(
   client: Client,
@@ -242,18 +251,30 @@ export async function seedEmbedding(
   vector: null | number[],
 ): Promise<void> {
   if (vector === null) {
-    await client.execute({
-      args: [trackId],
-      sql: `update tracks set embedding_blob = null, has_embedding = 0 where track_id = ?`,
-    });
+    await client.batch(
+      [
+        {
+          args: [trackId],
+          sql: `update tracks set ${CLEAR_EMBEDDING_SQL} where track_id = ?`,
+        },
+        clearEmbeddingSatellite(trackId),
+      ],
+      "write",
+    );
 
     return;
   }
 
-  await client.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?), has_embedding = 1 where track_id = ?`,
-  });
+  await client.batch(
+    [
+      {
+        args: [trackId],
+        sql: `update tracks set ${SET_EMBEDDING_SQL} where track_id = ?`,
+      },
+      writeEmbeddingSatellite(trackId, JSON.stringify(vector)),
+    ],
+    "write",
+  );
 }
 
 type SeedEntity = {

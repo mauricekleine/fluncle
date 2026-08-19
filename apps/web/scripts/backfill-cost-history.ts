@@ -125,7 +125,7 @@ async function main() {
   const result = await db.execute({
     sql: `select tracks.track_id, findings.log_id, findings.added_at,
                  findings.observation_script, findings.video_url, tracks.bpm,
-                 tracks.embedding_blob is not null as has_embedding
+                 tracks.has_embedding as has_embedding
             from findings join tracks on tracks.track_id = findings.track_id
            where findings.log_id is not null`,
   });

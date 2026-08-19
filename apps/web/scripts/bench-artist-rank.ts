@@ -190,10 +190,14 @@ async function seedTracks(): Promise<void> {
 
       statements.push(
         {
-          args: [trackId, `Track ${index}`, `["Artist ${index % artistCount}"]`, vector],
+          args: [trackId, `Track ${index}`, `["Artist ${index % artistCount}"]`],
           sql: `insert into tracks
-            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, embedding_blob)
-            values (?, ?, ?, 'spotify:track:x', 'https://open.spotify.com/track/x', 270000, vector32(?))`,
+            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, has_embedding)
+            values (?, ?, ?, 'spotify:track:x', 'https://open.spotify.com/track/x', 270000, 1)`,
+        },
+        {
+          args: [trackId, vector],
+          sql: `insert into track_embeddings (track_id, embedding_blob) values (?, vector32(?))`,
         },
         {
           args: [trackId, artistId],
@@ -254,10 +258,10 @@ async function recomputeCentroids(artistIds: string[]): Promise<void> {
     const placeholders = chunkIds.map(() => "?").join(", ");
     const vectorResult = await client.execute({
       args: chunkIds,
-      sql: `select ta.artist_id as artist_id, t.embedding_blob as embedding_blob
+      sql: `select ta.artist_id as artist_id, emb.embedding_blob as embedding_blob
             from track_artists ta
-            join tracks t on t.track_id = ta.track_id
-            where ta.artist_id in (${placeholders}) and t.embedding_blob is not null`,
+            join track_embeddings emb on emb.track_id = ta.track_id
+            where ta.artist_id in (${placeholders})`,
     });
 
     const grouped = new Map<string, { count: number; vectors: number[][] }>();

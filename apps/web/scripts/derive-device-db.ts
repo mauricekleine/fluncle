@@ -4,7 +4,7 @@
  *
  * The source is opened with SQLite's read-only flag and is never mutated. The output schema is
  * generated exclusively from the allowlist in lib/device-db-schema.ts; source-only cut inputs
- * such as `embedding_blob`, storage pointers, admin state, auth, and telemetry never cross the
+ * such as the MuQ vector, storage pointers, admin state, auth, and telemetry never cross the
  * boundary.
  *
  * Usage:

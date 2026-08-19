@@ -409,9 +409,12 @@ function findOccurrences(source: string): readonly Occurrence[] {
     }
   }
 
-  // (5) `select *` FROM THE FAT TABLE. `tracks` carries the 4KB inline `embedding_blob`
-  // and `features_json`; a star select drags both into a 128MB Worker isolate for every
-  // row. Column lists only (`LEAN_TRACK_SELECT` is the shape).
+  // (5) `select *` FROM THE FAT TABLE. `tracks` is 91 columns wide and carries
+  // `features_json`; a star select drags all of it into a 128MB Worker isolate for every
+  // row. Column lists only (`LEAN_TRACK_SELECT` is the shape). The 4 KB MuQ vector is no
+  // longer among them — it lives in the `track_embeddings` satellite, which a star select
+  // of `tracks` cannot reach — but the rule is unchanged: the table is still the fattest
+  // one here, and it is the one that grows.
   for (const match of code.matchAll(/select\s+\*\s+from\s+tracks\b/gi)) {
     push("select-star:tracks", match.index, match[0]);
   }

@@ -9,6 +9,11 @@ import { backfillHasEmbedding } from "./backfill-has-embedding";
 // the column DEFAULT 0, so every EXISTING row lands un-embedded — wrong for every row carrying a
 // vector. This flips exactly those, and only those. Driven against the real migrated schema so the
 // SQL under test is byte-identical to production.
+//
+// WHAT IT MIRRORS is a `track_embeddings` row, not a `tracks` column, so every fixture below
+// writes the satellite directly — RAW, deliberately bypassing the paired write, because an
+// unpaired vector is exactly the state history and a restored backup leave behind and exactly what
+// this pass exists to heal.
 
 let db: Client;
 
@@ -26,11 +31,11 @@ beforeEach(async () => {
   await seedCatalogueTrack(db, { title: "Embedded", trackId: "emb000000000000000000a" });
   await seedCatalogueTrack(db, { title: "Bare", trackId: "bare00000000000000000a" });
   // Recreate the pre-backfill state the migration leaves behind: a row that HAS a vector but whose
-  // mirror still reads the DDL default. Written raw, deliberately bypassing the paired write sites,
-  // because that unpaired state is exactly what history looks like and what the backfill must heal.
+  // mirror still reads the DDL default.
   await db.execute({
     args: [JSON.stringify(Array.from({ length: 1024 }, () => 0.01))],
-    sql: "update tracks set embedding_blob = vector32(?) where track_id = 'emb000000000000000000a'",
+    sql: `insert into track_embeddings (track_id, embedding_blob)
+          values ('emb000000000000000000a', vector32(?))`,
   });
   await db.execute("update tracks set has_embedding = 0");
 });
@@ -57,9 +62,10 @@ describe("backfillHasEmbedding", () => {
   });
 
   it("corrects drift in BOTH directions in one pass", async () => {
-    // The complement of the seeding case, and the reason the predicate reconciles against the blob
-    // rather than only flipping 0 → 1: a row FLAGGED with no vector (a console `SET embedding_blob =
-    // NULL`, a restored backup) makes the funnel OVER-report, and no write site is left to fix it.
+    // The complement of the seeding case, and the reason the predicate reconciles against the
+    // vectors rather than only flipping 0 → 1: a row FLAGGED with no vector (a console
+    // `DELETE FROM track_embeddings`, a restored backup) makes the funnel OVER-report AND hides
+    // the row from the re-embed queue, and no write site is left to fix it.
     await db.execute(
       "update tracks set has_embedding = 1 where track_id = 'bare00000000000000000a'",
     );

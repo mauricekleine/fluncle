@@ -361,7 +361,10 @@ describe("--confirm", () => {
     expect(s.batches).toHaveLength(1);
     expect(s.batches[0]?.mode).toBe("write");
     expect(s.batches[0]?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");
-    expect(s.batches[0]?.stmts[1]?.sql).toBe("delete from tracks where track_id in (?,?)");
+    expect(s.batches[0]?.stmts[1]?.sql).toBe(
+      "delete from track_embeddings where track_id in (?,?)",
+    );
+    expect(s.batches[0]?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
     // The artists row itself is NEVER deleted by this tool — that is the whole difference from
     // purge-artists.ts, and the reason a conflated row is safe to repair.
     expect(s.executed.some((sql) => /delete from artists\b/.test(sql))).toBe(false);

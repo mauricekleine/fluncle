@@ -81,7 +81,7 @@ await mock.module("../api", () => ({
     const url = new URL(path, "https://fluncle.test");
     const hasContext = url.searchParams.get("hasContext");
 
-    // The embed worklist (server gate: `embedding_blob IS NULL AND source_audio_key IS NOT
+    // The embed worklist (server gate: `has_embedding = 0 AND source_audio_key IS NOT
     // NULL`). The admin path does NOT strip the key, so the returned row carries it — the
     // exact shape the box embed sweep consumes.
     if (url.searchParams.get("hasEmbedding") === "false") {

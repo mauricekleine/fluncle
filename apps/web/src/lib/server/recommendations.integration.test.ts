@@ -7,7 +7,13 @@ import {
   frontierEditionInsertStatements,
 } from "./frontier-editions";
 import { type PublicUser } from "./public-auth";
-import { createIntegrationDb, rowCount, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  rowCount,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 // THE PER-USER RECOMMENDATION ENGINE, PROVEN — against the REAL schema, with
 // vectors we control (the catalogue.integration.test.ts discipline). The engine
@@ -51,10 +57,7 @@ function blend(from: number[], toward: number[], weight: number): number[] {
 
 /** The write the embed pipeline performs: the validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 function publicUser(id: string, emailVerified = true): PublicUser {

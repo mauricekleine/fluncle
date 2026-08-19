@@ -2,7 +2,12 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMBEDDING_DIMS, readEmbeddingBlob } from "./embedding";
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 import { type PublicUser } from "./public-auth";
 import { type SonarFilter, type SonarMatch } from "./sonar";
 
@@ -100,17 +105,18 @@ type IndexEntry = {
 
 /**
  * Load the `tracks` index exactly as apps/sonar's loader does (`TRACKS_SQL`): one entry per
- * EMBEDDED track — index membership IS the `embedding_blob is not null` clause — carrying the raw
+ * EMBEDDED track — index membership IS the inner join to `track_embeddings` — carrying the raw
  * metadata, with `certified` and `has_finding` read off the SAME single left join as two
  * DIFFERENT facts (a Log ID vs. a row).
  */
 async function loadIndex(): Promise<IndexEntry[]> {
   const result = await db.execute(
-    `select t.track_id, t.embedding_blob, t.spotify_uri,
+    `select t.track_id, e.embedding_blob, t.spotify_uri,
         f.track_id as finding_id, f.log_id as finding_log_id,
         t.dismissed_at, t.duplicate_of_track_id, t.nearest_finding_score, t.duration_ms
-      from tracks t left join findings f on f.track_id = t.track_id
-      where t.embedding_blob is not null`,
+      from tracks t
+      join track_embeddings e on e.track_id = t.track_id
+      left join findings f on f.track_id = t.track_id`,
   );
   const entries: IndexEntry[] = [];
 
@@ -242,10 +248,7 @@ function publicUser(id: string): PublicUser {
 
 /** The write the embed pipeline performs: validated JSON → the ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 /**

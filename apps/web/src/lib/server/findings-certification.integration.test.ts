@@ -1,7 +1,12 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 import { renderSitemap } from "./sitemap-test-kit";
 
 // THE SAFETY PROPERTY OF THE tracks/findings SPLIT, proven against the REAL schema.
@@ -84,9 +89,14 @@ vi.mock("./bluesky", () => ({
 const NOW = "2026-07-01T00:00:00.000Z";
 const FINDING_ID = "aaaaaaaaaaaaaaaaaaaaaa"; // 22 chars, the tracks PK shape
 const CATALOGUE_ID = "bbbbbbbbbbbbbbbbbbbbbb";
-// The write the agent-tier `update_track` path performs (embedding.ts): the validated JSON
-// array converted server-side into the native F32_BLOB the database ranks in SQL.
-const EMBED = `update tracks set embedding_blob = vector32(?) where track_id = ?`;
+/**
+ * The write the agent-tier `update_track` path performs (embedding.ts): the validated vector
+ * stored server-side as the native F32_BLOB the database ranks in SQL, in the `track_embeddings`
+ * satellite, with the `has_embedding` mirror moving in the same batch.
+ */
+async function embed(trackId: string, first: number): Promise<void> {
+  await seedEmbedding(db, trackId, [first, ...Array.from({ length: 1023 }, () => 0.01)]);
+}
 
 beforeEach(async () => {
   db = await createIntegrationDb();
@@ -182,21 +192,18 @@ describe("the tracks/findings split — an uncertified catalogue track is not a 
   it('never surfaces in "more like this", even when it HAS an embedding', async () => {
     const { getSimilarFindings } = await import("./tracks");
 
-    // THE SHARPEST CASE. `embedding_blob` lives on `tracks`, so an uncertified catalogue
-    // track can carry a perfectly good MuQ vector — the sonic space does not care whether
-    // Fluncle certified it. Only the join keeps it out of a public neighbours row. Give
-    // BOTH candidates a vector, make the catalogue track the NEARER one, and it still must
-    // not come back: a `/log` "more like this" row that linked a coordinate-less track
-    // would be a dead link on the public site.
+    // THE SHARPEST CASE. `track_embeddings` is keyed by `track_id` and knows nothing about
+    // certification, so an uncertified catalogue track can carry a perfectly good MuQ vector —
+    // the sonic space does not care whether Fluncle certified it. Only the join to `findings`
+    // keeps it out of a public neighbours row. Give BOTH candidates a vector, make the catalogue
+    // track the NEARER one, and it still must not come back: a `/log` "more like this" row that
+    // linked a coordinate-less track would be a dead link on the public site.
     const target = "cccccccccccccccccccccc";
     await seedTrack(db, { logId: "004.7.3J", title: "The Target", trackId: target });
 
-    const vector = (first: number): string =>
-      JSON.stringify([first, ...Array.from({ length: 1023 }, () => 0.01)]);
-
-    await db.execute({ args: [vector(1), target], sql: EMBED });
-    await db.execute({ args: [vector(0.99), CATALOGUE_ID], sql: EMBED }); // nearest
-    await db.execute({ args: [vector(0.2), FINDING_ID], sql: EMBED }); // further
+    await embed(target, 1);
+    await embed(CATALOGUE_ID, 0.99); // nearest
+    await embed(FINDING_ID, 0.2); // further
 
     const similar = await getSimilarFindings(target, 6);
 
@@ -262,7 +269,7 @@ describe("the certification rail — a catalogue track is measured, never spoken
     const result = await db.execute({
       args: [trackId],
       sql: `select bpm, key, features_json, analyzed_from,
-                   embedding_blob is not null as has_vector, source_audio_key, source_verification
+                   has_embedding as has_vector, source_audio_key, source_verification
             from tracks where track_id = ?`,
     });
 
@@ -305,7 +312,7 @@ describe("the certification rail — a catalogue track is measured, never spoken
     // a row with no vector is invisible to The Ear — which the pre-split queues guaranteed.
     const row = await db.execute({
       args: [CATALOGUE_ID],
-      sql: `select embedding_blob is not null as b from tracks where track_id = ?`,
+      sql: `select count(*) as b from track_embeddings where track_id = ?`,
     });
     expect(Number(row.rows[0]?.b)).toBe(1);
   });

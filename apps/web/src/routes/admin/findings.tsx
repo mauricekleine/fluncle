@@ -186,7 +186,7 @@ const fetchBoard = createServerFn({ method: "GET" })
     // Batch fetches — one query each for the whole page, no N+1: the per-platform posts,
     // the mixtape + plan memberships (which tapes each finding is already on, and which
     // plans it's pencilled into), which carry a MuQ audio embedding (the Embeddings column
-    // — `embedding_blob` presence), and — folded into ONE `findings` pass — every board
+    // — a `track_embeddings` row), and — folded into ONE `findings` pass — every board
     // STATUS FLAG: the internal `context_note` presence (Context cell) plus the Discogs /
     // Last.fm / Note backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
     // (`backfill_lastfm_done_at`). All pulled admin-only (none ride the public track

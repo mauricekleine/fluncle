@@ -44,20 +44,24 @@ function stub(rows: Record<string, unknown>[] = [], rowsAffected = 0): Stub {
 }
 
 describe("deleteTracksWithEdges", () => {
-  test("deletes the edges and the tracks in ONE batch, edges first, over the same id set", async () => {
+  test("deletes the edges, the vectors and the tracks in ONE batch, dependants first, over the same id set", async () => {
     const s = stub();
     await deleteTracksWithEdges(s.client, ["t1", "t2"]);
 
     expect(s.batches).toHaveLength(1);
     const [batch] = s.batches;
     expect(batch?.mode).toBe("write");
-    expect(batch?.stmts).toHaveLength(2);
-    // Edges FIRST — there must never be a window where the track is gone and the edge remains.
+    expect(batch?.stmts).toHaveLength(3);
+    // Dependants FIRST — there must never be a window where the track is gone and a row keyed on
+    // it remains. The vector's own `on delete cascade` would cover it when `PRAGMA foreign_keys`
+    // is on; this delete is what makes it true either way.
     expect(batch?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");
-    expect(batch?.stmts[1]?.sql).toBe("delete from tracks where track_id in (?,?)");
+    expect(batch?.stmts[1]?.sql).toBe("delete from track_embeddings where track_id in (?,?)");
+    expect(batch?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
     // Same id set, bound as args (never interpolated).
     expect(batch?.stmts[0]?.args).toEqual(["t1", "t2"]);
     expect(batch?.stmts[1]?.args).toEqual(["t1", "t2"]);
+    expect(batch?.stmts[2]?.args).toEqual(["t1", "t2"]);
   });
 
   test("never issues a bare execute — the pair is always transactional", async () => {
@@ -73,19 +77,23 @@ describe("deleteTracksWithEdges", () => {
     await deleteTracksWithEdges(s.client, ids);
 
     expect(s.batches).toHaveLength(2);
-    expect(s.batches[0]?.stmts).toHaveLength(2);
-    expect(s.batches[1]?.stmts).toHaveLength(2);
+    expect(s.batches[0]?.stmts).toHaveLength(3);
+    expect(s.batches[1]?.stmts).toHaveLength(3);
     expect(s.batches[0]?.stmts[0]?.args).toHaveLength(200);
     expect(s.batches[1]?.stmts[0]?.args).toHaveLength(50);
-    // Each chunk deletes the edges and the tracks for the SAME ids.
+    // Each chunk deletes the edges, the vectors and the tracks for the SAME ids.
     expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[1]?.args);
+    expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[2]?.args);
   });
 
   test("reports the rows removed from each table", async () => {
     const s = stub();
     const removed = await deleteTracksWithEdges(s.client, ["t1"]);
 
-    expect(removed).toEqual({ edges: 10, tracks: 20 });
+    // The stub returns `(index + 1) * 10` per statement, so the counts must be read off the
+    // RIGHT statements: edges is the first, tracks the third (the vector delete is unreported —
+    // it is a cascade, not a number the operator is deciding anything from).
+    expect(removed).toEqual({ edges: 10, tracks: 30 });
   });
 
   test("an empty id set touches nothing", async () => {

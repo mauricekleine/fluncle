@@ -1,4 +1,5 @@
 import { type TrackUpdateResult } from "@fluncle/contracts";
+import { type InStatement } from "@libsql/client";
 
 export type { TrackUpdateResult };
 
@@ -28,6 +29,12 @@ import { isLogId } from "../log-id";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
+import {
+  CLEAR_EMBEDDING_SQL,
+  clearEmbeddingSatellite,
+  SET_EMBEDDING_SQL,
+  writeEmbeddingSatellite,
+} from "./embedding";
 import { purgeTrackEntityPages } from "./entity-cache-purge";
 import { type AdminRole } from "./env";
 import { type IdentityMethod } from "./identity-envelope";
@@ -113,7 +120,8 @@ export type TrackUpdate = {
   contextStatus?: "pending" | "resolved" | "empty" | "failed";
   /**
    * The finding's MuQ audio embedding as a JSON array of 1024 floats — `vector32()`
-   * converts it to the native `embedding_blob` server-side. Internal analysis fuel like
+   * converts it to a native `F32_BLOB(1024)` in the `track_embeddings` satellite
+   * server-side. Internal analysis fuel like
    * `features` — written by the on-box `fluncle-embed` cron, never rendered, so writing it does NOT bump
    * updated_at (a whole-archive embed backfill must move no public lastmod). It IS the
    * sonic-similarity space `list_similar_tracks` ranks over; the handler validates the
@@ -535,6 +543,9 @@ export async function updateTrack(
   const args: Array<number | string | null> = [];
   const findingSets: string[] = [];
   const findingArgs: Array<number | string | null> = [];
+  // The third statement, when the write carries a vector: the `track_embeddings` upsert or
+  // delete that must travel in the SAME batch as its `has_embedding` half (embedding.ts).
+  let embeddingStatement: InStatement | undefined;
   // The coordinate whose cached log surfaces this write stales: the existing one,
   // or the freshly-minted one on a one-time backfill (set below).
   let effectiveLogId = existing.log_id;
@@ -648,23 +659,25 @@ export async function updateTrack(
   }
 
   if (update.embedding !== undefined) {
-    // The vector lands as a native `F32_BLOB(1024)` — the ONLY stored form: every similarity
-    // read ranks `vector_distance_cos(embedding_blob, ?)` in SQL, and `vector32()` converts
-    // the validated JSON server-side (the Worker never encodes a vector).
+    // The vector lands as a native `F32_BLOB(1024)` in the `track_embeddings` SATELLITE — the
+    // ONLY stored form: every similarity read ranks `vector_distance_cos(…, ?)` in SQL against
+    // that table, and `vector32()` converts the validated JSON server-side (the Worker never
+    // encodes a vector). This is the sole writer, and it goes through embedding.ts's shared
+    // statements so the satellite row and its `has_embedding` mirror provably cannot be
+    // written apart (schema.ts § `has_embedding`).
     //
-    // Empty string CLEARS it — null, not "", so the `embedding_blob IS NULL` embed queue
-    // treats a cleared row as un-embedded (re-embed on the next tick). `vector32(NULL)`
-    // throws, hence the two arms rather than one expression. The handler has already
-    // validated the 1024-d shape (`coerceEmbedding`), so `vector32()` cannot see garbage.
-    // `has_embedding` moves in the SAME statement, on both arms — the stored mirror the funnel's
-    // covering scan reads (schema.ts § `has_embedding`). A literal, not a bind: it is derived from
-    // which arm we are on, never from caller input.
+    // Empty string CLEARS it — a DELETE of the satellite row, because `vector32(NULL)` throws,
+    // hence the two arms rather than one expression. The mirror drops to 0 in the same batch, so
+    // the `has_embedding = 0` embed queue treats a cleared row as un-embedded (re-embed on the
+    // next tick). `has_embedding` is a literal on both arms, never a bind: it is derived from
+    // which arm we are on, never from caller input. The handler has already validated the 1024-d
+    // shape (`coerceEmbedding`), so `vector32()` cannot see garbage.
     if (update.embedding === "") {
-      sets.push("embedding_blob = ?", "has_embedding = 0");
-      args.push(null);
+      sets.push(CLEAR_EMBEDDING_SQL);
+      embeddingStatement = clearEmbeddingSatellite(trackId);
     } else {
-      sets.push("embedding_blob = vector32(?)", "has_embedding = 1");
-      args.push(update.embedding);
+      sets.push(SET_EMBEDDING_SQL);
+      embeddingStatement = writeEmbeddingSatellite(trackId, update.embedding);
     }
   }
 
@@ -1109,10 +1122,16 @@ export async function updateTrack(
     findingArgs.push(new Date().toISOString());
   }
 
-  // At most two statements, each fired only when its half actually has columns to write.
-  // They are issued as one libSQL BATCH, so a partial write is impossible: the pair moves
-  // together or not at all (the transactional guarantee of a single UPDATE). `write` batches
-  // are transactional in libSQL.
+  // At most three statements, each fired only when its half actually has something to write.
+  // They are issued as one libSQL BATCH, so a partial write is impossible: they move together
+  // or not at all (the transactional guarantee of a single UPDATE). `write` batches are
+  // transactional in libSQL.
+  //
+  // THE VECTOR STATEMENT COMES LAST, and that ordering is load-bearing rather than tidy: the
+  // clearing arm's DELETE is driven by the `has_embedding = 0` the `tracks` update just wrote
+  // (embedding.ts § CLEAR_EMBEDDING_SATELLITE_SQL), so it must not run first. A track with a
+  // vector but no mirror — or a mirror with no vector — is silent corruption of the ranking, so
+  // the pair never leaves this batch.
   const statements = [
     ...(sets.length > 0
       ? [
@@ -1130,6 +1149,7 @@ export async function updateTrack(
           },
         ]
       : []),
+    ...(embeddingStatement ? [embeddingStatement] : []),
   ];
 
   await db.batch(statements, "write");
@@ -1142,7 +1162,12 @@ export async function updateTrack(
   purgeTrackEntityPages(trackId);
 
   return {
-    fields: [...sets, ...findingSets].map((set) => set.split(" ")[0] ?? set),
+    // The vector no longer moves as a `tracks` column, so it would drop out of a list derived
+    // from the two SET-lists alone. Name it anyway — the caller asked to write an embedding and
+    // is owed the same answer it got when the bytes lived on `tracks`.
+    fields: [...sets, ...findingSets, ...(embeddingStatement ? ["embedding_blob"] : [])].map(
+      (set) => set.split(" ")[0] ?? set,
+    ),
     trackId,
   };
 }

@@ -12,13 +12,20 @@ import { listTracks } from "./tracks";
 
 // The MuQ embed worklist (RFC full-audio § Unit 3): `hasEmbedding=false` lists findings
 // still needing an embedding — but ONLY the CAPTURED full songs, never a preview or the
-// unmatched tail. So the queue is `embedding_blob IS NULL AND source_audio_key IS NOT NULL`:
+// unmatched tail. So the queue is `has_embedding = 0 AND source_audio_key IS NOT NULL`:
 // a keyless finding is excluded (there is no captured song to embed from); a keyed but
 // still-unembedded one is in. `hasEmbedding=true` stays a pure presence check (no key gate).
+//
+// THE PREDICATE'S SPELLING IS PART OF THE TEST. The vector itself lives in `track_embeddings`
+// now, but this queue reads the stored `has_embedding` mirror instead of anti-joining the
+// satellite, because `tracks_embed_queue_idx` is PARTIAL on exactly these two clauses and
+// SQLite will not match a partial index against a cross-table `not exists` (schema.ts). The
+// assertions below pin the literal, so a "tidying" rewrite fails here rather than turning the
+// 5-minute box tick into a full scan in production.
 
 type StoredTrack = {
   added_at: string;
-  embedding_blob: string | null;
+  has_embedding: number;
   source_audio_key: string | null;
   track_id: string;
 };
@@ -27,21 +34,21 @@ const archive: StoredTrack[] = [
   // IN the queue: captured (has a source key) but not yet embedded.
   {
     added_at: "2026-06-03T00:00:00.000Z",
-    embedding_blob: null,
+    has_embedding: 0,
     source_audio_key: "003.1.1A/abc.m4a",
     track_id: "t-keyed-unembedded",
   },
   // EXCLUDED: no captured song → nothing to embed from.
   {
     added_at: "2026-06-02T00:00:00.000Z",
-    embedding_blob: null,
+    has_embedding: 0,
     source_audio_key: null,
     track_id: "t-keyless",
   },
   // EXCLUDED: already carries a vector.
   {
     added_at: "2026-06-01T00:00:00.000Z",
-    embedding_blob: "[0.1]",
+    has_embedding: 1,
     source_audio_key: "001.1.1A/def.m4a",
     track_id: "t-embedded",
   },
@@ -93,7 +100,7 @@ function fullRow(stored: StoredTrack) {
 
 // The JS mirror of the embed key-gate: unembedded AND captured.
 function matchesEmbedQueue(t: StoredTrack): boolean {
-  return t.embedding_blob === null && t.source_audio_key !== null;
+  return t.has_embedding === 0 && t.source_audio_key !== null;
 }
 
 beforeEach(() => {
@@ -102,8 +109,7 @@ beforeEach(() => {
     const isCount = query.sql.includes("count(*)");
     // The embed key-gate emits BOTH predicates; model the archive filter off them.
     const wantsEmbedQueue =
-      query.sql.includes("embedding_blob is null") &&
-      query.sql.includes("source_audio_key is not null");
+      query.sql.includes("has_embedding = 0") && query.sql.includes("source_audio_key is not null");
     const matched = archive
       .filter((t) => (wantsEmbedQueue ? matchesEmbedQueue(t) : true))
       .sort((a, b) => b.added_at.localeCompare(a.added_at));
@@ -130,11 +136,11 @@ function lastListSql(): string {
 }
 
 describe("listTracks hasEmbedding=false — the MuQ embed key-gate", () => {
-  it("gates the embed worklist on a captured source key (embedding_blob IS NULL AND source_audio_key IS NOT NULL)", async () => {
+  it("gates the embed worklist on a captured source key (has_embedding = 0 AND source_audio_key IS NOT NULL)", async () => {
     await listTracks({ hasEmbedding: false, limit: 50, order: "asc" });
     const sql = lastListSql();
 
-    expect(sql).toContain("embedding_blob is null");
+    expect(sql).toContain("has_embedding = 0");
     expect(sql).toContain("source_audio_key is not null");
   });
 
@@ -159,7 +165,7 @@ describe("listTracks hasEmbedding=false — the MuQ embed key-gate", () => {
     await listTracks({ hasEmbedding: true, limit: 50, order: "asc" });
     const sql = lastListSql();
 
-    expect(sql).toContain("embedding_blob is not null");
+    expect(sql).toContain("has_embedding = 1");
     // `source_audio_key` rides in the SELECT list (a surfaced DTO column); what must be
     // absent is the WHERE-clause key GATE — hasEmbedding=true never filters on capture.
     expect(sql).not.toContain("source_audio_key is not null");
