@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -108,6 +108,18 @@ async function withPriority(trackId: string, priority: number): Promise<void> {
   await db.execute({
     args: [priority, trackId],
     sql: `update tracks set capture_priority = ? where track_id = ?`,
+  });
+}
+
+/** Stamp both shared work-order keys, including deliberate NULL/zero equivalence fixtures. */
+async function withWorkOrder(
+  trackId: string,
+  capturePriority: null | number,
+  demandScore: null | number,
+): Promise<void> {
+  await db.execute({
+    args: [capturePriority, demandScore, trackId],
+    sql: `update tracks set capture_priority = ?, demand_score = ? where track_id = ?`,
   });
 }
 
@@ -427,6 +439,206 @@ describe("listTrackWork — the isrc-recovery pass", () => {
 });
 
 describe("listTrackWork — the order is the budget", () => {
+  it("returns the old query's identical sequence for every kind across NULLs and complete ties", async () => {
+    const { kindClause, listTrackWork } = await import("./track-work");
+
+    // This is the PRE-SPLIT query kept as a test oracle. Its joined certification expression and
+    // coalesces are intentionally frozen here: the implementation may change HOW it obtains the
+    // page, but every prefix must remain byte-for-byte the sequence this SQL returns.
+    const legacyIds = async (
+      kind:
+        | "analyze"
+        | "anchor"
+        | "capture"
+        | "embed"
+        | "isrc-recovery"
+        | "youtube-provenance"
+        | "youtube-reverdict",
+      limit: number,
+    ): Promise<string[]> => {
+      const kindWhere = kindClause(kind);
+      const order =
+        kind === "anchor" || kind === "isrc-recovery"
+          ? `order by t.has_isrc desc,
+              t.has_embedding desc,
+              t.nearest_finding_score desc,
+              t.track_id desc`
+          : kind === "youtube-reverdict"
+            ? "order by t.youtube_verified_at asc, t.track_id asc"
+            : `order by (f.track_id is not null) desc,
+                coalesce(t.capture_priority, 0) desc,
+                coalesce(t.demand_score, 0) desc,
+                coalesce(f.added_at, '') desc,
+                t.track_id desc`;
+      const result = await db.execute({
+        args: [...kindWhere.args, limit],
+        sql: `select t.track_id
+              from tracks t
+              left join findings f on f.track_id = t.track_id
+              where 1 = 1 and ${kindWhere.sql}
+              ${order}
+              limit ?`,
+      });
+
+      return result.rows.map((row) => {
+        if (typeof row.track_id !== "string") {
+          throw new Error("legacy track-work oracle returned a non-string track_id");
+        }
+
+        return row.track_id;
+      });
+    };
+
+    await openCaptureBudget();
+
+    const addedAt = "2026-01-01T00:00:00.000Z";
+    const findingCaptureIds = ["finding-capture-a", "finding-capture-b"] as const;
+    const findingAudioIds = ["finding-audio-a", "finding-audio-b"] as const;
+    const findingReverdictIds = ["finding-reverdict-a", "finding-reverdict-b"] as const;
+    const catalogueCaptureIds = ["catalogue-capture-a", "catalogue-capture-b"] as const;
+    const catalogueAudioIds = ["catalogue-audio-a", "catalogue-audio-b"] as const;
+    const catalogueReverdictIds = ["catalogue-reverdict-a", "catalogue-reverdict-b"] as const;
+
+    for (const [index, trackId] of [
+      ...findingCaptureIds,
+      ...findingAudioIds,
+      ...findingReverdictIds,
+    ].entries()) {
+      await seedTrack(db, { addedAt, logId: `004.7.${index + 1}A`, trackId });
+    }
+
+    for (const trackId of [
+      ...catalogueCaptureIds,
+      ...catalogueAudioIds,
+      ...catalogueReverdictIds,
+    ]) {
+      await seedCatalogueTrack(db, { trackId });
+    }
+
+    // The audio pair in each half feeds analyze, embed, and youtube-provenance. Within each pair,
+    // NULL and zero tie under every legacy coalesce; identical finding dates leave track_id as the
+    // final deterministic term.
+    for (const trackId of [...findingAudioIds, ...catalogueAudioIds]) {
+      await withAudio(trackId);
+    }
+
+    // These catalogue rows feed both anchor-family queues. Their indexed anchor terms are also
+    // complete ties, so those specialist orders exercise their final track-id term unchanged.
+    for (const trackId of [...catalogueCaptureIds, ...catalogueReverdictIds]) {
+      await makeIsrcRecoveryCandidate(trackId);
+    }
+
+    // The re-verdict queue deliberately has candidates in BOTH halves. Its order never led with
+    // certification, so the split implementation must leave this specialist query alone.
+    for (const trackId of [...findingReverdictIds, ...catalogueReverdictIds]) {
+      await db.execute({
+        args: [`video-${trackId}`, trackId],
+        sql: `update tracks
+              set youtube_video_id = ?, youtube_video_official = 0, youtube_verified_at = null
+              where track_id = ?`,
+      });
+    }
+
+    const nullZeroPairs = [findingCaptureIds, findingAudioIds, findingReverdictIds];
+
+    for (const [nullId, zeroId] of nullZeroPairs) {
+      await withWorkOrder(nullId, null, null);
+      await withWorkOrder(zeroId, 0, 0);
+    }
+
+    const cataloguePairs = [catalogueCaptureIds, catalogueReverdictIds];
+
+    for (const [nullDemandId, zeroDemandId] of cataloguePairs) {
+      await withWorkOrder(nullDemandId, 2, null);
+      await withWorkOrder(zeroDemandId, 2, 0);
+    }
+
+    await withWorkOrder(catalogueAudioIds[0], null, null);
+    await withWorkOrder(catalogueAudioIds[1], 0, 0);
+
+    // Prove the fixture really spans both halves and both NULL/non-NULL forms. The pair assertions
+    // above also give each queue rows tied on capture priority, demand, and finding date; only the
+    // unique track id may break the final tie.
+    const shape = await db.execute(`select t.capture_priority, t.demand_score,
+                                          (f.track_id is not null) as certified
+                                   from tracks t
+                                   left join findings f on f.track_id = t.track_id`);
+    expect(shape.rows.some((row) => Number(row.certified) === 1)).toBe(true);
+    expect(shape.rows.some((row) => Number(row.certified) === 0)).toBe(true);
+    expect(shape.rows.some((row) => row.capture_priority === null)).toBe(true);
+    expect(shape.rows.some((row) => row.capture_priority !== null)).toBe(true);
+    expect(shape.rows.some((row) => row.demand_score === null)).toBe(true);
+    expect(shape.rows.some((row) => row.demand_score !== null)).toBe(true);
+
+    const kinds = [
+      "analyze",
+      "anchor",
+      "capture",
+      "embed",
+      "isrc-recovery",
+      "youtube-provenance",
+      "youtube-reverdict",
+    ] as const;
+
+    // The small limits are load-bearing: they cover a page ending inside findings, exactly at a
+    // half boundary, and just into catalogue. Equality at 200 proves the complete fixture order.
+    for (const kind of kinds) {
+      for (const limit of [1, 2, 4, 5, 200]) {
+        expect((await listTrackWork({ kind, limit })).map((item) => item.trackId)).toEqual(
+          await legacyIds(kind, limit),
+        );
+      }
+    }
+  });
+
+  it("seeks the catalogue capture ladder before sorting only its deep tie-breaks", async () => {
+    const { listTrackWork } = await import("./track-work");
+
+    await openCaptureBudget();
+    await seedCatalogueTrack(db, { trackId: "catalogue-plan-candidate" });
+    await withPriority("catalogue-plan-candidate", 2);
+
+    const execute = vi.spyOn(db, "execute");
+
+    try {
+      await listTrackWork({ kind: "capture", scope: "catalogue" });
+
+      const calls = execute.mock.calls as unknown as unknown[][];
+      const statement = calls
+        .map(([candidate]) => candidate)
+        .find(
+          (candidate): candidate is Exclude<InStatement, string> =>
+            typeof candidate === "object" &&
+            candidate !== null &&
+            "sql" in candidate &&
+            typeof candidate.sql === "string" &&
+            candidate.sql.includes("f.log_id as log_id"),
+        );
+
+      expect(statement).toBeDefined();
+
+      if (statement === undefined) {
+        return;
+      }
+
+      const plan = await db.execute({
+        args: statement.args ?? [],
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const details = plan.rows
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+        .join("\n");
+
+      expect(details).toContain(
+        "tracks_catalogue_capture_idx (is_catalogue=? AND dismissed_at=? AND capture_priority>?)",
+      );
+      expect(details).toContain("USE TEMP B-TREE FOR RIGHT PART OF ORDER BY");
+      expect(details.split("\n")).not.toContain("USE TEMP B-TREE FOR ORDER BY");
+    } finally {
+      execute.mockRestore();
+    }
+  });
+
   it("drains in capture_priority order, NOT insertion or alphabetical order", async () => {
     const { listTrackWork } = await import("./track-work");
 
