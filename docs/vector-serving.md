@@ -107,12 +107,14 @@ The recommendations catalogue scan in [`recommendations.ts`](../apps/web/src/lib
 | `REC_ELIGIBLE_WHERE`                                        | sonar                                             |
 | ----------------------------------------------------------- | ------------------------------------------------- |
 | `f.track_id is null`                                        | `has_finding: false`                              |
-| `t.embedding_blob is not null`                              | membership in the `tracks` index at all           |
+| `emb.track_id is not null`                                  | membership in the `tracks` index at all           |
 | `t.spotify_uri is not null`                                 | `anchored: true`                                  |
 | `t.dismissed_at is null`                                    | `dismissed: false`                                |
 | `t.duplicate_of_track_id is null`                           | `is_duplicate: false`                             |
 | `(nearest_finding_score is null or < DUPLICATE_SIMILARITY)` | `nearest_finding_score_max: DUPLICATE_SIMILARITY` |
 | `t.duration_ms < LONG_FORM_MS`                              | `duration_ms_max: LONG_FORM_MS`                   |
+
+The second row is a join, not a column test: the MuQ vector lives in the `track_embeddings` satellite (schema.ts), and both sides read it as membership — the Worker LEFT JOINs the satellite and tests the key, sonar's loader INNER JOINs the same table. Whichever way sonar is deployed, its index cannot hold a row that has no vector, which is what makes the mapping exact. **Deploy order follows from that**: the sonar binary must not ship ahead of the Worker migration that creates the table, or every refresh fails and the box keeps serving its last snapshot until it does.
 
 The first row is the trap worth naming: it is **`has_finding`, never `certified: false`**. `certified` means a findings row _with a Log ID_, so a coordinate-less straggler passes "not certified" and fails "no findings row at all" — routing on the weaker negation would have recommended a finding as a catalogue row. The last two rows carry the opposite null rules described under [the contract](#the-contract), and the two thresholds cross the wire as values so they stay owned by the Worker.
 

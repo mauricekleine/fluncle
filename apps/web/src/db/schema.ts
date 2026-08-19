@@ -87,7 +87,7 @@ export const tracks = sqliteTable(
     // public surface — NOT in `track-update.ts` VISIBLE_FIELDS). Internal does NOT mean
     // stripped, though — the other two internal columns each reach the public boundary
     // differently: `features_json` IS on the public DTO (parsed onto it as `features` —
-    // creative fuel for the video agent, deliberately surfaced), and `embedding_blob` is
+    // creative fuel for the video agent, deliberately surfaced), and the MuQ vector is
     // simply never selected into a DTO at all. Neither passes through
     // `toPublicTrackListItem`'s strip list.
     //   - `analyzedAt`   — ISO timestamp of the analysis write.
@@ -479,58 +479,54 @@ export const tracks = sqliteTable(
     // NOT write here — it reads its finding off `nearest_finding_track_id`.
     duplicateOfTrackId: text("duplicate_of_track_id"),
     durationMs: integer("duration_ms").notNull(),
-    // The finding's MuQ audio embedding, in the form the DATABASE can rank: a native
-    // libSQL `F32_BLOB(1024)`. Every similarity read (`list_similar_tracks`, the `/mix`
-    // rail, a galaxy's core-first order, the `fluncle-cluster` corpus read) ranks with
-    // `vector_distance_cos(embedding_blob, ?)` IN SQL and ships back only the winners —
-    // never the vectors. This is the SOLE stored form and the source of truth: the
-    // agent-tier `update_track` path writes it directly via `vector32(?)` (the validated
-    // JSON converted server-side; the Worker never encodes a vector). Internal analysis
-    // fuel like `features_json`, so writing it moves no public lastmod. NULL until the
-    // `fluncle-embed` cron drains the `embedding_blob IS NULL` queue. See
-    // lib/server/embedding.ts for the read contract (`readEmbeddingBlob`) and the
-    // raw-blob probe binding.
+    // LEGACY, UNREAD, AWAITING ITS DROP. The MuQ vector used to live here; it now lives in
+    // the {@link trackEmbeddings} satellite, and NOTHING reads or writes this column any
+    // more — not the ranking, not the queues, not the fixtures. It survives one release as
+    // the rollback copy of the data the split migration moved, because dropping a 169 MB
+    // column is a one-way door that must not ride in the same change as the code that
+    // stopped reading it. The next migration drops it; until then treat it as absent.
+    //
+    // Its history is the reason the satellite exists: a 4 KB `F32_BLOB(1024)` inline in the
+    // hottest table spills to overflow pages, so every scan reaching a column stored AFTER
+    // it walked that chain for bytes it never selected — the cost `has_embedding` below was
+    // materialized to dodge, paid again by every other predicate on the table.
     embeddingBlob: float32Vector("embedding_blob"),
     featuresJson: text("features_json"),
     // THE EMBEDDING-PRESENCE MIRROR (docs/db-scale-backlog Wave 2 #4, the column half). `1` iff
-    // `embedding_blob IS NOT NULL`, maintained in the SAME `UPDATE` as the vector itself.
+    // a {@link trackEmbeddings} row exists for this track, maintained in the SAME libSQL write
+    // BATCH as the satellite row itself. It is the AUTHORITY on presence: every queue, funnel
+    // arm and admin filter that asks "does this track have a vector" reads this column, and only
+    // a read that needs the BYTES joins the satellite.
     //
-    // WHY A STORED MIRROR AND NOT THE TEST ITSELF. `embedding_blob` is a ~4 KB
-    // `F32_BLOB(1024)` that spills to overflow pages, and SQLite must WALK that overflow
+    // WHY A STORED MIRROR AND NOT A JOIN. It was measured against the inline blob it replaced:
+    // a ~4 KB `F32_BLOB(1024)` spills to overflow pages, and SQLite must WALK that overflow
     // chain to reach any column stored after it in the record. So a scan whose predicates
     // read `dismissed_at` / `nearest_finding_score` / `spotify_anchor_attempted_at` / `isrc`
-    // pays for the vector it never selects. The `/admin/funnel` stage scan takes 9.5s cold / 0.38s
-    // warm, and three post-blob columns cost 3.32s versus 0.23s for three pre-blob columns. Testing
-    // `embedding_blob IS NOT NULL` is itself cheap (null-ness reads the record header) — the cost is
-    // SKIPPING
-    // PAST the blob, so no amount of care with the vector column fixes it. Mirroring the flag
-    // lets `tracks_funnel_scan_idx` COVER the whole scan, which never touches a table row and
-    // so never touches an overflow page: on a 54,860-row prod clone that is a 5 MB index against a
-    // 125 MB table; the scan is 12.6-19.9s cold, 1.70s first-touch, 0.30s after.
+    // paid for a vector it never selected. The `/admin/funnel` stage scan took 9.5s cold / 0.38s
+    // warm, and three post-blob columns cost 3.32s versus 0.23s for three pre-blob columns.
+    // Mirroring the flag lets `tracks_funnel_scan_idx` COVER the whole scan, which never touches
+    // a table row at all: on a 54,860-row prod clone that is a 5 MB index against a 125 MB table;
+    // the scan is 12.6-19.9s cold, 1.70s first-touch, 0.30s after.
     // Re-measure with `apps/web/scripts/bench-db-scale.ts`.
     //
-    // WHY NOT A GENERATED COLUMN. A `VIRTUAL` generated column mirroring the same expression
-    // was measured and REJECTED: the planner will not treat an index over it as covering, so
-    // the scan fell back to the table and ran 12-15s — 3× WORSE than the join form. An index
-    // on the raw EXPRESSION is never chosen at all, and a partial index `WHERE embedding_blob
-    // IS NOT NULL` plans as `USING INDEX`, not `USING COVERING INDEX`, because the query's own
-    // reference to the blob column defeats coverage. A plain stored column is the only shape
+    // THE SATELLITE SPLIT DID NOT RETIRE IT — it made it load-bearing twice over. An
+    // `exists (select 1 from track_embeddings …)` anti-join is a second b-tree probe per row and
+    // is not a predicate a PARTIAL INDEX can be matched against, so `tracks_embed_queue_idx` and
+    // `tracks_anchor_order_idx` would both fall back to scanning the growing table. A btree
+    // cannot key on an expression or on another table; a plain stored column is the only shape
     // the planner covers.
     //
-    // THE INVARIANT, AND WHY IT CANNOT DRIFT. There are exactly four writers of
-    // `embedding_blob` (the agent-tier `update_track` set/clear arms, and three catalogue
-    // quarantine paths that null it), and every one of them assigns this column in the SAME
-    // statement — the clears through the shared `CLEAR_EMBEDDING_SQL` fragment
-    // (lib/server/embedding.ts), so the pair cannot be written apart. `embedding-mirror.test.ts`
-    // scans the source and FAILS the build on any `embedding_blob =` assignment that does not
-    // carry one, and the funnel's fold-equivalence test pins the mirror against the live
-    // `embedding_blob IS NOT NULL` reference query on fixtures. INTERNAL bookkeeping: never in
-    // a public DTO, never a lastmod bump.
-    //
-    // NOTE ON PHYSICAL POSITION: `ALTER TABLE ADD COLUMN` appends to the end of the record, so
-    // on an existing database this column sits LAST (after the blob); a freshly created table
-    // places it here, alphabetically (before it). Neither matters — the covering index is what
-    // the scan reads, and no hot path reads this column off a table row.
+    // THE INVARIANT, AND WHY IT CANNOT DRIFT. `track_embeddings` has exactly ONE writing module
+    // (lib/server/embedding.ts — the `writeEmbeddingSatellite` insert and the
+    // `CLEAR_EMBEDDING_SATELLITE_SQL` delete), and each of its statements travels in the same
+    // `db.batch(…, "write")` as the `has_embedding` assignment beside it, so the pair provably
+    // cannot be written apart. The DELETE is even DRIVEN by the mirror the batch just wrote
+    // (`… and not exists (select 1 from tracks … has_embedding = 1)`), so a guarded update that
+    // matched nothing leaves the vector standing. `embedding-mirror.test.ts` scans the source and
+    // FAILS the build on a satellite write from anywhere else, and the funnel's fold-equivalence
+    // test pins the mirror against the live satellite-presence reference query on fixtures.
+    // `backfill-has-embedding.ts` is the standing reconciliation backstop.
+    // INTERNAL bookkeeping: never in a public DTO, never a lastmod bump.
     hasEmbedding: integer("has_embedding", { mode: "boolean" }).notNull().default(false),
     // ISRC PRESENCE, MATERIALIZED — the `has_embedding` shape applied to `isrc is not null and
     // trim(isrc) <> ''` (the trim matters: legacy rows carry empty-string ISRCs, which is why
@@ -1235,16 +1231,22 @@ export const tracks = sqliteTable(
     // predicate matches a shrinking slice of a growing table, so the index shrinks as the
     // backlog drains instead of growing with the archive.
     //
-    // It earns its keep twice. `embedding_blob` is a 4 KB `F32_BLOB(1024)`, so a `tracks` row
-    // carrying one SPILLS off the page: a full scan of the table to find the un-embedded
-    // rows costs (roughly) an extra page per embedded row — the exact shape AGENTS.md warns about, and
-    // it is paid on every 5-minute box tick and on every page of the GPU batch. Driving that
-    // predicate off this index reads only the backlog. And it is what makes `countTrackWork`
-    // affordable: the honest "how many are still queued" the batch reports is an index count,
-    // not an archive scan.
+    // It earns its keep twice. The predicate is what makes `countTrackWork` affordable — the
+    // honest "how many are still queued" the batch reports is an index count, not a scan of the
+    // growing archive — and it is paid on every 5-minute box tick and on every page of the GPU
+    // batch, so the difference between reading the backlog and reading the table is the whole
+    // cost of the sweep.
+    //
+    // IT READS THE MIRROR, NOT THE SATELLITE, and that is forced rather than chosen: the vector
+    // now lives in `track_embeddings`, and SQLite only considers a partial index when the
+    // query's WHERE provably IMPLIES its predicate — which an `exists (select 1 from
+    // track_embeddings …)` anti-join can never do across a table boundary. So the queue's
+    // predicate and this index are both spelled `has_embedding = 0` (track-work.ts
+    // `kindClause("embed")` and `listTracks`'s `hasEmbedding` filter carry it literally); if
+    // either is reworded past recognition the planner silently drops back to the scan.
     index("tracks_embed_queue_idx")
       .on(table.trackId)
-      .where(sql`${table.sourceAudioKey} is not null and ${table.embeddingBlob} is null`),
+      .where(sql`${table.sourceAudioKey} is not null and ${table.hasEmbedding} = 0`),
     // THE ANCHOR WORKLIST'S DRAIN ORDER (docs/db-scale-backlog Wave 2 #4; the box's hourly Apify
     // sweep, docs/catalogue-crawler.md § the anchor). The queue above indexes the worklist's
     // SECOND sort key; this one indexes the whole ORDER BY, in order, so the sweep's page is an
@@ -1265,11 +1267,11 @@ export const tracks = sqliteTable(
     // exact-ISRC rung — so an ISRC-less row served first is money spent on an ask that cannot
     // conclude while an answerable row waits. `has_embedding` follows as the sunk-cost key ("a row
     // Fluncle already spent capture + embed money on is the one he most wants recommendable"),
-    // then the Ear's ranking. Both leads are stored mirrors, not the raw expressions
-    // (`embedding_blob is not null` / `isrc is not null and trim(isrc) <> ''`): a btree cannot key
-    // on an expression, and the planner never chooses an index on one. Each mirror is maintained
-    // in the same statement as every write of its source column (see `has_embedding` / `has_isrc`
-    // above), so this index is walking the truth, not a copy of it.
+    // then the Ear's ranking. Both leads are stored mirrors, not the raw facts they stand for (a
+    // `track_embeddings` row exists / `isrc is not null and trim(isrc) <> ''`): a btree cannot key
+    // on an expression or on another table, and the planner never chooses an index on one. Each
+    // mirror is maintained in the same write BATCH as every write of what it mirrors (see
+    // `has_embedding` / `has_isrc` above), so this index is walking the truth, not a copy of it.
     //
     // PLAIN ASC throughout (a `desc()` index would poison the drizzle snapshot into rebuilding
     // every index on the next migration — the ratified trap), and a plain btree, never the vector
@@ -1320,8 +1322,8 @@ export const tracks = sqliteTable(
     //
     //   - The candidate scan (`getMixableTracks`). The rail only ever wants the ~8 Camelot
     //     classes a named harmonic move can reach, so the scan is `key in (…)` — an index
-    //     range, roughly a third of the archive, instead of a full scan whose every
-    //     embedded row spills off the page (the `embedding_blob` spill above).
+    //     range, roughly a third of the archive, instead of a full scan of a table designed
+    //     to grow to five figures and beyond.
     //   - The key histogram (`getMixChainDepth`). A `group by key` over 24-ish distinct
     //     values, which this index answers WITHOUT touching the table at all.
     //
@@ -1345,6 +1347,44 @@ export const tracks = sqliteTable(
       .where(sql`${table.capturePriority} is not null`),
   ],
 );
+
+/**
+ * THE VECTOR SATELLITE — one row per track that carries a MuQ audio embedding, and the SOLE
+ * stored form of that vector. `vector_distance_cos(track_embeddings.embedding_blob, ?)` is what
+ * every similarity read ranks (`list_similar_tracks`, the `/mix` rail, the sonic search tier,
+ * `/recommendations`, a galaxy's core-first order, The Ear's near-duplicate scan, the
+ * `fluncle-cluster` corpus read) — IN SQL, shipping back only the winners, never the vectors.
+ * The agent-tier `update_track` path writes it through `vector32(?)` (the validated JSON
+ * converted server-side; the Worker never encodes a vector). Internal analysis fuel like
+ * `features_json`, so writing it moves no public lastmod. ABSENT until the `fluncle-embed` cron
+ * drains the `has_embedding = 0` queue. lib/server/embedding.ts holds the read contract
+ * (`readEmbeddingBlob`), the raw-blob probe binding, and the only statements that write here.
+ *
+ * WHY IT IS NOT A `tracks` COLUMN ANY MORE. It was one, and the column is what made `tracks`
+ * expensive to be wrong about. A 4 KB `F32_BLOB(1024)` inline in a 116,989-row / 91-column /
+ * 31-index table is ~169 MB — a quarter of the whole database — sitting on OVERFLOW PAGES that
+ * SQLite must walk to reach any column stored after it. Hosted Turso cannot run `ANALYZE`
+ * (libsql-server rejects it as an unsupported statement), so `sqlite_stat1` does not exist and
+ * the planner picks among those 31 indexes by heuristic, permanently. We cannot make it guess
+ * better, so the lever is making a wrong guess CHEAP: with the vector out of the record, a
+ * mistaken scan of `tracks` drags no blob and fits far more rows per 4 KB page. The urgency is
+ * the crawler — `crawl_frontier` holds ~208k pending rows against ~117k in `tracks`, and
+ * scan-and-sort shapes degrade superlinearly.
+ *
+ * A SATELLITE, NOT A SECOND SOURCE OF TRUTH. `tracks.has_embedding` mirrors the EXISTENCE of a
+ * row here and is what every presence predicate reads (see its note above for why a partial
+ * index cannot be matched against a cross-table `exists`). The pair moves in one libSQL write
+ * batch, so it cannot drift; `embedding-mirror.test.ts` fails the build on a write from outside
+ * embedding.ts. `on delete cascade` is the one place this schema takes a real foreign key rather
+ * than the house's logical one: an orphan vector is not merely untidy, it is a vector the
+ * ranking can still reach for a track that no longer exists.
+ */
+export const trackEmbeddings = sqliteTable("track_embeddings", {
+  embeddingBlob: float32Vector("embedding_blob").notNull(),
+  trackId: text("track_id")
+    .primaryKey()
+    .references(() => tracks.trackId, { onDelete: "cascade" }),
+});
 
 /**
  * THE CERTIFICATION LAYER — present ONLY for a track Fluncle certified.
@@ -1455,7 +1495,7 @@ export const findings = sqliteTable(
     }),
     enrichmentStatus: text("enrichment_status").notNull().default("pending"),
     // The sonic galaxy this finding belongs to — a nullable logical FK to `galaxies.id`,
-    // the internal-grouping precedent of `embedding_blob`. Hard assignment (one galaxy
+    // the internal-grouping precedent of the MuQ vector. Hard assignment (one galaxy
     // per finding), written by the on-box `fluncle-cluster` cron via the agent-tier
     // `update_track` path (assignment-only nightly step). Internal like the embedding, so
     // writing it moves no public lastmod (kept OUT of `VISIBLE_FIELDS`); it surfaces on
@@ -3457,7 +3497,8 @@ export const trackArtists = sqliteTable(
 
 // One artist's position in MuQ embedding space — the MEAN over EVERY embedded track that
 // credits them, findings AND catalogue alike (the rail is catalogue-wide by design; the only
-// filter is `embedding_blob IS NOT NULL`). The artist-level mean is the accepted shape here:
+// filter is "the track has a `track_embeddings` row"). The artist-level mean is the accepted
+// shape here:
 // The Ear's max-similarity-never-a-centroid doctrine is about a per-USER taste that is
 // multi-modal, whereas an artist's own discography IS the thing being summarised, so its
 // centroid is a faithful identity point. `vector_count` is how many track vectors folded into

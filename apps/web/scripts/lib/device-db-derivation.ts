@@ -138,10 +138,17 @@ function selectedTracksCte(
            or (t.dismissed_at is null and t.duplicate_of_track_id is null)`;
   const schema = quoteDeviceDbIdentifier(sourceSchema);
 
+  // `emb` is joined for the SELECTION only, and never reaches the output: the device schema is
+  // built from the `DEVICE_DB_COLUMNS` allowlist, which has no `track_embeddings` entry at all, so
+  // the vector cannot ship even though the anchored cut's predicate reads its presence. That is
+  // the same boundary `embedding_blob` sat behind when it was a `tracks` column — a cut input, not
+  // a payload — and the split makes it structural rather than a column left off a list.
   return `WITH selected_tracks(track_id) AS (
     SELECT t.track_id
     FROM ${schema}.${quoteDeviceDbIdentifier("tracks")} AS t
     LEFT JOIN ${schema}.${quoteDeviceDbIdentifier("findings")} AS f ON f.track_id = t.track_id
+    LEFT JOIN ${schema}.${quoteDeviceDbIdentifier("track_embeddings")} AS emb
+      ON emb.track_id = t.track_id
     WHERE ${where}
   )`;
 }

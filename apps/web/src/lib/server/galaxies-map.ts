@@ -608,7 +608,9 @@ export async function listTrackEmbeddingsPage(
   const db = await getDb();
   const after = decodeCursor(cursor);
   const args: Array<number | string> = [];
-  let where = "findings.log_id is not null and tracks.embedding_blob is not null";
+  // The `track_embeddings` join is INNER, so membership in the satellite IS the old
+  // `embedding_blob is not null` filter — an un-embedded finding is simply not a row here.
+  let where = "findings.log_id is not null";
 
   if (after) {
     where += " and tracks.track_id > ?";
@@ -618,8 +620,12 @@ export async function listTrackEmbeddingsPage(
   args.push(limit + 1);
   const result = await db.execute({
     args,
-    sql: `select tracks.track_id, findings.galaxy_id, tracks.embedding_blob
-          from findings join tracks on tracks.track_id = findings.track_id
+    sql: `select emb.embedding_blob,
+                 tracks.track_id,
+                 findings.galaxy_id
+          from findings
+          join tracks on tracks.track_id = findings.track_id
+          join track_embeddings emb on emb.track_id = tracks.track_id
           where ${where} order by tracks.track_id asc limit ?`,
   });
 

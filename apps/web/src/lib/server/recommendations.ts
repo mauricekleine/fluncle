@@ -438,9 +438,14 @@ export async function listRecommendations(
   const [seedResult, recentResult, sonarEnabled, sonarCatalogueEnabled] = await Promise.all([
     db.execute({
       args: [user.id],
-      sql: `select s.track_id, t.embedding_blob
+      // `tracks` stays an INNER join (a seed pointing at no track is not a seed) while
+      // `track_embeddings` joins LEFT: a seed the user added before its vector landed must
+      // still come back, because it is reported as skipped below. Making the satellite join
+      // inner would silently shorten the honest `seedsSkipped` list instead.
+      sql: `select s.track_id, emb.embedding_blob
         from user_rec_seeds s
         join tracks t on t.track_id = s.track_id
+        left join track_embeddings emb on emb.track_id = t.track_id
         where s.user_id = ?
         order by s.added_at asc, s.track_id asc`,
     }),
@@ -520,7 +525,7 @@ export async function listRecommendations(
   //
   // The one-probe case binds the bare distance: single-argument `min()` is
   // SQLite's AGGREGATE min and would collapse the scan to one row.
-  const distanceTerms = probes.map(() => "vector_distance_cos(t.embedding_blob, ?)");
+  const distanceTerms = probes.map(() => "vector_distance_cos(emb.embedding_blob, ?)");
   const bestDistance =
     distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
 
@@ -578,6 +583,7 @@ export async function listRecommendations(
               select t.track_id, ${bestDistance} as dist
               from tracks t
               left join findings f on f.track_id = t.track_id
+              left join track_embeddings emb on emb.track_id = t.track_id
               where ${REC_ELIGIBLE_WHERE}
                 ${seedExclusion}
                 ${recentExclusion}
@@ -597,10 +603,10 @@ export async function listRecommendations(
           args: [...probes, ...seedIds, ...excludedIds, FINDINGS_SLOT_COUNT],
           sql: `select track_id, dist from (
               select t.track_id, ${bestDistance} as dist
-              from findings f cross join tracks t
-              where t.track_id = f.track_id
-                and f.log_id is not null
-                and t.embedding_blob is not null
+              from findings f
+              cross join tracks t on t.track_id = f.track_id
+              cross join track_embeddings emb on emb.track_id = t.track_id
+              where f.log_id is not null
                 ${seedExclusion}
                 ${recentExclusion}
             )
@@ -688,8 +694,8 @@ export async function listRecommendations(
  *   - `f.log_id is not null` ⇔ `filter: { certified: true }`. sonar DEFINES `certified` as "a
  *     findings row WITH a Log ID exists" — its loader joins `f.log_id is not null`
  *     (apps/sonar/src/turso.rs), tightened for exactly this reason. Identical set.
- *   - `t.embedding_blob is not null` ⇔ membership in the index at all: sonar's `tracks` loader
- *     selects `where t.embedding_blob is not null`, so an un-embedded row cannot be returned.
+ *   - the `track_embeddings` join ⇔ membership in the index at all: sonar's `tracks` loader
+ *     joins the same satellite, so an un-embedded row cannot be returned.
  *   - the seed exclusion + the FRONTIER NOVELTY prune ⇔ `excludeIds`. Both are FINITE, enumerated
  *     id sets already in memory (≤ MAX_REC_SEEDS seeds, ≤ FRONTIER_NOVELTY_WINDOW editions), which
  *     is the only reason they can cross the wire faithfully — an unbounded predicate could not.
@@ -728,8 +734,8 @@ function sonarFindingSlots(
  *     `log_id` is still NULL) passes `certified: false` and would be recommended as a catalogue
  *     row it is not. `has_finding` is the weaker fact this predicate actually negates, carried on
  *     sonar's index for exactly this reason (apps/sonar/src/turso.rs).
- *   - `t.embedding_blob is not null` ⇔ membership in the index at all: sonar's `tracks` loader
- *     selects `where t.embedding_blob is not null`, so an un-embedded row cannot come back.
+ *   - `emb.track_id is not null` ⇔ membership in the index at all: sonar's `tracks` loader
+ *     joins the same `track_embeddings` satellite, so an un-embedded row cannot come back.
  *   - `t.spotify_uri is not null` ⇔ `anchored: true`.
  *   - `t.dismissed_at is null` ⇔ `dismissed: false`.
  *   - `t.duplicate_of_track_id is null` ⇔ `is_duplicate: false`.

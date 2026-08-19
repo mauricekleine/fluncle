@@ -32,11 +32,14 @@
 // covering `tracks_funnel_scan_idx` rather than out of table rows (see `runFoldedFunnelScan`).
 //
 // That distinction is the whole story, and it is worth stating plainly because the obvious reading
-// is wrong: it is NOT enough that no vector crosses the wire. `embedding_blob` is a ~4 KB
-// `F32_BLOB(1024)` that spills to overflow pages, and SQLite must WALK that chain to reach any
-// column stored after it — so arms reading `dismissed_at` / `nearest_finding_score` /
-// `spotify_anchor_attempted_at` / `isrc` drag every vector in the archive to count null
-// flags. At 52k, this is 9.5s cold, 0.38s warm, and a 15.08s span in
+// is wrong: it is NOT enough that no vector crosses the wire. These numbers were measured when the
+// vector was a ~4 KB `F32_BLOB(1024)` INLINE on `tracks`, spilling to overflow pages SQLite must
+// WALK to reach any column stored after it — so arms reading `dismissed_at` /
+// `nearest_finding_score` / `spotify_anchor_attempted_at` / `isrc` dragged every vector in the
+// archive to count null flags. The satellite split has since taken the blob out of the record, so
+// the uncovered case is no longer this bad; the covering scan is still what the fold is built for,
+// because the arms themselves are unchanged and the table only grows. At 52k, this was 9.5s cold,
+// 0.38s warm, and a 15.08s span in
 // Sentry when the page cache had been evicted by a concurrent sweep; on a fresh 54,860-row prod
 // clone — the honest cold case — 12.6-19.9s. Covered, the same twelve arms read a 5 MB index instead
 // of a 125 MB table and land at 1.70s first-touch, 0.30s after. Live-on-every-load is affordable BECAUSE of that, not in
@@ -214,10 +217,10 @@ type FoldedFunnelScan = {
 /**
  * THE MIRROR REWRITE — take a shared `t`/`f`-aliased predicate and read it off the two MATERIALIZED
  * mirrors instead: the catalogue discriminator (`f.track_id is null` ⇒ `t.is_catalogue = 1`,
- * keystone 1) and the embedding-presence flag (`t.embedding_blob is not null` ⇒
+ * keystone 1) and the embedding-presence flag (`emb.track_id is not null` ⇒
  * `t.has_embedding = 1`, Wave 2 #4). Both are equivalences the SCHEMA maintains on every write, so
  * the rewritten predicate selects exactly the same rows — and it selects them without the `findings`
- * join and without naming the blob, which is what lets the folded pass ride
+ * join and without the `track_embeddings` join, which is what lets the folded pass ride
  * `tracks_funnel_scan_idx` as a COVERING scan (schema.ts § `tracks_funnel_scan_idx`).
  *
  * WHY REWRITE RATHER THAN FORK. This module's whole contract is that it counts THE PRODUCT'S OWN
@@ -244,8 +247,8 @@ type FoldedFunnelScan = {
 const MIRROR_REWRITES = [
   "f.track_id is not null => t.is_catalogue = 0",
   "f.track_id is null => t.is_catalogue = 1",
-  "t.embedding_blob is not null => t.has_embedding = 1",
-  "t.embedding_blob is null => t.has_embedding = 0",
+  "emb.track_id is not null => t.has_embedding = 1",
+  "emb.track_id is null => t.has_embedding = 0",
 ] as const;
 
 function onMirrors(fragment: string): string {
@@ -261,7 +264,7 @@ function onMirrors(fragment: string): string {
     rewritten = rewritten.replaceAll(canonical, mirrored);
   }
 
-  if (rewritten.includes("f.") || rewritten.includes("embedding_blob")) {
+  if (rewritten.includes("f.") || rewritten.includes("emb.")) {
     throw new Error(
       "funnel: a shared predicate no longer reduces to the stored `is_catalogue` / `has_embedding` mirrors, so the covering stage scan cannot be built from it",
     );
@@ -273,15 +276,16 @@ function onMirrors(fragment: string): string {
 /**
  * The SEVEN stage `SUM(CASE)` columns — the shared select fragment so the standalone reference scan
  * (`runStageScan`) and the folded pass (`runFoldedFunnelScan`) can only ever agree. `rec_eligible`
- * folds in the SHARED `REC_ELIGIBLE_WHERE` (recommendations.ts): the funnel's eligibility count is,
- * by construction, the same gate `listRecommendations` scans by. Aliased `t` = `tracks`, `f` = the
- * LEFT-joined `findings`. Carries NO bind params (the fragments it interpolates carry none).
+ * folds in the SHARED `REC_ELIGIBLE_WHERE` (lib/catalogue-eligibility.ts): the funnel's eligibility
+ * count is, by construction, the same gate `listRecommendations` scans by. Aliased `t` = `tracks`,
+ * `f` = the LEFT-joined `findings`, `emb` = the LEFT-joined `track_embeddings`. Carries NO bind
+ * params (the fragments it interpolates carry none).
  */
 const STAGE_SCAN_SELECT = `sum(case when f.track_id is null then 1 else 0 end) as crawled,
             sum(case when f.track_id is null and t.spotify_uri is not null then 1 else 0 end) as anchored,
             sum(case when f.track_id is null and t.source_audio_key is not null then 1 else 0 end) as captured,
             sum(case when f.track_id is null and t.analyzed_from = 'full' then 1 else 0 end) as analyzed,
-            sum(case when f.track_id is null and t.embedding_blob is not null then 1 else 0 end) as embedded,
+            sum(case when f.track_id is null and emb.track_id is not null then 1 else 0 end) as embedded,
             sum(case when ${REC_ELIGIBLE_WHERE} then 1 else 0 end) as rec_eligible,
             sum(case when f.track_id is not null then 1 else 0 end) as certified`;
 
@@ -349,7 +353,8 @@ export async function runStageScan(): Promise<StageScanCounts> {
   const db = await getDb();
   const result = await db.execute(`select ${STAGE_SCAN_SELECT}
           from tracks t
-          left join findings f on f.track_id = t.track_id`);
+          left join findings f on f.track_id = t.track_id
+          left join track_embeddings emb on emb.track_id = t.track_id`);
 
   return mapStageRow(typedRow<StageRow>(result.rows));
 }
@@ -360,9 +365,9 @@ export async function runStageScan(): Promise<StageScanCounts> {
  * `kindClause("anchor")` verbatim so the counts ARE the sweep's own worklist (docs/catalogue-crawler.md
  * § the anchor) — never a `union all` over a CTE (trap #4); four conditional sums over one scan.
  * `isrc is not null` gives the two verification paths (the persisted `anchorQueueIsrc/NoIsrc`);
- * `embedding_blob is not null` gives the ready/awaiting split (the live-only refinement). Both
- * partitions total the same whole queue by construction. `embedding_blob is not null` reads the cell's
- * null flag, not its bytes — no vector crosses the wire.
+ * `emb.track_id is not null` gives the ready/awaiting split (the live-only refinement). Both
+ * partitions total the same whole queue by construction. The satellite is joined for its KEY, never
+ * its `embedding_blob` — no vector crosses the wire.
  */
 export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
   const anchor = kindClause("anchor");
@@ -370,12 +375,13 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
   const result = await db.execute({
     args: anchor.args,
     sql: `select
-            sum(case when t.isrc is not null and t.embedding_blob is not null then 1 else 0 end) as isrc_ready,
-            sum(case when t.isrc is not null and t.embedding_blob is null then 1 else 0 end) as isrc_awaiting,
-            sum(case when t.isrc is null and t.embedding_blob is not null then 1 else 0 end) as no_isrc_ready,
-            sum(case when t.isrc is null and t.embedding_blob is null then 1 else 0 end) as no_isrc_awaiting
+            sum(case when t.isrc is not null and emb.track_id is not null then 1 else 0 end) as isrc_ready,
+            sum(case when t.isrc is not null and emb.track_id is null then 1 else 0 end) as isrc_awaiting,
+            sum(case when t.isrc is null and emb.track_id is not null then 1 else 0 end) as no_isrc_ready,
+            sum(case when t.isrc is null and emb.track_id is null then 1 else 0 end) as no_isrc_awaiting
           from tracks t
           left join findings f on f.track_id = t.track_id
+          left join track_embeddings emb on emb.track_id = t.track_id
           where ${anchor.sql}`,
   });
 
@@ -395,16 +401,17 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
  * then the backoff cutoff.
  *
  * AND IT IS COVERED. The select list is assembled in the CANONICAL spelling — the very
- * `f.track_id` / `embedding_blob` fragments the three reference queries below run — and then
- * rewritten onto the stored mirrors in ONE pass ({@link onMirrors}), which drops the `findings` join
- * and every mention of the vector. That is what turns this from a full table scan into
- * `SCAN tracks USING COVERING INDEX tracks_funnel_scan_idx`: the arms read post-blob columns
- * (`dismissed_at`, `nearest_finding_score`, `spotify_anchor_attempted_at`, `isrc`), and reaching
- * those in a table row means walking each 4 KB vector's overflow chain — for a page whose numbers
- * never leaves the null flags. On a 54,860-row clone of production:
- * 12.6-19.9s cold before, 1.70s first-touch and 0.30s after, off a 5 MB index rather than a 125 MB
- * table, every count identical. Writing the canonical form and rewriting it — rather than
- * hand-writing the mirror form — is what keeps this the SAME predicate as the sweeps, not a copy.
+ * `f.track_id` / `emb.track_id` fragments the three reference queries below run — and then
+ * rewritten onto the stored mirrors in ONE pass ({@link onMirrors}), which drops BOTH joins — the
+ * `findings` one and the `track_embeddings` one. That is what turns this from a full table scan into
+ * `SCAN tracks USING COVERING INDEX tracks_funnel_scan_idx`: reaching `dismissed_at`,
+ * `nearest_finding_score`, `spotify_anchor_attempted_at` and `isrc` in a table ROW is what the
+ * covering index avoids, and it avoids a b-tree probe per row into the satellite besides. On a
+ * 54,860-row clone of production (measured when the vector was still inline on `tracks`, so the
+ * uncovered number was at its worst): 12.6-19.9s cold before, 1.70s first-touch and 0.30s after,
+ * off a 5 MB index rather than a 125 MB table, every count identical. Writing the canonical form
+ * and rewriting it — rather than hand-writing the mirror form — is what keeps this the SAME
+ * predicate as the sweeps, not a copy.
  *
  * Exported for the fold-equivalence test, which pins it to the three standalone reference queries —
  * and so, since those still run the join-and-blob spelling, proves the two mirrors agree with the
@@ -413,10 +420,10 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
 export function foldedFunnelScanStatement(): { args: string[]; sql: string } {
   const anchor = kindClause("anchor");
   const selectList = `${STAGE_SCAN_SELECT},
-            sum(case when (${anchor.sql}) and t.isrc is not null and t.embedding_blob is not null then 1 else 0 end) as isrc_ready,
-            sum(case when (${anchor.sql}) and t.isrc is not null and t.embedding_blob is null then 1 else 0 end) as isrc_awaiting,
-            sum(case when (${anchor.sql}) and t.isrc is null and t.embedding_blob is not null then 1 else 0 end) as no_isrc_ready,
-            sum(case when (${anchor.sql}) and t.isrc is null and t.embedding_blob is null then 1 else 0 end) as no_isrc_awaiting,
+            sum(case when (${anchor.sql}) and t.isrc is not null and emb.track_id is not null then 1 else 0 end) as isrc_ready,
+            sum(case when (${anchor.sql}) and t.isrc is not null and emb.track_id is null then 1 else 0 end) as isrc_awaiting,
+            sum(case when (${anchor.sql}) and t.isrc is null and emb.track_id is not null then 1 else 0 end) as no_isrc_ready,
+            sum(case when (${anchor.sql}) and t.isrc is null and emb.track_id is null then 1 else 0 end) as no_isrc_awaiting,
             sum(case when (${ANCHOR_BACKOFF_WHERE}) then 1 else 0 end) as anchor_backoff`;
 
   return {

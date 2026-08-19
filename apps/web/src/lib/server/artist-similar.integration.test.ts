@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createIntegrationDb,
   seedCatalogueTrack,
+  seedEmbedding,
   seedTrack,
   syncHubCounts,
 } from "./integration-db";
@@ -83,10 +84,7 @@ async function link(trackId: string, artistId: string): Promise<void> {
 }
 
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 /** A CERTIFIED artist (one embedded finding) aimed at `vector`. */

@@ -368,7 +368,9 @@ describe("the catalogue crawler", () => {
     await drain();
 
     const rows = await db.execute(
-      "select capture_status, source_audio_key, embedding_blob from tracks",
+      `select t.capture_status, t.source_audio_key, emb.embedding_blob
+       from tracks t
+       left join track_embeddings emb on emb.track_id = t.track_id`,
     );
 
     for (const row of rows.rows) {

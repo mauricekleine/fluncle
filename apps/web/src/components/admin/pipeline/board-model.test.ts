@@ -78,7 +78,7 @@ describe("boardSteps — Discogs cell", () => {
 
 // The Embeddings cell is a read-only presence tracker (like Last.fm/Discogs): its
 // FILL is driven by `state` — `done` (filled gold check) once the finding carries a
-// MuQ audio embedding (`embedding_blob IS NOT NULL`, surfaced as `hasEmbedding`),
+// MuQ audio embedding (a `track_embeddings` row, surfaced as `hasEmbedding`),
 // `open` (hollow) while it's still in the embed cron's queue. No operator action — the
 // on-box `fluncle-embed` cron advances it. This is the sonic fingerprint that
 // provide the sonic fingerprint; the Tag cell is not part of this board (docs/track-lifecycle.md).

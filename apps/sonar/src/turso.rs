@@ -26,12 +26,24 @@ use crate::index::{Entry, Index, TrackMeta};
 ///
 /// `findings.track_id` is that table's PRIMARY KEY, so this single LEFT JOIN yields at
 /// most one row per track and both facts read off it — no second join, no fan-out.
+///
+/// THE VECTOR COMES FROM `track_embeddings`, NOT FROM `tracks`. The blob was moved out of
+/// the hot table into a satellite keyed 1:1 by `track_id` (apps/web/src/db/schema.ts), and
+/// that join is INNER here — membership in the satellite IS "this track has a vector", so
+/// it replaces the old `where t.embedding_blob is not null` exactly. The Worker's
+/// `/recommendations` predicate reads the same satellite, which is what keeps sonar's index
+/// membership clause-for-clause identical to the Turso path it stands in for
+/// (docs/vector-serving.md).
+///
+/// DEPLOY ORDER: this binary must not ship ahead of the Worker migration that creates the
+/// table, or every refresh fails and the box keeps serving its last snapshot until it does.
 const TRACKS_SQL: &str =
-    "select t.track_id, t.embedding_blob, t.key, t.bpm, t.spotify_uri, f.track_id as finding_id, \
+    "select t.track_id, e.embedding_blob, t.key, t.bpm, t.spotify_uri, f.track_id as finding_id, \
      f.log_id as finding_log_id, t.dismissed_at, t.duplicate_of_track_id, \
      t.nearest_finding_score, t.duration_ms \
-     from tracks t left join findings f on f.track_id = t.track_id \
-     where t.embedding_blob is not null";
+     from tracks t \
+     join track_embeddings e on e.track_id = t.track_id \
+     left join findings f on f.track_id = t.track_id";
 
 /// One row per artist centroid (no metadata for the pilot).
 const CENTROIDS_SQL: &str = "select ac.artist_id, ac.centroid_blob from artist_centroids ac";

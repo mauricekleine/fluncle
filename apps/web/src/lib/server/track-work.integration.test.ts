@@ -1,7 +1,12 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 // THE PIPELINE'S WORK QUEUES, PROVEN — against the REAL schema, on a real libSQL engine.
 //
@@ -82,14 +87,20 @@ async function withAudio(
       `${trackId}/sha.webm`,
       fields.analyzedFrom ?? null,
       fields.analyzedFrom ? "2026-07-01T00:00:00.000Z" : null,
-      fields.embedding ? new Uint8Array(new Float32Array(1024).fill(0.01).buffer) : null,
       trackId,
     ],
     sql: `update tracks
-          set source_audio_key = ?, analyzed_from = ?, analyzed_at = ?, embedding_blob = ?,
+          set source_audio_key = ?, analyzed_from = ?, analyzed_at = ?,
               capture_status = 'done'
           where track_id = ?`,
   });
+  // Through the pipeline's own write, so `has_embedding` — which is what the embed queue's
+  // partial index is keyed on — always agrees with whether a satellite row exists.
+  await seedEmbedding(
+    db,
+    trackId,
+    fields.embedding ? Array.from({ length: 1024 }, () => 0.01) : null,
+  );
 }
 
 /** Stamp a catalogue row's Ear-assigned capture tier (what `rank_catalogue` writes). */
@@ -411,7 +422,7 @@ describe("listTrackWork — the isrc-recovery pass", () => {
     expect(recovery.sql).toContain("t.isrc_recovery_attempted_at");
     expect(recovery.sql).not.toContain("t.isrc_attempted_at");
     expect(recovery.sql).not.toContain("t.backfill_deezer_attempted_at");
-    expect(recovery.sql).not.toContain("t.embedding_blob is null");
+    expect(recovery.sql).not.toContain("t.has_embedding = 0");
   });
 });
 
@@ -1029,10 +1040,10 @@ describe("listTrackWork — the wrong-audio quarantine (docs/the-ear.md § Wrong
       sql: `update tracks
             set capture_status = 'wrong-audio',
                 capture_priority = 3,
-                source_audio_key = 'catalogue/catwrong00000000000000/badbeef.webm',
-                embedding_blob = null
+                source_audio_key = 'catalogue/catwrong00000000000000/badbeef.webm'
             where track_id = ?`,
     });
+    await seedEmbedding(db, "catwrong00000000000000", null);
 
     // It re-enters the CAPTURE queue for a fresh download, carrying its old bad key.
     const capture = await listTrackWork({ kind: "capture", scope: "catalogue" });
@@ -1056,10 +1067,10 @@ describe("listTrackWork — the wrong-audio quarantine (docs/the-ear.md § Wrong
       sql: `update tracks
             set capture_status = 'quarantine-cleared',
                 capture_priority = 3,
-                source_audio_key = 'catalogue/catclear00000000000000/badbeef.webm',
-                embedding_blob = null
+                source_audio_key = 'catalogue/catclear00000000000000/badbeef.webm'
             where track_id = ?`,
     });
+    await seedEmbedding(db, "catclear00000000000000", null);
 
     // The operator kept it: it is NOT re-captured (a terminal-for-capture state), and its kept
     // audio flows to embed so it rejoins the ranking.

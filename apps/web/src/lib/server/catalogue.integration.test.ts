@@ -2,7 +2,12 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { qualifiedArtistsDigest } from "./catalogue";
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 /** The digest segment of the fingerprint when no artist is qualified — the state of most fixtures here. */
 const EMPTY_DIGEST = qualifiedArtistsDigest([]);
@@ -56,10 +61,7 @@ function blend(from: number[], toward: number[], weight: number): number[] {
 
 /** The write the agent-tier `update_track` path performs: the validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 type SeedOptions = {
@@ -1295,7 +1297,7 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
     });
   }
 
-  /** Read the capture side-channel columns the quarantine touches. */
+  /** Read the capture side-channel columns the quarantine touches, plus its vector. */
   async function stateOf(trackId: string): Promise<{
     capture_status: null | string;
     embedding_blob: unknown;
@@ -1303,7 +1305,12 @@ describe("wrong audio — a cross-title near-1.0 capture is quarantined, never t
   }> {
     const result = await db.execute({
       args: [trackId],
-      sql: `select capture_status, embedding_blob, source_audio_key from tracks where track_id = ?`,
+      // LEFT JOIN, so a quarantined row (its satellite row deleted) still returns — with a null
+      // `embedding_blob`, which is exactly what "the vector is gone" now looks like.
+      sql: `select t.capture_status, emb.embedding_blob, t.source_audio_key
+            from tracks t
+            left join track_embeddings emb on emb.track_id = t.track_id
+            where t.track_id = ?`,
     });
 
     return result.rows[0] as unknown as Awaited<ReturnType<typeof stateOf>>;
@@ -1715,7 +1722,7 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     // The duplicate KEEPS its vector — it still reads "already in the archive" on the board.
     const kept = await db.execute({
       args: ["cat-b"],
-      sql: "select embedding_blob from tracks where track_id = ?",
+      sql: "select embedding_blob from track_embeddings where track_id = ?",
     });
     expect(kept.rows[0]?.embedding_blob).not.toBeNull();
   });

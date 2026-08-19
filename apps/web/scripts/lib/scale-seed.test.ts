@@ -58,7 +58,9 @@ describe("seedScale seeds the maintained mirrors, not their DDL defaults", () =>
     // would be timed against a column that is uniformly 0).
     expect(
       await count(
-        `select count(*) as n from tracks where has_embedding <> (embedding_blob is not null)`,
+        `select count(*) as n from tracks
+         where has_embedding <> exists (select 1 from track_embeddings te
+                                        where te.track_id = tracks.track_id)`,
       ),
     ).toBe(0);
     // …and the seeder actually makes both kinds of row, so the equivalence above is not vacuous.

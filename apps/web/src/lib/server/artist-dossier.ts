@@ -335,8 +335,7 @@ const STALE_ARTISTS_INNER = `select live.artist_id as artist_id
             from (
               select ta.artist_id as artist_id, count(*) as n
               from track_artists ta
-              join tracks t on t.track_id = ta.track_id
-              where t.embedding_blob is not null
+              join track_embeddings emb on emb.track_id = ta.track_id
               group by ta.artist_id
             ) live
             left join artist_centroids ac on ac.artist_id = live.artist_id
@@ -347,8 +346,8 @@ const STALE_ARTISTS_INNER = `select live.artist_id as artist_id
             from artist_centroids ac
             where not exists (
               select 1 from track_artists ta
-              join tracks t on t.track_id = ta.track_id
-              where ta.artist_id = ac.artist_id and t.embedding_blob is not null
+              join track_embeddings emb on emb.track_id = ta.track_id
+              where ta.artist_id = ac.artist_id
             )`;
 
 // The tick's batch: the stale/orphan artists oldest-id first (deterministic drain, stable order).
@@ -470,10 +469,10 @@ export async function rankArtists(
     // so this is the blessed bounded artist-dossier-means read, not the pull-the-whole-table trap.
     const vectorResult = await db.execute({
       args: artistChunk,
-      sql: `select ta.artist_id as artist_id, t.embedding_blob as embedding_blob
+      sql: `select ta.artist_id as artist_id, emb.embedding_blob as embedding_blob
             from track_artists ta
-            join tracks t on t.track_id = ta.track_id
-            where ta.artist_id in (${placeholders}) and t.embedding_blob is not null`,
+            join track_embeddings emb on emb.track_id = ta.track_id
+            where ta.artist_id in (${placeholders})`,
     });
 
     // Group each artist's vectors + count its embedded-track ROWS (the fingerprint's count).

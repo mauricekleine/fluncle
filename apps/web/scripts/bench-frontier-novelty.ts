@@ -147,20 +147,25 @@ async function seedCandidates(from: number, count: number): Promise<void> {
     for (let index = start; index < end; index += 1) {
       const trackId = `cand-${index}`;
 
-      statements.push({
-        args: [
-          trackId,
-          `Candidate ${index}`,
-          `["Artist ${index % 500}"]`,
-          `spotify:track:${trackId}`,
-          `https://open.spotify.com/track/${trackId}`,
-          270_000,
-          blobArg(randomUnitVector()),
-        ],
-        sql: `insert or ignore into tracks
-          (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, embedding_blob)
-          values (?, ?, ?, ?, ?, ?, ?)`,
-      });
+      statements.push(
+        {
+          args: [
+            trackId,
+            `Candidate ${index}`,
+            `["Artist ${index % 500}"]`,
+            `spotify:track:${trackId}`,
+            `https://open.spotify.com/track/${trackId}`,
+            270_000,
+          ],
+          sql: `insert or ignore into tracks
+          (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, has_embedding)
+          values (?, ?, ?, ?, ?, ?, 1)`,
+        },
+        {
+          args: [trackId, blobArg(randomUnitVector())],
+          sql: `insert or ignore into track_embeddings (track_id, embedding_blob) values (?, ?)`,
+        },
+      );
     }
 
     await client.batch(statements, "write");
@@ -190,11 +195,14 @@ async function seedFindings(count: number): Promise<void> {
             `spotify:track:${trackId}`,
             `https://open.spotify.com/track/${trackId}`,
             270_000,
-            blobArg(randomUnitVector()),
           ],
           sql: `insert or ignore into tracks
-            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, embedding_blob)
-            values (?, ?, ?, ?, ?, ?, ?)`,
+            (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, has_embedding)
+            values (?, ?, ?, ?, ?, ?, 1)`,
+        },
+        {
+          args: [trackId, blobArg(randomUnitVector())],
+          sql: `insert or ignore into track_embeddings (track_id, embedding_blob) values (?, ?)`,
         },
         {
           args: [trackId, `${String(index).padStart(3, "0")}.1.1A`, new Date().toISOString()],
@@ -275,7 +283,7 @@ const DERIVE_SQL = `select fet.track_id
 
 /** Build the catalogue scan-with-exclusion, mirroring recommendations.ts verbatim. */
 function catalogueScan(probes: Uint8Array[], excludedIds: string[]) {
-  const distanceTerms = probes.map(() => "vector_distance_cos(t.embedding_blob, ?)");
+  const distanceTerms = probes.map(() => "vector_distance_cos(emb.embedding_blob, ?)");
   const bestDistance =
     distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
   const recentExclusion =
@@ -289,8 +297,9 @@ function catalogueScan(probes: Uint8Array[], excludedIds: string[]) {
         select t.track_id, ${bestDistance} as dist
         from tracks t
         left join findings f on f.track_id = t.track_id
+        left join track_embeddings emb on emb.track_id = t.track_id
         where f.track_id is null
-          and t.embedding_blob is not null
+          and emb.track_id is not null
           and t.spotify_uri is not null
           and t.dismissed_at is null
           and t.duplicate_of_track_id is null
@@ -306,7 +315,7 @@ function catalogueScan(probes: Uint8Array[], excludedIds: string[]) {
 
 /** Build the findings scan-with-exclusion, mirroring recommendations.ts verbatim. */
 function findingsScan(probes: Uint8Array[], excludedIds: string[]) {
-  const distanceTerms = probes.map(() => "vector_distance_cos(t.embedding_blob, ?)");
+  const distanceTerms = probes.map(() => "vector_distance_cos(emb.embedding_blob, ?)");
   const bestDistance =
     distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
   const recentExclusion =
@@ -318,10 +327,10 @@ function findingsScan(probes: Uint8Array[], excludedIds: string[]) {
     args: [...probes, ...excludedIds, FINDINGS_SLOT_COUNT],
     sql: `select track_id, dist from (
         select t.track_id, ${bestDistance} as dist
-        from findings f cross join tracks t
-        where t.track_id = f.track_id
-          and f.log_id is not null
-          and t.embedding_blob is not null
+        from findings f
+        cross join tracks t on t.track_id = f.track_id
+        cross join track_embeddings emb on emb.track_id = t.track_id
+        where f.log_id is not null
           ${recentExclusion}
       )
       where dist is not null

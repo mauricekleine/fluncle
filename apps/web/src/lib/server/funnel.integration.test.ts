@@ -570,8 +570,8 @@ describe("the folded funnel scan == its three standalone reference scans (real S
     const { foldedFunnelScanStatement } = await import("./funnel");
     const statement = foldedFunnelScanStatement();
 
-    // The rewrite must have removed both things that would force a table fetch.
-    expect(statement.sql).not.toContain("embedding_blob");
+    // The rewrite must have removed both joins that would force a table fetch or a second probe.
+    expect(statement.sql).not.toContain("track_embeddings");
     expect(statement.sql).not.toContain("findings");
 
     const plan = await db.execute({

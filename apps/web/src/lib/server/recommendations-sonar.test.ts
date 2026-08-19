@@ -2,7 +2,12 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMBEDDING_DIMS } from "./embedding";
-import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 import { type PublicUser } from "./public-auth";
 
 // THE /recommendations DRAFT ENGINE'S SONAR ROUTE (dark, DEFAULT OFF), against the REAL schema on a
@@ -63,10 +68,7 @@ function blend(from: number[], toward: number[], weight: number): number[] {
 
 /** The write the embed pipeline performs: validated JSON → the ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(vector), trackId],
-    sql: `update tracks set embedding_blob = vector32(?) where track_id = ?`,
-  });
+  await seedEmbedding(db, trackId, vector);
 }
 
 function publicUser(id: string): PublicUser {

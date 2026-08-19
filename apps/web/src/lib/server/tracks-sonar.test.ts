@@ -2,7 +2,7 @@ import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMBEDDING_DIMS } from "./embedding";
-import { createIntegrationDb, seedTrack } from "./integration-db";
+import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 
 // The `/log` "more like this" surface's SONAR route, against REAL libSQL. The one thing a mocked
 // `execute` could not prove is the load-bearing property here: with the flag ON, a finding whose
@@ -49,10 +49,7 @@ type Seed = { embedding: number[]; logId: string | null; trackId: string };
 async function seed(rows: Seed[]): Promise<void> {
   for (const row of rows) {
     await seedTrack(db, { logId: row.logId, title: row.trackId, trackId: row.trackId });
-    await db.execute({
-      args: [JSON.stringify(row.embedding), row.trackId],
-      sql: `update tracks set embedding_blob = vector32(?1) where track_id = ?2`,
-    });
+    await seedEmbedding(db, row.trackId, row.embedding);
   }
 }
 
@@ -179,11 +176,12 @@ async function seedMix(rows: MixSeed[]): Promise<void> {
   for (const row of rows) {
     await seedTrack(db, { logId: row.logId, title: row.trackId, trackId: row.trackId });
     await db.execute({
-      args: [row.key, JSON.stringify(row.embedding), row.trackId],
-      sql: `update tracks set key = ?1, bpm = 172, embedding_blob = vector32(?2),
+      args: [row.key, row.trackId],
+      sql: `update tracks set key = ?1, bpm = 172,
                               features_json = '{"centroidHz":1000,"highRatio":0.1,"onsetRate":10}'
-            where track_id = ?3`,
+            where track_id = ?2`,
     });
+    await seedEmbedding(db, row.trackId, row.embedding);
   }
 }
 
@@ -294,7 +292,7 @@ describe("getMixableTracks — the /mix sonar route (dark)", () => {
 
   it("never routes when the last track has no vector — there is no probe to send", async () => {
     await seedMix(MIX_ROWS);
-    await db.execute(`update tracks set embedding_blob = null where track_id = 't_tail'`);
+    await seedEmbedding(db, "t_tail", null);
     isSonarMixEnabled.mockResolvedValue(true);
 
     const rail = await getMixableTracks("t_tail", { limit: 12 });

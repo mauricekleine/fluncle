@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cosineSimilarity, EMBEDDING_DIMS, rankBySimilarity, readEmbeddingBlob } from "./embedding";
-import { createIntegrationDb, seedTrack } from "./integration-db";
+import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 import { getSimilarFindings } from "./tracks";
 
 // The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data source for
@@ -55,7 +55,7 @@ function pseudoVector(seed: number): number[] {
 }
 
 type Seed = {
-  /** The MuQ vector to store as the ranked `embedding_blob`, or null for an un-embedded row. */
+  /** The MuQ vector to store in `track_embeddings`, or null for an un-embedded row. */
   embedding?: number[] | null;
   logId: string | null;
   title?: string;
@@ -69,19 +69,13 @@ async function seed(rows: Seed[]): Promise<void> {
       title: row.title ?? "Test Track",
       trackId: row.trackId,
     });
-    const embedding = row.embedding ?? null;
     await db.execute({
-      // `vector32(NULL)` throws, so an un-embedded fixture writes a null blob explicitly.
-      args: [
-        embedding ? JSON.stringify(embedding) : null,
-        `https://img/${row.trackId}.jpg`,
-        row.trackId,
-      ],
-      sql: `update tracks
-            set embedding_blob = case when ?1 is null then null else vector32(?1) end,
-                album_image_url = ?2
-            where track_id = ?3`,
+      args: [`https://img/${row.trackId}.jpg`, row.trackId],
+      sql: `update tracks set album_image_url = ?1 where track_id = ?2`,
     });
+    // Through the pipeline's own write, so the fixture's satellite row and `has_embedding`
+    // mirror move together exactly as production's do. `null` = an un-embedded row.
+    await seedEmbedding(db, row.trackId, row.embedding ?? null);
   }
 }
 
@@ -89,15 +83,15 @@ async function seed(rows: Seed[]): Promise<void> {
 async function rankInIsolate(targetId: string, limit: number): Promise<string[]> {
   const rows = await db.execute({
     args: [targetId],
-    sql: `select tracks.track_id, tracks.embedding_blob
-          from findings join tracks on tracks.track_id = findings.track_id
+    sql: `select emb.track_id, emb.embedding_blob
+          from findings
+          join track_embeddings emb on emb.track_id = findings.track_id
           where findings.log_id is not null
-            and tracks.embedding_blob is not null
-            and tracks.track_id != ?`,
+            and emb.track_id != ?`,
   });
   const target = await db.execute({
     args: [targetId],
-    sql: `select embedding_blob from tracks where track_id = ?`,
+    sql: `select embedding_blob from track_embeddings where track_id = ?`,
   });
   const targetVector = readEmbeddingBlob(target.rows[0]?.embedding_blob);
 
@@ -170,13 +164,13 @@ describe("getSimilarFindings", () => {
     expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag"]);
   });
 
-  it("SKIPS a finding with no blob rather than ranking it", async () => {
-    // The ranking reads the native `embedding_blob` column and the DB does the cosine in SQL.
-    // A blobless finding is dropped, never pulled into the isolate. This is safe because the
-    // WRITE PATH sets `embedding_blob = vector32(embedding)` (track-update.ts), so an embedded
-    // finding always carries a blob.
+  it("SKIPS a finding with no vector rather than ranking it", async () => {
+    // The ranking INNER JOINs `track_embeddings` and the DB does the cosine in SQL, so a finding
+    // with no satellite row is dropped by the join, never pulled into the isolate. That is the
+    // real un-embedded state — the write path creates the satellite row and its `has_embedding`
+    // mirror together (track-update.ts), and the clear removes both.
     await seed(CORPUS);
-    await db.execute(`update tracks set embedding_blob = null where track_id = 't_diag'`);
+    await seedEmbedding(db, "t_diag", null);
 
     const findings = await getSimilarFindings("t_self");
 

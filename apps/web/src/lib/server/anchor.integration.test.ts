@@ -1,7 +1,7 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createIntegrationDb, seedTrack } from "./integration-db";
+import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 
 // THE SPOTIFY ANCHOR, against the REAL schema. anchorTrack's guarantees are all statements about
 // SQL — the two verification rungs, the three rails, the attempt stamp, the artist link — so a
@@ -23,7 +23,7 @@ const NOW = "2026-07-18T00:00:00.000Z";
 /** A libSQL cell → string (its value type is a union). */
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** A 1024-d zero vector — enough to make `embedding_blob is not null` true for the order test. */
+/** A 1024-d zero vector — enough to give a row a `track_embeddings` entry for the order test. */
 function zeroVector(): number[] {
   return Array.from<number>({ length: DIMS }).fill(0);
 }
@@ -35,10 +35,7 @@ function zeroVector(): number[] {
  * that wrote only the blob would be testing a state the app cannot produce.
  */
 async function embed(trackId: string): Promise<void> {
-  await db.execute({
-    args: [JSON.stringify(zeroVector()), trackId],
-    sql: "update tracks set embedding_blob = vector32(?), has_embedding = 1 where track_id = ?",
-  });
+  await seedEmbedding(db, trackId, zeroVector());
 }
 
 /** Insert an UN-ANCHORED catalogue row (spotify_uri NULL — the anchor worklist's shape). */
@@ -477,9 +474,12 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     await seedUnanchored({ title: "Mirrored", trackId: "mb_b-mirrored" });
     await embed("mb_b-mirrored");
     await seedUnanchored({ title: "Bare", trackId: "mb_a-bare" });
+    // Written RAW, deliberately bypassing the paired write: a satellite row with no mirror is
+    // precisely the drift state, and it proves which column the clause is actually sorting by.
     await db.execute({
       args: [JSON.stringify(zeroVector())],
-      sql: "update tracks set embedding_blob = vector32(?) where track_id = 'mb_a-bare'",
+      sql: `insert into track_embeddings (track_id, embedding_blob)
+            values ('mb_a-bare', vector32(?))`,
     });
 
     const work = await listTrackWork({ kind: "anchor", limit: 10 });

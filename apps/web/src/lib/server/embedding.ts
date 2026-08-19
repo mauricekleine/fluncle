@@ -1,10 +1,17 @@
 // The audio-embedding vector core — the pure math AND the SQL contract of the MuQ
 // similarity pipeline (docs/track-lifecycle.md). The box's `fluncle-embed` cron
 // produces a 1024-d MuQ vector per finding and the agent-tier `update_track` path
-// stores it as a native libSQL `F32_BLOB(1024)` in `tracks.embedding_blob` (the form
-// the DATABASE can rank) via `vector32()` — the sole stored form and the source of
-// truth. Everything downstream — `list_similar_tracks`, the `/mix` rail, a galaxy's
-// core-first order, the `fluncle-cluster` corpus read — ranks IN SQL against the blob.
+// stores it as a native libSQL `F32_BLOB(1024)` in the `track_embeddings` satellite
+// (the form the DATABASE can rank) via `vector32()` — the sole stored form and the
+// source of truth. Everything downstream — `list_similar_tracks`, the `/mix` rail, a
+// galaxy's core-first order, the `fluncle-cluster` corpus read — ranks IN SQL against
+// the blob, joining the satellite only when it needs the BYTES; a read that only asks
+// WHETHER a vector exists reads `tracks.has_embedding` instead (schema.ts).
+//
+// THIS MODULE IS THE SATELLITE'S ONLY WRITER. Both statements that touch a
+// `track_embeddings` row live below, each paired with the `has_embedding` half it must
+// travel with, and `embedding-mirror.test.ts` fails the build on a write from anywhere
+// else. That is what makes the mirror structurally unable to drift.
 //
 // WHY THE RANKING IS IN SQL. The vector is not stored as JSON or pulled for every
 // row's JSON into
@@ -39,6 +46,8 @@
 // vectors (no DB, no network); `readEmbeddingBlob`/`toVectorProbe` are the only
 // bridge to the wire format.
 
+import { type InStatement } from "@libsql/client";
+
 /**
  * The MuQ-large embedding width. `MuQ-large-msd-iter`'s `last_hidden_state`,
  * mean-pooled over time, is a 1024-d vector — the RFC's decided model + pooling.
@@ -47,15 +56,61 @@
 export const EMBEDDING_DIMS = 1024;
 
 /**
- * THE VECTOR-CLEARING ASSIGNMENT — `embedding_blob` and its `has_embedding` mirror, as ONE
- * `SET` fragment so the two provably cannot be written apart (schema.ts § `has_embedding`).
- * Drop it into any `update tracks set …` that quarantines or re-queues a row's audio; the
- * mirror is what lets `tracks_funnel_scan_idx` cover the funnel's stage scan, and a clear that
- * forgot it would leave the funnel counting an embedding the ranking can no longer read.
- * `embedding-mirror.test.ts` fails the build on an `embedding_blob =` write that skips this.
+ * THE VECTOR-CLEARING ASSIGNMENT, half one — the `tracks` side. Drop it into any
+ * `update tracks set …` that quarantines or re-queues a row's audio, and pair it with
+ * {@link clearEmbeddingSatellite} in the SAME `db.batch(…, "write")`.
+ *
+ * The mirror is what lets `tracks_funnel_scan_idx` cover the funnel's stage scan and what
+ * `tracks_embed_queue_idx` is keyed on, so a clear that forgot it would leave the funnel counting
+ * an embedding the ranking can no longer read AND leave the row out of the re-embed queue.
  */
-export const CLEAR_EMBEDDING_SQL = `embedding_blob = null,
-              has_embedding = 0`;
+export const CLEAR_EMBEDDING_SQL = `has_embedding = 0`;
+
+/**
+ * THE VECTOR-CLEARING ASSIGNMENT, half two — the satellite row itself, as its own statement
+ * because SQLite cannot reach a second table from an `UPDATE`.
+ *
+ * IT IS DRIVEN BY THE MIRROR THE SAME BATCH JUST WROTE, which is the whole trick: several clear
+ * sites carry a GUARD in their update's `where` (a quarantine that must not fire on an already
+ * quarantined row), and re-spelling that guard here would be a copy that can drift. Instead this
+ * deletes only when `tracks` no longer claims a vector — so an update that matched nothing leaves
+ * `has_embedding = 1` standing and this is a no-op, and an update that matched deletes exactly
+ * one row. Order matters: it must run AFTER the `update tracks` in the batch.
+ */
+export const CLEAR_EMBEDDING_SATELLITE_SQL = `delete from track_embeddings
+              where track_id = ?
+                and not exists (select 1 from tracks
+                                where tracks.track_id = track_embeddings.track_id
+                                  and tracks.has_embedding = 1)`;
+
+/** {@link CLEAR_EMBEDDING_SATELLITE_SQL} bound to one track — the batch's second statement. */
+export function clearEmbeddingSatellite(trackId: string): InStatement {
+  return { args: [trackId], sql: CLEAR_EMBEDDING_SATELLITE_SQL };
+}
+
+/**
+ * THE VECTOR WRITE, half one — the `tracks` side. Pair it with {@link writeEmbeddingSatellite}
+ * in the same `db.batch(…, "write")`, exactly as {@link CLEAR_EMBEDDING_SQL} pairs with the
+ * clearing statement.
+ */
+export const SET_EMBEDDING_SQL = `has_embedding = 1`;
+
+/**
+ * THE VECTOR WRITE, half two — the satellite upsert. `vector32()` converts the already-validated
+ * JSON array server-side, so no vector is ever encoded in the Worker and no probe is ever bound
+ * as text (rule 2 above). An upsert rather than an insert because a re-embed (a fresh capture, a
+ * model change) must replace the vector in place rather than fail on the primary key.
+ *
+ * The caller has validated the 1024-d shape (`coerceEmbedding`), so `vector32()` cannot see
+ * garbage; `vector32(NULL)` throws, which is why clearing is a DELETE and not a null write.
+ */
+export function writeEmbeddingSatellite(trackId: string, embeddingJson: string): InStatement {
+  return {
+    args: [trackId, embeddingJson],
+    sql: `insert into track_embeddings (track_id, embedding_blob) values (?, vector32(?))
+              on conflict(track_id) do update set embedding_blob = excluded.embedding_blob`,
+  };
+}
 
 /**
  * Validate an already-parsed value as an embedding vector: a plain array of exactly

@@ -52,7 +52,7 @@ import { type InStatement } from "@libsql/client/web";
 import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
-import { CLEAR_EMBEDDING_SQL } from "./embedding";
+import { CLEAR_EMBEDDING_SQL, clearEmbeddingSatellite } from "./embedding";
 import { labelSlug } from "./labels";
 import { getSetting, setSetting } from "./settings";
 import { matchKey } from "./track-match";
@@ -1049,7 +1049,7 @@ async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
                  ct.title as title,
                  ct.artists_json as artists_json,
                  ct.isrc as isrc,
-                 (ct.embedding_blob is not null) as has_vector
+                 ct.has_embedding as has_vector
           from tracks ct
           where ct.is_catalogue = 1
             and ct.source_audio_key is not null
@@ -1172,7 +1172,7 @@ export async function rankCatalogue(
     sql: `select
             (select count(*) from findings) as findings,
             (select count(*) from findings join tracks ft on ft.track_id = findings.track_id
-             where ft.embedding_blob is not null) as embedded`,
+             where ft.has_embedding = 1) as embedded`,
   });
   const counts = typedRows<{
     embedded: number;
@@ -1208,8 +1208,9 @@ export async function rankCatalogue(
   // lets the scoring path DELIBERATELY stamp a vectored row with a negative tier (a −2 true
   // duplicate, docs/the-ear.md § Wrong audio) without that stamp reading as "ranked before its
   // vector arrived" — a negative tier is a decision, not a leftover, so it is not re-picked.
-  // `has_vector` evaluates the read contract (blob first, guarded JSON fallback) as a BOOLEAN in
-  // SQL — no vector ever crosses the wire. A DISMISSED row ("not for me", docs/the-ear.md § The
+  // `has_vector` is the stored `has_embedding` mirror (schema.ts) — a boolean read off the row
+  // the scan already has, so no vector crosses the wire and no satellite join is paid for a
+  // question that is only about presence. A DISMISSED row ("not for me", docs/the-ear.md § The
   // operator's actions) is excluded here so the sweep never spends cosine work re-ranking a row
   // the operator has taken out of the telescope; on restore it re-enters this candidate set and
   // re-ranks if its fingerprint has drifted.
@@ -1223,13 +1224,13 @@ export async function rankCatalogue(
                  ct.capture_status as capture_status,
                  ct.source_audio_key as source_audio_key,
                  ct.source_audio_rejected as source_audio_rejected,
-                 (ct.embedding_blob is not null) as has_vector
+                 ct.has_embedding as has_vector
           from tracks ct
           where ct.is_catalogue = 1
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
-                 or (ct.embedding_blob is not null
+                 or (ct.has_embedding = 1
                      and ct.capture_priority is not null
                      and ct.capture_priority >= 0))
           order by ct.track_id asc
@@ -1275,19 +1276,22 @@ export async function rankCatalogue(
   // not production"), in its cross-join form. A plain CTE is flattened into the enclosing
   // query, so `pair` became a nested loop that RE-EXECUTED the whole `finding_vec` arm once
   // per candidate — and with no `sqlite_stat1` to tell it `findings` is tiny, the planner
-  // drove that arm off a full `SCAN` of `tracks`, dragging every 4 KB `embedding_blob` in
-  // the catalogue through the loop. At catalogue scale: p95 27.0 s,
+  // drove that arm off a full `SCAN` of `tracks`, dragging every 4 KB vector in the catalogue
+  // through the loop. At catalogue scale: p95 27.0 s,
   // avg 11.3 s per call for 250 candidates × 80 findings — 20k cosines that are microseconds
   // of arithmetic behind hundreds of megabytes of blob I/O. It scaled with the CATALOGUE
   // (the thing the crawler grows), not with the archive it is ranking against.
   //
   // `as materialized` walks each side ONCE into a temp b-tree; the `cross join` pins
   // `findings` (small, and bounded by the archive) as the driver so the finding arm is a
-  // scan of `findings` + a primary-key lookup per row instead of a scan of `tracks`. The
+  // scan of `findings` + a primary-key lookup per row instead of a scan of a big table. The
   // pair loop then reads two small temp tables. Same rows, same winners — a planner shape,
-  // not a semantic change. The `embedding_blob is not null` guards move INTO the CTEs so the
-  // materialized sides carry only rows the distance can actually be computed on (they were
-  // already required by `pair`'s `where`, so the result set is unchanged).
+  // not a semantic change.
+  //
+  // BOTH ARMS NOW READ `track_embeddings` DIRECTLY, which retires the separate
+  // presence guards: a row EXISTS in the satellite exactly when it has a vector, so the join
+  // IS the old `embedding_blob is not null` filter and the worst plan the heuristic can pick
+  // is a scan of the embedded subset rather than of the whole crawler-swollen catalogue.
   const winners = new Map<string, WinnerRow>();
 
   if (vectored.length > 0 && embeddedFindings > 0) {
@@ -1296,16 +1300,14 @@ export async function rankCatalogue(
     const rankedResult = await db.execute({
       args: ids,
       sql: `with finding_vec as materialized (
-              select ft.track_id as fid, ft.embedding_blob as fvec
+              select fe.track_id as fid, fe.embedding_blob as fvec
               from findings
-              cross join tracks ft on ft.track_id = findings.track_id
-              where ft.embedding_blob is not null
+              cross join track_embeddings fe on fe.track_id = findings.track_id
             ),
             candidate_vec as materialized (
-              select ct.track_id as cid, ct.embedding_blob as cvec
-              from tracks ct
-              where ct.track_id in (${placeholders})
-                and ct.embedding_blob is not null
+              select ce.track_id as cid, ce.embedding_blob as cvec
+              from track_embeddings ce
+              where ce.track_id in (${placeholders})
             ),
             pair as (
               select candidate_vec.cid as cid,
@@ -1479,6 +1481,9 @@ export async function rankCatalogue(
                   catalogue_ranked_at = ?
               where track_id = ?`,
         });
+        // The satellite half of the clear, in the SAME batch and immediately after its update —
+        // the delete reads the `has_embedding = 0` that update just wrote (embedding.ts).
+        writes.push(clearEmbeddingSatellite(candidate.track_id));
         continue;
       }
     }
@@ -1692,7 +1697,7 @@ async function countStale(corpus: string): Promise<number> {
             and ct.dismissed_at is null
             and (ct.catalogue_rank_corpus is null
                  or ct.catalogue_rank_corpus <> ?
-                 or (ct.embedding_blob is not null
+                 or (ct.has_embedding = 1
                      and ct.capture_priority is not null
                      and ct.capture_priority >= 0))`,
   });
@@ -2921,9 +2926,15 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
     now,
   );
 
-  const result = await db.execute({
-    args: [WRONG_AUDIO_STATUS, rejected, trackId],
-    sql: `update tracks
+  // ONE BATCH, update first: the guard lives only in the update's `where`, and the satellite
+  // delete is driven by the `has_embedding = 0` it writes (embedding.ts § the clearing
+  // statement). A guard that matched nothing therefore leaves the vector standing, with no
+  // second copy of the guard to drift.
+  const [result] = await db.batch(
+    [
+      {
+        args: [WRONG_AUDIO_STATUS, rejected, trackId],
+        sql: `update tracks
           set capture_status = ?,
               ${CLEAR_EMBEDDING_SQL},
               analyzed_from = null,
@@ -2933,9 +2944,13 @@ export async function flagWrongAudio(trackId: string): Promise<boolean> {
             and source_audio_key is not null
             and capture_status <> 'wrong-audio'
             and exists (select 1 from findings where findings.track_id = tracks.track_id)`,
-  });
+      },
+      clearEmbeddingSatellite(trackId),
+    ],
+    "write",
+  );
 
-  return result.rowsAffected > 0;
+  return (result?.rowsAffected ?? 0) > 0;
 }
 
 /**
@@ -3188,9 +3203,13 @@ export async function verifyCapture(
   // never refresh), and the per-row delta means it does not multiply the backfill's scans at all.
   const before = await readRowBuckets(trackId);
 
-  await db.execute({
-    args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
-    sql: `update tracks
+  // One batch, update first — the satellite delete reads the mirror the update just cleared
+  // (embedding.ts § the clearing statement), so the pair can never be written apart.
+  await db.batch(
+    [
+      {
+        args: [WRONG_AUDIO_STATUS, preAudio.priority, preAudio.duplicateOf, rejected, now, trackId],
+        sql: `update tracks
           set capture_status = ?,
               ${CLEAR_EMBEDDING_SQL},
               nearest_finding_score = null,
@@ -3201,7 +3220,11 @@ export async function verifyCapture(
               capture_verified_at = ?,
               catalogue_rank_corpus = null
           where track_id = ?`,
-  });
+      },
+      clearEmbeddingSatellite(trackId),
+    ],
+    "write",
+  );
 
   await applyCatalogueSummaryDelta(before, await readRowBuckets(trackId));
 

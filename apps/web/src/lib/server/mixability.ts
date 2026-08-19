@@ -1129,7 +1129,7 @@ export function transitionsAlong(
   return transitions;
 }
 
-/** Read a stored embedding for a `MixTrack` from its native `embedding_blob` bytes. */
+/** Read a stored embedding for a `MixTrack` from its native `F32_BLOB(1024)` bytes. */
 export function toMixTrack(row: {
   bpm: number | null;
   embedding_blob: unknown;

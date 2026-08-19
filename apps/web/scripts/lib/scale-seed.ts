@@ -62,10 +62,10 @@ const PLATFORMS = [
 const SOCIAL_SOURCES = ["musicbrainz", "firecrawl", "operator"];
 
 /**
- * A raw 4096-byte blob (1024 × float32) — the size a MuQ `embedding_blob` occupies, so a seeded
- * embedded row SPILLS off the page exactly like a real one (the cost item 12's partial index dodges).
- * The bytes are a deterministic pattern; the value never matters here (no bench probes it), only the
- * width and its presence/absence. Reused by reference across every embedded row.
+ * A raw 4096-byte blob (1024 × float32) — the width a MuQ vector occupies, so a seeded
+ * `track_embeddings` row weighs exactly what a real one does. The bytes are a deterministic
+ * pattern; the value never matters here (no bench probes it), only the width and whether the row
+ * exists at all. Reused by reference across every embedded row.
  */
 const EMBEDDING_BLOB = new Uint8Array(1024 * 4);
 for (let byte = 0; byte < EMBEDDING_BLOB.length; byte += 1) {
@@ -239,12 +239,20 @@ async function writeChunked(
 const TRACK_COLUMNS = `track_id, title, artists_json, duration_ms, release_date, bpm, key, label,
   label_id, album_id, album_image_url, capture_status, capture_priority, nearest_finding_score,
   nearest_finding_track_id, duplicate_of_track_id, catalogue_ranked_at, source_audio_key,
-  analyzed_from, analyzed_at, embedding_blob, spotify_uri, isrc, apple_music_url,
+  analyzed_from, analyzed_at, spotify_uri, isrc, apple_music_url,
   backfill_apple_music_done_at, backfill_apple_music_attempted_at, is_catalogue, has_embedding,
   has_isrc`;
 
 const TRACK_SQL = `insert or ignore into tracks (${TRACK_COLUMNS})
-  values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/**
+ * The vector's own row, in the satellite the app ranks (schema.ts § `trackEmbeddings`). It is a
+ * SEPARATE statement because the vector is a separate table now, and it rides the same chunk as
+ * its `tracks` row so the `has_embedding` mirror seeded above is never momentarily a lie.
+ */
+const TRACK_EMBEDDING_SQL = `insert or ignore into track_embeddings (track_id, embedding_blob)
+  values (?, ?)`;
 
 type Resolved = {
   albums: number;
@@ -264,12 +272,22 @@ type Resolved = {
  *   - `nearest_finding_score` + `duplicate_of_track_id` — a near-1.0 duplicate prefix for item 19.
  *   - `source_audio_key` / `analyzed_from` — a captured analyze backlog for item 12.
  *   - `apple_music_url` / `backfill_apple_music_*` / `isrc` — the barely-shrinking Apple slice (13).
- *   - `label_id` — the mega-imprint + long tail for item 15; `embedding_blob` the page-spill width.
+ *   - `label_id` — the mega-imprint + long tail for item 15.
  */
+/**
+ * Which catalogue rows carry a vector — CAPTURED and even-indexed, so roughly a fifth of the body.
+ * Named once because the answer is now needed in two places: the `has_embedding` mirror on the
+ * `tracks` row, and whether a `track_embeddings` row is written beside it. Two spellings of this
+ * rule would seed exactly the drift the mirror exists to be checked against.
+ */
+function catalogueIsEmbedded(index: number): boolean {
+  return index % 5 < 2 && index % 2 === 0;
+}
+
 function catalogueTrackArgs(index: number, nowMs: number, opts: Resolved): SeedValue[] {
   const trackId = `cat-${index}`;
   const captured = index % 5 < 2;
-  const hasEmbedding = captured && index % 2 === 0;
+  const hasEmbedding = catalogueIsEmbedded(index);
   const albumId = `album-${index % opts.albums}`;
 
   const captureStatus =
@@ -339,7 +357,6 @@ function catalogueTrackArgs(index: number, nowMs: number, opts: Resolved): SeedV
     captured ? `${trackId}/${(index * 2654435761) % 1_000_000}.mp3` : null,
     analyzedFrom,
     analyzedAt,
-    hasEmbedding ? EMBEDDING_BLOB : null,
     index % 10 < 7 ? null : `spotify:track:${trackId}`,
     index % 23 === 0 ? null : `GB${String(index).padStart(8, "0")}`,
     index % 20 === 0 ? `https://music.apple.com/us/song/${index}` : null,
@@ -381,7 +398,6 @@ function findingStatements(index: number, nowMs: number, opts: Resolved): SeedSt
     `${trackId}/${(index * 40503) % 1_000_000}.mp3`,
     "full",
     isoDaysBefore(nowMs, 3 + (index % 120)),
-    EMBEDDING_BLOB,
     `spotify:track:${trackId}`,
     `GBFND${String(index).padStart(6, "0")}`,
     index % 4 === 0 ? `https://music.apple.com/us/song/f${index}` : null,
@@ -397,6 +413,7 @@ function findingStatements(index: number, nowMs: number, opts: Resolved): SeedSt
 
   return [
     { args: trackArgs, sql: TRACK_SQL },
+    { args: [trackId, EMBEDDING_BLOB], sql: TRACK_EMBEDDING_SQL },
     {
       args: [trackId, `${String(index).padStart(4, "0")}.7.1A`, isoDaysBefore(nowMs, index % 400)],
       sql: `insert or ignore into findings (track_id, log_id, added_at) values (?, ?, ?)`,
@@ -483,6 +500,11 @@ export async function seedScale(client: Client, opts: ScaleSeedOptions = {}): Pr
   // ── tracks (catalogue body + findings-backed rows, each with its findings row) ────────────────
   await writeChunked(client, opts, "catalogue", resolved.catalogue, (index) => [
     { args: catalogueTrackArgs(index, nowMs, resolved), sql: TRACK_SQL },
+    // Only the embedded half gets a satellite row — its absence IS "this track has no vector",
+    // which is exactly the shape the queue predicates and the funnel's reference scan read.
+    ...(catalogueIsEmbedded(index)
+      ? [{ args: [`cat-${index}`, EMBEDDING_BLOB], sql: TRACK_EMBEDDING_SQL }]
+      : []),
   ]);
   await writeChunked(client, opts, "findings", resolved.findings, (index) =>
     findingStatements(index, nowMs, resolved),

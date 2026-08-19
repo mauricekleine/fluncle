@@ -348,6 +348,11 @@ export const ORPHAN_EDGE_DELETE_SQL = `delete from track_artists where ${orphanE
  *
  * Edges first, tracks second, inside one `batch(…, "write")` — see the note above. Returns the
  * rows removed from each table so the caller can report both.
+ *
+ * The `track_embeddings` row goes first for the same reason the edges do. It carries a real
+ * `on delete cascade` foreign key (the only one in the track schema), so this delete is belt AND
+ * braces: the cascade fires only when `PRAGMA foreign_keys` is on, and a leftover vector is not
+ * merely untidy — it is a vector the ranking can still reach for a track that no longer exists.
  */
 export async function deleteTracksWithEdges(
   db: Client,
@@ -357,9 +362,10 @@ export async function deleteTracksWithEdges(
   let tracks = 0;
   for (const c of chunk(trackIds)) {
     const holes = c.map(() => "?").join(",");
-    const [edgeResult, trackResult] = await db.batch(
+    const [edgeResult, , trackResult] = await db.batch(
       [
         { args: c, sql: `delete from track_artists where track_id in (${holes})` },
+        { args: c, sql: `delete from track_embeddings where track_id in (${holes})` },
         { args: c, sql: `delete from tracks where track_id in (${holes})` },
       ],
       "write",
