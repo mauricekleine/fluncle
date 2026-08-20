@@ -39,6 +39,7 @@ import { readFileSync } from "node:fs";
 import { type Client } from "@libsql/client/web";
 
 import { chunk, getDb } from "./lib";
+import { insertTrackDuplicateKeyStatement } from "../../../../apps/web/src/lib/server/track-duplicate-keys";
 
 export type Row = Record<string, null | number | string>;
 
@@ -285,9 +286,37 @@ export async function main(
 
     let inserted = 0;
 
-    for (const c of chunk(insertStatements(section.table, section.rows, columns), 50)) {
-      const results = await db.batch(c, "write");
-      inserted += results.reduce((n, r) => n + Number(r?.rowsAffected ?? 0), 0);
+    for (const rows of chunk(section.rows, 50)) {
+      const primaryStatements = insertStatements(section.table, rows, columns);
+      const duplicateKeyStatements =
+        section.table === "tracks"
+          ? rows.map((row) => {
+              const trackId = row.track_id;
+              const title = row.title;
+              const artistsJson = row.artists_json;
+
+              if (
+                typeof trackId !== "string" ||
+                typeof title !== "string" ||
+                typeof artistsJson !== "string"
+              ) {
+                throw new Error(
+                  "Rollback track rows need string track_id, title, and artists_json fields",
+                );
+              }
+
+              return insertTrackDuplicateKeyStatement({
+                artistsJson,
+                isrc: typeof row.isrc === "string" ? row.isrc : null,
+                title,
+                trackId,
+              });
+            })
+          : [];
+      const results = await db.batch([...primaryStatements, ...duplicateKeyStatements], "write");
+      inserted += results
+        .slice(0, primaryStatements.length)
+        .reduce((n, r) => n + Number(r?.rowsAffected ?? 0), 0);
     }
 
     written.push(`${section.table}: ${inserted}`);

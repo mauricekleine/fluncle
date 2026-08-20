@@ -8,6 +8,10 @@ import {
   seedEmbedding,
   seedTrack,
 } from "./integration-db";
+import {
+  updateTrackDuplicateIsrcStatement,
+  upsertTrackDuplicateKeyStatement,
+} from "./track-duplicate-keys";
 
 /** The digest segment of the fingerprint when no artist is qualified — the state of most fixtures here. */
 const EMPTY_DIGEST = qualifiedArtistsDigest([]);
@@ -103,7 +107,7 @@ async function applySeedOptions(trackId: string, options: SeedOptions): Promise<
   }
 
   if (options.isrc) {
-    await db.execute({ args: [options.isrc, trackId], sql: isrcSql });
+    await setIsrc(trackId, options.isrc);
   }
 
   if (options.releaseDate) {
@@ -126,7 +130,15 @@ async function applySeedOptions(trackId: string, options: SeedOptions): Promise<
 }
 
 const labelSql = `update tracks set label = ? where track_id = ?`;
-const isrcSql = `update tracks set isrc = ? where track_id = ?`;
+async function setIsrc(trackId: string, isrc: string): Promise<void> {
+  await db.batch(
+    [
+      { args: [isrc, trackId], sql: `update tracks set isrc = ?, has_isrc = 1 where track_id = ?` },
+      updateTrackDuplicateIsrcStatement(trackId, isrc),
+    ],
+    "write",
+  );
+}
 
 // ── The artist graph + label rulings, for AUTHORIZATION (RFC artist-primary-capture, slice 1) ──
 // Capture authorization is artist-driven: a track may be bought iff a credited artist is QUALIFIED
@@ -1697,7 +1709,7 @@ describe("catalogue-internal duplicates — one master, one row", () => {
       sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
     });
     if (isrc) {
-      await db.execute({ args: [isrc, trackId], sql: isrcSql });
+      await setIsrc(trackId, isrc);
     }
   }
 
@@ -1763,7 +1775,7 @@ describe("catalogue-internal duplicates — one master, one row", () => {
       args: ["catalogue/cat-isrc-y/x.webm", "cat-isrc-y"],
       sql: `update tracks set source_audio_key = ?, capture_status = 'done' where track_id = ?`,
     });
-    await db.execute({ args: ["GBTEST0000001", "cat-isrc-y"], sql: isrcSql });
+    await setIsrc("cat-isrc-y", "GBTEST0000001");
     await embed("cat-isrc-x", unit(axis(4)));
     await embed("cat-isrc-y", unit(axis(4)));
 
@@ -1791,6 +1803,101 @@ describe("catalogue-internal duplicates — one master, one row", () => {
     expect(summary.catalogueDuplicates).toBe(0);
     expect((await rankingOf("cat-orig")).duplicate_of_track_id).toBeNull();
     expect((await rankingOf("cat-vip")).duplicate_of_track_id).toBeNull();
+  });
+
+  it("keeps canonical selection identical across processing, tie, ISRC, clear, and re-key cases", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // A more-processed sibling wins even with a lexicographically larger id.
+    for (const trackId of ["proc-a", "proc-z", "proc-candidate"]) {
+      await seedCatalogueTrack(db, { artists: ["Proc"], title: "Shared", trackId });
+    }
+    await capture("proc-a");
+    await capture("proc-z");
+    await embed("proc-z", unit(axis(8)));
+
+    // Equal processing state falls back to the smallest track id.
+    for (const trackId of ["tie-a", "tie-b", "tie-candidate"]) {
+      await seedCatalogueTrack(db, { artists: ["Tie"], title: "Shared", trackId });
+    }
+    await capture("tie-a");
+    await capture("tie-b");
+
+    // Different match keys can still meet on the normalized ISRC fallback.
+    await seedCatalogueTrack(db, {
+      artists: ["ISRC"],
+      title: "Original",
+      trackId: "isrc-canonical",
+    });
+    await seedCatalogueTrack(db, {
+      artists: ["ISRC"],
+      title: "Different metadata",
+      trackId: "isrc-candidate",
+    });
+    await capture("isrc-canonical", "GB-TEST-00-00001");
+    await setIsrc("isrc-candidate", "gb test 00 00001");
+
+    // A force-cleared row is excluded from both sides: it neither points nor becomes canonical.
+    for (const trackId of ["clear-a", "clear-z", "clear-candidate"]) {
+      await seedCatalogueTrack(db, { artists: ["Clear"], title: "Shared", trackId });
+    }
+    await capture("clear-a");
+    await capture("clear-z");
+    await db.execute({
+      args: ["clear-a"],
+      sql: `update tracks set capture_status = 'duplicate-cleared' where track_id = ?`,
+    });
+
+    // This candidate starts on the old identity, then moves atomically to a different sibling.
+    await seedCatalogueTrack(db, {
+      artists: ["Old Artist"],
+      title: "Old Title",
+      trackId: "rekey-old",
+    });
+    await seedCatalogueTrack(db, {
+      artists: ["New Artist"],
+      title: "New Title",
+      trackId: "rekey-new",
+    });
+    await seedCatalogueTrack(db, {
+      artists: ["Old Artist"],
+      title: "Old Title",
+      trackId: "rekey-candidate",
+    });
+    await capture("rekey-old");
+    await capture("rekey-new");
+
+    await rankCatalogue();
+
+    expect((await rankingOf("proc-candidate")).duplicate_of_track_id).toBe("proc-z");
+    expect((await rankingOf("tie-candidate")).duplicate_of_track_id).toBe("tie-a");
+    expect((await rankingOf("isrc-candidate")).duplicate_of_track_id).toBe("isrc-canonical");
+    expect((await rankingOf("clear-candidate")).duplicate_of_track_id).toBe("clear-z");
+    expect((await rankingOf("clear-a")).duplicate_of_track_id).toBeNull();
+    expect((await rankingOf("rekey-candidate")).duplicate_of_track_id).toBe("rekey-old");
+
+    const artistsJson = JSON.stringify(["New Artist"]);
+    await db.batch(
+      [
+        {
+          args: ["New Title", artistsJson, "rekey-candidate"],
+          sql: `update tracks
+                set title = ?, artists_json = ?, catalogue_rank_corpus = null
+                where track_id = ?`,
+        },
+        upsertTrackDuplicateKeyStatement({
+          artistsJson,
+          isrc: null,
+          title: "New Title",
+          trackId: "rekey-candidate",
+        }),
+      ],
+      "write",
+    );
+
+    await rankCatalogue();
+
+    expect((await rankingOf("rekey-candidate")).duplicate_of_track_id).toBe("rekey-new");
   });
 });
 

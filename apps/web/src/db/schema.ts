@@ -1387,6 +1387,31 @@ export const trackEmbeddings = sqliteTable("track_embeddings", {
 });
 
 /**
+ * The maintained identity projection used by catalogue-sibling duplicate detection.
+ *
+ * `match_key` is deliberately materialized here rather than recomputed in SQL: its exact fold is
+ * the shared TypeScript `matchKey()` function, and a second SQL spelling would eventually drift.
+ * The rank sweep joins these tiny keys back to `tracks` for live capture/vector/dismissal state, so
+ * none of that mutable state is duplicated here. One row per track makes inserts and identity
+ * repairs local writes; the two composite indexes make a rank tick seek only the keys carried by
+ * its bounded candidate batch.
+ */
+export const trackDuplicateKeys = sqliteTable(
+  "track_duplicate_keys",
+  {
+    matchKey: text("match_key").notNull(),
+    normalizedIsrc: text("normalized_isrc"),
+    trackId: text("track_id")
+      .primaryKey()
+      .references(() => tracks.trackId, { onDelete: "cascade" }),
+  },
+  (table) => [
+    index("track_duplicate_keys_match_key_track_id_idx").on(table.matchKey, table.trackId),
+    index("track_duplicate_keys_isrc_track_id_idx").on(table.normalizedIsrc, table.trackId),
+  ],
+);
+
+/**
  * THE CERTIFICATION LAYER — present ONLY for a track Fluncle certified.
  *
  * The SUBTYPE half of the pair: 1:1 with `tracks`, sharing its primary key

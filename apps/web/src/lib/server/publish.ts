@@ -36,6 +36,7 @@ import {
   type TrackMetadata,
 } from "./spotify";
 import { formatTelegramMessage, postToTelegram } from "./telegram";
+import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 import { purgeTrackEntityPages } from "./entity-cache-purge";
 
 type AddOptions = {
@@ -270,6 +271,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   // mint-time look either concludes or is deferred, so there is no streak to back off from.
   const discogsResolved = discogs.releaseId !== undefined || discogs.masterId !== undefined;
   const discogsAttemptedAt = discogsResolved || !discogs.rateLimited ? nowIso : null;
+  const artistsJson = JSON.stringify(track.artists);
 
   await db.batch(
     [
@@ -279,7 +281,7 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
           track.spotifyUrl,
           track.spotifyUri,
           track.title,
-          JSON.stringify(track.artists),
+          artistsJson,
           track.album ?? null,
           track.albumImageUrl ?? null,
           track.releaseDate ?? null,
@@ -355,6 +357,12 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
             is_catalogue
           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'publish', 'publish', ?, ?, ?, ?)`,
       },
+      insertTrackDuplicateKeyStatement({
+        artistsJson,
+        isrc: track.isrc ?? null,
+        title: track.title,
+        trackId: track.trackId,
+      }),
       // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.
       findingInsertStatement({ logId, note: options.note, nowIso, trackId: track.trackId }),

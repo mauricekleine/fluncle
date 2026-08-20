@@ -86,6 +86,7 @@ import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
 import { FILL_ISRC_SQL } from "./isrc";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 import { logEvent } from "./log";
+import { updateTrackDuplicateIsrcStatement } from "./track-duplicate-keys";
 import {
   fetchTrackMetadata,
   findSpotifyTrackByIsrc,
@@ -601,38 +602,42 @@ export async function anchorTrack(
   }
 
   const spotifyId = verified.spotifyTrackId;
+  const candidateIsrc = verified.isrc?.trim() ? verified.isrc.trim() : null;
+  const expectedIsrc = row.isrc ?? candidateIsrc;
 
-  await db.execute({
-    args: [
-      `spotify:track:${spotifyId}`,
-      `https://open.spotify.com/track/${spotifyId}`,
-      verified.albumImageUrl ?? null,
-      // The verified candidate's ISRC recovers the recording's real ISRC when our own row lacks
-      // one — the crawler's ISRC comes from MusicBrainz, whose ISRC coverage of underground DnB is
-      // sparse (an editor-contributed field), so ~60% of catalogue rows arrive ISRC-less even
-      // though the track genuinely has one. Spotify carries it, and we already fetched it here to
-      // VERIFY the match, so storing it is free. FILL-EMPTY-ONLY via `coalesce`: a real ISRC (an
-      // exact-ISRC anchor, or one already present) is never overwritten — the recovered value only
-      // fills a NULL. This strengthens dedup (ISRC-equality is the strongest identity signal) and
-      // lets a related pressing resolve via the exact ISRC rung instead of fuzzy search.
-      // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts): the second
-      // binding feeds the `has_isrc` mirror the same candidate the coalesce sees.
-      verified.isrc?.trim() ? verified.isrc.trim() : null,
-      verified.isrc?.trim() ? verified.isrc.trim() : null,
-      now,
-      // THE PROVENANCE PAIR + THE HIT TIME (schema.ts § `spotify_anchor_source`). They ride the
-      // SAME statement as `spotify_uri` on purpose: a link and the story of how it was found are
-      // one fact, and writing them apart would let a row wear someone else's provenance.
-      source,
-      verifiedBy,
-      now,
-      trackId,
-    ],
-    // The anchor landed, so any suspected-version-mismatch review this row was carrying describes a
-    // miss that no longer exists — it is CLEARED here rather than left to nag the operator with a
-    // question the machine has now answered itself (the queue's trust rule: never surface a row the
-    // system cannot confirm is actionable). Unconditional: clearing a NULL costs nothing.
-    sql: `update tracks
+  await db.batch(
+    [
+      {
+        args: [
+          `spotify:track:${spotifyId}`,
+          `https://open.spotify.com/track/${spotifyId}`,
+          verified.albumImageUrl ?? null,
+          // The verified candidate's ISRC recovers the recording's real ISRC when our own row lacks
+          // one — the crawler's ISRC comes from MusicBrainz, whose ISRC coverage of underground DnB is
+          // sparse (an editor-contributed field), so ~60% of catalogue rows arrive ISRC-less even
+          // though the track genuinely has one. Spotify carries it, and we already fetched it here to
+          // VERIFY the match, so storing it is free. FILL-EMPTY-ONLY via `coalesce`: a real ISRC (an
+          // exact-ISRC anchor, or one already present) is never overwritten — the recovered value only
+          // fills a NULL. This strengthens dedup (ISRC-equality is the strongest identity signal) and
+          // lets a related pressing resolve via the exact ISRC rung instead of fuzzy search.
+          // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts): the second
+          // binding feeds the `has_isrc` mirror the same candidate the coalesce sees.
+          candidateIsrc,
+          candidateIsrc,
+          now,
+          // THE PROVENANCE PAIR + THE HIT TIME (schema.ts § `spotify_anchor_source`). They ride the
+          // SAME statement as `spotify_uri` on purpose: a link and the story of how it was found are
+          // one fact, and writing them apart would let a row wear someone else's provenance.
+          source,
+          verifiedBy,
+          now,
+          trackId,
+        ],
+        // The anchor landed, so any suspected-version-mismatch review this row was carrying describes a
+        // miss that no longer exists — it is CLEARED here rather than left to nag the operator with a
+        // question the machine has now answered itself (the queue's trust rule: never surface a row the
+        // system cannot confirm is actionable). Unconditional: clearing a NULL costs nothing.
+        sql: `update tracks
           set spotify_uri = ?,
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
@@ -644,7 +649,11 @@ export async function anchorTrack(
               spotify_anchored_at = ?,
               anchor_review_json = null
           where track_id = ?`,
-  });
+      },
+      updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),
+    ],
+    "write",
+  );
 
   // Connect the artists by their stable Spotify id, off the SAME candidate — no extra call. A
   // candidate that carried no artist ids simply mints/links nothing (the name-fold already ran at
@@ -1231,22 +1240,24 @@ export async function recoverIsrcViaDeezer(
   const deezerWonAt = deezerTrackId === null ? null : now;
   const recoveryAttemptedAt = suppliedCandidates === undefined ? null : now;
 
-  await db.execute({
-    args: [
-      // Bound twice — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
-      recovered,
-      recovered,
-      now,
-      recoveryAttemptedAt,
-      deezerTrackId,
-      deezerTrackId === null ? null : (verified?.via ?? null),
-      deezerWonAt,
-      deezerWonAt,
-      deezerTrackId === null ? 0 : 1,
-      deezerWonAt,
-      trackId,
-    ],
-    sql: `update tracks
+  await db.batch(
+    [
+      {
+        args: [
+          // Bound twice — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+          recovered,
+          recovered,
+          now,
+          recoveryAttemptedAt,
+          deezerTrackId,
+          deezerTrackId === null ? null : (verified?.via ?? null),
+          deezerWonAt,
+          deezerWonAt,
+          deezerTrackId === null ? 0 : 1,
+          deezerWonAt,
+          trackId,
+        ],
+        sql: `update tracks
           set ${FILL_ISRC_SQL},
               isrc_attempted_at = ?,
               isrc_recovery_attempted_at = coalesce(?, isrc_recovery_attempted_at),
@@ -1257,7 +1268,11 @@ export async function recoverIsrcViaDeezer(
               backfill_deezer_attempts = backfill_deezer_attempts + ?,
               backfill_deezer_done_at = coalesce(backfill_deezer_done_at, ?)
           where track_id = ?`,
-  });
+      },
+      updateTrackDuplicateIsrcStatement(trackId, recovered),
+    ],
+    "write",
+  );
 
   return recovered;
 }
@@ -1853,22 +1868,27 @@ export async function resolveAnchorReview(
   }
 
   // The gate's hit write, verbatim (see `anchorTrack`) — plus clearing the review the ruling settles.
-  await db.execute({
-    args: [
-      `spotify:track:${spotifyId}`,
-      `https://open.spotify.com/track/${spotifyId}`,
-      review.candidate.albumImageUrl ?? null,
-      // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
-      review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null,
-      review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null,
-      now.toISOString(),
-      // `verified_by = 'operator'`, and `source` left NULL: no rung found this link — he did, off
-      // evidence a rung could only raise as a question. These are the best-provenance anchors in
-      // the corpus and the envelope must never read them as legacy (schema.ts § the pair).
-      now.toISOString(),
-      trackId,
-    ],
-    sql: `update tracks
+  const candidateIsrc = review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null;
+  const expectedIsrc = row.isrc ?? candidateIsrc;
+
+  await db.batch(
+    [
+      {
+        args: [
+          `spotify:track:${spotifyId}`,
+          `https://open.spotify.com/track/${spotifyId}`,
+          review.candidate.albumImageUrl ?? null,
+          // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+          candidateIsrc,
+          candidateIsrc,
+          now.toISOString(),
+          // `verified_by = 'operator'`, and `source` left NULL: no rung found this link — he did, off
+          // evidence a rung could only raise as a question. These are the best-provenance anchors in
+          // the corpus and the envelope must never read them as legacy (schema.ts § the pair).
+          now.toISOString(),
+          trackId,
+        ],
+        sql: `update tracks
           set spotify_uri = ?,
               spotify_url = ?,
               album_image_url = coalesce(album_image_url, ?),
@@ -1880,7 +1900,11 @@ export async function resolveAnchorReview(
               spotify_anchored_at = ?,
               anchor_review_json = null
           where track_id = ?`,
-  });
+      },
+      updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),
+    ],
+    "write",
+  );
 
   await connectAnchorArtists(
     trackId,
