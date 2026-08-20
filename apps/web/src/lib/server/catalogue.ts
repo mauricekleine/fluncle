@@ -818,9 +818,21 @@ async function readTrackArtistIds(trackIds: string[]): Promise<Map<string, strin
 // QUALIFIED (a): an artist id with ≥1 CERTIFIED finding, through the graph. Bounded by the finding
 // count (each finding credits a handful of artists) — never the catalogue. Rides
 // `track_artists_track_id_idx` on the findings join.
+// CROSS JOIN is load-bearing, not style — the same lesson as the corpus count in `rankCatalogue`.
+// `findings` holds 94 rows; `track_artists` is the largest join table in the database. A plain JOIN
+// let the planner drive from `track_artists` and SCAN ALL of it, probing `findings` per row, to find
+// the artists attached to 94 findings. Hosted Turso rejects ANALYZE, so the planner has no
+// statistics, cannot know `findings` is tiny, and guesses the join order wrong; at this table size
+// that guess cost a Turso gateway timeout in `rankCatalogue`'s early phase — the sweep died with
+// `checked: 0` after 262s. SQLite treats CROSS JOIN as "do not reorder". Measured on prod, plan only:
+//
+//   join:       SCAN ta (all of track_artists)  +  SEARCH findings (track_id=?)
+//   cross join: SCAN f (94 rows)                +  SEARCH ta (track_id=?)
+//
+// Both return 103 distinct artist ids.
 const FINDING_QUALIFIED_ARTISTS_SQL = `select distinct ta.artist_id as artist_id
-      from track_artists ta
-      join findings f on f.track_id = ta.track_id`;
+      from findings f
+      cross join track_artists ta on ta.track_id = f.track_id`;
 
 // QUALIFIED (b): an artist id whose WEIGHTED release count on `enabled` labels is ≥ 3 (primary
 // credit 1.0, remixer 0.5). Bounded by the IN-LANE subset: it walks only tracks on enabled labels
