@@ -178,6 +178,17 @@ $(cat "${prompt_file}")"
     >&2 || { log "claude -p returned nonzero"; run_errors=1; }
 
   # 9. Report the outcome as the marker's JSON summary line.
+  #
+  # `ok` is DERIVED from this run's own error count, never asserted. The run ledger decides a
+  # run's verdict server-side as `exit_code === 0 && (summary.errors ?? 0) === 0` (see
+  # ./cron-output.sh, THE BODY CARRIES FACTS ONLY), and every branch below returns 0 — so the
+  # error count IS the whole verdict here. A hardcoded `ok:true` sat on each of these lines
+  # directly beside `errors:${run_errors}` and printed `{"ok":true,…,"errors":1}` on a night the
+  # agent failed: /status read the literal and called the sweep healthy while its own counter
+  # said otherwise. That contradiction is the exact thing the ledger exists to catch.
+  local ok="true"
+  [ "${run_errors}" = "0" ] || ok="false"
+
   local changed pr_url
   changed="$(git status --porcelain | wc -l | tr -d ' ')"
   if [ "${DRY_RUN}" = "1" ]; then
@@ -185,18 +196,18 @@ $(cat "${prompt_file}")"
     [ "${changed:-0}" = "0" ] || [ "${run_errors}" != "0" ] || dry_produced=1
     log "DRY RUN complete — ${changed} changed path(s) left in ${ws} for inspection"
     [ -r .audit/report.md ] && { log "── report ──"; cat .audit/report.md >&2; }
-    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"dry-run\",\"changed\":${changed:-0},\"checked\":1,\"errors\":${run_errors},\"produced\":${dry_produced}}"
+    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"dry-run\",\"changed\":${changed:-0},\"checked\":1,\"errors\":${run_errors},\"produced\":${dry_produced}}"
     return 0
   fi
 
   pr_url="$(gh pr list --head "${branch}" --json url --jq '.[0].url // empty' 2>/dev/null || true)"
   if [ -n "${pr_url}" ]; then
-    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}"
+    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"opened\",\"pr\":\"${pr_url}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}"
     return 0
   fi
   # No PR. Either a clean night (no local commits ahead) or the agent failed to ship.
   if [ "$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)" = "0" ]; then
-    echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"clean\",\"checked\":1,\"errors\":${run_errors},\"produced\":0}"
+    echo "{\"ok\":${ok},\"domain\":\"${DOMAIN}\",\"action\":\"clean\",\"checked\":1,\"errors\":${run_errors},\"produced\":0}"
     return 0
   fi
   echo "{\"ok\":false,\"domain\":\"${DOMAIN}\",\"action\":\"ship-failed\",\"error\":\"commits exist but no PR was opened\",\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}"

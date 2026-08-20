@@ -104,6 +104,7 @@ const {
   attemptKey,
   attemptLedgerPath,
   bioCostEvent,
+  bioSweepOk,
   buildBioFatalSummary,
   buildRewriteBlock,
   clearAttempts,
@@ -402,6 +403,21 @@ describe("shared bio sweep canonical counters", () => {
     expect(summary.checked).toBe(1);
     expect(summary.authored).toBe(1);
     expect(summary.produced).toBe(0);
+  });
+
+  // The dry-run path increments `errors` on a ClaudeAuthError and then keeps going, so its
+  // summary line has to be able to say no. It used to carry a hardcoded `ok: true` beside that
+  // very counter — the same contradiction the run ledger refuses to accept from any caller.
+  test("a tick that recorded an error reports ok:false", () => {
+    const summary = createBioSweepSummary("artist");
+
+    summary.errors += 1;
+
+    expect(bioSweepOk(summary)).toBe(false);
+  });
+
+  test("a clean tick still reports ok:true", () => {
+    expect(bioSweepOk(createBioSweepSummary("artist"))).toBe(true);
   });
 
   test("a fatal run reports errors without guessing work counters", () => {

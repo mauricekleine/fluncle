@@ -168,7 +168,54 @@ describe("fluncle-audit canonical counters", () => {
       changed: 1,
       checked: 1,
       errors: 1,
+      ok: false,
       produced: 0,
+    });
+  });
+
+  // `ok` is DERIVED from the error count, never a literal — the ledger's own rule
+  // (exit 0 AND errors 0). These three pin every branch that carries a live `run_errors`, because
+  // the defect they exist to catch is per-branch: the sweep printed `{"ok":true,…,"errors":1}` on
+  // the `clean` branch on production while /status read the literal and called it healthy.
+  test("a nonzero agent contradicts the literal: an errored clean night is ok:false", () => {
+    const box = fixture();
+    const result = run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_CLAUDE_STATUS: "1",
+    });
+
+    expect(result.summary).toMatchObject({
+      action: "clean",
+      checked: 1,
+      errors: 1,
+      ok: false,
+      produced: 0,
+    });
+  });
+
+  test("an opened PR is still ok:false when the agent that opened it errored", () => {
+    const box = fixture();
+    const result = run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/1",
+      STUB_CLAUDE_STATUS: "1",
+    });
+
+    expect(result.summary).toMatchObject({ action: "opened", errors: 1, ok: false });
+  });
+
+  test("the healthy dry-run path still reports ok:true", () => {
+    const box = fixture();
+    const result = run(box, "audit-sweep.sh", ["--domain", "test", "--dry-run"], {
+      STUB_CHANGED: "1",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.summary).toMatchObject({
+      action: "dry-run",
+      changed: 1,
+      checked: 1,
+      errors: 0,
+      ok: true,
+      produced: 1,
     });
   });
 });
@@ -228,7 +275,34 @@ describe("fluncle-audit-review canonical counters", () => {
       action: "held",
       checked: 1,
       errors: 1,
+      ok: false,
       produced: 0,
+    });
+  });
+
+  test("a merged PR is ok:false when the reviewer that merged it errored", () => {
+    const box = fixture();
+    const result = run(box, "audit-review-sweep.sh", ["--pr", "7"], {
+      STUB_CLAUDE_STATUS: "1",
+      STUB_REVIEW_STATE: "MERGED",
+    });
+
+    expect(result.summary).toMatchObject({ action: "merged", errors: 1, ok: false });
+  });
+
+  test("a merged PR the reviewer handled cleanly still reports ok:true", () => {
+    const box = fixture();
+    const result = run(box, "audit-review-sweep.sh", ["--pr", "7"], {
+      STUB_REVIEW_STATE: "MERGED",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.summary).toMatchObject({
+      action: "merged",
+      checked: 1,
+      errors: 0,
+      ok: true,
+      produced: 1,
     });
   });
 });

@@ -83,6 +83,10 @@ but like `embed`/`capture` they are **gated at first deploy** behind a pilot:
 
 - `/status` shows `cron.audit` + `cron.audit-review` freshness (24h cadence; the prober reads the
   `cron-output.sh` markers). A dead PAT or failed ship shows as stale/degraded there.
+- Both summary lines DERIVE their `ok` from the run's own `errors` count, the same rule the run
+  ledger applies server-side (`exit_code === 0 && (summary.errors ?? 0) === 0`). So a night whose
+  `claude -p` returned nonzero reads `ok:false` on the marker even when the branch was otherwise
+  clean or the PR did open — read `errors` and `action` together, not `action` alone.
 - Per-run logs: `journalctl -u fluncle-audit` / `-u fluncle-audit-review`, and the markers under
   `~/.hermes/cron/output/fluncle-audit{,-review}/`.
 - The findings ledger accumulates at `docs/audit-backlog.md`; the operator triages from it.

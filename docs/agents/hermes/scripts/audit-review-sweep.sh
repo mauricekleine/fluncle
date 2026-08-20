@@ -126,12 +126,19 @@ ${runtime_note}"
     >&2 || { log "claude -p returned nonzero"; run_errors=1; }
 
   # Report the outcome from the PR's final state.
-  local held_produced=1 state
+  #
+  # `ok` is DERIVED from this run's own error count, exactly as the auditor's own summary derives
+  # it (audit-sweep.sh, step 9) and as the run ledger derives it server-side —
+  # `exit_code === 0 && (summary.errors ?? 0) === 0`. Both branches below return 0, so the error
+  # count is the whole verdict. A literal `ok:true` here sat beside `errors:${run_errors}` and
+  # reported a reviewer whose `claude -p` had failed as a healthy night.
+  local held_produced=1 ok="true" state
   [ "${run_errors}" = "0" ] || held_produced=0
+  [ "${run_errors}" = "0" ] || ok="false"
   state="$(gh pr view "${PR_NUM}" --repo "${repo}" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
   case "${state}" in
-    MERGED) echo "{\"ok\":true,\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
-    OPEN)   echo "{\"ok\":true,\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
+    MERGED) echo "{\"ok\":${ok},\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
+    OPEN)   echo "{\"ok\":${ok},\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
     *)      echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\",\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}" ;;
   esac
 }
