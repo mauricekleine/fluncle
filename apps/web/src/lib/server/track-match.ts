@@ -308,6 +308,16 @@ export function matchKey(artists: string[] | string, title: string): string {
 }
 
 /**
+ * An ISRC folded for identity comparison. ISRCs are case-insensitive alphanumeric codes that
+ * carry stray hyphens/spaces in the wild; blank values deliberately have no key.
+ */
+export function normalizeIsrc(isrc: null | string): null | string {
+  const folded = (isrc ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+
+  return folded.length > 0 ? folded : null;
+}
+
+/**
  * The remixer-credit derivation (RFC label-lineage-remixer, U2): the subset of `artists` a track's
  * TITLE names as its remixer — and NOTHING beyond an EXACT fold match, so a credit is never guessed.
  *

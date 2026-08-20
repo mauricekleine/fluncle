@@ -82,6 +82,7 @@ import { setLabelMbLabelId } from "./label-images";
 import { ensureLabel, labelFold, labelSlug, listLabels } from "./labels";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
+import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 // ── Policy constants ─────────────────────────────────────────────────────────
 
@@ -890,11 +891,12 @@ async function writeCatalogueTracks(
     // entirely — the box's Apify anchor sweep → the agent-tier `anchor_track` op (anchor.ts). Its
     // worklist is derived (`spotify_uri is null`), so a row landing here with no anchor is simply
     // picked up on a later anchor tick. See docs/catalogue-crawler.md § the anchor.
-    const result = await db.execute({
+    const artistsJson = JSON.stringify(candidate.artists);
+    const insertTrack = {
       args: [
         trackId,
         candidate.title,
-        JSON.stringify(candidate.artists),
+        artistsJson,
         candidate.durationMs,
         candidate.album,
         candidate.albumImageUrl,
@@ -929,7 +931,24 @@ async function writeCatalogueTracks(
                backfill_discogs_attempts)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             on conflict (track_id) do nothing`,
-    });
+    };
+    const results = await db.batch(
+      [
+        insertTrack,
+        insertTrackDuplicateKeyStatement({
+          artistsJson,
+          isrc: candidate.isrc,
+          title: candidate.title,
+          trackId,
+        }),
+      ],
+      "write",
+    );
+    const result = results[0];
+
+    if (!result) {
+      throw new Error("Catalogue track insert batch returned no track result");
+    }
 
     if (result.rowsAffected > 0) {
       written += 1;

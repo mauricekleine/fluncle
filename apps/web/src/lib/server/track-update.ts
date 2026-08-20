@@ -42,6 +42,7 @@ import { hasIsrc } from "./isrc";
 import { resolveLogId } from "./log-id";
 import { ApiError } from "./spotify";
 import { checkYoutubeOfficial } from "./youtube-official";
+import { upsertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 export type TrackUpdate = {
   /**
@@ -398,6 +399,7 @@ type ExistingRow = {
   // The CANONICAL `labels.name` behind `tracks.label_id`, the officialness gate's first choice.
   label_name: string | null;
   log_id: string | null;
+  title: string;
   // Already-held capture provenance, so the fill-empty-only rule can short-circuit BEFORE
   // spending an oEmbed request on a row that will not take the answer anyway.
   youtube_video_id: string | null;
@@ -446,7 +448,7 @@ export async function updateTrack(
     // label channel). It rides the indexed `tracks.label_id` → `labels.id` edge and is an OUTER
     // join, so a row with no canonical label resolves exactly as before and falls back to the raw
     // `tracks.label` string.
-    sql: `select tracks.isrc, tracks.bpm_source, tracks.key_source,
+    sql: `select tracks.isrc, tracks.title, tracks.bpm_source, tracks.key_source,
                  tracks.artists_json, tracks.youtube_video_id, tracks.youtube_video_official,
                  tracks.label, labels.name as label_name,
                  findings.log_id, findings.added_at,
@@ -1139,6 +1141,16 @@ export async function updateTrack(
             args: [...args, trackId],
             sql: `update tracks set ${sets.join(", ")} where track_id = ?`,
           },
+        ]
+      : []),
+    ...(update.isrc !== undefined
+      ? [
+          upsertTrackDuplicateKeyStatement({
+            artistsJson: existing.artists_json ?? "[]",
+            isrc: update.isrc.trim(),
+            title: existing.title,
+            trackId,
+          }),
         ]
       : []),
     ...(findingSets.length > 0
