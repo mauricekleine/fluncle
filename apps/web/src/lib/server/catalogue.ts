@@ -866,12 +866,12 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
       db.execute({
         args: [],
         sql: `select tracks.artists_json as artists_json
-              from findings join tracks on tracks.track_id = findings.track_id`,
+              from findings cross join tracks on tracks.track_id = findings.track_id`,
       }),
       db.execute({
         args: [],
         sql: `select distinct tracks.label as label
-              from findings join tracks on tracks.track_id = findings.track_id
+              from findings cross join tracks on tracks.track_id = findings.track_id
               where tracks.label is not null and trim(tracks.label) <> ''`,
       }),
       db.execute({
@@ -944,7 +944,7 @@ async function readFindingIsrcs(): Promise<Map<string, string>> {
   const result = await db.execute({
     args: [],
     sql: `select findings.track_id as track_id, tracks.isrc as isrc
-          from findings join tracks on tracks.track_id = findings.track_id
+          from findings cross join tracks on tracks.track_id = findings.track_id
           where tracks.isrc is not null and trim(tracks.isrc) <> ''`,
   });
 
@@ -994,7 +994,7 @@ async function readFindingIdentity(): Promise<FindingIdentity> {
   const result = await db.execute({
     args: [],
     sql: `select findings.track_id as track_id, tracks.title as title, tracks.artists_json as artists_json
-          from findings join tracks on tracks.track_id = findings.track_id`,
+          from findings cross join tracks on tracks.track_id = findings.track_id`,
   });
 
   const byMatchKey = new Map<string, string>();
