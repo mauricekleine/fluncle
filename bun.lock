@@ -1,5 +1,5 @@
 {
-  "lockfileVersion": 1,
+  "lockfileVersion": 3,
   "configVersion": 1,
   "workspaces": {
     "": {
@@ -332,7 +332,9 @@
     "@remotion/bundler@4.0.499": "patches/@remotion%2Fbundler@4.0.499.patch",
   },
   "overrides": {
-    "nanoid@^3.0.0": "3.3.18",
+    "nanoid@^3.0.0": {
+      ".": "3.3.18",
+    },
     "undici": "7.29.0",
   },
   "catalog": {
