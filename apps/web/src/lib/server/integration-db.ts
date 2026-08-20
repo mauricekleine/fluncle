@@ -22,6 +22,7 @@ import {
   writeEmbeddingSatellite,
 } from "./embedding";
 import { resetKeyHistogramCache } from "./key-histogram";
+import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.url));
 
@@ -215,23 +216,37 @@ export async function seedCatalogueTrack(
   client: Client,
   track: Omit<SeedTrack, "addedToSpotify" | "logId" | "postedToTelegram">,
 ): Promise<void> {
-  await client.execute({
-    args: [
-      track.trackId,
-      track.title ?? "Test Track",
-      JSON.stringify(track.artists ?? ["Test Artist"]),
-      `spotify:track:${track.trackId}`,
-      `https://open.spotify.com/track/${track.trackId}`,
-      // A realistic DnB single, NOT 0: the capture queue vetoes both duration tails
-      // (MIN_TRACK_MS ≤ d < LONG_FORM_MS), so a zero-duration default would silently
-      // veto every fixture out of the queue. Tests that probe the vetoes set their own.
-      track.durationMs ?? 270_000,
-      track.label ?? null,
-    ],
-    sql: `insert into tracks
+  const title = track.title ?? "Test Track";
+  const artistsJson = JSON.stringify(track.artists ?? ["Test Artist"]);
+
+  await client.batch(
+    [
+      {
+        args: [
+          track.trackId,
+          title,
+          artistsJson,
+          `spotify:track:${track.trackId}`,
+          `https://open.spotify.com/track/${track.trackId}`,
+          // A realistic DnB single, NOT 0: the capture queue vetoes both duration tails
+          // (MIN_TRACK_MS ≤ d < LONG_FORM_MS), so a zero-duration default would silently
+          // veto every fixture out of the queue. Tests that probe the vetoes set their own.
+          track.durationMs ?? 270_000,
+          track.label ?? null,
+        ],
+        sql: `insert into tracks
       (track_id, title, artists_json, spotify_uri, spotify_url, duration_ms, label)
       values (?, ?, ?, ?, ?, ?, ?)`,
-  });
+      },
+      insertTrackDuplicateKeyStatement({
+        artistsJson,
+        isrc: null,
+        title,
+        trackId: track.trackId,
+      }),
+    ],
+    "write",
+  );
 }
 
 /**

@@ -58,7 +58,7 @@ const DEFAULT_COLUMNS: Record<string, string[]> = {
   albums: ["id", "name", "slug"],
   artists: ["id", "name", "slug"],
   track_artists: ["track_id", "artist_id", "position"],
-  tracks: ["track_id", "title", "album", "label", "album_id"],
+  tracks: ["track_id", "title", "artists_json", "album", "label", "album_id", "isrc"],
 };
 
 const ROLLBACK: Rollback = {
@@ -69,6 +69,7 @@ const ROLLBACK: Rollback = {
     {
       album: "Hit the Decks, Volume 1",
       album_id: "alb_hitdecks",
+      artists_json: '["SL2"]',
       label: "Planet Earth Recordings",
       title: "SL2 Megamix",
       track_id: "t_sl2",
@@ -76,6 +77,7 @@ const ROLLBACK: Rollback = {
     {
       album: "Hit the Decks, Volume 1",
       album_id: "alb_hitdecks",
+      artists_json: '["Carl Cox"]',
       label: "Planet Earth Recordings",
       title: "Carl Cox Megamix",
       track_id: "t_cox",
@@ -256,6 +258,11 @@ describe("--confirm", () => {
     for (const batch of s.batches) {
       expect(batch.mode).toBe("write");
     }
+
+    const trackBatch = s.batches.find((batch) =>
+      /insert or ignore into tracks/.test(batch.stmts[0]?.sql ?? ""),
+    );
+    expect(trackBatch?.stmts[1]?.sql).toContain("insert into track_duplicate_keys");
   });
 
   test("NOTHING is ever deleted or updated — a restore only inserts", async () => {
@@ -263,7 +270,10 @@ describe("--confirm", () => {
     await run(["--rollback", "f.json", "--tracks", "t_sl2", "--confirm"], s);
 
     for (const sql of writes(s)) {
-      expect(sql.startsWith("insert or ignore into")).toBe(true);
+      expect(
+        sql.startsWith("insert or ignore into") ||
+          sql.startsWith("insert into track_duplicate_keys"),
+      ).toBe(true);
     }
   });
 

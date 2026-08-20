@@ -55,7 +55,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { CLEAR_EMBEDDING_SQL, clearEmbeddingSatellite } from "./embedding";
 import { labelSlug } from "./labels";
 import { getSetting, setSetting } from "./settings";
-import { matchKey } from "./track-match";
+import { matchKey, normalizeIsrc } from "./track-match";
 
 // ── The pre-audio capture ladder ─────────────────────────────────────────────────────
 
@@ -915,18 +915,6 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
 }
 
 /**
- * An ISRC, folded for comparison. ISRCs are case-insensitive alphanumeric codes that carry
- * stray hyphens/spaces in the wild (`GB-AYE-12-34567` vs `GBAYE1234567`), so a raw string
- * equality would miss a real duplicate on a cosmetic difference. Empty/whitespace → null, so a
- * blank ISRC never matches another blank one. Mirrors the spirit of `labelSlug`'s fold.
- */
-function normalizeIsrc(isrc: null | string): null | string {
-  const folded = (isrc ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
-
-  return folded.length > 0 ? folded : null;
-}
-
-/**
  * The archive's ISRC identity map — normalized ISRC → the certified finding's `track_id`.
  *
  * This is the DUPLICATE detector's corpus (docs/the-ear.md § Duplicates), and it is a WRITE-PATH
@@ -1024,64 +1012,104 @@ async function readFindingIdentity(): Promise<FindingIdentity> {
  * are blind to the commonest duplicate at catalogue scale: the crawler walks MusicBrainz, which
  * carries a distinct recording MBID per release/compilation, so ONE song enters `tracks` as N
  * rows and each is captured + embedded separately — the same master bought two or three times,
- * only one sibling ever carrying an ISRC. This reads the identity of every CAPTURED catalogue row
- * so the sweep can name one canonical sibling and veto the rest off both the capture queue (the
- * money) and the ear lens (the telescope), exactly as the finding duplicate does.
+ * only one sibling ever carrying an ISRC. The maintained `track_duplicate_keys` projection lets
+ * this read only siblings for keys carried by the current rank batch, then name one canonical and
+ * veto the rest off both the capture queue (the money) and the ear lens (the telescope).
  *
  * The canonical sibling is deterministic: the most-processed one wins (a row that already carries
  * a vector, then the smallest `track_id`), so the choice is stable across ticks and idempotent —
  * the same row stays canonical, its siblings stay marked, no flap.
  *
- * Bounded by the CAPTURED catalogue (the metered ≤1,000/day half), never the raw metadata
- * catalogue that grows unbounded — and it pulls only the tiny identity fields (title, artists,
- * isrc), never a vector. Read once per sweep, only when a batch has candidates to adjudicate.
+ * Both indexed reads are bounded by the current candidate batch's distinct keys. Live capture,
+ * vector, dismissal, and force-clear state stays on `tracks` and is joined at decision time rather
+ * than duplicated into the key table, so a state transition and its canonical effect are the same
+ * atomic row write.
  */
 type CatalogueIdentity = {
   byIsrc: Map<string, string>;
   byMatchKey: Map<string, string>;
 };
 
-async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
+async function readCatalogueIdentity(
+  candidates: CatalogueCandidateIdentity[],
+): Promise<CatalogueIdentity> {
   const db = await getDb();
-  const result = await db.execute({
-    args: [WRONG_AUDIO_STATUS, DUPLICATE_CLEARED],
-    sql: `select ct.track_id as track_id,
-                 ct.title as title,
-                 ct.artists_json as artists_json,
-                 ct.isrc as isrc,
-                 ct.has_embedding as has_vector
-          from tracks ct
-          where ct.is_catalogue = 1
-            and ct.source_audio_key is not null
-            and ct.dismissed_at is null
-            and (ct.capture_status is null
-                 or (ct.capture_status <> ? and ct.capture_status <> ?))
-          order by ct.track_id asc`,
-  });
-
   const byMatchKey = new Map<string, string>();
   const byIsrc = new Map<string, string>();
-  // Track the winning candidate's vector state per key so a later, more-processed sibling (one
-  // that carries a vector) can take the canonical slot from an earlier unembedded one.
-  const keyHasVector = new Map<string, boolean>();
 
-  for (const row of typedRows<CatalogueCandidateIdentity>(result.rows)) {
-    const key = matchKey(parseArtistsJson(row.artists_json), row.title);
-    const hasVector = Number(row.has_vector) === 1;
-    const incumbentHasVector = keyHasVector.get(key);
+  const eligibleCandidates = candidates.filter(
+    (candidate) => candidate.capture_status !== DUPLICATE_CLEARED,
+  );
+  const matchKeys = [
+    ...new Set(
+      eligibleCandidates.map((candidate) =>
+        matchKey(parseArtistsJson(candidate.artists_json), candidate.title),
+      ),
+    ),
+  ];
+  const isrcKeys = [
+    ...new Set(
+      eligibleCandidates
+        .map((candidate) => normalizeIsrc(candidate.isrc))
+        .filter((key): key is string => key !== null),
+    ),
+  ];
 
-    // First sibling for this identity wins by default; a later one only displaces it when it is
-    // MORE processed (carries a vector while the incumbent does not). `track_id asc` ordering
-    // makes the "first" deterministic, so canonical selection is stable across ticks.
-    if (incumbentHasVector === undefined || (hasVector && !incumbentHasVector)) {
-      byMatchKey.set(key, row.track_id);
-      keyHasVector.set(key, hasVector);
+  if (matchKeys.length > 0) {
+    const result = await db.execute({
+      args: [...matchKeys, WRONG_AUDIO_STATUS, DUPLICATE_CLEARED],
+      sql: `select identity_key, track_id
+            from (
+              select duplicate_keys.match_key as identity_key,
+                     duplicate_keys.track_id as track_id,
+                     row_number() over (
+                       partition by duplicate_keys.match_key
+                       order by tracks.has_embedding desc,
+                                duplicate_keys.track_id asc
+                     ) as canonical_rank
+              from track_duplicate_keys duplicate_keys
+              join tracks on tracks.track_id = duplicate_keys.track_id
+              where duplicate_keys.match_key in (${matchKeys.map(() => "?").join(", ")})
+                and tracks.is_catalogue = 1
+                and tracks.source_audio_key is not null
+                and tracks.dismissed_at is null
+                and (tracks.capture_status is null
+                     or (tracks.capture_status <> ? and tracks.capture_status <> ?))
+            )
+            where canonical_rank = 1`,
+    });
+
+    for (const row of typedRows<{ identity_key: string; track_id: string }>(result.rows)) {
+      byMatchKey.set(row.identity_key, row.track_id);
     }
+  }
 
-    const isrcKey = normalizeIsrc(row.isrc);
+  if (isrcKeys.length > 0) {
+    const result = await db.execute({
+      args: [...isrcKeys, WRONG_AUDIO_STATUS, DUPLICATE_CLEARED],
+      sql: `select identity_key, track_id
+            from (
+              select duplicate_keys.normalized_isrc as identity_key,
+                     duplicate_keys.track_id as track_id,
+                     row_number() over (
+                       partition by duplicate_keys.normalized_isrc
+                       order by tracks.has_embedding desc,
+                                duplicate_keys.track_id asc
+                     ) as canonical_rank
+              from track_duplicate_keys duplicate_keys
+              join tracks on tracks.track_id = duplicate_keys.track_id
+              where duplicate_keys.normalized_isrc in (${isrcKeys.map(() => "?").join(", ")})
+                and tracks.is_catalogue = 1
+                and tracks.source_audio_key is not null
+                and tracks.dismissed_at is null
+                and (tracks.capture_status is null
+                     or (tracks.capture_status <> ? and tracks.capture_status <> ?))
+            )
+            where canonical_rank = 1`,
+    });
 
-    if (isrcKey && !byIsrc.has(isrcKey)) {
-      byIsrc.set(isrcKey, row.track_id);
+    for (const row of typedRows<{ identity_key: string; track_id: string }>(result.rows)) {
+      byIsrc.set(row.identity_key, row.track_id);
     }
   }
 
@@ -1090,6 +1118,7 @@ async function readCatalogueIdentity(): Promise<CatalogueIdentity> {
 
 type CatalogueCandidateIdentity = {
   artists_json: string;
+  capture_status?: null | string;
   has_vector: number;
   isrc: null | string;
   title: string;
@@ -1364,7 +1393,7 @@ export async function rankCatalogue(
       // The catalogue-internal duplicate corpus — needed on EVERY tick with candidates: a vectored
       // row may be a captured sibling of another catalogue row (declutter the ear lens), and an
       // unvectored row may duplicate an already-captured sibling (veto it off the capture queue).
-      readCatalogueIdentity(),
+      readCatalogueIdentity(candidates),
     ]);
   const findingMatchKeys = findingIdentity.byMatchKey;
 

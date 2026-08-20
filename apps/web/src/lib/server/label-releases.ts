@@ -109,6 +109,7 @@ import { labelFold } from "./labels";
 import { logEvent } from "./log";
 import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
 import { readSpotifyCallCount, recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } from "./spotify-budget";
+import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 // ── Policy constants ──────────────────────────────────────────────────────────────────────────
 
@@ -516,11 +517,12 @@ async function writeLabelReleaseTracks(
     }
 
     const artists = track.artistNames.length > 0 ? track.artistNames : ["Unknown"];
-    const result = await db.execute({
+    const artistsJson = JSON.stringify(artists);
+    const insertTrack = {
       args: [
         trackId,
         track.title,
-        JSON.stringify(artists),
+        artistsJson,
         track.durationMs,
         ctx.albumName,
         track.isrc,
@@ -546,7 +548,24 @@ async function writeLabelReleaseTracks(
                release_date, spotify_uri, spotify_url, isrc_attempted_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (track_id) do nothing`,
-    });
+    };
+    const results = await db.batch(
+      [
+        insertTrack,
+        insertTrackDuplicateKeyStatement({
+          artistsJson,
+          isrc: track.isrc,
+          title: track.title,
+          trackId,
+        }),
+      ],
+      "write",
+    );
+    const result = results[0];
+
+    if (!result) {
+      throw new Error("Freshness track insert batch returned no track result");
+    }
 
     if (result.rowsAffected > 0) {
       written += 1;

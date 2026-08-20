@@ -48,6 +48,7 @@ import { getDb, typedRows } from "./db";
 import { FILL_ISRC_SQL } from "./isrc";
 import { logEvent } from "./log";
 import { mbFetch } from "./musicbrainz";
+import { updateTrackDuplicateIsrcStatement } from "./track-duplicate-keys";
 
 // The `mb_<recording-mbid>` track-id prefix a crawler-born row carries (crawl.ts `catalogueTrackId`).
 const CRAWLER_TRACK_ID_PREFIX = "mb_";
@@ -313,13 +314,19 @@ async function listIsrcRefreshWork(limit: number, cutoff: string): Promise<IsrcR
 async function markIsrcRefreshed(trackId: string, isrc: null | string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    // The ISRC binds twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
-    args: [isrc, isrc, new Date().toISOString(), trackId],
-    sql: `update tracks
-          set ${FILL_ISRC_SQL}, isrc_attempted_at = ?
-          where track_id = ?`,
-  });
+  await db.batch(
+    [
+      {
+        // The ISRC binds twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+        args: [isrc, isrc, new Date().toISOString(), trackId],
+        sql: `update tracks
+              set ${FILL_ISRC_SQL}, isrc_attempted_at = ?
+              where track_id = ?`,
+      },
+      updateTrackDuplicateIsrcStatement(trackId, isrc),
+    ],
+    "write",
+  );
 }
 
 /** Stamp the attempt marker only (a clean MusicBrainz no-match) so the row drains the worklist. */

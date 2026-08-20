@@ -10,7 +10,14 @@ const mbFetch = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
 
-  return { ...actual, getDb: async () => ({ execute }) };
+  return {
+    ...actual,
+    getDb: async () => ({
+      batch: (statements: { args?: unknown[]; sql: string }[]) =>
+        Promise.all(statements.map((statement) => execute(statement))),
+      execute,
+    }),
+  };
 });
 
 vi.mock("./musicbrainz", async () => {
@@ -192,7 +199,8 @@ describe("resolveRecordingMbids — the ISRC refresh leg", () => {
     // fill-empty-only, so a concurrent Deezer recovery can never be clobbered.
     const writes = execute.mock.calls
       .slice(3)
-      .map((call) => call[0] as { args: unknown[]; sql: string });
+      .map((call) => call[0] as { args: unknown[]; sql: string })
+      .filter((write) => write.sql.includes("update tracks"));
     expect(writes).toHaveLength(2);
 
     for (const write of writes) {
@@ -270,7 +278,11 @@ describe("resolveRecordingMbids — the ISRC refresh leg", () => {
     expect(result.rateLimited).toBe(true);
     expect(result.isrcRefreshed).toEqual(["mb_a"]);
     // The throttled row was left untouched: one write, not two.
-    expect(execute.mock.calls.slice(3)).toHaveLength(1);
+    const trackWrites = execute.mock.calls
+      .slice(3)
+      .map((call) => call[0] as { sql: string })
+      .filter((write) => write.sql.includes("update tracks"));
+    expect(trackWrites).toHaveLength(1);
   });
 
   it("a dry run reports the worklist it WOULD re-read, with no vendor call and no write", async () => {
