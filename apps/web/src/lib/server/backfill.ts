@@ -1637,7 +1637,7 @@ async function listBeatportCatalogueWork(limit: number): Promise<BeatportCatalog
             and (t.backfill_beatport_attempted_at is null
                  or (t.backfill_beatport_failures > 0
                      and t.backfill_beatport_attempted_at < ?))
-          order by t.capture_priority desc, t.track_id
+          order by t.capture_priority desc, t.track_id desc
           limit ?`,
   });
 
@@ -1802,7 +1802,7 @@ async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCand
           -- this query because there is deliberately no capture_priority-is-not-null predicate.
           -- Metadata backfill stays independent of the ranking rail, so never-ranked NULL rows remain
           -- eligible after ranked rows drain. Plain desc sorts those NULLs last.
-          order by t.capture_priority desc, t.track_id
+          order by t.capture_priority desc, t.track_id desc
           limit ?`,
   });
 
@@ -2161,7 +2161,7 @@ async function listDeezerWork(limit: number): Promise<DeezerCandidate[]> {
           from tracks t
           where t.is_catalogue = 1
             and ${DEEZER_WORK_GATE}
-          order by t.capture_priority desc, t.track_id
+          order by t.capture_priority desc, t.track_id desc
           limit ?`,
   });
 

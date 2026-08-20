@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_vendor_worklist_idx` ON `tracks` (`is_catalogue`,`capture_priority`,`track_id`);

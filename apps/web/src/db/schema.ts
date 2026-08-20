@@ -1025,6 +1025,26 @@ export const tracks = sqliteTable(
       table.capturePriority,
       table.trackId,
     ),
+    // THE VENDOR WORKLIST ORDER (backfill.ts — the Apple, Deezer and Beatport catalogue legs). Same
+    // shape as the lens index above minus `dismissed_at`, because these three do NOT filter on it:
+    // they pick "next N to enrich" straight off `is_catalogue = 1` ordered by capture priority.
+    //
+    // Without this they took `tracks_is_catalogue_idx` — which matches 99.9% of rows and therefore
+    // filters nothing — and then sorted the whole table in a temp B-tree to return 50. Measured on
+    // prod: `POST /api/v1/admin/backfill/apple-catalogue` at 147–179s and `…/deezer` at 90s.
+    //
+    // The tiebreak is `track_id DESC` for the reason the lens indexes already record: the whole
+    // `ORDER BY … DESC, … DESC` is ONE reverse walk of this ASC index and stops at LIMIT, while a
+    // mixed `DESC, ASC` cannot ride it and keeps `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`.
+    // Measured on prod, plan only, with this index present:
+    //
+    //   order by capture_priority desc, track_id       SEARCH … + TEMP B-TREE FOR LAST TERM
+    //   order by capture_priority desc, track_id desc  SEARCH … , no sort at all
+    //
+    // The direction only orders rows of EQUAL priority and these worklists take a bare `limit` with
+    // no offset and no keyset cursor, so nothing depends on it — but if a tiebreak is ever flipped
+    // back to ASC, the sort returns and so does the wall.
+    index("tracks_vendor_worklist_idx").on(table.isCatalogue, table.capturePriority, table.trackId),
     // THE FUNNEL STAGE SCAN, COVERED (docs/db-scale-backlog Wave 2 #7). `/admin/funnel`'s
     // folded pass (`runFoldedFunnelScan`) is one conditional aggregate over the WHOLE catalogue —
     // twelve `SUM(CASE)` arms, no WHERE to seek on — so it is a full scan by construction and the
