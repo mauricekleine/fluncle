@@ -256,6 +256,18 @@ export function createBioSweepSummary(kind: EntityKind): BioSweepSummary {
   };
 }
 
+/**
+ * The tick's verdict, DERIVED from its own error count rather than asserted. Mirrors the rule the
+ * run ledger applies server-side — `exit_code === 0 && (summary.errors ?? 0) === 0` (cron-output.sh,
+ * THE BODY CARRIES FACTS ONLY) — and every emission that calls this one exits 0, so the error count
+ * is the whole verdict. The dry-run path used to print a hardcoded `ok: true` beside a summary whose
+ * `errors` it had just incremented on a `ClaudeAuthError`, which is the one shape a summary must
+ * never take: a green line sitting next to the counter that contradicts it.
+ */
+export function bioSweepOk(summary: Pick<BioSweepSummary, "errors">): boolean {
+  return summary.errors === 0;
+}
+
 /** Record one row actually passed to `describeOne`, preserving every domain counter. */
 export function recordBioOutcome(
   summary: BioSweepSummary,
@@ -1282,7 +1294,9 @@ async function main(): Promise<void> {
       }
     }
 
-    console.log(JSON.stringify({ gateState: "dry-run", ok: true, outcomes, ...summary }));
+    console.log(
+      JSON.stringify({ gateState: "dry-run", ok: bioSweepOk(summary), outcomes, ...summary }),
+    );
 
     return;
   }
@@ -1301,7 +1315,7 @@ async function main(): Promise<void> {
   const summary = createBioSweepSummary(kind);
 
   if (queue.length === 0) {
-    console.log(JSON.stringify({ ok: true, ...summary }));
+    console.log(JSON.stringify({ ok: bioSweepOk(summary), ...summary }));
 
     return; // fast no-op
   }
@@ -1360,7 +1374,7 @@ async function main(): Promise<void> {
   // Record the tick's authoring spend best-effort. It cannot throw or outlive its
   // 15s budget; rejected rows remain visible in the final status reading.
   const costWriteFailures = (await emitCost(costs)).failed;
-  console.log(JSON.stringify({ costWriteFailures, ok: true, ...summary }));
+  console.log(JSON.stringify({ costWriteFailures, ok: bioSweepOk(summary), ...summary }));
 }
 
 // `import.meta.main` so the pure helpers (the fallback prompt builder) can be imported by
