@@ -24,7 +24,11 @@ const COUNTER_EMITTER_PROOFS: Readonly<Record<string, EmitterProof>> = {
       // `createBioSweepSummary` factory — each time reporting a missing emitter that was never
       // missing. Assert the initializer exists; deleting the counter still fails this.
       /\bgateSkipped:\s*0,/,
-      /JSON\.stringify\(\{\s*ok:\s*true,\s*\.\.\.summary\s*\}\)/,
+      // The `ok` VALUE is left unpinned for the same reason: this proof is that the summary
+      // reaches an emitted line, not that the sweep asserts a particular verdict. Pinning the
+      // literal `ok: true` broke this a third time when that literal became the derived
+      // `bioSweepOk(summary)` — the shape a summary is supposed to have.
+      /JSON\.stringify\(\{\s*ok:[^,]+,\s*\.\.\.summary\s*\}\)/,
     ],
   },
 };
