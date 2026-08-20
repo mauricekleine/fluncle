@@ -1198,9 +1198,23 @@ export async function rankCatalogue(
   const countResult = await db.execute({
     args: [],
     // The two finding counts — the corpus half of the fingerprint (`rankCorpus`).
+    //
+    // CROSS JOIN is load-bearing, not style. `findings` holds 94 rows and `tracks` holds 117,526,
+    // so this counts a set that cannot exceed 94 — but a plain JOIN let the planner drive from
+    // `tracks` and SCAN all 117k rows, probing `findings` per row. Hosted Turso has no ANALYZE
+    // statistics (libsql-server rejects the statement), so the planner cannot know `findings` is
+    // tiny and guesses the join order wrong. At this table size that guess cost a Turso gateway
+    // timeout: `LibsqlError: SERVER_ERROR: Server returned HTTP status 524` inside `rankCatalogue`,
+    // which the sweep reports as a bare "Internal error". SQLite treats CROSS JOIN as "do not
+    // reorder", so it pins `findings` as the outer loop. Measured on prod, plan only:
+    //
+    //   join:       SCAN ft  +  SEARCH findings (track_id=?)          ← 117,526 rows scanned
+    //   cross join: SCAN findings  +  SEARCH ft (track_id=?)          ←      94 rows scanned
+    //
+    // Both return 93. Forcing the index alone did NOT flip it — only pinning the join order did.
     sql: `select
             (select count(*) from findings) as findings,
-            (select count(*) from findings join tracks ft on ft.track_id = findings.track_id
+            (select count(*) from findings cross join tracks ft on ft.track_id = findings.track_id
              where ft.has_embedding = 1) as embedded`,
   });
   const counts = typedRows<{
