@@ -25,7 +25,7 @@ A read is a **page**, capped at 200 rows, so its length answers "how many did I 
 
 ### The order is the budget
 
-Audio capture is metered — a residential proxy bills **per GB** — so the order this queue drains in literally decides what the money buys. It is one `ORDER BY`, evaluated in SQL:
+Audio capture is metered — a residential proxy bills **per GB** — so the order this queue drains in literally decides what the money buys. SQL evaluates the same total order as two limited reads: the tiny findings half first, then only enough catalogue rows to fill the page. Concatenating those halves is exactly the leading certification-first term, while letting the catalogue half seek its capture-priority index instead of sorting the growing table:
 
 Order capture work by certification first, then `capture_priority DESC`, then newest finding and track ID for determinism.
 

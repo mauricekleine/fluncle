@@ -310,28 +310,35 @@ const WORK_SELECT = `t.track_id, t.title, t.artists_json, t.isrc, t.label, t.dur
   (f.track_id is not null) as certified`;
 
 /**
- * THE ORDER. One ORDER BY, evaluated in SQL — the queue is never re-sorted in the isolate.
- * See the module header: certified first, then the pre-audio ladder, then the DEMAND signal,
- * then newest-first within the findings, then the id.
+ * THE ORDER INSIDE ONE CERTIFICATION HALF. The leading certification term is deliberately absent:
+ * {@link listTrackWork} reads findings and catalogue separately, then concatenates them in that
+ * order. That is exactly `(f.track_id is not null) desc`, but it lets the catalogue read seek the
+ * `tracks_catalogue_capture_idx` ladder instead of sorting the whole growing table on a joined
+ * expression.
  *
- * `coalesce(t.capture_priority, 0)` is what makes one clause serve both halves: every
- * finding reads 0 (the column is only ever written on a catalogue row), so the rung
- * cannot reorder the findings among themselves — and a VETOED catalogue row (−1) sorts
- * below an unranked one, which is precisely the intent.
+ * `coalesce(t.capture_priority, 0)` remains load-bearing wherever the kind permits NULL: it makes a
+ * NULL tie with tier 0 and keeps both ahead of a negative tier. CAPTURE is the one proved exception
+ * on the catalogue half — `kindClause("capture")` requires `capture_priority is not null` there, so
+ * the plain column is byte-for-byte the same order and can ride the index.
  *
- * `coalesce(t.demand_score, 0)` is the DEMAND reorder (docs/catalogue-crawler.md § Demand),
- * and its POSITION is the whole contract: it sits AFTER `capture_priority`, so it only ever
- * reorders rows of the SAME tier — a demanded row is captured before an undemanded sibling at
- * its tier, never lifted across the ladder, and NEVER past the `capture_priority >= 0` veto
- * (that predicate excludes a ruled-out row in `kindClause` before this ORDER BY is reached).
- * A finding reads 0 here too (demand_score is only written where a demanded entity hangs off a
- * row), so it cannot reorder the findings among themselves.
+ * `coalesce(t.demand_score, 0)` is the DEMAND reorder (docs/catalogue-crawler.md § Demand), and its
+ * POSITION is the whole contract: it sits AFTER `capture_priority`, so it only ever reorders rows
+ * of the SAME tier — a demanded row is captured before an undemanded sibling at its tier, never
+ * lifted across the ladder, and NEVER past the `capture_priority >= 0` veto. No kind predicate
+ * excludes a NULL demand score, so that coalesce stays. The added-at expression stays for the same
+ * reason; these deep tie-breaks may still need a TEMP B-TREE, but only after the indexed half seek.
  */
-const WORK_ORDER = `order by (f.track_id is not null) desc,
-  coalesce(t.capture_priority, 0) desc,
+function workOrder(kind: TrackWorkKind, half: Exclude<TrackWorkScope, "all">): string {
+  const capturePriority =
+    kind === "capture" && half === "catalogue"
+      ? "t.capture_priority"
+      : "coalesce(t.capture_priority, 0)";
+
+  return `order by ${capturePriority} desc,
   coalesce(t.demand_score, 0) desc,
   coalesce(f.added_at, '') desc,
   t.track_id desc`;
+}
 
 /**
  * THE ANCHOR ORDER — the same "the order IS the budget" law as the capture ladder, for the
@@ -397,6 +404,25 @@ export function scopeClause(scope: TrackWorkScope): string {
   }
 
   return "1 = 1";
+}
+
+/**
+ * One physical half of the shared work order. The findings predicate preserves the canonical
+ * membership test; the maintained `is_catalogue` mirror gives SQLite the indexed equality it cannot
+ * infer through a LEFT JOIN. The schema write paths keep the two equivalent by construction.
+ *
+ * Catalogue CAPTURE repeats its `kindClause` arm's priority/dismissal constraints at top level. The
+ * repetition changes no predicate: under `f.track_id is null`, the other OR arm is impossible. It
+ * does expose the complete `(is_catalogue, dismissed_at, capture_priority)` seek to SQLite, which
+ * does not simplify those terms out of the nested findings/catalogue OR by itself.
+ */
+function workHalfClause(kind: TrackWorkKind, half: Exclude<TrackWorkScope, "all">): string {
+  const captureSeek =
+    kind === "capture" && half === "catalogue"
+      ? " and t.dismissed_at is null and t.capture_priority >= 0"
+      : "";
+
+  return `${scopeClause(half)} and t.is_catalogue = ${half === "catalogue" ? 1 : 0}${captureSeek}`;
 }
 
 /**
@@ -817,9 +843,11 @@ const MAX_WORK_LIMIT = 200;
 /**
  * Read one stage's worklist, in the order the money should be spent.
  *
- * The whole read is one indexed statement: the predicate and the ordering are evaluated in
- * SQL and only the page comes back, so the cost is the page and not the archive. No vector,
- * no feature blob, and no certification column beyond the coordinate ever crosses the wire.
+ * The shared ladder is two ordered, limited reads — findings first, then only enough catalogue rows
+ * to fill the page. Splitting the leading certification key removes the joined expression that made
+ * SQLite sort the full candidate table. The three specialist queues keep their existing single
+ * indexed read. No vector, feature blob, or certification column beyond the coordinate crosses the
+ * wire.
  */
 export async function listTrackWork(options: {
   kind: TrackWorkKind;
@@ -852,27 +880,52 @@ export async function listTrackWork(options: {
   const kindWhere = kindClause(kind);
   // The anchor-family worklists ride the existing anchor index order; on `isrc-recovery`,
   // `has_isrc` is fixed at 0, so `has_embedding` is the next indexed key and embedded rows come
-  // first without a new index. The re-verdict rides its round-robin (oldest-ruled first); every
-  // other kind — the provenance backfill included — rides the shared capture ladder, which is what
-  // puts the findings ahead of the catalogue and orders them newest-first.
-  const order =
+  // first without a new index. The re-verdict rides its round-robin (oldest-ruled first). Those
+  // specialist orders do NOT begin with certification and must remain single reads; every other
+  // kind — the provenance backfill included — rides the split shared ladder below.
+  const specialistOrder =
     kind === "anchor" || kind === "isrc-recovery"
       ? ANCHOR_ORDER
       : kind === "youtube-reverdict"
         ? REVERDICT_ORDER
-        : WORK_ORDER;
+        : null;
   const db = await getDb();
-  const result = await db.execute({
-    args: [...kindWhere.args, page],
-    sql: `select ${WORK_SELECT}
-          from tracks t
-          left join findings f on f.track_id = t.track_id
-          where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
-          ${order}
-          limit ?`,
-  });
 
-  const items: TrackWorkItem[] = typedRows<WorkRow>(result.rows).map((row) => {
+  const readRows = async (where: string, order: string, limit: number): Promise<WorkRow[]> => {
+    const result = await db.execute({
+      args: [...kindWhere.args, limit],
+      sql: `select ${WORK_SELECT}
+            from tracks t
+            left join findings f on f.track_id = t.track_id
+            where ${where} and ${kindWhere.sql}
+            ${order}
+            limit ?`,
+    });
+
+    return typedRows<WorkRow>(result.rows);
+  };
+
+  let rows: WorkRow[];
+
+  if (specialistOrder !== null) {
+    rows = await readRows(scopeClause(effectiveScope), specialistOrder, page);
+  } else {
+    const halves: Exclude<TrackWorkScope, "all">[] =
+      effectiveScope === "all" ? ["findings", "catalogue"] : [effectiveScope];
+    rows = [];
+
+    for (const half of halves) {
+      const remaining = page - rows.length;
+
+      if (remaining === 0) {
+        break;
+      }
+
+      rows.push(...(await readRows(workHalfClause(kind, half), workOrder(kind, half), remaining)));
+    }
+  }
+
+  const items: TrackWorkItem[] = rows.map((row) => {
     const artists = parseArtistsJson(row.artists_json);
     // The recovery-kind Deezer ask, plus the ANCHOR ask for an ISRC-LESS row only. Deezer's
     // tokenless quota is per-IP and the Worker's shared edge IPs are saturated, so the BOX runs
