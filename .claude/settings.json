@@ -1,4 +1,5 @@
 {
+  "outputStyle": "Concise",
   "permissions": {
     "allow": [
       "Bash(bun run typecheck)",
