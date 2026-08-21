@@ -51,7 +51,7 @@
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",
       "sourceType": "local",
-      "computedHash": "7ef121d35b105701110cf034770d274683f6526bc274685cf39078ff8bbaf3e9"
+      "computedHash": "037713868caddae542a72360cf9a9588433b6b308bab9dab180950f9c6e3828b"
     },
     "fluncle-ledger": {
       "source": "packages/skills/fluncle-ledger",
@@ -181,6 +181,18 @@
       "source": "packages/skills/taste",
       "sourceType": "local",
       "computedHash": "9b2eb91093a806417830d94b861daf6095c831b8c2bde92d211ff5b7250920fd"
+    },
+    "turso-cloud": {
+      "source": "tursodatabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/turso-cloud/SKILL.md",
+      "computedHash": "6bdc1ca45154caeb33e42ad232f760db7f5483f2a29f41339cbb3e998b519d5b"
+    },
+    "turso-db": {
+      "source": "tursodatabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/turso-db/SKILL.md",
+      "computedHash": "d1aa5693c437b9bb848642fe04d613097fe54200c8190f09e7351f7d473c6b83"
     },
     "vercel-composition-patterns": {
       "source": "vercel-labs/agent-skills",

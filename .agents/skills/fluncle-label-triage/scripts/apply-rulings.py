@@ -55,6 +55,8 @@ USER_AGENT = "fluncle-label-triage/1.0 (operator)"
 MB_USER_AGENT = "FluncleLabelTriage/1.0 ( https://www.fluncle.com )"
 MB_PACE_SECONDS = 1.2
 RULE_LIMIT = 100  # replace_label_artist_rules caps a request at 100 rules.
+API_RETRIES = 4
+API_RETRY_BACKOFF_SECONDS = 5
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 # verdict bucket -> (seed state to write or None, the only rule verdict the bucket may carry)
@@ -94,11 +96,19 @@ class Api:
                 "User-Agent": USER_AGENT,
             },
         )
-        try:
-            with urllib.request.urlopen(req, timeout=45) as r:
-                return r.status, json.load(r)
-        except urllib.error.HTTPError as e:
-            return e.code, e.read().decode()[:200]
+        # A single socket timeout must not abort a multi-thousand-row round; every call here is
+        # idempotent (PATCH seedState / whole-set PUT / GET), so retry with backoff, then report.
+        last = ""
+        for attempt in range(API_RETRIES):
+            try:
+                with urllib.request.urlopen(req, timeout=45) as r:
+                    return r.status, json.load(r)
+            except urllib.error.HTTPError as e:
+                return e.code, e.read().decode()[:200]
+            except OSError as e:  # timeout, reset, DNS
+                last = str(e)[:200]
+                time.sleep(API_RETRY_BACKOFF_SECONDS * (attempt + 1))
+        return 0, f"network: {last}"
 
 
 def musicbrainz(path: str):
