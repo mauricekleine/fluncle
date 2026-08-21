@@ -894,8 +894,21 @@ export async function listTrackWork(options: {
   const readRows = async (where: string, order: string, limit: number): Promise<WorkRow[]> => {
     const result = await db.execute({
       args: [...kindWhere.args, limit],
+      // INDEXED BY on the anchor kind is load-bearing, not a hint. `tracks_anchor_order_idx` exists
+      // for exactly this ORDER BY — same four columns, same direction, partial on `spotify_uri is
+      // null` — so it walks in order and stops at LIMIT. The planner does not choose it: hosted
+      // Turso rejects ANALYZE, so with no statistics it prefers an equality seek it can SEE
+      // (`tracks_vendor_worklist_idx`, `is_catalogue=? AND capture_priority>?`) over an ordered walk
+      // whose benefit it cannot measure, then pays `USE TEMP B-TREE FOR ORDER BY` over the result.
+      // Measured on prod, plan only:
+      //
+      //   planner's choice: SEARCH t USING tracks_vendor_worklist_idx + TEMP B-TREE FOR ORDER BY
+      //   INDEXED BY:       SCAN t USING tracks_anchor_order_idx, no sort
+      //
+      // The planner cannot value an ordering, only a filter — so every index added for some other
+      // query becomes a more attractive wrong answer here. Pinning is the only stable fix.
       sql: `select ${WORK_SELECT}
-            from tracks t
+            from tracks t${order === ANCHOR_ORDER ? " indexed by tracks_anchor_order_idx" : ""}
             left join findings f on f.track_id = t.track_id
             where ${where} and ${kindWhere.sql}
             ${order}
