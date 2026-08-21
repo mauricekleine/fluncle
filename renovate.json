@@ -84,6 +84,11 @@
       "description": "GUARD: @remotion/bundler is patched via patchedDependencies, keyed by EXACT version — any bump must re-key patches/@remotion%2Fbundler@*.patch in the same PR (scripts/patched-dependencies.test.ts turns a detached patch into a red deploy gate). Surface it on the dashboard instead of auto-PRing.",
       "matchPackageNames": ["@remotion/bundler"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "GUARD: Shadcn currently resolves @modelcontextprotocol/sdk 1.30.0, patched because its published root export targets absent files (upstream #2273); a Shadcn or direct SDK bump must remove the patch if fixed upstream or re-key and revalidate it. Surface it on the dashboard instead of auto-PRing.",
+      "matchPackageNames": ["shadcn", "@modelcontextprotocol/sdk"],
+      "dependencyDashboardApproval": true
     }
   ]
 }

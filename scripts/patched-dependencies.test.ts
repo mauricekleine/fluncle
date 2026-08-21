@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -45,4 +46,65 @@ describe("patchedDependencies", () => {
       expect(applied, `${key}: no touched file carries the marker — patch detached`).toBe(true);
     });
   }
+
+  it("keeps shadcn usable while rejecting the SDK's broken root export", () => {
+    const sdkPackage = JSON.parse(
+      readFileSync(
+        join(root, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
+        "utf8",
+      ),
+    ) as { exports?: Record<string, unknown> };
+    expect(Object.keys(sdkPackage.exports ?? {})).toEqual([
+      "./client",
+      "./server",
+      "./validation",
+      "./validation/ajv",
+      "./validation/cfworker",
+      "./experimental",
+      "./experimental/tasks",
+      "./*",
+    ]);
+
+    const shadcn = spawnSync(
+      "bun",
+      [join(root, "node_modules", "shadcn", "dist", "index.js"), "--help"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+    expect(shadcn.status, shadcn.stderr).toBe(0);
+    expect(shadcn.stdout).toContain("Usage: shadcn");
+
+    const sdkSubpaths = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          'await import("@modelcontextprotocol/sdk/server/index.js")',
+          'await import("@modelcontextprotocol/sdk/server/stdio.js")',
+          'await import("@modelcontextprotocol/sdk/types.js")',
+        ].join(";"),
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(sdkSubpaths.status, sdkSubpaths.stderr).toBe(0);
+
+    const sdkRoot = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          'try { await import("@modelcontextprotocol/sdk") }',
+          "catch (error) { console.error(error); process.exit(23) }",
+          "process.exit(0)",
+        ].join("\n"),
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(sdkRoot.status).toBe(23);
+    expect(sdkRoot.stderr).toContain("Cannot find module '@modelcontextprotocol/sdk'");
+  });
 });
