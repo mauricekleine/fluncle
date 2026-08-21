@@ -1,0 +1,24 @@
+diff --git a/package.json b/package.json
+index 355e0705bfec79caf9e0cc8d21d7c615c79f8655..95798ec6b7efa6c35fd49edcf67bd36a02210825 100644
+--- a/package.json
++++ b/package.json
+@@ -11,6 +11,7 @@
+         "type": "git",
+         "url": "git+https://github.com/modelcontextprotocol/typescript-sdk.git"
+     },
++    "// PATCHED (fluncle)": "Package 1.30.0 was published without its advertised root files; remove only the broken root export. https://github.com/modelcontextprotocol/typescript-sdk/issues/2273",
+     "engines": {
+         "node": ">=18"
+     },
+@@ -19,11 +20,6 @@
+         "mcp"
+     ],
+     "exports": {
+-        ".": {
+-            "types": "./dist/esm/index.d.ts",
+-            "import": "./dist/esm/index.js",
+-            "require": "./dist/cjs/index.js"
+-        },
+         "./client": {
+             "types": "./dist/esm/client/index.d.ts",
+             "import": "./dist/esm/client/index.js",

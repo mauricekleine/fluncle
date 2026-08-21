@@ -329,6 +329,7 @@
     "@shopify/react-native-skia",
   ],
   "patchedDependencies": {
+    "@modelcontextprotocol/sdk@1.30.0": "patches/@modelcontextprotocol%2Fsdk@1.30.0.patch",
     "@remotion/bundler@4.0.499": "patches/@remotion%2Fbundler@4.0.499.patch",
   },
   "overrides": {
