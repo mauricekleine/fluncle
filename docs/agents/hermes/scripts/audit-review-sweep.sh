@@ -73,10 +73,9 @@ run_review() {
       --jq '[.[] | select(.headRefName | startswith("audit/"))] | sort_by(.createdAt) | reverse | .[0].number // empty' 2>/dev/null || true)"
   fi
   if [ -z "${PR_NUM}" ]; then
-    # This is a detector, not an optional consumer: no PR means the reviewer inspected zero
-    # audit units. Report blindness instead of laundering the missing auditor output as healthy.
-    echo "{\"ok\":false,\"action\":\"none\",\"note\":\"no open audit PR to review\",\"checked\":0,\"errors\":1,\"produced\":0}"
-    return 1
+    # A clean audit opens no PR, so an empty review queue is a healthy no-op.
+    echo "{\"ok\":true,\"action\":\"none\",\"note\":\"no open audit PR to review\",\"checked\":0,\"errors\":0,\"produced\":0}"
+    return 0
   fi
   branch="$(gh pr view "${PR_NUM}" --repo "${repo}" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
   domain="${branch##*-}"

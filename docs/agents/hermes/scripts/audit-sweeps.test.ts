@@ -221,18 +221,20 @@ describe("fluncle-audit canonical counters", () => {
 });
 
 describe("fluncle-audit-review canonical counters", () => {
-  test("BLINDNESS: no audit PR to review is checked:0 and fails the detector", () => {
+  test("an empty review queue exits cleanly without checking or producing work", () => {
     const box = fixture();
     const result = run(box, "audit-review-sweep.sh", []);
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(0);
     expect(result.summary).toMatchObject({
       action: "none",
       checked: 0,
-      errors: 1,
-      ok: false,
+      errors: 0,
+      ok: true,
       produced: 0,
     });
+    expect("queue_depth" in result.summary).toBe(false);
+    expect("expected_interval_ms" in result.summary).toBe(false);
   });
 
   test("holding a reviewed PR is a successful review action", () => {
