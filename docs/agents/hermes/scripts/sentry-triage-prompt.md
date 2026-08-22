@@ -108,7 +108,11 @@ triage is done:
    on it — no GitHub label is needed, matching the audit's `audit/` convention). The PR body MUST
    contain a `Sentry-Issue: <id>` line for the issue it fixes (the driver resolves the issue when
    this PR merges) and should link the `permalink`. Honour the RUNTIME auto-merge directive.
-4. **If you filed anything**: branch `sentry-triage/<dateTag>-ledger` off `origin/main`, commit the
+4. **If you filed anything**: use the ledger branch and continuation mode named by the driver's
+   RUNTIME line. When it says `CONTINUED`, fetch that existing branch, rebase it onto `origin/main`,
+   append tonight's rows to `docs/sentry-backlog.md`, push the branch, and update the named existing
+   PR's title count and body with tonight's `Sentry-Filed: <id>` lines — do not open a second ledger
+   PR. When it says `NEW`, branch the named ledger branch off `origin/main`, commit the
    `docs/sentry-backlog.md` rows (`docs(sentry): file N issues for review`), push, and open one PR
    titled `docs(sentry): N issues filed for review`. Its body carries a `Sentry-Filed: <id>` line
    per filed issue. This PR is docs-only — it must **not** carry any `Sentry-Issue:` line (a filed
