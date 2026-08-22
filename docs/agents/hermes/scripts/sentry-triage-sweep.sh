@@ -178,7 +178,40 @@ run_triage() {
   if [ "${DRY_RUN}" = "1" ]; then
     runtime_note="RUNTIME: this is a DRY RUN. Locate each bug, make the straightforward fixes, append filed rows to docs/sentry-backlog.md, and write .sentry/report.md — but do NOT run git or gh; leave the branches uncommitted for inspection."
   else
-    runtime_note="RUNTIME: this is a LIVE run. Tonight's branch date tag is ${date_tag}; name each fix branch \`sentry-triage/${date_tag}-<shortId>\` and (if anything is filed) the ledger branch \`sentry-triage/${date_tag}-ledger\`. Follow the 'Ship it' steps: one PR per fixed issue (each body carrying its \`Sentry-Issue: <id>\` line[s]), plus one ledger PR if you filed anything (its body carrying the \`Sentry-Filed: <id>\` lines). ${automerge_note}"
+    local ledger_resolution ledger_branch ledger_continued ledger_pr_number ledger_runtime
+    ledger_resolution="$("${BUN_BIN}" "${HELPER}" ledger-branch "${date_tag}")" || {
+      log "ledger branch discovery failed; refusing to let the agent open a conflicting ledger PR"
+      echo "{\"ok\":false,\"action\":\"ledger-branch-failed\",\"checked\":${fetch_checked},\"errors\":$((fetch_errors + 1)),\"produced\":0,\"triaged\":${triaged},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
+      return 1
+    }
+    ledger_branch="$("${BUN_BIN}" -e 'try{const j=JSON.parse(process.argv[1]||"");if(j.ok===true&&typeof j.branch==="string")process.stdout.write(j.branch)}catch{}' "${ledger_resolution}" 2>/dev/null)"
+    ledger_continued="$("${BUN_BIN}" -e 'try{const j=JSON.parse(process.argv[1]||"");if(j.ok===true&&(j.continued===true||j.continued===false))process.stdout.write(String(j.continued))}catch{}' "${ledger_resolution}" 2>/dev/null)"
+    ledger_pr_number="$("${BUN_BIN}" -e 'try{const j=JSON.parse(process.argv[1]||"");if(j.ok===true&&Number.isInteger(j.prNumber)&&j.prNumber>0)process.stdout.write(String(j.prNumber))}catch{}' "${ledger_resolution}" 2>/dev/null)"
+    case "${ledger_branch}" in
+      sentry-triage/*-ledger) ;;
+      *)
+        log "ledger branch discovery returned an invalid branch; refusing to continue"
+        echo "{\"ok\":false,\"action\":\"ledger-branch-failed\",\"checked\":${fetch_checked},\"errors\":$((fetch_errors + 1)),\"produced\":0,\"triaged\":${triaged},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
+        return 1
+        ;;
+    esac
+    if [ "${ledger_continued}" = "true" ]; then
+      case "${ledger_pr_number}" in
+        '' | *[!0-9]*)
+          log "continued ledger branch has no PR number; refusing to continue"
+          echo "{\"ok\":false,\"action\":\"ledger-branch-failed\",\"checked\":${fetch_checked},\"errors\":$((fetch_errors + 1)),\"produced\":0,\"triaged\":${triaged},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
+          return 1
+          ;;
+      esac
+      ledger_runtime="CONTINUED: use existing ledger branch \`${ledger_branch}\` and update PR #${ledger_pr_number}"
+    elif [ "${ledger_continued}" = "false" ]; then
+      ledger_runtime="NEW: use ledger branch \`${ledger_branch}\`"
+    else
+      log "ledger branch discovery returned an invalid continuation flag; refusing to continue"
+      echo "{\"ok\":false,\"action\":\"ledger-branch-failed\",\"checked\":${fetch_checked},\"errors\":$((fetch_errors + 1)),\"produced\":0,\"triaged\":${triaged},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled}}"
+      return 1
+    fi
+    runtime_note="RUNTIME: this is a LIVE run. Tonight's branch date tag is ${date_tag}; name each fix branch \`sentry-triage/${date_tag}-<shortId>\` and, if anything is filed, ${ledger_runtime}. Follow the 'Ship it' steps: one PR per fixed issue (each body carrying its \`Sentry-Issue: <id>\` line[s]), plus one ledger PR if you filed anything (its body carrying the \`Sentry-Filed: <id>\` lines). ${automerge_note}"
   fi
   local prompt worklist
   worklist="$(cat .sentry/issues.json)"

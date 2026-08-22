@@ -362,7 +362,7 @@ async function commentIssue(
 }
 
 // ── GitHub reads (via the baked `gh`; GH_TOKEN is exported by the driver) ─────────────────────
-type Pr = {
+export type TriagePr = {
   body: string;
   headRefName: string;
   mergedAt: string | null;
@@ -370,6 +370,12 @@ type Pr = {
   url: string;
 };
 type GhRunner = (args: string[]) => { ok: boolean; stdout: string };
+
+export type LedgerBranchResolution = {
+  branch: string;
+  continued: boolean;
+  prNumber: number | null;
+};
 
 // A merged fix is reconciled only within this window of its merge — see filterRecentlyMerged.
 const RECONCILE_WINDOW_MS = 48 * 60 * 60_000; // 48h ≈ 2 nightly runs of slack for a missed tick.
@@ -382,7 +388,7 @@ const RECONCILE_WINDOW_MS = 48 * 60 * 60_000; // 48h ≈ 2 nightly runs of slack
  * issue's id still lives in its long-merged PR body, but merged PRs are NOT in the fetch dedupe set
  * (only OPEN PRs + the ledger are), so the regression correctly re-enters the nightly worklist.
  */
-export function filterRecentlyMerged(prs: Pr[], now: number, windowMs: number): Pr[] {
+export function filterRecentlyMerged(prs: TriagePr[], now: number, windowMs: number): TriagePr[] {
   return prs.filter((p) => {
     if (!p.mergedAt) {
       return false;
@@ -398,7 +404,10 @@ const defaultGh: GhRunner = (args) => {
 };
 
 /** Open or merged triage PRs (head starts with the triage prefix). */
-export function listTriagePrs(state: "open" | "merged", gh: GhRunner = defaultGh): Pr[] {
+function readTriagePrs(
+  state: "open" | "merged",
+  gh: GhRunner = defaultGh,
+): { ok: boolean; rows: TriagePr[] } {
   const r = gh([
     "pr",
     "list",
@@ -413,15 +422,52 @@ export function listTriagePrs(state: "open" | "merged", gh: GhRunner = defaultGh
   ]);
   if (!r.ok) {
     log(`gh pr list --state ${state} failed`);
-    return [];
+    return { ok: false, rows: [] };
   }
-  let rows: Pr[] = [];
+  let rows: TriagePr[] = [];
   try {
-    rows = JSON.parse(r.stdout || "[]") as Pr[];
+    rows = JSON.parse(r.stdout || "[]") as TriagePr[];
   } catch {
-    return [];
+    log(`gh pr list --state ${state} returned invalid JSON`);
+    return { ok: false, rows: [] };
   }
-  return rows.filter((p) => (p.headRefName ?? "").startsWith(BRANCH_PREFIX));
+  return { ok: true, rows: rows.filter((p) => (p.headRefName ?? "").startsWith(BRANCH_PREFIX)) };
+}
+
+export function listTriagePrs(state: "open" | "merged", gh: GhRunner = defaultGh): TriagePr[] {
+  return readTriagePrs(state, gh).rows;
+}
+
+/** Branch discovery must distinguish a failed GitHub read from a confirmed empty PR list. */
+export function listTriagePrsOrThrow(
+  state: "open" | "merged",
+  gh: GhRunner = defaultGh,
+): TriagePr[] {
+  const result = readTriagePrs(state, gh);
+  if (!result.ok) {
+    throw new Error(`gh pr list --state ${state} failed`);
+  }
+  return result.rows;
+}
+
+/**
+ * Resolve the one ledger branch the agent may use tonight.
+ *
+ * The fetch dedupe already covers an open ledger PR's rows via its `Sentry-Filed:` markers, so
+ * continuing that branch does not change which issues are considered new. Keep this pure: the
+ * caller owns the GitHub read and must fail closed when that read fails instead of passing `[]`.
+ */
+export function resolveLedgerBranch(prs: TriagePr[], dateTag: string): LedgerBranchResolution {
+  const datedBranch = `${BRANCH_PREFIX}${dateTag}-ledger`;
+  const openLedgerPrs = prs.filter((pr) => /^sentry-triage\/[^/]+-ledger$/.test(pr.headRefName));
+  if (openLedgerPrs.length > 1) {
+    throw new Error(`found ${openLedgerPrs.length} open ledger PRs; refusing to choose one`);
+  }
+  const existing = openLedgerPrs[0];
+  if (!existing) {
+    return { branch: datedBranch, continued: false, prNumber: null };
+  }
+  return { branch: existing.headRefName, continued: true, prNumber: existing.number };
 }
 
 // ── subcommands ────────────────────────────────────────────────────────────────────────────
@@ -569,6 +615,11 @@ async function runComment(dateTag: string): Promise<void> {
   console.log(JSON.stringify({ commented, ok: true }));
 }
 
+function runLedgerBranch(dateTag: string): void {
+  const resolution = resolveLedgerBranch(listTriagePrsOrThrow("open"), dateTag);
+  console.log(JSON.stringify({ ok: true, ...resolution }));
+}
+
 // ── entry ─────────────────────────────────────────────────────────────────────────────────
 export async function main(argv: string[]): Promise<void> {
   const [cmd, a, b] = argv;
@@ -581,6 +632,9 @@ export async function main(argv: string[]): Promise<void> {
       return;
     case "comment":
       await runComment(a ?? "");
+      return;
+    case "ledger-branch":
+      runLedgerBranch(a ?? "");
       return;
     default:
       console.log(JSON.stringify({ error: `unknown subcommand "${cmd ?? ""}"`, ok: false }));

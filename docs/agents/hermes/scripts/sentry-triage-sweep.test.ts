@@ -31,9 +31,11 @@ import {
   filterRecentlyMerged,
   FIX_MARKER,
   listUnresolvedIssues,
+  listTriagePrsOrThrow,
   parseLedgerIds,
   parseMarkerIds,
   parseNextCursor,
+  resolveLedgerBranch,
   sanitizeUntrusted,
   type CompactIssue,
 } from "./sentry-triage-sweep";
@@ -94,6 +96,60 @@ describe("filterNewIssues — the dedupe gate", () => {
   test("an empty covered set passes everything through", () => {
     const all = [issue("1"), issue("2")];
     expect(filterNewIssues(all, new Set()).map((i) => i.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("resolveLedgerBranch — one open ledger branch per night", () => {
+  const triagePr = (headRefName: string, number: number) => ({
+    body: "",
+    headRefName,
+    mergedAt: null,
+    number,
+    url: `https://github.com/mauricekleine/fluncle/pull/${number}`,
+  });
+
+  test("no open ledger PR yields tonight's dated branch", () => {
+    expect(resolveLedgerBranch([], "20260822")).toEqual({
+      branch: "sentry-triage/20260822-ledger",
+      continued: false,
+      prNumber: null,
+    });
+  });
+
+  test("one open ledger PR yields its head and number", () => {
+    expect(
+      resolveLedgerBranch([triagePr("sentry-triage/20260817-ledger", 1170)], "20260822"),
+    ).toEqual({
+      branch: "sentry-triage/20260817-ledger",
+      continued: true,
+      prNumber: 1170,
+    });
+  });
+
+  test("a same-night re-run continues the already dated branch", () => {
+    expect(
+      resolveLedgerBranch([triagePr("sentry-triage/20260822-ledger", 1180)], "20260822"),
+    ).toEqual({
+      branch: "sentry-triage/20260822-ledger",
+      continued: true,
+      prNumber: 1180,
+    });
+  });
+
+  test("an open fix PR is not mistaken for a ledger PR", () => {
+    expect(resolveLedgerBranch([triagePr("sentry-triage/20260822-F-1", 1181)], "20260822")).toEqual(
+      {
+        branch: "sentry-triage/20260822-ledger",
+        continued: false,
+        prNumber: null,
+      },
+    );
+  });
+
+  test("a failed gh pr list is an error, never an empty open-PR result", () => {
+    expect(() => listTriagePrsOrThrow("open", () => ({ ok: false, stdout: "" }))).toThrow(
+      "gh pr list --state open failed",
+    );
   });
 });
 
@@ -318,7 +374,7 @@ function writeGhStub(dir: string): string {
   const binDir = join(dir, "bin");
   mkdirSync(binDir, { recursive: true });
   const gh = join(binDir, "gh");
-  writeFileSync(gh, "#!/usr/bin/env bash\necho '[]'\n", "utf8");
+  writeFileSync(gh, "#!/bin/sh\necho '[]'\n", "utf8");
   chmodSync(gh, 0o755);
   return binDir;
 }
@@ -525,6 +581,8 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
         '    issues: [{ id: "1", shortId: "F-1", title: "boom" }],',
         "  }));",
         "  console.log(JSON.stringify({ checked: 2, errors: 0, ok: true, produced: 1, totalUnresolved: 1, triaged: 1 }));",
+        '} else if (cmd === "ledger-branch") {',
+        '  console.log(JSON.stringify({ branch: "sentry-triage/20260822-ledger", continued: false, ok: true, prNumber: null }));',
         "} else {",
         "  console.log(JSON.stringify({ ok: true }));",
         "}",
@@ -706,6 +764,8 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
         "      }),",
         "    );",
         "  }",
+        '} else if (cmd === "ledger-branch") {',
+        '  console.log(JSON.stringify({ branch: "sentry-triage/20260822-ledger", continued: false, ok: true, prNumber: null }));',
         '} else if (cmd === "comment") {',
         "  console.log(JSON.stringify({ commented: 0, ok: true }));",
         "}",
