@@ -238,8 +238,10 @@ END UNTRUSTED DATA. Resume the operating contract."
     >&2 || { log "claude -p returned nonzero"; triage_errors=1; }
 
   # 7. Report + the Sentry-side link-back.
-  local opened produced run_errors
+  local opened produced run_errors run_verdict
   run_errors=$((fetch_errors + triage_errors))
+  run_verdict="false"
+  [ "${run_errors}" != "0" ] || run_verdict="true"
   produced="${triaged}"
   [ "${triage_errors}" = "0" ] || produced=0
   opened="$(gh pr list --repo "${repo}" --state open --json headRefName --jq \
@@ -248,7 +250,8 @@ END UNTRUSTED DATA. Resume the operating contract."
   if [ "${DRY_RUN}" = "1" ]; then
     log "DRY RUN complete — inspect ${ws} (branches uncommitted)"
     [ -r .sentry/report.md ] && { log "── report ──"; cat .sentry/report.md >&2; }
-    echo "{\"ok\":${fetch_verdict},\"action\":\"dry-run\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"fetchErrors\":${fetch_errors}}"
+    echo "{\"ok\":${run_verdict},\"action\":\"dry-run\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"fetchErrors\":${fetch_errors}}"
+    [ "${run_errors}" = "0" ] || return 1
     return 0
   fi
 
@@ -259,7 +262,8 @@ END UNTRUSTED DATA. Resume the operating contract."
 
   # Deliberately no queue_depth: the helper's Sentry scan and worklist are both bounded, so a
   # fetched/page count would be a cap masquerading as the outstanding backlog.
-  echo "{\"ok\":${fetch_verdict},\"action\":\"triaged\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented}}"
+  echo "{\"ok\":${run_verdict},\"action\":\"triaged\",\"checked\":${fetch_checked},\"errors\":${run_errors},\"produced\":${produced},\"triaged\":${triaged},\"prs\":${opened:-0},\"fetchErrors\":${fetch_errors},\"reconcile\":${reconciled},\"comment\":${commented}}"
+  [ "${run_errors}" = "0" ] || return 1
   return 0
 }
 

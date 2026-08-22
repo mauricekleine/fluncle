@@ -854,17 +854,19 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
 
   test("a nonzero triage agent is a run error and produces no successfully acted-on issues", () => {
     const box = setUpBox();
-    const { status, summary } = runDriver(box, "work", { FIXTURE_CLAUDE_STATUS: "1" });
+    const { marker, status, summary } = runDriver(box, "work", { FIXTURE_CLAUDE_STATUS: "1" });
 
-    // Flow stays unchanged: the best-effort driver completes, but the ledger derives failure
-    // from errors:1 and does not mistake the handed-off worklist for completed action.
-    expect(status).toBe(0);
+    // The agent did not complete the work, so every health carrier must agree: process exit,
+    // summary verdict, and the marker consumed by /status all report the run failure.
+    expect(status).toBe(1);
     expect(summary).toMatchObject({
       action: "triaged",
       checked: 2,
       errors: 1,
+      ok: false,
       produced: 0,
       triaged: 1,
     });
+    expect(marker).toContain('"ok":false');
   });
 });
