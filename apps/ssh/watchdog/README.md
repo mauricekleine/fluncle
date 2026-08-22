@@ -35,6 +35,18 @@ Public-safe by construction (this repo is open source): NO hostnames, IPs, ports
 - `FLUNCLE_API_TOKEN` — the agent-scoped token authorizing the onion POST (`record_health` is agent-tier).
 - `WATCH_TOR_SOCKS` / `WATCH_ONION_TIMEOUT` — _optional_; rave-01's Tor SOCKS proxy (default `127.0.0.1:9050`) + the probe timeout in seconds (default 30, Tor is slow).
 
+## Diagnose a silent `onion` row
+
+`fluncle-rave-watchdog` emits no run-ledger rows by construction. The similarly named `fluncle-timer-watchdog` is a different unit on rave-02 and does write to the ledger. Neither unit's ledger history is evidence about this watchdog's `onion` writer.
+
+Use off-box evidence instead: the external rave-01 beacon history, the public `onion` row's last successful write, and `self-deploy-ssh` freshness from the same host. A fresh `self-deploy-ssh` row proves rave-01 and another host timer are running; it does not prove this watchdog fired. If those sources cannot separate a stopped watchdog from an unset onion variable or a rejected best-effort POST, run this exact read-only command on rave-01:
+
+```bash
+sudo journalctl -u fluncle-rave-watchdog.service --since '24 hours ago' --no-pager
+```
+
+`onion probe not fully configured` names an environment cause in `/etc/fluncle/rave-watchdog.env`; `onion record_health POST failed` names the posting leg. No recent service invocation points back to the timer. Do not add a run-ledger emitter here as part of that diagnosis: doing so would create a fifth mirrored emitter and change the telemetry contract rather than explain the `onion` writer.
+
 ## Deploy (on rave-01)
 
 The script's deployed path is `/opt/fluncle-rave-watchdog/fluncle-rave-watchdog.sh` (sibling to the other box binaries, e.g. `/opt/fluncle-dns/fluncle-dns`); the unit `ExecStart` references it there.

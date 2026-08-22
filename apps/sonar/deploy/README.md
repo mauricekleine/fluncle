@@ -55,6 +55,22 @@ Default `--if-changed` (the timer); `--force` redeploys unconditionally (the ope
 
 **Every run also reports itself to the run ledger.** The last line of a run's stdout is a JSON summary — `checked`, `produced`, `errors`, `queueDepth`, `gateState`, `expectedIntervalMs` — and it is POSTed to the agent-tier `record_run` op alongside the run's start, end, and exit code. This unit needed it more than most: a self-deploy legitimately deploys nothing for weeks, so `produced == 0` says nothing about its health and only the DENOMINATOR does. `checked` stays **0** until the release feed actually resolves a commit, so a feed that has been unreachable for a week is legible AS blindness rather than as seven quiet successes — and because that path exits 0 on purpose, the failure is COUNTED, so the verdict the Worker derives from the exit code AND the error count does not read green over it. The line states no `ok` of its own: a summary that grades itself is rejected at the edge. `queueDepth` is 1 while a published build is not yet on the box, giving the ledger its `produced == 0 AND queueDepth > 0` alarm; a gated tick that measured nothing reports `null` counters rather than zeros, because "never got to try" and "tried and found nothing" are different facts. The emitter is carried verbatim from [`cron-output.sh`](../../../docs/agents/hermes/scripts/cron-output.sh) (this box shares no bash library with rave-02) and `run-events.test.ts` pins the copies byte for byte — plus, because byte-equality between copies cannot tell you the copies are RIGHT, it resolves the endpoint they POST at against the contract the Worker actually serves.
 
+### Diagnose a `never reported` self-deploy
+
+Read the run ledger before treating the public `self-deploy-sonar` row as a status-only problem:
+
+```bash
+fluncle admin telemetry read --unit fluncle-sonar-freshen --since 72h --json
+```
+
+Rows prove the timer reached this script: quote the newest row's `exitCode` and `summaryRaw`, then diagnose the facts it reported. No rows across several hourly cadences means the self-deploy path has supplied no evidence that it runs; do not call that cosmetic. Check the unit journal and timer state. If the committed timer file is already installed at `/etc/systemd/system/fluncle-sonar-freshen.timer` and activation is the only missing step, the exact operator command on rave-01 is:
+
+```bash
+sudo systemctl enable --now fluncle-sonar-freshen.timer
+```
+
+Installing or activating the unit is an operator action, never part of a repository diagnosis. The full one-time install and pilot remain below.
+
 **`gateState` speaks the ledger's own closed vocabulary** — `active` / `disabled` / `dry-run` / `forced` / `locked` / `paused`, the `run_events.gate_state` enum — not words of this script's invention, because the Worker rejects an unknown one and a rejected POST leaves no row at all. Two ticks are gated, and they take DIFFERENT words on purpose. A run that finds the flock held says `locked`: it looked at nothing, so its counters are `null` too. A `--dry-run` says `dry-run`: it verifies and pre-smokes and then deliberately leaves the build undeployed, so its `produced:0` beside `queueDepth:1` is an operator's choice rather than a stalled box. The distinction is load-bearing rather than cosmetic — the Worker nulls the work counters of the gates that NEVER LOOKED (`disabled` / `locked` / `paused`) and keeps them for the ones that did, so spelling a dry run `paused` would throw away the `checked:1` proving it read the release feed. `--force` is **not** gated at all: it is a real deploy that really swaps, and gating it would erase the `produced:1` that proves the swap happened — nor can it raise a false alarm, since a forced swap ends `produced:1, queueDepth:0`.
 
 Discord alerts (deploy / rollback / failure) use `DISCORD_ALERT_WEBHOOK` from the optional env file. Every run also reports a **`self-deploy-sonar`** health check to the public [`/status`](https://www.fluncle.com/status) board (POST `/api/v1/admin/health`, agent tier) — beside `self-deploy-ssh` from the same box: `ok` when current or freshly deployed, `degraded` when a download/verify/pre-smoke failed or a swap was rolled back (the engine is healthy on the prior binary, a human should look), `down` if a rollback itself failed. Both the alert and the status post are best-effort and public-safe (no host, no raw error). The shared status read synthesizes `never reported` when this expected writer has no row, and degrades an existing row after three missed hourly reports, so a missing token or stopped timer cannot leave the automation absent or green.
@@ -95,7 +111,8 @@ sudo /opt/sonar-freshen/fluncle-sonar-freshen.sh --force
 
 # 6. Install the units, reload, enable + start the timer.
 sudo install -m 0644 apps/sonar/deploy/fluncle-sonar-freshen.service /etc/systemd/system/
-sudo install -m 0644 apps/sonar/deploy/fluncle-sonar-freshen.timer   /etc/systemd/system/
+sudo install -m 0644 apps/sonar/deploy/fluncle-sonar-freshen.timer \
+  /etc/systemd/system/fluncle-sonar-freshen.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now fluncle-sonar-freshen.timer
 
