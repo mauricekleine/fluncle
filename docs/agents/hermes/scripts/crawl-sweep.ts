@@ -178,8 +178,11 @@ export function main(): void {
     const pass = crawlPassWithRetry();
 
     summary.expanded = pass.expanded ?? 0;
-    summary.failed = pass.failed ?? 0;
-    summary.checked = summary.expanded + summary.failed;
+    // The server counts the one request that trips its circuit breaker as failed before it
+    // stops. Keep that attempt in `checked`, but do not call designed backpressure failed work.
+    const attemptedFailures = pass.failed ?? 0;
+    summary.failed = Math.max(0, attemptedFailures - (pass.rateLimited ? 1 : 0));
+    summary.checked = summary.expanded + attemptedFailures;
     summary.produced = summary.expanded;
     summary.labelsDiscovered = pass.labelsDiscovered ?? [];
     summary.pending = pass.frontierPending ?? 0;

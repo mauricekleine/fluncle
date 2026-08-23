@@ -30,12 +30,20 @@ case "$1" in
       fi
       printf '{"artists":[{"artistId":"social-1","name":"One"},{"artistId":"social-2","name":"Two"}]}\\n'
     elif [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "social-1" ]]; then
-      printf '{"artistId":"social-1","mbid":"mbid-1","ok":true,"rateLimited":false,"socialsCount":2}\\n'
+      if [[ "\${ARTIST_STUB_RATE_LIMITED:-0}" == "1" ]]; then
+        printf '{"artistId":"social-1","mbid":null,"ok":true,"rateLimited":true,"socialsCount":0}\\n'
+      else
+        printf '{"artistId":"social-1","mbid":"mbid-1","ok":true,"rateLimited":false,"socialsCount":2}\\n'
+      fi
     elif [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "social-2" ]]; then
       printf '{"artistId":"social-2","mbid":"mbid-2","ok":true,"rateLimited":false,"socialsCount":0}\\n'
     elif [[ "$2" == "backfills" && "$3" == "artist-images" ]]; then
-      printf '{"budgetLimited":true,"checkedCount":9,"dryRun":false,"failed":[{"artistId":"image-fail-1","error":"spotify 500"},{"artistId":"image-fail-2","error":"spotify 502"}],"failedCount":2,"filled":["image-1","image-2","image-3"],"filledCount":3,"nextCursor":"image-9","ok":false,"queueDepth":12,"rateLimited":true,"skipped":["skip-1","skip-2","skip-3","skip-4"],"skippedCount":4}\\n'
-      exit 1
+      if [[ "\${ARTIST_STUB_RATE_LIMITED:-0}" == "1" ]]; then
+        printf '{"budgetLimited":false,"checkedCount":0,"dryRun":false,"failed":[],"failedCount":0,"filled":[],"filledCount":0,"nextCursor":null,"ok":true,"queueDepth":0,"rateLimited":false,"skipped":[],"skippedCount":0}\\n'
+      else
+        printf '{"budgetLimited":true,"checkedCount":9,"dryRun":false,"failed":[{"artistId":"image-fail-1","error":"spotify 500"},{"artistId":"image-fail-2","error":"spotify 502"}],"failedCount":2,"filled":["image-1","image-2","image-3"],"filledCount":3,"nextCursor":"image-9","ok":false,"queueDepth":12,"rateLimited":true,"skipped":["skip-1","skip-2","skip-3","skip-4"],"skippedCount":4}\\n'
+        exit 1
+      fi
     fi
     ;;
 esac
@@ -156,5 +164,34 @@ test("a genuine artist run failure reports errors:1 and exits non-zero", async (
     errors: 1,
     ok: false,
     reason: "artist_failed",
+  });
+});
+
+test("a MusicBrainz circuit-breaker yield is not a failed artist", async () => {
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: {
+      ...process.env,
+      ARTIST_STUB_RATE_LIMITED: "1",
+      FLUNCLE_BIN: join(stubDir, "fluncle"),
+      NODE_ENV: "test",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    batch: 1,
+    checked: 1,
+    failed: 0,
+    ok: true,
+    queueRemaining: 2,
+    resolved: 0,
+    throttled: true,
   });
 });

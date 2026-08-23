@@ -26,6 +26,7 @@ import { join } from "node:path";
 const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
   throttled) printf '{"ok":true,"expanded":3,"failed":1,"tracksFound":21,"tracksWritten":18,"tracksSkipped":3,"nodesEnqueued":5,"frontierPending":212,"seeded":0,"maxHop":2,"dryRun":false,"labelsDiscovered":["Hospital Records"],"rateLimited":true}\\n' ;;
+  throttled-after-failure) printf '{"ok":true,"expanded":3,"failed":2,"tracksFound":21,"tracksWritten":18,"tracksSkipped":3,"nodesEnqueued":5,"frontierPending":212,"seeded":0,"maxHop":2,"dryRun":false,"labelsDiscovered":[],"rateLimited":true}\\n' ;;
   cli-error) printf '{"code":"missing_token","message":"Missing required env vars: FLUNCLE_API_TOKEN","ok":false}\\n'; exit 1 ;;
   timeout-once) if [ -f "$(dirname "$0")/tried" ]; then printf '{"ok":true,"expanded":10,"failed":0,"tracksFound":40,"tracksWritten":31,"tracksSkipped":9,"nodesEnqueued":80,"frontierPending":150,"seeded":0,"maxHop":2,"dryRun":false,"labelsDiscovered":[],"rateLimited":false}\\n'; else touch "$(dirname "$0")/tried"; printf 'error: The operation timed out.\\n' >&2; exit 1; fi ;;
   crash) printf 'boom\\n' >&2; exit 1 ;;
@@ -36,6 +37,7 @@ esac
 let dir: string;
 let fluncleJson: typeof import("./crawl-sweep").fluncleJson;
 let crawlPassWithRetry: typeof import("./crawl-sweep").crawlPassWithRetry;
+const sweepPath = new URL("./crawl-sweep.ts", import.meta.url).pathname;
 
 /** Point the stub at one of its canned responses. */
 function mode(name: string): void {
@@ -120,5 +122,54 @@ describe("crawl-sweep's transient-timeout retry", () => {
     mode("cli-error");
 
     expect(() => crawlPassWithRetry()).toThrow(/missing_token|exited/);
+  });
+});
+
+test("a circuit-breaker yield is checked backpressure, not failed work", async () => {
+  mode("throttled");
+
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: { ...process.env, FLUNCLE_BIN: join(dir, "fluncle"), NODE_ENV: "test" },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    checked: 4,
+    expanded: 3,
+    failed: 0,
+    ok: true,
+    produced: 3,
+    throttled: true,
+  });
+});
+
+test("a circuit-breaker yield preserves earlier genuine failures", async () => {
+  mode("throttled-after-failure");
+
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: { ...process.env, FLUNCLE_BIN: join(dir, "fluncle"), NODE_ENV: "test" },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    checked: 5,
+    expanded: 3,
+    failed: 1,
+    ok: true,
+    throttled: true,
   });
 });

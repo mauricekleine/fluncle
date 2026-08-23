@@ -275,7 +275,6 @@ function main(): void {
         } else if (outcome === "noop") {
           summary.noop += 1;
         } else if (outcome === "rateLimited") {
-          summary.failed += 1;
           summary.throttled = true;
           break; // MB is throttling — stop hammering, let remaining artists stay queued
         } else {
