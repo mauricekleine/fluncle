@@ -18,6 +18,7 @@ import {
   buildCaptureSearchTarget,
   buildCaptureSummary,
   captureSessionSeed,
+  classifyCaptureFailure,
   filterRejectedCandidates,
   buildSearchQuery,
   buildSourceAudioKey,
@@ -27,6 +28,7 @@ import {
   classifyDownloadFailure,
   contentTypeForExt,
   createBotChallengeMeter,
+  createCaptureFailureMeter,
   DEFAULT_QUERY_VARIANTS,
   durationWithinTolerance,
   extractSourceAudioSha256,
@@ -42,6 +44,7 @@ import {
   normalizeChannelName,
   normalizeSearchQuery,
   noteBotChallenge,
+  noteCaptureFailure,
   pickCandidate,
   pickSegmentCandidates,
   pickTopicCandidate,
@@ -67,6 +70,14 @@ describe("capture sweep canonical counters", () => {
       botChallengesUncleared: 1,
       counts: { done: 2, failed: 1, skipped: 0, unmatched: 1 },
       elapsedMs: 123,
+      failures: {
+        failureRecording: 1,
+        proxy: 1,
+        r2: 0,
+        trackUpdate: 0,
+        unknown: 0,
+        ytDlp: 0,
+      },
       provenance: { failed: 0, found: 0, none: 0 },
       reverdict: { asked: 0, failed: 0 },
     });
@@ -76,8 +87,50 @@ describe("capture sweep canonical counters", () => {
       done: 2,
       errors: 0,
       failed: 1,
+      failureRecordingFailures: 1,
       produced: 2,
+      proxyFailures: 1,
+      r2Failures: 0,
+      trackUpdateFailures: 0,
+      unknownFailures: 0,
+      ytDlpFailures: 0,
     });
+  });
+
+  test("classifies a proxy-credit wall before the enclosing yt-dlp command", () => {
+    const meter = createCaptureFailureMeter();
+    const wall =
+      "yt-dlp search failed: ERROR: query page 1: Unable to download API page: ('Unable to connect to proxy', OSError('Tunnel connection failed: 407 TRAFFIC_EXHAUSTED'))";
+
+    expect(classifyCaptureFailure(new Error(wall))).toBe("proxy");
+    expect(noteCaptureFailure(meter, new Error(wall))).toBe("proxy");
+    expect(meter).toEqual({
+      failureRecording: 0,
+      proxy: 1,
+      r2: 0,
+      trackUpdate: 0,
+      unknown: 0,
+      ytDlp: 0,
+    });
+  });
+
+  test("keeps the other acquisition doors distinct", () => {
+    expect(classifyCaptureFailure(new Error("yt-dlp download failed: unavailable"))).toBe("yt-dlp");
+    expect(classifyCaptureFailure(new Error("R2 PUT key failed (403): denied"))).toBe("r2");
+    expect(classifyCaptureFailure(new Error("update_track track failed (500): no"))).toBe(
+      "track-update",
+    );
+    expect(classifyCaptureFailure(new Error("ffprobe exploded"))).toBe("unknown");
+  });
+
+  test("counts a failed failure-recording write independently of the acquisition door", () => {
+    const captureFindingSource = source.slice(
+      source.indexOf("async function captureFinding"),
+      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+    );
+
+    expect(captureFindingSource).toContain("noteCaptureFailure(failures, error);");
+    expect(captureFindingSource).toContain("failures.failureRecording += 1;");
   });
 
   test("preserves a measured empty batch as checked:0", () => {

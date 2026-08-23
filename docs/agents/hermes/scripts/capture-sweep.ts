@@ -1259,6 +1259,78 @@ async function signS3Request(options: {
 
 // ── R2 (S3 API) put ────────────────────────────────────────────────────────
 
+export type CaptureFailureKind = "proxy" | "r2" | "track-update" | "unknown" | "yt-dlp";
+
+export type CaptureFailureMeter = {
+  failureRecording: number;
+  proxy: number;
+  r2: number;
+  trackUpdate: number;
+  unknown: number;
+  ytDlp: number;
+};
+
+export function createCaptureFailureMeter(): CaptureFailureMeter {
+  return {
+    failureRecording: 0,
+    proxy: 0,
+    r2: 0,
+    trackUpdate: 0,
+    unknown: 0,
+    ytDlp: 0,
+  };
+}
+
+export function classifyCaptureFailure(error: unknown): CaptureFailureKind {
+  const tagged = (error as { captureFailureKind?: unknown } | null)?.captureFailureKind;
+  if (
+    tagged === "proxy" ||
+    tagged === "r2" ||
+    tagged === "track-update" ||
+    tagged === "unknown" ||
+    tagged === "yt-dlp"
+  ) {
+    return tagged;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /Unable to connect to proxy|ProxyError|Tunnel connection failed|Proxy Authentication Required|HTTP Error 407|status code 407|407 TRAFFIC_EXHAUSTED/i.test(
+      message,
+    )
+  ) {
+    return "proxy";
+  }
+  if (/^R2 (?:GET|PUT)\b/i.test(message)) {
+    return "r2";
+  }
+  if (/^update_track\b/i.test(message)) {
+    return "track-update";
+  }
+  if (/^yt-dlp\b/i.test(message)) {
+    return "yt-dlp";
+  }
+  return "unknown";
+}
+
+function tagCaptureFailure(kind: CaptureFailureKind, error: unknown): Error {
+  const tagged = error instanceof Error ? error : new Error(String(error));
+  Object.assign(tagged, { captureFailureKind: kind });
+  return tagged;
+}
+
+export function noteCaptureFailure(meter: CaptureFailureMeter, error: unknown): CaptureFailureKind {
+  const kind = classifyCaptureFailure(error);
+  if (kind === "track-update") {
+    meter.trackUpdate += 1;
+  } else if (kind === "yt-dlp") {
+    meter.ytDlp += 1;
+  } else {
+    meter[kind] += 1;
+  }
+  return kind;
+}
+
 const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 function encodeKey(key: string): string {
@@ -1266,25 +1338,29 @@ function encodeKey(key: string): string {
 }
 
 async function r2Put(key: string, body: Uint8Array, contentType: string): Promise<void> {
-  const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
-  const headers = await signS3Request({
-    accessKeyId: R2_ACCESS_KEY_ID,
-    body,
-    contentType,
-    method: "PUT",
-    now: new Date(),
-    region: "auto",
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
-    service: "s3",
-    url,
-  });
-  const res = await fetch(url, {
-    body,
-    headers: { ...headers, "content-type": contentType },
-    method: "PUT",
-  });
-  if (!res.ok) {
-    throw new Error(`R2 PUT ${key} failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  try {
+    const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
+    const headers = await signS3Request({
+      accessKeyId: R2_ACCESS_KEY_ID,
+      body,
+      contentType,
+      method: "PUT",
+      now: new Date(),
+      region: "auto",
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
+      service: "s3",
+      url,
+    });
+    const res = await fetch(url, {
+      body,
+      headers: { ...headers, "content-type": contentType },
+      method: "PUT",
+    });
+    if (!res.ok) {
+      throw new Error(`R2 PUT ${key} failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    }
+  } catch (error) {
+    throw tagCaptureFailure("r2", error);
   }
 }
 
@@ -1364,23 +1440,27 @@ async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
 }
 
 async function patchTrack(trackId: string, update: Record<string, unknown>): Promise<void> {
-  const url = `${API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(trackId)}`;
-  const res = await fetch(url, {
-    body: JSON.stringify(update),
-    headers: {
-      Authorization: `Bearer ${API_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    method: "PATCH",
-    // The Worker API record write (`update_track`), NOT a media download: the mutation can run
-    // slow-but-completing under load, so a 30s budget tripped a false failure alert. 60s clears
-    // the tail; the yt-dlp download/socket timeouts elsewhere in this file are left untouched.
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `update_track ${trackId} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
+  try {
+    const url = `${API_BASE_URL}/api/v1/admin/tracks/${encodeURIComponent(trackId)}`;
+    const res = await fetch(url, {
+      body: JSON.stringify(update),
+      headers: {
+        Authorization: `Bearer ${API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      method: "PATCH",
+      // The Worker API record write (`update_track`), NOT a media download: the mutation can run
+      // slow-but-completing under load, so a 30s budget tripped a false failure alert. 60s clears
+      // the tail; the yt-dlp download/socket timeouts elsewhere in this file are left untouched.
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      throw new Error(
+        `update_track ${trackId} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      );
+    }
+  } catch (error) {
+    throw tagCaptureFailure("track-update", error);
   }
 }
 
@@ -1962,7 +2042,8 @@ type FindingOutcome = "done" | "unmatched" | "failed" | "skipped";
 
 async function captureFinding(
   finding: CaptureFinding,
-  meter: BotChallengeMeter,
+  botChallenges: BotChallengeMeter,
+  failures: CaptureFailureMeter,
 ): Promise<FindingOutcome> {
   const { logId, trackId } = finding;
 
@@ -1985,7 +2066,10 @@ async function captureFinding(
   // retry never re-lands on the exit whose flag just failed it.
   const priorFailures =
     typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
-  const session = openProxySession(captureSessionSeed(logId ?? trackId, priorFailures), meter);
+  const session = openProxySession(
+    captureSessionSeed(logId ?? trackId, priorFailures),
+    botChallenges,
+  );
 
   const dir = mkdtempSync(join(tmpdir(), "fluncle-capture-"));
 
@@ -2091,7 +2175,9 @@ async function captureFinding(
     if (memory.dirty) {
       update.sourceAudioRejected = JSON.stringify(memory.sources);
     }
+    noteCaptureFailure(failures, error);
     await patchTrack(trackId, update).catch((patchError: unknown) => {
+      failures.failureRecording += 1;
       log(`failed to record failure for ${trackId}: ${String(patchError)}`);
     });
     log(
@@ -2649,12 +2735,14 @@ export function buildCaptureSummary(options: {
   botChallengesUncleared: number;
   counts: CaptureCounts;
   elapsedMs: number;
+  failures?: CaptureFailureMeter;
   /** The catalogue ladder's per-rung tally. Absent on a tick whose catalogue budget was shut. */
   ladder?: ProvenanceLadderCounts;
   provenance: ProvenanceCounts;
   reverdict: { asked: number; failed: number };
 }): Record<string, unknown> {
   const { counts, ladder, provenance, reverdict } = options;
+  const failures = options.failures ?? createCaptureFailureMeter();
 
   return {
     batch: options.batch,
@@ -2665,6 +2753,7 @@ export function buildCaptureSummary(options: {
     elapsedMs: options.elapsedMs,
     errors: 0,
     failed: counts.failed,
+    failureRecordingFailures: failures.failureRecording,
     ok: true,
     produced: counts.done,
     // THE PROVENANCE PHASE, reported separately from the capture batch it rides. Kept out of
@@ -2686,11 +2775,16 @@ export function buildCaptureSummary(options: {
     provenanceLadderSegmentVerified: ladder?.segmentVerified ?? 0,
     provenanceLadderTopicServed: ladder?.topicServed ?? 0,
     provenanceNone: provenance.none,
+    proxyFailures: failures.proxy,
+    r2Failures: failures.r2,
     reverdictAsked: reverdict.asked,
     reverdictFailed: reverdict.failed,
     // Deliberately no `queue_depth`: capture's whole-backlog count is an unindexed hot-path scan.
     skipped: counts.skipped,
+    trackUpdateFailures: failures.trackUpdate,
+    unknownFailures: failures.unknown,
     unmatched: counts.unmatched,
+    ytDlpFailures: failures.ytDlp,
   };
 }
 
@@ -2741,6 +2835,7 @@ async function main(): Promise<void> {
   // pool cannot lose a count). It rides into the summary below as the rate an operator can
   // finally read per tick instead of grepping a floor out of the journal.
   const botChallenges = createBotChallengeMeter();
+  const failures = createCaptureFailureMeter();
 
   // A fixed worker pool over the batch: `CONCURRENCY` workers each pull the next index. Catch
   // per-finding inside the worker — one failure must never abort the tick or starve a worker.
@@ -2755,10 +2850,11 @@ async function main(): Promise<void> {
       }
 
       try {
-        const outcome = await captureFinding(finding, botChallenges);
+        const outcome = await captureFinding(finding, botChallenges, failures);
         counts[outcome] += 1;
       } catch (error) {
         counts.failed += 1;
+        noteCaptureFailure(failures, error);
         log(
           `unexpected error on ${finding.trackId}: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -2798,6 +2894,7 @@ async function main(): Promise<void> {
         botChallengesUncleared: botChallenges.uncleared,
         counts,
         elapsedMs: Date.now() - started,
+        failures,
         // Deliberately NO `queue_depth`. `queue.length` is only the bounded page, while the honest
         // `count=true` capture predicate scans the growing tracks table plus its findings join on
         // every hot-path tick (capture has no covering queue index). Until an operator-approved,
