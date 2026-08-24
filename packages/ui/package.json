@@ -28,7 +28,7 @@
     "@base-ui/react": "catalog:",
     "@fluncle/tokens": "workspace:*",
     "@phosphor-icons/react": "catalog:",
-    "@shadcn/react": "~0.2.1",
+    "@shadcn/react": "~0.3.0",
     "class-variance-authority": "catalog:",
     "cmdk": "catalog:",
     "cnfast": "catalog:",
@@ -37,7 +37,7 @@
   "devDependencies": {
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "shadcn": "~4.11.1",
+    "shadcn": "~4.18.0",
     "typescript": "catalog:"
   },
   "peerDependencies": {

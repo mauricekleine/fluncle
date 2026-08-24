@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@fluncle/contracts": "workspace:*",
-    "@raycast/api": "~1.104.23",
+    "@raycast/api": "~2.0.5",
     "react": "catalog:"
   },
   "devDependencies": {
