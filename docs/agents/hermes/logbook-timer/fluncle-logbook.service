@@ -16,9 +16,19 @@ Type=oneshot
 # (Unit A — auto-updates from main via pin-watch); this host unit only TRIGGERS it, and the
 # sweep self-writes its /status marker (cron-output.sh) so the prober stays honest.
 ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/logbook-sweep.sh
-# A HYBRID sweep: deterministic everywhere except one `claude -p` authoring call for the day.
-# A long-form entry needs more model headroom than the fast Worker-trigger sweeps.
-TimeoutStartSec=300
+# A HYBRID sweep: deterministic everywhere except the `claude -p` authoring calls. A long-form
+# entry needs more model headroom than the fast Worker-trigger sweeps — measured across a month
+# of healthy ticks, ONE pass runs 98s to 763s (median ~250s), so even the old one-day-per-tick
+# shape sat right on a 300s budget and ran over it on a slow night.
+#
+# The sweep now spends a wall-clock budget instead of a fixed count (LOGBOOK_BUDGET_MS, 15m) so
+# that a backlog can actually close rather than trailing forever one day behind. This ceiling
+# must stay ABOVE that budget plus the reservation the sweep keeps for the pass it is about to
+# start (LOGBOOK_SLOWEST_PASS_MS, 13m) — the sweep never begins a pass without room for the
+# slowest one on record, and this number is the backstop if that reasoning is ever wrong.
+# Lower it and a budgeted tick gets SIGKILLed mid-authoring, which lands as a summary-less
+# marker and a red `no-summary` verdict for a sweep that was working.
+TimeoutStartSec=1800
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
