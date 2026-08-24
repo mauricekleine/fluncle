@@ -17,7 +17,7 @@
     "@fluncle/contracts": "workspace:*",
     "@fluncle/test-support": "workspace:*",
     "@types/bun": "catalog:",
-    "@types/chrome": "~0.2.2",
+    "@types/chrome": "~0.2.6",
     "typescript": "catalog:"
   }
 }

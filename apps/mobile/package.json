@@ -14,10 +14,10 @@
     "lint": "expo lint"
   },
   "dependencies": {
-    "@better-auth/expo": "~1.7.0",
+    "@better-auth/expo": "1.6.26",
     "@expo-google-fonts/oxanium": "~0.4.2",
     "@expo-google-fonts/space-grotesk": "~0.4.1",
-    "@expo/vector-icons": "~15.1.0",
+    "@expo/vector-icons": "~15.1.1",
     "@fluncle/contracts": "workspace:*",
     "@fluncle/tokens": "workspace:*",
     "@orpc/client": "catalog:",
@@ -25,12 +25,12 @@
     "@orpc/openapi-client": "catalog:",
     "@orpc/tanstack-query": "catalog:",
     "@react-native-async-storage/async-storage": "2.2.0",
-    "@shopify/flash-list": "2.3.2",
-    "@shopify/react-native-skia": "2.11.0",
+    "@shopify/flash-list": "2.0.2",
+    "@shopify/react-native-skia": "2.6.2",
     "@tanstack/query-async-storage-persister": "~5.101.4",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-query-persist-client": "~5.101.4",
-    "better-auth": "~1.7.0",
+    "better-auth": "1.6.26",
     "expo": "~56.0.17",
     "expo-audio": "~56.0.13",
     "expo-blur": "~56.0.4",
@@ -54,10 +54,10 @@
     "react": "19.2.8",
     "react-native": "0.85.3",
     "react-native-gesture-handler": "~2.31.2",
-    "react-native-reanimated": "4.5.3",
+    "react-native-reanimated": "4.3.1",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "4.27.0",
-    "react-native-worklets": "0.12.1"
+    "react-native-screens": "~4.26.0",
+    "react-native-worklets": "0.8.3"
   },
   "devDependencies": {
     "@fluncle/test-support": "workspace:*",
