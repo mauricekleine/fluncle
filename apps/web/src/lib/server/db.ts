@@ -213,6 +213,8 @@ export function readClientProperty(client: Client, property: PropertyKey): unkno
       return client.close.bind(client);
     case "closed":
       return client.closed;
+    case "constructor":
+      return client.constructor;
     case "execute":
       return client.execute.bind(client);
     case "executeMultiple":
