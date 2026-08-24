@@ -22,7 +22,7 @@ It is an opinionated starting point, not a universal cloud provisioning framewor
 - Private firewall name: `agent-devbox-private`
 - Public SSH app firewall name: `fluncle-rave-public`
 - Tailscale hostname: server name
-- Bun version: `1.2.15`
+- Bun version: `1.4.0`
 - Toolchain profile: `devbox` (the alternative is `agent-box`)
 - 1Password CLI (`op`) on the private profile: installed (`INSTALL_OP=1`)
 
