@@ -26,7 +26,7 @@ USERNAME="${USERNAME:-admin}"
 # OpenSSH on :2222, NOT Tailscale SSH on :22, so headless installs never hit a
 # Tailscale-SSH "check" re-auth prompt.
 ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
-BUN_VERSION="${BUN_VERSION:-1.2.15}"
+BUN_VERSION="${BUN_VERSION:-1.4.0}"
 
 # TOOLCHAIN_PROFILE sets the DEFAULTS below; an explicitly-set INSTALL_* always wins.
 #

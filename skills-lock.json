@@ -116,7 +116,7 @@
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "64f26f1dc6014a76fd79a5a48e7edb9cb0c676c4af24542fea4dd8db59735174"
+      "computedHash": "2ff01a6d91ae9fce02fa67f84f739543d883ee5e6c5a6528d05ec0dd1c5a00dd"
     },
     "impeccable": {
       "source": "pbakaus/impeccable",
