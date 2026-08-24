@@ -9,7 +9,14 @@
     "**/.turbo/**",
     "apps/raycast/raycast-env.d.ts",
     "apps/web/src/routeTree.gen.ts",
-    "apps/web/worker-configuration.d.ts"
+    "apps/web/worker-configuration.d.ts",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
   ],
   "options": {
     "denyWarnings": true,
@@ -34,6 +41,11 @@
     }
   ],
   "rules": {
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-widen-then-assert": "error",
     "curly": "error",
     "eslint/sort-keys": "error",
     "import/consistent-type-specifier-style": ["error", "prefer-inline"],

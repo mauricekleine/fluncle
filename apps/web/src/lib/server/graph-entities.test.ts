@@ -33,6 +33,7 @@ import {
 } from "./albums";
 import { listArtistsHubPage, listArtistsMissingBio, upsertTrackArtists } from "./artists";
 import { flattenArtistGroups, listLabelCatalogue } from "./catalogue-groups";
+import { readClientProperty } from "./db";
 import { createIntegrationDb, syncHubCounts } from "./integration-db";
 import { getGraphPreview } from "./graph-preview";
 import {
@@ -345,9 +346,7 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
           };
         }
 
-        const value = Reflect.get(target, prop);
-
-        return typeof value === "function" ? value.bind(target) : value;
+        return readClientProperty(target, prop);
       },
     });
   }

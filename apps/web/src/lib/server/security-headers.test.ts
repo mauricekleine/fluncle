@@ -434,9 +434,30 @@ describe("withSecurityHeaders", () => {
             };
           }
 
-          const value = Reflect.get(target, property);
-
-          return typeof value === "function" ? value.bind(target) : value;
+          switch (property) {
+            case Symbol.iterator:
+              return target[Symbol.iterator].bind(target);
+            case "append":
+              return target.append.bind(target);
+            case "delete":
+              return target.delete.bind(target);
+            case "entries":
+              return target.entries.bind(target);
+            case "forEach":
+              return target.forEach.bind(target);
+            case "get":
+              return target.get.bind(target);
+            case "getSetCookie":
+              return target.getSetCookie.bind(target);
+            case "has":
+              return target.has.bind(target);
+            case "keys":
+              return target.keys.bind(target);
+            case "values":
+              return target.values.bind(target);
+            default:
+              return undefined;
+          }
         },
       }),
     });

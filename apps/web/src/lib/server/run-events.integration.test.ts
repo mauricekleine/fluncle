@@ -2,6 +2,7 @@ import { type Client, type InArgs, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { insertRunEvent, readRunLedger } from "./run-events";
+import { readClientProperty } from "./db";
 import { createTelemetryIntegrationDb } from "./telemetry-integration-db";
 
 // The run ledger's SQL half — the REAL parameterized insert against the REAL generated
@@ -68,7 +69,7 @@ function faultRunEventInsert(
 
   return {
     client: new Proxy(client, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === "execute") {
           return async (statement: InStatement, args?: InArgs) => {
             const sql = typeof statement === "string" ? statement : statement.sql;
@@ -95,11 +96,7 @@ function faultRunEventInsert(
           };
         }
 
-        const value: unknown = Reflect.get(target, property, receiver);
-
-        return typeof value === "function"
-          ? (value as (...args: unknown[]) => unknown).bind(target)
-          : value;
+        return readClientProperty(target, property);
       },
     }),
     insertCalls: () => insertCalls,

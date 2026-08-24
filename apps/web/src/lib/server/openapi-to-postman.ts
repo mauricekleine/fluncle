@@ -7,8 +7,7 @@
 // maintenance. It deliberately does not implement the whole OpenAPI surface;
 // anything outside what the Fluncle spec exercises is skipped, not guessed.
 
-type Json = unknown;
-type JsonObject = Record<string, Json>;
+type JsonObject = Record<string, unknown>;
 
 type OpenApiSpec = {
   info?: { title?: string; description?: string; summary?: string; version?: string };
@@ -56,7 +55,7 @@ export type PostmanCollection = {
   item: PostmanFolder[];
 };
 
-function isObject(value: Json): value is JsonObject {
+function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -74,7 +73,11 @@ function resolveRef(spec: OpenApiSpec, ref: string): JsonObject | undefined {
 // Build a representative JSON example from a schema, following local $refs and
 // honouring const/enum/default/format so request bodies are runnable, not blank.
 // Guards against recursive schemas via a seen-set on resolved ref names.
-function exampleForSchema(spec: OpenApiSpec, schema: Json, seen: Set<string> = new Set()): Json {
+function exampleForSchema(
+  spec: OpenApiSpec,
+  schema: unknown,
+  seen: Set<string> = new Set(),
+): unknown {
   if (!isObject(schema)) {
     return null;
   }
@@ -102,7 +105,7 @@ function exampleForSchema(spec: OpenApiSpec, schema: Json, seen: Set<string> = n
   }
 
   // oneOf/anyOf: pick the first non-null branch so the example is useful.
-  const union = (schema.oneOf ?? schema.anyOf) as Json;
+  const union = schema.oneOf ?? schema.anyOf;
   if (Array.isArray(union)) {
     const branch = union.find((b) => !(isObject(b) && b.type === "null")) ?? union[0];
     return exampleForSchema(spec, branch, seen);
@@ -186,7 +189,7 @@ function folderNameForPath(path: string): string {
   return first.replace(/^\{(.+)\}$/, "$1") || "root";
 }
 
-export function openApiToPostman(input: Json): PostmanCollection {
+export function openApiToPostman(input: unknown): PostmanCollection {
   const spec = (isObject(input) ? input : {}) as OpenApiSpec;
   const serverUrl = spec.servers?.[0]?.url ?? "/";
   const { host, basePath } = splitServer(serverUrl);
@@ -299,7 +302,7 @@ export function openApiToPostman(input: Json): PostmanCollection {
   };
 }
 
-function jsonBodySchema(operation: JsonObject): Json {
+function jsonBodySchema(operation: JsonObject): unknown {
   const requestBody = operation.requestBody;
   if (!isObject(requestBody)) {
     return undefined;

@@ -7,3 +7,4 @@
 apps/raycast/raycast-env.d.ts
 apps/web/src/routeTree.gen.ts
 apps/web/worker-configuration.d.ts
+tools/oxlint/anti-slop/**

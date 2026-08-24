@@ -205,9 +205,36 @@ export async function retryRunEventInsert<T>(insert: () => Promise<T>): Promise<
 // method must run with `this` bound to the real client: the span wrappers call
 // `client.<method>(...)` in method-call form (which keeps `this`), and the
 // pass-through branch binds any forwarded function back to the real client.
+export function readClientProperty(client: Client, property: PropertyKey): unknown {
+  switch (property) {
+    case "batch":
+      return client.batch.bind(client);
+    case "close":
+      return client.close.bind(client);
+    case "closed":
+      return client.closed;
+    case "execute":
+      return client.execute.bind(client);
+    case "executeMultiple":
+      return client.executeMultiple.bind(client);
+    case "migrate":
+      return client.migrate.bind(client);
+    case "protocol":
+      return client.protocol;
+    case "reconnect":
+      return client.reconnect.bind(client);
+    case "sync":
+      return client.sync.bind(client);
+    case "transaction":
+      return client.transaction.bind(client);
+    default:
+      return undefined;
+  }
+}
+
 function instrument(client: Client): Client {
   return new Proxy(client, {
-    get(target, property, receiver) {
+    get(target, property) {
       if (property === "execute") {
         return (statement: InStatement, args?: InArgs) => {
           const sql = statementSql(statement);
@@ -252,11 +279,7 @@ function instrument(client: Client): Client {
         };
       }
 
-      const value: unknown = Reflect.get(target, property, receiver);
-
-      return typeof value === "function"
-        ? (value as (...args: unknown[]) => unknown).bind(target)
-        : value;
+      return readClientProperty(target, property);
     },
   });
 }
