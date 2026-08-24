@@ -122,6 +122,12 @@ describe("getDb instrumentation", () => {
     expect(spanContexts).toHaveLength(0);
   });
 
+  it("preserves the client's constructor for Drizzle's config detection", async () => {
+    const db = await getDb();
+
+    expect(db.constructor).toBe(Object);
+  });
+
   it("collapses whitespace and truncates an oversized span name", async () => {
     execute.mockResolvedValue({ rows: [] });
 

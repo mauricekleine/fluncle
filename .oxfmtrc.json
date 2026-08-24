@@ -11,6 +11,8 @@
     // thing under test — the parsers that read them exist precisely because that markup can
     // change. Reformatting them would rewrite the evidence and could quietly move an attribute
     // the parser matches on. Formatting-only, so they are still linted and still committed.
-    "apps/web/src/lib/server/__fixtures__/**/*.html"
+    "apps/web/src/lib/server/__fixtures__/**/*.html",
+    // Repository-owned policy, vendored verbatim so updates stay auditable against upstream.
+    "tools/oxlint/anti-slop/**"
   ]
 }

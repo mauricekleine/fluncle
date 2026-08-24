@@ -9,7 +9,14 @@
     "**/.turbo/**",
     "apps/raycast/raycast-env.d.ts",
     "apps/web/src/routeTree.gen.ts",
-    "apps/web/worker-configuration.d.ts"
+    "apps/web/worker-configuration.d.ts",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
   ],
   "options": {
     "denyWarnings": true,
@@ -34,11 +41,27 @@
     }
   ],
   "rules": {
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-widen-then-assert": "error",
     "curly": "error",
+    // Code comments may carry deliberate invisible separators when documenting token sequences;
+    // runtime syntax, strings, templates, and JSX remain checked.
+    "eslint/no-irregular-whitespace": ["warn", { "skipComments": true }],
     "eslint/sort-keys": "error",
     "import/consistent-type-specifier-style": ["error", "prefer-inline"],
     "no-unsafe-optional-chaining": "error",
     "no-unused-vars": "warn",
+    // React Compiler correctness is a separate migration surface. Keep the six backlog rules
+    // explicit rather than weakening warning enforcement or disabling clean React rules.
+    "react/immutability": "off",
+    "react/preserve-manual-memoization": "off",
+    "react/purity": "off",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+    "react/use-memo": "off",
     "typescript/await-thenable": "error",
     "typescript/consistent-type-definitions": ["error", "type"],
     "typescript/no-base-to-string": "error",
