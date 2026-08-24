@@ -61,7 +61,7 @@
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "94f00c0f47b65db2b6b2322ec9bcf54d6e179f0cf5e2e5c53f9da5daa478d02f"
+      "computedHash": "fb5feeb49bfe322f9dbdb2d61014c857eaf0faa839763ac27b1c058f4c55e214"
     },
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",

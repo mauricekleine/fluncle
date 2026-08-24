@@ -4,7 +4,9 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is unpinnable. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Most of this is now automated.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (box.ascii) is unpinnable. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+
+**A pin absent from this inventory is a pin nobody watches.** yt-dlp was baked and pinned but listed nowhere here, so no sweep ever asked about it. It fell behind a YouTube player change and `fluncle-capture` failed every single download for thirteen days while reporting a healthy tick each time — the failure is item-level (`ytDlpFailures`), so the run verdict stayed true and nothing escalated. Adding a baked binary to the Dockerfile without adding a row here is how that happens again.
 
 ---
 
@@ -137,6 +139,29 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 
 ---
 
+## 7. yt-dlp (the capture fetcher) — AUTO-BUMPED, CALENDAR-VERSIONED
+
+- **File:** `docs/agents/hermes/Dockerfile`, the early `yt-dlp` layer.
+- **Marker:** `curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/<ver>/yt-dlp_linux`
+- **Current pin:**
+
+  ```bash
+  grep -o 'yt-dlp/releases/download/[0-9.]*' docs/agents/hermes/Dockerfile
+  ```
+
+- **Check latest:**
+
+  ```bash
+  curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest | jq -r .tag_name
+  ```
+
+- **How to bump:** don't, by hand — `hermes-pin-drift.sh` opens the PR. The on-box `fluncle-pin-watch` timer rebakes on merge.
+- **Why it is auto-bumped rather than braked:** this is the binary `fluncle-capture` downloads audio with, and **staleness is its failure mode**. YouTube changes its player without notice; a yt-dlp that cannot follow fails every download. Holding a bump for review is therefore strictly more dangerous than taking it, which inverts the usual doctrine — so yt-dlp ships on any newer version.
+- **Why the major brake does not apply:** yt-dlp is calendar-versioned (`2026.08.19`). The brake compares leading components, which for a date means it would fire every January on an ordinary release and stall the fix through the exact window a stale pin hurts most. The `calendar` flag on `assess` skips it.
+- **Safety:** the pin-watch pre-smoke validates the rebuilt image before the live container is swapped, and rolls back on failure. If a bump ever does break capture, the symptom is `ytDlpFailures` on the `fluncle-capture` rows in the run ledger — **not** a red tick, so read the counter, not the verdict.
+
+---
+
 ## Quick reference table
 
 | #   | Item                | File (marker)                                                                     | Current pin (read)             | Check latest                                      | Ship end-to-end?                  |
@@ -147,3 +172,4 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
 | 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version`      | patch/minor yes, major/auth brake |
 | 5   | box.ascii CLI       | `Dockerfile` `box.ascii.dev/install`                                              | unpinned                       | N/A                                               | **Never** (re-verify only)        |
 | 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                    | `grep 'uses:.*@'`              | Renovate PRs (`gh pr list --author app/renovate`) | **Renovate (auto-pins + tracks)** |
+| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                        | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                       | **Always** (staleness = outage)   |

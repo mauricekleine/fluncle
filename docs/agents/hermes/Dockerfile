@@ -51,11 +51,19 @@ RUN apt-get update \
 
 # Bake a PINNED yt-dlp (the fluncle-capture sweep's fetcher) in its OWN EARLY layer — above the
 # frequently-bumped fluncle/claude pins — so a routine pin-watch rebuild never busts this 40MB
-# download (only a base/apt change does). A 40MB binary, never committed to this public repo;
-# bumped deliberately (a watched pin is a follow-up). `mkdir -p` because the sweep-script COPY
-# that creates /opt/hermes-scripts comes later; chmod 755 so the non-root cron user execs it.
+# download (only a base/apt change does). A 40MB binary, never committed to this public repo.
+# `mkdir -p` because the sweep-script COPY that creates /opt/hermes-scripts comes later; chmod
+# 755 so the non-root cron user execs it.
+#
+# STALENESS IS THE FAILURE MODE, so this pin is WATCHED (.github/scripts/hermes-pin-drift.sh),
+# not bumped by hand. YouTube changes its player without notice and a yt-dlp that cannot follow
+# fails every download while the sweep still reports a green tick — item-level `ytDlpFailures`,
+# never a run-level error. An unwatched pin therefore rots silently and takes capture with it.
+# The drift check treats yt-dlp as CALENDAR-versioned: any newer release is a safe auto-bump,
+# because a year rollover (2026.12.x -> 2027.01.x) is a date, not a breaking change, and holding
+# a January release for review is exactly the stall this watch exists to prevent.
 RUN mkdir -p /opt/hermes-scripts \
-  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_linux \
+  && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_linux \
        -o /opt/hermes-scripts/yt-dlp \
   && chmod 755 /opt/hermes-scripts/yt-dlp
 
@@ -191,9 +199,10 @@ RUN arch="$(uname -m)" \
   && chmod 755 /usr/local/bin/fluncle
 
 # GitHub CLI — the nightly-audit agents (audit-timer/) drive PRs through it (gh pr create/merge/
-# comment) with GH_TOKEN. Pinned single-binary from the release tarball, like yt-dlp; MANUAL-watch
-# tier (low-churn, backward-compatible) — NOT in hermes-pin-drift's hourly auto-bump, bumped
-# deliberately, with the nightly Security audit as the staleness backstop. pin-watch's pre-smoke
+# comment) with GH_TOKEN. Pinned single-binary from the release tarball; MANUAL-watch tier
+# (low-churn, backward-compatible) — NOT in hermes-pin-drift's hourly auto-bump, bumped
+# deliberately, with the nightly Security audit as the staleness backstop. (yt-dlp used to sit
+# in this tier and is no longer a fair comparison: it churns with YouTube and is auto-bumped.) pin-watch's pre-smoke
 # does `gh --version` after any rebuild so a broken bump rolls back.
 RUN arch="$(uname -m)" \
   && case "$arch" in \

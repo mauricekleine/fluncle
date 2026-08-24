@@ -4,13 +4,19 @@
 # Checks the baked Hermes supply-chain pins against their registries and acts on
 # the SHIP-vs-BRAKE doctrine (packages/skills/fluncle-maintenance) in plain code:
 #   • SAFE drift  — a patch/minor bump, SAME major — of the `fluncle` CLI, the
-#     Claude Code CLI, or bun → edits the pin in place so the workflow can open a
-#     PR. bun moves in TWO places: the Dockerfile installer line and package.json
+#     Claude Code CLI, or bun, and ANY newer yt-dlp (calendar-versioned, so the
+#     major brake would only ever misfire on a January release) → edits the pin in
+#     place so the workflow can open a PR. yt-dlp is here because its staleness is
+#     an OUTAGE that reads green: YouTube moves its player, the pinned binary can no
+#     longer follow, and fluncle-capture fails every download while still reporting
+#     a healthy tick (item-level `ytDlpFailures`, never a run-level error). It sat
+#     unwatched at 2026.07.04 and cost 13 days of captured audio.
+#     bun moves in TWO places: the Dockerfile installer line and package.json
 #     `packageManager` — every workflow reads the bun version from packageManager
 #     via setup-bun's `bun-version-file`, so the workflows follow automatically
 #     (a literal per-workflow bun-version once split the toolchain: only 2 of 5
 #     workflows were in this script's rewrite set).
-#   • RISKY drift — a MAJOR bump (any of the three), or a newer Nous Research
+#   • RISKY drift — a MAJOR bump (fluncle, Claude Code or bun), or a newer Nous Research
 #     Hermes BASE image tag — is recorded for a report-only issue, never edited.
 #     A major could rename/remove a command a cron calls; the base image's failure
 #     mode is the whole gateway. Those stay the operator's call.
@@ -51,20 +57,23 @@ inplace() { SRCH="$2" REPL="$3" perl -i -pe 's/\Q$ENV{SRCH}\E/$ENV{REPL}/g' "$1"
 CUR_FLUNCLE="$(sed -n 's#.*releases/download/v\([0-9][0-9.]*\)/fluncle-.*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_CLAUDE="$(sed -n 's#.*@anthropic-ai/claude-code@\([0-9][0-9.]*\).*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_BUN="$(sed -n 's/.*bun-v\([0-9][0-9.]*\).*/\1/p' "$DOCKERFILE" | head -1)"
+CUR_YTDLP="$(sed -n 's#.*yt-dlp/releases/download/\([0-9][0-9.]*\)/yt-dlp_linux.*#\1#p' "$DOCKERFILE" | head -1)"
 # The base is DIGEST-pinned (`FROM …@sha256:…`) for reproducible rebuilds, so its FROM line
 # carries no calendar version to drift-compare. The human-readable tag the digest was resolved
 # from lives in the adjacent `docker inspect …:v<ver>` comment — parse the version from there
 # (a `:v<ver>` marker anywhere in the Dockerfile), so the report-only base-drift check still
 # fires instead of FATALing on the digest form.
 CUR_BASE="$(sed -n 's#.*nousresearch/hermes-agent:v\([0-9][0-9.]*\).*#v\1#p' "$DOCKERFILE" | head -1)"
-[ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_CLAUDE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_BASE" ] \
-  || { log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' claude='$CUR_CLAUDE' bun='$CUR_BUN' base='$CUR_BASE')"; exit 1; }
+[ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_CLAUDE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_YTDLP" ] && [ -n "$CUR_BASE" ] \
+  || { log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' claude='$CUR_CLAUDE' bun='$CUR_BUN' yt-dlp='$CUR_YTDLP' base='$CUR_BASE')"; exit 1; }
 
 # ── check latest (read-only; a fetch failure degrades to 'unknown', never fatal) ─
 LATEST_FLUNCLE="$(npm view fluncle version 2>/dev/null || true)"
 LATEST_CLAUDE="$(npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
 LATEST_BUN="$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest 2>/dev/null \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"].replace("bun-v","",1))' 2>/dev/null || true)"
+LATEST_YTDLP="$(curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || true)"
 LATEST_BASE="$(curl -fsSL "https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags?page_size=50&ordering=last_updated" 2>/dev/null \
   | python3 -c 'import sys,json,re
 tags=[t["name"] for t in json.load(sys.stdin)["results"] if t["name"].startswith("v")]
@@ -74,22 +83,29 @@ print(max(tags,key=lambda v:[int(x) for x in re.findall(r"\d+",v)]) if tags else
 declare -a TABLE=("| pin | current | latest | verdict |" "| --- | --- | --- | --- |")
 declare -a BRAKE_LINES=()
 declare -a SHORT=()
-APPLY_FLUNCLE=""; APPLY_CLAUDE=""; APPLY_BUN=""
+APPLY_FLUNCLE=""; APPLY_CLAUDE=""; APPLY_BUN=""; APPLY_YTDLP=""
 
-assess() { # name current latest  → row + (sets APPLY_* / BRAKE_LINES)
-  local name="$1" cur="$2" latest="$3" verdict
+# The 4th argument marks a CALENDAR-versioned pin. The major-version brake below asks "did the
+# leading component change?" — a real signal for semver, meaningless for a date, where it fires
+# every January on an ordinary release. A calendar pin therefore takes every newer version as a
+# safe bump. yt-dlp is the only one: its staleness IS the outage (see the Dockerfile comment),
+# so a held bump costs more than an unreviewed one. The base image is calendar-versioned too and
+# deliberately does NOT get this — it is the whole gateway, and it has its own report-only path.
+assess() { # name current latest [calendar]  → row + (sets APPLY_* / BRAKE_LINES)
+  local name="$1" cur="$2" latest="$3" calendar="${4:-}" verdict
   if [ -z "$latest" ]; then
     verdict="unknown (fetch failed)"
   elif [ "$cur" = "$latest" ]; then
     verdict="current"
   elif ver_gt "$latest" "$cur"; then
-    if [ "$(major "$latest")" = "$(major "$cur")" ]; then
+    if [ -n "$calendar" ] || [ "$(major "$latest")" = "$(major "$cur")" ]; then
       verdict="SAFE → $latest"
       SHORT+=("${name} ${latest}")
       case "$name" in
         fluncle) APPLY_FLUNCLE="$latest" ;;
         claude-code) APPLY_CLAUDE="$latest" ;;
         bun) APPLY_BUN="$latest" ;;
+        yt-dlp) APPLY_YTDLP="$latest" ;;
       esac
     else
       verdict="MAJOR → $latest (report)"
@@ -104,6 +120,7 @@ assess() { # name current latest  → row + (sets APPLY_* / BRAKE_LINES)
 assess fluncle "$CUR_FLUNCLE" "$LATEST_FLUNCLE"
 assess claude-code "$CUR_CLAUDE" "$LATEST_CLAUDE"
 assess bun "$CUR_BUN" "$LATEST_BUN"
+assess yt-dlp "$CUR_YTDLP" "$LATEST_YTDLP" calendar
 
 # base image — always report-only (pre-1.0; failure mode is the whole gateway)
 BASE_VERDICT="current"
@@ -130,6 +147,10 @@ fi
 if [ -n "$APPLY_CLAUDE" ]; then
   inplace "$DOCKERFILE" "@anthropic-ai/claude-code@$CUR_CLAUDE" "@anthropic-ai/claude-code@$APPLY_CLAUDE"
   CHANGES+=("\`@anthropic-ai/claude-code\` \`$CUR_CLAUDE\` → \`$APPLY_CLAUDE\` (Dockerfile)")
+fi
+if [ -n "$APPLY_YTDLP" ]; then
+  inplace "$DOCKERFILE" "yt-dlp/releases/download/$CUR_YTDLP/yt-dlp_linux" "yt-dlp/releases/download/$APPLY_YTDLP/yt-dlp_linux"
+  CHANGES+=("\`yt-dlp\` \`$CUR_YTDLP\` → \`$APPLY_YTDLP\` (Dockerfile) — the fluncle-capture fetcher; a stale one fails every download while the tick still reads green")
 fi
 if [ -n "$APPLY_BUN" ]; then
   inplace "$DOCKERFILE"  "bun-v$CUR_BUN"          "bun-v$APPLY_BUN"          # installer line
