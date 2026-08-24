@@ -231,7 +231,7 @@ describe("run-ledger summary counters", () => {
 // `authorOne` driven against the stub binaries, with the ledger on disk. Each `tick()` is a
 // separate call that reads the ledger back off disk — what a real cron tick is.
 //
-// This sweep's queue is the worst of the three: the gap list is OLDEST FIRST at BATCH_CAP=1, so one
+// This sweep's queue is the worst of the three: the gap list is OLDEST FIRST, so one
 // unwritable day stopped the logbook backfilling ANYTHING newer, forever. And the day could be
 // genuinely unwritable: the sweep hands the author each finding's artist and title as its material
 // while the gate scanned those same names. THE NAME EXEMPTION fixes that; this bounds the rest.

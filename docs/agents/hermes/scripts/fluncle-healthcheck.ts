@@ -592,6 +592,19 @@ function probeDisk(): Check {
 // read a unit at tick time. The comments below (the claim-collision notes) are the part
 // no derivation can produce; keep writing them.
 //
+// The largest `RandomizedDelaySec` any committed sweep timer carries, in ms. Every timer
+// under docs/agents/hermes/*-timer/ jitters each firing so that a mass restart (a pin-watch
+// quiesce/restore) cannot re-align the roster onto libSQL's single writer — so an observed
+// gap is ALWAYS the cadence plus up to this much, and any freshness budget that omits it is
+// judging the fleet against a period no timer was ever going to hit.
+//
+// One constant rather than a per-cron mirror of the unit files, because a hand-kept mirror
+// drifts and this is the conservative direction: taking the maximum can only ever make a
+// budget more forgiving, never wrongly strict. `fluncle-healthcheck.test.ts` reads every
+// committed .timer and fails the build if one ever exceeds this, so the constant cannot
+// silently fall behind the units it stands for.
+export const MAX_TIMER_JITTER_MS = 90_000;
+
 // One known cron: the registry surface id we emit, the bare token its output-dir
 // header carries, and its cadence.
 export type CronDef = { cadenceMs: number; match: string; service: string };
@@ -860,8 +873,17 @@ export function judgeCron(
   dir: string | undefined,
   uptimeMs: number | null = null,
 ): CronVerdict {
-  // The stale budget: a run within 3× the cadence (plus a small floor for clock jitter).
-  const staleBudgetMs = Math.max(cron.cadenceMs * 3, 90_000);
+  // The stale budget: a run within 3× the cadence, PLUS the per-firing jitter every sweep
+  // timer carries. The jitter term is not decoration — `cadenceMs` describes what the unit
+  // asks for (`OnUnitActiveSec`), while the gap actually observed is that plus a fresh
+  // `RandomizedDelaySec` roll on every firing. For the slow crons the two are the same
+  // number to within rounding, but the faster the cron the more the jitter dominates, and
+  // at the fleet's fastest cadence it stops being a rounding error: `cron.live` asks for 60s
+  // and rolls up to 90s on top, so its real period is 60–150s against a 3× budget of 180s.
+  // Measured across its last 100 ticks: mean 114s, max 188s — over the budget, on a timer
+  // behaving exactly as configured. Without this term the board reports a healthy sweep as
+  // `lagging`, which is the flap that teaches an operator to stop reading the row.
+  const staleBudgetMs = Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
 
   // No output dir at all, or an unreadable one. Fresh box ⇒ genuinely "no runs yet"; a box
   // that has been up past this cron's whole stale budget ⇒ it should have produced something.

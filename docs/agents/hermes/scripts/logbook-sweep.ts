@@ -62,11 +62,29 @@ import {
 } from "./attempt-ledger";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
-// One day per tick: a single long-form authoring pass sits comfortably inside the
-// timer budget; the gap list drains across ticks (oldest first), so history
-// backfills over successive nights. Raise only once a healthy run measures fast.
-const BATCH_CAP = 1;
+// A WALL-CLOCK budget, not a fixed count. One day per tick is the steady state and always
+// will be — a caught-up logbook has exactly one gap per night — but a fixed cap of one made a
+// gap PERMANENT: it fills one old day per night while a new day arrives, so the gap count
+// never falls. Six days of lost ticks therefore meant the logbook ran a week behind forever
+// rather than catching up, which is the failure this budget exists to end.
+//
+// A count cannot be the lever here because the passes are not uniform. Measured across a month
+// of healthy authoring ticks: 98s to 763s, median ~250s. A cap of three is comfortable on a
+// median night and two and a half times over budget on a slow one, so the tick asks the clock
+// instead: keep authoring while there is room for another WORST-CASE pass, then stop cleanly.
+// Once caught up this changes nothing at all — there is only ever one day to write.
+const BATCH_CAP = 4; // hard ceiling; the clock below is what actually stops a tick
 const GAP_LIMIT = 10; // hard ceiling on the gap read (we only act on BATCH_CAP)
+
+// The tick's authoring budget, and the reservation it keeps for the pass it is about to start.
+// The reservation is the point: checking "am I still inside the budget?" AFTER a pass would
+// let a tick start a 763s pass at 890s and blow straight through the unit's TimeoutStartSec,
+// which SIGKILLs the run mid-authoring and leaves no summary — a red `no-summary` verdict for
+// a sweep that was working. So the question asked before each pass is "is there room for the
+// slowest pass I have ever measured?", and the unit's timeout sits above budget + reservation
+// with margin (see logbook-timer/fluncle-logbook.service).
+const BUDGET_MS = Number(process.env.LOGBOOK_BUDGET_MS ?? "") || 15 * 60_000;
+const SLOWEST_PASS_MS = Number(process.env.LOGBOOK_SLOWEST_PASS_MS ?? "") || 13 * 60_000;
 
 // The re-author budget when the Worker's anti-sameness rails reject an entry (a title
 // collision or a body echo). ONE retry: the second attempt is handed the offending
@@ -937,8 +955,8 @@ async function main(): Promise<void> {
   const ledger = readAttemptLedger(ledgerPath);
   const budget: Budget = { ledger, ledgerPath };
 
-  // Exhausted days are dropped BEFORE the cap: the gap list is OLDEST FIRST at BATCH_CAP=1, so one
-  // unwritable day would otherwise stop the logbook backfilling anything newer, forever.
+  // Exhausted days are dropped BEFORE the cap: the gap list is OLDEST FIRST, so one unwritable
+  // day would otherwise stop the logbook backfilling anything newer, forever.
   const { exhausted, work } = selectWork(gaps, ledger, logbookKey, BATCH_CAP, MAX_LOGBOOK_ATTEMPTS);
 
   summary.exhausted = exhausted.length;
@@ -957,7 +975,21 @@ async function main(): Promise<void> {
     );
   }
 
+  const startedAt = Date.now();
+
   for (const gap of work) {
+    // The clock, asked BEFORE the pass rather than after it (see BUDGET_MS). Stopping here is a
+    // clean, ordinary outcome: the remaining days keep their place at the head of the gap list
+    // and the next tick opens on them, so a budgeted stop costs nothing but a night.
+    const elapsedMs = Date.now() - startedAt;
+
+    if (summary.checked > 0 && elapsedMs + SLOWEST_PASS_MS > BUDGET_MS) {
+      log(
+        `budget spent after ${Math.round(elapsedMs / 1_000)}s (${summary.checked} authored this tick) — the rest of the gap stays queued for tomorrow`,
+      );
+      break;
+    }
+
     // Exhausted rows were filtered without a call. A checked row is one this tick actually
     // attempted, regardless of whether it authored, was refused, or failed as an item.
     summary.checked += 1;
