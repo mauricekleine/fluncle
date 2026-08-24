@@ -18,7 +18,7 @@
 //
 //   bun test docs/agents/hermes/scripts/fluncle-healthcheck.test.ts
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,6 +40,7 @@ import {
   formatStreakDuration,
   isStrained,
   judgeCron,
+  MAX_TIMER_JITTER_MS,
   markerBackpressure,
   markerStrain,
   nextServiceState,
@@ -58,7 +59,10 @@ import {
 } from "./fluncle-healthcheck";
 
 const CRON: CronDef = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
-const STALE_BUDGET_MS = CRON.cadenceMs * 3;
+// Mirrors judgeCron's own budget INCLUDING the jitter allowance — these cases mean "just
+// past the budget", so a mirror that omits a term silently starts asserting "comfortably
+// inside it" instead, which is the opposite test.
+const STALE_BUDGET_MS = CRON.cadenceMs * 3 + MAX_TIMER_JITTER_MS;
 
 /** A marker dir holding the given run bodies, newest LAST, each aged `ageMs` apart. */
 function markerDir(runs: { ageMs: number; body: string }[]): string {
@@ -906,5 +910,67 @@ describe("normalizeStrain — the v5 state section", () => {
 
     expect(normalizeStrain(parsed)).toEqual(strain);
     expect(normalizeState(parsed)).toEqual({});
+  });
+});
+
+describe("the stale budget covers the jitter every timer actually rolls", () => {
+  // `cadenceMs` is what a unit ASKS for (`OnUnitActiveSec`); the gap observed is that plus a
+  // fresh `RandomizedDelaySec` on every firing. Judging the fleet against the bare cadence
+  // marks a correctly-behaving fast cron `lagging`, and a row that flaps is a row nobody reads.
+  const MINUTE = 60_000;
+  const dirFor = (ageMs: number) => {
+    const dir = mkdtempSync(join(tmpdir(), "jitter-"));
+    const marker = join(dir, "run.md");
+
+    writeFileSync(marker, '# Cron Job: live\n{"ok":true}\n');
+    utimesSync(marker, new Date(), new Date(Date.now() - ageMs));
+
+    return dir;
+  };
+
+  test("the fleet's fastest cron survives its own worst legitimate gap", () => {
+    // cron.live: OnUnitActiveSec=1min + RandomizedDelaySec=90 ⇒ a real period up to 150s.
+    // Measured over its last 100 ticks: mean 114s, max 188s. All of that must read fresh.
+    const live = { cadenceMs: MINUTE, match: "live", service: "cron.live" };
+
+    for (const observedMs of [114_000, 150_000, 188_000]) {
+      expect(judgeCron(live, dirFor(observedMs))).toBe("fresh-ok");
+    }
+  });
+
+  test("a genuinely stalled fast cron is still caught", () => {
+    // The budget must not go so slack that it stops meaning anything: well past cadence plus
+    // jitter is still `lagging`.
+    const live = { cadenceMs: MINUTE, match: "live", service: "cron.live" };
+
+    expect(judgeCron(live, dirFor(15 * MINUTE))).toBe("lagging");
+  });
+
+  test("the allowance is noise for a slow cron, not a licence to sleep", () => {
+    // A daily cron's budget moves by 90s out of three days — the jitter term is only ever
+    // decisive where it is a real fraction of the period.
+    const daily = { cadenceMs: 24 * 60 * MINUTE, match: "logbook", service: "cron.logbook" };
+
+    expect(judgeCron(daily, dirFor(4 * 24 * 60 * MINUTE))).toBe("lagging");
+  });
+
+  test("no committed timer jitters harder than the constant claims", () => {
+    // The drift guard. One constant stands in for every unit file, so it has to be checked
+    // against them — otherwise a new timer with a wider roll silently reopens the flap.
+    const repoRoot = join(import.meta.dir, "..", "..", "..", "..");
+    const timers = [...new Bun.Glob("docs/agents/hermes/*/*.timer").scanSync(repoRoot)];
+
+    expect(timers.length).toBeGreaterThan(0);
+
+    for (const relative of timers) {
+      const unit = readFileSync(join(repoRoot, relative), "utf8");
+      const rolled = /^RandomizedDelaySec=(\d+)$/m.exec(unit);
+
+      if (!rolled?.[1]) {
+        continue; // a timer with no jitter can never exceed the allowance
+      }
+
+      expect(Number(rolled[1]) * 1_000).toBeLessThanOrEqual(MAX_TIMER_JITTER_MS);
+    }
   });
 });
