@@ -82,7 +82,10 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
       {set.setUrl && steps.length > 0 ? (
         <div className="border-t border-border pt-2.5">
           <a
-            aria-label="Open this set in the mixer"
+            // One action, one label (VOICE.md §4, the Chrome Rule): the accessible name
+            // carries the visible words. "the mixer" was a noun this surface invented for
+            // /mix and nothing else in the product uses.
+            aria-label="Open this set in /mix"
             className="track-log-id-link inline-flex items-center gap-1 text-xs text-muted-foreground"
             href={set.setUrl}
           >

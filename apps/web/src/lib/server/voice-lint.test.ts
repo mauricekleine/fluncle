@@ -25,8 +25,9 @@
 //   (c) EXCLAMATION MARKS — the Dry Rule, prose only (`!` is everywhere in code).
 //
 // WHAT IS SCANNED. See SCAN_ROOTS: the public web, mobile, and extension
-// surfaces, the CLI, and the individually-named modules out of `apps/web/src/lib`
-// whose strings reach a PUBLIC audience (below).
+// surfaces, the Galaxy game, the CLI and the npm packaging copy it publishes, and
+// the individually-named modules out of `apps/web/src/lib` whose strings reach a
+// PUBLIC audience (below).
 //
 // WHAT IS NOT, AND WHY. Every edge is a deliberate register or tooling boundary:
 //   - `/admin` under the web roots is skipped ENTIRELY (see SKIPPED_DIRECTORIES):
@@ -104,6 +105,15 @@ const SCAN_ROOTS = [
   "apps/mobile/app",
   "apps/extension/src",
   "apps/cli/src",
+  // The npm PACKAGING copy. `build-npm.ts` authors the published package's `description`
+  // and its README, which is the listing a stranger reads on npmjs.com/package/fluncle —
+  // as public as the web, and outside the net purely because it sits beside `src/` rather
+  // than in it. (Its Homebrew twin is Ruby, so it stays out of an oxc scan.)
+  "apps/cli/scripts",
+  // The Galaxy game. A public surface with its own copy (its gate screen, its empty
+  // state), sitting outside `routes/` + `components/` only because the canvas app is
+  // booted by a dynamic import from its route.
+  "apps/web/src/game",
   // The MCP tool descriptions: a PUBLIC agent surface — an assistant reads these
   // strings out to a stranger, so they are copy even though they live in lib/.
   "apps/web/src/lib/server/tools/specs.ts",
@@ -436,6 +446,8 @@ describe("voice lint", () => {
     expect(scanned.has("apps/mobile/app/(tabs)/archive.tsx")).toBe(true);
     expect(scanned.has("apps/extension/src/copy.ts")).toBe(true);
     expect(scanned.has("apps/cli/src/cli.ts")).toBe(true);
+    expect(scanned.has("apps/cli/scripts/build-npm.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/game/game.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/tools/specs.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/agent-discovery.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/identity.ts")).toBe(true);

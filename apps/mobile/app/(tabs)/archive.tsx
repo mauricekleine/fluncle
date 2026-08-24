@@ -198,7 +198,7 @@ export default function ArchiveScreen() {
             ListFooterComponent={isFetchingNextPage ? <FindingRowSkeleton isLast /> : null}
             ListEmptyComponent={
               <Text style={[font.body, styles.emptyText]}>
-                No findings logged yet. Quiet sector.
+                No findings logged yet. Quiet sector tonight.
               </Text>
             }
           />
