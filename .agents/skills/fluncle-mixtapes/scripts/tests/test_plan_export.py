@@ -318,6 +318,114 @@ class TestOpenDbCompatibility:
         assert db.path is None
 
 
+class TestExportXmlCompatibility:
+    def test_uses_rekordbox_average_bpm_attribute(self, monkeypatch, tmp_path):
+        state: dict = {}
+
+        class XmlTrack:
+            TrackID = 7
+
+            def __init__(self):
+                self.attributes: dict = {}
+
+            def __setitem__(self, key, value):
+                if key == "BPM":
+                    raise AssertionError("Rekordbox XML does not expose a BPM attribute")
+                self.attributes[key] = value
+
+        class Playlist:
+            def add_track(self, track_id):
+                state.setdefault("track_ids", []).append(track_id)
+
+        class Folder:
+            def add_playlist(self, name):
+                state["playlist"] = name
+                return Playlist()
+
+        class RekordboxXml:
+            def add_playlist_folder(self, name):
+                state["folder"] = name
+                return Folder()
+
+            def add_track(self, path, **attributes):
+                state["path"] = path
+                state["base_attributes"] = attributes
+                track = XmlTrack()
+                state["track"] = track
+                return track
+
+            def save(self, path):
+                state["saved"] = path
+
+        pyrekordbox = types.ModuleType("pyrekordbox")
+        rbxml = types.ModuleType("pyrekordbox.rbxml")
+        rbxml.RekordboxXml = RekordboxXml
+        pyrekordbox.rbxml = rbxml
+        monkeypatch.setitem(sys.modules, "pyrekordbox", pyrekordbox)
+        monkeypatch.setitem(sys.modules, "pyrekordbox.rbxml", rbxml)
+
+        output = tmp_path / "plan.xml"
+        content = FakeContent("Calibre", "Spill")
+        count = _export.export_xml(
+            "liquid-nebula-roller",
+            [({"artists": ["Calibre"], "title": "Spill"}, content, "matched")],
+            str(output),
+        )
+
+        assert count == 1
+        assert state["folder"] == "Fluncle Plans"
+        assert state["playlist"] == "liquid-nebula-roller"
+        assert state["base_attributes"] == {"Name": "Spill", "Artist": "Calibre"}
+        assert state["track"].attributes == {"AverageBpm": 175.0}
+        assert state["track_ids"] == [7]
+        assert state["saved"] == str(output)
+
+    def test_xml_failure_precedes_master_db_mutation(self, monkeypatch, capsys):
+        cue = {"artists": ["Calibre"], "title": "Spill"}
+        monkeypatch.setattr(
+            _export,
+            "fetch_plan",
+            lambda _bin, _plan_id: {
+                "title": "liquid-nebula-roller",
+                "tracklist": [cue],
+            },
+        )
+        monkeypatch.setattr(_export, "open_db", lambda _path: object())
+        monkeypatch.setattr(_export, "build_collection_index", lambda _db: {})
+        monkeypatch.setattr(
+            _export,
+            "match_cues_to_collection",
+            lambda _cues, _index: [(cue, None, "unmatched")],
+        )
+
+        def fail_xml(_slug, _matched, _path):
+            raise RuntimeError("invalid XML attribute")
+
+        mutation_calls: list[str] = []
+        monkeypatch.setattr(_export, "export_xml", fail_xml)
+        monkeypatch.setattr(
+            _export,
+            "backup_db",
+            lambda _db: mutation_calls.append("backup"),
+        )
+        monkeypatch.setattr(
+            _export,
+            "write_playlist",
+            lambda _db, _slug, _matched: mutation_calls.append("write"),
+        )
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["rekordbox-plan-export.py", "plan-id", "--yes"],
+        )
+
+        with pytest.raises(SystemExit):
+            _export.main()
+
+        assert mutation_calls == []
+        assert "could not export Rekordbox XML" in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------------------
 # Slug → playlist name mapping.
 # ---------------------------------------------------------------------------

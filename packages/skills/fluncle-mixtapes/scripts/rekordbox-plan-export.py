@@ -305,16 +305,16 @@ def export_xml(
         )
         title = str(getattr(content, "Title", None) or "")
         bpm_raw = getattr(content, "BPM", None)
-        bpm_str: str | None = None
+        average_bpm: float | None = None
         if bpm_raw is not None:
             try:
-                bpm_str = f"{int(bpm_raw) / 100:.2f}"
+                average_bpm = int(bpm_raw) / 100
             except (TypeError, ValueError):
                 pass
 
         xml_track = xml.add_track(local_path, Name=title, Artist=str(artist))
-        if bpm_str:
-            xml_track["BPM"] = bpm_str
+        if average_bpm is not None:
+            xml_track["AverageBpm"] = average_bpm
         playlist.add_track(xml_track.TrackID)
         n_added += 1
 
@@ -518,6 +518,24 @@ def main() -> None:
         index = build_collection_index(db)
         matched = match_cues_to_collection(cues, index)
 
+        # Finish the read-only fallback before mutating master.db so an XML failure
+        # cannot leave the command in a partial-success state.
+        try:
+            n_xml = export_xml(slug, matched, xml_path)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            die(f"could not export Rekordbox XML to {xml_path!r}: {exc}")
+        xml_result = {"path": xml_path, "n_tracks": n_xml}
+
+        if not args.json_out:
+            print(f"  XML exported → {xml_path}  ({n_xml} tracks)")
+            print(
+                "  Import into Rekordbox: File → Import Playlist → rekordbox xml → "
+                f"{xml_path}"
+            )
+            print()
+
         if do_db_write:
             # Back up the DB before writing.
             backup_path = backup_db(db)
@@ -530,24 +548,15 @@ def main() -> None:
             if not args.json_out:
                 n = result["n_added"]
                 s = result["n_skipped"]
-                print(f"  Created playlist '{slug}' in '{_FLUNCLE_FOLDER_NAME}' — {n} tracks added, {s} skipped.")
+                print(
+                    f"  Created playlist '{slug}' in '{_FLUNCLE_FOLDER_NAME}' — "
+                    f"{n} tracks added, {s} skipped."
+                )
                 for label in result["skipped_labels"]:
                     print(f"    ⚠ {label}")
                 print()
                 print("  Re-open Rekordbox to see the playlist.")
                 print()
-
-        # Always emit the XML (safe no-write fallback).
-        n_xml = export_xml(slug, matched, xml_path)
-        xml_result = {"path": xml_path, "n_tracks": n_xml}
-
-        if not args.json_out:
-            print(f"  XML exported → {xml_path}  ({n_xml} tracks)")
-            print(
-                "  Import into Rekordbox: File → Import Playlist → rekordbox xml → "
-                f"{xml_path}"
-            )
-            print()
 
     if args.json_out:
         print(
