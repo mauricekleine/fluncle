@@ -10,6 +10,16 @@ import { startSpan, type Span } from "@sentry/core";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "../../db/schema";
 import { PRIMARY_DB_CONCURRENCY, TELEMETRY_DB_CONCURRENCY } from "../database-concurrency";
+import { SENTRY_RELEASE } from "../sentry-config";
+import {
+  canonicalSqlShape,
+  classifyDatabaseAccess,
+  isDatabaseAccessClass,
+  normalizeDatabaseOperationId,
+  normalizeDatabaseRelease,
+  type DatabaseAccessClass,
+  type DatabaseOutcome,
+} from "./database-observability";
 import { readEnvs, readOptionalEnv } from "./env";
 
 // Every DB query runs inside a Sentry `db.query` span so slow queries surface in
@@ -26,23 +36,102 @@ import { readEnvs, readOptionalEnv } from "./env";
 // `startSpan` is a safe passthrough that just runs the callback and returns its
 // value, so the instrumentation is invisible there.
 
-// libsql already parameterizes queries to `?` placeholders, so the SQL string IS
-// the normalized (grouped) query — safe as a span name. Capped so an oversized
-// statement can't bloat the span name.
-const MAX_SPAN_NAME_LENGTH = 200;
+// SQL is deliberately NOT a span description. Most callers parameterize their
+// values, but this chokepoint cannot prove that every string is free of an
+// interpolated literal. Stable operation IDs group spans without recording a
+// statement, arguments, secrets, URLs, hostnames, or row identity.
+const DATABASE_OPERATION_METADATA = Symbol("fluncle.database-operation");
 
-function spanName(sql: string): string {
-  const collapsed = sql.replace(/\s+/g, " ").trim();
+export type DatabaseOperationMetadata = {
+  accessClass?: DatabaseAccessClass;
+  operationId: string;
+};
 
-  return collapsed.length > MAX_SPAN_NAME_LENGTH
-    ? `${collapsed.slice(0, MAX_SPAN_NAME_LENGTH - 1)}…`
-    : collapsed;
+type StatementWithDatabaseOperation = Exclude<InStatement, string> & {
+  [DATABASE_OPERATION_METADATA]?: DatabaseOperationMetadata;
+};
+
+/**
+ * Attach an explicit stable operation ID to a statement without changing the
+ * SQL sent to libSQL. Unannotated statements receive a deterministic redacted
+ * fallback at the instrumentation chokepoint.
+ */
+export function databaseOperationStatement(
+  statement: InStatement,
+  metadata: DatabaseOperationMetadata,
+): InStatement {
+  if (typeof statement === "string") {
+    const observedStatement: StatementWithDatabaseOperation = { sql: statement };
+    observedStatement[DATABASE_OPERATION_METADATA] = metadata;
+    return observedStatement;
+  }
+
+  const observedStatement: StatementWithDatabaseOperation = { ...statement };
+  observedStatement[DATABASE_OPERATION_METADATA] = metadata;
+  return observedStatement;
 }
 
 // The SQL lives in the first `execute` argument, in either call form:
 // `execute("…")`, `execute("…", args)`, or `execute({ sql, args })`.
 function statementSql(statement: InStatement): string {
   return typeof statement === "string" ? statement : statement.sql;
+}
+
+function statementMetadata(statement: InStatement): DatabaseOperationMetadata | undefined {
+  return typeof statement === "string"
+    ? undefined
+    : (statement as StatementWithDatabaseOperation)[DATABASE_OPERATION_METADATA];
+}
+
+function batchStatementSql(statement: InStatement | [string, InArgs?]): string {
+  return Array.isArray(statement) ? statement[0] : statementSql(statement);
+}
+
+function accessClassForStatement(statement: InStatement): DatabaseAccessClass {
+  const sql = statementSql(statement);
+  const inferred = classifyDatabaseAccess(sql);
+  const requested = statementMetadata(statement)?.accessClass;
+
+  // Explicit metadata may elevate a read to heavy-read. It may never disguise
+  // a write as a read, and an unknown value is ignored.
+  return inferred === "read" && isDatabaseAccessClass(requested) ? requested : inferred;
+}
+
+function operationIdForStatement(statement: InStatement, accessClass: DatabaseAccessClass): string {
+  const sqlShape = canonicalSqlShape(statementSql(statement));
+  return normalizeDatabaseOperationId(
+    statementMetadata(statement)?.operationId,
+    sqlShape,
+    accessClass,
+  );
+}
+
+function spanStatement(accessClass: DatabaseAccessClass, operationId: string): string {
+  const verb = accessClass === "write" ? "WRITE" : "SELECT";
+  return `${verb} [${operationId}]`;
+}
+
+function baseSpanAttributes(
+  accessClass: DatabaseAccessClass,
+  operationId: string,
+  batchCount: number,
+): Record<string, string | number> {
+  return {
+    "db.statement": spanStatement(accessClass, operationId),
+    "db.system": "sqlite",
+    "fluncle.access_class": accessClass,
+    "fluncle.attempt_count": 1,
+    "fluncle.batch_count": batchCount,
+    "fluncle.duration_ms": 0,
+    "fluncle.operation_id": operationId,
+    "fluncle.outcome": "success",
+    "fluncle.release": normalizeDatabaseRelease(SENTRY_RELEASE),
+  };
+}
+
+function finishSpan(span: Span | undefined, startedAt: number, outcome: DatabaseOutcome): void {
+  span?.setAttribute("fluncle.duration_ms", Math.max(0, Date.now() - startedAt));
+  span?.setAttribute("fluncle.outcome", outcome);
 }
 
 // ── Transient-gateway retry ────────────────────────────────────────────────
@@ -113,11 +202,6 @@ function isRetryableGatewayError(error: unknown): boolean {
   return false;
 }
 
-// Leading whitespace and leading SQL comments, so a commented statement is
-// still classified by its actual first keyword.
-const LEADING_NOISE = /^(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)+/;
-const WRITE_VERB = /\b(?:insert|update|delete|replace)\b/;
-
 // Classifies off the SQL string, because that is all the chokepoint has.
 //
 // A read is: `select …`, OR `with …` that contains no write verb — SQLite
@@ -130,13 +214,7 @@ const WRITE_VERB = /\b(?:insert|update|delete|replace)\b/;
 // behaviour. A false positive — retrying a write — is a correctness bug that
 // can double-apply it. So when this is unsure, it does not retry.
 function isRetryableRead(sql: string): boolean {
-  const normalized = sql.replace(LEADING_NOISE, "").toLowerCase();
-
-  if (/^select\b/.test(normalized)) {
-    return true;
-  }
-
-  return /^with\b/.test(normalized) && !WRITE_VERB.test(normalized);
+  return classifyDatabaseAccess(sql) === "read";
 }
 
 // Created inside the request path only — a module-level timer or promise chain
@@ -148,8 +226,12 @@ function delay(ms: number): Promise<void> {
 }
 
 function recordRetries(span: Span | undefined, attempt: number): void {
-  if (span && attempt > 0) {
-    span.setAttribute("db.retry.attempts", attempt);
+  if (span) {
+    span.setAttribute("fluncle.attempt_count", attempt + 1);
+
+    if (attempt > 0) {
+      span.setAttribute("db.retry.attempts", attempt);
+    }
   }
 }
 
@@ -241,23 +323,33 @@ function instrument(client: Client): Client {
       if (property === "execute") {
         return (statement: InStatement, args?: InArgs) => {
           const sql = statementSql(statement);
-          const name = spanName(sql);
+          const accessClass = accessClassForStatement(statement);
+          const operationId = operationIdForStatement(statement, accessClass);
+          const name = `db.query ${operationId}`;
 
           return startSpan(
             {
-              attributes: { "db.statement": name, "db.system": "sqlite" },
+              attributes: baseSpanAttributes(accessClass, operationId, 1),
               name,
               op: "db.query",
             },
-            (span) => {
+            async (span) => {
+              const startedAt = Date.now();
               const run = () =>
                 args !== undefined && typeof statement === "string"
                   ? target.execute(statement, args)
                   : target.execute(statement);
 
-              // A write (or anything the classifier can't vouch for) runs
-              // exactly once, exactly as before.
-              return isRetryableRead(sql) ? runWithRetry(run, span) : run();
+              try {
+                // A write (or anything the classifier can't vouch for) runs
+                // exactly once, exactly as before.
+                const result = await (isRetryableRead(sql) ? runWithRetry(run, span) : run());
+                finishSpan(span, startedAt, "success");
+                return result;
+              } catch (error) {
+                finishSpan(span, startedAt, "failure");
+                throw error;
+              }
             },
           );
         };
@@ -265,19 +357,52 @@ function instrument(client: Client): Client {
 
       if (property === "batch") {
         return (stmts: Array<InStatement | [string, InArgs?]>, mode?: TransactionMode) => {
-          const name = `db.batch (${stmts.length})`;
+          const statementAccess = stmts.map((statement) =>
+            Array.isArray(statement)
+              ? classifyDatabaseAccess(statement[0])
+              : accessClassForStatement(statement),
+          );
+          const accessClass: DatabaseAccessClass = statementAccess.includes("write")
+            ? "write"
+            : statementAccess.includes("heavy-read")
+              ? "heavy-read"
+              : "read";
+          const explicitIds = stmts
+            .map((statement) =>
+              Array.isArray(statement) ? undefined : statementMetadata(statement)?.operationId,
+            )
+            .filter((candidate): candidate is string => typeof candidate === "string");
+          const explicitId =
+            explicitIds.length === stmts.length && new Set(explicitIds).size === 1
+              ? explicitIds[0]
+              : undefined;
+          const shape = stmts
+            .map((statement) => canonicalSqlShape(batchStatementSql(statement)))
+            .join(";");
+          const operationId = normalizeDatabaseOperationId(explicitId, shape, accessClass);
+          const name = `db.query ${operationId}`;
 
           return startSpan(
             {
               attributes: {
                 "db.batch.size": stmts.length,
-                "db.statement": name,
-                "db.system": "sqlite",
+                ...baseSpanAttributes(accessClass, operationId, stmts.length),
               },
               name,
               op: "db.query",
             },
-            () => target.batch(stmts, mode),
+            async (span) => {
+              const startedAt = Date.now();
+
+              try {
+                const result = await target.batch(stmts, mode);
+                finishSpan(span, startedAt, "success");
+                return result;
+              } catch (error) {
+                finishSpan(span, startedAt, "failure");
+                throw error;
+              }
+            },
           );
         };
       }

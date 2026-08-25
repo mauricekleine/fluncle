@@ -39,6 +39,20 @@ const MAX_UNIT_CHARS = 128;
  * form without letting a broken emitter push arbitrary text into a time column.
  */
 const MAX_TIMESTAMP_CHARS = 64;
+const MAX_RUN_RELEASE_CHARS = 64;
+const RUN_OPERATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
+const RUN_RELEASE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * A defensive cap for run-measured database attempts and batch statements. Real runs are
+ * orders of magnitude smaller; this prevents a broken emitter from turning a counter into
+ * an unbounded integer while preserving every credible aggregate.
+ */
+export const MAX_RUN_DATABASE_COUNT = 1_000_000;
+
+/** These are kept equal to the server's public-safe database observability vocabulary. */
+const RunDatabaseAccessClassSchema = z.enum(["heavy-read", "read", "write"]);
+const RunDatabaseOutcomeSchema = z.enum(["failure", "success"]);
 
 /** A read page is deliberately bounded even behind the operator token. */
 export const MAX_RUN_LEDGER_PAGE_SIZE = 100;
@@ -105,10 +119,16 @@ export const MAX_SUMMARY_RAW_CHARS = 4096;
  */
 export const RunEventInputSchema = z
   .strictObject({
+    /** Measured database attempts across the run; null/absence means unknowable. */
+    attempt_count: z.number().int().nonnegative().max(MAX_RUN_DATABASE_COUNT).nullish(),
+    /** Measured statements submitted in batches; null/absence means unknowable. */
+    batch_count: z.number().int().nonnegative().max(MAX_RUN_DATABASE_COUNT).nullish(),
     /** ISO box time the run finished. */
     ended_at: z.string().min(1).max(MAX_TIMESTAMP_CHARS),
     /** The process exit code. Bash `$?` is definitionally 0–255; anything else is a broken emitter. */
     exit_code: z.number().int().min(0).max(255),
+    /** Bounded public build identifier of the emitter; null/absence degrades to `unknown`. */
+    release: z.string().min(1).max(MAX_RUN_RELEASE_CHARS).regex(RUN_RELEASE_PATTERN).nullish(),
     /** ISO box time the run started. Half of the deterministic idempotency key. */
     started_at: z.string().min(1).max(MAX_TIMESTAMP_CHARS),
     /**
@@ -166,6 +186,9 @@ const RunLedgerRelativeSinceSchema = z
 
 /** One raw ledger row, projected losslessly apart from JSON/boolean decoding. */
 export const RunLedgerRowSchema = z.object({
+  accessClass: RunDatabaseAccessClassSchema.nullable(),
+  attemptCount: z.number().int().nonnegative().max(MAX_RUN_DATABASE_COUNT).nullable(),
+  batchCount: z.number().int().nonnegative().max(MAX_RUN_DATABASE_COUNT).nullable(),
   checked: z.number().int().nullable(),
   createdAt: z.string(),
   endedAt: z.string(),
@@ -177,8 +200,11 @@ export const RunLedgerRowSchema = z.object({
   missingFields: z.array(z.string()),
   occurredAt: z.string(),
   ok: z.boolean(),
+  operationId: z.string().min(1).max(64).regex(RUN_OPERATION_ID_PATTERN).nullable(),
+  outcome: RunDatabaseOutcomeSchema,
   produced: z.number().int().nullable(),
   queueDepth: z.number().int().nullable(),
+  release: z.string().min(1).max(MAX_RUN_RELEASE_CHARS).regex(RUN_RELEASE_PATTERN),
   runDurationMs: z.number().int().nullable(),
   selfAssertedOk: z.boolean().nullable(),
   summaryRaw: z.string().nullable(),

@@ -112,7 +112,7 @@ type TelemetryRenderOptions = {
   missing?: boolean;
 };
 
-/** Terse operator rendering. `--json` remains the lossless 20-column read. */
+/** Terse operator rendering. `--json` remains the lossless run-ledger read. */
 export function telemetryLines(
   page: RunLedgerPage,
   options: TelemetryRenderOptions = {},
@@ -162,6 +162,12 @@ export function telemetryLines(
   const runHeader = [
     "OCCURRED",
     "UNIT",
+    "OPERATION",
+    "ACCESS",
+    "OUTCOME",
+    "ATTEMPTS",
+    "BATCH",
+    "DURATION",
     "OK",
     "SELF",
     "CHECKED",
@@ -173,6 +179,12 @@ export function telemetryLines(
   const runRows = page.rows.map((row) => [
     row.occurredAt,
     row.unit,
+    row.operationId ?? "-",
+    row.accessClass ?? "-",
+    row.outcome,
+    cell(row.attemptCount),
+    cell(row.batchCount),
+    cell(row.runDurationMs),
     cell(row.ok),
     cell(row.selfAssertedOk),
     cell(row.checked),

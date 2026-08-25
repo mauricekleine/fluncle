@@ -41,7 +41,7 @@ vi.mock("./env", () => ({
   readEnvs: async () => ({ TURSO_AUTH_TOKEN: "token", TURSO_DATABASE_URL: "libsql://scratch" }),
 }));
 
-const { DB_MAX_RETRIES, getDb } = await import("./db");
+const { DB_MAX_RETRIES, databaseOperationStatement, getDb } = await import("./db");
 
 // Shaped like a real `LibsqlError` from a gateway blip: `mapHranaError` hands
 // the hrana `HttpServerError` (which carries the numeric `status`) through as
@@ -72,9 +72,21 @@ describe("getDb instrumentation", () => {
     expect(execute).toHaveBeenCalledWith("select 1");
     expect(spanContexts).toHaveLength(1);
     expect(spanContexts[0]).toMatchObject({
-      attributes: { "db.statement": "select 1", "db.system": "sqlite" },
-      name: "select 1",
+      attributes: {
+        "db.system": "sqlite",
+        "fluncle.access_class": "read",
+        "fluncle.attempt_count": 1,
+        "fluncle.batch_count": 1,
+        "fluncle.operation_id": expect.stringMatching(/^db\.read\.[a-z0-9]+$/),
+        "fluncle.release": "unknown",
+      },
+      name: expect.stringMatching(/^db\.query db\.read\.[a-z0-9]+$/),
       op: "db.query",
+    });
+    expect(spanAttributes[0]).toMatchObject({
+      "fluncle.attempt_count": 1,
+      "fluncle.duration_ms": expect.any(Number),
+      "fluncle.outcome": "success",
     });
   });
 
@@ -85,7 +97,7 @@ describe("getDb instrumentation", () => {
     await db.execute("select ?", [7]);
 
     expect(execute).toHaveBeenCalledWith("select ?", [7]);
-    expect(spanContexts[0]?.name).toBe("select ?");
+    expect(spanContexts[0]?.name).toMatch(/^db\.query db\.read\./);
   });
 
   it("names the span from the sql of the execute({ sql, args }) object form", async () => {
@@ -95,7 +107,7 @@ describe("getDb instrumentation", () => {
     await db.execute({ args: [2], sql: "select 2" });
 
     expect(execute).toHaveBeenCalledWith({ args: [2], sql: "select 2" });
-    expect(spanContexts[0]?.name).toBe("select 2");
+    expect(spanContexts[0]?.name).toMatch(/^db\.query db\.read\./);
   });
 
   it("returns the batch result unchanged and names the span by statement count", async () => {
@@ -108,10 +120,22 @@ describe("getDb instrumentation", () => {
     expect(returned).toBe(results);
     expect(batch).toHaveBeenCalledWith([{ sql: "a" }, { sql: "b" }], undefined);
     expect(spanContexts[0]).toMatchObject({
-      attributes: { "db.batch.size": 2, "db.statement": "db.batch (2)", "db.system": "sqlite" },
-      name: "db.batch (2)",
+      attributes: {
+        "db.batch.size": 2,
+        "db.system": "sqlite",
+        "fluncle.access_class": "write",
+        "fluncle.attempt_count": 1,
+        "fluncle.batch_count": 2,
+        "fluncle.operation_id": expect.stringMatching(/^db\.write\.[a-z0-9]+$/),
+      },
+      name: expect.stringMatching(/^db\.query db\.write\.[a-z0-9]+$/),
       op: "db.query",
     });
+    expect(spanAttributes[0]).toMatchObject({
+      "fluncle.duration_ms": expect.any(Number),
+      "fluncle.outcome": "success",
+    });
+    expect(JSON.stringify({ spanAttributes, spanContexts })).not.toContain('"sql"');
   });
 
   it("passes non-query methods straight through without a span", async () => {
@@ -128,17 +152,79 @@ describe("getDb instrumentation", () => {
     expect(db.constructor).toBe(Object);
   });
 
-  it("collapses whitespace and truncates an oversized span name", async () => {
+  it("never records SQL literals, arguments, URLs, or topology", async () => {
     execute.mockResolvedValue({ rows: [] });
 
     const db = await getDb();
-    const longSql = `select\n   ${"x".repeat(400)}`;
-    await db.execute(longSql);
+    const secret = "private-value";
+    await db.execute(`select * from tracks where title = '${secret}' and source = ?`, [
+      "https://private.invalid/path",
+    ]);
 
-    const name = spanContexts[0]?.name ?? "";
-    expect(name.length).toBe(200);
-    expect(name.endsWith("…")).toBe(true);
-    expect(name).not.toContain("\n");
+    const recorded = JSON.stringify({ spanAttributes, spanContexts });
+    expect(recorded).not.toContain(secret);
+    expect(recorded).not.toContain("private.invalid");
+    expect(recorded).not.toContain("select * from tracks");
+    expect(spanContexts[0]?.attributes?.["db.statement"]).toMatch(
+      /^SELECT \[db\.read\.[a-z0-9]+\]$/,
+    );
+  });
+
+  it("uses a deterministic fallback for literal variants and unsafe explicit IDs", async () => {
+    execute.mockResolvedValue({ rows: [] });
+
+    const db = await getDb();
+    await db.execute("select * from tracks where id = 'synthetic-001'");
+    await db.execute("select * from tracks where id = 'synthetic-999'");
+    await db.execute(
+      databaseOperationStatement("select 1", {
+        accessClass: "heavy-read",
+        operationId: `Unsafe private URL ${"x".repeat(100)}`,
+      }),
+    );
+
+    const first = spanContexts[0]?.attributes?.["fluncle.operation_id"];
+    const second = spanContexts[1]?.attributes?.["fluncle.operation_id"];
+    const fallback = spanContexts[2]?.attributes?.["fluncle.operation_id"];
+    expect(first).toBe(second);
+    expect(fallback).toMatch(/^db\.heavy-read\.[a-z0-9]+$/);
+    expect(String(fallback).length).toBeLessThanOrEqual(64);
+  });
+
+  it("keeps a valid explicit operation ID and may elevate a read to heavy-read", async () => {
+    execute.mockResolvedValue({ rows: [] });
+
+    const db = await getDb();
+    await db.execute(
+      databaseOperationStatement(
+        { args: [], sql: "select * from track_embeddings" },
+        {
+          accessClass: "heavy-read",
+          operationId: "sonar.refresh",
+        },
+      ),
+    );
+
+    expect(spanContexts[0]).toMatchObject({
+      attributes: {
+        "fluncle.access_class": "heavy-read",
+        "fluncle.operation_id": "sonar.refresh",
+      },
+      name: "db.query sonar.refresh",
+    });
+  });
+
+  it("records failure outcome and duration without changing the thrown error", async () => {
+    const error = new Error("synthetic failure");
+    execute.mockRejectedValue(error);
+
+    const db = await getDb();
+    await expect(db.execute("update tracks set bpm = 1")).rejects.toBe(error);
+
+    expect(spanAttributes[0]).toMatchObject({
+      "fluncle.duration_ms": expect.any(Number),
+      "fluncle.outcome": "failure",
+    });
   });
 });
 
@@ -224,7 +310,11 @@ describe("getDb transient-gateway retry", () => {
     await pending;
 
     expect(spanContexts).toHaveLength(1);
-    expect(spanAttributes[0]).toEqual({ "db.retry.attempts": 1 });
+    expect(spanAttributes[0]).toMatchObject({
+      "db.retry.attempts": 1,
+      "fluncle.attempt_count": 2,
+      "fluncle.outcome": "success",
+    });
   });
 
   it("retries a read that fails once with a 520 connection error", async () => {
@@ -269,7 +359,11 @@ describe("getDb transient-gateway retry", () => {
     const db = await getDb();
     await db.execute("select 1");
 
-    expect(spanAttributes[0]).toEqual({});
+    expect(spanAttributes[0]).toMatchObject({
+      "fluncle.attempt_count": 1,
+      "fluncle.outcome": "success",
+    });
+    expect(spanAttributes[0]).not.toHaveProperty("db.retry.attempts");
   });
 
   it("rethrows the original error once the retry cap is exhausted", async () => {
@@ -280,6 +374,11 @@ describe("getDb transient-gateway retry", () => {
 
     expect(await rejectionAfterTimers(db.execute("select 1"))).toBe(error);
     expect(execute).toHaveBeenCalledTimes(DB_MAX_RETRIES + 1);
+    expect(spanAttributes[0]).toMatchObject({
+      "db.retry.attempts": DB_MAX_RETRIES,
+      "fluncle.attempt_count": DB_MAX_RETRIES + 1,
+      "fluncle.outcome": "failure",
+    });
   });
 
   it.each([
@@ -311,6 +410,10 @@ describe("getDb transient-gateway retry", () => {
 
     expect(await rejectionAfterTimers(db.batch([{ sql: "select 1" }]))).toBe(error);
     expect(batch).toHaveBeenCalledTimes(1);
+    expect(spanAttributes[0]).toMatchObject({
+      "fluncle.duration_ms": expect.any(Number),
+      "fluncle.outcome": "failure",
+    });
   });
 
   it.each([[400], [401], [404], [429]])("does not retry a %i", async (status) => {

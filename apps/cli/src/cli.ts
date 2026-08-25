@@ -822,6 +822,13 @@ Evidence and rollups:
 JSON field reference:
   top-level ok        Request acknowledgement only; never a run verdict.
   rows[].ok           Worker's derived verdict for that run.
+  rows[].operationId  Registry-derived stable database operation, or null.
+  rows[].accessClass  Aggregate read/write/heavy-read class, or null.
+  rows[].release      Bounded emitter build identifier; unknown when absent.
+  rows[].attemptCount Measured attempts only; null means the run could not know.
+  rows[].batchCount   Measured batch statements only; null means unknown.
+  rows[].runDurationMs Derived wall-clock duration; null for invalid/negative time.
+  rows[].outcome      Derived success/failure vocabulary matching rows[].ok.
   rollups[]           Whole-window unit totals, including expectedIntervalMs.
   missingRoster[]     Expected writers with no run in the selected window.
 `,
