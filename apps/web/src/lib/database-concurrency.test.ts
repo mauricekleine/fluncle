@@ -200,13 +200,55 @@ function collectCallSites(sources: SourceInfo[]): CallSite[] {
   const callSites: CallSite[] = [];
 
   for (const { ast, file, source } of sources) {
+    const importedCreateClientNames = new Set<string>();
+
+    walk(ast, (node) => {
+      if (
+        node.type !== "ImportDeclaration" ||
+        !isAstNode(node.source) ||
+        typeof node.source.value !== "string" ||
+        !node.source.value.startsWith("@libsql/client") ||
+        !Array.isArray(node.specifiers)
+      ) {
+        return;
+      }
+
+      for (const specifier of node.specifiers) {
+        if (!isAstNode(specifier) || specifier.type !== "ImportSpecifier") {
+          continue;
+        }
+
+        const imported = isAstNode(specifier.imported) ? specifier.imported : undefined;
+        const local = isAstNode(specifier.local) ? specifier.local : undefined;
+        if (
+          (imported?.name === "createClient" || imported?.value === "createClient") &&
+          typeof local?.name === "string"
+        ) {
+          importedCreateClientNames.add(local.name);
+        }
+      }
+    });
+
     walk(ast, (node, ancestors) => {
       if (node.type !== "CallExpression") {
         return;
       }
 
       const callee = isAstNode(node.callee) ? node.callee : undefined;
-      if (callee?.type !== "Identifier" || callee.name !== "createClient") {
+      const isImportedBinding =
+        callee?.type === "Identifier" &&
+        typeof callee.name === "string" &&
+        importedCreateClientNames.has(callee.name);
+      const property =
+        callee?.type === "MemberExpression" && isAstNode(callee.property)
+          ? callee.property
+          : undefined;
+      const isDynamicLibsqlClient =
+        source.includes('import("@libsql/client') &&
+        property?.type === "Identifier" &&
+        property.name === "createClient";
+
+      if (!isImportedBinding && !isDynamicLibsqlClient) {
         return;
       }
 

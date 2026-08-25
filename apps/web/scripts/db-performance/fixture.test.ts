@@ -1,5 +1,6 @@
 import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
 import {
   FIXTURE_TABLES,
@@ -80,7 +81,7 @@ describe("synthetic database performance fixture", () => {
   });
 
   it("materializes exact fan-out, null, selectivity, and backlog counts locally", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     try {
       await applyFixtureSchema(client);
@@ -120,7 +121,7 @@ describe("synthetic database performance fixture", () => {
   });
 
   it("resets only perf tables so a smaller rerun cannot inherit a larger profile", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     const smaller: FixtureCounts = {
       ...SMALL_COUNTS,
       crawlFrontier: 17,

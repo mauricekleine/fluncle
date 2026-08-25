@@ -1,5 +1,6 @@
 import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
 import { selectPerformanceContracts } from "./contracts";
 import { applyFixtureSchema, writeFixture } from "./fixture";
@@ -138,7 +139,7 @@ describe("performance registry", () => {
   });
 
   it("runs the registered lightweight contract at 1x, 2x, and 4x without the million-row fixture", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     try {
       await applyFixtureSchema(client);

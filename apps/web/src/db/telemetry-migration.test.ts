@@ -2,6 +2,7 @@ import { createClient } from "@libsql/client";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { LOCAL_DB_CONCURRENCY } from "../lib/database-concurrency";
 
 const MIGRATIONS = fileURLToPath(new URL("../../drizzle-telemetry", import.meta.url));
 
@@ -14,7 +15,7 @@ function statements(name: string): string[] {
 
 describe("telemetry observability migration", () => {
   it("preserves old run rows and backfills only facts the ledger already knew", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     try {
       for (const statement of statements("0000_fantastic_emma_frost.sql")) {

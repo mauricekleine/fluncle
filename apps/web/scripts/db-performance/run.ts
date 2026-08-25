@@ -1,5 +1,6 @@
 import { createClient as createLocalClient } from "@libsql/client";
 
+import { LOCAL_DB_CONCURRENCY, REMOTE_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { performanceRegistry, selectPerformanceContracts } from "./contracts";
 import { applyFixtureSchema, resetFixture, writeFixture } from "./fixture";
@@ -90,10 +91,10 @@ async function main(): Promise<void> {
     replay.mode === "hosted"
       ? (await import("@libsql/client/web")).createClient({
           authToken: replay.token,
-          concurrency: 1,
+          concurrency: REMOTE_DB_CONCURRENCY,
           url: replay.url,
         })
-      : createLocalClient({ url: ":memory:" });
+      : createLocalClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
   try {
     await resetFixture(client);
