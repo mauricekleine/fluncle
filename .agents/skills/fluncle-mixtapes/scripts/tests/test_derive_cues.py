@@ -143,9 +143,24 @@ class TestMatchKey:
         b = match_key("Fred V & Grafix", "Osiris")
         assert a == b
 
+    def test_retailer_country_qualifier_is_neutral(self):
+        a = match_key(["Archangel"], "She Was Mine")
+        b = match_key("Archangel (PT)", "She Was Mine (Original Mix)")
+        assert a == b
+
+    def test_bare_vip_matches_parenthesized_vip(self):
+        a = match_key(["In:Most"], "I Can't Do - VIP")
+        b = match_key("In_Most", "I Can_t Do VIP")
+        assert a == b
+
+    def test_rmx_matches_remix(self):
+        a = match_key(["Calibre"], "Spill (VIP rmx)")
+        b = match_key("Calibre", "Spill - VIP Remix")
+        assert a == b
+
 
 # ---------------------------------------------------------------------------
-# tolerant_same_recording — the remix-credit fallback identity.
+# tolerant_same_recording — the retailer-credit fallback identity.
 # ---------------------------------------------------------------------------
 
 
@@ -187,6 +202,17 @@ class TestTolerantSameRecording:
         a = match_key(["Calibre"], "Spill")
         b = match_key(["Calibre"], "Spill")
         assert tolerant_same_recording(a, b)
+
+    def test_unique_collaborator_credit_drift_is_tolerated(self):
+        plan = match_key(["Nu:Tone"], "Piece Of You (Mixed) - Refix")
+        rekordbox = match_key(["Nu_Tone", "Stac"], "Piece Of You (Refix)")
+        assert plan != rekordbox
+        assert tolerant_same_recording(plan, rekordbox)
+
+    def test_unrelated_artists_stay_apart(self):
+        a = match_key(["Calibre"], "Spill")
+        b = match_key(["Dbridge"], "Spill")
+        assert not tolerant_same_recording(a, b)
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +311,16 @@ class TestDeriveCues:
         rows = [_make_row("Calibre", "Spill")]
         cues = derive_cues(rows, self.index)
         assert cues[0].fuzzy is False
+
+    def test_fuzzy_fallback_matches_omitted_collaborator_credit(self):
+        finding = _make_finding(
+            "refix1", ["Nu:Tone"], "Piece Of You (Mixed) - Refix"
+        )
+        index = build_catalogue_index([finding])
+        rows = [_make_row("Nu_Tone, Stac", "Piece Of You (Refix)")]
+        cues = derive_cues(rows, index)
+        assert cues[0].finding_id == "refix1"
+        assert cues[0].fuzzy is True
 
     def test_fuzzy_fallback_multiple_hits_are_ambiguous(self):
         # Two findings that both tolerantly match the same remix row → ambiguous,

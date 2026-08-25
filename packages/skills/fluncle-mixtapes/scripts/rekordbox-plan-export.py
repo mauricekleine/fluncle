@@ -66,7 +66,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 
 from _cue_formats import beatport_search_links, checklist, m3u8  # noqa: E402
-from _matching import match_key  # noqa: E402
+from _matching import match_key, tolerant_same_recording  # noqa: E402
 
 # The Rekordbox playlist folder under which all Fluncle plan playlists live.
 _FLUNCLE_FOLDER_NAME = "Fluncle Plans"
@@ -245,7 +245,7 @@ def match_cues_to_collection(
 ) -> list[tuple[dict, object | None, str]]:
     """Return list of (cue_dict, DjmdContent_or_None, match_reason).
 
-    match_reason is "matched" | "ambiguous" | "unmatched".
+    match_reason is "matched" | "fuzzy" | "ambiguous" | "unmatched".
     """
     results: list[tuple[dict, object | None, str]] = []
     for cue in cues:
@@ -253,10 +253,20 @@ def match_cues_to_collection(
         title: str = cue.get("title", "")
         key = match_key(artists, title)
         candidates = index.get(key, [])
+        fuzzy = False
+
+        if not candidates:
+            fallback: list = []
+            for candidate_key, contents in index.items():
+                if tolerant_same_recording(key, candidate_key):
+                    fallback.extend(contents)
+            candidates = fallback
+            fuzzy = bool(fallback)
+
         if len(candidates) == 1:
-            results.append((cue, candidates[0], "matched"))
+            results.append((cue, candidates[0], "fuzzy" if fuzzy else "matched"))
         elif len(candidates) > 1:
-            results.append((cue, candidates[0], "ambiguous"))
+            results.append((cue, None if fuzzy else candidates[0], "ambiguous"))
         else:
             results.append((cue, None, "unmatched"))
     return results
@@ -371,13 +381,32 @@ def write_playlist(
 
     for cue, content, reason in matched_results:
         label = f"{', '.join(cue.get('artists', []))} — {cue.get('title', '')}"
-        if content is None or reason == "unmatched":
+        if content is None:
+            n_skipped += 1
+            detail = (
+                "ambiguous — no unique candidate"
+                if reason == "ambiguous"
+                else "unmatched"
+            )
+            skipped_labels.append(f"{label} ({detail})")
+            continue
+        if reason == "unmatched":
             n_skipped += 1
             skipped_labels.append(f"{label} (unmatched)")
             continue
         if reason == "ambiguous":
             # Use the first candidate but warn.
             skipped_labels.append(f"{label} (ambiguous — used first candidate)")
+        elif reason == "fuzzy":
+            matched_artist = (
+                getattr(getattr(content, "Artist", None), "Name", None)
+                or getattr(content, "ArtistName", None)
+                or "?"
+            )
+            matched_title = getattr(content, "Title", None) or "?"
+            skipped_labels.append(
+                f"{label} (credit variation — used {matched_artist} — {matched_title})"
+            )
 
         db.add_to_playlist(playlist, content)
         n_added += 1

@@ -1,8 +1,8 @@
 """Shared pure matching logic — normalized title + artist identity.
 
-Lifted verbatim from fluncle-rekordbox-sync/scripts/rekordbox_sync.py so both the
-Rekordbox derivation script and the plan-export script share one canonical copy.
-No external dependencies; no I/O.
+The exact fold builds on fluncle-rekordbox-sync's ratified matcher. The mixtape
+scripts also handle retailer qualifiers and add a unique-only tolerant pass for
+credit drift. No external dependencies; no I/O.
 
 `match_key(artists, title)` → (frozenset[str], base_title, descriptor)
 
@@ -24,10 +24,31 @@ _VERSION_WORDS = {
 }
 
 # Neutral version descriptors that name a variant but are NOT distinguishing.
-_NEUTRAL_DESCRIPTORS = {"original mix", "original", "extended mix"}
+_NEUTRAL_DESCRIPTORS = {
+    "original mix",
+    "original",
+    "extended mix",
+    "original version",
+}
+
+# Strong version words that stay part of identity even when written bare at the
+# end of a title: "I Can't Do VIP" and "I Can't Do (VIP)" are the same cut.
+_BARE_TRAILING_VERSION_WORDS = {
+    "bootleg",
+    "instrumental",
+    "refix",
+    "remaster",
+    "remix",
+    "rework",
+    "rmx",
+    "vip",
+}
+
+_DESCRIPTOR_TOKEN_SYNONYMS = {"rmx": "remix"}
 
 _ARTIST_SPLIT = re.compile(r"\s*(?:,|&|/|\band\b|\bx\b|\bvs\b|\bversus\b|\bwith\b)\s*")
 _FEAT_INLINE = re.compile(r"\b(?:feat|ft|featuring)\b\.?.*$", re.IGNORECASE)
+_ARTIST_COUNTRY_QUALIFIER = re.compile(r"\s*\([A-Z]{2,3}\)\s*$")
 _PUNCT = re.compile(r"[^a-z0-9 ]+")
 _WS = re.compile(r"\s+")
 
@@ -57,8 +78,19 @@ def _normalize_artists(artists: object) -> frozenset[str]:
 
     raw = _FEAT_INLINE.sub("", raw)
     parts = _ARTIST_SPLIT.split(raw)
-    names = {_fold(part) for part in parts}
+    names = {_fold(_ARTIST_COUNTRY_QUALIFIER.sub("", part)) for part in parts}
     return frozenset(name for name in names if name)
+
+
+def _canonicalize_descriptor(descriptor: str) -> str:
+    """Fold equivalent version spellings to one descriptor."""
+    if not descriptor:
+        return ""
+
+    tokens = [_DESCRIPTOR_TOKEN_SYNONYMS.get(token, token) for token in descriptor.split()]
+    if len(tokens) > 1 and tokens[-1] == "mix" and tokens[-2] in _VERSION_WORDS:
+        tokens.pop()
+    return " ".join(tokens)
 
 
 def _split_title(title: str) -> tuple[str, str]:
@@ -106,7 +138,15 @@ def _split_title(title: str) -> tuple[str, str]:
 
     # Drop an inline feat. from the base title too.
     working = _FEAT_INLINE.sub("", working)
-    return _fold(working), descriptor
+    base = _fold(working)
+
+    if not descriptor:
+        tokens = base.split()
+        if len(tokens) > 1 and tokens[-1] in _BARE_TRAILING_VERSION_WORDS:
+            descriptor = tokens[-1]
+            base = " ".join(tokens[:-1])
+
+    return base, _canonicalize_descriptor(descriptor)
 
 
 def match_key(artists: object, title: str) -> tuple[frozenset[str], str, str]:
@@ -140,14 +180,11 @@ def tolerant_same_recording(
 ) -> bool:
     """A LOOSER identity than exact `match_key` equality — for a fallback pass only.
 
-    Closes the one systematic gap between a Rekordbox row and a Fluncle finding of
-    the SAME remix: the remixer is credited as a second ARTIST on the finding but
-    only named inside the "(… Remix)" title suffix on the Rekordbox row (and an
-    "Extended Remix" vs "Remix" wording drift). It STILL never collapses a remix onto
-    its original (both sides must carry a descriptor, or neither) and requires an
-    exact base-title match, so it cannot fold two genuinely different recordings
-    together. Two different remixes of the same song keep distinct descriptors and
-    stay apart.
+    Closes systematic retailer-credit gaps after an exact miss: a remixer can live
+    in the title on one side and the artist set on the other, and a collaborator can
+    be omitted from one store's artist field. Callers accept this only when the pass
+    finds one candidate. It still requires the same base title and version descriptor
+    and never collapses a remix onto its original.
     """
     artists_a, base_a, desc_a = key_a
     artists_b, base_b, desc_b = key_b
@@ -157,7 +194,11 @@ def tolerant_same_recording(
     # Both a version, or both the original — never a remix onto its original.
     if bool(desc_a) != bool(desc_b):
         return False
-    if _core_artists(artists_a, desc_a) != _core_artists(artists_b, desc_b):
+    core_a = _core_artists(artists_a, desc_a)
+    core_b = _core_artists(artists_b, desc_b)
+    if not core_a or not core_b:
+        return False
+    if not (core_a <= core_b or core_b <= core_a):
         return False
 
     desc_norm_a = frozenset(t for t in desc_a.split() if t not in _NEUTRAL_DESC_TOKENS)

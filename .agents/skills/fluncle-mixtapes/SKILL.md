@@ -185,7 +185,7 @@ uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py <planId
 
 The script does five things in one pass:
 
-1. **Rekordbox playlist (direct DB write — the star).** Matches each plan cue to the operator's collection by normalized title+artist (the same matcher as the derivation script), creates a playlist named with the plan's Galaxy-vocab slug inside a "Fluncle Plans" folder, adds matched tracks in cue order, and commits. Backs up `master.db` to `master.db.bak-<timestamp>` before writing. Unmatched cues are skipped with a warning; the operator can buy them on Beatport first and re-export.
+1. **Rekordbox playlist (direct DB write — the star).** Matches each plan cue to the operator's collection by normalized title+artist (the same matcher as the derivation script), then makes one unique-only tolerant pass for retailer credit drift such as a country qualifier, an omitted collaborator, or a bare `VIP` suffix. It creates a playlist named with the plan's Galaxy-vocab slug inside a "Fluncle Plans" folder, adds matched tracks in cue order, and commits. Backs up `master.db` to `master.db.bak-<timestamp>` before writing. A fuzzy unique match is added with the actual Rekordbox credit shown for review; multiple fuzzy candidates are skipped as ambiguous. Unmatched cues are skipped with a warning; the operator can buy them on Beatport first and re-export.
 2. **Rekordbox XML (`<slug>.xml`).** A safe no-write fallback the operator can import into Rekordbox via File → Import Playlist without touching the encrypted DB. Always emitted.
 3. **Beatport search links.** One `beatport.com/search?q=…` URL per cue — click to buy. No open add-to-cart API (partner-gated).
 4. **m3u8.** An ordered reference list (metadata only, no local file paths).

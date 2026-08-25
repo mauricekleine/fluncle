@@ -259,6 +259,50 @@ class TestMatchCuesToCollection:
         # feat. is dropped from both sides, so they match
         assert reason == "matched"
 
+    def test_retailer_country_qualifier_matches_exactly(self):
+        index = _make_index([
+            ("Archangel (PT)", "She Was Mine (Original Mix)", "c1"),
+        ])
+        cues = [{"artists": ["Archangel"], "title": "She Was Mine"}]
+        results = match_cues_to_collection(cues, index)
+        _, content, reason = results[0]
+        assert reason == "matched"
+        assert content is not None
+
+    def test_unique_collaborator_credit_drift_is_fuzzy(self):
+        index = _make_index([
+            ("Nu_Tone, Stac", "Piece Of You (Refix)", "c1"),
+        ])
+        cues = [
+            {
+                "artists": ["Nu:Tone"],
+                "title": "Piece Of You (Mixed) - Refix",
+            }
+        ]
+        results = match_cues_to_collection(cues, index)
+        _, content, reason = results[0]
+        assert reason == "fuzzy"
+        assert content is not None
+
+    def test_multiple_credit_drift_candidates_stay_ambiguous(self):
+        key = match_key("Nu_Tone, Stac", "Piece Of You (Refix)")
+        index = {
+            key: [
+                FakeContent("Nu_Tone, Stac", "Piece Of You (Refix)", "c1"),
+                FakeContent("Nu_Tone, Stac", "Piece Of You (Refix)", "c2"),
+            ]
+        }
+        cues = [
+            {
+                "artists": ["Nu:Tone"],
+                "title": "Piece Of You (Mixed) - Refix",
+            }
+        ]
+        results = match_cues_to_collection(cues, index)
+        _, content, reason = results[0]
+        assert reason == "ambiguous"
+        assert content is None
+
 
 # ---------------------------------------------------------------------------
 # External compatibility boundaries.

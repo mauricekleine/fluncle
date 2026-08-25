@@ -231,7 +231,7 @@ class Cue:
     match_bucket: str  # "matched" | "ambiguous" | "unmatched"
     flagged_reason: str | None = None  # "repeat" for non-consecutive repeats
     flag_detail: str | None = None  # Ambiguous candidate ids
-    fuzzy: bool = False  # matched via the tolerant remix-credit fallback — eyeball it
+    fuzzy: bool = False  # matched via the tolerant retailer-credit fallback — eyeball it
 
     def to_cue_dict(self) -> dict:
         d: dict = {
@@ -268,10 +268,9 @@ def derive_cues(rows: list[dict], catalogue_index: dict[tuple, list[dict]]) -> l
         candidates = catalogue_index.get(identity, [])
         fuzzy = False
 
-        # Exact miss → one tolerant fallback pass across the catalogue, catching the
-        # remixer-as-artist-vs-in-title gap (see tolerant_same_recording). A single
-        # hit is a fuzzy match (flagged for the operator to eyeball); >1 stays
-        # ambiguous; 0 stays unmatched — the fallback never lowers the safety bar.
+        # Exact miss → one tolerant fallback pass across the catalogue for retailer
+        # credit drift (see tolerant_same_recording). A single hit is a fuzzy match
+        # flagged for review; >1 stays ambiguous; 0 stays unmatched.
         if not candidates:
             fallback: list[dict] = []
             for key, findings in catalogue_index.items():
