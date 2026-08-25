@@ -39,6 +39,7 @@
  * nothing for a human to decide about a record. See docs/album-entity.md.
  */
 import { type Client, createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
 
@@ -220,7 +221,12 @@ async function main(): Promise<void> {
   const authToken = await readSecret("TURSO_AUTH_TOKEN");
   // intMode:"bigint" keeps large catalogue integers exact; the script reads only text cells and
   // `rowsAffected` (always a JS number), so nothing here needs bigint narrowing.
-  const client = createClient({ authToken, intMode: "bigint", url });
+  const client = createClient({
+    authToken,
+    concurrency: REMOTE_DB_CONCURRENCY,
+    intMode: "bigint",
+    url,
+  });
   const result = await backfillAlbums(client);
 
   console.log(`album-graph backfill: ${result.minted} minted · ${result.linked} linked.`);

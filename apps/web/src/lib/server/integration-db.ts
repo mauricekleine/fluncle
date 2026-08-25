@@ -10,6 +10,7 @@
 // `include: src/**/*.test.{ts,tsx}` never picks it up as a suite.
 
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -37,7 +38,7 @@ const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.u
  * the DDL under test is byte-identical to production's, exactly like the migrations are.
  */
 export async function createIntegrationDb(): Promise<Client> {
-  const client = createClient({ url: ":memory:" });
+  const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
   await client.batch(
     (await schemaDdl()).map((sql) => ({ args: [], sql })),
@@ -80,7 +81,7 @@ let capturedDdl: Promise<string[]> | undefined;
  */
 function schemaDdl(): Promise<string[]> {
   capturedDdl ??= (async () => {
-    const template = createClient({ url: ":memory:" });
+    const template = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     await migrate(drizzle(template), { migrationsFolder });
 

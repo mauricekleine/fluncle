@@ -22,6 +22,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Client, createClient } from "@libsql/client";
 import { type Locator, type Page } from "playwright-core";
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { launchBrowser, loadDevVars, newAdminPage } from "./admin";
 
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:3000";
@@ -133,7 +134,11 @@ function seedClient(): Client {
   if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(url)) {
     throw new Error("SEED=1 refuses a non-local TURSO_DATABASE_URL");
   }
-  return createClient({ authToken: process.env.TURSO_AUTH_TOKEN ?? "", url });
+  return createClient({
+    authToken: process.env.TURSO_AUTH_TOKEN ?? "",
+    concurrency: LOCAL_DB_CONCURRENCY,
+    url,
+  });
 }
 
 /** Seed one row per source: a fresh + a bounced TikTok draft (on the two newest

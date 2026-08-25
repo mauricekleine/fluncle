@@ -1,6 +1,7 @@
 // Artist aliases (the MusicBrainz identity layer): the pure MB-alias harvest + the upsert
 // idempotence against a real in-memory libSQL engine. `getDb` is mocked to the per-test client.
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -45,7 +46,7 @@ describe("persistResolution — MB aliases are upserted idempotently", () => {
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(

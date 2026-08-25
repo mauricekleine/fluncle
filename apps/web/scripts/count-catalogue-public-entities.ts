@@ -34,6 +34,7 @@
  */
 import { $ } from "bun";
 import { type Client, createClient } from "@libsql/client/web";
+import { CATALOGUE_PUBLIC_ENTITY_COUNT_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { ALBUM_INDEX_MIN_TRACKS } from "../src/lib/server/albums";
 import { ARTIST_INDEX_MIN_FINDINGS } from "../src/lib/server/artists";
 import { LABEL_INDEX_MIN_TRACKS } from "../src/lib/server/labels";
@@ -162,7 +163,12 @@ async function main(): Promise<void> {
   const url = await readSecret("TURSO_DATABASE_URL");
   const authToken = await readSecret("TURSO_AUTH_TOKEN");
   // intMode:"bigint" keeps large catalogue counts exact; `asCount` already narrows bigint → number.
-  const client = createClient({ authToken, intMode: "bigint", url });
+  const client = createClient({
+    authToken,
+    concurrency: CATALOGUE_PUBLIC_ENTITY_COUNT_DB_CONCURRENCY,
+    intMode: "bigint",
+    url,
+  });
 
   const [albums, labels, artists] = await Promise.all([
     countEntity(client, ALBUM_INNER, ALBUM_INDEX_MIN_TRACKS),

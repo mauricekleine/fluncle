@@ -17,6 +17,7 @@
  */
 import { $ } from "bun";
 import { createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -48,7 +49,12 @@ const authToken = await readSecret("TURSO_AUTH_TOKEN");
 
 // intMode:"bigint" keeps large integers exact through the dump (the shared emitter
 // serialises a bigint by its precise decimal string).
-const client = createClient({ authToken, intMode: "bigint", url });
+const client = createClient({
+  authToken,
+  concurrency: REMOTE_DB_CONCURRENCY,
+  intMode: "bigint",
+  url,
+});
 
 const schemaResult = await client.execute(
   // `tracks_fts%` is the FTS5 search index and its shadow tables — a DERIVED artifact

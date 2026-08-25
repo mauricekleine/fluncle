@@ -9,6 +9,7 @@ import {
 import { startSpan, type Span } from "@sentry/core";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "../../db/schema";
+import { PRIMARY_DB_CONCURRENCY, TELEMETRY_DB_CONCURRENCY } from "../database-concurrency";
 import { readEnvs, readOptionalEnv } from "./env";
 
 // Every DB query runs inside a Sentry `db.query` span so slow queries surface in
@@ -292,6 +293,7 @@ export async function getDb() {
   return instrument(
     createClient({
       authToken: env.TURSO_AUTH_TOKEN,
+      concurrency: PRIMARY_DB_CONCURRENCY,
       url: env.TURSO_DATABASE_URL,
     }),
   );
@@ -333,7 +335,7 @@ export async function getTelemetryDb(): Promise<Client | undefined> {
     return undefined;
   }
 
-  return instrument(createClient({ authToken, url }));
+  return instrument(createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, url }));
 }
 
 export function typedRow<T extends object>(rows: Row[]): T | undefined {

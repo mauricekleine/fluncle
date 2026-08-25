@@ -44,6 +44,7 @@
  * NEVER points at `fluncle` or `fluncle-dev` (it refuses a URL containing either name as a guard).
  */
 import { createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -109,7 +110,7 @@ const entityCount = envInt("BENCH_ENTITIES", 25_000);
 const iterations = envInt("BENCH_ITERATIONS", 12);
 const seekVsOffset = process.argv.includes("--seek-vs-offset");
 
-const client = createClient({ authToken, url });
+const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 /**

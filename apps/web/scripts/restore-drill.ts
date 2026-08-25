@@ -23,6 +23,7 @@
  * The manifest defaults to the dump's sibling `manifest.json` (or `<name>.manifest.json`).
  */
 import { createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { gunzipSync } from "node:zlib";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -86,7 +87,7 @@ const scratchDb = join(scratchDir, "scratch.db");
 
 async function main(): Promise<void> {
   const started = Date.now();
-  const client = createClient({ url: `file:${scratchDb}` });
+  const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: `file:${scratchDb}` });
 
   // Restore the whole dump as one script (the same executeMultiple the app's client
   // speaks — proven to load the PRAGMA/BEGIN…COMMIT wrapper + blobs + escaped quotes).

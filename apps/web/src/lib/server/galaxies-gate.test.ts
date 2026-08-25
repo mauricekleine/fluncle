@@ -5,6 +5,7 @@
 // stubbed so the gate logic is tested without hydrating the full tracks schema (the
 // adjacency ranking still runs for real over the seeded centroids).
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -73,7 +74,7 @@ describe("the galaxy launch gate", () => {
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(

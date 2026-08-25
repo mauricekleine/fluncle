@@ -10,6 +10,7 @@
 //     source the operator stops reading, which is where this started);
 //   - both rulings CLEAR the row, and a later clean bio clears it too, by construction.
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -63,7 +64,7 @@ describe("the bio-review ledger", () => {
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     for (const table of ["artists", "labels", "albums"] as const) {

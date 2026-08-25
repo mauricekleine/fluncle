@@ -15,6 +15,7 @@
 // telemetry test.
 
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -30,7 +31,7 @@ const migrationsFolder = fileURLToPath(new URL("../../../drizzle-telemetry", imp
  * the cheap path and the cache would be complexity bought for nothing.
  */
 export async function createTelemetryIntegrationDb(): Promise<Client> {
-  const client = createClient({ url: ":memory:" });
+  const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
   await migrate(drizzle(client), { migrationsFolder });
 
