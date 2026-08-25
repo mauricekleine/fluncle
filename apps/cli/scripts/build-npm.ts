@@ -78,7 +78,11 @@ function buildPackageJson(): Record<string, unknown> {
   return {
     bin: { fluncle: "./bin/fluncle.mjs" },
     bugs: { url: "https://github.com/mauricekleine/fluncle/issues" },
-    description: "drum & bass bangers from another dimension — the Fluncle CLI",
+    // A colon, not an em dash, and the tagline in sentence case: npmjs.com/package/fluncle
+    // prints this to a stranger, and VOICE.md §6 sanctions exactly one em dash (the
+    // `Artist — Title` tracklist separator). Kept identical to the Homebrew formula's
+    // `desc` (apps/cli/packaging/homebrew/fluncle.rb) — one sentence, one spelling.
+    description: "Drum & bass bangers from another dimension: the Fluncle CLI",
     engines: { node: ">=18" },
     files: ["bin/fluncle.mjs", "README.md"],
     homepage: "https://www.fluncle.com",
@@ -95,7 +99,7 @@ function buildPackageJson(): Record<string, unknown> {
 function buildReadme(): string {
   return `# fluncle
 
-drum & bass bangers from another dimension — the Fluncle CLI.
+Drum & bass bangers from another dimension: the Fluncle CLI.
 
 \`\`\`sh
 npx fluncle recent
