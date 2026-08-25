@@ -8,8 +8,10 @@ Run with:
 from __future__ import annotations
 
 import importlib.util
-import sys
 import os
+import subprocess
+import sys
+import types
 
 _SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, _SCRIPTS_DIR)
@@ -256,6 +258,64 @@ class TestMatchCuesToCollection:
         _, _, reason = results[0]
         # feat. is dropped from both sides, so they match
         assert reason == "matched"
+
+
+# ---------------------------------------------------------------------------
+# External compatibility boundaries.
+# ---------------------------------------------------------------------------
+
+
+class TestFetchPlanFailure:
+    def test_surfaces_json_error_written_to_stdout(self, monkeypatch, capsys):
+        def fail_with_json(cmd, stdout, **_kwargs):
+            stdout.write(
+                b'{"code":"invalid_api_response","message":"stale API route","ok":false}\n'
+            )
+            raise subprocess.CalledProcessError(1, cmd, stderr="")
+
+        monkeypatch.setattr(_export.subprocess, "run", fail_with_json)
+
+        with pytest.raises(SystemExit):
+            _export.fetch_plan("fluncle", "plan-id")
+
+        error = capsys.readouterr().err
+        assert "invalid_api_response: stale API route" in error
+
+
+class TestOpenDbCompatibility:
+    class FakeDatabase:
+        def __init__(self, path=None):
+            self.path = path
+
+    def test_uses_released_rekordbox6_database(self, monkeypatch):
+        module = types.ModuleType("pyrekordbox")
+        module.Rekordbox6Database = self.FakeDatabase
+        monkeypatch.setitem(sys.modules, "pyrekordbox", module)
+
+        db = _export.open_db("/tmp/master.db")
+
+        assert isinstance(db, self.FakeDatabase)
+        assert db.path == "/tmp/master.db"
+
+    def test_prefers_new_master_database(self, monkeypatch):
+        fake_database = self.FakeDatabase
+
+        class MasterDatabase(fake_database):
+            pass
+
+        class LegacyDatabase:
+            def __init__(self, path=None):
+                raise AssertionError("legacy class should not be selected")
+
+        module = types.ModuleType("pyrekordbox")
+        module.MasterDatabase = MasterDatabase
+        module.Rekordbox6Database = LegacyDatabase
+        monkeypatch.setitem(sys.modules, "pyrekordbox", module)
+
+        db = _export.open_db(None)
+
+        assert isinstance(db, MasterDatabase)
+        assert db.path is None
 
 
 # ---------------------------------------------------------------------------

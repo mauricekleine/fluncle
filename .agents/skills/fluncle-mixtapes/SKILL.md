@@ -35,13 +35,13 @@ For the Rekordbox tracklist step, quit Rekordbox fully before running any script
 The work splits across two Macs, and the split is non-obvious:
 
 - 🖥️ **M5 (capture/stream + CLI)** — the compose/author/stream laptop: a browser (`/admin/plans`, `/admin/studio`, `/admin/clips`), the `fluncle` CLI hitting prod (`https://www.fluncle.com`), **OBS + the audio/video masters, the recording upload, audio extraction (`ffmpeg`), and distribute**. This is where you plan, mix + record, upload the take, promote, mark cues, clip, and distribute.
-- 🎛️ **M2 (mixing)** — the DJ laptop where **Rekordbox + its `master.db`** live. **Only** the two Rekordbox scripts (`rekordbox-plan-export.py`, `rekordbox-derive-cues.py`) run here — they read/write `master.db`, which exists only on this machine. No OBS, no browser: the FLX4's master leaves as analog, an M-Track splits it to the monitors + USB into the M5, and OBS captures on the M5. The physical rig is [docs/live-show-setup.md](../../../docs/live-show-setup.md).
+- 🎛️ **M2 (mixing)** — the DJ laptop where **Rekordbox + its `master.db`** live. **Only** the two Rekordbox scripts (`rekordbox-plan-export.py`, `rekordbox-derive-cues.py`) run here — they read/write `master.db`, which exists only on this machine. Their Fluncle reads/writes still go through the full Homebrew CLI and its uncommitted production profile on this Mac; pulling the repo does not update that standalone binary. No OBS, no browser: the FLX4's master leaves as analog, an M-Track splits it to the monitors + USB into the M5, and OBS captures on the M5. The physical rig is [docs/live-show-setup.md](../../../docs/live-show-setup.md).
 
 The runbook steps below are tagged 🖥️ (M5 — capture/stream + CLI) / 🎛️ (M2 — Rekordbox / `master.db`) so you know which Mac each one runs on.
 
 ### One-time setup
 
-The M5 carries the CLI, the operator token, and `ffmpeg` (the upload/extract/distribute machine); the M2 carries `uv` + the scripts (the Rekordbox machine).
+The M5 carries the CLI, the operator token, and `ffmpeg` (the upload/extract/distribute machine); the M2 carries the CLI + its production profile, `uv`, and the scripts (the Rekordbox machine). The M2 CLI is required because both Rekordbox scripts call authenticated `fluncle admin recordings …` operations.
 
 1. **On the 🖥️ M5 — install the full CLI via Homebrew:**
 
@@ -59,20 +59,29 @@ The M5 carries the CLI, the operator token, and `ffmpeg` (the upload/extract/dis
 
    The prod operator token also lives on the M5: the CLI reads `FLUNCLE_API_TOKEN` from `~/.config/fluncle/.env.production` (the default `production` profile; the CLI targets `https://www.fluncle.com`).
 
-3. **On the 🎛️ M2 — install `uv`** (runs the pyrekordbox scripts; or use the curl installer):
+3. **On the 🎛️ M2 — install the full CLI and configure its uncommitted production profile.** The npm package is the public shim and has no `admin` commands. Keep the standalone binary current independently of the repo clone:
+
+   ```bash
+   brew install mauricekleine/fluncle/fluncle
+   brew update
+   brew upgrade mauricekleine/fluncle/fluncle
+   fluncle version --check
+   ```
+
+4. **On the 🎛️ M2 — install `uv`** (runs the pyrekordbox scripts; or use the curl installer):
 
    ```bash
    brew install uv
    ```
 
-4. **On the 🎛️ M2 — get the scripts, clone the repo** (public), don't copy a single file: the two scripts import `_matching.py` / `_cue_formats.py` siblings, so they need the whole directory.
+5. **On the 🎛️ M2 — get the scripts, clone the repo** (public), don't copy a single file: the two scripts import `_matching.py` / `_cue_formats.py` siblings, so they need the whole directory.
 
    ```bash
    git clone https://github.com/mauricekleine/fluncle.git
    # scripts live at packages/skills/fluncle-mixtapes/scripts/
    ```
 
-5. **On the 🎛️ M2 — the Rekordbox key, no setup step.** pyrekordbox **auto-extracts** the `master.db` SQLCipher key when Rekordbox is installed on the Mac; there is nothing to run. Sanity-check the auto-extract with Rekordbox quit:
+6. **On the 🎛️ M2 — the Rekordbox key, no setup step.** pyrekordbox **auto-extracts** the `master.db` SQLCipher key when Rekordbox is installed on the Mac; there is nothing to run. Sanity-check the auto-extract with Rekordbox quit:
 
    ```bash
    uv run --with pyrekordbox python -c "from pyrekordbox import Rekordbox6Database; db=Rekordbox6Database(); print('OK', sum(1 for _ in db.get_content()))"
@@ -157,6 +166,9 @@ Use `rekordbox-tracklist.py` for a read-only session review and full-song key/BP
 Runs on the 🎛️ M2 (it reads/writes `master.db`). Once a plan recording has its cues (see §B above), export them to every tool you need before recording:
 
 ```bash
+# The repo clone and Homebrew CLI update separately; catch a stale API client first.
+fluncle version --check
+
 # Dry-run output: Beatport links + m3u8 + checklist, and the XML safe-fallback.
 # Rekordbox must be QUIT before running — the script writes to the encrypted master.db.
 uv run packages/skills/fluncle-mixtapes/scripts/rekordbox-plan-export.py <planId>

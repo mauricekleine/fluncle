@@ -8,8 +8,9 @@ Reads a plan recording's cues from the Fluncle admin API
 (`fluncle admin recordings get <planId> --json`), then:
 
   1. **Rekordbox playlist (direct DB write — the star).**
-     Opens `MasterDatabase`, finds each finding in the local collection by
-     normalized title+artist (the same matcher as rekordbox-derive-cues), creates
+     Opens the installed pyrekordbox database API, finds each finding in the
+     local collection by normalized title+artist (the same matcher as
+     rekordbox-derive-cues), creates
      a playlist named with the plan's slug, adds matched tracks in order, and
      commits.  A separate "Fluncle Plans" folder is created/reused as the parent.
 
@@ -39,7 +40,7 @@ Prerequisites (one-time, on this Mac):
      download-key` was removed upstream at AlphaTheta's request.)
      If auto-extraction ever fails, cache the key once:
        from pyrekordbox.config import write_db6_key_cache; write_db6_key_cache("<key>")
-     or pass it directly: MasterDatabase(key="<key>")
+     or pass it directly to the installed database class: `Database(key="<key>")`
 
 Usage:
   uv run rekordbox-plan-export.py <planId>
@@ -116,7 +117,11 @@ def fetch_plan(fluncle_bin: str, plan_id: str) -> dict:
                 "install the fluncle CLI or pass --fluncle-bin",
             )
         except subprocess.CalledProcessError as exc:
-            die(f"`fluncle admin recordings get` failed: {(exc.stderr or '').strip() or exc}")
+            out.seek(0)
+            stdout = out.read().decode("utf-8")
+            stderr = (exc.stderr or "").strip()
+            detail = stderr or cli_failure_detail(stdout) or str(exc)
+            die(f"`fluncle admin recordings get` failed: {detail}")
         out.seek(0)
         raw = out.read().decode("utf-8")
 
@@ -132,6 +137,30 @@ def fetch_plan(fluncle_bin: str, plan_id: str) -> dict:
     return recording
 
 
+def cli_failure_detail(stdout: str) -> str:
+    """Extract the CLI's JSON failure from stdout without dumping an HTML response."""
+    raw = stdout.strip()
+    if not raw:
+        return ""
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw[:800]
+
+    if not isinstance(payload, dict):
+        return raw[:800]
+
+    code = payload.get("code")
+    message = payload.get("message")
+    if isinstance(code, str) and isinstance(message, str):
+        detail = f"{code}: {message}"
+        return detail[:800]
+    if isinstance(message, str):
+        return message[:800]
+    return raw[:800]
+
+
 # ---------------------------------------------------------------------------
 # Rekordbox DB helpers.
 # ---------------------------------------------------------------------------
@@ -139,15 +168,27 @@ def fetch_plan(fluncle_bin: str, plan_id: str) -> dict:
 
 def open_db(db_path: str | None):
     try:
-        from pyrekordbox import MasterDatabase
-    except ImportError:
+        import pyrekordbox
+    except ImportError as exc:
         die(
-            "pyrekordbox is not installed",
+            f"pyrekordbox could not be imported: {exc}",
             "run via `uv run` so the inline dependency is provided",
         )
 
+    # PyPI 0.4.x exposes `Rekordbox6Database`; the upstream development API renamed it
+    # to `MasterDatabase`. Both classes provide the collection and playlist methods this
+    # exporter uses, so accept either without forcing operators onto an unreleased build.
+    database_class = getattr(pyrekordbox, "MasterDatabase", None)
+    if database_class is None:
+        database_class = getattr(pyrekordbox, "Rekordbox6Database", None)
+    if database_class is None:
+        die(
+            "the installed pyrekordbox exposes neither MasterDatabase nor Rekordbox6Database",
+            "run `uv cache clean pyrekordbox`, then retry the exporter",
+        )
+
     try:
-        return MasterDatabase(path=db_path) if db_path else MasterDatabase()
+        return database_class(path=db_path) if db_path else database_class()
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
         if "key" in msg:
