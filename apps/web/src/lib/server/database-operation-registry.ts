@@ -1511,7 +1511,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: every("10min", "1h", "", true),
+    cadence: every("10min", "1h", "90", true),
     directory: "pin-watch",
     heavy: false,
     operationId: "ops.pin-watch",
@@ -1935,6 +1935,7 @@ for (const operation of DATABASE_OPERATION_REGISTRY) {
 export type ResolvedDatabaseOperationOwner = Readonly<{
   accessClass: DatabaseAccessClass | null;
   heavy: boolean;
+  heavyRead: boolean;
   operationId: string;
 }>;
 
@@ -1951,6 +1952,7 @@ export function resolveDatabaseOperationOwner(
   return {
     accessClass: operation.accessClass,
     heavy: operation.heavy,
+    heavyRead: operation.triggers.some((trigger) => trigger.accessClass === "heavy-read"),
     operationId: operation.operationId,
   };
 }

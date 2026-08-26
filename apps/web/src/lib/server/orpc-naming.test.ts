@@ -76,6 +76,9 @@ const APPROVED_VERBS = new Set<string>([
   // `compact` removes only a bounded, transactionally proven log prefix below every live consumer
   // barrier. It is not `delete`: the caller cannot name rows and no live interval may be removed.
   "compact",
+  // `coordinate` advances one contender through a fenced admission protocol. It is not a generic
+  // update: the database decides queue order, ownership, renewal, release, and cancellation.
+  "coordinate",
   // `resolve` — walk an external authority to fix an entity's cross-platform identity. `resolve_artist`
   // resolves an artist's social profiles from MB + Firecrawl (the artist-relationship epic);
   // `resolve_anchor` resolves a catalogue row's Spotify anchor from ListenBrainz (the anchor waterfall's

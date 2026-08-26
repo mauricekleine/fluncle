@@ -31,6 +31,7 @@ import { adminBackfillsContract } from "./admin-backfills";
 import { adminBiosContract } from "./admin-bios";
 import { adminCatalogueContract } from "./admin-catalogue";
 import { adminCostsContract } from "./admin-costs";
+import { adminDatabaseAdmissionContract } from "./admin-database-admission";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { adminPromptsContract } from "./admin-prompts";
 import { adminReachContract } from "./admin-reach";
@@ -294,6 +295,16 @@ export {
 } from "./admin-observations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export {
+  adminDatabaseAdmissionContract,
+  coordinateDatabaseAdmission,
+  DatabaseAdmissionActionSchema,
+  DatabaseAdmissionLaneSchema,
+  DatabaseAdmissionOutcomeSchema,
+  type DatabaseAdmissionResponse,
+  DatabaseAdmissionResponseSchema,
+  DatabaseAdmissionYieldReasonSchema,
+} from "./admin-database-admission";
+export {
   adminTelemetryContract,
   MAX_RUN_DATABASE_COUNT,
   MAX_RUN_LEDGER_PAGE_SIZE,
@@ -547,6 +558,7 @@ export const contract = {
   ...adminBiosContract,
   ...adminCatalogueContract,
   ...adminCostsContract,
+  ...adminDatabaseAdmissionContract,
   ...adminGalaxiesContract,
   ...adminPromptsContract,
   ...adminReachContract,

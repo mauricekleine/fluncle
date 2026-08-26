@@ -15,13 +15,13 @@ Type=oneshot
 # The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from main via
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh) so a future prober entry stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/fluncle-live.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-live -- bash /opt/hermes-scripts/fluncle-live.sh
 # A single Twitch Helix poll (token mint/reuse + one GET + one POST); a clean tick is seconds.
 # The old 60s ceiling equalled the 1-min cadence, so a tick stalled by a pin-watch docker image
 # build (~4 min of heavy CPU contention on this 4-vCPU box) was false-killed. 180s clears that.
 # It exceeds the 1-min cadence: systemd never starts a new tick while one is active, so a stalled
 # poll just skips the next minute or two and self-heals — missing a live-poll tick is harmless.
-TimeoutStartSec=180
+TimeoutStartSec=310
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

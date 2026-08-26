@@ -10,18 +10,18 @@ Type=oneshot
 # creds, swaps the binary at /opt/sonar/sonar, and drives `systemctl restart sonar`.
 # Credential-free — the release assets come from a PUBLIC repo over plain curl, and it
 # reuses the live service's env; it reads nothing from `op`.
-ExecStart=/opt/sonar-freshen/fluncle-sonar-freshen.sh
+ExecStart=/opt/fluncle-database-admission/database-admission-runner.sh fluncle-sonar-freshen -- /opt/sonar-freshen/fluncle-sonar-freshen.sh
 
 # Optional alert/status inputs (Discord webhook + the agent-scoped API token for the
 # /status `self-deploy-sonar` row). Operator-placed, kept OUT of the repo; the `-` prefix
 # makes it optional, so the self-deploy still runs (silently) when the file is absent.
-# Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN (values in the ops runbook note).
+# Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN, DATABASE_ADMISSION_FAIL_CLOSED.
 EnvironmentFile=-/etc/fluncle/sonar-freshen.env
 
 # A clean tick is one small HTTP GET. A real deploy is a download + a ~180s isolated
 # pre-smoke (sonar validates and builds the durable local corpus) + a restart that
 # loads the local corpus again. Give it plenty of room; the flock keeps ticks serialised.
-TimeoutStartSec=1200
+TimeoutStartSec=1330
 
 # Modest hardening for a root oneshot that swaps a binary and restarts a unit.
 NoNewPrivileges=true

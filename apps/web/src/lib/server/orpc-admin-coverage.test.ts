@@ -430,6 +430,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly, like record_health). Admin tier
   // (agent-allowed): the box's sweeps POST a tick's cost rows with the agent token.
   "POST /admin/costs/events": "record_cost",
+  // Registry-classified recurring units use this one agent-tier protocol endpoint for shadow
+  // observation and fenced acquire/heartbeat/release/cancel after the default-off cutover.
+  "POST /admin/database-admission": "coordinate_database_admission",
   // The weekly Frontier refresh (E2, the public recommendation machine) — contract-only
   // oRPC (no TanStack route file; oRPC owns the path). Admin tier (agent-allowed): the
   // box's `fluncle-frontier-refresh` cron re-mirrors every crew member's playlist with

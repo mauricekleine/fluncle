@@ -15,10 +15,10 @@ Type=oneshot
 # private backup-bucket R2 creds). The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A —
 # auto-updates from main via pin-watch); this host unit only TRIGGERS it, and the sweep
 # self-writes its /status marker (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/backup-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-backup -- bash /opt/hermes-scripts/backup-sweep.sh
 # A full prod-DB dump → gzip → S3-direct PUT to the private R2 bucket + prune (30 daily / 12
 # monthly). Give the dump + upload generous headroom.
-TimeoutStartSec=1800
+TimeoutStartSec=1930
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
