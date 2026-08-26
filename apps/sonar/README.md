@@ -59,25 +59,25 @@ Tracks, centroids, and checkpoint metadata live in one published generation. A r
 
 ## Configuration
 
-| Variable | Required | Default | Meaning |
-| --- | --- | --- | --- |
-| `TURSO_DATABASE_URL` | yes | none | Remote source used only by embedded-replica sync. |
-| `TURSO_AUTH_TOKEN` | yes | none | Read credential used only by embedded-replica sync. |
-| `SONAR_REPLICA_PATH` | yes | none | Writable local embedded-replica file. |
-| `SONAR_STATE_PATH` | yes | none | Writable local consumer-state database. |
-| `FLUNCLE_API_BASE_URL` | yes | none | Base URL for agent-authenticated artifact operations. |
-| `FLUNCLE_API_TOKEN` | yes | none | Agent token for artifact operations. |
-| `SONAR_CONSUMER_ID` | yes | none | Stable artifact consumer identity. |
-| `SONAR_SECRET` | yes | none | Shared secret for search requests. |
-| `SONAR_DELTA_SECS` | no | `30` | Delay between bounded change reads. |
-| `SONAR_RECONCILE_SECS` | no | `3600` | Delay between explicit replica sync plus full local reconciliation. |
-| `SONAR_BATCH_LIMIT` | no | `100` | Change batch size, maximum 500. |
-| `SONAR_SNAPSHOT_LIMIT` | no | `200` | Local snapshot attestation page size, maximum 200. |
-| `SONAR_PORT` | no | `8080` | Listen port. |
-| `SONAR_BIND` | no | `0.0.0.0` | Bind address. |
-| `SONAR_TLS_CERT` | no | none | PEM certificate path. Set with the key. |
-| `SONAR_TLS_KEY` | no | none | PEM key path. Set with the certificate. |
-| `SONAR_VALIDATE_ONLY` | no | `false` | Pre-smoke mode. Reads and validates existing local state, serves health, and performs no sync or artifact mutation. |
+| Variable               | Required | Default   | Meaning                                                                                                             |
+| ---------------------- | -------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
+| `TURSO_DATABASE_URL`   | yes      | none      | Remote source used only by embedded-replica sync.                                                                   |
+| `TURSO_AUTH_TOKEN`     | yes      | none      | Read credential used only by embedded-replica sync.                                                                 |
+| `SONAR_REPLICA_PATH`   | yes      | none      | Writable local embedded-replica file.                                                                               |
+| `SONAR_STATE_PATH`     | yes      | none      | Writable local consumer-state database.                                                                             |
+| `FLUNCLE_API_BASE_URL` | yes      | none      | Base URL for agent-authenticated artifact operations.                                                               |
+| `FLUNCLE_API_TOKEN`    | yes      | none      | Agent token for artifact operations.                                                                                |
+| `SONAR_CONSUMER_ID`    | yes      | none      | Stable artifact consumer identity.                                                                                  |
+| `SONAR_SECRET`         | yes      | none      | Shared secret for search requests.                                                                                  |
+| `SONAR_DELTA_SECS`     | no       | `30`      | Delay between bounded change reads.                                                                                 |
+| `SONAR_RECONCILE_SECS` | no       | `3600`    | Delay between explicit replica sync plus full local reconciliation.                                                 |
+| `SONAR_BATCH_LIMIT`    | no       | `100`     | Change batch size, maximum 500.                                                                                     |
+| `SONAR_SNAPSHOT_LIMIT` | no       | `200`     | Local snapshot attestation page size, maximum 200.                                                                  |
+| `SONAR_PORT`           | no       | `8080`    | Listen port.                                                                                                        |
+| `SONAR_BIND`           | no       | `0.0.0.0` | Bind address.                                                                                                       |
+| `SONAR_TLS_CERT`       | no       | none      | PEM certificate path. Set with the key.                                                                             |
+| `SONAR_TLS_KEY`        | no       | none      | PEM key path. Set with the certificate.                                                                             |
+| `SONAR_VALIDATE_ONLY`  | no       | `false`   | Pre-smoke mode. Reads and validates existing local state, serves health, and performs no sync or artifact mutation. |
 
 The committed systemd unit creates a private writable state directory. Operator configuration points both local paths into it. Concrete credentials and topology stay outside this public repository.
 

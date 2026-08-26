@@ -141,17 +141,17 @@ Re-run `--dry-run` any time to preview without touching the live service. The sc
 
 Everything is overridable via the environment; the defaults are the canonical deploy paths.
 
-| Env var                          | Default                    | Meaning                                                                    |
-| -------------------------------- | -------------------------- | -------------------------------------------------------------------------- |
-| `SONARFRESHEN_RELEASE_REPO`      | `mauricekleine/fluncle`    | The public repo carrying the release.                                      |
-| `SONARFRESHEN_RELEASE_TAG`       | `sonar-latest`             | The rolling pre-release tag CI publishes to.                               |
-| `SONARFRESHEN_ASSET_BASE`        | derived from the two above | Full asset download base (point this at a mirror if ever needed).          |
-| `SONARFRESHEN_STATE_DIR`         | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                      |
-| `SONARFRESHEN_SERVICE`           | `sonar`                    | The systemd unit to restart.                                               |
-| `SONARFRESHEN_APP_BIN`           | `/opt/sonar/sonar`         | The binary to swap.                                                        |
+| Env var                          | Default                    | Meaning                                                                                                  |
+| -------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `SONARFRESHEN_RELEASE_REPO`      | `mauricekleine/fluncle`    | The public repo carrying the release.                                                                    |
+| `SONARFRESHEN_RELEASE_TAG`       | `sonar-latest`             | The rolling pre-release tag CI publishes to.                                                             |
+| `SONARFRESHEN_ASSET_BASE`        | derived from the two above | Full asset download base (point this at a mirror if ever needed).                                        |
+| `SONARFRESHEN_STATE_DIR`         | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                                                    |
+| `SONARFRESHEN_SERVICE`           | `sonar`                    | The systemd unit to restart.                                                                             |
+| `SONARFRESHEN_APP_BIN`           | `/opt/sonar/sonar`         | The binary to swap.                                                                                      |
 | `SONARFRESHEN_SERVICE_ENV`       | `/etc/sonar.env`           | Read-only source of local-state paths, replica open credentials, search secret, and live port/TLS shape. |
-| `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.            |
-| `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                      |
+| `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
+| `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
 
 Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
 
