@@ -1,256 +1,107 @@
-# sonar
+# Sonar
 
-Fluncle's vector sidecar: an in-memory, **exact** vector-similarity engine. It
-holds the whole MuQ embedding corpus (~600MB, 1024-dim) in RAM and answers
-nearest-neighbour queries with a brute-force, rayon-parallel, SIMD-friendly scan
-— ~tens of ms single-probe at catalogue scale, with **100% recall**.
+Sonar is Fluncle's exact vector sidecar. It keeps the 1024-dimension MuQ track corpus and artist centroids in RAM, then answers cosine searches with one rayon-parallel scan. The Worker owns every surface rule and hydrates returned IDs from Turso.
 
-It exists because the live discovery surfaces (sonic search, "sounds like these
-artists", "more like this", DJ-mix suggestions) are too slow on Turso's SQL
-`vector_distance_cos` scan (seconds at scale), and Cloudflare Vectorize was
-rejected (~150ms + recall loss from ANN). `sonar` reads the vectors from Turso
-into memory and serves the raw fast search over HTTP. The Cloudflare Worker
-(`apps/web`) owns all surface-specific logic: it calls `sonar` for the fast
-nearest-neighbour lookup, then hydrates the returned ids from Turso.
+## What it serves
 
-This is the FIRST Rust app in the monorepo — same "non-TS app under `apps/`"
-pattern as `apps/ssh` and `apps/dns` (Go). It is a standalone Cargo crate (its
-own `[workspace]`), built/linted/tested in CI alongside the Go apps.
+The `tracks` index contains one row per embedded track. Each row keeps the raw filter facts `{ key, bpm, anchored, certified, has_finding, dismissed, is_duplicate, nearest_finding_score, duration_ms }`. `certified` means a finding with a Log ID exists. `has_finding` means any findings row exists. Those facts stay separate because the recommendations predicate needs the difference.
 
-## What it holds
+The `centroids` index contains one vector per artist and no metadata.
 
-Two in-memory indexes, both refreshed periodically from Turso and hot-swapped
-atomically (in-flight queries always see a consistent snapshot):
+Vectors are decoded as exactly 4,096 little-endian bytes, validated, and L2-normalized in the served index. The durable local state keeps the original bytes unchanged. A candidate score is `max(dot(probe, candidate))` across every probe, never an average.
 
-- **`tracks`** — one entry per embedded track. id = `track_id`, a 1024-dim f32
-  vector, plus metadata
-  `{ key, bpm, anchored, certified, has_finding, dismissed, is_duplicate, nearest_finding_score, duration_ms }`.
-  `anchored = spotify_uri IS NOT NULL`. **`certified` and `has_finding` are two
-  different facts**: `certified` = a `findings` row **with a Log ID**, the
-  app-wide "Fluncle speaks about it"; `has_finding` = **any** `findings` row,
-  Log ID or not. A coordinate-less straggler (a finding awaiting its one-time Log
-  ID backfill) is `has_finding: true, certified: false`, so a surface negating
-  "no findings row at all" — the `/recommendations` catalogue predicate — must use
-  `has_finding`, never `certified: false`. `nearest_finding_score` and
-  `duration_ms` are stored RAW (NULL preserved), because the thresholds that read
-  them belong to the Worker.
-- **`centroids`** — one entry per artist centroid. id = `artist_id`, a 1024-dim
-  f32 vector, no metadata.
+The HTTP search contract, filter null laws, request caps, and fallback behavior remain the contract documented in [vector-serving.md](../../docs/vector-serving.md). Unknown filter fields fail closed. Bad input returns an empty match list. `MAX_TOP_K` is 1,000 and `MAX_PROBES` is 32.
 
-Every vector is L2-normalized on load, so cosine similarity == a plain dot
-product in the scan kernel.
+## Local data path
 
-## The scoring fold (important)
+Sonar never runs a full corpus SELECT against hosted Turso.
 
-A query carries one OR MORE `probes`. A candidate's score is
-**`max over probes of dot(probe, vector)`** — its similarity to the NEAREST
-probe. This is the max-similarity-to-nearest fold from
-[`docs/the-ear.md`](../../docs/the-ear.md). It is **never** a centroid/average of
-the probes: a candidate that matches one probe perfectly wins even if it is far
-from the others. A single probe is just that one dot.
+It opens an official libSQL embedded replica at `SONAR_REPLICA_PATH` with `Builder::new_remote_replica`. No automatic sync interval is configured. Sonar calls `Database::sync()` explicitly, then every track, revision, and centroid query runs against that local file.
 
-## HTTP API
+A separate embedded libSQL database at `SONAR_STATE_PATH` owns the consumer checkpoint and exact raw track projection. Source-replica files and consumer-state files must never share a path.
 
-### `POST /search` (authenticated)
+The steady loop has two lanes:
 
-Requires header `x-sonar-secret: <SONAR_SECRET>` (constant-time compared).
-Missing/wrong → `401`.
+- Every `SONAR_DELTA_SECS`, Sonar reads a bounded, globally ordered artifact batch and consumes `sonar.track@1/1`.
+- Every `SONAR_RECONCILE_SECS`, Sonar explicitly syncs the replica and runs a full local reconciliation of tracks and centroids. This catches metadata mutations that do not emit an embedding event. A sync or reconciliation failure leaves the served generation alone.
 
-Request body:
+There is no remote full-scan fallback. State corruption, a checkpoint divergence, or a compaction gap starts an exceptional full local rebuild. Corrupt derived state is retained as one bounded `.corrupt` generation and recreated automatically; the served in-memory generation stays untouched until its replacement validates.
 
-```json
-{
-  "index": "tracks",
-  "probes": [[0.01, -0.02, "... 1024 floats ..."]],
-  "filter": {
-    "key_in": ["Amin", "Emin"],
-    "bpm_min": 168.0,
-    "bpm_max": 176.0,
-    "anchored": true,
-    "certified": true,
-    "has_finding": false,
-    "dismissed": false,
-    "is_duplicate": false,
-    "nearest_finding_score_max": 0.995,
-    "duration_ms_max": 900000
-  },
-  "exclude_ids": ["track_abc"],
-  "top_k": 20
-}
-```
+## Bootstrap and rebuild
 
-- `index` — `"tracks"` or `"centroids"`.
-- `probes` — one or more 1024-dim query vectors. Scored by the nearest-probe fold
-  above (normalized server-side). A wrong-dimension probe makes the request
-  invalid → empty result.
-- `filter` — optional. Every field is optional; a set field constrains, and a
-  metadata constraint excludes entries that lack that metadata (so any metadata
-  filter naturally excludes centroids). `bpm_min`/`bpm_max` are inclusive.
-- `exclude_ids` — optional ids to omit from candidates.
-- `top_k` — number of results to return.
+Registration establishes the producer fence. Sonar explicitly syncs the local replica through that fence, computes each deterministic `sonar.track` snapshot page from the local keyset projection, and posts only the page checkpoint. The Worker re-reads and attests the same page. Snapshot vectors never travel back to Sonar over the admin API.
 
-**The two range bounds carry OPPOSITE null rules, mirroring the SQL they replace,
-and both are EXCLUSIVE (`<`, unlike the inclusive BPM pair):**
+Before activation, Sonar syncs once more, records local artifact head `H`, durably builds the complete track and centroid candidate from the local replica, and makes that generation visible. Only then does it activate the producer checkpoint. Events through `H` are still validated in global order and acknowledged as baseline-covered. Events above `H` apply normally.
 
-- `nearest_finding_score_max` — a row whose score is **NULL PASSES**
-  (`score is null or score < x`).
-- `duration_ms_max` — a row whose duration is **NULL FAILS** (`duration_ms < x`,
-  and SQL's `NULL < x` is NULL, so the row is excluded).
+The local snapshot preserves producer revisions, including receipts whose event bodies were compacted. Tombstones retain their subject revision after the row disappears, so delayed delivery cannot resurrect a deleted track.
 
-**An unknown `filter` field is REJECTED** (`deny_unknown_fields`), which returns
-the same empty result any malformed body does. That is a safety property, not
-strictness: serde's default is to ignore an unknown key, so a Worker sending a
-constraint an older binary does not know would have it silently dropped and get
-back a wider candidate set with no error. Failing instead makes the caller fall
-back to its Turso scan — correct, just slower — until the box self-deploys.
+## Crash ordering
 
-Response body:
+One batch follows this order:
 
-```json
-{
-  "matches": [
-    { "id": "track_xyz", "score": 0.83 },
-    { "id": "track_uvw", "score": 0.79 }
-  ]
-}
-```
+1. Validate sequence boundaries, versions, subject shape, canonical JSON, raw vector bytes, every payload digest, and the ordered batch digest.
+2. Apply the batch and write its pending acknowledgement inside one local transaction.
+3. Build and validate the complete candidate from that transaction.
+4. Commit the raw state, manifest, counts, bytes, deterministic digest, checkpoint, and pending receipt.
+5. Publish one `PublishedSnapshot` through a single `ArcSwap`.
+6. Acknowledge the exact producer batch.
+7. Clear the local pending receipt.
 
-`score` is cosine similarity (higher == nearer), sorted descending. Invalid or
-empty input (bad JSON, empty probes, wrong-dim probe, `top_k: 0`) returns
-`{ "matches": [] }` — never a panic.
+A crash before the local commit causes redelivery. A crash after the commit rebuilds and publishes the committed candidate before acknowledgement. A crash after the remote acknowledgement reconciles through consumer status, because repeating a committed acknowledgement is a regression in the producer protocol.
 
-### `GET /health` (open)
+Tracks, centroids, and checkpoint metadata live in one published generation. A request takes one full `Arc`. Sonar streams local source rows into its durable candidate and refuses to build another generation while a retired generation is still held by an in-flight request. One current generation plus one candidate or retired generation is the bound; freshness waits rather than creating a third corpus.
 
-```json
-{
-  "tracks": 148231,
-  "centroids": 5120,
-  "last_refresh_unix": 1753200000,
-  "commit": "e18ede22…",
-  "ok": true
-}
-```
+## Health
 
-Unauthenticated so Cloudflare health checks can hit it.
+`GET /health` remains open. It reports the served track and centroid counts, build commit, checkpoint, local baseline, producer head, delta backlog and age, last successful replica sync, raw vector bytes, artifact contract, validation state, and the last rebuild duration. Fields have bounded names and values. Structured logs use closed stage and rebuild-cause names plus numeric counters.
 
-`commit` is the git SHA this binary was built from, baked at compile time by
-[`sonar-release.yml`](../../.github/workflows/sonar-release.yml) (`GIT_SHA`);
-a local `cargo run` reports `"unknown"`. **It is the pre-flight check for a dark
-flag**: the box self-deploys on an hourly timer, so a merge and a running binary
-are different moments — confirm this field reports the commit that added a filter
-field before flipping the flag that sends it. A commit SHA of a public repo is
-public-safe; nothing else belongs on this response.
+`POST /search` still requires `x-sonar-secret`, compared in constant time.
 
-It is also what the box healthcheck prober reads every ~10m for the engine's **`Sonar`** row on the public [`/status`](https://www.fluncle.com/status) board (beside the `Self-deploy (sonar)` row the freshen timer posts). The prober GETs `${HEALTHCHECK_SONAR_URL}/health` and counts the engine up only when the body parses and `ok` is `true` — a reachable-but-unbuilt engine reads as down, which is the state worth catching. The operator sets `HEALTHCHECK_SONAR_URL` to the engine's PUBLIC base URL in the prober's `0600` env file; unset, the row simply reports "not configured".
+## Configuration
 
-### `GET /` (open)
+| Variable | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `TURSO_DATABASE_URL` | yes | none | Remote source used only by embedded-replica sync. |
+| `TURSO_AUTH_TOKEN` | yes | none | Read credential used only by embedded-replica sync. |
+| `SONAR_REPLICA_PATH` | yes | none | Writable local embedded-replica file. |
+| `SONAR_STATE_PATH` | yes | none | Writable local consumer-state database. |
+| `FLUNCLE_API_BASE_URL` | yes | none | Base URL for agent-authenticated artifact operations. |
+| `FLUNCLE_API_TOKEN` | yes | none | Agent token for artifact operations. |
+| `SONAR_CONSUMER_ID` | yes | none | Stable artifact consumer identity. |
+| `SONAR_SECRET` | yes | none | Shared secret for search requests. |
+| `SONAR_DELTA_SECS` | no | `30` | Delay between bounded change reads. |
+| `SONAR_RECONCILE_SECS` | no | `3600` | Delay between explicit replica sync plus full local reconciliation. |
+| `SONAR_BATCH_LIMIT` | no | `100` | Change batch size, maximum 500. |
+| `SONAR_SNAPSHOT_LIMIT` | no | `200` | Local snapshot attestation page size, maximum 200. |
+| `SONAR_PORT` | no | `8080` | Listen port. |
+| `SONAR_BIND` | no | `0.0.0.0` | Bind address. |
+| `SONAR_TLS_CERT` | no | none | PEM certificate path. Set with the key. |
+| `SONAR_TLS_KEY` | no | none | PEM key path. Set with the certificate. |
+| `SONAR_VALIDATE_ONLY` | no | `false` | Pre-smoke mode. Reads and validates existing local state, serves health, and performs no sync or artifact mutation. |
 
-A one-line info string.
+The committed systemd unit creates a private writable state directory. Operator configuration points both local paths into it. Concrete credentials and topology stay outside this public repository.
 
-## Configuration (env)
+## Static build
 
-| Var                  | Required | Default   | Meaning                                                      |
-| -------------------- | -------- | --------- | ------------------------------------------------------------ |
-| `TURSO_DATABASE_URL` | yes      | —         | Remote (read-only) Turso URL, e.g. `libsql://<db>.turso.io`. |
-| `TURSO_AUTH_TOKEN`   | yes      | —         | Read-only Turso auth token.                                  |
-| `SONAR_SECRET`       | yes      | —         | Shared secret for the `x-sonar-secret` header on `/search`.  |
-| `SONAR_PORT`         | no       | `8080`    | Listen port.                                                 |
-| `SONAR_BIND`         | no       | `0.0.0.0` | Bind address.                                                |
-| `SONAR_REFRESH_SECS` | no       | `3600`    | Seconds between background index refreshes.                  |
-| `SONAR_TLS_CERT`     | no       | —         | PEM cert path. HTTPS is served only when cert AND key set.   |
-| `SONAR_TLS_KEY`      | no       | —         | PEM key path (paired with `SONAR_TLS_CERT`).                 |
-
-Missing a required var (or setting only one of the TLS pair) fails fast with a
-clear message. TLS is rustls-based (for the Cloudflare Origin Certificate the
-deploy installs); with no TLS pair it serves plain HTTP.
-
-The initial index load must succeed at startup (fail fast — nothing to serve
-otherwise). A later refresh that fails logs and **keeps the current snapshot**, so
-a transient Turso blip never empties the served index.
-
-## No OpenSSL / no C-crypto (musl-static ready)
-
-The binary is meant to build as a static musl binary for a cheap Linux box, so it
-avoids any OpenSSL / native-tls / C-crypto dependency:
-
-- Turso reads use `libsql` with `remote` + `tls` → **rustls backed by `ring`**.
-- Server TLS uses `axum-server`'s `tls-rustls-no-provider` + `rustls` with the
-  `ring` feature (the process installs `ring` as the default crypto provider at
-  startup). This deliberately avoids `aws-lc-rs` (a C dependency).
-
-`cargo tree | grep -i openssl` on macOS returns nothing. On **Linux** targets one
-crate matches: `openssl-probe`, pulled transitively by `rustls-native-certs` (via
-`hyper-rustls`). It is **pure Rust** — it only reads the filesystem PATHS where a
-CA bundle might live; it links no `libssl`/`libcrypto` and pulls no `openssl-sys`.
-It does not affect the musl static build. The meaningful checks —
-`openssl-sys`, `native-tls`, `aws-lc-rs` — are absent on every target.
-
-## Running locally
-
-```sh
-# From the repo root (or use --manifest-path apps/sonar/Cargo.toml from anywhere):
-cd apps/sonar
-
-TURSO_DATABASE_URL=libsql://<db>.turso.io \
-TURSO_AUTH_TOKEN=<read-only-token> \
-SONAR_SECRET=<shared-secret> \
-cargo run --release
-
-# health (open)
-curl localhost:8080/health
-
-# search (authenticated) — probes elided for brevity
-curl -s localhost:8080/search \
-  -H "x-sonar-secret: <shared-secret>" \
-  -H "content-type: application/json" \
-  -d '{"index":"tracks","probes":[[/* 1024 floats */]],"top_k":20}'
-```
+The release remains a static `x86_64-unknown-linux-musl` binary built with `target-cpu=x86-64-v3`. Server TLS, artifact HTTP, and replica sync use rustls with ring. The embedded libSQL core is linked into the artifact; OpenSSL, native-tls, and aws-lc are not required.
 
 ## Checks
 
 ```sh
-cargo fmt --check           # formatting
-cargo clippy --all-targets -- -D warnings   # lint
-cargo build --release       # build
-cargo test                  # unit + in-process API tests
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-## Deploy
-
-The runtime systemd unit and the self-deploy loop live in [`deploy/`](./deploy):
-CI builds a static musl binary on every merge that touches `apps/sonar/**` and
-publishes it to a rolling release; a host timer on the box verifies its checksum,
-pre-smokes it in isolation, swaps it in, and auto-rolls-back on any failure. See
-[`deploy/README.md`](./deploy/README.md) — including why this app's build happens
-in CI while `apps/ssh` builds on the box.
-
-## Bench
-
-A synthetic scan bench (off the default test run) sanity-checks the latency
-ballpark:
-
-```sh
-cargo run --release --bin bench
-# → bench: n=150000 dim=1024 top_k=20 threads=<N> iters=30 single-probe_p50=…ms 12-probe_p50=…ms
-```
-
-Knobs: `SONAR_BENCH_N`, `SONAR_BENCH_ITERS`, `SONAR_BENCH_TOPK`,
-`SONAR_BENCH_PROBES`.
+The deterministic tests cover the existing API and search behavior, digest fixtures, global ordering, strict tombstones, duplicate and stale revision handling, crash checkpoints, state corruption, candidate rollback, restart recovery, and convergence with a full local rebuild at scaled corpus sizes.
 
 ## Layout
 
-- `src/lib.rs` — module wiring + re-exports.
-- `src/decode.rs` — little-endian f32 blob decode (`DIM=1024`, `BLOB_LEN=4096`).
-- `src/index.rs` — the in-memory index: flat normalized vector store + metadata.
-- `src/kernel.rs` — the dot kernel, the max-over-probes fold, and the rayon
-  parallel single-pass bounded top-K scan.
-- `src/search.rs` — the wire types (`SearchRequest`/`Filter`/`Match`/
-  `SearchResponse`) + query orchestration (validate/normalize probes, candidate
-  predicate, run the scan).
-- `src/config.rs` — env config with fail-fast validation.
-- `src/turso.rs` — remote read-only Turso load of both indexes.
-- `src/server.rs` — the axum router, shared state (`ArcSwap` hot-swap), handlers,
-  and the constant-time auth check.
-- `src/main.rs` — thin entrypoint: config, initial load, refresh loop, serve.
-- `src/bin/bench.rs` — the synthetic bench.
-- `tests/api.rs` — in-process API test over the axum router.
+- `artifact.rs` owns the exact `sonar.track@1/1` wire types, HTTP calls, and digests.
+- `replica.rs` owns explicit sync and local source projections.
+- `state.rs` owns durable raw state, pending acknowledgements, validation, and candidate builds.
+- `consumer.rs` owns bootstrap, reconciliation, delta application, recovery, and publication ordering.
+- `index.rs`, `kernel.rs`, and `search.rs` own the exact scan and filter semantics.
+- `server.rs` owns the unified published generation, health, HTTP routing, and search authentication.
+- `main.rs` wires configuration, local state, the consumer loop, and the server.
+- `deploy/` owns the runtime unit and self-deploy loop.

@@ -19,8 +19,8 @@ ExecStart=/opt/sonar-freshen/fluncle-sonar-freshen.sh
 EnvironmentFile=-/etc/fluncle/sonar-freshen.env
 
 # A clean tick is one small HTTP GET. A real deploy is a download + a ~180s isolated
-# pre-smoke (sonar reads the whole corpus out of Turso before it serves) + a restart
-# that loads the corpus again. Give it plenty of room; the flock keeps ticks serialised.
+# pre-smoke (sonar validates and builds the durable local corpus) + a restart that
+# loads the local corpus again. Give it plenty of room; the flock keeps ticks serialised.
 TimeoutStartSec=1200
 
 # Modest hardening for a root oneshot that swaps a binary and restarts a unit.

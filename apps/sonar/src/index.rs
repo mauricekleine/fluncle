@@ -3,6 +3,8 @@
 //! walks memory linearly. Every vector is L2-normalized on build, so cosine
 //! similarity reduces to a plain dot product in the kernel.
 
+use anyhow::{bail, Result};
+
 use crate::decode::DIM;
 
 /// Per-track filterable metadata. Centroid entries carry `None` (no metadata).
@@ -67,30 +69,68 @@ pub struct Index {
     metas: Vec<Option<TrackMeta>>,
 }
 
+/// Fallible, streaming index builder. Replica/state rows are appended directly
+/// into the final contiguous vectors allocation, avoiding the old
+/// `Vec<Entry>` + final-index double allocation during a hot reload.
+pub struct IndexBuilder {
+    ids: Vec<String>,
+    vectors: Vec<f32>,
+    metas: Vec<Option<TrackMeta>>,
+}
+
+impl IndexBuilder {
+    pub fn with_capacity(entries: usize) -> Self {
+        Self {
+            ids: Vec::with_capacity(entries),
+            vectors: Vec::with_capacity(entries.saturating_mul(DIM)),
+            metas: Vec::with_capacity(entries),
+        }
+    }
+
+    pub fn push(
+        &mut self,
+        id: String,
+        mut vector: Vec<f32>,
+        meta: Option<TrackMeta>,
+    ) -> Result<()> {
+        if id.is_empty() {
+            bail!("index entry id is empty");
+        }
+        if vector.len() != DIM {
+            bail!(
+                "index entry {id} has {} floats; expected {DIM}",
+                vector.len()
+            );
+        }
+        if vector.iter().any(|value| !value.is_finite()) {
+            bail!("index entry {id} contains a non-finite float");
+        }
+        normalize_in_place(&mut vector);
+        self.ids.push(id);
+        self.vectors.extend_from_slice(&vector);
+        self.metas.push(meta);
+        Ok(())
+    }
+
+    pub fn finish(self) -> Index {
+        Index {
+            ids: self.ids,
+            vectors: self.vectors,
+            metas: self.metas,
+        }
+    }
+}
+
 impl Index {
     /// Build an index from entries. Each vector is normalized on the way in.
     /// Entries whose vector length != [`DIM`] are skipped defensively (the decode
     /// layer already guards this, but a direct caller might not).
     pub fn from_entries(entries: Vec<Entry>) -> Self {
-        let n = entries.len();
-        let mut ids = Vec::with_capacity(n);
-        let mut vectors = Vec::with_capacity(n * DIM);
-        let mut metas = Vec::with_capacity(n);
+        let mut builder = IndexBuilder::with_capacity(entries.len());
         for entry in entries {
-            if entry.vector.len() != DIM {
-                continue;
-            }
-            let mut v = entry.vector;
-            normalize_in_place(&mut v);
-            ids.push(entry.id);
-            vectors.extend_from_slice(&v);
-            metas.push(entry.meta);
+            let _ = builder.push(entry.id, entry.vector, entry.meta);
         }
-        Self {
-            ids,
-            vectors,
-            metas,
-        }
+        builder.finish()
     }
 
     /// An empty index (used as the never-null starting point before first load
@@ -127,6 +167,13 @@ impl Index {
     #[inline]
     pub fn meta_at(&self, i: usize) -> Option<&TrackMeta> {
         self.metas[i].as_ref()
+    }
+
+    #[inline]
+    pub fn vector_bytes(&self) -> usize {
+        self.vectors
+            .len()
+            .saturating_mul(std::mem::size_of::<f32>())
     }
 }
 

@@ -1,19 +1,20 @@
-//! `sonar` server entrypoint: read config, load both indexes from Turso (fail
-//! fast if the first load fails — there is nothing to serve), spawn the periodic
-//! refresh loop, and serve HTTP (or HTTPS when TLS is configured).
+//! `sonar` server entrypoint: validate the durable last-good index, start the
+//! local-replica/artifact consumer, and serve HTTP or HTTPS.
 
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum_server::tls_rustls::RustlsConfig;
-use tracing::{info, warn};
+use tracing::info;
 
+use sonar::artifact::ArtifactClient;
 use sonar::config::Config;
-use sonar::server::{now_unix, router, AppState};
-use sonar::turso;
+use sonar::consumer::{published, Consumer};
+use sonar::replica::Replica;
+use sonar::server::{router, AppState};
+use sonar::state::StateStore;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,29 +30,96 @@ async fn main() -> Result<()> {
     info!(
         bind = %cfg.bind,
         port = cfg.port,
-        refresh_secs = cfg.refresh_secs,
+        delta_secs = cfg.delta_secs,
+        reconcile_secs = cfg.reconcile_secs,
+        validate_only = cfg.validate_only,
         tls = cfg.tls_enabled(),
         "starting sonar"
     );
 
-    // Initial load — fail fast if Turso is unreachable at startup.
-    let (tracks, centroids) = turso::load_indexes(&cfg.turso_url, &cfg.turso_token)
-        .await
-        .context("initial index load from Turso failed")?;
+    let (store, recovered_corruption) = if cfg.validate_only {
+        (StateStore::open_readonly(&cfg.state_path).await?, false)
+    } else {
+        StateStore::open_recovering(&cfg.state_path).await?
+    };
+
+    let (stored, activation, consumer, state_corrupt, bootstrap_duration_ms, replica_sync) =
+        if cfg.validate_only {
+            let stored = store
+                .load()
+                .await
+                .context("validating existing durable state")?;
+            (stored, None, None, false, None, None)
+        } else {
+            let replica = Replica::open(
+                cfg.replica_path
+                    .as_deref()
+                    .context("missing local replica path")?,
+                cfg.turso_url.clone().context("missing replica URL")?,
+                cfg.turso_token.clone().context("missing replica token")?,
+            )
+            .await
+            .context("opening local source replica")?;
+            let api = ArtifactClient::new(
+                cfg.api_base_url
+                    .clone()
+                    .context("missing artifact API base")?,
+                cfg.api_token
+                    .as_deref()
+                    .context("missing artifact API token")?,
+                cfg.consumer_id.clone(),
+            )?;
+            let consumer = Arc::new(Consumer::new(
+                api,
+                replica,
+                store,
+                cfg.batch_limit,
+                cfg.snapshot_limit,
+            )?);
+            let started = Instant::now();
+            let (stored, activation, logical_corruption, replica_sync) =
+                consumer.initial_snapshot().await?;
+            (
+                stored,
+                activation,
+                Some(consumer),
+                recovered_corruption || logical_corruption,
+                Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+                replica_sync,
+            )
+        };
     info!(
-        tracks = tracks.len(),
-        centroids = centroids.len(),
-        "loaded initial indexes"
+        tracks = stored.tracks.len(),
+        centroids = stored.centroids.len(),
+        checkpoint = stored.manifest.checkpoint,
+        "loaded validated local indexes"
     );
 
-    let state = Arc::new(AppState::new(tracks, centroids, cfg.secret.clone()));
-
-    spawn_refresh(
-        state.clone(),
-        cfg.turso_url.clone(),
-        cfg.turso_token.clone(),
-        cfg.refresh_secs,
-    );
+    let state = Arc::new(AppState::from_snapshot(
+        published(&stored),
+        cfg.secret.clone(),
+    ));
+    if let Some(sync) = replica_sync {
+        state.record_replica_sync(sync.frame_no, sync.frames_synced);
+    }
+    if let Some(consumer) = consumer {
+        if let Some(snapshot_seq) = activation {
+            consumer.activate_prepared(snapshot_seq).await?;
+            state.record_rebuild(
+                if state_corrupt {
+                    sonar::server::RebuildCause::StateCorrupt
+                } else {
+                    sonar::server::RebuildCause::Startup
+                },
+                bootstrap_duration_ms.unwrap_or_default(),
+            );
+        }
+        tokio::spawn(consumer.run(
+            state.clone(),
+            Duration::from_secs(cfg.delta_secs),
+            Duration::from_secs(cfg.reconcile_secs),
+        ));
+    }
 
     let app = router(state);
     let addr: SocketAddr = format!("{}:{}", cfg.bind, cfg.port)
@@ -85,34 +153,4 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter).init();
-}
-
-/// Background task: every `refresh_secs`, re-read Turso and atomically hot-swap
-/// both indexes. A failed refresh logs and keeps the current snapshot — a
-/// transient Turso blip never empties the served index.
-fn spawn_refresh(state: Arc<AppState>, url: String, token: String, refresh_secs: u64) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(refresh_secs.max(1)));
-        // The first tick fires immediately; consume it so we don't re-load right
-        // after the startup load.
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            match turso::load_indexes(&url, &token).await {
-                Ok((tracks, centroids)) => {
-                    let (nt, nc) = (tracks.len(), centroids.len());
-                    state.tracks.store(Arc::new(tracks));
-                    state.centroids.store(Arc::new(centroids));
-                    state.last_refresh.store(now_unix(), Ordering::Relaxed);
-                    info!(tracks = nt, centroids = nc, "refreshed indexes");
-                }
-                Err(e) => {
-                    warn!(
-                        error = format!("{e:#}"),
-                        "index refresh failed; keeping current snapshot"
-                    );
-                }
-            }
-        }
-    });
 }
