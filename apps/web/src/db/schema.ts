@@ -1110,6 +1110,12 @@ export const tracks = sqliteTable(
     // over a text column (not the vector `libsql_vector_idx` that wedges hosted Turso), so it
     // builds like `tracks_key_idx` / `tracks_isrc_idx` beside it.
     index("tracks_release_date_idx").on(table.releaseDate),
+    // The projected `/tracks` anchor document turns every numbered page into an exact strict
+    // `(release_date, track_id)` suffix. Keeping the tie-breaker in the same btree lets both the
+    // non-NULL range and the NULL-zone range seek without a corpus walk or a temporary tie sort.
+    // The older single-column index remains until the program's contraction goal audits every
+    // legacy/fresh caller independently.
+    index("tracks_release_date_track_id_idx").on(table.releaseDate, table.trackId),
     // The `/tracks` hub's BPM-range filter (`bpm >= ? and bpm <= ?`) over the whole-archive
     // browse list. A plain ASC btree — SQLite reverse-scans it, and a `desc()` index would poison
     // the drizzle snapshot into rebuilding every index on the next migration (the ratified trap).

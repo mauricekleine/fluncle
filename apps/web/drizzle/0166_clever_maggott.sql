@@ -1,0 +1,1 @@
+CREATE INDEX `tracks_release_date_track_id_idx` ON `tracks` (`release_date`,`track_id`);
