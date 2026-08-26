@@ -2,6 +2,19 @@
 
 Everything rave-01 needs to run and keep running [`apps/sonar`](../), the in-memory vector-similarity engine behind sonic search, "sounds like these artists", and the log page's more-like-this. Two things live here, and they close two separate gaps.
 
+## Runtime state contract
+
+The runtime service owns two writable libSQL files below the private directory created by `StateDirectory=fluncle-sonar`:
+
+- `SONAR_REPLICA_PATH` points at the embedded source replica. Sonar calls libSQL `Database::sync()` explicitly. No background replica sync interval is configured.
+- `SONAR_STATE_PATH` points at a separate consumer database containing exact raw vectors, producer revisions and tombstones, the validated manifest, the local checkpoint, and any pending remote acknowledgement.
+
+The two paths must differ and stay on the service account's local disk. The committed unit creates the directory with mode `0700` and applies `UMask=0077`. The public unit names only environment variables. Concrete credentials and topology remain in the operator-owned environment file.
+
+The service reads `FLUNCLE_API_BASE_URL`, `FLUNCLE_API_TOKEN`, and `SONAR_CONSUMER_ID` for the agent-authenticated `sonar.track@1/1` consumer. `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are replica-sync inputs, not query credentials. Every corpus SELECT runs against `SONAR_REPLICA_PATH`.
+
+The isolated pre-smoke sets `SONAR_VALIDATE_ONLY=true`. It opens and validates the existing local state, builds both indexes, and serves `/health`, but it performs no replica sync, registration, change read, checkpoint, or acknowledgement. The live daemon keeps running during the pre-smoke, so two processes must never advance one consumer or write one state database concurrently.
+
 **Gap 1 — the runtime unit was committed nowhere.** [`sonar.service`](./sonar.service) is what the box actually runs: `User=sonar`, the binary at `/opt/sonar/sonar`, `EnvironmentFile=/etc/sonar.env` (Turso read creds, `SONAR_SECRET`, port, TLS paths — installed `0600 root:root`, never in this repo), `CAP_NET_BIND_SERVICE` so a non-root user can bind 443 for Cloudflare's origin, a strict-ish sandbox, and `MemoryMax=2G` so a runaway index can never squeeze the SSH terminal off the same box. It was living only on the box; now it lives here, where a change to it is reviewable.
 
 **Gap 2 — no self-deploy.** sonar was deployed **by hand**: cross-build the musl binary on a Mac, `scp` it up, restart. So a merge to `main` did not reach the live engine until someone remembered. [`fluncle-sonar-freshen.sh`](./fluncle-sonar-freshen.sh) + its [`.service`](./fluncle-sonar-freshen.service) / [`.timer`](./fluncle-sonar-freshen.timer) close that: a host systemd timer that watches a rolling GitHub Release, verifies the published artifact, pre-smokes it in isolation, swaps it in, and auto-rolls-back on any failure.
@@ -46,9 +59,9 @@ Default `--if-changed` (the timer); `--force` redeploys unconditionally (the ope
 1. **Single-flight** (flock) — never two runs at once.
 2. **Ask what is published.** `GET` the release's `sonar.commit` asset and compare it to the recorded deployed SHA (`/opt/sonar-freshen/deployed-sha`). Equal → no-op, `/status` gets an `ok`, done. (`--dry-run` skips this short-circuit on purpose — it never touches the live service, so previewing the current release stays useful on an up-to-date box.) An unreachable or malformed release feed (CI hasn't published yet, GitHub is having a moment, an HTML error page came back instead of a SHA) is logged, posted as `degraded`, and **exits cleanly** — a broken release feed never becomes a broken box.
 3. **Download + VERIFY.** Fetch `sonar` + `sonar.sha256` into a throwaway dir and check the digest (see the trust boundary above). Abort loudly on any mismatch.
-4. **Pre-smoke the NEW binary in ISOLATION — before the live service is touched.** Boot it on a free high loopback port with **TLS disabled** (no cert/key in its env ⇒ sonar serves plain HTTP; see [`src/config.rs`](../src/config.rs)) and the live env's `TURSO_*` + `SONAR_SECRET`, read out of `/etc/sonar.env` without sourcing it. Then poll `http://127.0.0.1:<port>/health` until it answers `"ok":true`. That one response proves the whole chain: the binary **runs on this CPU** (a bad `-C target-cpu` would `SIGILL` right here), reaches Turso, decodes the vector blobs, builds both in-memory indexes, and serves HTTP. Generous timeout — the index load is ~30s today and grows with the corpus, so the wait is 180s by default (`SONARFRESHEN_BOOT_TIMEOUT_SECS`). Any failure → alert, `degraded`, **abort with the live service untouched**. The throwaway process is always reaped (trap), because it holds a second full copy of the index in RAM.
+4. **Pre-smoke the new binary in isolation before touching the live service.** Boot it on a free high loopback port with TLS disabled and `SONAR_VALIDATE_ONLY=true`, using the live environment's local replica path, consumer-state path, replica open credentials, and search secret. Then poll `/health` until it reports `ok`. This proves the binary runs on the CPU, opens the embedded files, validates the durable manifest and raw vectors, builds both indexes, and serves HTTP. It does not contact or mutate the artifact consumer. Any failure leaves the live service untouched. The throwaway process is always reaped because it holds a second full copy of the index in RAM.
 5. **Swap** (the only moment the live service changes): snapshot the current binary to `sonar.prev` (the rollback target), atomically rename the new one into place, `systemctl restart sonar`. Replacing the on-disk file under the running process is safe on Linux (the old process holds its inode until the restart). The systemd unit and `/etc/sonar.env` are **left untouched** — same contract as the ssh sibling: reuse the env already on the box, read nothing from `op`.
-6. **Post-swap smoke:** the service is `active` **and** the live port answers `/health` with `"ok":true`, polled for the same 180s (a restart re-reads the whole corpus before it serves). The live service normally terminates TLS on 443 with a Cloudflare **Origin Certificate**, whose SAN is the public hostname — so a loopback request legitimately mismatches the certificate name and the smoke uses `curl -k` on purpose. That is not a shortcut to tighten; validating Cloudflare's PKI from `127.0.0.1` is not the thing being proven. (Whether it smokes over `https` or `http` follows whatever `/etc/sonar.env` says about the TLS pair.)
+6. **Post-swap smoke:** the service is `active` and the live port answers `/health` with `"ok":true`, polled for the same timeout. A normal restart validates the durable last-good state before serving, then resumes replica reconciliation and bounded deltas. The loopback TLS probe ignores hostname validation because the origin certificate names the public host, not `127.0.0.1`.
 7. **On any post-swap failure → ROLLBACK:** restore `sonar.prev`, restart, confirm healthy, alert loudly. If the rollback itself fails, fire the loudest alert, post `down`, and stop for a human. **The box is never left broken.**
 
 **What a deploy costs the surfaces.** The restart in step 5 takes sonar away for as long as it needs to re-read the corpus (~30s today, growing with it), and again if step 7 rolls back. That is not an outage: every surface routing through sonar treats an unreachable engine exactly like a disabled flag and **falls back to the Turso exact scan**, so results stay correct and only get slower for the length of the reload. Worth knowing before hunting a latency spike that lines up with the timer's hour — and worth remembering when picking that hour, since the fallback path is the slow one the engine exists to replace.
@@ -128,17 +141,17 @@ Re-run `--dry-run` any time to preview without touching the live service. The sc
 
 Everything is overridable via the environment; the defaults are the canonical deploy paths.
 
-| Env var                          | Default                    | Meaning                                                                    |
-| -------------------------------- | -------------------------- | -------------------------------------------------------------------------- |
-| `SONARFRESHEN_RELEASE_REPO`      | `mauricekleine/fluncle`    | The public repo carrying the release.                                      |
-| `SONARFRESHEN_RELEASE_TAG`       | `sonar-latest`             | The rolling pre-release tag CI publishes to.                               |
-| `SONARFRESHEN_ASSET_BASE`        | derived from the two above | Full asset download base (point this at a mirror if ever needed).          |
-| `SONARFRESHEN_STATE_DIR`         | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                      |
-| `SONARFRESHEN_SERVICE`           | `sonar`                    | The systemd unit to restart.                                               |
-| `SONARFRESHEN_APP_BIN`           | `/opt/sonar/sonar`         | The binary to swap.                                                        |
-| `SONARFRESHEN_SERVICE_ENV`       | `/etc/sonar.env`           | Read-only source of the pre-smoke's Turso creds + the live port/TLS shape. |
-| `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.            |
-| `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                      |
+| Env var                          | Default                    | Meaning                                                                                                  |
+| -------------------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `SONARFRESHEN_RELEASE_REPO`      | `mauricekleine/fluncle`    | The public repo carrying the release.                                                                    |
+| `SONARFRESHEN_RELEASE_TAG`       | `sonar-latest`             | The rolling pre-release tag CI publishes to.                                                             |
+| `SONARFRESHEN_ASSET_BASE`        | derived from the two above | Full asset download base (point this at a mirror if ever needed).                                        |
+| `SONARFRESHEN_STATE_DIR`         | `/opt/sonar-freshen`       | Holds `deployed-sha`.                                                                                    |
+| `SONARFRESHEN_SERVICE`           | `sonar`                    | The systemd unit to restart.                                                                             |
+| `SONARFRESHEN_APP_BIN`           | `/opt/sonar/sonar`         | The binary to swap.                                                                                      |
+| `SONARFRESHEN_SERVICE_ENV`       | `/etc/sonar.env`           | Read-only source of local-state paths, replica open credentials, search secret, and live port/TLS shape. |
+| `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
+| `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
 
 Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
 

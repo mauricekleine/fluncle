@@ -1497,7 +1497,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.device-mirror",
     operatorNotes:
-      "hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Reads one consistent anchored-cut snapshot through a read-only source credential, diffs every whitelisted tuple against the shared device database, then applies dependent-first deletes and parent-first upserts in bounded parameterized batches. The target is mutated IN PLACE: rebuilding it would reset the libSQL replication log and force every device to bootstrap the full database again. A schema-version mismatch stops for an operator migration; the content fingerprint and derived timestamp update only after a verified zero-drift tick. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*. See docs/planning/offline-first-mobile-research.md.",
+      "hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Explicitly synchronizes one restart-safe local embedded replica, materializes the anchored track IDs once, derives and validates one allowlisted generation locally, then stages bounded changes and atomically cuts the complete verified generation into the shared device database. Sync, derivation, upload, validation, or cutover failure leaves the previous generation visible; rebuilding the target database remains forbidden because it would reset the libSQL replication log and force every device to bootstrap again. A schema-version mismatch stops for an operator migration. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*. See docs/planning/offline-first-mobile-research.md.",
     probeConfig: {
       cadenceMs: 60 * MINUTE_MS,
       cronName: "fluncle-device-mirror",

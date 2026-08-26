@@ -223,19 +223,33 @@ RUN arch="$(uname -m)" \
 # provision-rave-03.sh — it is NOT operator-only: render-conductor.sh execs it as a sibling
 # (`$SCRIPT_DIR/provision-rave-03.sh`) on a render-box cold start, so the render timer needs it
 # baked here too. The two device-mirror development shims are overwritten immediately afterward
-# by their canonical dependency-free modules from apps/web; this keeps the box script
-# self-contained without duplicating the device whitelist or anchored-cut SQL. World-readable +
-# exec so the non-root hermes cron user runs them.
+# by their canonical modules from apps/web; this keeps the box script self-contained without
+# duplicating the device whitelist or anchored-cut SQL. The complete local deriver is copied under
+# its repository-relative tree because its imports deliberately share those same canonical files.
+# World-readable + exec so the non-root hermes cron user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
 COPY apps/web/src/lib/catalogue-eligibility.ts \
      apps/web/scripts/lib/device-db-derivation.ts \
      apps/web/scripts/lib/device-db-schema.ts \
      /opt/hermes-scripts/
+COPY apps/web/scripts/derive-device-db.ts /opt/hermes-device/apps/web/scripts/derive-device-db.ts
+COPY apps/web/scripts/lib/device-db-derivation.ts \
+     apps/web/scripts/lib/device-db-schema.ts \
+     /opt/hermes-device/apps/web/scripts/lib/
+COPY apps/web/src/lib/catalogue-eligibility.ts /opt/hermes-device/apps/web/src/lib/catalogue-eligibility.ts
+ENV DEVICE_DERIVE_SCRIPT=/opt/hermes-device/apps/web/scripts/derive-device-db.ts
 RUN rm -f /opt/hermes-scripts/*.test.ts \
           /opt/hermes-scripts/bunfig.toml \
           /opt/hermes-scripts/clip-drip-sweep.sh \
  && chmod -R a+rX /opt/hermes-scripts \
  && chmod +x /opt/hermes-scripts/*.sh /opt/hermes-scripts/*.py
+
+# The device mirror's ONE production-corpus read is an @libsql/client embedded-replica sync.
+# Pin the exact runtime package already locked by the monorepo; install it beside the baked script
+# so Bun resolves the native Linux libSQL binding without shipping the web workspace's dependency
+# tree. No runtime install or network fetch is permitted on a timer tick.
+RUN bun add --cwd /opt/hermes-scripts --no-save --exact @libsql/client@0.17.4 \
+  && chmod -R a+rX /opt/hermes-scripts/node_modules
 
 # Oxanium SemiBold for the Fluncle Studio clip cut — the COORDINATE face. The `admin clips
 # cut` brand frame draws the `fluncle://<logId>` coordinate in Oxanium (DESIGN.md "One

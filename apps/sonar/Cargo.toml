@@ -39,16 +39,21 @@ rustls = { version = "0.23", default-features = false, features = [
   "logging",
 ] }
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Remote (read-only) Turso reads over HTTP. `tls` pulls hyper-rustls backed by
-# `ring` — no OpenSSL, no aws-lc-rs. (The lone `openssl-probe` crate in the tree
-# is a pure-Rust cert-path finder from rustls-native-certs; it links no OpenSSL
-# and does not affect the musl static build — see README "No OpenSSL / no C".)
-libsql = { version = "0.9", default-features = false, features = ["remote", "tls"] }
+# The source database is an explicitly-synchronised embedded replica and the
+# consumer checkpoint is a separate local libSQL database. `replication` and
+# `core` keep all corpus SELECTs local; `tls` is rustls-backed.
+libsql = { version = "0.9", default-features = false, features = ["core", "replication", "tls"] }
+
+# Agent-authenticated artifact protocol transport. Rustls keeps the static musl
+# artifact free of OpenSSL/native-tls.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+sha2 = "0.10"
 
 rayon = "1" # data-parallel single-pass scan kernel
 arc-swap = "1" # lock-free atomic hot-swap of the in-memory index snapshot
@@ -60,6 +65,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] } # ServiceExt::oneshot for the in-process API test
+tempfile = "3"
 
 [profile.release]
 opt-level = 3

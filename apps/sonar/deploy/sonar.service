@@ -8,7 +8,8 @@ Wants=network-online.target
 Type=simple
 User=sonar
 Group=sonar
-# Secrets + config (Turso read creds, SONAR_SECRET, port, TLS paths). Installed 0600 root:root.
+# Secrets + config (replica sync credentials, artifact API agent token,
+# SONAR_SECRET, state-path env names, port, TLS paths). Installed 0600 root:root.
 EnvironmentFile=/etc/sonar.env
 ExecStart=/opt/sonar/sonar
 Restart=on-failure
@@ -16,7 +17,12 @@ RestartSec=3
 # Bind 443 as a non-root user (Cloudflare proxies to the origin on 443).
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-# Hardening — the service only needs to read its binary + cert dir and reach the network.
+# libSQL replica + consumer checkpoint live below the systemd-managed state directory.
+# The EnvironmentFile points SONAR_REPLICA_PATH and SONAR_STATE_PATH into it.
+StateDirectory=fluncle-sonar
+StateDirectoryMode=0700
+UMask=0077
+# Hardening: the service only needs its state directory, binary/certs, and network.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
