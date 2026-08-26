@@ -51,7 +51,10 @@ import {
 import { parseArtistsJson } from "./artists";
 import { resolveBeatportUrl } from "./beatport-resolve";
 import { getDb, typedRows } from "./db";
+import { batchDueWorkSourceMutation } from "./due-work";
 import { lookupDeezerTrackByIsrc } from "./deezer";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import {
   type DiscogsEnrichment,
   type DiscogsThrottleVendor,
@@ -367,15 +370,22 @@ async function recordAttempt(
 
   args.push(trackId);
 
-  await db.execute({
-    args,
-    sql: `update ${reliabilityTable(source)}
-      set ${p}_attempted_at = ?,
-        ${p}_attempts = ${p}_attempts + 1,
-        ${doneClause}
-        ${failuresClause}
-      where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args,
+        sql: `update ${reliabilityTable(source)}
+          set ${p}_attempted_at = ?,
+            ${p}_attempts = ${p}_attempts + 1,
+            ${doneClause}
+            ${failuresClause}
+          where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "backfill-attempt" },
+  );
 }
 
 /**
@@ -406,6 +416,7 @@ export async function recordNoteAttempt(trackId: string, filled: boolean): Promi
 // we visited re-scans only the cheap non-finding rows between it and the next
 // finding (skipped again, no budget burned). Returns null once the feed drains.
 async function runPublishedFindingPass(
+  workKind: "apple-finding" | "beatport-finding" | "discogs-track" | "lastfm-track",
   startCursor: string | undefined,
   limit: number,
   // `true` = handled (counts toward the limit); `false` = skipped; `"stop"` = a
@@ -413,6 +424,11 @@ async function runPublishedFindingPass(
   // immediately rather than marching the next finding into the same wall.
   visit: (track: TrackListItem) => Promise<boolean | "stop">,
 ): Promise<string | null> {
+  if (await isDueWorkCutoverEnabled()) {
+    return runProjectedPublishedFindingPass(workKind, startCursor, limit, visit);
+  }
+
+  // GOAL H: remove this unchanged legacy corpus selector after the due-work cutover proves out.
   let cursor = startCursor;
   let handled = 0;
   let lastVisited: { addedAt: string; trackId: string } | undefined;
@@ -464,6 +480,89 @@ async function runPublishedFindingPass(
   return lastVisited ? encodeTrackCursor(lastVisited) : (cursor ?? null);
 }
 
+function findingDueContinuation(
+  cursor: ReturnType<typeof decodeTrackCursor>,
+): { sortKey: string; subjectId: string } | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  return {
+    sortKey: encodeDueWorkOrder([
+      { direction: "desc", kind: "timestamp", nulls: "last", value: cursor.addedAt },
+      { direction: "desc", kind: "text", value: cursor.trackId },
+    ]),
+    subjectId: cursor.trackId,
+  };
+}
+
+async function runProjectedPublishedFindingPass(
+  workKind: "apple-finding" | "beatport-finding" | "discogs-track" | "lastfm-track",
+  startCursor: string | undefined,
+  limit: number,
+  visit: (track: TrackListItem) => Promise<boolean | "stop">,
+): Promise<string | null> {
+  const db = await getDb();
+  let continuation = findingDueContinuation(decodeTrackCursor(startCursor ?? null));
+  let handled = 0;
+  let lastVisited: { addedAt: string; trackId: string } | undefined;
+
+  while (handled < limit) {
+    const page = await readPromotedDueWorkPage(db, workKind, {
+      continuation,
+      limit: PAGE_SIZE,
+    });
+    if (page.subjectIds.length === 0) {
+      return null;
+    }
+
+    const byId = await getTracksByIds(page.subjectIds);
+    for (const subjectId of page.subjectIds) {
+      if (handled >= limit) {
+        break;
+      }
+      const track = byId[subjectId];
+      if (track === undefined || !isPublishedFinding(track)) {
+        continue;
+      }
+
+      lastVisited = { addedAt: track.addedAt, trackId: track.trackId };
+      const outcome = await visit(track);
+      if (outcome === "stop") {
+        return encodeTrackCursor(lastVisited);
+      }
+      if (outcome) {
+        handled += 1;
+      }
+    }
+
+    if (handled >= limit) {
+      return lastVisited === undefined ? null : encodeTrackCursor(lastVisited);
+    }
+    if (!page.hasMore) {
+      return null;
+    }
+
+    const lastSubjectId = page.subjectIds.at(-1);
+    if (lastSubjectId === undefined) {
+      return null;
+    }
+    const cursorRow = await db.execute({
+      args: [workKind, lastSubjectId],
+      sql: `select sort_key from due_work
+            where work_kind = ? and subject_id = ? and subject_type = 'track'
+            limit 1`,
+    });
+    const sortKey = cursorRow.rows[0]?.sort_key;
+    if (typeof sortKey !== "string") {
+      return null;
+    }
+    continuation = { sortKey, subjectId: lastSubjectId };
+  }
+
+  return lastVisited === undefined ? null : encodeTrackCursor(lastVisited);
+}
+
 // ── Last.fm ───────────────────────────────────────────────────────────────────
 
 // Back-fill Last.fm loves over published findings. `lastfmLove` is idempotent and
@@ -483,6 +582,7 @@ export async function backfillLastfmLoves(
   let rateLimited = false;
 
   const nextCursor = await runPublishedFindingPass(
+    "lastfm-track",
     startCursor,
     batchLimit(limit),
     async (track) => {
@@ -707,9 +807,29 @@ export async function backfillDiscogsIds(
   let nextCursor: string | null;
 
   if (options.discogsCandidates !== undefined) {
-    const tracks = await getTracksByIds([...suppliedByTrack.keys()]);
+    const suppliedIds = [...suppliedByTrack.keys()];
+    let selectedIds: string[];
+    const cutoverEnabled = await isDueWorkCutoverEnabled();
 
-    for (const trackId of suppliedByTrack.keys()) {
+    if (cutoverEnabled) {
+      if (suppliedIds.length === 0) {
+        selectedIds = [];
+      } else {
+        const db = await getDb();
+        const page = await readPromotedDueWorkPage(db, "discogs-track", {
+          limit: suppliedIds.length,
+          subjectIds: suppliedIds,
+        });
+        selectedIds = page.subjectIds;
+      }
+    } else {
+      // GOAL H: remove this unchanged legacy supplied-evidence selector after cutover proves out.
+      selectedIds = suppliedIds;
+    }
+
+    const tracks = await getTracksByIds(selectedIds);
+
+    for (const trackId of selectedIds) {
       const track = tracks[trackId];
 
       if (track !== undefined && (await visit(track)) === "stop") {
@@ -719,7 +839,12 @@ export async function backfillDiscogsIds(
 
     nextCursor = null;
   } else {
-    nextCursor = await runPublishedFindingPass(startCursor, batchLimit(limit), visit);
+    nextCursor = await runPublishedFindingPass(
+      "discogs-track",
+      startCursor,
+      batchLimit(limit),
+      visit,
+    );
   }
 
   return {
@@ -760,7 +885,8 @@ async function setDiscogsIds(
   // so the id and the lastmod that advertises it can never diverge.
   const now = new Date().toISOString();
 
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         // The tracks-side attempt record rides the ids it describes (schema.ts § `backfill_discogs_*`
@@ -782,7 +908,8 @@ async function setDiscogsIds(
         sql: `update findings set updated_at = ? where track_id = ?`,
       },
     ],
-    "write",
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "backfill-discogs-resolve" },
   );
 }
 
@@ -1086,6 +1213,7 @@ export async function backfillAppleMusicUrls(
   let albumFactsWritten = 0;
 
   const nextCursor = await runPublishedFindingPass(
+    "apple-finding",
     startCursor,
     batchLimit(limit),
     async (track) => {
@@ -1248,7 +1376,9 @@ async function setAppleMusicUrl(trackId: string, url: string, bumpFinding: boole
     });
   }
 
-  await db.batch(statements, "write");
+  await batchDueWorkSourceMutation(db, statements, [{ subjectId: trackId, subjectType: "track" }], {
+    producer: "backfill-apple-resolve",
+  });
 }
 
 /**
@@ -1401,12 +1531,19 @@ export type BeatportBackfillResult = {
 async function setBeatportUrl(trackId: string, url: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [url, new Date().toISOString(), trackId],
-    sql: `update tracks
-      set beatport_url = ?, beatport_verified_at = ?
-      where track_id = ? and beatport_url is null`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [url, new Date().toISOString(), trackId],
+        sql: `update tracks
+          set beatport_url = ?, beatport_verified_at = ?
+          where track_id = ? and beatport_url is null`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "backfill-beatport-resolve" },
+  );
 }
 
 /**
@@ -1435,6 +1572,7 @@ export async function backfillBeatportUrls(
   let configured = true;
 
   const nextCursor = await runPublishedFindingPass(
+    "beatport-finding",
     startCursor,
     batchLimit(limit),
     async (track) => {
@@ -1621,6 +1759,47 @@ async function beatportCatalogueLimit(): Promise<number> {
  */
 async function listBeatportCatalogueWork(limit: number): Promise<BeatportCatalogueCandidate[]> {
   const db = await getDb();
+
+  if (await isDueWorkCutoverEnabled()) {
+    const page = await readPromotedDueWorkPage(db, "beatport-catalogue", { limit });
+    if (page.subjectIds.length === 0) {
+      return [];
+    }
+    const placeholders = page.subjectIds.map(() => "?").join(", ");
+    const result = await db.execute({
+      args: page.subjectIds,
+      sql: `select t.track_id, t.isrc, t.title, t.artists_json,
+                   t.backfill_beatport_attempted_at as attempted_at,
+                   t.backfill_beatport_failures as failures
+            from tracks t
+            where t.track_id in (${placeholders})`,
+    });
+    const byId = new Map(
+      typedRows<{
+        artists_json: null | string;
+        attempted_at: null | string;
+        failures: null | number;
+        isrc: string;
+        title: string;
+        track_id: string;
+      }>(result.rows).map((row) => [
+        row.track_id,
+        {
+          artists: parseArtistsJson(row.artists_json ?? "[]"),
+          attemptedAt: row.attempted_at,
+          failures: typeof row.failures === "number" ? row.failures : 0,
+          isrc: row.isrc,
+          title: row.title,
+          trackId: row.track_id,
+        },
+      ]),
+    );
+    return page.subjectIds
+      .map((trackId) => byId.get(trackId))
+      .filter((candidate): candidate is BeatportCatalogueCandidate => candidate !== undefined);
+  }
+
+  // GOAL H: remove this unchanged legacy corpus selector after the due-work cutover proves out.
   const cutoff = new Date(Date.now() - COOLDOWN_BASE_MS).toISOString();
   const result = await db.execute({
     args: [cutoff, limit],
@@ -1785,6 +1964,45 @@ const CATALOGUE_FACTS_MAX_PER_PASS = 10;
  */
 async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCandidate[]> {
   const db = await getDb();
+
+  if (await isDueWorkCutoverEnabled()) {
+    const page = await readPromotedDueWorkPage(db, "apple-catalogue", { limit });
+    if (page.subjectIds.length === 0) {
+      return [];
+    }
+    const placeholders = page.subjectIds.map(() => "?").join(", ");
+    const result = await db.execute({
+      args: page.subjectIds,
+      sql: `select t.track_id, t.isrc, t.album_id,
+                   t.backfill_apple_music_attempted_at as attempted_at,
+                   t.backfill_apple_music_failures as failures
+            from tracks t
+            where t.track_id in (${placeholders})`,
+    });
+    const byId = new Map(
+      typedRows<{
+        album_id: null | string;
+        attempted_at: null | string;
+        failures: null | number;
+        isrc: string;
+        track_id: string;
+      }>(result.rows).map((row) => [
+        row.track_id,
+        {
+          albumId: row.album_id,
+          attemptedAt: row.attempted_at,
+          failures: typeof row.failures === "number" ? row.failures : 0,
+          isrc: row.isrc,
+          trackId: row.track_id,
+        },
+      ]),
+    );
+    return page.subjectIds
+      .map((trackId) => byId.get(trackId))
+      .filter((candidate): candidate is CatalogueAppleCandidate => candidate !== undefined);
+  }
+
+  // GOAL H: remove this unchanged legacy corpus selector after the due-work cutover proves out.
   const cutoff = new Date(Date.now() - COOLDOWN_BASE_MS).toISOString();
   const result = await db.execute({
     args: [cutoff, limit],
@@ -2133,6 +2351,36 @@ async function listDeezerWork(limit: number): Promise<DeezerCandidate[]> {
       trackId: row.track_id,
     }));
 
+  if (await isDueWorkCutoverEnabled()) {
+    const findingPage = await readPromotedDueWorkPage(db, "deezer-finding", { limit });
+    const subjectIds = [...findingPage.subjectIds];
+    const remaining = limit - subjectIds.length;
+    if (remaining > 0) {
+      const cataloguePage = await readPromotedDueWorkPage(db, "deezer-catalogue", {
+        limit: remaining,
+      });
+      subjectIds.push(...cataloguePage.subjectIds);
+    }
+    if (subjectIds.length === 0) {
+      return [];
+    }
+    const placeholders = subjectIds.map(() => "?").join(", ");
+    const result = await db.execute({
+      args: subjectIds,
+      sql: `select t.track_id, t.isrc, t.duration_ms
+            from tracks t
+            where t.track_id in (${placeholders})`,
+    });
+    const byId = new Map(
+      toCandidates(result.rows).map((candidate) => [candidate.trackId, candidate]),
+    );
+    return subjectIds
+      .map((trackId) => byId.get(trackId))
+      .filter((candidate): candidate is DeezerCandidate => candidate !== undefined);
+  }
+
+  // GOAL H: remove these unchanged legacy corpus selectors after the due-work cutover proves out.
+
   const certified = await db.execute({
     args: [DEEZER_MAX_FAILURES, limit],
     // Driven FROM `findings` (a small table) rather than scanning `tracks` for the certified
@@ -2188,18 +2436,25 @@ async function setDeezerTrackId(trackId: string, deezerTrackId: string): Promise
   const db = await getDb();
   const now = new Date().toISOString();
 
-  await db.execute({
-    args: [deezerTrackId, "isrc", now, now, now, trackId],
-    sql: `update tracks
-      set deezer_track_id = coalesce(deezer_track_id, ?),
-        deezer_verified_by = coalesce(deezer_verified_by, ?),
-        deezer_verified_at = coalesce(deezer_verified_at, ?),
-        backfill_deezer_attempted_at = ?,
-        backfill_deezer_attempts = backfill_deezer_attempts + 1,
-        backfill_deezer_done_at = coalesce(backfill_deezer_done_at, ?),
-        backfill_deezer_failures = 0
-      where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [deezerTrackId, "isrc", now, now, now, trackId],
+        sql: `update tracks
+          set deezer_track_id = coalesce(deezer_track_id, ?),
+            deezer_verified_by = coalesce(deezer_verified_by, ?),
+            deezer_verified_at = coalesce(deezer_verified_at, ?),
+            backfill_deezer_attempted_at = ?,
+            backfill_deezer_attempts = backfill_deezer_attempts + 1,
+            backfill_deezer_done_at = coalesce(backfill_deezer_done_at, ?),
+            backfill_deezer_failures = 0
+          where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "backfill-deezer-resolve" },
+  );
 }
 
 /**
@@ -2211,14 +2466,21 @@ async function setDeezerTrackId(trackId: string, deezerTrackId: string): Promise
 async function recordDeezerMiss(trackId: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [new Date().toISOString(), trackId],
-    sql: `update tracks
-      set backfill_deezer_attempted_at = ?,
-        backfill_deezer_attempts = backfill_deezer_attempts + 1,
-        backfill_deezer_failures = 0
-      where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [new Date().toISOString(), trackId],
+        sql: `update tracks
+          set backfill_deezer_attempted_at = ?,
+            backfill_deezer_attempts = backfill_deezer_attempts + 1,
+            backfill_deezer_failures = 0
+          where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "backfill-deezer-miss" },
+  );
 }
 
 /**
@@ -2231,12 +2493,19 @@ async function recordDeezerMiss(trackId: string): Promise<void> {
 async function recordDeezerFailure(trackId: string): Promise<void> {
   const db = await getDb();
 
-  await db.execute({
-    args: [trackId],
-    sql: `update tracks
-      set backfill_deezer_failures = backfill_deezer_failures + 1
-      where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [trackId],
+        sql: `update tracks
+          set backfill_deezer_failures = backfill_deezer_failures + 1
+          where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "backfill-deezer-failure" },
+  );
 }
 
 /**

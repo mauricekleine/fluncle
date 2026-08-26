@@ -103,6 +103,7 @@ import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
+import { batchDueWorkSourceMutation } from "./due-work";
 import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { labelFold } from "./labels";
@@ -549,7 +550,8 @@ async function writeLabelReleaseTracks(
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (track_id) do nothing`,
     };
-    const results = await db.batch(
+    const results = await batchDueWorkSourceMutation(
+      db,
       [
         insertTrack,
         insertTrackDuplicateKeyStatement({
@@ -559,7 +561,8 @@ async function writeLabelReleaseTracks(
           trackId,
         }),
       ],
-      "write",
+      [{ subjectId: trackId, subjectType: "track" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "label-release-track-mint" },
     );
     const result = results[0];
 

@@ -1486,6 +1486,16 @@ export const dueWork = sqliteTable(
     index("due_work_lease_idx")
       .on(table.state, table.claimExpiresAt, table.workKind, table.subjectId)
       .where(sql`${table.state} = 'leased'`),
+    index("due_work_claim_idx")
+      .on(
+        table.workKind,
+        table.state,
+        table.claimedBy,
+        table.claimToken,
+        table.sortKey,
+        table.subjectId,
+      )
+      .where(sql`${table.state} = 'leased'`),
   ],
 );
 

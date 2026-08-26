@@ -33,6 +33,7 @@ import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { markDueWorkSourceRepairsFromSelectStatement } from "../src/lib/server/due-work";
 
 export type HubCountsBackfillResult = {
   /** Rows written per entity table. Absent when the run was skipped. */
@@ -44,8 +45,8 @@ export type HubCountsBackfillResult = {
 /** The three grouped recomputes, in the order the result reports them. */
 const PASSES = [
   {
-    key: "labels" as const,
-    sql: `update labels
+    backfillHubCountStatement: () => ({
+      sql: `update labels
             set renderable_track_count = src.renderable,
                 certified_finding_count = src.certified
           from (select label_id,
@@ -55,10 +56,21 @@ const PASSES = [
                 where label_id is not null
                 group by label_id) src
           where labels.id = src.label_id`,
+    }),
+    key: "labels" as const,
+    marker: () =>
+      markDueWorkSourceRepairsFromSelectStatement(
+        "label",
+        {
+          sql: `select label_id as subject_id from tracks
+                where label_id is not null group by label_id`,
+        },
+        { producer: "backfill-hub-counts-labels" },
+      ),
   },
   {
-    key: "albums" as const,
-    sql: `update albums
+    backfillHubCountStatement: () => ({
+      sql: `update albums
             set renderable_track_count = src.renderable,
                 certified_finding_count = src.certified
           from (select album_id,
@@ -68,12 +80,23 @@ const PASSES = [
                 where album_id is not null
                 group by album_id) src
           where albums.id = src.album_id`,
+    }),
+    key: "albums" as const,
+    marker: () =>
+      markDueWorkSourceRepairsFromSelectStatement(
+        "album",
+        {
+          sql: `select album_id as subject_id from tracks
+                where album_id is not null group by album_id`,
+        },
+        { producer: "backfill-hub-counts-albums" },
+      ),
   },
+  // The artists edge is the join table, so the group is over `track_artists ⋈ tracks` — the inner
+  // join also drops an orphan edge whose track is gone, which is exactly right.
   {
-    key: "artists" as const,
-    // The artists edge is the join table, so the group is over `track_artists ⋈ tracks` — the
-    // inner join also drops an orphan edge whose track is gone, which is exactly right.
-    sql: `update artists
+    backfillHubCountStatement: () => ({
+      sql: `update artists
             set renderable_track_count = src.renderable,
                 certified_finding_count = src.certified
           from (select ta.artist_id,
@@ -83,6 +106,16 @@ const PASSES = [
                 join tracks t on t.track_id = ta.track_id
                 group by ta.artist_id) src
           where artists.id = src.artist_id`,
+    }),
+    key: "artists" as const,
+    marker: () =>
+      markDueWorkSourceRepairsFromSelectStatement(
+        "artist",
+        {
+          sql: `select artist_id as subject_id from track_artists group by artist_id`,
+        },
+        { producer: "backfill-hub-counts-artists" },
+      ),
   },
 ];
 
@@ -107,8 +140,11 @@ export async function backfillHubCounts(
   const filled = { albums: 0, artists: 0, labels: 0 };
 
   for (const pass of PASSES) {
-    const result = await client.execute(pass.sql);
-    filled[pass.key] = result.rowsAffected;
+    const [, result] = await client.batch(
+      [pass.marker(), pass.backfillHubCountStatement()],
+      "write",
+    );
+    filled[pass.key] = result?.rowsAffected ?? 0;
   }
 
   return { filled, skipped: false };

@@ -1,20 +1,33 @@
-import { type Client, type InStatement, type ResultSet } from "@libsql/client";
+import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 
 import { getDb } from "./db";
 
 export const DUE_WORK_LIVE_GENERATION = "live";
+export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus";
+export const DUE_WORK_SOURCE_REPAIR_KIND = "source-repair";
 export const MAX_DUE_WORK_CHUNK_SIZE = 500;
+
+export class DueWorkMaintenancePendingError extends Error {
+  constructor(workKind: string) {
+    super(`due-work maintenance is still converging for ${workKind}`);
+    this.name = "DueWorkMaintenancePendingError";
+  }
+}
 
 export type DueWorkSubjectType = "album" | "artist" | "label" | "track";
 export type DueWorkState = "leased" | "ready" | "repair" | "scheduled";
 export type DueWorkProjectionState = Extract<DueWorkState, "ready" | "scheduled">;
 export type DueWorkClient = Pick<Client, "batch" | "execute">;
+export type DueWorkStatement = Exclude<InStatement, string>;
+type DueWorkPositionalStatement = { args?: InValue[]; sql: string };
 
 export type DueWorkIdentity<WorkKind extends string = string> = {
   subjectId: string;
   subjectType: DueWorkSubjectType;
   workKind: WorkKind;
 };
+
+export type DueWorkSourceSubject = Pick<DueWorkIdentity, "subjectId" | "subjectType">;
 
 export type DueWorkProjection<WorkKind extends string = string> = DueWorkIdentity<WorkKind> & {
   generation?: string;
@@ -322,7 +335,7 @@ export async function deleteDueWork<WorkKind extends string>(
 export function markDueWorkRepairStatement<WorkKind extends string>(
   identity: DueWorkIdentity<WorkKind> & { sourceVersion: string },
   options: { generation?: string; now?: Date | string } = {},
-): InStatement {
+): DueWorkStatement {
   const updatedAt = iso(options.now ?? new Date(), "updated time");
   assertNonEmpty(identity.sourceVersion, "source version");
 
@@ -361,6 +374,164 @@ export async function markDueWorkRepair<WorkKind extends string>(
   await client.execute(markDueWorkRepairStatement(identity, options));
 }
 
+function uniqueSourceSubjects(subjects: readonly DueWorkSourceSubject[]): DueWorkSourceSubject[] {
+  const unique = new Map<string, DueWorkSourceSubject>();
+
+  for (const subject of subjects) {
+    assertNonEmpty(subject.subjectId, "source repair subject id");
+    unique.set(`${subject.subjectType}\u0000${subject.subjectId}`, subject);
+  }
+
+  const values = [...unique.values()];
+  if (values.length === 0 || values.length > MAX_DUE_WORK_CHUNK_SIZE) {
+    throw new Error(
+      `due-work source repair batches must contain 1 through ${MAX_DUE_WORK_CHUNK_SIZE} subjects`,
+    );
+  }
+  return values;
+}
+
+/**
+ * Mark each changed source subject once, independently of how many physical queues derive from it.
+ * Producers append this statement to the same write batch as the source mutation. The opaque token
+ * lets reconciliation clear only the snapshot it evaluated, so a concurrent source write survives.
+ */
+export function markDueWorkSourceRepairsStatement(
+  subjects: readonly DueWorkSourceSubject[],
+  options: {
+    markerVersion?: string;
+    now?: Date | string;
+    onlyIfPreviousStatementChanged?: boolean;
+    producer: string;
+  },
+): DueWorkStatement {
+  const unique = uniqueSourceSubjects(subjects);
+  const updatedAt = iso(options.now ?? new Date(), "updated time");
+  assertNonEmpty(options.producer, "due-work producer");
+  const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
+  assertNonEmpty(markerVersion, "source repair marker version");
+  const rows = unique
+    .map(
+      () =>
+        "select ? as work_kind, ? as subject_type, ? as subject_id, 'repair' as state, '' as sort_key, ? as next_due_at, ? as source_version, ? as generation, ? as updated_at",
+    )
+    .join(" union all ");
+  const args = unique.flatMap((subject) => [
+    DUE_WORK_SOURCE_REPAIR_KIND,
+    subject.subjectType,
+    subject.subjectId,
+    updatedAt,
+    markerVersion,
+    DUE_WORK_LIVE_GENERATION,
+    updatedAt,
+  ]);
+
+  return {
+    args,
+    sql: `insert into due_work
+      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+       source_version, generation, updated_at)
+      select * from (${rows})
+      where 1 = 1${options.onlyIfPreviousStatementChanged === true ? " and changes() > 0" : ""}
+      on conflict(work_kind, subject_type, subject_id) do update set
+        state = 'repair',
+        sort_key = '',
+        next_due_at = excluded.next_due_at,
+        source_version = excluded.source_version,
+        generation = excluded.generation,
+        claim_token = null,
+        claim_expires_at = null,
+        claimed_by = null,
+        updated_at = excluded.updated_at`,
+  };
+}
+
+/** Clear a source marker only when no later producer has replaced its race token. */
+export function clearDueWorkSourceRepairStatement(
+  marker: DueWorkSourceSubject & { sourceVersion: string },
+): DueWorkStatement {
+  assertNonEmpty(marker.sourceVersion, "source repair marker version");
+  return {
+    args: [DUE_WORK_SOURCE_REPAIR_KIND, marker.subjectType, marker.subjectId, marker.sourceVersion],
+    sql: `delete from due_work
+      where work_kind = ? and subject_type = ? and subject_id = ?
+        and state = 'repair' and source_version = ?`,
+  };
+}
+
+/** Mark the subjects returned as `subject_id` by a bounded, producer-owned selection query. */
+export function markDueWorkSourceRepairsFromSelectStatement(
+  subjectType: DueWorkSubjectType,
+  selection: DueWorkPositionalStatement,
+  options: { markerVersion?: string; now?: Date | string; producer: string },
+): DueWorkStatement {
+  assertNonEmpty(selection.sql, "source repair selection");
+  assertNonEmpty(options.producer, "due-work producer");
+  const updatedAt = iso(options.now ?? new Date(), "updated time");
+  const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
+  assertNonEmpty(markerVersion, "source repair marker version");
+
+  return {
+    args: [
+      DUE_WORK_SOURCE_REPAIR_KIND,
+      subjectType,
+      updatedAt,
+      markerVersion,
+      DUE_WORK_LIVE_GENERATION,
+      updatedAt,
+      ...(selection.args ?? []),
+    ],
+    sql: `insert into due_work
+      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+       source_version, generation, updated_at)
+      select distinct ?, ?, source.subject_id, 'repair', '', ?, ?, ?, ?
+      from (${selection.sql}) source
+      where source.subject_id is not null and trim(source.subject_id) <> ''
+      on conflict(work_kind, subject_type, subject_id) do update set
+        state = 'repair',
+        sort_key = '',
+        next_due_at = excluded.next_due_at,
+        source_version = excluded.source_version,
+        generation = excluded.generation,
+        claim_token = null,
+        claim_expires_at = null,
+        claimed_by = null,
+        updated_at = excluded.updated_at`,
+  };
+}
+
+/** Execute a bounded source mutation and its repair marker in one libSQL write transaction. */
+export async function batchDueWorkSourceMutation(
+  client: DueWorkClient,
+  statements: readonly InStatement[],
+  subjects: readonly DueWorkSourceSubject[],
+  options: {
+    markerVersion?: string;
+    now?: Date | string;
+    onlyIfLastSourceStatementChanged?: boolean;
+    producer: string;
+  },
+): Promise<ResultSet[]> {
+  if (statements.length === 0 || statements.length >= MAX_DUE_WORK_CHUNK_SIZE) {
+    throw new Error(
+      `due-work source mutation batches must contain 1 through ${MAX_DUE_WORK_CHUNK_SIZE - 1} source statements`,
+    );
+  }
+
+  return client.batch(
+    [
+      ...statements,
+      markDueWorkSourceRepairsStatement(subjects, {
+        markerVersion: options.markerVersion,
+        now: options.now,
+        onlyIfPreviousStatementChanged: options.onlyIfLastSourceStatementChanged,
+        producer: options.producer,
+      }),
+    ],
+    "write",
+  );
+}
+
 export async function listReadyDueWork<WorkKind extends string>(
   client: DueWorkClient,
   workKind: WorkKind,
@@ -393,6 +564,73 @@ export async function hasReadyDueWork(client: DueWorkClient, workKind: string): 
   return result.rows.length > 0;
 }
 
+/**
+ * Count work that can be handed out now without consulting a source table. Ready rows and
+ * scheduled rows whose retry time has elapsed are counted through their two partial indexes;
+ * leases and future retries are deliberately excluded.
+ */
+export async function countDueWorkNow(
+  client: DueWorkClient,
+  workKind: string,
+  options: { now?: () => Date } = {},
+): Promise<number> {
+  const now = nowIso(options.now);
+  const results = await client.batch([
+    {
+      args: [workKind],
+      sql: `select count(*) as queued
+        from due_work
+        where work_kind = ? and state = 'ready'`,
+    },
+    {
+      args: [workKind, now],
+      sql: `select count(*) as queued
+        from due_work
+        where work_kind = ? and state = 'scheduled' and next_due_at <= ?`,
+    },
+  ]);
+
+  return results.reduce(
+    (total, result) =>
+      total + Number((result.rows[0] as { queued?: bigint | number } | undefined)?.queued ?? 0),
+    0,
+  );
+}
+
+/** Read a bounded page of transactionally coupled source-repair markers. */
+export async function listDueWorkSourceRepairs(
+  client: DueWorkClient,
+  options: {
+    excludeSubjectId?: string;
+    limit?: number;
+    subjectType?: DueWorkSubjectType;
+  } = {},
+): Promise<DueWorkPage<typeof DUE_WORK_SOURCE_REPAIR_KIND>> {
+  const limit = options.limit ?? 10;
+  assertLimit(limit);
+  const clauses = ["work_kind = ?", "state = 'repair'"];
+  const args: Array<number | string> = [DUE_WORK_SOURCE_REPAIR_KIND];
+  if (options.subjectType !== undefined) {
+    clauses.push("subject_type = ?");
+    args.push(options.subjectType);
+  }
+  if (options.excludeSubjectId !== undefined) {
+    clauses.push("subject_id <> ?");
+    args.push(options.excludeSubjectId);
+  }
+  args.push(limit + 1);
+  const result = await client.execute({
+    args,
+    sql: `select ${DUE_WORK_COLUMNS}
+      from due_work
+      where ${clauses.join(" and ")}
+      order by subject_type, subject_id
+      limit ?`,
+  });
+  const rows = dueWorkRows<typeof DUE_WORK_SOURCE_REPAIR_KIND>(result);
+  return { hasMore: rows.length > limit, items: rows.slice(0, limit) };
+}
+
 function promoteStatement(workKind: string, now: string, limit: number): InStatement {
   return {
     args: [now, workKind, now, limit],
@@ -417,6 +655,22 @@ export async function promoteDueWork(
   assertLimit(limit);
   const result = await client.execute(promoteStatement(workKind, nowIso(options.now), limit));
   return result.rowsAffected;
+}
+
+/** Probe whether another overdue scheduled row remains after one bounded promotion page. */
+export async function hasDueScheduledWork(
+  client: DueWorkClient,
+  workKind: string,
+  options: { now?: () => Date } = {},
+): Promise<boolean> {
+  const result = await client.execute({
+    args: [workKind, nowIso(options.now)],
+    sql: `select subject_id from due_work
+      where work_kind = ? and state = 'scheduled' and next_due_at <= ?
+      order by next_due_at, subject_id
+      limit 1`,
+  });
+  return result.rows.length > 0;
 }
 
 function reapStatement(workKind: string | undefined, now: string, limit: number): InStatement {
@@ -465,7 +719,7 @@ export async function claimDueWork<WorkKind extends string>(
   },
 ): Promise<DueWorkClaim<WorkKind>> {
   const limit = options.limit ?? 100;
-  const maintenanceLimit = options.maintenanceLimit ?? Math.min(MAX_DUE_WORK_CHUNK_SIZE, limit * 2);
+  const maintenanceLimit = options.maintenanceLimit ?? MAX_DUE_WORK_CHUNK_SIZE;
   assertLimit(limit);
   assertLimit(maintenanceLimit);
   assertNonEmpty(options.claimedBy, "claim owner");
@@ -482,7 +736,19 @@ export async function claimDueWork<WorkKind extends string>(
       promoteStatement(workKind, now, maintenanceLimit),
       reapStatement(workKind, now, maintenanceLimit),
       {
-        args: [claimToken, claimExpiresAt, options.claimedBy, now, workKind, limit],
+        args: [
+          claimToken,
+          claimExpiresAt,
+          options.claimedBy,
+          now,
+          workKind,
+          limit,
+          workKind,
+          now,
+          workKind,
+          options.claimedBy,
+          claimToken,
+        ],
         sql: `update due_work
           set state = 'leased', claim_token = ?, claim_expires_at = ?, claimed_by = ?, updated_at = ?
           where (work_kind, subject_type, subject_id) in (
@@ -492,7 +758,22 @@ export async function claimDueWork<WorkKind extends string>(
             order by sort_key, subject_id
             limit ?
           )
-          returning ${DUE_WORK_COLUMNS}`,
+          and not exists (
+            select 1 from due_work scheduled_due
+            where scheduled_due.work_kind = ? and scheduled_due.state = 'scheduled'
+              and scheduled_due.next_due_at <= ?
+          )
+          and not exists (
+            select 1 from due_work existing_claim
+            where existing_claim.work_kind = ? and existing_claim.state = 'leased'
+              and existing_claim.claimed_by = ? and existing_claim.claim_token = ?
+          )`,
+      },
+      {
+        args: [workKind, options.claimedBy, claimToken],
+        sql: `select ${DUE_WORK_COLUMNS} from due_work
+          where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?
+          order by sort_key, subject_id`,
       },
       {
         args: [workKind],
@@ -504,7 +785,7 @@ export async function claimDueWork<WorkKind extends string>(
     ],
     "write",
   );
-  const claimResult = results[2];
+  const claimResult = results[3];
   const claimed = claimResult === undefined ? [] : dueWorkRows<WorkKind>(claimResult);
   claimed.sort((left, right) =>
     left.sortKey === right.sortKey
@@ -512,10 +793,17 @@ export async function claimDueWork<WorkKind extends string>(
       : left.sortKey.localeCompare(right.sortKey),
   );
 
+  if (
+    claimed.length === 0 &&
+    (await hasDueScheduledWork(client, workKind, { now: () => new Date(now) }))
+  ) {
+    throw new DueWorkMaintenancePendingError(workKind);
+  }
+
   return {
-    claimExpiresAt,
+    claimExpiresAt: claimed[0]?.claimExpiresAt ?? claimExpiresAt,
     claimToken,
-    hasMore: (results[3]?.rows.length ?? 0) > 0,
+    hasMore: (results[4]?.rows.length ?? 0) > 0,
     items: claimed,
     promoted: results[0]?.rowsAffected ?? 0,
     reaped: results[1]?.rowsAffected ?? 0,
@@ -617,10 +905,6 @@ export async function repairDueWorkChunk<WorkKind extends string>(
 
   for (const marker of page) {
     const projection = await definition.project(marker);
-    if (projection !== null && projection.sourceVersion !== marker.sourceVersion) {
-      deferred += 1;
-      continue;
-    }
     const updatedAt = nowIso(options.now);
     const write =
       projection === null
@@ -669,6 +953,9 @@ export async function startDueWorkRebuild<WorkKind extends string>(
 ): Promise<DueWorkRebuildCheckpoint<WorkKind>> {
   const now = nowIso(options.now);
   const generation = options.generation ?? randomToken();
+  if (generation === DUE_WORK_LIVE_GENERATION) {
+    throw new Error("due-work rebuild generation 'live' is reserved for transactional repairs");
+  }
   const restart = options.newGeneration === true ? 1 : 0;
   const results = await client.batch(
     [
@@ -730,7 +1017,7 @@ function guardedRebuildProjectionStatement<WorkKind extends string>(
     checkpoint.cursor,
   );
   return {
-    args: [...values, ...guard.args],
+    args: [...values, ...guard.args, checkpoint.startedAt],
     sql: `insert into due_work
       (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
        source_version, generation, updated_at)
@@ -746,7 +1033,8 @@ function guardedRebuildProjectionStatement<WorkKind extends string>(
         claim_expires_at = null,
         claimed_by = null,
         updated_at = excluded.updated_at
-      where due_work.state <> 'repair'`,
+      where due_work.state <> 'repair'
+        and (due_work.generation <> 'live' or due_work.updated_at < ?)`,
   };
 }
 
@@ -764,9 +1052,16 @@ async function finishRebuild<WorkKind extends string>(
   await client.batch(
     [
       {
-        args: [checkpoint.workKind, checkpoint.subjectType, checkpoint.generation, ...guard.args],
+        args: [
+          checkpoint.workKind,
+          checkpoint.subjectType,
+          checkpoint.generation,
+          checkpoint.startedAt,
+          ...guard.args,
+        ],
         sql: `delete from due_work
-          where work_kind = ? and subject_type = ? and generation <> ? and state <> 'repair'
+          where work_kind = ? and subject_type = ? and generation <> ?
+            and state <> 'repair' and (generation <> 'live' or updated_at < ?)
             and exists (select 1 from due_work_rebuilds where ${guard.sql})`,
       },
       {
@@ -891,10 +1186,12 @@ export async function runDueWorkRebuildChunk<
           checkpoint.workKind,
           checkpoint.subjectType,
           checkpoint.generation,
+          checkpoint.startedAt,
           ...advancedGuard.args,
         ],
         sql: `delete from due_work
-          where work_kind = ? and subject_type = ? and generation <> ? and state <> 'repair'
+          where work_kind = ? and subject_type = ? and generation <> ?
+            and state <> 'repair' and (generation <> 'live' or updated_at < ?)
             and exists (select 1 from due_work_rebuilds where ${advancedGuard.sql})`,
       },
       {

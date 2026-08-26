@@ -43,11 +43,17 @@ import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { restaleCatalogueRankStatements } from "../src/lib/server/catalogue-rank-restale";
+import {
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsStatement,
+} from "../src/lib/server/due-work";
 
 export type ArtistLinksBackfillResult = {
   /** `track_artists` rows this run stamped. Zero on a steady-state deploy. */
   linked: number;
 };
+
+const PAGE = 200;
 
 /**
  * The idempotent core, taking any libSQL client so a test can drive it against an in-memory
@@ -69,32 +75,56 @@ export async function backfillArtistLinks(client: Client): Promise<ArtistLinksBa
                       join json_each(tracks.artists_json) credit
                       join artists a on a.name = credit.value collate nocase`;
 
-  // The CATALOGUE tracks that WILL gain an edge — read before the insert, so a re-run over the same
-  // corpus finds none and re-stales nothing.
-  const pending = await client.execute({
-    sql: `select distinct candidate.track_id as track_id
-          from (${linkSelect}) candidate
-          join tracks t on t.track_id = candidate.track_id
-          where t.is_catalogue = 1
-            and not exists (
+  let linked = 0;
+
+  for (;;) {
+    // Bound one transactional mutation to known track ids. The projection marker, edge insert,
+    // and rank re-stale then succeed or roll back together; a restart simply selects the next page.
+    const pending = await client.execute({
+      args: [PAGE],
+      sql: `select distinct candidate.track_id as track_id
+            from (${linkSelect}) candidate
+            where not exists (
               select 1 from track_artists ta
               where ta.track_id = candidate.track_id and ta.artist_id = candidate.artist_id
-            )`,
-  });
-  const restaleTrackIds = pending.rows
-    .map((row) => row["track_id"])
-    .filter((id): id is string => typeof id === "string");
+            )
+            order by candidate.track_id
+            limit ?`,
+    });
+    const trackIds = pending.rows
+      .map((row) => row["track_id"])
+      .filter((id): id is string => typeof id === "string");
 
-  const result = await client.execute({
-    sql: `insert or ignore into track_artists (track_id, artist_id, position)
-          select track_id, artist_id, position from (${linkSelect}) candidate`,
-  });
+    if (trackIds.length === 0) {
+      break;
+    }
 
-  for (const statement of restaleCatalogueRankStatements(restaleTrackIds)) {
-    await client.execute(statement);
+    const [inserted] = await client.batch(
+      [
+        {
+          args: trackIds,
+          sql: `insert or ignore into track_artists (track_id, artist_id, position)
+                select track_id, artist_id, position from (${linkSelect}) candidate
+                where candidate.track_id in (${trackIds.map(() => "?").join(", ")})`,
+        },
+        ...restaleCatalogueRankStatements(trackIds),
+        markDueWorkSourceRepairsStatement(
+          [
+            ...trackIds.map((subjectId) => ({ subjectId, subjectType: "track" as const })),
+            {
+              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+              subjectType: "track",
+            },
+          ],
+          { producer: "backfill-artist-links" },
+        ),
+      ],
+      "write",
+    );
+    linked += inserted?.rowsAffected ?? 0;
   }
 
-  return { linked: result.rowsAffected };
+  return { linked };
 }
 
 async function main(): Promise<void> {

@@ -13,6 +13,7 @@ import {
   type DueWorkRebuildSource,
 } from "../src/lib/server/due-work";
 import { DUE_WORK_BACKFILLS } from "../src/lib/server/due-work-registry";
+import { refreshCatalogueRankStateCache } from "../src/lib/server/catalogue";
 import { loadLocalEnv, readEnv } from "../src/lib/server/env";
 
 export type RegisteredDueWorkDefinition = DueWorkRebuildDefinition<string, DueWorkRebuildSource>;
@@ -32,6 +33,10 @@ export async function backfillDueWork(
     completed += checkpoint.state === "complete" ? 1 : 0;
     projected += checkpoint.projectedCount;
     scanned += checkpoint.scannedCount;
+  }
+
+  if (definitions.some((definition) => definition.workKind === "catalogue-rank")) {
+    await refreshCatalogueRankStateCache();
   }
 
   return { completed, projected, scanned };

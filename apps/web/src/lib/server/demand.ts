@@ -32,6 +32,7 @@
 
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { getDb, typedRows } from "./db";
+import { type DueWorkStatement, markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
 
 /** How far back the demand window looks. Sustained interest, not a single spike. */
 export const DEMAND_WINDOW_DAYS = 30;
@@ -305,7 +306,37 @@ export async function recordDemand(
   // 3. Promote the demanded entities' PENDING frontier nodes to `demand_rank = 0` (a label's whole
   //    seed subtree via `label_slug`; an artist node matched by MBID). `state = 'pending'` keeps
   //    the promotion off already-expanded nodes.
-  const writes: { args: (null | number | string)[]; sql: string }[] = [
+  const demandedArtistIds = [...artistDemandById.keys()];
+  const demandedLabelSlugs = [...labelDemandBySlugResolved.keys()];
+  const repairSelectionArms = [
+    `select track_id as subject_id from tracks where demand_score is not null`,
+  ];
+  const repairSelectionArgs: string[] = [];
+
+  if (demandedArtistIds.length > 0) {
+    repairSelectionArms.push(
+      `select track_id as subject_id from track_artists
+       where artist_id in (${placeholders(demandedArtistIds.length)})`,
+    );
+    repairSelectionArgs.push(...demandedArtistIds);
+  }
+
+  if (demandedLabelSlugs.length > 0) {
+    repairSelectionArms.push(
+      `select track_id as subject_id from tracks
+       where label_id in (
+         select id from labels where slug in (${placeholders(demandedLabelSlugs.length)})
+       )`,
+    );
+    repairSelectionArgs.push(...demandedLabelSlugs);
+  }
+
+  const writes: DueWorkStatement[] = [
+    markDueWorkSourceRepairsFromSelectStatement(
+      "track",
+      { args: repairSelectionArgs, sql: repairSelectionArms.join(" union ") },
+      { producer: "demand-score-rewrite" },
+    ),
     { args: [], sql: `update tracks set demand_score = null where demand_score is not null` },
     { args: [], sql: `update crawl_frontier set demand_rank = 1 where demand_rank = 0` },
   ];
@@ -347,8 +378,6 @@ export async function recordDemand(
   // `tracksScored` counts DISTINCT tracks the bumps touched, driven by `track_artists_artist_id_idx`
   // + `tracks_label_id_idx` over the (small) demanded sets — not a scan of the growing `tracks`.
   let tracksScored = 0;
-  const demandedArtistIds = [...artistDemandById.keys()];
-  const demandedLabelSlugs = [...labelDemandBySlugResolved.keys()];
 
   if (demandedArtistIds.length > 0 || demandedLabelSlugs.length > 0) {
     const scoredResult = await db.execute({

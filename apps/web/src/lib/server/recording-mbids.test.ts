@@ -14,7 +14,13 @@ vi.mock("./db", async () => {
     ...actual,
     getDb: async () => ({
       batch: (statements: { args?: unknown[]; sql: string }[]) =>
-        Promise.all(statements.map((statement) => execute(statement))),
+        Promise.all(
+          statements.map((statement) =>
+            statement.sql.includes("insert into due_work")
+              ? Promise.resolve({ rows: [], rowsAffected: 1 })
+              : execute(statement),
+          ),
+        ),
       execute,
     }),
   };
@@ -27,6 +33,10 @@ vi.mock("./musicbrainz", async () => {
 });
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
+vi.mock("./due-work-cutover", () => ({
+  isDueWorkCutoverEnabled: async () => false,
+  readPromotedDueWorkPage: vi.fn(),
+}));
 
 const { recordingMbidFromTrackId, resolveRecordingMbids } = await import("./recording-mbids");
 

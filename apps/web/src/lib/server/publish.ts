@@ -11,6 +11,7 @@ import { postToBluesky } from "./bluesky";
 import { getDb, typedRow } from "./db";
 import { enrichFromDeezer, lookupIsrcFromDeezer } from "./deezer";
 import { discogsResolveRelease } from "./discogs";
+import { batchDueWorkSourceMutation, DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID } from "./due-work";
 import { purgeLogCache } from "./edge-cache";
 import {
   type HubCountDelta,
@@ -273,7 +274,8 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   const discogsAttemptedAt = discogsResolved || !discogs.rateLimited ? nowIso : null;
   const artistsJson = JSON.stringify(track.artists);
 
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         args: [
@@ -367,7 +369,11 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
       // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.
       findingInsertStatement({ logId, note: options.note, nowIso, trackId: track.trackId }),
     ],
-    "write",
+    [
+      { subjectId: track.trackId, subjectType: "track" },
+      { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+    ],
+    { producer: "publish-track" },
   );
 
   // Best-effort: populate the artist entity tables (artists + track_artists) so
@@ -429,10 +435,17 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     await withRetries("Spotify playlist add", () => addTrackToPlaylist(track));
   } catch (error) {
     const message = formatError(error);
-    await db.execute({
-      args: [message, new Date().toISOString(), track.trackId],
-      sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [message, new Date().toISOString(), track.trackId],
+          sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-spotify-error" },
+    );
 
     // An expired Spotify authorization is an actionable "reconnect", not a generic
     // failure — pass it through verbatim so the operator sees the reconnect path.
@@ -444,15 +457,22 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
   }
 
   try {
-    await db.execute({
-      args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
-      sql: `update findings
-        set added_to_spotify = 1,
-          added_to_spotify_at = ?,
-          spotify_error = null,
-          updated_at = ?
-        where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
+          sql: `update findings
+            set added_to_spotify = 1,
+              added_to_spotify_at = ?,
+              spotify_error = null,
+              updated_at = ?
+            where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-spotify-success" },
+    );
   } catch (error) {
     throw new ApiError(
       "db_update_failed",
@@ -464,24 +484,38 @@ No database, Spotify, or Telegram changes were made. Enrichment (label, preview)
     await withRetries("Telegram post", () => postToTelegram(track, options.note, logId));
   } catch (error) {
     const message = formatError(error);
-    await db.execute({
-      args: [message, new Date().toISOString(), track.trackId],
-      sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [message, new Date().toISOString(), track.trackId],
+          sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-telegram-error" },
+    );
 
     throw new ApiError("telegram_failed", `Spotify succeeded, but Telegram failed.\n${message}`);
   }
 
   try {
-    await db.execute({
-      args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
-      sql: `update findings
-        set posted_to_telegram = 1,
-          posted_to_telegram_at = ?,
-          telegram_error = null,
-          updated_at = ?
-        where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [new Date().toISOString(), new Date().toISOString(), track.trackId],
+          sql: `update findings
+            set posted_to_telegram = 1,
+              posted_to_telegram_at = ?,
+              telegram_error = null,
+              updated_at = ?
+            where track_id = ?`,
+        },
+      ],
+      [{ subjectId: track.trackId, subjectType: "track" }],
+      { producer: "publish-telegram-success" },
+    );
   } catch (error) {
     throw new ApiError(
       "db_update_failed",
@@ -662,21 +696,28 @@ export async function certifyExistingTrack(
     if (lookup.match) {
       spotifyUri = lookup.match.spotifyUri;
       spotifyUrl = lookup.match.spotifyUrl;
-      await db.execute({
-        args: [spotifyUri, spotifyUrl, new Date().toISOString(), trackId],
-        // The provenance rides the SAME statement as the link (schema.ts § the pair). This IS the
-        // `spotify-isrc` rung — Spotify's own `/search?type=track&q=isrc:` read, matched on the
-        // recording's real identity — so it is recorded as such rather than left to read as legacy;
-        // an exact-ISRC anchor is the strongest provenance in the corpus and the envelope should
-        // say so.
-        sql: `update tracks
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [spotifyUri, spotifyUrl, new Date().toISOString(), trackId],
+            // The provenance rides the SAME statement as the link (schema.ts § the pair). This IS the
+            // `spotify-isrc` rung — Spotify's own `/search?type=track&q=isrc:` read, matched on the
+            // recording's real identity — so it is recorded as such rather than left to read as legacy;
+            // an exact-ISRC anchor is the strongest provenance in the corpus and the envelope should
+            // say so.
+            sql: `update tracks
               set spotify_uri = ?,
                   spotify_url = ?,
                   spotify_anchor_source = 'spotify-isrc',
                   spotify_anchor_verified_by = 'isrc',
                   spotify_anchored_at = ?
               where track_id = ?`,
-      });
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { producer: "certify-track-anchor" },
+      );
     }
   }
 
@@ -709,7 +750,8 @@ export async function certifyExistingTrack(
     // is already `is_catalogue = 0`, so a link that genuinely MOVES (a null pointer filled, a
     // re-point) carries its own certified delta and no double-count is possible: the entity credited
     // here is the one the pointer held BEFORE the links ran, and a re-point debits it again.
-    await db.batch(
+    await batchDueWorkSourceMutation(
+      db,
       [
         findingInsertStatement({ logId, note: options.note, nowIso, trackId }),
         { args: [trackId], sql: `update tracks set is_catalogue = 0 where track_id = ?` },
@@ -717,7 +759,11 @@ export async function certifyExistingTrack(
         ...(row.album_id ? [hubCountDeltaStatement("albums", row.album_id, CERTIFY_DELTA)] : []),
         hubCountDeltaForTrackArtistsStatement(trackId, CERTIFY_DELTA),
       ],
-      "write",
+      [
+        { subjectId: trackId, subjectType: "track" },
+        { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ],
+      { producer: "certify-track" },
     );
 
     // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
@@ -762,48 +808,83 @@ export async function certifyExistingTrack(
     if (spotifyUri) {
       try {
         await withRetries("Spotify playlist add", () => addTrackToPlaylist(metadata));
-        await db.execute({
-          args: [nowIso, nowIso, trackId],
-          sql: `update findings
-                set added_to_spotify = 1, added_to_spotify_at = ?, spotify_error = null,
-                    updated_at = ?
-                where track_id = ?`,
-        });
+        await batchDueWorkSourceMutation(
+          db,
+          [
+            {
+              args: [nowIso, nowIso, trackId],
+              sql: `update findings
+                    set added_to_spotify = 1, added_to_spotify_at = ?, spotify_error = null,
+                        updated_at = ?
+                    where track_id = ?`,
+            },
+          ],
+          [{ subjectId: trackId, subjectType: "track" }],
+          { producer: "certify-spotify-success" },
+        );
       } catch (error) {
-        await db.execute({
-          args: [formatError(error), nowIso, trackId],
-          sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
-        });
+        await batchDueWorkSourceMutation(
+          db,
+          [
+            {
+              args: [formatError(error), nowIso, trackId],
+              sql: `update findings set spotify_error = ?, updated_at = ? where track_id = ?`,
+            },
+          ],
+          [{ subjectId: trackId, subjectType: "track" }],
+          { producer: "certify-spotify-error" },
+        );
       }
     } else {
       // The honest miss: no stored identity and no exact-ISRC match. Recorded on the same
       // attention rail as a failed add — the operator links it by hand (or re-certifies once an
       // ISRC lands) — because a fuzzy metadata guess must never reach the public playlist.
-      await db.execute({
-        args: [nowIso, trackId],
-        sql: `update findings
-              set spotify_error = 'no Spotify presence (no exact-ISRC match) — link manually',
-                  updated_at = ?
-              where track_id = ?`,
-      });
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [nowIso, trackId],
+            sql: `update findings
+                  set spotify_error = 'no Spotify presence (no exact-ISRC match) — link manually',
+                      updated_at = ?
+                  where track_id = ?`,
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { producer: "certify-spotify-missing" },
+      );
     }
   }
 
   if (!alreadyTelegram) {
     try {
       await withRetries("Telegram post", () => postToTelegram(metadata, note, logId));
-      await db.execute({
-        args: [nowIso, nowIso, trackId],
-        sql: `update findings
-              set posted_to_telegram = 1, posted_to_telegram_at = ?, telegram_error = null,
-                  updated_at = ?
-              where track_id = ?`,
-      });
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [nowIso, nowIso, trackId],
+            sql: `update findings
+                  set posted_to_telegram = 1, posted_to_telegram_at = ?, telegram_error = null,
+                      updated_at = ?
+                  where track_id = ?`,
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { producer: "certify-telegram-success" },
+      );
     } catch (error) {
-      await db.execute({
-        args: [formatError(error), nowIso, trackId],
-        sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
-      });
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [formatError(error), nowIso, trackId],
+            sql: `update findings set telegram_error = ?, updated_at = ? where track_id = ?`,
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { producer: "certify-telegram-error" },
+      );
     }
 
     // The best-effort announce wave rides the FIRST Telegram attempt (posted was 0 at entry), so

@@ -50,6 +50,14 @@ describe("backfillHasEmbedding", () => {
     expect(flipped).toBe(1);
     expect(await mirror("emb000000000000000000a")).toBe(1);
     expect(await mirror("bare00000000000000000a")).toBe(0);
+    const markers = await db.execute({
+      sql: `select subject_id from due_work where work_kind = 'source-repair'
+            order by subject_id`,
+    });
+    expect(markers.rows.map((row) => row.subject_id)).toEqual([
+      "@catalogue-rank-corpus",
+      "emb000000000000000000a",
+    ]);
   });
 
   it("is idempotent — a second run flips nothing and changes no state", async () => {

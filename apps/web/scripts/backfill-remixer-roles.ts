@@ -21,6 +21,10 @@ import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveRemixerNames, fold } from "../src/lib/server/track-match";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+} from "../src/lib/server/due-work";
 
 export type RemixerRolesBackfillResult = {
   /** `track_artists` rows this run stamped `role='remixer'`. Zero on a steady-state deploy. */
@@ -112,13 +116,26 @@ export async function backfillRemixerRoles(client: Client): Promise<RemixerRoles
           continue;
         }
 
-        const result = await client.execute({
-          args: [artist.artist_id, record.track_id],
-          sql: `update track_artists set role = 'remixer'
-                where artist_id = ? and track_id = ? and role is null`,
-        });
+        const [result] = await batchDueWorkSourceMutation(
+          client,
+          [
+            {
+              args: [artist.artist_id, record.track_id],
+              sql: `update track_artists set role = 'remixer'
+                    where artist_id = ? and track_id = ? and role is null`,
+            },
+          ],
+          [
+            { subjectId: record.track_id, subjectType: "track" },
+            {
+              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+              subjectType: "track",
+            },
+          ],
+          { onlyIfLastSourceStatementChanged: true, producer: "backfill-remixer-role" },
+        );
 
-        stamped += result.rowsAffected;
+        stamped += result?.rowsAffected ?? 0;
       }
     }
 

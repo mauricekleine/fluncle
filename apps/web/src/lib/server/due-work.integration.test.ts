@@ -3,12 +3,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
 import {
+  batchDueWorkSourceMutation,
+  clearDueWorkSourceRepairStatement,
   claimDueWork,
   compareDueWorkRows,
   deleteDueWork,
+  DUE_WORK_LIVE_GENERATION,
+  DUE_WORK_SOURCE_REPAIR_KIND,
   hasReadyDueWork,
   listReadyDueWork,
   markDueWorkRepair,
+  markDueWorkSourceRepairsStatement,
   readDueWorkProjectionChunk,
   readDueWorkRebuild,
   repairDueWorkChunk,
@@ -24,6 +29,8 @@ import {
 const T0 = new Date("2026-01-01T00:00:00.000Z");
 const T1 = new Date("2026-01-01T00:00:01.000Z");
 const T2 = new Date("2026-01-01T00:00:02.000Z");
+const T3 = new Date("2026-01-01T00:00:03.000Z");
+const T4 = new Date("2026-01-01T00:00:04.000Z");
 
 let db: Client;
 
@@ -135,6 +142,30 @@ describe("due-work ready reads and leases", () => {
     expect(afterExpiry.items.every((item) => item.claimToken === "claim-after-expiry")).toBe(true);
   });
 
+  it("returns the original lease when a claim token is retried instead of claiming another page", async () => {
+    for (let index = 0; index < 4; index += 1) {
+      await upsertDueWork(db, ready(`retry-${index}`, `0${index}`, "claim-retry"), { now: T0 });
+    }
+    const options = {
+      claimedBy: "retrying-worker",
+      leaseMs: 1_000,
+      limit: 2,
+      now: () => T0,
+      token: "stable-claim-token",
+    };
+
+    const first = await claimDueWork(db, "claim-retry", options);
+    const retried = await claimDueWork(db, "claim-retry", options);
+
+    expect(first.items.map((row) => row.subjectId)).toEqual(["retry-0", "retry-1"]);
+    expect(retried.items.map((row) => row.subjectId)).toEqual(["retry-0", "retry-1"]);
+    expect(retried.claimExpiresAt).toBe(first.claimExpiresAt);
+    expect((await listReadyDueWork(db, "claim-retry")).items.map((row) => row.subjectId)).toEqual([
+      "retry-2",
+      "retry-3",
+    ]);
+  });
+
   it("promotes scheduled rows only when due and claims them in the same transaction", async () => {
     await upsertDueWork(
       db,
@@ -169,6 +200,99 @@ describe("due-work ready reads and leases", () => {
 });
 
 describe("due-work repair and drift", () => {
+  it("rolls back the source mutation when its coupled marker cannot commit", async () => {
+    await db.execute(`create table source_probe (id text primary key)`);
+    await db.execute(`create trigger reject_source_repair before insert on due_work
+      when new.work_kind = 'source-repair'
+      begin
+        select raise(abort, 'marker rejected');
+      end`);
+
+    await expect(
+      batchDueWorkSourceMutation(
+        db,
+        [{ args: ["source-1"], sql: `insert into source_probe (id) values (?)` }],
+        [{ subjectId: "source-1", subjectType: "track" }],
+        { markerVersion: "source-v1", now: T0, producer: "test-source-writer" },
+      ),
+    ).rejects.toThrow("marker rejected");
+
+    const source = await db.execute(`select id from source_probe`);
+    expect(source.rows).toEqual([]);
+  });
+
+  it("does not create a marker when a guarded source mutation changes no row", async () => {
+    await db.execute(
+      `create table guarded_source_probe (id text primary key, value text not null)`,
+    );
+    await db.execute(`insert into guarded_source_probe (id, value) values ('source-1', 'held')`);
+
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: ["replacement", "missing"],
+          sql: `update guarded_source_probe set value = ? where id = ?`,
+        },
+      ],
+      [{ subjectId: "missing", subjectType: "track" }],
+      {
+        markerVersion: "guarded-v1",
+        now: T0,
+        onlyIfLastSourceStatementChanged: true,
+        producer: "test-guarded-writer",
+      },
+    );
+
+    const markers = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: `select subject_id from due_work where work_kind = ?`,
+    });
+    expect(markers.rows).toEqual([]);
+  });
+
+  it("keeps one idempotent source marker per subject and preserves a concurrent rewrite", async () => {
+    const source = { subjectId: "repair-track", subjectType: "track" } as const;
+    const first = markDueWorkSourceRepairsStatement([source, source], {
+      markerVersion: "source-v1",
+      now: T0,
+      producer: "test-source-writer",
+    });
+
+    await db.batch([first, first], "write");
+    const idempotent = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND, source.subjectType, source.subjectId],
+      sql: `select source_version, state from due_work
+        where work_kind = ? and subject_type = ? and subject_id = ?`,
+    });
+    expect(idempotent.rows).toHaveLength(1);
+    expect(idempotent.rows[0]).toMatchObject({ source_version: "source-v1", state: "repair" });
+
+    await db.batch(
+      [
+        markDueWorkSourceRepairsStatement([source], {
+          markerVersion: "source-v2",
+          now: T1,
+          producer: "test-source-writer",
+        }),
+        clearDueWorkSourceRepairStatement({ ...source, sourceVersion: "source-v1" }),
+      ],
+      "write",
+    );
+    const raced = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND, source.subjectType, source.subjectId],
+      sql: `select source_version, state from due_work
+        where work_kind = ? and subject_type = ? and subject_id = ?`,
+    });
+    expect(raced.rows).toHaveLength(1);
+    expect(raced.rows[0]).toMatchObject({ source_version: "source-v2", state: "repair" });
+
+    const cleared = await db.execute(
+      clearDueWorkSourceRepairStatement({ ...source, sourceVersion: "source-v2" }),
+    );
+    expect(cleared.rowsAffected).toBe(1);
+  });
+
   it("keeps a newer repair marker when its source version changes during computation", async () => {
     await markDueWorkRepair(
       db,
@@ -419,5 +543,108 @@ describe("due-work rebuild", () => {
       "source-5",
       "source-6",
     ]);
+  });
+
+  it("never overwrites or prunes a live repair that wins after the rebuild source read", async () => {
+    let sourceReads = 0;
+    const definition: DueWorkRebuildDefinition<"raced-rebuild", SampleSource> = {
+      project(source, context) {
+        return {
+          generation: context.generation,
+          nextDueAt: context.now,
+          sortKey: source.sort_key,
+          sourceVersion: source.sourceVersion,
+          state: "ready",
+          subjectId: source.subjectId,
+          subjectType: "track",
+          workKind: "raced-rebuild",
+        };
+      },
+      async readSourceChunk({ after }) {
+        if (after !== null) {
+          return [];
+        }
+        sourceReads += 1;
+
+        // The rebuild captured v1. Before its guarded write begins, a transactionally repaired v2
+        // projection lands. The older generation must neither overwrite nor prune that winner.
+        if (sourceReads === 1) {
+          await upsertDueWork(
+            db,
+            {
+              generation: DUE_WORK_LIVE_GENERATION,
+              nextDueAt: T3.toISOString(),
+              sortKey: "02",
+              sourceVersion: "v2",
+              state: "ready",
+              subjectId: "raced-source",
+              subjectType: "track",
+              workKind: "raced-rebuild",
+            },
+            { now: T3 },
+          );
+        }
+        return [
+          {
+            cursor: "raced-source",
+            due: 1,
+            sort_key: sourceReads === 1 ? "01" : "02",
+            sourceVersion: sourceReads === 1 ? "v1" : "v2",
+            subjectId: "raced-source",
+          },
+        ];
+      },
+      subjectType: "track",
+      workKind: "raced-rebuild",
+    };
+
+    const result = await runDueWorkRebuildChunk(db, definition, {
+      generation: "backfill-generation",
+      limit: 2,
+      newGeneration: true,
+      now: () => T2,
+    });
+
+    expect(result.complete).toBe(true);
+    expect((await listReadyDueWork(db, "raced-rebuild")).items[0]).toMatchObject({
+      generation: DUE_WORK_LIVE_GENERATION,
+      sortKey: "02",
+      sourceVersion: "v2",
+    });
+
+    await upsertDueWork(
+      db,
+      {
+        generation: DUE_WORK_LIVE_GENERATION,
+        nextDueAt: T0.toISOString(),
+        sortKey: "00",
+        sourceVersion: "unexpected",
+        state: "ready",
+        subjectId: "unexpected-live",
+        subjectType: "track",
+        workKind: "raced-rebuild",
+      },
+      { now: T0 },
+    );
+    await runDueWorkRebuildToCompletion(db, definition, {
+      generation: "converged-generation",
+      limit: 2,
+      newGeneration: true,
+      now: () => T4,
+    });
+    expect((await listReadyDueWork(db, "raced-rebuild")).items).toMatchObject([
+      {
+        generation: "converged-generation",
+        sortKey: "02",
+        sourceVersion: "v2",
+        subjectId: "raced-source",
+      },
+    ]);
+    await expect(
+      startDueWorkRebuild(db, definition, {
+        generation: DUE_WORK_LIVE_GENERATION,
+        newGeneration: true,
+      }),
+    ).rejects.toThrow("reserved");
   });
 });

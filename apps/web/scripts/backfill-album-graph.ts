@@ -44,6 +44,10 @@ import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
 
 import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
+import {
+  batchDueWorkSourceMutation,
+  markDueWorkSourceRepairsFromSelectStatement,
+} from "../src/lib/server/due-work";
 
 export type AlbumsBackfillResult = {
   /** Tracks whose `album_id` pointer this run stamped. */
@@ -92,14 +96,22 @@ export async function backfillAlbums(client: Client): Promise<AlbumsBackfillResu
   }
 
   for (const [slug, name] of bySlug) {
-    const inserted = await client.execute({
-      args: [`alb_${randomUUID()}`, name, slug, now, now],
-      sql: `insert into albums (id, name, slug, created_at, updated_at)
-            values (?, ?, ?, ?, ?)
-            on conflict (slug) do nothing`,
-    });
+    const albumId = `alb_${randomUUID()}`;
+    const [inserted] = await batchDueWorkSourceMutation(
+      client,
+      [
+        {
+          args: [albumId, name, slug, now, now],
+          sql: `insert into albums (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
+                on conflict (slug) do nothing`,
+        },
+      ],
+      [{ subjectId: albumId, subjectType: "album" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "backfill-album-mint" },
+    );
 
-    result.minted += inserted.rowsAffected;
+    result.minted += inserted?.rowsAffected ?? 0;
   }
 
   // ── 2. LINK — the pointer, for every track whose album now has a row. Runs AFTER the
@@ -178,8 +190,17 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
 
     const certified = Number(census.rows[0]?.cert ?? 0);
     // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
-    const [updated] = await client.batch(
+    const [, updated] = await client.batch(
       [
+        markDueWorkSourceRepairsFromSelectStatement(
+          "track",
+          {
+            args: [raw],
+            sql: `select track_id as subject_id from tracks
+                  where album_id is null and trim(album) = ?`,
+          },
+          { producer: "backfill-album-link" },
+        ),
         {
           args: [albumId, raw],
           sql: `update tracks set album_id = ? where album_id is null and trim(album) = ?`,

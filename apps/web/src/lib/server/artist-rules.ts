@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { parseSpotifyArtistId } from "./artist-resolution";
 import { getDb, typedRows } from "./db";
+import {
+  type DueWorkStatement,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsStatement,
+} from "./due-work";
 import { LabelNotFoundError } from "./labels";
 import { mbFetch } from "./musicbrainz";
 
@@ -219,7 +224,7 @@ export async function replaceLabelArtistRules(
     })),
   );
   const now = new Date().toISOString();
-  const statements: Array<{ args: Array<null | string>; sql: string }> = [
+  const statements: DueWorkStatement[] = [
     { args: [labelId], sql: `delete from artist_rules where label_id = ?` },
     ...prepared.map((rule) => ({
       args: [
@@ -242,6 +247,13 @@ export async function replaceLabelArtistRules(
       args: [now, now, labelId],
       sql: `update labels set scope_changed_at = ?, updated_at = ? where id = ?`,
     },
+    markDueWorkSourceRepairsStatement(
+      [
+        { subjectId: labelId, subjectType: "label" },
+        { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ],
+      { producer: "label-artist-rules-replace" },
+    ),
   ];
 
   await db.batch(statements, "write");

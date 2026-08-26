@@ -76,6 +76,7 @@ import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
+import { batchDueWorkSourceMutation } from "./due-work";
 import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
@@ -932,7 +933,8 @@ async function writeCatalogueTracks(
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             on conflict (track_id) do nothing`,
     };
-    const results = await db.batch(
+    const results = await batchDueWorkSourceMutation(
+      db,
       [
         insertTrack,
         insertTrackDuplicateKeyStatement({
@@ -942,7 +944,8 @@ async function writeCatalogueTracks(
           trackId,
         }),
       ],
-      "write",
+      [{ subjectId: trackId, subjectType: "track" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "crawl-track-mint" },
     );
     const result = results[0];
 

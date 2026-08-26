@@ -14,7 +14,7 @@
 // correctness, because nothing guarantees the row is there or well-formed. Shape (7) below is
 // the ONE argued exception, and it states its own reason.
 //
-// WHAT RIDES IT TODAY — 36 keys across 16 modules, in seven shapes (grep `getSetting(` for the
+// WHAT RIDES IT TODAY — 38 keys across 17 modules, in seven shapes (grep `getSetting(` for the
 // live list; each module owns its own exported key constant and its own default):
 //
 //   1. OPERATOR FLIPS — `"true"`/`"false"`, and the unset state is the deliberate default
@@ -44,7 +44,8 @@
 //      the `anchor_apify_disabled_at` trip marker (./anchor-apify.ts), and the two telescope
 //      pointers `telescope.spotify_playlist_id` / `telescope.last_mirror`
 //      (./telescope-playlist.ts).
-//   6. JSON CACHES — `catalogue_summary_cache` and `catalogue_affinity_cache` (./catalogue.ts),
+//   6. JSON CACHES — `catalogue_summary_cache`, `catalogue_affinity_cache`, and
+//      `catalogue_rank_state_cache` (./catalogue.ts),
 //      the one shape that is not a scalar. BLESSED, and the invariant above is exactly why it
 //      is safe: both are precomputed reads whose cache is an OPTIMISATION, never the truth.
 //      The summary's six counts are maintained as ±1 deltas and a cold or unparseable row

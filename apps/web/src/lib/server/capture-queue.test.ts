@@ -215,8 +215,8 @@ afterEach(() => {
 });
 
 function lastListSql(): string {
-  const listCall = execute.mock.calls.find(
-    (c) => !(c[0] as { sql: string }).sql.includes("count(*)"),
+  const listCall = execute.mock.calls.find((c) =>
+    (c[0] as { sql: string }).sql.includes("from findings join tracks"),
   )?.[0] as { sql: string };
 
   return listCall.sql;
@@ -225,8 +225,8 @@ function lastListSql(): string {
 describe("listTracks captureQueue (the full-song capture queue)", () => {
   it("emits the status-aware + backoff clause and BINDS the cooldown cutoff (never interpolated)", async () => {
     await listTracks({ captureQueue: true, limit: 50, order: "desc" });
-    const listCall = execute.mock.calls.find(
-      (c) => !(c[0] as { sql: string }).sql.includes("count(*)"),
+    const listCall = execute.mock.calls.find((c) =>
+      (c[0] as { sql: string }).sql.includes("from findings join tracks"),
     )?.[0] as { args: unknown[]; sql: string };
 
     // pending/NULL always eligible; failed gated on the cap + the cooldown; coord required.

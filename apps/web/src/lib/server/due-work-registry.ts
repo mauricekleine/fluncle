@@ -1,7 +1,7 @@
 import { type Row } from "@libsql/client";
 
 import { parseArtistsJson } from "./artists";
-import { qualifiedArtistsDigest, rankCorpus } from "./catalogue";
+import { QUALIFIED_ARTISTS_SQL, qualifiedArtistsDigest, rankCorpus } from "./catalogue";
 import {
   DUE_WORK_KINDS,
   dueWorkEntitySourceVersion,
@@ -303,20 +303,6 @@ const VENDOR_SOURCE_SELECT = `select
   exists(select 1 from track_artists ta where ta.track_id = t.track_id) as has_artist_edge
 from tracks t
 left join findings f on f.track_id = t.track_id`;
-
-const FINDING_QUALIFIED_ARTISTS_SQL = `select distinct ta.artist_id as artist_id
-  from findings f
-  cross join track_artists ta on ta.track_id = f.track_id`;
-const WEIGHTED_QUALIFIED_ARTISTS_SQL = `select ta.artist_id as artist_id
-  from labels l
-  join tracks t on t.label_id = l.id
-  join track_artists ta on ta.track_id = t.track_id
-  where l.seed_state = 'enabled'
-  group by ta.artist_id
-  having sum(case when ta.role = 'remixer' then 0.5 else 1.0 end) >= 3`;
-const QUALIFIED_ARTISTS_SQL = `select artist_id from (${FINDING_QUALIFIED_ARTISTS_SQL})
-  union
-  select artist_id from (${WEIGHTED_QUALIFIED_ARTISTS_SQL})`;
 
 async function readCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
   const counts = await client.execute(`select
@@ -671,7 +657,7 @@ function entityDefinition<Kind extends DueWorkEntityKind>(
         const source = await config.readOne(client, marker.subjectId);
         return source === undefined
           ? null
-          : repairProjection(marker, project(source, markerContext(marker)));
+          : repairProjection(project(source, markerContext(marker)));
       },
       subjectType: config.subjectType,
       workKind: config.kind,
@@ -797,10 +783,9 @@ function markerContext(marker: DueWorkRow<string>): { generation: string; now: s
 }
 
 function repairProjection(
-  marker: DueWorkRow<string>,
   projection: DueWorkProjection<string> | null,
 ): DueWorkProjection<string> | null {
-  return projection === null ? null : { ...projection, sourceVersion: marker.sourceVersion };
+  return projection;
 }
 
 export function trackDueWorkRepairDefinitions(
@@ -811,7 +796,7 @@ export function trackDueWorkRepairDefinitions(
       const source = await readTrackDueWorkSource(client, marker.subjectId);
       return source === undefined
         ? null
-        : repairProjection(marker, projectTrackSource(entry, source, markerContext(marker)));
+        : repairProjection(projectTrackSource(entry, source, markerContext(marker)));
     },
     subjectType: "track",
     workKind: entry.workKind,
@@ -826,7 +811,7 @@ export function vendorDueWorkRepairDefinitions(
       const source = await readVendorDueWorkSource(client, entry.workKind, marker.subjectId);
       return source === undefined
         ? null
-        : repairProjection(marker, projectVendorSource(entry, source, markerContext(marker)));
+        : repairProjection(projectVendorSource(entry, source, markerContext(marker)));
     },
     subjectType: "track",
     workKind: entry.workKind,

@@ -6,6 +6,13 @@ import { validateSocialUrlForPlatform } from "./artist-resolution";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceRepairsStatement,
+} from "./due-work";
 import {
   hubCountArtistEdgeStatements,
   type HubCountDelta,
@@ -173,16 +180,31 @@ export async function fillEmptyArtistBio(
   const db = await getDb();
   const now = new Date().toISOString();
   const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
-  const result = await db.execute({
-    args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
-    sql: `update artists
-            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
-                bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
-          where slug = ?
-            and (bio is null or trim(bio) = '')`,
-  });
+  const results = await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        "artist",
+        {
+          args: [slug],
+          sql: `select id as subject_id from artists
+                where slug = ? and (bio is null or trim(bio) = '')`,
+        },
+        { producer: "artist-bio-fill" },
+      ),
+      {
+        args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
+        sql: `update artists
+                set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
+                    bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
+              where slug = ?
+                and (bio is null or trim(bio) = '')`,
+      },
+    ],
+    "write",
+  );
+  const result = results[1];
 
-  return result.rowsAffected > 0;
+  return (result?.rowsAffected ?? 0) > 0;
 }
 
 /** One row of the bio worklist: an artist with findings but no bio yet. */
@@ -209,6 +231,28 @@ export type EntityBioWorkItem = { id: string; name: string; slug: string };
  */
 export async function listArtistsMissingBio(limit: number): Promise<EntityBioWorkItem[]> {
   const db = await getDb();
+
+  if (await isDueWorkCutoverEnabled()) {
+    const page = await readPromotedDueWorkPage(db, "artist.bio", { limit });
+    if (page.subjectIds.length === 0) {
+      return [];
+    }
+
+    const result = await db.execute({
+      args: page.subjectIds,
+      sql: `select id, name, slug from artists
+            where id in (${page.subjectIds.map(() => "?").join(", ")})`,
+    });
+    const hydratedById = new Map(
+      typedRows<EntityBioWorkItem>(result.rows).map((row) => [row.id, row] as const),
+    );
+    return page.subjectIds.flatMap((id) => {
+      const row = hydratedById.get(id);
+      return row ? [row] : [];
+    });
+  }
+
+  // GOAL H: unchanged generic legacy selector retained behind the default-off cutover flag.
   const result = await db.execute({
     args: [ARTIST_INDEX_MIN_FINDINGS, limit],
     sql: `select a.id, a.name, a.slug
@@ -1033,6 +1077,27 @@ export async function linkTracksToArtistEntities(
     const followUp = [
       ...hubCountArtistEdgeStatements(newEdges),
       ...restaleCatalogueRankStatements(newEdges.map((edge) => edge.trackId)),
+      ...(newEdges.length > 0
+        ? [
+            markDueWorkSourceRepairsStatement(
+              [
+                {
+                  subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                  subjectType: "track" as const,
+                },
+                ...newEdges.map((edge) => ({
+                  subjectId: edge.trackId,
+                  subjectType: "track" as const,
+                })),
+                ...newEdges.map((edge) => ({
+                  subjectId: edge.artistId,
+                  subjectType: "artist" as const,
+                })),
+              ],
+              { producer: "artist-edge-link" },
+            ),
+          ]
+        : []),
     ];
 
     if (followUp.length > 0) {
@@ -1247,10 +1312,17 @@ export async function upsertTrackArtists(
 
         if (artistId && spotifyArtistId) {
           // Fill in the Spotify ID now that we have it.
-          await db.execute({
-            args: [spotifyArtistId, nowIso, artistId],
-            sql: `update artists set spotify_artist_id = ?, updated_at = ? where id = ? and spotify_artist_id is null`,
-          });
+          await batchDueWorkSourceMutation(
+            db,
+            [
+              {
+                args: [spotifyArtistId, nowIso, artistId],
+                sql: `update artists set spotify_artist_id = ?, updated_at = ? where id = ? and spotify_artist_id is null`,
+              },
+            ],
+            [{ subjectId: artistId, subjectType: "artist" }],
+            { onlyIfLastSourceStatementChanged: true, producer: "artist-spotify-adopt" },
+          );
         }
       }
     }
@@ -1263,14 +1335,32 @@ export async function upsertTrackArtists(
         ? `https://open.spotify.com/artist/${spotifyArtistId}`
         : null;
 
-      await db.execute({
-        args: [newId, spotifyArtistId ?? null, name, slug, spotifyUrl, nowIso, nowIso],
-        sql: `insert into artists (id, spotify_artist_id, name, slug, spotify_url, created_at, updated_at)
-              values (?, ?, ?, ?, ?, ?, ?)
-              on conflict(spotify_artist_id) do update set
-                name = excluded.name,
-                updated_at = excluded.updated_at`,
-      });
+      await db.batch(
+        [
+          {
+            args: [newId, spotifyArtistId ?? null, name, slug, spotifyUrl, nowIso, nowIso],
+            sql: `insert into artists (id, spotify_artist_id, name, slug, spotify_url, created_at, updated_at)
+                  values (?, ?, ?, ?, ?, ?, ?)
+                  on conflict(spotify_artist_id) do update set
+                    name = excluded.name,
+                    updated_at = excluded.updated_at`,
+          },
+          markDueWorkSourceRepairsFromSelectStatement(
+            "artist",
+            spotifyArtistId
+              ? {
+                  args: [spotifyArtistId],
+                  sql: `select id as subject_id from artists where spotify_artist_id = ? limit 1`,
+                }
+              : {
+                  args: [newId],
+                  sql: `select id as subject_id from artists where id = ? limit 1`,
+                },
+            { producer: "artist-mint" },
+          ),
+        ],
+        "write",
+      );
 
       // Re-fetch the id in case of a concurrent insert that triggered the ON CONFLICT.
       const fresh = await db.execute({
@@ -1305,6 +1395,21 @@ export async function upsertTrackArtists(
                   position = excluded.position`,
         },
         ...(isNewEdge && edgeDelta ? [hubCountDeltaStatement("artists", artistId, edgeDelta)] : []),
+        ...(isNewEdge
+          ? [
+              markDueWorkSourceRepairsStatement(
+                [
+                  { subjectId: trackId, subjectType: "track" },
+                  {
+                    subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                    subjectType: "track",
+                  },
+                  { subjectId: artistId, subjectType: "artist" },
+                ],
+                { producer: "artist-edge-upsert" },
+              ),
+            ]
+          : []),
       ],
       "write",
     );
@@ -1316,9 +1421,15 @@ export async function upsertTrackArtists(
   // helper's SQL is `is_catalogue = 1`-guarded, and the flag check skips the write for a certified
   // (finding) track, which carries no rank corpus.
   if (anyNewEdge && catalogueFlag !== undefined && Number(catalogueFlag.is_catalogue) === 1) {
-    for (const statement of restaleCatalogueRankStatements([trackId])) {
-      await db.execute(statement);
-    }
+    await batchDueWorkSourceMutation(
+      db,
+      restaleCatalogueRankStatements([trackId]),
+      [
+        { subjectId: trackId, subjectType: "track" },
+        { subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" },
+      ],
+      { producer: "artist-edge-rank-restale" },
+    );
   }
 
   // Fill the canonical Spotify avatar for any of this track's artists that lacks one
@@ -1368,11 +1479,18 @@ export async function mintArtistByMbid(name: string, mbid: string): Promise<stri
     const nowIso = new Date().toISOString();
 
     try {
-      await db.execute({
-        args: [newId, mbid, name, slug, nowIso, nowIso],
-        sql: `insert into artists (id, mbid, name, slug, created_at, updated_at)
-              values (?, ?, ?, ?, ?, ?)`,
-      });
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [newId, mbid, name, slug, nowIso, nowIso],
+            sql: `insert into artists (id, mbid, name, slug, created_at, updated_at)
+                  values (?, ?, ?, ?, ?, ?)`,
+          },
+        ],
+        [{ subjectId: newId, subjectType: "artist" }],
+        { producer: "artist-mbid-mint" },
+      );
 
       return newId;
     } catch (error) {
@@ -1461,10 +1579,17 @@ export async function fillMissingArtistImages(spotifyArtistIds: string[]): Promi
       continue;
     }
 
-    await db.execute({
-      args: [url, nowIso, row.id],
-      sql: `update artists set image_url = ?, updated_at = ? where id = ? and image_url is null`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [url, nowIso, row.id],
+          sql: `update artists set image_url = ?, updated_at = ? where id = ? and image_url is null`,
+        },
+      ],
+      [{ subjectId: row.id, subjectType: "artist" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "artist-image-fill" },
+    );
     filled += 1;
   }
 

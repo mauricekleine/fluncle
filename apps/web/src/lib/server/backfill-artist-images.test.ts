@@ -10,8 +10,23 @@ const fetchArtistImages = vi.fn();
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
 
-  return { ...actual, getDb: async () => ({ execute }) };
+  return {
+    ...actual,
+    getDb: async () => ({
+      batch: (statements: { args?: unknown[]; sql: string }[]) =>
+        Promise.all(
+          statements.map((statement) =>
+            statement.sql.includes("insert into due_work")
+              ? Promise.resolve({ rows: [], rowsAffected: 1 })
+              : execute(statement),
+          ),
+        ),
+      execute,
+    }),
+  };
 });
+
+vi.mock("./due-work-cutover", () => ({ isDueWorkCutoverEnabled: async () => false }));
 
 vi.mock("./spotify", () => ({ fetchArtistImages }));
 

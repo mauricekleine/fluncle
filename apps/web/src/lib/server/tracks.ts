@@ -16,7 +16,10 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import { countDueWorkNow } from "./due-work";
 import { discogsReleaseUrl } from "./discogs";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { readKeyHistogram } from "./key-histogram";
 import { logEvent } from "./log";
@@ -2576,6 +2579,15 @@ export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
   "queue",
 ];
 
+type FindingDueWorkKind =
+  | "finding.context"
+  | "finding.context.retry-empty"
+  | "finding.enrich"
+  | "finding.note"
+  | "finding.observe"
+  | "finding.render"
+  | "finding.render.requires-observation";
+
 type ListTracksOptions = {
   /**
    * Read the BOARD list projection (renders + findings efficiency batch) — the lean drop
@@ -2813,6 +2825,104 @@ export async function listTracks({
     : lean
       ? toLeanTrackListItem
       : toTrackListItem;
+
+  const projectedDueWorkKind: FindingDueWorkKind | undefined =
+    order !== "asc" ||
+    captureQueue ||
+    includeMixtapes ||
+    since !== undefined ||
+    until !== undefined ||
+    hasEmbedding !== undefined ||
+    hasKey !== undefined
+      ? undefined
+      : status === "queue" &&
+          hasContext === undefined &&
+          hasNote === undefined &&
+          hasObservation === undefined &&
+          hasVideo === undefined
+        ? "finding.enrich"
+        : status === undefined &&
+            hasContext === false &&
+            hasNote === undefined &&
+            hasObservation === undefined &&
+            hasVideo === undefined
+          ? retryEmptyContext
+            ? "finding.context.retry-empty"
+            : "finding.context"
+          : status === undefined &&
+              hasContext === true &&
+              hasNote === false &&
+              hasObservation === undefined &&
+              hasVideo === undefined
+            ? "finding.note"
+            : status === undefined &&
+                hasContext === true &&
+                hasNote === undefined &&
+                hasObservation === false &&
+                hasVideo === undefined
+              ? "finding.observe"
+              : status === undefined &&
+                  hasContext === true &&
+                  hasNote === undefined &&
+                  (hasObservation === undefined || hasObservation === true) &&
+                  hasVideo === false
+                ? hasObservation === true
+                  ? "finding.render.requires-observation"
+                  : "finding.render"
+                : undefined;
+
+  if (projectedDueWorkKind && (await isDueWorkCutoverEnabled())) {
+    const continuation = cursor
+      ? {
+          sortKey: encodeDueWorkOrder([
+            { direction: "asc", kind: "timestamp", nulls: "first", value: cursor.addedAt },
+            { direction: "asc", kind: "text", value: cursor.trackId },
+          ]),
+          subjectId: cursor.trackId,
+        }
+      : undefined;
+    const page = await readPromotedDueWorkPage(db, projectedDueWorkKind, {
+      continuation,
+      limit,
+    });
+
+    if (page.subjectIds.length === 0) {
+      return { nextCursor: undefined, totalCount: 0, tracks: [] };
+    }
+
+    const placeholders = page.subjectIds.map(() => "?").join(", ");
+    const result = await db.execute({
+      args: page.subjectIds,
+      sql: `select ${trackSelect}
+            from ${FINDINGS_FROM}
+            where tracks.track_id in (${placeholders})`,
+    });
+    const hydratedById = new Map(
+      typedRows<TrackRow>(result.rows).map((row) => [row.track_id, row] as const),
+    );
+    const hydratedRows = page.subjectIds.flatMap((subjectId) => {
+      const row = hydratedById.get(subjectId);
+      return row ? [row] : [];
+    });
+    const lastVisibleRow = hydratedRows.at(-1);
+
+    return {
+      nextCursor:
+        page.hasMore && lastVisibleRow
+          ? encodeTrackCursor({
+              addedAt: lastVisibleRow.added_at,
+              trackId: lastVisibleRow.track_id,
+            })
+          : undefined,
+      totalCount: countTotal
+        ? await countDueWorkNow(db, projectedDueWorkKind)
+        : hydratedRows.length,
+      tracks: hydratedRows.map(mapRow),
+    };
+  }
+
+  // GOAL H: keep this generic legacy selector intact until the default-off cutover is proven.
+  // Descending UI probes and filter combinations that are not queue modes stay on this branch.
 
   // Discovery-window and video filters; totalCount is scoped to the same
   // filters so a windowed caller (the newsletter agent) or the Stories feed

@@ -52,6 +52,11 @@ import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceRepairsStatement,
+} from "../src/lib/server/due-work";
 
 export type HasEmbeddingBackfillResult = {
   /** How many rows this run reconciled against their vector, in either direction. */
@@ -66,12 +71,32 @@ const HAS_VECTOR = `exists (select 1 from track_embeddings te where te.track_id 
  * the real migrations applied (the `backfillIsCatalogue` precedent).
  */
 export async function backfillHasEmbedding(client: Client): Promise<HasEmbeddingBackfillResult> {
-  const result = await client.execute({
-    sql: `update tracks set has_embedding = ${HAS_VECTOR}
-          where has_embedding <> ${HAS_VECTOR}`,
-  });
+  const [, result] = await client.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        "track",
+        {
+          sql: `select track_id as subject_id from tracks
+                where has_embedding <> ${HAS_VECTOR}`,
+        },
+        { producer: "backfill-has-embedding-subjects" },
+      ),
+      {
+        sql: `update tracks set has_embedding = ${HAS_VECTOR}
+              where has_embedding <> ${HAS_VECTOR}`,
+      },
+      markDueWorkSourceRepairsStatement(
+        [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }],
+        {
+          onlyIfPreviousStatementChanged: true,
+          producer: "backfill-has-embedding-rank-corpus",
+        },
+      ),
+    ],
+    "write",
+  );
 
-  return { flipped: result.rowsAffected };
+  return { flipped: result?.rowsAffected ?? 0 };
 }
 
 async function main(): Promise<void> {

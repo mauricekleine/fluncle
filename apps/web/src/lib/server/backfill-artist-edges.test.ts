@@ -24,6 +24,10 @@ vi.mock("./db", async () => {
 });
 
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
+vi.mock("./due-work-cutover", () => ({
+  isDueWorkCutoverEnabled: async () => false,
+  readPromotedDueWorkPage: vi.fn(),
+}));
 
 const { buildArtistFoldMap, buildIdentityClaimedNames, matchTrackNames, resolveArtistEdges } =
   await import("./backfill-artist-edges");

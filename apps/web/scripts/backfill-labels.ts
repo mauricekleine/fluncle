@@ -41,6 +41,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
+import { restaleCatalogueRankByLabelStatement } from "../src/lib/server/catalogue-rank-restale";
+import {
+  batchDueWorkSourceMutation,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceRepairsStatement,
+} from "../src/lib/server/due-work";
 
 /** The once-ever marker: present ⇒ the D7 bootstrap has already run. */
 const SEED_MARKER_KEY = "labels_seeded_at";
@@ -187,8 +194,17 @@ export async function linkTracksToLabels(
 
     const certified = Number(census.rows[0]?.cert ?? 0);
     // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
-    const [updated] = await client.batch(
+    const [, updated] = await client.batch(
       [
+        markDueWorkSourceRepairsFromSelectStatement(
+          "track",
+          {
+            args: [raw],
+            sql: `select track_id as subject_id from tracks
+                  where label_id is null and trim(label) = ?`,
+          },
+          { producer: "backfill-label-link" },
+        ),
         {
           args: [labelId, raw],
           sql: `update tracks set label_id = ? where label_id is null and trim(label) = ?`,
@@ -257,14 +273,22 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
   }
 
   for (const [slug, name] of bySlug) {
-    const inserted = await client.execute({
-      args: [`lbl_${randomUUID()}`, name, slug, now, now],
-      sql: `insert into labels (id, name, slug, created_at, updated_at)
-            values (?, ?, ?, ?, ?)
-            on conflict (slug) do nothing`,
-    });
+    const labelId = `lbl_${randomUUID()}`;
+    const [inserted] = await batchDueWorkSourceMutation(
+      client,
+      [
+        {
+          args: [labelId, name, slug, now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
+                on conflict (slug) do nothing`,
+        },
+      ],
+      [{ subjectId: labelId, subjectType: "label" }],
+      { onlyIfLastSourceStatementChanged: true, producer: "backfill-label-mint" },
+    );
 
-    result.minted += inserted.rowsAffected;
+    result.minted += inserted?.rowsAffected ?? 0;
   }
 
   // ── 1b. LINK (every deploy) — the `tracks.label_id` pointer for every track whose label
@@ -314,11 +338,37 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
         ? "undecided"
         : "enabled";
 
-    await client.execute({
-      // `ruled_at` stays NULL: this is the machine's bootstrap, not a human's ruling.
-      args: [state, now, asText(row.id)],
-      sql: `update labels set seed_state = ?, updated_at = ? where id = ? and ruled_at is null`,
-    });
+    const labelId = asText(row.id);
+    await client.batch(
+      [
+        {
+          // `ruled_at` stays NULL: this is the machine's bootstrap, not a human's ruling.
+          args: [state, now, labelId],
+          sql: `update labels set seed_state = ?, updated_at = ?
+                where id = ? and ruled_at is null`,
+        },
+        markDueWorkSourceRepairsStatement(
+          [
+            { subjectId: labelId, subjectType: "label" },
+            {
+              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+              subjectType: "track",
+            },
+          ],
+          { onlyIfPreviousStatementChanged: true, producer: "backfill-label-seed" },
+        ),
+        restaleCatalogueRankByLabelStatement(labelId),
+        markDueWorkSourceRepairsFromSelectStatement(
+          "track",
+          {
+            args: [labelId],
+            sql: `select track_id as subject_id from tracks where label_id = ?`,
+          },
+          { producer: "backfill-label-seed" },
+        ),
+      ],
+      "write",
+    );
 
     result[state] += 1;
   }

@@ -26,6 +26,11 @@ import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl } from "../media";
 import { bioBypassColumns } from "./bio-review";
 import { getDb, typedRows } from "./db";
+import {
+  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceRepairsStatement,
+} from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { relinkTracksToEntity } from "./hub-counts";
 import {
   type CatalogueBrowsePage,
@@ -168,13 +173,23 @@ export async function ensureAlbum(
   }
 
   const now = new Date().toISOString();
+  const albumId = `alb_${randomUUID()}`;
 
-  await db.execute({
-    args: [`alb_${randomUUID()}`, raw.trim(), slug, mbid, now, now],
-    sql: `insert into albums (id, name, slug, release_group_mbid, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?)
-          on conflict (slug) do nothing`,
-  });
+  await db.batch(
+    [
+      {
+        args: [albumId, raw.trim(), slug, mbid, now, now],
+        sql: `insert into albums (id, name, slug, release_group_mbid, created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?)
+              on conflict (slug) do nothing`,
+      },
+      markDueWorkSourceRepairsStatement([{ subjectId: albumId, subjectType: "album" }], {
+        onlyIfPreviousStatementChanged: true,
+        producer: "album-mint",
+      }),
+    ],
+    "write",
+  );
 
   const result = await db.execute({
     args: [slug],
@@ -397,16 +412,30 @@ export async function fillEmptyAlbumBio(
   const db = await getDb();
   const now = new Date().toISOString();
   const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
-  const result = await db.execute({
-    args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
-    sql: `update albums
-            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
-                bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
-          where slug = ?
-            and (bio is null or trim(bio) = '')`,
-  });
+  const [, result] = await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        "album",
+        {
+          args: [slug],
+          sql: `select id as subject_id from albums
+                where slug = ? and (bio is null or trim(bio) = '')`,
+        },
+        { producer: "album-bio-fill" },
+      ),
+      {
+        args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
+        sql: `update albums
+                set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
+                    bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
+              where slug = ?
+                and (bio is null or trim(bio) = '')`,
+      },
+    ],
+    "write",
+  );
 
-  return result.rowsAffected > 0;
+  return (result?.rowsAffected ?? 0) > 0;
 }
 
 /** One row of the bio worklist: an album with findings but no bio yet. */
@@ -432,6 +461,28 @@ export type AlbumBioWorkItem = { id: string; name: string; slug: string };
  */
 export async function listAlbumsMissingBio(limit: number): Promise<AlbumBioWorkItem[]> {
   const db = await getDb();
+
+  if (await isDueWorkCutoverEnabled()) {
+    const page = await readPromotedDueWorkPage(db, "album.bio", { limit });
+    if (page.subjectIds.length === 0) {
+      return [];
+    }
+
+    const result = await db.execute({
+      args: page.subjectIds,
+      sql: `select id, name, slug from albums
+            where id in (${page.subjectIds.map(() => "?").join(", ")})`,
+    });
+    const hydratedById = new Map(
+      typedRows<AlbumBioWorkItem>(result.rows).map((row) => [row.id, row] as const),
+    );
+    return page.subjectIds.flatMap((id) => {
+      const row = hydratedById.get(id);
+      return row ? [row] : [];
+    });
+  }
+
+  // GOAL H: unchanged generic legacy selector retained behind the default-off cutover flag.
   const result = await db.execute({
     args: [ALBUM_INDEX_MIN_TRACKS, limit],
     sql: `select a.id, a.name, a.slug
