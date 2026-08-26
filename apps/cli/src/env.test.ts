@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,13 +19,18 @@ const envModule = new URL("./env.ts", import.meta.url).pathname;
 async function fakeHomeWithProfile(): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "fluncle-env-rail-"));
 
-  await mkdir(join(home, ".config/fluncle"), { recursive: true });
-  await writeFile(
-    join(home, ".config/fluncle/.env.production"),
-    "FLUNCLE_API_TOKEN=synthetic-token-for-this-test\n",
-  );
+  try {
+    await mkdir(join(home, ".config/fluncle"), { recursive: true });
+    await writeFile(
+      join(home, ".config/fluncle/.env.production"),
+      "FLUNCLE_API_TOKEN=synthetic-token-for-this-test\n",
+    );
 
-  return home;
+    return home;
+  } catch (error) {
+    await rm(home, { force: true, recursive: true });
+    throw error;
+  }
 }
 
 async function readTokenAfterLoad(home: string, nodeEnv: string | undefined): Promise<string> {
@@ -63,12 +68,20 @@ describe("the credential rail on the CLI's env profile", () => {
   test("does NOT read the operator's profile when NODE_ENV is test", async () => {
     const home = await fakeHomeWithProfile();
 
-    expect(await readTokenAfterLoad(home, "test")).toBe("MISSING");
+    try {
+      expect(await readTokenAfterLoad(home, "test")).toBe("MISSING");
+    } finally {
+      await rm(home, { force: true, recursive: true });
+    }
   });
 
   test("still reads the profile for a real run, so nothing changes outside tests", async () => {
     const home = await fakeHomeWithProfile();
 
-    expect(await readTokenAfterLoad(home, undefined)).toBe("synthetic-token-for-this-test");
+    try {
+      expect(await readTokenAfterLoad(home, undefined)).toBe("synthetic-token-for-this-test");
+    } finally {
+      await rm(home, { force: true, recursive: true });
+    }
   });
 });

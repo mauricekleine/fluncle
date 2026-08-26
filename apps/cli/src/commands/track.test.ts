@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as realApi from "../api";
@@ -242,10 +242,10 @@ describe("trackVideoCommand bundle guard", () => {
     // Real files on disk: small artifacts are BUFFERED before the PUT (the 2026-07-14
     // render-box hardening), so the upload now reads the path eagerly.
     const dir = await mkdtemp(join(tmpdir(), "fluncle-plates-"));
-    await Bun.write(join(dir, "plate.png"), "png-bytes");
-    await Bun.write(join(dir, "plate.background.png"), "png-bytes");
 
     try {
+      await Bun.write(join(dir, "plate.png"), "png-bytes");
+      await Bun.write(join(dir, "plate.background.png"), "png-bytes");
       const result = await trackVideoCommand("032.0.4L", {
         plate: join(dir, "plate.png"),
         plateBackground: join(dir, "plate.background.png"),
@@ -268,6 +268,7 @@ describe("trackVideoCommand bundle guard", () => {
       adminApiPostImpl = async () => {
         throw new Error("PRESIGN_REACHED");
       };
+      await rm(dir, { force: true, recursive: true });
     }
   });
 });

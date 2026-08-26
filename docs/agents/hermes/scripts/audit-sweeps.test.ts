@@ -6,9 +6,9 @@
 //
 //   bun test docs/agents/hermes/scripts/audit-sweeps.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,13 @@ const AUDIT = join(import.meta.dir, "audit-sweep.sh");
 const REVIEW = join(import.meta.dir, "audit-review-sweep.sh");
 const AGENT_ENV = join(import.meta.dir, "agent-env.sh");
 const CRON_OUTPUT = join(import.meta.dir, "cron-output.sh");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 type Fixture = {
   bin: string;
@@ -32,6 +39,7 @@ function executable(path: string, body: string): void {
 
 function fixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), "fluncle-audit-summary-"));
+  temporaryDirectories.push(root);
   const scripts = join(root, "scripts");
   const bin = join(root, "bin");
   const ws = join(root, "workspace");
