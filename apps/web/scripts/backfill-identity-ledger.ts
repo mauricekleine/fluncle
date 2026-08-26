@@ -43,7 +43,7 @@ import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { markDueWorkSourceRepairsFromSelectStatement } from "../src/lib/server/due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type IdentityLedgerBackfillResult = {
   /** Rows given a Discogs attempt record because they already carry a Discogs id. */
@@ -64,9 +64,9 @@ export async function backfillIdentityLedger(
 ): Promise<IdentityLedgerBackfillResult> {
   // A non-empty ISRC is proof an ISRC path concluded for this row. `findings.added_at` is a PK
   // lookup on the certification half; a catalogue row has no finding, so `coalesce` falls to now.
-  const [, isrc] = await client.batch(
+  const isrcResults = await client.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "track",
         {
           sql: `select track_id as subject_id from tracks
@@ -88,9 +88,9 @@ export async function backfillIdentityLedger(
 
   // Same argument for Discogs: an id present means the look landed, so the row is both attempted
   // AND done. `attempts` goes to 1 — a floor, and the only count history can support.
-  const [, discogs] = await client.batch(
+  const discogsResults = await client.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "track",
         {
           sql: `select track_id as subject_id from tracks
@@ -155,8 +155,8 @@ export async function backfillIdentityLedger(
   });
 
   return {
-    discogsStamped: discogs?.rowsAffected ?? 0,
-    isrcStamped: isrc?.rowsAffected ?? 0,
+    discogsStamped: discogsResults.at(-1)?.rowsAffected ?? 0,
+    isrcStamped: isrcResults.at(-1)?.rowsAffected ?? 0,
     publishAnchorsStamped: publishAnchors.rowsAffected,
   };
 }

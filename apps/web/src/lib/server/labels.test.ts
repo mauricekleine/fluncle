@@ -301,6 +301,24 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
 
     expect(ruled.seedState).toBe("disabled");
     expect(ruled.ruledAt).not.toBeNull();
+    expect(
+      (
+        await db.execute(`select source_type, source_id from crawl_projection_repairs
+          order by source_type, source_id`)
+      ).rows,
+    ).toEqual([{ source_id: label.slug, source_type: "label" }]);
+    expect(
+      (
+        await db.execute(`select projection, subject_type, subject_id from projection_repairs
+          where subject_type = 'label'`)
+      ).rows,
+    ).toEqual([
+      {
+        projection: "artist_qualification",
+        subject_id: label.id,
+        subject_type: "label",
+      },
+    ]);
   });
 
   it("stamps the label-scope watermark when the operator enables a label", async () => {
@@ -1067,6 +1085,11 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
       labelId: "lbl_loser",
       status: "confirmed",
     });
+    await insertArtistRule({
+      artistMbid: "artist-loser",
+      id: "rule-loser",
+      labelId: "lbl_loser",
+    });
 
     const result = await mergeLabel("medschool", "med-school");
 
@@ -1096,6 +1119,17 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     // The loser row is gone; the moved alias survives on the canonical.
     expect(await labelSlugs()).toEqual(["med-school", "sub-imprint"]);
     expect(await getConfirmedAliasNames("lbl_canon")).toContain("Med-School");
+    expect(result.droppedRules).toBe(1);
+    expect(
+      (
+        await db.execute(`select source_type, source_id from crawl_projection_repairs
+          order by source_type, source_id`)
+      ).rows,
+    ).toEqual([
+      { source_id: "artist-loser", source_type: "artist" },
+      { source_id: "med-school", source_type: "label" },
+      { source_id: "medschool", source_type: "label" },
+    ]);
   });
 
   it("resolves seed_state by ruled_at precedence — the more recent ruling wins", async () => {

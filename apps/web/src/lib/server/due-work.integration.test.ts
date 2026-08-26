@@ -8,6 +8,7 @@ import {
   claimDueWork,
   compareDueWorkRows,
   deleteDueWork,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DUE_WORK_LIVE_GENERATION,
   DUE_WORK_SOURCE_REPAIR_KIND,
   hasReadyDueWork,
@@ -221,6 +222,82 @@ describe("due-work repair and drift", () => {
     expect(source.rows).toEqual([]);
   });
 
+  it("rolls back source, legacy marker, and epochs when a public repair marker cannot commit", async () => {
+    await db.execute(`create table projection_source_probe (id text primary key)`);
+    await db.execute(`create trigger reject_public_repair before insert on projection_repairs
+      begin
+        select raise(abort, 'public marker rejected');
+      end`);
+
+    await expect(
+      batchDueWorkSourceMutation(
+        db,
+        [{ args: ["source-1"], sql: `insert into projection_source_probe (id) values (?)` }],
+        [{ subjectId: "source-1", subjectType: "track" }],
+        { markerVersion: "source-v1", now: T0, producer: "test-source-writer" },
+      ),
+    ).rejects.toThrow("public marker rejected");
+
+    expect((await db.execute(`select id from projection_source_probe`)).rows).toEqual([]);
+    expect((await db.execute(`select subject_id from due_work`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
+  });
+
+  it("uses one source version and timestamp on both maintenance rails", async () => {
+    await db.execute(`create table committed_source_probe (id text primary key)`);
+    await batchDueWorkSourceMutation(
+      db,
+      [{ args: ["source-1"], sql: `insert into committed_source_probe (id) values (?)` }],
+      [{ subjectId: "source-1", subjectType: "track" }],
+      { markerVersion: "stable-v1", now: T0, producer: "test-source-writer" },
+    );
+
+    expect(
+      (
+        await db.execute(`select source_version, updated_at from due_work
+          where work_kind = 'source-repair' and subject_id = 'source-1'`)
+      ).rows,
+    ).toEqual([{ source_version: "stable-v1", updated_at: T0.toISOString() }]);
+    expect(
+      (
+        await db.execute(`select projection, source_version, updated_at from projection_repairs
+          where subject_type = 'track' and subject_id = 'source-1' order by projection`)
+      ).rows,
+    ).toEqual([
+      {
+        projection: "artist_qualification",
+        source_version: "stable-v1",
+        updated_at: T0.toISOString(),
+      },
+      {
+        projection: "public_aggregates",
+        source_version: "stable-v1",
+        updated_at: T0.toISOString(),
+      },
+    ]);
+  });
+
+  it("does not treat the catalogue-rank corpus marker as a physical track", async () => {
+    await db.execute(`create table synthetic_source_probe (id text primary key)`);
+    await batchDueWorkSourceMutation(
+      db,
+      [{ args: ["source-1"], sql: `insert into synthetic_source_probe (id) values (?)` }],
+      [
+        {
+          subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+          subjectType: "track",
+        },
+      ],
+      { markerVersion: "synthetic-v1", now: T0, producer: "test-source-writer" },
+    );
+
+    expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
+    expect((await db.execute(`select subject_id from due_work`)).rows).toEqual([
+      { subject_id: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID },
+    ]);
+  });
+
   it("does not create a marker when a guarded source mutation changes no row", async () => {
     await db.execute(
       `create table guarded_source_probe (id text primary key, value text not null)`,
@@ -249,6 +326,9 @@ describe("due-work repair and drift", () => {
       sql: `select subject_id from due_work where work_kind = ?`,
     });
     expect(markers.rows).toEqual([]);
+    expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
   });
 
   it("keeps one idempotent source marker per subject and preserves a concurrent rewrite", async () => {

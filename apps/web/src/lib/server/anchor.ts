@@ -84,7 +84,7 @@ import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artis
 import { getDb, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
-  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
 } from "./due-work";
 import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
 import { FILL_ISRC_SQL } from "./isrc";
@@ -1370,7 +1370,7 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
   };
   const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement("track", source, {
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
         producer: "anchor-requeue",
       }),
       {
@@ -1385,7 +1385,7 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
     ],
     "write",
   );
-  const result = results[1];
+  const result = results.at(-1);
 
   return result?.rowsAffected ?? 0;
 }

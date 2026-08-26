@@ -47,7 +47,7 @@
 import { getDb, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
-  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
@@ -204,7 +204,7 @@ async function stripCrawlerPrefixes(): Promise<number> {
   };
   const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement("track", source, {
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
         producer: "recording-mbid-prefix-strip",
       }),
       {
@@ -228,7 +228,7 @@ async function stripCrawlerPrefixes(): Promise<number> {
     ],
     "write",
   );
-  const result = results[1];
+  const result = results.at(-1);
 
   return result?.rowsAffected ?? 0;
 }

@@ -27,7 +27,7 @@
 // read negative, whatever a lost race did.
 
 import { getDb, typedRows } from "./db";
-import { markDueWorkSourceRepairsStatement } from "./due-work";
+import { markDueWorkSourceMaintenanceStatements } from "./due-work";
 
 /** The three entity tables that carry the maintained pair. */
 export type HubCountEntity = "albums" | "artists" | "labels";
@@ -281,7 +281,7 @@ export async function relinkTracksToEntity(
               where track_id in (${placeholders})`,
       },
       ...hubCountMoveStatements(entity, entityId, groups),
-      markDueWorkSourceRepairsStatement(
+      ...markDueWorkSourceMaintenanceStatements(
         [
           ...trackIds.map((trackId) => ({ subjectId: trackId, subjectType: "track" as const })),
           ...[...new Set([entityId, ...groups.flatMap((group) => group.fromId ?? [])])].map(

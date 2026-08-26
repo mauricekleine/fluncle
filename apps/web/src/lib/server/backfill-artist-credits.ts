@@ -54,7 +54,7 @@ import { getDb, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
@@ -372,7 +372,7 @@ async function insertEdges(
       // The worklist selects edge-less tracks, so this track just gained its artist graph — re-stale
       // the catalogue row for the next `rank_catalogue` tick, atomically (catalogue-rank-restale.ts).
       ...restaleCatalogueRankStatements([trackId]),
-      markDueWorkSourceRepairsStatement(
+      ...markDueWorkSourceMaintenanceStatements(
         [
           { subjectId: trackId, subjectType: "track" },
           {

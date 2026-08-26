@@ -1,6 +1,10 @@
 import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 
 import { getDb } from "./db";
+import {
+  markPublicProjectionSourceChangedFromSelectStatements,
+  markPublicProjectionSourceChangedStatements,
+} from "./public-projection-source-maintenance";
 
 export const DUE_WORK_LIVE_GENERATION = "live";
 export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus";
@@ -500,6 +504,70 @@ export function markDueWorkSourceRepairsFromSelectStatement(
   };
 }
 
+/**
+ * Append the legacy due-work marker and every public shadow marker with one race token and time.
+ * The returned statements belong immediately after the bounded source statement they describe.
+ */
+export function markDueWorkSourceMaintenanceStatements(
+  subjects: readonly DueWorkSourceSubject[],
+  options: {
+    markerVersion?: string;
+    now?: Date | string;
+    onlyIfPreviousStatementChanged?: boolean;
+    producer: string;
+  },
+): DueWorkStatement[] {
+  const updatedAt = iso(options.now ?? new Date(), "updated time");
+  assertNonEmpty(options.producer, "due-work producer");
+  const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
+  assertNonEmpty(markerVersion, "source repair marker version");
+  return [
+    markDueWorkSourceRepairsStatement(subjects, {
+      markerVersion,
+      now: updatedAt,
+      onlyIfPreviousStatementChanged: options.onlyIfPreviousStatementChanged,
+      producer: options.producer,
+    }),
+    ...markPublicProjectionSourceChangedStatements(subjects, markerVersion, {
+      now: updatedAt,
+      onlyIfPreviousStatementChanged: true,
+    }),
+  ];
+}
+
+/** Build both maintenance rails from one bounded producer-owned `subject_id` selection. */
+export function markDueWorkSourceMaintenanceFromSelectStatements(
+  subjectType: DueWorkSubjectType,
+  selection: DueWorkPositionalStatement,
+  options: {
+    markerVersion?: string;
+    now?: Date | string;
+    onlyIfPreviousStatementChanged?: boolean;
+    producer: string;
+  },
+): DueWorkStatement[] {
+  const updatedAt = iso(options.now ?? new Date(), "updated time");
+  assertNonEmpty(options.producer, "due-work producer");
+  const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
+  assertNonEmpty(markerVersion, "source repair marker version");
+  return [
+    markDueWorkSourceRepairsFromSelectStatement(subjectType, selection, {
+      markerVersion,
+      now: updatedAt,
+      producer: options.producer,
+    }),
+    ...markPublicProjectionSourceChangedFromSelectStatements(
+      subjectType,
+      selection,
+      markerVersion,
+      {
+        now: updatedAt,
+        onlyIfPreviousStatementChanged: options.onlyIfPreviousStatementChanged,
+      },
+    ),
+  ];
+}
+
 /** Execute a bounded source mutation and its repair marker in one libSQL write transaction. */
 export async function batchDueWorkSourceMutation(
   client: DueWorkClient,
@@ -512,24 +580,23 @@ export async function batchDueWorkSourceMutation(
     producer: string;
   },
 ): Promise<ResultSet[]> {
-  if (statements.length === 0 || statements.length >= MAX_DUE_WORK_CHUNK_SIZE) {
+  if (statements.length === 0) {
+    throw new Error("due-work source mutation batches must contain at least one source statement");
+  }
+
+  const maintenance = markDueWorkSourceMaintenanceStatements(subjects, {
+    markerVersion: options.markerVersion,
+    now: options.now,
+    onlyIfPreviousStatementChanged: options.onlyIfLastSourceStatementChanged,
+    producer: options.producer,
+  });
+  if (statements.length + maintenance.length > MAX_DUE_WORK_CHUNK_SIZE) {
     throw new Error(
-      `due-work source mutation batches must contain 1 through ${MAX_DUE_WORK_CHUNK_SIZE - 1} source statements`,
+      `due-work source mutation batches may contain at most ${MAX_DUE_WORK_CHUNK_SIZE - maintenance.length} source statements for their maintenance shape`,
     );
   }
 
-  return client.batch(
-    [
-      ...statements,
-      markDueWorkSourceRepairsStatement(subjects, {
-        markerVersion: options.markerVersion,
-        now: options.now,
-        onlyIfPreviousStatementChanged: options.onlyIfLastSourceStatementChanged,
-        producer: options.producer,
-      }),
-    ],
-    "write",
-  );
+  return client.batch([...statements, ...maintenance], "write");
 }
 
 export async function listReadyDueWork<WorkKind extends string>(

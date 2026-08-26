@@ -27,6 +27,7 @@ export function isYoutubeVerification(value: unknown): value is YoutubeVerificat
 
 import { isLogId } from "../log-id";
 import { parseArtistsJson } from "./artists";
+import { insertCurrentSonarTrackArtifactChangeInTransaction } from "./artifact-changes";
 import { getDb, typedRow } from "./db";
 import { purgeLogCache } from "./edge-cache";
 import {
@@ -42,7 +43,7 @@ import { hasIsrc } from "./isrc";
 import { resolveLogId } from "./log-id";
 import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { ApiError } from "./spotify";
 import { checkYoutubeOfficial } from "./youtube-official";
@@ -1128,16 +1129,17 @@ export async function updateTrack(
     findingArgs.push(new Date().toISOString());
   }
 
-  // At most three statements, each fired only when its half actually has something to write.
-  // They are issued as one libSQL BATCH, so a partial write is impossible: they move together
-  // or not at all (the transactional guarantee of a single UPDATE). `write` batches are
-  // transactional in libSQL.
+  // Source statements come first, each fired only when its half actually has something to write;
+  // the due/public maintenance statements follow in the same fixed list so every changes()-based
+  // marker still reads the immediately preceding result. Non-embedding updates issue this list as
+  // one transactional libSQL write batch. Embedding updates issue the same list as a batch
+  // inside the explicit write transaction that appends the Sonar event below.
   //
-  // THE VECTOR STATEMENT COMES LAST, and that ordering is load-bearing rather than tidy: the
-  // clearing arm's DELETE is driven by the `has_embedding = 0` the `tracks` update just wrote
-  // (embedding.ts § CLEAR_EMBEDDING_SATELLITE_SQL), so it must not run first. A track with a
-  // vector but no mirror — or a mirror with no vector — is silent corruption of the ranking, so
-  // the pair never leaves this batch.
+  // THE VECTOR STATEMENT COMES AFTER THE TRACK UPDATE, and that ordering is load-bearing rather
+  // than tidy: the clearing arm's DELETE is driven by the `has_embedding = 0` the `tracks` update
+  // just wrote (embedding.ts § CLEAR_EMBEDDING_SATELLITE_SQL), so it must not run first. A track
+  // with a vector but no mirror — or a mirror with no vector — is silent corruption of the
+  // ranking, so the pair never leaves this list or its transaction.
   const statements = [
     ...(sets.length > 0
       ? [
@@ -1166,7 +1168,7 @@ export async function updateTrack(
         ]
       : []),
     ...(embeddingStatement ? [embeddingStatement] : []),
-    markDueWorkSourceRepairsStatement(
+    ...markDueWorkSourceMaintenanceStatements(
       [
         { subjectId: trackId, subjectType: "track" },
         ...(embeddingStatement
@@ -1182,7 +1184,36 @@ export async function updateTrack(
     ),
   ];
 
-  await db.batch(statements, "write");
+  if (embeddingStatement === undefined) {
+    // Preserve the existing low-round-trip batch for every non-embedding update. These writes do
+    // not produce a sonar event because they do not accept or clear the vector that makes a track
+    // visible in the index.
+    await db.batch(statements, "write");
+  } else {
+    // Embedding visibility has one production chokepoint. Keep the existing statement list and
+    // its changes()-dependent order intact inside an explicit write transaction, then re-read the
+    // committed-shape Sonar source row and append exactly one event before the shared commit.
+    const transaction = await db.transaction("write");
+
+    try {
+      await transaction.batch(statements);
+      await insertCurrentSonarTrackArtifactChangeInTransaction(transaction, {
+        producer: "track-update",
+        trackId,
+      });
+      await transaction.commit();
+    } catch (error) {
+      try {
+        await transaction.rollback();
+      } catch {
+        // Preserve the source/event failure. close() below is the final rollback/resource guard.
+      }
+
+      throw error;
+    } finally {
+      transaction.close();
+    }
+  }
 
   // The finding changed (enrichment, re-tag, video link, note edit, a backfilled
   // coordinate): drop its cached `/log/<id>` page + the `/log` index, and the entity
@@ -1248,7 +1279,7 @@ export async function fillEmptyNote(
               where track_id = ?
                 and (note is null or trim(note) = '')`,
       },
-      markDueWorkSourceRepairsStatement([{ subjectId: trackId, subjectType: "track" }], {
+      ...markDueWorkSourceMaintenanceStatements([{ subjectId: trackId, subjectType: "track" }], {
         onlyIfPreviousStatementChanged: true,
         producer: "track-note-fill",
       }),

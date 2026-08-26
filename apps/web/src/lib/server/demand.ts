@@ -32,7 +32,11 @@
 
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { getDb, typedRows } from "./db";
-import { type DueWorkStatement, markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import {
+  type DueWorkStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+} from "./due-work";
+import { markCrawlProjectionRepairsFromSelectStatement } from "./crawl-due-work";
 
 /** How far back the demand window looks. Sustained interest, not a single spike. */
 export const DEMAND_WINDOW_DAYS = 30;
@@ -308,6 +312,8 @@ export async function recordDemand(
   //    the promotion off already-expanded nodes.
   const demandedArtistIds = [...artistDemandById.keys()];
   const demandedLabelSlugs = [...labelDemandBySlugResolved.keys()];
+  const writeTime = now.toISOString();
+  const sourceVersion = `demand-rewrite:${crypto.randomUUID()}`;
   const repairSelectionArms = [
     `select track_id as subject_id from tracks where demand_score is not null`,
   ];
@@ -332,44 +338,120 @@ export async function recordDemand(
   }
 
   const writes: DueWorkStatement[] = [
-    markDueWorkSourceRepairsFromSelectStatement(
+    markCrawlProjectionRepairsFromSelectStatement(
+      "label",
+      {
+        args: [],
+        sql: `select distinct label_slug as source_id from crawl_frontier
+              where demand_rank = 0 and label_slug is not null`,
+      },
+      { now: writeTime, sourceVersion },
+    ),
+    markCrawlProjectionRepairsFromSelectStatement(
+      "artist",
+      {
+        args: [],
+        sql: `select distinct external_id as source_id from crawl_frontier
+              where demand_rank = 0 and kind = 'artist'`,
+      },
+      { now: writeTime, sourceVersion },
+    ),
+    ...markDueWorkSourceMaintenanceFromSelectStatements(
       "track",
       { args: repairSelectionArgs, sql: repairSelectionArms.join(" union ") },
-      { producer: "demand-score-rewrite" },
+      {
+        markerVersion: sourceVersion,
+        now: writeTime,
+        producer: "demand-score-rewrite",
+      },
     ),
     { args: [], sql: `update tracks set demand_score = null where demand_score is not null` },
     { args: [], sql: `update crawl_frontier set demand_rank = 1 where demand_rank = 0` },
   ];
 
-  for (const [artistId, demand] of artistDemandById) {
+  if (artistDemandById.size > 0) {
+    const demandRows = [...artistDemandById.entries()];
     writes.push({
-      args: [demand.pageviews, artistId],
-      sql: `update tracks set demand_score = coalesce(demand_score, 0) + ?
-            where track_id in (select track_id from track_artists where artist_id = ?)`,
+      args: demandRows.flatMap(([artistId, demand]) => [artistId, demand.pageviews]),
+      sql: `with demand(artist_id, score) as
+              (values ${demandRows.map(() => "(?, ?)").join(", ")})
+            update tracks set demand_score = coalesce(demand_score, 0) + (
+              select sum(demand.score) from track_artists
+              join demand on demand.artist_id = track_artists.artist_id
+              where track_artists.track_id = tracks.track_id
+            ) where exists (
+              select 1 from track_artists
+              join demand on demand.artist_id = track_artists.artist_id
+              where track_artists.track_id = tracks.track_id
+            )`,
     });
   }
 
-  for (const [slug, pageviews] of labelDemandBySlugResolved) {
+  if (labelDemandBySlugResolved.size > 0) {
+    const demandRows = [...labelDemandBySlugResolved.entries()];
     writes.push({
-      args: [pageviews, slug],
-      sql: `update tracks set demand_score = coalesce(demand_score, 0) + ?
-            where label_id = (select id from labels where slug = ?)`,
+      args: demandRows.flatMap(([slug, pageviews]) => [slug, pageviews]),
+      sql: `with demand(label_slug, score) as
+              (values ${demandRows.map(() => "(?, ?)").join(", ")})
+            update tracks set demand_score = coalesce(demand_score, 0) + (
+              select demand.score from labels
+              join demand on demand.label_slug = labels.slug
+              where labels.id = tracks.label_id
+            ) where label_id in (
+              select labels.id from labels join demand on demand.label_slug = labels.slug
+            )`,
     });
     writes.push({
-      args: [slug],
-      sql: `update crawl_frontier set demand_rank = 0 where state = 'pending' and label_slug = ?`,
+      args: demandedLabelSlugs,
+      sql: `with demand(label_slug) as
+              (values ${demandedLabelSlugs.map(() => "(?)").join(", ")})
+            update crawl_frontier set demand_rank = 0
+            where state = 'pending' and label_slug in (select label_slug from demand)`,
     });
+    writes.push(
+      markCrawlProjectionRepairsFromSelectStatement(
+        "label",
+        {
+          args: demandedLabelSlugs,
+          sql: `select column1 as source_id
+                from (values ${demandedLabelSlugs.map(() => "(?)").join(", ")})`,
+        },
+        {
+          now: writeTime,
+          onlyIfPreviousStatementChanged: true,
+          sourceVersion,
+        },
+      ),
+    );
   }
 
-  for (const mbid of demandedArtistMbids) {
+  if (demandedArtistMbids.length > 0) {
     writes.push({
-      args: [mbid],
+      args: demandedArtistMbids,
       // PK point lookup, not an `external_id` scan: the frontier id is deterministic
-      // `<source>:<kind>:<externalId>` = `musicbrainz:artist:<mbid>` (crawl.ts `frontierId`), so an
-      // artist node is one O(1) seek on the primary key (docs/db-scale-backlog Wave 1 #6).
-      sql: `update crawl_frontier set demand_rank = 0
-            where id = 'musicbrainz:artist:' || ? and state = 'pending'`,
+      // `<source>:<kind>:<externalId>` = `musicbrainz:artist:<mbid>` (crawl.ts `frontierId`).
+      sql: `with demand(artist_mbid) as
+              (values ${demandedArtistMbids.map(() => "(?)").join(", ")})
+            update crawl_frontier set demand_rank = 0
+            where id in (
+              select 'musicbrainz:artist:' || artist_mbid from demand
+            ) and state = 'pending'`,
     });
+    writes.push(
+      markCrawlProjectionRepairsFromSelectStatement(
+        "artist",
+        {
+          args: demandedArtistMbids,
+          sql: `select column1 as source_id
+                from (values ${demandedArtistMbids.map(() => "(?)").join(", ")})`,
+        },
+        {
+          now: writeTime,
+          onlyIfPreviousStatementChanged: true,
+          sourceVersion,
+        },
+      ),
+    );
   }
 
   await db.batch(writes, "write");

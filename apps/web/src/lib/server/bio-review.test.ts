@@ -77,6 +77,18 @@ describe("the bio-review ledger", () => {
       claim_token text, claim_expires_at text, claimed_by text,
       primary key (work_kind, subject_type, subject_id)
     )`);
+    await db.execute(`create table artist_qualification_state (
+      scope text primary key, generation text not null, cursor text, scanned_count integer not null,
+      source_qualified_count integer not null, projected_qualified_count integer not null,
+      source_epoch integer not null, projection_epoch integer not null,
+      rebuild_start_epoch integer not null, state text not null, started_at text not null,
+      updated_at text not null, completed_at text, source_digest text, projected_digest text
+    )`);
+    await db.execute(`create table projection_repairs (
+      projection text not null, subject_type text not null, subject_id text not null,
+      source_epoch integer not null, source_version text not null, created_at text not null,
+      updated_at text not null, primary key (projection, subject_type, subject_id)
+    )`);
   });
 
   // ── The bypass raises a row ────────────────────────────────────────────────────────────────

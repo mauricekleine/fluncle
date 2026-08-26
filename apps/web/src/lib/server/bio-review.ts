@@ -30,7 +30,7 @@
 
 import { getDb, typedRows } from "./db";
 import { type EntityKind } from "./bio";
-import { markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 
 /** One bypassed bio waiting on the operator's eye — the `bio-review` attention row's raw shape. */
 export type BioReviewRow = {
@@ -179,9 +179,9 @@ export async function resolveBioReview(input: {
       ? `bio = null, bio_prompt_version = null, bio_status = 'pending', `
       : "";
   const table = tableFor(input.kind);
-  const [, result] = await db.batch(
+  const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         input.kind,
         {
           args: [input.slug],
@@ -202,5 +202,5 @@ export async function resolveBioReview(input: {
     "write",
   );
 
-  return (result?.rowsAffected ?? 0) > 0;
+  return (results.at(-1)?.rowsAffected ?? 0) > 0;
 }

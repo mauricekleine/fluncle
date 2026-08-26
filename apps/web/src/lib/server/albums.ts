@@ -27,8 +27,8 @@ import { bestAlbumCoverUrl } from "../media";
 import { bioBypassColumns } from "./bio-review";
 import { getDb, typedRows } from "./db";
 import {
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { relinkTracksToEntity } from "./hub-counts";
@@ -183,7 +183,7 @@ export async function ensureAlbum(
               values (?, ?, ?, ?, ?, ?)
               on conflict (slug) do nothing`,
       },
-      markDueWorkSourceRepairsStatement([{ subjectId: albumId, subjectType: "album" }], {
+      ...markDueWorkSourceMaintenanceStatements([{ subjectId: albumId, subjectType: "album" }], {
         onlyIfPreviousStatementChanged: true,
         producer: "album-mint",
       }),
@@ -412,9 +412,9 @@ export async function fillEmptyAlbumBio(
   const db = await getDb();
   const now = new Date().toISOString();
   const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
-  const [, result] = await db.batch(
+  const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "album",
         {
           args: [slug],
@@ -435,7 +435,7 @@ export async function fillEmptyAlbumBio(
     "write",
   );
 
-  return (result?.rowsAffected ?? 0) > 0;
+  return (results.at(-1)?.rowsAffected ?? 0) > 0;
 }
 
 /** One row of the bio worklist: an album with findings but no bio yet. */

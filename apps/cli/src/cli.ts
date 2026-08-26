@@ -55,6 +55,37 @@ type AdminTelemetryOptions = AdminListOptions & {
   until?: string;
 };
 
+type AdminArtifactRegisterOptions = JsonOptions & {
+  contract: string[];
+};
+
+type AdminArtifactSnapshotOptions = JsonOptions & {
+  limit: string;
+  stream: string;
+  streamVersion: string;
+};
+
+type AdminArtifactRebuildCheckpointOptions = JsonOptions & {
+  consumerDigest: string;
+  consumerItemCount: string;
+  generation: string;
+  pageDigest: string;
+  pageLimit: string;
+  stream: string;
+  streamVersion: string;
+};
+
+type AdminArtifactListOptions = JsonOptions & {
+  limit: string;
+};
+
+type AdminArtifactCheckpointOptions = JsonOptions & {
+  batchDigest: string;
+  eventCount: string;
+  fromSeq: string;
+  throughSeq: string;
+};
+
 // `admin tracks requeue-analysis` — the archive-wide BPM/key provenance repair. Dry-run
 // unless `--apply`; `--limit` caps the archive walk (absent ⇒ the whole archive).
 type AdminRequeueAnalysisOptions = {
@@ -836,6 +867,250 @@ JSON field reference:
     .action(async (options: AdminTelemetryOptions) => {
       const { telemetryCommand } = await import("./commands/admin-telemetry");
       await runAdminTelemetry(options, telemetryCommand);
+    });
+
+  // The versioned artifact-log transport. These are deliberately literal operator controls: the
+  // filesystemful consumer applies the JSON bytes, while the Worker owns ordering and checkpoints.
+  const adminArtifacts = configureCommand(
+    admin.command("artifacts").description("Versioned derived-artifact change log"),
+  );
+
+  adminArtifacts.action(() => {
+    adminArtifacts.outputHelp();
+  });
+
+  adminArtifacts
+    .command("register")
+    .description("Register or re-register a consumer at a fresh snapshot fence")
+    .argument("<consumerId>")
+    .requiredOption(
+      "--contract <contract...>",
+      "Supported contract(s), as stream@streamVersion/formatVersion",
+    )
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactRegisterOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.registerArtifactConsumerCommand({
+        consumerId,
+        contracts: artifacts.parseArtifactContracts(options.contract),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: rebuilding at snapshot seq ${result.consumer.snapshotSeq ?? 0}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("status")
+    .description("Read a consumer's contracts, rebuilds, and checkpoints")
+    .argument("<consumerId>")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: JsonOptions) => {
+      const { getArtifactConsumerCommand } = await import("./commands/admin-artifacts");
+      const result = await getArtifactConsumerCommand(consumerId);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: ${result.consumer.state}, head ${result.consumer.headSeq}, applied ${result.consumer.appliedThroughSeq ?? "none"}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("bootstrap")
+    .description("Read the next deterministic source-snapshot page")
+    .argument("<consumerId>")
+    .requiredOption("--stream <stream>", "Registered artifact stream")
+    .option("--stream-version <version>", "Exact stream version", "1")
+    .option("--limit <limit>", "Snapshot items to read (1-200)", "100")
+    .option("--json", "Print lossless payloads and digests as JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactSnapshotOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.listArtifactSnapshotCommand({
+        consumerId,
+        limit: artifacts.parseArtifactInteger(options.limit, "--limit", {
+          maximum: artifacts.ARTIFACT_SNAPSHOT_API_MAX_LIMIT,
+        }),
+        stream: artifacts.parseArtifactStream(options.stream),
+        streamVersion: artifacts.parseArtifactInteger(options.streamVersion, "--stream-version"),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.stream}@${result.streamVersion}/${result.formatVersion}: ${result.itemCount} item(s), snapshot seq ${result.snapshotSeq}, page ${result.pageDigest}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("bootstrap-checkpoint")
+    .description("Checkpoint one source page after applying its exact payloads")
+    .argument("<consumerId>")
+    .requiredOption("--stream <stream>", "Registered artifact stream")
+    .option("--stream-version <version>", "Exact stream version", "1")
+    .requiredOption("--generation <generation>", "Generation from the snapshot page")
+    .requiredOption("--page-digest <digest>", "Digest from the snapshot page")
+    .option("--page-limit <limit>", "Page limit used for the snapshot read (1-200)", "100")
+    .requiredOption("--consumer-digest <digest>", "Running digest after applying the page")
+    .requiredOption("--consumer-item-count <count>", "Running applied item count")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactRebuildCheckpointOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.checkpointArtifactRebuildCommand({
+        consumerDigest: options.consumerDigest,
+        consumerId,
+        consumerItemCount: artifacts.parseArtifactInteger(
+          options.consumerItemCount,
+          "--consumer-item-count",
+          { minimum: 0 },
+        ),
+        generation: options.generation,
+        pageDigest: options.pageDigest,
+        pageLimit: artifacts.parseArtifactInteger(options.pageLimit, "--page-limit", {
+          maximum: artifacts.ARTIFACT_SNAPSHOT_API_MAX_LIMIT,
+        }),
+        stream: artifacts.parseArtifactStream(options.stream),
+        streamVersion: artifacts.parseArtifactInteger(options.streamVersion, "--stream-version"),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.checkpoint.stream}: ${result.checkpoint.state}, ${result.checkpoint.sourceItemCount} item(s) checkpointed.`,
+      );
+    });
+
+  adminArtifacts
+    .command("activate")
+    .description("Activate a consumer after every registered rebuild matches")
+    .argument("<consumerId>")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: JsonOptions) => {
+      const { activateArtifactConsumerCommand } = await import("./commands/admin-artifacts");
+      const result = await activateArtifactConsumerCommand(consumerId);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: active at seq ${result.consumer.appliedThroughSeq ?? 0}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("list")
+    .description("Read the next ordered event batch from a consumer checkpoint")
+    .argument("<consumerId>")
+    .option("--limit <limit>", "Events to read (1-500)", "100")
+    .option("--json", "Print lossless payloads and digests as JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactListOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.listArtifactChangesCommand({
+        consumerId,
+        limit: artifacts.parseArtifactInteger(options.limit, "--limit", {
+          maximum: artifacts.ARTIFACT_CHANGE_API_MAX_LIMIT,
+        }),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.events.length} event(s), seq ${result.fromSeq} through ${result.throughSeq}, head ${result.headSeq}, batch ${result.batchDigest}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("checkpoint")
+    .description("Acknowledge the exact event batch after applying it")
+    .argument("<consumerId>")
+    .requiredOption("--batch-digest <digest>", "Digest from the event batch")
+    .requiredOption("--event-count <count>", "Event count from the event batch")
+    .requiredOption("--from-seq <seq>", "First sequence from the event batch")
+    .requiredOption("--through-seq <seq>", "Last sequence from the event batch")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: AdminArtifactCheckpointOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.acknowledgeArtifactChangesCommand({
+        batchDigest: options.batchDigest,
+        consumerId,
+        eventCount: artifacts.parseArtifactInteger(options.eventCount, "--event-count", {
+          maximum: artifacts.ARTIFACT_CHANGE_API_MAX_LIMIT,
+        }),
+        fromSeq: artifacts.parseArtifactInteger(options.fromSeq, "--from-seq", { minimum: 0 }),
+        throughSeq: artifacts.parseArtifactInteger(options.throughSeq, "--through-seq", {
+          minimum: 0,
+        }),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        `${result.consumer.consumerId}: applied through seq ${result.consumer.appliedThroughSeq ?? 0}.`,
+      );
+    });
+
+  adminArtifacts
+    .command("inactivate")
+    .description("Retire a consumer and discard its reusable checkpoint")
+    .argument("<consumerId>")
+    .option("--json", "Print JSON", false)
+    .action(async (consumerId: string, options: JsonOptions) => {
+      const { inactivateArtifactConsumerCommand } = await import("./commands/admin-artifacts");
+      const result = await inactivateArtifactConsumerCommand(consumerId);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(`${result.consumer.consumerId}: inactive, bootstrap required before reuse.`);
+    });
+
+  adminArtifacts
+    .command("compact")
+    .description("Delete one bounded prefix below every live consumer barrier")
+    .option("--limit <limit>", "Events to delete (1-1000)", "1000")
+    .option("--json", "Print JSON", false)
+    .action(async (options: AdminArtifactListOptions) => {
+      const artifacts = await import("./commands/admin-artifacts");
+      const result = await artifacts.compactArtifactChangesCommand(
+        artifacts.parseArtifactInteger(options.limit, "--limit", {
+          maximum: artifacts.ARTIFACT_COMPACTION_API_MAX_LIMIT,
+        }),
+      );
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(
+        result.deletedCount === 0
+          ? `Compaction: ${result.reason}.`
+          : `Compaction: deleted ${result.deletedCount} event(s), seq ${result.deletedFromSeq ?? 0} through ${result.deletedThroughSeq ?? 0}.`,
+      );
     });
 
   // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
@@ -8031,6 +8306,7 @@ const stringOptions = new Set([
   "--analyzed-from",
   "--at",
   "--audio",
+  "--batch-digest",
   "--bio",
   "--bio-file",
   "--body",
@@ -8039,7 +8315,10 @@ const stringOptions = new Set([
   "--bpm-confidence",
   "--bpm-source",
   "--composition",
+  "--consumer-digest",
+  "--consumer-item-count",
   "--content-file",
+  "--contract",
   "--context-note",
   "--cover",
   "--cues-file",
@@ -8049,6 +8328,7 @@ const stringOptions = new Set([
   "--duration-target-sec",
   "--embedding",
   "--embedding-file",
+  "--event-count",
   "--features",
   "--file",
   "--footage",
@@ -8057,8 +8337,10 @@ const stringOptions = new Set([
   "--footage-notext",
   "--footage-social",
   "--from",
+  "--from-seq",
   "--galaxy-id",
   "--gb",
+  "--generation",
   "--has-key",
   "--intent",
   "--isrc",
@@ -8080,6 +8362,8 @@ const stringOptions = new Set([
   "--ok",
   "--order",
   "--page",
+  "--page-digest",
+  "--page-limit",
   "--parent-id",
   "--plate",
   "--plate-background",
@@ -8106,8 +8390,11 @@ const stringOptions = new Set([
   "--soundcloud-url",
   "--source",
   "--status",
+  "--stream",
+  "--stream-version",
   "--subject",
   "--title",
+  "--through-seq",
   "--token",
   "--tracklist-file",
   "--tracks",

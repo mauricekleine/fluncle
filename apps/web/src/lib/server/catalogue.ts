@@ -57,8 +57,8 @@ import {
   countDueWorkNow,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DueWorkMaintenancePendingError,
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
@@ -1824,7 +1824,7 @@ export async function rankCatalogue(
   await db.batch(
     [
       ...writes,
-      markDueWorkSourceRepairsStatement(
+      ...markDueWorkSourceMaintenanceStatements(
         movedIds.map((subjectId) => ({ subjectId, subjectType: "track" })),
         { producer: "catalogue-rank" },
       ),
@@ -3013,7 +3013,7 @@ export async function requeueUnmatchedCaptures(): Promise<{
   };
   const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement("track", source, {
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
         producer: "catalogue-requeue-unmatched",
       }),
       {
@@ -3028,7 +3028,7 @@ export async function requeueUnmatchedCaptures(): Promise<{
     ],
     "write",
   );
-  const result = results[1];
+  const result = results.at(-1);
 
   return {
     requeued: result?.rowsAffected ?? 0,

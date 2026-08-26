@@ -112,6 +112,27 @@ describe("label artist rules", () => {
 
     expect(mocks.mbFetch).toHaveBeenCalledWith("/artist/mbid-jus-now?inc=url-rels");
     expect(rule?.artistSpotifyId).toBe("spotify");
+    expect(
+      (
+        await db.execute(`select source_type, source_id from crawl_projection_repairs
+          order by source_type, source_id`)
+      ).rows,
+    ).toEqual([
+      { source_id: "mbid-jus-now", source_type: "artist" },
+      { source_id: "label-lbl_bridge", source_type: "label" },
+    ]);
+  });
+
+  it("rejects an unbounded scoped-rule fanout before resolving identities", async () => {
+    await seedLabel("lbl_wide");
+    const rules = Array.from({ length: 101 }, (_, index) => ({
+      artistMbid: `mbid-${index}`,
+      artistName: `Artist ${index}`,
+      verdict: "allow" as const,
+    }));
+
+    await expect(replaceLabelArtistRules("lbl_wide", rules)).rejects.toThrow("at most 100");
+    expect(mocks.mbFetch).not.toHaveBeenCalled();
   });
 
   it("falls back to the local artist graph when MB has no Spotify relation", async () => {
@@ -368,6 +389,19 @@ describe("global artist rules", () => {
 
     expect(await listArtistRules()).toEqual([]);
     expect(await listLabelArtistRules("lbl_sibling")).toHaveLength(1);
+    expect(
+      (
+        await db.execute(`select source_epoch, source_version from crawl_projection_repairs
+          where source_type = 'artist' and source_id = 'mbid-shared'`)
+      ).rows[0],
+    ).toMatchObject({ source_epoch: 3 });
+    const sourceVersion = (
+      await db.execute(`select source_version from crawl_projection_repairs
+        where source_type = 'artist' and source_id = 'mbid-shared'`)
+    ).rows[0]?.source_version;
+    expect(
+      typeof sourceVersion === "string" && sourceVersion.startsWith("artist-rule-remove:"),
+    ).toBe(true);
   });
 
   it("stamps global rules by the same globally unique id and rejects unknown ids", async () => {

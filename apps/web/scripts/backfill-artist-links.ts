@@ -45,7 +45,7 @@ import { fileURLToPath } from "node:url";
 import { restaleCatalogueRankStatements } from "../src/lib/server/catalogue-rank-restale";
 import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceStatements,
 } from "../src/lib/server/due-work";
 
 export type ArtistLinksBackfillResult = {
@@ -108,7 +108,7 @@ export async function backfillArtistLinks(client: Client): Promise<ArtistLinksBa
                 where candidate.track_id in (${trackIds.map(() => "?").join(", ")})`,
         },
         ...restaleCatalogueRankStatements(trackIds),
-        markDueWorkSourceRepairsStatement(
+        ...markDueWorkSourceMaintenanceStatements(
           [
             ...trackIds.map((subjectId) => ({ subjectId, subjectType: "track" as const })),
             {

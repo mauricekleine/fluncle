@@ -14,9 +14,21 @@ export const DUE_WORK_ELIGIBILITY_TABLES = [
   "track_embeddings",
   "tracks",
 ] as const;
+export const GOAL_D_SOURCE_TABLES = [
+  "artist_rules",
+  "crawl_frontier",
+  "findings",
+  "labels",
+  "track_artists",
+  "tracks",
+] as const;
 
 export type DueWorkEligibilityTable = (typeof DUE_WORK_ELIGIBILITY_TABLES)[number];
-export type DueWorkMutationTable = "dynamic" | DueWorkEligibilityTable;
+export type DueWorkMutationTable =
+  | "artist_rules"
+  | "crawl_frontier"
+  | "dynamic"
+  | DueWorkEligibilityTable;
 export type DueWorkMutationOperation = "delete" | "insert" | "update";
 export type DueWorkMutationCoupling = "source-helper" | "write-batch" | "write-transaction";
 
@@ -27,6 +39,7 @@ export type DueWorkMutationSite = {
   id: string;
   line: number;
   operation: DueWorkMutationOperation;
+  projectionCoupling: DueWorkMutationCoupling | null;
   table: DueWorkMutationTable;
 };
 
@@ -48,13 +61,33 @@ const FUNCTION_TYPES = new Set([
   "FunctionExpression",
 ]);
 const SOURCE_HELPER = "batchDueWorkSourceMutation";
-const MARKER_HELPERS = new Set([
+const DUE_WORK_MARKER_HELPERS = new Set([
+  "markDueWorkSourceMaintenanceFromSelectStatements",
+  "markDueWorkSourceMaintenanceStatements",
   "markDueWorkSourceRepairsFromSelectStatement",
   "markDueWorkSourceRepairsStatement",
+]);
+const PUBLIC_PROJECTION_MARKER_HELPERS = new Set([
+  "markDueWorkSourceMaintenanceFromSelectStatements",
+  "markDueWorkSourceMaintenanceStatements",
+  "markPublicProjectionSourceChangedFromSelectStatements",
+  "markPublicProjectionSourceChangedStatements",
+]);
+const GOAL_D_PROJECTION_MARKER_HELPERS = new Set([
+  ...PUBLIC_PROJECTION_MARKER_HELPERS,
+  "markCrawlNodeRepairStatement",
+  "markCrawlNodeRepairsByUpdatedAtStatement",
+  "markCrawlProjectionRepairStatement",
+  "markCrawlProjectionRepairsFromSelectStatement",
 ]);
 const TABLE_PATTERN = DUE_WORK_ELIGIBILITY_TABLES.join("|");
 const MUTATION_PATTERN = new RegExp(
   `\\b(insert\\s+(?:or\\s+\\w+\\s+)?into|update(?:\\s+or\\s+\\w+)?|delete\\s+from)\\s+(?:["'\\x60]?(?:main\\.)?)(${TABLE_PATTERN}\\b|\\$\\{\\})`,
+  "gi",
+);
+const GOAL_D_TABLE_PATTERN = GOAL_D_SOURCE_TABLES.join("|");
+const GOAL_D_MUTATION_PATTERN = new RegExp(
+  `\\b(insert\\s+(?:or\\s+\\w+\\s+)?into|update(?:\\s+or\\s+\\w+)?|delete\\s+from)\\s+(?:["'\\x60]?(?:main\\.)?)(${GOAL_D_TABLE_PATTERN}\\b|\\$\\{\\})`,
   "gi",
 );
 
@@ -338,7 +371,11 @@ function enclosingFunctionName(node: AstNode, parents: WeakMap<AstNode, AstNode>
   return null;
 }
 
-function functionContainsMarker(call: AstNode, program: AstNode): boolean {
+function functionContainsMarker(
+  call: AstNode,
+  program: AstNode,
+  markerHelpers: ReadonlySet<string>,
+): boolean {
   const name = callName(call);
   if (name === null) {
     return false;
@@ -353,7 +390,7 @@ function functionContainsMarker(call: AstNode, program: AstNode): boolean {
       return;
     }
     walk(node, (candidate) => {
-      if (candidate.type === "CallExpression" && MARKER_HELPERS.has(callName(candidate) ?? "")) {
+      if (candidate.type === "CallExpression" && markerHelpers.has(callName(candidate) ?? "")) {
         found = true;
       }
     });
@@ -361,13 +398,18 @@ function functionContainsMarker(call: AstNode, program: AstNode): boolean {
   return found;
 }
 
-function partsContainMarker(parts: readonly AstNode[], program: AstNode): boolean {
+function partsContainMarker(
+  parts: readonly AstNode[],
+  program: AstNode,
+  markerHelpers: ReadonlySet<string>,
+): boolean {
   let found = false;
   for (const part of parts) {
     walk(part, (node) => {
       if (
         node.type === "CallExpression" &&
-        (MARKER_HELPERS.has(callName(node) ?? "") || functionContainsMarker(node, program))
+        (markerHelpers.has(callName(node) ?? "") ||
+          functionContainsMarker(node, program, markerHelpers))
       ) {
         found = true;
         return false;
@@ -421,6 +463,7 @@ function mutationCoupling(
   node: AstNode,
   program: AstNode,
   parents: WeakMap<AstNode, AstNode>,
+  markerHelpers: ReadonlySet<string>,
 ): DueWorkMutationCoupling | null {
   const scope = enclosingScope(node, parents);
   let coupling: DueWorkMutationCoupling | null = null;
@@ -444,7 +487,7 @@ function mutationCoupling(
       isWriteBatch(candidate) &&
       firstArgument !== undefined &&
       collectionContains(firstArgument, node, scope, parents) &&
-      partsContainMarker(collectionParts(firstArgument, scope), program)
+      partsContainMarker(collectionParts(firstArgument, scope), program, markerHelpers)
     ) {
       coupling = "write-batch";
     }
@@ -484,7 +527,7 @@ function mutationCoupling(
       if (
         identifierName(callReceiver(batchCandidate)) === receiverName &&
         batchStatements !== undefined &&
-        partsContainMarker(collectionParts(batchStatements, scope), program)
+        partsContainMarker(collectionParts(batchStatements, scope), program, markerHelpers)
       ) {
         coupling = "write-transaction";
       }
@@ -499,7 +542,12 @@ function lineAndColumn(sourceText: string, offset: number): { column: number; li
   return { column: (lines.at(-1)?.length ?? 0) + 1, line: lines.length };
 }
 
-export function auditDueWorkMutationSites(file: string, sourceText: string): DueWorkMutationSite[] {
+function auditMutationSites(
+  file: string,
+  sourceText: string,
+  mutationPattern: RegExp,
+  projectionMarkerHelpers: ReadonlySet<string>,
+): DueWorkMutationSite[] {
   const parsed = parseSync(file, sourceText, { astType: "ts", lang: "ts", range: false });
   if (parsed.errors.some((error) => error.severity === "Error")) {
     throw new Error(
@@ -509,7 +557,10 @@ export function auditDueWorkMutationSites(file: string, sourceText: string): Due
   const program = parsed.program as unknown as AstNode;
   const parents = buildParents(program);
   const rawSites: Array<
-    Omit<DueWorkMutationSite, "coupling" | "id"> & { node: AstNode; sql: string }
+    Omit<DueWorkMutationSite, "coupling" | "id" | "projectionCoupling"> & {
+      node: AstNode;
+      sql: string;
+    }
   > = [];
 
   walk(program, (node) => {
@@ -517,8 +568,8 @@ export function auditDueWorkMutationSites(file: string, sourceText: string): Due
     if (sql === null) {
       return;
     }
-    MUTATION_PATTERN.lastIndex = 0;
-    for (const match of sql.matchAll(MUTATION_PATTERN)) {
+    mutationPattern.lastIndex = 0;
+    for (const match of sql.matchAll(mutationPattern)) {
       const rawTable = match[2]?.toLowerCase();
       const table = (rawTable === "${}" ? "dynamic" : rawTable) as DueWorkMutationTable | undefined;
       const verb = match[1];
@@ -543,10 +594,24 @@ export function auditDueWorkMutationSites(file: string, sourceText: string): Due
     duplicateCounts.set(base, occurrence);
     return {
       ...site,
-      coupling: mutationCoupling(node, program, parents),
+      coupling: mutationCoupling(node, program, parents, DUE_WORK_MARKER_HELPERS),
       id: occurrence === 1 ? base : `${base}:${occurrence}`,
+      projectionCoupling: mutationCoupling(node, program, parents, projectionMarkerHelpers),
     };
   });
+}
+
+export function auditDueWorkMutationSites(file: string, sourceText: string): DueWorkMutationSite[] {
+  return auditMutationSites(file, sourceText, MUTATION_PATTERN, PUBLIC_PROJECTION_MARKER_HELPERS);
+}
+
+export function auditGoalDMutationSites(file: string, sourceText: string): DueWorkMutationSite[] {
+  return auditMutationSites(
+    file,
+    sourceText,
+    GOAL_D_MUTATION_PATTERN,
+    GOAL_D_PROJECTION_MARKER_HELPERS,
+  );
 }
 
 export function auditDueWorkDelegatedCallSites(
@@ -578,7 +643,7 @@ export function auditDueWorkDelegatedCallSites(
     counts.set(base, occurrence);
     calls.push({
       ...lineAndColumn(sourceText, node.start),
-      coupling: mutationCoupling(node, program, parents),
+      coupling: mutationCoupling(node, program, parents, DUE_WORK_MARKER_HELPERS),
       file,
       id: occurrence === 1 ? base : `${base}:${occurrence}`,
       name,

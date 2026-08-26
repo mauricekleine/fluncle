@@ -193,6 +193,10 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 // private     = the `/me` cookie-session tier (read via privateUserAuth, write via
 //               privateUserMutation).
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
+  // A filesystemful artifact consumer acknowledges only the exact batch it was served. Agent tier
+  // lets the consumer own its durable progress without granting irreversible prefix deletion.
+  acknowledge_artifact_changes: "admin",
+  activate_artifact_consumer: "admin",
   // Global artist acquisition rules are editorial scope changes.
   add_artist_rule: "operator",
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
@@ -283,11 +287,15 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // agent-tier sweep is agent-allowed precisely because it can never certify). The
   // `update_label` / `set_capture_budget` rule.
   certify_track: "operator",
+  checkpoint_artifact_rebuild: "admin",
   // The wrong-audio quarantine override (docs/the-ear.md § Wrong audio) — operator tier: an
   // agent does not get to reverse the machine's own wrong-audio verdict on its own output, the
   // same reasoning that keeps `update_label` and `set_capture_budget` operator-tier.
   clear_wrong_audio: "operator",
   collect_private_galaxy_log: "private-session",
+  // Prefix deletion is irreversible even though the runtime proves every live consumer is beyond
+  // the barrier, so only an operator may trigger a bounded compaction transaction.
+  compact_artifact_changes: "operator",
   // The follow queue's one-tap confirm (candidate → confirmed) — operator tier: it lets
   // a Firecrawl-sourced link onto the public artist page.
   confirm_artist_social: "operator",
@@ -382,6 +390,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // operatorGuard), the list_*_admin precedent: it composes the same admin-tier reads
   // the snapshot draws from and publishes nothing, so the operator's CLI + Raycast
   // menu bar (and the box) read it with the agent token.
+  get_artifact_consumer: "admin",
   get_attention: "admin",
   // The capture budget's spend readout — admin tier (agent-allowed READ), the
   // `get_crawl_status` precedent. Reading what a metered budget has left spends nothing and
@@ -443,10 +452,15 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // list_tracks_admin / get_recording precedent: an authoritative by-coordinate read
   // the board + CLI + box can all consume.
   get_track_admin: "admin",
+  // Inactivation deliberately discards the consumer's reusable checkpoint and forces a rebuild;
+  // the affected agent may retire its own consumer identity without compacting the shared log.
+  inactivate_artifact_consumer: "admin",
   initiate_mixtape_youtube: "operator",
   // The album-bio worklist (albums with findings but no bio yet) — admin tier (agent-allowed
   // read), the list_labels_missing_bio precedent; the bio cron drains it. Publishes nothing.
   list_albums_missing_bio: "admin",
+  list_artifact_changes: "admin",
+  list_artifact_snapshot: "admin",
   // Reading global artist acquisition scope changes nothing.
   list_artist_rules: "admin",
   // The `/admin/artists` review queue read — admin tier (agent-allowed), the list_*_admin
@@ -652,6 +666,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // `advance_publish_queue` / `rank_catalogue` precedent. It re-mirrors playlists that
   // already exist (each minted by its own owner), so it creates no new public authority.
   refresh_frontier_playlists: "admin",
+  // Registration/re-registration creates a fresh immutable snapshot fence. It publishes nothing
+  // and is the entry point for the same agent that consumes the resulting stream.
+  register_artifact_consumer: "admin",
   // Discard a label-alias candidate — operator tier: ruling two spellings are NOT one label
   // is an editorial act (the remove_artist_social / confirm_label_alias precedent).
   reject_label_alias: "operator",

@@ -54,8 +54,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "../src/lib/server/due-work";
 
 export type HasEmbeddingBackfillResult = {
@@ -71,9 +71,9 @@ const HAS_VECTOR = `exists (select 1 from track_embeddings te where te.track_id 
  * the real migrations applied (the `backfillIsCatalogue` precedent).
  */
 export async function backfillHasEmbedding(client: Client): Promise<HasEmbeddingBackfillResult> {
-  const [, result] = await client.batch(
+  const results = await client.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "track",
         {
           sql: `select track_id as subject_id from tracks
@@ -85,7 +85,7 @@ export async function backfillHasEmbedding(client: Client): Promise<HasEmbedding
         sql: `update tracks set has_embedding = ${HAS_VECTOR}
               where has_embedding <> ${HAS_VECTOR}`,
       },
-      markDueWorkSourceRepairsStatement(
+      ...markDueWorkSourceMaintenanceStatements(
         [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }],
         {
           onlyIfPreviousStatementChanged: true,
@@ -96,7 +96,7 @@ export async function backfillHasEmbedding(client: Client): Promise<HasEmbedding
     "write",
   );
 
-  return { flipped: result?.rowsAffected ?? 0 };
+  return { flipped: results.at(-2)?.rowsAffected ?? 0 };
 }
 
 async function main(): Promise<void> {

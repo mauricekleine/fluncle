@@ -9,6 +9,11 @@ import { updateTrack } from "./track-update";
 // context_note) must NOT bump it; visible fields (observation audio, note) must.
 
 const execute = vi.hoisted(() => vi.fn());
+const projectionMaintenance = (sql: string) =>
+  sql.includes("insert into due_work") ||
+  sql.includes("public_aggregate_state") ||
+  sql.includes("artist_qualification_state") ||
+  sql.includes("projection_repairs");
 
 vi.mock("./db", () => ({
   // `updateTrack` fans ONE logical write out across the tracks/findings pair, issued as a
@@ -20,7 +25,7 @@ vi.mock("./db", () => ({
     batch: (statements: { args?: unknown[]; sql: string }[]) =>
       Promise.all(
         statements.map((statement) =>
-          statement.sql.includes("insert into due_work")
+          projectionMaintenance(statement.sql)
             ? Promise.resolve({ rows: [], rowsAffected: 1 })
             : execute(statement),
         ),

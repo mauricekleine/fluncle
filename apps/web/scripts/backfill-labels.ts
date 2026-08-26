@@ -45,8 +45,8 @@ import { restaleCatalogueRankByLabelStatement } from "../src/lib/server/catalogu
 import {
   batchDueWorkSourceMutation,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "../src/lib/server/due-work";
 
 /** The once-ever marker: present ⇒ the D7 bootstrap has already run. */
@@ -194,9 +194,9 @@ export async function linkTracksToLabels(
 
     const certified = Number(census.rows[0]?.cert ?? 0);
     // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
-    const [, updated] = await client.batch(
+    const results = await client.batch(
       [
-        markDueWorkSourceRepairsFromSelectStatement(
+        ...markDueWorkSourceMaintenanceFromSelectStatements(
           "track",
           {
             args: [raw],
@@ -214,7 +214,7 @@ export async function linkTracksToLabels(
       "write",
     );
 
-    linked += updated?.rowsAffected ?? 0;
+    linked += results.at(-2)?.rowsAffected ?? 0;
   }
 
   return linked;
@@ -347,7 +347,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
           sql: `update labels set seed_state = ?, updated_at = ?
                 where id = ? and ruled_at is null`,
         },
-        markDueWorkSourceRepairsStatement(
+        ...markDueWorkSourceMaintenanceStatements(
           [
             { subjectId: labelId, subjectType: "label" },
             {
@@ -358,7 +358,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
           { onlyIfPreviousStatementChanged: true, producer: "backfill-label-seed" },
         ),
         restaleCatalogueRankByLabelStatement(labelId),
-        markDueWorkSourceRepairsFromSelectStatement(
+        ...markDueWorkSourceMaintenanceFromSelectStatements(
           "track",
           {
             args: [labelId],

@@ -33,7 +33,7 @@ import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { markDueWorkSourceRepairsFromSelectStatement } from "../src/lib/server/due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type HubCountsBackfillResult = {
   /** Rows written per entity table. Absent when the run was skipped. */
@@ -59,7 +59,7 @@ const PASSES = [
     }),
     key: "labels" as const,
     marker: () =>
-      markDueWorkSourceRepairsFromSelectStatement(
+      markDueWorkSourceMaintenanceFromSelectStatements(
         "label",
         {
           sql: `select label_id as subject_id from tracks
@@ -83,7 +83,7 @@ const PASSES = [
     }),
     key: "albums" as const,
     marker: () =>
-      markDueWorkSourceRepairsFromSelectStatement(
+      markDueWorkSourceMaintenanceFromSelectStatements(
         "album",
         {
           sql: `select album_id as subject_id from tracks
@@ -109,7 +109,7 @@ const PASSES = [
     }),
     key: "artists" as const,
     marker: () =>
-      markDueWorkSourceRepairsFromSelectStatement(
+      markDueWorkSourceMaintenanceFromSelectStatements(
         "artist",
         {
           sql: `select artist_id as subject_id from track_artists group by artist_id`,
@@ -140,11 +140,11 @@ export async function backfillHubCounts(
   const filled = { albums: 0, artists: 0, labels: 0 };
 
   for (const pass of PASSES) {
-    const [, result] = await client.batch(
-      [pass.marker(), pass.backfillHubCountStatement()],
+    const results = await client.batch(
+      [...pass.marker(), pass.backfillHubCountStatement()],
       "write",
     );
-    filled[pass.key] = result?.rowsAffected ?? 0;
+    filled[pass.key] = results.at(-1)?.rowsAffected ?? 0;
   }
 
   return { filled, skipped: false };

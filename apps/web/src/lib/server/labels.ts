@@ -32,13 +32,17 @@ import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl, labelLogoUrl } from "../media";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankByLabelStatement } from "./catalogue-rank-restale";
+import {
+  markCrawlProjectionRepairStatement,
+  markCrawlProjectionRepairsFromSelectStatement,
+} from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   type DueWorkStatement,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import {
   type HubOrderedPageShape,
@@ -262,7 +266,7 @@ export async function ensureLabel(
               values (?, ?, ?, ?, ?, ?)
               on conflict (slug) do nothing`,
       },
-      markDueWorkSourceRepairsStatement([{ subjectId: labelId, subjectType: "label" }], {
+      ...markDueWorkSourceMaintenanceStatements([{ subjectId: labelId, subjectType: "label" }], {
         onlyIfPreviousStatementChanged: true,
         producer: "label-mint",
       }),
@@ -1832,7 +1836,7 @@ export async function reconcileLabels(): Promise<number> {
                 values (?, ?, ?, ?, ?)
                 on conflict (slug) do nothing`,
         },
-        markDueWorkSourceRepairsStatement([{ subjectId: labelId, subjectType: "label" }], {
+        ...markDueWorkSourceMaintenanceStatements([{ subjectId: labelId, subjectType: "label" }], {
           onlyIfPreviousStatementChanged: true,
           producer: "label-reconcile-mint",
         }),
@@ -2014,6 +2018,7 @@ export async function updateLabelSeedState(
 ): Promise<LabelAdminItem> {
   const db = await getDb();
   const now = new Date().toISOString();
+  const sourceVersion = `label-seed-state:${randomUUID()}`;
   const assignments: string[] = [];
   const args: string[] = [];
 
@@ -2035,7 +2040,7 @@ export async function updateLabelSeedState(
       args,
       sql: `update labels set ${assignments.join(", ")} where id = ?`,
     },
-    markDueWorkSourceRepairsStatement(
+    ...markDueWorkSourceMaintenanceStatements(
       [
         { subjectId: id, subjectType: "label" },
         ...(seedState === undefined
@@ -2048,6 +2053,8 @@ export async function updateLabelSeedState(
             ]),
       ],
       {
+        markerVersion: sourceVersion,
+        now,
         onlyIfPreviousStatementChanged: true,
         producer: "label-seed-state",
       },
@@ -2059,16 +2066,31 @@ export async function updateLabelSeedState(
   if (seedState !== undefined) {
     statements.push(
       restaleCatalogueRankByLabelStatement(id),
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "track",
         {
           args: [id],
           sql: `select track_id as subject_id from tracks where label_id = ?`,
         },
-        { producer: "label-seed-state" },
+        {
+          markerVersion: sourceVersion,
+          now,
+          producer: "label-seed-state",
+        },
       ),
     );
   }
+
+  statements.push(
+    markCrawlProjectionRepairsFromSelectStatement(
+      "label",
+      {
+        args: [id, now],
+        sql: `select slug as source_id from labels where id = ? and updated_at = ?`,
+      },
+      { now, sourceVersion },
+    ),
+  );
 
   await db.batch(statements, "write");
 
@@ -2117,9 +2139,9 @@ export async function fillEmptyLabelBio(
   const db = await getDb();
   const now = new Date().toISOString();
   const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
-  const [, result] = await db.batch(
+  const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "label",
         {
           args: [slug],
@@ -2140,7 +2162,7 @@ export async function fillEmptyLabelBio(
     "write",
   );
 
-  return (result?.rowsAffected ?? 0) > 0;
+  return (results.at(-1)?.rowsAffected ?? 0) > 0;
 }
 
 /** One row of the bio worklist: a label with findings but no bio yet. */
@@ -2454,7 +2476,6 @@ export async function mergeLabel(
   canonicalSlug: string,
 ): Promise<MergeLabelResult> {
   const db = await getDb();
-
   const [loser, canonical] = await Promise.all([
     getLabelMergeRow(losingSlug),
     getLabelMergeRow(canonicalSlug),
@@ -2555,6 +2576,7 @@ export async function mergeLabel(
   }
 
   const now = new Date().toISOString();
+  const sourceVersion = `label-merge:${randomUUID()}`;
 
   // ── the maintained hub counts (keystone 2): census the loser's tracks BEFORE the re-point ──
   // Every track pointed at the loser lands on the canonical, so the canonical's two counters gain
@@ -2646,28 +2668,49 @@ export async function mergeLabel(
     },
   ];
 
+  const trackMaintenance = markDueWorkSourceMaintenanceFromSelectStatements(
+    "track",
+    {
+      args: [loser.id],
+      sql: `select track_id as subject_id from tracks where label_id = ?`,
+    },
+    { markerVersion: sourceVersion, now, producer: "label-merge" },
+  );
+  const crawlRuleMaintenance = markCrawlProjectionRepairsFromSelectStatement(
+    "artist",
+    {
+      args: [loser.id],
+      sql: `select distinct artist_mbid as source_id from artist_rules where label_id = ?`,
+    },
+    { now, sourceVersion },
+  );
   const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
-        "track",
-        {
-          args: [loser.id],
-          sql: `select track_id as subject_id from tracks where label_id = ?`,
-        },
-        { producer: "label-merge" },
-      ),
+      ...trackMaintenance,
+      crawlRuleMaintenance,
       ...statements,
-      markDueWorkSourceRepairsStatement(
+      ...markDueWorkSourceMaintenanceStatements(
         [
           { subjectId: canonical.id, subjectType: "label" },
           { subjectId: loser.id, subjectType: "label" },
         ],
-        { producer: "label-merge" },
+        { markerVersion: sourceVersion, now, producer: "label-merge" },
       ),
+      markCrawlProjectionRepairStatement("label", canonical.slug, {
+        now,
+        sourceVersion,
+      }),
+      markCrawlProjectionRepairStatement("label", loser.slug, {
+        now,
+        sourceVersion,
+      }),
     ],
     "write",
   );
-  const sourceResults = results.slice(1, 1 + statements.length);
+  const sourceResults = results.slice(
+    trackMaintenance.length + 1,
+    trackMaintenance.length + 1 + statements.length,
+  );
 
   return {
     aliasWritten: { alias: loser.name, aliasSlug: loser.slug },

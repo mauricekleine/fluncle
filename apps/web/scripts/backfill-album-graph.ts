@@ -46,7 +46,7 @@ import { randomUUID } from "node:crypto";
 import { hubCountDeltaStatement } from "../src/lib/server/hub-counts";
 import {
   batchDueWorkSourceMutation,
-  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
 } from "../src/lib/server/due-work";
 
 export type AlbumsBackfillResult = {
@@ -190,9 +190,9 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
 
     const certified = Number(census.rows[0]?.cert ?? 0);
     // ONE batch, because a half-applied pair IS drift and a maintained counter fails silently.
-    const [, updated] = await client.batch(
+    const results = await client.batch(
       [
-        markDueWorkSourceRepairsFromSelectStatement(
+        ...markDueWorkSourceMaintenanceFromSelectStatements(
           "track",
           {
             args: [raw],
@@ -210,7 +210,7 @@ export async function linkTracksToAlbums(client: Client): Promise<number> {
       "write",
     );
 
-    linked += updated?.rowsAffected ?? 0;
+    linked += results.at(-2)?.rowsAffected ?? 0;
   }
 
   return linked;
