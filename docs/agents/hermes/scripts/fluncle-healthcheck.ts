@@ -2098,38 +2098,101 @@ export function buildStrainAlert(newly: string[], cleared: string[]): string | n
 // on a 2xx ack.
 // ---------------------------------------------------------------------------
 
-async function postSnapshot(at: string, checks: CheckWithTransition[]): Promise<boolean> {
-  if (!WORKER_URL) {
+const HEALTH_SNAPSHOT_PRODUCER = "hermes-healthcheck";
+
+type SnapshotFetch = (input: string, init: RequestInit, timeoutMs?: number) => Promise<Response>;
+
+function normalizeSnapshotMessage(message: string | null): string | null {
+  const collapsed = message?.replace(/\s+/g, " ").trim() ?? "";
+
+  if (collapsed.length === 0) {
+    return null;
+  }
+
+  return collapsed.length > 160 ? `${collapsed.slice(0, 159)}…` : collapsed;
+}
+
+export async function healthSnapshotReceiptMetadata(
+  at: string,
+  checks: CheckWithTransition[],
+): Promise<{
+  at: string;
+  checks: CheckWithTransition[];
+  operationKey: string;
+  producer: string;
+  requestDigest: string;
+}> {
+  const canonicalAt = new Date(at).toISOString();
+  const canonicalChecks = checks.map((check) => ({
+    latencyMs: check.latencyMs,
+    message: normalizeSnapshotMessage(check.message),
+    service: check.service.trim(),
+    status: check.status,
+    transitioned: check.transitioned,
+  }));
+  const canonicalRequest = JSON.stringify({
+    at: canonicalAt,
+    checks: canonicalChecks,
+    producer: HEALTH_SNAPSHOT_PRODUCER,
+  });
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalRequest),
+  );
+  const requestDigest = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+  return {
+    at: canonicalAt,
+    checks: canonicalChecks,
+    operationKey: `health.snapshot:${HEALTH_SNAPSHOT_PRODUCER}:${canonicalAt}`,
+    producer: HEALTH_SNAPSHOT_PRODUCER,
+    requestDigest,
+  };
+}
+
+export async function postSnapshot(
+  at: string,
+  checks: CheckWithTransition[],
+  transport: SnapshotFetch = fetchWithTimeout,
+  config: {
+    token?: string;
+    wait?: () => Promise<void>;
+    workerUrl?: string;
+  } = {},
+): Promise<boolean> {
+  const workerUrl = config.workerUrl ?? WORKER_URL;
+  const token = config.token ?? FLUNCLE_API_TOKEN;
+
+  if (!workerUrl) {
     log("no HEALTHCHECK_WORKER_URL — cannot POST the snapshot");
 
     return false;
   }
 
-  if (!FLUNCLE_API_TOKEN) {
+  if (!token) {
     log("no FLUNCLE_API_TOKEN in the cron env — cannot POST the snapshot");
 
     return false;
   }
 
-  const body = JSON.stringify({
-    at,
-    checks: checks.map((check) => ({
-      latencyMs: check.latencyMs,
-      message: check.message,
-      service: check.service,
-      status: check.status,
-      transitioned: check.transitioned,
-    })),
+  const metadata = await healthSnapshotReceiptMetadata(at, checks);
+  const body = JSON.stringify(metadata);
+  const reconcileBody = JSON.stringify({
+    operationId: "health.snapshot",
+    operationKey: metadata.operationKey,
+    requestDigest: metadata.requestDigest,
   });
 
   for (let attempt = 1; attempt <= POST_ATTEMPTS; attempt++) {
     try {
-      const response = await fetchWithTimeout(
-        `${WORKER_URL}/api/v1/admin/health`,
+      const response = await transport(
+        `${workerUrl}/api/v1/admin/health`,
         {
           body,
           headers: {
-            Authorization: `Bearer ${FLUNCLE_API_TOKEN}`,
+            Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           method: "POST",
@@ -2141,24 +2204,59 @@ async function postSnapshot(at: string, checks: CheckWithTransition[]): Promise<
         return true;
       }
 
-      // A 4xx/5xx is a definitive answer, not a transient abort — don't retry it.
-      log(`record_health POST returned HTTP ${response.status} (best-effort, ignored)`);
+      // A client rejection is definitive. A gateway/server failure (including Cloudflare's
+      // 524) is ambiguous: the Worker may have committed before the response was lost, so it
+      // must take the same digest-bound reconciliation path as a thrown transport timeout.
+      if (response.status < 500) {
+        log(`record_health POST returned HTTP ${response.status} (best-effort, ignored)`);
+        return false;
+      }
 
-      return false;
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error("record_health POST returned an ambiguous server response");
+    } catch {
+      try {
+        const reconciliation = await transport(
+          `${workerUrl}/api/v1/admin/operation-receipts/resolve`,
+          {
+            body: reconcileBody,
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          },
+          POST_TIMEOUT_MS,
+        );
+
+        if (!reconciliation.ok) {
+          log("record_health reconciliation unavailable; snapshot was not replayed");
+          return false;
+        }
+
+        const payload = (await reconciliation.json()) as {
+          receipt?: { outcome?: string };
+        };
+        const outcome = payload.receipt?.outcome;
+        if (outcome === "committed") {
+          return true;
+        }
+
+        if (outcome !== "safely-retryable") {
+          log("record_health reconciliation did not authorize replay");
+          return false;
+        }
+      } catch {
+        log("record_health reconciliation unavailable; snapshot was not replayed");
+        return false;
+      }
 
       if (attempt < POST_ATTEMPTS) {
-        log(`record_health POST attempt ${attempt}/${POST_ATTEMPTS} failed (${detail}); retrying`);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-
+        log(`record_health POST attempt ${attempt}/${POST_ATTEMPTS} was safely retryable`);
+        await (config.wait?.() ?? new Promise((resolve) => setTimeout(resolve, 1000)));
         continue;
       }
 
-      log(
-        `record_health POST failed after ${POST_ATTEMPTS} attempts (best-effort, ignored): ${detail}`,
-      );
-
+      log(`record_health POST failed after ${POST_ATTEMPTS} reconciled attempts`);
       return false;
     }
   }

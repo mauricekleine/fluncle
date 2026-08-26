@@ -1,18 +1,119 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { createProgram } from "../../../../cli/src/cli";
 import { type Argument, type ArrayExpression, parseSync, Visitor } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { DATABASE_OPERATION_ID_MAX_LENGTH, isDatabaseOperationId } from "./database-observability";
 import {
   DATABASE_OPERATION_REGISTRY,
+  INCIDENT_MUTATION_POLICIES,
   type OperationCadence,
   resolveDatabaseOperationOwner,
+  TRIGGER_MUTATION_POLICY_IDS,
+  WRITE_MUTATION_POLICIES,
 } from "./database-operation-registry";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
 const HERMES_ROOT = join(REPO_ROOT, "docs/agents/hermes");
+const RECURRING_ROOTS = [
+  HERMES_ROOT,
+  join(REPO_ROOT, "apps/sonar/deploy"),
+  join(REPO_ROOT, "apps/ssh/deploy"),
+  join(REPO_ROOT, "apps/ssh/watchdog"),
+];
 const SCRIPTS = "docs/agents/hermes/scripts";
+const EXPECTED_WRITE_OPERATION_IDS = [
+  "analytics.funnel-snapshot",
+  "artist.resolve",
+  "backfill.artist-credits",
+  "backfill.artist-edges",
+  "backfill.cover-masters",
+  "backfill.label-images",
+  "backfill.label-lineage",
+  "backfill.recording-mbids",
+  "backfill.vendor-sweep",
+  "bio.album",
+  "bio.artist",
+  "bio.label",
+  "catalogue.anchor",
+  "catalogue.crawl",
+  "catalogue.demand",
+  "catalogue.isrc-recovery",
+  "catalogue.label-releases",
+  "catalogue.rank",
+  "catalogue.reconcile-hub-counts",
+  "catalogue.verify-captures",
+  "clips.studio",
+  "device.mirror",
+  "frontier.refresh",
+  "galaxies.cluster",
+  "health.snapshot",
+  "live.snapshot",
+  "logbook.draft",
+  "newsletter.draft",
+  "ops.pin-watch",
+  "ops.rave-watchdog",
+  "ops.sonar-freshen",
+  "ops.ssh-freshen",
+  "reach.collect",
+  "social.capture",
+  "social.metrics",
+  "social.publish-advance",
+  "submissions.triage",
+  "track.capture",
+  "track.context",
+  "track.embed",
+  "track.enrich",
+  "track.note",
+  "track.observe",
+] as const;
+const EXPECTED_INCIDENT_FUNCTION_NAMES = [
+  "fillEmptyAlbumBio",
+  "listDeezerWork",
+  "markResolved",
+  "rearmStaleAllowedArtists",
+  "stripCrawlerPrefixes",
+] as const;
+const EXPECTED_RECEIPT_BACKED_OPERATION_IDS = ["health.snapshot"] as const;
+const EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS = [
+  "clips.studio",
+  "frontier.refresh",
+  "ops.pin-watch",
+  "ops.rave-watchdog",
+  "ops.sonar-freshen",
+  "ops.ssh-freshen",
+  "track.capture",
+  "track.embed",
+  "track.enrich",
+  "track.observe",
+] as const;
+const EXPECTED_MUTATION_DISPOSITION_KINDS = new Set([
+  "deliberately-non-replayable",
+  "not-applicable",
+  "receipt-backed",
+  "replay-safe-idempotent",
+]);
+
+function sorted(values: readonly string[]): string[] {
+  return [...values].sort();
+}
+
+function resolveNamedImportSource(importerSource: string, importedName: string): string {
+  const importerPath = join(REPO_ROOT, importerSource);
+  const importer = readFileSync(importerPath, "utf8");
+  const namedImport = new RegExp(
+    `import\\s*\\{[^}]*\\b${importedName}\\b[^}]*\\}\\s*from\\s*["']([^"']+)["']`,
+    "s",
+  ).exec(importer);
+  const specifier = namedImport?.[1];
+
+  if (!specifier?.startsWith(".")) {
+    throw new Error(`${importerSource} does not import ${importedName} from a local module`);
+  }
+
+  const sourcePath = resolve(dirname(importerPath), `${specifier}.ts`);
+  return relative(REPO_ROOT, sourcePath).replaceAll("\\", "/");
+}
 
 function filesBelow(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
@@ -194,7 +295,7 @@ function discoverShellCliCalls(source: string): DiscoveredCliCall[] {
 }
 
 function reachableTimerSources(): string[] {
-  const localScripts = filesBelow(HERMES_ROOT)
+  const localScripts = RECURRING_ROOTS.flatMap(filesBelow)
     .filter(
       (path) =>
         /\.(?:py|sh|ts)$/.test(path) &&
@@ -245,9 +346,17 @@ function reachableTimerSources(): string[] {
   return [...reachable].sort();
 }
 
+function allMutationDispositions() {
+  return DATABASE_OPERATION_REGISTRY.flatMap((operation) => [
+    operation.mutationDisposition,
+    ...operation.triggers.map((trigger) => trigger.mutationDisposition),
+    ...operation.incidents.map((incident) => incident.mutationDisposition),
+  ]);
+}
+
 describe("database operation registry", () => {
-  it("covers every committed Hermes timer and pins its exact cadence", () => {
-    const timerSources = filesBelow(HERMES_ROOT)
+  it("covers every committed recurring timer and pins its exact cadence", () => {
+    const timerSources = RECURRING_ROOTS.flatMap(filesBelow)
       .filter((path) => path.endsWith(".timer"))
       .map((path) => relative(REPO_ROOT, path))
       .sort();
@@ -379,6 +488,52 @@ describe("database operation registry", () => {
     }
   });
 
+  it("classifies every recurring raw health writer and its receipt metadata", () => {
+    const rawCallers = RECURRING_ROOTS.flatMap(filesBelow)
+      .filter((path) => /\.(?:sh|ts)$/.test(path) && !path.endsWith(".test.ts"))
+      .filter((path) => {
+        const body = readFileSync(path, "utf8");
+        const withoutBlockComments = path.endsWith(".ts")
+          ? body.replace(/\/\*[\s\S]*?\*\//g, "")
+          : body;
+        return withoutBlockComments
+          .split("\n")
+          .filter((line) => !/^\s*(?:#|\/\/)/.test(line))
+          .join("\n")
+          .includes("/api/v1/admin/health");
+      })
+      .map((path) => relative(REPO_ROOT, path))
+      .sort();
+    const registered = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.triggers)
+      .filter(
+        (trigger) =>
+          trigger.kind === "worker-endpoint" && trigger.target === "POST /api/v1/admin/health",
+      )
+      .map((trigger) => trigger.source)
+      .sort();
+
+    expect(registered).toEqual(rawCallers);
+    expect(new Set(registered).size).toBe(registered.length);
+
+    for (const source of rawCallers) {
+      const body = readFileSync(join(REPO_ROOT, source), "utf8");
+      expect(body, source).toContain("operationKey");
+      expect(body, source).toContain("producer");
+      expect(body, source).toContain("requestDigest");
+
+      if (source.endsWith(".sh")) {
+        expect(body, source).toContain('{"at":"%s","checks":[{"latencyMs":');
+        expect(body, source).toContain('}],"producer":"%s"}');
+        expect(body, source).toContain('key="health.snapshot:${producer}:${at}"');
+        expect(body, source).toContain("sha256sum");
+        expect(body, source).toContain("shasum -a 256");
+      } else {
+        expect(body, source).toContain("healthSnapshotReceiptMetadata");
+        expect(body, source).toContain("crypto.subtle.digest");
+      }
+    }
+  });
+
   it("makes the six direct Worker database timers explicit", () => {
     const expected = [
       "catalogue.anchor",
@@ -396,22 +551,20 @@ describe("database operation registry", () => {
 
     for (const operation of direct) {
       expect(operation.accessClass).toBe("write");
-      expect(operation.mutationDisposition).toBe("needs-policy");
+      expect(operation.mutationDisposition.kind).toBe(
+        operation.operationId === "track.capture"
+          ? "deliberately-non-replayable"
+          : "replay-safe-idempotent",
+      );
       expect(operation.triggers.some((trigger) => trigger.kind === "worker-endpoint")).toBe(true);
     }
   });
 
-  it("names all five audited incident functions without assigning Goal E policy", () => {
+  it("names all five audited incident functions and assigns their disposition", () => {
     const incidents = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.incidents);
 
-    expect(incidents.map((incident) => incident.functionName).sort()).toEqual(
-      [
-        "fillEmptyAlbumBio",
-        "listDeezerWork",
-        "markResolved",
-        "rearmStaleAllowedArtists",
-        "stripCrawlerPrefixes",
-      ].sort(),
+    expect(sorted(incidents.map((incident) => incident.functionName))).toEqual(
+      sorted(EXPECTED_INCIDENT_FUNCTION_NAMES),
     );
 
     for (const incident of incidents) {
@@ -420,12 +573,117 @@ describe("database operation registry", () => {
       );
       const source = readFileSync(join(REPO_ROOT, incident.source), "utf8");
       expect(owner, incident.functionName).toBeDefined();
-      expect(owner?.mutationDisposition, incident.functionName).toBe("needs-policy");
+      expect(owner?.mutationDisposition.kind, incident.functionName).toBe("replay-safe-idempotent");
+      expect(incident.mutationDisposition.kind, incident.functionName).toBe(
+        "replay-safe-idempotent",
+      );
+      expect(incident.mutationDisposition.evidenceSource, incident.functionName).toBe(
+        incident.source,
+      );
       expect(new RegExp(`\\b${incident.functionName}\\b`).test(source), incident.source).toBe(true);
     }
   });
 
-  it("requires a placeholder on every write and explicitly classifies no-database timers", () => {
+  it("binds reach.collect evidence to the mutation module called by its write handler", () => {
+    const handlerSource = "apps/web/src/lib/server/orpc/admin-reach.ts";
+    const handler = readFileSync(join(REPO_ROOT, handlerSource), "utf8");
+    const mutationSource = resolveNamedImportSource(handlerSource, "recordPlatformStats");
+    const policy = WRITE_MUTATION_POLICIES["reach.collect"];
+
+    expect(handler).toMatch(/await recordPlatformStats\(\)/);
+    expect(policy.evidenceSource).toBe(mutationSource);
+    expect(policy.kind).toBe("replay-safe-idempotent");
+  });
+
+  it("machine-checks complete mutation disposition coverage", () => {
+    const writeOperations = DATABASE_OPERATION_REGISTRY.filter(
+      (operation) => operation.accessClass === "write",
+    );
+    const writeTriggers = DATABASE_OPERATION_REGISTRY.flatMap(
+      (operation) => operation.triggers,
+    ).filter((trigger) => trigger.accessClass === "write");
+    const receiptBacked = writeOperations
+      .filter((operation) => operation.mutationDisposition.kind === "receipt-backed")
+      .map((operation) => operation.operationId);
+    const deliberatelyNonReplayable = writeOperations
+      .filter((operation) => operation.mutationDisposition.kind === "deliberately-non-replayable")
+      .map((operation) => operation.operationId);
+    const incidents = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.incidents);
+    const dispositions = allMutationDispositions();
+    const receiptBackedIds = new Set<string>(EXPECTED_RECEIPT_BACKED_OPERATION_IDS);
+    const deliberatelyNonReplayableIds = new Set<string>(
+      EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS,
+    );
+
+    expect(sorted(writeOperations.map((operation) => operation.operationId))).toEqual(
+      sorted(EXPECTED_WRITE_OPERATION_IDS),
+    );
+    expect(sorted(Object.keys(WRITE_MUTATION_POLICIES))).toEqual(
+      sorted(EXPECTED_WRITE_OPERATION_IDS),
+    );
+    expect(sorted(Object.keys(TRIGGER_MUTATION_POLICY_IDS))).toEqual(
+      sorted([...new Set(writeTriggers.map((trigger) => trigger.operationId))]),
+    );
+    expect(sorted(incidents.map((incident) => incident.functionName))).toEqual(
+      sorted(EXPECTED_INCIDENT_FUNCTION_NAMES),
+    );
+    expect(sorted(Object.keys(INCIDENT_MUTATION_POLICIES))).toEqual(
+      sorted(EXPECTED_INCIDENT_FUNCTION_NAMES),
+    );
+    expect(sorted(receiptBacked)).toEqual(sorted(EXPECTED_RECEIPT_BACKED_OPERATION_IDS));
+    expect(sorted(deliberatelyNonReplayable)).toEqual(
+      sorted(EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS),
+    );
+    expect(new Set(dispositions.map((disposition) => disposition.kind))).toEqual(
+      EXPECTED_MUTATION_DISPOSITION_KINDS,
+    );
+
+    for (const operation of DATABASE_OPERATION_REGISTRY) {
+      if (operation.accessClass !== "write") {
+        expect(operation.mutationDisposition.kind, operation.operationId).toBe("not-applicable");
+        continue;
+      }
+
+      const expectedKind = receiptBackedIds.has(operation.operationId)
+        ? "receipt-backed"
+        : deliberatelyNonReplayableIds.has(operation.operationId)
+          ? "deliberately-non-replayable"
+          : "replay-safe-idempotent";
+      expect(operation.mutationDisposition.kind, operation.operationId).toBe(expectedKind);
+    }
+
+    for (const trigger of writeTriggers) {
+      const policyId =
+        TRIGGER_MUTATION_POLICY_IDS[
+          trigger.operationId as keyof typeof TRIGGER_MUTATION_POLICY_IDS
+        ];
+      expect(policyId, trigger.operationId).toBeDefined();
+      if (policyId === undefined) {
+        throw new Error(`missing trigger policy for ${trigger.operationId}`);
+      }
+      expect(trigger.mutationDisposition.kind, trigger.operationId).toBe(
+        WRITE_MUTATION_POLICIES[policyId].kind,
+      );
+    }
+
+    for (const incident of incidents) {
+      expect(incident.mutationDisposition.kind, incident.functionName).toBe(
+        "replay-safe-idempotent",
+      );
+    }
+
+    for (const disposition of dispositions) {
+      expect(disposition.evidenceSource.trim()).not.toBe("");
+      expect(
+        existsSync(join(REPO_ROOT, disposition.evidenceSource)),
+        disposition.evidenceSource,
+      ).toBe(true);
+      expect(disposition.rationale.trim()).not.toBe("");
+      expect(disposition.reconciliation.trim()).not.toBe("");
+    }
+  });
+
+  it("requires structured dispositions on every recurring operation and trigger", () => {
     const noDatabaseTimers = DATABASE_OPERATION_REGISTRY.filter(
       (operation) => operation.accessClass === null,
     );
@@ -453,9 +711,11 @@ describe("database operation registry", () => {
       expect(operation.accessClass, operation.operationId).toBe(aggregate);
 
       if (operation.accessClass === "write") {
-        expect(operation.mutationDisposition, operation.operationId).toBe("needs-policy");
+        expect(operation.mutationDisposition.kind, operation.operationId).not.toBe(
+          "not-applicable",
+        );
       } else {
-        expect(operation.mutationDisposition, operation.operationId).toBe("not-applicable");
+        expect(operation.mutationDisposition.kind, operation.operationId).toBe("not-applicable");
       }
 
       if (operation.accessClass === null) {
@@ -463,8 +723,12 @@ describe("database operation registry", () => {
       }
 
       for (const trigger of operation.triggers) {
-        expect(trigger.mutationDisposition, trigger.operationId).toBe(
-          trigger.accessClass === "write" ? "needs-policy" : "not-applicable",
+        expect(trigger.mutationDisposition.kind, trigger.operationId).toBe(
+          trigger.accessClass === "write"
+            ? trigger.operationId === "health.snapshot"
+              ? "receipt-backed"
+              : operation.mutationDisposition.kind
+            : "not-applicable",
         );
       }
     }

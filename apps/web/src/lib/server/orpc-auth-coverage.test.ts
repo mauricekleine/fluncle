@@ -415,6 +415,11 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
+  // The health writer's agent must inspect an ambiguous timeout before any replay. The bounded
+  // key travels in a POST body so diagnostics never capture it from a route URL.
+  get_operation_receipt: "admin",
+  // Initialization-era CLI compatibility. Sentry redacts the keyed path until Goal H removes it.
+  get_operation_receipt_legacy: "admin",
   get_private_account_export: "private-session",
   // One of the signed-in user's frozen Frontier editions + its tracklist — private-session
   // (privateUserAuth), the get_private_frontier_playlist precedent. Scoped by the session
@@ -622,6 +627,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // whose stored counts disagreed with truth — it cannot mint a coordinate, write a note, or
   // certify anything — so the box's nightly cron drives it with the agent token it already holds.
   reconcile_hub_counts: "admin",
+  // Stale accepted receipt repair terminalizes rows and remains operator-only.
+  reconcile_operation_receipts: "operator",
   // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost
   // rows with the agent token, and it writes only the internal cost_events ledger
@@ -730,6 +737,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   resolve_note_rejection: "operator",
   // Rendering a held observation overrules the gate and spends a Cartesia render — publish-class.
   resolve_observation_rejection: "operator",
+  // Digest-bound reconciliation is read-only and agent-allowed.
+  resolve_operation_receipt: "admin",
   // The Mixcloud metadata re-sync — operator tier: it EDITS a LIVE published cloudcast's
   // sections[] (the Mixcloud edit endpoint, server-side with the mixcloud_auth token),
   // so the agent token 403s (the parity twin of resync_mixtape_youtube).

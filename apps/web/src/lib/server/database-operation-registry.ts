@@ -1,6 +1,22 @@
 import { type DatabaseAccessClass, isDatabaseOperationId } from "./database-observability";
 
-export type OperationMutationDisposition = "needs-policy" | "not-applicable";
+export type OperationMutationDispositionKind =
+  | "deliberately-non-replayable"
+  | "not-applicable"
+  | "receipt-backed"
+  | "replay-safe-idempotent";
+
+type OperationMutationDispositionDetails = Readonly<{
+  evidenceSource: string;
+  rationale: string;
+  reconciliation: string;
+}>;
+
+export type OperationMutationDisposition =
+  | (OperationMutationDispositionDetails & { kind: "deliberately-non-replayable" })
+  | (OperationMutationDispositionDetails & { kind: "not-applicable" })
+  | (OperationMutationDispositionDetails & { kind: "receipt-backed" })
+  | (OperationMutationDispositionDetails & { kind: "replay-safe-idempotent" });
 export type OperationTriggerKind = "cli" | "direct-database" | "no-database" | "worker-endpoint";
 
 export type OperationCadence = Readonly<{
@@ -27,6 +43,7 @@ export type OperationTrigger = Readonly<{
 
 export type IncidentOperation = Readonly<{
   functionName: string;
+  mutationDisposition: OperationMutationDisposition;
   operationId: string;
   source: string;
 }>;
@@ -52,37 +69,495 @@ export type RecurringDatabaseOperation = Readonly<{
 
 type OperationDefinition = Omit<
   RecurringDatabaseOperation,
-  "incidents" | "owner" | "serviceSource" | "timerSource"
+  "incidents" | "mutationDisposition" | "owner" | "serviceSource" | "timerSource"
 > & {
-  directory: string;
+  directory?: string;
   incidents?: readonly IncidentOperation[];
   service?: string;
+  serviceSource?: string;
   telemetryUnit?: string;
   timer?: string;
+  timerSource?: string;
 };
 
 const HERMES_ROOT = "docs/agents/hermes";
 
+type MutationPolicy = Omit<OperationMutationDisposition, "evidenceSource"> & {
+  evidenceSource: string;
+};
+
+export const WRITE_MUTATION_POLICIES = {
+  "analytics.funnel-snapshot": {
+    evidenceSource: "apps/web/src/lib/server/funnel.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The UTC-day row uses on-conflict update on its stable day key.",
+    reconciliation: "Read that UTC-day snapshot before repeating the bounded recompute.",
+  },
+  "artist.resolve": {
+    evidenceSource: "apps/web/src/lib/server/artists.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Identity, social, and image writes are guarded or upserted by stable artist keys.",
+    reconciliation: "Read the artist identity and social rows before repeating resolution.",
+  },
+  "backfill.artist-credits": {
+    evidenceSource: "apps/web/src/lib/server/backfill-artist-credits.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Artist edges use a natural conflict key and durable per-track drain state.",
+    reconciliation: "Read the bounded track work row and its edges before retrying it.",
+  },
+  "backfill.artist-edges": {
+    evidenceSource: "apps/web/src/lib/server/backfill-artist-edges.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Edge inserts ignore natural-key conflicts and visited rows carry a durable stamp.",
+    reconciliation: "Read the track's current edge set and visited stamp before retrying it.",
+  },
+  "backfill.cover-masters": {
+    evidenceSource: "apps/web/src/lib/server/cover-masters.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The bounded resolver fills one owned key/source and is explicitly idempotent.",
+    reconciliation: "Read the entity's owned cover key and source before resolving it again.",
+  },
+  "backfill.label-images": {
+    evidenceSource: "apps/web/src/lib/server/label-images.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The bounded resolver fills only missing label identity and image fields.",
+    reconciliation: "Read the label image fields before repeating that label's resolution.",
+  },
+  "backfill.label-lineage": {
+    evidenceSource: "apps/web/src/lib/server/label-lineage.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Lineage facts coalesce into missing fields and preserve prior values.",
+    reconciliation: "Read the label lineage fields before repeating that label's fill.",
+  },
+  "backfill.recording-mbids": {
+    evidenceSource: "apps/web/src/lib/server/recording-mbids.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Prefix fill requires null identity and resolved MBIDs use non-clobbering coalesce.",
+    reconciliation: "Read the recording MBID before retrying the bounded row.",
+  },
+  "backfill.vendor-sweep": {
+    evidenceSource: "apps/web/src/lib/server/backfill.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Vendor facts use existing-null guards or stable upserts; provider love is idempotent.",
+    reconciliation: "Read the bounded track's vendor fields before replaying that item.",
+  },
+  "bio.album": {
+    evidenceSource: "apps/web/src/lib/server/albums.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The SQL fill-empty predicate cannot overwrite an existing album bio.",
+    reconciliation: "Read the album bio; a non-empty value is the stable result.",
+  },
+  "bio.artist": {
+    evidenceSource: "apps/web/src/lib/server/artists.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The SQL fill-empty predicate cannot overwrite an existing artist bio.",
+    reconciliation: "Read the artist bio; a non-empty value is the stable result.",
+  },
+  "bio.label": {
+    evidenceSource: "apps/web/src/lib/server/labels.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The SQL fill-empty predicate cannot overwrite an existing label bio.",
+    reconciliation: "Read the label bio; a non-empty value is the stable result.",
+  },
+  "catalogue.anchor": {
+    evidenceSource: "apps/web/src/lib/server/catalogue.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Anchor resolution converges on the track's stable Spotify identity fields.",
+    reconciliation: "Read the bounded track's anchor fields before retrying resolution.",
+  },
+  "catalogue.crawl": {
+    evidenceSource: "apps/web/src/lib/server/crawl.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Frontier and track writes use conflict guards and durable watermark or lease state.",
+    reconciliation: "Read the claimed frontier node and lease before retrying that node.",
+  },
+  "catalogue.demand": {
+    evidenceSource: "apps/web/src/lib/server/demand.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Demand values are cleared and recomputed from current source truth.",
+    reconciliation: "Repeat the bounded recompute; the derived rows converge on current truth.",
+  },
+  "catalogue.isrc-recovery": {
+    evidenceSource: "apps/web/src/lib/server/recording-mbids.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Identity recovery fills only missing ISRC or anchor fields.",
+    reconciliation: "Read the bounded track's ISRC and anchor fields before retrying it.",
+  },
+  "catalogue.label-releases": {
+    evidenceSource: "apps/web/src/lib/server/label-releases.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Track minting uses the stable track ID with on-conflict do-nothing.",
+    reconciliation: "Read the track ID before repeating the bounded release item.",
+  },
+  "catalogue.rank": {
+    evidenceSource: "apps/web/src/lib/server/catalogue.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The rank transaction uses primary-keyed statements derived from current truth.",
+    reconciliation: "Repeat the bounded rank pass; stored rank rows converge by primary key.",
+  },
+  "catalogue.reconcile-hub-counts": {
+    evidenceSource: "apps/web/src/lib/server/hub-counts-reconcile.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Hub counts are recomputed from source truth, including stale nonzero rows.",
+    reconciliation: "Repeat the bounded reconciliation; zero corrected rows proves convergence.",
+  },
+  "catalogue.verify-captures": {
+    evidenceSource: "apps/web/src/lib/server/catalogue.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Verification records a guarded classification on an existing captured track.",
+    reconciliation: "Read the bounded track's current capture verdict before retrying it.",
+  },
+  "clips.studio": {
+    evidenceSource: "apps/web/src/lib/server/clips.ts",
+    kind: "deliberately-non-replayable",
+    rationale: "Cut and render artifacts are created outside the database transaction.",
+    reconciliation: "Inspect one clip's state and owned output artifact before recutting it.",
+  },
+  "device.mirror": {
+    evidenceSource: "docs/agents/hermes/scripts/device-mirror.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The source-to-device diff is a convergence operation over stable device identity.",
+    reconciliation: "Compare the bounded device state with its source before rerunning the diff.",
+  },
+  "frontier.refresh": {
+    evidenceSource: "apps/web/src/lib/server/frontier-playlist.ts",
+    kind: "deliberately-non-replayable",
+    rationale: "A refresh can mutate an external playlist beyond the database transaction.",
+    reconciliation:
+      "Inspect the bounded user's persisted and external playlist state before refresh.",
+  },
+  "galaxies.cluster": {
+    evidenceSource: "apps/web/src/lib/server/galaxies-map.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Map application upserts centroids and memberships from the same stable map input.",
+    reconciliation: "Read the current map generation before applying that generation again.",
+  },
+  "health.snapshot": {
+    evidenceSource: "apps/web/src/lib/server/status.ts",
+    kind: "receipt-backed",
+    rationale:
+      "Random-ID events and samples require the effect and terminal receipt to commit together.",
+    reconciliation: "Look up the operation receipt by key before any replay.",
+  },
+  "live.snapshot": {
+    evidenceSource: "apps/web/src/lib/server/live.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The live state is upserted into one fixed-identity row.",
+    reconciliation: "Read the singleton live-state row before repeating the snapshot.",
+  },
+  "logbook.draft": {
+    evidenceSource: "apps/web/src/lib/server/logbook.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Agent draft creation uses on-conflict do-nothing on the stable sector key.",
+    reconciliation: "Read the sector entry before retrying its draft.",
+  },
+  "newsletter.draft": {
+    evidenceSource: "apps/web/src/lib/server/newsletter.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Edition and window identity returns or rejects an existing draft instead of appending.",
+    reconciliation: "Read the edition window before retrying draft creation.",
+  },
+  "ops.pin-watch": {
+    evidenceSource: "docs/agents/hermes/pin-watch/rebuild-hermes.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "Image rebuild and deploy side effects cannot share a database transaction.",
+    reconciliation: "Inspect the one pinned image set and running release before rebuilding.",
+  },
+  "ops.rave-watchdog": {
+    evidenceSource: "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "External probes and alerts cannot share the health database transaction.",
+    reconciliation: "Inspect the watchdog state and current service health before rerunning it.",
+  },
+  "ops.sonar-freshen": {
+    evidenceSource: "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "Binary download, smoke, swap, and restart cannot share a database transaction.",
+    reconciliation: "Inspect the published and running release before rerunning deployment.",
+  },
+  "ops.ssh-freshen": {
+    evidenceSource: "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "Repository sync, build, swap, and restart cannot share a database transaction.",
+    reconciliation: "Inspect the source and running release before rerunning deployment.",
+  },
+  "reach.collect": {
+    evidenceSource: "apps/web/src/lib/server/platform-stats.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Snapshot rows use deterministic platform, metric, and UTC-day IDs with conflict suppression.",
+    reconciliation:
+      "Read that UTC day's platform/metric rows; replay only inserts identities still absent.",
+  },
+  "social.capture": {
+    evidenceSource: "apps/web/src/lib/server/clip-social.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "A posted clip with a captured permalink leaves the stable worklist.",
+    reconciliation: "Read the bounded post row's permalink before capturing it again.",
+  },
+  "social.metrics": {
+    evidenceSource: "apps/web/src/lib/server/social-metrics.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Metric snapshots are unique per external post, source, and UTC day.",
+    reconciliation: "Read that post/source/day row before repeating collection.",
+  },
+  "social.publish-advance": {
+    evidenceSource: "apps/web/src/lib/server/publish-advance.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "Publication rows use the stable track and platform identity with conflict suppression.",
+    reconciliation: "Read the bounded publication row before advancing it again.",
+  },
+  "submissions.triage": {
+    evidenceSource: "apps/web/src/lib/server/submissions.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "A verdict converges on the same stable submission row and terminal state.",
+    reconciliation: "Read the submission's current state before applying the verdict again.",
+  },
+  "track.capture": {
+    evidenceSource: "apps/web/src/lib/server/track-update.ts",
+    kind: "deliberately-non-replayable",
+    rationale: "Download and object-storage work precedes the mutable track update.",
+    reconciliation:
+      "Inspect one track's capture state, owned object, and hash before downloading again.",
+  },
+  "track.context": {
+    evidenceSource: "apps/web/src/lib/server/track-update.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "Context enrichment is guarded by the track's existing authored state.",
+    reconciliation: "Read the bounded track's context fields before reauthoring them.",
+  },
+  "track.embed": {
+    evidenceSource: "apps/web/src/lib/server/track-update.ts",
+    kind: "deliberately-non-replayable",
+    rationale: "Embedding computation and artifact handling precede the mutable track update.",
+    reconciliation: "Inspect one track's input and artifact fingerprints before recomputing it.",
+  },
+  "track.enrich": {
+    evidenceSource: "apps/web/src/lib/server/track-update.ts",
+    kind: "deliberately-non-replayable",
+    rationale: "External analysis is derived before its mutable provenance update.",
+    reconciliation: "Inspect one track's analysis provenance before deriving it again.",
+  },
+  "track.note": {
+    evidenceSource: "apps/web/src/lib/server/track-update.ts",
+    kind: "replay-safe-idempotent",
+    rationale: "The note writer has an in-SQL pending or empty guard.",
+    reconciliation: "Read the track note; a non-pending value is the stable result.",
+  },
+  "track.observe": {
+    evidenceSource: "apps/web/src/lib/server/track-update.ts",
+    kind: "deliberately-non-replayable",
+    rationale: "Observation creation represents a fresh authored observation and provenance.",
+    reconciliation: "Inspect one track's observation and provenance before authoring another.",
+  },
+} as const satisfies Record<string, MutationPolicy>;
+
+type WriteMutationPolicyId = keyof typeof WRITE_MUTATION_POLICIES;
+
+/** Every concrete recurring write trigger maps explicitly to its own mutation policy. */
+export const TRIGGER_MUTATION_POLICY_IDS = {
+  "analytics.funnel-snapshot": "analytics.funnel-snapshot",
+  "artist.resolve": "artist.resolve",
+  "backfill.apple-catalogue": "backfill.vendor-sweep",
+  "backfill.apple-music": "backfill.vendor-sweep",
+  "backfill.artist-credits": "backfill.artist-credits",
+  "backfill.artist-edges": "backfill.artist-edges",
+  "backfill.artist-images": "artist.resolve",
+  "backfill.beatport": "backfill.vendor-sweep",
+  "backfill.cover-masters.album": "backfill.cover-masters",
+  "backfill.cover-masters.artist": "backfill.cover-masters",
+  "backfill.deezer": "backfill.vendor-sweep",
+  "backfill.discogs": "backfill.vendor-sweep",
+  "backfill.discogs-facts": "backfill.vendor-sweep",
+  "backfill.label-images": "backfill.label-images",
+  "backfill.label-lineage": "backfill.label-lineage",
+  "backfill.lastfm": "backfill.vendor-sweep",
+  "backfill.recording-mbids": "backfill.recording-mbids",
+  "bio.album.describe": "bio.album",
+  "bio.artist.describe": "bio.artist",
+  "bio.label.describe": "bio.label",
+  "catalogue.anchor.resolve": "catalogue.anchor",
+  "catalogue.anchor.search": "catalogue.anchor",
+  "catalogue.crawl": "catalogue.crawl",
+  "catalogue.demand": "catalogue.demand",
+  "catalogue.isrc-recovery.resolve": "catalogue.isrc-recovery",
+  "catalogue.label-releases": "catalogue.label-releases",
+  "catalogue.rank": "catalogue.rank",
+  "catalogue.reconcile-hub-counts": "catalogue.reconcile-hub-counts",
+  "catalogue.verify-captures.write": "catalogue.verify-captures",
+  "clips.cut": "clips.studio",
+  "device.mirror": "device.mirror",
+  "frontier.refresh": "frontier.refresh",
+  "galaxies.map.write": "galaxies.cluster",
+  "health.snapshot": "health.snapshot",
+  "live.snapshot": "live.snapshot",
+  "logbook.create": "logbook.draft",
+  "newsletter.draft": "newsletter.draft",
+  "reach.collect": "reach.collect",
+  "social.capture": "social.capture",
+  "social.metrics": "social.metrics",
+  "social.publish-advance": "social.publish-advance",
+  "submissions.triage": "submissions.triage",
+  "track.capture.write": "track.capture",
+  "track.context.fill": "track.context",
+  "track.note.write": "track.note",
+  "track.observe.write": "track.observe",
+  "track.update.analysis": "track.enrich",
+  "track.update.embedding": "track.embed",
+  "track.update.galaxy": "galaxies.cluster",
+} as const satisfies Record<string, WriteMutationPolicyId>;
+
+export const INCIDENT_MUTATION_POLICIES = {
+  fillEmptyAlbumBio: {
+    rationale: "The fill-empty predicate cannot overwrite an existing album bio.",
+    reconciliation: "Read the album bio before repeating the fill.",
+  },
+  listDeezerWork: {
+    rationale: "The function is a read-only bounded worklist and has no effect to duplicate.",
+    reconciliation: "Read the same bounded worklist again.",
+  },
+  markResolved: {
+    rationale:
+      "Resolved MBID uses non-clobbering coalesce; only the attempt timestamp may refresh.",
+    reconciliation: "Read the recording MBID before repeating the resolution stamp.",
+  },
+  rearmStaleAllowedArtists: {
+    rationale: "Only allowed rows without the current rearm stamp are changed.",
+    reconciliation: "Read the artist's rearm stamp before repeating the bounded rearm.",
+  },
+  stripCrawlerPrefixes: {
+    rationale: "Only crawler-prefixed rows with null MBID are filled from stable identity.",
+    reconciliation: "Read the recording MBID before repeating the prefix fill.",
+  },
+} as const;
+
+function makeMutationDisposition(
+  kind: OperationMutationDispositionKind,
+  evidenceSource: string,
+): OperationMutationDisposition {
+  switch (kind) {
+    case "deliberately-non-replayable":
+      throw new Error(`non-replayable operation ${evidenceSource} needs an explicit policy`);
+    case "not-applicable":
+      return {
+        evidenceSource,
+        kind,
+        rationale: "No product-database mutation occurs in this recurring path.",
+        reconciliation: "No mutation reconciliation is required.",
+      };
+    case "receipt-backed":
+    case "replay-safe-idempotent":
+      throw new Error(`write operation ${evidenceSource} needs an explicit policy`);
+  }
+}
+
+function initialTriggerDisposition(
+  accessClass: DatabaseAccessClass | null,
+  evidenceSource: string,
+): OperationMutationDisposition {
+  if (accessClass !== "write") {
+    return makeMutationDisposition("not-applicable", evidenceSource);
+  }
+
+  return {
+    evidenceSource,
+    kind: "replay-safe-idempotent",
+    rationale: "The owning recurring operation supplies this trigger's final mutation policy.",
+    reconciliation: "Use the owning recurring operation's reconciliation rule.",
+  };
+}
+
+function operationMutationDisposition(
+  operationId: string,
+  accessClass: DatabaseAccessClass | null,
+  evidenceSource: string,
+): OperationMutationDisposition {
+  if (accessClass !== "write") {
+    return makeMutationDisposition("not-applicable", evidenceSource);
+  }
+
+  const policy = WRITE_MUTATION_POLICIES[operationId as keyof typeof WRITE_MUTATION_POLICIES];
+  if (policy === undefined) {
+    throw new Error(`write operation ${operationId} has no mutation policy`);
+  }
+
+  return policy;
+}
+
+function triggerMutationPolicyId(operationId: string): WriteMutationPolicyId {
+  const policyId =
+    TRIGGER_MUTATION_POLICY_IDS[operationId as keyof typeof TRIGGER_MUTATION_POLICY_IDS];
+  if (policyId === undefined) {
+    throw new Error(`write trigger ${operationId} has no mutation policy mapping`);
+  }
+  return policyId;
+}
+
+function incident(functionName: string, operationId: string, source: string): IncidentOperation {
+  const policy =
+    INCIDENT_MUTATION_POLICIES[functionName as keyof typeof INCIDENT_MUTATION_POLICIES];
+  if (policy === undefined) {
+    throw new Error(`incident function ${functionName} has no mutation policy`);
+  }
+
+  return {
+    functionName,
+    mutationDisposition: {
+      evidenceSource: source,
+      kind: "replay-safe-idempotent",
+      ...policy,
+    },
+    operationId,
+    source,
+  };
+}
+
 function defineOperation(definition: OperationDefinition): RecurringDatabaseOperation {
   const timer = definition.timer ?? `${definition.telemetryUnit}.timer`;
   const service = definition.service ?? timer.replace(/\.timer$/, ".service");
-  const directory = `${HERMES_ROOT}/${definition.directory}`;
+  const directory = definition.directory ? `${HERMES_ROOT}/${definition.directory}` : undefined;
+  const serviceSource =
+    definition.serviceSource ?? (directory ? `${directory}/${service}` : undefined);
+  const timerSource = definition.timerSource ?? (directory ? `${directory}/${timer}` : undefined);
+  if (serviceSource === undefined || timerSource === undefined) {
+    throw new Error(`recurring operation ${definition.operationId} has no unit sources`);
+  }
+  const mutationDisposition = operationMutationDisposition(
+    definition.operationId,
+    definition.accessClass,
+    definition.wrapperSource,
+  );
+  const triggers = definition.triggers.map((trigger) => ({
+    ...trigger,
+    mutationDisposition:
+      trigger.accessClass === "write"
+        ? operationMutationDisposition(
+            triggerMutationPolicyId(trigger.operationId),
+            trigger.accessClass,
+            trigger.source,
+          )
+        : makeMutationDisposition("not-applicable", trigger.source),
+  }));
 
   return {
     accessClass: definition.accessClass,
     cadence: definition.cadence,
     heavy: definition.heavy,
     incidents: definition.incidents ?? [],
-    mutationDisposition: definition.mutationDisposition,
+    mutationDisposition,
     operationId: definition.operationId,
     owner: {
       service,
       telemetryUnit: definition.telemetryUnit ?? service.replace(/\.service$/, ""),
       timer,
     },
-    serviceSource: `${directory}/${service}`,
-    timerSource: `${directory}/${timer}`,
-    triggers: definition.triggers,
+    serviceSource,
+    timerSource,
+    triggers,
     wrapperSource: definition.wrapperSource,
   };
 }
@@ -103,7 +578,7 @@ function cli(
     accessClass,
     cliRoute: route,
     kind: "cli",
-    mutationDisposition: accessClass === "write" ? "needs-policy" : "not-applicable",
+    mutationDisposition: initialTriggerDisposition(accessClass, source),
     operationId,
     source,
     target,
@@ -121,7 +596,7 @@ function endpoint(
   return {
     accessClass,
     kind: "worker-endpoint",
-    mutationDisposition: accessClass === "write" ? "needs-policy" : "not-applicable",
+    mutationDisposition: initialTriggerDisposition(accessClass, source),
     operationId,
     source,
     target: `${method} ${path}`,
@@ -137,7 +612,7 @@ function direct(
   return {
     accessClass,
     kind: "direct-database",
-    mutationDisposition: accessClass === "write" ? "needs-policy" : "not-applicable",
+    mutationDisposition: initialTriggerDisposition(accessClass, source),
     operationId,
     source,
     target,
@@ -148,7 +623,7 @@ function noDatabase(operationId: string, target: string, source: string): Operat
   return {
     accessClass: null,
     kind: "no-database",
-    mutationDisposition: "not-applicable",
+    mutationDisposition: makeMutationDisposition("not-applicable", source),
     operationId,
     source,
     target,
@@ -204,10 +679,10 @@ const READ_CLI_OPERATIONS = new Set([
 const HEAVY_READ_CLI_OPERATIONS = new Set(["galaxies.embeddings.read"]);
 
 /**
- * Complete roster of committed Hermes timers. The classification describes the
+ * Complete roster of recurring database-touching timers across the Hermes and
+ * satellite deployment/watchdog roots. The classification describes each
  * scheduled operation's product-database effect; the standard run-ledger receipt
- * is telemetry and deliberately does not turn a no-database operation into a
- * product write.
+ * is telemetry and deliberately does not turn a no-database operation into a write.
  */
 export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] = [
   defineOperation({
@@ -216,13 +691,8 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     directory: "album-bio-timer",
     heavy: false,
     incidents: [
-      {
-        functionName: "fillEmptyAlbumBio",
-        operationId: "bio.album.describe",
-        source: "apps/web/src/lib/server/albums.ts",
-      },
+      incident("fillEmptyAlbumBio", "bio.album.describe", "apps/web/src/lib/server/albums.ts"),
     ],
-    mutationDisposition: "needs-policy",
     operationId: "bio.album",
     service: "fluncle-album-bio.service",
     telemetryUnit: "album-bio",
@@ -254,7 +724,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("11min", "1h"),
     directory: "anchor-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.anchor",
     service: "fluncle-anchor.service",
     telemetryUnit: "anchor",
@@ -286,7 +755,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("5min", "30min"),
     directory: "artist-bio-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "bio.artist",
     service: "fluncle-artist-bio.service",
     telemetryUnit: "artist-bio",
@@ -318,7 +786,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("4min", "5min"),
     directory: "artist-credits-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "backfill.artist-credits",
     service: "fluncle-artist-credits.service",
     telemetryUnit: "artist-credits",
@@ -338,7 +805,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("17min", "60min"),
     directory: "artist-edges-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "backfill.artist-edges",
     service: "fluncle-artist-edges.service",
     telemetryUnit: "artist-edges",
@@ -358,7 +824,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("7min", "60min"),
     directory: "artist-sweep-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "artist.resolve",
     service: "fluncle-artist-sweep.service",
     telemetryUnit: "artist-sweep",
@@ -390,7 +855,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 05:00:00 Europe/Amsterdam"),
     directory: "audit-review-timer",
     heavy: false,
-    mutationDisposition: "not-applicable",
     operationId: "ops.audit-review",
     service: "fluncle-audit-review.service",
     telemetryUnit: "audit-review",
@@ -409,7 +873,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 01:00:00 Europe/Amsterdam"),
     directory: "audit-timer",
     heavy: false,
-    mutationDisposition: "not-applicable",
     operationId: "ops.audit",
     service: "fluncle-audit.service",
     telemetryUnit: "audit",
@@ -425,13 +888,8 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     directory: "backfill-timer",
     heavy: false,
     incidents: [
-      {
-        functionName: "listDeezerWork",
-        operationId: "backfill.deezer",
-        source: "apps/web/src/lib/server/backfill.ts",
-      },
+      incident("listDeezerWork", "backfill.deezer", "apps/web/src/lib/server/backfill.ts"),
     ],
-    mutationDisposition: "needs-policy",
     operationId: "backfill.vendor-sweep",
     service: "fluncle-backfill.service",
     telemetryUnit: "backfill",
@@ -487,7 +945,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 03:00:00 Europe/Amsterdam"),
     directory: "backup-timer",
     heavy: true,
-    mutationDisposition: "not-applicable",
     operationId: "database.backup",
     service: "fluncle-backup.service",
     telemetryUnit: "backup",
@@ -507,7 +964,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("3min", "5min"),
     directory: "capture-timer",
     heavy: true,
-    mutationDisposition: "needs-policy",
     operationId: "track.capture",
     service: "fluncle-capture.service",
     telemetryUnit: "capture",
@@ -533,7 +989,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 02:20:00 Europe/Amsterdam"),
     directory: "cluster-timer",
     heavy: true,
-    mutationDisposition: "needs-policy",
     operationId: "galaxies.cluster",
     service: "fluncle-cluster.service",
     telemetryUnit: "cluster",
@@ -571,7 +1026,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("2min", "5min"),
     directory: "context-note-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "track.context",
     service: "fluncle-context-note.service",
     telemetryUnit: "context-note",
@@ -597,7 +1051,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("11min", "60min"),
     directory: "cover-masters-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "backfill.cover-masters",
     service: "fluncle-cover-masters.service",
     telemetryUnit: "cover-masters",
@@ -624,13 +1077,8 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     directory: "crawl-timer",
     heavy: true,
     incidents: [
-      {
-        functionName: "rearmStaleAllowedArtists",
-        operationId: "catalogue.crawl",
-        source: "apps/web/src/lib/server/crawl.ts",
-      },
+      incident("rearmStaleAllowedArtists", "catalogue.crawl", "apps/web/src/lib/server/crawl.ts"),
     ],
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.crawl",
     service: "fluncle-crawl.service",
     telemetryUnit: "crawl",
@@ -650,7 +1098,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 04:40:00 Europe/Amsterdam"),
     directory: "demand-timer",
     heavy: true,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.demand",
     service: "fluncle-demand.service",
     telemetryUnit: "demand",
@@ -670,7 +1117,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("23min", "1h"),
     directory: "device-mirror-timer",
     heavy: true,
-    mutationDisposition: "needs-policy",
     operationId: "device.mirror",
     service: "fluncle-device-mirror.service",
     telemetryUnit: "device-mirror",
@@ -690,7 +1136,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("3min", "5min"),
     directory: "embed-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "track.embed",
     service: "fluncle-embed.service",
     telemetryUnit: "embed",
@@ -716,7 +1161,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("1min", "5min"),
     directory: "enrich-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "track.enrich",
     service: "fluncle-enrich.service",
     telemetryUnit: "enrich",
@@ -754,7 +1198,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*:0/15"),
     directory: "frontier-refresh-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "frontier.refresh",
     service: "fluncle-frontier-refresh.service",
     telemetryUnit: "frontier-refresh",
@@ -774,7 +1217,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 23:45:00 UTC"),
     directory: "funnel-snapshot-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "analytics.funnel-snapshot",
     service: "fluncle-funnel-snapshot.service",
     telemetryUnit: "funnel-snapshot",
@@ -794,7 +1236,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("2min", "10min"),
     directory: "healthcheck-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "health.snapshot",
     service: "fluncle-healthcheck.service",
     telemetryUnit: "healthcheck",
@@ -816,7 +1257,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("12min", "1h"),
     directory: "isrc-recovery-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.isrc-recovery",
     service: "fluncle-isrc-recovery.service",
     telemetryUnit: "isrc-recovery",
@@ -842,7 +1282,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("7min", "30min"),
     directory: "label-bio-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "bio.label",
     service: "fluncle-label-bio.service",
     telemetryUnit: "label-bio",
@@ -874,7 +1313,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("8min", "60min"),
     directory: "label-images-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "backfill.label-images",
     service: "fluncle-label-images.service",
     telemetryUnit: "label-images",
@@ -894,7 +1332,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("13min", "60min"),
     directory: "label-lineage-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "backfill.label-lineage",
     service: "fluncle-label-lineage.service",
     telemetryUnit: "label-lineage",
@@ -914,7 +1351,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("23min", "24h"),
     directory: "label-releases-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.label-releases",
     service: "fluncle-label-releases.service",
     telemetryUnit: "label-releases",
@@ -934,7 +1370,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("30s", "1min", "90", false),
     directory: "live-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "live.snapshot",
     service: "fluncle-live.service",
     telemetryUnit: "live",
@@ -949,7 +1384,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 00:40:00 Europe/Amsterdam"),
     directory: "logbook-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "logbook.draft",
     service: "fluncle-logbook.service",
     telemetryUnit: "logbook",
@@ -975,7 +1409,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("Fri 15:00 Europe/Amsterdam"),
     directory: "newsletter-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "newsletter.draft",
     service: "fluncle-newsletter.service",
     telemetryUnit: "newsletter",
@@ -1001,7 +1434,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("3min", "10min"),
     directory: "note-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "track.note",
     service: "fluncle-note.service",
     telemetryUnit: "note",
@@ -1045,7 +1477,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("4min", "60min"),
     directory: "observation-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "track.observe",
     service: "fluncle-observation.service",
     telemetryUnit: "observation",
@@ -1083,14 +1514,13 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("10min", "1h", "", true),
     directory: "pin-watch",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "ops.pin-watch",
     service: "pin-watch.service",
     telemetryUnit: "pin-watch",
     timer: "pin-watch.timer",
     triggers: [
       endpoint(
-        "health.self-deploy",
+        "health.snapshot",
         "POST",
         "/api/v1/admin/health",
         `${HERMES_ROOT}/pin-watch/rebuild-hermes.sh`,
@@ -1103,7 +1533,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("9min", "30min"),
     directory: "publish-advance-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "social.publish-advance",
     service: "fluncle-publish-advance.service",
     telemetryUnit: "publish-advance",
@@ -1123,7 +1552,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("11min", "30min"),
     directory: "rank-timer",
     heavy: true,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.rank",
     service: "fluncle-rank.service",
     telemetryUnit: "rank",
@@ -1143,7 +1571,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 04:00:00 Europe/Amsterdam"),
     directory: "reach-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "reach.collect",
     service: "fluncle-reach.service",
     telemetryUnit: "reach",
@@ -1163,7 +1590,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 04:10:00 Europe/Amsterdam"),
     directory: "reconcile-hub-counts-timer",
     heavy: true,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.reconcile-hub-counts",
     service: "fluncle-reconcile-hub-counts.service",
     telemetryUnit: "reconcile-hub-counts",
@@ -1184,18 +1610,17 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     directory: "recording-mbids-timer",
     heavy: false,
     incidents: [
-      {
-        functionName: "stripCrawlerPrefixes",
-        operationId: "backfill.recording-mbids",
-        source: "apps/web/src/lib/server/recording-mbids.ts",
-      },
-      {
-        functionName: "markResolved",
-        operationId: "backfill.recording-mbids",
-        source: "apps/web/src/lib/server/recording-mbids.ts",
-      },
+      incident(
+        "stripCrawlerPrefixes",
+        "backfill.recording-mbids",
+        "apps/web/src/lib/server/recording-mbids.ts",
+      ),
+      incident(
+        "markResolved",
+        "backfill.recording-mbids",
+        "apps/web/src/lib/server/recording-mbids.ts",
+      ),
     ],
-    mutationDisposition: "needs-policy",
     operationId: "backfill.recording-mbids",
     service: "fluncle-recording-mbids.service",
     telemetryUnit: "recording-mbids",
@@ -1215,7 +1640,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("9min", "60min"),
     directory: "render-timer",
     heavy: false,
-    mutationDisposition: "not-applicable",
     operationId: "render.conductor",
     service: "fluncle-render.service",
     telemetryUnit: "render",
@@ -1247,7 +1671,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("1min", "15min", ""),
     directory: "secrets",
     heavy: false,
-    mutationDisposition: "not-applicable",
     operationId: "ops.secrets-sync",
     service: "fluncle-secrets-sync.service",
     telemetryUnit: "fluncle-secrets-sync",
@@ -1266,7 +1689,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 03:30:00 Europe/Amsterdam"),
     directory: "sentry-triage-timer",
     heavy: false,
-    mutationDisposition: "not-applicable",
     operationId: "ops.sentry-triage",
     service: "fluncle-sentry-triage.service",
     telemetryUnit: "sentry-triage",
@@ -1285,7 +1707,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("6min", "10min"),
     directory: "social-capture-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "social.capture",
     service: "fluncle-social-capture.service",
     telemetryUnit: "social-capture",
@@ -1305,7 +1726,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 22:15:00 UTC"),
     directory: "social-metrics-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "social.metrics",
     service: "fluncle-social-metrics.service",
     telemetryUnit: "social-metrics",
@@ -1325,7 +1745,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("10min", "15min"),
     directory: "studio-clip-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "clips.studio",
     service: "fluncle-studio-clip.service",
     telemetryUnit: "studio-clip",
@@ -1351,7 +1770,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*:0/15", "90"),
     directory: "timer-watchdog",
     heavy: false,
-    mutationDisposition: "not-applicable",
     operationId: "ops.timer-watchdog",
     service: "fluncle-timer-watchdog.service",
     telemetryUnit: "fluncle-timer-watchdog",
@@ -1370,7 +1788,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("5min", "15min"),
     directory: "triage-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "submissions.triage",
     service: "fluncle-triage.service",
     telemetryUnit: "triage",
@@ -1402,7 +1819,6 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("17min", "30min"),
     directory: "verify-captures-timer",
     heavy: false,
-    mutationDisposition: "needs-policy",
     operationId: "catalogue.verify-captures",
     service: "fluncle-verify-captures.service",
     telemetryUnit: "verify-captures",
@@ -1422,6 +1838,81 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/verify-captures.sh`,
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("11min", "1h", "420"),
+    heavy: false,
+    operationId: "ops.sonar-freshen",
+    service: "fluncle-sonar-freshen.service",
+    serviceSource: "apps/sonar/deploy/fluncle-sonar-freshen.service",
+    telemetryUnit: "sonar-freshen",
+    timer: "fluncle-sonar-freshen.timer",
+    timerSource: "apps/sonar/deploy/fluncle-sonar-freshen.timer",
+    triggers: [
+      noDatabase(
+        "ops.sonar-freshen",
+        "verify and swap the current sonar release",
+        "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+      ),
+      endpoint(
+        "health.snapshot",
+        "POST",
+        "/api/v1/admin/health",
+        "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+      ),
+    ],
+    wrapperSource: "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("5min", "1h"),
+    heavy: false,
+    operationId: "ops.ssh-freshen",
+    service: "fluncle-ssh-freshen.service",
+    serviceSource: "apps/ssh/deploy/fluncle-ssh-freshen.service",
+    telemetryUnit: "ssh-freshen",
+    timer: "fluncle-ssh-freshen.timer",
+    timerSource: "apps/ssh/deploy/fluncle-ssh-freshen.timer",
+    triggers: [
+      noDatabase(
+        "ops.ssh-freshen",
+        "build, verify, and swap the SSH terminal release",
+        "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+      ),
+      endpoint(
+        "health.snapshot",
+        "POST",
+        "/api/v1/admin/health",
+        "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+      ),
+    ],
+    wrapperSource: "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("2min", "10min", "30"),
+    heavy: false,
+    operationId: "ops.rave-watchdog",
+    service: "fluncle-rave-watchdog.service",
+    serviceSource: "apps/ssh/watchdog/fluncle-rave-watchdog.service",
+    telemetryUnit: "rave-watchdog",
+    timer: "fluncle-rave-watchdog.timer",
+    timerSource: "apps/ssh/watchdog/fluncle-rave-watchdog.timer",
+    triggers: [
+      noDatabase(
+        "ops.rave-watchdog",
+        "probe the remote box and Tor surface",
+        "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+      ),
+      endpoint(
+        "health.snapshot",
+        "POST",
+        "/api/v1/admin/health",
+        "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+      ),
+    ],
+    wrapperSource: "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
   }),
 ];
 

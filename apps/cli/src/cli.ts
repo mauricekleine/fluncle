@@ -55,6 +55,11 @@ type AdminTelemetryOptions = AdminListOptions & {
   until?: string;
 };
 
+type AdminReceiptRepairOptions = JsonOptions & {
+  limit: string;
+  staleBefore: string;
+};
+
 type AdminArtifactRegisterOptions = JsonOptions & {
   contract: string[];
 };
@@ -867,6 +872,83 @@ JSON field reference:
     .action(async (options: AdminTelemetryOptions) => {
       const { telemetryCommand } = await import("./commands/admin-telemetry");
       await runAdminTelemetry(options, telemetryCommand);
+    });
+
+  const adminReceipts = configureCommand(
+    admin.command("receipts").description("Atomic database operation receipts"),
+  );
+
+  adminReceipts.action(() => {
+    adminReceipts.outputHelp();
+  });
+
+  adminReceipts
+    .command("get")
+    .description("Inspect one operation key")
+    .argument("<operationKey>")
+    .option("--json", "Print lossless bounded receipt metadata as JSON", false)
+    .action(async (operationKey: string, options: JsonOptions) => {
+      const receipts = await import("./commands/admin-operation-receipts");
+      const result = await receipts.getOperationReceiptCommand(operationKey);
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      console.log(receipts.operationReceiptLines(result.receipt).join("\n"));
+    });
+
+  adminReceipts
+    .command("reconcile")
+    .description("Reconcile one digest-bound operation")
+    .argument("<operationId>")
+    .argument("<operationKey>")
+    .argument("<requestDigest>")
+    .option("--json", "Print lossless bounded receipt metadata as JSON", false)
+    .action(
+      async (
+        operationId: string,
+        operationKey: string,
+        requestDigest: string,
+        options: JsonOptions,
+      ) => {
+        const receipts = await import("./commands/admin-operation-receipts");
+        const result = await receipts.reconcileOperationReceiptCommand({
+          operationId,
+          operationKey,
+          requestDigest,
+        });
+
+        if (options.json) {
+          printJson(result);
+          return;
+        }
+
+        console.log(receipts.operationReceiptLines(result.receipt).join("\n"));
+      },
+    );
+
+  adminReceipts
+    .command("repair")
+    .description("Reject a bounded page of stale in-progress receipts")
+    .requiredOption("--stale-before <iso>", "Repair only receipts older than this ISO timestamp")
+    .option("--limit <limit>", "Maximum receipts to repair (1-100)", "50")
+    .option("--json", "Print the repair counts as JSON", false)
+    .action(async (options: AdminReceiptRepairOptions) => {
+      const receipts = await import("./commands/admin-operation-receipts");
+      const result = await receipts.repairOperationReceiptsCommand({
+        limit: receipts.parseOperationReceiptRepairLimit(options.limit),
+        staleBefore: receipts.parseOperationReceiptFence(options.staleBefore),
+      });
+
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+
+      const noun = result.repaired === 1 ? "receipt" : "receipts";
+      console.log(`Repaired ${result.repaired} stale ${noun} after scanning ${result.scanned}.`);
     });
 
   // The versioned artifact-log transport. These are deliberately literal operator controls: the
@@ -8390,6 +8472,7 @@ const stringOptions = new Set([
   "--soundcloud-url",
   "--source",
   "--status",
+  "--stale-before",
   "--stream",
   "--stream-version",
   "--subject",

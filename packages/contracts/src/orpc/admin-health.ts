@@ -17,6 +17,14 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+import {
+  OPERATION_RECEIPT_KEY_MAX,
+  OPERATION_RECEIPT_KEY_PATTERN,
+  OPERATION_RECEIPT_REQUEST_DIGEST_PATTERN,
+} from "./admin-operation-receipts.js";
+
+export const HEALTH_SNAPSHOT_PRODUCER_MAX = 64;
+export const HEALTH_SNAPSHOT_PRODUCER_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 
 /** The three-state service health enum, shared by the snapshot + the stored rows. */
 export const ServiceHealthStatusSchema = z
@@ -42,12 +50,13 @@ const HealthCheckSchema = z
 /**
  * `record_health` → `POST /admin/health` (operationId `recordHealth`).
  *
- * AGENT tier (`adminAuth`, no `operatorGuard`): the box's agent-token status cron
- * drives it, the `context_track`/`note_track` precedent. Persists ONE snapshot:
+ * AGENT tier (`adminAuth`, no `operatorGuard`): the recurring health producers
+ * drive it with agent tokens. Persists ONE snapshot:
  * each check upserts its `service_status` row (carrying `since` forward while the
  * status is unchanged, resetting it on a flip), every `transitioned` check appends
- * a `status_events` row, then the ledger is pruned to its most recent 200 rows.
- * Internal write only (no public lastmod moves). Returns the bare `{ ok: true }`.
+ * a `status_events` row, then the ledgers are pruned. Receipt metadata is optional
+ * at the contract boundary for default-off compatibility and required by the
+ * handler when cutover is enabled. Internal write only (no public lastmod moves).
  */
 export const recordHealth = oc
   .route({
@@ -58,10 +67,33 @@ export const recordHealth = oc
     tags: ["Admin"],
   })
   .input(
-    z.object({
-      at: z.string().min(1),
-      checks: z.array(HealthCheckSchema),
-    }),
+    z
+      .object({
+        at: z.string().max(64).datetime({ offset: true }),
+        checks: z.array(HealthCheckSchema),
+        operationKey: z
+          .string()
+          .min(1)
+          .max(OPERATION_RECEIPT_KEY_MAX)
+          .regex(OPERATION_RECEIPT_KEY_PATTERN)
+          .optional(),
+        producer: z
+          .string()
+          .max(HEALTH_SNAPSHOT_PRODUCER_MAX)
+          .regex(HEALTH_SNAPSHOT_PRODUCER_PATTERN)
+          .optional(),
+        requestDigest: z.string().regex(OPERATION_RECEIPT_REQUEST_DIGEST_PATTERN).optional(),
+      })
+      .refine((input) => {
+        const values = [input.operationKey, input.producer, input.requestDigest];
+        const supplied = values.filter((value) => value !== undefined).length;
+
+        return (
+          supplied === 0 ||
+          supplied === values.length ||
+          (supplied === 1 && input.operationKey !== undefined)
+        );
+      }, "supply no receipt metadata, the compatibility operationKey, or all receipt fields"),
   )
   .output(z.object({ ok: z.literal(true) }));
 

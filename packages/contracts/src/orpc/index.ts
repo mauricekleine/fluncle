@@ -50,6 +50,7 @@ import { adminMigrationsContract } from "./admin-migrations";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminNotesContract } from "./admin-notes";
 import { adminObservationsContract } from "./admin-observations";
+import { adminOperationReceiptsContract } from "./admin-operation-receipts";
 import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
@@ -163,6 +164,19 @@ export {
   listArtifactSnapshot,
   registerArtifactConsumer,
 } from "./admin-artifacts";
+export {
+  adminOperationReceiptsContract,
+  getOperationReceipt,
+  getOperationReceiptLegacy,
+  OPERATION_RECEIPT_KEY_MAX,
+  OPERATION_RECEIPT_KEY_PATTERN,
+  OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
+  OPERATION_RECEIPT_REQUEST_DIGEST_PATTERN,
+  OperationReceiptReconciliationOutcomeSchema,
+  OperationReceiptStateSchema,
+  reconcileOperationReceipts,
+  resolveOperationReceipt,
+} from "./admin-operation-receipts";
 export {
   addArtistRule,
   AddArtistRuleInputSchema,
@@ -299,7 +313,12 @@ export {
   type RunLedgerUnitRollup,
   RunLedgerUnitRollupSchema,
 } from "./admin-telemetry";
-export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
+export {
+  HEALTH_SNAPSHOT_PRODUCER_MAX,
+  HEALTH_SNAPSHOT_PRODUCER_PATTERN,
+  recordHealth,
+  ServiceHealthStatusSchema,
+} from "./admin-health";
 export { adminReachContract, recordPlatformStats } from "./admin-reach";
 export { listPlatformStats, reachContract } from "./reach";
 export {
@@ -547,6 +566,7 @@ export const contract = {
   ...adminMixtapesContract,
   ...adminNotesContract,
   ...adminObservationsContract,
+  ...adminOperationReceiptsContract,
   ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,

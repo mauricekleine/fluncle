@@ -216,6 +216,33 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("Limit must be an integer between 1 and 100");
   });
 
+  test("admin receipts exposes read-only reconciliation and bounded repair", async () => {
+    const result = await runCli(["admin", "receipts", "--help"]);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("get");
+    expect(result.stdout).toContain("reconcile");
+    expect(result.stdout).toContain("repair");
+  });
+
+  test("admin receipts validates repair bounds before fetching", async () => {
+    const result = await runCli([
+      "admin",
+      "receipts",
+      "repair",
+      "--stale-before",
+      "2026-08-26T10:00:00.000Z",
+      "--limit",
+      "101",
+      "--json",
+    ]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("--limit must be a whole number from 1 through 100");
+  });
+
   test("admin artifacts exposes the complete consumer lifecycle", async () => {
     const result = await runCli(["admin", "artifacts", "--help"]);
 

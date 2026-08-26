@@ -1316,7 +1316,7 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin",
     exposedContent: [
-      "the operator/agent command group (hidden): a bare `queue` read plus plural groups — tracks (publish|update|enrich|embed|capture|video|draft|social|preview|observe|context|note|work|get|list|queue|mixable-order|requeue-analysis|vehicles), artifacts (register|status|bootstrap|bootstrap-checkpoint|activate|list|checkpoint|inactivate|compact), catalogue (the crawler + The Ear), frontier, labels, artists, albums, galaxies, notes, observations, clips, recordings, publish, capture, mixtapes, newsletter, logbook, prompts, submissions, reach, backfills, migrations, auth",
+      "the operator/agent command group (hidden): a bare `queue` read plus plural groups — tracks (publish|update|enrich|embed|capture|video|draft|social|preview|observe|context|note|work|get|list|queue|mixable-order|requeue-analysis|vehicles), artifacts (register|status|bootstrap|bootstrap-checkpoint|activate|list|checkpoint|inactivate|compact), receipts (get|repair), catalogue (the crawler + The Ear), frontier, labels, artists, albums, galaxies, notes, observations, clips, recordings, publish, capture, mixtapes, newsletter, logbook, prompts, submissions, reach, backfills, migrations, auth",
     ],
     kind: "cli",
     name: "cli.admin",

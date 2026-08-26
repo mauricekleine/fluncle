@@ -10,6 +10,12 @@ import { ADMIN_COOKIE_NAME } from "./lib/server/env";
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
 import { withSecurityHeaders } from "./lib/server/security-headers";
+import {
+  scrubServerSentryEvent,
+  scrubServerSentrySpan,
+  scrubServerSentryTransaction,
+  serverSentryIntegrations,
+} from "./lib/server/sentry-options";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
 // The whole custom entry, wrapped once by Sentry so any unhandled throw from
@@ -165,10 +171,14 @@ const cfHandler: ExportedHandler<Env> = {
 
 export default Sentry.withSentry(
   () => ({
+    beforeSend: scrubServerSentryEvent,
+    beforeSendSpan: scrubServerSentrySpan,
+    beforeSendTransaction: scrubServerSentryTransaction,
     dsn: import.meta.env.PROD ? WORKER_SENTRY_DSN : undefined,
+    integrations: serverSentryIntegrations,
     release: SENTRY_RELEASE,
     // Tracing on (operator-approved raise from the errors-only posture), still no
-    // profiling and no PII. See docs/error-tracking.md.
+    // profiling, PII, or request bodies. See docs/error-tracking.md.
     sendDefaultPii: false,
     // Route sampling keyed on the transaction name (method + path, e.g.
     // `GET /me/recommendations`). LIMITATION: a substring on the name is
