@@ -19,7 +19,9 @@ describe("materialized projection schema laws", () => {
 
     expect(indexes.rows.map((row) => row.name)).toEqual([
       "crawl_due_work_claim_position_idx",
+      "crawl_due_work_label_slug_node_id_idx",
       "crawl_due_work_lease_idx",
+      "crawl_due_work_parent_id_node_id_idx",
       "crawl_due_work_ready_idx",
       "crawl_due_work_release_ready_idx",
       "crawl_due_work_repair_idx",
@@ -29,6 +31,12 @@ describe("materialized projection schema laws", () => {
     expect(
       indexes.rows.find((row) => row.name === "crawl_due_work_release_ready_idx")?.sql,
     ).toContain("storable_rank");
+    expect(
+      indexes.rows.find((row) => row.name === "crawl_due_work_label_slug_node_id_idx")?.sql,
+    ).toContain("`label_slug`,`node_id`");
+    expect(
+      indexes.rows.find((row) => row.name === "crawl_due_work_parent_id_node_id_idx")?.sql,
+    ).toContain("`parent_id`,`node_id`");
 
     await db.execute(`insert into crawl_due_work
       (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank,
@@ -76,6 +84,39 @@ describe("materialized projection schema laws", () => {
         values ('artist:bad', 0, 5, 1, 'generation-a', 'source-a', '2026-01-01')`),
     ).rejects.toThrow(/constraint/i);
 
+    const contributionIndexes = await db.execute(
+      `select name from sqlite_master
+       where type = 'index' and tbl_name = 'artist_qualification_contributions'
+       order by name`,
+    );
+
+    expect(contributionIndexes.rows.map((row) => row.name)).toEqual([
+      "artist_qualification_contributions_artist_track_idx",
+      "sqlite_autoindex_artist_qualification_contributions_1",
+    ]);
+
+    await db.execute(`insert into artist_qualification_contributions
+      (track_id, artist_id, certified_contribution, enabled_credit_half_units,
+       generation, source_version, updated_at)
+      values ('track:a', 'artist:a', 1, 2, 'generation-a', 'source-a', '2026-01-01'),
+             ('track:a', 'artist:b', 0, 1, 'generation-a', 'source-a', '2026-01-01')`);
+
+    await expect(
+      db.execute(`insert into artist_qualification_contributions
+        (track_id, artist_id, certified_contribution, enabled_credit_half_units,
+         generation, source_version, updated_at)
+        values ('track:bad-certified', 'artist:a', 2, 0,
+                'generation-a', 'source-a', '2026-01-01')`),
+    ).rejects.toThrow(/constraint/i);
+
+    await expect(
+      db.execute(`insert into artist_qualification_contributions
+        (track_id, artist_id, certified_contribution, enabled_credit_half_units,
+         generation, source_version, updated_at)
+        values ('track:bad-credit', 'artist:a', 0, 3,
+                'generation-a', 'source-a', '2026-01-01')`),
+    ).rejects.toThrow(/constraint/i);
+
     await db.execute(`insert into public_aggregate_counts
       (aggregate_kind, bucket, track_count, generation, source_version, updated_at)
       values ('release_date_bucket', '', 1, 'generation-a', 'source-a', '2026-01-01'),
@@ -88,11 +129,57 @@ describe("materialized projection schema laws", () => {
         values ('release_date_bucket', '12345', 1, 'generation-a', 'source-a', '2026-01-01')`),
     ).rejects.toThrow(/constraint/i);
 
+    await db.execute(`insert into public_aggregate_membership
+      (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at)
+      values ('track:null', null, null, 'generation-a', 'source-a', '2026-01-01'),
+             ('track:empty', '', '', 'generation-a', 'source-a', '2026-01-01'),
+             ('track:malformed', '20x?', 'wat', 'generation-a', 'source-a', '2026-01-01')`);
+
+    await expect(
+      db.execute(`insert into public_aggregate_membership
+        (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at)
+        values ('track:long', '12345', null,
+                'generation-a', 'source-a', '2026-01-01')`),
+    ).rejects.toThrow(/constraint/i);
+
     await expect(
       db.execute(`insert into projection_repairs
         (projection, subject_type, subject_id, source_epoch, source_version, created_at, updated_at)
         values ('public_aggregates', 'label', 'label:a', 1, 'source-a',
                 '2026-01-01', '2026-01-01')`),
+    ).rejects.toThrow(/constraint/i);
+  });
+
+  it("keeps crawl fanout repairs separate, constrained, and epoch-ordered", async () => {
+    const indexes = await db.execute(
+      `select name, sql from sqlite_master
+       where type = 'index' and tbl_name = 'crawl_projection_repairs'
+       order by name`,
+    );
+
+    expect(indexes.rows.map((row) => row.name)).toEqual([
+      "crawl_projection_repairs_order_idx",
+      "sqlite_autoindex_crawl_projection_repairs_1",
+    ]);
+    expect(
+      indexes.rows.find((row) => row.name === "crawl_projection_repairs_order_idx")?.sql,
+    ).toContain("`source_epoch`,`source_type`,`source_id`");
+
+    await db.execute(`insert into crawl_projection_repairs
+      (source_type, source_id, source_epoch, source_version, created_at, updated_at)
+      values ('label', 'label:a', 1, 'source-a', '2026-01-01', '2026-01-01'),
+             ('artist', 'artist:a', 2, 'source-b', '2026-01-01', '2026-01-01')`);
+
+    await expect(
+      db.execute(`insert into crawl_projection_repairs
+        (source_type, source_id, source_epoch, source_version, created_at, updated_at)
+        values ('track', 'track:a', 3, 'source-c', '2026-01-01', '2026-01-01')`),
+    ).rejects.toThrow(/constraint/i);
+
+    await expect(
+      db.execute(`insert into crawl_projection_repairs
+        (source_type, source_id, source_epoch, source_version, created_at, updated_at)
+        values ('label', 'label:negative', -1, 'source-c', '2026-01-01', '2026-01-01')`),
     ).rejects.toThrow(/constraint/i);
   });
 

@@ -1548,9 +1548,11 @@ export const crawlDueWork = sqliteTable(
     demandRank: integer("demand_rank").notNull(),
     generation: text("generation").notNull(),
     hop: integer("hop").notNull(),
+    labelSlug: text("label_slug"),
     nextDueAt: text("next_due_at"),
     nodeId: text("node_id").primaryKey(),
     nodeKind: text("node_kind", { enum: ["artist", "label", "release"] }).notNull(),
+    parentId: text("parent_id"),
     sourceVersion: text("source_version").notNull(),
     state: text("state", { enum: ["ready", "scheduled", "leased", "repair"] }).notNull(),
     // 0 sorts a release whose current provenance can store ahead of 1. Non-release rows carry NULL
@@ -1602,9 +1604,40 @@ export const crawlDueWork = sqliteTable(
     index("crawl_due_work_lease_idx")
       .on(table.state, table.claimExpiresAt, table.nodeId)
       .where(sql`${table.state} = 'leased'`),
+    index("crawl_due_work_label_slug_node_id_idx").on(table.labelSlug, table.nodeId),
+    index("crawl_due_work_parent_id_node_id_idx").on(table.parentId, table.nodeId),
     uniqueIndex("crawl_due_work_claim_position_idx")
       .on(table.claimedBy, table.claimToken, table.claimPosition)
       .where(sql`${table.state} = 'leased'`),
+  ],
+);
+
+/**
+ * Source fanout markers for crawl due-state repair. Keeping these separate preserves each affected
+ * frontier node's ready or scheduled lifecycle while a bounded source-epoch walk fans out repairs.
+ */
+export const crawlProjectionRepairs = sqliteTable(
+  "crawl_projection_repairs",
+  {
+    createdAt: text("created_at").notNull(),
+    sourceEpoch: integer("source_epoch").notNull(),
+    sourceId: text("source_id").notNull(),
+    sourceType: text("source_type", { enum: ["artist", "label"] }).notNull(),
+    sourceVersion: text("source_version").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceType, table.sourceId] }),
+    check(
+      "crawl_projection_repairs_source_type_check",
+      sql`${table.sourceType} in ('label', 'artist')`,
+    ),
+    check("crawl_projection_repairs_epoch_check", sql`${table.sourceEpoch} >= 0`),
+    index("crawl_projection_repairs_order_idx").on(
+      table.sourceEpoch,
+      table.sourceType,
+      table.sourceId,
+    ),
   ],
 );
 
@@ -1667,6 +1700,35 @@ export const artistQualification = sqliteTable(
     index("artist_qualification_qualified_idx")
       .on(table.isQualified, table.artistId)
       .where(sql`${table.isQualified} = 1`),
+  ],
+);
+
+/**
+ * Per-track artist contributions retained for exact repair deltas. A certified track contributes
+ * one finding and an enabled primary/remixer credit contributes two/one half-units respectively.
+ */
+export const artistQualificationContributions = sqliteTable(
+  "artist_qualification_contributions",
+  {
+    artistId: text("artist_id").notNull(),
+    certifiedContribution: integer("certified_contribution").notNull(),
+    enabledCreditHalfUnits: integer("enabled_credit_half_units").notNull(),
+    generation: text("generation").notNull(),
+    sourceVersion: text("source_version").notNull(),
+    trackId: text("track_id").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.trackId, table.artistId] }),
+    check(
+      "artist_qualification_contributions_certified_check",
+      sql`${table.certifiedContribution} in (0, 1)`,
+    ),
+    check(
+      "artist_qualification_contributions_credit_check",
+      sql`${table.enabledCreditHalfUnits} in (0, 1, 2)`,
+    ),
+    index("artist_qualification_contributions_artist_track_idx").on(table.artistId, table.trackId),
   ],
 );
 
@@ -1740,6 +1802,25 @@ export const publicAggregateCounts = sqliteTable(
     check(
       "public_aggregate_counts_bucket_check",
       sql`${table.aggregateKind} <> 'release_date_bucket' or length(${table.bucket}) <= 4`,
+    ),
+  ],
+);
+
+/** Literal aggregate membership retained per track so repairs can apply exact old-to-new deltas. */
+export const publicAggregateMembership = sqliteTable(
+  "public_aggregate_membership",
+  {
+    generation: text("generation").notNull(),
+    keyBucket: text("key_bucket"),
+    releaseDateBucket: text("release_date_bucket"),
+    sourceVersion: text("source_version").notNull(),
+    trackId: text("track_id").primaryKey(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "public_aggregate_membership_release_date_bucket_check",
+      sql`${table.releaseDateBucket} is null or length(${table.releaseDateBucket}) <= 4`,
     ),
   ],
 );
