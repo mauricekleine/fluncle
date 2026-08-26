@@ -40,6 +40,7 @@ import { adminBackfillsHandlers } from "./orpc/admin-backfills";
 import { adminBiosHandlers } from "./orpc/admin-bios";
 import { adminCatalogueHandlers } from "./orpc/admin-catalogue";
 import { adminCostsHandlers } from "./orpc/admin-costs";
+import { adminDatabaseAdmissionHandlers } from "./orpc/admin-database-admission";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
 import { adminReachHandlers } from "./orpc/admin-reach";
@@ -115,6 +116,7 @@ export const router = os.router({
   ...adminBiosHandlers(os),
   ...adminCatalogueHandlers(os),
   ...adminCostsHandlers(os),
+  ...adminDatabaseAdmissionHandlers(os),
   ...adminGalaxiesHandlers(os),
   ...adminPromptsHandlers(os),
   ...adminReachHandlers(os),

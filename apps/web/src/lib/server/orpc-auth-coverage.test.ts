@@ -304,6 +304,10 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // (the confirm_artist_social / update_label precedent).
   confirm_label_alias: "operator",
   context_track: "admin",
+  // The recurring-work coordinator is agent tier: committed background units use the existing
+  // agent principal to observe or acquire their registry-classified lane. It changes only
+  // admission protocol state and never performs the payload's domain mutation.
+  coordinate_database_admission: "admin",
   // The catalogue crawler — admin tier (adminAuth only, no operatorGuard): it acquires
   // METADATA and nothing else. It publishes nothing, certifies nothing (a crawled row has
   // no `findings` row, so no coordinate, no note, no video, no public surface), and
