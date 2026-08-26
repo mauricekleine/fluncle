@@ -19,7 +19,7 @@ export async function getHealthSnapshotReceiptCutoverDisposition(): Promise<Heal
   }
 }
 
-/** Missing, malformed, or unreadable settings retain the legacy health snapshot writer. */
+/** A convenience boolean for callers that do not choose a write path from an unreadable flag. */
 export async function isHealthSnapshotReceiptCutoverEnabled(): Promise<boolean> {
   return (await getHealthSnapshotReceiptCutoverDisposition()) === "enabled";
 }

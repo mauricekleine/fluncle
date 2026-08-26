@@ -71,11 +71,13 @@ type OperationDefinition = Omit<
   RecurringDatabaseOperation,
   "incidents" | "mutationDisposition" | "owner" | "serviceSource" | "timerSource"
 > & {
-  directory: string;
+  directory?: string;
   incidents?: readonly IncidentOperation[];
   service?: string;
+  serviceSource?: string;
   telemetryUnit?: string;
   timer?: string;
+  timerSource?: string;
 };
 
 const HERMES_ROOT = "docs/agents/hermes";
@@ -264,6 +266,24 @@ export const WRITE_MUTATION_POLICIES = {
     rationale: "Image rebuild and deploy side effects cannot share a database transaction.",
     reconciliation: "Inspect the one pinned image set and running release before rebuilding.",
   },
+  "ops.rave-watchdog": {
+    evidenceSource: "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "External probes and alerts cannot share the health database transaction.",
+    reconciliation: "Inspect the watchdog state and current service health before rerunning it.",
+  },
+  "ops.sonar-freshen": {
+    evidenceSource: "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "Binary download, smoke, swap, and restart cannot share a database transaction.",
+    reconciliation: "Inspect the published and running release before rerunning deployment.",
+  },
+  "ops.ssh-freshen": {
+    evidenceSource: "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+    kind: "deliberately-non-replayable",
+    rationale: "Repository sync, build, swap, and restart cannot share a database transaction.",
+    reconciliation: "Inspect the source and running release before rerunning deployment.",
+  },
   "reach.collect": {
     evidenceSource: "apps/web/src/lib/server/platform-stats.ts",
     kind: "replay-safe-idempotent",
@@ -335,6 +355,61 @@ export const WRITE_MUTATION_POLICIES = {
     reconciliation: "Inspect one track's observation and provenance before authoring another.",
   },
 } as const satisfies Record<string, MutationPolicy>;
+
+type WriteMutationPolicyId = keyof typeof WRITE_MUTATION_POLICIES;
+
+/** Every concrete recurring write trigger maps explicitly to its own mutation policy. */
+export const TRIGGER_MUTATION_POLICY_IDS = {
+  "analytics.funnel-snapshot": "analytics.funnel-snapshot",
+  "artist.resolve": "artist.resolve",
+  "backfill.apple-catalogue": "backfill.vendor-sweep",
+  "backfill.apple-music": "backfill.vendor-sweep",
+  "backfill.artist-credits": "backfill.artist-credits",
+  "backfill.artist-edges": "backfill.artist-edges",
+  "backfill.artist-images": "artist.resolve",
+  "backfill.beatport": "backfill.vendor-sweep",
+  "backfill.cover-masters.album": "backfill.cover-masters",
+  "backfill.cover-masters.artist": "backfill.cover-masters",
+  "backfill.deezer": "backfill.vendor-sweep",
+  "backfill.discogs": "backfill.vendor-sweep",
+  "backfill.discogs-facts": "backfill.vendor-sweep",
+  "backfill.label-images": "backfill.label-images",
+  "backfill.label-lineage": "backfill.label-lineage",
+  "backfill.lastfm": "backfill.vendor-sweep",
+  "backfill.recording-mbids": "backfill.recording-mbids",
+  "bio.album.describe": "bio.album",
+  "bio.artist.describe": "bio.artist",
+  "bio.label.describe": "bio.label",
+  "catalogue.anchor.resolve": "catalogue.anchor",
+  "catalogue.anchor.search": "catalogue.anchor",
+  "catalogue.crawl": "catalogue.crawl",
+  "catalogue.demand": "catalogue.demand",
+  "catalogue.isrc-recovery.resolve": "catalogue.isrc-recovery",
+  "catalogue.label-releases": "catalogue.label-releases",
+  "catalogue.rank": "catalogue.rank",
+  "catalogue.reconcile-hub-counts": "catalogue.reconcile-hub-counts",
+  "catalogue.verify-captures.write": "catalogue.verify-captures",
+  "clips.cut": "clips.studio",
+  "device.mirror": "device.mirror",
+  "frontier.refresh": "frontier.refresh",
+  "galaxies.map.write": "galaxies.cluster",
+  "health.snapshot": "health.snapshot",
+  "live.snapshot": "live.snapshot",
+  "logbook.create": "logbook.draft",
+  "newsletter.draft": "newsletter.draft",
+  "reach.collect": "reach.collect",
+  "social.capture": "social.capture",
+  "social.metrics": "social.metrics",
+  "social.publish-advance": "social.publish-advance",
+  "submissions.triage": "submissions.triage",
+  "track.capture.write": "track.capture",
+  "track.context.fill": "track.context",
+  "track.note.write": "track.note",
+  "track.observe.write": "track.observe",
+  "track.update.analysis": "track.enrich",
+  "track.update.embedding": "track.embed",
+  "track.update.galaxy": "galaxies.cluster",
+} as const satisfies Record<string, WriteMutationPolicyId>;
 
 export const INCIDENT_MUTATION_POLICIES = {
   fillEmptyAlbumBio: {
@@ -413,6 +488,15 @@ function operationMutationDisposition(
   return policy;
 }
 
+function triggerMutationPolicyId(operationId: string): WriteMutationPolicyId {
+  const policyId =
+    TRIGGER_MUTATION_POLICY_IDS[operationId as keyof typeof TRIGGER_MUTATION_POLICY_IDS];
+  if (policyId === undefined) {
+    throw new Error(`write trigger ${operationId} has no mutation policy mapping`);
+  }
+  return policyId;
+}
+
 function incident(functionName: string, operationId: string, source: string): IncidentOperation {
   const policy =
     INCIDENT_MUTATION_POLICIES[functionName as keyof typeof INCIDENT_MUTATION_POLICIES];
@@ -435,7 +519,13 @@ function incident(functionName: string, operationId: string, source: string): In
 function defineOperation(definition: OperationDefinition): RecurringDatabaseOperation {
   const timer = definition.timer ?? `${definition.telemetryUnit}.timer`;
   const service = definition.service ?? timer.replace(/\.timer$/, ".service");
-  const directory = `${HERMES_ROOT}/${definition.directory}`;
+  const directory = definition.directory ? `${HERMES_ROOT}/${definition.directory}` : undefined;
+  const serviceSource =
+    definition.serviceSource ?? (directory ? `${directory}/${service}` : undefined);
+  const timerSource = definition.timerSource ?? (directory ? `${directory}/${timer}` : undefined);
+  if (serviceSource === undefined || timerSource === undefined) {
+    throw new Error(`recurring operation ${definition.operationId} has no unit sources`);
+  }
   const mutationDisposition = operationMutationDisposition(
     definition.operationId,
     definition.accessClass,
@@ -445,7 +535,11 @@ function defineOperation(definition: OperationDefinition): RecurringDatabaseOper
     ...trigger,
     mutationDisposition:
       trigger.accessClass === "write"
-        ? mutationDisposition
+        ? operationMutationDisposition(
+            triggerMutationPolicyId(trigger.operationId),
+            trigger.accessClass,
+            trigger.source,
+          )
         : makeMutationDisposition("not-applicable", trigger.source),
   }));
 
@@ -461,8 +555,8 @@ function defineOperation(definition: OperationDefinition): RecurringDatabaseOper
       telemetryUnit: definition.telemetryUnit ?? service.replace(/\.service$/, ""),
       timer,
     },
-    serviceSource: `${directory}/${service}`,
-    timerSource: `${directory}/${timer}`,
+    serviceSource,
+    timerSource,
     triggers,
     wrapperSource: definition.wrapperSource,
   };
@@ -585,10 +679,10 @@ const READ_CLI_OPERATIONS = new Set([
 const HEAVY_READ_CLI_OPERATIONS = new Set(["galaxies.embeddings.read"]);
 
 /**
- * Complete roster of committed Hermes timers. The classification describes the
+ * Complete roster of recurring database-touching timers across the Hermes and
+ * satellite deployment/watchdog roots. The classification describes each
  * scheduled operation's product-database effect; the standard run-ledger receipt
- * is telemetry and deliberately does not turn a no-database operation into a
- * product write.
+ * is telemetry and deliberately does not turn a no-database operation into a write.
  */
 export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] = [
   defineOperation({
@@ -1426,7 +1520,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     timer: "pin-watch.timer",
     triggers: [
       endpoint(
-        "health.self-deploy",
+        "health.snapshot",
         "POST",
         "/api/v1/admin/health",
         `${HERMES_ROOT}/pin-watch/rebuild-hermes.sh`,
@@ -1744,6 +1838,81 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/verify-captures.sh`,
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("11min", "1h", "420"),
+    heavy: false,
+    operationId: "ops.sonar-freshen",
+    service: "fluncle-sonar-freshen.service",
+    serviceSource: "apps/sonar/deploy/fluncle-sonar-freshen.service",
+    telemetryUnit: "sonar-freshen",
+    timer: "fluncle-sonar-freshen.timer",
+    timerSource: "apps/sonar/deploy/fluncle-sonar-freshen.timer",
+    triggers: [
+      noDatabase(
+        "ops.sonar-freshen",
+        "verify and swap the current sonar release",
+        "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+      ),
+      endpoint(
+        "health.snapshot",
+        "POST",
+        "/api/v1/admin/health",
+        "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+      ),
+    ],
+    wrapperSource: "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("5min", "1h"),
+    heavy: false,
+    operationId: "ops.ssh-freshen",
+    service: "fluncle-ssh-freshen.service",
+    serviceSource: "apps/ssh/deploy/fluncle-ssh-freshen.service",
+    telemetryUnit: "ssh-freshen",
+    timer: "fluncle-ssh-freshen.timer",
+    timerSource: "apps/ssh/deploy/fluncle-ssh-freshen.timer",
+    triggers: [
+      noDatabase(
+        "ops.ssh-freshen",
+        "build, verify, and swap the SSH terminal release",
+        "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+      ),
+      endpoint(
+        "health.snapshot",
+        "POST",
+        "/api/v1/admin/health",
+        "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+      ),
+    ],
+    wrapperSource: "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: every("2min", "10min", "30"),
+    heavy: false,
+    operationId: "ops.rave-watchdog",
+    service: "fluncle-rave-watchdog.service",
+    serviceSource: "apps/ssh/watchdog/fluncle-rave-watchdog.service",
+    telemetryUnit: "rave-watchdog",
+    timer: "fluncle-rave-watchdog.timer",
+    timerSource: "apps/ssh/watchdog/fluncle-rave-watchdog.timer",
+    triggers: [
+      noDatabase(
+        "ops.rave-watchdog",
+        "probe the remote box and Tor surface",
+        "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+      ),
+      endpoint(
+        "health.snapshot",
+        "POST",
+        "/api/v1/admin/health",
+        "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+      ),
+    ],
+    wrapperSource: "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
   }),
 ];
 

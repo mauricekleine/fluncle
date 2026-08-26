@@ -288,16 +288,56 @@ probe_and_post_onion() {
 
   # POST the single `onion` check to record_health (same shape as the healthcheck
   # cron's snapshot). Best-effort: a failed POST is logged, never fatal.
-  local at body
+  local at body producer core digest key reconcile_body response http_status response_body attempt
   at="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-  body="$(printf '{"at":"%s","checks":[{"service":"onion","status":"%s","message":"%s","latencyMs":%s,"transitioned":%s}]}' \
-    "${at}" "${status}" "${message}" "${latency_ms}" "${transitioned}")"
-  if ! "${CURL_BIN}" -sS -o /dev/null -X POST \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
-    -d "${body}" --max-time 10 "${WATCH_WORKER_URL%/}/api/v1/admin/health"; then
-    log "onion record_health POST failed (best-effort, ignored)"
+  producer="rave-watchdog"
+  core="$(printf '{"at":"%s","checks":[{"latencyMs":%s,"message":"%s","service":"onion","status":"%s","transitioned":%s}],"producer":"%s"}' \
+    "${at}" "${latency_ms}" "${message}" "${status}" "${transitioned}" "${producer}")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
+  else
+    digest="$(printf '%s' "$core" | shasum -a 256 | awk '{print $1}')"
   fi
+  key="health.snapshot:${producer}:${at}"
+  body="$(printf '{"at":"%s","checks":[{"service":"onion","status":"%s","message":"%s","latencyMs":%s,"transitioned":%s}],"operationKey":"%s","producer":"%s","requestDigest":"%s"}' \
+    "${at}" "${status}" "${message}" "${latency_ms}" "${transitioned}" "$key" "$producer" "$digest")"
+  reconcile_body="$(printf '{"operationId":"health.snapshot","operationKey":"%s","requestDigest":"%s"}' "$key" "$digest")"
+
+  for attempt in 1 2; do
+    http_status=""
+    if http_status="$("${CURL_BIN}" -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+      -d "${body}" --max-time 10 "${WATCH_WORKER_URL%/}/api/v1/admin/health" 2>/dev/null)"; then
+      case "$http_status" in
+        2??) return 0 ;;
+        4??) log "onion record_health rejected the snapshot (best-effort, not replayed)"; return 0 ;;
+      esac
+    fi
+
+    if ! response="$("${CURL_BIN}" -sS -w $'\n%{http_code}' -X POST \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer ${FLUNCLE_API_TOKEN}" \
+      -d "${reconcile_body}" --max-time 10 \
+      "${WATCH_WORKER_URL%/}/api/v1/admin/operation-receipts/resolve" 2>/dev/null)"; then
+      log "onion record_health reconciliation unavailable; snapshot was not replayed"
+      return 0
+    fi
+    http_status="${response##*$'\n'}"
+    response_body="${response%$'\n'*}"
+    case "$http_status" in
+      2??) ;;
+      *) log "onion record_health reconciliation unavailable; snapshot was not replayed"; return 0 ;;
+    esac
+    if printf '%s' "$response_body" | grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"committed"'; then
+      return 0
+    fi
+    if printf '%s' "$response_body" | grep -Eq '"outcome"[[:space:]]*:[[:space:]]*"safely-retryable"' && [ "$attempt" -lt 2 ]; then
+      continue
+    fi
+    log "onion record_health reconciliation did not authorize replay"
+    return 0
+  done
 }
 
 # --- Run (each step best-effort; a completed run always exits 0) -------------------

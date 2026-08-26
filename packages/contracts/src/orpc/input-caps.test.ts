@@ -26,6 +26,7 @@ import {
   DISCOGS_RELEASE_WORK_LIMIT,
 } from "./admin-backfills";
 import { recordCost } from "./admin-costs";
+import { recordHealth } from "./admin-health";
 import { updateArtistRule } from "./admin-artist-rules";
 import { replaceLabelArtistRules } from "./admin-labels";
 import {
@@ -40,9 +41,11 @@ import { presignClipUpload, presignSetVideoUpload } from "./admin-mixtapes";
 import { presignRecordingUpload } from "./admin-recordings";
 import {
   getOperationReceipt,
+  getOperationReceiptLegacy,
   OPERATION_RECEIPT_KEY_MAX,
   OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
   reconcileOperationReceipts,
+  resolveOperationReceipt,
 } from "./admin-operation-receipts";
 
 /**
@@ -773,6 +776,39 @@ function accepts(op: unknown, input: unknown): boolean {
     "an operation key past the storage cap is rejected",
   );
   assert.equal(
+    accepts(getOperationReceipt, {
+      operationKey: "health.snapshot:one",
+    }),
+    true,
+    "inspection accepts only the bounded operation key",
+  );
+  assert.equal(
+    accepts(getOperationReceiptLegacy, {
+      operationKey: "health.snapshot:one",
+    }),
+    true,
+    "the initialization-era inspection route preserves the same bounded input",
+  );
+  assert.equal(
+    accepts(getOperationReceiptLegacy, { operationKey: "é".repeat(128) }),
+    true,
+    "the initialization-era inspection route preserves its original key grammar",
+  );
+  assert.equal(
+    accepts(resolveOperationReceipt, {
+      operationId: "health.snapshot",
+      operationKey: "health.snapshot:one",
+      requestDigest: "a".repeat(64),
+    }),
+    true,
+    "a complete digest-bound POST reconciliation request is accepted",
+  );
+  assert.equal(
+    accepts(getOperationReceipt, { operationKey: "é".repeat(128) }),
+    false,
+    "a non-ASCII operation key is rejected even when its character count is within the cap",
+  );
+  assert.equal(
     accepts(reconcileOperationReceipts, {
       limit: OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
       staleBefore: "2026-08-26T10:00:00.000Z",
@@ -792,6 +828,47 @@ function accepts(op: unknown, input: unknown): boolean {
     accepts(reconcileOperationReceipts, { limit: 1, staleBefore: "2026-08-26T10:00:00" }),
     false,
     "a stale receipt repair requires an explicit timestamp offset",
+  );
+  const health = {
+    at: "2026-08-26T10:00:00.000Z",
+    checks: [],
+    operationKey: "health.snapshot:test:2026-08-26T10:00:00.000Z",
+    producer: "test",
+    requestDigest: "a".repeat(64),
+  };
+  assert.equal(accepts(recordHealth, health), true, "complete health receipt metadata is accepted");
+  assert.equal(
+    accepts(recordHealth, {
+      at: health.at,
+      checks: health.checks,
+      operationKey: health.operationKey,
+    }),
+    true,
+    "the initialization-era operation key remains accepted until contraction",
+  );
+  assert.equal(
+    accepts(recordHealth, {
+      at: health.at,
+      checks: health.checks,
+      producer: health.producer,
+    }),
+    false,
+    "partial receipt metadata without the compatibility key is rejected",
+  );
+  assert.equal(
+    accepts(recordHealth, {
+      at: health.at,
+      checks: health.checks,
+      operationKey: health.operationKey,
+      producer: health.producer,
+    }),
+    false,
+    "partial receipt metadata beyond the compatibility shape is rejected",
+  );
+  assert.equal(
+    accepts(recordHealth, { ...health, operationKey: "é".repeat(100) }),
+    false,
+    "health rejects a non-ASCII operation key within the character cap",
   );
 }
 

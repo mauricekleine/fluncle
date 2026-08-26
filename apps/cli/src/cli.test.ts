@@ -222,6 +222,7 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("get");
+    expect(result.stdout).toContain("reconcile");
     expect(result.stdout).toContain("repair");
   });
 

@@ -1,11 +1,13 @@
 import { OPERATION_RECEIPT_REPAIR_LIMIT_MAX } from "@fluncle/contracts/orpc";
 
-import { adminApiGet, adminApiPost } from "../api";
+import { adminApiPost } from "../api";
 
 export type OperationReceiptOutcome =
   | "committed"
+  | "conflict"
   | "cutover-disabled"
   | "in-progress"
+  | "not-found"
   | "rejected"
   | "safely-retryable";
 
@@ -33,9 +35,9 @@ export type OperationReceiptRepairResponse = {
 export async function getOperationReceiptCommand(
   operationKey: string,
 ): Promise<OperationReceiptResponse> {
-  return adminApiGet<OperationReceiptResponse>(
-    `/api/v1/admin/operation-receipts/${encodeURIComponent(operationKey)}`,
-  );
+  return adminApiPost<OperationReceiptResponse>("/api/v1/admin/operation-receipts/inspect", {
+    operationKey,
+  });
 }
 
 export async function repairOperationReceiptsCommand(input: {
@@ -46,6 +48,14 @@ export async function repairOperationReceiptsCommand(input: {
     "/api/v1/admin/operation-receipts/reconcile",
     input,
   );
+}
+
+export async function reconcileOperationReceiptCommand(input: {
+  operationId: string;
+  operationKey: string;
+  requestDigest: string;
+}): Promise<OperationReceiptResponse> {
+  return adminApiPost<OperationReceiptResponse>("/api/v1/admin/operation-receipts/resolve", input);
 }
 
 export function parseOperationReceiptRepairLimit(value: string): number {

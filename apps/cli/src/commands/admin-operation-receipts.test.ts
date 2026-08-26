@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realApi from "../api";
 
-const gets: string[] = [];
 const posts: { body: unknown; path: string }[] = [];
 
 const response = {
@@ -19,13 +18,9 @@ const response = {
 
 await mock.module("../api", () => ({
   ...realApi,
-  adminApiGet: async (path: string) => {
-    gets.push(path);
-    return response;
-  },
   adminApiPost: async (path: string, body: unknown) => {
     posts.push({ body, path });
-    return { ok: true, repaired: 2, scanned: 2 };
+    return path.endsWith("/reconcile") ? { ok: true, repaired: 2, scanned: 2 } : response;
   },
 }));
 
@@ -34,19 +29,28 @@ const {
   operationReceiptLines,
   parseOperationReceiptFence,
   parseOperationReceiptRepairLimit,
+  reconcileOperationReceiptCommand,
   repairOperationReceiptsCommand,
 } = await import("./admin-operation-receipts");
 
 beforeEach(() => {
-  gets.length = 0;
   posts.length = 0;
 });
 
 describe("operation receipt commands", () => {
-  test("encodes the operation key and sends only the bounded repair fence", async () => {
+  test("keeps inspection, digest reconciliation, and repair on separate transports", async () => {
     expect(await Promise.resolve(getOperationReceiptCommand("health.snapshot:one/two"))).toBe(
       response,
     );
+    expect(
+      await Promise.resolve(
+        reconcileOperationReceiptCommand({
+          operationId: "health.snapshot",
+          operationKey: "health.snapshot:one/two",
+          requestDigest: "a".repeat(64),
+        }),
+      ),
+    ).toBe(response);
     expect(
       await Promise.resolve(
         repairOperationReceiptsCommand({
@@ -56,8 +60,19 @@ describe("operation receipt commands", () => {
       ),
     ).toEqual({ ok: true, repaired: 2, scanned: 2 });
 
-    expect(gets).toEqual(["/api/v1/admin/operation-receipts/health.snapshot%3Aone%2Ftwo"]);
     expect(posts).toEqual([
+      {
+        body: { operationKey: "health.snapshot:one/two" },
+        path: "/api/v1/admin/operation-receipts/inspect",
+      },
+      {
+        body: {
+          operationId: "health.snapshot",
+          operationKey: "health.snapshot:one/two",
+          requestDigest: "a".repeat(64),
+        },
+        path: "/api/v1/admin/operation-receipts/resolve",
+      },
       {
         body: { limit: 2, staleBefore: "2026-08-26T10:00:00.000Z" },
         path: "/api/v1/admin/operation-receipts/reconcile",

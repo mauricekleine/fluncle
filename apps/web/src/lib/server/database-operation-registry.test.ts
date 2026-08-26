@@ -9,11 +9,18 @@ import {
   INCIDENT_MUTATION_POLICIES,
   type OperationCadence,
   resolveDatabaseOperationOwner,
+  TRIGGER_MUTATION_POLICY_IDS,
   WRITE_MUTATION_POLICIES,
 } from "./database-operation-registry";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
 const HERMES_ROOT = join(REPO_ROOT, "docs/agents/hermes");
+const RECURRING_ROOTS = [
+  HERMES_ROOT,
+  join(REPO_ROOT, "apps/sonar/deploy"),
+  join(REPO_ROOT, "apps/ssh/deploy"),
+  join(REPO_ROOT, "apps/ssh/watchdog"),
+];
 const SCRIPTS = "docs/agents/hermes/scripts";
 const EXPECTED_WRITE_OPERATION_IDS = [
   "analytics.funnel-snapshot",
@@ -45,6 +52,9 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "logbook.draft",
   "newsletter.draft",
   "ops.pin-watch",
+  "ops.rave-watchdog",
+  "ops.sonar-freshen",
+  "ops.ssh-freshen",
   "reach.collect",
   "social.capture",
   "social.metrics",
@@ -69,6 +79,9 @@ const EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS = [
   "clips.studio",
   "frontier.refresh",
   "ops.pin-watch",
+  "ops.rave-watchdog",
+  "ops.sonar-freshen",
+  "ops.ssh-freshen",
   "track.capture",
   "track.embed",
   "track.enrich",
@@ -282,7 +295,7 @@ function discoverShellCliCalls(source: string): DiscoveredCliCall[] {
 }
 
 function reachableTimerSources(): string[] {
-  const localScripts = filesBelow(HERMES_ROOT)
+  const localScripts = RECURRING_ROOTS.flatMap(filesBelow)
     .filter(
       (path) =>
         /\.(?:py|sh|ts)$/.test(path) &&
@@ -342,8 +355,8 @@ function allMutationDispositions() {
 }
 
 describe("database operation registry", () => {
-  it("covers every committed Hermes timer and pins its exact cadence", () => {
-    const timerSources = filesBelow(HERMES_ROOT)
+  it("covers every committed recurring timer and pins its exact cadence", () => {
+    const timerSources = RECURRING_ROOTS.flatMap(filesBelow)
       .filter((path) => path.endsWith(".timer"))
       .map((path) => relative(REPO_ROOT, path))
       .sort();
@@ -475,6 +488,52 @@ describe("database operation registry", () => {
     }
   });
 
+  it("classifies every recurring raw health writer and its receipt metadata", () => {
+    const rawCallers = RECURRING_ROOTS.flatMap(filesBelow)
+      .filter((path) => /\.(?:sh|ts)$/.test(path) && !path.endsWith(".test.ts"))
+      .filter((path) => {
+        const body = readFileSync(path, "utf8");
+        const withoutBlockComments = path.endsWith(".ts")
+          ? body.replace(/\/\*[\s\S]*?\*\//g, "")
+          : body;
+        return withoutBlockComments
+          .split("\n")
+          .filter((line) => !/^\s*(?:#|\/\/)/.test(line))
+          .join("\n")
+          .includes("/api/v1/admin/health");
+      })
+      .map((path) => relative(REPO_ROOT, path))
+      .sort();
+    const registered = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.triggers)
+      .filter(
+        (trigger) =>
+          trigger.kind === "worker-endpoint" && trigger.target === "POST /api/v1/admin/health",
+      )
+      .map((trigger) => trigger.source)
+      .sort();
+
+    expect(registered).toEqual(rawCallers);
+    expect(new Set(registered).size).toBe(registered.length);
+
+    for (const source of rawCallers) {
+      const body = readFileSync(join(REPO_ROOT, source), "utf8");
+      expect(body, source).toContain("operationKey");
+      expect(body, source).toContain("producer");
+      expect(body, source).toContain("requestDigest");
+
+      if (source.endsWith(".sh")) {
+        expect(body, source).toContain('{"at":"%s","checks":[{"latencyMs":');
+        expect(body, source).toContain('}],"producer":"%s"}');
+        expect(body, source).toContain('key="health.snapshot:${producer}:${at}"');
+        expect(body, source).toContain("sha256sum");
+        expect(body, source).toContain("shasum -a 256");
+      } else {
+        expect(body, source).toContain("healthSnapshotReceiptMetadata");
+        expect(body, source).toContain("crypto.subtle.digest");
+      }
+    }
+  });
+
   it("makes the six direct Worker database timers explicit", () => {
     const expected = [
       "catalogue.anchor",
@@ -540,6 +599,9 @@ describe("database operation registry", () => {
     const writeOperations = DATABASE_OPERATION_REGISTRY.filter(
       (operation) => operation.accessClass === "write",
     );
+    const writeTriggers = DATABASE_OPERATION_REGISTRY.flatMap(
+      (operation) => operation.triggers,
+    ).filter((trigger) => trigger.accessClass === "write");
     const receiptBacked = writeOperations
       .filter((operation) => operation.mutationDisposition.kind === "receipt-backed")
       .map((operation) => operation.operationId);
@@ -558,6 +620,9 @@ describe("database operation registry", () => {
     );
     expect(sorted(Object.keys(WRITE_MUTATION_POLICIES))).toEqual(
       sorted(EXPECTED_WRITE_OPERATION_IDS),
+    );
+    expect(sorted(Object.keys(TRIGGER_MUTATION_POLICY_IDS))).toEqual(
+      sorted([...new Set(writeTriggers.map((trigger) => trigger.operationId))]),
     );
     expect(sorted(incidents.map((incident) => incident.functionName))).toEqual(
       sorted(EXPECTED_INCIDENT_FUNCTION_NAMES),
@@ -585,6 +650,20 @@ describe("database operation registry", () => {
           ? "deliberately-non-replayable"
           : "replay-safe-idempotent";
       expect(operation.mutationDisposition.kind, operation.operationId).toBe(expectedKind);
+    }
+
+    for (const trigger of writeTriggers) {
+      const policyId =
+        TRIGGER_MUTATION_POLICY_IDS[
+          trigger.operationId as keyof typeof TRIGGER_MUTATION_POLICY_IDS
+        ];
+      expect(policyId, trigger.operationId).toBeDefined();
+      if (policyId === undefined) {
+        throw new Error(`missing trigger policy for ${trigger.operationId}`);
+      }
+      expect(trigger.mutationDisposition.kind, trigger.operationId).toBe(
+        WRITE_MUTATION_POLICIES[policyId].kind,
+      );
     }
 
     for (const incident of incidents) {
@@ -645,7 +724,11 @@ describe("database operation registry", () => {
 
       for (const trigger of operation.triggers) {
         expect(trigger.mutationDisposition.kind, trigger.operationId).toBe(
-          trigger.accessClass === "write" ? operation.mutationDisposition.kind : "not-applicable",
+          trigger.accessClass === "write"
+            ? trigger.operationId === "health.snapshot"
+              ? "receipt-backed"
+              : operation.mutationDisposition.kind
+            : "not-applicable",
         );
       }
     }

@@ -1,5 +1,6 @@
 import { startSpan } from "@sentry/core";
 import { type Client, type Transaction } from "@libsql/client";
+import { OPERATION_RECEIPT_KEY_MAX, OPERATION_RECEIPT_KEY_PATTERN } from "@fluncle/contracts/orpc";
 import { isDatabaseOperationId } from "./database-observability";
 
 export type JsonValue =
@@ -130,7 +131,6 @@ type ReceiptLookup = { kind: "absent" } | { kind: "found"; outcome: OperationRec
 const REQUEST_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const STRICT_ISO_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const MAX_OPERATION_ID_LENGTH = 64;
-const MAX_OPERATION_KEY_LENGTH = 256;
 const MAX_RESULT_IDENTITY_LENGTH = 512;
 const MAX_RESULT_JSON_LENGTH = 16_384;
 const MAX_TIMESTAMP_LENGTH = 64;
@@ -247,8 +247,29 @@ export async function inspectOperationReceipt(
   client: OperationReceiptClient,
   operationKey: string,
 ): Promise<OperationReceiptInspection> {
-  validateBoundedString(operationKey, "operationKey", MAX_OPERATION_KEY_LENGTH);
+  validateOperationKey(operationKey);
 
+  return inspectOperationReceiptFor(client, operationKey);
+}
+
+/** Read through the initialization-era key grammar until its Goal H contraction. */
+export async function inspectOperationReceiptLegacy(
+  client: OperationReceiptClient,
+  operationKey: string,
+): Promise<OperationReceiptInspection> {
+  if (operationKey.length === 0 || operationKey.length > OPERATION_RECEIPT_KEY_MAX) {
+    throw new RangeError(
+      `operationKey must contain from 1 through ${OPERATION_RECEIPT_KEY_MAX} characters`,
+    );
+  }
+
+  return inspectOperationReceiptFor(client, operationKey);
+}
+
+async function inspectOperationReceiptFor(
+  client: OperationReceiptClient,
+  operationKey: string,
+): Promise<OperationReceiptInspection> {
   return startSpan({ name: "operation receipt inspect", op: "operation.receipt" }, async (span) => {
     try {
       const result = await client.execute({
@@ -552,7 +573,7 @@ function validateOperationCoordinates(
   operationId: string,
   requestDigest: string,
 ): void {
-  validateBoundedString(operationKey, "operationKey", MAX_OPERATION_KEY_LENGTH);
+  validateOperationKey(operationKey);
 
   if (!isDatabaseOperationId(operationId)) {
     throw new TypeError("operationId must be a valid database operation id");
@@ -560,6 +581,14 @@ function validateOperationCoordinates(
 
   if (!REQUEST_DIGEST_PATTERN.test(requestDigest)) {
     throw new TypeError("requestDigest must be 64 lowercase hexadecimal characters");
+  }
+}
+
+function validateOperationKey(operationKey: unknown): asserts operationKey is string {
+  validateBoundedString(operationKey, "operationKey", OPERATION_RECEIPT_KEY_MAX);
+
+  if (!OPERATION_RECEIPT_KEY_PATTERN.test(operationKey)) {
+    throw new TypeError("operationKey must contain printable operation-key characters only");
   }
 }
 

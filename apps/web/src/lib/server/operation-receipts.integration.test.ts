@@ -3,12 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { createIntegrationDb } from "./integration-db";
 import {
   canonicalOperationJson,
   digestOperationRequest,
   executeReceiptBackedOperation,
   inspectOperationReceipt,
+  inspectOperationReceiptLegacy,
   type JsonValue,
   type OperationReceiptClient,
   reconcileOperationReceipt,
@@ -193,29 +195,49 @@ describe("operation receipts", () => {
     });
   });
 
-  it("collapses duplicate callers onto one effect", async () => {
-    await withFileDb(async (client) => {
+  it("collapses genuinely overlapping clients and write transactions onto one effect", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "fluncle-operation-receipts-overlap-"));
+    const url = `file:${join(directory, "receipts.db")}`;
+    const firstClient = await createIntegrationDb({ url });
+    const secondClient = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url });
+
+    try {
       const digest = await digestOperationRequest({ value: "same" });
       let effects = 0;
-      let winner: Awaited<ReturnType<typeof executeReceiptBackedOperation>> | undefined;
-      const racingClient = overrideClient(client, {
+      let releaseFirst: (() => void) | undefined;
+      let markFirstEntered: (() => void) | undefined;
+      let markSecondStarted: (() => void) | undefined;
+      const firstEntered = new Promise<void>((resolve) => {
+        markFirstEntered = resolve;
+      });
+      const firstReleased = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const secondStarted = new Promise<void>((resolve) => {
+        markSecondStarted = resolve;
+      });
+      const observedSecond = overrideClient(secondClient, {
         transaction: async (mode?: "write" | "read" | "deferred") => {
-          winner = await executeReceiptBackedOperation({
-            client,
-            effect: async () => {
-              effects += 1;
-              return committed("result:once", { call: effects });
-            },
-            operationId: "test-operation",
-            operationKey: "duplicate-callers",
-            requestDigest: digest,
-          });
-          return client.transaction(mode);
+          markSecondStarted?.();
+          return secondClient.transaction(mode);
         },
       });
 
-      const reconciledCaller = await executeReceiptBackedOperation({
-        client: racingClient,
+      const winnerPromise = executeReceiptBackedOperation({
+        client: firstClient,
+        effect: async () => {
+          effects += 1;
+          markFirstEntered?.();
+          await firstReleased;
+          return committed("result:once", { call: effects });
+        },
+        operationId: "test-operation",
+        operationKey: "duplicate-callers",
+        requestDigest: digest,
+      });
+      await firstEntered;
+      const reconciledPromise = executeReceiptBackedOperation({
+        client: observedSecond,
         effect: async () => {
           effects += 1;
           return committed("result:once", { call: effects });
@@ -224,12 +246,19 @@ describe("operation receipts", () => {
         operationKey: "duplicate-callers",
         requestDigest: digest,
       });
+      await secondStarted;
+      releaseFirst?.();
+      const [winner, reconciledCaller] = await Promise.all([winnerPromise, reconciledPromise]);
 
       expect(effects).toBe(1);
       expect(winner).toMatchObject({ outcome: "committed", replayed: false });
       expect(reconciledCaller).toMatchObject({ outcome: "committed", replayed: true });
-      expect(await receiptCount(client, "duplicate-callers")).toBe(1);
-    });
+      expect(await receiptCount(firstClient, "duplicate-callers")).toBe(1);
+    } finally {
+      firstClient.close();
+      secondClient.close();
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   it("rolls back an accepted receipt when the effect fails", async () => {
@@ -329,6 +358,31 @@ describe("operation receipts", () => {
     });
   });
 
+  it("keeps the initialization-era inspection key grammar bounded by characters", async () => {
+    await withFileDb(async (client) => {
+      const operationKey = `legacy-${"é".repeat(100)}`;
+      await client.execute({
+        args: [
+          operationKey,
+          "test-operation",
+          "a".repeat(64),
+          "2026-08-26T10:00:00.000Z",
+          "2026-08-26T10:00:00.000Z",
+        ],
+        sql: `insert into operation_receipts
+          (operation_key, operation_id, request_digest, state, created_at, updated_at)
+          values (?, ?, ?, 'accepted', ?, ?)`,
+      });
+
+      await expect(inspectOperationReceiptLegacy(client, operationKey)).resolves.toMatchObject({
+        operationId: "test-operation",
+        outcome: "found",
+        state: "accepted",
+      });
+      await expect(inspectOperationReceipt(client, operationKey)).rejects.toThrow(/printable/);
+    });
+  });
+
   it("enforces storage byte bounds before starting a transaction", async () => {
     await withFileDb(async (client) => {
       const digest = await digestOperationRequest({ value: 1 });
@@ -337,10 +391,19 @@ describe("operation receipts", () => {
           client,
           effect: () => committed("never", null),
           operationId: "test-operation",
-          operationKey: "é".repeat(129),
+          operationKey: "a".repeat(257),
           requestDigest: digest,
         }),
       ).rejects.toThrow(/256 bytes/);
+      await expect(
+        executeReceiptBackedOperation({
+          client,
+          effect: () => committed("never", null),
+          operationId: "test-operation",
+          operationKey: `key-${"é".repeat(120)}`,
+          requestDigest: digest,
+        }),
+      ).rejects.toThrow(/printable/);
     });
   });
 
@@ -400,7 +463,7 @@ describe("operation receipts", () => {
       expect(first).toMatchObject({ outcome: "committed", replayed: false });
       firstClient.close();
 
-      const restarted = createClient({ url });
+      const restarted = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url });
       try {
         const replay = await executeReceiptBackedOperation({
           client: restarted,
@@ -425,6 +488,66 @@ describe("operation receipts", () => {
           resultIdentity: "result:restart",
         });
         expect(Number(effects.rows[0]?.count ?? 0)).toBe(1);
+      } finally {
+        restarted.close();
+      }
+    } finally {
+      firstClient.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("rolls back an open effect transaction when the client is lost before commit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "fluncle-operation-receipts-loss-"));
+    const url = `file:${join(directory, "receipts.db")}`;
+    const digest = await digestOperationRequest({ value: "lost-process" });
+    const firstClient = await createIntegrationDb({ url });
+
+    try {
+      await firstClient.execute(
+        "create table operation_receipt_test_effects (effect_key text primary key)",
+      );
+      const transaction = await firstClient.transaction("write");
+      await transaction.execute({
+        args: [
+          "lost-process-key",
+          "test-operation",
+          digest,
+          "accepted",
+          "2026-08-26T10:00:00.000Z",
+          "2026-08-26T10:00:00.000Z",
+        ],
+        sql: `insert into operation_receipts
+          (operation_key, operation_id, request_digest, state, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)`,
+      });
+      await transaction.execute(
+        "insert into operation_receipt_test_effects (effect_key) values ('uncommitted')",
+      );
+      transaction.close();
+      firstClient.close();
+
+      const restarted = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url });
+      try {
+        expect(await receiptCount(restarted, "lost-process-key")).toBe(0);
+        const replay = await executeReceiptBackedOperation({
+          client: restarted,
+          effect: async (nextTransaction) => {
+            await nextTransaction.execute(
+              "insert into operation_receipt_test_effects (effect_key) values ('committed')",
+            );
+            return committed("result:recovered", { committed: true });
+          },
+          operationId: "test-operation",
+          operationKey: "lost-process-key",
+          requestDigest: digest,
+        });
+        const effects = await restarted.execute(
+          "select effect_key from operation_receipt_test_effects order by effect_key",
+        );
+
+        expect(replay).toMatchObject({ outcome: "committed", replayed: false });
+        expect(effects.rows.map((row) => row.effect_key)).toEqual(["committed"]);
       } finally {
         restarted.close();
       }

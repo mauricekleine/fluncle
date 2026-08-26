@@ -884,7 +884,7 @@ JSON field reference:
 
   adminReceipts
     .command("get")
-    .description("Reconcile one operation key")
+    .description("Inspect one operation key")
     .argument("<operationKey>")
     .option("--json", "Print lossless bounded receipt metadata as JSON", false)
     .action(async (operationKey: string, options: JsonOptions) => {
@@ -898,6 +898,36 @@ JSON field reference:
 
       console.log(receipts.operationReceiptLines(result.receipt).join("\n"));
     });
+
+  adminReceipts
+    .command("reconcile")
+    .description("Reconcile one digest-bound operation")
+    .argument("<operationId>")
+    .argument("<operationKey>")
+    .argument("<requestDigest>")
+    .option("--json", "Print lossless bounded receipt metadata as JSON", false)
+    .action(
+      async (
+        operationId: string,
+        operationKey: string,
+        requestDigest: string,
+        options: JsonOptions,
+      ) => {
+        const receipts = await import("./commands/admin-operation-receipts");
+        const result = await receipts.reconcileOperationReceiptCommand({
+          operationId,
+          operationKey,
+          requestDigest,
+        });
+
+        if (options.json) {
+          printJson(result);
+          return;
+        }
+
+        console.log(receipts.operationReceiptLines(result.receipt).join("\n"));
+      },
+    );
 
   adminReceipts
     .command("repair")

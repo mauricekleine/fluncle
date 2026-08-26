@@ -167,11 +167,15 @@ export {
 export {
   adminOperationReceiptsContract,
   getOperationReceipt,
+  getOperationReceiptLegacy,
   OPERATION_RECEIPT_KEY_MAX,
+  OPERATION_RECEIPT_KEY_PATTERN,
   OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
+  OPERATION_RECEIPT_REQUEST_DIGEST_PATTERN,
   OperationReceiptReconciliationOutcomeSchema,
   OperationReceiptStateSchema,
   reconcileOperationReceipts,
+  resolveOperationReceipt,
 } from "./admin-operation-receipts";
 export {
   addArtistRule,
@@ -309,7 +313,12 @@ export {
   type RunLedgerUnitRollup,
   RunLedgerUnitRollupSchema,
 } from "./admin-telemetry";
-export { recordHealth, ServiceHealthStatusSchema } from "./admin-health";
+export {
+  HEALTH_SNAPSHOT_PRODUCER_MAX,
+  HEALTH_SNAPSHOT_PRODUCER_PATTERN,
+  recordHealth,
+  ServiceHealthStatusSchema,
+} from "./admin-health";
 export { adminReachContract, recordPlatformStats } from "./admin-reach";
 export { listPlatformStats, reachContract } from "./reach";
 export {

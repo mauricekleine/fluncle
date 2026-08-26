@@ -7,7 +7,8 @@
 //   - WRITE (the agent cron): `recordHealthSnapshot` — for each check, upsert the
 //     single `service_status` row (carry `since` forward while the status is
 //     unchanged, reset it on a flip), append a `status_events` row for every
-//     `transitioned` check, then prune the ledger to its most recent 200 rows.
+//     `transitioned` check, then prune the ledgers. Under receipt cutover, those
+//     effects and spent rate-limit pruning commit with the terminal receipt.
 //
 // Everything here is PUBLIC-SAFE by construction: only service name + status +
 // short message + latency + timestamps ever flow through, never an internal
@@ -15,6 +16,10 @@
 
 import { randomUUID } from "node:crypto";
 import { type Client } from "@libsql/client";
+import {
+  HEALTH_SNAPSHOT_PRODUCER_MAX,
+  HEALTH_SNAPSHOT_PRODUCER_PATTERN,
+} from "@fluncle/contracts/orpc";
 import { cronSurfaces } from "@fluncle/registry";
 import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
@@ -24,7 +29,6 @@ import {
   executeReceiptBackedOperation,
   type OperationReceiptOutcome,
 } from "./operation-receipts";
-import { pruneRateLimitCounters } from "./rate-limit";
 
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
 export type ServiceHealthStatus = "ok" | "degraded" | "down";
@@ -67,9 +71,72 @@ export type HealthCheckInput = {
 
 export const HEALTH_SNAPSHOT_OPERATION_ID = "health.snapshot";
 
-/** The caller and Worker derive the same logical operation key from the snapshot timestamp. */
-export function healthSnapshotOperationKey(at: string): string {
-  return `${HEALTH_SNAPSHOT_OPERATION_ID}:${at}`;
+const MESSAGE_MAX = 160;
+const RATE_LIMIT_COUNTER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Canonicalize every accepted offset onto the one UTC representation used by keys and storage. */
+export function normalizeHealthSnapshotAt(at: string): string {
+  try {
+    return new Date(at).toISOString();
+  } catch {
+    throw new TypeError("at must be a valid ISO timestamp");
+  }
+}
+
+/** Trim, collapse whitespace, and cap a probe message; an empty result is null. */
+export function normalizeHealthCheck(check: HealthCheckInput): HealthCheckInput {
+  const collapsed = check.message?.replace(/\s+/g, " ").trim() ?? "";
+  const message =
+    collapsed.length === 0
+      ? null
+      : collapsed.length > MESSAGE_MAX
+        ? `${collapsed.slice(0, MESSAGE_MAX - 1)}…`
+        : collapsed;
+
+  return {
+    latencyMs: check.latencyMs,
+    message,
+    service: check.service.trim(),
+    status: check.status,
+    transitioned: check.transitioned,
+  };
+}
+
+export function normalizeHealthSnapshot(
+  at: string,
+  checks: HealthCheckInput[],
+): { at: string; checks: HealthCheckInput[] } {
+  return {
+    at: normalizeHealthSnapshotAt(at),
+    checks: checks.map(normalizeHealthCheck),
+  };
+}
+
+function validateHealthSnapshotProducer(producer: string): void {
+  if (
+    producer.length > HEALTH_SNAPSHOT_PRODUCER_MAX ||
+    !HEALTH_SNAPSHOT_PRODUCER_PATTERN.test(producer)
+  ) {
+    throw new TypeError("producer must be a bounded stable identifier");
+  }
+}
+
+/** Independent producers share timestamps safely by carrying their stable identity in the key. */
+export function healthSnapshotOperationKey(producer: string, at: string): string {
+  validateHealthSnapshotProducer(producer);
+  return `${HEALTH_SNAPSHOT_OPERATION_ID}:${producer}:${normalizeHealthSnapshotAt(at)}`;
+}
+
+/** The caller and Worker digest the same normalized request before any effect can execute. */
+export async function healthSnapshotRequestDigest(
+  producer: string,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<string> {
+  validateHealthSnapshotProducer(producer);
+  const snapshot = normalizeHealthSnapshot(at, checks);
+
+  return digestOperationRequest({ ...snapshot, producer });
 }
 
 // The ledger is trimmed to this many most-recent rows on every write — a status
@@ -375,50 +442,48 @@ async function writeHealthSnapshot(
 }
 
 export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[]): Promise<void> {
-  const db = await getDb();
+  await recordHealthSnapshotFor(await getDb(), at, checks);
+}
 
-  await writeHealthSnapshot(db, at, checks, false);
-  await pruneRateLimitsAfterHealthSnapshot();
+/** Client-injected legacy writer retained as the default-off rollback path. */
+export async function recordHealthSnapshotFor(
+  db: Client,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<void> {
+  const snapshot = normalizeHealthSnapshot(at, checks);
+
+  await writeHealthSnapshot(db, snapshot.at, snapshot.checks, false);
+  await pruneRateLimitsAfterHealthSnapshot(db, snapshot.at);
 }
 
 /** Persist a health snapshot and its terminal receipt in one transaction. */
 export async function recordHealthSnapshotWithReceipt(
   operationKey: string,
+  producer: string,
   at: string,
   checks: HealthCheckInput[],
 ): Promise<OperationReceiptOutcome> {
-  const outcome = await recordHealthSnapshotWithReceiptFor(await getDb(), operationKey, at, checks);
-
-  if (outcome.outcome === "committed") {
-    await pruneRateLimitsAfterHealthSnapshot();
-  }
-
-  return outcome;
+  return recordHealthSnapshotWithReceiptFor(await getDb(), operationKey, producer, at, checks);
 }
 
 /** Client-injected receipt writer for real-libSQL failure and compatibility tests. */
 export async function recordHealthSnapshotWithReceiptFor(
   client: Client,
   operationKey: string,
+  producer: string,
   at: string,
   checks: HealthCheckInput[],
 ): Promise<OperationReceiptOutcome> {
-  const requestDigest = await digestOperationRequest({
-    at,
-    checks: checks.map((check) => ({
-      latencyMs: check.latencyMs,
-      message: check.message,
-      service: check.service,
-      status: check.status,
-      transitioned: check.transitioned,
-    })),
-  });
+  const snapshot = normalizeHealthSnapshot(at, checks);
+  const requestDigest = await healthSnapshotRequestDigest(producer, snapshot.at, snapshot.checks);
   return executeReceiptBackedOperation({
     client,
     effect: async (transaction) => {
-      await writeHealthSnapshot(transaction, at, checks, true);
+      await writeHealthSnapshot(transaction, snapshot.at, snapshot.checks, true);
+      await pruneRateLimitCountersInSnapshot(transaction, snapshot.at);
       return {
-        result: { at },
+        result: { at: snapshot.at },
         resultIdentity: operationKey,
         state: "committed",
       };
@@ -429,14 +494,14 @@ export async function recordHealthSnapshotWithReceiptFor(
   });
 }
 
-async function pruneRateLimitsAfterHealthSnapshot(): Promise<void> {
+async function pruneRateLimitsAfterHealthSnapshot(db: Client, at: string): Promise<void> {
   // And prune the rate limiter's spent windows, which nothing deleted from before (rate-limit.ts
   // `pruneRateLimitCounters`). It rides here because this is the repo's periodic-maintenance write
   // and a housekeeping delete must never sit on a read a caller is waiting for. NON-CRITICAL, the
   // samples-ledger discipline above: a failure here is logged and swallowed, because the health
   // snapshot this function exists for is already complete and must not be lost to upkeep.
   try {
-    const pruned = await pruneRateLimitCounters();
+    const pruned = await pruneRateLimitCountersInSnapshot(db, at);
 
     if (pruned > 0) {
       logEvent("info", "status.rate-limit-counters-pruned", { rows: pruned });
@@ -444,4 +509,16 @@ async function pruneRateLimitsAfterHealthSnapshot(): Promise<void> {
   } catch (error) {
     logEvent("error", "status.rate-limit-prune-failed", { error });
   }
+}
+
+async function pruneRateLimitCountersInSnapshot(
+  db: Pick<Client, "execute">,
+  at: string,
+): Promise<number> {
+  const cutoff = new Date(Date.parse(at) - RATE_LIMIT_COUNTER_RETENTION_MS).toISOString();
+  const result = await db.execute({
+    args: [cutoff],
+    sql: "delete from rate_limit_counters where window_start < ?",
+  });
+  return result.rowsAffected;
 }
