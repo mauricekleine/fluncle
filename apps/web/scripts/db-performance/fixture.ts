@@ -14,6 +14,7 @@ export const FIXTURE_TABLES = [
   "perf_track_embeddings",
   "perf_track_artists",
   "perf_crawl_frontier",
+  "due_work",
 ] as const;
 
 export type FixtureTable = (typeof FIXTURE_TABLES)[number];
@@ -94,6 +95,16 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     on perf_crawl_frontier(state, id)`,
   `create index if not exists perf_tracks_label_scope_id_idx
     on perf_tracks(label_scope, id)`,
+  `create table if not exists due_work (
+    work_kind text not null,
+    state text not null,
+    sort_key text not null,
+    subject_id text not null,
+    primary key (work_kind, subject_id)
+  )`,
+  `create index if not exists due_work_ready_idx
+    on due_work(work_kind, state, sort_key, subject_id)
+    where state = 'ready'`,
 ] as const;
 
 const TRACK_INSERT = `insert or ignore into perf_tracks
@@ -356,6 +367,13 @@ export async function* generateFixture(
       sql: "insert or ignore into perf_crawl_frontier (id, state, due_at) values (?, ?, ?)",
     };
   });
+
+  const dueWorkReady = Math.min(counts.tracks, getScaleManifest(profile).multiplier * 100);
+  yield* generatedChunks("due_work", dueWorkReady, chunkSize, (index) => ({
+    args: ["synthetic-ready", "ready", padded(index), `synthetic-subject-${padded(index)}`],
+    sql: `insert or ignore into due_work (work_kind, state, sort_key, subject_id)
+      values (?, ?, ?, ?)`,
+  }));
 }
 
 export async function applyFixtureSchema(sink: FixtureBatchSink): Promise<void> {

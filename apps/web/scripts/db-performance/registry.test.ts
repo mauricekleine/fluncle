@@ -138,29 +138,35 @@ describe("performance registry", () => {
     expect(report.contracts[0]?.passed).toBe(false);
   });
 
-  it("runs the registered lightweight contract at 1x, 2x, and 4x without the million-row fixture", async () => {
-    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
-
-    try {
-      await applyFixtureSchema(client);
-      const counts = createCiFixtureCounts("1x", 256);
-      await writeFixture(client, "1x", { counts });
-
-      expect(counts.tracks).toBe(256);
-      for (const profile of ["1x", "2x", "4x"] as const) {
+  it("proves empty and bounded due-work ready-index plans at 1x, 2x, and 4x", async () => {
+    for (const profile of ["1x", "2x", "4x"] as const) {
+      const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+      try {
+        await applyFixtureSchema(client);
+        const counts = createCiFixtureCounts(profile, 512);
+        await writeFixture(client, profile, { counts });
         const report = await runPerformanceContracts({
           client,
-          contracts: selectPerformanceContracts(["fixture.frontier-pending-claim"]),
+          contracts: selectPerformanceContracts([
+            "fixture.due-work-ready",
+            "fixture.due-work-ready-empty",
+          ]),
           profile,
         });
 
         expect(report.profile).toBe(profile);
         expect(report.passed).toBe(true);
-        expect(report.contracts[0]?.resultRowCount.p50).toBe(25);
-        expect(report.contracts[0]?.plan?.violations).toEqual([]);
+        expect(
+          report.contracts
+            .map((contract) => contract.resultRowCount.p50)
+            .sort((left, right) => left - right),
+        ).toEqual([0, 25]);
+        expect(report.contracts.every((contract) => contract.plan?.violations.length === 0)).toBe(
+          true,
+        );
+      } finally {
+        client.close();
       }
-    } finally {
-      client.close();
     }
   });
 

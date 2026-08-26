@@ -693,6 +693,70 @@ performanceRegistry.register(
   }),
 );
 
+const DUE_WORK_READY_READ = {
+  args: ["synthetic-ready", 25],
+  sql: `select subject_id from due_work
+    where work_kind = ? and state = 'ready'
+    order by sort_key, subject_id
+    limit ?`,
+};
+
+performanceRegistry.register(
+  sqlContract({
+    description: "A bounded due-work ready read seeks the maintained backlog index",
+    id: "fixture.due-work-ready",
+    iterations: 20,
+    plan: {
+      policy: {
+        forbidTempSort: true,
+        growingTables: ["due_work"],
+        requiredDetails: [/due_work_ready_idx/i],
+      },
+      statement: DUE_WORK_READY_READ,
+    },
+    statement: DUE_WORK_READY_READ,
+    validate(execution) {
+      return execution.resultRowCount === 25
+        ? []
+        : [`bounded due-work read returned ${execution.resultRowCount} rows`];
+    },
+    warmupIterations: 2,
+    workClass: "queue",
+  }),
+);
+
+const DUE_WORK_EMPTY_READ = {
+  args: ["synthetic-empty", 1],
+  sql: `select subject_id from due_work
+    where work_kind = ? and state = 'ready'
+    order by sort_key, subject_id
+    limit ?`,
+};
+
+performanceRegistry.register(
+  sqlContract({
+    description: "An empty due-work probe seeks the same ready index without a source scan",
+    id: "fixture.due-work-ready-empty",
+    iterations: 20,
+    plan: {
+      policy: {
+        forbidTempSort: true,
+        growingTables: ["due_work"],
+        requiredDetails: [/due_work_ready_idx/i],
+      },
+      statement: DUE_WORK_EMPTY_READ,
+    },
+    statement: DUE_WORK_EMPTY_READ,
+    validate(execution) {
+      return execution.resultRowCount === 0
+        ? []
+        : [`empty due-work read returned ${execution.resultRowCount} rows`];
+    },
+    warmupIterations: 2,
+    workClass: "queue",
+  }),
+);
+
 performanceRegistry.register({
   description: "Held heavy reader, public reads, and serialized batches honor per-client bounds",
   async execute() {

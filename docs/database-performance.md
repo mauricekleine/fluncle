@@ -59,6 +59,14 @@ Background write work ultimately uses one global admission path with lease expir
 
 Every externally retryable or timeout-prone logical mutation selected for receipt coverage carries an operation key and writes its receipt atomically with its effect. An unknown response is reconciled before replay. Projections define a source of truth, transactional maintenance where practical, an idempotent rebuild, and a drift audit. Backfills are resumable, chunked, observable, and reversible until verified; schema expansion, shadow/backfill, cutover, and contraction remain separate phases. Goal A records these laws and instrumentation but does not implement receipts, projections, admission, or SQL changes.
 
+### Due-work projection
+
+Recurring track and graph-entity selectors materialize eligibility in `due_work`. One physical `work_kind` owns each eligibility and priority policy, while `subject_type` and `subject_id` identify the source row. `ready` rows are claimed through the ready-order index; future retry windows remain `scheduled` until a bounded promotion; leased rows carry an owner, token, and expiry; and `repair` rows are transactionally coupled proof that a source mutation still needs projection repair. An absent or terminal source has no projected row.
+
+The source tables remain authoritative. Each registered definition provides a primary-key-ordered bounded reader, a pure evaluator, and an explicit source-version token. Rebuild checkpoints make zero-row, interrupted, and completed runs idempotent. A new generation upserts the rows it observes and deletes only older-generation rows after the source walk completes, while concurrent repair markers survive that contraction. Drift comparison reads bounded source and projection pages and reports missing, unexpected, and field-mismatched rows without mutating either side.
+
+The local backfill command is `bun run --cwd apps/web db:backfill-due-work`; it rejects every non-local database URL before opening a client. Backfill and shadow comparison populate and verify the projection without changing selector behavior. Runtime cutover is a later, default-off compatibility phase, and the legacy selectors remain the rollback path until their separate contraction.
+
 ## Test-data laws
 
 Raw production data and identifiers never enter the repository or CI artifacts. Fixtures are deterministic and synthetic while preserving audited cardinality, selectivity, null distribution, fan-out, and backlog distribution. Exact 1×, 2×, and 4× profiles derive only from the checked-in manifest. Local SQLite/libSQL is mandatory for correctness and deterministic plan tests. Hosted Turso is a separate scratch-only replay because local behavior is not hosted performance evidence.
