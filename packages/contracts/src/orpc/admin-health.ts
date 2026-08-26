@@ -17,6 +17,7 @@
 
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+import { OPERATION_RECEIPT_KEY_MAX } from "./admin-operation-receipts.js";
 
 /** The three-state service health enum, shared by the snapshot + the stored rows. */
 export const ServiceHealthStatusSchema = z
@@ -59,8 +60,9 @@ export const recordHealth = oc
   })
   .input(
     z.object({
-      at: z.string().min(1),
+      at: z.string().max(64).datetime({ offset: true }),
       checks: z.array(HealthCheckSchema),
+      operationKey: z.string().min(1).max(OPERATION_RECEIPT_KEY_MAX).optional(),
     }),
   )
   .output(z.object({ ok: z.literal(true) }));

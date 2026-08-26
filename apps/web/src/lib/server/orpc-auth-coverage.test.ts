@@ -415,6 +415,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // no operatorGuard. `promote_recording` remains the only way a mixtape exists.
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
+  // The health writer's agent must resolve an ambiguous timeout before any replay. The response
+  // exposes only bounded receipt metadata, never the digest or stored result payload.
+  get_operation_receipt: "admin",
   get_private_account_export: "private-session",
   // One of the signed-in user's frozen Frontier editions + its tracklist — private-session
   // (privateUserAuth), the get_private_frontier_playlist precedent. Scoped by the session
@@ -622,6 +625,9 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // whose stored counts disagreed with truth — it cannot mint a coordinate, write a note, or
   // certify anything — so the box's nightly cron drives it with the agent token it already holds.
   reconcile_hub_counts: "admin",
+  // Stale accepted receipts require an explicit bounded operator repair; an agent may inspect but
+  // cannot terminalize one.
+  reconcile_operation_receipts: "operator",
   // The append-only cost ledger's write (COST-01) — agent tier (adminAuth only, no
   // operatorGuard), the record_health precedent; the box's sweeps POST their cost
   // rows with the agent token, and it writes only the internal cost_events ledger

@@ -174,6 +174,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
   // spoken sibling of the note-rejections ledger.
   "GET /admin/observation-rejections": "list_observation_rejections",
+  "GET /admin/operation-receipts/{operationKey}": "get_operation_receipt",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
   // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
@@ -508,6 +509,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The operator's ruling on a held observation — contract-only oRPC. OPERATOR tier:
   // `accepted` renders the held script (a Cartesia spend, publish-class), so the agent 403s.
   "POST /admin/observation-rejections/{id}/resolve": "resolve_observation_rejection",
+  "POST /admin/operation-receipts/reconcile": "reconcile_operation_receipts",
   // The push receipts sweep is a contract-only admin op (no TanStack route file —
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's

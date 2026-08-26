@@ -38,6 +38,12 @@ import {
 import { updateGalaxyMap } from "./admin-galaxies";
 import { presignClipUpload, presignSetVideoUpload } from "./admin-mixtapes";
 import { presignRecordingUpload } from "./admin-recordings";
+import {
+  getOperationReceipt,
+  OPERATION_RECEIPT_KEY_MAX,
+  OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
+  reconcileOperationReceipts,
+} from "./admin-operation-receipts";
 
 /**
  * The Standard Schema surface we need, spelled out locally rather than imported from
@@ -751,6 +757,41 @@ function accepts(op: unknown, input: unknown): boolean {
     }),
     false,
     "an inverted time window is rejected",
+  );
+}
+
+// ── operation receipts: exact keys and explicit stale repair remain bounded ──────────────
+{
+  assert.equal(
+    accepts(getOperationReceipt, { operationKey: "k".repeat(OPERATION_RECEIPT_KEY_MAX) }),
+    true,
+    "an operation key at the storage cap is accepted",
+  );
+  assert.equal(
+    accepts(getOperationReceipt, { operationKey: "k".repeat(OPERATION_RECEIPT_KEY_MAX + 1) }),
+    false,
+    "an operation key past the storage cap is rejected",
+  );
+  assert.equal(
+    accepts(reconcileOperationReceipts, {
+      limit: OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
+      staleBefore: "2026-08-26T10:00:00.000Z",
+    }),
+    true,
+    "a stale receipt repair at the page cap is accepted",
+  );
+  assert.equal(
+    accepts(reconcileOperationReceipts, {
+      limit: OPERATION_RECEIPT_REPAIR_LIMIT_MAX + 1,
+      staleBefore: "2026-08-26T10:00:00.000Z",
+    }),
+    false,
+    "a stale receipt repair past the page cap is rejected",
+  );
+  assert.equal(
+    accepts(reconcileOperationReceipts, { limit: 1, staleBefore: "2026-08-26T10:00:00" }),
+    false,
+    "a stale receipt repair requires an explicit timestamp offset",
   );
 }
 

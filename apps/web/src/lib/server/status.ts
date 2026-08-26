@@ -14,10 +14,16 @@
 // address or raw error body (the probe is responsible for keeping `message` clean).
 
 import { randomUUID } from "node:crypto";
+import { type Client } from "@libsql/client";
 import { cronSurfaces } from "@fluncle/registry";
 import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
+import {
+  digestOperationRequest,
+  executeReceiptBackedOperation,
+  type OperationReceiptOutcome,
+} from "./operation-receipts";
 import { pruneRateLimitCounters } from "./rate-limit";
 
 /** The three-state health enum, shared with the `@fluncle/contracts` snapshot schema. */
@@ -59,6 +65,13 @@ export type HealthCheckInput = {
   transitioned: boolean;
 };
 
+export const HEALTH_SNAPSHOT_OPERATION_ID = "health.snapshot";
+
+/** The caller and Worker derive the same logical operation key from the snapshot timestamp. */
+export function healthSnapshotOperationKey(at: string): string {
+  return `${HEALTH_SNAPSHOT_OPERATION_ID}:${at}`;
+}
+
 // The ledger is trimmed to this many most-recent rows on every write — a status
 // page never needs deep history, and this keeps the table bounded without a cron.
 const STATUS_EVENTS_KEEP = 200;
@@ -67,6 +80,8 @@ const STATUS_EVENTS_KEEP = 200;
 // every write — the uptime bar shows the last N checks (≈ N × the 10m cadence),
 // bounded without a cron. It fills in over time, then rolls.
 const SERVICE_CHECK_SAMPLES_KEEP = 90;
+
+type HealthSnapshotWriteClient = Pick<Client, "execute">;
 
 // The SHARED expected-writers roster. Registry cron ids are build-bound to the
 // committed timer units by docs/agents/hermes/scripts/cron-roster.test.ts, so the
@@ -278,9 +293,12 @@ export async function getServiceCheckSamples(): Promise<Record<string, ServiceCh
  * also appends a `status_events` row. After the writes, the ledger is pruned to
  * its most recent `STATUS_EVENTS_KEEP` rows.
  */
-export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[]): Promise<void> {
-  const db = await getDb();
-
+async function writeHealthSnapshot(
+  db: HealthSnapshotWriteClient,
+  at: string,
+  checks: HealthCheckInput[],
+  strictSamples: boolean,
+): Promise<void> {
   for (const check of checks) {
     // `since` preservation lives in the conflict clause: on a fresh row it is the
     // incoming `at`; on an existing row it stays put while the status is unchanged
@@ -310,12 +328,10 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
       });
     }
 
-    // Append this check to the recent-samples ledger (the uptime bar), then prune
-    // this service to its most-recent SERVICE_CHECK_SAMPLES_KEEP rows. NON-CRITICAL:
-    // the bar is an enhancement, so a failure here (e.g. the table not yet migrated
-    // during a deploy window) must never lose the service_status upsert + the event
-    // above — it is caught and logged, not thrown.
-    try {
+    // Append this check to the recent-samples ledger (the uptime bar), then prune this service to
+    // its most-recent SERVICE_CHECK_SAMPLES_KEEP rows. The legacy writer keeps this best-effort;
+    // the receipt-backed writer makes it part of the atomic effect so its terminal result is exact.
+    const appendSample = async () => {
       await db.execute({
         args: [randomUUID(), check.service, check.status, check.latencyMs, at],
         sql: `insert into service_check_samples (id, service, status, latency_ms, at)
@@ -332,8 +348,16 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
                     limit ?
                   )`,
       });
-    } catch (error) {
-      logEvent("error", "status.health-snapshot-write-failed", { error });
+    };
+
+    if (strictSamples) {
+      await appendSample();
+    } else {
+      try {
+        await appendSample();
+      } catch (error) {
+        logEvent("error", "status.health-snapshot-write-failed", { error });
+      }
     }
   }
 
@@ -348,7 +372,64 @@ export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[
               limit ?
             )`,
   });
+}
 
+export async function recordHealthSnapshot(at: string, checks: HealthCheckInput[]): Promise<void> {
+  const db = await getDb();
+
+  await writeHealthSnapshot(db, at, checks, false);
+  await pruneRateLimitsAfterHealthSnapshot();
+}
+
+/** Persist a health snapshot and its terminal receipt in one transaction. */
+export async function recordHealthSnapshotWithReceipt(
+  operationKey: string,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<OperationReceiptOutcome> {
+  const outcome = await recordHealthSnapshotWithReceiptFor(await getDb(), operationKey, at, checks);
+
+  if (outcome.outcome === "committed") {
+    await pruneRateLimitsAfterHealthSnapshot();
+  }
+
+  return outcome;
+}
+
+/** Client-injected receipt writer for real-libSQL failure and compatibility tests. */
+export async function recordHealthSnapshotWithReceiptFor(
+  client: Client,
+  operationKey: string,
+  at: string,
+  checks: HealthCheckInput[],
+): Promise<OperationReceiptOutcome> {
+  const requestDigest = await digestOperationRequest({
+    at,
+    checks: checks.map((check) => ({
+      latencyMs: check.latencyMs,
+      message: check.message,
+      service: check.service,
+      status: check.status,
+      transitioned: check.transitioned,
+    })),
+  });
+  return executeReceiptBackedOperation({
+    client,
+    effect: async (transaction) => {
+      await writeHealthSnapshot(transaction, at, checks, true);
+      return {
+        result: { at },
+        resultIdentity: operationKey,
+        state: "committed",
+      };
+    },
+    operationId: HEALTH_SNAPSHOT_OPERATION_ID,
+    operationKey,
+    requestDigest,
+  });
+}
+
+async function pruneRateLimitsAfterHealthSnapshot(): Promise<void> {
   // And prune the rate limiter's spent windows, which nothing deleted from before (rate-limit.ts
   // `pruneRateLimitCounters`). It rides here because this is the repo's periodic-maintenance write
   // and a housekeeping delete must never sit on a read a caller is waiting for. NON-CRITICAL, the

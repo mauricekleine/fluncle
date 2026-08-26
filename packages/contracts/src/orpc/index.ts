@@ -50,6 +50,7 @@ import { adminMigrationsContract } from "./admin-migrations";
 import { adminMixtapesContract } from "./admin-mixtapes";
 import { adminNotesContract } from "./admin-notes";
 import { adminObservationsContract } from "./admin-observations";
+import { adminOperationReceiptsContract } from "./admin-operation-receipts";
 import { adminRecordingsContract } from "./admin-recordings";
 import { adminSocialContract } from "./admin-social";
 import { adminSubmissionsContract } from "./admin-submissions";
@@ -163,6 +164,15 @@ export {
   listArtifactSnapshot,
   registerArtifactConsumer,
 } from "./admin-artifacts";
+export {
+  adminOperationReceiptsContract,
+  getOperationReceipt,
+  OPERATION_RECEIPT_KEY_MAX,
+  OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
+  OperationReceiptReconciliationOutcomeSchema,
+  OperationReceiptStateSchema,
+  reconcileOperationReceipts,
+} from "./admin-operation-receipts";
 export {
   addArtistRule,
   AddArtistRuleInputSchema,
@@ -547,6 +557,7 @@ export const contract = {
   ...adminMixtapesContract,
   ...adminNotesContract,
   ...adminObservationsContract,
+  ...adminOperationReceiptsContract,
   ...adminRecordingsContract,
   ...adminSocialContract,
   ...adminSubmissionsContract,

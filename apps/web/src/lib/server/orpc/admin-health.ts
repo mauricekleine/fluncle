@@ -14,9 +14,16 @@
 
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { type contract } from "@fluncle/contracts/orpc";
-import { type HealthCheckInput, recordHealthSnapshot } from "../status";
+import { getHealthSnapshotReceiptCutoverDisposition } from "../health-receipt-cutover";
 import { adminAuth } from "../orpc-auth";
-import { apiFault, type Implementer } from "./_shared";
+import { ApiError } from "../spotify";
+import {
+  healthSnapshotOperationKey,
+  type HealthCheckInput,
+  recordHealthSnapshot,
+  recordHealthSnapshotWithReceipt,
+} from "../status";
+import { type Implementer, toFault } from "./_shared";
 
 type RecordHealthInput = InferContractRouterInputs<typeof contract>["record_health"];
 type RawCheck = RecordHealthInput["checks"][number];
@@ -56,11 +63,64 @@ export function adminHealthHandlers(os: Implementer) {
   // ack. Internal write (service_status / status_events); no public lastmod moves.
   const recordHealthHandler = os.record_health.use(adminAuth).handler(async ({ input }) => {
     try {
-      await recordHealthSnapshot(input.at, input.checks.map(normalizeCheck));
+      const checks = input.checks.map(normalizeCheck);
 
-      return { ok: true as const };
+      if (input.operationKey === undefined) {
+        await recordHealthSnapshot(input.at, checks);
+        return { ok: true as const };
+      }
+
+      const expectedOperationKey = healthSnapshotOperationKey(input.at);
+      if (input.operationKey !== expectedOperationKey) {
+        throw new ApiError(
+          "operation_key_mismatch",
+          "The operation key does not identify this health snapshot.",
+          409,
+        );
+      }
+
+      const cutover = await getHealthSnapshotReceiptCutoverDisposition();
+      if (cutover === "unavailable") {
+        throw new ApiError(
+          "operation_receipt_cutover_unavailable",
+          "The health snapshot write path could not be selected safely.",
+          503,
+        );
+      }
+
+      if (cutover === "disabled") {
+        await recordHealthSnapshot(input.at, checks);
+        return { ok: true as const };
+      }
+
+      const outcome = await recordHealthSnapshotWithReceipt(input.operationKey, input.at, checks);
+      if (outcome.outcome === "committed") {
+        return { ok: true as const };
+      }
+
+      if (outcome.outcome === "conflict") {
+        throw new ApiError(
+          "operation_receipt_digest_mismatch",
+          "The operation key is already bound to a different health snapshot.",
+          409,
+        );
+      }
+
+      if (outcome.outcome === "in-progress" || outcome.outcome === "rejected") {
+        throw new ApiError(
+          "operation_receipt_terminal",
+          "The operation receipt is not eligible for automatic replay.",
+          409,
+        );
+      }
+
+      throw new ApiError(
+        "operation_receipt_unavailable",
+        "The operation outcome could not be reconciled safely.",
+        503,
+      );
     } catch (error) {
-      throw apiFault(error);
+      throw toFault(error);
     }
   });
 
