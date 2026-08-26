@@ -60,6 +60,30 @@ describe("database admission shadow observation", () => {
     expect(rows.rows).toEqual([{ contender_id: "held" }]);
   });
 
+  it("observes cross-resource contention for a mixed writer and heavy reader", async () => {
+    await db.execute({
+      args: ["backup", "heavy-read", "database.backup", "fluncle-backup", "held-run"],
+      sql: `insert into database_admission_contenders
+        (contender_id, lane, operation_id, owner_id, run_id, state, enqueued_at_ms,
+         queue_heartbeat_at_ms, updated_at_ms, acquired_at_ms, fencing_token,
+         lease_expires_at_ms)
+        values (?, ?, ?, ?, ?, 'active', 4000, 4000, 4000, 4000, 1, 14000)`,
+    });
+
+    const result = await observeDatabaseAdmissionFor(
+      db,
+      { action: "acquire", owner: "fluncle-cluster", runId: "mixed" },
+      { monotonicNow: () => 0, serverNowMs: 10_000 },
+    );
+
+    expect(result).toMatchObject({
+      heavyRead: true,
+      lane: "write",
+      outcome: "shadow-yield",
+      yieldReason: "queue",
+    });
+  });
+
   it("gives direct harmless-read latency precedence over health and public guardrails", async () => {
     const monotonicSamples = [10, 10 + DATABASE_ADMISSION_DIRECT_READ_LIMIT_MS + 1];
     const result = await observeDatabaseAdmissionFor(

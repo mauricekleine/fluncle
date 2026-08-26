@@ -35,8 +35,9 @@ const DatabaseAdmissionInputSchema = z
       .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   })
   .refine(
-    (input) => input.action === "acquire" || input.fencingToken !== undefined,
-    "heartbeat, release, and cancel require a fencing token",
+    (input) =>
+      input.action === "acquire" || input.action === "cancel" || input.fencingToken !== undefined,
+    "heartbeat and release require a fencing token",
   );
 
 export const DatabaseAdmissionResponseSchema = z.object({
@@ -44,6 +45,7 @@ export const DatabaseAdmissionResponseSchema = z.object({
   enforced: z.boolean(),
   fencingToken: z.number().int().positive().nullable(),
   heartbeatAfterMs: z.number().int().nonnegative(),
+  heavyRead: z.boolean(),
   holdMs: z.number().int().nonnegative(),
   lane: DatabaseAdmissionLaneSchema,
   leaseExpiresAtMs: z.number().int().nonnegative().nullable(),

@@ -13,10 +13,10 @@ Type=oneshot
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ and the sweep self-writes
 # its /status marker. Deezer is tokenless; the wrapper sources the existing agent token.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ISRC_RECOVERY_BATCH=100 hermes bash /opt/hermes-scripts/isrc-recovery-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home -e FLUNCLE_ISRC_RECOVERY_BATCH=100 hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-isrc-recovery -- bash /opt/hermes-scripts/isrc-recovery-sweep.sh
 # This ceiling leaves a paced 100-row batch room for transport retries while remaining well
 # below the hourly cadence. The sweep never calls anchor_track and therefore cannot spend Apify.
-TimeoutStartSec=1200
+TimeoutStartSec=1330
 NoNewPrivileges=true
 ProtectControlGroups=true
 ProtectKernelTunables=true

@@ -398,6 +398,50 @@ describe("database operation registry", () => {
     }
   });
 
+  it("routes every classified writer and heavy reader through the one admission runner", () => {
+    const runnerSource = join(HERMES_ROOT, "scripts/database-admission-runner.sh");
+    expect(existsSync(runnerSource)).toBe(true);
+    const runner = readFileSync(runnerSource, "utf8");
+    const maxWaitMatch =
+      /ADMISSION_MAX_WAIT_SECS="\$\{DATABASE_ADMISSION_MAX_WAIT_SECS:-([0-9]+)\}"/.exec(runner);
+    const maxWaitSec = Number(maxWaitMatch?.[1]);
+    expect(Number.isFinite(maxWaitSec)).toBe(true);
+
+    for (const operation of DATABASE_OPERATION_REGISTRY) {
+      const service = readFileSync(join(REPO_ROOT, operation.serviceSource), "utf8");
+      const execStart = unitValue(service, "ExecStart") ?? "";
+      const requiresAdmission =
+        operation.accessClass === "write" || operation.accessClass === "heavy-read";
+
+      if (requiresAdmission) {
+        expect(execStart, operation.owner.service).toContain("database-admission-runner.sh");
+        const tokens = execStart.split(/\s+/);
+        const runnerIndex = tokens.findIndex((token) =>
+          token.endsWith("/database-admission-runner.sh"),
+        );
+        expect(runnerIndex, operation.owner.service).toBeGreaterThanOrEqual(0);
+        expect(tokens[runnerIndex + 1], operation.owner.service).toBe(
+          operation.owner.service.replace(/\.service$/, ""),
+        );
+        expect(tokens[runnerIndex + 2], operation.owner.service).toBe("--");
+        expect(tokens[runnerIndex + 3], operation.owner.service).toBeTruthy();
+        expect(
+          tokens.filter((token) => token.endsWith("/database-admission-runner.sh")),
+          operation.owner.service,
+        ).toHaveLength(1);
+        expect(operation.cadence.randomizedDelaySec, operation.owner.timer).toBeDefined();
+        const timeoutSec = Number(unitValue(service, "TimeoutStartSec"));
+        expect(Number.isFinite(timeoutSec), operation.owner.service).toBe(true);
+        expect(timeoutSec, operation.owner.service).toBeGreaterThanOrEqual(maxWaitSec + 10);
+        if (operation.operationId === "ops.rave-watchdog") {
+          expect(timeoutSec, operation.owner.service).toBeGreaterThanOrEqual(maxWaitSec + 180);
+        }
+      } else {
+        expect(execStart, operation.owner.service).not.toContain("database-admission-runner.sh");
+      }
+    }
+  });
+
   it("keeps run and step IDs bounded, stable, public-safe, and resolvable by unit", () => {
     const runIds = DATABASE_OPERATION_REGISTRY.map((operation) => operation.operationId);
     expect(new Set(runIds).size).toBe(runIds.length);
@@ -405,6 +449,14 @@ describe("database operation registry", () => {
     for (const operation of DATABASE_OPERATION_REGISTRY) {
       expect(isDatabaseOperationId(operation.operationId), operation.operationId).toBe(true);
       expect(operation.operationId.length).toBeLessThanOrEqual(DATABASE_OPERATION_ID_MAX_LENGTH);
+      if (
+        operation.accessClass === "write" &&
+        operation.triggers.some((trigger) => trigger.accessClass === "heavy-read")
+      ) {
+        expect(`${operation.operationId}|heavy-read`.length).toBeLessThanOrEqual(
+          DATABASE_OPERATION_ID_MAX_LENGTH,
+        );
+      }
 
       for (const trigger of operation.triggers) {
         expect(isDatabaseOperationId(trigger.operationId), trigger.operationId).toBe(true);
@@ -413,6 +465,7 @@ describe("database operation registry", () => {
       const expected = {
         accessClass: operation.accessClass,
         heavy: operation.heavy,
+        heavyRead: operation.triggers.some((trigger) => trigger.accessClass === "heavy-read"),
         operationId: operation.operationId,
       };
 

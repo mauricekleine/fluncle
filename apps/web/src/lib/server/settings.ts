@@ -14,8 +14,8 @@
 // correctness, because nothing guarantees the row is there or well-formed. Shape (7) below is
 // the ONE argued exception, and it states its own reason.
 //
-// WHAT RIDES IT TODAY — 41 keys across 20 modules, in seven shapes (grep `getSetting(` for the
-// live list; each module owns its own exported key constant and its own default):
+// WHAT RIDES IT TODAY — the bounded keys across their owning modules, in seven shapes (grep
+// `getSetting(` for the live list; each module owns its own exported key constant and default):
 //
 //   1. OPERATOR FLIPS — `"true"`/`"false"`, and the unset state is the deliberate default
 //      (some default-deny, some default-allow; each module's comment states which):
@@ -24,9 +24,10 @@
 //      (./anchor-apify.ts), `anchor_spotify_search_enabled` (./anchor-spotify-search.ts),
 //      `frontier.minting` (./frontier-playlist.ts), `crawl_due_cutover_enabled`
 //      (./crawl-cutover.ts), `public_projection_cutover_enabled`
-//      (./public-projection-cutover.ts), and `health_snapshot_receipts_enabled`
-//      (./health-receipt-cutover.ts). The projection and receipt cutovers are DEFAULT-DENY and only the
-//      exact literal `true` opens them; every other value and every read failure keeps legacy SQL.
+//      (./public-projection-cutover.ts), `health_snapshot_receipts_enabled`
+//      (./health-receipt-cutover.ts), and `database_admission_enforced`
+//      (./database-admission.ts). These cutovers are DEFAULT-DENY and only the exact literal
+//      `true` opens them; every other value and every read failure keeps the compatibility path.
 //   2. THE SIX SONAR DARK FLAGS (./sonar.ts) — `sonar_sonic_enabled`, `sonar_artists_enabled`,
 //      `sonar_log_enabled`, `sonar_recs_enabled`, `sonar_recs_catalogue_enabled`,
 //      `sonar_mix_enabled`. Same shape as (1), all DEFAULT-DENY, one per surface: this is how

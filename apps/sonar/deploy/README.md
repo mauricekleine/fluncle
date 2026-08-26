@@ -106,9 +106,12 @@ sudo install -m 0644 apps/sonar/deploy/sonar.service /etc/systemd/system/
 # 2. The self-deploy script at its deployed path.
 sudo install -D -m 0755 apps/sonar/deploy/fluncle-sonar-freshen.sh \
   /opt/sonar-freshen/fluncle-sonar-freshen.sh
+sudo install -D -m 0755 docs/agents/hermes/scripts/database-admission-runner.sh \
+  /opt/fluncle-database-admission/database-admission-runner.sh
 
 # 3. (Optional) The 0600 operator env file for the Discord alert + /status post.
-#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN (values in the ops runbook note —
+#    Keys: DISCORD_ALERT_WEBHOOK, FLUNCLE_API_TOKEN, DATABASE_ADMISSION_FAIL_CLOSED
+#    (values in the ops runbook note —
 #    the same pair the ssh freshen and the watchdog use). Skip this and the self-deploy
 #    still runs, just without Discord/status visibility.
 sudo install -d -m 0755 /etc/fluncle
@@ -153,7 +156,7 @@ Everything is overridable via the environment; the defaults are the canonical de
 | `SONARFRESHEN_BOOT_TIMEOUT_SECS` | `180`                      | How long an index load may take, pre-smoke and post-swap alike.                                          |
 | `SONARFRESHEN_WORKER_URL`        | `https://www.fluncle.com`  | Where the `/status` health post goes.                                                                    |
 
-Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`.
+Operator env file (`/etc/fluncle/sonar-freshen.env`, optional, `0600`, kept out of the repo): `DISCORD_ALERT_WEBHOOK`, `FLUNCLE_API_TOKEN`, `DATABASE_ADMISSION_FAIL_CLOSED`. The admission gate is inert unless its value is exactly `true`; follow [the global cutover order](../../../docs/database-performance.md#mutation-laws).
 
 ## The CI half
 

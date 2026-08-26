@@ -14,10 +14,10 @@ Type=oneshot
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from
 # main via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status
 # marker (cron-output.sh) so the prober stays honest.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/clip-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-studio-clip -- bash /opt/hermes-scripts/clip-sweep.sh
 # A deterministic ffmpeg cut (trim + 9:16 crop + brand frame) → PUT to R2, cap 1 clip/tick.
 # Give ffmpeg headroom.
-TimeoutStartSec=600
+TimeoutStartSec=730
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

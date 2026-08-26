@@ -1,7 +1,7 @@
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { type contract } from "@fluncle/contracts/orpc";
 import { getDb } from "../db";
-import { observeDatabaseAdmissionFor } from "../database-admission";
+import { coordinateDatabaseAdmissionFor } from "../database-admission";
 import { adminAuth } from "../orpc-auth";
 import { type Implementer, toFault } from "./_shared";
 
@@ -9,10 +9,10 @@ type AdmissionInput = InferContractRouterInputs<typeof contract>["coordinate_dat
 
 /** Execute the agent endpoint against an injected client for compatibility tests. */
 export async function coordinateDatabaseAdmissionRequestFor(
-  client: Parameters<typeof observeDatabaseAdmissionFor>[0],
+  client: Parameters<typeof coordinateDatabaseAdmissionFor>[0],
   input: AdmissionInput,
 ) {
-  return observeDatabaseAdmissionFor(client, input);
+  return coordinateDatabaseAdmissionFor(client, input);
 }
 
 /** Build the agent-tier recurring-work admission handler. */

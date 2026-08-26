@@ -18,11 +18,11 @@ Type=oneshot
 # self-writes its /status marker (cron-output.sh) so the prober stays honest. The COLD-START
 # and --remint fits are OPERATOR-run by hand (a manual `docker exec … cluster-sweep.sh
 # --cold-start`), never wired here — a full k-means fit must never fire on a schedule.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/cluster-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-cluster -- bash /opt/hermes-scripts/cluster-sweep.sh
 # The nightly tick is sub-second CPU (nearest-centroid + mean over ~hundreds of vectors) plus
 # a handful of write round-trips; a split consumption adds one small k=2 fit. Give it ample
 # headroom well past the gateway's ~300s budget so a slow network write never trips it.
-TimeoutStartSec=600
+TimeoutStartSec=730
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

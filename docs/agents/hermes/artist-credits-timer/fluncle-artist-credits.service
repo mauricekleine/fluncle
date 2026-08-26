@@ -15,14 +15,14 @@ Type=oneshot
 # this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh).
 # NO new secret: `backfill_artist_credits` is AGENT tier, so the box's existing agent-scoped token
 # drives it.
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/artist-credits-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-artist-credits -- bash /opt/hermes-scripts/artist-credits-sweep.sh
 # A PURE trigger — zero LLM tokens. One batch is up to 40 MusicBrainz recording lookups paced at
 # ~1 req/s in the Worker; the vendor circuit breaker stops the pass on a throttle and a 60s response
 # budget pauses it under cross-sweep contention (the CLI then issues at most one more request with a
 # fresh budget), so a tick is normally ~under a minute and ~2 minutes at worst. The 240s ceiling
 # clears that with headroom and still sits under the 5-min cadence (systemd skips an overlapping
 # trigger rather than double-firing this oneshot).
-TimeoutStartSec=240
+TimeoutStartSec=370
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true

@@ -296,6 +296,9 @@ describe("the installer lays down every host script a unit ExecStart points at",
   // generic assertions above already cover them; these name them so a regression reads as
   // itself in the failure output rather than as an anonymous diff entry.
   test("the secrets sync and pin-watch host scripts are laid down", () => {
+    expect(
+      plan.hostScripts.get("/opt/fluncle-database-admission/database-admission-runner.sh"),
+    ).toBe("scripts/database-admission-runner.sh");
     expect(plan.hostScripts.get("/usr/local/sbin/fluncle-secrets-sync.sh")).toBe(
       "secrets/fluncle-secrets-sync.sh",
     );

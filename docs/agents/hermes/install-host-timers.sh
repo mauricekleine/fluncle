@@ -56,6 +56,7 @@ set -euo pipefail
 
 DEST=/etc/systemd/system
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ADMISSION_RUNNER_SOURCE="${REPO_DIR}/scripts/database-admission-runner.sh"
 
 dry_run=0
 for arg in "$@"; do
@@ -99,7 +100,7 @@ is_system_binary() {
 # `docker exec` unit those name IN-CONTAINER paths, which is exactly why only the executable
 # is classified here.
 exec_paths() {
-  local unit="$1" line
+  local unit="$1" line executable payload
   while IFS= read -r line; do
     # Trim leading whitespace, then the systemd prefix characters, one at a time. (Two arms:
     # `-` has to lead its own bracket expression or it reads as a range.)
@@ -111,7 +112,16 @@ exec_paths() {
       esac
     done
     [ -n "$line" ] || continue
-    printf '%s\n' "${line%%[[:space:]]*}"
+    executable="${line%%[[:space:]]*}"
+    printf '%s\n' "$executable"
+    # A host admission wrapper does not make its payload cease to be a managed host script.
+    # Emit the first token after `--` as a second executable so both canonical files are installed.
+    if [ "$(basename "$executable")" = "database-admission-runner.sh" ]; then
+      payload="${line#* -- }"
+      if [ "$payload" != "$line" ] && [ -n "$payload" ]; then
+        printf '%s\n' "${payload%%[[:space:]]*}"
+      fi
+    fi
   done < <(sed -n 's/^ExecStart=//p' "$unit")
 }
 
@@ -189,7 +199,11 @@ for dir in "${unit_dirs[@]}"; do
         fi
         continue
       fi
-      src="${dir}/$(basename "$exec_path")"
+      if [ "$(basename "$exec_path")" = "database-admission-runner.sh" ]; then
+        src="$ADMISSION_RUNNER_SOURCE"
+      else
+        src="${dir}/$(basename "$exec_path")"
+      fi
       if [ ! -e "$src" ]; then
         unresolved+=("$(rel "$unit"): ExecStart=${exec_path} has no source at $(rel "$src")")
         continue
