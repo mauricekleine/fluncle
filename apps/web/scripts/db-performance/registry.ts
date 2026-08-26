@@ -1,7 +1,7 @@
 import { type InValue } from "@libsql/client";
 
 import { PERFORMANCE_BUDGETS, type PerformanceWorkClass, distribution } from "./budgets";
-import { type ScaleProfile } from "./manifest";
+import { type FixtureCounts, type ScaleProfile } from "./manifest";
 import { type ExplainPlanAnalysis, type ExplainPlanPolicy, analyzeExplainPlan } from "./plan";
 
 export const PERFORMANCE_CONTRACT_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
@@ -35,6 +35,7 @@ export type ContractExecution = ContractObservation & {
 
 export type ContractContext = {
   client: PerformanceClient;
+  fixtureCounts?: FixtureCounts;
   iteration: number;
   now: () => number;
   profile: ScaleProfile;
@@ -166,6 +167,7 @@ function metricValue(
 export async function runPerformanceContracts(options: {
   client: PerformanceClient;
   contracts: readonly PerformanceContract[];
+  fixtureCounts?: FixtureCounts;
   generatedAt?: string;
   now?: () => number;
   profile: ScaleProfile;
@@ -188,6 +190,7 @@ export async function runPerformanceContracts(options: {
     for (let iteration = 0; iteration < warmups; iteration += 1) {
       await contract.execute({
         client: options.client,
+        fixtureCounts: options.fixtureCounts,
         iteration: -iteration - 1,
         now,
         profile: options.profile,
@@ -200,6 +203,7 @@ export async function runPerformanceContracts(options: {
     for (let iteration = 0; iteration < contract.iterations; iteration += 1) {
       const observation = await contract.execute({
         client: options.client,
+        fixtureCounts: options.fixtureCounts,
         iteration,
         now,
         profile: options.profile,

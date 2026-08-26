@@ -12,7 +12,11 @@ import { updateGalaxyMap } from "./galaxies-map";
 const FIXED_UUID = "0000-fixed-uuid";
 const NEW_ID = `gal_${FIXED_UUID}`;
 
-vi.mock("node:crypto", () => ({ randomUUID: () => FIXED_UUID }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+
+  return { ...actual, randomUUID: () => FIXED_UUID };
+});
 
 const execute = vi.hoisted(() => vi.fn());
 const batch = vi.hoisted(() => vi.fn());

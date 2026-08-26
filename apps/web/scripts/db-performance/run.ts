@@ -107,6 +107,7 @@ async function main(): Promise<void> {
     const report = await runPerformanceContracts({
       client,
       contracts: selectPerformanceContracts(options.contractIds),
+      fixtureCounts: counts,
       profile: options.profile,
     });
 

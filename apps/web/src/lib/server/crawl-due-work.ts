@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 export const CRAWL_DUE_LIVE_GENERATION = "live";
 export const CRAWL_REARM_TAIL_CURSOR = -1;
+export const CRAWL_STALE_ARTIST_REARM_LIMIT = 10;
 export const MAX_CRAWL_DUE_CHUNK_SIZE = 500;
 
 const MAX_FAILURES = 5;
@@ -41,6 +42,7 @@ export type CrawlDueRow = Omit<CrawlDueProjection, "generation" | "state"> & {
 };
 
 export type CrawlDueClaim = {
+  artistsRearmed: number;
   claimExpiresAt: string;
   claimToken: string;
   hasMore: boolean;
@@ -798,34 +800,66 @@ export function crawlGeneralReadyQuery(
 }
 
 /** Promote a bounded due-time page and perform the stale allowed-artist tail re-arm atomically. */
+export type CrawlDuePromotion = {
+  artistsRearmed: number;
+  promoted: number;
+};
+
 export async function promoteCrawlDueWork(
   client: CrawlDueClient,
   options: { limit?: number; now?: () => Date } = {},
-): Promise<number> {
+): Promise<CrawlDuePromotion> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
   const now = nowIso(options.now);
-  const dueSelection = `select node_id from crawl_due_work indexed by crawl_due_work_scheduled_idx
-    where state = 'scheduled' and next_due_at <= ? order by next_due_at, node_id limit ?`;
+  const staleSelection = `select due.node_id
+    from crawl_due_work as due indexed by crawl_due_work_scheduled_idx
+    join crawl_frontier as source on source.id = due.node_id
+    where due.state = 'scheduled' and due.next_due_at <= ?
+      and source.state = 'done' and source.kind = 'artist' and source.source = 'musicbrainz'
+    order by due.next_due_at, due.node_id limit ?`;
   const results = await client.batch(
     [
       {
-        args: [CRAWL_REARM_TAIL_CURSOR, now, now, limit],
+        args: [CRAWL_REARM_TAIL_CURSOR, now, now, CRAWL_STALE_ARTIST_REARM_LIMIT],
         sql: `update crawl_frontier
           set state = 'pending', cursor = ?, updated_at = ?
-          where id in (${dueSelection}) and kind = 'artist' and source = 'musicbrainz'
-            and state = 'done'`,
+          where id in (${staleSelection}) and state = 'done'`,
+      },
+      {
+        args: [now, now, CRAWL_STALE_ARTIST_REARM_LIMIT],
+        sql: `update crawl_due_work
+          set state = 'ready', next_due_at = null, updated_at = ?
+          where node_id in (
+            select due.node_id
+            from crawl_due_work as due indexed by crawl_due_work_scheduled_idx
+            join crawl_frontier as source on source.id = due.node_id
+            where due.state = 'scheduled' and due.next_due_at <= ?
+              and source.state = 'pending' and source.kind = 'artist'
+              and source.source = 'musicbrainz' and source.cursor = ${CRAWL_REARM_TAIL_CURSOR}
+              and source.updated_at = ?1
+            order by due.next_due_at, due.node_id limit ?
+          )`,
       },
       {
         args: [now, now, limit],
         sql: `update crawl_due_work
           set state = 'ready', next_due_at = null, updated_at = ?
-          where node_id in (${dueSelection})`,
+          where node_id in (
+            select due.node_id
+            from crawl_due_work as due indexed by crawl_due_work_scheduled_idx
+            join crawl_frontier as source on source.id = due.node_id
+            where due.state = 'scheduled' and due.next_due_at <= ? and source.state = 'failed'
+            order by due.next_due_at, due.node_id limit ?
+          )`,
       },
     ],
     "write",
   );
-  return results[1]?.rowsAffected ?? 0;
+  return {
+    artistsRearmed: results[0]?.rowsAffected ?? 0,
+    promoted: (results[1]?.rowsAffected ?? 0) + (results[2]?.rowsAffected ?? 0),
+  };
 }
 
 export async function reapExpiredCrawlDueLeases(
@@ -959,7 +993,7 @@ export async function claimCrawlDueWork(
   const claimToken = options.token ?? crypto.randomUUID();
   assertNonEmpty(claimToken, "crawl claim token");
 
-  const promoted = await promoteCrawlDueWork(client, {
+  const promotion = await promoteCrawlDueWork(client, {
     limit: maintenanceLimit,
     now: () => new Date(now),
   });
@@ -993,11 +1027,12 @@ export async function claimCrawlDueWork(
   );
   const items = results[1] === undefined ? [] : crawlDueRows(results[1]);
   return {
+    artistsRearmed: promotion.artistsRearmed,
     claimExpiresAt: items[0]?.claimExpiresAt ?? claimExpiresAt,
     claimToken,
     hasMore: (results[2]?.rows.length ?? 0) > 0,
     items,
-    promoted,
+    promoted: promotion.promoted,
     reaped,
   };
 }

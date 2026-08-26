@@ -14,7 +14,7 @@
 // correctness, because nothing guarantees the row is there or well-formed. Shape (7) below is
 // the ONE argued exception, and it states its own reason.
 //
-// WHAT RIDES IT TODAY — 38 keys across 17 modules, in seven shapes (grep `getSetting(` for the
+// WHAT RIDES IT TODAY — 40 keys across 19 modules, in seven shapes (grep `getSetting(` for the
 // live list; each module owns its own exported key constant and its own default):
 //
 //   1. OPERATOR FLIPS — `"true"`/`"false"`, and the unset state is the deliberate default
@@ -22,7 +22,10 @@
 //      `clip_drip_paused` (./clip-social.ts), `publish_advance_paused` (./publish-advance.ts),
 //      `catalogue_capture_paused` (./capture-budget.ts), `anchor_apify_enabled`
 //      (./anchor-apify.ts), `anchor_spotify_search_enabled` (./anchor-spotify-search.ts),
-//      `frontier.minting` (./frontier-playlist.ts).
+//      `frontier.minting` (./frontier-playlist.ts), `crawl_due_cutover_enabled`
+//      (./crawl-cutover.ts), and `public_projection_cutover_enabled`
+//      (./public-projection-cutover.ts). The projection cutovers are DEFAULT-DENY and only the
+//      exact literal `true` opens them; every other value and every read failure keeps legacy SQL.
 //   2. THE SIX SONAR DARK FLAGS (./sonar.ts) — `sonar_sonic_enabled`, `sonar_artists_enabled`,
 //      `sonar_log_enabled`, `sonar_recs_enabled`, `sonar_recs_catalogue_enabled`,
 //      `sonar_mix_enabled`. Same shape as (1), all DEFAULT-DENY, one per surface: this is how

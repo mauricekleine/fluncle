@@ -59,7 +59,7 @@ import { getDb, typedRow, typedRows } from "./db";
 import { countIndexableLabels } from "./labels";
 import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause } from "./track-work";
-import { tracksHubCountQuery } from "./tracks-hub";
+import { readDefaultTracksHubTotal } from "./tracks-hub";
 
 /** The funnel's stage totals — cumulative counts of rows that have reached each stage. */
 export type FunnelStages = {
@@ -460,9 +460,7 @@ export async function runFoldedFunnelScan(): Promise<FoldedFunnelScan> {
  */
 async function countPublicTracks(): Promise<number> {
   const db = await getDb();
-  const result = await db.execute(tracksHubCountQuery({}));
-
-  return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
+  return readDefaultTracksHubTotal(db);
 }
 
 /** The full live computation, and the two live-only extras the persisted `counts` cannot carry. */

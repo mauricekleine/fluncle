@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
 import { hubCorpusFingerprint, hubPageAnchorsFromRows } from "./hub-page-anchors";
+import { PUBLIC_ANCHOR_FORMAT_VERSION } from "./public-projection-cutover";
 import {
   TRACKS_HUB_ANCHOR_ADDRESS,
   TRACKS_HUB_PAGE_SIZE,
@@ -24,8 +25,8 @@ export {
   markPublicTrackSourceChangedStatements,
   PUBLIC_PROJECTION_LIVE_GENERATION,
 } from "./public-projection-source-maintenance";
+export { PUBLIC_ANCHOR_FORMAT_VERSION } from "./public-projection-cutover";
 
-export const PUBLIC_ANCHOR_FORMAT_VERSION = 1;
 export const MAX_PUBLIC_PROJECTION_CHUNK_SIZE = 500;
 
 export type PublicProjectionClient = Pick<Client, "batch" | "execute">;

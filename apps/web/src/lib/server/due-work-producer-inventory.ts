@@ -690,7 +690,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "crawl-due-work.ts",
     rationale:
       "The bounded due-time promotion updates frontier and its crawl projection in one write batch.",
-    sites: ["crawl-due-work.ts:update:crawl_frontier:e2e2082d"],
+    sites: ["crawl-due-work.ts:update:crawl_frontier:a5c0d85c"],
   },
   {
     disposition: "delegated-atomicity",

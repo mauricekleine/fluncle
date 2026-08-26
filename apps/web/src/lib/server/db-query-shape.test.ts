@@ -563,7 +563,7 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     file: "lib/server/tracks-hub.ts",
     pattern: "fn-wrapped:substr-release-date",
     reason:
-      "tracksHubYearLaneQuery's `group by substr(tracks.release_date, 1, 4)` — BOUNDED on purpose, behind the 60s memo the unfiltered lane always reads. The maintained year→renderable-count rollup that would have retired it was DROPPED from the backlog on 2026-07-27 (operator ruling, docs/db-scale-backlog.md status header), so this is a standing survivor rather than a queued one; git history holds the rollup analysis if the lane ever starts costing.",
+      "tracksHubYearLaneQuery is the exact compatibility query for every filtered lane and for flag-off or unusable public projection state. The default unfiltered lane reads `public_aggregate_counts`; this literal `substr(release_date, 1, 4)` source scan remains only as the reversible legacy fallback until contraction.",
   },
   {
     count: 1,

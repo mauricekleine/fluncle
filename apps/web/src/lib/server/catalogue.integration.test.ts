@@ -894,9 +894,8 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     await rankCatalogue();
 
     // The weighted qualified-artist fragment (`having sum(case when ta.role = 'remixer' …)`) is now
-    // shared (`WEIGHTED_QUALIFIED_ARTISTS_SQL`): `readArchiveAffinity` runs it BARE (one arm of the
-    // set), while v5's staleness fingerprint reads the whole set — both arms UNION'd — to hash it. So
-    // the affinity read is the one WITHOUT a `union`, and the fingerprint read is the one WITH it.
+    // reached through the one cutover helper by both archive affinity and the rank fingerprint. With
+    // the default-off flag, each call executes the unchanged full legacy union exactly once.
     const calls = executeSpy.mock.calls.map((call) => {
       // `Client.execute` is overloaded (string form + object form), so the mock-call arg is typed to
       // the string overload; the affinity reads all use the object form (`{ sql, args }`).
@@ -907,14 +906,11 @@ describe("the read — the ranked page, and the WHY on every row", () => {
     const weightedFragment = calls.filter((sql) =>
       sql.includes("having sum(case when ta.role = 'remixer'"),
     );
-    const affinityReads = weightedFragment.filter((sql) => !sql.includes("union"));
-    const fingerprintReads = weightedFragment.filter((sql) => sql.includes("union"));
     executeSpy.mockRestore();
 
-    expect(affinityReads).toHaveLength(1);
-    // And the fingerprint's qualified-set digest is read exactly once per tick — the cheap replacement
-    // for v4's full `count(*) from track_artists`, not an extra affinity recompute.
-    expect(fingerprintReads).toHaveLength(1);
+    // One union feeds affinity and one feeds the fingerprint: no second affinity recompute.
+    expect(weightedFragment).toHaveLength(2);
+    expect(weightedFragment.every((sql) => sql.includes("union"))).toBe(true);
   });
 
   it("the pure bucket classifier agrees with the SQL aggregate, bucket-for-bucket (the delta drift guard)", async () => {

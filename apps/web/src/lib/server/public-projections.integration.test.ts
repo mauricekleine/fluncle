@@ -1,8 +1,16 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InValue } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 import { batchDueWorkSourceMutation } from "./due-work";
+import {
+  PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
+  readProjectedAggregateBuckets,
+  readProjectedDefaultTrackTotal,
+  readProjectedTrackHubAnchors,
+  readQualifiedArtistIds,
+  type PublicProjectionReadClient,
+} from "./public-projection-cutover";
 import {
   artistQualificationLabelFanoutQuery,
   auditPublicProjections,
@@ -17,6 +25,12 @@ import {
   shadowPublicProjections,
   type PublicProjectionClient,
 } from "./public-projections";
+import {
+  projectedTracksHubIdPageQueries,
+  TRACKS_HUB_ANCHOR_ADDRESS,
+  TRACKS_HUB_PAGE_SIZE,
+} from "./tracks-hub";
+import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
 
 const OLD = "2026-01-01T00:00:00.000Z";
 const NOW = new Date("2026-01-10T12:00:00.000Z");
@@ -117,7 +131,15 @@ async function rebuildAll(): Promise<void> {
     generation: "artists-a",
     limit: 2,
   });
-  await rebuildDefaultTrackHubAnchors(db, { generation: "anchors-a", now: () => NOW });
+  await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
+}
+
+async function setCutover(value: string): Promise<void> {
+  await db.execute({
+    args: [PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY, value],
+    sql: `insert into settings (key, value) values (?, ?)
+      on conflict(key) do update set value = excluded.value`,
+  });
 }
 
 async function drainRepairs(limit = 2): Promise<void> {
@@ -134,6 +156,255 @@ async function drainRepairs(limit = 2): Promise<void> {
 }
 
 describe("public shadow projections", () => {
+  it("seeks projected hub pages through composite ranges, including the NULL transition", async () => {
+    await seedProjectedTrack({
+      key: null,
+      releaseDate: "2026-01-01",
+      trackId: "track-newer",
+    });
+    await seedProjectedTrack({
+      key: null,
+      releaseDate: "2024-01-01",
+      trackId: "track-dated",
+    });
+    await seedProjectedTrack({ key: null, releaseDate: null, trackId: "track-null-a" });
+    await seedProjectedTrack({ key: null, releaseDate: null, trackId: "track-null-z" });
+
+    const transition = projectedTracksHubIdPageQueries(
+      2,
+      [{ id: "track-z", key: "2025-01-01", page: 2 }],
+      3,
+    );
+    const primary = await db.execute(transition.primary);
+    const fill = await db.execute(transition.nullFill?.(3 - primary.rows.length) ?? "select 0");
+    expect([...primary.rows, ...fill.rows].map((row) => row.track_id)).toEqual([
+      "track-dated",
+      "track-null-z",
+      "track-null-a",
+    ]);
+
+    const nullZone = projectedTracksHubIdPageQueries(
+      2,
+      [{ id: "track-null-z", key: null, page: 2 }],
+      3,
+    );
+    expect((await db.execute(nullZone.primary)).rows.map((row) => row.track_id)).toEqual([
+      "track-null-a",
+    ]);
+
+    const plans = [transition.primary, transition.nullFill?.(2), nullZone.primary];
+    for (const query of plans) {
+      expect(query).toBeDefined();
+      if (query === undefined) {
+        continue;
+      }
+      const details = (
+        await db.execute({ args: query.args, sql: `explain query plan ${query.sql}` })
+      ).rows
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+        .join("\n");
+      expect(details).toContain("tracks_release_date_track_id_idx");
+      expect(details).toContain("SEARCH tracks");
+      expect(details).not.toContain("SCAN tracks");
+      expect(details).not.toContain("USE TEMP B-TREE");
+    }
+  });
+
+  it("keeps absent, false, malformed, and unreadable flags closed and opens only literal true", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+    await setCutover("false");
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+    await setCutover("TRUE");
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+    await setCutover("true");
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(4);
+
+    const unreadable: PublicProjectionReadClient = {
+      execute: async (statement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("from settings")) {
+          throw new Error("settings unavailable");
+        }
+        return db.execute(statement);
+      },
+    };
+    expect(await readProjectedDefaultTrackTotal(unreadable)).toBeUndefined();
+  });
+
+  it("gates aggregates, artists, and anchors independently on exact readiness", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await setCutover("true");
+
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(4);
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual([
+      "certified",
+      "primary",
+    ]);
+    expect(
+      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toEqual({ anchors: [], total: 4 });
+
+    await db.execute(`update artist_qualification_state
+      set state = 'running', completed_at = null, source_digest = null, projected_digest = null
+      where scope = 'artists'`);
+    await db.execute(`delete from artist_qualification where artist_id = 'primary'`);
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(4);
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual([
+      "certified",
+      "primary",
+    ]);
+
+    await db.execute(`update artist_qualification_state
+      set state = 'complete', completed_at = '${OLD}', source_digest = 'source',
+          projected_digest = 'projection'
+      where scope = 'artists'`);
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version, created_at, updated_at)
+      values ('artist_qualification', 'artist', 'primary', 1, 'repair', '${OLD}', '${OLD}')`);
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual([
+      "certified",
+      "primary",
+    ]);
+    await db.execute(`delete from projection_repairs where projection = 'artist_qualification'`);
+    await db.execute(`update public_aggregate_state
+      set source_epoch = aggregate_epoch + 1, default_track_total = 99
+      where scope = 'tracks'`);
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual(["certified"]);
+  });
+
+  it("falls back on running, epoch-stale, repair-marked, and malformed-anchor states", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await setCutover("true");
+
+    await db.execute(`update public_aggregate_state
+      set state = 'running', completed_at = null, source_digest = null, projected_digest = null
+      where scope = 'tracks'`);
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+
+    await db.execute(`update public_aggregate_state
+      set state = 'complete', completed_at = '${OLD}', source_digest = 'source',
+          projected_digest = 'projection', source_epoch = aggregate_epoch + 1
+      where scope = 'tracks'`);
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+
+    await db.execute(`update public_aggregate_state set aggregate_epoch = source_epoch
+      where scope = 'tracks'`);
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version, created_at, updated_at)
+      values ('public_aggregates', 'track', 'track-null', 1, 'repair', '${OLD}', '${OLD}')`);
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+
+    await db.execute(`delete from projection_repairs where projection = 'public_aggregates'`);
+    await db.execute({
+      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+      sql: `delete from hub_page_anchor_validity where hub = ? and clause_hash = ?`,
+    });
+    expect(
+      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toBeUndefined();
+
+    await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
+    await db.execute({
+      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+      sql: `update hub_page_anchor_validity
+        set anchor_format_version = anchor_format_version + 1
+        where hub = ? and clause_hash = ?`,
+    });
+    expect(
+      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toBeUndefined();
+
+    await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
+    await db.execute({
+      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+      sql: `update hub_page_anchor_validity set order_epoch = order_epoch + 1
+        where hub = ? and clause_hash = ?`,
+    });
+    expect(
+      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toBeUndefined();
+
+    await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
+    await db.execute({
+      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+      sql: `update hub_page_anchor_validity set generation = 'other'
+        where hub = ? and clause_hash = ?`,
+    });
+    expect(
+      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toBeUndefined();
+
+    await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
+    await db.execute({
+      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
+      sql: `update hub_page_anchors set anchors_json = '{bad json'
+        where hub = ? and clause_hash = ?`,
+    });
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(4);
+    expect(
+      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toBeUndefined();
+  });
+
+  it("reads literal year/key buckets and projection indexes without a source scan or temp sort", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await setCutover("true");
+
+    expect(await readProjectedAggregateBuckets(db, "release_date_bucket")).toEqual([
+      { bucket: "20x?", count: 1 },
+      { bucket: "2024", count: 1 },
+      { bucket: "", count: 1 },
+    ]);
+    expect(await readProjectedAggregateBuckets(db, "key")).toEqual([
+      { bucket: "", count: 1 },
+      { bucket: "C minor", count: 1 },
+      { bucket: "wat", count: 1 },
+    ]);
+
+    const statements: Array<{ args: InValue[]; sql: string }> = [];
+    const traced: PublicProjectionReadClient = {
+      execute: async (statement) => {
+        const normalized = {
+          args:
+            typeof statement !== "string" && Array.isArray(statement.args)
+              ? (statement.args as InValue[])
+              : [],
+          sql: typeof statement === "string" ? statement : statement.sql,
+        };
+        statements.push(normalized);
+        return db.execute(statement);
+      },
+    };
+    await readProjectedAggregateBuckets(traced, "key");
+    await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
+    await readProjectedTrackHubAnchors(traced, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE);
+
+    for (const statement of statements.filter(
+      ({ sql }) => !sql.includes("from settings") && !sql.includes("select artist_id from ("),
+    )) {
+      const plan = await db.execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const details = plan.rows
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+        .join("\n");
+      expect(details).not.toContain("SCAN tracks");
+      expect(details).not.toContain("SCAN track_artists");
+      expect(details).not.toContain("USE TEMP B-TREE");
+    }
+    expect(statements.map(({ sql }) => sql).join("\n")).toContain(
+      "artist_qualification_qualified_idx",
+    );
+  });
+
   it("rebuilds literal buckets, exact weighted qualification, totals, anchors, and shadow equivalence", async () => {
     await seedProjectionWorld();
     await rebuildAll();

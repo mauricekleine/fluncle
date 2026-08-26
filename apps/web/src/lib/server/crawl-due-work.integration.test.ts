@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
@@ -13,6 +13,7 @@ import {
   markCrawlNodeRepairStatement,
   markCrawlNodeRepairsByUpdatedAtStatement,
   markCrawlProjectionRepairStatement,
+  promoteCrawlDueWork,
   readCrawlDueRebuild,
   rebuildCrawlDueWork,
   repairCrawlDueNodes,
@@ -371,6 +372,66 @@ describe("crawl due-work shadow runtime", () => {
     expect(claimPlan.join("\n")).toContain("crawl_due_work_ready_idx");
     expect(joined).not.toContain("crawl_frontier");
     expect(joined).not.toContain("USE TEMP B-TREE");
+  });
+
+  it("tail-rearms only the oldest ten stale artists while independently promoting retries", async () => {
+    for (let index = 0; index < 12; index += 1) {
+      const suffix = String(index).padStart(2, "0");
+      const artistMbid = `stale-${suffix}`;
+      const doneAt = `2026-01-0${index < 9 ? 1 : 2}T${String(index % 9).padStart(2, "0")}:00:00.000Z`;
+      await rule(artistMbid);
+      await node({
+        doneAt,
+        externalId: artistMbid,
+        hop: 0,
+        id: `musicbrainz:artist:${artistMbid}`,
+        kind: "artist",
+        state: "done",
+      });
+    }
+    await node({
+      attemptedAt: "2026-01-01T00:00:00.000Z",
+      externalId: "retry-independent",
+      failures: 1,
+      hop: 0,
+      id: "artist:retry-independent",
+      kind: "artist",
+      state: "failed",
+    });
+    await rebuildCrawlDueWork(db, { generation: "crawl-cap", limit: 20 });
+
+    const statements: InStatement[] = [];
+    const traced = {
+      batch: async (batch: InStatement[], mode?: "read" | "write") => {
+        statements.push(...batch);
+        return db.batch(batch, mode);
+      },
+      execute: db.execute.bind(db),
+    };
+    const promotion = await promoteCrawlDueWork(traced, { limit: 20, now: () => NOW });
+    expect(promotion).toEqual({ artistsRearmed: 10, promoted: 11 });
+
+    const artists = await db.execute(`select external_id, state from crawl_frontier
+      where external_id like 'stale-%' order by done_at, id`);
+    expect(artists.rows.slice(0, 10).every((row) => row.state === "pending")).toBe(true);
+    expect(artists.rows.slice(10).every((row) => row.state === "done")).toBe(true);
+    expect(
+      (
+        await db.execute(`select state from crawl_due_work
+          where node_id = 'artist:retry-independent'`)
+      ).rows[0]?.state,
+    ).toBe("ready");
+
+    for (const statement of statements) {
+      const sql = typeof statement === "string" ? statement : statement.sql;
+      const args = typeof statement === "string" ? [] : statement.args;
+      const details = (await db.execute({ args, sql: `explain query plan ${sql}` })).rows
+        .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+        .join("\n");
+      expect(details).toContain("crawl_due_work_scheduled_idx");
+      expect(details).not.toContain("SCAN crawl_frontier");
+      expect(details).not.toContain("USE TEMP B-TREE");
+    }
   });
 
   it("fans label and artist rule changes through bounded indexed rows, then repairs exact facts", async () => {

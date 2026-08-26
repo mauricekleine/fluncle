@@ -75,10 +75,18 @@ import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import {
+  CRAWL_STALE_ARTIST_REARM_LIMIT,
   markCrawlNodeRepairStatement,
   markCrawlNodeRepairsByUpdatedAtStatement,
   markCrawlProjectionRepairStatement,
 } from "./crawl-due-work";
+import {
+  CRAWL_CATALOGUE_CLAIM_OWNER,
+  CRAWL_CATALOGUE_LEASE_MS,
+  claimCrawlFrontierRows,
+  isCrawlDueCutoverEnabled,
+  settleClaimedCrawlFrontierRow,
+} from "./crawl-cutover";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
 import { batchDueWorkSourceMutation, type DueWorkStatement } from "./due-work";
@@ -155,7 +163,7 @@ export const REARM_BATCH = 10;
 export const REARM_SCOPED_BATCH = 10;
 
 /** Allow-rule artist nodes minted/revived per pass, and stale allowed-artist subscriptions re-armed. */
-export const REARM_ALLOWED_BATCH = 10;
+export const REARM_ALLOWED_BATCH = CRAWL_STALE_ARTIST_REARM_LIMIT;
 
 /** Hard ceiling on the one per-tick rules read; overflow fails the pass instead of losing a rule. */
 const ARTIST_RULE_MEMO_LIMIT = 10_000;
@@ -2054,39 +2062,55 @@ export async function crawlCatalogue({
   // pick so a re-armed browse node can expand in this very pass, bounded against frontier floods.
   pass.releasesRearmed = await rearmScopedLabelReleases();
   pass.artistsRearmed = await rearmAllowedArtists();
-  pass.artistsRearmed += await rearmStaleAllowedArtists();
   pass.seedsRearmed = await rearmSeedLabels();
 
-  const nodes = await pickNodes(limit);
+  const cutoverEnabled = await isCrawlDueCutoverEnabled();
+  if (!cutoverEnabled) {
+    pass.artistsRearmed += await rearmStaleAllowedArtists();
+  }
+  const claimToken = cutoverEnabled ? crypto.randomUUID() : undefined;
+  const claimed =
+    cutoverEnabled && claimToken !== undefined
+      ? await claimCrawlFrontierRows(await getDb(), {
+          claimedBy: CRAWL_CATALOGUE_CLAIM_OWNER,
+          leaseMs: CRAWL_CATALOGUE_LEASE_MS,
+          limit,
+          token: claimToken,
+        })
+      : undefined;
+  pass.artistsRearmed += claimed?.artistsRearmed ?? 0;
+  const nodes: FrontierRow[] = claimed?.rows ?? (await pickNodes(limit));
+
+  const settleNode = async (
+    node: FrontierRow,
+    state: CrawlNodeState,
+    patch: { cursor?: number; failures?: number; note?: string },
+  ): Promise<boolean> => {
+    if (claimed === undefined) {
+      await settle(node.id, state, patch);
+      return true;
+    }
+    return settleClaimedCrawlFrontierRow(await getDb(), {
+      claimToken: claimed.claimToken,
+      id: node.id,
+      state,
+      ...patch,
+    });
+  };
 
   for (const node of nodes) {
+    let expansion: Expansion;
     try {
-      const expansion =
+      expansion =
         node.kind === "release"
           ? await expandRelease(node, hopLimit)
           : node.kind === "artist" || node.source === "musicbrainz"
             ? await expandBrowse(node, hopLimit)
             : await expandSeedLabel(node);
-
-      await settle(node.id, expansion.next.state, {
-        cursor: expansion.next.cursor,
-        note: expansion.next.note,
-      });
-
-      pass.expanded += 1;
-      pass.nodesEnqueued += expansion.enqueued;
-      pass.tracksAllowedIn += expansion.tracksAllowedIn;
-      pass.tracksFound += expansion.tracksFound;
-      pass.tracksWritten += expansion.tracksWritten;
-      pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
-      pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
-      pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;
-      pass.tracksSkipped += expansion.tracksSkipped;
-      pass.labelsDiscovered.push(...expansion.labelsDiscovered);
     } catch (error) {
       const throttled = error instanceof ThrottledError;
 
-      await settle(node.id, "failed", {
+      const settled = await settleNode(node, "failed", {
         // Preserve the browse cursor across a transient failure so the retry RESUMES where it was —
         // a paginated forward drain keeps its offset, and a re-armed node keeps its tail-first state
         // (`REARM_TAIL`/descent) instead of collapsing to `0`, which would restart it as a full walk.
@@ -2094,6 +2118,10 @@ export async function crawlCatalogue({
         failures: node.failures + 1,
         note: throttled ? "musicbrainz rate-limited" : String(error).slice(0, 200),
       });
+
+      if (!settled) {
+        continue;
+      }
       pass.failed += 1;
 
       logEvent(throttled ? "warn" : "error", "crawl.node-failed", {
@@ -2108,7 +2136,28 @@ export async function crawlCatalogue({
         pass.rateLimited = true;
         break;
       }
+      continue;
     }
+
+    const settled = await settleNode(node, expansion.next.state, {
+      cursor: expansion.next.cursor,
+      note: expansion.next.note,
+    });
+
+    if (!settled) {
+      continue;
+    }
+
+    pass.expanded += 1;
+    pass.nodesEnqueued += expansion.enqueued;
+    pass.tracksAllowedIn += expansion.tracksAllowedIn;
+    pass.tracksFound += expansion.tracksFound;
+    pass.tracksWritten += expansion.tracksWritten;
+    pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
+    pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
+    pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;
+    pass.tracksSkipped += expansion.tracksSkipped;
+    pass.labelsDiscovered.push(...expansion.labelsDiscovered);
   }
 
   // The crawl is MusicBrainz-only now. Filling the Spotify anchor moved ENTIRELY off this Worker

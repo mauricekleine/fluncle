@@ -3,6 +3,7 @@ import { type ScaleProfile } from "./manifest";
 export const PERFORMANCE_WORK_CLASSES = [
   "route-db",
   "route-e2e",
+  "projection",
   "queue",
   "writer-admission",
   "mutation",
@@ -44,6 +45,13 @@ export const PERFORMANCE_BUDGETS: Record<PerformanceWorkClass, PerformanceBudget
     invariants: [{ field: "ambiguousOutcomes", maximum: 0 }],
     measurements: [{ metric: "max", thresholdMs: 2_000 }],
     requiredProfiles: ["2x"],
+  },
+  projection: {
+    description: "Contract D crawl and public projection reads",
+    id: "projection",
+    invariants: [],
+    measurements: [{ metric: "p95", thresholdMs: 250 }],
+    requiredProfiles: ["1x", "2x", "4x"],
   },
   queue: {
     description: "Queue empty check or bounded claim",

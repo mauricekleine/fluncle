@@ -415,6 +415,25 @@ describe("getFunnel (real SQL)", () => {
 // `/tracks` hub's own count; the three entity figures are the sitemap's INDEXABLE sets.
 
 describe("getFunnel publicSurfaces (real SQL)", () => {
+  it("routes the tracks card through the usable projected total", async () => {
+    const { getFunnel } = await import("./funnel");
+    const { rebuildPublicProjection } = await import("./public-projections");
+    const { PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY } = await import("./public-projection-cutover");
+    await seedCatalogueTrack(db, { trackId: "projected-track" });
+    await rebuildPublicProjection(db, "public_aggregates", {
+      generation: "funnel-aggregate",
+      limit: 10,
+    });
+    await db.execute(`update public_aggregate_state set default_track_total = 123
+      where scope = 'tracks'`);
+    await db.execute({
+      args: [PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY, "true"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+
+    expect((await getFunnel()).live.publicSurfaces.tracks).toBe(123);
+  });
+
   it("publicSurfaces.tracks equals the /tracks hub's own count (findings + catalogue)", async () => {
     const { getFunnel } = await import("./funnel");
     const { tracksHubCountQuery } = await import("./tracks-hub");
