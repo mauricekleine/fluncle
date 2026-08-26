@@ -1911,6 +1911,66 @@ export const projectionRepairs = sqliteTable(
 );
 
 /**
+ * Public-safe idempotency receipts for operations whose effect and terminal receipt will later be
+ * committed atomically. Request bodies are represented only by their digest; accepted is the sole
+ * in-progress state, and terminal rows carry one bounded identity plus canonical JSON.
+ */
+export const operationReceipts = sqliteTable(
+  "operation_receipts",
+  {
+    createdAt: text("created_at").notNull(),
+    operationId: text("operation_id").notNull(),
+    operationKey: text("operation_key").primaryKey(),
+    requestDigest: text("request_digest").notNull(),
+    resultIdentity: text("result_identity"),
+    resultJson: text("result_json"),
+    state: text("state", { enum: ["accepted", "committed", "rejected"] }).notNull(),
+    terminalAt: text("terminal_at"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    check(
+      "operation_receipts_identity_bounds_check",
+      sql`typeof(${table.operationKey}) = 'text' and length(cast(${table.operationKey} as blob)) between 1 and 256
+        and typeof(${table.operationId}) = 'text' and length(cast(${table.operationId} as blob)) between 1 and 64
+        and (${table.resultIdentity} is null or (typeof(${table.resultIdentity}) = 'text' and length(cast(${table.resultIdentity} as blob)) between 1 and 512))`,
+    ),
+    check(
+      "operation_receipts_digest_check",
+      sql`typeof(${table.requestDigest}) = 'text' and length(${table.requestDigest}) = 64 and length(cast(${table.requestDigest} as blob)) = 64 and ${table.requestDigest} not glob '*[^0-9a-f]*'`,
+    ),
+    check(
+      "operation_receipts_result_json_check",
+      sql`${table.resultJson} is null or (typeof(${table.resultJson}) = 'text' and length(cast(${table.resultJson} as blob)) between 1 and 16384 and json_valid(${table.resultJson}))`,
+    ),
+    check(
+      "operation_receipts_timestamp_check",
+      sql`typeof(${table.createdAt}) = 'text' and length(cast(${table.createdAt} as blob)) between 1 and 64
+        and typeof(${table.updatedAt}) = 'text' and length(cast(${table.updatedAt} as blob)) between 1 and 64
+        and ${table.updatedAt} >= ${table.createdAt}
+        and (${table.terminalAt} is null or (typeof(${table.terminalAt}) = 'text' and length(cast(${table.terminalAt} as blob)) between 1 and 64 and ${table.terminalAt} >= ${table.createdAt} and ${table.terminalAt} <= ${table.updatedAt}))`,
+    ),
+    check(
+      "operation_receipts_state_check",
+      sql`${table.state} in ('accepted', 'committed', 'rejected')`,
+    ),
+    check(
+      "operation_receipts_lifecycle_check",
+      sql`(${table.state} = 'accepted' and ${table.resultIdentity} is null and ${table.resultJson} is null and ${table.terminalAt} is null)
+        or (${table.state} in ('committed', 'rejected') and ${table.resultIdentity} is not null and ${table.resultJson} is not null and ${table.terminalAt} is not null)`,
+    ),
+    index("operation_receipts_stale_accepted_idx")
+      .on(table.state, table.updatedAt, table.operationKey)
+      .where(sql`${table.state} = 'accepted'`),
+    index("operation_receipts_operation_audit_idx").on(
+      table.operationId,
+      table.createdAt,
+      table.operationKey,
+    ),
+  ],
+);
+
+/**
  * Append-only artifact/vector producer log. `AUTOINCREMENT` makes sequence values globally
  * monotonic without reuse; producer revisions make a retry idempotent; delete events are explicit
  * tombstones and therefore cannot carry a stale vector payload.
