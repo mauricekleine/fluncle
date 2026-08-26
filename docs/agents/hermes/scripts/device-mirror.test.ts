@@ -67,14 +67,21 @@ function binding(value: DeviceSqlValue): SQLQueryBindings {
 
 class LocalTargetClient implements DeviceTargetClient {
   readonly database: Database;
+  aroundBatch?: (
+    statements: readonly LibsqlStatement[],
+    mode: "read" | "write",
+    execute: (statements: readonly LibsqlStatement[], mode: "read" | "write") => QueryResult[],
+  ) => QueryResult[];
   beforeBatch?: (statements: readonly LibsqlStatement[], mode: "read" | "write") => void;
 
   constructor(path: string) {
     this.database = new Database(path, { create: true, strict: true });
   }
 
-  batch(statements: readonly LibsqlStatement[], mode: "read" | "write"): Promise<QueryResult[]> {
-    this.beforeBatch?.(statements, mode);
+  private executeBatch(
+    statements: readonly LibsqlStatement[],
+    mode: "read" | "write",
+  ): QueryResult[] {
     const run = this.database.transaction(() =>
       statements.map((statement) => {
         const args = (statement.args ?? []).map(binding);
@@ -96,7 +103,17 @@ class LocalTargetClient implements DeviceTargetClient {
       }),
     );
 
-    return Promise.resolve(mode === "write" ? run.immediate() : run.deferred());
+    return mode === "write" ? run.immediate() : run.deferred();
+  }
+
+  batch(statements: readonly LibsqlStatement[], mode: "read" | "write"): Promise<QueryResult[]> {
+    this.beforeBatch?.(statements, mode);
+    const execute = (delivered: readonly LibsqlStatement[], deliveredMode: "read" | "write") =>
+      this.executeBatch(delivered, deliveredMode);
+
+    return Promise.resolve(
+      this.aroundBatch ? this.aroundBatch(statements, mode, execute) : execute(statements, mode),
+    );
   }
 
   close(): void {
@@ -185,6 +202,19 @@ function liveTracks(client: LocalTargetClient): string[] {
       track_id: string;
     }[]
   ).map((row) => row.track_id);
+}
+
+function stageFootprint(client: LocalTargetClient): number {
+  const stageTables = DEVICE_SOURCE_TABLES.map((table) => `_device_mirror_stage_${table}`);
+  return [...stageTables, "_device_mirror_stage_checkpoint", "_device_mirror_stage_control"].reduce(
+    (total, table) => {
+      const row = client.database
+        .query(`SELECT count(*) AS count FROM ${quoteDeviceDbIdentifier(table)}`)
+        .get() as { count: number };
+      return total + Number(row.count);
+    },
+    0,
+  );
 }
 
 function createReplicaSchema(path: string): void {
@@ -502,6 +532,65 @@ describe("embedded source replica", () => {
 });
 
 describe("staged target publication", () => {
+  test("duplicate and out-of-order staged deltas converge through derivation and publication", async () => {
+    const source = await scaledSourceFixture(2);
+    const artifactPath = join(temporaryDirectory(), "redelivery-generation.db");
+    await deriveDeviceDatabase({ cut: "anchored", out: artifactPath, source });
+    const generation = inspectDeviceGeneration(artifactPath);
+    const artifact = new Database(artifactPath, { readonly: true, strict: true });
+    const expectedRows = publicRows(artifact);
+    artifact.close();
+    const { client } = targetFixture();
+    let firstTrackPage: readonly LibsqlStatement[] | null = null;
+    let duplicateDeliveries = 0;
+    let duplicateCheckpointRejected = false;
+    let outOfOrderDeliveries = 0;
+    let staleCheckpointRejected = false;
+
+    client.aroundBatch = (statements, mode, execute) => {
+      const isTrackPage =
+        mode === "write" &&
+        statements.some((statement) =>
+          statement.sql.includes('INSERT INTO "_device_mirror_stage_tracks"'),
+        );
+
+      if (!isTrackPage) {
+        return execute(statements, mode);
+      }
+      if (!firstTrackPage) {
+        firstTrackPage = statements;
+        const accepted = execute(statements, mode);
+        const duplicate = execute(statements, mode);
+        duplicateCheckpointRejected = duplicate.at(-1)?.affectedRows === 0;
+        duplicateDeliveries += 1;
+        return accepted;
+      }
+      if (outOfOrderDeliveries === 0) {
+        const accepted = execute(statements, mode);
+        const stale = execute(firstTrackPage, "write");
+        staleCheckpointRejected = stale.at(-1)?.affectedRows === 0;
+        outOfOrderDeliveries += 1;
+        return accepted;
+      }
+
+      return execute(statements, mode);
+    };
+
+    const result = await publishDeviceGeneration(client, generation, 2);
+    expect(duplicateDeliveries).toBe(1);
+    expect(duplicateCheckpointRejected).toBe(true);
+    expect(outOfOrderDeliveries).toBe(1);
+    expect(staleCheckpointRejected).toBe(true);
+    expect(result.published).toBe(true);
+    expect(result.backlogRows).toBeGreaterThan(0);
+    expect(publicRows(client.database)).toEqual(expectedRows);
+    expect(client.database.query("SELECT source_watermark FROM device_sync_meta").get()).toEqual({
+      source_watermark: generation.fingerprint,
+    });
+    expect(stageFootprint(client)).toBe(0);
+    client.close();
+  });
+
   test("upload, pre-cutover, and in-transaction failures leave the old live artifact intact", async () => {
     const generation = generationFixture(4);
 
@@ -586,6 +675,40 @@ describe("staged target publication", () => {
     expect(corrupted).toBe(true);
     expect(result.stageRebuilt).toBe(true);
     expect(liveTracks(client)).toEqual(["track-0000", "track-0001", "track-0002", "track-0003"]);
+    client.close();
+  });
+
+  test("reclaims a published stage only after last-good validation and converges on replay", async () => {
+    const generation = generationFixture(4);
+    const { client } = targetFixture();
+    let interruptedReclamation = false;
+    client.beforeBatch = (statements, mode) => {
+      if (
+        !interruptedReclamation &&
+        mode === "write" &&
+        statements.some((statement) =>
+          statement.sql.includes('DELETE FROM "_device_mirror_stage_control"'),
+        )
+      ) {
+        interruptedReclamation = true;
+        throw new Error("stage reclamation interrupted");
+      }
+    };
+
+    const first = await publishDeviceGeneration(client, generation, 2);
+    const lastGoodRows = publicRows(client.database);
+    expect(interruptedReclamation).toBe(true);
+    expect(first.published).toBe(true);
+    expect(first.stageRetained).toBe(true);
+    expect(liveTracks(client)).toEqual(["track-0000", "track-0001", "track-0002", "track-0003"]);
+    expect(stageFootprint(client)).toBeGreaterThan(0);
+
+    client.beforeBatch = undefined;
+    const replay = await publishDeviceGeneration(client, generation, 2);
+    expect(replay.replayed).toBe(true);
+    expect(replay.stageRetained).toBe(false);
+    expect(publicRows(client.database)).toEqual(lastGoodRows);
+    expect(stageFootprint(client)).toBe(0);
     client.close();
   });
 

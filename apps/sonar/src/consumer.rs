@@ -462,7 +462,202 @@ pub fn manifest_is_pending(manifest: &Manifest) -> bool {
 mod tests {
     use super::*;
     use crate::artifact::Contract;
+    use crate::decode::BLOB_LEN;
+    use crate::index::TrackMeta;
+    use crate::replica::{SourceRevision, SourceTrack};
     use crate::state::PendingAck;
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use libsql::{params, Builder};
+    use serde_json::{json, Value};
+    use std::path::Path;
+    use std::sync::atomic::AtomicUsize;
+    use tempfile::tempdir;
+
+    fn test_blob(seed: f32) -> Vec<u8> {
+        let mut bytes = vec![0_u8; BLOB_LEN];
+        bytes[..4].copy_from_slice(&seed.to_le_bytes());
+        bytes
+    }
+
+    fn test_track(id: &str, revision: u64, seed: f32) -> SourceTrack {
+        SourceTrack {
+            blob: test_blob(seed),
+            id: id.into(),
+            meta: TrackMeta {
+                anchored: true,
+                bpm: Some(174.0),
+                ..TrackMeta::default()
+            },
+            revision,
+        }
+    }
+
+    async fn local_replica(
+        path: &Path,
+        tracks: &[SourceTrack],
+        artifact_head: u64,
+        compact_event_bodies: bool,
+    ) -> Replica {
+        let db = Builder::new_local(path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            "create table tracks (
+               track_id text primary key, key text, bpm real, spotify_uri text,
+               dismissed_at text, duplicate_of_track_id text,
+               nearest_finding_score real, duration_ms integer
+             );
+             create table track_embeddings (track_id text primary key, embedding_blob blob);
+             create table findings (track_id text primary key, log_id text);
+             create table artifact_change_revisions (
+               stream text, stream_version integer, subject_type text,
+               subject_id text, revision integer
+             );
+             create table artist_centroids (artist_id text primary key, centroid_blob blob);
+             create table artifact_changes (seq integer primary key autoincrement, body text);",
+        )
+        .await
+        .unwrap();
+        for track in tracks {
+            conn.execute(
+                "insert into tracks(track_id,bpm,spotify_uri) values(?,174.0,'spotify:track:test')",
+                [track.id.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "insert into track_embeddings(track_id,embedding_blob) values(?,?)",
+                params![track.id.clone(), track.blob.clone()],
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "insert into artifact_change_revisions(stream,stream_version,subject_type,subject_id,revision) values('sonar.track',1,'track',?,?)",
+                params![track.id.clone(), i64::try_from(track.revision).unwrap()],
+            )
+            .await
+            .unwrap();
+        }
+        for seq in 1..=artifact_head {
+            conn.execute(
+                "insert into artifact_changes(body) values(?)",
+                [format!("event-{seq}")],
+            )
+            .await
+            .unwrap();
+        }
+        if compact_event_bodies {
+            conn.execute("delete from artifact_changes", ())
+                .await
+                .unwrap();
+        }
+        drop(conn);
+        drop(db);
+        Replica::open_local_test_source(path).await.unwrap()
+    }
+
+    async fn compacted_change_rows(path: &Path) -> i64 {
+        let db = Builder::new_local(path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        let mut rows = conn
+            .query("select count(*) from artifact_changes", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get(0).unwrap()
+    }
+
+    fn response_status(
+        state: &str,
+        applied: Option<u64>,
+        earliest: Option<u64>,
+        head: u64,
+        rebuilds: Vec<Value>,
+    ) -> Value {
+        json!({
+            "appliedThroughSeq": applied,
+            "checkpointedAt": null,
+            "compactionBarrier": 2,
+            "consumerId": "sonar-test",
+            "contracts": [{"formatVersion": 1, "stream": STREAM, "streamVersion": 1}],
+            "earliestSeq": earliest,
+            "headSeq": head,
+            "rebuilds": rebuilds,
+            "registeredAt": "2030-01-01T00:00:00.000Z",
+            "snapshotSeq": 3,
+            "state": state,
+            "stateChangedAt": "2030-01-01T00:00:00.000Z",
+            "updatedAt": "2030-01-01T00:00:00.000Z"
+        })
+    }
+
+    fn complete_rebuild() -> Value {
+        json!({
+            "completedAt": "2030-01-01T00:00:00.000Z",
+            "consumerDigest": crate::artifact::EMPTY_DIGEST,
+            "consumerItemCount": 1,
+            "cursor": null,
+            "formatVersion": 1,
+            "generation": "compaction-rebuild",
+            "snapshotSeq": 3,
+            "sourceDigest": crate::artifact::EMPTY_DIGEST,
+            "sourceItemCount": 1,
+            "startedAt": "2030-01-01T00:00:00.000Z",
+            "state": "complete",
+            "stream": STREAM,
+            "streamVersion": 1,
+            "updatedAt": "2030-01-01T00:00:00.000Z"
+        })
+    }
+
+    async fn compaction_api() -> (String, tokio::task::JoinHandle<()>) {
+        let status_calls = Arc::new(AtomicUsize::new(0));
+        let get_calls = Arc::clone(&status_calls);
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test",
+                get(move || {
+                    let calls = Arc::clone(&get_calls);
+                    async move {
+                        let response = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                            response_status("active", Some(1), None, 3, Vec::new())
+                        } else {
+                            response_status("rebuilding", None, None, 3, vec![complete_rebuild()])
+                        };
+                        Json(json!({"consumer": response, "ok": true}))
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers",
+                post(|| async {
+                    Json(json!({
+                        "consumer": response_status(
+                            "rebuilding",
+                            None,
+                            None,
+                            3,
+                            vec![complete_rebuild()]
+                        ),
+                        "ok": true
+                    }))
+                }),
+            )
+            .route(
+                "/api/v1/admin/artifacts/consumers/sonar-test/activate",
+                post(|| async {
+                    Json(json!({
+                        "consumer": response_status("active", Some(3), None, 3, Vec::new()),
+                        "ok": true
+                    }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{address}"), task)
+    }
 
     fn status(checkpoint: Option<u64>, earliest: Option<u64>, head: u64) -> ConsumerStatus {
         ConsumerStatus {
@@ -484,6 +679,135 @@ mod tests {
             state_changed_at: "2030-01-01T00:00:00.000Z".into(),
             updated_at: "2030-01-01T00:00:00.000Z".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn interrupted_sync_before_rebuild_commit_leaves_exact_last_good_bytes() {
+        let dir = tempdir().unwrap();
+        let store = StateStore::open(dir.path().join("state.db")).await.unwrap();
+        let original = store
+            .replace_from_replica(
+                &[test_track("last-good", 1, 3.5)],
+                &[SourceRevision {
+                    id: "last-good".into(),
+                    revision: 1,
+                }],
+                &[],
+                1,
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        let original_digest = original.manifest.artifact_digest.clone();
+        let app = AppState::from_snapshot(published(&original), "secret".into());
+        let replica = local_replica(
+            &dir.path().join("replica.db"),
+            &[test_track("replacement", 2, 9.5)],
+            2,
+            false,
+        )
+        .await;
+        replica.interrupt_next_sync();
+        let consumer = Consumer::new(
+            ArtifactClient::new("http://127.0.0.1:1".into(), "test", "sonar-test".into()).unwrap(),
+            replica,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        let error = consumer.reconcile_local(&app).await.unwrap_err();
+        assert!(format!("{error:#}").contains("embedded replica sync interruption"));
+        let durable = consumer.state.load().await.unwrap();
+        let served = app.snapshot.load_full();
+        assert_eq!(durable.manifest.artifact_digest, original_digest);
+        assert_eq!(durable.tracks.id_at(0), "last-good");
+        assert_eq!(served.artifact_digest, original_digest);
+        assert_eq!(served.tracks.id_at(0), "last-good");
+
+        consumer.reconcile_local(&app).await.unwrap();
+        let recovered = consumer.state.load().await.unwrap();
+        let published = app.snapshot.load_full();
+        assert_eq!(
+            recovered.manifest.artifact_digest,
+            published.artifact_digest
+        );
+        assert_ne!(published.artifact_digest, original_digest);
+        assert_eq!(recovered.tracks.id_at(0), "replacement");
+        assert_eq!(published.tracks.id_at(0), "replacement");
+    }
+
+    #[tokio::test]
+    async fn compaction_gap_rebuilds_and_atomically_publishes_the_converged_replica() {
+        let dir = tempdir().unwrap();
+        let store = StateStore::open(dir.path().join("state.db")).await.unwrap();
+        let original = store
+            .replace_from_replica(
+                &[test_track("last-good", 1, 2.5)],
+                &[SourceRevision {
+                    id: "last-good".into(),
+                    revision: 1,
+                }],
+                &[],
+                1,
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        let original_digest = original.manifest.artifact_digest.clone();
+        let app = AppState::from_snapshot(published(&original), "secret".into());
+        let held_last_good = app.snapshot.load_full();
+        let desired = test_track("after-compaction", 3, 8.5);
+        let replica_path = dir.path().join("replica.db");
+        let replica = local_replica(&replica_path, std::slice::from_ref(&desired), 3, true).await;
+        assert_eq!(compacted_change_rows(&replica_path).await, 0);
+        assert_eq!(replica.artifact_head().await.unwrap(), 3);
+
+        let expected_store = StateStore::open(dir.path().join("expected.db"))
+            .await
+            .unwrap();
+        let expected = expected_store
+            .replace_from_replica(
+                std::slice::from_ref(&desired),
+                &[SourceRevision {
+                    id: desired.id.clone(),
+                    revision: desired.revision,
+                }],
+                &[],
+                3,
+                3,
+                2,
+            )
+            .await
+            .unwrap();
+        let (base_url, server) = compaction_api().await;
+        let consumer = Consumer::new(
+            ArtifactClient::new(base_url, "test", "sonar-test".into()).unwrap(),
+            replica,
+            store,
+            10,
+            10,
+        )
+        .unwrap();
+
+        consumer.consume_once(&app).await.unwrap();
+        server.abort();
+        let durable = consumer.state.load().await.unwrap();
+        let current = app.snapshot.load_full();
+        assert_eq!(held_last_good.artifact_digest, original_digest);
+        assert_eq!(held_last_good.tracks.id_at(0), "last-good");
+        assert_eq!(
+            durable.manifest.artifact_digest,
+            expected.manifest.artifact_digest
+        );
+        assert_eq!(current.artifact_digest, expected.manifest.artifact_digest);
+        assert_eq!(current.checkpoint, 3);
+        assert_eq!(current.baseline_seq, 3);
+        assert_eq!(current.tracks.id_at(0), "after-compaction");
+        assert_eq!(app.rebuild_cause.load(Ordering::Relaxed), 3);
     }
 
     #[test]

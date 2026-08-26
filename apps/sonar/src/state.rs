@@ -1056,43 +1056,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupted_sync_before_rebuild_commit_leaves_exact_last_good_bytes() {
-        let dir = tempdir().unwrap();
-        let store = StateStore::open(dir.path().join("state.db")).await.unwrap();
-        let original_blob = blob(3.5);
-        let original = store
-            .replace_from_replica(
-                &[track("a", 1, 3.5)],
-                &[SourceRevision {
-                    id: "a".into(),
-                    revision: 1,
-                }],
-                &[centroid("artist", 4.5)],
-                1,
-                1,
-                1,
-            )
-            .await
-            .unwrap();
-
-        let interrupted_sync: Result<Vec<SourceTrack>> = Err(anyhow::anyhow!("interrupted"));
-        assert!(interrupted_sync.is_err());
-        let after = store.load().await.unwrap();
-        assert_eq!(
-            after.manifest.artifact_digest,
-            original.manifest.artifact_digest
-        );
-        let mut rows = store
-            .connection()
-            .unwrap()
-            .query("select vector from sonar_tracks where id='a'", ())
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get_value(0).unwrap(), Value::Blob(original_blob));
-    }
-
-    #[tokio::test]
     async fn corrupt_state_is_detected_instead_of_partially_loaded() {
         let dir = tempdir().unwrap();
         let store = StateStore::open(dir.path().join("state.db")).await.unwrap();

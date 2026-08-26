@@ -4,6 +4,8 @@
 //! centroid SELECT runs against the local replica file.
 
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Context, Result};
 use libsql::{Builder, Connection, Database, Value};
@@ -49,6 +51,10 @@ pub struct LocalSnapshotPage {
 pub struct Replica {
     db: Database,
     conn: Connection,
+    #[cfg(test)]
+    interrupt_next_sync: AtomicBool,
+    #[cfg(test)]
+    local_test_source: bool,
 }
 
 impl Replica {
@@ -60,11 +66,48 @@ impl Replica {
         let conn = db
             .connect()
             .context("connecting to embedded libSQL replica")?;
-        Ok(Self { db, conn })
+        Ok(Self {
+            db,
+            conn,
+            #[cfg(test)]
+            interrupt_next_sync: AtomicBool::new(false),
+            #[cfg(test)]
+            local_test_source: false,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn open_local_test_source(path: impl AsRef<Path>) -> Result<Self> {
+        let db = Builder::new_local(path)
+            .build()
+            .await
+            .context("opening test local replica source")?;
+        let conn = db
+            .connect()
+            .context("connecting to test local replica source")?;
+        Ok(Self {
+            db,
+            conn,
+            interrupt_next_sync: AtomicBool::new(false),
+            local_test_source: true,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interrupt_next_sync(&self) {
+        self.interrupt_next_sync.store(true, Ordering::SeqCst);
     }
 
     /// Pull committed frames explicitly. No `sync_interval` is configured.
     pub async fn sync(&self) -> Result<SyncStats> {
+        #[cfg(test)]
+        if self.interrupt_next_sync.swap(false, Ordering::SeqCst) {
+            bail!("injected embedded replica sync interruption");
+        }
+        #[cfg(test)]
+        if self.local_test_source {
+            return Ok(SyncStats::default());
+        }
         let result = self
             .db
             .sync()
@@ -353,7 +396,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let replica = Replica { db, conn };
+        let replica = Replica {
+            db,
+            conn,
+            interrupt_next_sync: AtomicBool::new(false),
+            local_test_source: true,
+        };
 
         assert_eq!(replica.artifact_head().await.unwrap(), 3);
     }
