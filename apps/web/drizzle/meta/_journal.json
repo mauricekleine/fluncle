@@ -1128,6 +1128,13 @@
       "when": 1787262233201,
       "tag": "0160_ancient_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "6",
+      "when": 1787706051693,
+      "tag": "0161_salty_echo",
+      "breakpoints": true
     }
   ]
 }
