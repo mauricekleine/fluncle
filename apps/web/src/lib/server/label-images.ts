@@ -32,7 +32,7 @@ import {
   verifyDiscogsLabelEvidence,
 } from "./discogs";
 import { getDb, typedRows } from "./db";
-import { markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 import { readOptionalEnv } from "./env";
@@ -441,7 +441,7 @@ async function markResolved(slug: string, imageKey: string): Promise<void> {
   // survives a zone purge). The albums/artists cover-master sweep stamps its twin for the same reason.
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "label",
         {
           args: [slug],
@@ -466,7 +466,7 @@ async function markNone(slug: string): Promise<void> {
 
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "label",
         {
           args: [slug],
@@ -497,7 +497,7 @@ async function recordFailure(slug: string, priorFailures: number): Promise<void>
 
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "label",
         {
           args: [slug],

@@ -28,6 +28,7 @@ const SETTINGS_INVENTORY = {
     "catalogue_summary_cache",
   ],
   "clip-social.ts": ["clip_drip_paused"],
+  "crawl-cutover.ts": ["crawl_due_cutover_enabled"],
   "due-work-cutover.ts": ["track_work_due_cutover_enabled"],
   "env.ts": ["admin_grant_epoch"],
   "frontier-playlist.ts": ["frontier.minting"],
@@ -37,6 +38,7 @@ const SETTINGS_INVENTORY = {
     "observation_echo_max_overlap",
     "observation_echo_min_phrase_words",
   ],
+  "public-projection-cutover.ts": ["public_projection_cutover_enabled"],
   "publish-advance.ts": ["publish_advance_paused"],
   "sonar.ts": [
     "sonar_artists_enabled",
@@ -156,7 +158,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(38);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(17);
+    expect(registered.size).toBe(40);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(19);
   });
 });

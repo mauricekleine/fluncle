@@ -74,9 +74,22 @@
 import { ensureAlbum } from "./albums";
 import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
+import {
+  CRAWL_STALE_ARTIST_REARM_LIMIT,
+  markCrawlNodeRepairStatement,
+  markCrawlNodeRepairsByUpdatedAtStatement,
+  markCrawlProjectionRepairStatement,
+} from "./crawl-due-work";
+import {
+  CRAWL_CATALOGUE_CLAIM_OWNER,
+  CRAWL_CATALOGUE_LEASE_MS,
+  claimCrawlFrontierRows,
+  isCrawlDueCutoverEnabled,
+  settleClaimedCrawlFrontierRow,
+} from "./crawl-cutover";
 import { getDb, typedRows } from "./db";
 import { parseDiscogsUrl } from "./discogs";
-import { batchDueWorkSourceMutation } from "./due-work";
+import { batchDueWorkSourceMutation, type DueWorkStatement } from "./due-work";
 import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { setLabelMbLabelId } from "./label-images";
@@ -150,7 +163,7 @@ export const REARM_BATCH = 10;
 export const REARM_SCOPED_BATCH = 10;
 
 /** Allow-rule artist nodes minted/revived per pass, and stale allowed-artist subscriptions re-armed. */
-export const REARM_ALLOWED_BATCH = 10;
+export const REARM_ALLOWED_BATCH = CRAWL_STALE_ARTIST_REARM_LIMIT;
 
 /** Hard ceiling on the one per-tick rules read; overflow fails the pass instead of losing a rule. */
 const ARTIST_RULE_MEMO_LIMIT = 10_000;
@@ -361,25 +374,36 @@ async function enqueue(node: {
 }): Promise<number> {
   const db = await getDb();
   const now = new Date().toISOString();
-  const result = await db.execute({
-    args: [
-      frontierId(node.source, node.kind, node.externalId),
-      node.kind,
-      node.source,
-      node.externalId,
-      node.hop,
-      node.parentId,
-      node.labelSlug,
-      now,
-      now,
-    ],
-    sql: `insert into crawl_frontier
+  const id = frontierId(node.source, node.kind, node.externalId);
+  const sourceVersion = `crawl-enqueue:${crypto.randomUUID()}`;
+  const results = await db.batch(
+    [
+      {
+        args: [
+          id,
+          node.kind,
+          node.source,
+          node.externalId,
+          node.hop,
+          node.parentId,
+          node.labelSlug,
+          now,
+          now,
+        ],
+        sql: `insert into crawl_frontier
             (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict (id) do nothing`,
-  });
+      },
+      markCrawlNodeRepairStatement(id, sourceVersion, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
+    ],
+    "write",
+  );
 
-  return result.rowsAffected;
+  return results[0]?.rowsAffected ?? 0;
 }
 
 /** Record how a node's expansion ended. The durable state the next tick resumes from. */
@@ -391,30 +415,39 @@ async function settle(
   const db = await getDb();
   const now = new Date().toISOString();
 
-  await db.execute({
-    args: [
-      state,
-      state,
-      state === "done" ? now : null,
-      state,
-      patch.cursor ?? 0,
-      patch.failures ?? 0,
-      patch.note ?? null,
-      now,
-      now,
-      id,
+  await db.batch(
+    [
+      {
+        args: [
+          state,
+          state,
+          state === "done" ? now : null,
+          state,
+          patch.cursor ?? 0,
+          patch.failures ?? 0,
+          patch.note ?? null,
+          now,
+          now,
+          id,
+        ],
+        sql: `update crawl_frontier
+              set state = ?,
+                  done_at = case
+                    when ? = 'done' then ?
+                    when ? in ('pending', 'failed') and done_at is not null then done_at
+                    else null
+                  end,
+                  cursor = ?, failures = ?, note = ?,
+                  attempts = attempts + 1, attempted_at = ?, updated_at = ?
+              where id = ?`,
+      },
+      markCrawlNodeRepairStatement(id, `crawl-settle:${crypto.randomUUID()}`, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
     ],
-    sql: `update crawl_frontier
-          set state = ?,
-              done_at = case
-                when ? = 'done' then ?
-                when ? in ('pending', 'failed') and done_at is not null then done_at
-                else null
-              end,
-              cursor = ?, failures = ?, note = ?,
-              attempts = attempts + 1, attempted_at = ?, updated_at = ?
-          where id = ?`,
-  });
+    "write",
+  );
 }
 
 /**
@@ -618,38 +651,48 @@ async function rearmSeedLabels(): Promise<number> {
   const db = await getDb();
   const cutoff = new Date(Date.now() - REARM_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const now = new Date().toISOString();
-
-  // One bounded UPDATE. The subquery picks the batch (oldest-done-first, capped) — SQLite forbids
-  // ORDER BY/LIMIT on the UPDATE itself but allows it in the row-selecting subquery. The seed join
-  // is a CORRELATED `exists` rather than `label_slug in (…)` because it now tests two things about
-  // the SAME row — the label is still enabled AND this node is the label's ruled MusicBrainz
-  // identity — against a bounded, tens-of-rows table keyed on its unique `slug`; nothing is pulled
-  // into the isolate either way. A row with no `mb_label_id` has no ruling to contradict, so it
-  // re-arms exactly as before. `cursor → REARM_TAIL` arms the TAIL-FIRST re-read
-  // (`expandRearmedBrowse`), not a full forward re-walk.
-  const result = await db.execute({
-    args: [REARM_TAIL, now, cutoff, REARM_BATCH],
-    sql: `update crawl_frontier
-          set state = 'pending', cursor = ?, updated_at = ?
-          where id in (
-            select node.id from crawl_frontier as node
-            where node.kind = 'label'
-              and node.source = 'musicbrainz'
-              and node.state = 'done'
-              and node.done_at is not null
-              and node.done_at < ?
-              and exists (
-                select 1 from labels
-                where labels.slug = node.label_slug
-                  and labels.seed_state = 'enabled'
-                  and (labels.mb_label_id is null or labels.mb_label_id = node.external_id)
-              )
-            order by node.done_at asc, node.id asc
-            limit ?
-          )`,
+  const selected = await db.execute({
+    args: [cutoff, REARM_BATCH],
+    sql: `select node.id from crawl_frontier as node
+          where node.kind = 'label' and node.source = 'musicbrainz'
+            and node.state = 'done' and node.done_at is not null and node.done_at < ?
+            and exists (
+              select 1 from labels
+              where labels.slug = node.label_slug and labels.seed_state = 'enabled'
+                and (labels.mb_label_id is null or labels.mb_label_id = node.external_id)
+            )
+          order by node.done_at asc, node.id asc limit ?`,
   });
+  const nodeIds = typedRows<{ id: string }>(selected.rows).map((row) => row.id);
+  if (nodeIds.length === 0) {
+    return 0;
+  }
+  const placeholders = nodeIds.map(() => "?").join(", ");
+  const results = await db.batch(
+    [
+      {
+        args: [REARM_TAIL, now, ...nodeIds, cutoff],
+        sql: `update crawl_frontier
+              set state = 'pending', cursor = ?, updated_at = ?
+              where id in (${placeholders}) and kind = 'label' and source = 'musicbrainz'
+                and state = 'done' and done_at is not null and done_at < ?
+                and exists (
+                  select 1 from labels where labels.slug = crawl_frontier.label_slug
+                    and labels.seed_state = 'enabled'
+                    and (labels.mb_label_id is null
+                      or labels.mb_label_id = crawl_frontier.external_id)
+                )`,
+      },
+      markCrawlNodeRepairsByUpdatedAtStatement(
+        nodeIds,
+        `crawl-seed-rearm:${crypto.randomUUID()}`,
+        now,
+      ),
+    ],
+    "write",
+  );
 
-  const rearmed = result.rowsAffected;
+  const rearmed = results[0]?.rowsAffected ?? 0;
 
   if (rearmed > 0) {
     logEvent("info", "crawl.seeds-rearmed", { count: rearmed });
@@ -671,30 +714,51 @@ async function rearmSeedLabels(): Promise<number> {
 async function rearmScopedLabelReleases(): Promise<number> {
   const db = await getDb();
   const now = new Date().toISOString();
-  const result = await db.execute({
-    args: [now, REARM_SCOPED_BATCH],
-    sql: `update crawl_frontier
-          set state = 'pending', cursor = 0, updated_at = ?
-          where id in (
-            select node.id from crawl_frontier as node
-            where node.kind = 'label'
-              and node.source = 'musicbrainz'
-              and node.state = 'done'
-              and node.done_at is not null
-              and exists (
-                select 1 from labels
-                where labels.slug = node.label_slug
-                  and labels.seed_state = 'enabled'
-                  and labels.scope_changed_at is not null
-                  and labels.scope_changed_at > node.done_at
-                  and (labels.mb_label_id is null or labels.mb_label_id = node.external_id)
-              )
-            order by node.done_at asc, node.id asc
-            limit ?
-          )`,
+  const selected = await db.execute({
+    args: [REARM_SCOPED_BATCH],
+    sql: `select node.id from crawl_frontier as node
+          where node.kind = 'label' and node.source = 'musicbrainz'
+            and node.state = 'done' and node.done_at is not null
+            and exists (
+              select 1 from labels
+              where labels.slug = node.label_slug and labels.seed_state = 'enabled'
+                and labels.scope_changed_at is not null
+                and labels.scope_changed_at > node.done_at
+                and (labels.mb_label_id is null or labels.mb_label_id = node.external_id)
+            )
+          order by node.done_at asc, node.id asc limit ?`,
   });
+  const nodeIds = typedRows<{ id: string }>(selected.rows).map((row) => row.id);
+  if (nodeIds.length === 0) {
+    return 0;
+  }
+  const placeholders = nodeIds.map(() => "?").join(", ");
+  const results = await db.batch(
+    [
+      {
+        args: [now, ...nodeIds],
+        sql: `update crawl_frontier
+              set state = 'pending', cursor = 0, updated_at = ?
+              where id in (${placeholders}) and kind = 'label' and source = 'musicbrainz'
+                and state = 'done' and done_at is not null
+                and exists (
+                  select 1 from labels where labels.slug = crawl_frontier.label_slug
+                    and labels.seed_state = 'enabled' and labels.scope_changed_at is not null
+                    and labels.scope_changed_at > crawl_frontier.done_at
+                    and (labels.mb_label_id is null
+                      or labels.mb_label_id = crawl_frontier.external_id)
+                )`,
+      },
+      markCrawlNodeRepairsByUpdatedAtStatement(
+        nodeIds,
+        `crawl-scope-rearm:${crypto.randomUUID()}`,
+        now,
+      ),
+    ],
+    "write",
+  );
 
-  const rearmed = result.rowsAffected;
+  const rearmed = results[0]?.rowsAffected ?? 0;
 
   if (rearmed > 0) {
     logEvent("info", "crawl.releases-rearmed", { count: rearmed });
@@ -736,35 +800,52 @@ async function rearmAllowedArtists(): Promise<number> {
   }
 
   const now = new Date().toISOString();
+  const sourceVersion = `crawl-artist-rearm:${crypto.randomUUID()}`;
 
   // ONE batch, not a statement per identity. The selection is capped at `REARM_ALLOWED_BATCH`, so
   // a statement-per-identity loop is a bounded N+1 rather than an unbounded one — but it still
   // spends that many sequential round-trips inside a tick that fires 144×/day, and it lets the node
   // writes and the stamp half-apply. As ONE write transaction, a tick that dies mid-way re-arms the
   // same identities next time instead of stamping some of them.
-  await db.batch(
-    [
-      ...artistMbids.map((artistMbid) => ({
-        args: [frontierId("musicbrainz", "artist", artistMbid), artistMbid, now, now],
+  const writes: DueWorkStatement[] = [];
+  for (const artistMbid of artistMbids) {
+    const nodeId = frontierId("musicbrainz", "artist", artistMbid);
+    writes.push(
+      {
+        args: [nodeId, artistMbid, now, now],
         sql: `insert into crawl_frontier
                 (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor,
                  created_at, updated_at)
               values (?, 'artist', 'musicbrainz', ?, 0, null, null, 'pending', 0, ?, ?)
               on conflict (id) do update set
-                state = case when crawl_frontier.state = 'failed' then 'failed' else 'pending' end,
+                state = case
+                  when crawl_frontier.state = 'failed' then 'failed' else 'pending' end,
                 cursor = 0, hop = 0, parent_id = null,
                 label_slug = null, updated_at = excluded.updated_at
               where crawl_frontier.state in ('done', 'failed', 'pending')`,
-      })),
-      {
-        args: [now, ...artistMbids],
-        sql: `update artist_rules set rearmed_at = ?
+      },
+      markCrawlNodeRepairStatement(nodeId, sourceVersion, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
+    );
+  }
+  writes.push(
+    {
+      args: [now, ...artistMbids],
+      sql: `update artist_rules set rearmed_at = ?
               where verdict = 'allow' and rearmed_at is null
                 and artist_mbid in (${artistMbids.map(() => "?").join(", ")})`,
-      },
-    ],
-    "write",
+    },
+    ...artistMbids.map((artistMbid) =>
+      markCrawlProjectionRepairStatement("artist", artistMbid, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+        sourceVersion,
+      }),
+    ),
   );
+  await db.batch(writes, "write");
 
   logEvent("info", "crawl.artists-rearmed", { count: artistMbids.length, mode: "forward" });
   return artistMbids.length;
@@ -775,33 +856,56 @@ async function rearmStaleAllowedArtists(): Promise<number> {
   const db = await getDb();
   const cutoff = new Date(Date.now() - REARM_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const now = new Date().toISOString();
-  const result = await db.execute({
-    args: [REARM_TAIL, now, cutoff, REARM_ALLOWED_BATCH],
-    sql: `update crawl_frontier
-          set state = 'pending', cursor = ?, updated_at = ?
-          where id in (
-            select node.id from crawl_frontier as node
-            where node.kind = 'artist'
-              and node.source = 'musicbrainz'
-              and node.state = 'done'
-              and node.done_at is not null
-              and node.done_at < ?
-              and exists (
-                select 1 from artist_rules
-                where artist_rules.artist_mbid = node.external_id
-                  and artist_rules.verdict = 'allow'
-              )
-              and not exists (
-                select 1 from artist_rules as outstanding
-                where outstanding.artist_mbid = node.external_id
-                  and outstanding.verdict = 'allow'
-                  and outstanding.rearmed_at is null
-              )
-            order by node.done_at asc, node.id asc
-            limit ?
-          )`,
+  const selected = await db.execute({
+    args: [cutoff, REARM_ALLOWED_BATCH],
+    sql: `select node.id from crawl_frontier as node
+          where node.kind = 'artist' and node.source = 'musicbrainz'
+            and node.state = 'done' and node.done_at is not null and node.done_at < ?
+            and exists (
+              select 1 from artist_rules
+              where artist_rules.artist_mbid = node.external_id
+                and artist_rules.verdict = 'allow'
+            )
+            and not exists (
+              select 1 from artist_rules as outstanding
+              where outstanding.artist_mbid = node.external_id
+                and outstanding.verdict = 'allow' and outstanding.rearmed_at is null
+            )
+          order by node.done_at asc, node.id asc limit ?`,
   });
-  const rearmed = result.rowsAffected;
+  const nodeIds = typedRows<{ id: string }>(selected.rows).map((row) => row.id);
+  if (nodeIds.length === 0) {
+    return 0;
+  }
+  const placeholders = nodeIds.map(() => "?").join(", ");
+  const results = await db.batch(
+    [
+      {
+        args: [REARM_TAIL, now, ...nodeIds, cutoff],
+        sql: `update crawl_frontier
+              set state = 'pending', cursor = ?, updated_at = ?
+              where id in (${placeholders}) and kind = 'artist' and source = 'musicbrainz'
+                and state = 'done' and done_at is not null and done_at < ?
+                and exists (
+                  select 1 from artist_rules
+                  where artist_rules.artist_mbid = crawl_frontier.external_id
+                    and artist_rules.verdict = 'allow'
+                )
+                and not exists (
+                  select 1 from artist_rules as outstanding
+                  where outstanding.artist_mbid = crawl_frontier.external_id
+                    and outstanding.verdict = 'allow' and outstanding.rearmed_at is null
+                )`,
+      },
+      markCrawlNodeRepairsByUpdatedAtStatement(
+        nodeIds,
+        `crawl-artist-tail-rearm:${crypto.randomUUID()}`,
+        now,
+      ),
+    ],
+    "write",
+  );
+  const rearmed = results[0]?.rowsAffected ?? 0;
 
   if (rearmed > 0) {
     logEvent("info", "crawl.artists-rearmed", { count: rearmed, mode: "tail" });
@@ -1260,34 +1364,44 @@ async function enqueueReleaseNodes(
 
     const db = await getDb();
     const now = new Date().toISOString();
-    const result = await db.execute({
-      args: {
-        createdAt: now,
-        externalId: release.id,
-        hop: childHop,
-        id: frontierId("musicbrainz", "release", release.id),
-        kind: "release",
-        labelSlug: node.label_slug,
-        parentId: node.id,
-        source: "musicbrainz",
-        updatedAt: now,
-        watermark: replayWatermark,
-      },
-      sql: `insert into crawl_frontier
-              (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
-            values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug, :createdAt, :updatedAt)
-            on conflict (id) do update set
-              state = 'pending', cursor = 0, hop = 0,
-              parent_id = excluded.parent_id, label_slug = excluded.label_slug,
-              updated_at = excluded.updated_at
-            where (crawl_frontier.state = 'done'
-                   and crawl_frontier.done_at < :watermark)
-               or (crawl_frontier.state = 'pending'
-                   and (crawl_frontier.parent_id is not :parentId
-                        or crawl_frontier.hop <> 0
-                        or crawl_frontier.label_slug is not :labelSlug))`,
-    });
-    newlyEnqueued += result.rowsAffected;
+    const nodeId = frontierId("musicbrainz", "release", release.id);
+    const results = await db.batch(
+      [
+        {
+          args: {
+            createdAt: now,
+            externalId: release.id,
+            hop: childHop,
+            id: nodeId,
+            kind: "release",
+            labelSlug: node.label_slug,
+            parentId: node.id,
+            source: "musicbrainz",
+            updatedAt: now,
+            watermark: replayWatermark,
+          },
+          sql: `insert into crawl_frontier
+                  (id, kind, source, external_id, hop, parent_id, label_slug, created_at, updated_at)
+                values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug, :createdAt, :updatedAt)
+                on conflict (id) do update set
+                  state = 'pending', cursor = 0, hop = 0,
+                  parent_id = excluded.parent_id, label_slug = excluded.label_slug,
+                  updated_at = excluded.updated_at
+                where (crawl_frontier.state = 'done'
+                       and crawl_frontier.done_at < :watermark)
+                   or (crawl_frontier.state = 'pending'
+                       and (crawl_frontier.parent_id is not :parentId
+                            or crawl_frontier.hop <> 0
+                            or crawl_frontier.label_slug is not :labelSlug))`,
+        },
+        markCrawlNodeRepairStatement(nodeId, `crawl-replay-enqueue:${crypto.randomUUID()}`, {
+          now,
+          onlyIfPreviousStatementChanged: true,
+        }),
+      ],
+      "write",
+    );
+    newlyEnqueued += results[0]?.rowsAffected ?? 0;
   }
 
   return newlyEnqueued;
@@ -1948,39 +2062,55 @@ export async function crawlCatalogue({
   // pick so a re-armed browse node can expand in this very pass, bounded against frontier floods.
   pass.releasesRearmed = await rearmScopedLabelReleases();
   pass.artistsRearmed = await rearmAllowedArtists();
-  pass.artistsRearmed += await rearmStaleAllowedArtists();
   pass.seedsRearmed = await rearmSeedLabels();
 
-  const nodes = await pickNodes(limit);
+  const cutoverEnabled = await isCrawlDueCutoverEnabled();
+  if (!cutoverEnabled) {
+    pass.artistsRearmed += await rearmStaleAllowedArtists();
+  }
+  const claimToken = cutoverEnabled ? crypto.randomUUID() : undefined;
+  const claimed =
+    cutoverEnabled && claimToken !== undefined
+      ? await claimCrawlFrontierRows(await getDb(), {
+          claimedBy: CRAWL_CATALOGUE_CLAIM_OWNER,
+          leaseMs: CRAWL_CATALOGUE_LEASE_MS,
+          limit,
+          token: claimToken,
+        })
+      : undefined;
+  pass.artistsRearmed += claimed?.artistsRearmed ?? 0;
+  const nodes: FrontierRow[] = claimed?.rows ?? (await pickNodes(limit));
+
+  const settleNode = async (
+    node: FrontierRow,
+    state: CrawlNodeState,
+    patch: { cursor?: number; failures?: number; note?: string },
+  ): Promise<boolean> => {
+    if (claimed === undefined) {
+      await settle(node.id, state, patch);
+      return true;
+    }
+    return settleClaimedCrawlFrontierRow(await getDb(), {
+      claimToken: claimed.claimToken,
+      id: node.id,
+      state,
+      ...patch,
+    });
+  };
 
   for (const node of nodes) {
+    let expansion: Expansion;
     try {
-      const expansion =
+      expansion =
         node.kind === "release"
           ? await expandRelease(node, hopLimit)
           : node.kind === "artist" || node.source === "musicbrainz"
             ? await expandBrowse(node, hopLimit)
             : await expandSeedLabel(node);
-
-      await settle(node.id, expansion.next.state, {
-        cursor: expansion.next.cursor,
-        note: expansion.next.note,
-      });
-
-      pass.expanded += 1;
-      pass.nodesEnqueued += expansion.enqueued;
-      pass.tracksAllowedIn += expansion.tracksAllowedIn;
-      pass.tracksFound += expansion.tracksFound;
-      pass.tracksWritten += expansion.tracksWritten;
-      pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
-      pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
-      pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;
-      pass.tracksSkipped += expansion.tracksSkipped;
-      pass.labelsDiscovered.push(...expansion.labelsDiscovered);
     } catch (error) {
       const throttled = error instanceof ThrottledError;
 
-      await settle(node.id, "failed", {
+      const settled = await settleNode(node, "failed", {
         // Preserve the browse cursor across a transient failure so the retry RESUMES where it was —
         // a paginated forward drain keeps its offset, and a re-armed node keeps its tail-first state
         // (`REARM_TAIL`/descent) instead of collapsing to `0`, which would restart it as a full walk.
@@ -1988,6 +2118,10 @@ export async function crawlCatalogue({
         failures: node.failures + 1,
         note: throttled ? "musicbrainz rate-limited" : String(error).slice(0, 200),
       });
+
+      if (!settled) {
+        continue;
+      }
       pass.failed += 1;
 
       logEvent(throttled ? "warn" : "error", "crawl.node-failed", {
@@ -2002,7 +2136,28 @@ export async function crawlCatalogue({
         pass.rateLimited = true;
         break;
       }
+      continue;
     }
+
+    const settled = await settleNode(node, expansion.next.state, {
+      cursor: expansion.next.cursor,
+      note: expansion.next.note,
+    });
+
+    if (!settled) {
+      continue;
+    }
+
+    pass.expanded += 1;
+    pass.nodesEnqueued += expansion.enqueued;
+    pass.tracksAllowedIn += expansion.tracksAllowedIn;
+    pass.tracksFound += expansion.tracksFound;
+    pass.tracksWritten += expansion.tracksWritten;
+    pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
+    pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
+    pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;
+    pass.tracksSkipped += expansion.tracksSkipped;
+    pass.labelsDiscovered.push(...expansion.labelsDiscovered);
   }
 
   // The crawl is MusicBrainz-only now. Filling the Spotify anchor moved ENTIRELY off this Worker

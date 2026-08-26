@@ -85,6 +85,11 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // (Firecrawl facts + finding titles → a ready-to-author prompt) with its agent token; the
   // describe_album sibling.
   "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
+  // The versioned artifact-log transport is contract-only oRPC. Filesystemful consumers use the
+  // agent tier to rebuild and advance; the prefix compactor alone is operator tier.
+  "GET /admin/artifacts/changes": "list_artifact_changes",
+  "GET /admin/artifacts/consumers/{consumerId}": "get_artifact_consumer",
+  "GET /admin/artifacts/snapshots": "list_artifact_snapshot",
   // Global artist acquisition rules — contract-only oRPC. The list is an agent-allowed read.
   "GET /admin/artist-rules": "list_artist_rules",
   // The artist-relationship RFC ops (Unit 2.1). `list_unresolved_artists` (the resolve
@@ -257,6 +262,13 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // route file; oRPC owns the path directly). Agent tier: the box's bio sweep drives the
   // fill-empty-only write with its agent token, the note_track precedent.
   "POST /admin/albums/{slug}/bio": "describe_album",
+  "POST /admin/artifacts/changes/compact": "compact_artifact_changes",
+  "POST /admin/artifacts/consumers": "register_artifact_consumer",
+  "POST /admin/artifacts/consumers/{consumerId}/activate": "activate_artifact_consumer",
+  "POST /admin/artifacts/consumers/{consumerId}/checkpoint": "acknowledge_artifact_changes",
+  "POST /admin/artifacts/consumers/{consumerId}/inactivate": "inactivate_artifact_consumer",
+  "POST /admin/artifacts/consumers/{consumerId}/rebuilds/{stream}/checkpoint":
+    "checkpoint_artifact_rebuild",
   // Add one global artist acquisition rule. Operator tier.
   "POST /admin/artist-rules": "add_artist_rule",
   // The similar-artists precompute sweep (D6) — contract-only oRPC (no TanStack route file;

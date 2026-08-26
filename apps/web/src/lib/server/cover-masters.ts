@@ -35,7 +35,7 @@
 
 import { appleArtworkUrl } from "./apple-music";
 import { getDb, typedRows } from "./db";
-import { markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 import { logEvent } from "./log";
@@ -501,7 +501,7 @@ async function markResolved(
   // lastmod) AND `image_updated_at` (the `?v` rendition-cache bust — media.ts).
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         kind,
         {
           args: [slug],
@@ -527,7 +527,7 @@ async function markNone(kind: CoverMasterKind, slug: string): Promise<void> {
 
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         kind,
         {
           args: [slug],
@@ -562,7 +562,7 @@ async function recordFailure(
 
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         kind,
         {
           args: [slug],
@@ -615,7 +615,7 @@ async function requeueTerminalNone(
 
   await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         kind,
         {
           args: slugs,

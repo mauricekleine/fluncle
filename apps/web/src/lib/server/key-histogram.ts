@@ -15,6 +15,7 @@
 // fixture (below) without importing that module's whole surface.
 
 import { getDb, typedRows } from "./db";
+import { readProjectedAggregateBuckets } from "./public-projection-cutover";
 
 /** One bucket: a stored key spelling and how many tracks carry it. */
 export type KeyHistogramRow = { count: number; key: string | null };
@@ -37,6 +38,12 @@ export async function readKeyHistogram(): Promise<readonly KeyHistogramRow[]> {
   }
 
   const db = await getDb();
+  const projected = await readProjectedAggregateBuckets(db, "key");
+  if (projected !== undefined) {
+    const rows = projected.map(({ bucket, count }) => ({ count, key: bucket }));
+    cache = { at: now, rows };
+    return rows;
+  }
   const result = await db.execute(
     `select key, count(*) as count from tracks where key is not null group by key`,
   );

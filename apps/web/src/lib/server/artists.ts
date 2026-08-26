@@ -10,8 +10,8 @@ import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cut
 import {
   batchDueWorkSourceMutation,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import {
   hubCountArtistEdgeStatements,
@@ -182,7 +182,7 @@ export async function fillEmptyArtistBio(
   const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
   const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "artist",
         {
           args: [slug],
@@ -202,7 +202,7 @@ export async function fillEmptyArtistBio(
     ],
     "write",
   );
-  const result = results[1];
+  const result = results.at(-1);
 
   return (result?.rowsAffected ?? 0) > 0;
 }
@@ -1079,7 +1079,7 @@ export async function linkTracksToArtistEntities(
       ...restaleCatalogueRankStatements(newEdges.map((edge) => edge.trackId)),
       ...(newEdges.length > 0
         ? [
-            markDueWorkSourceRepairsStatement(
+            ...markDueWorkSourceMaintenanceStatements(
               [
                 {
                   subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
@@ -1193,13 +1193,23 @@ export async function stampRemixerRoles(trackIds: string[]): Promise<number> {
         continue;
       }
 
-      const result = await db.execute({
-        args: [artist.artistId, trackId],
-        sql: `update track_artists set role = 'remixer'
-              where artist_id = ? and track_id = ? and role is null`,
-      });
+      const [result] = await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [artist.artistId, trackId],
+            sql: `update track_artists set role = 'remixer'
+                  where artist_id = ? and track_id = ? and role is null`,
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        {
+          onlyIfLastSourceStatementChanged: true,
+          producer: "artist-remixer-role-stamp",
+        },
+      );
 
-      stamped += result.rowsAffected;
+      stamped += result?.rowsAffected ?? 0;
     }
   }
 
@@ -1345,7 +1355,7 @@ export async function upsertTrackArtists(
                     name = excluded.name,
                     updated_at = excluded.updated_at`,
           },
-          markDueWorkSourceRepairsFromSelectStatement(
+          ...markDueWorkSourceMaintenanceFromSelectStatements(
             "artist",
             spotifyArtistId
               ? {
@@ -1397,7 +1407,7 @@ export async function upsertTrackArtists(
         ...(isNewEdge && edgeDelta ? [hubCountDeltaStatement("artists", artistId, edgeDelta)] : []),
         ...(isNewEdge
           ? [
-              markDueWorkSourceRepairsStatement(
+              ...markDueWorkSourceMaintenanceStatements(
                 [
                   { subjectId: trackId, subjectType: "track" },
                   {

@@ -7,10 +7,11 @@ import {
   applyFixtureSchema,
   fixtureFingerprint,
   generateFixture,
+  projectionFixtureCardinalities,
   resetFixture,
   writeFixture,
 } from "./fixture";
-import { type FixtureCounts } from "./manifest";
+import { getScaleManifest, type FixtureCounts } from "./manifest";
 
 const SMALL_COUNTS: FixtureCounts = {
   albums: 9,
@@ -65,6 +66,7 @@ describe("synthetic database performance fixture", () => {
       perf_track_artists: SMALL_COUNTS.trackArtists,
       perf_track_embeddings: SMALL_COUNTS.trackEmbeddings,
       perf_tracks: SMALL_COUNTS.tracks,
+      ...projectionFixtureCardinalities(SMALL_COUNTS),
     });
   });
 
@@ -79,6 +81,40 @@ describe("synthetic database performance fixture", () => {
     expect(first).toMatch(/^[a-f0-9]{64}$/);
     expect(second).toBe(first);
     expect(changed).not.toBe(first);
+  });
+
+  it("keeps Contract D source growth exact while projection buckets and documents stay bounded", () => {
+    const baselineCounts = getScaleManifest("1x").counts;
+    const baseline = projectionFixtureCardinalities(baselineCounts);
+    const growing = [
+      "perf_artist_qualification",
+      "perf_artist_qualification_contributions",
+      "perf_crawl_due_work",
+      "perf_public_aggregate_membership",
+    ] as const;
+    const bounded = [
+      "perf_artist_qualification_state",
+      "perf_crawl_projection_repairs",
+      "perf_hub_page_anchor_validity",
+      "perf_hub_page_anchors",
+      "perf_projection_repairs",
+      "perf_public_aggregate_counts",
+      "perf_public_aggregate_state",
+    ] as const;
+
+    for (const [profile, multiplier] of [
+      ["2x", 2],
+      ["4x", 4],
+    ] as const) {
+      const scaled = projectionFixtureCardinalities(getScaleManifest(profile).counts);
+
+      for (const key of growing) {
+        expect(scaled[key], `${profile} ${key}`).toBe(baseline[key] * multiplier);
+      }
+      for (const key of bounded) {
+        expect(scaled[key], `${profile} ${key}`).toBe(baseline[key]);
+      }
+    }
   });
 
   it("materializes exact fan-out, null, selectivity, and backlog counts locally", async () => {
@@ -148,6 +184,21 @@ describe("synthetic database performance fixture", () => {
           "select count(*) as n from perf_crawl_frontier where state = 'pending'",
         ),
       ).toBe(23);
+      expect(await scalar(client, "select count(*) as n from perf_crawl_due_work")).toBe(23);
+      expect(await scalar(client, "select count(*) as n from perf_artist_qualification")).toBe(11);
+      expect(
+        await scalar(client, "select count(*) as n from perf_artist_qualification_contributions"),
+      ).toBe(53);
+      expect(
+        await scalar(client, "select count(*) as n from perf_public_aggregate_membership"),
+      ).toBe(41);
+      expect(await scalar(client, "select count(*) as n from perf_public_aggregate_counts")).toBe(
+        10,
+      );
+      expect(await scalar(client, "select count(*) as n from perf_hub_page_anchors")).toBe(1);
+      expect(await scalar(client, "select count(*) as n from perf_hub_page_anchor_validity")).toBe(
+        1,
+      );
       expect(await scalar(client, "select count(*) as n from due_work where state = 'ready'")).toBe(
         30,
       );

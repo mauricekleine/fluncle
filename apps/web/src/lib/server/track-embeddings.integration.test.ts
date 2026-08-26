@@ -1,5 +1,8 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
@@ -23,6 +26,7 @@ import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integratio
 // byte-identical to production's — including the foreign key and its cascade.
 
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -54,7 +58,17 @@ async function stateOf(trackId: string): Promise<{ mirror: number; vectors: numb
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-track-embeddings-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
+});
+
+afterEach(async () => {
+  db.close();
+
+  if (fixtureDirectory !== undefined) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 describe("the vector write keeps the satellite row and its mirror in step", () => {

@@ -6,11 +6,13 @@ import { describe, expect, it } from "vitest";
 import {
   auditDueWorkDelegatedCallSites,
   auditDueWorkMutationSites,
+  auditGoalDMutationSites,
   DUE_WORK_ELIGIBILITY_TABLES,
 } from "./due-work-producer-audit";
 import {
   DUE_WORK_PRODUCER_INVENTORY,
   DUE_WORK_REVIEWED_NONPRODUCER_WRITERS,
+  GOAL_D_REVIEWED_NONPROJECTION_WRITERS,
 } from "./due-work-producer-inventory";
 
 const SERVER_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -97,6 +99,7 @@ describe("due-work producer maintenance inventory", () => {
       ["artists", "source-helper"],
       ["artists", null],
     ]);
+    expect(sites.map((site) => site.projectionCoupling)).toEqual(["source-helper", null]);
   });
 
   it("discovers every eligibility satellite table as its own mutation site", () => {
@@ -134,6 +137,23 @@ describe("due-work producer maintenance inventory", () => {
 
     expect(sites).toHaveLength(1);
     expect(sites[0]?.coupling).toBeNull();
+    expect(sites[0]?.projectionCoupling).toBeNull();
+  });
+
+  it("rejects crawl and rule markers split from their Goal D source transaction", () => {
+    const sites = auditGoalDMutationSites(
+      "split-goal-d.ts",
+      `async function write(db: Db) {
+        await db.batch([{ sql: "update crawl_frontier set state = 'done' where id = ?" }], "write");
+        await db.batch([markCrawlNodeRepairStatement("node", "v1")], "write");
+        await db.execute({ sql: "delete from artist_rules where id = ?" });
+      }`,
+    );
+
+    expect(sites.map((site) => [site.table, site.projectionCoupling])).toEqual([
+      ["crawl_frontier", null],
+      ["artist_rules", null],
+    ]);
   });
 
   it("accepts a marker in the same batch and in the same explicit write transaction", () => {
@@ -156,6 +176,59 @@ describe("due-work producer maintenance inventory", () => {
     );
 
     expect(sites.map((site) => site.coupling)).toEqual(["write-batch", "write-transaction"]);
+    expect(sites.map((site) => site.projectionCoupling)).toEqual([null, null]);
+  });
+
+  it("requires Goal D maintenance beside every inventoried source-table producer", async () => {
+    const productionFiles = await productionSources();
+    const sites = (
+      await Promise.all(
+        productionFiles.map(async ({ file, path }) =>
+          auditDueWorkMutationSites(file, await readFile(path, "utf8")),
+        ),
+      )
+    ).flat();
+    const projectionTables = new Set(["findings", "labels", "track_artists", "tracks"]);
+
+    expect(
+      sites.filter(
+        (site) =>
+          projectionTables.has(site.table) &&
+          site.coupling !== null &&
+          site.projectionCoupling === null,
+      ),
+    ).toEqual([]);
+  });
+
+  it("inventories every Goal D source writer beside atomic projection maintenance", async () => {
+    const productionFiles = await productionSources();
+    const sites = (
+      await Promise.all(
+        productionFiles.map(async ({ file, path }) =>
+          auditGoalDMutationSites(file, await readFile(path, "utf8")),
+        ),
+      )
+    ).flat();
+
+    const reviewed = new Set<string>();
+    for (const entry of GOAL_D_REVIEWED_NONPROJECTION_WRITERS) {
+      expect(entry.rationale.trim()).not.toBe("");
+      expect(entry.sites.length).toBeGreaterThan(0);
+      for (const site of entry.sites) {
+        expect(site.startsWith(`${entry.file}:`)).toBe(true);
+        expect(reviewed.has(site)).toBe(false);
+        reviewed.add(site);
+      }
+    }
+
+    expect(
+      sites
+        .filter((site) => site.projectionCoupling === null && !reviewed.has(site.id))
+        .map((site) => site.id),
+    ).toEqual([]);
+    expect(
+      [...reviewed].filter((site) => !sites.some((candidate) => candidate.id === site)),
+    ).toEqual([]);
   });
 
   it("keeps every inventoried producer registered on an atomic maintenance callsite", async () => {

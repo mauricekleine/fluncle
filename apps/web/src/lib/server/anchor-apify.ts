@@ -53,7 +53,7 @@
 // (the flip-ON), never a per-tick/hot path, so its full-table scan is acceptable.
 
 import { getDb } from "./db";
-import { markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 import { deleteSetting, getSetting, setSetting } from "./settings";
 
 /** The kill-flag on the shared `settings` KV. DEFAULT ON — only the literal "false" disables it. */
@@ -123,9 +123,9 @@ async function requeueOffWindowDeferrals(): Promise<number> {
             and spotify_anchor_attempted_at >= ?
             and has_isrc = 1`,
   };
-  const [, result] = await db.batch(
+  const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement("track", selection, {
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", selection, {
         producer: "anchor-apify-requeue",
       }),
       {
@@ -141,7 +141,7 @@ async function requeueOffWindowDeferrals(): Promise<number> {
     "write",
   );
 
-  return result?.rowsAffected ?? 0;
+  return results.at(-1)?.rowsAffected ?? 0;
 }
 
 /**

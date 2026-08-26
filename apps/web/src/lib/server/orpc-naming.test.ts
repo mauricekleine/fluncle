@@ -56,6 +56,13 @@ const APPROVED_VERBS = new Set<string>([
   // not `drip` (that is the clip-feed's paced, jittered cadence). This names the CHAINING:
   // the step that stops a finished stage from waiting on a human tap.
   "advance",
+  // `acknowledge` (durably accept the exact ordered event batch just served) and `checkpoint`
+  // (durably accept one re-read snapshot page) name two distinct consumer proofs. Neither is a
+  // generic update: both are monotonic protocol transitions guarded by digests and fences.
+  "acknowledge",
+  // `activate` moves a fully rebuilt consumer onto its fenced incremental checkpoint; `inactivate`
+  // retires one and deliberately discards that checkpoint so reuse requires a fresh bootstrap.
+  "activate",
   // `anchor` (verify box-supplied Spotify candidates against a catalogue row and, on a hit, write
   // its `spotify_uri`/`spotify_url` anchor) — added deliberately with the `anchor_track` op
   // (docs/catalogue-crawler.md § the anchor). Distinct from every verb here: not `resolve` (fix a
@@ -65,6 +72,10 @@ const APPROVED_VERBS = new Set<string>([
   "anchor",
   "authorize",
   "backfill",
+  "checkpoint",
+  // `compact` removes only a bounded, transactionally proven log prefix below every live consumer
+  // barrier. It is not `delete`: the caller cannot name rows and no live interval may be removed.
+  "compact",
   // `resolve` — walk an external authority to fix an entity's cross-platform identity. `resolve_artist`
   // resolves an artist's social profiles from MB + Firecrawl (the artist-relationship epic);
   // `resolve_anchor` resolves a catalogue row's Spotify anchor from ListenBrainz (the anchor waterfall's
@@ -175,6 +186,7 @@ const APPROVED_VERBS = new Set<string>([
   "exchange",
   "export",
   "initiate",
+  "inactivate",
   "merge",
   "mint",
   "presign",

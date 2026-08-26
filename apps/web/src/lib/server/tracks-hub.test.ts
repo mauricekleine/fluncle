@@ -14,7 +14,7 @@
 //      resolves to `/label/<slug>` via `tracks.label_id`.
 //   6. THE YEAR FAST LANE. Every present release year, newest first, mapped to the page it starts on.
 
-import { type Client } from "@libsql/client";
+import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -33,6 +33,8 @@ import {
   persistHubPageAnchors,
 } from "./hub-page-anchors";
 import { parseTracksHubPayload } from "../tracks-search";
+import { readKeyHistogram, resetKeyHistogramCache } from "./key-histogram";
+import { PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY } from "./public-projection-cutover";
 import {
   type TracksHubEntry,
   TRACKS_HUB_ANCHOR_ADDRESS,
@@ -517,6 +519,57 @@ describe("countAllTracks", () => {
     await seedTrack({ releaseDate: null, trackId: "c2" });
 
     expect(await countAllTracks()).toBe(3);
+  });
+
+  it("uses independently ready projected totals, year/key buckets, and default anchors", async () => {
+    await seedTrack({ key: "A minor", releaseDate: "2024-01-01", trackId: "a" });
+    await seedTrack({ key: "A minor", releaseDate: "20x?long", trackId: "b" });
+    await seedTrack({ key: "C major", releaseDate: "", trackId: "c" });
+    const { rebuildDefaultTrackHubAnchors, rebuildPublicProjection } =
+      await import("./public-projections");
+    await rebuildPublicProjection(db, "public_aggregates", {
+      generation: "cutover-aggregate",
+      limit: 2,
+    });
+    await rebuildDefaultTrackHubAnchors(db, { generation: "cutover-aggregate" });
+    await db.execute({
+      args: [PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY, "true"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+
+    const statements: string[] = [];
+    const projectedOnly = {
+      ...db,
+      execute: async (statement: InStatement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        statements.push(sql);
+        if (
+          sql.includes("select count(*) as total\n          from tracks") ||
+          sql.includes("group by year") ||
+          sql.includes("group by key")
+        ) {
+          throw new Error("legacy growing aggregate reached");
+        }
+        return db.execute(statement);
+      },
+    } as Client;
+    holder.db = projectedOnly;
+    resetTracksHubAggregateCache();
+    resetKeyHistogramCache();
+
+    expect(await countAllTracks()).toBe(3);
+    expect(await listTracksHubYearLane({})).toEqual([{ page: 1, year: "2024" }]);
+    expect(await readKeyHistogram()).toEqual([
+      { count: 2, key: "A minor" },
+      { count: 1, key: "C major" },
+    ]);
+    expect(ids((await listTracksHubPage({}, 1)).items)).toEqual(["b", "a", "c"]);
+    expect(statements.some((sql) => sql.includes("insert into hub_page_anchors"))).toBe(false);
+
+    holder.db = db;
+    resetTracksHubAggregateCache();
+    // Filtered requests remain exact legacy reads; all three fixture BPMs are null.
+    expect((await listTracksHubPage({ bpmMin: 1 }, 1)).total).toBe(0);
   });
 });
 

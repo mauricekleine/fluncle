@@ -9,6 +9,11 @@ const mbFetch = vi.fn();
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
+  const projectionMaintenance = (sql: string) =>
+    sql.includes("insert into due_work") ||
+    sql.includes("public_aggregate_state") ||
+    sql.includes("artist_qualification_state") ||
+    sql.includes("projection_repairs");
 
   return {
     ...actual,
@@ -16,7 +21,7 @@ vi.mock("./db", async () => {
       batch: (statements: { args?: unknown[]; sql: string }[]) =>
         Promise.all(
           statements.map((statement) =>
-            statement.sql.includes("insert into due_work")
+            projectionMaintenance(statement.sql)
               ? Promise.resolve({ rows: [], rowsAffected: 1 })
               : execute(statement),
           ),

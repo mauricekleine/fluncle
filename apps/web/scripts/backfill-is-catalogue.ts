@@ -26,7 +26,7 @@ import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { markDueWorkSourceRepairsFromSelectStatement } from "../src/lib/server/due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type IsCatalogueBackfillResult = {
   /** How many previously-mis-flagged certified rows this run flipped 1 → 0. */
@@ -38,9 +38,9 @@ export type IsCatalogueBackfillResult = {
  * the real migrations applied (the `backfillCrewNumbers` precedent).
  */
 export async function backfillIsCatalogue(client: Client): Promise<IsCatalogueBackfillResult> {
-  const [, result] = await client.batch(
+  const results = await client.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "track",
         {
           sql: `select track_id as subject_id from tracks
@@ -58,7 +58,7 @@ export async function backfillIsCatalogue(client: Client): Promise<IsCatalogueBa
     "write",
   );
 
-  return { flipped: result?.rowsAffected ?? 0 };
+  return { flipped: results.at(-1)?.rowsAffected ?? 0 };
 }
 
 async function main(): Promise<void> {

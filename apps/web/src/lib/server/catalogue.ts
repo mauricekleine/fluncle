@@ -57,13 +57,14 @@ import {
   countDueWorkNow,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DueWorkMaintenancePendingError,
-  markDueWorkSourceRepairsFromSelectStatement,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceFromSelectStatements,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
 import { CLEAR_EMBEDDING_SQL, clearEmbeddingSatellite } from "./embedding";
 import { labelSlug } from "./labels";
+import { readQualifiedArtistIds } from "./public-projection-cutover";
 import { getSetting, setSetting } from "./settings";
 import { matchKey, normalizeIsrc } from "./track-match";
 
@@ -746,13 +747,7 @@ async function readLiveCatalogueRankState(): Promise<CatalogueRankState> {
   }>(countResult.rows)[0];
   const findings = Number(counts?.findings ?? 0);
   const embeddedFindings = Number(counts?.embedded ?? 0);
-  const qualifiedResult = await db.execute({
-    args: [],
-    sql: `select artist_id from (${QUALIFIED_ARTISTS_SQL}) order by artist_id`,
-  });
-  const qualifiedArtistIds = typedRows<{ artist_id: string }>(qualifiedResult.rows).map(
-    (row) => row.artist_id,
-  );
+  const qualifiedArtistIds = await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL);
 
   return {
     corpus: rankCorpus(
@@ -949,32 +944,29 @@ export const QUALIFIED_ARTISTS_SQL = `select artist_id from (${FINDING_QUALIFIED
  */
 async function readArchiveAffinity(): Promise<ArchiveAffinity> {
   const db = await getDb();
-  const [artistResult, labelResult, seedResult, findingQualifiedResult, weightedQualifiedResult] =
-    await Promise.all([
-      db.execute({
-        args: [],
-        sql: `select tracks.artists_json as artists_json
+  const [artistResult, labelResult, seedResult, qualifiedArtistIds] = await Promise.all([
+    db.execute({
+      args: [],
+      sql: `select tracks.artists_json as artists_json
               from findings cross join tracks on tracks.track_id = findings.track_id`,
-      }),
-      db.execute({
-        args: [],
-        sql: `select distinct tracks.label as label
+    }),
+    db.execute({
+      args: [],
+      sql: `select distinct tracks.label as label
               from findings cross join tracks on tracks.track_id = findings.track_id
               where tracks.label is not null and trim(tracks.label) <> ''`,
-      }),
-      db.execute({
-        args: [],
-        // The operator's rulings. The ONE sanctioned way `seed_state` reaches this module: it
-        // orders what Fluncle ACQUIRES next (a capture is an acquisition), and it never decides
-        // what is shown, kept, or removed — see `capturePriorityFor`.
-        sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
-      }),
-      // QUALIFIED (a): ≥1 CERTIFIED finding, through the graph — the shared fragment folded into the
-      // fingerprint's set size, so the set the sweep authorizes against and the set it counts agree.
-      db.execute({ args: [], sql: FINDING_QUALIFIED_ARTISTS_SQL }),
-      // QUALIFIED (b): a WEIGHTED enabled-label release count ≥ 3 — the shared fragment's other arm.
-      db.execute({ args: [], sql: WEIGHTED_QUALIFIED_ARTISTS_SQL }),
-    ]);
+    }),
+    db.execute({
+      args: [],
+      // The operator's rulings. The ONE sanctioned way `seed_state` reaches this module: it
+      // orders what Fluncle ACQUIRES next (a capture is an acquisition), and it never decides
+      // what is shown, kept, or removed — see `capturePriorityFor`.
+      sql: `select slug, seed_state from labels where seed_state in ('enabled', 'disabled')`,
+    }),
+    // The exact projected set is read only behind its complete clean-through proof. Flag-off or
+    // unusable projection state executes the unchanged legacy union.
+    readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL),
+  ]);
 
   const findingArtists = new Set<string>();
 
@@ -1003,12 +995,8 @@ async function readArchiveAffinity(): Promise<ArchiveAffinity> {
 
   const qualifiedArtists = new Set<string>();
 
-  for (const row of typedRows<{ artist_id: string }>(findingQualifiedResult.rows)) {
-    qualifiedArtists.add(row.artist_id);
-  }
-
-  for (const row of typedRows<{ artist_id: string }>(weightedQualifiedResult.rows)) {
-    qualifiedArtists.add(row.artist_id);
+  for (const artistId of qualifiedArtistIds) {
+    qualifiedArtists.add(artistId);
   }
 
   return { disabledLabels, findingArtists, findingLabels, qualifiedArtists, seedLabels };
@@ -1824,7 +1812,7 @@ export async function rankCatalogue(
   await db.batch(
     [
       ...writes,
-      markDueWorkSourceRepairsStatement(
+      ...markDueWorkSourceMaintenanceStatements(
         movedIds.map((subjectId) => ({ subjectId, subjectType: "track" })),
         { producer: "catalogue-rank" },
       ),
@@ -3013,7 +3001,7 @@ export async function requeueUnmatchedCaptures(): Promise<{
   };
   const results = await db.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement("track", source, {
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
         producer: "catalogue-requeue-unmatched",
       }),
       {
@@ -3028,7 +3016,7 @@ export async function requeueUnmatchedCaptures(): Promise<{
     ],
     "write",
   );
-  const result = results[1];
+  const result = results.at(-1);
 
   return {
     requeued: result?.rowsAffected ?? 0,

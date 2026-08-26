@@ -67,7 +67,7 @@
 // "skips a night" rather than to a wedged page.
 
 import { getDb } from "./db";
-import { markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "./due-work";
 
 /** One table's reconciliation outcome — an object so the shape has room to grow. */
 export type HubCountsTableResult = {
@@ -167,27 +167,27 @@ function repairMarker(pass: ReconcilePass, phase: "grouped" | "zero") {
   };
   if (pass.key === "albums") {
     return phase === "grouped"
-      ? markDueWorkSourceRepairsFromSelectStatement("album", selection, {
+      ? markDueWorkSourceMaintenanceFromSelectStatements("album", selection, {
           producer: "hub-counts-reconcile-album-grouped",
         })
-      : markDueWorkSourceRepairsFromSelectStatement("album", selection, {
+      : markDueWorkSourceMaintenanceFromSelectStatements("album", selection, {
           producer: "hub-counts-reconcile-album-zero",
         });
   }
   if (pass.key === "artists") {
     return phase === "grouped"
-      ? markDueWorkSourceRepairsFromSelectStatement("artist", selection, {
+      ? markDueWorkSourceMaintenanceFromSelectStatements("artist", selection, {
           producer: "hub-counts-reconcile-artist-grouped",
         })
-      : markDueWorkSourceRepairsFromSelectStatement("artist", selection, {
+      : markDueWorkSourceMaintenanceFromSelectStatements("artist", selection, {
           producer: "hub-counts-reconcile-artist-zero",
         });
   }
   return phase === "grouped"
-    ? markDueWorkSourceRepairsFromSelectStatement("label", selection, {
+    ? markDueWorkSourceMaintenanceFromSelectStatements("label", selection, {
         producer: "hub-counts-reconcile-label-grouped",
       })
-    : markDueWorkSourceRepairsFromSelectStatement("label", selection, {
+    : markDueWorkSourceMaintenanceFromSelectStatements("label", selection, {
         producer: "hub-counts-reconcile-label-zero",
       });
 }
@@ -208,11 +208,11 @@ export async function reconcileHubCounts(): Promise<HubCountsReconcileResult> {
 
   for (const pass of PASSES) {
     const grouped = await db.batch(
-      [repairMarker(pass, "grouped"), correctionStatement(pass)],
+      [...repairMarker(pass, "grouped"), correctionStatement(pass)],
       "write",
     );
-    const zeroed = await db.batch([repairMarker(pass, "zero"), zeroStatement(pass)], "write");
-    corrected[pass.key] = (grouped[1]?.rowsAffected ?? 0) + (zeroed[1]?.rowsAffected ?? 0);
+    const zeroed = await db.batch([...repairMarker(pass, "zero"), zeroStatement(pass)], "write");
+    corrected[pass.key] = (grouped.at(-1)?.rowsAffected ?? 0) + (zeroed.at(-1)?.rowsAffected ?? 0);
   }
 
   return {

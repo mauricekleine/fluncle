@@ -18,6 +18,15 @@ export type DueWorkReviewedWriterEntry = DueWorkReviewedMutationSiteBase &
     | { disposition: "non-eligibility" | "serialization" | "test-fixture" }
   );
 
+export type GoalDReviewedWriterEntry = DueWorkReviewedMutationSiteBase & {
+  disposition:
+    | "delegated-atomicity"
+    | "derived-projection-write"
+    | "non-projection-fact"
+    | "serialization"
+    | "test-fixture";
+};
+
 /**
  * Every production writer that transactionally couples an eligibility source mutation to the
  * subject-level due-work repair marker. The static completeness test enumerates the real helper
@@ -112,6 +121,7 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
       "artist-image-fill",
       "artist-mbid-mint",
       "artist-mint",
+      "artist-remixer-role-stamp",
       "artist-spotify-adopt",
     ],
     subjects: ["artist", "track"],
@@ -306,9 +316,8 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     disposition: "non-eligibility",
     file: "artists.ts",
     rationale:
-      "Writes artist names, MB identity, social trust, and remixer roles outside due-work evaluator inputs.",
+      "Writes artist names, MB identity, and social trust outside due-work evaluator inputs.",
     sites: [
-      "artists.ts:update:track_artists:4099240f",
       "artists.ts:update:artists:8908f34c",
       "artists.ts:update:artists:ccc6822f",
       "artists.ts:update:artist_socials:818be6b6",
@@ -425,6 +434,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
       "labels.ts:update:label_aliases:22525227",
       "labels.ts:delete:label_aliases:a75be81b",
     ],
+  },
+  {
+    disposition: "non-eligibility",
+    file: "public-projections.ts",
+    rationale:
+      "Updates the selected shadow rebuild checkpoint table and never mutates an authoritative due-work source.",
+    sites: ["public-projections.ts:update:dynamic:c5abf67b"],
   },
   {
     disposition: "non-eligibility",
@@ -602,3 +618,217 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: ["scripts/requeue-empty-artists.ts:update:artists:4ade5c1e"],
   },
 ] as const satisfies readonly DueWorkReviewedWriterEntry[];
+
+/** Exact dispositions for Goal D source-table SQL that does not owe a new shadow repair marker. */
+export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
+  {
+    disposition: "delegated-atomicity",
+    file: "publish.ts",
+    rationale:
+      "The finding insert builder is called only inside the inventoried source mutation chokepoint.",
+    sites: ["publish.ts:insert:findings:4869a78b"],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "public-projections.ts",
+    rationale: "Writes a projection checkpoint table selected dynamically, never source truth.",
+    sites: ["public-projections.ts:update:dynamic:c5abf67b"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "artist-rules.ts",
+    rationale: "Updates only MusicBrainz drift-audit fields, not verdict, scope, or re-arm state.",
+    sites: ["artist-rules.ts:update:artist_rules:2093c18a"],
+  },
+  {
+    disposition: "serialization",
+    file: "db-dump.ts",
+    rationale: "Generates restore SQL and does not execute an application source mutation.",
+    sites: ["db-dump.ts:insert:dynamic:3511a2ab"],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "hub-counts.ts",
+    rationale:
+      "Updates maintained hub counters on a dynamic entity table, not Goal D source facts.",
+    sites: ["hub-counts.ts:update:dynamic:4b68e04a"],
+  },
+  {
+    disposition: "test-fixture",
+    file: "integration-db.ts",
+    rationale: "Seeds and mutates isolated integration-test databases only.",
+    sites: [
+      "integration-db.ts:insert:findings:645c7078",
+      "integration-db.ts:update:tracks:2687eeb5",
+      "integration-db.ts:insert:tracks:0192c825",
+      "integration-db.ts:update:tracks:e05d9ca6",
+      "integration-db.ts:update:tracks:e05d9ca6:2",
+      "integration-db.ts:insert:labels:a39abea2",
+    ],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "catalogue-rank-restale.ts",
+    rationale: "Changes only The Ear staleness state, outside both Goal D projections.",
+    sites: [
+      "catalogue-rank-restale.ts:update:tracks:7b4809bb",
+      "catalogue-rank-restale.ts:update:tracks:5f8866fc",
+    ],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "label-lineage.ts",
+    rationale: "Changes label lineage display facts, not seed state or crawl scope.",
+    sites: [
+      "label-lineage.ts:update:labels:c627ba9a",
+      "label-lineage.ts:update:labels:8b333375",
+      "label-lineage.ts:update:labels:b2861415",
+    ],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "crawl-due-work.ts",
+    rationale:
+      "The bounded due-time promotion updates frontier and its crawl projection in one write batch.",
+    sites: ["crawl-due-work.ts:update:crawl_frontier:a5c0d85c"],
+  },
+  {
+    disposition: "delegated-atomicity",
+    file: "artists.ts",
+    rationale:
+      "The edge statement builder is called only by the inventoried explicit write transaction.",
+    sites: ["artists.ts:insert:track_artists:52cae2df"],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "hub-counts-reconcile.ts",
+    rationale: "Reconciles maintained hub counters on dynamic entity tables only.",
+    sites: [
+      "hub-counts-reconcile.ts:update:dynamic:dc26152e",
+      "hub-counts-reconcile.ts:update:dynamic:cf192f5e",
+    ],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "label-images.ts",
+    rationale: "Changes label artwork resolution fields, not seed state or crawl scope.",
+    sites: ["label-images.ts:update:labels:eea3eaf3", "label-images.ts:update:labels:27d7ff1d"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "preview-archive.ts",
+    rationale: "Changes preview archive storage metadata only.",
+    sites: ["preview-archive.ts:update:tracks:d06cafad"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "anchor.ts",
+    rationale: "Changes anchor-review bookkeeping only; accepted anchor writes use the chokepoint.",
+    sites: ["anchor.ts:update:tracks:b6e72ebf", "anchor.ts:update:tracks:106f7943"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "label-releases.ts",
+    rationale: "Changes label release-sync bookkeeping, not seed state or crawl scope.",
+    sites: ["label-releases.ts:update:labels:32c5071e", "label-releases.ts:update:labels:0e8fa4e4"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "preview-bucket-migration.ts",
+    rationale: "Changes preview bucket storage metadata only.",
+    sites: ["preview-bucket-migration.ts:update:tracks:846f3e45"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "labels.ts",
+    rationale: "Adopts label MusicBrainz identity without changing seed state or crawl scope.",
+    sites: ["labels.ts:update:labels:7120eabc"],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/bench-artist-rank.ts",
+    rationale: "Seeds an isolated benchmark database only.",
+    sites: [
+      "scripts/bench-artist-rank.ts:insert:tracks:2ddb456f",
+      "scripts/bench-artist-rank.ts:insert:track_artists:afc239c0",
+      "scripts/bench-artist-rank.ts:insert:findings:ccca5fec",
+    ],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/bench-db-scale.ts",
+    rationale: "Seeds an isolated benchmark database only.",
+    sites: ["scripts/bench-db-scale.ts:update:tracks:fe3c1e0d"],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/bench-tracks-hub.ts",
+    rationale: "Seeds an isolated benchmark database only.",
+    sites: [
+      "scripts/bench-tracks-hub.ts:insert:tracks:bc3f8c63",
+      "scripts/bench-tracks-hub.ts:insert:tracks:bc3f8c63:2",
+      "scripts/bench-tracks-hub.ts:insert:findings:354cf5e9",
+      "scripts/bench-tracks-hub.ts:insert:labels:766cb9f0",
+    ],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "scripts/backfill-anchor-reviews.ts",
+    rationale: "Backfills anchor-review bookkeeping only.",
+    sites: ["scripts/backfill-anchor-reviews.ts:update:tracks:6e9eee3b"],
+  },
+  {
+    disposition: "serialization",
+    file: "scripts/derive-device-db.ts",
+    rationale: "Writes an isolated derived device database, not application source truth.",
+    sites: ["scripts/derive-device-db.ts:insert:dynamic:eb0180a3"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "scripts/backfill-label-mbid.ts",
+    rationale: "Backfills label MusicBrainz identity without changing seed state or crawl scope.",
+    sites: ["scripts/backfill-label-mbid.ts:update:labels:7120eabc"],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "scripts/backfill-hub-counts.ts",
+    rationale: "Backfills maintained label hub counters only.",
+    sites: ["scripts/backfill-hub-counts.ts:update:labels:9bb0b2ff"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "scripts/backfill-identity-ledger.ts",
+    rationale: "Backfills track identity-attempt bookkeeping only.",
+    sites: ["scripts/backfill-identity-ledger.ts:update:tracks:bcc7b764"],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/bench-frontier-novelty.ts",
+    rationale: "Seeds an isolated benchmark database only.",
+    sites: [
+      "scripts/bench-frontier-novelty.ts:insert:tracks:e7e471d8",
+      "scripts/bench-frontier-novelty.ts:insert:tracks:e7e471d8:2",
+      "scripts/bench-frontier-novelty.ts:insert:findings:354cf5e9",
+    ],
+  },
+  {
+    disposition: "test-fixture",
+    file: "scripts/lib/scale-seed.ts",
+    rationale: "Seeds deterministic local performance fixtures only.",
+    sites: [
+      "scripts/lib/scale-seed.ts:insert:tracks:8bb8038d",
+      "scripts/lib/scale-seed.ts:insert:findings:354cf5e9",
+      "scripts/lib/scale-seed.ts:insert:labels:fd1c42fd",
+      "scripts/lib/scale-seed.ts:insert:track_artists:32e13993",
+      "scripts/lib/scale-seed.ts:insert:track_artists:32e13993:2",
+      "scripts/lib/scale-seed.ts:insert:crawl_frontier:574e0cf1",
+      "scripts/lib/scale-seed.ts:update:labels:290f2b0e",
+    ],
+  },
+  {
+    disposition: "serialization",
+    file: "scripts/lib/device-db-derivation.ts",
+    rationale: "Builds SQL for an isolated derived device database only.",
+    sites: ["scripts/lib/device-db-derivation.ts:insert:dynamic:0540082e"],
+  },
+] as const satisfies readonly GoalDReviewedWriterEntry[];

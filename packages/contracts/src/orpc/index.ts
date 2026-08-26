@@ -23,6 +23,7 @@
 
 import { isContractProcedure } from "@orpc/contract";
 import { adminAlbumsContract } from "./admin-albums";
+import { adminArtifactsContract } from "./admin-artifacts";
 import { adminArtistRulesContract } from "./admin-artist-rules";
 import { adminArtistsContract } from "./admin-artists";
 import { adminAttentionContract } from "./admin-attention";
@@ -128,6 +129,40 @@ export {
   draftAlbumBio,
   listAlbumsMissingBio,
 } from "./admin-albums";
+export {
+  acknowledgeArtifactChanges,
+  activateArtifactConsumer,
+  adminArtifactsContract,
+  ARTIFACT_CHANGE_API_MAX_LIMIT,
+  ARTIFACT_COMPACTION_API_MAX_LIMIT,
+  type ArtifactChangeEvent,
+  ArtifactChangeEventSchema,
+  type ArtifactChangePage,
+  ArtifactChangePageSchema,
+  type ArtifactCompactionResult,
+  ArtifactCompactionResultSchema,
+  type ArtifactConsumerStatus,
+  ArtifactConsumerStatusSchema,
+  type ArtifactContract,
+  ArtifactContractSchema,
+  type ArtifactRebuildCheckpoint,
+  ArtifactRebuildCheckpointSchema,
+  ARTIFACT_SNAPSHOT_API_MAX_LIMIT,
+  ARTIFACT_SUPPORTED_CONTRACTS,
+  type ArtifactSnapshotItem,
+  ArtifactSnapshotItemSchema,
+  type ArtifactSnapshotPage,
+  ArtifactSnapshotPageSchema,
+  type ArtifactStream,
+  ArtifactStreamSchema,
+  checkpointArtifactRebuild,
+  compactArtifactChanges,
+  getArtifactConsumer,
+  inactivateArtifactConsumer,
+  listArtifactChanges,
+  listArtifactSnapshot,
+  registerArtifactConsumer,
+} from "./admin-artifacts";
 export {
   addArtistRule,
   AddArtistRuleInputSchema,
@@ -485,6 +520,7 @@ export {
  */
 export const contract = {
   ...adminAlbumsContract,
+  ...adminArtifactsContract,
   ...adminArtistRulesContract,
   ...adminArtistsContract,
   ...adminAttentionContract,

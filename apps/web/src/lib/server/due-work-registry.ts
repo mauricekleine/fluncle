@@ -2,6 +2,7 @@ import { type Row } from "@libsql/client";
 
 import { parseArtistsJson } from "./artists";
 import { QUALIFIED_ARTISTS_SQL, qualifiedArtistsDigest, rankCorpus } from "./catalogue";
+import { readQualifiedArtistIds } from "./public-projection-cutover";
 import {
   DUE_WORK_KINDS,
   dueWorkEntitySourceVersion,
@@ -312,12 +313,7 @@ async function readCatalogueRankCorpus(client: DueWorkClient): Promise<string> {
   const countRow = counts.rows[0] as
     | { embedded: bigint | number; findings: bigint | number }
     | undefined;
-  const qualified = await client.execute(
-    `select artist_id from (${QUALIFIED_ARTISTS_SQL}) order by artist_id`,
-  );
-  const artistIds = (qualified.rows as unknown as { artist_id: string }[]).map(
-    (row) => row.artist_id,
-  );
+  const artistIds = await readQualifiedArtistIds(client, QUALIFIED_ARTISTS_SQL);
   return rankCorpus(
     Number(countRow?.findings ?? 0),
     Number(countRow?.embedded ?? 0),

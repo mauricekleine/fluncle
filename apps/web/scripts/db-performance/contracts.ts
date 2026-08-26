@@ -1,4 +1,5 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
+import { registerContractD } from "./contract-d";
 import { simulateMixedLoad } from "./mixed-load";
 import { analyzeExplainPlan } from "./plan";
 import {
@@ -872,6 +873,8 @@ performanceRegistry.register(
     workClass: "queue",
   }),
 );
+
+registerContractD(performanceRegistry);
 
 performanceRegistry.register({
   description: "Held heavy reader, public reads, and serialized batches honor per-client bounds",

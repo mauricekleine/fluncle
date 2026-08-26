@@ -2,7 +2,8 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
-import { selectPerformanceContracts } from "./contracts";
+import { performanceRegistry, selectPerformanceContracts } from "./contracts";
+import { CONTRACT_D_CONTRACT_IDS } from "./contract-d";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
 import {
@@ -165,6 +166,70 @@ describe("performance registry", () => {
         expect(report.contracts.every((contract) => contract.plan?.violations.length === 0)).toBe(
           true,
         );
+      } finally {
+        client.close();
+      }
+    }
+  });
+
+  it("runs every Contract D observation at every scale with bounded rows and clean plans", async () => {
+    const expectedRows: Record<(typeof CONTRACT_D_CONTRACT_IDS)[number], number> = {
+      "projection.crawl-ready-sentinel": 1,
+      "projection.crawl-two-lane-claim": 500,
+      "projection.crawl-two-lane-read": 500,
+      "projection.default-anchor-keyset": 48,
+      "projection.default-anchor-validity": 1,
+      "projection.public-keys": 5,
+      "projection.public-readiness": 1,
+      "projection.public-release-years": 5,
+      "projection.public-total": 1,
+      "projection.qualified-artists": 6,
+    };
+
+    const contracts = CONTRACT_D_CONTRACT_IDS.map((id) => performanceRegistry.get(id));
+
+    for (const profile of ["1x", "2x", "4x"] as const) {
+      const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+      try {
+        await applyFixtureSchema(client);
+        const fixtureCounts = createCiFixtureCounts(profile, 512);
+        await writeFixture(client, profile, { counts: fixtureCounts });
+        const report = await runPerformanceContracts({
+          client,
+          contracts,
+          fixtureCounts,
+          profile,
+        });
+
+        expect(report.profile).toBe(profile);
+        expect(report.passed).toBe(true);
+        expect(report.contracts).toHaveLength(CONTRACT_D_CONTRACT_IDS.length);
+
+        for (const contract of report.contracts) {
+          const expected =
+            expectedRows[contract.contractId as (typeof CONTRACT_D_CONTRACT_IDS)[number]];
+
+          expect(contract.workClass).toBe("projection");
+          expect(contract.budget.required).toBe(true);
+          expect(contract.budget.failures).toEqual([]);
+          expect(contract.durationMs.p95).toBeLessThanOrEqual(250);
+          expect(contract.plan).not.toBeNull();
+          expect(contract.plan?.violations).toEqual([]);
+          expect(contract.plan?.tempSorts).toEqual([]);
+          expect(contract.resultRowCount).toEqual({
+            max: expected,
+            p50: expected,
+            p95: expected,
+            p99: expected,
+          });
+          expect(contract.plan?.fullScans.some((scan) => scan.table.startsWith("perf_"))).toBe(
+            false,
+          );
+        }
+        const keyset = report.contracts.find(
+          (contract) => contract.contractId === "projection.default-anchor-keyset",
+        );
+        expect(Number(keyset?.metadata[0]?.nullFillRows ?? 0)).toBeGreaterThan(0);
       } finally {
         client.close();
       }

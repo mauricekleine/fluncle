@@ -22,7 +22,7 @@ import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { markDueWorkSourceRepairsFromSelectStatement } from "../src/lib/server/due-work";
+import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type HasIsrcBackfillResult = {
   /** How many rows this run reconciled against their ISRC, in either direction. */
@@ -34,9 +34,9 @@ export type HasIsrcBackfillResult = {
  * with the real migrations applied (the `backfillHasEmbedding` precedent).
  */
 export async function backfillHasIsrc(client: Client): Promise<HasIsrcBackfillResult> {
-  const [, result] = await client.batch(
+  const results = await client.batch(
     [
-      markDueWorkSourceRepairsFromSelectStatement(
+      ...markDueWorkSourceMaintenanceFromSelectStatements(
         "track",
         {
           sql: `select track_id as subject_id from tracks
@@ -52,7 +52,7 @@ export async function backfillHasIsrc(client: Client): Promise<HasIsrcBackfillRe
     "write",
   );
 
-  return { flipped: result?.rowsAffected ?? 0 };
+  return { flipped: results.at(-1)?.rowsAffected ?? 0 };
 }
 
 async function main(): Promise<void> {

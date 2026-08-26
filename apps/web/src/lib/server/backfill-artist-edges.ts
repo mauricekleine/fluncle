@@ -41,7 +41,7 @@ import { getDb, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-  markDueWorkSourceRepairsStatement,
+  markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { encodeDueWorkOrder } from "./due-work-order";
@@ -415,7 +415,7 @@ async function insertEdges(
         // in the chunk just gained the artist graph the capture gate reads — re-stale it for the
         // next `rank_catalogue` tick, atomically with the edge write (catalogue-rank-restale.ts).
         ...restaleCatalogueRankStatements(chunk.map(([trackId]) => trackId)),
-        markDueWorkSourceRepairsStatement(
+        ...markDueWorkSourceMaintenanceStatements(
           [
             {
               subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
