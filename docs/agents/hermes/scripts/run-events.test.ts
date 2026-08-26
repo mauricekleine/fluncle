@@ -1180,6 +1180,7 @@ async function runSonar(
     [
       "TURSO_DATABASE_URL=libsql://stub",
       "TURSO_AUTH_TOKEN=stub",
+      `SONAR_STATE_PATH=${join(root, "sonar-state.db")}`,
       "SONAR_SECRET=stub",
       `SONAR_PORT=${live.port}`,
     ].join("\n"),
