@@ -2,32 +2,28 @@
 /**
  * Derive the read-only public catalogue database shipped to mobile devices.
  *
- * The source is opened with SQLite's read-only flag and is never mutated. The output schema is
- * generated exclusively from the allowlist in lib/device-db-schema.ts; source-only cut inputs
- * such as the MuQ vector, storage pointers, admin state, auth, and telemetry never cross the
- * boundary.
- *
- * Usage:
- *   bun apps/web/scripts/derive-device-db.ts \
- *     --source "apps/web/.dev/local.db" \
- *     --out "/tmp/fluncle-device-full.db" \
- *     --cut "full"
+ * The source is a stable local SQLite/libSQL snapshot. Production first synchronizes its
+ * restart-safe embedded replica, closes that client, and invokes this same local-only derivation.
+ * The output schema is generated exclusively from DEVICE_DB_COLUMNS; source-only cut inputs such
+ * as the MuQ vector, storage pointers, admin state, auth, and telemetry cannot cross the boundary.
  */
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import { REC_ELIGIBLE_WHERE } from "../src/lib/catalogue-eligibility";
 import {
-  createDeviceTableSql as createTableSql,
-  type DeviceDbCut as Cut,
-  type DeviceDbSqliteColumn as SqliteColumn,
+  createDeviceTableSql,
+  type DeviceDbCut,
+  type DeviceDbSqliteColumn,
   DEVICE_DB_INDEXES,
+  deviceDbClosureChecksSql,
   insertDeviceTableSql,
-  quoteDeviceDbIdentifier as quoteIdentifier,
+  materializeSelectedTrackIdsSql,
+  quoteDeviceDbIdentifier,
+  selectDeviceRowsSql,
 } from "./lib/device-db-derivation";
 import {
   DEVICE_DB_COLUMNS,
@@ -37,19 +33,44 @@ import {
   type DeviceSourceTable,
 } from "./lib/device-db-schema";
 
-type DerivationArgs = {
-  cut: Cut;
+export type DerivationArgs = {
+  cut: DeviceDbCut;
   out: string;
   source: string;
+};
+
+export type DeviceArtifactValidation = {
+  bytes: number;
+  contentFingerprint: string;
+  rowCounts: Record<string, number>;
+  validation: "verified";
+};
+
+export type DeviceDerivationResult = DeviceArtifactValidation & {
+  cut: DeviceDbCut;
+  derivedAt: string;
+  elapsedMs: number;
+  out: string;
+  preVacuumBytes: number;
+  schemaVersion: number;
+  selectedTrackCount: number;
+  source: string;
+  sourceRowCounts: Record<string, number>;
+  sourceWatermark: string;
+};
+
+export type DeviceDerivationRuntime = {
+  afterCopy?: () => void;
+  publish?: (temporaryPath: string, destinationPath: string) => Promise<void>;
 };
 
 type SourceInspection = {
   derivedAt: string;
   rowCounts: Record<string, number>;
-  schema: Map<DeviceSourceTable, SqliteColumn[]>;
+  schema: Map<DeviceSourceTable, DeviceDbSqliteColumn[]>;
 };
 
-function parseArgs(argv: readonly string[]): DerivationArgs {
+export function parseDeviceDerivationArgs(argv: readonly string[]): DerivationArgs {
   const values = new Map<string, string>();
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -88,20 +109,20 @@ function parseArgs(argv: readonly string[]): DerivationArgs {
   return { cut, out: resolve(out), source: resolve(source) };
 }
 
-async function sourceWatermark(sourcePath: string): Promise<string> {
+async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
 
-  for await (const chunk of createReadStream(sourcePath)) {
+  for await (const chunk of createReadStream(path)) {
     hash.update(chunk);
   }
 
   return `sha256:${hash.digest("hex")}`;
 }
 
-function tableInfo(source: Database, table: DeviceSourceTable): SqliteColumn[] {
+function tableInfo(source: Database, table: DeviceSourceTable): DeviceDbSqliteColumn[] {
   const rows = source
-    .query(`PRAGMA main.table_info(${quoteIdentifier(table)})`)
-    .all() as SqliteColumn[];
+    .query(`PRAGMA main.table_info(${quoteDeviceDbIdentifier(table)})`)
+    .all() as DeviceDbSqliteColumn[];
 
   if (rows.length === 0) {
     throw new Error(`Source table is missing: ${table}`);
@@ -118,22 +139,38 @@ function tableInfo(source: Database, table: DeviceSourceTable): SqliteColumn[] {
   return rows;
 }
 
-function createIndexes(source: Database): void {
+function createIndexes(database: Database): void {
   for (const index of DEVICE_DB_INDEXES) {
-    source.run(
-      `CREATE ${index.unique ? "UNIQUE " : ""}INDEX main.${quoteIdentifier(index.name)}
-       ON ${quoteIdentifier(index.table)} (${index.columns.map(quoteIdentifier).join(", ")})`,
+    database.run(
+      `CREATE ${index.unique ? "UNIQUE " : ""}INDEX main.${quoteDeviceDbIdentifier(index.name)}
+       ON ${quoteDeviceDbIdentifier(index.table)} (${index.columns
+         .map(quoteDeviceDbIdentifier)
+         .join(", ")})`,
     );
   }
 }
 
-function countRows(source: Database, schema: "main" | "source", table: string): number {
-  const row = source
-    .query(`SELECT count(*) AS count FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}`)
+function countRows(database: Database, schema: "main" | "source" | "temp", table: string): number {
+  const row = database
+    .query(
+      `SELECT count(*) AS count FROM ${quoteDeviceDbIdentifier(schema)}.${quoteDeviceDbIdentifier(table)}`,
+    )
     .get() as { count: bigint | number } | null;
 
   if (!row) {
     throw new Error(`Could not count ${schema}.${table}`);
+  }
+
+  return Number(row.count);
+}
+
+function countQuery(database: Database, sql: string): number {
+  const row = database.query(`SELECT count(*) AS count FROM (${sql})`).get() as {
+    count: bigint | number;
+  } | null;
+
+  if (!row) {
+    throw new Error("Could not count selected device rows");
   }
 
   return Number(row.count);
@@ -156,8 +193,6 @@ function deterministicDerivedAt(source: Database): string {
     )
     .get() as { timestamp: null | string } | null;
 
-  // A wall-clock timestamp would make identical source + cut inputs produce different content.
-  // Use the source's latest public-data timestamp as the reproducible derivation epoch instead.
   return row?.timestamp ?? "1970-01-01T00:00:00.000Z";
 }
 
@@ -165,6 +200,12 @@ function inspectSource(sourcePath: string): SourceInspection {
   const source = new Database(sourcePath, { readonly: true, strict: true });
 
   try {
+    const integrity = source.query("PRAGMA quick_check").get() as { quick_check: string } | null;
+
+    if (integrity?.quick_check !== "ok") {
+      throw new Error(`Source quick_check failed: ${integrity?.quick_check ?? "no result"}`);
+    }
+
     return {
       derivedAt: deterministicDerivedAt(source),
       rowCounts: Object.fromEntries(
@@ -185,7 +226,168 @@ async function removeDatabaseFiles(path: string): Promise<void> {
   ]);
 }
 
-async function derive(args: DerivationArgs): Promise<void> {
+async function assertStableSource(sourcePath: string): Promise<void> {
+  const sourceWalPath = `${sourcePath}-wal`;
+  const sourceWal = await stat(sourceWalPath).catch(() => undefined);
+
+  if (sourceWal && sourceWal.size > 0) {
+    throw new Error(
+      `Source has a non-empty WAL (${sourceWalPath}); checkpoint a stable local snapshot before deriving.`,
+    );
+  }
+}
+
+async function fsyncPath(path: string): Promise<void> {
+  const handle = await open(path, "r");
+
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** The destination is never unlinked first: rename is the single publication boundary. */
+export async function publishDeviceArtifactAtomically(
+  temporaryPath: string,
+  destinationPath: string,
+): Promise<void> {
+  await fsyncPath(temporaryPath);
+  await fsyncPath(dirname(destinationPath));
+  await rename(temporaryPath, destinationPath);
+  await fsyncPath(dirname(destinationPath));
+}
+
+function assertClosure(database: Database): void {
+  for (const check of deviceDbClosureChecksSql()) {
+    const row = database.query(check.sql).get() as { count: bigint | number } | null;
+    const violations = Number(row?.count ?? -1);
+
+    if (violations !== 0) {
+      throw new Error(`Device reachability violation (${check.edge}): ${violations}`);
+    }
+  }
+}
+
+function assertIndexes(database: Database): void {
+  const rows = database.query("SELECT name FROM sqlite_master WHERE type = 'index'").all() as {
+    name: string;
+  }[];
+  const names = new Set(rows.map((row) => row.name));
+
+  for (const index of DEVICE_DB_INDEXES) {
+    if (!names.has(index.name)) {
+      throw new Error(`Device index is missing: ${index.name}`);
+    }
+  }
+}
+
+export async function validateDeviceArtifact(
+  path: string,
+  expected: {
+    cut: DeviceDbCut;
+    rowCounts?: Readonly<Record<string, number>>;
+    sourceWatermark: string;
+  },
+): Promise<DeviceArtifactValidation> {
+  const file = await stat(path);
+
+  if (!file.isFile() || file.size <= 0) {
+    throw new Error(`Device artifact is missing or empty: ${path}`);
+  }
+
+  const database = new Database(path, { readonly: true, strict: true });
+  let rowCounts: Record<string, number>;
+
+  try {
+    const integrity = database.query("PRAGMA integrity_check").get() as {
+      integrity_check: string;
+    } | null;
+
+    if (integrity?.integrity_check !== "ok") {
+      throw new Error(
+        `Device integrity_check failed: ${integrity?.integrity_check ?? "no result"}`,
+      );
+    }
+
+    for (const table of DEVICE_SOURCE_TABLES) {
+      const columns = tableInfo(database, table).map((column) => column.name);
+
+      if (
+        columns.length !== DEVICE_DB_COLUMNS[table].length ||
+        columns.some((column, index) => column !== DEVICE_DB_COLUMNS[table][index])
+      ) {
+        throw new Error(`Unexpected device columns for ${table}`);
+      }
+    }
+
+    const meta = database
+      .query(
+        `SELECT schema_version, cut_name, derived_at, source_watermark
+         FROM device_sync_meta ORDER BY rowid`,
+      )
+      .all() as {
+      cut_name: string;
+      derived_at: string;
+      schema_version: number;
+      source_watermark: string;
+    }[];
+
+    if (meta.length !== 1) {
+      throw new Error("Device metadata must contain exactly one row");
+    }
+
+    const metadata = meta[0];
+
+    if (!metadata) {
+      throw new Error("Device metadata row is missing");
+    }
+    if (metadata.schema_version !== DEVICE_DB_SCHEMA_VERSION) {
+      throw new Error(`Unexpected device schema version: ${metadata.schema_version}`);
+    }
+    if (metadata.cut_name !== expected.cut) {
+      throw new Error(`Unexpected device cut: ${metadata.cut_name}`);
+    }
+    if (metadata.source_watermark !== expected.sourceWatermark) {
+      throw new Error("Device source watermark does not match the requested generation");
+    }
+    if (!metadata.derived_at) {
+      throw new Error("Device derived_at is empty");
+    }
+
+    rowCounts = Object.fromEntries([
+      ...DEVICE_SOURCE_TABLES.map((table) => [table, countRows(database, "main", table)]),
+      ["device_sync_meta", countRows(database, "main", "device_sync_meta")],
+    ]);
+
+    if (expected.rowCounts) {
+      for (const [table, expectedCount] of Object.entries(expected.rowCounts)) {
+        if (rowCounts[table] !== expectedCount) {
+          throw new Error(
+            `Device row count mismatch for ${table}: ${rowCounts[table] ?? "missing"} != ${expectedCount}`,
+          );
+        }
+      }
+    }
+
+    assertIndexes(database);
+    assertClosure(database);
+  } finally {
+    database.close();
+  }
+
+  return {
+    bytes: file.size,
+    contentFingerprint: await sha256File(path),
+    rowCounts,
+    validation: "verified",
+  };
+}
+
+export async function deriveDeviceDatabase(
+  args: DerivationArgs,
+  runtime: DeviceDerivationRuntime = {},
+): Promise<DeviceDerivationResult> {
   const startedAt = performance.now();
   const sourceFile = await stat(args.source);
 
@@ -196,35 +398,29 @@ async function derive(args: DerivationArgs): Promise<void> {
     throw new Error("--source and --out must be different files");
   }
 
-  const sourceWalPath = `${args.source}-wal`;
-  const sourceWal = await stat(sourceWalPath).catch(() => undefined);
-
-  if (sourceWal && sourceWal.size > 0) {
-    throw new Error(
-      `Source has a non-empty WAL (${sourceWalPath}); checkpoint a stable snapshot before deriving.`,
-    );
-  }
-
-  const watermark = await sourceWatermark(args.source);
-  const tempOut = `${args.out}.tmp`;
+  await assertStableSource(args.source);
+  const sourceWatermark = await sha256File(args.source);
+  const temporaryOut = `${args.out}.tmp`;
 
   await mkdir(dirname(args.out), { recursive: true });
-  await removeDatabaseFiles(tempOut);
+  await removeDatabaseFiles(temporaryOut);
 
   const {
     derivedAt,
     rowCounts: sourceRowCounts,
     schema: sourceSchema,
   } = inspectSource(args.source);
-
-  const output = new Database(tempOut, { create: true, strict: true });
+  const output = new Database(temporaryOut, { create: true, strict: true });
   let attached = false;
-  let completed = false;
+  let published = false;
+  let preVacuumBytes = 0;
+  let selectedTrackCount = 0;
 
   try {
-    const readonlySourceUrl = pathToFileURL(args.source);
-    readonlySourceUrl.searchParams.set("mode", "ro");
-    output.query("ATTACH DATABASE ? AS source").run(readonlySourceUrl.href);
+    // Bun's SQLite binding does not pass URI `mode=ro` through ATTACH. The source is a private
+    // local replica under this process's single-flight lock; every statement names it only in a
+    // SELECT, and the before/after byte fingerprint rejects any accidental mutation.
+    output.query("ATTACH DATABASE ? AS source").run(args.source);
     attached = true;
 
     for (const table of DEVICE_SOURCE_TABLES) {
@@ -234,99 +430,103 @@ async function derive(args: DerivationArgs): Promise<void> {
         throw new Error(`Source schema metadata is missing: ${table}`);
       }
 
-      output.run(createTableSql(table, sourceColumns));
+      output.run(createDeviceTableSql(table, sourceColumns));
     }
 
     output.run(
-      `CREATE TABLE main.${quoteIdentifier("device_sync_meta")} (
-        ${quoteIdentifier(DEVICE_SYNC_META_COLUMNS[0])} INTEGER NOT NULL,
-        ${quoteIdentifier(DEVICE_SYNC_META_COLUMNS[1])} TEXT NOT NULL,
-        ${quoteIdentifier(DEVICE_SYNC_META_COLUMNS[2])} TEXT NOT NULL,
-        ${quoteIdentifier(DEVICE_SYNC_META_COLUMNS[3])} TEXT NOT NULL
+      `CREATE TABLE main.${quoteDeviceDbIdentifier("device_sync_meta")} (
+        ${quoteDeviceDbIdentifier(DEVICE_SYNC_META_COLUMNS[0])} INTEGER NOT NULL,
+        ${quoteDeviceDbIdentifier(DEVICE_SYNC_META_COLUMNS[1])} TEXT NOT NULL,
+        ${quoteDeviceDbIdentifier(DEVICE_SYNC_META_COLUMNS[2])} TEXT NOT NULL,
+        ${quoteDeviceDbIdentifier(DEVICE_SYNC_META_COLUMNS[3])} TEXT NOT NULL
       )`,
     );
 
+    const expectedRowCounts: Record<string, number> = {};
     const copy = output.transaction(() => {
+      for (const sql of materializeSelectedTrackIdsSql(args.cut, REC_ELIGIBLE_WHERE)) {
+        output.run(sql);
+      }
+
+      selectedTrackCount = countRows(output, "temp", "device_selected_track_ids");
+
       for (const table of DEVICE_SOURCE_TABLES) {
-        output.run(insertDeviceTableSql(table, args.cut, REC_ELIGIBLE_WHERE));
+        expectedRowCounts[table] = countQuery(output, selectDeviceRowsSql(table, args.cut));
+        output.run(insertDeviceTableSql(table, args.cut));
       }
 
       createIndexes(output);
       output
         .query(
-          `INSERT INTO main.${quoteIdentifier("device_sync_meta")} (
-            ${DEVICE_SYNC_META_COLUMNS.map(quoteIdentifier).join(", ")}
+          `INSERT INTO main.${quoteDeviceDbIdentifier("device_sync_meta")} (
+            ${DEVICE_SYNC_META_COLUMNS.map(quoteDeviceDbIdentifier).join(", ")}
           ) VALUES (?, ?, ?, ?)`,
         )
-        .run(DEVICE_DB_SCHEMA_VERSION, args.cut, derivedAt, watermark);
+        .run(DEVICE_DB_SCHEMA_VERSION, args.cut, derivedAt, sourceWatermark);
     });
 
     copy.immediate();
-
-    const rowCounts = Object.fromEntries([
-      ...DEVICE_SOURCE_TABLES.map((table) => [table, countRows(output, "main", table)]),
-      ["device_sync_meta", countRows(output, "main", "device_sync_meta")],
-    ]);
-    const preVacuumBytes = (await stat(tempOut)).size;
+    expectedRowCounts.device_sync_meta = 1;
+    runtime.afterCopy?.();
+    assertClosure(output);
+    preVacuumBytes = (await stat(temporaryOut)).size;
 
     output.run("DETACH DATABASE source");
     attached = false;
     output.run("VACUUM");
     output.close();
 
-    const postVacuumBytes = (await stat(tempOut)).size;
-    const watermarkAfterDerivation = await sourceWatermark(args.source);
-    const sourceWalAfterDerivation = await stat(sourceWalPath).catch(() => undefined);
+    const sourceWatermarkAfterDerivation = await sha256File(args.source);
+    await assertStableSource(args.source);
 
-    if (watermarkAfterDerivation !== watermark) {
+    if (sourceWatermarkAfterDerivation !== sourceWatermark) {
       throw new Error("Source changed during derivation; discarded the inconsistent output.");
     }
-    if (sourceWalAfterDerivation && sourceWalAfterDerivation.size > 0) {
-      throw new Error("Source WAL changed during derivation; discarded the inconsistent output.");
-    }
 
-    await removeDatabaseFiles(args.out);
-    await rename(tempOut, args.out);
-    completed = true;
+    const validation = await validateDeviceArtifact(temporaryOut, {
+      cut: args.cut,
+      rowCounts: expectedRowCounts,
+      sourceWatermark,
+    });
+    const publish = runtime.publish ?? publishDeviceArtifactAtomically;
+    await publish(temporaryOut, args.out);
+    published = true;
 
-    console.log(
-      JSON.stringify(
-        {
-          cut: args.cut,
-          derivedAt,
-          elapsedMs: Math.round(performance.now() - startedAt),
-          out: args.out,
-          postVacuumBytes,
-          preVacuumBytes,
-          rowCounts,
-          schemaVersion: DEVICE_DB_SCHEMA_VERSION,
-          source: args.source,
-          sourceRowCounts,
-          sourceWatermark: watermark,
-        },
-        null,
-        2,
-      ),
-    );
+    return {
+      ...validation,
+      cut: args.cut,
+      derivedAt,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      out: args.out,
+      preVacuumBytes,
+      schemaVersion: DEVICE_DB_SCHEMA_VERSION,
+      selectedTrackCount,
+      source: args.source,
+      sourceRowCounts,
+      sourceWatermark,
+    };
   } finally {
     if (attached) {
       try {
         output.run("DETACH DATABASE source");
       } catch {
-        // The original derivation error is more useful than a best-effort detach failure.
+        // Preserve the original derivation failure.
       }
     }
 
     try {
       output.close();
     } catch {
-      // The handle may already be closed after a successful detach.
+      // The handle is already closed on the verified publication path.
     }
 
-    if (!completed) {
-      await removeDatabaseFiles(tempOut);
+    if (!published) {
+      await removeDatabaseFiles(temporaryOut);
     }
   }
 }
 
-await derive(parseArgs(Bun.argv.slice(2)));
+if (import.meta.main) {
+  const result = await deriveDeviceDatabase(parseDeviceDerivationArgs(Bun.argv.slice(2)));
+  console.log(JSON.stringify(result, null, 2));
+}
