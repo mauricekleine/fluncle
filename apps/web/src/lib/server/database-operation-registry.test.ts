@@ -3,14 +3,20 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { createProgram } from "../../../../cli/src/cli";
 import { type Argument, type ArrayExpression, parseSync, Visitor } from "oxc-parser";
 import { describe, expect, it } from "vitest";
-import { DATABASE_OPERATION_ID_MAX_LENGTH, isDatabaseOperationId } from "./database-observability";
 import {
+  type DatabaseAccessClass,
+  DATABASE_OPERATION_ID_MAX_LENGTH,
+  isDatabaseOperationId,
+} from "./database-observability";
+import {
+  DATABASE_MUTATION_POLICIES,
   DATABASE_OPERATION_REGISTRY,
   INCIDENT_MUTATION_POLICIES,
+  mutationDispositionForPolicy,
   type OperationCadence,
   resolveDatabaseOperationOwner,
+  triggerMutationPolicyId,
   TRIGGER_MUTATION_POLICY_IDS,
-  WRITE_MUTATION_POLICIES,
 } from "./database-operation-registry";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../../../..");
@@ -44,7 +50,6 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "catalogue.reconcile-hub-counts",
   "catalogue.verify-captures",
   "clips.studio",
-  "device.mirror",
   "frontier.refresh",
   "galaxies.cluster",
   "health.snapshot",
@@ -56,6 +61,7 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "ops.sonar-freshen",
   "ops.ssh-freshen",
   "reach.collect",
+  "render.conductor",
   "social.capture",
   "social.metrics",
   "social.publish-advance",
@@ -66,6 +72,32 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "track.enrich",
   "track.note",
   "track.observe",
+] as const;
+const EXPECTED_MUTATING_OPERATION_IDS = [
+  ...EXPECTED_WRITE_OPERATION_IDS,
+  "device.mirror",
+  "sonar.service",
+] as const;
+const EXPECTED_MUTATION_POLICY_IDS = [
+  ...EXPECTED_MUTATING_OPERATION_IDS,
+  "due-work.queue-maintenance",
+  "health.snapshot.compatibility",
+] as const;
+const EXPECTED_DUE_WORK_QUEUE_TRIGGER_IDS = [
+  "bio.album.queue",
+  "bio.artist.queue",
+  "bio.label.queue",
+  "catalogue.anchor.queue",
+  "catalogue.isrc-recovery.queue",
+  "catalogue.verify-captures.queue",
+  "render.tracks.queue-read",
+  "track.capture.queue",
+  "track.context.queue",
+  "track.embed.queue",
+  "track.enrich.catalogue-queue",
+  "track.enrich.queue",
+  "track.note.queue",
+  "track.observe.queue",
 ] as const;
 const EXPECTED_INCIDENT_FUNCTION_NAMES = [
   "fillEmptyAlbumBio",
@@ -78,10 +110,13 @@ const EXPECTED_RECEIPT_BACKED_OPERATION_IDS = ["health.snapshot"] as const;
 const EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS = [
   "clips.studio",
   "frontier.refresh",
+  "live.snapshot",
   "ops.pin-watch",
   "ops.rave-watchdog",
   "ops.sonar-freshen",
   "ops.ssh-freshen",
+  "render.conductor",
+  "social.capture",
   "track.capture",
   "track.embed",
   "track.enrich",
@@ -93,9 +128,28 @@ const EXPECTED_MUTATION_DISPOSITION_KINDS = new Set([
   "receipt-backed",
   "replay-safe-idempotent",
 ]);
+const EXPECTED_INCIDENT_ACCESS = {
+  fillEmptyAlbumBio: "write",
+  listDeezerWork: "read",
+  markResolved: "write",
+  rearmStaleAllowedArtists: "write",
+  stripCrawlerPrefixes: "write",
+} as const satisfies Record<(typeof EXPECTED_INCIDENT_FUNCTION_NAMES)[number], DatabaseAccessClass>;
 
 function sorted(values: readonly string[]): string[] {
   return [...values].sort();
+}
+
+function aggregateAccessClass(
+  accessClasses: readonly (DatabaseAccessClass | null)[],
+): DatabaseAccessClass | null {
+  return accessClasses.includes("write")
+    ? "write"
+    : accessClasses.includes("heavy-read")
+      ? "heavy-read"
+      : accessClasses.includes("read")
+        ? "read"
+        : null;
 }
 
 function resolveNamedImportSource(importerSource: string, importedName: string): string {
@@ -137,6 +191,7 @@ function timerCadence(contents: string): OperationCadence {
   const randomizedDelaySec = unitValue(contents, "RandomizedDelaySec");
 
   return {
+    kind: "timer",
     ...(onBootSec ? { onBootSec } : {}),
     ...(onCalendar ? { onCalendar } : {}),
     ...(onUnitActiveSec ? { onUnitActiveSec } : {}),
@@ -349,9 +404,27 @@ function reachableTimerSources(): string[] {
 function allMutationDispositions() {
   return DATABASE_OPERATION_REGISTRY.flatMap((operation) => [
     operation.mutationDisposition,
-    ...operation.triggers.map((trigger) => trigger.mutationDisposition),
+    ...(operation.compatibility ? [operation.compatibility.mutationDisposition] : []),
+    ...operation.triggers.flatMap((trigger) => [
+      trigger.mutationDisposition,
+      ...(trigger.compatibility ? [trigger.compatibility.mutationDisposition] : []),
+    ]),
     ...operation.incidents.map((incident) => incident.mutationDisposition),
   ]);
+}
+
+function explicitAccessClass(
+  argument: Argument | undefined,
+): DatabaseAccessClass | null | undefined {
+  if (argument?.type !== "Literal") {
+    return undefined;
+  }
+  if (argument.value === null) {
+    return null;
+  }
+  return argument.value === "heavy-read" || argument.value === "read" || argument.value === "write"
+    ? argument.value
+    : undefined;
 }
 
 describe("database operation registry", () => {
@@ -360,14 +433,23 @@ describe("database operation registry", () => {
       .filter((path) => path.endsWith(".timer"))
       .map((path) => relative(REPO_ROOT, path))
       .sort();
-    const registered = DATABASE_OPERATION_REGISTRY.map((operation) => operation.timerSource).sort();
+    const registered = DATABASE_OPERATION_REGISTRY.flatMap((operation) =>
+      operation.timerSource ? [operation.timerSource] : [],
+    ).sort();
 
     expect(registered).toEqual(timerSources);
     expect(new Set(registered).size).toBe(registered.length);
 
     for (const operation of DATABASE_OPERATION_REGISTRY) {
+      if (operation.timerSource === null) {
+        expect(operation.cadence.kind, operation.operationId).toBe("daemon");
+        expect(operation.owner.timer, operation.operationId).toBeNull();
+        continue;
+      }
       const timer = readFileSync(join(REPO_ROOT, operation.timerSource), "utf8");
-      expect(operation.cadence, operation.owner.timer).toEqual(timerCadence(timer));
+      expect(operation.cadence, operation.owner.timer ?? operation.operationId).toEqual(
+        timerCadence(timer),
+      );
       expect(basename(operation.timerSource), operation.operationId).toBe(operation.owner.timer);
     }
   });
@@ -380,10 +462,18 @@ describe("database operation registry", () => {
       expect(existsSync(join(REPO_ROOT, operation.wrapperSource)), operation.wrapperSource).toBe(
         true,
       );
+      expect(existsSync(join(REPO_ROOT, operation.cadenceSource)), operation.cadenceSource).toBe(
+        true,
+      );
 
       const service = readFileSync(join(REPO_ROOT, operation.serviceSource), "utf8");
       const execStart = unitValue(service, "ExecStart") ?? "";
-      expect(execStart, operation.owner.service).toContain(basename(operation.wrapperSource));
+      if (operation.cadence.kind === "daemon") {
+        expect(operation.operationId).toBe("sonar.service");
+        expect(execStart, operation.owner.service).toBe("/opt/sonar/sonar");
+      } else {
+        expect(execStart, operation.owner.service).toContain(basename(operation.wrapperSource));
+      }
       expect(basename(operation.serviceSource), operation.operationId).toBe(
         operation.owner.service,
       );
@@ -429,7 +519,10 @@ describe("database operation registry", () => {
           tokens.filter((token) => token.endsWith("/database-admission-runner.sh")),
           operation.owner.service,
         ).toHaveLength(1);
-        expect(operation.cadence.randomizedDelaySec, operation.owner.timer).toBeDefined();
+        expect(
+          operation.cadence.randomizedDelaySec,
+          operation.owner.timer ?? operation.operationId,
+        ).toBeDefined();
         const timeoutSec = Number(unitValue(service, "TimeoutStartSec"));
         expect(Number.isFinite(timeoutSec), operation.owner.service).toBe(true);
         expect(timeoutSec, operation.owner.service).toBeGreaterThanOrEqual(maxWaitSec + 10);
@@ -469,7 +562,9 @@ describe("database operation registry", () => {
         operationId: operation.operationId,
       };
 
-      expect(resolveDatabaseOperationOwner(operation.owner.timer)).toEqual(expected);
+      if (operation.owner.timer) {
+        expect(resolveDatabaseOperationOwner(operation.owner.timer)).toEqual(expected);
+      }
       expect(resolveDatabaseOperationOwner(operation.owner.service)).toEqual(expected);
       expect(resolveDatabaseOperationOwner(operation.owner.telemetryUnit)).toEqual(expected);
     }
@@ -489,6 +584,28 @@ describe("database operation registry", () => {
       expect(trigger.cliRoute, trigger.operationId).toBeDefined();
       expect(cliRouteExists(trigger.cliRoute ?? []), trigger.target).toBe(true);
     }
+  });
+
+  it("requires every trigger helper callsite to spell its primary access class", () => {
+    const source = "apps/web/src/lib/server/database-operation-registry.ts";
+    const path = join(REPO_ROOT, source);
+    const parsed = parseSync(path, readFileSync(path, "utf8"), { lang: "ts" });
+    const helpers = new Set(["cli", "direct", "endpoint", "noDatabase"]);
+    const discovered: Array<DatabaseAccessClass | null | undefined> = [];
+
+    new Visitor({
+      CallExpression(node) {
+        if (node.callee.type === "Identifier" && helpers.has(node.callee.name)) {
+          discovered.push(explicitAccessClass(node.arguments[1]));
+        }
+      },
+    }).visit(parsed.program);
+
+    const registered = DATABASE_OPERATION_REGISTRY.flatMap((operation) =>
+      operation.triggers.map((trigger) => trigger.accessClass),
+    );
+    expect(discovered).toEqual(registered);
+    expect(discovered.every((accessClass) => accessClass !== undefined)).toBe(true);
   });
 
   it("parses recurring wrappers so a new CLI call cannot bypass the registry", () => {
@@ -587,6 +704,143 @@ describe("database operation registry", () => {
     }
   });
 
+  it("models final due-work queue maintenance separately from flag-off reads", () => {
+    const affected = new Set<string>(EXPECTED_DUE_WORK_QUEUE_TRIGGER_IDS);
+    const triggers = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.triggers).filter(
+      (trigger) => affected.has(trigger.operationId),
+    );
+
+    expect(sorted(triggers.map((trigger) => trigger.operationId))).toEqual(
+      sorted(EXPECTED_DUE_WORK_QUEUE_TRIGGER_IDS),
+    );
+    expect(triggers).toHaveLength(EXPECTED_DUE_WORK_QUEUE_TRIGGER_IDS.length);
+    for (const trigger of triggers) {
+      expect(trigger.accessClass, trigger.operationId).toBe("write");
+      expect(trigger.mutationTarget, trigger.operationId).toBe("primary");
+      expect(trigger.mutationDisposition.kind, trigger.operationId).toBe("replay-safe-idempotent");
+      expect(trigger.mutationDisposition.evidenceSource, trigger.operationId).toBe(
+        "apps/web/src/lib/server/due-work-cutover.ts",
+      );
+      expect(trigger.compatibility?.accessClass, trigger.operationId).toBe("read");
+      expect(trigger.compatibility?.mutationTarget, trigger.operationId).toBeNull();
+      expect(trigger.compatibility?.mutationDisposition.kind, trigger.operationId).toBe(
+        "not-applicable",
+      );
+    }
+
+    const cutover = readFileSync(
+      join(REPO_ROOT, "apps/web/src/lib/server/due-work-cutover.ts"),
+      "utf8",
+    );
+    expect(cutover).toMatch(/await maintainDueWork\(client, workKind\)/);
+    expect(cutover).toMatch(/await promoteDueWork\(client, workKind,/);
+  });
+
+  it("aggregates each operation from its final trigger profiles", () => {
+    for (const operation of DATABASE_OPERATION_REGISTRY) {
+      const aggregate = aggregateAccessClass(
+        operation.triggers.map((trigger) => trigger.accessClass),
+      );
+
+      expect(operation.accessClass, operation.operationId).toBe(aggregate);
+    }
+  });
+
+  it("aggregates each flag-off operation from its compatibility trigger profiles", () => {
+    for (const operation of DATABASE_OPERATION_REGISTRY) {
+      const aggregate = aggregateAccessClass(
+        operation.triggers.map(
+          (trigger) => trigger.compatibility?.accessClass ?? trigger.accessClass,
+        ),
+      );
+      const operationAccess = operation.compatibility?.accessClass ?? operation.accessClass;
+
+      expect(operationAccess, operation.operationId).toBe(aggregate);
+    }
+  });
+
+  it("models receipt-backed health snapshots and their non-replayable flag-off writer", () => {
+    const triggers = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.triggers).filter(
+      (trigger) => trigger.operationId === "health.snapshot",
+    );
+    const health = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "health.snapshot",
+    );
+
+    expect(triggers.length).toBeGreaterThan(0);
+    for (const trigger of triggers) {
+      expect(trigger.accessClass).toBe("write");
+      expect(trigger.mutationTarget).toBe("primary");
+      expect(trigger.mutationDisposition.kind).toBe("receipt-backed");
+      expect(trigger.compatibility?.accessClass).toBe("write");
+      expect(trigger.compatibility?.mutationTarget).toBe("primary");
+      expect(trigger.compatibility?.mutationDisposition.kind).toBe("deliberately-non-replayable");
+    }
+    expect(health?.mutationDisposition.kind).toBe("receipt-backed");
+    expect(health?.compatibility?.mutationDisposition.kind).toBe("deliberately-non-replayable");
+  });
+
+  it("separates device mirror primary reads from its derived remote mutation", () => {
+    const operation = DATABASE_OPERATION_REGISTRY.find(
+      (candidate) => candidate.operationId === "device.mirror",
+    );
+    const source = readFileSync(join(REPO_ROOT, `${SCRIPTS}/device-mirror.ts`), "utf8");
+
+    expect(operation?.accessClass).toBe("heavy-read");
+    expect(operation?.mutationTarget).toBe("derived-remote");
+    expect(operation?.mutationDisposition.kind).toBe("replay-safe-idempotent");
+    expect(resolveDatabaseOperationOwner("fluncle-device-mirror")?.accessClass).toBe("heavy-read");
+    expect(source).toContain('const sourceUrl = requiredEnv("TURSO_DATABASE_URL")');
+    expect(source).toContain('const targetUrl = requiredEnv("DEVICE_TURSO_DATABASE_URL")');
+    expect(source).toContain("sync = await client.sync()");
+    expect(source).toContain('await target.batch(statements, "write")');
+  });
+
+  it("registers the continuous Sonar replica consumer independently from freshening", () => {
+    const operation = DATABASE_OPERATION_REGISTRY.find(
+      (candidate) => candidate.operationId === "sonar.service",
+    );
+    const config = readFileSync(join(REPO_ROOT, "apps/sonar/src/config.rs"), "utf8");
+    const main = readFileSync(join(REPO_ROOT, "apps/sonar/src/main.rs"), "utf8");
+    const consumer = readFileSync(join(REPO_ROOT, "apps/sonar/src/consumer.rs"), "utf8");
+
+    expect(operation).toMatchObject({
+      accessClass: "read",
+      cadence: {
+        interval: { defaultSeconds: 30, environment: "SONAR_DELTA_SECS" },
+        kind: "daemon",
+        persistent: true,
+        reconcileInterval: {
+          defaultSeconds: 3600,
+          environment: "SONAR_RECONCILE_SECS",
+        },
+      },
+      cadenceSource: "apps/sonar/src/config.rs",
+      mutationTarget: "derived-local",
+      operationId: "sonar.service",
+      owner: { service: "sonar.service", telemetryUnit: "sonar-service", timer: null },
+      serviceSource: "apps/sonar/deploy/sonar.service",
+      timerSource: null,
+      wrapperSource: "apps/sonar/src/main.rs",
+    });
+    expect(operation?.mutationDisposition.kind).toBe("replay-safe-idempotent");
+    expect(operation?.operationId).not.toBe("ops.sonar-freshen");
+    expect(config).toMatch(/None => 30,/);
+    expect(config).toMatch(/parsed\("SONAR_RECONCILE_SECS", 3600\)/);
+    expect(main).toContain("tokio::spawn(consumer.run(");
+    expect(consumer).toContain("self.replica.sync().await?");
+    expect(consumer).toContain("replace_from_local_replica");
+  });
+
+  it("throws for unknown operation and trigger mutation policies", () => {
+    expect(() => mutationDispositionForPolicy("missing.policy")).toThrow(
+      "database mutation policy missing.policy is not registered",
+    );
+    expect(() => triggerMutationPolicyId("missing.trigger")).toThrow(
+      "mutating trigger missing.trigger has no mutation policy mapping",
+    );
+  });
+
   it("makes the six direct Worker database timers explicit", () => {
     const expected = [
       "catalogue.anchor",
@@ -605,7 +859,7 @@ describe("database operation registry", () => {
     for (const operation of direct) {
       expect(operation.accessClass).toBe("write");
       expect(operation.mutationDisposition.kind).toBe(
-        operation.operationId === "track.capture"
+        operation.operationId === "track.capture" || operation.operationId === "social.capture"
           ? "deliberately-non-replayable"
           : "replay-safe-idempotent",
       );
@@ -613,7 +867,31 @@ describe("database operation registry", () => {
     }
   });
 
-  it("names all five audited incident functions and assigns their disposition", () => {
+  it("binds live and social side-effect dispositions to their real handlers", () => {
+    const livePolicy = DATABASE_MUTATION_POLICIES["live.snapshot"];
+    const socialPolicy = DATABASE_MUTATION_POLICIES["social.capture"];
+    const liveHandler = readFileSync(join(REPO_ROOT, livePolicy.evidenceSource), "utf8");
+    const socialHandler = readFileSync(join(REPO_ROOT, socialPolicy.evidenceSource), "utf8");
+    const captureHandler = socialHandler.slice(
+      socialHandler.indexOf("const capturePostUrlsHandler"),
+    );
+    const liveTelegramIndex = liveHandler.indexOf("await postLiveToTelegram(input.title)");
+    const liveWriteIndex = liveHandler.lastIndexOf("await db.execute({");
+    const socialUrlWriteIndex = captureHandler.indexOf("await recordPostUrl(");
+    const socialReleaseLinkIndex = captureHandler.indexOf("await postizSetReleaseId(");
+    const socialStatusWriteIndex = captureHandler.indexOf("await updateSocialStatus(");
+
+    expect(livePolicy.kind).toBe("deliberately-non-replayable");
+    expect(liveTelegramIndex).toBeGreaterThanOrEqual(0);
+    expect(liveWriteIndex).toBeGreaterThan(liveTelegramIndex);
+    expect(socialPolicy.kind).toBe("deliberately-non-replayable");
+    expect(socialPolicy.evidenceSource).toBe("apps/web/src/lib/server/orpc/admin-social.ts");
+    expect(socialUrlWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(socialReleaseLinkIndex).toBeGreaterThan(socialUrlWriteIndex);
+    expect(socialStatusWriteIndex).toBeGreaterThan(socialReleaseLinkIndex);
+  });
+
+  it("names all five audited incident functions and assigns access and disposition", () => {
     const incidents = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.incidents);
 
     expect(sorted(incidents.map((incident) => incident.functionName))).toEqual(
@@ -627,8 +905,11 @@ describe("database operation registry", () => {
       const source = readFileSync(join(REPO_ROOT, incident.source), "utf8");
       expect(owner, incident.functionName).toBeDefined();
       expect(owner?.mutationDisposition.kind, incident.functionName).toBe("replay-safe-idempotent");
+      expect(incident.accessClass, incident.functionName).toBe(
+        EXPECTED_INCIDENT_ACCESS[incident.functionName as keyof typeof EXPECTED_INCIDENT_ACCESS],
+      );
       expect(incident.mutationDisposition.kind, incident.functionName).toBe(
-        "replay-safe-idempotent",
+        incident.accessClass === "write" ? "replay-safe-idempotent" : "not-applicable",
       );
       expect(incident.mutationDisposition.evidenceSource, incident.functionName).toBe(
         incident.source,
@@ -641,7 +922,7 @@ describe("database operation registry", () => {
     const handlerSource = "apps/web/src/lib/server/orpc/admin-reach.ts";
     const handler = readFileSync(join(REPO_ROOT, handlerSource), "utf8");
     const mutationSource = resolveNamedImportSource(handlerSource, "recordPlatformStats");
-    const policy = WRITE_MUTATION_POLICIES["reach.collect"];
+    const policy = DATABASE_MUTATION_POLICIES["reach.collect"];
 
     expect(handler).toMatch(/await recordPlatformStats\(\)/);
     expect(policy.evidenceSource).toBe(mutationSource);
@@ -652,13 +933,16 @@ describe("database operation registry", () => {
     const writeOperations = DATABASE_OPERATION_REGISTRY.filter(
       (operation) => operation.accessClass === "write",
     );
-    const writeTriggers = DATABASE_OPERATION_REGISTRY.flatMap(
+    const mutatingOperations = DATABASE_OPERATION_REGISTRY.filter(
+      (operation) => operation.mutationTarget !== null,
+    );
+    const mutatingTriggers = DATABASE_OPERATION_REGISTRY.flatMap(
       (operation) => operation.triggers,
-    ).filter((trigger) => trigger.accessClass === "write");
-    const receiptBacked = writeOperations
+    ).filter((trigger) => trigger.mutationTarget !== null);
+    const receiptBacked = mutatingOperations
       .filter((operation) => operation.mutationDisposition.kind === "receipt-backed")
       .map((operation) => operation.operationId);
-    const deliberatelyNonReplayable = writeOperations
+    const deliberatelyNonReplayable = mutatingOperations
       .filter((operation) => operation.mutationDisposition.kind === "deliberately-non-replayable")
       .map((operation) => operation.operationId);
     const incidents = DATABASE_OPERATION_REGISTRY.flatMap((operation) => operation.incidents);
@@ -671,11 +955,14 @@ describe("database operation registry", () => {
     expect(sorted(writeOperations.map((operation) => operation.operationId))).toEqual(
       sorted(EXPECTED_WRITE_OPERATION_IDS),
     );
-    expect(sorted(Object.keys(WRITE_MUTATION_POLICIES))).toEqual(
-      sorted(EXPECTED_WRITE_OPERATION_IDS),
+    expect(sorted(mutatingOperations.map((operation) => operation.operationId))).toEqual(
+      sorted(EXPECTED_MUTATING_OPERATION_IDS),
+    );
+    expect(sorted(Object.keys(DATABASE_MUTATION_POLICIES))).toEqual(
+      sorted(EXPECTED_MUTATION_POLICY_IDS),
     );
     expect(sorted(Object.keys(TRIGGER_MUTATION_POLICY_IDS))).toEqual(
-      sorted([...new Set(writeTriggers.map((trigger) => trigger.operationId))]),
+      sorted([...new Set(mutatingTriggers.map((trigger) => trigger.operationId))]),
     );
     expect(sorted(incidents.map((incident) => incident.functionName))).toEqual(
       sorted(EXPECTED_INCIDENT_FUNCTION_NAMES),
@@ -692,7 +979,7 @@ describe("database operation registry", () => {
     );
 
     for (const operation of DATABASE_OPERATION_REGISTRY) {
-      if (operation.accessClass !== "write") {
+      if (operation.mutationTarget === null) {
         expect(operation.mutationDisposition.kind, operation.operationId).toBe("not-applicable");
         continue;
       }
@@ -705,7 +992,7 @@ describe("database operation registry", () => {
       expect(operation.mutationDisposition.kind, operation.operationId).toBe(expectedKind);
     }
 
-    for (const trigger of writeTriggers) {
+    for (const trigger of mutatingTriggers) {
       const policyId =
         TRIGGER_MUTATION_POLICY_IDS[
           trigger.operationId as keyof typeof TRIGGER_MUTATION_POLICY_IDS
@@ -715,13 +1002,13 @@ describe("database operation registry", () => {
         throw new Error(`missing trigger policy for ${trigger.operationId}`);
       }
       expect(trigger.mutationDisposition.kind, trigger.operationId).toBe(
-        WRITE_MUTATION_POLICIES[policyId].kind,
+        DATABASE_MUTATION_POLICIES[policyId].kind,
       );
     }
 
     for (const incident of incidents) {
       expect(incident.mutationDisposition.kind, incident.functionName).toBe(
-        "replay-safe-idempotent",
+        incident.accessClass === "write" ? "replay-safe-idempotent" : "not-applicable",
       );
     }
 
@@ -752,18 +1039,7 @@ describe("database operation registry", () => {
     );
 
     for (const operation of DATABASE_OPERATION_REGISTRY) {
-      const triggerClasses = operation.triggers.map((trigger) => trigger.accessClass);
-      const aggregate = triggerClasses.includes("write")
-        ? "write"
-        : triggerClasses.includes("heavy-read")
-          ? "heavy-read"
-          : triggerClasses.includes("read")
-            ? "read"
-            : null;
-
-      expect(operation.accessClass, operation.operationId).toBe(aggregate);
-
-      if (operation.accessClass === "write") {
+      if (operation.mutationTarget !== null) {
         expect(operation.mutationDisposition.kind, operation.operationId).not.toBe(
           "not-applicable",
         );
@@ -776,13 +1052,22 @@ describe("database operation registry", () => {
       }
 
       for (const trigger of operation.triggers) {
-        expect(trigger.mutationDisposition.kind, trigger.operationId).toBe(
-          trigger.accessClass === "write"
-            ? trigger.operationId === "health.snapshot"
-              ? "receipt-backed"
-              : operation.mutationDisposition.kind
-            : "not-applicable",
+        expect(trigger.mutationDisposition.kind === "not-applicable", trigger.operationId).toBe(
+          trigger.mutationTarget === null,
         );
+        if (trigger.compatibility) {
+          expect(
+            trigger.compatibility.mutationDisposition.kind === "not-applicable",
+            `${trigger.operationId}: compatibility`,
+          ).toBe(trigger.compatibility.mutationTarget === null);
+        }
+      }
+
+      if (operation.compatibility) {
+        expect(
+          operation.compatibility.mutationDisposition.kind === "not-applicable",
+          `${operation.operationId}: compatibility`,
+        ).toBe(operation.compatibility.mutationTarget === null);
       }
     }
   });

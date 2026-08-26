@@ -18,12 +18,14 @@ Type=oneshot
 # wrap happens HERE at the unit — `. cron-output.sh && emit_cron_output render -- bash …` runs
 # the conductor as a child, captures its summary, and writes the `# Cron Job: fluncle-render`
 # marker the prober reads. The conductor drives a DETACHED ~85m render on the scale-to-zero
-# rave-03 box; this tick itself returns in seconds.
+# rave-03 box; this tick itself returns in seconds. The admission runner owns the final
+# due-work queue maintenance write, then starts this marker-wrapped state-machine payload.
 # NOTE: render-conductor.sh execs provision-rave-03.sh from its own dir, so Unit A MUST bake
 # provision-rave-03.sh alongside it under /opt/hermes-scripts/ (see this dir's README).
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash -c '. /opt/hermes-scripts/cron-output.sh && emit_cron_output render -- bash /opt/hermes-scripts/render-conductor.sh'
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-render -- bash -c '. /opt/hermes-scripts/cron-output.sh && emit_cron_output render -- bash /opt/hermes-scripts/render-conductor.sh'
 # The tick is quick (<120s: state read + box poll/trigger); the render runs detached on rave-03.
-TimeoutStartSec=180
+# Preserve the prior 180s payload budget after the admission runner's bounded 120s wait.
+TimeoutStartSec=310
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true
 ProtectControlGroups=true
