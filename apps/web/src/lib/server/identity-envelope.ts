@@ -44,6 +44,7 @@ import { type AnchorRefusalReason, anchorRefusalReason, ANCHOR_MAX_ATTEMPTS } fr
 import { getDb, typedRows } from "./db";
 import { parseArtistsJson } from "./artists";
 import { siteUrl } from "../fluncle-links";
+import { ALL_TRACK_OR_LOG_ID_MATCHES_CTE } from "./track-id-resolver";
 
 /** The public fix-it address (RFC ruling 6) — the one channel for "this answer is wrong". */
 export const IDENTITY_CONTACT = "hey@fluncle.com";
@@ -859,25 +860,39 @@ export async function readIdentity(
           : key.kind === "deezer"
             ? { args: [key.deezerId, IDENTITY_MAX_ROWS], where: `t.deezer_track_id = ?` }
             : {
-                args: [key.idOrLogId, key.idOrLogId, IDENTITY_MAX_ROWS],
-                // The same OR shape `getTrackByIdOrLogId` has always used against production:
-                // SQLite's OR optimization takes the PK for one arm and `findings.log_id` for the
-                // other.
-                where: `(t.track_id = ? or f.log_id = ?)`,
+                args: [key.idOrLogId, key.idOrLogId, key.idOrLogId, IDENTITY_MAX_ROWS],
+                where: "1 = 1",
               };
+  const referenceLookup = key.kind === "idOrLogId";
 
   const result = await db.execute({
     args: query.args,
-    // `order by t.track_id asc` is UNCHANGED, deliberately: it is the order every existing caller's
-    // answer already arrives in, and the batch does its grouping in memory rather than buying it
-    // here with a second sort key that would reorder the single-key answers.
-    sql: `select ${IDENTITY_SELECT} ${IDENTITY_FROM}
+    // Non-reference branches retain their established SQL ordering. A reference has at most two
+    // indexed matches, so it is sorted below in memory instead of buying a temporary compound-query
+    // sort; callers still receive the same track-ID order.
+    sql: `${referenceLookup ? `with ${ALL_TRACK_OR_LOG_ID_MATCHES_CTE}` : ""}
+          select ${IDENTITY_SELECT}
+          ${
+            referenceLookup
+              ? `from resolved_tracks
+                 join tracks t on t.track_id = resolved_tracks.track_id
+                 left join findings f on f.track_id = t.track_id`
+              : IDENTITY_FROM
+          }
           where ${query.where}
-          order by t.track_id asc
+          ${referenceLookup ? "" : "order by t.track_id asc"}
           limit ?`,
   });
 
   const rows = typedRows<IdentityRow>(result.rows);
+
+  if (referenceLookup) {
+    // The removed SQL `order by t.track_id` used SQLite's default BINARY collation. Keep that exact
+    // ordering without a compound-query temp sort; localeCompare would reorder case/punctuation.
+    rows.sort((left, right) =>
+      left.track_id < right.track_id ? -1 : left.track_id > right.track_id ? 1 : 0,
+    );
+  }
 
   if (rows.length === 0) {
     return undefined;

@@ -1,4 +1,4 @@
-// THE FRESHNESS TAP (D8), proven against the REAL migrated schema on an in-memory libSQL engine
+// THE FRESHNESS TAP (D8), proven against the REAL migrated schema on a file-backed libSQL engine
 // (the integration-db harness). The Spotify client (`./spotify`) is mocked so a test drives exactly
 // the Spotify response it wants and can flip the grant/throttle shut; every DB write executes REAL
 // SQL against the REAL schema.
@@ -20,7 +20,10 @@
 //     KNOWN seed label — never Spotify's spelling).
 
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 
@@ -300,9 +303,11 @@ function setMintableFixture(): void {
 }
 
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-label-releases-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   holder.db = db;
   // The default grounding: a known artist whose Spotify id every un-overridden album fixture claims,
   // so a minting fixture is grounded unless it deliberately names an UNKNOWN artist.
@@ -312,6 +317,16 @@ beforeEach(async () => {
   spotify.throwKind = null;
   spotify.failPath = () => false;
   spotify.respond = () => ({});
+});
+
+afterEach(async () => {
+  db.close();
+  holder.db = undefined;
+
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 // ── The pure parsers + the post-filter ──────────────────────────────────────────────────────────

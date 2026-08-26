@@ -1,5 +1,8 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { qualifiedArtistsDigest } from "./catalogue";
 import {
@@ -34,6 +37,7 @@ const EMPTY_DIGEST = qualifiedArtistsDigest([]);
 // is executed by a real engine against the real DDL — not a mock.
 
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -211,7 +215,17 @@ async function rankingOf(trackId: string): Promise<{
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-catalogue-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
+});
+
+afterEach(async () => {
+  db.close();
+
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 describe("the ranking — the sweep picks the finding we know is nearest", () => {

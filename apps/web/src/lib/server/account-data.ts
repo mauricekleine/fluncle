@@ -16,6 +16,7 @@ import { type RecSeedItem } from "./recommendations";
 import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { jsonError } from "./env";
 import { enforceRateLimit } from "./rate-limit";
+import { bulkTrackOrLogIdCte, TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
 
 // Re-export the shared limiter from its established import site. `enforceRateLimit`
 // moved to `./rate-limit` (the one atomic, cf-connecting-ip-keyed limiter), but
@@ -447,14 +448,13 @@ async function collectLogIds(
   const resolved = new Map<string, string>();
 
   for (const chunk of chunked(tokens, GALAXY_MERGE_CHUNK)) {
-    const placeholders = chunk.map(() => "?").join(", ");
     const result = await db.execute({
-      args: [...chunk, ...chunk],
-      // The set form of `findTrackByTrackOrLog`: same LEFT JOIN, same "either a raw track id or a
-      // Log ID" resolution, one statement for the chunk.
-      sql: `select tracks.track_id, findings.log_id from tracks
-        left join findings on findings.track_id = tracks.track_id
-        where tracks.track_id in (${placeholders}) or findings.log_id in (${placeholders})`,
+      args: chunk,
+      // The set form of `findTrackByTrackOrLog`: scan only the bounded input CTE, seek `tracks`
+      // and `findings` independently, prefer a raw id on collisions, and suppress the Log-ID arm
+      // when the same finding was already named by its raw id.
+      sql: `with ${bulkTrackOrLogIdCte(chunk.length)}
+        select track_id, log_id from resolved_tracks`,
     });
 
     for (const row of typedRows<TrackRefRow>(result.rows)) {
@@ -761,10 +761,11 @@ async function defaultSetName(tokens: string[]): Promise<string> {
     const result = await (
       await getDb()
     ).execute({
-      args: [first, first],
-      sql: `select tracks.title from tracks
-        left join findings on findings.track_id = tracks.track_id
-        where tracks.track_id = ? or findings.log_id = ? limit 1`,
+      args: [first, first, first],
+      sql: `with ${TRACK_OR_LOG_ID_CTE}
+        select tracks.title from resolved_track
+        join tracks on tracks.track_id = resolved_track.track_id
+        limit 1`,
     });
     const title = typedRow<SetTitleRow>(result.rows)?.title;
 
@@ -1547,13 +1548,15 @@ async function findTrackByTrackOrLog(trackIdOrLogId: string): Promise<TrackRefRo
   const result = await (
     await getDb()
   ).execute({
-    args: [value, value],
+    args: [value, value, value],
     // LEFT JOIN so ANY track resolves — a certified finding carries its `log_id`, an
     // uncertified catalogue track (a `tracks` row with no `findings` row) resolves with
     // a null `log_id`. Resolving by either a raw track id OR a Log ID.
-    sql: `select tracks.track_id, findings.log_id from tracks
+    sql: `with ${TRACK_OR_LOG_ID_CTE}
+      select tracks.track_id, findings.log_id from resolved_track
+      join tracks on tracks.track_id = resolved_track.track_id
       left join findings on findings.track_id = tracks.track_id
-      where tracks.track_id = ? or findings.log_id = ? limit 1`,
+      limit 1`,
   });
 
   return typedRow<TrackRefRow>(result.rows);

@@ -400,9 +400,9 @@ export async function maxArtistSitemapLastmod(minTracks: number): Promise<string
     args: [minTracks],
     sql: `select max(findings.added_at) as lastmod
           from findings
-          join tracks on tracks.track_id = findings.track_id
-          join track_artists ta on ta.track_id = tracks.track_id
-          join artists a on a.id = ta.artist_id
+          cross join tracks on tracks.track_id = findings.track_id
+          cross join track_artists ta on ta.track_id = tracks.track_id
+          cross join artists a on a.id = ta.artist_id
           where a.renderable_track_count >= ?`,
   });
 
@@ -840,11 +840,12 @@ async function mintArtistSlug(id: string, name: string): Promise<string> {
  * belonged: `scripts/backfill-artist-links.ts`, an operator one-off.
  *
  * ── THE COUNT DELTA ──────────────────────────────────────────────────────────────────────────
- * `insert or ignore` DOES report only actually-inserted rows in `rowsAffected` (verified), but one
- * statement inserts edges for many artists, so that total carries no per-artist attribution. The
- * NEW-edge set is therefore read first — the same join, anti-joined against the edges that already
- * exist and carrying each track's `is_catalogue` — and the per-artist deltas ride the insert's
- * batch. Bounded by `trackIds`, exactly like the insert it mirrors.
+ * `RETURNING` carries the ACTUAL new `(track, artist)` edges and each source track's
+ * `is_catalogue` flag out of `insert or ignore` (the returned-row count is the portable count;
+ * local libSQL reports zero `rowsAffected` for data-returning statements). The per-artist deltas
+ * and rank re-stales then ride the same explicit write transaction. There is one artist-resolution
+ * pass, no predictive copy of the full selection, and an ignored duplicate can move neither
+ * downstream projection.
  *
  * ── THE HOMONYM SEAL (`creditMbids`) ─────────────────────────────────────────────────────────
  * A bare name is not an identity. Folding one onto an `artists` row is how TWO real-world acts
@@ -905,6 +906,108 @@ export function creditMbidTriples(
   return triples;
 }
 
+type ArtistLinkStatement = {
+  args: string[];
+  sql: string;
+};
+
+/**
+ * Build the one artist-edge insertion statement for a requested track batch.
+ *
+ * `requested_credit` is deliberately MATERIALIZED: JSON expansion is bounded by and performed
+ * once for `trackIds`, then the identity ladder branches over that small relation. The growing
+ * `artists` table is never joined through `CASE` or `OR`: exact identity, anonymous-name fold, and
+ * identified-name fallback are separate sargable branches. That leaves `artists_mbid_idx` and
+ * `artists_name_nocase_idx` available to the planner independently.
+ *
+ * The anti-join preserves the first position when one real artist appears more than once on a
+ * track without adding a temporary group sort. `RETURNING` reports only rows the composite key
+ * really accepted; its primary-key lookup back to `tracks` carries the maintained-count
+ * discriminator without repeating resolution.
+ */
+export function buildArtistLinkStatement(
+  trackIds: readonly string[],
+  creditMbids?: CreditMbidsByTrack,
+): ArtistLinkStatement {
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const triples = creditMbids ? creditMbidTriples(trackIds, creditMbids) : [];
+  const hasIdentity = triples.length > 0;
+  const identityCte = hasIdentity
+    ? `credit_id as materialized (
+         select cast(json_extract(value, '$[0]') as text) as track_id,
+                cast(json_extract(value, '$[1]') as integer) as position,
+                cast(json_extract(value, '$[2]') as text) as mbid
+           from json_each(?)
+       ),
+       `
+    : "";
+  const identityJoin = hasIdentity
+    ? `left join credit_id
+             on credit_id.track_id = tracks.track_id
+            and credit_id.position = cast(credit.key as integer) + 1`
+    : "";
+  const mbidBranches = hasIdentity
+    ? `select credit.track_id, artist.id as artist_id, credit.position, credit.is_catalogue
+         from requested_credit credit
+         cross join artists artist indexed by artists_mbid_idx on artist.mbid = credit.mbid
+        where credit.mbid is not null
+       union all
+       select credit.track_id, artist.id as artist_id, credit.position, credit.is_catalogue
+         from requested_credit credit
+         cross join artists artist indexed by artists_name_nocase_idx
+           on artist.name collate nocase = credit.artist_name
+        where credit.mbid is not null
+          and artist.mbid is null
+          and not exists (
+                select 1 from artists claimed indexed by artists_mbid_idx
+                 where claimed.mbid = credit.mbid
+              )
+       union all
+       `
+    : "";
+  const anonymousCreditWhere = hasIdentity ? "where credit.mbid is null" : "";
+
+  return {
+    args: [...(hasIdentity ? [JSON.stringify(triples)] : []), ...trackIds],
+    sql: `with ${identityCte}requested_credit as materialized (
+            select tracks.track_id,
+                   cast(credit.key as integer) + 1 as position,
+                   cast(credit.value as text) as artist_name,
+                   tracks.is_catalogue,
+                   ${hasIdentity ? "credit_id.mbid" : "null as mbid"}
+              from tracks
+              join json_each(tracks.artists_json) credit
+              ${identityJoin}
+             where tracks.track_id in (${placeholders})
+          ),
+          resolved_candidate as materialized (
+            ${mbidBranches}select credit.track_id, artist.id as artist_id,
+                                      credit.position, credit.is_catalogue
+                                from requested_credit credit
+                                cross join artists artist indexed by artists_name_nocase_idx
+                                  on artist.name collate nocase = credit.artist_name
+                                ${anonymousCreditWhere}
+          ),
+          resolved_edge as (
+            select candidate.track_id, candidate.artist_id, candidate.position
+              from resolved_candidate candidate
+             where not exists (
+                   select 1
+                     from resolved_candidate earlier
+                    where earlier.track_id = candidate.track_id
+                      and earlier.artist_id = candidate.artist_id
+                      and earlier.position < candidate.position
+             )
+          )
+          insert or ignore into track_artists (track_id, artist_id, position)
+          select track_id, artist_id, position from resolved_edge
+          returning track_id, artist_id,
+                    (select tracks.is_catalogue
+                       from tracks
+                      where tracks.track_id = track_artists.track_id) as is_catalogue`,
+  };
+}
+
 export async function linkTracksToArtistEntities(
   trackIds: string[],
   creditMbids?: CreditMbidsByTrack,
@@ -914,87 +1017,34 @@ export async function linkTracksToArtistEntities(
   }
 
   const db = await getDb();
-  const placeholders = trackIds.map(() => "?").join(", ");
-  const triples = creditMbids ? creditMbidTriples(trackIds, creditMbids) : [];
-  // The identity side of the seal, bound as ONE json argument (see `creditMbidTriples`). Absent —
-  // no caller-supplied ids, or none of them carried one — the statement below stays byte-identical
-  // to the name-only join this function has always run.
-  const identityArgs = triples.length > 0 ? [JSON.stringify(triples)] : [];
-  const identityCte =
-    triples.length > 0
-      ? `with credit_id as (
-           select json_extract(value, '$[0]') as track_id,
-                  json_extract(value, '$[1]') as position,
-                  json_extract(value, '$[2]') as mbid
-             from json_each(?)
-         )
-         `
-      : "";
-  // The join predicate. Without identity it is the historical case-insensitive name match. With it,
-  // the three-rung ladder in the doc comment above: the mbid row wins; a name fold may only claim an
-  // UNCLAIMED row, and only while no row holds the credit's mbid; a row holding a DIFFERENT mbid is a
-  // homonym and matches nothing.
-  const identityJoin =
-    triples.length > 0
-      ? `left join credit_id ci
-             on ci.track_id = tracks.track_id and ci.position = credit.key + 1
-         join artists a on case
-             when ci.mbid is not null then (
-                  a.mbid = ci.mbid
-               or (a.mbid is null
-                   and a.name = credit.value collate nocase
-                   and not exists (select 1 from artists claimed where claimed.mbid = ci.mbid))
-             )
-             else a.name = credit.value collate nocase
-           end`
-      : `join artists a on a.name = credit.value collate nocase`;
-  // `json_each` explodes `artists_json` into one row per credited name; `credit.key` is the
-  // 0-based array index, which is exactly the 1-based `position` the column wants. The name
-  // match is the same case-insensitive fold every other entity uses to relate a raw captured
-  // string to its normalized twin.
-  const linkSelect = `${identityCte}select tracks.track_id, a.id as artist_id, credit.key + 1 as position,
-                             tracks.is_catalogue as is_catalogue
-                      from tracks
-                      join json_each(tracks.artists_json) credit
-                      ${identityJoin}
-                      where tracks.track_id in (${placeholders})`;
-  const linkArgs = [...identityArgs, ...trackIds];
-  // The edges this insert will really CREATE — the same join, minus the ones already held.
-  // `group by` folds a track that credits one artist twice (the PK stores a single row).
-  const pending = await db.execute({
-    args: linkArgs,
-    sql: `select track_id, artist_id, is_catalogue
-          from (${linkSelect}) candidate
-          where not exists (
-            select 1 from track_artists ta
-            where ta.track_id = candidate.track_id and ta.artist_id = candidate.artist_id
-          )
-          group by track_id, artist_id`,
-  });
-  const newEdges = typedRows<{
-    artist_id: string;
-    is_catalogue: bigint | number;
-    track_id: string;
-  }>(pending.rows).map((row) => ({
-    artistId: row.artist_id,
-    certified: Number(row.is_catalogue) === 0,
-    trackId: row.track_id,
-  }));
+  const transaction = await db.transaction("write");
 
-  const results = await db.batch(
-    [
-      {
-        args: linkArgs,
-        sql: `insert or ignore into track_artists (track_id, artist_id, position)
-              select track_id, artist_id, position from (${linkSelect}) candidate`,
-      },
+  try {
+    const inserted = await transaction.execute(buildArtistLinkStatement(trackIds, creditMbids));
+    const newEdges = typedRows<{
+      artist_id: string;
+      is_catalogue: bigint | number;
+      track_id: string;
+    }>(inserted.rows).map((row) => ({
+      artistId: row.artist_id,
+      certified: Number(row.is_catalogue) === 0,
+      trackId: row.track_id,
+    }));
+    const followUp = [
       ...hubCountArtistEdgeStatements(newEdges),
       ...restaleCatalogueRankStatements(newEdges.map((edge) => edge.trackId)),
-    ],
-    "write",
-  );
+    ];
 
-  return results[0]?.rowsAffected ?? 0;
+    if (followUp.length > 0) {
+      await transaction.batch(followUp);
+    }
+
+    await transaction.commit();
+
+    return newEdges.length;
+  } finally {
+    transaction.close();
+  }
 }
 
 /**

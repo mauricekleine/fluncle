@@ -91,6 +91,38 @@ describe("synthetic database performance fixture", () => {
       expect(await scalar(client, "select count(*) as n from perf_track_artists")).toBe(53);
       expect(await scalar(client, "select count(*) as n from perf_track_embeddings")).toBe(19);
       expect(await scalar(client, "select count(*) as n from perf_findings")).toBe(3);
+      const collisionArtists = await client.execute(
+        `select name, mbid from perf_artists where id in
+          ('synthetic-artist-000000000', 'synthetic-artist-000000001',
+           'synthetic-artist-000000002') order by id`,
+      );
+      expect(collisionArtists.rows).toEqual([
+        { mbid: "synthetic-mbid-identity", name: "Synthetic Identity" },
+        { mbid: null, name: "Synthetic Collision" },
+        { mbid: "synthetic-mbid-collision", name: "Synthetic Collision" },
+      ]);
+      const collisionTracks = await client.execute(
+        `select id, artists_json, is_catalogue from perf_tracks
+         where id in ('synthetic-track-000000000', 'synthetic-track-000000003',
+                      'synthetic-track-000000004') order by id`,
+      );
+      expect(collisionTracks.rows).toEqual([
+        {
+          artists_json: '["Synthetic Identity"]',
+          id: "synthetic-track-000000000",
+          is_catalogue: 1,
+        },
+        {
+          artists_json: '["Synthetic Collision","Synthetic Identity","Synthetic Identity"]',
+          id: "synthetic-track-000000003",
+          is_catalogue: 1,
+        },
+        {
+          artists_json: '["Synthetic Alias"]',
+          id: "synthetic-track-000000004",
+          is_catalogue: 1,
+        },
+      ]);
       expect(
         await scalar(client, "select count(*) as n from perf_tracks where label_scope = 'enabled'"),
       ).toBe(37);

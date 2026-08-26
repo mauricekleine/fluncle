@@ -44,6 +44,7 @@
 import { bestAlbumCoverUrl } from "../media";
 import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
+import { TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
 import { DUPLICATE_SIMILARITY, diversifyRanked, LONG_FORM_MS } from "./catalogue";
 import { getDb, typedRow, typedRows } from "./db";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
@@ -254,29 +255,16 @@ async function findSeedTrack(trackIdOrLogId: string): Promise<TrackRefRow | unde
 
   const db = await getDb();
 
-  // Two indexed SEEKS, never the cross-table OR. `where tracks.track_id = ? or findings.log_id = ?`
-  // over a LEFT JOIN rejects no NULL rows, so neither index can drive it and it full-scans `tracks`
-  // (docs/db-scale-backlog Wave 1 #8). Seek the PK on `tracks` first (a seed may be an uncertified
-  // catalogue row, so the finding is optional), carrying its Log ID via a single-row PK subquery so
-  // the row shape is unchanged; only on a miss, seek the finding by its unique `log_id`.
-  const byTrack = await db.execute({
-    args: [value],
-    sql: `select track_id,
-                 (select log_id from findings where findings.track_id = tracks.track_id) as log_id
-      from tracks where track_id = ? limit 1`,
-  });
-  const trackRow = typedRow<TrackRefRow>(byTrack.rows);
-
-  if (trackRow) {
-    return trackRow;
-  }
-
-  const byLog = await db.execute({
-    args: [value],
-    sql: `select track_id, log_id from findings where log_id = ? limit 1`,
+  const result = await db.execute({
+    args: [value, value, value],
+    sql: `with ${TRACK_OR_LOG_ID_CTE}
+      select tracks.track_id, findings.log_id from resolved_track
+      join tracks on tracks.track_id = resolved_track.track_id
+      left join findings on findings.track_id = tracks.track_id
+      limit 1`,
   });
 
-  return typedRow<TrackRefRow>(byLog.rows);
+  return typedRow<TrackRefRow>(result.rows);
 }
 
 /** The signed-in user's seeds, newest first, hydrated for recognition. */

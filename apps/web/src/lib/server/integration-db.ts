@@ -28,17 +28,21 @@ import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 const migrationsFolder = fileURLToPath(new URL("../../../drizzle", import.meta.url));
 
 /**
- * A fresh in-memory libSQL database with every generated Drizzle migration
- * applied. Each call is an isolated `:memory:` database (no cross-test leakage),
- * so a test can `beforeEach(async () => { db = await createIntegrationDb(); })`.
+ * A fresh libSQL database with every generated Drizzle migration applied. Each call defaults to an
+ * isolated `:memory:` database (no cross-test leakage); a test exercising interactive transactions
+ * may supply a disposable file URL because the local driver detaches the transaction connection
+ * and a second `:memory:` connection is necessarily an empty database.
  *
  * The FTS5 search index is built here too, by the SAME `ensureSearchIndex` the deploy and
  * every local dev boot run (`db:migrate`, see `src/db/search-index.ts`). It is not a
  * migration — it is a derived artifact — so this is where a test picks it up, and it means
  * the DDL under test is byte-identical to production's, exactly like the migrations are.
  */
-export async function createIntegrationDb(): Promise<Client> {
-  const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+export async function createIntegrationDb(options: { url?: string } = {}): Promise<Client> {
+  const client = createClient({
+    concurrency: LOCAL_DB_CONCURRENCY,
+    url: options.url ?? ":memory:",
+  });
 
   await client.batch(
     (await schemaDdl()).map((sql) => ({ args: [], sql })),

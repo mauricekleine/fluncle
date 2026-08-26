@@ -529,8 +529,8 @@ export async function maxAlbumSitemapLastmod(minTracks: number): Promise<string 
     args: [minTracks],
     sql: `select max(findings.added_at) as lastmod
           from findings
-          join tracks on tracks.track_id = findings.track_id
-          join albums on albums.id = tracks.album_id
+          cross join tracks on tracks.track_id = findings.track_id
+          cross join albums on albums.id = tracks.album_id
           where albums.renderable_track_count >= ?`,
   });
 
