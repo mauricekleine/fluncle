@@ -9,7 +9,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const execute = vi.fn();
 
 vi.mock("./db", () => ({
-  getDb: async () => ({ execute }),
+  getDb: async () => ({
+    batch: (statements: { args?: unknown[]; sql: string }[]) =>
+      Promise.all(
+        statements.map((statement) =>
+          statement.sql.includes("insert into due_work")
+            ? Promise.resolve({ rows: [], rowsAffected: 1 })
+            : execute(statement),
+        ),
+      ),
+    execute,
+  }),
   typedRows: (rows: unknown) => rows,
 }));
 

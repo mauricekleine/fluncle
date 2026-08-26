@@ -693,6 +693,186 @@ performanceRegistry.register(
   }),
 );
 
+const DUE_WORK_READY_READ = {
+  args: ["youtube-provenance-findings", 25],
+  sql: `select subject_id from due_work
+    where work_kind = ? and state = 'ready'
+    order by sort_key, subject_id
+    limit ?`,
+};
+
+const DUE_WORK_CLAIM = {
+  args: [
+    "synthetic-claim-token",
+    "2099-01-01T00:01:00.000Z",
+    "synthetic-worker",
+    "2099-01-01T00:00:00.000Z",
+    "youtube-provenance-findings",
+    25,
+    "youtube-provenance-findings",
+    "2099-01-01T00:00:00.000Z",
+    "youtube-provenance-findings",
+    "synthetic-worker",
+    "synthetic-claim-token",
+  ],
+  sql: `update due_work
+    set state = 'leased', claim_token = ?, claim_expires_at = ?, claimed_by = ?, updated_at = ?
+    where (work_kind, subject_type, subject_id) in (
+      select work_kind, subject_type, subject_id from due_work
+      where work_kind = ? and state = 'ready'
+      order by sort_key, subject_id
+      limit ?
+    )
+    and not exists (
+      select 1 from due_work scheduled_due
+      where scheduled_due.work_kind = ? and scheduled_due.state = 'scheduled'
+        and scheduled_due.next_due_at <= ?
+    )
+    and not exists (
+      select 1 from due_work existing_claim
+      where existing_claim.work_kind = ? and existing_claim.state = 'leased'
+        and existing_claim.claimed_by = ? and existing_claim.claim_token = ?
+    )`,
+};
+
+const DUE_WORK_PROMOTE = {
+  args: [
+    "2099-01-01T00:00:00.000Z",
+    "youtube-provenance-findings",
+    "2099-01-01T00:00:00.000Z",
+    500,
+  ],
+  sql: `update due_work set state = 'ready', updated_at = ?
+    where (work_kind, subject_type, subject_id) in (
+      select work_kind, subject_type, subject_id from due_work
+      where work_kind = ? and state = 'scheduled' and next_due_at <= ?
+      order by next_due_at, subject_id limit ?
+    )`,
+};
+
+const DUE_WORK_REAP = {
+  args: [
+    "2099-01-01T00:00:00.000Z",
+    "2099-01-01T00:00:00.000Z",
+    "youtube-provenance-findings",
+    "2099-01-01T00:00:00.000Z",
+    500,
+  ],
+  sql: `update due_work
+    set state = case when next_due_at <= ? then 'ready' else 'scheduled' end,
+        claim_token = null, claim_expires_at = null, claimed_by = null, updated_at = ?
+    where (work_kind, subject_type, subject_id) in (
+      select work_kind, subject_type, subject_id from due_work
+      where state = 'leased' and work_kind = ? and claim_expires_at <= ?
+      order by claim_expires_at, work_kind, subject_id limit ?
+    )`,
+};
+
+const DUE_WORK_CLAIM_RESULT = {
+  args: ["youtube-provenance-findings", "synthetic-worker", "synthetic-claim-token"],
+  sql: `select subject_id from due_work
+    where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?
+    order by sort_key, subject_id`,
+};
+
+performanceRegistry.register({
+  description: "A bounded due-work claim seeks and updates only the maintained backlog page",
+  async execute(context) {
+    const startedAt = context.now();
+    await context.client.execute(DUE_WORK_PROMOTE);
+    await context.client.execute(DUE_WORK_REAP);
+    const mutation = await context.client.execute(DUE_WORK_CLAIM);
+    const result = await context.client.execute(DUE_WORK_CLAIM_RESULT);
+    await context.client.execute(DUE_WORK_EMPTY_READ);
+    const durationMs = Math.max(0, context.now() - startedAt);
+    await context.client.execute({
+      args: ["youtube-provenance-findings", "synthetic-worker", "synthetic-claim-token"],
+      sql: `update due_work set state = 'ready', claim_token = null,
+            claim_expires_at = null, claimed_by = null
+            where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?`,
+    });
+    return {
+      affectedRowCount: mutation.rowsAffected ?? 0,
+      durationMs,
+      rawResult: result,
+      resultRowCount: result.rows.length,
+    };
+  },
+  id: "fixture.due-work-claim",
+  iterations: 20,
+  plan: {
+    policy: {
+      forbidTempSort: true,
+      growingTables: ["due_work"],
+      requiredDetails: [/due_work_claim_idx/i, /due_work_ready_idx/i, /due_work_scheduled_idx/i],
+    },
+    statement: DUE_WORK_CLAIM,
+  },
+  validate(execution) {
+    return execution.resultRowCount === 25
+      ? []
+      : [`bounded due-work claim returned ${execution.resultRowCount} rows`];
+  },
+  warmupIterations: 2,
+  workClass: "queue",
+});
+
+performanceRegistry.register(
+  sqlContract({
+    description: "A bounded due-work ready read seeks the maintained backlog index",
+    id: "fixture.due-work-ready",
+    iterations: 20,
+    plan: {
+      policy: {
+        forbidTempSort: true,
+        growingTables: ["due_work"],
+        requiredDetails: [/due_work_ready_idx/i],
+      },
+      statement: DUE_WORK_READY_READ,
+    },
+    statement: DUE_WORK_READY_READ,
+    validate(execution) {
+      return execution.resultRowCount === 25
+        ? []
+        : [`bounded due-work read returned ${execution.resultRowCount} rows`];
+    },
+    warmupIterations: 2,
+    workClass: "queue",
+  }),
+);
+
+const DUE_WORK_EMPTY_READ = {
+  args: ["analyze-findings", 1],
+  sql: `select subject_id from due_work
+    where work_kind = ? and state = 'ready'
+    order by sort_key, subject_id
+    limit ?`,
+};
+
+performanceRegistry.register(
+  sqlContract({
+    description: "An empty due-work probe seeks the same ready index without a source scan",
+    id: "fixture.due-work-ready-empty",
+    iterations: 20,
+    plan: {
+      policy: {
+        forbidTempSort: true,
+        growingTables: ["due_work"],
+        requiredDetails: [/due_work_ready_idx/i],
+      },
+      statement: DUE_WORK_EMPTY_READ,
+    },
+    statement: DUE_WORK_EMPTY_READ,
+    validate(execution) {
+      return execution.resultRowCount === 0
+        ? []
+        : [`empty due-work read returned ${execution.resultRowCount} rows`];
+    },
+    warmupIterations: 2,
+    workClass: "queue",
+  }),
+);
+
 performanceRegistry.register({
   description: "Held heavy reader, public reads, and serialized batches honor per-client bounds",
   async execute() {

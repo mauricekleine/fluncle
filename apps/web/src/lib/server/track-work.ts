@@ -83,6 +83,12 @@ import { LONG_FORM_MS, MIN_TRACK_MS } from "./catalogue";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import {
+  countTrackWorkDue,
+  isTrackWorkDueCutoverEnabled,
+  readTrackWorkDueIds,
+} from "./due-work-cutover";
+import { type DueWorkClient } from "./due-work";
+import {
   CAPTURE_FAILED_COOLDOWN_MS,
   CAPTURE_MAX_FAILURES,
   readArtistYoutubeChannelIdsByTrack,
@@ -840,6 +846,30 @@ const LADDER_KINDS = new Set<TrackWorkKind>(["capture", "youtube-provenance"]);
 /** The hard ceiling on one worklist read — a sweep acts on a far smaller batch than this. */
 const MAX_WORK_LIMIT = 200;
 
+/** Hydrate only the bounded ID page selected by the due-work projection, in projection order. */
+async function hydrateWorkRows(db: DueWorkClient, trackIds: readonly string[]): Promise<WorkRow[]> {
+  if (trackIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: [...trackIds],
+    sql: `select ${WORK_SELECT}
+          from tracks t
+          left join findings f on f.track_id = t.track_id
+          where t.track_id in (${placeholders})`,
+  });
+  const rowsById = new Map(
+    typedRows<WorkRow>(result.rows).map((row) => [row.track_id, row] as const),
+  );
+
+  return trackIds.flatMap((trackId) => {
+    const row = rowsById.get(trackId);
+    return row === undefined ? [] : [row];
+  });
+}
+
 /**
  * Read one stage's worklist, in the order the money should be spent.
  *
@@ -877,64 +907,80 @@ export async function listTrackWork(options: {
   // narrowing is the whole safety property: the brake stops the catalogue, never the archive.
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
 
-  const kindWhere = kindClause(kind);
-  // The anchor-family worklists ride the existing anchor index order; on `isrc-recovery`,
-  // `has_isrc` is fixed at 0, so `has_embedding` is the next indexed key and embedded rows come
-  // first without a new index. The re-verdict rides its round-robin (oldest-ruled first). Those
-  // specialist orders do NOT begin with certification and must remain single reads; every other
-  // kind — the provenance backfill included — rides the split shared ladder below.
-  const specialistOrder =
-    kind === "anchor" || kind === "isrc-recovery"
-      ? ANCHOR_ORDER
-      : kind === "youtube-reverdict"
-        ? REVERDICT_ORDER
-        : null;
   const db = await getDb();
-
-  const readRows = async (where: string, order: string, limit: number): Promise<WorkRow[]> => {
-    const result = await db.execute({
-      args: [...kindWhere.args, limit],
-      // INDEXED BY on the anchor kind is load-bearing, not a hint. `tracks_anchor_order_idx` exists
-      // for exactly this ORDER BY — same four columns, same direction, partial on `spotify_uri is
-      // null` — so it walks in order and stops at LIMIT. The planner does not choose it: hosted
-      // Turso rejects ANALYZE, so with no statistics it prefers an equality seek it can SEE
-      // (`tracks_vendor_worklist_idx`, `is_catalogue=? AND capture_priority>?`) over an ordered walk
-      // whose benefit it cannot measure, then pays `USE TEMP B-TREE FOR ORDER BY` over the result.
-      // Measured on prod, plan only:
-      //
-      //   planner's choice: SEARCH t USING tracks_vendor_worklist_idx + TEMP B-TREE FOR ORDER BY
-      //   INDEXED BY:       SCAN t USING tracks_anchor_order_idx, no sort
-      //
-      // The planner cannot value an ordering, only a filter — so every index added for some other
-      // query becomes a more attractive wrong answer here. Pinning is the only stable fix.
-      sql: `select ${WORK_SELECT}
-            from tracks t${order === ANCHOR_ORDER ? " indexed by tracks_anchor_order_idx" : ""}
-            left join findings f on f.track_id = t.track_id
-            where ${where} and ${kindWhere.sql}
-            ${order}
-            limit ?`,
-    });
-
-    return typedRows<WorkRow>(result.rows);
-  };
+  const dueCutoverEnabled = await isTrackWorkDueCutoverEnabled();
 
   let rows: WorkRow[];
 
-  if (specialistOrder !== null) {
-    rows = await readRows(scopeClause(effectiveScope), specialistOrder, page);
+  if (dueCutoverEnabled) {
+    const selectedIds = await readTrackWorkDueIds(db, {
+      kind,
+      limit: page,
+      scope: effectiveScope,
+    });
+    rows = await hydrateWorkRows(db, selectedIds);
   } else {
-    const halves: Exclude<TrackWorkScope, "all">[] =
-      effectiveScope === "all" ? ["findings", "catalogue"] : [effectiveScope];
-    rows = [];
+    // GOAL H CONTRACTION: this is the unchanged source-table selector retained while Goal C's
+    // default-off cutover proves the due_work projection. Delete this branch only after the
+    // projection has been promoted and its compatibility evidence is complete.
+    const kindWhere = kindClause(kind);
+    // The anchor-family worklists ride the existing anchor index order; on `isrc-recovery`,
+    // `has_isrc` is fixed at 0, so `has_embedding` is the next indexed key and embedded rows come
+    // first without a new index. The re-verdict rides its round-robin (oldest-ruled first). Those
+    // specialist orders do NOT begin with certification and must remain single reads; every other
+    // kind — the provenance backfill included — rides the split shared ladder below.
+    const specialistOrder =
+      kind === "anchor" || kind === "isrc-recovery"
+        ? ANCHOR_ORDER
+        : kind === "youtube-reverdict"
+          ? REVERDICT_ORDER
+          : null;
 
-    for (const half of halves) {
-      const remaining = page - rows.length;
+    const readRows = async (where: string, order: string, limit: number): Promise<WorkRow[]> => {
+      const result = await db.execute({
+        args: [...kindWhere.args, limit],
+        // INDEXED BY on the anchor kind is load-bearing, not a hint. `tracks_anchor_order_idx` exists
+        // for exactly this ORDER BY — same four columns, same direction, partial on `spotify_uri is
+        // null` — so it walks in order and stops at LIMIT. The planner does not choose it: hosted
+        // Turso rejects ANALYZE, so with no statistics it prefers an equality seek it can SEE
+        // (`tracks_vendor_worklist_idx`, `is_catalogue=? AND capture_priority>?`) over an ordered walk
+        // whose benefit it cannot measure, then pays `USE TEMP B-TREE FOR ORDER BY` over the result.
+        // Measured on prod, plan only:
+        //
+        //   planner's choice: SEARCH t USING tracks_vendor_worklist_idx + TEMP B-TREE FOR ORDER BY
+        //   INDEXED BY:       SCAN t USING tracks_anchor_order_idx, no sort
+        //
+        // The planner cannot value an ordering, only a filter — so every index added for some other
+        // query becomes a more attractive wrong answer here. Pinning is the only stable fix.
+        sql: `select ${WORK_SELECT}
+              from tracks t${order === ANCHOR_ORDER ? " indexed by tracks_anchor_order_idx" : ""}
+              left join findings f on f.track_id = t.track_id
+              where ${where} and ${kindWhere.sql}
+              ${order}
+              limit ?`,
+      });
 
-      if (remaining === 0) {
-        break;
+      return typedRows<WorkRow>(result.rows);
+    };
+
+    if (specialistOrder !== null) {
+      rows = await readRows(scopeClause(effectiveScope), specialistOrder, page);
+    } else {
+      const halves: Exclude<TrackWorkScope, "all">[] =
+        effectiveScope === "all" ? ["findings", "catalogue"] : [effectiveScope];
+      rows = [];
+
+      for (const half of halves) {
+        const remaining = page - rows.length;
+
+        if (remaining === 0) {
+          break;
+        }
+
+        rows.push(
+          ...(await readRows(workHalfClause(kind, half), workOrder(kind, half), remaining)),
+        );
       }
-
-      rows.push(...(await readRows(workHalfClause(kind, half), workOrder(kind, half), remaining)));
     }
   }
 
@@ -1066,6 +1112,13 @@ export async function countTrackWork(options: {
   }
 
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
+  const db = await getDb();
+
+  if (await isTrackWorkDueCutoverEnabled()) {
+    return countTrackWorkDue(db, { kind, scope: effectiveScope });
+  }
+
+  // GOAL H CONTRACTION: this source-table count remains only as the default-off rollback path.
   const kindWhere = kindClause(kind);
   const where = `${scopeClause(effectiveScope)} and ${kindWhere.sql}`;
 
@@ -1079,7 +1132,6 @@ export async function countTrackWork(options: {
   // alias, so any `f.` fragment — the `findings`/`catalogue` scopes' `f.track_id`, `capture`'s
   // `f.log_id` — pulls the join in, and `embed`/`analyze` at `scope=all` (no `f.` at all) drop it.
   const needsFindings = where.includes("f.");
-  const db = await getDb();
   const result = await db.execute({
     args: kindWhere.args,
     sql: `select count(*) as queued

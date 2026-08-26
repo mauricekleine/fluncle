@@ -56,6 +56,7 @@ describe("synthetic database performance fixture", () => {
 
     expect(chunks).toBeGreaterThan(8);
     expect(counts).toEqual({
+      due_work: SMALL_COUNTS.youtubeProvenanceBacklog + SMALL_COUNTS.musicbrainzIsrcBacklog,
       perf_albums: SMALL_COUNTS.albums,
       perf_artists: SMALL_COUNTS.artists,
       perf_crawl_frontier: SMALL_COUNTS.crawlFrontier,
@@ -147,6 +148,9 @@ describe("synthetic database performance fixture", () => {
           "select count(*) as n from perf_crawl_frontier where state = 'pending'",
         ),
       ).toBe(23);
+      expect(await scalar(client, "select count(*) as n from due_work where state = 'ready'")).toBe(
+        30,
+      );
     } finally {
       client.close();
     }

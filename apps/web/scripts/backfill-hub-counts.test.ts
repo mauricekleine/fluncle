@@ -69,6 +69,15 @@ describe("backfillHubCounts", () => {
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 3 });
+    const markers = await db.execute({
+      sql: `select subject_type, subject_id from due_work where work_kind = 'source-repair'
+            order by subject_type, subject_id`,
+    });
+    expect(markers.rows.map((row) => [row.subject_type, row.subject_id])).toEqual([
+      ["album", "alb-1"],
+      ["artist", "art-1"],
+      ["label", "lab-1"],
+    ]);
   });
 
   it("leaves an entity with no linked tracks at the DDL default of 0", async () => {

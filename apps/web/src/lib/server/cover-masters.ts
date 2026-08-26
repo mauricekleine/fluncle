@@ -35,6 +35,9 @@
 
 import { appleArtworkUrl } from "./apple-music";
 import { getDb, typedRows } from "./db";
+import { markDueWorkSourceRepairsFromSelectStatement } from "./due-work";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import { encodeDueWorkOrder } from "./due-work-order";
 import { logEvent } from "./log";
 import { albumCoverAtSize } from "../media";
 
@@ -340,6 +343,82 @@ type ArtistWorkRow = {
   slug: string;
 };
 
+function coverMasterContinuation(
+  cursor: string | undefined,
+): { sortKey: string; subjectId: string } | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  return {
+    sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: cursor }]),
+    subjectId: cursor,
+  };
+}
+
+function restoreCoverMasterOrder<Row extends { slug: string }>(
+  rows: Row[],
+  subjectIds: readonly string[],
+): Row[] {
+  const bySlug = new Map(rows.map((row) => [row.slug, row]));
+  return subjectIds.flatMap((slug) => {
+    const row = bySlug.get(slug);
+    return row === undefined ? [] : [row];
+  });
+}
+
+async function listProjectedAlbums(
+  limit: number,
+  cursor: string | undefined,
+): Promise<AlbumWorkRow[]> {
+  const db = await getDb();
+  const page = await readPromotedDueWorkPage(db, "album.cover-master", {
+    continuation: coverMasterContinuation(cursor),
+    limit,
+  });
+
+  if (page.subjectIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = page.subjectIds.map(() => "?").join(", ");
+  const cover = `(select t.album_image_url from tracks t
+                   where t.album_id = albums.id and t.album_image_url is not null limit 1) as cover_url`;
+  const result = await db.execute({
+    args: page.subjectIds,
+    sql: `select slug, artwork_url_template, artwork_width, artwork_height, image_failures, ${cover}
+          from albums
+          where slug in (${placeholders})`,
+  });
+
+  return restoreCoverMasterOrder(typedRows<AlbumWorkRow>(result.rows), page.subjectIds);
+}
+
+async function listProjectedArtists(
+  limit: number,
+  cursor: string | undefined,
+): Promise<ArtistWorkRow[]> {
+  const db = await getDb();
+  const page = await readPromotedDueWorkPage(db, "artist.cover-master", {
+    continuation: coverMasterContinuation(cursor),
+    limit,
+  });
+
+  if (page.subjectIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = page.subjectIds.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: page.subjectIds,
+    sql: `select slug, image_url, image_failures
+          from artists
+          where slug in (${placeholders})`,
+  });
+
+  return restoreCoverMasterOrder(typedRows<ArtistWorkRow>(result.rows), page.subjectIds);
+}
+
 /**
  * One bounded page of the ALBUM worklist: `pending` albums not cooling down, slug-cursored. A
  * representative `cover_url` is pulled from any track on the album (the Spotify/CAA floor); the
@@ -420,25 +499,51 @@ async function markResolved(
 
   // A resolved master IS a visible change to the picture, so bump `updated_at` (the sitemap
   // lastmod) AND `image_updated_at` (the `?v` rendition-cache bust — media.ts).
-  await db.execute({
-    args: [imageKey, source, now, now, now, slug],
-    sql: `update ${table}
-          set image_key = ?, image_source = ?, image_state = 'resolved', image_failures = 0,
-              image_attempted_at = ?, image_updated_at = ?, updated_at = ?
-          where slug = ?`,
-  });
+  await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        kind,
+        {
+          args: [slug],
+          sql: `select id as subject_id from ${table} where slug = ?`,
+        },
+        { producer: "cover-master-resolved" },
+      ),
+      {
+        args: [imageKey, source, now, now, now, slug],
+        sql: `update ${table}
+              set image_key = ?, image_source = ?, image_state = 'resolved', image_failures = 0,
+                  image_attempted_at = ?, image_updated_at = ?, updated_at = ?
+              where slug = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 async function markNone(kind: CoverMasterKind, slug: string): Promise<void> {
   const db = await getDb();
   const table = kind === "album" ? "albums" : "artists";
 
-  await db.execute({
-    args: [new Date().toISOString(), slug],
-    sql: `update ${table}
-          set image_state = 'none', image_failures = 0, image_attempted_at = ?
-          where slug = ?`,
-  });
+  await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        kind,
+        {
+          args: [slug],
+          sql: `select id as subject_id from ${table} where slug = ?`,
+        },
+        { producer: "cover-master-none" },
+      ),
+      {
+        args: [new Date().toISOString(), slug],
+        sql: `update ${table}
+              set image_state = 'none', image_failures = 0, image_attempted_at = ?
+              where slug = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 /**
@@ -455,12 +560,25 @@ async function recordFailure(
   const failures = priorFailures + 1;
   const giveUp = failures >= MAX_FAILURES;
 
-  await db.execute({
-    args: [failures, giveUp ? "none" : "pending", new Date().toISOString(), slug],
-    sql: `update ${table}
-          set image_failures = ?, image_state = ?, image_attempted_at = ?
-          where slug = ?`,
-  });
+  await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        kind,
+        {
+          args: [slug],
+          sql: `select id as subject_id from ${table} where slug = ?`,
+        },
+        { producer: "cover-master-failure" },
+      ),
+      {
+        args: [failures, giveUp ? "none" : "pending", new Date().toISOString(), slug],
+        sql: `update ${table}
+              set image_failures = ?, image_state = ?, image_attempted_at = ?
+              where slug = ?`,
+      },
+    ],
+    "write",
+  );
 }
 
 /**
@@ -495,12 +613,25 @@ async function requeueTerminalNone(
 
   const placeholders = slugs.map(() => "?").join(", ");
 
-  await db.execute({
-    args: slugs,
-    sql: `update ${table}
-          set image_state = 'pending', image_failures = 0, image_attempted_at = null
-          where slug in (${placeholders})`,
-  });
+  await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        kind,
+        {
+          args: slugs,
+          sql: `select id as subject_id from ${table} where slug in (${placeholders})`,
+        },
+        { producer: "cover-master-requeue" },
+      ),
+      {
+        args: slugs,
+        sql: `update ${table}
+              set image_state = 'pending', image_failures = 0, image_attempted_at = null
+              where slug in (${placeholders})`,
+      },
+    ],
+    "write",
+  );
   logEvent("info", "cover-masters.requeued", { count: slugs.length, kind });
 
   return slugs;
@@ -618,11 +749,30 @@ export async function resolveCoverMasters(
   retryNone = false,
 ): Promise<CoverMastersResult> {
   const batchLimit = Math.max(1, Math.min(limit, MAX_BATCH));
-  const requeued = retryNone ? await requeueTerminalNone(kind, batchLimit, dryRun) : [];
-  const rows =
-    kind === "album"
-      ? await listPendingAlbums(batchLimit, cursor)
-      : await listPendingArtists(batchLimit, cursor);
+  let requeued: string[] = [];
+  let rows: AlbumWorkRow[] | ArtistWorkRow[];
+
+  if (retryNone) {
+    // OUTSIDE THE RECURRING REGISTRY SWEEP. GOAL H CONTRACTION: retry=none is an explicit
+    // operator heal and stays wholly on the unchanged legacy selector until contraction.
+    requeued = await requeueTerminalNone(kind, batchLimit, dryRun);
+    rows =
+      kind === "album"
+        ? await listPendingAlbums(batchLimit, cursor)
+        : await listPendingArtists(batchLimit, cursor);
+  } else if (await isDueWorkCutoverEnabled()) {
+    rows =
+      kind === "album"
+        ? await listProjectedAlbums(batchLimit, cursor)
+        : await listProjectedArtists(batchLimit, cursor);
+  } else {
+    // GOAL H CONTRACTION: this is the unchanged source-table selector retained while Goal C's
+    // default-off cutover proves the due_work projection.
+    rows =
+      kind === "album"
+        ? await listPendingAlbums(batchLimit, cursor)
+        : await listPendingArtists(batchLimit, cursor);
+  }
 
   const resolved: string[] = [];
   const none: string[] = [];

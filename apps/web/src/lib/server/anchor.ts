@@ -82,6 +82,10 @@ import {
 } from "./anchor-spotify-search";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
+import {
+  batchDueWorkSourceMutation,
+  markDueWorkSourceRepairsFromSelectStatement,
+} from "./due-work";
 import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
 import { FILL_ISRC_SQL } from "./isrc";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
@@ -589,13 +593,20 @@ export async function anchorTrack(
     // UNLESS this is the free rung (`stampOnMiss: false`), which must not back a row off before the
     // metered Apify fallback has had its turn on it (see the doc above).
     if (stampOnMiss) {
-      await db.execute({
-        args: [now, trackId],
-        sql: `update tracks
-              set spotify_anchor_attempted_at = ?,
-                  spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
-              where track_id = ?`,
-      });
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [now, trackId],
+            sql: `update tracks
+                  set spotify_anchor_attempted_at = ?,
+                      spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+                  where track_id = ?`,
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { producer: "anchor-miss" },
+      );
     }
 
     return { anchored: false, verifiedBy: null };
@@ -605,7 +616,8 @@ export async function anchorTrack(
   const candidateIsrc = verified.isrc?.trim() ? verified.isrc.trim() : null;
   const expectedIsrc = row.isrc ?? candidateIsrc;
 
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         args: [
@@ -652,7 +664,8 @@ export async function anchorTrack(
       },
       updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),
     ],
-    "write",
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "anchor-hit" },
   );
 
   // Connect the artists by their stable Spotify id, off the SAME candidate — no extra call. A
@@ -1139,12 +1152,19 @@ export async function recoverIsrcViaDeezer(
       // isrc-recovery sweep sends `[]` solely after an `ok` Deezer response; quota and transport
       // outcomes never call `resolve_anchor`. The Worker-self-fetched client still collapses its
       // empty and failed outcomes, so absence of supplied candidates must remain unstamped.
-      await db.execute({
-        args: [new Date().toISOString(), trackId],
-        sql: `update tracks
-              set isrc_recovery_attempted_at = ?
-              where track_id = ?`,
-      });
+      await batchDueWorkSourceMutation(
+        db,
+        [
+          {
+            args: [new Date().toISOString(), trackId],
+            sql: `update tracks
+                  set isrc_recovery_attempted_at = ?
+                  where track_id = ?`,
+          },
+        ],
+        [{ subjectId: trackId, subjectType: "track" }],
+        { producer: "isrc-recovery-empty" },
+      );
     }
 
     return undefined;
@@ -1194,15 +1214,22 @@ export async function recoverIsrcViaDeezer(
     const missAt = new Date().toISOString();
     const recoveryAttemptedAt = suppliedCandidates === undefined ? null : missAt;
 
-    await db.execute({
-      args: [missAt, missAt, recoveryAttemptedAt, trackId],
-      sql: `update tracks
-            set isrc_attempted_at = ?,
-                backfill_deezer_attempted_at = ?,
-                backfill_deezer_attempts = backfill_deezer_attempts + 1,
-                isrc_recovery_attempted_at = coalesce(?, isrc_recovery_attempted_at)
-            where track_id = ?`,
-    });
+    await batchDueWorkSourceMutation(
+      db,
+      [
+        {
+          args: [missAt, missAt, recoveryAttemptedAt, trackId],
+          sql: `update tracks
+                set isrc_attempted_at = ?,
+                    backfill_deezer_attempted_at = ?,
+                    backfill_deezer_attempts = backfill_deezer_attempts + 1,
+                    isrc_recovery_attempted_at = coalesce(?, isrc_recovery_attempted_at)
+                where track_id = ?`,
+        },
+      ],
+      [{ subjectId: trackId, subjectType: "track" }],
+      { producer: "isrc-recovery-miss" },
+    );
 
     return undefined;
   }
@@ -1240,7 +1267,8 @@ export async function recoverIsrcViaDeezer(
   const deezerWonAt = deezerTrackId === null ? null : now;
   const recoveryAttemptedAt = suppliedCandidates === undefined ? null : now;
 
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         args: [
@@ -1271,7 +1299,8 @@ export async function recoverIsrcViaDeezer(
       },
       updateTrackDuplicateIsrcStatement(trackId, recovered),
     ],
-    "write",
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "isrc-recovery-hit" },
   );
 
   return recovered;
@@ -1293,13 +1322,20 @@ async function stampAnchorAttempt(
   trackId: string,
   now: Date,
 ): Promise<void> {
-  await db.execute({
-    args: [now.toISOString(), trackId],
-    sql: `update tracks
-          set spotify_anchor_attempted_at = ?,
-              spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
-          where track_id = ?`,
-  });
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [now.toISOString(), trackId],
+        sql: `update tracks
+              set spotify_anchor_attempted_at = ?,
+                  spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1
+              where track_id = ?`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "anchor-stamp" },
+  );
 }
 
 /**
@@ -1324,17 +1360,34 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
 
   const db = await getDb();
   const placeholders = trackIds.map(() => "?").join(", ");
-  const result = await db.execute({
+  const source = {
     args: trackIds,
-    sql: `update tracks
-          set spotify_anchor_attempted_at = null
+    sql: `select track_id as subject_id from tracks
           where track_id in (${placeholders})
             and spotify_uri is null
             and spotify_anchor_attempted_at is not null
             and has_isrc = 1`,
-  });
+  };
+  const results = await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement("track", source, {
+        producer: "anchor-requeue",
+      }),
+      {
+        args: trackIds,
+        sql: `update tracks
+              set spotify_anchor_attempted_at = null
+              where track_id in (${placeholders})
+                and spotify_uri is null
+                and spotify_anchor_attempted_at is not null
+                and has_isrc = 1`,
+      },
+    ],
+    "write",
+  );
+  const result = results[1];
 
-  return result.rowsAffected;
+  return result?.rowsAffected ?? 0;
 }
 
 /**
@@ -1871,7 +1924,8 @@ export async function resolveAnchorReview(
   const candidateIsrc = review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null;
   const expectedIsrc = row.isrc ?? candidateIsrc;
 
-  await db.batch(
+  await batchDueWorkSourceMutation(
+    db,
     [
       {
         args: [
@@ -1903,7 +1957,8 @@ export async function resolveAnchorReview(
       },
       updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),
     ],
-    "write",
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "anchor-review-accept" },
   );
 
   await connectAnchorArtists(

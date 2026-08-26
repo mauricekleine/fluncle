@@ -40,6 +40,10 @@ import { type AdminRole } from "./env";
 import { type IdentityMethod } from "./identity-envelope";
 import { hasIsrc } from "./isrc";
 import { resolveLogId } from "./log-id";
+import {
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsStatement,
+} from "./due-work";
 import { ApiError } from "./spotify";
 import { checkYoutubeOfficial } from "./youtube-official";
 import { upsertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
@@ -1162,6 +1166,20 @@ export async function updateTrack(
         ]
       : []),
     ...(embeddingStatement ? [embeddingStatement] : []),
+    markDueWorkSourceRepairsStatement(
+      [
+        { subjectId: trackId, subjectType: "track" },
+        ...(embeddingStatement
+          ? [
+              {
+                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                subjectType: "track" as const,
+              },
+            ]
+          : []),
+      ],
+      { producer: "track-update" },
+    ),
   ];
 
   await db.batch(statements, "write");
@@ -1221,15 +1239,25 @@ export async function fillEmptyNote(
   // `promptVersion` is undefined for an operator-typed note and null when the sweep fell
   // back to its baked-in prompt — both store NULL, which reads as "no registry prompt
   // wrote this".
-  const result = await db.execute({
-    args: [note, promptVersion ?? null, new Date().toISOString(), trackId],
-    sql: `update findings
-            set note = ?, note_prompt_version = ?, updated_at = ?
-          where track_id = ?
-            and (note is null or trim(note) = '')`,
-  });
+  const results = await db.batch(
+    [
+      {
+        args: [note, promptVersion ?? null, new Date().toISOString(), trackId],
+        sql: `update findings
+                set note = ?, note_prompt_version = ?, updated_at = ?
+              where track_id = ?
+                and (note is null or trim(note) = '')`,
+      },
+      markDueWorkSourceRepairsStatement([{ subjectId: trackId, subjectType: "track" }], {
+        onlyIfPreviousStatementChanged: true,
+        producer: "track-note-fill",
+      }),
+    ],
+    "write",
+  );
+  const result = results[0];
 
-  const filled = result.rowsAffected > 0;
+  const filled = (result?.rowsAffected ?? 0) > 0;
 
   if (filled) {
     // Only when the fill actually wrote: refresh the finding's cached `/log` page and the

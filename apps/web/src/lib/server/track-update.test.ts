@@ -18,7 +18,13 @@ vi.mock("./db", () => ({
   // UPDATE — one call per statement, in order, with its bound args.
   getDb: async () => ({
     batch: (statements: { args?: unknown[]; sql: string }[]) =>
-      Promise.all(statements.map((statement) => execute(statement))),
+      Promise.all(
+        statements.map((statement) =>
+          statement.sql.includes("insert into due_work")
+            ? Promise.resolve({ rows: [], rowsAffected: 1 })
+            : execute(statement),
+        ),
+      ),
     execute,
   }),
   typedRow: <T extends object>(rows: T[]) => rows[0],

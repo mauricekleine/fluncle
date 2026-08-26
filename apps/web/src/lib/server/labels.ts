@@ -33,6 +33,13 @@ import { bestAlbumCoverUrl, labelLogoUrl } from "../media";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankByLabelStatement } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
+import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
+import {
+  type DueWorkStatement,
+  DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+  markDueWorkSourceRepairsFromSelectStatement,
+  markDueWorkSourceRepairsStatement,
+} from "./due-work";
 import {
   type HubOrderedPageShape,
   type HubPageAnchor,
@@ -245,13 +252,23 @@ export async function ensureLabel(
   }
 
   const now = new Date().toISOString();
+  const labelId = `lbl_${randomUUID()}`;
 
-  await db.execute({
-    args: [`lbl_${randomUUID()}`, raw.trim(), slug, mbid, now, now],
-    sql: `insert into labels (id, name, slug, mb_label_id, created_at, updated_at)
-          values (?, ?, ?, ?, ?, ?)
-          on conflict (slug) do nothing`,
-  });
+  await db.batch(
+    [
+      {
+        args: [labelId, raw.trim(), slug, mbid, now, now],
+        sql: `insert into labels (id, name, slug, mb_label_id, created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?)
+              on conflict (slug) do nothing`,
+      },
+      markDueWorkSourceRepairsStatement([{ subjectId: labelId, subjectType: "label" }], {
+        onlyIfPreviousStatementChanged: true,
+        producer: "label-mint",
+      }),
+    ],
+    "write",
+  );
 
   const result = await db.execute({
     args: [slug],
@@ -1806,14 +1823,24 @@ export async function reconcileLabels(): Promise<number> {
   const now = new Date().toISOString();
 
   for (const [slug, name] of bySlug) {
-    const inserted = await db.execute({
-      args: [`lbl_${randomUUID()}`, name, slug, now, now],
-      sql: `insert into labels (id, name, slug, created_at, updated_at)
-            values (?, ?, ?, ?, ?)
-            on conflict (slug) do nothing`,
-    });
+    const labelId = `lbl_${randomUUID()}`;
+    const [inserted] = await db.batch(
+      [
+        {
+          args: [labelId, name, slug, now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
+                on conflict (slug) do nothing`,
+        },
+        markDueWorkSourceRepairsStatement([{ subjectId: labelId, subjectType: "label" }], {
+          onlyIfPreviousStatementChanged: true,
+          producer: "label-reconcile-mint",
+        }),
+      ],
+      "write",
+    );
 
-    minted += inserted.rowsAffected;
+    minted += inserted?.rowsAffected ?? 0;
   }
 
   return minted;
@@ -2003,17 +2030,44 @@ export async function updateLabelSeedState(
   assignments.push("updated_at = ?");
   args.push(now, id);
 
-  const statements = [
+  const statements: DueWorkStatement[] = [
     {
       args,
       sql: `update labels set ${assignments.join(", ")} where id = ?`,
     },
+    markDueWorkSourceRepairsStatement(
+      [
+        { subjectId: id, subjectType: "label" },
+        ...(seedState === undefined
+          ? []
+          : [
+              {
+                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                subjectType: "track" as const,
+              },
+            ]),
+      ],
+      {
+        onlyIfPreviousStatementChanged: true,
+        producer: "label-seed-state",
+      },
+    ),
   ];
 
   // A seed-state ruling changes capture authorization and owes The Ear a re-rank. A bare re-walk
   // changes only crawl scheduling, so it deliberately leaves catalogue ranking fresh.
   if (seedState !== undefined) {
-    statements.push(restaleCatalogueRankByLabelStatement(id));
+    statements.push(
+      restaleCatalogueRankByLabelStatement(id),
+      markDueWorkSourceRepairsFromSelectStatement(
+        "track",
+        {
+          args: [id],
+          sql: `select track_id as subject_id from tracks where label_id = ?`,
+        },
+        { producer: "label-seed-state" },
+      ),
+    );
   }
 
   await db.batch(statements, "write");
@@ -2063,16 +2117,30 @@ export async function fillEmptyLabelBio(
   const db = await getDb();
   const now = new Date().toISOString();
   const [bypassedAt, violations] = bioBypassColumns(gateBypass, now);
-  const result = await db.execute({
-    args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
-    sql: `update labels
-            set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
-                bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
-          where slug = ?
-            and (bio is null or trim(bio) = '')`,
-  });
+  const [, result] = await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        "label",
+        {
+          args: [slug],
+          sql: `select id as subject_id from labels
+                where slug = ? and (bio is null or trim(bio) = '')`,
+        },
+        { producer: "label-bio-fill" },
+      ),
+      {
+        args: [bio, promptVersion ?? null, bypassedAt, violations, now, slug],
+        sql: `update labels
+                set bio = ?, bio_prompt_version = ?, bio_status = 'resolved',
+                    bio_gate_bypassed_at = ?, bio_voice_violations = ?, updated_at = ?
+              where slug = ?
+                and (bio is null or trim(bio) = '')`,
+      },
+    ],
+    "write",
+  );
 
-  return result.rowsAffected > 0;
+  return (result?.rowsAffected ?? 0) > 0;
 }
 
 /** One row of the bio worklist: a label with findings but no bio yet. */
@@ -2099,6 +2167,28 @@ export type LabelBioWorkItem = { id: string; name: string; slug: string };
  */
 export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkItem[]> {
   const db = await getDb();
+
+  if (await isDueWorkCutoverEnabled()) {
+    const page = await readPromotedDueWorkPage(db, "label.bio", { limit });
+    if (page.subjectIds.length === 0) {
+      return [];
+    }
+
+    const result = await db.execute({
+      args: page.subjectIds,
+      sql: `select id, name, slug from labels
+            where id in (${page.subjectIds.map(() => "?").join(", ")})`,
+    });
+    const hydratedById = new Map(
+      typedRows<LabelBioWorkItem>(result.rows).map((row) => [row.id, row] as const),
+    );
+    return page.subjectIds.flatMap((id) => {
+      const row = hydratedById.get(id);
+      return row ? [row] : [];
+    });
+  }
+
+  // GOAL H: unchanged generic legacy selector retained behind the default-off cutover flag.
   const result = await db.execute({
     args: [LABEL_INDEX_MIN_TRACKS, limit],
     sql: `select l.id, l.name, l.slug
@@ -2548,22 +2638,49 @@ export async function mergeLabel(
     // 8: scoped rules belong to this exact label identity. Never repoint or union the losing set
     //    onto the canonical, because either move can invert the survivor's operator intent.
     { args: [loser.id], sql: `delete from artist_rules where label_id = ?` },
+    // The slug-keyed image projection cannot recover the loser's slug after statement 0. Remove
+    // both entity identity forms in this same transaction; the canonical marker below rebuilds it.
+    {
+      args: [loser.id, loser.slug],
+      sql: `delete from due_work where subject_type = 'label' and subject_id in (?, ?)`,
+    },
   ];
 
-  const results = await db.batch(statements, "write");
+  const results = await db.batch(
+    [
+      markDueWorkSourceRepairsFromSelectStatement(
+        "track",
+        {
+          args: [loser.id],
+          sql: `select track_id as subject_id from tracks where label_id = ?`,
+        },
+        { producer: "label-merge" },
+      ),
+      ...statements,
+      markDueWorkSourceRepairsStatement(
+        [
+          { subjectId: canonical.id, subjectType: "label" },
+          { subjectId: loser.id, subjectType: "label" },
+        ],
+        { producer: "label-merge" },
+      ),
+    ],
+    "write",
+  );
+  const sourceResults = results.slice(1, 1 + statements.length);
 
   return {
     aliasWritten: { alias: loser.name, aliasSlug: loser.slug },
     canonicalName: canonical.name,
     canonicalSlug: canonical.slug,
-    droppedRules: results[8]?.rowsAffected ?? 0,
+    droppedRules: sourceResults[8]?.rowsAffected ?? 0,
     losingName: loser.name,
     losingSlug: loser.slug,
     reconciled,
     repointed: {
-      aliases: results[3]?.rowsAffected ?? 0,
-      childLabels: results[2]?.rowsAffected ?? 0,
-      tracks: results[1]?.rowsAffected ?? 0,
+      aliases: sourceResults[3]?.rowsAffected ?? 0,
+      childLabels: sourceResults[2]?.rowsAffected ?? 0,
+      tracks: sourceResults[1]?.rowsAffected ?? 0,
     },
     seedState,
   };

@@ -1432,6 +1432,105 @@ export const trackDuplicateKeys = sqliteTable(
 );
 
 /**
+ * The single maintained backlog projection for recurring database work.
+ *
+ * A row exists only while one subject has work outstanding, so an empty check probes this backlog
+ * rather than the growing source table. `sort_key` is a pre-normalized binary-order key: every
+ * queue maps its existing multi-column order onto one ascending value, which lets the shared ready
+ * index preserve each queue's exact priority without a temporary sort. Future retry windows stay
+ * `scheduled` until an indexed due-time promotion makes them `ready`; a lease never removes the row,
+ * so expiry can safely make the same unique subject claimable again.
+ *
+ * `repair` rows are transactionally coupled source-change markers. They live in this table rather
+ * than a second backlog, keeping one durable resume query for both projection maintenance and work
+ * claims. Reconciliation replaces a marker with the subject's complete derived work set in one
+ * write transaction. Built-in CDC is deliberately not part of the contract.
+ */
+export const dueWork = sqliteTable(
+  "due_work",
+  {
+    claimExpiresAt: text("claim_expires_at"),
+    claimToken: text("claim_token"),
+    claimedBy: text("claimed_by"),
+    generation: text("generation").notNull(),
+    nextDueAt: text("next_due_at").notNull(),
+    sortKey: text("sort_key").notNull(),
+    sourceVersion: text("source_version").notNull(),
+    state: text("state").notNull(),
+    subjectId: text("subject_id").notNull(),
+    subjectType: text("subject_type").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    workKind: text("work_kind").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workKind, table.subjectType, table.subjectId] }),
+    check(
+      "due_work_state_check",
+      sql`${table.state} in ('ready', 'scheduled', 'leased', 'repair')`,
+    ),
+    check(
+      "due_work_subject_type_check",
+      sql`${table.subjectType} in ('track', 'artist', 'album', 'label')`,
+    ),
+    // `sort_key` already encodes every DESC/NULLS FIRST term, so this stays plain ASC. A `.desc()`
+    // index would make drizzle-kit rebuild it on later snapshots and is unnecessary here.
+    index("due_work_ready_idx")
+      .on(table.workKind, table.state, table.sortKey, table.subjectId)
+      .where(sql`${table.state} = 'ready'`),
+    index("due_work_scheduled_idx")
+      .on(table.workKind, table.state, table.nextDueAt, table.subjectId)
+      .where(sql`${table.state} = 'scheduled'`),
+    index("due_work_repair_idx")
+      .on(table.state, table.subjectType, table.subjectId)
+      .where(sql`${table.state} = 'repair'`),
+    index("due_work_lease_idx")
+      .on(table.state, table.claimExpiresAt, table.workKind, table.subjectId)
+      .where(sql`${table.state} = 'leased'`),
+    index("due_work_claim_idx")
+      .on(
+        table.workKind,
+        table.state,
+        table.claimedBy,
+        table.claimToken,
+        table.sortKey,
+        table.subjectId,
+      )
+      .where(sql`${table.state} = 'leased'`),
+  ],
+);
+
+/**
+ * Durable per-queue checkpoints for the chunked source-of-truth rebuild.
+ *
+ * A generation is reused across retries until its final audit and stale-row prune commit together.
+ * Zero, midpoint, and complete restarts therefore resume from the last committed source cursor;
+ * starting a new generation is explicit rather than an accidental consequence of process restart.
+ */
+export const dueWorkRebuilds = sqliteTable(
+  "due_work_rebuilds",
+  {
+    completedAt: text("completed_at"),
+    cursor: text("cursor"),
+    generation: text("generation").notNull(),
+    projectedCount: integer("projected_count").notNull().default(0),
+    scannedCount: integer("scanned_count").notNull().default(0),
+    startedAt: text("started_at").notNull(),
+    state: text("state").notNull(),
+    subjectType: text("subject_type").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    workKind: text("work_kind").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workKind, table.subjectType] }),
+    check("due_work_rebuilds_state_check", sql`${table.state} in ('running', 'complete')`),
+    check(
+      "due_work_rebuilds_subject_type_check",
+      sql`${table.subjectType} in ('track', 'artist', 'album', 'label')`,
+    ),
+  ],
+);
+
+/**
  * THE CERTIFICATION LAYER — present ONLY for a track Fluncle certified.
  *
  * The SUBTYPE half of the pair: 1:1 with `tracks`, sharing its primary key

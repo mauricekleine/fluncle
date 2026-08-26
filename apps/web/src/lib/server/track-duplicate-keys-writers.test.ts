@@ -50,7 +50,7 @@ describe("track_duplicate_keys writer coverage", () => {
 
           return (
             !contents.includes("insertTrackDuplicateKeyStatement") ||
-            !contents.includes("db.batch(")
+            (!contents.includes("db.batch(") && !contents.includes("batchDueWorkSourceMutation("))
           );
         })
         .map((file) => file),

@@ -9,6 +9,7 @@ import {
   seedLabel,
   seedTrack,
 } from "./integration-db";
+import { DUE_WORK_SOURCE_REPAIR_KIND } from "./due-work";
 
 // THE HUB-COUNTS DRIFT BACKSTOP, PROVEN AGAINST THE REAL SCHEMA (docs/db-scale-backlog Wave 2
 // keystone 2, slice C).
@@ -93,6 +94,16 @@ describe("reconcileHubCounts — the grouped correction", () => {
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 3 });
+    const repairs = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: `select subject_type, subject_id from due_work
+            where work_kind = ? order by subject_type, subject_id`,
+    });
+    expect(repairs.rows).toEqual([
+      { subject_id: "alb-1", subject_type: "album" },
+      { subject_id: "art-1", subject_type: "artist" },
+      { subject_id: "lab-1", subject_type: "label" },
+    ]);
   });
 
   it("corrects an OVER-count too, not only an under-count", async () => {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { type FixtureCounts, type ScaleProfile, getScaleManifest } from "./manifest";
+import { type FixtureCounts, type ScaleProfile } from "./manifest";
 
 export const DEFAULT_FIXTURE_CHUNK_SIZE = 500;
 export const SYNTHETIC_FIXTURE_EPOCH = "2026-01-01T00:00:00.000Z";
@@ -14,6 +14,7 @@ export const FIXTURE_TABLES = [
   "perf_track_embeddings",
   "perf_track_artists",
   "perf_crawl_frontier",
+  "due_work",
 ] as const;
 
 export type FixtureTable = (typeof FIXTURE_TABLES)[number];
@@ -94,6 +95,33 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     on perf_crawl_frontier(state, id)`,
   `create index if not exists perf_tracks_label_scope_id_idx
     on perf_tracks(label_scope, id)`,
+  `create table if not exists due_work (
+    claim_expires_at text,
+    claim_token text,
+    claimed_by text,
+    generation text not null,
+    next_due_at text not null,
+    source_version text not null,
+    subject_type text not null,
+    work_kind text not null,
+    state text not null,
+    sort_key text not null,
+    subject_id text not null,
+    updated_at text not null,
+    primary key (work_kind, subject_type, subject_id)
+  )`,
+  `create index if not exists due_work_ready_idx
+    on due_work(work_kind, state, sort_key, subject_id)
+    where state = 'ready'`,
+  `create index if not exists due_work_scheduled_idx
+    on due_work(work_kind, state, next_due_at, subject_id)
+    where state = 'scheduled'`,
+  `create index if not exists due_work_lease_idx
+    on due_work(state, claim_expires_at, work_kind, subject_id)
+    where state = 'leased'`,
+  `create index if not exists due_work_claim_idx
+    on due_work(work_kind, state, claimed_by, claim_token, sort_key, subject_id)
+    where state = 'leased'`,
 ] as const;
 
 const TRACK_INSERT = `insert or ignore into perf_tracks
@@ -356,6 +384,30 @@ export async function* generateFixture(
       sql: "insert or ignore into perf_crawl_frontier (id, state, due_at) values (?, ?, ?)",
     };
   });
+
+  const dueWorkQueues = [
+    { count: counts.youtubeProvenanceBacklog, workKind: "youtube-provenance-findings" },
+    { count: counts.musicbrainzIsrcBacklog, workKind: "mbid-isrc-lookup" },
+  ] as const;
+  for (const queue of dueWorkQueues) {
+    yield* generatedChunks("due_work", queue.count, chunkSize, (index) => ({
+      args: [
+        "fixture",
+        SYNTHETIC_FIXTURE_EPOCH,
+        `fixture-${queue.workKind}-${padded(index)}`,
+        "ready",
+        padded(index),
+        `synthetic-${queue.workKind}-${padded(index)}`,
+        "track",
+        SYNTHETIC_FIXTURE_EPOCH,
+        queue.workKind,
+      ],
+      sql: `insert or ignore into due_work
+        (generation, next_due_at, source_version, state, sort_key, subject_id,
+         subject_type, updated_at, work_kind)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    }));
+  }
 }
 
 export async function applyFixtureSchema(sink: FixtureBatchSink): Promise<void> {

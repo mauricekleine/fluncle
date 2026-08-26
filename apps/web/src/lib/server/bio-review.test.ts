@@ -70,6 +70,13 @@ describe("the bio-review ledger", () => {
     for (const table of ["artists", "labels", "albums"] as const) {
       await db.execute(`create table ${table} (${ENTITY_COLUMNS})`);
     }
+    await db.execute(`create table due_work (
+      work_kind text not null, subject_type text not null, subject_id text not null,
+      state text not null, sort_key text not null, next_due_at text not null,
+      source_version text not null, generation text not null, updated_at text not null,
+      claim_token text, claim_expires_at text, claimed_by text,
+      primary key (work_kind, subject_type, subject_id)
+    )`);
   });
 
   // ── The bypass raises a row ────────────────────────────────────────────────────────────────
@@ -168,6 +175,10 @@ describe("the bio-review ledger", () => {
     expect(stored?.bio_prompt_version).toBeNull();
     expect(stored?.bio_status).toBe("pending");
     expect(stored?.bio_gate_bypassed_at).toBeNull();
+    const marker = await db.execute(
+      `select subject_type, subject_id from due_work where work_kind = 'source-repair'`,
+    );
+    expect(marker.rows[0]).toMatchObject({ subject_id: "l1", subject_type: "label" });
   });
 
   it("re-authoring a bio that clears the gate wipes the flag in the same write", async () => {
