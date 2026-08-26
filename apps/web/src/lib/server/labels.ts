@@ -688,8 +688,8 @@ export async function maxLabelSitemapLastmod(minTracks: number): Promise<string 
     args: [minTracks],
     sql: `select max(findings.added_at) as lastmod
           from findings
-          join tracks on tracks.track_id = findings.track_id
-          join labels on labels.id = tracks.label_id
+          cross join tracks on tracks.track_id = findings.track_id
+          cross join labels on labels.id = tracks.label_id
           where labels.renderable_track_count >= ?`,
   });
 

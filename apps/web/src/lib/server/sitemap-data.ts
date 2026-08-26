@@ -177,9 +177,8 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
                    max(coalesce(findings.video_squared_at, ''),
                        coalesce(findings.updated_at, ''),
                        findings.added_at) as lastmod
-            from findings join tracks on tracks.track_id = findings.track_id
-            where findings.log_id is not null
-            order by lastmod desc`,
+            from findings cross join tracks on tracks.track_id = findings.track_id
+            where findings.log_id is not null`,
     }),
     db.execute({
       sql: `select log_id, title, note, set_video_at,
@@ -190,10 +189,11 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
     }),
   ]);
 
-  return [
-    ...typedRows<TrackRow>(trackResult.rows).map(trackPage),
-    ...typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage),
-  ];
+  const trackPages = typedRows<TrackRow>(trackResult.rows)
+    .map(trackPage)
+    .sort((left, right) => right.lastmod.localeCompare(left.lastmod));
+
+  return [...trackPages, ...typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage)];
 }
 
 // Thin-content gate: `listArtistSitemapRows` applies the floor IN SQL over RENDERABLE tracks —
@@ -291,7 +291,7 @@ async function readLogKindStats(): Promise<SitemapKindStats> {
                    max(max(coalesce(findings.video_squared_at, ''),
                            coalesce(findings.updated_at, ''),
                            findings.added_at)) as lastmod
-            from findings join tracks on tracks.track_id = findings.track_id
+            from findings cross join tracks on tracks.track_id = findings.track_id
             where findings.log_id is not null`,
     }),
     db.execute({

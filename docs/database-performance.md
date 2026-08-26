@@ -51,6 +51,8 @@ A request-time or per-tick query must not scan a growing corpus merely to prove 
 
 Every critical contract asserts output correctness and plan shape. The runner records every `EXPLAIN QUERY PLAN` detail and detects a growing-table `SCAN` and `USE TEMP B-TREE`; contracts name the growing tables, allowed exceptional scans, required index/driver details, and whether temporary sorting is forbidden. Timing is evidence, never the only regression oracle.
 
+Schema-neutral rewrite contracts execute both the reference and optimized statements over the same deterministic fixture, record both ordered outputs and row counts, measure only the optimized statement, and retain the reference plan in report metadata. The artist-link fixture includes claimed and unclaimed MBIDs, same-name collisions, name drift, null identity, duplicate credits, catalogue flags, and position ordering; its optimized plan must probe the track primary key plus the MBID and NOCASE-name artist indexes without a growing-table scan or temporary sort. Sitemap finding rows, counts, and entity lastmods must drive from `perf_findings`, probe outward by indexed keys, and preserve the reference count, null, lastmod, and ordered-row results.
+
 ## Mutation laws
 
 Background write work ultimately uses one global admission path with lease expiry, ownership, heartbeat, queue age, and contention telemetry. At most one background writer and one explicitly classified heavy reader may run concurrently once that later program goal lands. Public requests do not wait behind newly admitted best-effort sweeps: background work yields, chunks transactions, and stops renewing while health or public latency is outside its guardrail.

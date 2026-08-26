@@ -164,6 +164,59 @@ describe("performance registry", () => {
     }
   });
 
+  it("records Goal B equivalence while rejecting the original artist scan and sitemap sort", async () => {
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    const contractIds = [
+      "artist-link.identity-resolution",
+      "artist-link.name-resolution",
+      "sitemap.albums-lastmod",
+      "sitemap.artists-lastmod",
+      "sitemap.finding-pages",
+      "sitemap.finding-stats",
+      "sitemap.labels-lastmod",
+    ];
+
+    try {
+      await applyFixtureSchema(client);
+      await writeFixture(client, "1x", { counts: createCiFixtureCounts("1x", 256) });
+      const report = await runPerformanceContracts({
+        client,
+        contracts: selectPerformanceContracts(contractIds),
+        profile: "2x",
+      });
+
+      expect(report.passed).toBe(true);
+      expect(report.contracts.map((contract) => contract.contractId)).toEqual(contractIds);
+
+      for (const contract of report.contracts) {
+        expect(contract.metadata[0]?.outputsEquivalent).toBe(true);
+        expect(contract.metadata[0]?.beforeResultRowCount).toBe(contract.resultRowCount.p50);
+        expect(contract.plan?.violations).toEqual([]);
+        expect(contract.plan?.tempSorts).toEqual([]);
+      }
+
+      const artist = report.contracts.find(
+        (contract) => contract.contractId === "artist-link.identity-resolution",
+      );
+      expect(artist?.metadata[0]?.beforeFullScanCount).toBeGreaterThan(0);
+      expect(artist?.metadata[0]?.beforePlanViolationCount).toBeGreaterThan(0);
+      expect(artist?.plan?.details.some((detail) => /perf_artists_mbid_idx/i.test(detail))).toBe(
+        true,
+      );
+      expect(
+        artist?.plan?.details.some((detail) => /perf_artists_name_nocase_idx/i.test(detail)),
+      ).toBe(true);
+
+      const findingPages = report.contracts.find(
+        (contract) => contract.contractId === "sitemap.finding-pages",
+      );
+      expect(findingPages?.metadata[0]?.beforePlanDetails).toMatch(/USE TEMP B-TREE/i);
+      expect(findingPages?.plan?.details[0]).toMatch(/perf_findings/i);
+    } finally {
+      client.close();
+    }
+  });
+
   it("retains deterministic mixed-load distributions and bounds as JSON metadata", async () => {
     const report = await runPerformanceContracts({
       client: NOOP_CLIENT,

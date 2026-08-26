@@ -34,23 +34,32 @@ export type GenerateFixtureOptions = {
 export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create table if not exists perf_artists (
     id text primary key,
-    name text not null
+    name text not null,
+    mbid text,
+    renderable_track_count integer not null
   )`,
+  `create index if not exists perf_artists_mbid_idx on perf_artists(mbid)`,
+  `create index if not exists perf_artists_name_nocase_idx
+    on perf_artists(name collate nocase, id)`,
   `create table if not exists perf_labels (
     id text primary key,
-    name text not null
+    name text not null,
+    renderable_track_count integer not null
   )`,
   `create table if not exists perf_albums (
     id text primary key,
     name text not null,
-    label_id text
+    label_id text,
+    renderable_track_count integer not null
   )`,
   `create table if not exists perf_tracks (
     id text primary key,
     title text not null,
+    artists_json text not null,
     label_id text,
     album_id text,
     label_scope text not null,
+    is_catalogue integer not null,
     youtube_backlog integer not null,
     musicbrainz_isrc_backlog integer not null,
     full_analysis_backlog integer not null,
@@ -58,7 +67,10 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   )`,
   `create table if not exists perf_findings (
     track_id text primary key,
-    log_id text not null
+    log_id text not null,
+    added_at text not null,
+    updated_at text,
+    video_squared_at text
   )`,
   `create table if not exists perf_track_embeddings (
     track_id text primary key,
@@ -68,8 +80,10 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     track_id text not null,
     artist_id text not null,
     position integer not null,
-    primary key (track_id, position)
+    primary key (track_id, artist_id)
   )`,
+  `create index if not exists perf_track_artists_track_id_idx on perf_track_artists(track_id)`,
+  `create index if not exists perf_track_artists_artist_id_idx on perf_track_artists(artist_id)`,
   `create table if not exists perf_crawl_frontier (
     id text primary key,
     state text not null,
@@ -82,9 +96,9 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
 ] as const;
 
 const TRACK_INSERT = `insert or ignore into perf_tracks
-  (id, title, label_id, album_id, label_scope, youtube_backlog,
-   musicbrainz_isrc_backlog, full_analysis_backlog, created_at)
-  values (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, title, artists_json, label_id, album_id, label_scope, is_catalogue,
+   youtube_backlog, musicbrainz_isrc_backlog, full_analysis_backlog, created_at)
+  values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 const EMBEDDING_BLOB = new Uint8Array(4096);
 for (let index = 0; index < EMBEDDING_BLOB.length; index += 1) {
@@ -93,6 +107,49 @@ for (let index = 0; index < EMBEDDING_BLOB.length; index += 1) {
 
 function padded(index: number): string {
   return index.toString().padStart(9, "0");
+}
+
+function syntheticTimestamp(index: number, dayOffset = 0): string {
+  return new Date(Date.UTC(2026, 0, 1 + dayOffset, 0, 0, index)).toISOString();
+}
+
+function syntheticArtist(index: number): { mbid: null | string; name: string } {
+  if (index === 0) {
+    return { mbid: "synthetic-mbid-identity", name: "Synthetic Identity" };
+  }
+
+  if (index === 1) {
+    return { mbid: null, name: "Synthetic Collision" };
+  }
+
+  if (index === 2) {
+    return { mbid: "synthetic-mbid-collision", name: "Synthetic Collision" };
+  }
+
+  return {
+    mbid: `synthetic-mbid-${padded(index)}`,
+    name: `Synthetic Artist ${padded(index)}`,
+  };
+}
+
+function syntheticTrackCredits(index: number, artistCount: number): string[] {
+  if (index === 0) {
+    return ["Synthetic Identity"];
+  }
+
+  if (index === 1 || index === 2) {
+    return ["Synthetic Collision"];
+  }
+
+  if (index === 3) {
+    return ["Synthetic Collision", "Synthetic Identity"];
+  }
+
+  if (index === 4) {
+    return ["Synthetic Alias"];
+  }
+
+  return [syntheticArtist(index % artistCount).name];
 }
 
 function selected(index: number, total: number, selectedCount: number): boolean {
@@ -183,14 +240,20 @@ export async function* generateFixture(
 
   assertCounts(counts);
 
-  yield* generatedChunks("perf_artists", counts.artists, chunkSize, (index) => ({
-    args: [`synthetic-artist-${padded(index)}`, `Synthetic Artist ${padded(index)}`],
-    sql: "insert or ignore into perf_artists (id, name) values (?, ?)",
-  }));
+  yield* generatedChunks("perf_artists", counts.artists, chunkSize, (index) => {
+    const artist = syntheticArtist(index);
+
+    return {
+      args: [`synthetic-artist-${padded(index)}`, artist.name, artist.mbid, 4],
+      sql: `insert or ignore into perf_artists
+              (id, name, mbid, renderable_track_count) values (?, ?, ?, ?)`,
+    };
+  });
 
   yield* generatedChunks("perf_labels", counts.labels, chunkSize, (index) => ({
-    args: [`synthetic-label-${padded(index)}`, `Synthetic Label ${padded(index)}`],
-    sql: "insert or ignore into perf_labels (id, name) values (?, ?)",
+    args: [`synthetic-label-${padded(index)}`, `Synthetic Label ${padded(index)}`, 4],
+    sql: `insert or ignore into perf_labels
+            (id, name, renderable_track_count) values (?, ?, ?)`,
   }));
 
   yield* generatedChunks("perf_albums", counts.albums, chunkSize, (index) => ({
@@ -198,17 +261,21 @@ export async function* generateFixture(
       `synthetic-album-${padded(index)}`,
       `Synthetic Album ${padded(index)}`,
       `synthetic-label-${padded(index % counts.labels)}`,
+      4,
     ],
-    sql: "insert or ignore into perf_albums (id, name, label_id) values (?, ?, ?)",
+    sql: `insert or ignore into perf_albums
+            (id, name, label_id, renderable_track_count) values (?, ?, ?, ?)`,
   }));
 
   yield* generatedChunks("perf_tracks", counts.tracks, chunkSize, (index) => ({
     args: [
       `synthetic-track-${padded(index)}`,
       `Synthetic Track ${padded(index)}`,
+      JSON.stringify(syntheticTrackCredits(index, counts.artists)),
       `synthetic-label-${padded(index % counts.labels)}`,
       `synthetic-album-${padded(index % counts.albums)}`,
       selected(index, counts.tracks, counts.enabledLabelTracks) ? "enabled" : "other",
+      selected(index, counts.tracks, counts.findings) ? 0 : 1,
       selected(index, counts.tracks, counts.youtubeProvenanceBacklog) ? 1 : 0,
       selected(index, counts.tracks, counts.musicbrainzIsrcBacklog) ? 1 : 0,
       selected(index, counts.tracks, counts.fullAnalysisBacklog) ? 1 : 0,
@@ -223,8 +290,13 @@ export async function* generateFixture(
           args: [
             `synthetic-track-${padded(index)}`,
             `synthetic-log-${padded(Math.floor((index * counts.findings) / counts.tracks))}`,
+            syntheticTimestamp(index),
+            index % 5 === 0 ? syntheticTimestamp(index, 31) : null,
+            index % 7 === 0 ? syntheticTimestamp(index, 62) : null,
           ],
-          sql: "insert or ignore into perf_findings (track_id, log_id) values (?, ?)",
+          sql: `insert or ignore into perf_findings
+                  (track_id, log_id, added_at, updated_at, video_squared_at)
+                values (?, ?, ?, ?, ?)`,
         }
       : null,
   );
@@ -247,15 +319,19 @@ export async function* generateFixture(
       return null;
     }
 
-    const artistIndex = isSecondEdge
+    let artistIndex = isSecondEdge
       ? (trackIndex * 7 + 3) % counts.artists
       : trackIndex % counts.artists;
+
+    if (isSecondEdge && artistIndex === trackIndex % counts.artists) {
+      artistIndex = (artistIndex + 1) % counts.artists;
+    }
 
     return {
       args: [
         `synthetic-track-${padded(trackIndex)}`,
         `synthetic-artist-${padded(artistIndex)}`,
-        isSecondEdge ? 1 : 0,
+        isSecondEdge ? 2 : 1,
       ],
       sql: "insert or ignore into perf_track_artists (track_id, artist_id, position) values (?, ?, ?)",
     };
