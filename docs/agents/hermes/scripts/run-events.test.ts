@@ -16,13 +16,14 @@
 // the real binary and REFUSES anything else, so "nothing touches the network" is enforced here
 // rather than merely asserted. It had to be — that sentence was false until the rail existed.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,6 +51,13 @@ const SECRETS_SYNC = join(REPO, "docs/agents/hermes/secrets/fluncle-secrets-sync
 const SECRETS_SYNC_TIMER = join(REPO, "docs/agents/hermes/secrets/fluncle-secrets-sync.timer");
 const SONAR_FRESHEN = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.sh");
 const SONAR_FRESHEN_TIMER = join(REPO, "apps/sonar/deploy/fluncle-sonar-freshen.timer");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 const BEGIN = ">>> BEGIN MIRRORED BLOCK: record_run_event";
 const END = "<<< END MIRRORED BLOCK: record_run_event <<<";
@@ -539,6 +547,7 @@ function writeStub(dir: string, name: string, body: string): void {
  */
 function loopbackCurlRail(): { dir: string; refusals: string } {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-loopback-rail-"));
+  temporaryDirectories.push(dir);
   const refusals = join(dir, "refused.log");
   const real = Bun.which("curl");
 
@@ -710,6 +719,7 @@ async function runWatchdog(
   base?: string,
 ): Promise<{ code: number; stdout: string; summary: Summary }> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-watchdog-"));
+  temporaryDirectories.push(root);
   const bin = watchdogStubs(root, fixture);
   const run = await runScript(WATCHDOG, {
     // Empty, not absent, with no ledger fixture — see runSecretsSync below for what an absent
@@ -877,6 +887,7 @@ async function runSecretsSync(
   base?: string,
 ): Promise<{ code: number; root: string; stderr: string; stdout: string; summary: Summary }> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-sync-"));
+  temporaryDirectories.push(root);
   const bin = join(root, "bin");
   const tpl = join(root, "tpl");
   const sweepOut = join(root, "state/home/.fluncle-secrets.env");
@@ -1065,6 +1076,7 @@ describe("secrets-sync reports a run", () => {
 
   test("a missing bootstrap env reports the failure rather than dying quiet", async () => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-secrets-nobootstrap-"));
+    temporaryDirectories.push(root);
     const run = await runScript(SECRETS_SYNC, {
       FLUNCLE_API_BASE_URL: "",
       HOME: root,
@@ -1135,6 +1147,7 @@ async function runSonar(
   args: string[] = [],
 ): Promise<{ code: number; stdout: string; summary: Summary }> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-sonar-freshen-"));
+  temporaryDirectories.push(root);
   const bin = join(root, "bin");
   const appDir = join(root, "app");
 

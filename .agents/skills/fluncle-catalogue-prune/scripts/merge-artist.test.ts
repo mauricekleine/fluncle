@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 import { type Client } from "@libsql/client/web";
 
@@ -29,7 +29,12 @@ const isWrite = (sql: string): boolean => /^\s*(delete|insert|replace|update)\b/
 
 // Redirect the rollback snapshot before ANY test runs — in a real run that file is verbatim
 // production rows, and the script defaults `PRUNE_OUT_DIR` to `.`.
-process.env.PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "merge-artist-"));
+const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "merge-artist-"));
+process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
+
+afterAll(() => {
+  rmSync(PRUNE_OUT_DIR, { force: true, recursive: true });
+});
 
 const ARTIST_ROWS: Record<string, Row> = {
   A_CANON: { bio: null, id: "A_CANON", mbid: "mb-wrong", name: "Orion", slug: "orion" },

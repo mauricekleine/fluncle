@@ -8,7 +8,7 @@
 // The network functions take an injectable `fetchFn`, so `listUnresolvedIssues` (the windowing +
 // pagination) is exercised here against a canned two-page response — no real Sentry call.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,6 +40,14 @@ import {
   sanitizeUntrusted,
   type CompactIssue,
 } from "./sentry-triage-sweep";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 describe("parseMarkerIds — the PR-body contract", () => {
   const body = `Fixes the crash.\n\nSentry-Issue: 4507111\nSentry-Issue: #4507222\nsentry-issue: 4507333\n`;
@@ -414,6 +423,7 @@ describe("fetch summary (the real sweep, against a fixture Sentry) — ok is DER
     projects = "fluncle-web,fluncle-worker",
   ): Promise<{ requests: string[]; summary: Record<string, unknown> }> {
     const root = mkdtempSync(join(tmpdir(), "fluncle-sentry-fetch-"));
+    temporaryDirectories.push(root);
     const requests: string[] = [];
     const port = await availableLoopbackPort();
     const server = Bun.serve({
@@ -540,6 +550,7 @@ describe("the env scrub (the real driver + a real secrets file) — what claude 
    */
   function runWithSecrets(): { env: Record<string, string>; invoked: boolean } {
     const root = mkdtempSync(join(tmpdir(), "fluncle-sentry-scrub-"));
+    temporaryDirectories.push(root);
     const scriptDir = join(root, "scripts");
     const binDir = join(root, "bin");
     const ws = join(root, "ws");
@@ -727,6 +738,7 @@ describe("the driver's /status line (the real sentry-triage-sweep.sh) — it fol
    */
   function setUpBox(): { cronDir: string; root: string; script: string; ws: string } {
     const root = mkdtempSync(join(tmpdir(), "fluncle-sentry-driver-"));
+    temporaryDirectories.push(root);
     const scriptDir = join(root, "scripts");
     const ws = join(root, "ws");
     const origin = join(root, "origin.git");

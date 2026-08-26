@@ -10,11 +10,19 @@
 // refused, AND that a guard which cannot parse refuses rather than waves through. A test that only
 // checked the happy path would have passed against the broken version.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 const HOOK = join(import.meta.dir, "guard-protected-files.sh");
 
@@ -118,28 +126,39 @@ describe("FAIL CLOSED — the failure mode that shipped", () => {
    * bun/node/jq are NOT. Starving PATH entirely would only prove that `bash` cannot be launched,
    * which tests nothing about the guard.
    */
-  function starvedPath(): string {
+  function starvedPath(): { dir: string; path: string } {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-guard-starved-"));
-    for (const bin of ["bash", "sed", "dirname"]) {
-      const found = spawnSync("sh", ["-c", `command -v ${bin}`], {
-        encoding: "utf8",
-      }).stdout.trim();
-      if (found) {
-        symlinkSync(found, join(dir, bin));
+    try {
+      for (const bin of ["bash", "sed", "dirname"]) {
+        const found = spawnSync("sh", ["-c", `command -v ${bin}`], {
+          encoding: "utf8",
+        }).stdout.trim();
+        if (found) {
+          symlinkSync(found, join(dir, bin));
+        }
       }
+    } catch (error) {
+      rmSync(dir, { force: true, recursive: true });
+      throw error;
     }
-    return dir;
+    temporaryDirectories.push(dir);
+    return { dir, path: dir };
   }
 
   test("with no bun, node, or jq on PATH the guard REFUSES instead of allowing", () => {
     // Reproduces the container the sweeps actually run in. The old hook exited 0 here, for every
     // call, forever. If this test ever goes green with code 0 again, the guard is decorative.
-    const r = runGuard(
-      { file_path: "/ws/apps/web/src/a.ts", tool: "Edit" },
-      { PATH: starvedPath() },
-    );
-    expect(r.code).toBe(2);
-    expect(r.why).toContain("Refusing the call rather than allowing it unchecked");
+    const starved = starvedPath();
+    try {
+      const r = runGuard(
+        { file_path: "/ws/apps/web/src/a.ts", tool: "Edit" },
+        { PATH: starved.path },
+      );
+      expect(r.code).toBe(2);
+      expect(r.why).toContain("Refusing the call rather than allowing it unchecked");
+    } finally {
+      rmSync(starved.dir, { force: true, recursive: true });
+    }
   });
 
   test("a malformed payload is refused, not ignored", () => {

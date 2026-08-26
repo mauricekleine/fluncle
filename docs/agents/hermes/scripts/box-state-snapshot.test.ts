@@ -13,9 +13,9 @@
 //
 //   bun test docs/agents/hermes/scripts/box-state-snapshot.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +29,14 @@ import {
   sealBoxState,
   selectBoxStatePaths,
 } from "./box-state-snapshot";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 const KEY = new Uint8Array(32).fill(9);
 
@@ -46,6 +54,7 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
 /** A miniature data root shaped like the box's: `<root>` with a `home` inside it. */
 function fakeDataRoot(): { home: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "fluncle-boxstate-"));
+  temporaryDirectories.push(root);
   const home = join(root, "home");
 
   mkdirSync(join(root, "memories"), { recursive: true });
@@ -167,6 +176,7 @@ describe("buildBoxStateArchive", () => {
   test("seals an archive that restores byte-for-byte, modes included", async () => {
     const { home, root } = fakeDataRoot();
     const out = mkdtempSync(join(tmpdir(), "fluncle-boxstate-out-"));
+    temporaryDirectories.push(out);
     const outPath = join(out, "box-state.tar.gz.enc");
 
     const paths = selectBoxStatePaths(
@@ -210,6 +220,7 @@ describe("buildBoxStateArchive", () => {
     ).toBe(manifest.sha256);
 
     const restored = mkdtempSync(join(tmpdir(), "fluncle-boxstate-restore-"));
+    temporaryDirectories.push(restored);
     const tarPath = join(out, "restored.tar.gz");
 
     writeFileSync(tarPath, plaintext);
@@ -230,6 +241,7 @@ describe("buildBoxStateArchive", () => {
   test("an over-cap selection fails BEFORE spending memory on it", async () => {
     const { root } = fakeDataRoot();
     const out = mkdtempSync(join(tmpdir(), "fluncle-boxstate-cap-"));
+    temporaryDirectories.push(out);
 
     expect(
       await rejectionMessage(
@@ -248,6 +260,7 @@ describe("buildBoxStateArchive", () => {
 
   test("an empty selection is an error, not a silently empty backup", async () => {
     const out = mkdtempSync(join(tmpdir(), "fluncle-boxstate-empty-"));
+    temporaryDirectories.push(out);
 
     expect(
       await rejectionMessage(

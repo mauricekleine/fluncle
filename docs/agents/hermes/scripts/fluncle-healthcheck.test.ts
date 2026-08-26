@@ -17,8 +17,8 @@
 // 24 …) rather than becoming a per-tick siren.
 //
 //   bun test docs/agents/hermes/scripts/fluncle-healthcheck.test.ts
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -63,10 +63,18 @@ const CRON: CronDef = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "
 // past the budget", so a mirror that omits a term silently starts asserting "comfortably
 // inside it" instead, which is the opposite test.
 const STALE_BUDGET_MS = CRON.cadenceMs * 3 + MAX_TIMER_JITTER_MS;
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 /** A marker dir holding the given run bodies, newest LAST, each aged `ageMs` apart. */
 function markerDir(runs: { ageMs: number; body: string }[]): string {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-cron-"));
+  temporaryDirectories.push(dir);
 
   runs.forEach((run, index) => {
     const path = join(dir, `2026-07-2${index}T000000Z-1.md`);
@@ -188,6 +196,7 @@ describe("judgeCron — no runs at all", () => {
 
   test("an EMPTY marker dir ages the same way", () => {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-cron-empty-"));
+    temporaryDirectories.push(dir);
 
     expect(judgeCron(CRON, dir, 60_000)).toBe("no-data");
     expect(judgeCron(CRON, dir, STALE_BUDGET_MS + 60_000)).toBe("lagging");
@@ -920,6 +929,7 @@ describe("the stale budget covers the jitter every timer actually rolls", () => 
   const MINUTE = 60_000;
   const dirFor = (ageMs: number) => {
     const dir = mkdtempSync(join(tmpdir(), "jitter-"));
+    temporaryDirectories.push(dir);
     const marker = join(dir, "run.md");
 
     writeFileSync(marker, '# Cron Job: live\n{"ok":true}\n');
