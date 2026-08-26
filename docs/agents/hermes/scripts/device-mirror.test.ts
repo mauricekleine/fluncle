@@ -1,10 +1,18 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { deriveDeviceDatabase } from "../../../../apps/web/scripts/derive-device-db";
 import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "../../../../apps/web/src/lib/server/integration-db";
+import {
+  calculateReplicaLagFrames,
   type DeviceGeneration,
   type DeviceSqlValue,
   type DeviceTargetClient,
@@ -189,7 +197,106 @@ function createReplicaSchema(path: string): void {
   database.close();
 }
 
+async function scaledSourceFixture(scale: number): Promise<string> {
+  const directory = temporaryDirectory();
+  const source = join(directory, `source-${scale}.db`);
+  const client = await createIntegrationDb({ url: `file:${source}` });
+  const timestamp = "2026-08-25T12:00:00.000Z";
+
+  await client.execute({
+    args: ["label-parent", "Parent", "parent", timestamp, timestamp],
+    sql: `INSERT INTO labels (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+  });
+
+  for (let index = 0; index < scale; index += 1) {
+    const suffix = String(index).padStart(2, "0");
+    const certifiedTrackId = `certified-${suffix}`;
+    const catalogueTrackId = `catalogue-${suffix}`;
+
+    await seedTrack(client, {
+      addedAt: timestamp,
+      logId: `001.${String(index + 1).padStart(3, "0")}A`,
+      title: `Certified ${index}`,
+      trackId: certifiedTrackId,
+    });
+    await seedCatalogueTrack(client, {
+      title: `Catalogue ${index}`,
+      trackId: catalogueTrackId,
+    });
+    await seedEmbedding(client, catalogueTrackId, [0.1 + index, 0.2 + index]);
+
+    await client.batch(
+      [
+        {
+          args: [
+            `label-child-${suffix}`,
+            `Child ${index}`,
+            `child-${suffix}`,
+            "label-parent",
+            timestamp,
+            timestamp,
+          ],
+          sql: `INSERT INTO labels (id, name, slug, parent_label_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+        },
+        {
+          args: [`album-${suffix}`, `Album ${index}`, `album-${suffix}`, timestamp, timestamp],
+          sql: `INSERT INTO albums (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+        },
+        {
+          args: [`artist-${suffix}`, `Artist ${index}`, `artist-${suffix}`, timestamp, timestamp],
+          sql: `INSERT INTO artists (id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+        },
+        {
+          args: [`album-${suffix}`, `label-child-${suffix}`, certifiedTrackId, catalogueTrackId],
+          sql: `UPDATE tracks SET album_id = ?, label_id = ? WHERE track_id IN (?, ?)`,
+        },
+        {
+          args: [certifiedTrackId, `artist-${suffix}`, 0],
+          sql: `INSERT INTO track_artists (track_id, artist_id, position) VALUES (?, ?, ?)`,
+        },
+        {
+          args: [catalogueTrackId, `artist-${suffix}`, 0],
+          sql: `INSERT INTO track_artists (track_id, artist_id, position) VALUES (?, ?, ?)`,
+        },
+      ],
+      "write",
+    );
+  }
+
+  client.close();
+  const database = new Database(source);
+  database.run("PRAGMA wal_checkpoint(TRUNCATE)");
+  database.close();
+  return source;
+}
+
+function publicRows(database: Database): Record<string, unknown[]> {
+  return Object.fromEntries(
+    DEVICE_SOURCE_TABLES.map((table) => {
+      const columns = DEVICE_DB_COLUMNS[table].map(quoteDeviceDbIdentifier).join(", ");
+      const order = DEVICE_DB_PRIMARY_KEYS[table].map(quoteDeviceDbIdentifier).join(", ");
+      return [
+        table,
+        database
+          .query(`SELECT ${columns} FROM ${quoteDeviceDbIdentifier(table)} ORDER BY ${order}`)
+          .all(),
+      ];
+    }),
+  );
+}
+
 describe("embedded source replica", () => {
+  test("reports zero post-sync lag only when the embedded sync result is measurable", () => {
+    expect(calculateReplicaLagFrames({ frameNo: 43, framesSynced: 1 })).toBe(0);
+    expect(calculateReplicaLagFrames({ frameNo: 43, framesSynced: 43 })).toBe(0);
+    expect(calculateReplicaLagFrames({ frameNo: 43, framesSynced: 44 })).toBe(0);
+    expect(calculateReplicaLagFrames({ frameNo: null, framesSynced: 0 })).toBeNull();
+    expect(
+      calculateReplicaLagFrames({ frameNo: Number.MAX_SAFE_INTEGER + 1, framesSynced: 1 }),
+    ).toBeNull();
+  });
+
   test("rebuilds corrupt local state before making exactly one explicit sync call", async () => {
     const path = join(temporaryDirectory(), "replica.db");
     writeFileSync(path, "corrupt");
@@ -266,6 +373,131 @@ describe("embedded source replica", () => {
 
     expect(result.rebuildCause).toBe("full_rebuild");
     expect(result.frameNo).toBe(50);
+  });
+
+  test("crosses replica sync, local derivation, and staged publication at 1x, 2x, and 4x", async () => {
+    for (const scale of [1, 2, 4] as const) {
+      const source = await scaledSourceFixture(scale);
+      const replica = join(temporaryDirectory(), `replica-${scale}.db`);
+      const rebuiltReplica = join(temporaryDirectory(), `rebuilt-replica-${scale}.db`);
+      let syncCalls = 0;
+
+      const synced = await syncSourceReplica(
+        { authToken: "test", path: replica, syncUrl: "libsql://source.invalid" },
+        () => ({
+          close: () => {},
+          sync: async () => {
+            syncCalls += 1;
+            copyFileSync(source, replica);
+            return { frame_no: 100 + scale, frames_synced: 100 + scale };
+          },
+        }),
+      );
+      expect(syncCalls).toBe(1);
+      expect(synced.rebuildCause).toBe("missing");
+      expect(calculateReplicaLagFrames(synced)).toBe(0);
+
+      const artifactPath = join(temporaryDirectory(), `device-${scale}.db`);
+      const derivation = await deriveDeviceDatabase({
+        cut: "anchored",
+        out: artifactPath,
+        source: replica,
+      });
+      const generation = inspectDeviceGeneration(artifactPath);
+      const artifactRows = new Database(artifactPath, { readonly: true, strict: true });
+      const semanticRows = publicRows(artifactRows);
+      artifactRows.close();
+
+      expect(derivation.bytes).toBe(generation.artifactBytes);
+      expect(derivation.selectedTrackCount).toBe(scale * 2);
+      expect(generation.rowCounts.tracks).toBe(scale * 2);
+
+      const lastGoodBytes = readFileSync(artifactPath);
+      expect(
+        await rejectionMessage(
+          deriveDeviceDatabase(
+            { cut: "anchored", out: artifactPath, source: replica },
+            {
+              afterCopy: () => {
+                throw new Error("synthetic rebuild interrupted");
+              },
+            },
+          ),
+        ),
+      ).toContain("synthetic rebuild interrupted");
+      expect(readFileSync(artifactPath)).toEqual(lastGoodBytes);
+
+      const published = targetFixture();
+      expect(
+        await rejectionMessage(
+          publishDeviceGeneration(published.client, generation, 2, {
+            beforeCutover: () => {
+              throw new Error("synthetic cutover interrupted");
+            },
+          }),
+        ),
+      ).toContain("synthetic cutover interrupted");
+      expect(liveTracks(published.client)).toEqual(["old-track"]);
+
+      const publication = await publishDeviceGeneration(published.client, generation, 2);
+      expect(publication.published).toBe(true);
+      expect(publication.restarted).toBe(true);
+      expect(liveTracks(published.client)).toHaveLength(scale * 2);
+      const publishedRows = publicRows(published.client.database);
+      published.client.database.run("VACUUM");
+      const publishedBytes = Bun.file(published.path).size;
+      published.client.close();
+
+      const rebuilt = await syncSourceReplica(
+        {
+          authToken: "test",
+          forceRebuild: true,
+          path: rebuiltReplica,
+          syncUrl: "libsql://source.invalid",
+        },
+        () => ({
+          close: () => {},
+          sync: async () => {
+            copyFileSync(source, rebuiltReplica);
+            return { frame_no: 100 + scale, frames_synced: 100 + scale };
+          },
+        }),
+      );
+      expect(rebuilt.rebuildCause).toBe("full_rebuild");
+
+      const rebuiltArtifactPath = join(temporaryDirectory(), `device-rebuilt-${scale}.db`);
+      const rebuiltDerivation = await deriveDeviceDatabase({
+        cut: "anchored",
+        out: rebuiltArtifactPath,
+        source: rebuiltReplica,
+      });
+      const rebuiltGeneration = inspectDeviceGeneration(rebuiltArtifactPath);
+      const rebuiltArtifact = new Database(rebuiltArtifactPath, {
+        readonly: true,
+        strict: true,
+      });
+      const rebuiltSemanticRows = publicRows(rebuiltArtifact);
+      rebuiltArtifact.close();
+
+      expect(rebuiltDerivation.bytes).toBe(derivation.bytes);
+      expect(rebuiltDerivation.sourceWatermark).toBe(derivation.sourceWatermark);
+      expect(rebuiltGeneration.fingerprint).toBe(generation.fingerprint);
+      expect(rebuiltGeneration.rowCounts).toEqual(generation.rowCounts);
+      expect(rebuiltSemanticRows).toEqual(semanticRows);
+
+      const fullTarget = targetFixture();
+      const fullPublication = await publishDeviceGeneration(
+        fullTarget.client,
+        rebuiltGeneration,
+        2,
+      );
+      expect(fullPublication.published).toBe(true);
+      expect(fullPublication.writtenRows).toBe(publication.writtenRows);
+      expect(publicRows(fullTarget.client.database)).toEqual(publishedRows);
+      fullTarget.client.database.run("VACUUM");
+      expect(Bun.file(fullTarget.path).size).toBe(publishedBytes);
+      fullTarget.client.close();
+    }
   });
 });
 

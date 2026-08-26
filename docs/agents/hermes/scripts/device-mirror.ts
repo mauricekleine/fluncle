@@ -82,6 +82,27 @@ export type ReplicaSyncResult = {
   rebuildCause: string | null;
 };
 
+/**
+ * A successful one-shot sync returns only after the local committed frame reaches the primary
+ * frame observed during its handshake. The post-sync lag is therefore zero when the result is
+ * measurable; `framesSynced` separately reports how much catch-up work the run performed.
+ */
+export function calculateReplicaLagFrames(
+  sync: Pick<ReplicaSyncResult, "frameNo" | "framesSynced">,
+): number | null {
+  if (
+    sync.frameNo === null ||
+    !Number.isSafeInteger(sync.frameNo) ||
+    sync.frameNo < 0 ||
+    !Number.isSafeInteger(sync.framesSynced) ||
+    sync.framesSynced < 0
+  ) {
+    return null;
+  }
+
+  return 0;
+}
+
 type StageControl = {
   artifactBytes: number;
   derivedAt: string;
@@ -1706,7 +1727,7 @@ export async function main(): Promise<MirrorSummary> {
     });
     summary.replicaFrame = sync.frameNo;
     summary.replicaFramesSynced = sync.framesSynced;
-    summary.replicaLagFrames = null;
+    summary.replicaLagFrames = calculateReplicaLagFrames(sync);
     summary.rebuildCause = sync.rebuildCause;
     summary.rebuildDurationMs = sync.rebuildCause ? sync.durationMs : 0;
 
