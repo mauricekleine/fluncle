@@ -1156,6 +1156,13 @@
       "when": 1787727836047,
       "tag": "0164_silent_taskmaster",
       "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "6",
+      "when": 1787730821185,
+      "tag": "0165_lucky_earthquake",
+      "breakpoints": true
     }
   ]
 }

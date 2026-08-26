@@ -1948,6 +1948,43 @@ export const artifactChanges = sqliteTable(
 );
 
 /**
+ * Durable producer idempotency receipts. Compaction may remove an acknowledged event body, but a
+ * producer that lost the original commit response must still recover the same sequence instead of
+ * re-emitting that material revision. The digest proves immutable content without duplicating the
+ * JSON or vector bytes retained in the bounded log.
+ */
+export const artifactChangeRevisions = sqliteTable(
+  "artifact_change_revisions",
+  {
+    contentDigest: text("content_digest").notNull(),
+    createdAt: text("created_at").notNull(),
+    eventSeq: integer("event_seq").notNull(),
+    producer: text("producer").notNull(),
+    revision: integer("revision").notNull(),
+    stream: text("stream").notNull(),
+    streamVersion: integer("stream_version").notNull(),
+    subjectId: text("subject_id").notNull(),
+    subjectType: text("subject_type").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.stream,
+        table.streamVersion,
+        table.subjectType,
+        table.subjectId,
+        table.revision,
+      ],
+    }),
+    check(
+      "artifact_change_revisions_value_check",
+      sql`${table.streamVersion} >= 1 and ${table.revision} >= 1 and ${table.eventSeq} >= 1`,
+    ),
+    uniqueIndex("artifact_change_revisions_event_seq_idx").on(table.eventSeq),
+  ],
+);
+
+/**
  * Registered artifact-log consumers. Active rows always expose a non-NULL compaction barrier;
  * inactive rows retain no reusable snapshot or checkpoint, so reactivation structurally begins as
  * a new rebuild instead of resuming after events may have been compacted.
