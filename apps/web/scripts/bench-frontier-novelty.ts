@@ -56,6 +56,7 @@
  * either name as a guard).
  */
 import { createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { randomUUID } from "node:crypto";
@@ -105,7 +106,7 @@ const editionsPerUser = envInt("BENCH_EDITIONS_PER_USER", FRONTIER_NOVELTY_WINDO
 const tracksPerEdition = envInt("BENCH_TRACKS_PER_EDITION", 33);
 const iterations = envInt("BENCH_ITERATIONS", 10);
 
-const client = createClient({ authToken, url });
+const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 /** A random unit vector — a synthetic embedding (values, not realism, are what a scan costs). */

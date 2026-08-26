@@ -31,6 +31,7 @@
  * the drift claim honest as the archive grows (the roadmap's "re-measure as it grows").
  */
 import { createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -432,7 +433,11 @@ type ArchiveReading = {
 
 async function readCorpora(url: string): Promise<ArchiveReading> {
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
 
   try {
     const notesRows = await client.execute(

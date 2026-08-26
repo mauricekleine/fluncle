@@ -10,6 +10,8 @@ Sentry runs on the Team plan with a 5M-spans/month budget. Capture errors and sa
 
 Database spans cover the recommendation vector scan and other scaling-sensitive queries. The libSQL wrapper retries transient HTTP gateway failures for read-only statements. Treat 4xx responses as non-retryable.
 
+Every completed `execute` and `batch` span keeps `op=db.query` and carries the same bounded performance vocabulary used by the fleet run ledger: `fluncle.operation_id`, `fluncle.access_class`, `fluncle.release`, `fluncle.attempt_count`, `fluncle.batch_count`, `fluncle.duration_ms`, and the closed `fluncle.outcome` verdict. A caller may attach a validated stable operation ID and may elevate a proven read to `heavy-read`; otherwise the wrapper derives a deterministic bounded fallback from a literal-redacted statement shape. The SQL text is never a span name or description. `db.statement` contains only the access verb and operation ID, and no SQL argument, interpolated literal, URL, hostname, secret, or row identity enters an attribute.
+
 The span import (`startSpan`) comes from **`@sentry/core`** (env-agnostic), NOT `@sentry/cloudflare` (Worker-oriented), because `db.ts` is also imported by bun scripts that run in Node and by tests. When no Sentry client is active — every one of those Node importers, and any dev/test run — `startSpan` is a safe passthrough that just runs the callback and returns its value, so the wrap is invisible and results are unchanged there.
 
 ### The sampler policy

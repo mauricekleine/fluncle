@@ -10,6 +10,7 @@
  */
 import { $, type Subprocess } from "bun";
 import { createClient } from "@libsql/client/web";
+import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { existsSync } from "node:fs";
 
@@ -49,6 +50,7 @@ function shutdown(): void {
 async function waitForDb(dbUrl: string, server: Subprocess, attempts = 300): Promise<void> {
   const client = createClient({
     authToken: process.env.TURSO_AUTH_TOKEN ?? "local-dev",
+    concurrency: LOCAL_DB_CONCURRENCY,
     url: dbUrl,
   });
 

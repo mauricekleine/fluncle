@@ -57,6 +57,7 @@
  * NEVER points at `fluncle` or `fluncle-dev` (it refuses a URL containing either name as a guard).
  */
 import { createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -103,7 +104,7 @@ const artistCount = envInt("BENCH_ARTISTS", 5_000);
 const trackCount = envInt("BENCH_TRACKS", 25_000);
 const iterations = envInt("BENCH_ITERATIONS", 12);
 
-const client = createClient({ authToken, url });
+const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 // A tiny deterministic RNG (mulberry32) so every run seeds the SAME vectors — comparable numbers.

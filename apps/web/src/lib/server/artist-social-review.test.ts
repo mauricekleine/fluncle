@@ -6,6 +6,7 @@
 //   - reviewArtist bulk-stamps the whole list,
 //   - listArtistReviewRows counts UNREVIEWED links per artist (the /admin attention read).
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -70,7 +71,7 @@ describe("per-link review writes + the fresh-links queue", () => {
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(

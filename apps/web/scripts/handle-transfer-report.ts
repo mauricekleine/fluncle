@@ -18,6 +18,7 @@
  *   bun run apps/web/scripts/handle-transfer-report.ts
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -124,7 +125,11 @@ function dbFromEnv(): Client {
     );
   }
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  return createClient(authToken ? { authToken, url } : { url });
+  return createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
 }
 
 type Candidate = { artistId: string; name: string; handle: string; anchor: string; short: boolean };

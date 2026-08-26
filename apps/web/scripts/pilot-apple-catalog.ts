@@ -34,6 +34,7 @@
  *   bun run scripts/pilot-apple-catalog.ts --file isrcs.txt   # skip the DB; read ISRCs from a file
  */
 import { createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -114,7 +115,11 @@ async function sampleIsrcsFromDb(limit: number): Promise<string[]> {
   }
 
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
 
   // A CATALOGUE row is a `tracks` row with no `findings` row (docs/the-ear.md); we
   // want the ones carrying an ISRC, sampled at random so the pilot is representative.

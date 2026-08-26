@@ -246,6 +246,7 @@ export {
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
 export {
   adminTelemetryContract,
+  MAX_RUN_DATABASE_COUNT,
   MAX_RUN_LEDGER_PAGE_SIZE,
   MAX_SUMMARY_RAW_CHARS,
   type ReadRunLedgerInput,

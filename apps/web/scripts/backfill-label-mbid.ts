@@ -38,6 +38,7 @@
  * picks up where it left off (fill-empty-only makes that safe).
  */
 import { type Client, createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { labelFold } from "@fluncle/contracts/util/galaxy-slug";
 import { mbFetch } from "../src/lib/server/musicbrainz";
 
@@ -203,7 +204,12 @@ async function main(): Promise<void> {
   const authToken = await readSecret("TURSO_AUTH_TOKEN");
   // intMode:"bigint" keeps large integers exact; the script reads only text cells and `rowsAffected`
   // (always a JS number), so nothing here needs bigint narrowing.
-  const client = createClient({ authToken, intMode: "bigint", url });
+  const client = createClient({
+    authToken,
+    concurrency: REMOTE_DB_CONCURRENCY,
+    intMode: "bigint",
+    url,
+  });
   const result = await backfillLabelMbids(client, resolveLabelMbidByName);
 
   console.log(

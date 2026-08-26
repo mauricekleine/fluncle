@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { describe, expect, it } from "vitest";
 import {
   type HubOrderedPageShape,
@@ -189,7 +190,7 @@ describe("serving ladder", () => {
 
 describe("snapshot consistency", () => {
   it("covers adjacent pages from one boundary set exactly once, with empty dates before NULLs", async () => {
-    const db = createClient({ url: ":memory:" });
+    const db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     const rows: [string, null | string][] = [
       ["new-b", "2025-01-01"],
       ["new-a", "2025-01-01"],

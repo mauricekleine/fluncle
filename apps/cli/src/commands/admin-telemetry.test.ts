@@ -20,6 +20,9 @@ const page = {
   ],
   rows: [
     {
+      accessClass: "write" as const,
+      attemptCount: 2,
+      batchCount: 5,
       checked: null,
       createdAt: "2026-07-30T19:00:00.100Z",
       endedAt: "2026-07-30T19:00:05.000Z",
@@ -31,8 +34,11 @@ const page = {
       missingFields: ["checked", "produced", "queue_depth"],
       occurredAt: "2026-07-30T19:00:00.000Z",
       ok: false,
+      operationId: "sentry.triage",
+      outcome: "failure" as const,
       produced: null,
       queueDepth: null,
+      release: "test-release",
       runDurationMs: 5000,
       selfAssertedOk: true,
       summaryRaw: '{"errors":2,"ok":true}',
@@ -102,6 +108,9 @@ describe("telemetryLines", () => {
     expect(rendered).toContain("BLIND");
     expect(rendered).toContain("Evidence rows (1 of 2 matching; this page)");
     expect(rendered).toContain("fluncle-sentry-triage");
+    expect(rendered).toContain("sentry.triage");
+    expect(rendered).toContain("write");
+    expect(rendered).toContain("failure");
     expect(lines.at(-1)).toBe("Next cursor: next-page");
   });
 

@@ -41,6 +41,7 @@
  * `file:`, exactly like the tracks-hub bench).
  */
 import { createClient } from "@libsql/client/web";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { fileURLToPath } from "node:url";
@@ -79,7 +80,7 @@ const only = (process.env.BENCH_ONLY ?? "")
   .filter((value) => Number.isInteger(value));
 const skipSeed = process.env.BENCH_SKIP_SEED === "1";
 
-const client = createClient({ authToken, url });
+const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 // ── The stamps the seeder wrote are relative to SEED_NOW, so the bench's cutoffs are too ──────────

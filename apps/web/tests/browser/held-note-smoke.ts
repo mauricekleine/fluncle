@@ -23,6 +23,7 @@
 
 import { createClient } from "@libsql/client";
 import { type Page } from "playwright-core";
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { launchBrowser, loadDevVars, newAdminPage } from "./admin";
 
 const BASE = process.env.BASE_URL ?? "http://127.0.0.1:3000";
@@ -43,7 +44,7 @@ if (SEED && !/127\.0\.0\.1|localhost/.test(dbUrl)) {
   throw new Error(`SEED=1 refuses a non-local database (${dbUrl}). It mutates notes.`);
 }
 
-const db = createClient({ url: dbUrl });
+const db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: dbUrl });
 let restoreNote: null | string = null;
 
 async function seedHeldRejection(): Promise<void> {

@@ -57,6 +57,7 @@
 // things that produce a 400 is kept as small as the honesty rules allow.
 
 import {
+  MAX_RUN_DATABASE_COUNT,
   type ReadRunLedgerInput,
   type RunEventInput,
   type RunLedgerPage,
@@ -64,6 +65,14 @@ import {
   type RunLedgerUnitRollup,
 } from "@fluncle/contracts/orpc";
 import { runLedgerWriters } from "@fluncle/registry";
+import {
+  DATABASE_OUTCOMES,
+  type DatabaseOutcome,
+  isDatabaseAccessClass,
+  isDatabaseOperationId,
+  normalizeDatabaseRelease,
+} from "./database-observability";
+import { resolveDatabaseOperationOwner } from "./database-operation-registry";
 import { getTelemetryDb, retryRunEventInsert } from "./db";
 import { logEvent } from "./log";
 import { ApiError } from "./spotify";
@@ -615,6 +624,9 @@ export function runDurationMs(startedAt: string, endedAt: string): null | number
 // drift (the `costs.ts` INSERT_COLUMNS precedent).
 const INSERT_COLUMNS = [
   "id",
+  "access_class",
+  "attempt_count",
+  "batch_count",
   "checked",
   "created_at",
   "ended_at",
@@ -625,8 +637,11 @@ const INSERT_COLUMNS = [
   "missing_fields",
   "occurred_at",
   "ok",
+  "operation_id",
+  "outcome",
   "produced",
   "queue_depth",
+  "release",
   "run_duration_ms",
   "self_asserted_ok",
   "summary_raw",
@@ -667,6 +682,14 @@ export type RecordedRun = {
 export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun> {
   const summary = withRegisteredCronCadence(input.unit, normalizeRunSummary(input.summary_raw));
   const runOk = deriveRunOk(input.exit_code, summary.errors);
+  const operation = resolveDatabaseOperationOwner(input.unit);
+  const operationId =
+    operation !== undefined && isDatabaseOperationId(operation.operationId)
+      ? operation.operationId
+      : null;
+  const accessClass = operation?.accessClass ?? null;
+  const outcome: DatabaseOutcome = runOk ? "success" : "failure";
+  const release = normalizeDatabaseRelease(input.release);
   const id = runEventId({ startedAt: input.started_at, unit: input.unit });
   const db = await getTelemetryDb();
 
@@ -692,6 +715,9 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
     db.execute({
       args: [
         id,
+        accessClass,
+        input.attempt_count ?? null,
+        input.batch_count ?? null,
         summary.checked,
         new Date().toISOString(),
         input.ended_at,
@@ -702,8 +728,11 @@ export async function insertRunEvent(input: RunEventInput): Promise<RecordedRun>
         JSON.stringify(summary.missingFields),
         input.started_at,
         runOk ? 1 : 0,
+        operationId,
+        outcome,
         summary.produced,
         summary.queueDepth,
+        release,
         runDurationMs(input.started_at, input.ended_at),
         summary.selfAssertedOk === null ? null : Number(summary.selfAssertedOk),
         input.summary_raw ?? null,
@@ -734,6 +763,9 @@ type RunLedgerCursor = {
 };
 
 type RunLedgerDbRow = {
+  access_class: unknown;
+  attempt_count: unknown;
+  batch_count: unknown;
   checked: unknown;
   created_at: unknown;
   ended_at: unknown;
@@ -745,8 +777,11 @@ type RunLedgerDbRow = {
   missing_fields: unknown;
   occurred_at: unknown;
   ok: unknown;
+  operation_id: unknown;
+  outcome: unknown;
   produced: unknown;
   queue_depth: unknown;
+  release: unknown;
   run_duration_ms: unknown;
   self_asserted_ok: unknown;
   summary_raw: unknown;
@@ -789,6 +824,16 @@ function ledgerNumber(value: unknown, field: string): number {
 
 function nullableLedgerNumber(value: unknown, field: string): number | null {
   return value === null ? null : ledgerNumber(value, field);
+}
+
+function nullableLedgerCount(value: unknown, field: string): number | null {
+  const count = nullableLedgerNumber(value, field);
+
+  if (count !== null && (!Number.isInteger(count) || count < 0 || count > MAX_RUN_DATABASE_COUNT)) {
+    throw new Error(`run_events.${field} was not a bounded non-negative integer`);
+  }
+
+  return count;
 }
 
 function nullableLedgerBoolean(value: unknown, field: string): boolean | null {
@@ -846,8 +891,59 @@ function ledgerSummaryStatus(value: unknown): RunSummaryStatus {
   return value;
 }
 
+function nullableLedgerAccessClass(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isDatabaseAccessClass(value)) {
+    throw new Error("run_events.access_class was not a known database access class");
+  }
+
+  return value;
+}
+
+function nullableLedgerOperationId(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isDatabaseOperationId(value)) {
+    throw new Error("run_events.operation_id was not a bounded database operation id");
+  }
+
+  return value;
+}
+
+function ledgerOutcome(value: unknown, ok: boolean): DatabaseOutcome {
+  if (value === null) {
+    return ok ? "success" : "failure";
+  }
+
+  if (typeof value !== "string" || !(DATABASE_OUTCOMES as readonly string[]).includes(value)) {
+    throw new Error("run_events.outcome was not a known database outcome");
+  }
+
+  return value as DatabaseOutcome;
+}
+
+function ledgerRelease(value: unknown): string {
+  const release = ledgerText(value, "release");
+
+  if (normalizeDatabaseRelease(release) !== release) {
+    throw new Error("run_events.release was not a bounded database release");
+  }
+
+  return release;
+}
+
 function toRunLedgerRow(row: RunLedgerDbRow): RunLedgerRow {
+  const ok = ledgerBoolean(row.ok, "ok");
+
   return {
+    accessClass: nullableLedgerAccessClass(row.access_class),
+    attemptCount: nullableLedgerCount(row.attempt_count, "attempt_count"),
+    batchCount: nullableLedgerCount(row.batch_count, "batch_count"),
     checked: nullableLedgerNumber(row.checked, "checked"),
     createdAt: ledgerText(row.created_at, "created_at"),
     endedAt: ledgerText(row.ended_at, "ended_at"),
@@ -858,9 +954,12 @@ function toRunLedgerRow(row: RunLedgerDbRow): RunLedgerRow {
     id: ledgerText(row.id, "id"),
     missingFields: ledgerStringArray(row.missing_fields, "missing_fields"),
     occurredAt: ledgerText(row.occurred_at, "occurred_at"),
-    ok: ledgerBoolean(row.ok, "ok"),
+    ok,
+    operationId: nullableLedgerOperationId(row.operation_id),
+    outcome: ledgerOutcome(row.outcome, ok),
     produced: nullableLedgerNumber(row.produced, "produced"),
     queueDepth: nullableLedgerNumber(row.queue_depth, "queue_depth"),
+    release: ledgerRelease(row.release),
     runDurationMs: nullableLedgerNumber(row.run_duration_ms, "run_duration_ms"),
     selfAssertedOk: nullableLedgerBoolean(row.self_asserted_ok, "self_asserted_ok"),
     summaryRaw: row.summary_raw === null ? null : ledgerText(row.summary_raw, "summary_raw"),
@@ -1091,9 +1190,11 @@ export async function readRunLedger(
     db.execute({
       args: pageArgs,
       sql: `select checked, created_at, ended_at, errors, exit_code,
-                   expected_interval_ms, gate_state, id, missing_fields, occurred_at,
-                   ok, produced, queue_depth, run_duration_ms, self_asserted_ok,
-                   summary_raw, summary_status, unit, unrecognised_fields, vendor_calls
+                   access_class, attempt_count, batch_count, expected_interval_ms,
+                   gate_state, id, missing_fields, occurred_at, ok, operation_id,
+                   outcome, produced, queue_depth, release, run_duration_ms,
+                   self_asserted_ok, summary_raw, summary_status, unit,
+                   unrecognised_fields, vendor_calls
             from run_events
             ${pageWhere}
             order by occurred_at desc, id desc

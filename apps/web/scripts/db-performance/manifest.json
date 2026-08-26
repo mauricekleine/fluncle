@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "integrationBase": "f0b368203d42a3b92d5b5025c8064e27baa9f632",
+  "evidence": "read-only production cardinality audit",
+  "databaseSizeMb": 945,
+  "inventory": {
+    "productionTables": 78,
+    "productionIndexes": 147,
+    "trackIndexes": 31,
+    "sqliteStat1Available": false,
+    "sqliteStat4Available": false
+  },
+  "vector": {
+    "dimensions": 1024,
+    "scalarBytes": 4,
+    "bytesPerEmbedding": 4096,
+    "baselineRawBytes": 177651712
+  },
+  "profiles": {
+    "1x": 1,
+    "2x": 2,
+    "4x": 4
+  },
+  "tables": {
+    "tracks": 122151,
+    "trackEmbeddings": 43372,
+    "trackArtists": 154551,
+    "findings": 96,
+    "artists": 13543,
+    "labels": 6401,
+    "albums": 27454,
+    "crawlFrontier": 211980
+  },
+  "distributions": {
+    "pendingFrontier": 130864,
+    "enabledLabelTracks": 117710,
+    "youtubeProvenanceBacklog": 30260,
+    "musicbrainzIsrcBacklog": 44473,
+    "fullAnalysisBacklog": 0
+  }
+}

@@ -29,6 +29,7 @@ import { recordCost } from "./admin-costs";
 import { updateArtistRule } from "./admin-artist-rules";
 import { replaceLabelArtistRules } from "./admin-labels";
 import {
+  MAX_RUN_DATABASE_COUNT,
   MAX_RUN_LEDGER_PAGE_SIZE,
   MAX_SUMMARY_RAW_CHARS,
   readRunLedger,
@@ -580,6 +581,45 @@ function accepts(op: unknown, input: unknown): boolean {
     true,
     "an explicitly null summary is still recordable",
   );
+  assert.equal(
+    accepts(recordRun, run({ attempt_count: null, batch_count: null })),
+    true,
+    "unknown database counts stay explicitly nullable",
+  );
+  assert.equal(
+    accepts(recordRun, run({ release: "emitter-build_abc.123" })),
+    true,
+    "a bounded public emitter release is accepted",
+  );
+  assert.equal(
+    accepts(recordRun, run({ release: null })),
+    true,
+    "an unknown emitter release stays nullable on input",
+  );
+  for (const release of ["contains/slash", "space separated", "a".repeat(65)]) {
+    assert.equal(
+      accepts(recordRun, run({ release })),
+      false,
+      "an unsafe or oversized emitter release is rejected",
+    );
+  }
+  assert.equal(
+    accepts(
+      recordRun,
+      run({ attempt_count: MAX_RUN_DATABASE_COUNT, batch_count: MAX_RUN_DATABASE_COUNT }),
+    ),
+    true,
+    "database counts at the defensive cap are accepted",
+  );
+  for (const field of ["attempt_count", "batch_count"]) {
+    assert.equal(
+      accepts(recordRun, run({ [field]: MAX_RUN_DATABASE_COUNT + 1 })),
+      false,
+      `${field} above the cap is rejected`,
+    );
+    assert.equal(accepts(recordRun, run({ [field]: -1 })), false, `${field} cannot be negative`);
+    assert.equal(accepts(recordRun, run({ [field]: 1.5 })), false, `${field} must be integral`);
+  }
 
   // The real nightly Sentry sweep line (sentry-triage-sweep.ts:489) — a summary carrying its
   // own `ok`. It MUST reach the Worker, which records the claim rather than obeying it.
@@ -605,6 +645,13 @@ function accepts(op: unknown, input: unknown): boolean {
     false,
     "an unrecognised envelope key is rejected rather than silently widening the contract",
   );
+  for (const derived of ["access_class", "operation_id", "outcome"]) {
+    assert.equal(
+      accepts(recordRun, run({ [derived]: "caller-value" })),
+      false,
+      `${derived} is server-derived and rejected from the envelope`,
+    );
+  }
 
   // Every field is REQUIRED: a run with no unit, no start, or no exit code is not a run.
   for (const key of ["ended_at", "exit_code", "started_at", "unit"]) {

@@ -49,6 +49,7 @@
  * offered, and the operator uses the MusicBrainz link to fix the metadata upstream instead.
  */
 import { type Client, createClient } from "@libsql/client";
+import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -228,7 +229,11 @@ async function main(): Promise<void> {
 
   const execute = process.argv.includes("--execute");
   const authToken = process.env.TURSO_AUTH_TOKEN;
-  const client = createClient(authToken ? { authToken, url } : { url });
+  const client = createClient(
+    authToken
+      ? { authToken, concurrency: REMOTE_DB_CONCURRENCY, url }
+      : { concurrency: REMOTE_DB_CONCURRENCY, url },
+  );
 
   try {
     const result = await backfillAnchorReviews(client, parsed as AnchorReviewSeed[], { execute });

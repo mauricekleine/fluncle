@@ -3,6 +3,7 @@
 // that a re-resolve NEVER overwrites an operator-owned row. `getDb` is mocked to hand back
 // the per-test in-memory client.
 import { type Client, createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
@@ -57,7 +58,7 @@ describe("persistResolution — operator rows are immune to a re-resolve", () =>
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(
@@ -194,7 +195,7 @@ describe("persistResolution — the per-link review stamp (reviewed_at)", () => 
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(
@@ -278,7 +279,7 @@ describe("persistResolution — the secondary KG anchors (Discogs + Last.fm)", (
   let db: Client;
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     holder.db = db;
 
     await db.execute(

@@ -12,6 +12,7 @@
 // page renders with zero external fetches.
 
 import { createClient, type Client } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import {
   seedAlbum,
   seedArtist,
@@ -235,7 +236,11 @@ async function stampLabelPointers(client: Client): Promise<void> {
 
 /** Standalone entry point (`bun run tests/e2e/seed.ts`) — global-setup imports `seedE2eData`. */
 async function main(): Promise<void> {
-  const client = createClient({ authToken: "e2e-local", url: LIBSQL_URL });
+  const client = createClient({
+    authToken: "e2e-local",
+    concurrency: LOCAL_DB_CONCURRENCY,
+    url: LIBSQL_URL,
+  });
 
   await seedE2eData(client);
   client.close();
