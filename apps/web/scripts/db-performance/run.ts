@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+
 import { createClient as createLocalClient } from "@libsql/client";
 
 import { LOCAL_DB_CONCURRENCY, REMOTE_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
@@ -11,7 +14,13 @@ import {
   getScaleManifest,
   isScaleProfile,
 } from "./manifest";
-import { runPerformanceContracts } from "./registry";
+import {
+  PERFORMANCE_REPORT_SCHEMA_VERSION,
+  fixtureBaselineAdjustedResourceSample,
+  maxPerformanceResourceSample,
+  readPerformanceResourceSample,
+  runPerformanceContracts,
+} from "./registry";
 
 type CliOptions = {
   contractIds: string[];
@@ -72,6 +81,7 @@ async function main(): Promise<void> {
     process.stdout.write(
       `${JSON.stringify(
         performanceRegistry.list().map((contract) => ({
+          criterionCategories: [contract.workClass],
           description: contract.description,
           id: contract.id,
           workClass: contract.workClass,
@@ -87,6 +97,12 @@ async function main(): Promise<void> {
     hosted: options.hosted,
     operatorApproved: options.operatorApproved,
   });
+  const scratchDirectory =
+    replay.mode === "local" && options.fullFixture
+      ? await mkdtemp(join(process.cwd(), ".db-performance-"))
+      : null;
+  const localUrl =
+    scratchDirectory === null ? ":memory:" : `file:${join(scratchDirectory, "fixture.db")}`;
   const client =
     replay.mode === "hosted"
       ? (await import("@libsql/client/web")).createClient({
@@ -94,7 +110,9 @@ async function main(): Promise<void> {
           concurrency: REMOTE_DB_CONCURRENCY,
           url: replay.url,
         })
-      : createLocalClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+      : createLocalClient({ concurrency: LOCAL_DB_CONCURRENCY, url: localUrl });
+  const runStartedAtMs = performance.now();
+  const initialResource = readPerformanceResourceSample();
 
   try {
     await resetFixture(client);
@@ -103,12 +121,38 @@ async function main(): Promise<void> {
     const counts = exactFixture
       ? getScaleManifest(options.profile).counts
       : createCiFixtureCounts(options.profile);
+    const fixtureWriteStartedAtMs = performance.now();
     const written = await writeFixture(client, options.profile, { counts });
+    const fixtureWriteCompletedAtMs = performance.now();
+    const fixtureWriteDurationMs = Math.max(0, fixtureWriteCompletedAtMs - fixtureWriteStartedAtMs);
+    const fixtureResource = readPerformanceResourceSample();
+    const fixtureAdjustedSample =
+      replay.mode === "local" && options.fullFixture
+        ? () =>
+            fixtureBaselineAdjustedResourceSample(
+              readPerformanceResourceSample(),
+              initialResource,
+              fixtureResource,
+            )
+        : undefined;
     const report = await runPerformanceContracts({
       client,
       contracts: selectPerformanceContracts(options.contractIds),
       fixtureCounts: counts,
       profile: options.profile,
+      resource: {
+        initial:
+          fixtureAdjustedSample === undefined
+            ? maxPerformanceResourceSample(initialResource, fixtureResource)
+            : initialResource,
+        sample: fixtureAdjustedSample,
+        sampleSource:
+          fixtureAdjustedSample === undefined
+            ? undefined
+            : "process.memoryUsage.fixture-baseline-adjusted",
+        startedAtMs:
+          fixtureAdjustedSample === undefined ? runStartedAtMs : fixtureWriteCompletedAtMs,
+      },
     });
 
     process.stdout.write(
@@ -120,10 +164,11 @@ async function main(): Promise<void> {
             counts,
             exactProfileCardinality: exactFixture,
             profile: options.profile,
+            writeDurationMs: fixtureWriteDurationMs,
             written,
           },
           report,
-          schemaVersion: 1,
+          schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
         },
         null,
         2,
@@ -135,6 +180,9 @@ async function main(): Promise<void> {
     }
   } finally {
     client.close();
+    if (scratchDirectory !== null) {
+      await rm(scratchDirectory, { force: true, recursive: true });
+    }
   }
 }
 

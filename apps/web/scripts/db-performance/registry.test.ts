@@ -100,6 +100,35 @@ describe("performance registry", () => {
     expect(report.passed).toBe(true);
   });
 
+  it("reports an unavailable resource sample when a contract-only caller omits one", async () => {
+    const report = await runPerformanceContracts({
+      client: NOOP_CLIENT,
+      contracts: [],
+      profile: "1x",
+    });
+
+    expect(report.resources).toMatchObject({
+      availability: "unavailable",
+      peak: null,
+      sampleSource: null,
+      unavailableReason: expect.stringContaining("not supplied"),
+    });
+    expect(report.criteria.resources).toMatchObject({ addressed: false, passed: null });
+  });
+
+  it("rejects invalid supplied resource values instead of coercing them to zero", async () => {
+    await expect(
+      runPerformanceContracts({
+        client: NOOP_CLIENT,
+        contracts: [],
+        profile: "1x",
+        resource: {
+          sample: () => ({ heapUsedBytes: -1, rssBytes: 1 }),
+        },
+      }),
+    ).rejects.toThrow("resource sampling returned an invalid heapUsedBytes value");
+  });
+
   it("fails an EQP full scan or temporary sort independently of timing", async () => {
     const client: PerformanceClient = {
       async execute(statement) {
