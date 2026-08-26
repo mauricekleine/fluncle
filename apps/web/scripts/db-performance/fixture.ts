@@ -40,7 +40,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   )`,
   `create index if not exists perf_artists_mbid_idx on perf_artists(mbid)`,
   `create index if not exists perf_artists_name_nocase_idx
-    on perf_artists(name collate nocase, id)`,
+    on perf_artists(name collate nocase)`,
   `create table if not exists perf_labels (
     id text primary key,
     name text not null,
@@ -72,6 +72,7 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     updated_at text,
     video_squared_at text
   )`,
+  `create unique index if not exists perf_findings_log_id_unique on perf_findings(log_id)`,
   `create table if not exists perf_track_embeddings (
     track_id text primary key,
     embedding_blob blob not null
@@ -142,11 +143,17 @@ function syntheticTrackCredits(index: number, artistCount: number): string[] {
   }
 
   if (index === 3) {
-    return ["Synthetic Collision", "Synthetic Identity"];
+    return ["Synthetic Collision", "Synthetic Identity", "Synthetic Identity"];
   }
 
   if (index === 4) {
     return ["Synthetic Alias"];
+  }
+
+  // One exact-profile and one compact-profile finding exercise the certified half of the artist
+  // link contract while retaining identical synthetic identity semantics at every scale.
+  if (index === 511 || index === 1272) {
+    return ["Synthetic Identity"];
   }
 
   return [syntheticArtist(index % artistCount).name];

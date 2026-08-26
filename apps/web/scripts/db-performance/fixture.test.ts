@@ -113,7 +113,7 @@ describe("synthetic database performance fixture", () => {
           is_catalogue: 1,
         },
         {
-          artists_json: '["Synthetic Collision","Synthetic Identity"]',
+          artists_json: '["Synthetic Collision","Synthetic Identity","Synthetic Identity"]',
           id: "synthetic-track-000000003",
           is_catalogue: 1,
         },

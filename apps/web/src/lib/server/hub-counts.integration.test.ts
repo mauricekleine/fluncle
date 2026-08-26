@@ -1,5 +1,8 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { typedRows } from "./db";
 import {
@@ -23,6 +26,7 @@ import {
 // server-side path exists; the out-of-band prune + the future reconciliation sweep own that drift).
 
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
@@ -69,7 +73,17 @@ async function rawLink(
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-hub-counts-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
+});
+
+afterEach(async () => {
+  db.close();
+
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 describe("linkTrackToLabel / linkTrackToAlbum — the per-track link", () => {

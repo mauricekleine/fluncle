@@ -287,13 +287,14 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
     );
 
     // SQLite changes SEARCH/SCAN phrasing across releases; the stable contract is that both named
-    // indexes participate and no bare artist-table scan appears.
+    // indexes participate and neither an artist branch nor the claimed-MBID anti-join scans.
     expect(details.some((detail) => detail.includes("artists_mbid_idx"))).toBe(true);
     expect(details.some((detail) => detail.includes("artists_name_nocase_idx"))).toBe(true);
     expect(
       details.filter(
         (detail) =>
-          /\bscan\s+(?:table\s+)?artist\b/iu.test(detail) && !detail.includes("using index"),
+          /\bscan\s+(?:table\s+)?(?:artist|claimed)\b/iu.test(detail) &&
+          !detail.includes("using index"),
       ),
     ).toEqual([]);
     expect(details.filter((detail) => detail.includes("use temp b-tree"))).toEqual([]);

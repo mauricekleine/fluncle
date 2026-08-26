@@ -54,6 +54,16 @@ function newestFirst(rows: readonly unknown[]): unknown[] {
   });
 }
 
+function trackRefsOrdered(rows: readonly unknown[]): unknown[] {
+  return [...rows].sort((left, right) => {
+    const byTrack = valueAt(left, "track_id").localeCompare(valueAt(right, "track_id"));
+
+    return byTrack === 0
+      ? valueAt(left, "log_id").localeCompare(valueAt(right, "log_id"))
+      : byTrack;
+  });
+}
+
 type ComparisonContractOptions = Omit<PerformanceContract, "execute" | "plan" | "validate"> & {
   after: PerformanceStatement;
   before: PerformanceStatement;
@@ -63,21 +73,48 @@ type ComparisonContractOptions = Omit<PerformanceContract, "execute" | "plan" | 
 
 function comparisonContract(options: ComparisonContractOptions): PerformanceContract {
   const { after, before, normalizeRows, plan, ...contract } = options;
+  const beforeEvidenceByClient = new WeakMap<
+    object,
+    Promise<{
+      beforeFullScanCount: number;
+      beforeOutput: string;
+      beforePlanDetails: string;
+      beforePlanViolationCount: number;
+      beforeResultRowCount: number;
+    }>
+  >();
 
   return {
     ...contract,
     async execute(context): Promise<ContractExecution> {
-      const beforePlanResult = await context.client.execute({
-        args: before.args,
-        sql: `EXPLAIN QUERY PLAN ${before.sql}`,
-      });
-      const beforePlan = analyzeExplainPlan(explainDetails(beforePlanResult), plan.policy);
-      const beforeResult = await context.client.execute(before);
+      let beforeEvidence = beforeEvidenceByClient.get(context.client);
+
+      if (!beforeEvidence) {
+        beforeEvidence = (async () => {
+          const beforePlanResult = await context.client.execute({
+            args: before.args,
+            sql: `EXPLAIN QUERY PLAN ${before.sql}`,
+          });
+          const beforePlan = analyzeExplainPlan(explainDetails(beforePlanResult), plan.policy);
+          const beforeResult = await context.client.execute(before);
+          const normalize = normalizeRows ?? ((rows: readonly unknown[]) => [...rows]);
+
+          return {
+            beforeFullScanCount: beforePlan.fullScans.length,
+            beforeOutput: serializableRows(normalize(beforeResult.rows)),
+            beforePlanDetails: beforePlan.details.join(" | "),
+            beforePlanViolationCount: beforePlan.violations.length,
+            beforeResultRowCount: beforeResult.rows.length,
+          };
+        })();
+        beforeEvidenceByClient.set(context.client, beforeEvidence);
+      }
+
+      const reference = await beforeEvidence;
       const startedAt = context.now();
       const afterResult = await context.client.execute(after);
       const durationMs = Math.max(0, context.now() - startedAt);
       const normalize = normalizeRows ?? ((rows: readonly unknown[]) => [...rows]);
-      const beforeOutput = serializableRows(normalize(beforeResult.rows));
       const afterOutput = serializableRows(normalize(afterResult.rows));
 
       return {
@@ -86,12 +123,8 @@ function comparisonContract(options: ComparisonContractOptions): PerformanceCont
         metadata: {
           afterOutput,
           afterResultRowCount: afterResult.rows.length,
-          beforeFullScanCount: beforePlan.fullScans.length,
-          beforeOutput,
-          beforePlanDetails: beforePlan.details.join(" | "),
-          beforePlanViolationCount: beforePlan.violations.length,
-          beforeResultRowCount: beforeResult.rows.length,
-          outputsEquivalent: beforeOutput === afterOutput,
+          ...reference,
+          outputsEquivalent: reference.beforeOutput === afterOutput,
         },
         rawResult: afterResult,
         resultRowCount: afterResult.rows.length,
@@ -218,7 +251,9 @@ function entityLastmodStatements(entity: "albums" | "artists" | "labels"): {
 for (const entity of ["albums", "artists", "labels"] as const) {
   const statements = entityLastmodStatements(entity);
   const growingTables =
-    entity === "artists" ? ["perf_tracks", "perf_track_artists"] : ["perf_tracks"];
+    entity === "artists"
+      ? ["perf_tracks", "perf_track_artists", "perf_artists"]
+      : ["perf_tracks", `perf_${entity}`];
 
   performanceRegistry.register(
     comparisonContract({
@@ -237,12 +272,207 @@ for (const entity of ["albums", "artists", "labels"] as const) {
   );
 }
 
+const TRACK_RESOLVER_PLAN_POLICY = {
+  forbidTempSort: true,
+  growingTables: ["perf_findings", "perf_tracks", "preferred_finding", "preferred_track"],
+  requiredDetails: [/sqlite_autoindex_perf_tracks_1/i, /perf_findings_log_id_unique/i],
+} as const;
+
+const TRACK_RESOLVER_RAW_ID = "synthetic-track-000000000";
+const TRACK_RESOLVER_LOG_ID = "synthetic-log-000000000";
+
+const OPTIONAL_TRACK_RESOLVER_BEFORE = {
+  args: [TRACK_RESOLVER_RAW_ID, TRACK_RESOLVER_RAW_ID],
+  sql: `select perf_tracks.id as track_id, perf_findings.log_id
+          from perf_tracks
+          left join perf_findings on perf_findings.track_id = perf_tracks.id
+         where perf_tracks.id = ? or perf_findings.log_id = ?
+         limit 1`,
+} satisfies PerformanceStatement;
+
+const OPTIONAL_TRACK_RESOLVER_AFTER = {
+  args: [TRACK_RESOLVER_RAW_ID, TRACK_RESOLVER_RAW_ID, TRACK_RESOLVER_RAW_ID],
+  sql: `with resolved_track(track_id) as (
+          select perf_tracks.id from perf_tracks
+           where perf_tracks.id = ?
+          union all
+          select perf_findings.track_id from perf_findings
+          join perf_tracks on perf_tracks.id = perf_findings.track_id
+           where perf_findings.log_id = ?
+             and not exists (
+                   select 1 from perf_tracks preferred_track
+                    where preferred_track.id = ?
+                 )
+          limit 1
+        )
+        select perf_tracks.id as track_id, perf_findings.log_id
+          from resolved_track
+          join perf_tracks on perf_tracks.id = resolved_track.track_id
+          left join perf_findings on perf_findings.track_id = perf_tracks.id
+         limit 1`,
+} satisfies PerformanceStatement;
+
+performanceRegistry.register(
+  comparisonContract({
+    after: OPTIONAL_TRACK_RESOLVER_AFTER,
+    before: OPTIONAL_TRACK_RESOLVER_BEFORE,
+    description: "Optional-finding track resolvers seek raw and Log IDs through separate indexes",
+    id: "track-resolver.optional-finding",
+    iterations: 20,
+    plan: { policy: TRACK_RESOLVER_PLAN_POLICY, statement: OPTIONAL_TRACK_RESOLVER_AFTER },
+    warmupIterations: 2,
+    workClass: "route-db",
+  }),
+);
+
+const ALL_TRACK_MATCHES_BEFORE = {
+  args: [TRACK_RESOLVER_LOG_ID, TRACK_RESOLVER_LOG_ID],
+  sql: `select perf_tracks.id as track_id, perf_findings.log_id
+          from perf_tracks
+          left join perf_findings on perf_findings.track_id = perf_tracks.id
+         where perf_tracks.id = ? or perf_findings.log_id = ?`,
+} satisfies PerformanceStatement;
+
+const ALL_TRACK_MATCHES_AFTER = {
+  args: [TRACK_RESOLVER_LOG_ID, TRACK_RESOLVER_LOG_ID, TRACK_RESOLVER_LOG_ID],
+  sql: `with resolved_tracks(track_id) as (
+          select perf_tracks.id from perf_tracks
+           where perf_tracks.id = ?
+          union all
+          select perf_findings.track_id from perf_findings
+          join perf_tracks on perf_tracks.id = perf_findings.track_id
+           where perf_findings.log_id = ? and perf_findings.track_id <> ?
+        )
+        select perf_tracks.id as track_id, perf_findings.log_id
+          from resolved_tracks
+          join perf_tracks on perf_tracks.id = resolved_tracks.track_id
+          left join perf_findings on perf_findings.track_id = perf_tracks.id`,
+} satisfies PerformanceStatement;
+
+performanceRegistry.register(
+  comparisonContract({
+    after: ALL_TRACK_MATCHES_AFTER,
+    before: ALL_TRACK_MATCHES_BEFORE,
+    description: "Identity references preserve all cross-namespace matches through indexed seeks",
+    id: "track-resolver.all-matches",
+    iterations: 20,
+    normalizeRows: trackRefsOrdered,
+    plan: { policy: TRACK_RESOLVER_PLAN_POLICY, statement: ALL_TRACK_MATCHES_AFTER },
+    warmupIterations: 2,
+    workClass: "route-db",
+  }),
+);
+
+const REQUIRED_FINDING_RESOLVER_BEFORE = {
+  args: [TRACK_RESOLVER_LOG_ID, TRACK_RESOLVER_LOG_ID],
+  sql: `select perf_tracks.id as track_id, perf_findings.log_id
+          from perf_findings
+          join perf_tracks on perf_tracks.id = perf_findings.track_id
+         where perf_tracks.id = ? or perf_findings.log_id = ?
+         limit 1`,
+} satisfies PerformanceStatement;
+
+const REQUIRED_FINDING_RESOLVER_AFTER = {
+  args: [TRACK_RESOLVER_LOG_ID, TRACK_RESOLVER_LOG_ID, TRACK_RESOLVER_LOG_ID],
+  sql: `with resolved_track(track_id) as (
+          select perf_tracks.id from perf_tracks
+          join perf_findings on perf_findings.track_id = perf_tracks.id
+           where perf_tracks.id = ?
+          union all
+          select perf_findings.track_id from perf_findings
+          join perf_tracks on perf_tracks.id = perf_findings.track_id
+           where perf_findings.log_id = ?
+             and not exists (
+                   select 1 from perf_tracks preferred_track
+                   join perf_findings preferred_finding
+                     on preferred_finding.track_id = preferred_track.id
+                    where preferred_track.id = ?
+                 )
+          limit 1
+        )
+        select perf_tracks.id as track_id, perf_findings.log_id
+          from resolved_track
+          join perf_findings on perf_findings.track_id = resolved_track.track_id
+          join perf_tracks on perf_tracks.id = resolved_track.track_id
+         limit 1`,
+} satisfies PerformanceStatement;
+
+performanceRegistry.register(
+  comparisonContract({
+    after: REQUIRED_FINDING_RESOLVER_AFTER,
+    before: REQUIRED_FINDING_RESOLVER_BEFORE,
+    description: "Finding-only track resolvers seek both identities and preserve certification",
+    id: "track-resolver.required-finding",
+    iterations: 20,
+    plan: { policy: TRACK_RESOLVER_PLAN_POLICY, statement: REQUIRED_FINDING_RESOLVER_AFTER },
+    warmupIterations: 2,
+    workClass: "route-db",
+  }),
+);
+
+const BULK_TRACK_RESOLVER_INPUTS = [
+  TRACK_RESOLVER_RAW_ID,
+  TRACK_RESOLVER_LOG_ID,
+  "synthetic-missing-track",
+] as const;
+const BULK_TRACK_RESOLVER_PLACEHOLDERS = BULK_TRACK_RESOLVER_INPUTS.map(() => "?").join(", ");
+
+const BULK_TRACK_RESOLVER_BEFORE = {
+  args: [...BULK_TRACK_RESOLVER_INPUTS, ...BULK_TRACK_RESOLVER_INPUTS],
+  sql: `select perf_tracks.id as track_id, perf_findings.log_id
+          from perf_tracks
+          left join perf_findings on perf_findings.track_id = perf_tracks.id
+         where perf_tracks.id in (${BULK_TRACK_RESOLVER_PLACEHOLDERS})
+            or perf_findings.log_id in (${BULK_TRACK_RESOLVER_PLACEHOLDERS})`,
+} satisfies PerformanceStatement;
+
+const BULK_TRACK_RESOLVER_AFTER = {
+  args: [...BULK_TRACK_RESOLVER_INPUTS],
+  sql: `with input(value) as (values ${BULK_TRACK_RESOLVER_INPUTS.map(() => "(?)").join(", ")}),
+        resolved_tracks(track_id, log_id) as (
+          select perf_tracks.id, perf_findings.log_id
+            from input
+            join perf_tracks on perf_tracks.id = input.value
+            left join perf_findings on perf_findings.track_id = perf_tracks.id
+          union all
+          select perf_tracks.id, perf_findings.log_id
+            from input
+            join perf_findings on perf_findings.log_id = input.value
+            join perf_tracks on perf_tracks.id = perf_findings.track_id
+           where not exists (
+                 select 1 from perf_tracks preferred_track
+                  where preferred_track.id = input.value
+               )
+             and not exists (
+                   select 1 from input raw_input
+                    where raw_input.value = perf_findings.track_id
+                 )
+        )
+        select track_id, log_id from resolved_tracks`,
+} satisfies PerformanceStatement;
+
+performanceRegistry.register(
+  comparisonContract({
+    after: BULK_TRACK_RESOLVER_AFTER,
+    before: BULK_TRACK_RESOLVER_BEFORE,
+    description: "Bulk track collection resolves a bounded input set without a catalogue scan",
+    id: "track-resolver.bulk",
+    iterations: 20,
+    normalizeRows: trackRefsOrdered,
+    plan: { policy: TRACK_RESOLVER_PLAN_POLICY, statement: BULK_TRACK_RESOLVER_AFTER },
+    warmupIterations: 2,
+    workClass: "route-db",
+  }),
+);
+
 const ARTIST_LINK_TRACK_IDS = [
   "synthetic-track-000000000",
   "synthetic-track-000000001",
   "synthetic-track-000000002",
   "synthetic-track-000000003",
   "synthetic-track-000000004",
+  "synthetic-track-000000511",
+  "synthetic-track-000001272",
 ] as const;
 const ARTIST_LINK_PLACEHOLDERS = ARTIST_LINK_TRACK_IDS.map(() => "?").join(", ");
 const ARTIST_LINK_TRIPLES = JSON.stringify([
@@ -250,7 +480,10 @@ const ARTIST_LINK_TRIPLES = JSON.stringify([
   [ARTIST_LINK_TRACK_IDS[1], 1, "synthetic-mbid-unclaimed"],
   [ARTIST_LINK_TRACK_IDS[2], 1, "synthetic-mbid-collision"],
   [ARTIST_LINK_TRACK_IDS[3], 2, "synthetic-mbid-identity"],
+  [ARTIST_LINK_TRACK_IDS[3], 3, "synthetic-mbid-identity"],
   [ARTIST_LINK_TRACK_IDS[4], 1, "synthetic-mbid-identity"],
+  [ARTIST_LINK_TRACK_IDS[5], 1, "synthetic-mbid-identity"],
+  [ARTIST_LINK_TRACK_IDS[6], 1, "synthetic-mbid-identity"],
 ]);
 const ARTIST_LINK_ARGS = [ARTIST_LINK_TRIPLES, ...ARTIST_LINK_TRACK_IDS];
 
@@ -261,27 +494,32 @@ const ARTIST_LINK_BEFORE = {
                  cast(json_extract(value, '$[1]') as integer) as position,
                  cast(json_extract(value, '$[2]') as text) as mbid
             from json_each(?)
+        ),
+        legacy_candidate as (
+          select perf_tracks.id as track_id, perf_artists.id as artist_id,
+                 cast(credit.key as integer) + 1 as position, perf_tracks.is_catalogue
+            from perf_tracks
+            join json_each(perf_tracks.artists_json) credit
+            left join credit_id
+              on credit_id.track_id = perf_tracks.id
+             and credit_id.position = cast(credit.key as integer) + 1
+            join perf_artists on case
+              when credit_id.mbid is not null then (
+                   perf_artists.mbid = credit_id.mbid
+                or (perf_artists.mbid is null
+                    and perf_artists.name = credit.value collate nocase
+                    and not exists (
+                          select 1 from perf_artists claimed
+                           where claimed.mbid = credit_id.mbid
+                        ))
+              )
+              else perf_artists.name = credit.value collate nocase
+            end
+           where perf_tracks.id in (${ARTIST_LINK_PLACEHOLDERS})
         )
-        select perf_tracks.id as track_id, perf_artists.id as artist_id,
-               cast(credit.key as integer) + 1 as position, perf_tracks.is_catalogue
-          from perf_tracks
-          join json_each(perf_tracks.artists_json) credit
-          left join credit_id
-            on credit_id.track_id = perf_tracks.id
-           and credit_id.position = cast(credit.key as integer) + 1
-          join perf_artists on case
-            when credit_id.mbid is not null then (
-                 perf_artists.mbid = credit_id.mbid
-              or (perf_artists.mbid is null
-                  and perf_artists.name = credit.value collate nocase
-                  and not exists (
-                        select 1 from perf_artists claimed
-                         where claimed.mbid = credit_id.mbid
-                      ))
-            )
-            else perf_artists.name = credit.value collate nocase
-          end
-         where perf_tracks.id in (${ARTIST_LINK_PLACEHOLDERS})`,
+        select track_id, artist_id, min(position) as position, is_catalogue
+          from legacy_candidate
+         group by track_id, artist_id, is_catalogue`,
 } satisfies PerformanceStatement;
 
 const ARTIST_LINK_AFTER = {
@@ -348,7 +586,7 @@ const ARTIST_LINK_AFTER = {
 
 const ARTIST_LINK_PLAN_POLICY = {
   forbidTempSort: true,
-  growingTables: ["perf_artists", "perf_tracks"],
+  growingTables: ["claimed", "perf_artists", "perf_tracks"],
   requiredDetails: [
     /sqlite_autoindex_perf_tracks_1/i,
     /perf_artists_mbid_idx/i,

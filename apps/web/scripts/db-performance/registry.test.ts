@@ -174,6 +174,10 @@ describe("performance registry", () => {
       "sitemap.finding-pages",
       "sitemap.finding-stats",
       "sitemap.labels-lastmod",
+      "track-resolver.all-matches",
+      "track-resolver.bulk",
+      "track-resolver.optional-finding",
+      "track-resolver.required-finding",
     ];
 
     try {
@@ -212,6 +216,23 @@ describe("performance registry", () => {
       );
       expect(findingPages?.metadata[0]?.beforePlanDetails).toMatch(/USE TEMP B-TREE/i);
       expect(findingPages?.plan?.details[0]).toMatch(/perf_findings/i);
+
+      for (const contractId of [
+        "track-resolver.all-matches",
+        "track-resolver.bulk",
+        "track-resolver.optional-finding",
+        "track-resolver.required-finding",
+      ]) {
+        const resolver = report.contracts.find((contract) => contract.contractId === contractId);
+
+        expect(resolver?.metadata[0]?.beforePlanViolationCount).toBeGreaterThan(0);
+        expect(resolver?.plan?.details).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(/sqlite_autoindex_perf_tracks_1/i),
+            expect.stringMatching(/perf_findings_log_id_unique/i),
+          ]),
+        );
+      }
     } finally {
       client.close();
     }

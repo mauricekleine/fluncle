@@ -191,7 +191,15 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
 
   const trackPages = typedRows<TrackRow>(trackResult.rows)
     .map(trackPage)
-    .sort((left, right) => right.lastmod.localeCompare(left.lastmod));
+    .sort((left, right) => {
+      if (left.lastmod !== right.lastmod) {
+        return left.lastmod < right.lastmod ? 1 : -1;
+      }
+
+      // Match SQLite's default BINARY text order so equal timestamps cannot move rows across a
+      // sitemap shard boundary when the engine happens to return the driver in a different order.
+      return left.logId < right.logId ? -1 : left.logId > right.logId ? 1 : 0;
+    });
 
   return [...trackPages, ...typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage)];
 }

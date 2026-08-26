@@ -23,6 +23,7 @@ import { logEvent } from "./log";
 import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
 import { isLogId } from "../log-id";
 import { dedupeByRecordingIdentity } from "./track-match";
+import { FINDING_TRACK_OR_LOG_ID_CTE, TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
 import {
   applyTaste,
   type MixCandidate as RankCandidate,
@@ -673,26 +674,23 @@ export function toPublicTrackListItem<T extends object>(item: T): T {
 
 /** Fetch a single track by its Spotify trackId or its Log ID. */
 /**
- * The minimal shape the `/api/preview` relay needs to resolve a live preview — resolved from
- * `tracks` (a LEFT join to `findings`, so it answers by track id OR Log ID), NOT through the
- * finding INNER join `getTrackByIdOrLogId` uses. That difference is the point: a CATALOGUE track
- * (a `tracks` row with no `findings` row) has no finding to inner-join, so the finding-scoped
- * resolver returns nothing for it — and The Ear's inline artwork audition (docs/the-ear.md § The
- * operator's actions) previews catalogue rows. The preview itself is the official 30s Deezer /
- * Apple / iTunes preview the relay resolves by ISRC; nothing about the catalogue is exposed but a
- * public song preview. Everything it selects lives on `tracks` (catalogue identity), never on the
- * certification half.
+ * The minimal shape the `/api/preview` relay needs to resolve a live preview — resolved through
+ * the catalogue-aware resolver (so it answers by track ID or Log ID), not through the
+ * finding-scoped resolver `getTrackByIdOrLogId` uses. That difference is the point: a catalogue
+ * track has no certification, so the finding-scoped resolver returns nothing for it, while The
+ * Ear's inline artwork audition (docs/the-ear.md § The operator's actions) previews catalogue
+ * rows. Everything selected here lives on `tracks`; the certification half is only an identity.
  */
 export async function getLivePreviewTrack(
   idOrLogId: string,
 ): Promise<{ artists: string[]; isrc?: string; previewUrl?: string; title: string } | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select tracks.title, tracks.artists_json, tracks.isrc, tracks.preview_url
-          from tracks
-          left join findings on findings.track_id = tracks.track_id
-          where tracks.track_id = ? or findings.log_id = ?
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${TRACK_OR_LOG_ID_CTE}
+          select tracks.title, tracks.artists_json, tracks.isrc, tracks.preview_url
+          from resolved_track
+          join tracks on tracks.track_id = resolved_track.track_id
           limit 1`,
   });
   const row = typedRow<{
@@ -717,9 +715,13 @@ export async function getLivePreviewTrack(
 export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select ${TRACK_SELECT} from ${FINDINGS_FROM}
-          where tracks.track_id = ? or findings.log_id = ? limit 1`,
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${FINDING_TRACK_OR_LOG_ID_CTE}
+          select ${TRACK_SELECT}
+          from resolved_track
+          join findings on findings.track_id = resolved_track.track_id
+          join tracks on tracks.track_id = resolved_track.track_id
+          limit 1`,
   });
   const row = typedRow<TrackRow>(result.rows);
 
@@ -1082,8 +1084,11 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
 export async function getTrackContextNote(idOrLogId: string): Promise<string | null> {
   const db = await getDb();
   const result = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select context_note from findings where track_id = ? or log_id = ? limit 1`,
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${FINDING_TRACK_OR_LOG_ID_CTE}
+          select findings.context_note from resolved_track
+          join findings on findings.track_id = resolved_track.track_id
+          limit 1`,
   });
   const row = typedRow<{ context_note: string | null }>(result.rows);
 
@@ -1102,8 +1107,12 @@ export async function getObservationProvenance(
 ): Promise<{ promptVersion: number | null; script: string | null }> {
   const db = await getDb();
   const result = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select observation_script, observation_prompt_version from findings where track_id = ? or log_id = ? limit 1`,
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${FINDING_TRACK_OR_LOG_ID_CTE}
+          select findings.observation_script, findings.observation_prompt_version
+          from resolved_track
+          join findings on findings.track_id = resolved_track.track_id
+          limit 1`,
   });
   const row = typedRow<{
     observation_prompt_version: number | null;
@@ -1126,13 +1135,14 @@ export async function getObservationProvenance(
 export async function getSourceAudioKey(idOrLogId: string): Promise<string | null> {
   const db = await getDb();
   const result = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    // LEFT join, not the finding inner join: a CATALOGUE row's captured bytes stream too — the
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    // Catalogue-aware, not finding-scoped: a catalogue row's captured bytes stream too — the
     // quarantine lens auditions them so the operator can hear which side of a wrong-audio
     // collision is actually wrong (docs/the-ear.md § Wrong audio). Same privacy tier either way.
-    sql: `select tracks.source_audio_key from tracks
-          left join findings on findings.track_id = tracks.track_id
-          where tracks.track_id = ? or findings.log_id = ? limit 1`,
+    sql: `with ${TRACK_OR_LOG_ID_CTE}
+          select tracks.source_audio_key from resolved_track
+          join tracks on tracks.track_id = resolved_track.track_id
+          limit 1`,
   });
   const row = typedRow<{ source_audio_key: string | null }>(result.rows);
 
@@ -1490,12 +1500,15 @@ export async function getSimilarFindings(idOrLogId: string, limit = 6): Promise<
 
   const db = await getDb();
   const targetResult = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select emb.embedding_blob,
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${FINDING_TRACK_OR_LOG_ID_CTE}
+          select emb.embedding_blob,
                  tracks.track_id
-          from ${FINDINGS_FROM}
+          from resolved_track
+          join findings on findings.track_id = resolved_track.track_id
+          join tracks on tracks.track_id = resolved_track.track_id
           left join track_embeddings emb on emb.track_id = tracks.track_id
-          where tracks.track_id = ? or findings.log_id = ? limit 1`,
+          limit 1`,
   });
   const targetRow = typedRow<{ embedding_blob: unknown; track_id: string }>(targetResult.rows);
 
@@ -1831,12 +1844,15 @@ export async function getMixableTracks(
 
   const db = await getDb();
   const targetResult = await db.execute({
-    args: [idOrLogId, idOrLogId],
-    sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
+    args: [idOrLogId, idOrLogId, idOrLogId],
+    sql: `with ${TRACK_OR_LOG_ID_CTE}
+          select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
                  emb.embedding_blob, tracks.features_json
-          from ${MIX_FROM}
+          from resolved_track
+          join tracks on tracks.track_id = resolved_track.track_id
+          left join findings on findings.track_id = tracks.track_id
           left join track_embeddings emb on emb.track_id = tracks.track_id
-          where tracks.track_id = ? or findings.log_id = ? limit 1`,
+          limit 1`,
   });
   const targetRow = typedRow<MixRow>(targetResult.rows);
 

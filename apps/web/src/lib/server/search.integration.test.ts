@@ -18,6 +18,9 @@
 
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { linkTrackToAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { createIntegrationDb } from "./integration-db";
@@ -33,6 +36,7 @@ vi.mock("./search-llm", () => ({ translateQuery }));
 // The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL
 // query functions run REAL SQL against the REAL migrated schema.
 let db: Client;
+let fixtureDirectory: string | undefined;
 
 vi.mock("./db", async () => {
   const actual = await vi.importActual<typeof import("./db")>("./db");
@@ -129,7 +133,8 @@ async function seed(client: Client, track: Fixture): Promise<void> {
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-search-"));
+  db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   translateQuery.mockReset();
   translateQuery.mockResolvedValue(null);
 
@@ -197,8 +202,13 @@ beforeEach(async () => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   db.close();
+
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, { force: true, recursive: true });
+    fixtureDirectory = undefined;
+  }
 });
 
 // ── The index itself ─────────────────────────────────────────────────────────────────
