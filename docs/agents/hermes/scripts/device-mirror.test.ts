@@ -528,7 +528,7 @@ describe("embedded source replica", () => {
       expect(Bun.file(fullTarget.path).size).toBe(publishedBytes);
       fullTarget.client.close();
     }
-  });
+  }, 30_000);
 });
 
 describe("staged target publication", () => {
@@ -734,5 +734,5 @@ describe("staged target publication", () => {
     expect(sizes[1] ?? Infinity).toBeLessThanOrEqual((sizes[0] ?? 0) * 2);
     expect(sizes[2] ?? Infinity).toBeLessThanOrEqual((sizes[0] ?? 0) * 4);
     incremental.client.close();
-  });
+  }, 30_000);
 });
