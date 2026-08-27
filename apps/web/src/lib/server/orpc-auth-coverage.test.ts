@@ -422,8 +422,6 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The health writer's agent must inspect an ambiguous timeout before any replay. The bounded
   // key travels in a POST body so diagnostics never capture it from a route URL.
   get_operation_receipt: "admin",
-  // Initialization-era CLI compatibility. Sentry redacts the keyed path until Goal H removes it.
-  get_operation_receipt_legacy: "admin",
   get_private_account_export: "private-session",
   // One of the signed-in user's frozen Frontier editions + its tracklist — private-session
   // (privateUserAuth), the get_private_frontier_playlist precedent. Scoped by the session

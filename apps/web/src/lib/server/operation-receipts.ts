@@ -252,20 +252,6 @@ export async function inspectOperationReceipt(
   return inspectOperationReceiptFor(client, operationKey);
 }
 
-/** Read through the initialization-era key grammar until its Goal H contraction. */
-export async function inspectOperationReceiptLegacy(
-  client: OperationReceiptClient,
-  operationKey: string,
-): Promise<OperationReceiptInspection> {
-  if (operationKey.length === 0 || operationKey.length > OPERATION_RECEIPT_KEY_MAX) {
-    throw new RangeError(
-      `operationKey must contain from 1 through ${OPERATION_RECEIPT_KEY_MAX} characters`,
-    );
-  }
-
-  return inspectOperationReceiptFor(client, operationKey);
-}
-
 async function inspectOperationReceiptFor(
   client: OperationReceiptClient,
   operationKey: string,

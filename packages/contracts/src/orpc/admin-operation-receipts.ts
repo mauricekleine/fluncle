@@ -54,22 +54,6 @@ export const getOperationReceipt = oc
   )
   .output(z.object({ ok: z.literal(true), receipt: OperationReceiptSummarySchema }));
 
-/** Initialization-era inspection route retained until Goal H contraction. */
-export const getOperationReceiptLegacy = oc
-  .route({
-    method: "GET",
-    operationId: "getOperationReceiptLegacy",
-    path: "/admin/operation-receipts/{operationKey}",
-    summary: "Inspect one operation receipt through the compatibility route",
-    tags: ["Admin"],
-  })
-  .input(
-    z.object({
-      operationKey: z.string().min(1).max(OPERATION_RECEIPT_KEY_MAX),
-    }),
-  )
-  .output(z.object({ ok: z.literal(true), receipt: OperationReceiptSummarySchema }));
-
 /** Digest-bound read-only reconciliation. The bounded coordinates travel in a POST body. */
 export const resolveOperationReceipt = oc
   .route({
@@ -120,7 +104,6 @@ export const reconcileOperationReceipts = oc
 
 export const adminOperationReceiptsContract = {
   get_operation_receipt: getOperationReceipt,
-  get_operation_receipt_legacy: getOperationReceiptLegacy,
   reconcile_operation_receipts: reconcileOperationReceipts,
   resolve_operation_receipt: resolveOperationReceipt,
 };

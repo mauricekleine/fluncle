@@ -6,7 +6,6 @@ import { getHealthSnapshotReceiptCutoverDispositionFor } from "../health-receipt
 import { logEvent } from "../log";
 import {
   inspectOperationReceipt,
-  inspectOperationReceiptLegacy,
   reconcileOperationReceipt,
   repairStaleOperationReceipts,
   type OperationReceiptInspection,
@@ -54,31 +53,6 @@ async function inspectReceipt(operationKey: string) {
   };
 }
 
-/** Preserve initialization inspection outcomes until Goal H removes the keyed GET. */
-export async function inspectLegacyOperationReceiptFor(
-  db: Parameters<typeof inspectOperationReceiptLegacy>[0],
-  operationKey: string,
-) {
-  const inspection = await inspectOperationReceiptLegacy(db, operationKey);
-  if (inspection.outcome !== "not-found") {
-    return { ok: true as const, receipt: inspectionSummary(inspection) };
-  }
-
-  const cutover = await getHealthSnapshotReceiptCutoverDispositionFor(db);
-  if (cutover === "unavailable") {
-    throw new ApiError(
-      "operation_receipt_cutover_unavailable",
-      "The operation receipt cutover could not be reconciled safely.",
-      503,
-    );
-  }
-
-  const outcome: "cutover-disabled" | "safely-retryable" =
-    cutover === "enabled" ? "safely-retryable" : "cutover-disabled";
-  logEvent("info", "operation-receipt.reconciled", { outcome });
-  return { ok: true as const, receipt: { ...inspectionSummary(inspection), outcome } };
-}
-
 /** Build the operation-receipt inspection, reconciliation, and repair handlers. */
 export function adminOperationReceiptHandlers(os: Implementer) {
   const getOperationReceiptHandler = os.get_operation_receipt
@@ -86,16 +60,6 @@ export function adminOperationReceiptHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return await inspectReceipt(input.operationKey);
-      } catch (error) {
-        throw toFault(error);
-      }
-    });
-
-  const getOperationReceiptLegacyHandler = os.get_operation_receipt_legacy
-    .use(adminAuth)
-    .handler(async ({ input }) => {
-      try {
-        return await inspectLegacyOperationReceiptFor(await getDb(), input.operationKey);
       } catch (error) {
         throw toFault(error);
       }
@@ -183,7 +147,6 @@ export function adminOperationReceiptHandlers(os: Implementer) {
 
   return {
     get_operation_receipt: getOperationReceiptHandler,
-    get_operation_receipt_legacy: getOperationReceiptLegacyHandler,
     reconcile_operation_receipts: reconcileOperationReceiptsHandler,
     resolve_operation_receipt: resolveOperationReceiptHandler,
   };
