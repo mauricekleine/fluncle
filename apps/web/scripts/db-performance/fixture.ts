@@ -398,7 +398,6 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
   `create index if not exists perf_tracks_release_date_track_id_idx
     on perf_tracks(release_date, id)`,
   `create index if not exists perf_tracks_bpm_idx on perf_tracks(bpm)`,
-  `create index if not exists perf_tracks_capture_priority_idx on perf_tracks(capture_priority)`,
   `create index if not exists perf_tracks_source_audio_attempted_at_idx
     on perf_tracks(source_audio_attempted_at)`,
   `create index if not exists perf_tracks_capture_verification_verified_at_idx

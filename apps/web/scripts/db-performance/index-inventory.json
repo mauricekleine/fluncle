@@ -8,8 +8,8 @@
       "tracksIndexes": 32
     },
     "finalSchemaAfterContraction": {
-      "indexes": 172,
-      "tracksIndexes": 30
+      "indexes": 171,
+      "tracksIndexes": 29
     }
   },
   "tracksIndexes": [
@@ -293,13 +293,13 @@
       "name": "tracks_capture_priority_idx",
       "columns": ["capture_priority"],
       "partialPredicate": null,
-      "decision": "keep",
+      "decision": "drop",
       "finalConsumer": {
         "file": "apps/web/src/lib/server/backfill.ts",
         "symbol": "listCatalogueVendorWork",
         "query": "Apple and Deezer catalogue worklists use is_catalogue plus nullable capture_priority and track_id ordering, all carried by tracks_vendor_worklist_idx."
       },
-      "structuralRationale": "The full tracks_vendor_worklist_idx serves the exact nullable-priority vendor reads, leaving this singleton shadowed and eligible for a separate ordered contraction after plan and equivalence proof.",
+      "structuralRationale": "Drop in the final contraction: tracks_vendor_worklist_idx is a full composite whose is_catalogue prefix and capture_priority/track_id suffix serve the exact nullable-priority vendor reads, leaving the singleton shadowed.",
       "performanceContracts": [
         {
           "id": "index.tracks-capture-priority",
@@ -1231,8 +1231,8 @@
     "tracksIndexes": 32,
     "databaseScaleIndexes": 30,
     "decisions": {
-      "keep": 56,
-      "drop": 6,
+      "keep": 55,
+      "drop": 7,
       "add": 0
     },
     "planContractCount": 67,

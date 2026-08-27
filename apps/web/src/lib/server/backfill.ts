@@ -2016,10 +2016,9 @@ async function listCatalogueAppleWork(limit: number): Promise<CatalogueAppleCand
             and t.backfill_apple_music_done_at is null
             and (t.backfill_apple_music_attempted_at is null
                  or t.backfill_apple_music_attempted_at < ?)
-          -- The full tracks_capture_priority_idx is load-bearing: the partial composite cannot serve
-          -- this query because there is deliberately no capture_priority-is-not-null predicate.
-          -- Metadata backfill stays independent of the ranking rail, so never-ranked NULL rows remain
-          -- eligible after ranked rows drain. Plain desc sorts those NULLs last.
+          -- The full tracks_vendor_worklist_idx includes nullable capture priorities and carries
+          -- this exact is_catalogue/order/tiebreak shape. Never-ranked NULL rows remain eligible and
+          -- sort last without restoring the redundant capture-priority singleton.
           order by t.capture_priority desc, t.track_id desc
           limit ?`,
   });
@@ -2401,10 +2400,9 @@ async function listDeezerWork(limit: number): Promise<DeezerCandidate[]> {
 
   const catalogue = await db.execute({
     args: [DEEZER_MAX_FAILURES, limit - candidates.length],
-    // The full tracks_capture_priority_idx is load-bearing: the partial composite cannot serve this
-    // query because there is deliberately no capture_priority-is-not-null predicate. Metadata
-    // backfill stays independent of the ranking rail, so never-ranked NULL rows remain eligible
-    // after ranked rows drain. Plain desc sorts those NULLs last.
+    // The full tracks_vendor_worklist_idx includes nullable capture priorities and carries this
+    // exact is_catalogue/order/tiebreak shape. Never-ranked NULL rows remain eligible and sort last
+    // without restoring the redundant capture-priority singleton.
     sql: `select t.track_id, t.isrc, t.duration_ms
           from tracks t
           where t.is_catalogue = 1

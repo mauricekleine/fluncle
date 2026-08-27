@@ -118,6 +118,7 @@ export function validateIndexInventory(
     "artifact_change_consumers_compaction_idx",
     "artifact_changes_created_seq_idx",
     "operation_receipts_operation_audit_idx",
+    "tracks_capture_priority_idx",
     "tracks_nearest_finding_score_idx",
     "tracks_release_date_idx",
   ]);
@@ -187,7 +188,7 @@ export function validateIndexInventory(
     }
   }
 
-  if (decisions.keep !== 56 || decisions.drop !== 6 || decisions.add !== 0) {
+  if (decisions.keep !== 55 || decisions.drop !== 7 || decisions.add !== 0) {
     failures.push(
       `final decisions are keep=${decisions.keep}, drop=${decisions.drop}, add=${decisions.add}`,
     );
@@ -222,11 +223,11 @@ export function validateIndexInventory(
   if (inventory.productionInventory.currentFinalSchemaBeforeContraction.tracksIndexes !== 32) {
     failures.push("current final schema track index count must be 32");
   }
-  if (inventory.productionInventory.finalSchemaAfterContraction.indexes !== 172) {
-    failures.push("final contracted schema inventory count must be 172 indexes");
+  if (inventory.productionInventory.finalSchemaAfterContraction.indexes !== 171) {
+    failures.push("final contracted schema inventory count must be 171 indexes");
   }
-  if (inventory.productionInventory.finalSchemaAfterContraction.tracksIndexes !== 30) {
-    failures.push("final contracted schema track index count must be 30");
+  if (inventory.productionInventory.finalSchemaAfterContraction.tracksIndexes !== 29) {
+    failures.push("final contracted schema track index count must be 29");
   }
 
   return failures;

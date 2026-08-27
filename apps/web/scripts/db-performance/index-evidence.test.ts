@@ -199,10 +199,10 @@ describe("final index plan evidence", () => {
           indexes: 62,
           tracksIndexes: 32,
         });
-        expect(report.indexAudit?.decisions.counts).toEqual({ add: 0, drop: 6, keep: 56 });
+        expect(report.indexAudit?.decisions.counts).toEqual({ add: 0, drop: 7, keep: 55 });
         expect(report.indexAudit?.productionInventory).toEqual({
           currentFinalSchemaBeforeContraction: { indexes: 178, tracksIndexes: 32 },
-          finalSchemaAfterContraction: { indexes: 172, tracksIndexes: 30 },
+          finalSchemaAfterContraction: { indexes: 171, tracksIndexes: 29 },
         });
         expect(report.indexAudit?.missingConsumers).toEqual([]);
         expect(report.indexAudit?.missingPlanEvidence).toEqual([]);
@@ -248,6 +248,17 @@ describe("final index plan evidence", () => {
               contract.metadata.productionPlanViolations === 0,
           ),
         ).toBe(true);
+        const capturePriorityDrop = auditEntries.find(
+          (entry) => entry.name === "tracks_capture_priority_idx",
+        );
+        expect(capturePriorityDrop?.decision).toBe("drop");
+        expect(capturePriorityDrop?.contracts).toHaveLength(1);
+        expect(capturePriorityDrop?.contracts[0]?.metadata).toMatchObject({
+          outputsEquivalent: true,
+          productionPlanUsesDroppedIndex: false,
+          productionPlanViolations: 0,
+          requiredIndex: "tracks_vendor_worklist_idx",
+        });
         const freshEvidence = droppedIndex?.contracts.find(
           (contract) => contract.contractId === "index.tracks-release-date-drop-fresh",
         );
@@ -293,6 +304,7 @@ describe("final index plan evidence", () => {
           "perf_artifact_change_consumers_compaction_idx",
           "perf_artifact_changes_created_seq_idx",
           "perf_operation_receipts_operation_audit_idx",
+          "perf_tracks_capture_priority_idx",
           "perf_tracks_nearest_finding_score_idx",
           "perf_tracks_release_date_idx",
         ];

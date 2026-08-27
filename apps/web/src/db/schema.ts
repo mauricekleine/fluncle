@@ -1116,13 +1116,6 @@ export const tracks = sqliteTable(
     // Builds like the `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that
     // wedges hosted Turso).
     index("tracks_bpm_idx").on(table.bpm),
-    // THE METADATA-BACKFILL ORDER. This full index is load-bearing for the catalogue Apple and
-    // Deezer worklists: both order by `capture_priority desc, track_id` without a
-    // `capture_priority is not null` predicate, so the partial composite below cannot serve them.
-    // That omission is deliberate. Metadata link backfill stays independent of the ranking rail,
-    // including never-ranked rows whose priority is NULL, so replacing this with the partial index
-    // would strand valid work.
-    index("tracks_capture_priority_idx").on(table.capturePriority),
     index("tracks_source_audio_attempted_at_idx").on(table.sourceAudioAttemptedAt),
     // THE CAPTURE-MISMATCH ATTENTION READ (attention.ts `listCaptureSuspectRows`, docs/the-ear.md
     // § Wrong audio). The /admin attention queue's suspect list is `capture_verification =
