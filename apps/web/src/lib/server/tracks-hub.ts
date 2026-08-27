@@ -597,8 +597,10 @@ export type ProjectedTracksHubIdPageQueries = {
 
 /**
  * The complete projected anchor document gives every numbered page an exact preceding boundary.
- * Split the one transition page at the NULL zone so both halves are true composite-index ranges;
- * the general OR-shaped legacy seek remains available only to shadow/rollback callers.
+ * Split the one transition page at the NULL zone so both halves are true composite-index ranges.
+ * The row-value bound intentionally excludes NULL release dates under SQL's three-valued logic;
+ * `nullFill` reads that zone explicitly. The general OR-shaped legacy seek remains available only
+ * to shadow/rollback callers.
  */
 export function projectedTracksHubIdPageQueries(
   page: number,
@@ -646,12 +648,10 @@ export function projectedTracksHubIdPageQueries(
         limit ?`,
     }),
     primary: {
-      args: [anchor.key, anchor.key, anchor.key, anchor.id, limit],
+      args: [anchor.key, anchor.id, limit],
       sql: `select tracks.track_id as track_id
         from tracks indexed by tracks_release_date_track_id_idx
-        where tracks.release_date <= ?
-          and (tracks.release_date < ?
-            or (tracks.release_date = ? and tracks.track_id < ?))
+        where (tracks.release_date, tracks.track_id) < (?, ?)
         order by ${TRACKS_HUB_ORDER_BY}
         limit ?`,
     },

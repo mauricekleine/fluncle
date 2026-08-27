@@ -7,7 +7,10 @@ import {
   applyFixtureSchema,
   fixtureFingerprint,
   generateFixture,
+  indexFixtureCardinalities,
   projectionFixtureCardinalities,
+  publicAggregateFixtureBuckets,
+  releaseDateForIndex,
   resetFixture,
   writeFixture,
 } from "./fixture";
@@ -62,10 +65,12 @@ describe("synthetic database performance fixture", () => {
       perf_artists: SMALL_COUNTS.artists,
       perf_crawl_frontier: SMALL_COUNTS.crawlFrontier,
       perf_findings: SMALL_COUNTS.findings,
+      perf_galaxies: 0,
       perf_labels: SMALL_COUNTS.labels,
       perf_track_artists: SMALL_COUNTS.trackArtists,
       perf_track_embeddings: SMALL_COUNTS.trackEmbeddings,
       perf_tracks: SMALL_COUNTS.tracks,
+      ...indexFixtureCardinalities(SMALL_COUNTS),
       ...projectionFixtureCardinalities(SMALL_COUNTS),
     });
   });
@@ -86,6 +91,7 @@ describe("synthetic database performance fixture", () => {
   it("keeps Contract D source growth exact while projection buckets and documents stay bounded", () => {
     const baselineCounts = getScaleManifest("1x").counts;
     const baseline = projectionFixtureCardinalities(baselineCounts);
+    const baselineIndex = indexFixtureCardinalities(baselineCounts);
     const growing = [
       "perf_artist_qualification",
       "perf_artist_qualification_contributions",
@@ -114,7 +120,35 @@ describe("synthetic database performance fixture", () => {
       for (const key of bounded) {
         expect(scaled[key], `${profile} ${key}`).toBe(baseline[key]);
       }
+
+      const scaledIndex = indexFixtureCardinalities(getScaleManifest(profile).counts);
+      for (const key of Object.keys(baselineIndex) as (keyof typeof baselineIndex)[]) {
+        const expected =
+          key === "perf_database_admission_contenders"
+            ? baselineIndex[key]
+            : baselineIndex[key] * multiplier;
+        expect(scaledIndex[key], `${profile} ${key}`).toBe(expected);
+      }
     }
+  });
+
+  it("preserves the release-year histogram while distributing the fresh year across real dates", () => {
+    const counts = getScaleManifest("1x").counts;
+    const buckets = publicAggregateFixtureBuckets(counts).releaseDate;
+    const freshCount = buckets[0]?.count ?? 0;
+    const freshDates = Array.from({ length: freshCount }, (_, index) =>
+      releaseDateForIndex(index, buckets),
+    );
+    const presentDates = freshDates.filter((date): date is string => date !== null);
+
+    expect(freshCount).toBe(28_000);
+    expect(presentDates).toHaveLength(freshCount);
+    expect(presentDates[0]).toBe("2026-01-01");
+    expect(presentDates.at(-1)).toBe("2026-12-31");
+    expect(new Set(presentDates).size).toBe(365);
+    expect(presentDates.every((date) => date.startsWith("2026-"))).toBe(true);
+    expect(presentDates).toEqual([...presentDates].sort());
+    expect(releaseDateForIndex(freshCount, buckets)).toBe("2025");
   });
 
   it("materializes exact fan-out, null, selectivity, and backlog counts locally", async () => {
@@ -184,7 +218,9 @@ describe("synthetic database performance fixture", () => {
           "select count(*) as n from perf_crawl_frontier where state = 'pending'",
         ),
       ).toBe(23);
-      expect(await scalar(client, "select count(*) as n from perf_crawl_due_work")).toBe(23);
+      expect(await scalar(client, "select count(*) as n from perf_crawl_due_work")).toBe(
+        projectionFixtureCardinalities(SMALL_COUNTS).perf_crawl_due_work,
+      );
       expect(await scalar(client, "select count(*) as n from perf_artist_qualification")).toBe(11);
       expect(
         await scalar(client, "select count(*) as n from perf_artist_qualification_contributions"),

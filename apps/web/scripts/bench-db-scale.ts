@@ -352,18 +352,18 @@ const PROOFS: Proof[] = [
     title: "candidate queue: status='candidate' scan → partial index seek",
   },
   {
-    // catalogue.ts:2384-2399 ear lens — walks tracks_nearest_finding_score_idx DESC but the near-1.0
-    // duplicate prefix (dupes score ~1.0) is a residual, so the walk reads the whole dupe head first.
+    // The Ear's final read walks the active-catalogue prefix before its score order, so dismissed
+    // rows never become a growing residual prefix and the page remains bounded by its LIMIT.
     after: [{ args: [175], sql: earLensSql() }],
     baseline: [{ args: [175], sql: earLensSql() }],
     index: {
-      ddl: `create index if not exists tracks_ear_lens_idx on tracks(nearest_finding_score)
-            where duplicate_of_track_id is null and nearest_finding_score is not null`,
-      name: "tracks_ear_lens_idx",
+      ddl: `create index if not exists tracks_catalogue_ear_idx
+            on tracks(is_catalogue, dismissed_at, nearest_finding_score, track_id)`,
+      name: "tracks_catalogue_ear_idx",
     },
     item: 19,
     rewrite: false,
-    title: "Ear lens: duplicate-prefix walk → partial index skipping the dupe head",
+    title: "Ear lens: residual prefix walk → active-catalogue composite seek",
   },
   {
     // search.ts compileFilters — the name filters (backlog Wave 3-2). Baseline: the artist's

@@ -10,6 +10,11 @@ import {
   distribution,
 } from "./budgets";
 import { type FixtureCounts, type ScaleProfile } from "./manifest";
+import {
+  buildIndexAudit,
+  type IndexAuditReport,
+  type IndexEvidenceDefinition,
+} from "./index-inventory";
 import { type ExplainPlanAnalysis, type ExplainPlanPolicy, analyzeExplainPlan } from "./plan";
 
 export const PERFORMANCE_CONTRACT_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
@@ -104,6 +109,7 @@ export type PerformanceContract = {
   description: string;
   execute: (context: ContractContext) => Promise<ContractExecution>;
   id: string;
+  indexEvidence?: IndexEvidenceDefinition;
   iterations: number;
   plan?: {
     policy: ExplainPlanPolicy;
@@ -150,6 +156,7 @@ export type PerformanceRunReport = {
   contracts: ContractReport[];
   criteria: Record<PerformanceCriterionCategory, PerformanceCriterionReport>;
   generatedAt: string;
+  indexAudit: IndexAuditReport | null;
   passed: boolean;
   profile: ScaleProfile;
   resources: PerformanceResourceReport;
@@ -580,11 +587,21 @@ export async function runPerformanceContracts(options: {
     }
   }
 
+  const indexAudit = buildIndexAudit({
+    contracts: options.contracts,
+    profile: options.profile,
+    reports,
+  });
+
   return {
     contracts: reports,
     criteria: buildCriteria(reports, resources),
     generatedAt: options.generatedAt ?? new Date().toISOString(),
-    passed: reports.every((report) => report.passed) && resources.failures.length === 0,
+    indexAudit,
+    passed:
+      reports.every((report) => report.passed) &&
+      resources.failures.length === 0 &&
+      (indexAudit?.passed ?? true),
     profile: options.profile,
     resources,
     schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,

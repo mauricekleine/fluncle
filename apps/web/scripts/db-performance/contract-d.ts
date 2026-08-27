@@ -205,12 +205,10 @@ const ANCHOR_VALIDITY: PerformanceStatement = {
 };
 
 const KEYSET: PerformanceStatement = {
-  args: ["2026", "2026", "2026", "synthetic-track-000000464", CONTRACT_D_HUB_PAGE_SIZE],
+  args: ["2026", "synthetic-track-000000464", CONTRACT_D_HUB_PAGE_SIZE],
   sql: `select perf_tracks.id as track_id, perf_tracks.release_date as rd
     from perf_tracks indexed by perf_tracks_release_date_track_id_idx
-   where perf_tracks.release_date <= ?
-     and (perf_tracks.release_date < ?
-       or (perf_tracks.release_date = ? and perf_tracks.id < ?))
+   where (perf_tracks.release_date, perf_tracks.id) < (?, ?)
    order by perf_tracks.release_date desc, perf_tracks.id desc
    limit ?`,
 };
@@ -316,7 +314,10 @@ const KEYSET_PLAN = {
   policy: {
     ...PROJECTION_NO_TEMP_SORT,
     growingTables: ["perf_tracks"],
-    requiredDetails: [/perf_tracks_release_date_track_id_idx/i],
+    requiredDetails: [
+      /perf_tracks_release_date_track_id_idx/i,
+      /\(\(release_date,id\)<\(\?,\?\)\)/i,
+    ],
   },
   statement: KEYSET,
 };
@@ -755,7 +756,7 @@ async function executeKeyset(context: ContractContext): Promise<ContractExecutio
   }
 
   const statement: PerformanceStatement = {
-    args: [anchor.key, anchor.key, anchor.key, anchor.id, CONTRACT_D_HUB_PAGE_SIZE],
+    args: [anchor.key, anchor.id, CONTRACT_D_HUB_PAGE_SIZE],
     sql: KEYSET.sql,
   };
   const expected = expectedKeysetRows(countsFor(context), anchor);

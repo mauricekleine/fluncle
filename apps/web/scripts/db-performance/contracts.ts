@@ -1,6 +1,7 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { registerContractD } from "./contract-d";
 import { registerFinalProofContracts } from "./final-proof";
+import { registerIndexEvidenceContracts } from "./index-evidence";
 import { simulateMixedLoad } from "./mixed-load";
 import { analyzeExplainPlan } from "./plan";
 import {
@@ -945,6 +946,7 @@ performanceRegistry.register(
 
 registerContractD(performanceRegistry);
 registerFinalProofContracts(performanceRegistry);
+registerIndexEvidenceContracts(performanceRegistry);
 
 async function executeMixedLoadContract(): Promise<ContractExecution> {
   const report = simulateMixedLoad();

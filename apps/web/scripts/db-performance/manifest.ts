@@ -153,7 +153,10 @@ export function createCiFixtureCounts(profile: ScaleProfile, tracks = 512): Fixt
     artists: ratio(source.artists, 1),
     crawlFrontier: ratio(source.crawlFrontier, 1),
     enabledLabelTracks: ratio(source.enabledLabelTracks),
-    findings: ratio(source.findings, 1),
+    // Every compact proof needs a certified row in the 90-day fresh window and the catalogue
+    // complement. Five evenly selected findings put the first certified row inside the compact
+    // fixture's day-precision 2026 population while retaining rows in the older/null buckets.
+    findings: ratio(source.findings, 5),
     fullAnalysisBacklog: ratio(source.fullAnalysisBacklog),
     labels: ratio(source.labels, 1),
     musicbrainzIsrcBacklog: ratio(source.musicbrainzIsrcBacklog),

@@ -167,6 +167,7 @@ async function main(): Promise<void> {
             writeDurationMs: fixtureWriteDurationMs,
             written,
           },
+          indexAudit: report.indexAudit,
           report,
           schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
         },

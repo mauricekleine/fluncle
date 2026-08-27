@@ -175,6 +175,10 @@ describe("public shadow projections", () => {
       [{ id: "track-z", key: "2025-01-01", page: 2 }],
       3,
     );
+    expect(transition.primary.args).toEqual(["2025-01-01", "track-z", 3]);
+    expect(transition.primary.sql).toContain(
+      "where (tracks.release_date, tracks.track_id) < (?, ?)",
+    );
     const primary = await db.execute(transition.primary);
     const fill = await db.execute(transition.nullFill?.(3 - primary.rows.length) ?? "select 0");
     expect([...primary.rows, ...fill.rows].map((row) => row.track_id)).toEqual([
@@ -207,7 +211,46 @@ describe("public shadow projections", () => {
       expect(details).toContain("SEARCH tracks");
       expect(details).not.toContain("SCAN tracks");
       expect(details).not.toContain("USE TEMP B-TREE");
+      if (query === transition.primary) {
+        expect(details).toMatch(/\(\(release_date,track_id\)<\(\?,\?\)\)/);
+      }
     }
+  });
+
+  it("seeks through a large same-date tie on both composite columns", async () => {
+    const tieSize = 192;
+    for (let index = 0; index < tieSize; index += 1) {
+      await seedProjectedTrack({
+        key: null,
+        releaseDate: "2024-01-01",
+        trackId: `track-tie-${String(index).padStart(3, "0")}`,
+      });
+    }
+
+    const anchorId = "track-tie-128";
+    const query = projectedTracksHubIdPageQueries(
+      2,
+      [{ id: anchorId, key: "2024-01-01", page: 2 }],
+      48,
+    ).primary;
+    const rows = await db.execute(query);
+
+    expect(rows.rows.map((row) => row.track_id)).toEqual(
+      Array.from(
+        { length: 48 },
+        (_value, offset) => `track-tie-${String(127 - offset).padStart(3, "0")}`,
+      ),
+    );
+
+    const details = (
+      await db.execute({ args: query.args, sql: `explain query plan ${query.sql}` })
+    ).rows
+      .map((row) => (typeof row.detail === "string" ? row.detail : ""))
+      .join("\n");
+    expect(details).toMatch(
+      /SEARCH tracks USING COVERING INDEX tracks_release_date_track_id_idx \(\(release_date,track_id\)<\(\?,\?\)\)/,
+    );
+    expect(details).not.toContain("USE TEMP B-TREE");
   });
 
   it("keeps absent, false, malformed, and unreadable flags closed and opens only literal true", async () => {
