@@ -8,8 +8,9 @@
  * ISRC-less — correct for the rows with no ISRC and WRONG for every row that already carries one.
  * Until it runs, the anchor worklist's ISRC-first drain order treats history as unanchorable-first
  * — an ordering under-report, never a wrong answer (the exact-ISRC rung still reads `isrc`
- * itself). `deploy:cf` is `db:migrate && db:backfill && wrangler deploy` (package.json), so the
- * column is added and flipped BEFORE the Worker that sorts on it ships.
+ * itself). `deploy:cf` is `db:migrate:production && db:backfill && wrangler deploy` (package.json),
+ * so the guarded wrapper adds the column before the backfill flips it and before the Worker that
+ * sorts on it ships.
  *
  * THE SHAPE RECONCILES BOTH DIRECTIONS against the column itself — `trim()` included, because
  * legacy rows carry empty-string ISRCs that must mirror to 0 — so this is a standing backstop

@@ -20,7 +20,8 @@
  *      filter, a YEAR range, a COMBINED filter, and the whole-set YEAR LANE scan. No vectors here —
  *      this is pure btree-index verification.
  *   3. `EXPLAIN QUERY PLAN` per shape, so the operator can SEE that the primary sort rides
- *      `tracks_release_date_idx` (a reverse scan, never a full table scan of a growing table) and
+ *      `tracks_release_date_track_id_idx` (a reverse scan, never a full table scan of a growing
+ *      table) and
  *      that `tracks_bpm_idx` is available to a narrow BPM range.
  *
  * ── THE SHAPE UNDER TEST IS THE REAL ONE ──────────────────────────────────────
@@ -331,7 +332,8 @@ async function main(): Promise<void> {
     { name: "count(*) (unfiltered)", ...tracksHubCountQuery({}) },
     // The year fast lane — the hub's OTHER whole-set scan, and the one the `findings` join was
     // costing most (it forced a bare `SCAN tracks` over the wide embedding-bearing row; without the
-    // join it is a covering read of `tracks_release_date_idx`). It is memoised per filter set in
+    // join it is a covering read of `tracks_release_date_track_id_idx`). It is memoised per filter
+    // set in
     // production, but the cold read still has to come in under budget.
     { args: yearLane.args, name: "year lane (unfiltered)", sql: yearLane.sql },
     {
@@ -478,10 +480,10 @@ async function main(): Promise<void> {
     }
 
     // The primary order must ride the release_date index (a reverse scan), never a full table scan.
-    const ridesReleaseIndex = /tracks_release_date_idx/.test(plan);
+    const ridesReleaseIndex = /tracks_release_date_track_id_idx/.test(plan);
     const fullScan = /SCAN tracks\b(?! USING)/.test(plan);
     console.log(
-      `  → ${ridesReleaseIndex ? "rides tracks_release_date_idx" : "NOT on the release-date index"}${
+      `  → ${ridesReleaseIndex ? "rides tracks_release_date_track_id_idx" : "NOT on the release-date index"}${
         fullScan ? " — WARNING: a full SCAN tracks appears" : ""
       }\n`,
     );

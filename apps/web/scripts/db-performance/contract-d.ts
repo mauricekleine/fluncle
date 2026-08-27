@@ -9,6 +9,7 @@ import { getScaleManifest, type FixtureCounts } from "./manifest";
 import {
   type ContractContext,
   type ContractExecution,
+  type ConvergenceObservation,
   type PerformanceContract,
   type PerformanceResult,
   type PerformanceStatement,
@@ -204,12 +205,10 @@ const ANCHOR_VALIDITY: PerformanceStatement = {
 };
 
 const KEYSET: PerformanceStatement = {
-  args: ["2026", "2026", "2026", "synthetic-track-000000464", CONTRACT_D_HUB_PAGE_SIZE],
+  args: ["2026", "synthetic-track-000000464", CONTRACT_D_HUB_PAGE_SIZE],
   sql: `select perf_tracks.id as track_id, perf_tracks.release_date as rd
     from perf_tracks indexed by perf_tracks_release_date_track_id_idx
-   where perf_tracks.release_date <= ?
-     and (perf_tracks.release_date < ?
-       or (perf_tracks.release_date = ? and perf_tracks.id < ?))
+   where (perf_tracks.release_date, perf_tracks.id) < (?, ?)
    order by perf_tracks.release_date desc, perf_tracks.id desc
    limit ?`,
 };
@@ -315,7 +314,10 @@ const KEYSET_PLAN = {
   policy: {
     ...PROJECTION_NO_TEMP_SORT,
     growingTables: ["perf_tracks"],
-    requiredDetails: [/perf_tracks_release_date_track_id_idx/i],
+    requiredDetails: [
+      /perf_tracks_release_date_track_id_idx/i,
+      /\(\(release_date,id\)<\(\?,\?\)\)/i,
+    ],
   },
   statement: KEYSET,
 };
@@ -344,6 +346,41 @@ function rowNumber(row: unknown, field: string): number {
   return Number(rowValue(row, field));
 }
 
+function countValue(result: PerformanceResult): number {
+  return rowNumber(result.rows[0], "n");
+}
+
+async function crawlConvergence(context: ContractContext): Promise<ConvergenceObservation> {
+  const source = await context.client.execute(
+    "select count(*) as n from perf_crawl_frontier where state = 'pending'",
+  );
+  const projected = await context.client.execute(
+    "select count(*) as n from perf_crawl_due_work where state = 'ready'",
+  );
+  const repairs = await context.client.execute(
+    "select count(*) as n from perf_crawl_projection_repairs",
+  );
+  const sourceRows = countValue(source);
+  const projectedRows = countValue(projected);
+  const repairRows = countValue(repairs);
+  const countsAreValid = [sourceRows, projectedRows, repairRows].every(
+    (value) => Number.isSafeInteger(value) && value >= 0,
+  );
+  const countMismatch = sourceRows !== projectedRows;
+
+  return {
+    category: "projection",
+    converged: countsAreValid && !countMismatch && repairRows === 0,
+    fieldMismatches: countsAreValid && countMismatch ? 1 : countsAreValid ? 0 : 1,
+    missingRows: countsAreValid ? Math.max(0, sourceRows - projectedRows) : 0,
+    projectedRows,
+    repairRows,
+    scope: "crawl-due-work",
+    sourceRows,
+    unexpectedRows: countsAreValid ? Math.max(0, projectedRows - sourceRows) : 0,
+  };
+}
+
 function jsonRows(rows: readonly unknown[]): string {
   return JSON.stringify(rows, (_key, value: unknown) =>
     typeof value === "bigint" ? value.toString() : value,
@@ -356,9 +393,11 @@ function observation(
   context: ContractContext,
   metadata: Record<string, boolean | number | string | null>,
   affectedRowCount?: number,
+  convergence?: ConvergenceObservation,
 ): ContractExecution {
   return {
     affectedRowCount,
+    convergence,
     durationMs: Math.max(0, context.now() - startedAt),
     metadata,
     rawResult: result,
@@ -402,6 +441,7 @@ async function executeCrawl(
   let rows: readonly unknown[] = [];
   let hasMoreRows = 0;
   let startedAt = 0;
+  let execution: ContractExecution | undefined;
 
   try {
     if (measureClaim) {
@@ -419,11 +459,19 @@ async function executeCrawl(
     const hasMore = await context.client.execute(CRAWL_READY_SENTINEL);
     hasMoreRows = hasMore.rows.length;
     const metadata = crawlMetadata(claimRows, rows, hasMoreRows, CONTRACT_D_CRAWL_CLAIM_LIMIT);
-
-    return observation(read, startedAt, context, metadata, claimRows);
+    execution = observation(read, startedAt, context, metadata, claimRows);
   } finally {
     await cleanupCrawl(context);
   }
+
+  if (execution === undefined) {
+    throw new Error("crawl contract did not produce an observation");
+  }
+
+  return {
+    ...execution,
+    convergence: await crawlConvergence(context),
+  };
 }
 
 function validateCrawl(execution: ContractExecution): readonly string[] {
@@ -708,7 +756,7 @@ async function executeKeyset(context: ContractContext): Promise<ContractExecutio
   }
 
   const statement: PerformanceStatement = {
-    args: [anchor.key, anchor.key, anchor.key, anchor.id, CONTRACT_D_HUB_PAGE_SIZE],
+    args: [anchor.key, anchor.id, CONTRACT_D_HUB_PAGE_SIZE],
     sql: KEYSET.sql,
   };
   const expected = expectedKeysetRows(countsFor(context), anchor);

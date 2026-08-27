@@ -1,16 +1,68 @@
 import { type InValue } from "@libsql/client";
 
-import { PERFORMANCE_BUDGETS, type PerformanceWorkClass, distribution } from "./budgets";
+import {
+  PERFORMANCE_BUDGETS,
+  PERFORMANCE_CRITERION_CATEGORIES,
+  PERFORMANCE_RESOURCE_WARNING_THRESHOLDS,
+  type PerformanceCriterionCategory,
+  type PerformanceResourceThresholds,
+  type PerformanceWorkClass,
+  distribution,
+} from "./budgets";
 import { type FixtureCounts, type ScaleProfile } from "./manifest";
+import {
+  buildIndexAudit,
+  type IndexAuditReport,
+  type IndexEvidenceDefinition,
+} from "./index-inventory";
 import { type ExplainPlanAnalysis, type ExplainPlanPolicy, analyzeExplainPlan } from "./plan";
 
 export const PERFORMANCE_CONTRACT_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
+export const PERFORMANCE_REPORT_SCHEMA_VERSION = 3 as const;
 
 export type PerformanceStatement = { args: InValue[]; sql: string };
 
 export type PerformanceResult = {
   rows: unknown[];
   rowsAffected?: number;
+};
+
+export type ConvergenceObservation = {
+  category: "projection" | "queue";
+  converged: boolean;
+  fieldMismatches: number;
+  missingRows: number;
+  projectedRows: number;
+  repairRows: number;
+  scope: string;
+  sourceRows: number;
+  unexpectedRows: number;
+};
+
+export type ConvergenceReport = ConvergenceObservation & {
+  failedObservations: number;
+  observations: number;
+};
+
+export type PerformanceResourceSample = {
+  heapUsedBytes: number;
+  rssBytes: number;
+};
+
+export type PerformanceResourceSampleSource =
+  | "process.memoryUsage"
+  | "process.memoryUsage.fixture-baseline-adjusted"
+  | "provided";
+
+export type PerformanceResourceReport = {
+  availability: "measured" | "unavailable";
+  failures: string[];
+  mode: "required" | "bounded-memory-timing-warning";
+  peak: (PerformanceResourceSample & { wallDurationMs: number }) | null;
+  sampleSource: PerformanceResourceSampleSource | null;
+  unavailableReason: string | null;
+  warningThresholds: PerformanceResourceThresholds;
+  warnings: string[];
 };
 
 export type PerformanceClient = {
@@ -22,11 +74,23 @@ export type ContractObservation = {
   batchCount?: number | null;
   durationMs?: number;
   invariants?: Partial<
-    Record<"ambiguousOutcomes" | "remoteFullCorpusScans" | "repeatedProductionCorpusScans", number>
+    Record<
+      | "ambiguousOutcomes"
+      | "architectureFailures"
+      | "atomicityViolations"
+      | "convergenceFailures"
+      | "fifoViolations"
+      | "fencingViolations"
+      | "remoteFullCorpusScans"
+      | "repeatedProductionCorpusScans"
+      | "uncontendedAcquisitionViolations",
+      number
+    >
   >;
   metadata?: Record<string, boolean | number | string | null>;
   queueMs?: number;
   resultRowCount: number;
+  convergence?: ConvergenceObservation;
 };
 
 export type ContractExecution = ContractObservation & {
@@ -45,6 +109,7 @@ export type PerformanceContract = {
   description: string;
   execute: (context: ContractContext) => Promise<ContractExecution>;
   id: string;
+  indexEvidence?: IndexEvidenceDefinition;
   iterations: number;
   plan?: {
     policy: ExplainPlanPolicy;
@@ -65,6 +130,7 @@ export type ContractReport = {
     warnings: string[];
   };
   contractId: string;
+  criterionCategories: PerformanceCriterionCategory[];
   description: string;
   durationMs: ReturnType<typeof distribution>;
   invariantTotals: Record<string, number>;
@@ -74,16 +140,27 @@ export type ContractReport = {
   plan: ExplainPlanAnalysis | null;
   queueMs: ReturnType<typeof distribution> | null;
   resultRowCount: ReturnType<typeof distribution>;
+  convergence: ConvergenceReport | null;
   validationFailures: string[];
   workClass: PerformanceWorkClass;
 };
 
+export type PerformanceCriterionReport = {
+  addressed: boolean;
+  contractIds: string[];
+  passed: boolean | null;
+  warnings: string[];
+};
+
 export type PerformanceRunReport = {
   contracts: ContractReport[];
+  criteria: Record<PerformanceCriterionCategory, PerformanceCriterionReport>;
   generatedAt: string;
+  indexAudit: IndexAuditReport | null;
   passed: boolean;
   profile: ScaleProfile;
-  schemaVersion: 1;
+  resources: PerformanceResourceReport;
+  schemaVersion: typeof PERFORMANCE_REPORT_SCHEMA_VERSION;
 };
 
 export class PerformanceRegistry {
@@ -123,18 +200,25 @@ export class PerformanceRegistry {
 }
 
 export type SqlContractOptions = Omit<PerformanceContract, "execute"> & {
+  convergence?: (
+    context: ContractContext,
+    result: PerformanceResult,
+  ) => Promise<ConvergenceObservation>;
   statement: PerformanceStatement;
 };
 
 export function sqlContract(options: SqlContractOptions): PerformanceContract {
+  const { convergence, ...contract } = options;
+
   return {
-    ...options,
+    ...contract,
     async execute(context) {
       const startedAt = context.now();
       const result = await context.client.execute(options.statement);
 
       return {
         affectedRowCount: result.rowsAffected ?? 0,
+        convergence: convergence ? await convergence(context, result) : undefined,
         durationMs: Math.max(0, context.now() - startedAt),
         rawResult: result,
         resultRowCount: result.rows.length,
@@ -164,6 +248,141 @@ function metricValue(
   return values[metric];
 }
 
+function requireResourceValue(value: number, field: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`resource sampling returned an invalid ${field} value`);
+  }
+
+  return value;
+}
+
+export function readPerformanceResourceSample(): PerformanceResourceSample {
+  if (typeof process === "undefined" || typeof process.memoryUsage !== "function") {
+    throw new Error("resource sampling is unavailable: process.memoryUsage is required");
+  }
+
+  const memory = process.memoryUsage();
+
+  return {
+    heapUsedBytes: requireResourceValue(memory.heapUsed, "heapUsedBytes"),
+    rssBytes: requireResourceValue(memory.rss, "rssBytes"),
+  };
+}
+
+function validatePerformanceResourceSample(
+  sample: PerformanceResourceSample,
+): PerformanceResourceSample {
+  return {
+    heapUsedBytes: requireResourceValue(sample.heapUsedBytes, "heapUsedBytes"),
+    rssBytes: requireResourceValue(sample.rssBytes, "rssBytes"),
+  };
+}
+
+export function maxPerformanceResourceSample(
+  left: PerformanceResourceSample,
+  right: PerformanceResourceSample,
+): PerformanceResourceSample {
+  return {
+    heapUsedBytes: Math.max(left.heapUsedBytes, right.heapUsedBytes),
+    rssBytes: Math.max(left.rssBytes, right.rssBytes),
+  };
+}
+
+/**
+ * Keep the application process baseline and report only RSS growth above a completed local fixture.
+ * Exact local profiles embed the disposable database engine in this process; its resident pages are
+ * test infrastructure, while hosted Turso keeps them outside the Worker whose memory budget matters.
+ */
+export function fixtureBaselineAdjustedResourceSample(
+  current: PerformanceResourceSample,
+  processBaseline: PerformanceResourceSample,
+  fixtureBaseline: PerformanceResourceSample,
+): PerformanceResourceSample {
+  return {
+    heapUsedBytes: current.heapUsedBytes,
+    rssBytes: processBaseline.rssBytes + Math.max(0, current.rssBytes - fixtureBaseline.rssBytes),
+  };
+}
+
+function resourceWarnings(
+  peak: NonNullable<PerformanceResourceReport["peak"]>,
+  thresholds: PerformanceResourceThresholds,
+): string[] {
+  const warnings: string[] = [];
+
+  for (const [field, actual, threshold] of [
+    ["heapUsedBytes", peak.heapUsedBytes, thresholds.heapUsedBytes],
+    ["rssBytes", peak.rssBytes, thresholds.rssBytes],
+    ["wallDurationMs", peak.wallDurationMs, thresholds.wallDurationMs],
+  ] as const) {
+    if (actual > threshold) {
+      warnings.push(`${field} ${actual} exceeds ${threshold}`);
+    }
+  }
+
+  return warnings;
+}
+
+function convergenceReport(observations: readonly ContractExecution[]): ConvergenceReport | null {
+  const evidence = observations.flatMap((observation) =>
+    observation.convergence === undefined ? [] : [observation.convergence],
+  );
+  const first = evidence[0];
+
+  if (first === undefined) {
+    return null;
+  }
+
+  return {
+    ...first,
+    converged: evidence.every((entry) => entry.converged),
+    failedObservations: evidence.filter((entry) => !entry.converged).length,
+    observations: evidence.length,
+  };
+}
+
+function criterionCategoriesForContract(
+  contract: PerformanceContract,
+): PerformanceCriterionCategory[] {
+  return PERFORMANCE_CRITERION_CATEGORIES.includes(contract.workClass) ? [contract.workClass] : [];
+}
+
+function emptyCriteria(): Record<PerformanceCriterionCategory, PerformanceCriterionReport> {
+  return Object.fromEntries(
+    PERFORMANCE_CRITERION_CATEGORIES.map((category) => [
+      category,
+      { addressed: false, contractIds: [], passed: null, warnings: [] },
+    ]),
+  ) as Record<PerformanceCriterionCategory, PerformanceCriterionReport>;
+}
+
+function buildCriteria(
+  reports: readonly ContractReport[],
+  resources: PerformanceResourceReport,
+): Record<PerformanceCriterionCategory, PerformanceCriterionReport> {
+  const criteria = emptyCriteria();
+
+  for (const report of reports) {
+    const categories = report.criterionCategories;
+
+    for (const category of categories) {
+      const criterion = criteria[category];
+      criterion.addressed = true;
+      criterion.contractIds.push(report.contractId);
+      criterion.passed = (criterion.passed ?? true) && report.passed;
+      criterion.warnings.push(...report.budget.warnings);
+    }
+  }
+
+  const resourcesCriterion = criteria.resources;
+  resourcesCriterion.addressed = resources.availability === "measured";
+  resourcesCriterion.passed =
+    resources.availability === "measured" ? resources.failures.length === 0 : null;
+  resourcesCriterion.warnings.push(...resources.warnings);
+
+  return criteria;
+}
+
 export async function runPerformanceContracts(options: {
   client: PerformanceClient;
   contracts: readonly PerformanceContract[];
@@ -171,8 +390,28 @@ export async function runPerformanceContracts(options: {
   generatedAt?: string;
   now?: () => number;
   profile: ScaleProfile;
+  resource?: {
+    initial?: PerformanceResourceSample;
+    sample?: () => PerformanceResourceSample;
+    sampleSource?: PerformanceResourceSampleSource;
+    startedAtMs?: number;
+  };
 }): Promise<PerformanceRunReport> {
   const now = options.now ?? performance.now.bind(performance);
+  const hasResourceSampling = options.resource !== undefined;
+  const resourceSample = () =>
+    validatePerformanceResourceSample(
+      (options.resource?.sample ?? readPerformanceResourceSample)(),
+    );
+  const wallStartedAt = options.resource?.startedAtMs ?? now();
+  let peak = hasResourceSampling
+    ? maxPerformanceResourceSample(
+        options.resource?.initial === undefined
+          ? resourceSample()
+          : validatePerformanceResourceSample(options.resource.initial),
+        resourceSample(),
+      )
+    : null;
   const reports: ContractReport[] = [];
 
   for (const contract of options.contracts) {
@@ -195,6 +434,7 @@ export async function runPerformanceContracts(options: {
         now,
         profile: options.profile,
       });
+      peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
     }
 
     const observations: ContractExecution[] = [];
@@ -209,9 +449,15 @@ export async function runPerformanceContracts(options: {
         profile: options.profile,
       });
       observations.push(observation);
+      peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
 
       for (const failure of contract.validate?.(observation) ?? []) {
         validationFailures.push(`iteration ${iteration + 1}: ${failure}`);
+      }
+      if (observation.convergence?.converged === false) {
+        validationFailures.push(
+          `iteration ${iteration + 1}: convergence evidence did not converge`,
+        );
       }
     }
 
@@ -243,30 +489,37 @@ export async function runPerformanceContracts(options: {
       for (const [field, value] of Object.entries(observation.invariants ?? {})) {
         invariantTotals[field] = (invariantTotals[field] ?? 0) + (value ?? 0);
       }
+      if (
+        observation.convergence?.converged === false &&
+        observation.invariants?.convergenceFailures === undefined
+      ) {
+        invariantTotals.convergenceFailures = (invariantTotals.convergenceFailures ?? 0) + 1;
+      }
     }
 
     const definition = PERFORMANCE_BUDGETS[contract.workClass];
     const required = definition.requiredProfiles.includes(options.profile);
-    const budgetProblems: string[] = [];
+    const measurementProblems: string[] = [];
 
     for (const measurement of definition.measurements) {
       const actual = metricValue(measurement.metric, durations);
       if (actual > measurement.thresholdMs) {
-        budgetProblems.push(
+        measurementProblems.push(
           `${measurement.metric} ${actual}ms exceeds ${measurement.thresholdMs}ms`,
         );
       }
     }
 
+    const invariantProblems: string[] = [];
     for (const invariant of definition.invariants) {
       const actual = invariantTotals[invariant.field] ?? 0;
       if (actual > invariant.maximum) {
-        budgetProblems.push(`${invariant.field} ${actual} exceeds ${invariant.maximum}`);
+        invariantProblems.push(`${invariant.field} ${actual} exceeds ${invariant.maximum}`);
       }
     }
 
-    const failures = required ? budgetProblems : [];
-    const warnings = required ? [] : budgetProblems;
+    const failures = [...invariantProblems, ...(required ? measurementProblems : [])];
+    const warnings = required ? [] : measurementProblems;
     const planFailures = plan?.violations ?? [];
 
     reports.push({
@@ -279,6 +532,8 @@ export async function runPerformanceContracts(options: {
         warnings,
       },
       contractId: contract.id,
+      convergence: convergenceReport(observations),
+      criterionCategories: criterionCategoriesForContract(contract),
       description: contract.description,
       durationMs: durations,
       invariantTotals,
@@ -293,11 +548,62 @@ export async function runPerformanceContracts(options: {
     });
   }
 
+  peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
+  const resources: PerformanceResourceReport = {
+    availability: hasResourceSampling ? "measured" : "unavailable",
+    failures: [],
+    mode: options.profile === "4x" ? "bounded-memory-timing-warning" : "required",
+    peak:
+      peak === null
+        ? null
+        : {
+            ...peak,
+            wallDurationMs: Math.max(0, now() - wallStartedAt),
+          },
+    sampleSource: hasResourceSampling
+      ? options.resource?.sample
+        ? (options.resource.sampleSource ?? "provided")
+        : "process.memoryUsage"
+      : null,
+    unavailableReason: hasResourceSampling
+      ? null
+      : "resource sampling was not supplied for this contract-only run",
+    warningThresholds: PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[options.profile],
+    warnings: [],
+  };
+  if (resources.peak === null) {
+    resources.warnings.push(resources.unavailableReason ?? "resource sampling is unavailable");
+  } else {
+    const resourceProblems = resourceWarnings(resources.peak, resources.warningThresholds);
+    if (resources.mode === "required") {
+      resources.failures = resourceProblems;
+    } else {
+      resources.failures = resourceProblems.filter(
+        (problem) => !problem.startsWith("wallDurationMs "),
+      );
+      resources.warnings = resourceProblems.filter((problem) =>
+        problem.startsWith("wallDurationMs "),
+      );
+    }
+  }
+
+  const indexAudit = buildIndexAudit({
+    contracts: options.contracts,
+    profile: options.profile,
+    reports,
+  });
+
   return {
     contracts: reports,
+    criteria: buildCriteria(reports, resources),
     generatedAt: options.generatedAt ?? new Date().toISOString(),
-    passed: reports.every((report) => report.passed),
+    indexAudit,
+    passed:
+      reports.every((report) => report.passed) &&
+      resources.failures.length === 0 &&
+      (indexAudit?.passed ?? true),
     profile: options.profile,
-    schemaVersion: 1,
+    resources,
+    schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
   };
 }

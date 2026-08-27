@@ -130,10 +130,11 @@ describe("deploy:cf — telemetry can never gate the deploy", () => {
     expect(telemetryAt).toBeGreaterThan(deployAt);
   });
 
-  it("keeps the PRIMARY migration before the deploy", () => {
+  it("keeps the guarded PRIMARY migration before the deploy", () => {
     // The counterweight: the primary's schema is a product dependency of the code being
-    // deployed, so it must still land first. Only the diagnostics store moved.
-    const primaryAt = chain.indexOf("bun run db:migrate ");
+    // deployed, so the production wrapper must still inspect and migrate it first. Only the
+    // diagnostics store moved.
+    const primaryAt = chain.indexOf("bun run db:migrate:production");
 
     expect(primaryAt).toBeGreaterThanOrEqual(0);
     expect(primaryAt).toBeLessThan(chain.indexOf("wrangler deploy"));

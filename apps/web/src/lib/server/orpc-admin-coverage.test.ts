@@ -174,7 +174,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
   // spoken sibling of the note-rejections ledger.
   "GET /admin/observation-rejections": "list_observation_rejections",
-  "GET /admin/operation-receipts/{operationKey}": "get_operation_receipt_legacy",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
   // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI

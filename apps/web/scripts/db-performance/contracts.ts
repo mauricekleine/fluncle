@@ -1,8 +1,11 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { registerContractD } from "./contract-d";
+import { registerFinalProofContracts } from "./final-proof";
+import { registerIndexEvidenceContracts } from "./index-evidence";
 import { simulateMixedLoad } from "./mixed-load";
 import { analyzeExplainPlan } from "./plan";
 import {
+  type ConvergenceObservation,
   type ContractExecution,
   type PerformanceContract,
   type PerformanceResult,
@@ -662,6 +665,63 @@ performanceRegistry.register(
   }),
 );
 
+function scalarCount(result: PerformanceResult): number {
+  const row = result.rows[0];
+  if (typeof row !== "object" || row === null || !("n" in row)) {
+    return -1;
+  }
+
+  const value = (row as { n?: unknown }).n;
+  return typeof value === "number" || typeof value === "bigint"
+    ? Number.isSafeInteger(Number(value)) && Number(value) >= 0
+      ? Number(value)
+      : -1
+    : -1;
+}
+
+function convergenceEvidence(
+  category: ConvergenceObservation["category"],
+  scope: string,
+  sourceRows: number,
+  projectedRows: number,
+  repairRows: number,
+): ConvergenceObservation {
+  const countsAreValid = [sourceRows, projectedRows, repairRows].every(
+    (value) => Number.isSafeInteger(value) && value >= 0,
+  );
+  const countMismatch = sourceRows !== projectedRows;
+  const repairMismatch = repairRows !== 0;
+
+  return {
+    category,
+    converged: countsAreValid && !countMismatch && !repairMismatch,
+    fieldMismatches: countsAreValid ? Number(countMismatch) + Number(repairMismatch) : 1,
+    missingRows: countsAreValid ? Math.max(0, sourceRows - projectedRows) : 0,
+    projectedRows,
+    repairRows,
+    scope,
+    sourceRows,
+    unexpectedRows: countsAreValid ? Math.max(0, projectedRows - sourceRows) : 0,
+  };
+}
+
+async function dueWorkConvergence(
+  context: Pick<ContractContext, "client">,
+  workKind: string,
+  sourceColumn: string,
+): Promise<ConvergenceObservation> {
+  const source = await context.client.execute({
+    args: [],
+    sql: `select count(*) as n from perf_tracks where ${sourceColumn} = 1`,
+  });
+  const projected = await context.client.execute({
+    args: [workKind],
+    sql: "select count(*) as n from due_work where work_kind = ? and state = 'ready'",
+  });
+
+  return convergenceEvidence("queue", "due-work", scalarCount(source), scalarCount(projected), 0);
+}
+
 performanceRegistry.register(
   sqlContract({
     description: "A bounded pending-frontier claim uses the synthetic eligibility index",
@@ -792,8 +852,14 @@ performanceRegistry.register({
             claim_expires_at = null, claimed_by = null
             where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?`,
     });
+    const convergence = await dueWorkConvergence(
+      context,
+      "youtube-provenance-findings",
+      "youtube_backlog",
+    );
     return {
       affectedRowCount: mutation.rowsAffected ?? 0,
+      convergence,
       durationMs,
       rawResult: result,
       resultRowCount: result.rows.length,
@@ -820,6 +886,8 @@ performanceRegistry.register({
 
 performanceRegistry.register(
   sqlContract({
+    convergence: (context) =>
+      dueWorkConvergence(context, "youtube-provenance-findings", "youtube_backlog"),
     description: "A bounded due-work ready read seeks the maintained backlog index",
     id: "fixture.due-work-ready",
     iterations: 20,
@@ -852,6 +920,8 @@ const DUE_WORK_EMPTY_READ = {
 
 performanceRegistry.register(
   sqlContract({
+    convergence: (context) =>
+      dueWorkConvergence(context, "analyze-findings", "full_analysis_backlog"),
     description: "An empty due-work probe seeks the same ready index without a source scan",
     id: "fixture.due-work-ready-empty",
     iterations: 20,
@@ -875,52 +945,69 @@ performanceRegistry.register(
 );
 
 registerContractD(performanceRegistry);
+registerFinalProofContracts(performanceRegistry);
+registerIndexEvidenceContracts(performanceRegistry);
 
-performanceRegistry.register({
-  description: "Held heavy reader, public reads, and serialized batches honor per-client bounds",
-  async execute() {
-    const report = simulateMixedLoad();
-    const writes = report.events.filter((event) => event.workClass === "write-batch");
+async function executeMixedLoadContract(): Promise<ContractExecution> {
+  const report = simulateMixedLoad();
+  const writes = report.events.filter((event) => event.workClass === "write-batch");
 
-    return {
-      batchCount: writes.reduce((sum, event) => sum + (event.batchCount ?? 0), 0),
-      durationMs: report.latencyMs["public-read"].p95,
-      metadata: {
-        heavyReaderLatencyP50Ms: report.latencyMs["heavy-reader"].p50,
-        heavyReaderLatencyP95Ms: report.latencyMs["heavy-reader"].p95,
-        heavyReaderLatencyP99Ms: report.latencyMs["heavy-reader"].p99,
-        heavyReaderQueueP50Ms: report.queueMs["heavy-reader"].p50,
-        heavyReaderQueueP95Ms: report.queueMs["heavy-reader"].p95,
-        heavyReaderQueueP99Ms: report.queueMs["heavy-reader"].p99,
-        maxPrimaryConcurrency: report.maxConcurrentByClient.primary,
-        primaryBound: report.bounds.primary,
-        publicReadLatencyP50Ms: report.latencyMs["public-read"].p50,
-        publicReadLatencyP95Ms: report.latencyMs["public-read"].p95,
-        publicReadLatencyP99Ms: report.latencyMs["public-read"].p99,
-        publicReadQueueP50Ms: report.queueMs["public-read"].p50,
-        publicReadQueueP95Ms: report.queueMs["public-read"].p95,
-        publicReadQueueP99Ms: report.queueMs["public-read"].p99,
-        scope: report.scope,
-        telemetryBound: report.bounds.telemetry,
-        violations: report.violations.length,
-        writeBatchLatencyP50Ms: report.latencyMs["write-batch"].p50,
-        writeBatchLatencyP95Ms: report.latencyMs["write-batch"].p95,
-        writeBatchLatencyP99Ms: report.latencyMs["write-batch"].p99,
-        writeBatchQueueP50Ms: report.queueMs["write-batch"].p50,
-        writeBatchQueueP95Ms: report.queueMs["write-batch"].p95,
-        writeBatchQueueP99Ms: report.queueMs["write-batch"].p99,
-      },
-      queueMs: report.queueMs["public-read"].p95,
-      resultRowCount: report.events.length,
-    };
+  return {
+    batchCount: writes.reduce((sum, event) => sum + (event.batchCount ?? 0), 0),
+    durationMs: report.latencyMs["public-read"].p95,
+    metadata: {
+      heavyReaderLatencyP50Ms: report.latencyMs["heavy-reader"].p50,
+      heavyReaderLatencyP95Ms: report.latencyMs["heavy-reader"].p95,
+      heavyReaderLatencyP99Ms: report.latencyMs["heavy-reader"].p99,
+      heavyReaderQueueP50Ms: report.queueMs["heavy-reader"].p50,
+      heavyReaderQueueP95Ms: report.queueMs["heavy-reader"].p95,
+      heavyReaderQueueP99Ms: report.queueMs["heavy-reader"].p99,
+      maxPrimaryConcurrency: report.maxConcurrentByClient.primary,
+      primaryBound: report.bounds.primary,
+      publicReadLatencyP50Ms: report.latencyMs["public-read"].p50,
+      publicReadLatencyP95Ms: report.latencyMs["public-read"].p95,
+      publicReadLatencyP99Ms: report.latencyMs["public-read"].p99,
+      publicReadQueueP50Ms: report.queueMs["public-read"].p50,
+      publicReadQueueP95Ms: report.queueMs["public-read"].p95,
+      publicReadQueueP99Ms: report.queueMs["public-read"].p99,
+      scope: report.scope,
+      telemetryBound: report.bounds.telemetry,
+      violations: report.violations.length,
+      writeBatchLatencyP50Ms: report.latencyMs["write-batch"].p50,
+      writeBatchLatencyP95Ms: report.latencyMs["write-batch"].p95,
+      writeBatchLatencyP99Ms: report.latencyMs["write-batch"].p99,
+      writeBatchQueueP50Ms: report.queueMs["write-batch"].p50,
+      writeBatchQueueP95Ms: report.queueMs["write-batch"].p95,
+      writeBatchQueueP99Ms: report.queueMs["write-batch"].p99,
+    },
+    queueMs: report.queueMs["public-read"].p95,
+    resultRowCount: report.events.length,
+  };
+}
+
+function validateMixedLoadContract(): readonly string[] {
+  return simulateMixedLoad({ bounds: DATABASE_CLIENT_BOUNDS }).violations;
+}
+
+for (const contract of [
+  {
+    description: "Held heavy reader, public reads, and serialized batches honor per-client bounds",
+    id: "client.mixed-load",
+    workClass: "route-db" as const,
   },
-  id: "client.mixed-load",
-  iterations: 20,
-  validate() {
-    return simulateMixedLoad({ bounds: DATABASE_CLIENT_BOUNDS }).violations;
+  {
+    description: "Mixed-client public reads remain within the end-to-end latency budget",
+    id: "client.mixed-load-e2e",
+    workClass: "route-e2e" as const,
   },
-  workClass: "route-db",
-});
+]) {
+  performanceRegistry.register({
+    ...contract,
+    execute: executeMixedLoadContract,
+    iterations: 20,
+    validate: validateMixedLoadContract,
+  });
+}
 
 export function selectPerformanceContracts(ids: readonly string[]) {
   if (ids.length === 0) {

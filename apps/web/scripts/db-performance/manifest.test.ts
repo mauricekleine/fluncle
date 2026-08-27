@@ -79,7 +79,7 @@ describe("database performance manifest", () => {
 
     expect(counts.tracks).toBe(512);
     expect(counts.trackArtists).toBeGreaterThanOrEqual(512);
-    expect(counts.findings).toBe(1);
+    expect(counts.findings).toBe(5);
     expect(counts.crawlFrontier).toBeLessThan(1_000);
   });
 });

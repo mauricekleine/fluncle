@@ -1,0 +1,1 @@
+DROP INDEX `tracks_capture_priority_idx`;

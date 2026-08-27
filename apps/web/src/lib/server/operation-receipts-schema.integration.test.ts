@@ -38,16 +38,12 @@ describe("operation receipt schema", () => {
 
     expect(table.rows[0]?.sql).toContain("operation_receipts_lifecycle_check");
     expect(indexes.rows.map((row) => row.name)).toEqual([
-      "operation_receipts_operation_audit_idx",
       "operation_receipts_stale_accepted_idx",
       "sqlite_autoindex_operation_receipts_1",
     ]);
     expect(
       indexes.rows.find((row) => row.name === "operation_receipts_stale_accepted_idx")?.sql,
     ).toContain("`state`,`updated_at`,`operation_key`");
-    expect(
-      indexes.rows.find((row) => row.name === "operation_receipts_operation_audit_idx")?.sql,
-    ).toContain("`operation_id`,`created_at`,`operation_key`");
   });
 
   it("moves accepted receipts to either complete terminal state", async () => {

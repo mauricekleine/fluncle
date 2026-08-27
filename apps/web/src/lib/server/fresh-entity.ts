@@ -18,8 +18,9 @@
 // ── RELEASE DATE IS NOT FOUND DATE ─────────────────────────────────────────────────────
 // Like `/fresh`, this orders by `tracks.release_date` — when the tune came OUT — not
 // `findings.added_at`. So the feed copy never says Fluncle FOUND these, only that they just landed
-// (VOICE.md's Found Rule). The window rides the `tracks_release_date_idx` btree, and every query is
-// LIMIT-capped, so nothing unbounded crosses into the isolate however big the catalogue grows.
+// (VOICE.md's Found Rule). The window rides the release-date prefix of the
+// `tracks_release_date_track_id_idx` btree, and every query is LIMIT-capped, so nothing unbounded
+// crosses into the isolate however big the catalogue grows.
 
 import { getArtistBySlug, parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";

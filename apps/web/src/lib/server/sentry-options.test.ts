@@ -23,7 +23,7 @@ describe("serverSentryIntegrations", () => {
     expect(integrations.some((integration) => integration.name === "sentinel")).toBe(true);
   });
 
-  it("redacts initialization-era receipt keys from errors and spans", () => {
+  it("redacts stale keyed receipt coordinates from errors and spans", () => {
     const keyedUrl =
       "https://www.fluncle.com/api/v1/admin/operation-receipts/health.snapshot%3Aprivate-key";
     const redactedPath = "/api/v1/admin/operation-receipts/{operationKey}";
@@ -47,7 +47,7 @@ describe("serverSentryIntegrations", () => {
     expect(span.description).not.toContain("private-key");
   });
 
-  it("redacts every accepted legacy key and bundled transaction span", () => {
+  it("redacts every accepted stale key and bundled transaction span", () => {
     const legacy =
       "https://www.fluncle.com/api/v1/admin/operation-receipts/health.snapshot%3Aprivate-key";
     const transaction = scrubServerSentryTransaction({

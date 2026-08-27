@@ -241,9 +241,11 @@ bun run --cwd apps/web db:refresh-dev
 bun run --cwd apps/web preview
 ```
 
-Production uses the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which is the committed script `db:migrate && db:backfill && wrangler deploy`. Prod Turso credentials come from the Cloudflare build/deploy environment, so `db:migrate` runs against `fluncle`. To run a production migration by hand instead, load the production credentials through the `op` CLI from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (the concrete item lives in the private ops runbook), then run `db:migrate` deliberately.
+Production uses the `fluncle` Turso database through Wrangler secrets. Deploys run through Cloudflare Workers Builds on push to `main`, and migrations apply as part of the deploy step: the Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf`, which starts with `db:migrate:production`, then runs the idempotent backfills and `wrangler deploy`. Both production deploy scripts read the checked-out operation-receipt contract before constructing a database client or building the Worker. While `get_operation_receipt_legacy` exists, no caller-floor value is required; once that compatibility route is absent, the persistent public `FLUNCLE_OPERATION_RECEIPT_CALLER_FLOOR` value must exactly equal `a58f9441088728efa03f8745813ac17425229c18` on this and every later deploy.
 
-To deploy manually from a checkout (builds locally, no migrate):
+The wrapper then reads the generated Drizzle journal and the target's `__drizzle_migrations` ledger before calling the unchanged `db:migrate`. Ordinary deploys pass with no migration approval when no protected contraction is pending. If any of `0169_lonely_mariko_yashida`, `0170_motionless_squadron_supreme`, or `0171_watery_skreet` is pending, the wrapper stops unless `FLUNCLE_PROTECTED_MIGRATION_APPROVAL` exactly equals only the pending tags in journal order; the failure prints the required value. Supply that non-secret approval only for the attended deploy, then unset it. To run a production migration by hand instead, load the production credentials through the `op` CLI from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (the concrete item lives in the private ops runbook), then run `db:migrate:production` deliberately. Local `db:migrate` behavior is unchanged.
+
+To deploy manually from a checkout (checks the caller floor and builds locally, but does not migrate):
 
 ```bash
 bun run --cwd apps/web deploy

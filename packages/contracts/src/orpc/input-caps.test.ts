@@ -41,7 +41,6 @@ import { presignClipUpload, presignSetVideoUpload } from "./admin-mixtapes";
 import { presignRecordingUpload } from "./admin-recordings";
 import {
   getOperationReceipt,
-  getOperationReceiptLegacy,
   OPERATION_RECEIPT_KEY_MAX,
   OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
   reconcileOperationReceipts,
@@ -781,18 +780,6 @@ function accepts(op: unknown, input: unknown): boolean {
     }),
     true,
     "inspection accepts only the bounded operation key",
-  );
-  assert.equal(
-    accepts(getOperationReceiptLegacy, {
-      operationKey: "health.snapshot:one",
-    }),
-    true,
-    "the initialization-era inspection route preserves the same bounded input",
-  );
-  assert.equal(
-    accepts(getOperationReceiptLegacy, { operationKey: "é".repeat(128) }),
-    true,
-    "the initialization-era inspection route preserves its original key grammar",
   );
   assert.equal(
     accepts(resolveOperationReceipt, {

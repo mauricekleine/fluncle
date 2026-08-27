@@ -25,9 +25,9 @@
 // immediately and schedules a refresh. Deep filtered pages build the same SQL-only boundary window
 // once per exact clause-set memo. The nearest boundary plus an offset remainder preserves tail
 // reachability when a stored set predates corpus growth. The primary sort rides
-// `tracks_release_date_idx`; TRACK_SELECT stays a NAMED column list, so neither boundary extraction
-// nor hydration brings the wide embedding BLOBs across the isolate. The total remains a separate
-// memoized `count(*)`. Hosted Turso is still the only performance proof
+// `tracks_release_date_track_id_idx`; TRACK_SELECT stays a NAMED column list, so neither boundary
+// extraction nor hydration brings the wide embedding BLOBs across the isolate. The total remains a
+// separate memoized `count(*)`. Hosted Turso is still the only performance proof
 // (`scripts/bench-tracks-hub.ts --seek-vs-offset`); local libSQL proves correctness only.
 //
 // ── THE JOIN IS PAID ONLY WHEN IT IS READ ──────────────────────────────────────────────
@@ -41,7 +41,7 @@
 //   • THE YEAR LANE is where it is large. Carrying the join, the planner chose a bare `SCAN tracks`
 //     — a full scan of the WIDE row, dragging every `F32_BLOB(1024)` embedding off disk to read one
 //     10-byte date — plus a `findings` probe per row. Without it: `SEARCH tracks USING COVERING
-//     INDEX tracks_release_date_idx`. The table is never touched at all.
+//     INDEX tracks_release_date_track_id_idx`. The table is never touched at all.
 //   • THE `count(*)` loses its per-row `findings` probe: `SCAN tracks USING COVERING INDEX …
 //     + SEARCH findings … LEFT-JOIN` becomes a lone covering scan.
 //   • THE ID PAGE is unchanged — SQLite already proved the join unused there and elided it. Dropping
@@ -501,7 +501,7 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
 /**
  * ONE numbered page of the `/tracks` hub: every track (findings + catalogue) that survives the
  * filters, newest release first, as a shallow offset or anchored seek riding
- * `tracks_release_date_idx`.
+ * `tracks_release_date_track_id_idx`.
  * Throws {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty result
  * is a legitimate empty page, never a throw) so the route can 404 rather than clamp — a `?page=99`
  * on a 3-page hub is NOT a second URL for page 1's rows. The `count(*)` for the total runs in
@@ -543,11 +543,11 @@ export function tracksHubCountQuery(
 
 /**
  * Step 1's SQL: the bare id slice. No SELECT-list subqueries, so the offset walk touches only the
- * `tracks_release_date_idx` order and the filter predicates. The `findings` join appears ONLY when a
- * predicate reads it (the galaxy filter) — the plan here is identical either way (SQLite already
- * elided the unused join), so that is tidiness rather than a speedup; the join drop earns its keep
- * on the year lane and the `count(*)`. Exported so the hosted bench (`scripts/bench-tracks-hub.ts`)
- * measures the EXACT production shape.
+ * `tracks_release_date_track_id_idx` order and the filter predicates. The `findings` join appears
+ * ONLY when a predicate reads it (the galaxy filter) — the plan here is identical either way
+ * (SQLite already elided the unused join), so that is tidiness rather than a speedup; the join drop
+ * earns its keep on the year lane and the `count(*)`. Exported so the hosted bench
+ * (`scripts/bench-tracks-hub.ts`) measures the EXACT production shape.
  */
 export function tracksHubIdPageQuery(
   filters: TracksHubFilters,
@@ -597,8 +597,10 @@ export type ProjectedTracksHubIdPageQueries = {
 
 /**
  * The complete projected anchor document gives every numbered page an exact preceding boundary.
- * Split the one transition page at the NULL zone so both halves are true composite-index ranges;
- * the general OR-shaped legacy seek remains available only to shadow/rollback callers.
+ * Split the one transition page at the NULL zone so both halves are true composite-index ranges.
+ * The row-value bound intentionally excludes NULL release dates under SQL's three-valued logic;
+ * `nullFill` reads that zone explicitly. The general OR-shaped legacy seek remains available only
+ * to shadow/rollback callers.
  */
 export function projectedTracksHubIdPageQueries(
   page: number,
@@ -646,12 +648,10 @@ export function projectedTracksHubIdPageQueries(
         limit ?`,
     }),
     primary: {
-      args: [anchor.key, anchor.key, anchor.key, anchor.id, limit],
+      args: [anchor.key, anchor.id, limit],
       sql: `select tracks.track_id as track_id
         from tracks indexed by tracks_release_date_track_id_idx
-        where tracks.release_date <= ?
-          and (tracks.release_date < ?
-            or (tracks.release_date = ? and tracks.track_id < ?))
+        where (tracks.release_date, tracks.track_id) < (?, ?)
         order by ${TRACKS_HUB_ORDER_BY}
         limit ?`,
     },
@@ -954,8 +954,9 @@ export function tracksHubYearLaneQuery(
     args,
     clauses,
     // Unfiltered (and under any `tracks`-only filter) this references `tracks.release_date` and
-    // nothing else, so the grouped scan is a covering read of `tracks_release_date_idx` rather than a
-    // drag over the wide row — the embedding BLOBs on `tracks` are never touched.
+    // nothing else, so the grouped scan is a covering read of
+    // `tracks_release_date_track_id_idx` rather than a drag over the wide row — the embedding BLOBs
+    // on `tracks` are never touched.
     sql: `select substr(tracks.release_date, 1, 4) as year, count(*) as n
           from tracks
           ${findingsJoinFor(clauses)}

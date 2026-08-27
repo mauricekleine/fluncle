@@ -4,7 +4,7 @@ Fluncle's web app (`apps/web`) reports unexpected errors to **Sentry** for priva
 
 ## The posture: errors + sampled DB-query tracing
 
-Sentry runs on the Team plan with a 5M-spans/month budget. Capture errors and sampled DB-query tracing; keep session replay and profiling disabled, with `sendDefaultPii: false`. The Worker also replaces Sentry's default HTTP integration with `maxRequestBodySize: "none"`, because that integration otherwise captures JSON request bodies independently of the PII switch; raw request bodies therefore never enter error events or spans. The initialization-era keyed operation-receipt inspection route remains available for compatibility until its contraction phase, so `beforeSend`, `beforeSendTransaction`, and `beforeSendSpan` replace that path segment with `{operationKey}` before telemetry leaves the Worker.
+Sentry runs on the Team plan with a 5M-spans/month budget. Capture errors and sampled DB-query tracing; keep session replay and profiling disabled, with `sendDefaultPii: false`. The Worker also replaces Sentry's default HTTP integration with `maxRequestBodySize: "none"`, because that integration otherwise captures JSON request bodies independently of the PII switch; raw request bodies therefore never enter error events or spans. Operation-receipt inspection and reconciliation are POST-only and the keyed GET route is removed. `beforeSend`, `beforeSendTransaction`, and `beforeSendSpan` still replace a stale keyed path segment with `{operationKey}` so delayed telemetry or an overlooked old caller cannot leak its coordinate.
 
 ### What tracing captures
 

@@ -10,7 +10,6 @@ import {
   digestOperationRequest,
   executeReceiptBackedOperation,
   inspectOperationReceipt,
-  inspectOperationReceiptLegacy,
   type JsonValue,
   type OperationReceiptClient,
   reconcileOperationReceipt,
@@ -355,31 +354,6 @@ describe("operation receipts", () => {
       await expect(inspectOperationReceipt(client, "missing-key")).resolves.toEqual({
         outcome: "not-found",
       });
-    });
-  });
-
-  it("keeps the initialization-era inspection key grammar bounded by characters", async () => {
-    await withFileDb(async (client) => {
-      const operationKey = `legacy-${"é".repeat(100)}`;
-      await client.execute({
-        args: [
-          operationKey,
-          "test-operation",
-          "a".repeat(64),
-          "2026-08-26T10:00:00.000Z",
-          "2026-08-26T10:00:00.000Z",
-        ],
-        sql: `insert into operation_receipts
-          (operation_key, operation_id, request_digest, state, created_at, updated_at)
-          values (?, ?, ?, 'accepted', ?, ?)`,
-      });
-
-      await expect(inspectOperationReceiptLegacy(client, operationKey)).resolves.toMatchObject({
-        operationId: "test-operation",
-        outcome: "found",
-        state: "accepted",
-      });
-      await expect(inspectOperationReceipt(client, operationKey)).rejects.toThrow(/printable/);
     });
   });
 

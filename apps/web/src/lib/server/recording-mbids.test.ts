@@ -97,6 +97,11 @@ describe("resolveRecordingMbids", () => {
     expect(result.rateLimited).toBe(false);
     expect(result.nextCursor).toBeNull(); // 2 rows < batch limit 10 ⇒ drained
 
+    const prefixStrip = String(execute.mock.calls[0]?.[0].sql);
+    const isrcWorklist = String(execute.mock.calls[1]?.[0].sql);
+    expect(prefixStrip).toContain("from tracks indexed by tracks_mb_recording_id_queue_idx");
+    expect(isrcWorklist).toContain("from tracks indexed by tracks_mb_recording_id_queue_idx");
+
     // The MB lookup hit /isrc/<isrc> for each row.
     expect(mbFetch).toHaveBeenCalledWith("/isrc/GBABC1200001");
     expect(mbFetch).toHaveBeenCalledWith("/isrc/GBABC1200002");
@@ -174,6 +179,11 @@ describe("resolveRecordingMbids", () => {
     expect(result.resolved).toEqual(["spotifyF"]); // the eligible worklist, not a real resolve
     expect(mbFetch).not.toHaveBeenCalled();
     expect(execute).toHaveBeenCalledTimes(2); // count + list, no writes
+    expect(
+      execute.mock.calls.every((call) =>
+        String(call[0].sql).includes("from tracks indexed by tracks_mb_recording_id_queue_idx"),
+      ),
+    ).toBe(true);
   });
 });
 

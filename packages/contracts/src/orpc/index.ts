@@ -168,7 +168,6 @@ export {
 export {
   adminOperationReceiptsContract,
   getOperationReceipt,
-  getOperationReceiptLegacy,
   OPERATION_RECEIPT_KEY_MAX,
   OPERATION_RECEIPT_KEY_PATTERN,
   OPERATION_RECEIPT_REPAIR_LIMIT_MAX,
