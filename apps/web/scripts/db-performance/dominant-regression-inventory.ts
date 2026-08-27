@@ -411,6 +411,35 @@ export const DOMINANT_REGRESSION_INVENTORY = freezeInventory([
 
 export type DominantRegressionInventory = typeof DOMINANT_REGRESSION_INVENTORY;
 
+export function dominantRegressionEvidenceKey(evidence: EvidenceLocation): string {
+  return JSON.stringify([evidence.file, evidence.marker]);
+}
+
+export function appsWebVitestPath(file: string): string | null {
+  if (!file.startsWith("apps/web/") || !/(?:\.test|\.spec)\.[cm]?[jt]sx?$/.test(file)) {
+    return null;
+  }
+
+  return file.slice("apps/web/".length);
+}
+
+export function deriveDominantRegressionVitestPaths(
+  inventory: readonly DominantRegressionFamily[] = DOMINANT_REGRESSION_INVENTORY,
+): string[] {
+  const paths = new Set<string>();
+
+  for (const family of inventory) {
+    for (const evidence of family.runtimeTests) {
+      const path = appsWebVitestPath(evidence.file);
+      if (path !== null) {
+        paths.add(path);
+      }
+    }
+  }
+
+  return [...paths];
+}
+
 export function validateDominantRegressionInventory(
   inventory: readonly DominantRegressionFamily[],
   knownPerformanceContractIds: ReadonlySet<string>,

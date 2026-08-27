@@ -8,6 +8,7 @@ import { CONTRACT_D_CONTRACT_IDS } from "./contract-d";
 import {
   DOMINANT_REGRESSION_FAMILY_IDS,
   DOMINANT_REGRESSION_INVENTORY,
+  deriveDominantRegressionVitestPaths,
   type DominantRegressionFamily,
   validateDominantRegressionInventory,
 } from "./dominant-regression-inventory";
@@ -78,6 +79,20 @@ describe("Goal H dominant regression inventory", () => {
     for (const family of DOMINANT_REGRESSION_INVENTORY) {
       expect(family.finalImplementation).not.toEqual(family.runtimeTests);
     }
+  });
+
+  it("derives unique apps/web Vitest paths from all runtime evidence", () => {
+    expect(deriveDominantRegressionVitestPaths()).toEqual([
+      "src/lib/server/backfill-artist-credits.test.ts",
+      "src/lib/server/crawl-cutover.integration.test.ts",
+      "src/lib/server/public-projections.integration.test.ts",
+      "src/lib/server/hub-page-anchors.test.ts",
+      "src/lib/server/due-work-cutover.integration.test.ts",
+      "scripts/lib/device-db-derivation.test.ts",
+      "src/lib/server/database-admission.integration.test.ts",
+      "scripts/db-performance/mixed-load.test.ts",
+      "src/lib/server/operation-receipts.integration.test.ts",
+    ]);
   });
 
   it("rejects omitted or duplicate family IDs", () => {

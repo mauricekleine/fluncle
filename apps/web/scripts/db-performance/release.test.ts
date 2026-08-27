@@ -1,15 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import { PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import {
+  deriveDominantRegressionVitestPaths,
+  DOMINANT_REGRESSION_INVENTORY,
+} from "./dominant-regression-inventory";
 import { getScaleManifest } from "./manifest";
 import {
   aggregateNoGo,
   assessCategoryCompleteness,
+  DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS,
   parseReleaseArguments,
   REQUIRED_RELEASE_CATEGORIES,
+  releaseCommands,
   type ChildResult,
   type ReleaseCommandResult,
   validateChildResult,
+  validateDominantRegressionRuntimeCoverage,
   validateProfileReport,
 } from "./release";
 
@@ -151,6 +158,57 @@ describe("database performance release proof", () => {
     expect(coverage[0]).toMatchObject({ status: "missing" });
     expect(coverage[1]).toMatchObject({ status: "failed" });
     expect(coverage.slice(2).every((entry) => entry.status === "passed")).toBe(true);
+  });
+
+  it("derives every inventory Vitest path into the dominant command and preserves cutover extras", () => {
+    const definitions = releaseCommands();
+    const dominantCommand = definitions.find(({ id }) => id === "component-registry-and-cutovers");
+    if (dominantCommand === undefined) {
+      throw new Error("missing dominant-regression component command");
+    }
+
+    const derivedPaths = deriveDominantRegressionVitestPaths(DOMINANT_REGRESSION_INVENTORY);
+    expect(new Set(derivedPaths)).toHaveLength(derivedPaths.length);
+    expect(dominantCommand.command).toEqual(expect.arrayContaining(derivedPaths));
+    expect(dominantCommand.command).toEqual(
+      expect.arrayContaining([
+        "src/lib/server/backfill-due-work-cutover.integration.test.ts",
+        "src/lib/server/due-work-cutover-consumers.test.ts",
+        "src/lib/server/due-work-finding-bio-cutover.integration.test.ts",
+        "src/lib/server/due-work-image-cutovers.integration.test.ts",
+        "src/lib/server/due-work-vendor-core-cutover.integration.test.ts",
+      ]),
+    );
+    expect(
+      validateDominantRegressionRuntimeCoverage(DOMINANT_REGRESSION_INVENTORY, definitions),
+    ).toEqual([]);
+    expect(DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ commandId: "component-sonar-rust" }),
+        expect.objectContaining({ commandId: "component-device-derivation" }),
+      ]),
+    );
+  });
+
+  it("fails closed when future runtime evidence has no executable assignment", () => {
+    const futureInventory = DOMINANT_REGRESSION_INVENTORY.map((family, index) =>
+      index === 0
+        ? {
+            ...family,
+            runtimeTests: [
+              ...family.runtimeTests,
+              {
+                file: "apps/sonar/src/future-runtime.rs",
+                marker: "future runtime evidence",
+              },
+            ],
+          }
+        : family,
+    );
+
+    expect(validateDominantRegressionRuntimeCoverage(futureInventory, releaseCommands())).toContain(
+      "artist-identity-case-or: runtime evidence apps/sonar/src/future-runtime.rs#future runtime evidence has no explicit component assignment",
+    );
   });
 
   it("aggregates every process, validation, category, and runner no-go", () => {

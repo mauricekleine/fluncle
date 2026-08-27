@@ -10,6 +10,14 @@ import {
   type FixtureCounts,
   type ScaleProfile,
 } from "./manifest";
+import {
+  appsWebVitestPath,
+  deriveDominantRegressionVitestPaths,
+  dominantRegressionEvidenceKey,
+  DOMINANT_REGRESSION_INVENTORY,
+  type DominantRegressionFamily,
+  type EvidenceLocation,
+} from "./dominant-regression-inventory";
 import { PERFORMANCE_REPORT_SCHEMA_VERSION } from "./registry";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -41,6 +49,40 @@ export const REQUIRED_RELEASE_CATEGORIES = [
 ] as const;
 
 export type ReleaseCategory = (typeof REQUIRED_RELEASE_CATEGORIES)[number];
+
+export type DominantRegressionRuntimeComponentAssignment = Readonly<{
+  categories: readonly ReleaseCategory[];
+  commandId: string;
+  evidence: EvidenceLocation;
+}>;
+
+/** Runtime evidence with an existing component proof owner outside the dominant command. */
+export const DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS = [
+  {
+    categories: ["sonar-rust", "sonar-scaled-delta-full-rebuild"],
+    commandId: "component-sonar-rust",
+    evidence: {
+      file: "apps/sonar/src/state.rs",
+      marker: "delta_converges_with_full_local_rebuild_at_scaled_corpora",
+    },
+  },
+  {
+    categories: ["device-derivation"],
+    commandId: "component-device-derivation",
+    evidence: {
+      file: "apps/web/scripts/lib/device-db-derivation.test.ts",
+      marker: "materializes the growing anchored scan once and makes every copy read that relation",
+    },
+  },
+  {
+    categories: ["mixed-load"],
+    commandId: "component-mixed-load",
+    evidence: {
+      file: "apps/web/scripts/db-performance/mixed-load.test.ts",
+      marker: "keeps public reads moving beside a held reader and serializes write batches",
+    },
+  },
+] as const satisfies readonly DominantRegressionRuntimeComponentAssignment[];
 
 export type ReleaseOptions = {
   outputDirectory: string | null;
@@ -89,7 +131,7 @@ export type CategoryCoverage = {
   status: "failed" | "missing" | "passed";
 };
 
-type CommandDefinition = {
+export type ReleaseCommandDefinition = {
   categories: ReleaseCategory[];
   command: string[];
   cwd: string;
@@ -393,7 +435,94 @@ export function aggregateNoGo(
   return [...reasons];
 }
 
-function profileCommand(profile: ScaleProfile): CommandDefinition {
+function requiresExplicitComponentAssignment(evidence: EvidenceLocation): boolean {
+  return appsWebVitestPath(evidence.file) === null || evidence.file.startsWith("apps/web/scripts/");
+}
+
+export function validateDominantRegressionRuntimeCoverage(
+  inventory: readonly DominantRegressionFamily[],
+  commandDefinitions: readonly ReleaseCommandDefinition[],
+  assignments: readonly DominantRegressionRuntimeComponentAssignment[] = DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS,
+): string[] {
+  const failures: string[] = [];
+  const runtimeEvidence = inventory.flatMap((family) => family.runtimeTests);
+  const inventoryEvidenceKeys = new Set(
+    runtimeEvidence.map((evidence) => dominantRegressionEvidenceKey(evidence)),
+  );
+  const dominantCommands = commandDefinitions.filter(
+    (definition) =>
+      definition.cwd === "apps/web" &&
+      definition.categories.includes("dominant-regression-inventory"),
+  );
+  const assignmentByEvidence = new Map<string, DominantRegressionRuntimeComponentAssignment>();
+  const validAssignmentKeys = new Set<string>();
+
+  for (const assignment of assignments) {
+    const key = dominantRegressionEvidenceKey(assignment.evidence);
+    if (assignmentByEvidence.has(key)) {
+      failures.push(
+        `duplicate runtime component assignment for ${assignment.evidence.file}#${assignment.evidence.marker}`,
+      );
+    } else {
+      assignmentByEvidence.set(key, assignment);
+    }
+
+    if (!inventoryEvidenceKeys.has(key)) {
+      failures.push(
+        `runtime component assignment ${assignment.evidence.file}#${assignment.evidence.marker} is not named by the inventory`,
+      );
+    }
+
+    const command = commandDefinitions.find(({ id }) => id === assignment.commandId);
+    if (command === undefined) {
+      failures.push(
+        `runtime component assignment ${assignment.evidence.file}#${assignment.evidence.marker} names missing command ${assignment.commandId}`,
+      );
+      continue;
+    }
+
+    const missingCategories = assignment.categories.filter(
+      (category) => !command.categories.includes(category),
+    );
+    if (missingCategories.length > 0) {
+      failures.push(
+        `runtime component assignment ${assignment.evidence.file}#${assignment.evidence.marker} names categories missing from ${assignment.commandId}: ${missingCategories.join(", ")}`,
+      );
+    } else if (inventoryEvidenceKeys.has(key)) {
+      validAssignmentKeys.add(key);
+    }
+  }
+
+  for (const family of inventory) {
+    for (const evidence of family.runtimeTests) {
+      const key = dominantRegressionEvidenceKey(evidence);
+      const path = appsWebVitestPath(evidence.file);
+      const assignedToDominantCommand =
+        path !== null && dominantCommands.some((definition) => definition.command.includes(path));
+      const assignedToComponent = validAssignmentKeys.has(key);
+
+      if (path !== null && !assignedToDominantCommand) {
+        failures.push(
+          `${family.id}: runtime Vitest path ${path} is not assigned to the dominant-regression command`,
+        );
+      }
+      if (requiresExplicitComponentAssignment(evidence) && !assignmentByEvidence.has(key)) {
+        failures.push(
+          `${family.id}: runtime evidence ${evidence.file}#${evidence.marker} has no explicit component assignment`,
+        );
+      }
+      if (!assignedToDominantCommand && !assignedToComponent) {
+        failures.push(
+          `${family.id}: runtime evidence ${evidence.file}#${evidence.marker} has no executable assignment`,
+        );
+      }
+    }
+  }
+
+  return failures;
+}
+
+function profileCommand(profile: ScaleProfile): ReleaseCommandDefinition {
   return {
     categories: [`sql-full-fixture-${profile}`],
     command: [
@@ -410,7 +539,31 @@ function profileCommand(profile: ScaleProfile): CommandDefinition {
   };
 }
 
-function releaseCommands(): CommandDefinition[] {
+const DOMINANT_REGRESSION_EXTRA_VITEST_PATHS = [
+  "src/lib/server/backfill-due-work-cutover.integration.test.ts",
+  "src/lib/server/crawl-cutover.integration.test.ts",
+  "src/lib/server/due-work-cutover.integration.test.ts",
+  "src/lib/server/due-work-cutover-consumers.test.ts",
+  "src/lib/server/due-work-finding-bio-cutover.integration.test.ts",
+  "src/lib/server/due-work-image-cutovers.integration.test.ts",
+  "src/lib/server/due-work-vendor-core-cutover.integration.test.ts",
+  "src/lib/server/health-receipt-cutover.integration.test.ts",
+] as const;
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+function buildReleaseCommands(
+  inventory: readonly DominantRegressionFamily[],
+): ReleaseCommandDefinition[] {
+  const dominantRegressionVitestPaths = uniqueStrings([
+    "scripts/db-performance/dominant-regression-inventory.test.ts",
+    "src/lib/server/database-operation-registry.test.ts",
+    ...DOMINANT_REGRESSION_EXTRA_VITEST_PATHS,
+    ...deriveDominantRegressionVitestPaths(inventory),
+  ]);
+
   return [
     ...SCALE_PROFILES.map(profileCommand),
     {
@@ -423,16 +576,7 @@ function releaseCommands(): CommandDefinition[] {
         "node",
         "../../node_modules/vitest/vitest.mjs",
         "run",
-        "scripts/db-performance/dominant-regression-inventory.test.ts",
-        "src/lib/server/database-operation-registry.test.ts",
-        "src/lib/server/backfill-due-work-cutover.integration.test.ts",
-        "src/lib/server/crawl-cutover.integration.test.ts",
-        "src/lib/server/due-work-cutover.integration.test.ts",
-        "src/lib/server/due-work-cutover-consumers.test.ts",
-        "src/lib/server/due-work-finding-bio-cutover.integration.test.ts",
-        "src/lib/server/due-work-image-cutovers.integration.test.ts",
-        "src/lib/server/due-work-vendor-core-cutover.integration.test.ts",
-        "src/lib/server/health-receipt-cutover.integration.test.ts",
+        ...dominantRegressionVitestPaths,
       ],
       cwd: "apps/web",
       id: "component-registry-and-cutovers",
@@ -522,6 +666,19 @@ function releaseCommands(): CommandDefinition[] {
   ];
 }
 
+export function releaseCommands(
+  inventory: readonly DominantRegressionFamily[] = DOMINANT_REGRESSION_INVENTORY,
+): ReleaseCommandDefinition[] {
+  const definitions = buildReleaseCommands(inventory);
+  const coverageFailures = validateDominantRegressionRuntimeCoverage(inventory, definitions);
+  if (coverageFailures.length > 0) {
+    throw new Error(
+      `dominant-regression runtime coverage is incomplete: ${coverageFailures.join("; ")}`,
+    );
+  }
+  return definitions;
+}
+
 function childEnvironment(): Record<string, string> {
   const safeNames = [
     "BUN_INSTALL",
@@ -555,7 +712,7 @@ function childEnvironment(): Record<string, string> {
   return environment;
 }
 
-async function captureChild(definition: CommandDefinition): Promise<ChildResult> {
+async function captureChild(definition: ReleaseCommandDefinition): Promise<ChildResult> {
   const startedAtMs = performance.now();
 
   try {
@@ -636,12 +793,13 @@ async function runRelease(
 ): Promise<{ manifest: JsonRecord; passed: boolean }> {
   const startedAt = new Date();
   const startedAtMs = performance.now();
+  const definitions = releaseCommands();
   const outputDirectory = await prepareOutputDirectory(options.outputDirectory, startedAt);
   const commandResults: ReleaseCommandResult[] = [];
   const profileEvidence: ProfileEvidence[] = [];
   const artifactFilenames = new Set<string>();
 
-  for (const definition of releaseCommands()) {
+  for (const definition of definitions) {
     process.stderr.write(`[db:performance:release] running ${definition.id}\n`);
     const commandStartedAt = new Date().toISOString();
     const child = await captureChild(definition);
