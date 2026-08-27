@@ -19,15 +19,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/tracks.ts",
-        "symbol": "findingsByAlbum",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/tracks.ts",
+            "marker": "getFindingsByAlbum"
+          }
+        ],
         "query": "Entity-scoped findings read starts from tracks.album_id = ?."
       },
       "structuralRationale": "Indexed graph-pointer equality bounds album pages and backfill work to one album slice.",
       "performanceContracts": [
         {
           "id": "index.tracks-album-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks.ts",
+              "marker": "getFindingsByAlbum"
+            }
+          ]
         }
       ]
     },
@@ -37,15 +47,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/public-projections.ts",
-        "symbol": "fanOutLabelQualificationRepair",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/public-projections.ts",
+            "marker": "fanOutArtistQualificationLabelRepair"
+          }
+        ],
         "query": "Indexed tracks.label_id scans fan out a label ruling only to its tracks."
       },
       "structuralRationale": "Serves label graph pages, label-scoped projection repair, and metadata linking without scanning the catalogue.",
       "performanceContracts": [
         {
           "id": "index.tracks-label-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/public-projections.ts",
+              "marker": "fanOutArtistQualificationLabelRepair"
+            }
+          ]
         }
       ]
     },
@@ -55,15 +75,25 @@
       "partialPredicate": "is_catalogue = 1",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/tracks-hub.ts",
-        "symbol": "listTracksHub",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/tracks-hub.ts",
+            "marker": "listTracksHubPage"
+          }
+        ],
         "query": "Catalogue-filtered hub lane uses is_catalogue = 1."
       },
       "structuralRationale": "Materializes the catalogue anti-join as a shrinking predicate-free catalogue slice for consumers that only need membership.",
       "performanceContracts": [
         {
           "id": "index.tracks-is-catalogue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks-hub.ts",
+              "marker": "listTracksHubPage"
+            }
+          ]
         }
       ]
     },
@@ -73,15 +103,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/fresh.ts",
-        "symbol": "listFreshTracks",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/fresh.ts",
+            "marker": "listFreshTracks"
+          }
+        ],
         "query": "Fresh catalogue window filters is_catalogue and release_date, ordered by release_date DESC, track_id DESC."
       },
       "structuralRationale": "Visible leading equality plus date range and tie-break order avoids a catalogue-wide temporary sort.",
       "performanceContracts": [
         {
           "id": "index.tracks-fresh-catalogue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/fresh.ts",
+              "marker": "listFreshTracks"
+            }
+          ]
         }
       ]
     },
@@ -91,15 +131,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/catalogue.ts",
-        "symbol": "rankCatalogue",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/catalogue.ts",
+            "marker": "rankCatalogue"
+          }
+        ],
         "query": "Stale active-catalogue batch filters is_catalogue = 1 and dismissed_at IS NULL, ordered by track_id."
       },
       "structuralRationale": "Supports bounded active-catalogue walks without sorting the full live catalogue.",
       "performanceContracts": [
         {
           "id": "index.tracks-catalogue-active-track-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/catalogue.ts",
+              "marker": "rankCatalogue"
+            }
+          ]
         }
       ]
     },
@@ -109,15 +159,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/catalogue.ts",
-        "symbol": "listCatalogueLens",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/catalogue.ts",
+            "marker": "listCatalogueTracks"
+          }
+        ],
         "query": "ear lens filters active catalogue with non-null nearest_finding_score and orders score DESC, track_id DESC."
       },
       "structuralRationale": "Aligns both active predicates and the Ear ranking order for a reverse bounded walk.",
       "performanceContracts": [
         {
           "id": "index.tracks-catalogue-ear",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/catalogue.ts",
+              "marker": "listCatalogueTracks"
+            }
+          ]
         }
       ]
     },
@@ -127,15 +187,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/catalogue.ts",
-        "symbol": "listCatalogueLens",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/catalogue.ts",
+            "marker": "listCatalogueTracks"
+          }
+        ],
         "query": "capture lens filters active catalogue with non-null capture_priority and orders priority DESC, track_id DESC."
       },
       "structuralRationale": "Aligns active-catalogue predicates with the metered capture ranking order.",
       "performanceContracts": [
         {
           "id": "index.tracks-catalogue-capture",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/catalogue.ts",
+              "marker": "listCatalogueTracks"
+            }
+          ]
         }
       ]
     },
@@ -145,15 +215,41 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/backfill.ts",
-        "symbol": "listCatalogueVendorWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listCatalogueAppleWork"
+          },
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listDeezerWork"
+          },
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listBeatportCatalogueWork"
+          }
+        ],
         "query": "Apple, Deezer, and Beatport catalogue worklists filter is_catalogue and order capture_priority DESC, track_id DESC."
       },
       "structuralRationale": "Metadata work includes dismissed rows, so it needs a separate ordered catalogue worklist without dismissed_at.",
       "performanceContracts": [
         {
           "id": "index.tracks-vendor-worklist",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listCatalogueAppleWork"
+            },
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listDeezerWork"
+            },
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listBeatportCatalogueWork"
+            }
+          ]
         }
       ]
     },
@@ -178,15 +274,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/funnel.ts",
-        "symbol": "runFoldedFunnelScan",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/funnel.ts",
+            "marker": "runFoldedFunnelScan"
+          }
+        ],
         "query": "Single conditional aggregate over catalogue stages is required to use this covering index."
       },
       "structuralRationale": "Covers every funnel arm so the full scan reads a narrow index rather than rows containing large audio/vector storage.",
       "performanceContracts": [
         {
           "id": "index.tracks-funnel-scan",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/funnel.ts",
+              "marker": "runFoldedFunnelScan"
+            }
+          ]
         }
       ]
     },
@@ -196,40 +302,90 @@
       "partialPredicate": null,
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/fresh-entity.ts; apps/web/src/lib/server/fresh.ts; apps/web/src/lib/server/tracks-hub.ts; apps/web/src/lib/server/search.ts",
-        "symbol": "listEntityFreshTracks; listFreshReleases; tracksHubYearLaneQuery; projectedTracksHubIdPageQueries; runFilters",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/fresh-entity.ts",
+            "marker": "listEntityFreshTracks"
+          },
+          {
+            "file": "apps/web/src/lib/server/fresh.ts",
+            "marker": "listFreshReleases"
+          },
+          {
+            "file": "apps/web/src/lib/server/tracks-hub.ts",
+            "marker": "tracksHubYearLaneQuery"
+          },
+          {
+            "file": "apps/web/src/lib/server/tracks-hub.ts",
+            "marker": "projectedTracksHubIdPageQueries"
+          },
+          {
+            "file": "apps/web/src/lib/server/search.ts",
+            "marker": "runFilters"
+          }
+        ],
         "query": "The exact entity-fresh, public findings, public records, year-grouping, projected keyset/NULL-zone, and filtered-search release-date consumers retain a classified bounded driver after the singleton is removed."
       },
       "structuralRationale": "Drop in the final contraction: (release_date) is a strict prefix of tracks_release_date_track_id_idx. Unforced plans prove the public findings lane through the composite plus finding/artist primary-key probes, and the entity-fresh, records, year, search, and default-hub consumers through their exact surviving indexed drivers.",
       "performanceContracts": [
         {
           "id": "index.tracks-release-date-drop-fresh",
-          "consumer": "apps/web/src/lib/server/fresh-entity.ts#listEntityFreshTracks",
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/fresh-entity.ts",
+              "marker": "listEntityFreshTracks"
+            }
+          ],
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
           "id": "index.tracks-release-date-drop-public-findings",
-          "consumer": "apps/web/src/lib/server/fresh.ts#listFreshReleases:findings",
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/fresh.ts",
+              "marker": "listFreshReleases"
+            }
+          ],
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
           "id": "index.tracks-release-date-drop-public-records",
-          "consumer": "apps/web/src/lib/server/fresh.ts#listFreshReleases:records",
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/fresh.ts",
+              "marker": "listFreshReleases"
+            }
+          ],
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
           "id": "index.tracks-release-date-drop-year",
-          "consumer": "apps/web/src/lib/server/tracks-hub.ts#tracksHubYearLaneQuery",
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks-hub.ts",
+              "marker": "tracksHubYearLaneQuery"
+            }
+          ],
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
           "id": "index.tracks-release-date-drop-default-hub",
-          "consumer": "apps/web/src/lib/server/tracks-hub.ts#projectedTracksHubIdPageQueries",
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks-hub.ts",
+              "marker": "projectedTracksHubIdPageQueries"
+            }
+          ],
           "requiredProfiles": ["1x", "2x", "4x"]
         },
         {
           "id": "index.tracks-release-date-drop-search",
-          "consumer": "apps/web/src/lib/server/search.ts#runFilters",
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/search.ts",
+              "marker": "runFilters"
+            }
+          ],
           "requiredProfiles": ["1x", "2x", "4x"]
         }
       ]
@@ -240,8 +396,12 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/tracks-hub.ts",
-        "symbol": "projectedTracksHubIdPageQueries",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/tracks-hub.ts",
+            "marker": "projectedTracksHubIdPageQueries"
+          }
+        ],
         "query": "The projected hub reads an exact two-column row-value suffix and an explicit null-date suffix through this index."
       },
       "knownContractMappings": ["projection.default-anchor-keyset"],
@@ -249,7 +409,13 @@
       "performanceContracts": [
         {
           "id": "index.tracks-release-date-track-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks-hub.ts",
+              "marker": "projectedTracksHubIdPageQueries"
+            }
+          ]
         }
       ]
     },
@@ -259,15 +425,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/search.ts",
-        "symbol": "compileFilters",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/search.ts",
+            "marker": "compileFilters"
+          }
+        ],
         "query": "BPM bounds compile to bare tracks.bpm >= ? and tracks.bpm <= ? predicates."
       },
       "structuralRationale": "Keeps the optional archive-wide BPM range filter seekable.",
       "performanceContracts": [
         {
           "id": "index.tracks-bpm",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/search.ts",
+              "marker": "compileFilters"
+            }
+          ]
         }
       ]
     },
@@ -277,15 +453,25 @@
       "partialPredicate": null,
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/catalogue.ts",
-        "symbol": "listCatalogueTracks",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/catalogue.ts",
+            "marker": "listCatalogueTracks"
+          }
+        ],
         "query": "The Ear filters is_catalogue, dismissed_at, and nearest_finding_score before ordering score and track_id; tracks_catalogue_ear_idx serves the exact shape."
       },
       "structuralRationale": "Drop in the final contraction: no final query uses the singleton shape, while the exact Ear consumer is fully covered by tracks_catalogue_ear_idx.",
       "performanceContracts": [
         {
           "id": "index.tracks-nearest-finding-score",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/catalogue.ts",
+              "marker": "listCatalogueTracks"
+            }
+          ]
         }
       ]
     },
@@ -295,15 +481,33 @@
       "partialPredicate": null,
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/backfill.ts",
-        "symbol": "listCatalogueVendorWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listCatalogueAppleWork"
+          },
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listDeezerWork"
+          }
+        ],
         "query": "Apple and Deezer catalogue worklists use is_catalogue plus nullable capture_priority and track_id ordering, all carried by tracks_vendor_worklist_idx."
       },
       "structuralRationale": "Drop in the final contraction: tracks_vendor_worklist_idx is a full composite whose is_catalogue prefix and capture_priority/track_id suffix serve the exact nullable-priority vendor reads, leaving the singleton shadowed.",
       "performanceContracts": [
         {
           "id": "index.tracks-capture-priority",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listCatalogueAppleWork"
+            },
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listDeezerWork"
+            }
+          ]
         }
       ]
     },
@@ -313,15 +517,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/capture-budget.ts",
-        "symbol": "readCaptureSpend",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/capture-budget.ts",
+            "marker": "readCatalogueCaptureSpend"
+          }
+        ],
         "query": "Rolling 24-hour ledger filters source_audio_attempted_at >= cutoff."
       },
       "structuralRationale": "A range seek skips the unattempted majority and bounds the budget-brake read to its recent window.",
       "performanceContracts": [
         {
           "id": "index.tracks-source-audio-attempted-at",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/capture-budget.ts",
+              "marker": "readCatalogueCaptureSpend"
+            }
+          ]
         }
       ]
     },
@@ -331,15 +545,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/anchor.ts",
-        "symbol": "listCaptureSuspectRows",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/attention.ts",
+            "marker": "listCaptureSuspectRows"
+          }
+        ],
         "query": "Attention queue filters capture_verification = 'mismatch' and orders capture_verified_at ASC."
       },
       "structuralRationale": "Combines mismatch equality with attention ordering; it also supports the null-verification backfill queue.",
       "performanceContracts": [
         {
           "id": "index.tracks-capture-verification-verified-at",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/attention.ts",
+              "marker": "listCaptureSuspectRows"
+            }
+          ]
         }
       ]
     },
@@ -349,15 +573,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/identity-envelope.ts",
-        "symbol": "resolveIdentityEnvelope",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/identity-envelope.ts",
+            "marker": "readIdentity"
+          }
+        ],
         "query": "Batch ISRC resolution uses tracks.isrc IN (...) equality probes."
       },
       "structuralRationale": "Supports crawler idempotence and public identity resolution; it intentionally remains non-unique because duplicate ISRCs are representable.",
       "performanceContracts": [
         {
           "id": "index.tracks-isrc",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/identity-envelope.ts",
+              "marker": "readIdentity"
+            }
+          ]
         }
       ]
     },
@@ -367,15 +601,25 @@
       "partialPredicate": "spotify_uri IS NULL AND isrc IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl.ts",
-        "symbol": "getCrawlStatus",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl.ts",
+            "marker": "getCrawlStatus"
+          }
+        ],
         "query": "Anchor-pending gauge counts unanchored rows that have an ISRC."
       },
       "structuralRationale": "Small partial index represents the fillable anchor slice and shrinks as Spotify anchors land.",
       "performanceContracts": [
         {
           "id": "index.tracks-anchor-queue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl.ts",
+              "marker": "getCrawlStatus"
+            }
+          ]
         }
       ]
     },
@@ -385,15 +629,25 @@
       "partialPredicate": "mb_recording_id IS NULL AND mb_recording_id_attempted_at IS NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/recording-mbids.ts",
-        "symbol": "listRecordingMbidWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/recording-mbids.ts",
+            "marker": "listIsrcWork"
+          }
+        ],
         "query": "Backfill reads unfilled, unattempted recording-MBID rows in track_id order."
       },
       "structuralRationale": "Indexes the derived shrinking worklist rather than the whole catalogue.",
       "performanceContracts": [
         {
           "id": "index.tracks-mb-recording-id-queue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/recording-mbids.ts",
+              "marker": "listIsrcWork"
+            }
+          ]
         }
       ]
     },
@@ -403,15 +657,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/identity-envelope.ts",
-        "symbol": "resolveIdentityEnvelope",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/identity-envelope.ts",
+            "marker": "readIdentity"
+          }
+        ],
         "query": "MBID identity key resolves through tracks.mb_recording_id equality."
       },
       "structuralRationale": "Filled MBID values are a growing lookup domain and may be ambiguous, requiring a non-unique value index.",
       "performanceContracts": [
         {
           "id": "index.tracks-mb-recording-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/identity-envelope.ts",
+              "marker": "readIdentity"
+            }
+          ]
         }
       ]
     },
@@ -421,15 +685,25 @@
       "partialPredicate": "in_release_id IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/backfill.ts",
-        "symbol": "listDiscogsFactsWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listDiscogsFactsWork"
+          }
+        ],
         "query": "Discogs facts worklist starts from rows with in_release_id IS NOT NULL and groups by album."
       },
       "structuralRationale": "Indexes only the small resolved-release subset eligible for the facts sweep.",
       "performanceContracts": [
         {
           "id": "index.tracks-discogs-release",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listDiscogsFactsWork"
+            }
+          ]
         }
       ]
     },
@@ -439,15 +713,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/identity-envelope.ts",
-        "symbol": "resolveIdentityEnvelope",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/identity-envelope.ts",
+            "marker": "readIdentity"
+          }
+        ],
         "query": "Spotify URI identity key uses an equality probe and participates in the track_id OR Spotify URI resolution path."
       },
       "structuralRationale": "Avoids blob-heavy full scans for public identity misses while preserving ambiguous collisions.",
       "performanceContracts": [
         {
           "id": "index.tracks-spotify-uri",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/identity-envelope.ts",
+              "marker": "readIdentity"
+            }
+          ]
         }
       ]
     },
@@ -457,15 +741,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/identity-envelope.ts",
-        "symbol": "resolveIdentityEnvelope",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/identity-envelope.ts",
+            "marker": "readIdentity"
+          }
+        ],
         "query": "Deezer identity key resolves through tracks.deezer_track_id equality."
       },
       "structuralRationale": "Filled Deezer IDs are a growing non-unique identity lookup domain.",
       "performanceContracts": [
         {
           "id": "index.tracks-deezer-track-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/identity-envelope.ts",
+              "marker": "readIdentity"
+            }
+          ]
         }
       ]
     },
@@ -475,15 +769,25 @@
       "partialPredicate": "artist_edges_backfilled_at IS NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/backfill-artist-edges.ts",
-        "symbol": "listArtistEdgeBackfillRows",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/backfill-artist-edges.ts",
+            "marker": "listWork"
+          }
+        ],
         "query": "Name-fold graph backfill walks unattempted rows in track_id order."
       },
       "structuralRationale": "Indexes the stamp-gated shrinking candidate walk; the anti-join portion uses track_artists indexes.",
       "performanceContracts": [
         {
           "id": "index.tracks-artist-edges-backfill-queue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/backfill-artist-edges.ts",
+              "marker": "listWork"
+            }
+          ]
         }
       ]
     },
@@ -493,15 +797,25 @@
       "partialPredicate": "artist_credits_backfilled_at IS NULL AND artist_edges_backfilled_at IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/backfill-artist-credits.ts",
-        "symbol": "listArtistCreditBackfillRows",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/backfill-artist-credits.ts",
+            "marker": "listWork"
+          }
+        ],
         "query": "MB-credit sweep walks slice-0-stamped but credit-unattempted rows in track_id order."
       },
       "structuralRationale": "Precisely fronts the residual zero-match credit-recovery queue.",
       "performanceContracts": [
         {
           "id": "index.tracks-artist-credits-backfill-queue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/backfill-artist-credits.ts",
+              "marker": "listWork"
+            }
+          ]
         }
       ]
     },
@@ -511,15 +825,25 @@
       "partialPredicate": "source_audio_key IS NOT NULL AND has_embedding = 0",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/track-work.ts",
-        "symbol": "listTrackWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/track-work.ts",
+            "marker": "listTrackWork"
+          }
+        ],
         "query": "embed kind literal predicate matches the partial index and reads the bounded queue."
       },
       "structuralRationale": "Derived queue shrinks as embeddings land; literal mirror predicate is required for SQLite partial-index eligibility.",
       "performanceContracts": [
         {
           "id": "index.tracks-embed-queue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/track-work.ts",
+              "marker": "listTrackWork"
+            }
+          ]
         }
       ]
     },
@@ -529,15 +853,25 @@
       "partialPredicate": "spotify_uri IS NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/track-work.ts",
-        "symbol": "listTrackWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/track-work.ts",
+            "marker": "listTrackWork"
+          }
+        ],
         "query": "anchor kind explicitly INDEXED BY this index and reverse-walks the full priority order."
       },
       "structuralRationale": "Encodes paid-anchor desirability and all ordering terms beneath the unanchored slice, preventing materialize-and-sort.",
       "performanceContracts": [
         {
           "id": "index.tracks-anchor-order",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/track-work.ts",
+              "marker": "listTrackWork"
+            }
+          ]
         }
       ]
     },
@@ -547,15 +881,25 @@
       "partialPredicate": "anchor_review_json IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/anchor.ts",
-        "symbol": "listAnchorReviewRows",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/anchor.ts",
+            "marker": "listAnchorReviewRows"
+          }
+        ],
         "query": "Attention source lists unresolved anchor_review_json rows by track_id."
       },
       "structuralRationale": "Keeps a rare, operator-drained review queue off the growing blob-bearing table.",
       "performanceContracts": [
         {
           "id": "index.tracks-anchor-review",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/anchor.ts",
+              "marker": "listAnchorReviewRows"
+            }
+          ]
         }
       ]
     },
@@ -565,15 +909,25 @@
       "partialPredicate": "dismissed_at IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/catalogue.ts",
-        "symbol": "listCatalogueLens",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/catalogue.ts",
+            "marker": "listCatalogueTracks"
+          }
+        ],
         "query": "dismissed lens filters dismissed_at IS NOT NULL and orders dismissed_at DESC."
       },
       "structuralRationale": "Indexes the rare restore-listing slice while active-catalogue composites handle the opposite null predicate.",
       "performanceContracts": [
         {
           "id": "index.tracks-dismissed",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/catalogue.ts",
+              "marker": "listCatalogueTracks"
+            }
+          ]
         }
       ]
     },
@@ -583,15 +937,25 @@
       "partialPredicate": "demand_score IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/demand.ts",
-        "symbol": "recordDemand",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/demand.ts",
+            "marker": "recordDemand"
+          }
+        ],
         "query": "Nightly clear selects and updates rows where demand_score IS NOT NULL."
       },
       "structuralRationale": "Bounds demand reset and recount work to the usually small scored subset.",
       "performanceContracts": [
         {
           "id": "index.tracks-demand-score",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/demand.ts",
+              "marker": "recordDemand"
+            }
+          ]
         }
       ]
     },
@@ -601,15 +965,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/tracks.ts",
-        "symbol": "getMixableTracks",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/tracks.ts",
+            "marker": "getMixableTracks"
+          }
+        ],
         "query": "Mix candidates use tracks.key IN (...) harmonic prefilter."
       },
       "structuralRationale": "Supports public mix prefiltering and the key histogram without scanning the archive.",
       "performanceContracts": [
         {
           "id": "index.tracks-key",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/tracks.ts",
+              "marker": "getMixableTracks"
+            }
+          ]
         }
       ]
     },
@@ -619,15 +993,25 @@
       "partialPredicate": "capture_priority IS NOT NULL",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/catalogue.ts",
-        "symbol": "listCatalogueLens",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/catalogue.ts",
+            "marker": "listCatalogueTracks"
+          }
+        ],
         "query": "Pre-audio capture lens filters unscored rows with non-null capture_priority and orders priority DESC, track_id DESC."
       },
       "structuralRationale": "Small partial composite serves the capture-eligible queue order; nullable vendor work remains covered by the full priority index.",
       "performanceContracts": [
         {
           "id": "index.tracks-capture-priority-track-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/catalogue.ts",
+              "marker": "listCatalogueTracks"
+            }
+          ]
         }
       ]
     }
@@ -640,8 +1024,12 @@
       "partialPredicate": "state = 'ready'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/due-work.ts",
-        "symbol": "listReadyDueWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/due-work.ts",
+            "marker": "listReadyDueWork"
+          }
+        ],
         "query": "Ready work query filters work_kind/state and orders sort_key, subject_id."
       },
       "knownContractMappings": [
@@ -653,7 +1041,13 @@
       "performanceContracts": [
         {
           "id": "index.due-work-ready",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/due-work.ts",
+              "marker": "listReadyDueWork"
+            }
+          ]
         }
       ]
     },
@@ -664,8 +1058,12 @@
       "partialPredicate": "state = 'scheduled'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/due-work.ts",
-        "symbol": "promoteDueWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/due-work.ts",
+            "marker": "promoteDueWork"
+          }
+        ],
         "query": "Promotion selects due scheduled rows by work_kind and next_due_at order."
       },
       "knownContractMappings": ["fixture.due-work-claim"],
@@ -673,7 +1071,13 @@
       "performanceContracts": [
         {
           "id": "index.due-work-scheduled",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/due-work.ts",
+              "marker": "promoteDueWork"
+            }
+          ]
         }
       ]
     },
@@ -684,15 +1088,25 @@
       "partialPredicate": "state = 'repair'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/due-work.ts",
-        "symbol": "listDueWorkSourceRepairs",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/due-work.ts",
+            "marker": "listDueWorkSourceRepairs"
+          }
+        ],
         "query": "Repair-marker read filters state = 'repair' and optional subject type."
       },
       "structuralRationale": "Separates bounded repair maintenance from ready and scheduled queue paths.",
       "performanceContracts": [
         {
           "id": "index.due-work-repair",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/due-work.ts",
+              "marker": "listDueWorkSourceRepairs"
+            }
+          ]
         }
       ]
     },
@@ -703,15 +1117,25 @@
       "partialPredicate": "state = 'leased'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/due-work.ts",
-        "symbol": "reapExpiredDueWorkLeases",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/due-work.ts",
+            "marker": "reapExpiredDueWorkLeases"
+          }
+        ],
         "query": "Lease reaper filters leased rows by expiry and orders claim_expires_at, work_kind, subject_id."
       },
       "structuralRationale": "Provides expiry-ordered bounded recovery of abandoned claims.",
       "performanceContracts": [
         {
           "id": "index.due-work-lease",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/due-work.ts",
+              "marker": "reapExpiredDueWorkLeases"
+            }
+          ]
         }
       ]
     },
@@ -722,8 +1146,12 @@
       "partialPredicate": "state = 'leased'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/due-work.ts",
-        "symbol": "claimDueWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/due-work.ts",
+            "marker": "claimDueWork"
+          }
+        ],
         "query": "Claim result reads leased rows for one work_kind/owner/token in ready sort order."
       },
       "knownContractMappings": ["fixture.due-work-claim"],
@@ -731,7 +1159,13 @@
       "performanceContracts": [
         {
           "id": "index.due-work-claim",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/due-work.ts",
+              "marker": "claimDueWork"
+            }
+          ]
         }
       ]
     },
@@ -742,15 +1176,25 @@
       "partialPredicate": "state = 'running'",
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/artifact-changes.ts",
-        "symbol": "readRebuildCheckpoint",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/artifact-changes.ts",
+            "marker": "readRebuildCheckpoint"
+          }
+        ],
         "query": "Checkpoint lookup constrains the complete consumer_id, stream, stream_version, phase primary key; no final query filters running checkpoints by updated_at."
       },
       "structuralRationale": "Drop in the final contraction: every checkpoint read uses the composite primary key or a consumer-keyed join, and the running/updated_at partial order is unreachable.",
       "performanceContracts": [
         {
           "id": "index.artifact-change-checkpoints-running",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/artifact-changes.ts",
+              "marker": "readRebuildCheckpoint"
+            }
+          ]
         }
       ]
     },
@@ -761,15 +1205,25 @@
       "partialPredicate": "state = 'active'",
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/artifact-changes.ts",
-        "symbol": "compactionBarrier",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/artifact-changes.ts",
+            "marker": "compactionBarrier"
+          }
+        ],
         "query": "Compaction computes one barrier across both active and rebuilding consumers; the active-only partial index cannot serve the exact predicate."
       },
       "structuralRationale": "Drop in the final contraction: the only barrier consumer must include rebuilding rows and scans the bounded registered-consumer control set, so the active-only partial index is unusable.",
       "performanceContracts": [
         {
           "id": "index.artifact-change-consumers-compaction",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/artifact-changes.ts",
+              "marker": "compactionBarrier"
+            }
+          ]
         }
       ]
     },
@@ -780,15 +1234,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/artifact-changes.ts",
-        "symbol": "buildArtifactChangeInsertStatement",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/artifact-changes.ts",
+            "marker": "buildArtifactChangeInsertStatement"
+          }
+        ],
         "query": "INSERT ON CONFLICT(stream, stream_version, subject_type, subject_id, revision) DO NOTHING."
       },
       "structuralRationale": "Unique retry identity is the durable idempotency boundary for immutable artifact revisions.",
       "performanceContracts": [
         {
           "id": "index.artifact-changes-revision",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/artifact-changes.ts",
+              "marker": "buildArtifactChangeInsertStatement"
+            }
+          ]
         }
       ]
     },
@@ -799,15 +1263,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/artifact-changes.ts",
-        "symbol": "insertArtifactChangeInTransaction",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/artifact-changes.ts",
+            "marker": "insertArtifactChangeInTransaction"
+          }
+        ],
         "query": "Existing-event lookup constrains stream and stream_version before subject/revision validation."
       },
       "structuralRationale": "Provides the stream/version prefix of immutable-log lookup paths and remains distinct from the primary seq cursor.",
       "performanceContracts": [
         {
           "id": "index.artifact-changes-stream-seq",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/artifact-changes.ts",
+              "marker": "insertArtifactChangeInTransaction"
+            }
+          ]
         }
       ]
     },
@@ -818,15 +1292,25 @@
       "partialPredicate": null,
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/artifact-changes.ts",
-        "symbol": "compactArtifactChanges",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/artifact-changes.ts",
+            "marker": "compactArtifactChanges"
+          }
+        ],
         "query": "Compaction selects a bounded seq prefix with seq <= ? ordered by seq; the INTEGER PRIMARY KEY serves the exact shape."
       },
       "structuralRationale": "Drop in the final contraction: no final query filters or orders by created_at, while every log page and compaction candidate read uses the seq primary key.",
       "performanceContracts": [
         {
           "id": "index.artifact-changes-created-seq",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/artifact-changes.ts",
+              "marker": "compactArtifactChanges"
+            }
+          ]
         }
       ]
     },
@@ -837,8 +1321,12 @@
       "partialPredicate": "is_qualified = 1",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/public-projection-cutover.ts",
-        "symbol": "readPublicProjectionReadiness",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/public-projection-cutover.ts",
+            "marker": "readQualifiedArtistIds"
+          }
+        ],
         "query": "Qualified artist set left-joins artist_qualification with is_qualified = 1, explicitly INDEXED BY this index."
       },
       "knownContractMappings": ["projection.qualified-artists"],
@@ -846,7 +1334,13 @@
       "performanceContracts": [
         {
           "id": "index.artist-qualification-qualified",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/public-projection-cutover.ts",
+              "marker": "readQualifiedArtistIds"
+            }
+          ]
         }
       ]
     },
@@ -857,8 +1351,12 @@
       "partialPredicate": "state = 'ready' AND node_kind = 'release'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "crawlReleaseReadyQuery",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "crawlReleaseReadyQuery"
+          }
+        ],
         "query": "Release lane filters ready release rows and orders storable_rank, hop, demand_rank, created_at, node_id."
       },
       "knownContractMappings": ["projection.crawl-two-lane-claim"],
@@ -866,7 +1364,13 @@
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-release-ready",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "crawlReleaseReadyQuery"
+            }
+          ]
         }
       ]
     },
@@ -877,8 +1381,12 @@
       "partialPredicate": "state = 'ready'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "crawlGeneralReadyQuery",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "crawlGeneralReadyQuery"
+          }
+        ],
         "query": "General lane filters ready rows and orders breadth-first hop, demand_rank, created_at, node_id."
       },
       "knownContractMappings": [
@@ -889,7 +1397,13 @@
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-ready",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "crawlGeneralReadyQuery"
+            }
+          ]
         }
       ]
     },
@@ -900,15 +1414,25 @@
       "partialPredicate": "state = 'scheduled'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "promoteCrawlDueWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "promoteCrawlDueWork"
+          }
+        ],
         "query": "Promotion selects scheduled rows due at or before now, ordered by next_due_at and node_id."
       },
       "structuralRationale": "Bounds promotion work to the due scheduled prefix.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-scheduled",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "promoteCrawlDueWork"
+            }
+          ]
         }
       ]
     },
@@ -919,15 +1443,25 @@
       "partialPredicate": "state = 'repair'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "repairCrawlDueNodes",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "repairCrawlDueNodes"
+          }
+        ],
         "query": "Repair pass explicitly INDEXED BY this index for state = 'repair' node-id selection."
       },
       "structuralRationale": "Keeps source-repair markers on a separate bounded scan path.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-repair",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "repairCrawlDueNodes"
+            }
+          ]
         }
       ]
     },
@@ -938,15 +1472,25 @@
       "partialPredicate": "state = 'leased'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "reapExpiredCrawlDueLeases",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "reapExpiredCrawlDueLeases"
+          }
+        ],
         "query": "Lease reaper explicitly INDEXED BY this index and orders expired lease rows by expiry/node."
       },
       "structuralRationale": "Supports bounded expiry recovery for crawl claims.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-lease",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "reapExpiredCrawlDueLeases"
+            }
+          ]
         }
       ]
     },
@@ -957,8 +1501,12 @@
       "partialPredicate": "state = 'leased'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "claimCrawlDueWork",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "claimCrawlDueWork"
+          }
+        ],
         "query": "Claim-result read explicitly INDEXED BY this unique index for owner/token and ORDER BY claim_position."
       },
       "knownContractMappings": ["projection.crawl-two-lane-read"],
@@ -966,7 +1514,13 @@
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-claim-position",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "claimCrawlDueWork"
+            }
+          ]
         }
       ]
     },
@@ -977,8 +1531,12 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/public-projections.ts",
-        "symbol": "firstRepairOfType",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/public-projections.ts",
+            "marker": "firstRepairOfType"
+          }
+        ],
         "query": "Projection repair reads explicitly INDEXED BY this index and select the earliest source-epoch marker."
       },
       "knownContractMappings": [
@@ -993,7 +1551,13 @@
       "performanceContracts": [
         {
           "id": "index.projection-repairs-order",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/public-projections.ts",
+              "marker": "firstRepairOfType"
+            }
+          ]
         }
       ]
     },
@@ -1004,15 +1568,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/public-projections.ts",
-        "symbol": "recomputeArtistQualification",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/public-projections.ts",
+            "marker": "repairArtistQualificationById"
+          }
+        ],
         "query": "Qualification maintenance reads and reconciles contribution rows by artist_id."
       },
       "structuralRationale": "Primary key is track-first; this reverse index supports artist-oriented qualification maintenance.",
       "performanceContracts": [
         {
           "id": "index.artist-qualification-contributions-artist-track",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/public-projections.ts",
+              "marker": "repairArtistQualificationById"
+            }
+          ]
         }
       ]
     },
@@ -1023,15 +1597,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "firstCrawlRepairMarker",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "firstCrawlRepairMarker"
+          }
+        ],
         "query": "Repair fanout explicitly INDEXED BY this index and takes earliest source epoch/type/id marker."
       },
       "structuralRationale": "Provides deterministic source-epoch ordering for crawl projection repair fanout.",
       "performanceContracts": [
         {
           "id": "index.crawl-projection-repairs-order",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "firstCrawlRepairMarker"
+            }
+          ]
         }
       ]
     },
@@ -1042,15 +1626,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "fanOutCrawlProjectionRepairs",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "fanOutCrawlProjectionRepairs"
+          }
+        ],
         "query": "Label repair fanout explicitly INDEXED BY this index to enumerate affected crawl nodes."
       },
       "structuralRationale": "Supports label-scoped fanout independently of crawl lifecycle state.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-label-slug-node-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "fanOutCrawlProjectionRepairs"
+            }
+          ]
         }
       ]
     },
@@ -1061,15 +1655,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/crawl-due-work.ts",
-        "symbol": "fanOutCrawlProjectionRepairs",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/crawl-due-work.ts",
+            "marker": "fanOutCrawlProjectionRepairs"
+          }
+        ],
         "query": "Artist/parent repair fanout explicitly INDEXED BY this index to enumerate dependent nodes."
       },
       "structuralRationale": "Supports bounded parent-to-child crawl repair fanout.",
       "performanceContracts": [
         {
           "id": "index.crawl-due-work-parent-id-node-id",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/crawl-due-work.ts",
+              "marker": "fanOutCrawlProjectionRepairs"
+            }
+          ]
         }
       ]
     },
@@ -1080,15 +1684,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/artifact-changes.ts",
-        "symbol": "insertRevisionReceipt",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/artifact-changes.ts",
+            "marker": "insertRevisionReceipt"
+          }
+        ],
         "query": "Receipt insert records event_seq under a unique index, enforcing one durable revision receipt per event sequence."
       },
       "structuralRationale": "Integrity constraint prevents two immutable revision receipts from claiming the same event.",
       "performanceContracts": [
         {
           "id": "index.artifact-change-revisions-event-seq",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/artifact-changes.ts",
+              "marker": "insertRevisionReceipt"
+            }
+          ]
         }
       ]
     },
@@ -1099,15 +1713,25 @@
       "partialPredicate": "state = 'accepted'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/operation-receipts.ts",
-        "symbol": "repairStaleOperationReceipts",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/operation-receipts.ts",
+            "marker": "repairStaleOperationReceipts"
+          }
+        ],
         "query": "Stale-receipt reaper filters accepted rows before cutoff and orders updated_at, operation_key."
       },
       "structuralRationale": "Indexes only in-progress receipts in exactly the bounded stale-repair order.",
       "performanceContracts": [
         {
           "id": "index.operation-receipts-stale-accepted",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/operation-receipts.ts",
+              "marker": "repairStaleOperationReceipts"
+            }
+          ]
         }
       ]
     },
@@ -1118,15 +1742,25 @@
       "partialPredicate": null,
       "decision": "drop",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/operation-receipts.ts",
-        "symbol": "inspectOperationReceiptFor",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/operation-receipts.ts",
+            "marker": "inspectOperationReceiptFor"
+          }
+        ],
         "query": "Receipt inspection and mutation reconciliation look up one operation_key through the primary key; stale repair uses operation_receipts_stale_accepted_idx."
       },
       "structuralRationale": "Drop in the final contraction: no final audit list constrains operation_id and created_at; the only reads use the primary key or the stale-accepted partial index.",
       "performanceContracts": [
         {
           "id": "index.operation-receipts-operation-audit",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/operation-receipts.ts",
+              "marker": "inspectOperationReceiptFor"
+            }
+          ]
         }
       ]
     },
@@ -1137,15 +1771,25 @@
       "partialPredicate": null,
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/database-admission.ts",
-        "symbol": "readContender",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/database-admission.ts",
+            "marker": "readContender"
+          }
+        ],
         "query": "Reads one contender by owner_id and run_id; enqueue uses the same pair as its ON CONFLICT target."
       },
       "structuralRationale": "Natural retry identity supports idempotent queue insertion and exact contender recovery.",
       "performanceContracts": [
         {
           "id": "index.database-admission-contenders-owner-run",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/database-admission.ts",
+              "marker": "readContender"
+            }
+          ]
         }
       ]
     },
@@ -1156,15 +1800,25 @@
       "partialPredicate": "state = 'active'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/database-admission.ts",
-        "symbol": "acquireEnforcedDatabaseAdmissionFor",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/database-admission.ts",
+            "marker": "acquireEnforcedDatabaseAdmissionFor"
+          }
+        ],
         "query": "Acquisition checks for conflicting active contenders before granting a lane."
       },
       "structuralRationale": "Partial unique index is the final database concurrency backstop: at most one active row per lane.",
       "performanceContracts": [
         {
           "id": "index.database-admission-contenders-active-lane",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/database-admission.ts",
+              "marker": "acquireEnforcedDatabaseAdmissionFor"
+            }
+          ]
         }
       ]
     },
@@ -1175,15 +1829,25 @@
       "partialPredicate": "state = 'queued'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/database-admission.ts",
-        "symbol": "acquireEnforcedDatabaseAdmissionFor",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/database-admission.ts",
+            "marker": "acquireEnforcedDatabaseAdmissionFor"
+          }
+        ],
         "query": "Acquisition selects the FIFO queued contender for a lane ordered enqueued_at_ms, contender_id."
       },
       "structuralRationale": "Encodes fair queue order within the queued slice.",
       "performanceContracts": [
         {
           "id": "index.database-admission-contenders-queue",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/database-admission.ts",
+              "marker": "acquireEnforcedDatabaseAdmissionFor"
+            }
+          ]
         }
       ]
     },
@@ -1194,15 +1858,25 @@
       "partialPredicate": "state = 'queued'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/database-admission.ts",
-        "symbol": "acquireEnforcedDatabaseAdmissionFor",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/database-admission.ts",
+            "marker": "acquireEnforcedDatabaseAdmissionFor"
+          }
+        ],
         "query": "Recovery deletes stale queued contenders ordered by queue_heartbeat_at_ms, contender_id."
       },
       "structuralRationale": "Bounds queued-contender TTL cleanup to its oldest heartbeat prefix.",
       "performanceContracts": [
         {
           "id": "index.database-admission-contenders-queue-heartbeat",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/database-admission.ts",
+              "marker": "acquireEnforcedDatabaseAdmissionFor"
+            }
+          ]
         }
       ]
     },
@@ -1213,15 +1887,25 @@
       "partialPredicate": "state = 'active'",
       "decision": "keep",
       "finalConsumer": {
-        "file": "apps/web/src/lib/server/database-admission.ts",
-        "symbol": "acquireEnforcedDatabaseAdmissionFor",
+        "coordinates": [
+          {
+            "file": "apps/web/src/lib/server/database-admission.ts",
+            "marker": "acquireEnforcedDatabaseAdmissionFor"
+          }
+        ],
         "query": "Recovery deletes expired active contenders ordered by lease_expires_at_ms, lane, contender_id."
       },
       "structuralRationale": "Bounds active-lease recovery to the expiry prefix while retaining lane/tie ordering.",
       "performanceContracts": [
         {
           "id": "index.database-admission-contenders-lease",
-          "requiredProfiles": ["1x", "2x", "4x"]
+          "requiredProfiles": ["1x", "2x", "4x"],
+          "consumer": [
+            {
+              "file": "apps/web/src/lib/server/database-admission.ts",
+              "marker": "acquireEnforcedDatabaseAdmissionFor"
+            }
+          ]
         }
       ]
     }

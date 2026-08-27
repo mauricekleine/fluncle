@@ -18,6 +18,26 @@ import { analyzeExplainPlan, type ExplainPlanPolicy } from "./plan";
 const INDEX_EVIDENCE_LIMIT = 25;
 const INDEX_EVIDENCE_ITERATIONS = 2;
 
+/** Inventory indexes whose production consumer deliberately carries an `INDEXED BY` lock. */
+export const INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES = [
+  "artist_qualification_qualified_idx",
+  "crawl_due_work_claim_position_idx",
+  "crawl_due_work_label_slug_node_id_idx",
+  "crawl_due_work_lease_idx",
+  "crawl_due_work_parent_id_node_id_idx",
+  "crawl_due_work_ready_idx",
+  "crawl_due_work_repair_idx",
+  "crawl_due_work_release_ready_idx",
+  "crawl_due_work_scheduled_idx",
+  "crawl_projection_repairs_order_idx",
+  "projection_repairs_order_idx",
+  "tracks_anchor_order_idx",
+  "tracks_anchor_queue_idx",
+  "tracks_label_id_idx",
+  "tracks_mb_recording_id_queue_idx",
+  "tracks_release_date_track_id_idx",
+] as const;
+
 type IndexPlanSpec = {
   allowFullScanOf?: string;
   forbidTempSort?: boolean;
@@ -84,16 +104,18 @@ function fixtureIndexName(indexName: string): string {
   return `perf_${indexName}`;
 }
 
+type IndexPlanStatementMode = "production-lock" | "supplemental-force" | "unforced";
+
 function indexPlanStatement(
   indexName: string,
   sql: string,
-  options: { forced?: boolean } = {},
+  mode: IndexPlanStatementMode = "unforced",
 ): PerformanceStatement {
   const fixtureIndex = fixtureIndexName(indexName);
   const indexedSql = sql.replace("__INDEX__", fixtureIndex);
 
   return statement(
-    options.forced
+    mode === "production-lock" || mode === "supplemental-force"
       ? indexedSql
       : indexedSql.replace(new RegExp(`\\s+indexed\\s+by\\s+${fixtureIndex}\\b`, "gi"), ""),
   );
@@ -116,11 +138,12 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
           and nearest_finding_score >= 0.5
         order by has_isrc desc, has_embedding desc, nearest_finding_score desc, id desc
         limit 25`,
+      "production-lock",
     ),
     tracks_anchor_queue_idx: indexPlanStatement(
       indexName,
       "select isrc from perf_tracks indexed by __INDEX__ where spotify_uri is null and isrc is not null and isrc >= 'synthetic-isrc-000000001' order by isrc limit 25",
-      { forced: true },
+      "production-lock",
     ),
     tracks_anchor_review_idx: indexPlanStatement(
       indexName,
@@ -232,6 +255,7 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
     tracks_label_id_idx: indexPlanStatement(
       indexName,
       "select label_id from perf_tracks indexed by __INDEX__ where label_id = 'synthetic-label-000000000' limit 25",
+      "production-lock",
     ),
     tracks_mb_recording_id_idx: indexPlanStatement(
       indexName,
@@ -240,7 +264,7 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
     tracks_mb_recording_id_queue_idx: indexPlanStatement(
       indexName,
       "select id from perf_tracks indexed by __INDEX__ where mb_recording_id is null and mb_recording_id_attempted_at is null and id >= 'synthetic-track-000000000' order by id limit 25",
-      { forced: true },
+      "production-lock",
     ),
     tracks_nearest_finding_score_idx: indexPlanStatement(
       "tracks_catalogue_ear_idx",
@@ -322,42 +346,52 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
     artist_qualification_qualified_idx: indexPlanStatement(
       indexName,
       "select artist_id from perf_artist_qualification indexed by __INDEX__ where is_qualified = 1 and artist_id >= 'synthetic-artist-000000000' order by is_qualified, artist_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_claim_position_idx: indexPlanStatement(
       indexName,
       "select claimed_by, claim_token, claim_position from perf_crawl_due_work indexed by __INDEX__ where state = 'leased' and claimed_by = 'synthetic-crawl-worker' and claim_token = 'synthetic-crawl-claim-000000002' order by claimed_by, claim_token, claim_position limit 25",
+      "production-lock",
     ),
     crawl_due_work_label_slug_node_id_idx: indexPlanStatement(
       indexName,
       "select label_slug, node_id from perf_crawl_due_work indexed by __INDEX__ where label_slug = 'synthetic-label-000000001' order by label_slug, node_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_lease_idx: indexPlanStatement(
       indexName,
       "select node_id, claim_expires_at from perf_crawl_due_work indexed by __INDEX__ where state = 'leased' and claim_expires_at <= '9999-12-31' order by state, claim_expires_at, node_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_parent_id_node_id_idx: indexPlanStatement(
       indexName,
       "select parent_id, node_id from perf_crawl_due_work indexed by __INDEX__ where parent_id = 'synthetic-frontier-000000000' order by parent_id, node_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_ready_idx: indexPlanStatement(
       indexName,
       "select node_id from perf_crawl_due_work indexed by __INDEX__ where state = 'ready' and hop >= 0 order by state, hop, demand_rank, created_at, node_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_release_ready_idx: indexPlanStatement(
       indexName,
       "select node_id from perf_crawl_due_work indexed by __INDEX__ where state = 'ready' and node_kind = 'release' and storable_rank >= 0 order by state, storable_rank, hop, demand_rank, created_at, node_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_repair_idx: indexPlanStatement(
       indexName,
       "select node_id from perf_crawl_due_work indexed by __INDEX__ where state = 'repair' and node_id >= 'synthetic-frontier-lifecycle-000000001' order by state, node_id limit 25",
+      "production-lock",
     ),
     crawl_due_work_scheduled_idx: indexPlanStatement(
       indexName,
       "select node_id, next_due_at from perf_crawl_due_work indexed by __INDEX__ where state = 'scheduled' and next_due_at <= '9999-12-31' order by state, next_due_at, node_id limit 25",
+      "production-lock",
     ),
     crawl_projection_repairs_order_idx: indexPlanStatement(
       indexName,
       "select source_epoch, source_type, source_id from perf_crawl_projection_repairs indexed by __INDEX__ where source_epoch >= 0 order by source_epoch, source_type, source_id limit 25",
+      "production-lock",
     ),
     database_admission_contenders_active_lane_idx: indexPlanStatement(
       indexName,
@@ -409,6 +443,7 @@ function genericDatabaseScalePlan(indexName: string): IndexPlanSpec {
     projection_repairs_order_idx: indexPlanStatement(
       indexName,
       "select projection, source_epoch, subject_type, subject_id from perf_projection_repairs indexed by __INDEX__ where projection = 'synthetic-index-evidence' and source_epoch >= 0 order by projection, source_epoch, subject_type, subject_id limit 25",
+      "production-lock",
     ),
   };
   const selected = plans[indexName];
@@ -548,14 +583,23 @@ const DEFAULT_HUB_NON_NULL_REFERENCE = statement(
     order by release_date desc, id desc
     limit 48`,
 );
-const DEFAULT_HUB_NON_NULL_INDEXED = indexPlanStatement(
+const DEFAULT_HUB_NON_NULL_PRODUCTION_LOCK = indexPlanStatement(
   "tracks_release_date_track_id_idx",
   `select id as track_id, release_date as rd
      from perf_tracks indexed by __INDEX__
     where (release_date, id) < ('2026', 'synthetic-track-000000464')
     order by release_date desc, id desc
     limit 48`,
-  { forced: true },
+  "production-lock",
+);
+const DEFAULT_HUB_NON_NULL_SUPPLEMENTAL = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id, release_date as rd
+     from perf_tracks indexed by __INDEX__
+    where (release_date, id) < ('2026', 'synthetic-track-000000464')
+    order by release_date desc, id desc
+    limit 48`,
+  "supplemental-force",
 );
 const DEFAULT_HUB_NULL_REFERENCE = statement(
   `select id as track_id, release_date as rd
@@ -564,14 +608,23 @@ const DEFAULT_HUB_NULL_REFERENCE = statement(
     order by release_date desc, id desc
     limit 48`,
 );
-const DEFAULT_HUB_NULL_INDEXED = indexPlanStatement(
+const DEFAULT_HUB_NULL_PRODUCTION_LOCK = indexPlanStatement(
   "tracks_release_date_track_id_idx",
   `select id as track_id, release_date as rd
      from perf_tracks indexed by __INDEX__
     where release_date is null
     order by release_date desc, id desc
     limit 48`,
-  { forced: true },
+  "production-lock",
+);
+const DEFAULT_HUB_NULL_SUPPLEMENTAL = indexPlanStatement(
+  "tracks_release_date_track_id_idx",
+  `select id as track_id, release_date as rd
+     from perf_tracks indexed by __INDEX__
+    where release_date is null
+    order by release_date desc, id desc
+    limit 48`,
+  "supplemental-force",
 );
 
 function releaseDateDropComparison(
@@ -589,20 +642,23 @@ function releaseDateDropComparison(
   };
 }
 
-function defaultHubComparison(): ComparisonSpec {
+function defaultHubComparison(productionLocked = false): ComparisonSpec {
   const policy: ExplainPlanPolicy = {
     forbidTempSort: true,
     growingTables: ["perf_tracks"],
     requiredDetails: [/perf_tracks_release_date_track_id_idx/i],
   };
+  const references = productionLocked
+    ? [DEFAULT_HUB_NON_NULL_PRODUCTION_LOCK, DEFAULT_HUB_NULL_PRODUCTION_LOCK]
+    : [DEFAULT_HUB_NON_NULL_REFERENCE, DEFAULT_HUB_NULL_REFERENCE];
 
   return {
     maxRows: 96,
     minRows: 1,
     productionPlanPolicies: [policy, policy],
-    references: [DEFAULT_HUB_NON_NULL_REFERENCE, DEFAULT_HUB_NULL_REFERENCE],
-    statement: DEFAULT_HUB_NON_NULL_REFERENCE,
-    supplementalStatements: [DEFAULT_HUB_NON_NULL_INDEXED, DEFAULT_HUB_NULL_INDEXED],
+    references,
+    statement: references[0] ?? DEFAULT_HUB_NON_NULL_REFERENCE,
+    supplementalStatements: [DEFAULT_HUB_NON_NULL_SUPPLEMENTAL, DEFAULT_HUB_NULL_SUPPLEMENTAL],
   };
 }
 
@@ -725,37 +781,92 @@ function definitionFor(entry: IndexInventoryEntry): IndexEvidenceDefinition {
   };
 }
 
+function forceTracksIndex(
+  reference: PerformanceStatement,
+  indexName: string,
+): PerformanceStatement {
+  const indexedFrom = new RegExp(`\\bfrom\\s+perf_tracks\\s+t\\b`, "i");
+  const forcedSql = reference.sql.replace(
+    indexedFrom,
+    `from perf_tracks t indexed by ${fixtureIndexName(indexName)}`,
+  );
+
+  if (forcedSql === reference.sql) {
+    throw new Error(`cannot force ${indexName} on a tracks evidence statement`);
+  }
+
+  return statement(forcedSql, reference.args);
+}
+
 function planSpecFor(
   entry: IndexInventoryEntry,
   contractId: string,
 ): IndexPlanSpec | ComparisonSpec {
   if (entry.name === "tracks_capture_priority_idx") {
-    const exact = statement(
-      `select id, capture_priority
-         from perf_tracks
-        where is_catalogue = 1
-        order by capture_priority desc, id desc
-        limit 25`,
+    // The compact fixture has no vendor reliability columns. Project equivalent fixture state under
+    // the production names, then run the unchanged catalogue predicate/order/result shapes so the
+    // surviving vendor-worklist index is still tested without widening the fixture schema.
+    const apple = statement(
+      `with vendor_tracks as (
+        select t.id as track_id, t.isrc, t.album_id,
+               t.source_audio_attempted_at as backfill_apple_music_attempted_at,
+               t.spotify_anchor_attempts as backfill_apple_music_failures,
+               t.source_audio_key as apple_music_url,
+               t.source_audio_key as backfill_apple_music_done_at,
+               t.is_catalogue, t.capture_priority
+          from perf_tracks t
+      )
+      select t.track_id, t.isrc, t.album_id,
+             t.backfill_apple_music_attempted_at as attempted_at,
+             t.backfill_apple_music_failures as failures
+        from vendor_tracks t
+       where t.is_catalogue = 1
+         and t.apple_music_url is null
+         and t.isrc is not null and trim(t.isrc) <> ''
+         and t.backfill_apple_music_done_at is null
+         and (t.backfill_apple_music_attempted_at is null
+              or t.backfill_apple_music_attempted_at < ?)
+       order by t.capture_priority desc, t.track_id desc
+       limit ?`,
+      ["2026-01-01T00:00:00.000Z", INDEX_EVIDENCE_LIMIT],
     );
-    const replacement = statement(
-      exact.sql.replace(
-        "from perf_tracks",
-        "from perf_tracks indexed by perf_tracks_vendor_worklist_idx",
-      ),
+    const deezer = statement(
+      `with vendor_tracks as (
+        select t.id as track_id, t.isrc, t.duration_ms,
+               t.deezer_track_id,
+               t.source_audio_attempted_at as backfill_deezer_attempted_at,
+               t.spotify_anchor_attempts as backfill_deezer_failures,
+               t.is_catalogue, t.capture_priority
+          from perf_tracks t
+      )
+      select t.track_id, t.isrc, t.duration_ms
+        from vendor_tracks t
+       where t.is_catalogue = 1
+         and t.deezer_track_id is null
+         and t.backfill_deezer_attempted_at is null
+         and t.backfill_deezer_failures < ?
+         and t.isrc is not null and trim(t.isrc) <> ''
+         and t.duration_ms > 0
+       order by t.capture_priority desc, t.track_id desc
+       limit ?`,
+      [3, INDEX_EVIDENCE_LIMIT],
     );
+    const policy: ExplainPlanPolicy = {
+      forbidTempSort: true,
+      growingTables: ["perf_tracks"],
+      requiredDetails: [/perf_tracks_vendor_worklist_idx/i],
+    };
+
     return {
-      maxRows: 25,
+      maxRows: INDEX_EVIDENCE_LIMIT * 2,
       minRows: 1,
-      productionPlanPolicies: [
-        {
-          forbidTempSort: true,
-          growingTables: ["perf_tracks"],
-          requiredDetails: [/perf_tracks_vendor_worklist_idx/i],
-        },
+      productionPlanPolicies: [policy, policy],
+      references: [apple, deezer],
+      statement: apple,
+      supplementalStatements: [
+        forceTracksIndex(apple, "tracks_vendor_worklist_idx"),
+        forceTracksIndex(deezer, "tracks_vendor_worklist_idx"),
       ],
-      references: [exact],
-      statement: exact,
-      supplementalStatements: [replacement],
     };
   }
 
@@ -988,7 +1099,7 @@ function planSpecFor(
   }
 
   if (entry.name === "tracks_release_date_track_id_idx") {
-    return defaultHubComparison();
+    return defaultHubComparison(true);
   }
   return entry.name.startsWith("tracks_")
     ? genericTrackPlan(entry.name)

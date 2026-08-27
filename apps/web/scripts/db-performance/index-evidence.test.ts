@@ -1,4 +1,6 @@
 import { createClient } from "@libsql/client";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 
@@ -8,7 +10,7 @@ import {
   validateIndexInventory,
   type IndexInventoryDocument,
 } from "./index-inventory";
-import { indexEvidenceContracts } from "./index-evidence";
+import { INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES, indexEvidenceContracts } from "./index-evidence";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
 import {
@@ -17,16 +19,15 @@ import {
   runPerformanceContracts,
 } from "./registry";
 
+const REPOSITORY_ROOT = join(import.meta.dirname, "../../../..");
+
 function cloneInventory(): IndexInventoryDocument {
   return JSON.parse(JSON.stringify(FINAL_INDEX_INVENTORY)) as IndexInventoryDocument;
 }
 
 describe("final index plan evidence", () => {
-  it("uses normal planner choice except for production SQL that deliberately locks a shrinking queue", () => {
-    const runtimeLockedIndexes = new Set([
-      "tracks_anchor_queue_idx",
-      "tracks_mb_recording_id_queue_idx",
-    ]);
+  it("uses normal planner choice except for SQL that deliberately locks a production index", () => {
+    const runtimeLockedIndexes = new Set(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES);
     const expectedPolicyFragments: Record<string, string> = {
       "artifact-change-checkpoints-primary-key":
         "sqlite_autoindex_perf_artifact_change_checkpoints_1",
@@ -65,6 +66,107 @@ describe("final index plan evidence", () => {
         expectedPolicyFragment,
       );
     }
+  });
+
+  it("resolves every final and per-contract consumer coordinate against the filesystem", async () => {
+    const coordinates = FINAL_INDEX_INVENTORY.tracksIndexes
+      .concat(FINAL_INDEX_INVENTORY.databaseScaleIndexes)
+      .flatMap((entry) => [
+        ...entry.finalConsumer.coordinates.map((coordinate) => ({
+          coordinate,
+          label: `${entry.name} final consumer`,
+        })),
+        ...entry.performanceContracts.flatMap((contract) =>
+          contract.consumer.map((coordinate) => ({
+            coordinate,
+            label: `${entry.name} contract ${contract.id}`,
+          })),
+        ),
+      ]);
+
+    expect(coordinates.length).toBeGreaterThan(0);
+    await Promise.all(
+      coordinates.map(async ({ coordinate, label }) => {
+        expect(coordinate.file, label).not.toBe("");
+        expect(coordinate.marker, label).not.toBe("");
+        const path = join(REPOSITORY_ROOT, coordinate.file);
+        await expect(access(path), label).resolves.toBeUndefined();
+        await expect(readFile(path, "utf8"), label).resolves.toContain(coordinate.marker);
+      }),
+    );
+  });
+
+  it("keeps Apple and Deezer catalogue worklists unforced with forced variants supplemental", async () => {
+    const contract = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.tracks-capture-priority",
+    );
+    if (!contract?.plan) {
+      throw new Error("capture-priority comparison contract has no plan");
+    }
+
+    const executedSql: string[] = [];
+    const execution = await contract.execute({
+      client: {
+        async execute(statement) {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          executedSql.push(sql);
+
+          if (/^EXPLAIN QUERY PLAN/i.test(sql)) {
+            return {
+              rows: [{ detail: "SEARCH perf_tracks USING INDEX perf_tracks_vendor_worklist_idx" }],
+            };
+          }
+          if (/sqlite_master/i.test(sql)) {
+            return { rows: [] };
+          }
+
+          return { rows: [{ isrc: "synthetic-isrc", track_id: "synthetic-track-000000000" }] };
+        },
+      },
+      iteration: 0,
+      now: () => 0,
+      profile: "1x",
+    });
+    const dataSql = executedSql.filter(
+      (sql) => !/^EXPLAIN QUERY PLAN/i.test(sql) && !/sqlite_master/i.test(sql),
+    );
+    const [apple, deezer, forcedApple, forcedDeezer] = dataSql;
+    if (!apple || !deezer || !forcedApple || !forcedDeezer) {
+      throw new Error("capture-priority comparison did not execute both vendor variants");
+    }
+
+    expect(dataSql).toHaveLength(4);
+    expect(apple).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(deezer).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(forcedApple).toMatch(/\bINDEXED\s+BY\s+perf_tracks_vendor_worklist_idx\b/i);
+    expect(forcedDeezer).toMatch(/\bINDEXED\s+BY\s+perf_tracks_vendor_worklist_idx\b/i);
+    for (const pattern of [
+      /track_id/i,
+      /isrc/i,
+      /album_id/i,
+      /backfill_apple_music_attempted_at/i,
+      /backfill_apple_music_failures/i,
+      /apple_music_url/i,
+      /backfill_apple_music_done_at/i,
+      /capture_priority desc/i,
+      /track_id desc/i,
+    ]) {
+      expect(apple).toMatch(pattern);
+    }
+    for (const pattern of [
+      /track_id/i,
+      /isrc/i,
+      /duration_ms/i,
+      /deezer_track_id/i,
+      /backfill_deezer_attempted_at/i,
+      /backfill_deezer_failures/i,
+      /capture_priority desc/i,
+      /track_id desc/i,
+    ]) {
+      expect(deezer).toMatch(pattern);
+    }
+    expect(execution.metadata?.outputsEquivalent).toBe(true);
+    expect(execution.metadata?.productionPlanViolations).toBe(0);
   });
 
   it("keeps forced release-date variants supplemental to the unforced production plan", async () => {
@@ -106,6 +208,20 @@ describe("final index plan evidence", () => {
         .slice(2)
         .every((sql) => /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i.test(sql)),
     ).toBe(true);
+  });
+
+  it("keeps the exact default-hub release lock in the production plan", () => {
+    const contract = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.tracks-release-date-track-id",
+    );
+    if (!contract?.plan) {
+      throw new Error("default-hub release-date lock contract has no plan");
+    }
+
+    expect(INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES).toContain("tracks_release_date_track_id_idx");
+    expect(contract.plan.statement.sql).toMatch(
+      /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i,
+    );
   });
 
   it("rejects missing consumers, plan contracts, and required profile declarations", () => {

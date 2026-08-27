@@ -6,20 +6,24 @@ export const INDEX_AUDIT_PROFILES = [...SCALE_PROFILES] as const;
 
 export type IndexDecision = "add" | "drop" | "keep";
 
+export type IndexConsumerCoordinate = {
+  file: string;
+  marker: string;
+};
+
 export type IndexInventoryEntry = {
   columns: string[];
   decision: IndexDecision;
   finalConsumer: {
-    file: string;
+    coordinates: IndexConsumerCoordinate[];
     query: string;
-    symbol: string;
   };
   knownContractMappings?: string[];
   migration?: string;
   name: string;
   partialPredicate: null | string;
   performanceContracts: {
-    consumer?: string;
+    consumer: IndexConsumerCoordinate[];
     id: string;
     requiredProfiles: ScaleProfile[];
   }[];
@@ -148,12 +152,15 @@ export function validateIndexInventory(
     if (entry.columns.length === 0) {
       failures.push(`${entry.name} has no indexed columns`);
     }
-    if (
-      entry.finalConsumer.file.length === 0 ||
-      entry.finalConsumer.symbol.length === 0 ||
-      entry.finalConsumer.query.length === 0
-    ) {
+    if (entry.finalConsumer.coordinates.length === 0 || entry.finalConsumer.query.length === 0) {
       failures.push(`${entry.name} is missing its final consumer or query`);
+    }
+    if (
+      entry.finalConsumer.coordinates.some(
+        (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
+      )
+    ) {
+      failures.push(`${entry.name} has an empty final consumer coordinate`);
     }
     if (
       /no production|not located|schema test|keep conservatively/i.test(entry.finalConsumer.query)
@@ -175,8 +182,13 @@ export function validateIndexInventory(
       if (contract.requiredProfiles.join(",") !== INDEX_AUDIT_PROFILES.join(",")) {
         failures.push(`${entry.name} contract ${contract.id} is missing a required profile`);
       }
-      if (entry.performanceContracts.length > 1 && !contract.consumer) {
-        failures.push(`${entry.name} contract ${contract.id} is missing its exact consumer`);
+      if (
+        contract.consumer.length === 0 ||
+        contract.consumer.some(
+          (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
+        )
+      ) {
+        failures.push(`${entry.name} contract ${contract.id} is missing its consumer coordinate`);
       }
     }
 
@@ -289,8 +301,10 @@ export function buildIndexAudit(options: {
   const missingConsumers = entries
     .filter(
       (entry) =>
-        entry.finalConsumer.file.length === 0 ||
-        entry.finalConsumer.symbol.length === 0 ||
+        entry.finalConsumer.coordinates.length === 0 ||
+        entry.finalConsumer.coordinates.some(
+          (coordinate) => coordinate.file.length === 0 || coordinate.marker.length === 0,
+        ) ||
         entry.finalConsumer.query.length === 0,
     )
     .map((entry) => entry.name);
