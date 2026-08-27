@@ -552,373 +552,391 @@ export async function updateTrack(
   // or the freshly-minted one on a one-time backfill (set below).
   let effectiveLogId = existing.log_id;
 
-  if (update.bpm !== undefined) {
-    sets.push("bpm = ?");
-    args.push(update.bpm);
-  }
-
-  if (update.key !== undefined) {
-    sets.push("key = ?");
-    args.push(update.key);
-  }
-
-  // BPM/key analysis provenance (RFC bpm-key-accuracy). All internal analysis metadata —
-  // NONE is in VISIBLE_FIELDS, so a provenance-only write bumps no public lastmod (mirrors
-  // features/embedding). `analyzedFrom` is the field the capture re-derive predicate reads.
-  if (update.bpmSource !== undefined) {
-    sets.push("bpm_source = ?");
-    args.push(update.bpmSource);
-  }
-
-  if (update.bpmConfidence !== undefined) {
-    sets.push("bpm_confidence = ?");
-    args.push(update.bpmConfidence);
-  }
-
-  if (update.keySource !== undefined) {
-    sets.push("key_source = ?");
-    args.push(update.keySource);
-  }
-
-  if (update.keyConfidence !== undefined) {
-    sets.push("key_confidence = ?");
-    args.push(update.keyConfidence);
-  }
-
-  if (update.analyzedFrom !== undefined) {
-    sets.push("analyzed_from = ?");
-    args.push(update.analyzedFrom);
-  }
-
-  if (update.analyzedAt !== undefined) {
-    sets.push("analyzed_at = ?");
-    args.push(update.analyzedAt);
-  }
-
-  if (update.videoUrl !== undefined) {
-    // Empty string clears the video (the "remove an off-direction video" path) —
-    // null, not "", so the `video_url is not null` hasVideo filter drops it.
-    findingSets.push("video_url = ?");
-    findingArgs.push(update.videoUrl === "" ? null : update.videoUrl);
-  }
-
-  if (update.videoVehicle !== undefined) {
-    findingSets.push("video_vehicle = ?");
-    findingArgs.push(update.videoVehicle);
-  }
-
-  if (update.videoGrain !== undefined) {
-    findingSets.push("video_grain = ?");
-    findingArgs.push(update.videoGrain);
-  }
-
-  if (update.videoRegister !== undefined) {
-    findingSets.push("video_register = ?");
-    findingArgs.push(update.videoRegister);
-  }
-
-  if (update.videoPalette !== undefined) {
-    findingSets.push("video_palette = ?");
-    findingArgs.push(update.videoPalette);
-  }
-
-  if (update.videoPlateSubject !== undefined) {
-    findingSets.push("video_plate_subject = ?");
-    findingArgs.push(update.videoPlateSubject);
-  }
-
-  if (update.videoStructure !== undefined) {
-    findingSets.push("video_structure = ?");
-    findingArgs.push(update.videoStructure);
-  }
-
-  if (update.videoModel !== undefined) {
-    findingSets.push("video_model = ?");
-    findingArgs.push(update.videoModel);
-  }
-
-  if (update.videoModelReasoning !== undefined) {
-    findingSets.push("video_model_reasoning = ?");
-    findingArgs.push(update.videoModelReasoning);
-  }
-
-  if (update.videoSquaredAt !== undefined) {
-    // Empty string clears the signal (back to the legacy single-file layout);
-    // any value stamps the two-master layout. null, not "", so a cleared row is
-    // treated as un-squared by the `video_squared_at is not null` reads.
-    findingSets.push("video_squared_at = ?");
-    findingArgs.push(update.videoSquaredAt === "" ? null : update.videoSquaredAt);
-  }
-
-  if (update.enrichmentStatus !== undefined) {
-    findingSets.push("enrichment_status = ?");
-    findingArgs.push(update.enrichmentStatus);
-  }
-
-  if (update.features !== undefined) {
-    sets.push("features_json = ?");
-    args.push(update.features);
-  }
-
-  if (update.embedding !== undefined) {
-    // The vector lands as a native `F32_BLOB(1024)` in the `track_embeddings` SATELLITE — the
-    // ONLY stored form: every similarity read ranks `vector_distance_cos(…, ?)` in SQL against
-    // that table, and `vector32()` converts the validated JSON server-side (the Worker never
-    // encodes a vector). This is the sole writer, and it goes through embedding.ts's shared
-    // statements so the satellite row and its `has_embedding` mirror provably cannot be
-    // written apart (schema.ts § `has_embedding`).
-    //
-    // Empty string CLEARS it — a DELETE of the satellite row, because `vector32(NULL)` throws,
-    // hence the two arms rather than one expression. The mirror drops to 0 in the same batch, so
-    // the `has_embedding = 0` embed queue treats a cleared row as un-embedded (re-embed on the
-    // next tick). `has_embedding` is a literal on both arms, never a bind: it is derived from
-    // which arm we are on, never from caller input. The handler has already validated the 1024-d
-    // shape (`coerceEmbedding`), so `vector32()` cannot see garbage.
-    if (update.embedding === "") {
-      sets.push(CLEAR_EMBEDDING_SQL);
-      embeddingStatement = clearEmbeddingSatellite(trackId);
-    } else {
-      sets.push(SET_EMBEDDING_SQL);
-      embeddingStatement = writeEmbeddingSatellite(trackId, update.embedding);
+  const appendTempoAndKeyAnalysisFields = (): void => {
+    if (update.bpm !== undefined) {
+      sets.push("bpm = ?");
+      args.push(update.bpm);
     }
-  }
 
-  if (update.galaxyId !== undefined) {
-    // The nightly cluster assignment (browse-by-feel RFC). Empty string clears it —
-    // null, not "", so `galaxy_id IS NULL` reads a cleared row as unassigned. NOT in
-    // VISIBLE_FIELDS (below), so an assignment write bumps no public lastmod.
-    findingSets.push("galaxy_id = ?");
-    findingArgs.push(update.galaxyId === "" ? null : update.galaxyId);
-  }
+    if (update.key !== undefined) {
+      sets.push("key = ?");
+      args.push(update.key);
+    }
 
-  // The full-song capture side-channel (RFC full-audio). All internal analysis state
-  // written by the `fluncle-capture` cron — NONE is in VISIBLE_FIELDS, so a capture
-  // write bumps no public lastmod (mirrors the embedding/context discipline above).
-  if (update.captureStatus !== undefined) {
-    // THE RULING GUARD (docs/the-ear.md § Duplicates) — the same class of guarantee as the
-    // auto-note's fill-empty-only rule: A MACHINE WRITE NEVER CLOBBERS AN OPERATOR RULING.
-    // `duplicate-cleared` is the operator's sticky force-capture override, and the row it sits on
-    // is EXPECTED to be captured — that is the whole point of the override — so the capture
-    // sweep's terminal PATCH (`done`, or `failed`/`unmatched` on a bad day) would erase the
-    // sentinel at exactly the moment it must survive: the very next post-embed re-rank would then
-    // re-mark the row a duplicate, silently reversing the ruling right after the capture the
-    // operator paid for. The CASE keeps the sentinel standing while every other capture column
-    // (`sourceAudioKey`, the stamps, the failure count — the scheduling state the queue reads)
-    // lands normally. Enforced HERE, server-side, rather than in the box sweep: the baked box
-    // scripts freshen asynchronously after a deploy, so a box-side guard would leave a window
-    // where an old sweep erases the sentinel — the Worker ships atomically with the deploy.
-    // (The HTTP handler's enum admits only the four machine statuses, so no PATCH can write the
-    // sentinel itself; the rank sweep's wrong-audio quarantine writes direct SQL and MAY overwrite
-    // it — the verification gate deliberately outranks the duplicate override.)
-    sets.push(
-      "capture_status = case when capture_status = 'duplicate-cleared' then capture_status else ? end",
-    );
-    args.push(update.captureStatus);
-  }
+    // BPM/key analysis provenance (RFC bpm-key-accuracy). All internal analysis metadata —
+    // NONE is in VISIBLE_FIELDS, so a provenance-only write bumps no public lastmod (mirrors
+    // features/embedding). `analyzedFrom` is the field the capture re-derive predicate reads.
+    if (update.bpmSource !== undefined) {
+      sets.push("bpm_source = ?");
+      args.push(update.bpmSource);
+    }
 
-  if (update.sourceAudioKey !== undefined) {
-    sets.push("source_audio_key = ?");
-    args.push(update.sourceAudioKey);
-  }
+    if (update.bpmConfidence !== undefined) {
+      sets.push("bpm_confidence = ?");
+      args.push(update.bpmConfidence);
+    }
 
-  if (update.captureVerification !== undefined) {
-    sets.push("capture_verification = ?");
-    args.push(update.captureVerification);
-  }
+    if (update.keySource !== undefined) {
+      sets.push("key_source = ?");
+      args.push(update.keySource);
+    }
 
-  if (update.captureVerifiedAt !== undefined) {
-    sets.push("capture_verified_at = ?");
-    args.push(update.captureVerifiedAt);
-  }
+    if (update.keyConfidence !== undefined) {
+      sets.push("key_confidence = ?");
+      args.push(update.keyConfidence);
+    }
 
-  if (update.sourceAudioRejected !== undefined) {
-    // Empty string clears the memory — null, not "", so a cleared row reads as "no rejections yet".
-    sets.push("source_audio_rejected = ?");
-    args.push(update.sourceAudioRejected === "" ? null : update.sourceAudioRejected);
-  }
+    if (update.analyzedFrom !== undefined) {
+      sets.push("analyzed_from = ?");
+      args.push(update.analyzedFrom);
+    }
 
-  if (update.sourceAudioCapturedAt !== undefined) {
-    sets.push("source_audio_captured_at = ?");
-    args.push(update.sourceAudioCapturedAt);
-  }
+    if (update.analyzedAt !== undefined) {
+      sets.push("analyzed_at = ?");
+      args.push(update.analyzedAt);
+    }
+  };
 
-  if (update.sourceAudioAttemptedAt !== undefined) {
-    sets.push("source_audio_attempted_at = ?");
-    args.push(update.sourceAudioAttemptedAt);
-  }
+  const appendVideoAndEnrichmentFields = (): void => {
+    if (update.videoUrl !== undefined) {
+      // Empty string clears the video (the "remove an off-direction video" path) —
+      // null, not "", so the `video_url is not null` hasVideo filter drops it.
+      findingSets.push("video_url = ?");
+      findingArgs.push(update.videoUrl === "" ? null : update.videoUrl);
+    }
 
-  if (update.sourceAudioFailures !== undefined) {
-    sets.push("source_audio_failures = ?");
-    args.push(update.sourceAudioFailures);
-  }
+    if (update.videoVehicle !== undefined) {
+      findingSets.push("video_vehicle = ?");
+      findingArgs.push(update.videoVehicle);
+    }
 
-  if (update.sourceAudioBytes !== undefined) {
-    sets.push("source_audio_bytes = ?");
-    args.push(update.sourceAudioBytes);
-  }
+    if (update.videoGrain !== undefined) {
+      findingSets.push("video_grain = ?");
+      findingArgs.push(update.videoGrain);
+    }
+
+    if (update.videoRegister !== undefined) {
+      findingSets.push("video_register = ?");
+      findingArgs.push(update.videoRegister);
+    }
+
+    if (update.videoPalette !== undefined) {
+      findingSets.push("video_palette = ?");
+      findingArgs.push(update.videoPalette);
+    }
+
+    if (update.videoPlateSubject !== undefined) {
+      findingSets.push("video_plate_subject = ?");
+      findingArgs.push(update.videoPlateSubject);
+    }
+
+    if (update.videoStructure !== undefined) {
+      findingSets.push("video_structure = ?");
+      findingArgs.push(update.videoStructure);
+    }
+
+    if (update.videoModel !== undefined) {
+      findingSets.push("video_model = ?");
+      findingArgs.push(update.videoModel);
+    }
+
+    if (update.videoModelReasoning !== undefined) {
+      findingSets.push("video_model_reasoning = ?");
+      findingArgs.push(update.videoModelReasoning);
+    }
+
+    if (update.videoSquaredAt !== undefined) {
+      // Empty string clears the signal (back to the legacy single-file layout);
+      // any value stamps the two-master layout. null, not "", so a cleared row is
+      // treated as un-squared by the `video_squared_at is not null` reads.
+      findingSets.push("video_squared_at = ?");
+      findingArgs.push(update.videoSquaredAt === "" ? null : update.videoSquaredAt);
+    }
+
+    if (update.enrichmentStatus !== undefined) {
+      findingSets.push("enrichment_status = ?");
+      findingArgs.push(update.enrichmentStatus);
+    }
+  };
+
+  const appendFeatureEmbeddingAndGalaxyFields = (): void => {
+    if (update.features !== undefined) {
+      sets.push("features_json = ?");
+      args.push(update.features);
+    }
+
+    if (update.embedding !== undefined) {
+      // The vector lands as a native `F32_BLOB(1024)` in the `track_embeddings` SATELLITE — the
+      // ONLY stored form: every similarity read ranks `vector_distance_cos(…, ?)` in SQL against
+      // that table, and `vector32()` converts the validated JSON server-side (the Worker never
+      // encodes a vector). This is the sole writer, and it goes through embedding.ts's shared
+      // statements so the satellite row and its `has_embedding` mirror provably cannot be
+      // written apart (schema.ts § `has_embedding`).
+      //
+      // Empty string CLEARS it — a DELETE of the satellite row, because `vector32(NULL)` throws,
+      // hence the two arms rather than one expression. The mirror drops to 0 in the same batch, so
+      // the `has_embedding = 0` embed queue treats a cleared row as un-embedded (re-embed on the
+      // next tick). `has_embedding` is a literal on both arms, never a bind: it is derived from
+      // which arm we are on, never from caller input. The handler has already validated the 1024-d
+      // shape (`coerceEmbedding`), so `vector32()` cannot see garbage.
+      if (update.embedding === "") {
+        sets.push(CLEAR_EMBEDDING_SQL);
+        embeddingStatement = clearEmbeddingSatellite(trackId);
+      } else {
+        sets.push(SET_EMBEDDING_SQL);
+        embeddingStatement = writeEmbeddingSatellite(trackId, update.embedding);
+      }
+    }
+
+    if (update.galaxyId !== undefined) {
+      // The nightly cluster assignment (browse-by-feel RFC). Empty string clears it —
+      // null, not "", so `galaxy_id IS NULL` reads a cleared row as unassigned. NOT in
+      // VISIBLE_FIELDS (below), so an assignment write bumps no public lastmod.
+      findingSets.push("galaxy_id = ?");
+      findingArgs.push(update.galaxyId === "" ? null : update.galaxyId);
+    }
+  };
+
+  const appendCaptureStorageFields = (): void => {
+    // The full-song capture side-channel (RFC full-audio). All internal analysis state
+    // written by the `fluncle-capture` cron — NONE is in VISIBLE_FIELDS, so a capture
+    // write bumps no public lastmod (mirrors the embedding/context discipline above).
+    if (update.captureStatus !== undefined) {
+      // THE RULING GUARD (docs/the-ear.md § Duplicates) — the same class of guarantee as the
+      // auto-note's fill-empty-only rule: A MACHINE WRITE NEVER CLOBBERS AN OPERATOR RULING.
+      // `duplicate-cleared` is the operator's sticky force-capture override, and the row it sits on
+      // is EXPECTED to be captured — that is the whole point of the override — so the capture
+      // sweep's terminal PATCH (`done`, or `failed`/`unmatched` on a bad day) would erase the
+      // sentinel at exactly the moment it must survive: the very next post-embed re-rank would then
+      // re-mark the row a duplicate, silently reversing the ruling right after the capture the
+      // operator paid for. The CASE keeps the sentinel standing while every other capture column
+      // (`sourceAudioKey`, the stamps, the failure count — the scheduling state the queue reads)
+      // lands normally. Enforced HERE, server-side, rather than in the box sweep: the baked box
+      // scripts freshen asynchronously after a deploy, so a box-side guard would leave a window
+      // where an old sweep erases the sentinel — the Worker ships atomically with the deploy.
+      // (The HTTP handler's enum admits only the four machine statuses, so no PATCH can write the
+      // sentinel itself; the rank sweep's wrong-audio quarantine writes direct SQL and MAY overwrite
+      // it — the verification gate deliberately outranks the duplicate override.)
+      sets.push(
+        "capture_status = case when capture_status = 'duplicate-cleared' then capture_status else ? end",
+      );
+      args.push(update.captureStatus);
+    }
+
+    if (update.sourceAudioKey !== undefined) {
+      sets.push("source_audio_key = ?");
+      args.push(update.sourceAudioKey);
+    }
+
+    if (update.captureVerification !== undefined) {
+      sets.push("capture_verification = ?");
+      args.push(update.captureVerification);
+    }
+
+    if (update.captureVerifiedAt !== undefined) {
+      sets.push("capture_verified_at = ?");
+      args.push(update.captureVerifiedAt);
+    }
+
+    if (update.sourceAudioRejected !== undefined) {
+      // Empty string clears the memory — null, not "", so a cleared row reads as "no rejections yet".
+      sets.push("source_audio_rejected = ?");
+      args.push(update.sourceAudioRejected === "" ? null : update.sourceAudioRejected);
+    }
+
+    if (update.sourceAudioCapturedAt !== undefined) {
+      sets.push("source_audio_captured_at = ?");
+      args.push(update.sourceAudioCapturedAt);
+    }
+
+    if (update.sourceAudioAttemptedAt !== undefined) {
+      sets.push("source_audio_attempted_at = ?");
+      args.push(update.sourceAudioAttemptedAt);
+    }
+
+    if (update.sourceAudioFailures !== undefined) {
+      sets.push("source_audio_failures = ?");
+      args.push(update.sourceAudioFailures);
+    }
+
+    if (update.sourceAudioBytes !== undefined) {
+      sets.push("source_audio_bytes = ?");
+      args.push(update.sourceAudioBytes);
+    }
+  };
+
+  // Preserve the field and bound-argument order: callers receive the SET-list order in `fields`,
+  // and every placeholder must remain paired with the argument appended beside it.
+  appendTempoAndKeyAnalysisFields();
+  appendVideoAndEnrichmentFields();
+  appendFeatureEmbeddingAndGalaxyFields();
+  appendCaptureStorageFields();
 
   // SoundCloud evidence is a recording-side measurement. Narrow again at the write boundary so a
   // stale or direct caller cannot persist an invented verdict, and keep it entirely separate from
   // the YouTube-only id/verdict/stamp columns below.
-  const sourceVerification =
-    update.sourceVerification === "soundcloud-preview-match" ||
-    update.sourceVerification === "soundcloud-archive-match"
-      ? update.sourceVerification
-      : undefined;
   const askedSourceVerification = update.sourceVerification !== undefined;
-
-  if (sourceVerification !== undefined) {
-    sets.push("source_verification = ?");
-    args.push(sourceVerification);
-  }
-
-  // THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id). The sweep reports the id
-  // of the upload its fingerprint gate accepted; the SERVER decides whether that upload may ever
-  // be shown, and stamps when it decided. The box is never trusted with permission.
-  //
-  // FILL-EMPTY-ONLY, and ALL THREE COLUMNS MOVE TOGETHER OR NOT AT ALL. `coalesce` alone would be
-  // wrong here in a way the Deezer trio never faces: `youtube_video_official` is legitimately NULL
-  // (an unconcluded check) while the id beside it is set, so a coalesce on the verdict would let a
-  // LATER capture's verdict attach itself to an EARLIER capture's id — a row claiming one upload is
-  // official on the strength of a check run against a different one. The two `case` clauses read
-  // the row's PRE-UPDATE `youtube_video_id` (SQLite evaluates every SET expression against the
-  // original row), so the trio is atomically all-or-nothing: first write wins, provenance intact.
-  //
-  // AND THE ID IS ONLY TAKEN ALONGSIDE A REAL MATCH. Both proving sweeps have an ABSTAIN path —
-  // a track with no preview reference compares nothing — and the envelope serves this id under
-  // `method: "fingerprint"`. Accepting an id from that path would print "matched by audio
-  // fingerprint" beneath a match that never ran. The sweeps already withhold it there; this is the
-  // same condition enforced where a stale or wrong box build cannot reach, which is the rule the
-  // whole leg is built on: the box reports, the server rules. It fails CLOSED — an id arriving
-  // with NEITHER proof beside it is simply not stored.
-  //
-  // TWO PROOFS ARE ACCEPTED, and they are different claims about different writes:
-  //
-  //   · `captureVerification: "preview-match"` — the CAPTURE sweep, which is storing the very
-  //     bytes it fingerprinted in this same body. Unchanged, so an old baked box build that knows
-  //     nothing about the field below keeps working exactly as it did.
-  //   · `youtubeVerification: "preview-match"` — the PROVENANCE backfill, which re-ran the same
-  //     ladder over an already-captured row and threw the candidate bytes away. It has the proof
-  //     and deliberately no capture write at all, so it cannot borrow capture's field: sending
-  //     `captureVerification` from a sweep that stored nothing would be a lie about the archive.
-  //
-  // A BARE ID IS STILL REFUSED under both. The distinguishing fact is not who sent it — the server
-  // has no way to know that — but whether the payload CARRIES a fingerprint verdict at all.
-  // …AND EACH PROOF NAMES ITS OWN METHOD, which is the whole reason this is a map and not a
-  // boolean. `youtube_verified_by` is served straight to the reader as the receipt's method
-  // fragment, so the value chosen here IS the sentence the /identity page prints. A fingerprint
-  // proof says "matched by audio fingerprint"; the Topic rung's metadata proof says "matched by
-  // artist, title, and length" and must not be able to borrow the other. An UNKNOWN verdict maps to
-  // nothing and so proves nothing — fail closed, exactly as a bare id does.
-  const YOUTUBE_PROOF_METHODS: Partial<Record<YoutubeVerification, IdentityMethod>> = {
-    "archive-match": "fingerprint",
-    "metadata-match": "search",
-    "preview-match": "fingerprint",
-  };
-
-  const provenanceMethod: IdentityMethod | undefined =
-    update.captureVerification === "preview-match"
-      ? "fingerprint"
-      : typeof update.youtubeVerification === "string"
-        ? YOUTUBE_PROOF_METHODS[update.youtubeVerification]
-        : undefined;
-
-  // Whether this body ASKED something of the YouTube trio. A declined ask — an id the row already
-  // holds, a re-verdict on a row already ruled official, a bare id with no proof — must be a silent
-  // NO-OP SUCCESS, never the `no_fields` 400: the provenance backfill's whole payload is these
-  // fields, so a decline would otherwise read to the box as a failed write and a failed sweep. The
-  // same reasoning the source-hierarchy guard above is built on.
   const askedYoutube =
     update.youtubeVideoId !== undefined ||
     update.youtubeVerification !== undefined ||
     update.youtubeReverdict !== undefined;
-
-  // `provenanceMethod !== undefined` IS the proof test — an unmapped verdict yields no method, and
-  // narrowing on it here is what keeps `undefined` out of the bound args below.
-  if (
-    update.youtubeVideoId !== undefined &&
-    provenanceMethod !== undefined &&
-    !existing.youtube_video_id
-  ) {
-    // Skipped entirely when the row already holds an id — no oEmbed request is spent on an answer
-    // the write would discard.
-    const official = await checkYoutubeOfficial(update.youtubeVideoId, recordingNames(existing));
-
-    sets.push(
-      "youtube_video_id = coalesce(youtube_video_id, ?)",
-      "youtube_video_official = case when youtube_video_id is null then ? else youtube_video_official end",
-      "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
-      // THE METHOD RIDES THE SAME ALL-OR-NOTHING CASE as the verdict and the stamp, for the same
-      // reason: a method that could attach itself to an EARLIER write's id would print the wrong
-      // sentence under the right link, which is the one failure this receipt exists to prevent.
-      "youtube_verified_by = case when youtube_video_id is null then ? else youtube_verified_by end",
-    );
-    args.push(update.youtubeVideoId, official, new Date().toISOString(), provenanceMethod);
-  }
-
-  // THE PROVENANCE SWEEP'S EMPTY-HANDED REPORT. The ladder ran, cost real proxy bandwidth, and
-  // concluded that nothing on YouTube fingerprint-matches this recording. That is worth recording:
-  // without it the worklist would hand the same row back on the very next tick and re-buy the same
-  // download forever, which is the treadmill the anchor queue's re-ask window exists to prevent.
-  //
-  // ONE COLUMN MOVES, and it is not the id: `youtube_verified_at` becomes "when the provenance
-  // question was last answered for this recording", answered NO. The id stays NULL, so a later
-  // capture or a later backfill still fills it — the stamp is a schedule, never a verdict. Guarded
-  // on the pre-update id anyway, so it can never disturb a row that already holds one.
-  //
-  // AND IT MOVES THE STREAK. The stamp alone paces a row that concluded honestly; it does nothing
-  // for one that can NEVER conclude, and the worklist would go on offering that row every window
-  // forever. `youtube_provenance_failures` is what retires it: the envelope never reads the column,
-  // so a retired row's receipt honestly stays "Not checked yet" rather than acquiring a verdict it
-  // did not earn; the streak guard applies here as well.
-  //
-  // `inconclusive` is the same streak WITHOUT the stamp. The catalogue ladder ran and the CDN
-  // refused every section it tried; that is not an answer, so burning the 90-day window on it would
-  // cost the row months for a reason that had nothing to do with the row. The streak still moves,
-  // because a row that is refused forever must still stop being asked forever.
-  const youtubeSettledNothing =
-    (update.youtubeVerification === "no-match" || update.youtubeVerification === "inconclusive") &&
-    update.youtubeVideoId === undefined &&
-    !existing.youtube_video_id;
-
-  if (youtubeSettledNothing) {
-    sets.push("youtube_provenance_failures = coalesce(youtube_provenance_failures, 0) + 1");
-  }
-
-  if (youtubeSettledNothing && update.youtubeVerification === "no-match") {
-    sets.push(
-      "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
-    );
-    args.push(new Date().toISOString());
-  }
-
-  // THE RE-VERDICT. A row already holds an id whose officialness was ruled 0 (checked and refused)
-  // or NULL (never concluded). The rule that ruled it has since WIDENED — a recording's own label
-  // channel now counts — so the question is asked again, keylessly and for free.
-  //
-  // IT ONLY EVER PROMOTES. A row at 1 is excluded here as well as in the worklist: the widening is
-  // the only reason to re-ask, and a channel rename must never quietly retract a link Fluncle has
-  // been serving. The id is never touched, no capture column is touched, and an UNCONCLUDED check
-  // (a 404, a timeout) leaves the verdict exactly as it was while still advancing the stamp — so
-  // the round-robin moves on rather than spinning on an unreachable video.
-  if (
-    update.youtubeReverdict === true &&
-    existing.youtube_video_id &&
-    Number(existing.youtube_video_official) !== 1
-  ) {
-    const official = await checkYoutubeOfficial(
-      existing.youtube_video_id,
-      recordingNames(existing),
-    );
-
-    if (official !== null) {
-      sets.push("youtube_video_official = ?");
-      args.push(official);
+  const appendCaptureProvenanceFields = async (): Promise<void> => {
+    const sourceVerification =
+      update.sourceVerification === "soundcloud-preview-match" ||
+      update.sourceVerification === "soundcloud-archive-match"
+        ? update.sourceVerification
+        : undefined;
+    if (sourceVerification !== undefined) {
+      sets.push("source_verification = ?");
+      args.push(sourceVerification);
     }
 
-    sets.push("youtube_verified_at = ?");
-    args.push(new Date().toISOString());
-  }
+    // THE CAPTURE'S YOUTUBE PROVENANCE (db/schema.ts § youtube_video_id). The sweep reports the id
+    // of the upload its fingerprint gate accepted; the SERVER decides whether that upload may ever
+    // be shown, and stamps when it decided. The box is never trusted with permission.
+    //
+    // FILL-EMPTY-ONLY, and ALL THREE COLUMNS MOVE TOGETHER OR NOT AT ALL. `coalesce` alone would be
+    // wrong here in a way the Deezer trio never faces: `youtube_video_official` is legitimately NULL
+    // (an unconcluded check) while the id beside it is set, so a coalesce on the verdict would let a
+    // LATER capture's verdict attach itself to an EARLIER capture's id — a row claiming one upload is
+    // official on the strength of a check run against a different one. The two `case` clauses read
+    // the row's PRE-UPDATE `youtube_video_id` (SQLite evaluates every SET expression against the
+    // original row), so the trio is atomically all-or-nothing: first write wins, provenance intact.
+    //
+    // AND THE ID IS ONLY TAKEN ALONGSIDE A REAL MATCH. Both proving sweeps have an ABSTAIN path —
+    // a track with no preview reference compares nothing — and the envelope serves this id under
+    // `method: "fingerprint"`. Accepting an id from that path would print "matched by audio
+    // fingerprint" beneath a match that never ran. The sweeps already withhold it there; this is the
+    // same condition enforced where a stale or wrong box build cannot reach, which is the rule the
+    // whole leg is built on: the box reports, the server rules. It fails CLOSED — an id arriving
+    // with NEITHER proof beside it is simply not stored.
+    //
+    // TWO PROOFS ARE ACCEPTED, and they are different claims about different writes:
+    //
+    //   · `captureVerification: "preview-match"` — the CAPTURE sweep, which is storing the very
+    //     bytes it fingerprinted in this same body. Unchanged, so an old baked box build that knows
+    //     nothing about the field below keeps working exactly as it did.
+    //   · `youtubeVerification: "preview-match"` — the PROVENANCE backfill, which re-ran the same
+    //     ladder over an already-captured row and threw the candidate bytes away. It has the proof
+    //     and deliberately no capture write at all, so it cannot borrow capture's field: sending
+    //     `captureVerification` from a sweep that stored nothing would be a lie about the archive.
+    //
+    // A BARE ID IS STILL REFUSED under both. The distinguishing fact is not who sent it — the server
+    // has no way to know that — but whether the payload CARRIES a fingerprint verdict at all.
+    // …AND EACH PROOF NAMES ITS OWN METHOD, which is the whole reason this is a map and not a
+    // boolean. `youtube_verified_by` is served straight to the reader as the receipt's method
+    // fragment, so the value chosen here IS the sentence the /identity page prints. A fingerprint
+    // proof says "matched by audio fingerprint"; the Topic rung's metadata proof says "matched by
+    // artist, title, and length" and must not be able to borrow the other. An UNKNOWN verdict maps to
+    // nothing and so proves nothing — fail closed, exactly as a bare id does.
+    const YOUTUBE_PROOF_METHODS: Partial<Record<YoutubeVerification, IdentityMethod>> = {
+      "archive-match": "fingerprint",
+      "metadata-match": "search",
+      "preview-match": "fingerprint",
+    };
+
+    const provenanceMethod: IdentityMethod | undefined =
+      update.captureVerification === "preview-match"
+        ? "fingerprint"
+        : typeof update.youtubeVerification === "string"
+          ? YOUTUBE_PROOF_METHODS[update.youtubeVerification]
+          : undefined;
+
+    // Whether this body ASKED something of the YouTube trio. A declined ask — an id the row already
+    // holds, a re-verdict on a row already ruled official, a bare id with no proof — must be a silent
+    // NO-OP SUCCESS, never the `no_fields` 400: the provenance backfill's whole payload is these
+    // fields, so a decline would otherwise read to the box as a failed write and a failed sweep. The
+    // same reasoning the source-hierarchy guard above is built on.
+    // `provenanceMethod !== undefined` IS the proof test — an unmapped verdict yields no method, and
+    // narrowing on it here is what keeps `undefined` out of the bound args below.
+    if (
+      update.youtubeVideoId !== undefined &&
+      provenanceMethod !== undefined &&
+      !existing.youtube_video_id
+    ) {
+      // Skipped entirely when the row already holds an id — no oEmbed request is spent on an answer
+      // the write would discard.
+      const official = await checkYoutubeOfficial(update.youtubeVideoId, recordingNames(existing));
+
+      sets.push(
+        "youtube_video_id = coalesce(youtube_video_id, ?)",
+        "youtube_video_official = case when youtube_video_id is null then ? else youtube_video_official end",
+        "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+        // THE METHOD RIDES THE SAME ALL-OR-NOTHING CASE as the verdict and the stamp, for the same
+        // reason: a method that could attach itself to an EARLIER write's id would print the wrong
+        // sentence under the right link, which is the one failure this receipt exists to prevent.
+        "youtube_verified_by = case when youtube_video_id is null then ? else youtube_verified_by end",
+      );
+      args.push(update.youtubeVideoId, official, new Date().toISOString(), provenanceMethod);
+    }
+
+    // THE PROVENANCE SWEEP'S EMPTY-HANDED REPORT. The ladder ran, cost real proxy bandwidth, and
+    // concluded that nothing on YouTube fingerprint-matches this recording. That is worth recording:
+    // without it the worklist would hand the same row back on the very next tick and re-buy the same
+    // download forever, which is the treadmill the anchor queue's re-ask window exists to prevent.
+    //
+    // ONE COLUMN MOVES, and it is not the id: `youtube_verified_at` becomes "when the provenance
+    // question was last answered for this recording", answered NO. The id stays NULL, so a later
+    // capture or a later backfill still fills it — the stamp is a schedule, never a verdict. Guarded
+    // on the pre-update id anyway, so it can never disturb a row that already holds one.
+    //
+    // AND IT MOVES THE STREAK. The stamp alone paces a row that concluded honestly; it does nothing
+    // for one that can NEVER conclude, and the worklist would go on offering that row every window
+    // forever. `youtube_provenance_failures` is what retires it: the envelope never reads the column,
+    // so a retired row's receipt honestly stays "Not checked yet" rather than acquiring a verdict it
+    // did not earn; the streak guard applies here as well.
+    //
+    // `inconclusive` is the same streak WITHOUT the stamp. The catalogue ladder ran and the CDN
+    // refused every section it tried; that is not an answer, so burning the 90-day window on it would
+    // cost the row months for a reason that had nothing to do with the row. The streak still moves,
+    // because a row that is refused forever must still stop being asked forever.
+    const youtubeSettledNothing =
+      (update.youtubeVerification === "no-match" ||
+        update.youtubeVerification === "inconclusive") &&
+      update.youtubeVideoId === undefined &&
+      !existing.youtube_video_id;
+
+    if (youtubeSettledNothing) {
+      sets.push("youtube_provenance_failures = coalesce(youtube_provenance_failures, 0) + 1");
+    }
+
+    if (youtubeSettledNothing && update.youtubeVerification === "no-match") {
+      sets.push(
+        "youtube_verified_at = case when youtube_video_id is null then ? else youtube_verified_at end",
+      );
+      args.push(new Date().toISOString());
+    }
+
+    // THE RE-VERDICT. A row already holds an id whose officialness was ruled 0 (checked and refused)
+    // or NULL (never concluded). The rule that ruled it has since WIDENED — a recording's own label
+    // channel now counts — so the question is asked again, keylessly and for free.
+    //
+    // IT ONLY EVER PROMOTES. A row at 1 is excluded here as well as in the worklist: the widening is
+    // the only reason to re-ask, and a channel rename must never quietly retract a link Fluncle has
+    // been serving. The id is never touched, no capture column is touched, and an UNCONCLUDED check
+    // (a 404, a timeout) leaves the verdict exactly as it was while still advancing the stamp — so
+    // the round-robin moves on rather than spinning on an unreachable video.
+    if (
+      update.youtubeReverdict === true &&
+      existing.youtube_video_id &&
+      Number(existing.youtube_video_official) !== 1
+    ) {
+      const official = await checkYoutubeOfficial(
+        existing.youtube_video_id,
+        recordingNames(existing),
+      );
+
+      if (official !== null) {
+        sets.push("youtube_video_official = ?");
+        args.push(official);
+      }
+
+      sets.push("youtube_verified_at = ?");
+      args.push(new Date().toISOString());
+    }
+  };
+
+  await appendCaptureProvenanceFields();
 
   // THE PROVENANCE INVARIANT: a `*_prompt_version` column always describes the text
   // CURRENTLY in its row, or it is NULL. So rewriting the text through this generic path
@@ -930,166 +948,174 @@ export async function updateTrack(
   // A caller that KNOWS the provenance (the `note_track` / `observe_track` / `context_track`
   // paths, which author through a registry prompt) passes the version explicitly and it wins.
   // See lib/server/prompts.ts + docs/agents/prompt-registry.md.
-  if (update.note !== undefined) {
-    findingSets.push("note = ?");
-    findingArgs.push(update.note);
+  const appendEditorialFields = (): void => {
+    if (update.note !== undefined) {
+      findingSets.push("note = ?");
+      findingArgs.push(update.note);
 
-    if (update.notePromptVersion === undefined) {
+      if (update.notePromptVersion === undefined) {
+        findingSets.push("note_prompt_version = ?");
+        findingArgs.push(null);
+      }
+    }
+
+    if (update.notePromptVersion !== undefined) {
       findingSets.push("note_prompt_version = ?");
-      findingArgs.push(null);
+      findingArgs.push(update.notePromptVersion);
     }
-  }
 
-  if (update.notePromptVersion !== undefined) {
-    findingSets.push("note_prompt_version = ?");
-    findingArgs.push(update.notePromptVersion);
-  }
+    if (update.contextNote !== undefined) {
+      findingSets.push("context_note = ?");
+      findingArgs.push(update.contextNote);
 
-  if (update.contextNote !== undefined) {
-    findingSets.push("context_note = ?");
-    findingArgs.push(update.contextNote);
+      // Same invariant as `note` above: a context note rewritten without a stated provenance
+      // was written by no registry prompt, so the version must go with it.
+      if (update.contextPromptVersion === undefined) {
+        findingSets.push("context_prompt_version = ?");
+        findingArgs.push(null);
+      }
+    }
 
-    // Same invariant as `note` above: a context note rewritten without a stated provenance
-    // was written by no registry prompt, so the version must go with it.
-    if (update.contextPromptVersion === undefined) {
+    if (update.contextPromptVersion !== undefined) {
       findingSets.push("context_prompt_version = ?");
+      findingArgs.push(update.contextPromptVersion);
+    }
+
+    if (update.contextStatus !== undefined) {
+      findingSets.push("context_status = ?");
+      findingArgs.push(update.contextStatus);
+    }
+
+    if (update.observationAlignmentJson !== undefined) {
+      // Empty string clears it — null, not "", so the backfill's
+      // `observation_alignment_json IS NULL` pick treats a cleared row as un-aligned.
+      findingSets.push("observation_alignment_json = ?");
+      findingArgs.push(
+        update.observationAlignmentJson === "" ? null : update.observationAlignmentJson,
+      );
+    }
+
+    if (update.observationAudioUrl !== undefined) {
+      // Empty string clears the observation (re-render path) — null, not "", so the
+      // `observation_audio_url is not null` radio-eligibility filter drops it.
+      findingSets.push("observation_audio_url = ?");
+      findingArgs.push(update.observationAudioUrl === "" ? null : update.observationAudioUrl);
+    }
+
+    if (update.observationDurationMs !== undefined) {
+      findingSets.push("observation_duration_ms = ?");
+      findingArgs.push(update.observationDurationMs);
+    }
+
+    if (update.observationGeneratedAt !== undefined) {
+      findingSets.push("observation_generated_at = ?");
+      findingArgs.push(update.observationGeneratedAt);
+    }
+
+    if (update.observationPromptVersion !== undefined) {
+      findingSets.push("observation_prompt_version = ?");
+      findingArgs.push(update.observationPromptVersion);
+    }
+
+    // Same invariant: an observation script rewritten with no stated provenance clears the
+    // version rather than keeping one that describes the script it replaced.
+    if (update.observationScript !== undefined && update.observationPromptVersion === undefined) {
+      findingSets.push("observation_prompt_version = ?");
       findingArgs.push(null);
     }
-  }
 
-  if (update.contextPromptVersion !== undefined) {
-    findingSets.push("context_prompt_version = ?");
-    findingArgs.push(update.contextPromptVersion);
-  }
+    if (update.observationScript !== undefined) {
+      // Empty string clears the transcript — null, not "", so a cleared row reads as
+      // "no script yet" for the back-migration's `observation_script IS NULL` pick.
+      findingSets.push("observation_script = ?");
+      findingArgs.push(update.observationScript === "" ? null : update.observationScript);
+    }
+  };
 
-  if (update.contextStatus !== undefined) {
-    findingSets.push("context_status = ?");
-    findingArgs.push(update.contextStatus);
-  }
+  appendEditorialFields();
 
-  if (update.observationAlignmentJson !== undefined) {
-    // Empty string clears it — null, not "", so the backfill's
-    // `observation_alignment_json IS NULL` pick treats a cleared row as un-aligned.
-    findingSets.push("observation_alignment_json = ?");
-    findingArgs.push(
-      update.observationAlignmentJson === "" ? null : update.observationAlignmentJson,
-    );
-  }
+  const appendIdentityFields = async (): Promise<void> => {
+    if (update.isrc !== undefined) {
+      if (existing.isrc?.trim()) {
+        throw new ApiError("immutable", "isrc is already set; identity fields never change", 409);
+      }
 
-  if (update.observationAudioUrl !== undefined) {
-    // Empty string clears the observation (re-render path) — null, not "", so the
-    // `observation_audio_url is not null` radio-eligibility filter drops it.
-    findingSets.push("observation_audio_url = ?");
-    findingArgs.push(update.observationAudioUrl === "" ? null : update.observationAudioUrl);
-  }
+      if (!update.isrc.trim()) {
+        throw new ApiError("invalid_isrc", "isrc must be a non-empty string", 400);
+      }
 
-  if (update.observationDurationMs !== undefined) {
-    findingSets.push("observation_duration_ms = ?");
-    findingArgs.push(update.observationDurationMs);
-  }
-
-  if (update.observationGeneratedAt !== undefined) {
-    findingSets.push("observation_generated_at = ?");
-    findingArgs.push(update.observationGeneratedAt);
-  }
-
-  if (update.observationPromptVersion !== undefined) {
-    findingSets.push("observation_prompt_version = ?");
-    findingArgs.push(update.observationPromptVersion);
-  }
-
-  // Same invariant: an observation script rewritten with no stated provenance clears the
-  // version rather than keeping one that describes the script it replaced.
-  if (update.observationScript !== undefined && update.observationPromptVersion === undefined) {
-    findingSets.push("observation_prompt_version = ?");
-    findingArgs.push(null);
-  }
-
-  if (update.observationScript !== undefined) {
-    // Empty string clears the transcript — null, not "", so a cleared row reads as
-    // "no script yet" for the back-migration's `observation_script IS NULL` pick.
-    findingSets.push("observation_script = ?");
-    findingArgs.push(update.observationScript === "" ? null : update.observationScript);
-  }
-
-  if (update.isrc !== undefined) {
-    if (existing.isrc?.trim()) {
-      throw new ApiError("immutable", "isrc is already set; identity fields never change", 409);
+      sets.push("isrc = ?");
+      args.push(update.isrc.trim());
+      // The presence mirror rides the same statement (schema.ts § `has_isrc`); the guard above
+      // makes the value non-empty, so this always writes 1 — spelled through the shared helper
+      // so the pairing is uniform across writers.
+      sets.push("has_isrc = ?");
+      args.push(hasIsrc(update.isrc));
     }
 
-    if (!update.isrc.trim()) {
-      throw new ApiError("invalid_isrc", "isrc must be a non-empty string", 400);
-    }
+    if (update.logId !== undefined) {
+      if (existing.log_id?.trim()) {
+        throw new ApiError("immutable", "log_id is already set; coordinates are permanent", 409);
+      }
 
-    sets.push("isrc = ?");
-    args.push(update.isrc.trim());
-    // The presence mirror rides the same statement (schema.ts § `has_isrc`); the guard above
-    // makes the value non-empty, so this always writes 1 — spelled through the shared helper
-    // so the pairing is uniform across writers.
-    sets.push("has_isrc = ?");
-    args.push(hasIsrc(update.isrc));
-  }
+      let logId: string;
 
-  if (update.logId !== undefined) {
-    if (existing.log_id?.trim()) {
-      throw new ApiError("immutable", "log_id is already set; coordinates are permanent", 409);
-    }
+      // `logId` is a CERTIFICATION field, so the rail already 409'd an uncertified track and
+      // a `findings` row is guaranteed here — which means `added_at` is non-null. Narrowed
+      // with a guard rather than an assertion (the repo bans `!`); it is unreachable.
+      const foundAt = existing.added_at;
 
-    let logId: string;
+      if (!foundAt) {
+        throw new ApiError("not_found", `No finding for track ${trackId}`, 404);
+      }
 
-    // `logId` is a CERTIFICATION field, so the rail already 409'd an uncertified track and
-    // a `findings` row is guaranteed here — which means `added_at` is non-null. Narrowed
-    // with a guard rather than an assertion (the repo bans `!`); it is unreachable.
-    const foundAt = existing.added_at;
+      if (update.logId === "auto") {
+        // Backfill the coordinate the add flow would have minted: found date +
+        // the recording's identity (the just-provided isrc wins over the stored
+        // one, Spotify id as last resort).
+        logId = await resolveLogId(
+          {
+            foundAt,
+            isrc: update.isrc?.trim() || existing.isrc,
+            trackId,
+          },
+          async (candidate) => {
+            const taken = await db.execute({
+              args: [candidate],
+              sql: `select 1 from findings where log_id = ? limit 1`,
+            });
 
-    if (!foundAt) {
-      throw new ApiError("not_found", `No finding for track ${trackId}`, 404);
-    }
-
-    if (update.logId === "auto") {
-      // Backfill the coordinate the add flow would have minted: found date +
-      // the recording's identity (the just-provided isrc wins over the stored
-      // one, Spotify id as last resort).
-      logId = await resolveLogId(
-        {
-          foundAt,
-          isrc: update.isrc?.trim() || existing.isrc,
-          trackId,
-        },
-        async (candidate) => {
-          const taken = await db.execute({
-            args: [candidate],
-            sql: `select 1 from findings where log_id = ? limit 1`,
-          });
-
-          return taken.rows.length > 0;
-        },
-      );
-    } else {
-      if (!isLogId(update.logId)) {
-        throw new ApiError(
-          "invalid_log_id",
-          `"${update.logId}" is not a Log ID coordinate (expected sector.orbit.mark, e.g. 004.7.2I, or "auto")`,
-          400,
+            return taken.rows.length > 0;
+          },
         );
+      } else {
+        if (!isLogId(update.logId)) {
+          throw new ApiError(
+            "invalid_log_id",
+            `"${update.logId}" is not a Log ID coordinate (expected sector.orbit.mark, e.g. 004.7.2I, or "auto")`,
+            400,
+          );
+        }
+
+        const taken = await db.execute({
+          args: [update.logId],
+          sql: `select 1 from findings where log_id = ? limit 1`,
+        });
+
+        if (taken.rows.length > 0) {
+          throw new ApiError("log_id_taken", `${update.logId} already names another finding`, 409);
+        }
+
+        logId = update.logId;
       }
 
-      const taken = await db.execute({
-        args: [update.logId],
-        sql: `select 1 from findings where log_id = ? limit 1`,
-      });
-
-      if (taken.rows.length > 0) {
-        throw new ApiError("log_id_taken", `${update.logId} already names another finding`, 409);
-      }
-
-      logId = update.logId;
+      findingSets.push("log_id = ?");
+      findingArgs.push(logId);
+      effectiveLogId = logId;
     }
+  };
 
-    findingSets.push("log_id = ?");
-    findingArgs.push(logId);
-    effectiveLogId = logId;
-  }
+  await appendIdentityFields();
 
   if (sets.length === 0 && findingSets.length === 0) {
     // The provenance guard dropped every field this write carried (an agent trying to

@@ -179,234 +179,246 @@ export function adminTracksHandlers(os: Implementer) {
       const trackId = body.trackId;
       const update: TrackUpdate = {};
 
-      if (typeof body.bpm === "number" && Number.isFinite(body.bpm)) {
-        update.bpm = body.bpm;
-      }
-
-      if (typeof body.key === "string") {
-        update.key = body.key;
-      }
-
-      // BPM/key analysis provenance (RFC bpm-key-accuracy) — agent-writable analysis
-      // metadata, like features/embedding, so NOT in OPERATOR_ONLY_FIELDS. Narrow each:
-      // analyzedFrom to the preview|full enum, the sources to non-empty strings, the
-      // confidences to finite numbers, analyzedAt to a non-empty ISO string.
-      if (typeof body.bpmSource === "string" && body.bpmSource.trim()) {
-        update.bpmSource = body.bpmSource;
-      }
-
-      if (typeof body.keySource === "string" && body.keySource.trim()) {
-        update.keySource = body.keySource;
-      }
-
-      if (typeof body.bpmConfidence === "number" && Number.isFinite(body.bpmConfidence)) {
-        update.bpmConfidence = body.bpmConfidence;
-      }
-
-      if (typeof body.keyConfidence === "number" && Number.isFinite(body.keyConfidence)) {
-        update.keyConfidence = body.keyConfidence;
-      }
-
-      if (body.analyzedFrom === "preview" || body.analyzedFrom === "full") {
-        update.analyzedFrom = body.analyzedFrom;
-      }
-
-      if (typeof body.analyzedAt === "string" && body.analyzedAt.trim()) {
-        update.analyzedAt = body.analyzedAt;
-      }
-
-      if (typeof body.features === "string") {
-        update.features = body.features;
-      }
-
-      // The MuQ embedding: an analysis field the agent may write. Accept the vector
-      // as a real JSON array (the CLI parses `--embedding`/`--embedding-file` into
-      // one) or, defensively, a JSON-string of one; validate the 1024-d shape and
-      // store the canonical serialization. `""` clears it (re-embed on the next tick).
-      // A malformed vector is a 400 `invalid_embedding`, never a silent drop, so a
-      // truncated MuQ run can't poison the similarity space.
-      if (body.embedding !== undefined) {
-        if (body.embedding === "") {
-          update.embedding = "";
-        } else {
-          const raw =
-            typeof body.embedding === "string" ? safeJsonParse(body.embedding) : body.embedding;
-          const vector = coerceEmbedding(raw);
-
-          if (!vector) {
-            throw new ORPCError("BAD_REQUEST", {
-              data: {
-                apiCode: "invalid_embedding",
-                apiMessage: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
-              },
-              message: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
-              status: 400,
-            });
-          }
-
-          update.embedding = JSON.stringify(vector);
+      const parseAnalysisFields = (): void => {
+        if (typeof body.bpm === "number" && Number.isFinite(body.bpm)) {
+          update.bpm = body.bpm;
         }
-      }
 
-      if (typeof body.videoUrl === "string") {
-        update.videoUrl = body.videoUrl;
-      }
+        if (typeof body.key === "string") {
+          update.key = body.key;
+        }
 
-      // The sonic galaxy assignment (browse-by-feel RFC) — agent-writable, like
-      // embedding, so NOT in OPERATOR_ONLY_FIELDS: the on-box `fluncle-cluster` cron
-      // sets it with the box's agent token. A string sets it (including "" which clears
-      // the assignment); anything else leaves it untouched.
-      if (typeof body.galaxyId === "string") {
-        update.galaxyId = body.galaxyId;
-      }
+        // BPM/key analysis provenance (RFC bpm-key-accuracy) — agent-writable analysis
+        // metadata, like features/embedding, so NOT in OPERATOR_ONLY_FIELDS. Narrow each:
+        // analyzedFrom to the preview|full enum, the sources to non-empty strings, the
+        // confidences to finite numbers, analyzedAt to a non-empty ISO string.
+        if (typeof body.bpmSource === "string" && body.bpmSource.trim()) {
+          update.bpmSource = body.bpmSource;
+        }
 
-      if (
-        body.enrichmentStatus === "pending" ||
-        body.enrichmentStatus === "done" ||
-        body.enrichmentStatus === "failed"
-      ) {
-        update.enrichmentStatus = body.enrichmentStatus;
-      }
+        if (typeof body.keySource === "string" && body.keySource.trim()) {
+          update.keySource = body.keySource;
+        }
 
-      // A present note sets it (including "" which clears the stored note); an
-      // absent note leaves it untouched. parseEditorialNote throws on too-long.
-      if (typeof body.note === "string") {
-        update.note = parseEditorialNote(body.note);
-      }
+        if (typeof body.bpmConfidence === "number" && Number.isFinite(body.bpmConfidence)) {
+          update.bpmConfidence = body.bpmConfidence;
+        }
 
-      // The render's diversity-ledger stamps (vehicle/grain/register). Normally the
-      // video FINALIZE writes them from the bundle's render.json, but a bundle can be missing
-      // them, and the correction path is this
-      // generic update — the operator watches the video and stamps what is on screen.
-      // Same trim/length discipline as the finalize mapping; the certification rail in
-      // updateTrack still 409s them on an uncertified row (they are findings columns).
-      if (typeof body.videoVehicle === "string" && body.videoVehicle.trim()) {
-        update.videoVehicle = body.videoVehicle.trim().slice(0, 120);
-      }
+        if (typeof body.keyConfidence === "number" && Number.isFinite(body.keyConfidence)) {
+          update.keyConfidence = body.keyConfidence;
+        }
 
-      if (typeof body.videoGrain === "string" && body.videoGrain.trim()) {
-        update.videoGrain = body.videoGrain.trim().slice(0, 120);
-      }
+        if (body.analyzedFrom === "preview" || body.analyzedFrom === "full") {
+          update.analyzedFrom = body.analyzedFrom;
+        }
 
-      if (typeof body.videoRegister === "string" && body.videoRegister.trim()) {
-        update.videoRegister = body.videoRegister.trim().slice(0, 120);
-      }
+        if (typeof body.analyzedAt === "string" && body.analyzedAt.trim()) {
+          update.analyzedAt = body.analyzedAt;
+        }
 
-      if (typeof body.videoPalette === "string" && body.videoPalette.trim()) {
-        update.videoPalette = body.videoPalette.trim().slice(0, 120);
-      }
+        if (typeof body.features === "string") {
+          update.features = body.features;
+        }
 
-      if (typeof body.videoPlateSubject === "string" && body.videoPlateSubject.trim()) {
-        update.videoPlateSubject = body.videoPlateSubject.trim().slice(0, 120);
-      }
+        // The MuQ embedding: an analysis field the agent may write. Accept the vector
+        // as a real JSON array (the CLI parses `--embedding`/`--embedding-file` into
+        // one) or, defensively, a JSON-string of one; validate the 1024-d shape and
+        // store the canonical serialization. `""` clears it (re-embed on the next tick).
+        // A malformed vector is a 400 `invalid_embedding`, never a silent drop, so a
+        // truncated MuQ run can't poison the similarity space.
+        if (body.embedding !== undefined) {
+          if (body.embedding === "") {
+            update.embedding = "";
+          } else {
+            const raw =
+              typeof body.embedding === "string" ? safeJsonParse(body.embedding) : body.embedding;
+            const vector = coerceEmbedding(raw);
 
-      if (typeof body.videoStructure === "string" && body.videoStructure.trim()) {
-        update.videoStructure = body.videoStructure.trim().slice(0, 120);
-      }
+            if (!vector) {
+              throw new ORPCError("BAD_REQUEST", {
+                data: {
+                  apiCode: "invalid_embedding",
+                  apiMessage: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
+                },
+                message: `embedding must be a JSON array of ${EMBEDDING_DIMS} finite numbers`,
+                status: 400,
+              });
+            }
 
-      // Straggler repair: one-time backfill of identity fields into null slots
-      // (updateTrack enforces immutability once set).
-      if (typeof body.isrc === "string") {
-        update.isrc = body.isrc;
-      }
+            update.embedding = JSON.stringify(vector);
+          }
+        }
+      };
 
-      if (typeof body.logId === "string") {
-        update.logId = body.logId;
-      }
+      parseAnalysisFields();
 
-      // The full-song capture side-channel fields (RFC full-audio) — agent-writable
-      // analysis, like enrichmentStatus/embedding, so NOT in OPERATOR_ONLY_FIELDS.
-      // Narrow each: the status to the 4-value enum, the key/timestamps to non-empty
-      // strings, the failure count to a finite number.
-      if (
-        body.captureStatus === "pending" ||
-        body.captureStatus === "done" ||
-        body.captureStatus === "unmatched" ||
-        body.captureStatus === "failed"
-      ) {
-        update.captureStatus = body.captureStatus;
-      }
+      const parseFindingFields = (): void => {
+        if (typeof body.videoUrl === "string") {
+          update.videoUrl = body.videoUrl;
+        }
 
-      if (typeof body.sourceAudioKey === "string" && body.sourceAudioKey.trim()) {
-        update.sourceAudioKey = body.sourceAudioKey;
-      }
+        // The sonic galaxy assignment (browse-by-feel RFC) — agent-writable, like
+        // embedding, so NOT in OPERATOR_ONLY_FIELDS: the on-box `fluncle-cluster` cron
+        // sets it with the box's agent token. A string sets it (including "" which clears
+        // the assignment); anything else leaves it untouched.
+        if (typeof body.galaxyId === "string") {
+          update.galaxyId = body.galaxyId;
+        }
 
-      if (typeof body.sourceAudioCapturedAt === "string" && body.sourceAudioCapturedAt.trim()) {
-        update.sourceAudioCapturedAt = body.sourceAudioCapturedAt;
-      }
+        if (
+          body.enrichmentStatus === "pending" ||
+          body.enrichmentStatus === "done" ||
+          body.enrichmentStatus === "failed"
+        ) {
+          update.enrichmentStatus = body.enrichmentStatus;
+        }
 
-      if (typeof body.sourceAudioAttemptedAt === "string" && body.sourceAudioAttemptedAt.trim()) {
-        update.sourceAudioAttemptedAt = body.sourceAudioAttemptedAt;
-      }
+        // A present note sets it (including "" which clears the stored note); an
+        // absent note leaves it untouched. parseEditorialNote throws on too-long.
+        if (typeof body.note === "string") {
+          update.note = parseEditorialNote(body.note);
+        }
 
-      if (
-        typeof body.sourceAudioFailures === "number" &&
-        Number.isFinite(body.sourceAudioFailures)
-      ) {
-        update.sourceAudioFailures = body.sourceAudioFailures;
-      }
+        // The render's diversity-ledger stamps (vehicle/grain/register). Normally the
+        // video FINALIZE writes them from the bundle's render.json, but a bundle can be missing
+        // them, and the correction path is this
+        // generic update — the operator watches the video and stamps what is on screen.
+        // Same trim/length discipline as the finalize mapping; the certification rail in
+        // updateTrack still 409s them on an uncertified row (they are findings columns).
+        if (typeof body.videoVehicle === "string" && body.videoVehicle.trim()) {
+          update.videoVehicle = body.videoVehicle.trim().slice(0, 120);
+        }
 
-      // The capture BYTE meter (the budget's byte cap reads it — lib/server/capture-budget.ts).
-      // A non-integer or negative size is not a measurement, so it is dropped rather than
-      // stored: a corrupt byte count would silently mis-state the spend the operator reads.
-      if (
-        typeof body.sourceAudioBytes === "number" &&
-        Number.isInteger(body.sourceAudioBytes) &&
-        body.sourceAudioBytes >= 0
-      ) {
-        update.sourceAudioBytes = body.sourceAudioBytes;
-      }
+        if (typeof body.videoGrain === "string" && body.videoGrain.trim()) {
+          update.videoGrain = body.videoGrain.trim().slice(0, 120);
+        }
 
-      // THE CAPTURE VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
-      // verdict + its stamp + the bad-audio memory. Agent-writable analysis fields (internal, no
-      // public surface). The verdict is narrowed to the 3-value enum; the memory is a JSON string
-      // ("" clears it, handled in updateTrack).
-      if (
-        body.captureVerification === "preview-match" ||
-        body.captureVerification === "unverified" ||
-        body.captureVerification === "mismatch"
-      ) {
-        update.captureVerification = body.captureVerification;
-      }
+        if (typeof body.videoRegister === "string" && body.videoRegister.trim()) {
+          update.videoRegister = body.videoRegister.trim().slice(0, 120);
+        }
 
-      if (typeof body.captureVerifiedAt === "string" && body.captureVerifiedAt.trim()) {
-        update.captureVerifiedAt = body.captureVerifiedAt;
-      }
+        if (typeof body.videoPalette === "string" && body.videoPalette.trim()) {
+          update.videoPalette = body.videoPalette.trim().slice(0, 120);
+        }
 
-      if (typeof body.sourceAudioRejected === "string") {
-        update.sourceAudioRejected = body.sourceAudioRejected;
-      }
+        if (typeof body.videoPlateSubject === "string" && body.videoPlateSubject.trim()) {
+          update.videoPlateSubject = body.videoPlateSubject.trim().slice(0, 120);
+        }
 
-      // SoundCloud provenance is banked beside the YouTube-only trio, never inside it. These are
-      // the only two claims the sweep can make; any other shape is an additive no-op.
-      if (
-        body.sourceVerification === "soundcloud-preview-match" ||
-        body.sourceVerification === "soundcloud-archive-match"
-      ) {
-        update.sourceVerification = body.sourceVerification;
-      }
+        if (typeof body.videoStructure === "string" && body.videoStructure.trim()) {
+          update.videoStructure = body.videoStructure.trim().slice(0, 120);
+        }
 
-      // The accepted upload's id, from a fingerprint gate. Trimmed and only taken when non-empty —
-      // there is no "clear it" semantic here, because a sweep only ever reports an id it PROVED,
-      // and an empty string would be a claim about nothing.
-      if (typeof body.youtubeVideoId === "string" && body.youtubeVideoId.trim()) {
-        update.youtubeVideoId = body.youtubeVideoId.trim();
-      }
+        // Straggler repair: one-time backfill of identity fields into null slots
+        // (updateTrack enforces immutability once set).
+        if (typeof body.isrc === "string") {
+          update.isrc = body.isrc;
+        }
 
-      // The PROVENANCE backfill's verdict — the alternative proof for the id above, from a sweep
-      // that fingerprinted or metadata-matched a candidate and then discarded it rather than
-      // storing it. The domain-owned guard keeps this boundary on the complete sweep vocabulary;
-      // `updateTrack` decides what each verdict is allowed to move, and neither one moves a
-      // capture column.
-      if (isYoutubeVerification(body.youtubeVerification)) {
-        update.youtubeVerification = body.youtubeVerification;
-      }
+        if (typeof body.logId === "string") {
+          update.logId = body.logId;
+        }
+      };
 
-      // The re-verdict ask. A pure `true` and nothing else: it carries no verdict of its own, so
-      // there is no value here for a caller to get wrong, and any other shape is simply not the ask.
-      if (body.youtubeReverdict === true) {
-        update.youtubeReverdict = true;
-      }
+      parseFindingFields();
+
+      const parseCaptureFields = (): void => {
+        // The full-song capture side-channel fields (RFC full-audio) — agent-writable
+        // analysis, like enrichmentStatus/embedding, so NOT in OPERATOR_ONLY_FIELDS.
+        // Narrow each: the status to the 4-value enum, the key/timestamps to non-empty
+        // strings, the failure count to a finite number.
+        if (
+          body.captureStatus === "pending" ||
+          body.captureStatus === "done" ||
+          body.captureStatus === "unmatched" ||
+          body.captureStatus === "failed"
+        ) {
+          update.captureStatus = body.captureStatus;
+        }
+
+        if (typeof body.sourceAudioKey === "string" && body.sourceAudioKey.trim()) {
+          update.sourceAudioKey = body.sourceAudioKey;
+        }
+
+        if (typeof body.sourceAudioCapturedAt === "string" && body.sourceAudioCapturedAt.trim()) {
+          update.sourceAudioCapturedAt = body.sourceAudioCapturedAt;
+        }
+
+        if (typeof body.sourceAudioAttemptedAt === "string" && body.sourceAudioAttemptedAt.trim()) {
+          update.sourceAudioAttemptedAt = body.sourceAudioAttemptedAt;
+        }
+
+        if (
+          typeof body.sourceAudioFailures === "number" &&
+          Number.isFinite(body.sourceAudioFailures)
+        ) {
+          update.sourceAudioFailures = body.sourceAudioFailures;
+        }
+
+        // The capture BYTE meter (the budget's byte cap reads it — lib/server/capture-budget.ts).
+        // A non-integer or negative size is not a measurement, so it is dropped rather than
+        // stored: a corrupt byte count would silently mis-state the spend the operator reads.
+        if (
+          typeof body.sourceAudioBytes === "number" &&
+          Number.isInteger(body.sourceAudioBytes) &&
+          body.sourceAudioBytes >= 0
+        ) {
+          update.sourceAudioBytes = body.sourceAudioBytes;
+        }
+
+        // THE CAPTURE VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
+        // verdict + its stamp + the bad-audio memory. Agent-writable analysis fields (internal, no
+        // public surface). The verdict is narrowed to the 3-value enum; the memory is a JSON string
+        // ("" clears it, handled in updateTrack).
+        if (
+          body.captureVerification === "preview-match" ||
+          body.captureVerification === "unverified" ||
+          body.captureVerification === "mismatch"
+        ) {
+          update.captureVerification = body.captureVerification;
+        }
+
+        if (typeof body.captureVerifiedAt === "string" && body.captureVerifiedAt.trim()) {
+          update.captureVerifiedAt = body.captureVerifiedAt;
+        }
+
+        if (typeof body.sourceAudioRejected === "string") {
+          update.sourceAudioRejected = body.sourceAudioRejected;
+        }
+
+        // SoundCloud provenance is banked beside the YouTube-only trio, never inside it. These are
+        // the only two claims the sweep can make; any other shape is an additive no-op.
+        if (
+          body.sourceVerification === "soundcloud-preview-match" ||
+          body.sourceVerification === "soundcloud-archive-match"
+        ) {
+          update.sourceVerification = body.sourceVerification;
+        }
+
+        // The accepted upload's id, from a fingerprint gate. Trimmed and only taken when non-empty —
+        // there is no "clear it" semantic here, because a sweep only ever reports an id it PROVED,
+        // and an empty string would be a claim about nothing.
+        if (typeof body.youtubeVideoId === "string" && body.youtubeVideoId.trim()) {
+          update.youtubeVideoId = body.youtubeVideoId.trim();
+        }
+
+        // The PROVENANCE backfill's verdict — the alternative proof for the id above, from a sweep
+        // that fingerprinted or metadata-matched a candidate and then discarded it rather than
+        // storing it. The domain-owned guard keeps this boundary on the complete sweep vocabulary;
+        // `updateTrack` decides what each verdict is allowed to move, and neither one moves a
+        // capture column.
+        if (isYoutubeVerification(body.youtubeVerification)) {
+          update.youtubeVerification = body.youtubeVerification;
+        }
+
+        // The re-verdict ask. A pure `true` and nothing else: it carries no verdict of its own, so
+        // there is no value here for a caller to get wrong, and any other shape is simply not the ask.
+        if (body.youtubeReverdict === true) {
+          update.youtubeReverdict = true;
+        }
+      };
+
+      parseCaptureFields();
 
       // The agent role may only touch analysis fields. Reject (not silently drop)
       // an attempt at an operator-only field — a 403 the gate can voice. The role

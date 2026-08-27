@@ -2757,6 +2757,130 @@ async function attachArtistYoutubeChannelIds(
   }
 }
 
+type TrackListFilters = Pick<
+  ListTracksOptions,
+  | "captureQueue"
+  | "hasContext"
+  | "hasEmbedding"
+  | "hasKey"
+  | "hasNote"
+  | "hasObservation"
+  | "hasVideo"
+  | "retryEmptyContext"
+  | "since"
+  | "status"
+  | "until"
+>;
+
+/**
+ * Build the finding-list predicates and bound values as one cohesive query phase.
+ * The count query reuses this exact pair so a windowed or queue caller receives a
+ * count scoped to the same filters as its page.
+ */
+function buildTrackListFilters({
+  captureQueue,
+  hasContext,
+  hasEmbedding,
+  hasKey,
+  hasNote,
+  hasObservation,
+  hasVideo,
+  retryEmptyContext = false,
+  since,
+  status,
+  until,
+}: TrackListFilters): { filterArgs: string[]; filterClauses: string[] } {
+  const filterClauses: string[] = [];
+  const filterArgs: string[] = [];
+
+  if (since) {
+    filterClauses.push("findings.added_at >= ?");
+    filterArgs.push(since);
+  }
+  if (until) {
+    filterClauses.push("findings.added_at < ?");
+    filterArgs.push(until);
+  }
+
+  if (hasVideo !== undefined) {
+    filterClauses.push(`findings.video_url is ${hasVideo ? "not " : ""}null`);
+  }
+
+  // The Rekordbox-sync queue: `key IS NULL` means no stored musical key — the DSP left it
+  // null below its confidence floor. `true` means a key is on file. Mirrors hasVideo.
+  if (hasKey !== undefined) {
+    filterClauses.push(`tracks.key is ${hasKey ? "not " : ""}null`);
+  }
+
+  // The MuQ embed queue (RFC full-audio § Unit 3): `has_embedding = 0` AND a captured
+  // source key on file (`source_audio_key IS NOT NULL`). MuQ embeds the captured full song,
+  // never a preview or unmatched tail, so keyless findings are not embeddable yet.
+  //
+  // BOTH ARMS READ THE STORED MIRROR rather than probing `track_embeddings`. This spelling is
+  // load-bearing: `tracks_embed_queue_idx` is partial on `source_audio_key is not null and
+  // has_embedding = 0`, and SQLite only selects it when the WHERE clause provably implies that
+  // predicate. Keep it aligned with schema.ts or the five-minute box tick becomes a full scan.
+  if (hasEmbedding === true) {
+    filterClauses.push("tracks.has_embedding = 1");
+  } else if (hasEmbedding === false) {
+    filterClauses.push("tracks.has_embedding = 0 and tracks.source_audio_key is not null");
+  }
+
+  // The context queue. `true` means resolved. `false` selects rows with no note whose status is
+  // pending, failed, or NULL (legacy never-attempted), excluding confirmed-empty rows unless
+  // `retryEmptyContext` explicitly widens the queue. The note guard also excludes legacy rows
+  // that have a note but no status.
+  if (hasContext === true) {
+    filterClauses.push("findings.context_note is not null");
+  } else if (hasContext === false) {
+    filterClauses.push(
+      retryEmptyContext
+        ? "(findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed', 'empty')))"
+        : "(findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed')))",
+    );
+  }
+
+  // Paired with hasContext=true, `false` is the ready-to-observe queue.
+  if (hasObservation !== undefined) {
+    filterClauses.push(`findings.observation_audio_url is ${hasObservation ? "not " : ""}null`);
+  }
+
+  // Paired with hasContext=true, `false` is the auto-note queue. Whitespace is empty to match
+  // note_track's fill-empty-only semantics.
+  if (hasNote === true) {
+    filterClauses.push("(findings.note is not null and trim(findings.note) != '')");
+  } else if (hasNote === false) {
+    filterClauses.push("(findings.note is null or trim(findings.note) = '')");
+  }
+
+  // The full-song capture queue: pending/NULL rows are always eligible; done/unmatched rows are
+  // terminal. Failed rows return only after the bound cooldown and below the trusted failure cap.
+  // Coordinate-less stragglers stay out because an R2 key requires a Log ID. This predicate is
+  // deliberately separate from the enrich/embed queues, and the cron pairs it with order=desc.
+  if (captureQueue) {
+    const captureCooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
+    filterClauses.push(
+      `(findings.log_id is not null and (tracks.capture_status is null or tracks.capture_status = 'pending' or (tracks.capture_status = 'failed' and tracks.source_audio_failures < ${CAPTURE_MAX_FAILURES} and (tracks.source_audio_attempted_at is null or tracks.source_audio_attempted_at < ?))))`,
+    );
+    filterArgs.push(captureCooldown);
+  }
+  if (status === "queue") {
+    // Self-healing enrichment queue: pending, failed, and stale processing. A processing row is
+    // stale after the threshold or when its updated_at predates the column. Bind the timestamp;
+    // never interpolate it.
+    const staleCutoff = new Date(Date.now() - ENRICH_STALE_PROCESSING_MS).toISOString();
+    filterClauses.push(
+      "(findings.enrichment_status in ('pending', 'failed') or (findings.enrichment_status = 'processing' and (findings.updated_at is null or findings.updated_at < ?)))",
+    );
+    filterArgs.push(staleCutoff);
+  } else if (status) {
+    filterClauses.push("findings.enrichment_status = ?");
+    filterArgs.push(status);
+  }
+
+  return { filterArgs, filterClauses };
+}
+
 export function listTracks(
   options: ListTracksOptions & { includeMixtapes: true },
 ): Promise<FeedListPage>;
@@ -2798,125 +2922,21 @@ export async function listTracks({
       ? toLeanTrackListItem
       : toTrackListItem;
 
-  // Discovery-window and video filters; totalCount is scoped to the same
-  // filters so a windowed caller (the newsletter agent) or the Stories feed
-  // gets the matching count, while the homepage's unfiltered calls keep the
-  // global archive count for numbering.
-  const filterClauses: string[] = [];
-  const filterArgs: string[] = [];
-
-  if (since) {
-    filterClauses.push("findings.added_at >= ?");
-    filterArgs.push(since);
-  }
-
-  if (until) {
-    filterClauses.push("findings.added_at < ?");
-    filterArgs.push(until);
-  }
-
-  if (hasVideo === true) {
-    filterClauses.push("findings.video_url is not null");
-  } else if (hasVideo === false) {
-    filterClauses.push("findings.video_url is null");
-  }
-
-  // The Rekordbox-sync queue: `key IS NULL` (no stored musical key — the DSP left it
-  // null below its confidence floor). `true` = a key is on file. Mirrors hasVideo.
-  if (hasKey === true) {
-    filterClauses.push("tracks.key is not null");
-  } else if (hasKey === false) {
-    filterClauses.push("tracks.key is null");
-  }
-
-  // The MuQ embed queue (RFC full-audio § Unit 3): `has_embedding = 0` AND a
-  // captured source key on file (`source_audio_key IS NOT NULL`) — the `fluncle-embed`
-  // cron's worklist. The key gate is the point: MuQ embeds the CAPTURED full song, never
-  // a preview or the unmatched tail, so a keyless finding is not embeddable yet and stays
-  // out of the queue. `true` = a vector is already on file (a pure presence check — no key
-  // gate; an embedded finding is done regardless of how it was captured). Mirrors hasKey.
-  //
-  // BOTH ARMS READ THE STORED MIRROR rather than probing `track_embeddings`, and that is
-  // forced: `tracks_embed_queue_idx` is PARTIAL on `source_audio_key is not null and
-  // has_embedding = 0`, and SQLite will only pick a partial index when the query's WHERE
-  // provably implies its predicate — which a cross-table `not exists` never can. Keep the
-  // two spelled identically (schema.ts § `tracks_embed_queue_idx`) or the 5-minute box tick
-  // silently becomes a full scan of the crawler-swollen table.
-  if (hasEmbedding === true) {
-    filterClauses.push("tracks.has_embedding = 1");
-  } else if (hasEmbedding === false) {
-    filterClauses.push("tracks.has_embedding = 0 and tracks.source_audio_key is not null");
-  }
-
-  // The context queue. `true` = resolved (a note is stored). `false` = the work
-  // queue: findings still needing a fetch — no note yet AND `context_status`
-  // pending/failed/NULL (NULL = never-attempted rows that predate the column), but
-  // NOT `empty` so a confirmed-empty find is not re-burned every tick. The
-  // `context_note IS NULL` guard also keeps a legacy resolved-but-unmarked row (note
-  // present, status NULL) out of the queue. `retryEmptyContext` widens it to also
-  // re-pick `empty` (the `--retry-empty` escape hatch).
-  if (hasContext === true) {
-    filterClauses.push("findings.context_note is not null");
-  } else if (hasContext === false) {
-    filterClauses.push(
-      retryEmptyContext
-        ? "(findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed', 'empty')))"
-        : "(findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed')))",
-    );
-  }
-
-  // The observation queue: `observation_audio_url IS NULL` (no spoken
-  // observation). Paired with hasContext=true it is the "ready to observe" queue.
-  if (hasObservation === true) {
-    filterClauses.push("findings.observation_audio_url is not null");
-  } else if (hasObservation === false) {
-    filterClauses.push("findings.observation_audio_url is null");
-  }
-
-  // The auto-note queue: `note IS NULL OR note = ''` (no editorial note yet). Paired
-  // with hasContext=true it is the "ready to author a note" queue — a finding with
-  // the context_note fuel but an empty `note`. The empty-string guard matches the
-  // fill-empty-only semantics of note_track (a whitespace note is still empty).
-  if (hasNote === true) {
-    filterClauses.push("(findings.note is not null and trim(findings.note) != '')");
-  } else if (hasNote === false) {
-    filterClauses.push("(findings.note is null or trim(findings.note) = '')");
-  }
-
-  // The full-song CAPTURE queue: findings still needing a capture. `pending`/NULL are
-  // ALWAYS eligible (the NULL arm is defensive — the column is notNull-default, but a
-  // pre-column row reads NULL — mirroring the context_status style above); a terminal
-  // `unmatched`/`done` is never re-burned. A `failed` row backs off: re-included only
-  // once `source_audio_attempted_at` is past the cooldown AND below the failure cap, so a
-  // persistently failing finding stops re-attempting every tick (CAPTURE_FAILED_COOLDOWN_MS
-  // / CAPTURE_MAX_FAILURES — the cutoff is BOUND like the enrich queue's staleCutoff; the
-  // cap is a trusted module int, interpolated). `log_id is not null` drops coordinate-less
-  // stragglers (the R2 key needs a Log ID) so they never re-pick. A SEPARATE queue — no
-  // capture predicate ever reaches the enrich/embed queues (capture must not gate them).
-  // The capture cron pairs this with order=desc so a fresh add jumps ahead of the backfill.
-  if (captureQueue) {
-    const captureCooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
-    filterClauses.push(
-      `(findings.log_id is not null and (tracks.capture_status is null or tracks.capture_status = 'pending' or (tracks.capture_status = 'failed' and tracks.source_audio_failures < ${CAPTURE_MAX_FAILURES} and (tracks.source_audio_attempted_at is null or tracks.source_audio_attempted_at < ?))))`,
-    );
-    filterArgs.push(captureCooldown);
-  }
-
-  if (status === "queue") {
-    // The self-healing enrich-queue: pending ∪ failed ∪ STALE processing. A
-    // `processing` row counts as stuck once it's older than the staleness
-    // threshold (updated_at is bumped to the processing transition — enrichment
-    // status is a visible field in track-update.ts) OR has a null updated_at
-    // (predates the column). Bound arg only; never string-concatenated.
-    const staleCutoff = new Date(Date.now() - ENRICH_STALE_PROCESSING_MS).toISOString();
-    filterClauses.push(
-      "(findings.enrichment_status in ('pending', 'failed') or (findings.enrichment_status = 'processing' and (findings.updated_at is null or findings.updated_at < ?)))",
-    );
-    filterArgs.push(staleCutoff);
-  } else if (status) {
-    filterClauses.push("findings.enrichment_status = ?");
-    filterArgs.push(status);
-  }
+  // Discovery-window and queue filters share one predicate-building phase so the list and
+  // count queries cannot drift apart.
+  const { filterArgs, filterClauses } = buildTrackListFilters({
+    captureQueue,
+    hasContext,
+    hasEmbedding,
+    hasKey,
+    hasNote,
+    hasObservation,
+    hasVideo,
+    retryEmptyContext,
+    since,
+    status,
+    until,
+  });
 
   // asc/desc are internal literals (never user strings), so they interpolate
   // safely; the cursor comparison flips with the direction.

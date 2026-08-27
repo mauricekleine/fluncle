@@ -439,6 +439,7 @@ async function main(argv: string[]): Promise<void> {
   if (!track.logId) {
     throw new Error(`${track.trackId} has no Log ID — every video needs a coordinate. Stop.`);
   }
+  const logId = track.logId;
 
   // 2. The render must already exist (renders are slow; keep ship fast + idempotent).
   const reviewSrc = path.join(OUT_DIR, `${track.trackId}.mp4`);
@@ -502,75 +503,79 @@ async function main(argv: string[]): Promise<void> {
   // RE-render (a new composition), shipping two DIVERGED masters. ship now stamps
   // the inputs' fingerprint when it renders the square and re-renders whenever the
   // sidecar mismatches — the artifact twin of render.ts's bundle-hash gate (#307).
-  const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
-  const squareHashPath = `${squareSrc}.hash`;
-  const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
-  const propsSource = existsSync(propsInPath) ? readFileSync(propsInPath, "utf8") : null;
+  const prepareSquareMaster = async (): Promise<void> => {
+    const squareSrc = path.join(OUT_DIR, `${track.trackId}.square.mp4`);
+    const squareHashPath = `${squareSrc}.hash`;
+    const propsInPath = path.join(OUT_DIR, `${track.trackId}.props.json`);
+    const propsSource = existsSync(propsInPath) ? readFileSync(propsInPath, "utf8") : null;
 
-  const squareFingerprint =
-    renderManifest.compositionId && propsSource !== null
-      ? squareInputsHash({
+    const squareFingerprint =
+      renderManifest.compositionId && propsSource !== null
+        ? squareInputsHash({
+            bundleHash: bundleInputsHash(),
+            compositionId: renderManifest.compositionId,
+            propsSource,
+          })
+        : null;
+    const cachedSquareHash = existsSync(squareHashPath)
+      ? readFileSync(squareHashPath, "utf8").trim()
+      : null;
+
+    const squareExists = existsSync(squareSrc);
+    // Reuse the cached square when it exists AND either we can't fingerprint the
+    // inputs (no composition id / no props → can't re-render either; ship what's
+    // there and let the re-render-contract check below catch a truly broken bundle)
+    // or the sidecar still matches (see shouldReuseSquare for the missing-sidecar
+    // escape-hatch rule).
+    const reuseSquare =
+      squareExists &&
+      (squareFingerprint === null || shouldReuseSquare(squareFingerprint, cachedSquareHash));
+
+    if (reuseSquare) {
+      log(
+        squareFingerprint === null
+          ? "footage.mp4 (square crop source — cached render, inputs unverifiable)"
+          : cachedSquareHash === null
+            ? "footage.mp4 (square crop source — cached render, unfingerprinted — trusting it)"
+            : "footage.mp4 (square crop source — cached render, inputs unchanged)",
+      );
+    } else {
+      if (squareExists) {
+        log(
+          "footage.mp4 (square crop source — inputs changed since the cached render → re-rendering)",
+        );
+      }
+      if (!renderManifest.compositionId || propsSource === null) {
+        throw new Error(
+          `cannot render the square crop source: missing ${!renderManifest.compositionId ? "composition id (out/<trackId>.render.json)" : "props (out/<trackId>.props.json)"}. Render the portrait master with social-preview first, or render the square directly:\n  bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id> --aspect square --no-overlay`,
+        );
+      }
+
+      log("footage.mp4 (square crop source — rendering 1920×1920, clean)");
+      const portraitProps = JSON.parse(propsSource) as NostalgicCosmosProps;
+      const squareProps: NostalgicCosmosProps = {
+        ...portraitProps,
+        aspect: "square",
+        hideOverlay: true,
+      };
+      const { render } = await import("./render");
+      await render(squareProps, squareSrc, renderManifest.compositionId);
+
+      // Stamp the sidecar with the fingerprint of the inputs this square rendered
+      // from, so the next ship trusts it — and, on any input change, invalidates it.
+      writeFileSync(
+        squareHashPath,
+        squareInputsHash({
           bundleHash: bundleInputsHash(),
           compositionId: renderManifest.compositionId,
           propsSource,
-        })
-      : null;
-  const cachedSquareHash = existsSync(squareHashPath)
-    ? readFileSync(squareHashPath, "utf8").trim()
-    : null;
-
-  const squareExists = existsSync(squareSrc);
-  // Reuse the cached square when it exists AND either we can't fingerprint the
-  // inputs (no composition id / no props → can't re-render either; ship what's
-  // there and let the re-render-contract check below catch a truly broken bundle)
-  // or the sidecar still matches (see shouldReuseSquare for the missing-sidecar
-  // escape-hatch rule).
-  const reuseSquare =
-    squareExists &&
-    (squareFingerprint === null || shouldReuseSquare(squareFingerprint, cachedSquareHash));
-
-  if (reuseSquare) {
-    log(
-      squareFingerprint === null
-        ? "footage.mp4 (square crop source — cached render, inputs unverifiable)"
-        : cachedSquareHash === null
-          ? "footage.mp4 (square crop source — cached render, unfingerprinted — trusting it)"
-          : "footage.mp4 (square crop source — cached render, inputs unchanged)",
-    );
-  } else {
-    if (squareExists) {
-      log(
-        "footage.mp4 (square crop source — inputs changed since the cached render → re-rendering)",
+        }),
       );
     }
-    if (!renderManifest.compositionId || propsSource === null) {
-      throw new Error(
-        `cannot render the square crop source: missing ${!renderManifest.compositionId ? "composition id (out/<trackId>.render.json)" : "props (out/<trackId>.props.json)"}. Render the portrait master with social-preview first, or render the square directly:\n  bun src/pipeline/social-preview.ts ${track.trackId} --composition <Id> --aspect square --no-overlay`,
-      );
-    }
+    copyFileSync(squareSrc, paths.footage);
+  };
 
-    log("footage.mp4 (square crop source — rendering 1920×1920, clean)");
-    const portraitProps = JSON.parse(propsSource) as NostalgicCosmosProps;
-    const squareProps: NostalgicCosmosProps = {
-      ...portraitProps,
-      aspect: "square",
-      hideOverlay: true,
-    };
-    const { render } = await import("./render");
-    await render(squareProps, squareSrc, renderManifest.compositionId);
-
-    // Stamp the sidecar with the fingerprint of the inputs this square rendered
-    // from, so the next ship trusts it — and, on any input change, invalidates it.
-    writeFileSync(
-      squareHashPath,
-      squareInputsHash({
-        bundleHash: bundleInputsHash(),
-        compositionId: renderManifest.compositionId,
-        propsSource,
-      }),
-    );
-  }
-  copyFileSync(squareSrc, paths.footage);
+  await prepareSquareMaster();
 
   let posterMissing = false;
   log("poster.jpg (~80% in)");
@@ -699,31 +704,35 @@ async function main(argv: string[]): Promise<void> {
   // block — ship NEVER fails because structural classification stumbled.
   const vehicle = flags.vehicle ?? renderManifest.vehicle ?? null;
   let structure: StructureManifest | null = null;
-  try {
-    if (existsSync(paths.compositionPath)) {
-      const source = readFileSync(paths.compositionPath, "utf8");
-      const located = locateFragmentLiteral(source);
-      if (!located.ok) {
-        log(`structure unclassified: ${located.error}`);
-      } else {
-        const resolved = resolveGlslBody(located.raw, GLSL as unknown as Record<string, string>);
-        if (!resolved.ok) {
-          log(`structure unclassified: ${resolved.error}`);
+  const classifyStructure = (): void => {
+    try {
+      if (existsSync(paths.compositionPath)) {
+        const source = readFileSync(paths.compositionPath, "utf8");
+        const located = locateFragmentLiteral(source);
+        if (!located.ok) {
+          log(`structure unclassified: ${located.error}`);
         } else {
-          const classification = classifyShaderStructure(resolved.body);
-          structure = toStructureManifest(classification);
-          const secondary = classification.secondary ? ` +${classification.secondary}` : "";
-          log(
-            `structure: ${labelWithStructure(vehicle, structure.dominant)}${secondary} (confidence ${structure.confidence})`,
-          );
+          const resolved = resolveGlslBody(located.raw, GLSL as unknown as Record<string, string>);
+          if (!resolved.ok) {
+            log(`structure unclassified: ${resolved.error}`);
+          } else {
+            const classification = classifyShaderStructure(resolved.body);
+            structure = toStructureManifest(classification);
+            const secondary = classification.secondary ? ` +${classification.secondary}` : "";
+            log(
+              `structure: ${labelWithStructure(vehicle, structure.dominant)}${secondary} (confidence ${structure.confidence})`,
+            );
+          }
         }
+      } else {
+        log("structure unclassified (no composition source in the bundle)");
       }
-    } else {
-      log("structure unclassified (no composition source in the bundle)");
+    } catch (error) {
+      log(`structure unclassified: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } catch (error) {
-    log(`structure unclassified: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  };
+
+  classifyStructure();
 
   // Palette provenance: summarize the render's derived palette (social-preview's
   // paletteMix, in props.json) into a coarse hue-bucket tag + dominant swatches. Best-
@@ -766,70 +775,76 @@ async function main(argv: string[]): Promise<void> {
   // reach. Emission is best-effort by contract: a hiccup (no composition source, an
   // unresolvable interpolation, a missing gate report) WARNS and skips the file —
   // ship NEVER fails because scene emission stumbled.
-  try {
-    if (existsSync(paths.compositionPath)) {
-      const source = readFileSync(paths.compositionPath, "utf8");
+  const emitScene = (): void => {
+    try {
+      if (existsSync(paths.compositionPath)) {
+        const source = readFileSync(paths.compositionPath, "utf8");
 
-      // Palette + grain from props (the finding's identity) — the four stops the
-      // host feeds u_palette, dark→light.
-      let palette: ScenePalette = ["#0b0a10", "#171611", "#8e8378", "#f4ead7"];
-      if (existsSync(paths.propsOutPath)) {
-        try {
-          const props = JSON.parse(
-            readFileSync(paths.propsOutPath, "utf8"),
-          ) as NostalgicCosmosProps;
-          const p = props.palette;
-          if (p) {
-            palette = [p.background, p.accent, p.glow, p.ink];
+        // Palette + grain from props (the finding's identity) — the four stops the
+        // host feeds u_palette, dark→light.
+        let palette: ScenePalette = ["#0b0a10", "#171611", "#8e8378", "#f4ead7"];
+        if (existsSync(paths.propsOutPath)) {
+          try {
+            const props = JSON.parse(
+              readFileSync(paths.propsOutPath, "utf8"),
+            ) as NostalgicCosmosProps;
+            const p = props.palette;
+            if (p) {
+              palette = [p.background, p.accent, p.glow, p.ink];
+            }
+          } catch (error) {
+            log(
+              `scene palette fell back: ${error instanceof Error ? error.message : String(error)}`,
+            );
           }
-        } catch (error) {
-          log(`scene palette fell back: ${error instanceof Error ? error.message : String(error)}`);
         }
-      }
 
-      // Fold the ship-time gate verdicts from the metrics report (if analyze-motion
-      // ran). Absent → `cleared` reads `unknown`, never a failure.
-      const metricsPath = path.join(OUT_DIR, `${track.trackId}.metrics.json`);
-      let metricsReport: unknown = null;
-      if (existsSync(metricsPath)) {
-        try {
-          metricsReport = JSON.parse(readFileSync(metricsPath, "utf8"));
-        } catch (error) {
+        // Fold the ship-time gate verdicts from the metrics report (if analyze-motion
+        // ran). Absent → `cleared` reads `unknown`, never a failure.
+        const metricsPath = path.join(OUT_DIR, `${track.trackId}.metrics.json`);
+        let metricsReport: unknown = null;
+        if (existsSync(metricsPath)) {
+          try {
+            metricsReport = JSON.parse(readFileSync(metricsPath, "utf8"));
+          } catch (error) {
+            log(
+              `scene cleared unresolved: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+
+        const { scene, warnings } = buildScene({
+          at: new Date().toISOString(),
+          glsl: GLSL as unknown as Record<string, string>,
+          grainFamily: flags.grain ?? renderManifest.grain ?? null,
+          id: logId,
+          kind: "finding",
+          metricsReport,
+          palette,
+          source,
+        });
+        for (const warning of warnings) {
+          log(`scene: ${warning}`);
+        }
+        if (scene) {
           log(
-            `scene cleared unresolved: ${error instanceof Error ? error.message : String(error)}`,
+            `scene.json (${scene.liveReady ? "live-ready" : "replay-only"}${scene.liveReady ? "" : `: ${scene.liveReadyReasons.join("; ")}`})`,
           );
+          writeFileSync(paths.sceneOutPath, JSON.stringify(scene, null, 2));
+        } else {
+          log("scene.json skipped (see warnings above) — bundle ships without it");
         }
-      }
-
-      const { scene, warnings } = buildScene({
-        at: new Date().toISOString(),
-        glsl: GLSL as unknown as Record<string, string>,
-        grainFamily: flags.grain ?? renderManifest.grain ?? null,
-        id: track.logId,
-        kind: "finding",
-        metricsReport,
-        palette,
-        source,
-      });
-      for (const warning of warnings) {
-        log(`scene: ${warning}`);
-      }
-      if (scene) {
-        log(
-          `scene.json (${scene.liveReady ? "live-ready" : "replay-only"}${scene.liveReady ? "" : `: ${scene.liveReadyReasons.join("; ")}`})`,
-        );
-        writeFileSync(paths.sceneOutPath, JSON.stringify(scene, null, 2));
       } else {
-        log("scene.json skipped (see warnings above) — bundle ships without it");
+        log("scene.json skipped (no composition source in the bundle)");
       }
-    } else {
-      log("scene.json skipped (no composition source in the bundle)");
+    } catch (error) {
+      log(
+        `scene.json skipped (emission error): ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-  } catch (error) {
-    log(
-      `scene.json skipped (emission error): ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  };
+
+  emitScene();
 
   // Bundle-completeness self-check (fail loudly): ship's job is a COMPLETE,
   // re-renderable bundle. If props.json (no analyzed props) or composition.tsx (no
