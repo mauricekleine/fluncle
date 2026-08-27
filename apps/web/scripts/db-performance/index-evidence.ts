@@ -851,6 +851,31 @@ function planSpecFor(
        limit ?`,
       [3, INDEX_EVIDENCE_LIMIT],
     );
+    const beatport = statement(
+      `with vendor_tracks as (
+        select t.id as track_id, t.isrc, t.title, t.artists_json,
+               t.source_audio_attempted_at as backfill_beatport_attempted_at,
+               t.spotify_anchor_attempts as backfill_beatport_failures,
+               t.source_audio_key as beatport_url,
+               t.source_audio_key as backfill_beatport_done_at,
+               t.is_catalogue, t.capture_priority
+          from perf_tracks t
+      )
+      select t.track_id, t.isrc, t.title, t.artists_json,
+             t.backfill_beatport_attempted_at as attempted_at,
+             t.backfill_beatport_failures as failures
+        from vendor_tracks t
+       where t.is_catalogue = 1
+         and t.beatport_url is null
+         and t.isrc is not null and trim(t.isrc) <> ''
+         and t.backfill_beatport_done_at is null
+         and (t.backfill_beatport_attempted_at is null
+              or (t.backfill_beatport_failures > 0
+                  and t.backfill_beatport_attempted_at < ?))
+       order by t.capture_priority desc, t.track_id desc
+       limit ?`,
+      ["2026-01-01T00:00:00.000Z", INDEX_EVIDENCE_LIMIT],
+    );
     const policy: ExplainPlanPolicy = {
       forbidTempSort: true,
       growingTables: ["perf_tracks"],
@@ -858,14 +883,15 @@ function planSpecFor(
     };
 
     return {
-      maxRows: INDEX_EVIDENCE_LIMIT * 2,
+      maxRows: INDEX_EVIDENCE_LIMIT * 3,
       minRows: 1,
-      productionPlanPolicies: [policy, policy],
-      references: [apple, deezer],
+      productionPlanPolicies: [policy, policy, policy],
+      references: [apple, deezer, beatport],
       statement: apple,
       supplementalStatements: [
         forceTracksIndex(apple, "tracks_vendor_worklist_idx"),
         forceTracksIndex(deezer, "tracks_vendor_worklist_idx"),
+        forceTracksIndex(beatport, "tracks_vendor_worklist_idx"),
       ],
     };
   }

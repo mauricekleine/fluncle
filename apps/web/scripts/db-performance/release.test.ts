@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import { PERFORMANCE_BUDGETS, PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import { performanceRegistry } from "./contracts";
 import {
   deriveDominantRegressionVitestPaths,
   DOMINANT_REGRESSION_INVENTORY,
@@ -21,29 +22,69 @@ import {
 } from "./release";
 
 function validProfileReport(profile: "1x" | "2x" | "4x"): string {
+  const registeredContracts = performanceRegistry.list();
+  const counts = getScaleManifest(profile).counts;
+  const distribution = { max: 1, p50: 1, p95: 1, p99: 1 };
+
   return JSON.stringify({
     clientBounds: { local: 1 },
     environment: "local",
     fixture: {
-      counts: getScaleManifest(profile).counts,
+      counts,
       exactProfileCardinality: true,
       profile,
       writeDurationMs: 1,
-      written: { perf_tracks: getScaleManifest(profile).counts.tracks },
+      written: { perf_tracks: counts.tracks },
     },
     indexAudit: { passed: true },
     report: {
-      contracts: [],
+      contracts: registeredContracts.map((contract) => ({
+        affectedRowCount: null,
+        batchCount: null,
+        budget: {
+          description: PERFORMANCE_BUDGETS[contract.workClass].description,
+          failures: [],
+          required: PERFORMANCE_BUDGETS[contract.workClass].requiredProfiles.includes(profile),
+          warnings: [],
+        },
+        contractId: contract.id,
+        convergence: null,
+        criterionCategories: [contract.workClass],
+        description: contract.description,
+        durationMs: distribution,
+        invariantTotals: {},
+        iterations: contract.iterations,
+        metadata: [],
+        passed: true,
+        plan: null,
+        queueMs: null,
+        resultRowCount: distribution,
+        validationFailures: [],
+        workClass: contract.workClass,
+      })),
       criteria: Object.fromEntries(
         PERFORMANCE_CRITERION_CATEGORIES.map((category) => [
           category,
-          { addressed: true, contractIds: [], passed: true, warnings: [] },
+          {
+            addressed: true,
+            contractIds: registeredContracts
+              .filter((contract) => contract.workClass === category)
+              .map((contract) => contract.id),
+            passed: true,
+            warnings: [],
+          },
         ]),
       ),
       generatedAt: "2026-08-27T00:00:00.000Z",
       passed: true,
       profile,
       resources: {
+        availability: "measured",
+        failures: [],
+        mode: profile === "4x" ? "bounded-memory-timing-warning" : "required",
+        peak: { heapUsedBytes: 1, rssBytes: 2, wallDurationMs: 3 },
+        sampleSource: "provided",
+        unavailableReason: null,
         warningThresholds: {
           heapUsedBytes: 1,
           rssBytes: 2,
@@ -139,6 +180,44 @@ describe("database performance release proof", () => {
     expect(validateProfileReport("not-json", "1x").errors[0]).toContain(
       "stdout is not one JSON document",
     );
+  });
+
+  it("fails closed on contract identity, contract shape, and criterion shape drift", () => {
+    const missing = JSON.parse(validProfileReport("2x"));
+    missing.report.contracts.splice(0, 1);
+    const missingValidation = validateProfileReport(JSON.stringify(missing), "2x");
+    expect(missingValidation.report).toBeNull();
+    expect(missingValidation.errors.some((error) => error.includes("missing registered ids"))).toBe(
+      true,
+    );
+
+    const extra = JSON.parse(validProfileReport("2x"));
+    const firstContract = extra.report.contracts[0];
+    if (firstContract === undefined) {
+      throw new Error("valid fixture did not include a registered contract");
+    }
+    extra.report.contracts.push({ ...firstContract, contractId: "extra.contract" });
+    const extraValidation = validateProfileReport(JSON.stringify(extra), "2x");
+    expect(extraValidation.report).toBeNull();
+    expect(extraValidation.errors.some((error) => error.includes("extra ids"))).toBe(true);
+
+    const incomplete = JSON.parse(validProfileReport("2x"));
+    delete incomplete.report.contracts[0].durationMs;
+    const incompleteValidation = validateProfileReport(JSON.stringify(incomplete), "2x");
+    expect(incompleteValidation.report).toBeNull();
+    expect(
+      incompleteValidation.errors.some((error) => error.includes("durationMs is incomplete")),
+    ).toBe(true);
+
+    const incompleteCriterion = JSON.parse(validProfileReport("2x"));
+    delete incompleteCriterion.report.criteria.projection.addressed;
+    const criterionValidation = validateProfileReport(JSON.stringify(incompleteCriterion), "2x");
+    expect(criterionValidation.report).toBeNull();
+    expect(
+      criterionValidation.errors.some((error) =>
+        error.includes("criterion projection is missing addressed"),
+      ),
+    ).toBe(true);
   });
 
   it("marks every absent, failed, and complete category explicitly", () => {

@@ -96,7 +96,7 @@ describe("final index plan evidence", () => {
     );
   });
 
-  it("keeps Apple and Deezer catalogue worklists unforced with forced variants supplemental", async () => {
+  it("keeps Apple, Deezer, and Beatport catalogue worklists unforced with forced variants supplemental", async () => {
     const contract = indexEvidenceContracts().find(
       (candidate) => candidate.id === "index.tracks-capture-priority",
     );
@@ -130,16 +130,18 @@ describe("final index plan evidence", () => {
     const dataSql = executedSql.filter(
       (sql) => !/^EXPLAIN QUERY PLAN/i.test(sql) && !/sqlite_master/i.test(sql),
     );
-    const [apple, deezer, forcedApple, forcedDeezer] = dataSql;
-    if (!apple || !deezer || !forcedApple || !forcedDeezer) {
-      throw new Error("capture-priority comparison did not execute both vendor variants");
+    const [apple, deezer, beatport, forcedApple, forcedDeezer, forcedBeatport] = dataSql;
+    if (!apple || !deezer || !beatport || !forcedApple || !forcedDeezer || !forcedBeatport) {
+      throw new Error("capture-priority comparison did not execute all vendor variants");
     }
 
-    expect(dataSql).toHaveLength(4);
+    expect(dataSql).toHaveLength(6);
     expect(apple).not.toMatch(/\bINDEXED\s+BY\b/i);
     expect(deezer).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(beatport).not.toMatch(/\bINDEXED\s+BY\b/i);
     expect(forcedApple).toMatch(/\bINDEXED\s+BY\s+perf_tracks_vendor_worklist_idx\b/i);
     expect(forcedDeezer).toMatch(/\bINDEXED\s+BY\s+perf_tracks_vendor_worklist_idx\b/i);
+    expect(forcedBeatport).toMatch(/\bINDEXED\s+BY\s+perf_tracks_vendor_worklist_idx\b/i);
     for (const pattern of [
       /track_id/i,
       /isrc/i,
@@ -164,6 +166,27 @@ describe("final index plan evidence", () => {
       /track_id desc/i,
     ]) {
       expect(deezer).toMatch(pattern);
+    }
+    for (const pattern of [
+      /track_id/i,
+      /isrc/i,
+      /title/i,
+      /artists_json/i,
+      /backfill_beatport_attempted_at/i,
+      /backfill_beatport_failures/i,
+      /t\.is_catalogue\s*=\s*1/i,
+      /t\.beatport_url\s+is\s+null/i,
+      /t\.isrc\s+is\s+not\s+null/i,
+      /trim\(t\.isrc\)\s*<>\s*''/i,
+      /t\.backfill_beatport_done_at\s+is\s+null/i,
+      /t\.backfill_beatport_attempted_at\s+is\s+null/i,
+      /t\.backfill_beatport_failures\s*>\s*0/i,
+      /t\.backfill_beatport_attempted_at\s*<\s*\?/i,
+      /capture_priority desc/i,
+      /track_id desc/i,
+      /limit\s+\?/i,
+    ]) {
+      expect(beatport).toMatch(pattern);
     }
     expect(execution.metadata?.outputsEquivalent).toBe(true);
     expect(execution.metadata?.productionPlanViolations).toBe(0);

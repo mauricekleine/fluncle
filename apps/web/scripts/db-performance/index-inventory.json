@@ -106,7 +106,7 @@
         "coordinates": [
           {
             "file": "apps/web/src/lib/server/fresh.ts",
-            "marker": "listFreshTracks"
+            "marker": "listFreshReleases"
           }
         ],
         "query": "Fresh catalogue window filters is_catalogue and release_date, ordered by release_date DESC, track_id DESC."
@@ -119,7 +119,7 @@
           "consumer": [
             {
               "file": "apps/web/src/lib/server/fresh.ts",
-              "marker": "listFreshTracks"
+              "marker": "listFreshReleases"
             }
           ]
         }
@@ -489,9 +489,13 @@
           {
             "file": "apps/web/src/lib/server/backfill.ts",
             "marker": "listDeezerWork"
+          },
+          {
+            "file": "apps/web/src/lib/server/backfill.ts",
+            "marker": "listBeatportCatalogueWork"
           }
         ],
-        "query": "Apple and Deezer catalogue worklists use is_catalogue plus nullable capture_priority and track_id ordering, all carried by tracks_vendor_worklist_idx."
+        "query": "Apple, Deezer, and Beatport catalogue worklists use is_catalogue plus nullable capture_priority and track_id ordering, all carried by tracks_vendor_worklist_idx."
       },
       "structuralRationale": "Drop in the final contraction: tracks_vendor_worklist_idx is a full composite whose is_catalogue prefix and capture_priority/track_id suffix serve the exact nullable-priority vendor reads, leaving the singleton shadowed.",
       "performanceContracts": [
@@ -506,6 +510,10 @@
             {
               "file": "apps/web/src/lib/server/backfill.ts",
               "marker": "listDeezerWork"
+            },
+            {
+              "file": "apps/web/src/lib/server/backfill.ts",
+              "marker": "listBeatportCatalogueWork"
             }
           ]
         }

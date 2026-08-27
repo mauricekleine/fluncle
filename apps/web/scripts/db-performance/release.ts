@@ -3,7 +3,8 @@ import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import { PERFORMANCE_BUDGETS, PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import { performanceRegistry } from "./contracts";
 import {
   getScaleManifest,
   SCALE_PROFILES,
@@ -18,7 +19,7 @@ import {
   type DominantRegressionFamily,
   type EvidenceLocation,
 } from "./dominant-regression-inventory";
-import { PERFORMANCE_REPORT_SCHEMA_VERSION } from "./registry";
+import { PERFORMANCE_REPORT_SCHEMA_VERSION, type PerformanceContract } from "./registry";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DEFAULT_ARTIFACT_ROOT = join(REPOSITORY_ROOT, "apps/web/.dev/db-performance-release");
@@ -244,6 +245,236 @@ function stringArray(value: unknown): string[] | null {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : null;
 }
 
+const DISTRIBUTION_FIELDS = ["max", "p50", "p95", "p99"] as const;
+
+function isDistribution(value: unknown): boolean {
+  return (
+    isRecord(value) && DISTRIBUTION_FIELDS.every((field) => isNonNegativeFiniteNumber(value[field]))
+  );
+}
+
+function isNullableDistribution(value: unknown): boolean {
+  return value === null || isDistribution(value);
+}
+
+function isExplainPlanAnalysis(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const details = stringArray(value.details);
+  const tempSorts = stringArray(value.tempSorts);
+  const violations = stringArray(value.violations);
+
+  return (
+    details !== null &&
+    Array.isArray(value.fullScans) &&
+    value.fullScans.every(
+      (scan) => isRecord(scan) && typeof scan.detail === "string" && typeof scan.table === "string",
+    ) &&
+    tempSorts !== null &&
+    violations !== null
+  );
+}
+
+function isConvergenceReport(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    (value.category === "projection" || value.category === "queue") &&
+    typeof value.converged === "boolean" &&
+    isNonNegativeFiniteNumber(value.fieldMismatches) &&
+    isNonNegativeFiniteNumber(value.missingRows) &&
+    isNonNegativeFiniteNumber(value.projectedRows) &&
+    isNonNegativeFiniteNumber(value.repairRows) &&
+    typeof value.scope === "string" &&
+    isNonNegativeFiniteNumber(value.sourceRows) &&
+    isNonNegativeFiniteNumber(value.unexpectedRows) &&
+    isNonNegativeFiniteNumber(value.failedObservations) &&
+    isNonNegativeFiniteNumber(value.observations)
+  );
+}
+
+function sameStringArray(observed: readonly string[], expected: readonly string[]): boolean {
+  return (
+    observed.length === expected.length &&
+    observed.every((entry, index) => entry === expected[index])
+  );
+}
+
+function validateRegisteredContractReport(
+  entry: JsonRecord,
+  registered: PerformanceContract,
+  profile: ScaleProfile,
+  malformedReport: (message: string) => void,
+): void {
+  const label = `profile ${profile} payload contract ${registered.id}`;
+  const criterionCategories = stringArray(entry.criterionCategories);
+  const budget = isRecord(entry.budget) ? entry.budget : null;
+
+  if (entry.description !== registered.description) {
+    malformedReport(`${label} description is incomplete or does not match its registration`);
+  }
+  if (entry.workClass !== registered.workClass) {
+    malformedReport(`${label} workClass is incomplete or does not match its registration`);
+  }
+  if (
+    criterionCategories === null ||
+    criterionCategories.length !== 1 ||
+    criterionCategories[0] !== registered.workClass
+  ) {
+    malformedReport(`${label} criterionCategories are incomplete or do not match its registration`);
+  }
+  if (!Number.isSafeInteger(entry.iterations) || entry.iterations !== registered.iterations) {
+    malformedReport(`${label} iterations are incomplete or do not match its registration`);
+  }
+  if (!isDistribution(entry.durationMs)) {
+    malformedReport(`${label} durationMs is incomplete`);
+  }
+  if (!isDistribution(entry.resultRowCount)) {
+    malformedReport(`${label} resultRowCount is incomplete`);
+  }
+  if (readNumericRecord(entry.invariantTotals) === null) {
+    malformedReport(`${label} invariantTotals are incomplete`);
+  }
+  if (!Array.isArray(entry.metadata) || !entry.metadata.every((metadata) => isRecord(metadata))) {
+    malformedReport(`${label} metadata is incomplete`);
+  }
+  if (!Array.isArray(entry.validationFailures) || stringArray(entry.validationFailures) === null) {
+    malformedReport(`${label} validationFailures are incomplete`);
+  }
+  if (typeof entry.passed !== "boolean") {
+    malformedReport(`${label} passed is incomplete`);
+  }
+  if (!isNullableDistribution(entry.affectedRowCount)) {
+    malformedReport(`${label} affectedRowCount is incomplete`);
+  }
+  if (!isNullableDistribution(entry.batchCount)) {
+    malformedReport(`${label} batchCount is incomplete`);
+  }
+  if (!isNullableDistribution(entry.queueMs)) {
+    malformedReport(`${label} queueMs is incomplete`);
+  }
+  if (!(entry.convergence === null || isConvergenceReport(entry.convergence))) {
+    malformedReport(`${label} convergence is incomplete`);
+  }
+  if (!(entry.plan === null || isExplainPlanAnalysis(entry.plan))) {
+    malformedReport(`${label} plan is incomplete`);
+  }
+
+  if (budget === null) {
+    malformedReport(`${label} budget is incomplete`);
+  } else {
+    const expectedBudget = PERFORMANCE_BUDGETS[registered.workClass];
+    if (budget.description !== expectedBudget.description) {
+      malformedReport(`${label} budget description is incomplete or incorrect`);
+    }
+    if (
+      typeof budget.required !== "boolean" ||
+      budget.required !== expectedBudget.requiredProfiles.includes(profile)
+    ) {
+      malformedReport(`${label} budget required flag is incomplete or incorrect`);
+    }
+    if (stringArray(budget.failures) === null) {
+      malformedReport(`${label} budget failures are incomplete`);
+    }
+    if (stringArray(budget.warnings) === null) {
+      malformedReport(`${label} budget warnings are incomplete`);
+    }
+  }
+}
+
+function validateRegisteredContracts(
+  contracts: readonly unknown[],
+  registeredContracts: readonly PerformanceContract[],
+  profile: ScaleProfile,
+  malformedReport: (message: string) => void,
+): void {
+  const registeredById = new Map(registeredContracts.map((contract) => [contract.id, contract]));
+  const observedIds: string[] = [];
+  const observedIdSet = new Set<string>();
+
+  for (const [index, entry] of contracts.entries()) {
+    if (!isRecord(entry) || typeof entry.contractId !== "string") {
+      malformedReport(`profile ${profile} payload contract ${index} is incomplete`);
+      continue;
+    }
+
+    const id = entry.contractId;
+    observedIds.push(id);
+    if (observedIdSet.has(id)) {
+      malformedReport(`profile ${profile} payload contracts contain duplicate id ${id}`);
+    }
+    observedIdSet.add(id);
+
+    const registered = registeredById.get(id);
+    if (registered !== undefined) {
+      validateRegisteredContractReport(entry, registered, profile, malformedReport);
+    }
+  }
+
+  const missingIds = registeredContracts
+    .filter((contract) => !observedIdSet.has(contract.id))
+    .map((contract) => contract.id);
+  const extraIds = [...new Set(observedIds.filter((id) => !registeredById.has(id)))];
+
+  if (missingIds.length > 0) {
+    malformedReport(
+      `profile ${profile} payload contracts are missing registered ids: ${missingIds.join(", ")}`,
+    );
+  }
+  if (extraIds.length > 0) {
+    malformedReport(
+      `profile ${profile} payload contracts contain extra ids: ${extraIds.join(", ")}`,
+    );
+  }
+}
+
+function validateCriteria(
+  criteria: JsonRecord,
+  registeredContracts: readonly PerformanceContract[],
+  profile: ScaleProfile,
+  malformedReport: (message: string) => void,
+): void {
+  const expectedCategories = new Set<string>(PERFORMANCE_CRITERION_CATEGORIES);
+
+  for (const category of Object.keys(criteria)) {
+    if (!expectedCategories.has(category)) {
+      malformedReport(`profile ${profile} payload has extra criterion ${category}`);
+    }
+  }
+
+  for (const category of PERFORMANCE_CRITERION_CATEGORIES) {
+    const criterion = criteria[category];
+    if (!isRecord(criterion)) {
+      malformedReport(`profile ${profile} payload criterion ${category} is missing`);
+      continue;
+    }
+
+    if (typeof criterion.addressed !== "boolean") {
+      malformedReport(`profile ${profile} payload criterion ${category} is missing addressed`);
+    }
+
+    const observedIds = stringArray(criterion.contractIds);
+    const expectedIds = registeredContracts
+      .filter((contract) => contract.workClass === category)
+      .map((contract) => contract.id);
+    if (observedIds === null || !sameStringArray(observedIds, expectedIds)) {
+      malformedReport(
+        `profile ${profile} payload criterion ${category} has incomplete contractIds`,
+      );
+    }
+    if (typeof criterion.passed !== "boolean") {
+      malformedReport(`profile ${profile} payload criterion ${category} is missing passed`);
+    }
+    if (stringArray(criterion.warnings) === null) {
+      malformedReport(`profile ${profile} payload criterion ${category} is missing warnings`);
+    }
+  }
+}
+
 export function validateProfileReport(rawJson: string, profile: ScaleProfile): ProfileValidation {
   const errors: string[] = [];
   let malformed = false;
@@ -343,19 +574,18 @@ export function validateProfileReport(rawJson: string, profile: ScaleProfile): P
   if (typeof report?.generatedAt !== "string" || report.generatedAt.length === 0) {
     malformedReport(`profile ${profile} payload generatedAt is malformed`);
   }
+  const registeredContracts = performanceRegistry.list();
   if (!Array.isArray(report?.contracts)) {
     malformedReport(`profile ${profile} payload contracts are missing`);
+  } else {
+    validateRegisteredContracts(report.contracts, registeredContracts, profile, malformedReport);
   }
 
   const criteria = isRecord(report?.criteria) ? report.criteria : null;
   if (criteria === null) {
     malformedReport(`profile ${profile} payload criteria are missing`);
   } else {
-    for (const category of PERFORMANCE_CRITERION_CATEGORIES) {
-      if (!isRecord(criteria[category])) {
-        malformedReport(`profile ${profile} payload criterion ${category} is missing`);
-      }
-    }
+    validateCriteria(criteria, registeredContracts, profile, malformedReport);
   }
 
   const resources = isRecord(report?.resources) ? report.resources : null;
@@ -885,12 +1115,12 @@ async function runRelease(
     passed: noGoReasons.length === 0,
     profiles: profileEvidence,
     safety: {
-      credentials: "not inherited",
+      credentials: "not passed to child processes",
       database: "disposable local libSQL fixtures only",
       deploys: false,
       hostedDatabase: false,
       migrations: false,
-      network: false,
+      network: "not sandboxed; proof commands are expected to remain offline",
       production: false,
       timers: false,
     },
