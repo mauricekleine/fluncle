@@ -271,97 +271,108 @@ async function main(): Promise<void> {
     throw new Error(`[social-preview] assertion failed: energyCurve is empty`);
   }
 
-  if (skipRender) {
-    console.log(`[social-preview] --skip-render set; stopping after props json`);
-    return;
-  }
-
-  if (!compositionId) {
-    throw new Error("[social-preview] internal error: missing composition id for render");
-  }
-
-  const { render } = await import("./render");
-  const outputPath = path.join(
-    OUT_DIR,
-    draft ? `${trackId}.draft.mp4` : `${trackId}${variantSuffix}.mp4`,
-  );
-  if (draft) {
-    console.log(
-      `[social-preview] DRAFT render: half-res, fast, NO VBV cap — a NON-SHIPPABLE proof for direction + motion only (run without --draft for the ship-quality master)`,
-    );
-  }
-  console.log(`[social-preview] rendering -> ${outputPath}`);
-  const result = await render(inputProps, outputPath, compositionId, { draft });
-
-  // Silence guard: the audio HOOKS only drive visuals — the composition must
-  // include <TrackAudio audio={audio} /> for the render to carry sound. Remotion
-  // always muxes an aac track, so silence is invisible to a stream check; measure
-  // the actual level and fail loudly if the clip is effectively silent.
-  const { spawnSync } = await import("node:child_process");
-  const probe = spawnSync("ffmpeg", ["-i", outputPath, "-af", "volumedetect", "-f", "null", "-"], {
-    encoding: "utf8",
-  });
-  const meanMatch = /mean_volume:\s*(-?\d+(?:\.\d+)?) dB/.exec(probe.stderr ?? "");
-  const meanVolume = meanMatch ? Number.parseFloat(meanMatch[1] ?? "") : Number.NaN;
-  if (Number.isFinite(meanVolume) && meanVolume < -70) {
-    throw new Error(
-      `[social-preview] rendered MP4 is SILENT (mean_volume ${meanVolume} dB). The audio hooks drive visuals only — add <TrackAudio audio={audio} /> to the composition so the cut carries sound.`,
-    );
-  }
-  console.log(`[social-preview] audio level ok (mean_volume ${meanVolume} dB)`);
-
-  if (draft) {
-    // Verify-only: no render.json manifest (that's the ship pointer). Gate the
-    // draft directly — the beat-pull gate runs on any clip, half-res included.
-    console.log(
-      `[social-preview] DRAFT done -> ${outputPath} (NON-SHIPPABLE). Eyeball direction + motion, and gate it:\n  bun run --cwd packages/video detect-beat-pull ${path.relative(PACKAGE_ROOT, outputPath)}\nRun without --draft for the ship-quality master.`,
-    );
-    return;
-  }
-
-  if (isVariant) {
-    // The text-free / landscape cuts are staging-only radio.fluncle.com variants:
-    // no render.json (that's the ship pointer for the canonical portrait master,
-    // and ship has no R2 key scheme for variants yet). Eyeball the suffixed file.
-    console.log(
-      `[social-preview] VARIANT done -> ${outputPath} (staging only; no ship pointer written).`,
-    );
-    return;
-  }
-
-  // --composition-source is forgiving about cwd: a path given as cwd-relative,
-  // package-relative, or repo-root-relative all resolve. If omitted or wrong,
-  // the workbench filename is the source of record.
-  const resolveGivenSource = (given: string): string | undefined => {
-    for (const candidate of [
-      path.resolve(given),
-      path.resolve(PACKAGE_ROOT, given),
-      path.resolve(PACKAGE_ROOT, "..", "..", given),
-    ]) {
-      if (existsSync(candidate)) {
-        return candidate;
-      }
+  const renderPreparedPreview = async (): Promise<void> => {
+    if (skipRender) {
+      console.log(`[social-preview] --skip-render set; stopping after props json`);
+      return;
     }
-    return undefined;
-  };
-  const sourcePath = compositionSource
-    ? (resolveGivenSource(compositionSource) ?? findCompositionSource(result.compositionId))
-    : findCompositionSource(result.compositionId);
-  const manifest = {
-    compositionId: result.compositionId,
-    compositionSource: sourcePath ? path.relative(PACKAGE_ROOT, sourcePath) : undefined,
-    props: path.relative(PACKAGE_ROOT, propsPath),
-    trackId,
-  };
-  await writeFile(path.join(OUT_DIR, `${trackId}.render.json`), JSON.stringify(manifest, null, 2));
 
-  if (!manifest.compositionSource) {
-    console.warn(
-      `[social-preview] warning: could not identify source for composition ${result.compositionId}; ship will omit composition.tsx unless a render manifest is added`,
+    if (!compositionId) {
+      throw new Error("[social-preview] internal error: missing composition id for render");
+    }
+
+    const { render } = await import("./render");
+    const outputPath = path.join(
+      OUT_DIR,
+      draft ? `${trackId}.draft.mp4` : `${trackId}${variantSuffix}.mp4`,
     );
-  }
+    if (draft) {
+      console.log(
+        `[social-preview] DRAFT render: half-res, fast, NO VBV cap — a NON-SHIPPABLE proof for direction + motion only (run without --draft for the ship-quality master)`,
+      );
+    }
+    console.log(`[social-preview] rendering -> ${outputPath}`);
+    const result = await render(inputProps, outputPath, compositionId, { draft });
 
-  console.log(`[social-preview] rendered ${result.compositionId} -> ${result.outputPath}`);
+    // Silence guard: the audio HOOKS only drive visuals — the composition must
+    // include <TrackAudio audio={audio} /> for the render to carry sound. Remotion
+    // always muxes an aac track, so silence is invisible to a stream check; measure
+    // the actual level and fail loudly if the clip is effectively silent.
+    const { spawnSync } = await import("node:child_process");
+    const probe = spawnSync(
+      "ffmpeg",
+      ["-i", outputPath, "-af", "volumedetect", "-f", "null", "-"],
+      {
+        encoding: "utf8",
+      },
+    );
+    const meanMatch = /mean_volume:\s*(-?\d+(?:\.\d+)?) dB/.exec(probe.stderr ?? "");
+    const meanVolume = meanMatch ? Number.parseFloat(meanMatch[1] ?? "") : Number.NaN;
+    if (Number.isFinite(meanVolume) && meanVolume < -70) {
+      throw new Error(
+        `[social-preview] rendered MP4 is SILENT (mean_volume ${meanVolume} dB). The audio hooks drive visuals only — add <TrackAudio audio={audio} /> to the composition so the cut carries sound.`,
+      );
+    }
+    console.log(`[social-preview] audio level ok (mean_volume ${meanVolume} dB)`);
+
+    if (draft) {
+      // Verify-only: no render.json manifest (that's the ship pointer). Gate the
+      // draft directly — the beat-pull gate runs on any clip, half-res included.
+      console.log(
+        `[social-preview] DRAFT done -> ${outputPath} (NON-SHIPPABLE). Eyeball direction + motion, and gate it:\n  bun run --cwd packages/video detect-beat-pull ${path.relative(PACKAGE_ROOT, outputPath)}\nRun without --draft for the ship-quality master.`,
+      );
+      return;
+    }
+
+    if (isVariant) {
+      // The text-free / landscape cuts are staging-only radio.fluncle.com variants:
+      // no render.json (that's the ship pointer for the canonical portrait master,
+      // and ship has no R2 key scheme for variants yet). Eyeball the suffixed file.
+      console.log(
+        `[social-preview] VARIANT done -> ${outputPath} (staging only; no ship pointer written).`,
+      );
+      return;
+    }
+
+    // --composition-source is forgiving about cwd: a path given as cwd-relative,
+    // package-relative, or repo-root-relative all resolve. If omitted or wrong,
+    // the workbench filename is the source of record.
+    const resolveGivenSource = (given: string): string | undefined => {
+      for (const candidate of [
+        path.resolve(given),
+        path.resolve(PACKAGE_ROOT, given),
+        path.resolve(PACKAGE_ROOT, "..", "..", given),
+      ]) {
+        if (existsSync(candidate)) {
+          return candidate;
+        }
+      }
+      return undefined;
+    };
+    const sourcePath = compositionSource
+      ? (resolveGivenSource(compositionSource) ?? findCompositionSource(result.compositionId))
+      : findCompositionSource(result.compositionId);
+    const manifest = {
+      compositionId: result.compositionId,
+      compositionSource: sourcePath ? path.relative(PACKAGE_ROOT, sourcePath) : undefined,
+      props: path.relative(PACKAGE_ROOT, propsPath),
+      trackId,
+    };
+    await writeFile(
+      path.join(OUT_DIR, `${trackId}.render.json`),
+      JSON.stringify(manifest, null, 2),
+    );
+
+    if (!manifest.compositionSource) {
+      console.warn(
+        `[social-preview] warning: could not identify source for composition ${result.compositionId}; ship will omit composition.tsx unless a render manifest is added`,
+      );
+    }
+
+    console.log(`[social-preview] rendered ${result.compositionId} -> ${result.outputPath}`);
+  };
+
+  await renderPreparedPreview();
 }
 
 main().catch((err) => {

@@ -2120,6 +2120,104 @@ function deriveTrackId(target: string, video: string): string {
   return target;
 }
 
+function rollupMotionGate(input: {
+  allowFlash: boolean;
+  arc: ArcResult;
+  beatPull: BeatPullResult;
+  beatReactivity: BeatReactivity | null;
+  coupling: CouplingResult | null;
+  flashSafety: FlashSafetyResult;
+  intentCheck: IntentCheckResult | null;
+  probedFps: number;
+  seam: SeamResult;
+  unreliable: boolean;
+}): GateRollup {
+  const blockingFailures: string[] = [];
+  const advisories: string[] = [];
+
+  if (input.flashSafety.unsafe && !input.allowFlash) {
+    blockingFailures.push("flashSafety");
+  } else if (input.flashSafety.unsafe) {
+    advisories.push("flashSafety.overridden(--allow-flash)");
+  }
+  if (input.flashSafety.aaaStricterFlag) {
+    advisories.push("flashSafety.aaaStricterFlag");
+  }
+  if (input.beatPull.beatLocked) {
+    blockingFailures.push("beatPull");
+  } else if (input.beatPull.inconclusive) {
+    // Pass with a note: inconclusive beat-pull never blocks. The low-motion carve-out covers calm
+    // presence clips; the arc and coupling reads below own the deadness decision.
+    advisories.push(`beatPull.inconclusive(${input.beatPull.inconclusive})`);
+  }
+  if (input.arc.dead) {
+    blockingFailures.push("arc.dead");
+  } else if (input.arc.verdict === "inconclusive") {
+    // Pass with a note: presenceQuiet is a near-miss regional reveal that cleared the safety
+    // gates, while tooShort is the too-few-frames case. Both ask for an operator eyeball, not a
+    // hard failure.
+    advisories.push(
+      input.arc.inconclusive === "presenceQuiet"
+        ? "arc.inconclusive(presenceQuiet — eyeball the reveal)"
+        : `arc.inconclusive(${input.arc.inconclusive ?? "tooShort"})`,
+    );
+  }
+  if (input.arc.intentArc && !input.arc.intentArc.meetsArc) {
+    advisories.push(`arc.intentMismatch(seg${input.arc.intentArc.dropSegment})`);
+  }
+  // A legitimate hard horizon can look like a spatial seam, so this possible atan branch-cut or
+  // tiling seam is advisory only and stays available for the operator's eye.
+  if (input.seam.detected && input.seam.seam) {
+    const seam = input.seam.seam;
+    const position = `${seam.axis === "row" ? "y" : "x"}≈${Math.round(seam.positionPct * 100)}%`;
+    advisories.push(`seam.possible(${position})`);
+  }
+  if (input.coupling) {
+    if (input.coupling.verdict === "dead") {
+      advisories.push("coupling.dead");
+    } else if (input.coupling.verdict === "weak") {
+      advisories.push("coupling.weak");
+    }
+    for (const deadZone of input.coupling.deadZones) {
+      advisories.push(
+        `deadZone@${deadZone.startMs}${deadZone.overlapsDrop ? "(overlapsDrop)" : ""}`,
+      );
+    }
+    if (input.coupling.attribution.attributedLayer !== null) {
+      advisories.push(`attribution.layer${input.coupling.attribution.attributedLayer}`);
+    }
+  }
+  if (input.beatReactivity) {
+    if (input.beatReactivity.verdict === "dead") {
+      advisories.push("beatReactivity.dead");
+    } else if (input.beatReactivity.verdict === "weak") {
+      advisories.push("beatReactivity.weak");
+    }
+    if (input.beatReactivity.arcScore >= 0.15) {
+      advisories.push(`sceneArc(${input.beatReactivity.arcScore})`);
+    }
+  }
+  if (input.intentCheck) {
+    if (!input.intentCheck.translationTripwire.pass) {
+      advisories.push("intent.translationTripwire");
+    }
+    if (!input.intentCheck.axisCoverage.pass) {
+      advisories.push("intent.axisCoverage");
+    }
+    if (!input.intentCheck.drop.pass) {
+      advisories.push("intent.dropMissing");
+    }
+    if (input.intentCheck.arcPeakAlignmentMs > 1500) {
+      advisories.push(`intent.arcMisaligned(${input.intentCheck.arcPeakAlignmentMs}ms)`);
+    }
+  }
+  if (input.unreliable) {
+    advisories.push(`unreliable.fps(${input.probedFps.toFixed(2)})`);
+  }
+
+  return { advisories, blockingFailures, hardPass: blockingFailures.length === 0 };
+}
+
 /**
  * Run all deterministic metrics on a target (trackId or video path), fold in the
  * beat-pull gate on the SAME 48×86 extraction, and assemble the combined report.
@@ -2232,94 +2330,18 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
   }
 
   // Gate roll-up. TWO HARD gates: flashSafety + beatPull. Coupling is advisory.
-  const blockingFailures: string[] = [];
-  const advisories: string[] = [];
-
-  if (flashSafety.unsafe && !options.allowFlash) {
-    blockingFailures.push("flashSafety");
-  } else if (flashSafety.unsafe && options.allowFlash) {
-    advisories.push("flashSafety.overridden(--allow-flash)");
-  }
-  if (flashSafety.aaaStricterFlag) {
-    advisories.push("flashSafety.aaaStricterFlag");
-  }
-  if (beatPull.beatLocked) {
-    blockingFailures.push("beatPull");
-  } else if (beatPull.inconclusive) {
-    // Pass-with-note: an inconclusive beat-pull never blocks (like the too-few-frames
-    // case). The low-motion carve-out lands here for calm presence clips — the
-    // deadness question is owned by the arc + coupling reads below.
-    advisories.push(`beatPull.inconclusive(${beatPull.inconclusive})`);
-  }
-  if (arc.dead) {
-    blockingFailures.push("arc.dead");
-  } else if (arc.verdict === "inconclusive") {
-    // Pass-with-note: an inconclusive arc never blocks. presenceQuiet is the
-    // presence-class relief (a near-miss regional reveal on a clip that cleared both
-    // hard safety gates) — flagged so the operator eyeballs the reveal; tooShort is
-    // the too-few-frames case.
-    advisories.push(
-      arc.inconclusive === "presenceQuiet"
-        ? "arc.inconclusive(presenceQuiet — eyeball the reveal)"
-        : `arc.inconclusive(${arc.inconclusive ?? "tooShort"})`,
-    );
-  }
-  if (arc.intentArc && !arc.intentArc.meetsArc) {
-    advisories.push(`arc.intentMismatch(seg${arc.intentArc.dropSegment})`);
-  }
-
-  // The spatial-seam WARN — never blocks (a legitimate hard horizon reads the same
-  // way), but flags a possible atan branch-cut / tiling seam for the operator's eye.
-  if (seam.detected && seam.seam) {
-    const s = seam.seam;
-    const pos = `${s.axis === "row" ? "y" : "x"}≈${Math.round(s.positionPct * 100)}%`;
-    advisories.push(`seam.possible(${pos})`);
-  }
-
-  if (coupling) {
-    if (coupling.verdict === "dead") {
-      advisories.push("coupling.dead");
-    } else if (coupling.verdict === "weak") {
-      advisories.push("coupling.weak");
-    }
-    for (const dz of coupling.deadZones) {
-      advisories.push(`deadZone@${dz.startMs}${dz.overlapsDrop ? "(overlapsDrop)" : ""}`);
-    }
-    if (coupling.attribution.attributedLayer !== null) {
-      advisories.push(`attribution.layer${coupling.attribution.attributedLayer}`);
-    }
-  }
-
-  if (beatReactivity) {
-    if (beatReactivity.verdict === "dead") {
-      advisories.push("beatReactivity.dead");
-    } else if (beatReactivity.verdict === "weak") {
-      advisories.push("beatReactivity.weak");
-    }
-    if (beatReactivity.arcScore >= 0.15) {
-      advisories.push(`sceneArc(${beatReactivity.arcScore})`);
-    }
-  }
-
-  if (intentCheck) {
-    if (!intentCheck.translationTripwire.pass) {
-      advisories.push("intent.translationTripwire");
-    }
-    if (!intentCheck.axisCoverage.pass) {
-      advisories.push("intent.axisCoverage");
-    }
-    if (!intentCheck.drop.pass) {
-      advisories.push("intent.dropMissing");
-    }
-    if (intentCheck.arcPeakAlignmentMs > 1500) {
-      advisories.push(`intent.arcMisaligned(${intentCheck.arcPeakAlignmentMs}ms)`);
-    }
-  }
-  if (unreliable) {
-    advisories.push(`unreliable.fps(${probedFps.toFixed(2)})`);
-  }
-
-  const hardPass = blockingFailures.length === 0;
+  const gate = rollupMotionGate({
+    allowFlash: options.allowFlash === true,
+    arc,
+    beatPull,
+    beatReactivity,
+    coupling,
+    flashSafety,
+    intentCheck,
+    probedFps,
+    seam,
+    unreliable,
+  });
 
   return {
     arc,
@@ -2330,7 +2352,7 @@ export function analyzeMotion(target: string, options: AnalyzeMotionOptions = {}
     flashSafety,
     fps: reportFps,
     frames: gray.frames.length,
-    gate: { advisories, blockingFailures, hardPass },
+    gate,
     intent: intentCheck,
     intentDeclaredBand: coupling?.intentDeclaredBand ?? null,
     logId,

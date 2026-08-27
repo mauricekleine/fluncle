@@ -162,18 +162,23 @@ type Detector = {
   evidence: string[];
 };
 
-/** Detect every family's raw signal in a comment-stripped body. */
-function detectFamilies(body: string): {
+function addDetector(
+  detectors: Detector[],
+  family: Detector["family"],
+  score: number,
+  evidence: string[],
+): void {
+  if (score > 0) {
+    detectors.push({ evidence, family, score });
+  }
+}
+
+/** Detect the cellular, caustic, and filament signals that share ridge/cell evidence. */
+function detectOrganicFamilies(body: string): {
   detectors: Detector[];
   ridge: { present: boolean; field: string | null };
-  ridgeSurface: boolean;
 } {
   const detectors: Detector[] = [];
-  const add = (family: Detector["family"], score: number, evidence: string[]) => {
-    if (score > 0) {
-      detectors.push({ evidence, family, score });
-    }
-  };
 
   // ── cellular ────────────────────────────────────────────────────────────
   const voronoiCalls = callCount("voronoi", body) + callCount("voronoi3", body);
@@ -207,7 +212,7 @@ function detectFamilies(body: string): {
         evidence.push(`${names}× cell* naming`);
       }
     }
-    add("cellular", score, evidence);
+    addDetector(detectors, "cellular", score, evidence);
   }
 
   // ── caustic (sine-accumulator interference webs) ──────────────────────────
@@ -237,7 +242,7 @@ function detectFamilies(body: string): {
         evidence.push(`${names}× caustic/neuro naming`);
       }
     }
-    add("caustic", score, evidence);
+    addDetector(detectors, "caustic", score, evidence);
   }
 
   // ── filament (ridged-noise crests) ───────────────────────────────────────
@@ -261,8 +266,20 @@ function detectFamilies(body: string): {
         evidence.push(`${names}× ridge/filament/vein naming`);
       }
     }
-    add("filament", score, evidence);
+    addDetector(detectors, "filament", score, evidence);
   }
+
+  return { detectors, ridge };
+}
+
+/** Detect flow and geometric families after the ridge evidence has been established. */
+function detectGeometricFamilies(
+  body: string,
+  ridge: { present: boolean; field: string | null },
+): { detectors: Detector[]; ridgeSurface: boolean } {
+  const detectors: Detector[] = [];
+  const causticCalls = callCount("caustic", body);
+  const minDistLoop = /d\s*<\s*f1/.test(body) && /f2\s*=\s*f1/.test(body);
 
   // ── flow (fbm / domain-warp / curl advection) ────────────────────────────
   const flowCalls =
@@ -297,7 +314,7 @@ function detectFamilies(body: string): {
         evidence.push("warp field rendered as a surface tone (body), not only ridged");
       }
     }
-    add("flow", score, evidence);
+    addDetector(detectors, "flow", score, evidence);
   }
 
   // ── lattice (regular grid / dot screen) ──────────────────────────────────
@@ -327,7 +344,7 @@ function detectFamilies(body: string): {
         evidence.push(`${names}× lattice/grid/weave naming`);
       }
     }
-    add("lattice", score, evidence);
+    addDetector(detectors, "lattice", score, evidence);
   }
 
   // ── radial (polar / angular fields) ──────────────────────────────────────
@@ -355,7 +372,7 @@ function detectFamilies(body: string): {
         evidence.push(`${names}× radial/polar/kaleido naming`);
       }
     }
-    add("radial", score, evidence);
+    addDetector(detectors, "radial", score, evidence);
   }
 
   // ── metaball (SDF blend / raymarched body) ───────────────────────────────
@@ -391,10 +408,26 @@ function detectFamilies(body: string): {
         evidence.push(`${names}× sdf/metaball/raymarch naming`);
       }
     }
-    add("metaball", score, evidence);
+    addDetector(detectors, "metaball", score, evidence);
   }
 
-  return { detectors, ridge, ridgeSurface };
+  return { detectors, ridgeSurface };
+}
+
+/** Detect every family's raw signal in a comment-stripped body. */
+function detectFamilies(body: string): {
+  detectors: Detector[];
+  ridge: { present: boolean; field: string | null };
+  ridgeSurface: boolean;
+} {
+  const organic = detectOrganicFamilies(body);
+  const geometric = detectGeometricFamilies(body, organic.ridge);
+
+  return {
+    detectors: [...organic.detectors, ...geometric.detectors],
+    ridge: organic.ridge,
+    ridgeSurface: geometric.ridgeSurface,
+  };
 }
 
 /**

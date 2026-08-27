@@ -1707,57 +1707,63 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   const candidates: TrackCandidate[] = [];
   const artistMbids = new Set<string>();
 
-  for (const medium of release.media ?? []) {
-    for (const track of medium.tracks ?? []) {
-      const recording = track.recording;
-      const title = recording?.title ?? track.title;
+  const collectReleaseCandidates = (): void => {
+    for (const medium of release.media ?? []) {
+      for (const track of medium.tracks ?? []) {
+        const recording = track.recording;
+        const title = recording?.title ?? track.title;
 
-      if (!recording?.id || !title) {
-        continue;
-      }
-
-      const credits = recording["artist-credit"] ?? release["artist-credit"] ?? [];
-      // Name and MB artist id are kept TOGETHER through the filter so the two arrays stay
-      // positionally aligned — the alignment is what lets the link step tell which identity a
-      // given credited name carries (crawl → `linkTracksToArtistEntities`'s homonym seal).
-      const named = credits
-        .map((credit) => ({
-          mbid: credit.artist?.id ?? null,
-          name: credit.artist?.name ?? credit.name,
-        }))
-        .filter((credit): credit is { mbid: null | string; name: string } => Boolean(credit.name));
-      const artists = named.map((credit) => credit.name);
-
-      for (const credit of named) {
-        if (credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID) {
-          artistMbids.add(credit.mbid);
+        if (!recording?.id || !title) {
+          continue;
         }
-      }
 
-      candidates.push({
-        album: release.title ?? null,
-        albumImageUrl: coverUrl,
-        artists: artists.length > 0 ? artists : ["Unknown"],
-        // The `["Unknown"]` fallback above names no identity, so its slot is null too.
-        creditMbids:
-          artists.length > 0
-            ? named.map((credit) =>
-                credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID ? credit.mbid : null,
-              )
-            : [null],
-        // `duration_ms` is NOT NULL on `tracks`. MusicBrainz genuinely does not always
-        // know a recording's length, and 0 is the honest "unknown" — never a guess.
-        durationMs: recording.length ?? track.length ?? 0,
-        inMasterId,
-        inReleaseId,
-        isrc: recording.isrcs?.[0] ?? null,
-        label: labelName ?? null,
-        recordingId: recording.id,
-        releaseDate: release.date ?? null,
-        title,
-      });
+        const credits = recording["artist-credit"] ?? release["artist-credit"] ?? [];
+        // Name and MB artist id are kept TOGETHER through the filter so the two arrays stay
+        // positionally aligned — the alignment is what lets the link step tell which identity a
+        // given credited name carries (crawl → `linkTracksToArtistEntities`'s homonym seal).
+        const named = credits
+          .map((credit) => ({
+            mbid: credit.artist?.id ?? null,
+            name: credit.artist?.name ?? credit.name,
+          }))
+          .filter((credit): credit is { mbid: null | string; name: string } =>
+            Boolean(credit.name),
+          );
+        const artists = named.map((credit) => credit.name);
+
+        for (const credit of named) {
+          if (credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID) {
+            artistMbids.add(credit.mbid);
+          }
+        }
+
+        candidates.push({
+          album: release.title ?? null,
+          albumImageUrl: coverUrl,
+          artists: artists.length > 0 ? artists : ["Unknown"],
+          // The `["Unknown"]` fallback above names no identity, so its slot is null too.
+          creditMbids:
+            artists.length > 0
+              ? named.map((credit) =>
+                  credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID ? credit.mbid : null,
+                )
+              : [null],
+          // `duration_ms` is NOT NULL on `tracks`. MusicBrainz genuinely does not always
+          // know a recording's length, and 0 is the honest "unknown" — never a guess.
+          durationMs: recording.length ?? track.length ?? 0,
+          inMasterId,
+          inReleaseId,
+          isrc: recording.isrcs?.[0] ?? null,
+          label: labelName ?? null,
+          recordingId: recording.id,
+          releaseDate: release.date ?? null,
+          title,
+        });
+      }
     }
-  }
+  };
+
+  collectReleaseCandidates();
 
   // ── THE STORAGE GATE ──────────────────────────────────────────────────────────
   // Apply FIRST-credit exceptions to the label default. The artist-hop walk below remains
@@ -1772,24 +1778,28 @@ async function expandRelease(node: FrontierRow, maxHop: number): Promise<Expansi
   let tracksSkippedLabelGate = 0;
 
   // Preserve the cheap non-enabled no-op: no candidate verdict work when no allow can match.
-  if (!scope.enabled && !canAllow) {
-    tracksSkippedLabelGate = candidates.length;
-  } else {
-    for (const candidate of candidates) {
-      const verdict = artistScopeVerdict(candidate, scope, memo);
+  const applyStorageGate = (): void => {
+    if (!scope.enabled && !canAllow) {
+      tracksSkippedLabelGate = candidates.length;
+    } else {
+      for (const candidate of candidates) {
+        const verdict = artistScopeVerdict(candidate, scope, memo);
 
-      if (verdict === "block") {
-        tracksSkippedArtistRule += 1;
-      } else if (verdict === "allow") {
-        kept.push(candidate);
-        tracksAllowedIn += scope.enabled ? 0 : 1;
-      } else if (scope.enabled) {
-        kept.push(candidate);
-      } else {
-        tracksSkippedLabelGate += 1;
+        if (verdict === "block") {
+          tracksSkippedArtistRule += 1;
+        } else if (verdict === "allow") {
+          kept.push(candidate);
+          tracksAllowedIn += scope.enabled ? 0 : 1;
+        } else if (scope.enabled) {
+          kept.push(candidate);
+        } else {
+          tracksSkippedLabelGate += 1;
+        }
       }
     }
-  }
+  };
+
+  applyStorageGate();
 
   let tracksSkippedHeld = 0;
   let written = 0;

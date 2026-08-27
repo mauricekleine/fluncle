@@ -381,287 +381,310 @@ export async function runBackfillSweep(effects: BackfillSweepEffects = {}) {
 
   const limit = ["--limit", String(BATCH_LIMIT)];
 
-  try {
-    const addDiscogsPass = (pass: DiscogsSummary): void => {
-      summary.discogs.resolved += pass.resolvedCount ?? 0;
-      summary.discogs.unresolved += pass.unresolvedCount ?? 0;
-      summary.discogs.skipped += pass.skippedCount ?? 0;
-      summary.discogs.throttled ||= pass.rateLimited === true && pass.rateLimitedBy === "discogs";
-      summary.musicbrainz.throttled ||=
-        pass.rateLimited === true && pass.rateLimitedBy === "musicbrainz";
-      summary.ok &&= pass.ok !== false;
-    };
-    const common = {
-      baseUrl: agentBaseUrl,
-      fetch: effects.fetch,
-      query: { boxFetch: true, limit: BATCH_LIMIT },
-    };
-    const prepared = await postDiscogsAgentOperation<DiscogsSummary>(
-      "/admin/backfill/discogs",
-      apiToken,
-      common,
-    );
-    addDiscogsPass(prepared);
-    const work = prepared.rateLimited ? [] : (prepared.discogsWork ?? []);
-
-    if (work.length > 0) {
-      const fetched = await getDiscogsFetcher().fetchReleaseCandidates(work);
-
-      if (!fetched.ok) {
-        summary.discogs.throttled = fetched.rateLimited;
-
-        if (!fetched.rateLimited) {
-          summary.ok = false;
-          summary.errors += 1;
-          summary.discogs.error = fetched.error;
-        }
-      } else {
-        const decided = await postDiscogsAgentOperation<DiscogsSummary>(
-          "/admin/backfill/discogs",
-          apiToken,
-          { ...common, body: { discogsCandidates: fetched.candidates } },
-        );
-        addDiscogsPass(decided);
-      }
-    }
-
-    summary.checked += summary.discogs.resolved + summary.discogs.unresolved;
-    summary.produced += summary.discogs.resolved;
-  } catch (error) {
-    summary.ok = false;
-    summary.errors += 1;
-    summary.discogs.error = error instanceof Error ? error.message : String(error);
-    log(`discogs backfill failed: ${summary.discogs.error}`);
-  }
-
-  try {
-    const lastfm = fluncleJson<LastfmSummary>(["admin", "backfills", "lastfm", ...limit]);
-    summary.lastfm.loved = lastfm.lovedCount ?? 0;
-    summary.lastfm.failed = lastfm.failedCount ?? 0;
-    summary.lastfm.skipped = lastfm.skippedCount ?? 0;
-    summary.lastfm.throttled = lastfm.rateLimited ?? false;
-    summary.checked += summary.lastfm.loved + summary.lastfm.failed;
-    summary.produced += summary.lastfm.loved;
-    summary.failed += summary.lastfm.failed;
-
-    if (lastfm.ok === false) {
-      summary.ok = false;
-      // A partial-failure batch (`ok: false`, exit 1): the counts above are the
-      // honest summary — some loved, some failed — distinct from the catch below,
-      // which is the whole source erroring with no batch summary at all.
-      log(`lastfm backfill partial: ${summary.lastfm.failed} item(s) failed this tick`);
-    }
-  } catch (error) {
-    summary.ok = false;
-    summary.errors += 1;
-    summary.lastfm.error = error instanceof Error ? error.message : String(error);
-    log(`lastfm backfill failed: ${summary.lastfm.error}`);
-  }
-
-  try {
-    const apple = fluncleJson<AppleMusicSummary>(["admin", "backfills", "apple-music", ...limit]);
-    summary["apple-music"].configured = apple.configured ?? false;
-    summary["apple-music"].resolved = apple.resolvedCount ?? 0;
-    summary["apple-music"].unresolved = apple.unresolvedCount ?? 0;
-    summary["apple-music"].failed = apple.failedCount ?? 0;
-    summary["apple-music"].skipped = apple.skippedCount ?? 0;
-    summary["apple-music"].throttled = apple.rateLimited ?? false;
-    summary.checked +=
-      summary["apple-music"].resolved +
-      summary["apple-music"].unresolved +
-      summary["apple-music"].failed;
-    summary.produced += summary["apple-music"].resolved;
-    summary.failed += summary["apple-music"].failed;
-
-    if (apple.ok === false) {
-      summary.ok = false;
-      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
-      // summary — some resolved, some failed — distinct from the catch below.
-      log(
-        `apple-music backfill partial: ${summary["apple-music"].failed} item(s) failed this tick`,
+  const runDiscogs = async (): Promise<void> => {
+    try {
+      const addDiscogsPass = (pass: DiscogsSummary): void => {
+        summary.discogs.resolved += pass.resolvedCount ?? 0;
+        summary.discogs.unresolved += pass.unresolvedCount ?? 0;
+        summary.discogs.skipped += pass.skippedCount ?? 0;
+        summary.discogs.throttled ||= pass.rateLimited === true && pass.rateLimitedBy === "discogs";
+        summary.musicbrainz.throttled ||=
+          pass.rateLimited === true && pass.rateLimitedBy === "musicbrainz";
+        summary.ok &&= pass.ok !== false;
+      };
+      const common = {
+        baseUrl: agentBaseUrl,
+        fetch: effects.fetch,
+        query: { boxFetch: true, limit: BATCH_LIMIT },
+      };
+      const prepared = await postDiscogsAgentOperation<DiscogsSummary>(
+        "/admin/backfill/discogs",
+        apiToken,
+        common,
       );
+      addDiscogsPass(prepared);
+      const work = prepared.rateLimited ? [] : (prepared.discogsWork ?? []);
+
+      if (work.length > 0) {
+        const fetched = await getDiscogsFetcher().fetchReleaseCandidates(work);
+
+        if (!fetched.ok) {
+          summary.discogs.throttled = fetched.rateLimited;
+
+          if (!fetched.rateLimited) {
+            summary.ok = false;
+            summary.errors += 1;
+            summary.discogs.error = fetched.error;
+          }
+        } else {
+          const decided = await postDiscogsAgentOperation<DiscogsSummary>(
+            "/admin/backfill/discogs",
+            apiToken,
+            { ...common, body: { discogsCandidates: fetched.candidates } },
+          );
+          addDiscogsPass(decided);
+        }
+      }
+
+      summary.checked += summary.discogs.resolved + summary.discogs.unresolved;
+      summary.produced += summary.discogs.resolved;
+    } catch (error) {
+      summary.ok = false;
+      summary.errors += 1;
+      summary.discogs.error = error instanceof Error ? error.message : String(error);
+      log(`discogs backfill failed: ${summary.discogs.error}`);
     }
-  } catch (error) {
-    summary.ok = false;
-    summary.errors += 1;
-    summary["apple-music"].error = error instanceof Error ? error.message : String(error);
-    log(`apple-music backfill failed: ${summary["apple-music"].error}`);
-  }
+  };
+
+  const runLastfm = (): void => {
+    try {
+      const lastfm = fluncleJson<LastfmSummary>(["admin", "backfills", "lastfm", ...limit]);
+      summary.lastfm.loved = lastfm.lovedCount ?? 0;
+      summary.lastfm.failed = lastfm.failedCount ?? 0;
+      summary.lastfm.skipped = lastfm.skippedCount ?? 0;
+      summary.lastfm.throttled = lastfm.rateLimited ?? false;
+      summary.checked += summary.lastfm.loved + summary.lastfm.failed;
+      summary.produced += summary.lastfm.loved;
+      summary.failed += summary.lastfm.failed;
+
+      if (lastfm.ok === false) {
+        summary.ok = false;
+        // A partial-failure batch (`ok: false`, exit 1): the counts above are the
+        // honest summary — some loved, some failed — distinct from the catch below,
+        // which is the whole source erroring with no batch summary at all.
+        log(`lastfm backfill partial: ${summary.lastfm.failed} item(s) failed this tick`);
+      }
+    } catch (error) {
+      summary.ok = false;
+      summary.errors += 1;
+      summary.lastfm.error = error instanceof Error ? error.message : String(error);
+      log(`lastfm backfill failed: ${summary.lastfm.error}`);
+    }
+  };
+
+  const runAppleMusic = (): void => {
+    try {
+      const apple = fluncleJson<AppleMusicSummary>(["admin", "backfills", "apple-music", ...limit]);
+      summary["apple-music"].configured = apple.configured ?? false;
+      summary["apple-music"].resolved = apple.resolvedCount ?? 0;
+      summary["apple-music"].unresolved = apple.unresolvedCount ?? 0;
+      summary["apple-music"].failed = apple.failedCount ?? 0;
+      summary["apple-music"].skipped = apple.skippedCount ?? 0;
+      summary["apple-music"].throttled = apple.rateLimited ?? false;
+      summary.checked +=
+        summary["apple-music"].resolved +
+        summary["apple-music"].unresolved +
+        summary["apple-music"].failed;
+      summary.produced += summary["apple-music"].resolved;
+      summary.failed += summary["apple-music"].failed;
+
+      if (apple.ok === false) {
+        summary.ok = false;
+        // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
+        // summary — some resolved, some failed — distinct from the catch below.
+        log(
+          `apple-music backfill partial: ${summary["apple-music"].failed} item(s) failed this tick`,
+        );
+      }
+    } catch (error) {
+      summary.ok = false;
+      summary.errors += 1;
+      summary["apple-music"].error = error instanceof Error ? error.message : String(error);
+      log(`apple-music backfill failed: ${summary["apple-music"].error}`);
+    }
+  };
 
   // The CATALOGUE Apple leg, last: leg 3's certified rows get first call on the shared
   // Apple meter, and this drains whatever budget survives (RFC dnb-identity-graph U1.3).
-  try {
-    const catalogue = fluncleJson<AppleCatalogueSummary>([
-      "admin",
-      "backfills",
-      "apple-catalogue",
-      "--limit",
-      String(CATALOGUE_BATCH_LIMIT),
-    ]);
-    summary["apple-catalogue"].configured = catalogue.configured ?? false;
-    summary["apple-catalogue"].resolved = catalogue.resolvedCount ?? 0;
-    summary["apple-catalogue"].unresolved = catalogue.unresolvedCount ?? 0;
-    summary["apple-catalogue"].failed = catalogue.failedCount ?? 0;
-    summary["apple-catalogue"].albumFacts = catalogue.albumFactsWritten ?? 0;
-    summary["apple-catalogue"].throttled = catalogue.rateLimited ?? false;
-    summary["apple-catalogue"].breakerTripped = catalogue.breakerTripped ?? false;
-    summary.checked +=
-      summary["apple-catalogue"].resolved +
-      summary["apple-catalogue"].unresolved +
-      summary["apple-catalogue"].failed;
-    summary.produced += summary["apple-catalogue"].resolved;
-    summary.failed += summary["apple-catalogue"].failed;
+  const runAppleCatalogue = (): void => {
+    try {
+      const catalogue = fluncleJson<AppleCatalogueSummary>([
+        "admin",
+        "backfills",
+        "apple-catalogue",
+        "--limit",
+        String(CATALOGUE_BATCH_LIMIT),
+      ]);
+      summary["apple-catalogue"].configured = catalogue.configured ?? false;
+      summary["apple-catalogue"].resolved = catalogue.resolvedCount ?? 0;
+      summary["apple-catalogue"].unresolved = catalogue.unresolvedCount ?? 0;
+      summary["apple-catalogue"].failed = catalogue.failedCount ?? 0;
+      summary["apple-catalogue"].albumFacts = catalogue.albumFactsWritten ?? 0;
+      summary["apple-catalogue"].throttled = catalogue.rateLimited ?? false;
+      summary["apple-catalogue"].breakerTripped = catalogue.breakerTripped ?? false;
+      summary.checked +=
+        summary["apple-catalogue"].resolved +
+        summary["apple-catalogue"].unresolved +
+        summary["apple-catalogue"].failed;
+      summary.produced += summary["apple-catalogue"].resolved;
+      summary.failed += summary["apple-catalogue"].failed;
 
-    if (catalogue.ok === false) {
+      if (catalogue.ok === false) {
+        summary.ok = false;
+        // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
+        // summary — some resolved, some failed — distinct from the catch below.
+        log(
+          `apple-catalogue backfill partial: ${summary["apple-catalogue"].failed} row(s) failed this tick`,
+        );
+      }
+
+      if (summary["apple-catalogue"].breakerTripped) {
+        log("apple-catalogue backfill yielded: the shared Apple breaker/budget stopped the pass");
+      }
+    } catch (error) {
       summary.ok = false;
-      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest
-      // summary — some resolved, some failed — distinct from the catch below.
-      log(
-        `apple-catalogue backfill partial: ${summary["apple-catalogue"].failed} row(s) failed this tick`,
-      );
+      summary.errors += 1;
+      summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
+      log(`apple-catalogue backfill failed: ${summary["apple-catalogue"].error}`);
     }
-
-    if (summary["apple-catalogue"].breakerTripped) {
-      log("apple-catalogue backfill yielded: the shared Apple breaker/budget stopped the pass");
-    }
-  } catch (error) {
-    summary.ok = false;
-    summary.errors += 1;
-    summary["apple-catalogue"].error = error instanceof Error ? error.message : String(error);
-    log(`apple-catalogue backfill failed: ${summary["apple-catalogue"].error}`);
-  }
+  };
 
   // The Beatport store leg. Independent of the Apple pair (its own vendor, its own limiter), so its
   // placement last carries no priority meaning — and its failure, like every other leg's, is
   // contained here so it can never abort the sweep.
-  try {
-    const beatport = fluncleJson<BeatportSummary>([
-      "admin",
-      "backfills",
-      "beatport",
-      "--limit",
-      String(BEATPORT_BATCH_LIMIT),
-    ]);
-    summary.beatport.configured = beatport.configured ?? false;
-    summary.beatport.resolved = beatport.resolvedCount ?? 0;
-    summary.beatport.unresolved = beatport.unresolvedCount ?? 0;
-    summary.beatport.failed = beatport.failedCount ?? 0;
-    summary.beatport.skipped = beatport.skippedCount ?? 0;
-    summary.beatport.catalogueResolved = beatport.catalogueResolvedCount ?? 0;
-    summary.beatport.catalogueUnresolved = beatport.catalogueUnresolvedCount ?? 0;
-    summary.beatport.catalogueFailed = beatport.catalogueFailedCount ?? 0;
-    // The canonical counters cover BOTH tiers: a catalogue row scraped is a row checked and a link
-    // won is a link produced, whichever side of the certification it sits on.
-    summary.checked +=
-      summary.beatport.resolved +
-      summary.beatport.unresolved +
-      summary.beatport.failed +
-      summary.beatport.catalogueResolved +
-      summary.beatport.catalogueUnresolved +
-      summary.beatport.catalogueFailed;
-    summary.produced += summary.beatport.resolved + summary.beatport.catalogueResolved;
-    summary.failed += summary.beatport.failed + summary.beatport.catalogueFailed;
+  const runBeatport = (): void => {
+    try {
+      const beatport = fluncleJson<BeatportSummary>([
+        "admin",
+        "backfills",
+        "beatport",
+        "--limit",
+        String(BEATPORT_BATCH_LIMIT),
+      ]);
+      summary.beatport.configured = beatport.configured ?? false;
+      summary.beatport.resolved = beatport.resolvedCount ?? 0;
+      summary.beatport.unresolved = beatport.unresolvedCount ?? 0;
+      summary.beatport.failed = beatport.failedCount ?? 0;
+      summary.beatport.skipped = beatport.skippedCount ?? 0;
+      summary.beatport.catalogueResolved = beatport.catalogueResolvedCount ?? 0;
+      summary.beatport.catalogueUnresolved = beatport.catalogueUnresolvedCount ?? 0;
+      summary.beatport.catalogueFailed = beatport.catalogueFailedCount ?? 0;
+      // The canonical counters cover BOTH tiers: a catalogue row scraped is a row checked and a link
+      // won is a link produced, whichever side of the certification it sits on.
+      summary.checked +=
+        summary.beatport.resolved +
+        summary.beatport.unresolved +
+        summary.beatport.failed +
+        summary.beatport.catalogueResolved +
+        summary.beatport.catalogueUnresolved +
+        summary.beatport.catalogueFailed;
+      summary.produced += summary.beatport.resolved + summary.beatport.catalogueResolved;
+      summary.failed += summary.beatport.failed + summary.beatport.catalogueFailed;
 
-    if (beatport.ok === false) {
-      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
-      // some resolved, some failed — distinct from the catch below.
-      log(`beatport backfill partial: ${summary.beatport.failed} finding(s) failed this tick`);
+      if (beatport.ok === false) {
+        // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
+        // some resolved, some failed — distinct from the catch below.
+        log(`beatport backfill partial: ${summary.beatport.failed} finding(s) failed this tick`);
+      }
+    } catch (error) {
+      // Preserve the pre-existing exit/`ok` behaviour for this slice: this bug is reported
+      // separately. The canonical run-failure counter still exposes the failed whole leg.
+      summary.errors += 1;
+      summary.beatport.error = error instanceof Error ? error.message : String(error);
+      log(`beatport backfill failed: ${summary.beatport.error}`);
     }
-  } catch (error) {
-    // Preserve the pre-existing exit/`ok` behaviour for this slice: this bug is reported
-    // separately. The canonical run-failure counter still exposes the failed whole leg.
-    summary.errors += 1;
-    summary.beatport.error = error instanceof Error ? error.message : String(error);
-    log(`beatport backfill failed: ${summary.beatport.error}`);
-  }
+  };
 
   // The Discogs release-FACTS leg, last: it shares leg 1's Discogs rate window, and leg 1's
   // release-ID resolves (which a finding's public `sameAs` depends on) get first call on it. Its
   // failure is contained here like every other leg's, so it can never abort the sweep.
-  try {
-    const addFactsPass = (pass: DiscogsFactsSummary): void => {
-      summary["discogs-facts"].configured ||= pass.configured ?? false;
-      summary["discogs-facts"].resolved += pass.resolvedCount ?? 0;
-      summary["discogs-facts"].none += pass.noneCount ?? 0;
-      summary["discogs-facts"].failed += pass.failedCount ?? 0;
-      summary["discogs-facts"].throttled ||= pass.rateLimited ?? false;
-    };
-    const common = {
-      baseUrl: agentBaseUrl,
-      fetch: effects.fetch,
-      query: { boxFetch: true, limit: DISCOGS_FACTS_BATCH_LIMIT },
-    };
-    const prepared = await postDiscogsAgentOperation<DiscogsFactsSummary>(
-      "/admin/backfill/discogs-facts",
-      apiToken,
-      common,
-    );
-    addFactsPass(prepared);
-    const work = prepared.rateLimited ? [] : (prepared.discogsWork ?? []);
+  const runDiscogsFacts = async (): Promise<void> => {
+    try {
+      const addFactsPass = (pass: DiscogsFactsSummary): void => {
+        summary["discogs-facts"].configured ||= pass.configured ?? false;
+        summary["discogs-facts"].resolved += pass.resolvedCount ?? 0;
+        summary["discogs-facts"].none += pass.noneCount ?? 0;
+        summary["discogs-facts"].failed += pass.failedCount ?? 0;
+        summary["discogs-facts"].throttled ||= pass.rateLimited ?? false;
+      };
+      const common = {
+        baseUrl: agentBaseUrl,
+        fetch: effects.fetch,
+        query: { boxFetch: true, limit: DISCOGS_FACTS_BATCH_LIMIT },
+      };
+      const prepared = await postDiscogsAgentOperation<DiscogsFactsSummary>(
+        "/admin/backfill/discogs-facts",
+        apiToken,
+        common,
+      );
+      addFactsPass(prepared);
+      const work = prepared.rateLimited ? [] : (prepared.discogsWork ?? []);
 
-    if (work.length > 0) {
-      const fetched = await getDiscogsFetcher().fetchFactsCandidates(work);
+      if (work.length > 0) {
+        const fetched = await getDiscogsFetcher().fetchFactsCandidates(work);
 
-      if (!fetched.ok) {
-        summary["discogs-facts"].throttled = fetched.rateLimited;
+        if (!fetched.ok) {
+          summary["discogs-facts"].throttled = fetched.rateLimited;
 
-        if (!fetched.rateLimited) {
-          summary.ok = false;
-          summary.errors += 1;
-          summary["discogs-facts"].error = fetched.error;
+          if (!fetched.rateLimited) {
+            summary.ok = false;
+            summary.errors += 1;
+            summary["discogs-facts"].error = fetched.error;
+          }
+        } else {
+          const decided = await postDiscogsAgentOperation<DiscogsFactsSummary>(
+            "/admin/backfill/discogs-facts",
+            apiToken,
+            { ...common, body: { discogsCandidates: fetched.candidates } },
+          );
+          addFactsPass(decided);
         }
-      } else {
-        const decided = await postDiscogsAgentOperation<DiscogsFactsSummary>(
-          "/admin/backfill/discogs-facts",
-          apiToken,
-          { ...common, body: { discogsCandidates: fetched.candidates } },
-        );
-        addFactsPass(decided);
       }
+    } catch (error) {
+      summary.ok = false;
+      summary.errors += 1;
+      summary["discogs-facts"].error = error instanceof Error ? error.message : String(error);
+      log(`discogs-facts backfill failed: ${summary["discogs-facts"].error}`);
     }
-  } catch (error) {
-    summary.ok = false;
-    summary.errors += 1;
-    summary["discogs-facts"].error = error instanceof Error ? error.message : String(error);
-    log(`discogs-facts backfill failed: ${summary["discogs-facts"].error}`);
-  }
+  };
 
   // The Deezer forward-accretion leg, last because it is newest. It shares no budget with any leg
   // above — its own vendor, no key at all — and its failure is contained here like every other
   // leg's, so it can never abort the sweep.
-  try {
-    const deezer = fluncleJson<DeezerSummary>([
-      "admin",
-      "backfills",
-      "deezer",
-      "--limit",
-      String(DEEZER_BATCH_LIMIT),
-    ]);
-    summary.deezer.resolved = deezer.resolvedCount ?? 0;
-    summary.deezer.unresolved = deezer.unresolvedCount ?? 0;
-    summary.deezer.unvouchable = deezer.unvouchableCount ?? 0;
-    summary.deezer.failed = deezer.failedCount ?? 0;
-    summary.deezer.throttled = deezer.rateLimited ?? false;
-    // `unvouchable` is deliberately OUT of `checked`: Deezer answered, but nothing was concluded and
-    // nothing was stamped, so counting it as a checked row would overstate the tick's real work.
-    summary.checked += summary.deezer.resolved + summary.deezer.unresolved + summary.deezer.failed;
-    summary.produced += summary.deezer.resolved;
-    summary.failed += summary.deezer.failed;
+  const runDeezer = (): void => {
+    try {
+      const deezer = fluncleJson<DeezerSummary>([
+        "admin",
+        "backfills",
+        "deezer",
+        "--limit",
+        String(DEEZER_BATCH_LIMIT),
+      ]);
+      summary.deezer.resolved = deezer.resolvedCount ?? 0;
+      summary.deezer.unresolved = deezer.unresolvedCount ?? 0;
+      summary.deezer.unvouchable = deezer.unvouchableCount ?? 0;
+      summary.deezer.failed = deezer.failedCount ?? 0;
+      summary.deezer.throttled = deezer.rateLimited ?? false;
+      // `unvouchable` is deliberately OUT of `checked`: Deezer answered, but nothing was concluded and
+      // nothing was stamped, so counting it as a checked row would overstate the tick's real work.
+      summary.checked +=
+        summary.deezer.resolved + summary.deezer.unresolved + summary.deezer.failed;
+      summary.produced += summary.deezer.resolved;
+      summary.failed += summary.deezer.failed;
 
-    if (deezer.ok === false) {
-      // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
-      // some resolved, some failed — distinct from the catch below, which is the whole leg erroring.
-      log(`deezer backfill partial: ${summary.deezer.failed} row(s) failed this tick`);
-    }
+      if (deezer.ok === false) {
+        // A partial-failure batch (`ok: false`, exit 1): the counts above are the honest summary —
+        // some resolved, some failed — distinct from the catch below, which is the whole leg erroring.
+        log(`deezer backfill partial: ${summary.deezer.failed} row(s) failed this tick`);
+      }
 
-    if (summary.deezer.throttled) {
-      log("deezer backfill yielded: Deezer answered its quota limit, nothing was stamped");
+      if (summary.deezer.throttled) {
+        log("deezer backfill yielded: Deezer answered its quota limit, nothing was stamped");
+      }
+    } catch (error) {
+      summary.errors += 1;
+      summary.deezer.error = error instanceof Error ? error.message : String(error);
+      log(`deezer backfill failed: ${summary.deezer.error}`);
     }
-  } catch (error) {
-    summary.errors += 1;
-    summary.deezer.error = error instanceof Error ? error.message : String(error);
-    log(`deezer backfill failed: ${summary.deezer.error}`);
-  }
+  };
+
+  await runDiscogs();
+  runLastfm();
+  runAppleMusic();
+  runAppleCatalogue();
+  runBeatport();
+  await runDiscogsFacts();
+  runDeezer();
 
   return summary;
 }
