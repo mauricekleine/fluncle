@@ -195,7 +195,7 @@ async function stripCrawlerPrefixes(): Promise<number> {
 
   const source = {
     args: [CRAWLER_TRACK_ID_PREFIX, PREFIX_STRIP_BATCH],
-    sql: `select track_id as subject_id from tracks
+    sql: `select track_id as subject_id from tracks indexed by tracks_mb_recording_id_queue_idx
           where mb_recording_id is null
             and mb_recording_id_attempted_at is null
             and substr(track_id, 1, 3) = ?
@@ -217,7 +217,7 @@ async function stripCrawlerPrefixes(): Promise<number> {
         sql: `update tracks
               set mb_recording_id = substr(track_id, 4)
               where track_id in (
-                select track_id from tracks
+                select track_id from tracks indexed by tracks_mb_recording_id_queue_idx
                 where mb_recording_id is null
                   and mb_recording_id_attempted_at is null
                   and substr(track_id, 1, 3) = ?
@@ -291,7 +291,7 @@ async function countStrippableCrawlerRows(): Promise<number> {
   const result = await db.execute({
     args: [PREFIX_STRIP_BATCH],
     sql: `select count(*) as n from (
-            select track_id from tracks
+            select track_id from tracks indexed by tracks_mb_recording_id_queue_idx
             where mb_recording_id is null
               and mb_recording_id_attempted_at is null
               and substr(track_id, 1, 3) = 'mb_'
@@ -313,14 +313,14 @@ async function listIsrcWork(limit: number, cursor: string | undefined): Promise<
   const result = await db.execute({
     args: cursor ? [cursor, limit] : [limit],
     sql: cursor
-      ? `select track_id, isrc from tracks
+      ? `select track_id, isrc from tracks indexed by tracks_mb_recording_id_queue_idx
          where mb_recording_id is null
            and mb_recording_id_attempted_at is null
            and isrc is not null and isrc != ''
            and substr(track_id, 1, 3) != 'mb_'
            and track_id > ?
          order by track_id asc limit ?`
-      : `select track_id, isrc from tracks
+      : `select track_id, isrc from tracks indexed by tracks_mb_recording_id_queue_idx
          where mb_recording_id is null
            and mb_recording_id_attempted_at is null
            and isrc is not null and isrc != ''

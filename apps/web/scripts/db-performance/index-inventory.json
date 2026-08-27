@@ -297,9 +297,9 @@
       "finalConsumer": {
         "file": "apps/web/src/lib/server/backfill.ts",
         "symbol": "listCatalogueVendorWork",
-        "query": "Vendor metadata worklists order by capture_priority without requiring capture_priority IS NOT NULL."
+        "query": "Apple and Deezer catalogue worklists use is_catalogue plus nullable capture_priority and track_id ordering, all carried by tracks_vendor_worklist_idx."
       },
-      "structuralRationale": "The partial capture-priority composite cannot serve nullable-priority vendor work; this full index preserves that independent worklist.",
+      "structuralRationale": "The full tracks_vendor_worklist_idx serves the exact nullable-priority vendor reads, leaving this singleton shadowed and eligible for a separate ordered contraction after plan and equivalence proof.",
       "performanceContracts": [
         {
           "id": "index.tracks-capture-priority",

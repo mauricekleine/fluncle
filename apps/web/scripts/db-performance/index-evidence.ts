@@ -84,8 +84,19 @@ function fixtureIndexName(indexName: string): string {
   return `perf_${indexName}`;
 }
 
-function indexPlanStatement(indexName: string, sql: string): PerformanceStatement {
-  return statement(sql.replace("__INDEX__", fixtureIndexName(indexName)));
+function indexPlanStatement(
+  indexName: string,
+  sql: string,
+  options: { forced?: boolean } = {},
+): PerformanceStatement {
+  const fixtureIndex = fixtureIndexName(indexName);
+  const indexedSql = sql.replace("__INDEX__", fixtureIndex);
+
+  return statement(
+    options.forced
+      ? indexedSql
+      : indexedSql.replace(new RegExp(`\\s+indexed\\s+by\\s+${fixtureIndex}\\b`, "gi"), ""),
+  );
 }
 
 function genericTrackPlan(indexName: string): IndexPlanSpec {
@@ -109,6 +120,7 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
     tracks_anchor_queue_idx: indexPlanStatement(
       indexName,
       "select isrc from perf_tracks indexed by __INDEX__ where spotify_uri is null and isrc is not null and isrc >= 'synthetic-isrc-000000001' order by isrc limit 25",
+      { forced: true },
     ),
     tracks_anchor_review_idx: indexPlanStatement(
       indexName,
@@ -125,10 +137,6 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
     tracks_bpm_idx: indexPlanStatement(
       indexName,
       "select bpm from perf_tracks indexed by __INDEX__ where bpm >= 160 and bpm <= 180 order by bpm limit 25",
-    ),
-    tracks_capture_priority_idx: indexPlanStatement(
-      indexName,
-      "select capture_priority from perf_tracks indexed by __INDEX__ where capture_priority >= 0 order by capture_priority desc limit 25",
     ),
     tracks_capture_priority_track_id_idx: indexPlanStatement(
       indexName,
@@ -211,7 +219,7 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
     ),
     tracks_is_catalogue_idx: indexPlanStatement(
       indexName,
-      "select id from perf_tracks indexed by __INDEX__ where is_catalogue = 1 and id >= 'synthetic-track-000000000' limit 25",
+      "select count(*) from perf_tracks indexed by __INDEX__ where is_catalogue = 1",
     ),
     tracks_isrc_idx: indexPlanStatement(
       indexName,
@@ -232,6 +240,7 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
     tracks_mb_recording_id_queue_idx: indexPlanStatement(
       indexName,
       "select id from perf_tracks indexed by __INDEX__ where mb_recording_id is null and mb_recording_id_attempted_at is null and id >= 'synthetic-track-000000000' order by id limit 25",
+      { forced: true },
     ),
     tracks_nearest_finding_score_idx: indexPlanStatement(
       "tracks_catalogue_ear_idx",
@@ -546,6 +555,7 @@ const DEFAULT_HUB_NON_NULL_INDEXED = indexPlanStatement(
     where (release_date, id) < ('2026', 'synthetic-track-000000464')
     order by release_date desc, id desc
     limit 48`,
+  { forced: true },
 );
 const DEFAULT_HUB_NULL_REFERENCE = statement(
   `select id as track_id, release_date as rd
@@ -561,6 +571,7 @@ const DEFAULT_HUB_NULL_INDEXED = indexPlanStatement(
     where release_date is null
     order by release_date desc, id desc
     limit 48`,
+  { forced: true },
 );
 
 function releaseDateDropComparison(
@@ -677,19 +688,19 @@ function validateComparisonProof(
   const failures = [...validateSimpleIndexProof(definition, spec, execution)];
 
   if (metadata.outputsEquivalent !== true) {
-    failures.push("release-date consumer output changed after singleton removal");
+    failures.push("consumer output changed after singleton removal");
   }
   if (
     definition.inventoryEntry.decision === "drop" &&
     (metadata.droppedIndexAbsent !== true || metadata.productionPlanUsesDroppedIndex !== false)
   ) {
-    failures.push("release-date drop proof still depends on the removed singleton");
+    failures.push("drop proof still depends on the removed singleton");
   }
   if (metadata.referenceResultRowCount !== execution.resultRowCount) {
-    failures.push("release-date reference and indexed cardinalities differ");
+    failures.push("reference and replacement-index cardinalities differ");
   }
   if (metadata.productionPlanViolations !== 0) {
-    failures.push("an unforced production release-date plan violated its exact consumer policy");
+    failures.push("an unforced production plan violated its exact consumer policy");
   }
 
   return failures;
@@ -701,6 +712,7 @@ function definitionFor(entry: IndexInventoryEntry): IndexEvidenceDefinition {
     artifact_change_consumers_compaction_idx: "bounded-consumer-control-table",
     artifact_changes_created_seq_idx: "artifact-changes-integer-primary-key",
     operation_receipts_operation_audit_idx: "operation-receipts-primary-key",
+    tracks_capture_priority_idx: "tracks_vendor_worklist_idx",
     tracks_nearest_finding_score_idx: "tracks_catalogue_ear_idx",
     tracks_release_date_idx: "tracks_release_date_track_id_idx",
   };
@@ -717,6 +729,36 @@ function planSpecFor(
   entry: IndexInventoryEntry,
   contractId: string,
 ): IndexPlanSpec | ComparisonSpec {
+  if (entry.name === "tracks_capture_priority_idx") {
+    const exact = statement(
+      `select id, capture_priority
+         from perf_tracks
+        where is_catalogue = 1
+        order by capture_priority desc, id desc
+        limit 25`,
+    );
+    const replacement = statement(
+      exact.sql.replace(
+        "from perf_tracks",
+        "from perf_tracks indexed by perf_tracks_vendor_worklist_idx",
+      ),
+    );
+    return {
+      maxRows: 25,
+      minRows: 1,
+      productionPlanPolicies: [
+        {
+          forbidTempSort: true,
+          growingTables: ["perf_tracks"],
+          requiredDetails: [/perf_tracks_vendor_worklist_idx/i],
+        },
+      ],
+      references: [exact],
+      statement: exact,
+      supplementalStatements: [replacement],
+    };
+  }
+
   if (entry.name === "tracks_release_date_idx") {
     if (contractId === "index.tracks-release-date-drop-default-hub") {
       return defaultHubComparison();

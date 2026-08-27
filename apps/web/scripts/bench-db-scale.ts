@@ -265,21 +265,20 @@ const PROOFS: Proof[] = [
     title: "analyze worklist: captured-row scan → tracks_analyze_queue_idx seek",
   },
   {
-    // backfill.ts listCatalogueAppleWork — the shipped catalogue discriminator + cooldown shape.
-    // The query deliberately admits NULL capture_priority rows, so the partial composite cannot
-    // serve it. Trial-drop the plain index to prove why it remains load-bearing.
+    // backfill.ts listCatalogueAppleWork — the full vendor composite carries is_catalogue,
+    // nullable capture_priority, and the track-id tiebreak. Trial-drop the shadowed singleton.
     after: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     baseline: [{ args: [APPLE_COOLDOWN_CUTOFF, 100], sql: appleWorklistSql() }],
     index: {
       baselineDdl: `create index if not exists tracks_capture_priority_idx on tracks(capture_priority)`,
       ddl: `drop index if exists tracks_capture_priority_idx`,
-      expected: "load-bearing",
+      expected: "redundant",
       mode: "drop",
       name: "tracks_capture_priority_idx",
     },
     item: 13,
     rewrite: false,
-    title: "catalogue Apple worklist: tracks_capture_priority_idx keep proof",
+    title: "catalogue Apple worklist: capture-priority singleton → vendor composite",
   },
   {
     // catalogue.ts:2401-2412 quarantine lens — `capture_status = ?` is unindexed → full anti-join scan
@@ -385,21 +384,21 @@ const PROOFS: Proof[] = [
       "search name filters: JSON LIKE + lower() scans → track_artists / label_id / album_id / key seeks",
   },
   {
-    // backfill.ts listDeezerWork catalogue arm — the second metadata worklist with the same
-    // deliberate nullable-priority order. Trial-drop the plain index independently so this proof
-    // cannot inherit item 13's DDL state.
+    // backfill.ts listDeezerWork catalogue arm — the second metadata worklist with the same full
+    // vendor-composite order. Trial-drop the singleton independently so this proof cannot inherit
+    // item 13's DDL state.
     after: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
     baseline: [{ args: [3, 100], sql: deezerCatalogueWorklistSql() }],
     index: {
       baselineDdl: `create index if not exists tracks_capture_priority_idx on tracks(capture_priority)`,
       ddl: `drop index if exists tracks_capture_priority_idx`,
-      expected: "load-bearing",
+      expected: "redundant",
       mode: "drop",
       name: "tracks_capture_priority_idx",
     },
     item: 21,
     rewrite: false,
-    title: "catalogue Deezer worklist: tracks_capture_priority_idx keep proof",
+    title: "catalogue Deezer worklist: capture-priority singleton → vendor composite",
   },
   {
     // artists.ts getPublicArtistSocials + hydrateArtistOverview — equality and bounded IN reads.

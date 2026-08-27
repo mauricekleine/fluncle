@@ -2257,7 +2257,7 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     // `kind: "anchor"`) — this count is the indexed lower-bound gauge, not the full drain set (a
     // no-ISRC row has no partial index to count it cheaply, and counting the whole table on every
     // status read is exactly the growing-table scan the DB rules forbid).
-    db.execute(`select count(*) as n from tracks
+    db.execute(`select count(*) as n from tracks indexed by tracks_anchor_queue_idx
                 where isrc is not null and spotify_uri is null
                   and not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
     listLabels(),

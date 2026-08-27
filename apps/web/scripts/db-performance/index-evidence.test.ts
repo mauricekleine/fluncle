@@ -22,6 +22,92 @@ function cloneInventory(): IndexInventoryDocument {
 }
 
 describe("final index plan evidence", () => {
+  it("uses normal planner choice except for production SQL that deliberately locks a shrinking queue", () => {
+    const runtimeLockedIndexes = new Set([
+      "tracks_anchor_queue_idx",
+      "tracks_mb_recording_id_queue_idx",
+    ]);
+    const expectedPolicyFragments: Record<string, string> = {
+      "artifact-change-checkpoints-primary-key":
+        "sqlite_autoindex_perf_artifact_change_checkpoints_1",
+      "artifact-changes-integer-primary-key": "INTEGER PRIMARY KEY.*rowid",
+      "bounded-consumer-control-table": "perf_artifact_change_consumers",
+      "operation-receipts-primary-key": "sqlite_autoindex_perf_operation_receipts_1",
+    };
+    const genericSimpleContracts = indexEvidenceContracts().filter((contract) => {
+      const inventoryName = contract.indexEvidence?.inventoryEntry.name;
+
+      return (
+        contract.plan !== undefined &&
+        inventoryName !== undefined &&
+        inventoryName !== "tracks_release_date_idx" &&
+        inventoryName !== "tracks_release_date_track_id_idx"
+      );
+    });
+
+    expect(genericSimpleContracts.length).toBeGreaterThan(0);
+
+    for (const contract of genericSimpleContracts) {
+      const plan = contract.plan;
+      const requiredIndex = contract.indexEvidence?.requiredIndexName;
+      const inventoryName = contract.indexEvidence?.inventoryEntry.name;
+      if (!plan || !requiredIndex || !inventoryName) {
+        throw new Error(`generic index evidence contract is missing its plan: ${contract.id}`);
+      }
+
+      expect(plan.statement.sql.match(/\bINDEXED\s+BY\b/gi)?.length ?? 0).toBe(
+        runtimeLockedIndexes.has(inventoryName) ? 1 : 0,
+      );
+
+      const expectedPolicyFragment =
+        expectedPolicyFragments[requiredIndex] ?? `perf_${requiredIndex}`;
+      expect(plan.policy.requiredDetails?.map((pattern) => pattern.source).join(" ")).toContain(
+        expectedPolicyFragment,
+      );
+    }
+  });
+
+  it("keeps forced release-date variants supplemental to the unforced production plan", async () => {
+    const contract = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.tracks-release-date-drop-default-hub",
+    );
+    if (!contract?.plan) {
+      throw new Error("default hub release-date comparison contract has no plan");
+    }
+
+    const executedSql: string[] = [];
+    const execution = await contract.execute({
+      client: {
+        async execute(statement) {
+          const sql = typeof statement === "string" ? statement : statement.sql;
+          executedSql.push(sql);
+
+          if (/^EXPLAIN QUERY PLAN/i.test(sql) || /sqlite_master/i.test(sql)) {
+            return { rows: [] };
+          }
+
+          return { rows: [{ rd: "2026", track_id: "synthetic-track-000000000" }] };
+        },
+      },
+      iteration: 0,
+      now: () => 0,
+      profile: "1x",
+    });
+    const dataSql = executedSql.filter(
+      (sql) => !/^EXPLAIN QUERY PLAN/i.test(sql) && !/sqlite_master/i.test(sql),
+    );
+
+    expect(contract.plan.statement.sql).not.toMatch(/\bINDEXED\s+BY\b/i);
+    expect(execution.metadata?.outputsEquivalent).toBe(true);
+    expect(dataSql).toHaveLength(4);
+    expect(dataSql.slice(0, 2).every((sql) => !/\bINDEXED\s+BY\b/i.test(sql))).toBe(true);
+    expect(
+      dataSql
+        .slice(2)
+        .every((sql) => /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i.test(sql)),
+    ).toBe(true);
+  });
+
   it("rejects missing consumers, plan contracts, and required profile declarations", () => {
     const missingConsumer = cloneInventory();
     const firstConsumer = missingConsumer.tracksIndexes[0];
@@ -93,7 +179,19 @@ describe("final index plan evidence", () => {
         await writeFixture(client, profile, { counts: createCiFixtureCounts(profile, 512) });
         const report = await runPerformanceContracts({ client, contracts, profile });
 
-        expect(report.passed).toBe(true);
+        expect(
+          report.passed,
+          JSON.stringify(
+            report.contracts
+              .filter((contract) => !contract.passed)
+              .map((contract) => ({
+                budgetFailures: contract.budget.failures,
+                contractId: contract.contractId,
+                plan: contract.plan,
+                validationFailures: contract.validationFailures,
+              })),
+          ),
+        ).toBe(true);
         expect(report.indexAudit?.passed).toBe(true);
         expect(report.indexAudit?.totals).toEqual({
           databaseScaleIndexes: 30,
