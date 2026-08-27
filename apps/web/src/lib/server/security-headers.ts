@@ -167,8 +167,8 @@ export const CONTENT_POLICY = [
   // WHY archive.org rides along with coverartarchive.org, and why naming only the
   // latter was a BUG rather than a tight policy: a CAA cover URL is a redirect stub.
   // `coverartarchive.org/release/<id>/front-500` answers 307 → `archive.org/download/…`
-  // → 302 → a per-node `dn<NNNNNN>.ca.archive.org` across
-  // samples; the US pool answers as `ia<NNN>.us.archive.org`). CSP re-checks EVERY
+  // → 302 → a per-node archive.org host (`dn<NNNNNN>.ca.archive.org` in the CA pool,
+  // `ia<NNN>.us.archive.org` in the US pool). CSP re-checks EVERY
   // redirect hop, so allowing only the stub blocked the image at hop one and reported
   // it under the stub's own URL — which is exactly why FLUNCLE-WEB-6 kept firing (157
   // events) against a policy that already listed `coverartarchive.org`. Both forms are
@@ -367,10 +367,10 @@ export function securityHeadersFor(request: Request, response: Response): [strin
   // policy, so nothing is layered over it. This is what keeps the oEmbed card's
   // `frame-ancestors *` intact without this module carrying `/embed/` anywhere.
   if (!response.headers.has("content-security-policy")) {
-    // ONE header now, not two. Graduating the full policy to enforcing subsumes the
-    // framing-only header is not sent beside it — `frame-ancestors 'self'` is a
-    // directive INSIDE this policy — so the report-only slot simply stops being sent
-    // rather than being duplicated.
+    // ONE header now, not two. The enforced policy SUBSUMES the framing-only header —
+    // `frame-ancestors 'self'` is a directive INSIDE this policy — so that header is
+    // not sent beside it, and the report-only slot simply stops being sent rather than
+    // being duplicated.
     const policyHeader = isLocalDevOrigin(url)
       ? "Content-Security-Policy-Report-Only"
       : "Content-Security-Policy";
