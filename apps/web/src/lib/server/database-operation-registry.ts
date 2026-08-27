@@ -86,7 +86,7 @@ export type RecurringDatabaseOperation = OperationDatabaseProfile &
 type DatabaseProfileDefinition = Readonly<{
   accessClass: DatabaseAccessClass | null;
   mutationPolicyId?: MutationPolicyId;
-  mutationTarget?: DatabaseMutationTarget | null;
+  mutationTarget: DatabaseMutationTarget | null;
 }>;
 
 type OperationDefinition = Omit<
@@ -105,7 +105,7 @@ type OperationDefinition = Omit<
   directory?: string;
   incidents?: readonly IncidentOperation[];
   mutationPolicyId?: MutationPolicyId;
-  mutationTarget?: DatabaseMutationTarget | null;
+  mutationTarget: DatabaseMutationTarget | null;
   service?: string;
   serviceSource?: string;
   telemetryUnit?: string;
@@ -567,12 +567,7 @@ function profile(
   evidenceSource: string,
   fallbackPolicyId?: MutationPolicyId,
 ): OperationDatabaseProfile {
-  const mutationTarget =
-    definition.mutationTarget === undefined
-      ? definition.accessClass === "write"
-        ? "primary"
-        : null
-      : definition.mutationTarget;
+  const mutationTarget = definition.mutationTarget;
 
   if (definition.accessClass === "write" && mutationTarget === null) {
     throw new Error(`write operation ${operationId} has no mutation target`);
@@ -700,7 +695,7 @@ function defineOperation(definition: OperationDefinition): RecurringDatabaseOper
 type TriggerOptions = Readonly<{
   compatibility?: DatabaseProfileDefinition;
   mutationPolicyId?: MutationPolicyId;
-  mutationTarget?: DatabaseMutationTarget | null;
+  mutationTarget: DatabaseMutationTarget | null;
 }>;
 
 function triggerProfile(
@@ -717,12 +712,7 @@ function triggerProfile(
     mutationPolicyId: options.mutationPolicyId,
     mutationTarget: options.mutationTarget,
   };
-  const mutationTarget =
-    definition.mutationTarget === undefined
-      ? accessClass === "write"
-        ? "primary"
-        : null
-      : definition.mutationTarget;
+  const mutationTarget = definition.mutationTarget;
   const finalProfile = profile(
     operationId,
     definition,
@@ -734,9 +724,7 @@ function triggerProfile(
         operationId,
         options.compatibility,
         source,
-        options.compatibility.mutationTarget === null ||
-          (options.compatibility.mutationTarget === undefined &&
-            options.compatibility.accessClass !== "write")
+        options.compatibility.mutationTarget === null
           ? undefined
           : triggerMutationPolicyId(operationId),
       )
@@ -751,7 +739,7 @@ function cli(
   route: readonly string[],
   target: string,
   source: string,
-  options: TriggerOptions = {},
+  options: TriggerOptions,
 ): OperationTrigger {
   return {
     ...triggerProfile(operationId, accessClass, source, options),
@@ -769,7 +757,7 @@ function endpoint(
   method: "GET" | "PATCH" | "POST" | "PUT",
   path: string,
   source: string,
-  options: TriggerOptions = {},
+  options: TriggerOptions,
 ): OperationTrigger {
   return {
     ...triggerProfile(operationId, accessClass, source, options),
@@ -785,7 +773,7 @@ function direct(
   accessClass: DatabaseAccessClass | null,
   target: string,
   source: string,
-  options: TriggerOptions = {},
+  options: TriggerOptions,
 ): OperationTrigger {
   return {
     ...triggerProfile(operationId, accessClass, source, options),
@@ -801,9 +789,10 @@ function noDatabase(
   accessClass: null,
   target: string,
   source: string,
+  options: TriggerOptions,
 ): OperationTrigger {
   return {
-    ...triggerProfile(operationId, accessClass, source, {}),
+    ...triggerProfile(operationId, accessClass, source, options),
     kind: "no-database",
     operationId,
     source,
@@ -847,16 +836,15 @@ const daemon = (
 
 const SCRIPTS = `${HERMES_ROOT}/scripts`;
 
-const DUE_WORK_FLAG_OFF_READ: TriggerOptions = {
-  compatibility: { accessClass: "read", mutationTarget: null },
+const DUE_WORK_FLAG_OFF_COMPATIBILITY: DatabaseProfileDefinition = {
+  accessClass: "read",
+  mutationTarget: null,
 };
 
-const HEALTH_RECEIPT_FLAG_OFF_WRITE: TriggerOptions = {
-  compatibility: {
-    accessClass: "write",
-    mutationPolicyId: "health.snapshot.compatibility",
-    mutationTarget: "primary",
-  },
+const HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY: DatabaseProfileDefinition = {
+  accessClass: "write",
+  mutationPolicyId: "health.snapshot.compatibility",
+  mutationTarget: "primary",
 };
 
 /**
@@ -879,6 +867,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "apps/web/src/lib/server/albums.ts",
       ),
     ],
+    mutationTarget: "primary",
     operationId: "bio.album",
     service: "fluncle-album-bio.service",
     telemetryUnit: "album-bio",
@@ -890,7 +879,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "albums", "describe"],
         "fluncle admin albums describe --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "bio.album.draft",
@@ -898,6 +887,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "albums", "draft-bio"],
         "fluncle admin albums draft-bio <slug> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "bio.album.describe",
@@ -905,6 +895,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "albums", "describe"],
         "fluncle admin albums describe <slug> --bio-file <file> --prompt-version <version> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/album-bio-sweep.sh`,
@@ -914,6 +905,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("11min", "1h"),
     directory: "anchor-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "catalogue.anchor",
     service: "fluncle-anchor.service",
     telemetryUnit: "anchor",
@@ -925,7 +917,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "GET",
         "/api/v1/admin/tracks/work",
         `${SCRIPTS}/anchor-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       endpoint(
         "catalogue.anchor.search",
@@ -933,6 +925,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/catalogue/anchor",
         `${SCRIPTS}/anchor-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       endpoint(
         "catalogue.anchor.resolve",
@@ -940,6 +933,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/catalogue/anchor/resolve",
         `${SCRIPTS}/anchor-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/anchor-sweep.sh`,
@@ -949,6 +943,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("5min", "30min"),
     directory: "artist-bio-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "bio.artist",
     service: "fluncle-artist-bio.service",
     telemetryUnit: "artist-bio",
@@ -960,7 +955,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "artists", "describe"],
         "fluncle admin artists describe --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "bio.artist.draft",
@@ -968,6 +963,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "artists", "draft-bio"],
         "fluncle admin artists draft-bio <slug> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "bio.artist.describe",
@@ -975,6 +971,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "artists", "describe"],
         "fluncle admin artists describe <slug> --bio-file <file> --prompt-version <version> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/artist-bio-sweep.sh`,
@@ -984,6 +981,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("4min", "5min"),
     directory: "artist-credits-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "backfill.artist-credits",
     service: "fluncle-artist-credits.service",
     telemetryUnit: "artist-credits",
@@ -995,6 +993,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "artist-credits"],
         "fluncle admin backfills artist-credits --limit <bounded-limit> --json",
         `${SCRIPTS}/artist-credits-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/artist-credits-sweep.sh`,
@@ -1004,6 +1003,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("17min", "60min"),
     directory: "artist-edges-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "backfill.artist-edges",
     service: "fluncle-artist-edges.service",
     telemetryUnit: "artist-edges",
@@ -1015,6 +1015,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "artist-edges"],
         "fluncle admin backfills artist-edges --limit <bounded-limit> --json",
         `${SCRIPTS}/artist-edges-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/artist-edges-sweep.sh`,
@@ -1024,6 +1025,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("7min", "60min"),
     directory: "artist-sweep-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "artist.resolve",
     service: "fluncle-artist-sweep.service",
     telemetryUnit: "artist-sweep",
@@ -1035,6 +1037,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "artists", "resolve"],
         "fluncle admin artists resolve --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/artist-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "artist.resolve",
@@ -1042,6 +1045,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "artists", "resolve"],
         "fluncle admin artists resolve <id> --json",
         `${SCRIPTS}/artist-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.artist-images",
@@ -1049,6 +1053,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "artist-images"],
         "fluncle admin backfills artist-images --limit <bounded-limit> --json",
         `${SCRIPTS}/artist-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/artist-sweep.sh`,
@@ -1058,6 +1063,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 05:00:00 Europe/Amsterdam"),
     directory: "audit-review-timer",
     heavy: false,
+    mutationTarget: null,
     operationId: "ops.audit-review",
     service: "fluncle-audit-review.service",
     telemetryUnit: "audit-review",
@@ -1068,6 +1074,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "review the newest audit pull request",
         `${SCRIPTS}/audit-review-sweep.sh`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${SCRIPTS}/audit-review-sweep.sh`,
@@ -1077,6 +1084,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 01:00:00 Europe/Amsterdam"),
     directory: "audit-timer",
     heavy: false,
+    mutationTarget: null,
     operationId: "ops.audit",
     service: "fluncle-audit.service",
     telemetryUnit: "audit",
@@ -1087,6 +1095,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "run the nightly repository audit",
         `${SCRIPTS}/audit-sweep.sh`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${SCRIPTS}/audit-sweep.sh`,
@@ -1099,6 +1108,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     incidents: [
       incident("listDeezerWork", "backfill.deezer", "read", "apps/web/src/lib/server/backfill.ts"),
     ],
+    mutationTarget: "primary",
     operationId: "backfill.vendor-sweep",
     service: "fluncle-backfill.service",
     telemetryUnit: "backfill",
@@ -1110,6 +1120,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/backfill/discogs",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.lastfm",
@@ -1117,6 +1128,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "lastfm"],
         "fluncle admin backfills lastfm --limit <bounded-limit> --json",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.apple-music",
@@ -1124,6 +1136,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "apple-music"],
         "fluncle admin backfills apple-music --limit <bounded-limit> --json",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.apple-catalogue",
@@ -1131,6 +1144,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "apple-catalogue"],
         "fluncle admin backfills apple-catalogue --limit <bounded-limit> --json",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.beatport",
@@ -1138,6 +1152,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "beatport"],
         "fluncle admin backfills beatport --limit <bounded-limit> --json",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       endpoint(
         "backfill.discogs-facts",
@@ -1145,6 +1160,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/backfill/discogs-facts",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.deezer",
@@ -1152,6 +1168,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "deezer"],
         "fluncle admin backfills deezer --limit <bounded-limit> --json",
         `${SCRIPTS}/backfill-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/backfill-sweep.sh`,
@@ -1161,6 +1178,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 03:00:00 Europe/Amsterdam"),
     directory: "backup-timer",
     heavy: true,
+    mutationTarget: null,
     operationId: "database.backup",
     service: "fluncle-backup.service",
     telemetryUnit: "backup",
@@ -1171,6 +1189,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "heavy-read",
         "stream a read-only database dump to the backup archive",
         `${SCRIPTS}/backup-sweep.ts`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${SCRIPTS}/backup-sweep.sh`,
@@ -1180,6 +1199,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("3min", "5min"),
     directory: "capture-timer",
     heavy: true,
+    mutationTarget: "primary",
     operationId: "track.capture",
     service: "fluncle-capture.service",
     telemetryUnit: "capture",
@@ -1191,7 +1211,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "GET",
         "/api/v1/admin/tracks/work",
         `${SCRIPTS}/capture-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       endpoint(
         "track.capture.write",
@@ -1199,6 +1219,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "PATCH",
         "/api/v1/admin/tracks/{trackId}",
         `${SCRIPTS}/capture-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/capture-sweep.sh`,
@@ -1208,6 +1229,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 02:20:00 Europe/Amsterdam"),
     directory: "cluster-timer",
     heavy: true,
+    mutationTarget: "primary",
     operationId: "galaxies.cluster",
     service: "fluncle-cluster.service",
     telemetryUnit: "cluster",
@@ -1219,6 +1241,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "galaxies", "map"],
         "fluncle admin galaxies map --json",
         `${SCRIPTS}/cluster-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "galaxies.embeddings.read",
@@ -1226,6 +1249,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "galaxies", "embeddings"],
         "fluncle admin galaxies embeddings --cursor <cursor> --json",
         `${SCRIPTS}/cluster-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "galaxies.map.write",
@@ -1233,6 +1257,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "galaxies", "set-map"],
         "fluncle admin galaxies set-map --file <file> --json",
         `${SCRIPTS}/cluster-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "track.update.galaxy",
@@ -1240,6 +1265,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "update"],
         "fluncle admin tracks update <id> --galaxy-id <id> --json",
         `${SCRIPTS}/cluster-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/cluster-sweep.sh`,
@@ -1249,6 +1275,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("2min", "5min"),
     directory: "context-note-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "track.context",
     service: "fluncle-context-note.service",
     telemetryUnit: "context-note",
@@ -1260,7 +1287,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "context"],
         "fluncle admin tracks context --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/context-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "track.context.fill",
@@ -1268,6 +1295,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "context"],
         "fluncle admin tracks context <id> --json",
         `${SCRIPTS}/context-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/context-sweep.sh`,
@@ -1277,6 +1305,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("11min", "60min"),
     directory: "cover-masters-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "backfill.cover-masters",
     service: "fluncle-cover-masters.service",
     telemetryUnit: "cover-masters",
@@ -1288,6 +1317,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "cover-masters"],
         "fluncle admin backfills cover-masters --kind album --limit <bounded-limit> --json",
         `${SCRIPTS}/cover-masters-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
       cli(
         "backfill.cover-masters.artist",
@@ -1295,6 +1325,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "cover-masters"],
         "fluncle admin backfills cover-masters --kind artist --limit <bounded-limit> --json",
         `${SCRIPTS}/cover-masters-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/cover-masters-sweep.sh`,
@@ -1312,6 +1343,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "apps/web/src/lib/server/crawl.ts",
       ),
     ],
+    mutationTarget: "primary",
     operationId: "catalogue.crawl",
     service: "fluncle-crawl.service",
     telemetryUnit: "crawl",
@@ -1323,6 +1355,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "catalogue", "crawl"],
         "fluncle admin catalogue crawl --limit 60 --json",
         `${SCRIPTS}/crawl-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/crawl-sweep.sh`,
@@ -1332,6 +1365,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 04:40:00 Europe/Amsterdam"),
     directory: "demand-timer",
     heavy: true,
+    mutationTarget: "primary",
     operationId: "catalogue.demand",
     service: "fluncle-demand.service",
     telemetryUnit: "demand",
@@ -1343,6 +1377,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "catalogue", "demand"],
         "fluncle admin catalogue demand --json",
         `${SCRIPTS}/demand-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/demand-sweep.sh`,
@@ -1373,6 +1408,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("3min", "5min"),
     directory: "embed-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "track.embed",
     service: "fluncle-embed.service",
     telemetryUnit: "embed",
@@ -1384,7 +1420,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "GET",
         "/api/v1/admin/tracks/work",
         `${SCRIPTS}/embed-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "track.update.embedding",
@@ -1392,6 +1428,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "update"],
         "fluncle admin tracks update <id> --embedding-file <file> --json",
         `${SCRIPTS}/embed-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/embed-sweep.sh`,
@@ -1401,6 +1438,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("1min", "5min"),
     directory: "enrich-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "track.enrich",
     service: "fluncle-enrich.service",
     telemetryUnit: "enrich",
@@ -1412,7 +1450,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "enrich"],
         "fluncle admin tracks enrich --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/enrich-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "track.read",
@@ -1420,6 +1458,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["tracks", "get"],
         "fluncle tracks get <id> --json",
         `${SCRIPTS}/enrich-sweep.ts`,
+        { mutationTarget: null },
       ),
       endpoint(
         "track.enrich.catalogue-queue",
@@ -1427,7 +1466,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "GET",
         "/api/v1/admin/tracks/work",
         `${SCRIPTS}/enrich-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "track.update.analysis",
@@ -1435,6 +1474,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "update"],
         "fluncle admin tracks update <id> <analysis-fields> --json",
         `${SCRIPTS}/enrich-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/enrich-sweep.sh`,
@@ -1444,6 +1484,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*:0/15"),
     directory: "frontier-refresh-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "frontier.refresh",
     service: "fluncle-frontier-refresh.service",
     telemetryUnit: "frontier-refresh",
@@ -1455,6 +1496,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "frontier", "refresh"],
         "fluncle admin frontier refresh --json",
         `${SCRIPTS}/frontier-refresh-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/frontier-refresh-sweep.sh`,
@@ -1464,6 +1506,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 23:45:00 UTC"),
     directory: "funnel-snapshot-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "analytics.funnel-snapshot",
     service: "fluncle-funnel-snapshot.service",
     telemetryUnit: "funnel-snapshot",
@@ -1475,6 +1518,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/funnel/snapshot",
         `${SCRIPTS}/funnel-snapshot-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/funnel-snapshot-sweep.sh`,
@@ -1489,18 +1533,22 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     },
     directory: "healthcheck-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "health.snapshot",
     service: "fluncle-healthcheck.service",
     telemetryUnit: "healthcheck",
     timer: "fluncle-healthcheck.timer",
     triggers: [
-      endpoint("health.web", "read", "GET", "/api/v1/health", `${SCRIPTS}/fluncle-healthcheck.ts`),
+      endpoint("health.web", "read", "GET", "/api/v1/health", `${SCRIPTS}/fluncle-healthcheck.ts`, {
+        mutationTarget: null,
+      }),
       endpoint(
         "health.database",
         "read",
         "GET",
         "/api/v1/status",
         `${SCRIPTS}/fluncle-healthcheck.ts`,
+        { mutationTarget: null },
       ),
       endpoint(
         "health.snapshot",
@@ -1508,7 +1556,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/health",
         `${SCRIPTS}/fluncle-healthcheck.ts`,
-        HEALTH_RECEIPT_FLAG_OFF_WRITE,
+        {
+          compatibility: HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY,
+          mutationTarget: "primary",
+        },
       ),
     ],
     wrapperSource: `${SCRIPTS}/fluncle-healthcheck.sh`,
@@ -1518,6 +1569,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("12min", "1h"),
     directory: "isrc-recovery-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "catalogue.isrc-recovery",
     service: "fluncle-isrc-recovery.service",
     telemetryUnit: "isrc-recovery",
@@ -1529,7 +1581,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "GET",
         "/api/v1/admin/tracks/work",
         `${SCRIPTS}/isrc-recovery-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       endpoint(
         "catalogue.isrc-recovery.resolve",
@@ -1537,6 +1589,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/catalogue/anchor/resolve",
         `${SCRIPTS}/isrc-recovery-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/isrc-recovery-sweep.sh`,
@@ -1546,6 +1599,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("7min", "30min"),
     directory: "label-bio-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "bio.label",
     service: "fluncle-label-bio.service",
     telemetryUnit: "label-bio",
@@ -1557,7 +1611,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "labels", "describe"],
         "fluncle admin labels describe --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "bio.label.draft",
@@ -1565,6 +1619,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "labels", "draft-bio"],
         "fluncle admin labels draft-bio <slug> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "bio.label.describe",
@@ -1572,6 +1627,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "labels", "describe"],
         "fluncle admin labels describe <slug> --bio-file <file> --prompt-version <version> --json",
         `${SCRIPTS}/entity-bio-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-bio-sweep.sh`,
@@ -1581,6 +1637,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("8min", "60min"),
     directory: "label-images-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "backfill.label-images",
     service: "fluncle-label-images.service",
     telemetryUnit: "label-images",
@@ -1592,6 +1649,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "label-images"],
         "fluncle admin backfills label-images --limit <bounded-limit> --json",
         `${SCRIPTS}/label-images-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-images-sweep.sh`,
@@ -1601,6 +1659,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("13min", "60min"),
     directory: "label-lineage-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "backfill.label-lineage",
     service: "fluncle-label-lineage.service",
     telemetryUnit: "label-lineage",
@@ -1612,6 +1671,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "label-lineage"],
         "fluncle admin backfills label-lineage --limit <bounded-limit> --json",
         `${SCRIPTS}/label-lineage-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-lineage-sweep.sh`,
@@ -1621,6 +1681,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("23min", "24h"),
     directory: "label-releases-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "catalogue.label-releases",
     service: "fluncle-label-releases.service",
     telemetryUnit: "label-releases",
@@ -1632,6 +1693,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/backfill/label-releases",
         `${SCRIPTS}/label-releases-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-releases-sweep.sh`,
@@ -1641,6 +1703,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("30s", "1min", "90", false),
     directory: "live-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "live.snapshot",
     service: "fluncle-live.service",
     telemetryUnit: "live",
@@ -1652,6 +1715,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/twitch/live",
         `${SCRIPTS}/fluncle-live.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/fluncle-live.sh`,
@@ -1661,6 +1725,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 00:40:00 Europe/Amsterdam"),
     directory: "logbook-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "logbook.draft",
     service: "fluncle-logbook.service",
     telemetryUnit: "logbook",
@@ -1672,6 +1737,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "logbook", "gaps"],
         "fluncle admin logbook gaps --limit <bounded-limit> --json",
         `${SCRIPTS}/logbook-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "logbook.create",
@@ -1679,6 +1745,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "logbook", "create"],
         "fluncle admin logbook create <sector> --title <title> --body-file <file> --json",
         `${SCRIPTS}/logbook-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/logbook-sweep.sh`,
@@ -1688,6 +1755,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("Fri 15:00 Europe/Amsterdam"),
     directory: "newsletter-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "newsletter.draft",
     service: "fluncle-newsletter.service",
     telemetryUnit: "newsletter",
@@ -1699,6 +1767,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "newsletter", "list"],
         "fluncle admin newsletter list --json",
         `${SCRIPTS}/newsletter-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "newsletter.draft",
@@ -1706,6 +1775,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "newsletter", "draft"],
         "fluncle admin newsletter draft --content-file <file> --subject <subject> --window-since <iso> --window-until <iso> --json",
         `${SCRIPTS}/newsletter-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/newsletter-sweep.sh`,
@@ -1715,6 +1785,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("3min", "10min"),
     directory: "note-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "track.note",
     service: "fluncle-note.service",
     telemetryUnit: "note",
@@ -1726,7 +1797,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "note"],
         "fluncle admin tracks note --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/note-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "track.read",
@@ -1734,6 +1805,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["tracks", "get"],
         "fluncle tracks get <id> --json",
         `${SCRIPTS}/note-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "track.similar",
@@ -1741,6 +1813,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["tracks", "similar"],
         "fluncle tracks similar <id> --limit <bounded-limit> --json",
         `${SCRIPTS}/note-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "track.context.read",
@@ -1748,6 +1821,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "context"],
         "fluncle admin tracks context <id> --json",
         `${SCRIPTS}/note-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "track.note.write",
@@ -1755,6 +1829,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "note"],
         "fluncle admin tracks note <id> --script-file <file> --json",
         `${SCRIPTS}/note-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/note-sweep.sh`,
@@ -1764,6 +1839,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("4min", "60min"),
     directory: "observation-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "track.observe",
     service: "fluncle-observation.service",
     telemetryUnit: "observation",
@@ -1775,7 +1851,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "observe"],
         "fluncle admin tracks observe --queue --limit <bounded-limit> --json",
         `${SCRIPTS}/observe-sweep.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "track.read",
@@ -1783,6 +1859,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["tracks", "get"],
         "fluncle tracks get <id> --json",
         `${SCRIPTS}/observe-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "track.context.read",
@@ -1790,6 +1867,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "context"],
         "fluncle admin tracks context <id> --json",
         `${SCRIPTS}/observe-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "track.observe.write",
@@ -1797,6 +1875,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "observe"],
         "fluncle admin tracks observe <id> --script-file <file> --json",
         `${SCRIPTS}/observe-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/observe-sweep.sh`,
@@ -1806,6 +1885,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("10min", "1h", "90", true),
     directory: "pin-watch",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "ops.pin-watch",
     service: "pin-watch.service",
     telemetryUnit: "pin-watch",
@@ -1817,7 +1897,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/health",
         `${HERMES_ROOT}/pin-watch/rebuild-hermes.sh`,
-        HEALTH_RECEIPT_FLAG_OFF_WRITE,
+        {
+          compatibility: HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY,
+          mutationTarget: "primary",
+        },
       ),
     ],
     wrapperSource: `${HERMES_ROOT}/pin-watch/rebuild-hermes.sh`,
@@ -1827,6 +1910,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("9min", "30min"),
     directory: "publish-advance-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "social.publish-advance",
     service: "fluncle-publish-advance.service",
     telemetryUnit: "publish-advance",
@@ -1838,6 +1922,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/social/publish/advance",
         `${SCRIPTS}/publish-advance-sweep.sh`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/publish-advance-sweep.sh`,
@@ -1847,6 +1932,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("11min", "30min"),
     directory: "rank-timer",
     heavy: true,
+    mutationTarget: "primary",
     operationId: "catalogue.rank",
     service: "fluncle-rank.service",
     telemetryUnit: "rank",
@@ -1858,6 +1944,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "catalogue", "rank"],
         "fluncle admin catalogue rank --limit <bounded-limit> --json",
         `${SCRIPTS}/rank-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/rank-sweep.sh`,
@@ -1867,6 +1954,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 04:00:00 Europe/Amsterdam"),
     directory: "reach-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "reach.collect",
     service: "fluncle-reach.service",
     telemetryUnit: "reach",
@@ -1878,6 +1966,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "reach", "collect"],
         "fluncle admin reach collect --json",
         `${SCRIPTS}/reach-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/reach-sweep.sh`,
@@ -1887,6 +1976,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 04:10:00 Europe/Amsterdam"),
     directory: "reconcile-hub-counts-timer",
     heavy: true,
+    mutationTarget: "primary",
     operationId: "catalogue.reconcile-hub-counts",
     service: "fluncle-reconcile-hub-counts.service",
     telemetryUnit: "reconcile-hub-counts",
@@ -1898,6 +1988,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/hub-counts/reconcile",
         `${SCRIPTS}/reconcile-hub-counts.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/reconcile-hub-counts.sh`,
@@ -1921,6 +2012,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "apps/web/src/lib/server/recording-mbids.ts",
       ),
     ],
+    mutationTarget: "primary",
     operationId: "backfill.recording-mbids",
     service: "fluncle-recording-mbids.service",
     telemetryUnit: "recording-mbids",
@@ -1932,6 +2024,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "backfills", "recording-mbids"],
         "fluncle admin backfills recording-mbids --limit <bounded-limit> --json",
         `${SCRIPTS}/recording-mbids-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/recording-mbids-sweep.sh`,
@@ -1942,6 +2035,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     compatibility: { accessClass: "read", mutationTarget: null },
     directory: "render-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "render.conductor",
     service: "fluncle-render.service",
     telemetryUnit: "render",
@@ -1953,6 +2047,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "get"],
         "fluncle admin tracks get <id> --json",
         `${SCRIPTS}/render-conductor.sh`,
+        { mutationTarget: null },
       ),
       cli(
         "render.tracks.queue-read",
@@ -1960,7 +2055,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "queue"],
         "fluncle admin tracks queue --limit 25 --json",
         `${SCRIPTS}/render-conductor.sh`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       cli(
         "render.vehicles-read",
@@ -1968,6 +2063,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "vehicles"],
         "fluncle admin tracks vehicles --json",
         `${SCRIPTS}/render-conductor.sh`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${SCRIPTS}/render-conductor.sh`,
@@ -1977,6 +2073,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("1min", "15min", ""),
     directory: "secrets",
     heavy: false,
+    mutationTarget: null,
     operationId: "ops.secrets-sync",
     service: "fluncle-secrets-sync.service",
     telemetryUnit: "fluncle-secrets-sync",
@@ -1987,6 +2084,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "materialize the box secret files",
         `${HERMES_ROOT}/secrets/fluncle-secrets-sync.sh`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${HERMES_ROOT}/secrets/fluncle-secrets-sync.sh`,
@@ -1996,6 +2094,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 03:30:00 Europe/Amsterdam"),
     directory: "sentry-triage-timer",
     heavy: false,
+    mutationTarget: null,
     operationId: "ops.sentry-triage",
     service: "fluncle-sentry-triage.service",
     telemetryUnit: "sentry-triage",
@@ -2006,6 +2105,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "triage the Sentry issue queue",
         `${SCRIPTS}/sentry-triage-sweep.ts`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${SCRIPTS}/sentry-triage-sweep.sh`,
@@ -2015,6 +2115,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("6min", "10min"),
     directory: "social-capture-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "social.capture",
     service: "fluncle-social-capture.service",
     telemetryUnit: "social-capture",
@@ -2026,6 +2127,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/social/posts/capture",
         `${SCRIPTS}/social-capture-sweep.sh`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/social-capture-sweep.sh`,
@@ -2035,6 +2137,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*-*-* 22:15:00 UTC"),
     directory: "social-metrics-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "social.metrics",
     service: "fluncle-social-metrics.service",
     telemetryUnit: "social-metrics",
@@ -2046,6 +2149,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/social/metrics/record",
         `${SCRIPTS}/social-metrics-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/social-metrics-sweep.sh`,
@@ -2055,6 +2159,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("10min", "15min"),
     directory: "studio-clip-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "clips.studio",
     service: "fluncle-studio-clip.service",
     telemetryUnit: "studio-clip",
@@ -2066,6 +2171,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "clips", "list"],
         "fluncle admin clips list --status pending --json",
         `${SCRIPTS}/clip-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "clips.cut",
@@ -2073,6 +2179,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "clips", "cut"],
         "fluncle admin clips cut <id> --json",
         `${SCRIPTS}/clip-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/clip-sweep.sh`,
@@ -2082,6 +2189,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: calendar("*:0/15", "90"),
     directory: "timer-watchdog",
     heavy: false,
+    mutationTarget: null,
     operationId: "ops.timer-watchdog",
     service: "fluncle-timer-watchdog.service",
     telemetryUnit: "fluncle-timer-watchdog",
@@ -2092,6 +2200,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "inspect and re-arm stranded systemd timers",
         `${HERMES_ROOT}/timer-watchdog/timer-watchdog.sh`,
+        { mutationTarget: null },
       ),
     ],
     wrapperSource: `${HERMES_ROOT}/timer-watchdog/timer-watchdog.sh`,
@@ -2101,6 +2210,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("5min", "15min"),
     directory: "triage-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "submissions.triage",
     service: "fluncle-triage.service",
     telemetryUnit: "triage",
@@ -2112,6 +2222,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "submissions"],
         "fluncle admin submissions --json",
         `${SCRIPTS}/triage-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "track.admin-read",
@@ -2119,6 +2230,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "tracks", "get"],
         "fluncle admin tracks get <id> --json",
         `${SCRIPTS}/triage-sweep.ts`,
+        { mutationTarget: null },
       ),
       cli(
         "submissions.triage",
@@ -2126,6 +2238,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         ["admin", "submissions", "triage"],
         "fluncle admin submissions triage <id> --verdict-file <file> --json",
         `${SCRIPTS}/triage-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/triage-sweep.sh`,
@@ -2135,6 +2248,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     cadence: every("17min", "30min"),
     directory: "verify-captures-timer",
     heavy: false,
+    mutationTarget: "primary",
     operationId: "catalogue.verify-captures",
     service: "fluncle-verify-captures.service",
     telemetryUnit: "verify-captures",
@@ -2146,7 +2260,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "GET",
         "/api/v1/admin/catalogue/captures/unverified",
         `${SCRIPTS}/verify-captures.ts`,
-        DUE_WORK_FLAG_OFF_READ,
+        { compatibility: DUE_WORK_FLAG_OFF_COMPATIBILITY, mutationTarget: "primary" },
       ),
       endpoint(
         "catalogue.verify-captures.write",
@@ -2154,6 +2268,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/catalogue/captures/verify",
         `${SCRIPTS}/verify-captures.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/verify-captures.sh`,
@@ -2185,6 +2300,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     accessClass: "write",
     cadence: every("11min", "1h", "420"),
     heavy: false,
+    mutationTarget: "primary",
     operationId: "ops.sonar-freshen",
     service: "fluncle-sonar-freshen.service",
     serviceSource: "apps/sonar/deploy/fluncle-sonar-freshen.service",
@@ -2197,6 +2313,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "verify and swap the current sonar release",
         "apps/sonar/deploy/fluncle-sonar-freshen.sh",
+        { mutationTarget: null },
       ),
       endpoint(
         "health.snapshot",
@@ -2204,7 +2321,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/health",
         "apps/sonar/deploy/fluncle-sonar-freshen.sh",
-        HEALTH_RECEIPT_FLAG_OFF_WRITE,
+        {
+          compatibility: HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY,
+          mutationTarget: "primary",
+        },
       ),
     ],
     wrapperSource: "apps/sonar/deploy/fluncle-sonar-freshen.sh",
@@ -2213,6 +2333,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     accessClass: "write",
     cadence: every("5min", "1h"),
     heavy: false,
+    mutationTarget: "primary",
     operationId: "ops.ssh-freshen",
     service: "fluncle-ssh-freshen.service",
     serviceSource: "apps/ssh/deploy/fluncle-ssh-freshen.service",
@@ -2225,6 +2346,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "build, verify, and swap the SSH terminal release",
         "apps/ssh/deploy/fluncle-ssh-freshen.sh",
+        { mutationTarget: null },
       ),
       endpoint(
         "health.snapshot",
@@ -2232,7 +2354,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/health",
         "apps/ssh/deploy/fluncle-ssh-freshen.sh",
-        HEALTH_RECEIPT_FLAG_OFF_WRITE,
+        {
+          compatibility: HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY,
+          mutationTarget: "primary",
+        },
       ),
     ],
     wrapperSource: "apps/ssh/deploy/fluncle-ssh-freshen.sh",
@@ -2241,6 +2366,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     accessClass: "write",
     cadence: every("2min", "10min", "30"),
     heavy: false,
+    mutationTarget: "primary",
     operationId: "ops.rave-watchdog",
     service: "fluncle-rave-watchdog.service",
     serviceSource: "apps/ssh/watchdog/fluncle-rave-watchdog.service",
@@ -2253,6 +2379,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         null,
         "probe the remote box and Tor surface",
         "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
+        { mutationTarget: null },
       ),
       endpoint(
         "health.snapshot",
@@ -2260,7 +2387,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "POST",
         "/api/v1/admin/health",
         "apps/ssh/watchdog/fluncle-rave-watchdog.sh",
-        HEALTH_RECEIPT_FLAG_OFF_WRITE,
+        {
+          compatibility: HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY,
+          mutationTarget: "primary",
+        },
       ),
     ],
     wrapperSource: "apps/ssh/watchdog/fluncle-rave-watchdog.sh",

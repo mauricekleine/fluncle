@@ -11,6 +11,7 @@ import {
 import {
   DATABASE_MUTATION_POLICIES,
   DATABASE_OPERATION_REGISTRY,
+  type DatabaseMutationTarget,
   INCIDENT_MUTATION_POLICIES,
   mutationDispositionForPolicy,
   type OperationCadence,
@@ -427,6 +428,48 @@ function explicitAccessClass(
     : undefined;
 }
 
+function explicitObjectProperty(
+  argument: Argument | undefined,
+  name: string,
+  bindings: ReadonlyMap<string, Argument> = new Map(),
+): Argument | undefined {
+  const object = argument?.type === "Identifier" ? bindings.get(argument.name) : argument;
+
+  if (object?.type !== "ObjectExpression") {
+    return undefined;
+  }
+
+  const property = object.properties.find(
+    (candidate) =>
+      candidate.type === "Property" &&
+      !candidate.computed &&
+      ((candidate.key.type === "Identifier" && candidate.key.name === name) ||
+        (candidate.key.type === "Literal" && candidate.key.value === name)),
+  );
+
+  return property?.type === "Property" ? property.value : undefined;
+}
+
+function explicitMutationTarget(
+  argument: Argument | undefined,
+  bindings: ReadonlyMap<string, Argument> = new Map(),
+): DatabaseMutationTarget | null | undefined {
+  const value = explicitObjectProperty(argument, "mutationTarget", bindings);
+
+  if (value?.type !== "Literal") {
+    return undefined;
+  }
+  if (value.value === null) {
+    return null;
+  }
+
+  return value.value === "derived-local" ||
+    value.value === "derived-remote" ||
+    value.value === "primary"
+    ? value.value
+    : undefined;
+}
+
 describe("database operation registry", () => {
   it("covers every committed recurring timer and pins its exact cadence", () => {
     const timerSources = RECURRING_ROOTS.flatMap(filesBelow)
@@ -606,6 +649,69 @@ describe("database operation registry", () => {
     );
     expect(discovered).toEqual(registered);
     expect(discovered.every((accessClass) => accessClass !== undefined)).toBe(true);
+  });
+
+  it("requires every operation and trigger helper callsite to spell its mutation target", () => {
+    const source = "apps/web/src/lib/server/database-operation-registry.ts";
+    const path = join(REPO_ROOT, source);
+    const parsed = parseSync(path, readFileSync(path, "utf8"), { lang: "ts" });
+    const helpers = new Set(["cli", "direct", "endpoint", "noDatabase"]);
+    const operationTargets: Array<DatabaseMutationTarget | null | undefined> = [];
+    const triggerTargets: Array<DatabaseMutationTarget | null | undefined> = [];
+    const compatibilityTargets: Array<DatabaseMutationTarget | null | undefined> = [];
+    const bindings = new Map<string, Argument>();
+
+    new Visitor({
+      VariableDeclarator(node) {
+        if (node.id.type === "Identifier" && node.init?.type === "ObjectExpression") {
+          bindings.set(node.id.name, node.init);
+        }
+      },
+    }).visit(parsed.program);
+
+    new Visitor({
+      CallExpression(node) {
+        if (node.callee.type !== "Identifier") {
+          return;
+        }
+
+        if (node.callee.name === "defineOperation") {
+          const definition = node.arguments[0];
+          operationTargets.push(explicitMutationTarget(definition, bindings));
+          const compatibility = explicitObjectProperty(definition, "compatibility", bindings);
+          if (compatibility !== undefined) {
+            compatibilityTargets.push(explicitMutationTarget(compatibility, bindings));
+          }
+        } else if (helpers.has(node.callee.name)) {
+          const options = node.arguments.at(-1);
+          triggerTargets.push(explicitMutationTarget(options, bindings));
+          const compatibility = explicitObjectProperty(options, "compatibility", bindings);
+          if (compatibility !== undefined) {
+            compatibilityTargets.push(explicitMutationTarget(compatibility, bindings));
+          }
+        }
+      },
+    }).visit(parsed.program);
+
+    expect(operationTargets).toEqual(
+      DATABASE_OPERATION_REGISTRY.map((operation) => operation.mutationTarget),
+    );
+    expect(triggerTargets).toEqual(
+      DATABASE_OPERATION_REGISTRY.flatMap((operation) =>
+        operation.triggers.map((trigger) => trigger.mutationTarget),
+      ),
+    );
+    expect(compatibilityTargets).toEqual(
+      DATABASE_OPERATION_REGISTRY.flatMap((operation) => [
+        ...(operation.compatibility ? [operation.compatibility.mutationTarget] : []),
+        ...operation.triggers.flatMap((trigger) =>
+          trigger.compatibility ? [trigger.compatibility.mutationTarget] : [],
+        ),
+      ]),
+    );
+    expect(operationTargets.every((mutationTarget) => mutationTarget !== undefined)).toBe(true);
+    expect(triggerTargets.every((mutationTarget) => mutationTarget !== undefined)).toBe(true);
+    expect(compatibilityTargets.every((mutationTarget) => mutationTarget !== undefined)).toBe(true);
   });
 
   it("parses recurring wrappers so a new CLI call cannot bypass the registry", () => {
