@@ -216,7 +216,8 @@ const PROOFS: Proof[] = [
   },
   {
     // search.ts:678-690 compileFilters year — `substr(release_date,1,4)` wraps the column and defeats
-    // tracks_release_date_idx. Rewrite: a bare lexicographic range that rides the existing index.
+    // tracks_release_date_track_id_idx. Rewrite: a bare lexicographic range that rides the existing
+    // index.
     after: [
       {
         args: [],

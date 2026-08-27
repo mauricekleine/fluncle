@@ -16,7 +16,7 @@
 // the page never says he FOUND these — only that they just landed (VOICE.md's Found Rule).
 //
 // ── WHY IT SCALES ──────────────────────────────────────────────────────────────────────
-// `tracks.release_date` is a btree index (`tracks_release_date_idx`), so the window predicate
+// `tracks.release_date` leads the `tracks_release_date_track_id_idx` btree, so the window predicate
 // (`release_date BETWEEN <30d ago> AND <today>`) is a bounded RANGE SCAN and the `ORDER BY
 // release_date DESC` rides the same index — not the full scan of a growing table AGENTS.md
 // forbids. The window bounds the row set to ~a month of releases however big the catalogue

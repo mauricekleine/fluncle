@@ -1,0 +1,1 @@
+DROP INDEX `tracks_release_date_idx`;

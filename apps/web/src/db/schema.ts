@@ -1102,28 +1102,20 @@ export const tracks = sqliteTable(
       table.artistsJson,
       table.labelId,
     ),
-    // The `/fresh` window read ("what just came out"): `release_date BETWEEN <30d ago> AND
-    // <today>` ordered `release_date DESC`. Over a table built to grow to five figures, an
-    // unindexed range scan is exactly the full scan of a growing table AGENTS.md forbids, so
-    // release_date is a btree index — the range predicate + the ORDER BY both ride it, and the
-    // window bounds the scan to ~a month of rows however big the catalogue gets. A plain btree
-    // over a text column (not the vector `libsql_vector_idx` that wedges hosted Turso), so it
-    // builds like `tracks_key_idx` / `tracks_isrc_idx` beside it.
-    index("tracks_release_date_idx").on(table.releaseDate),
-    // The projected `/tracks` anchor document turns every numbered page into an exact strict
-    // `(release_date, track_id)` suffix. Keeping the tie-breaker in the same btree lets both the
-    // non-NULL range and the NULL-zone range seek without a corpus walk or a temporary tie sort.
-    // The older single-column index remains until the program's contraction goal audits every
-    // legacy/fresh caller independently.
+    // `/fresh` and the filtered release-year reads use the leading `release_date` column for
+    // bounded ranges, while the projected `/tracks` anchor document turns every numbered page
+    // into an exact strict `(release_date, track_id)` suffix. The tie-breaker lets both the
+    // non-NULL range and the NULL-zone range seek without a corpus walk or temporary tie sort.
+    // This one plain btree therefore serves the release window, grouping, and keyset consumers.
     index("tracks_release_date_track_id_idx").on(table.releaseDate, table.trackId),
     // The `/tracks` hub's BPM-range filter (`bpm >= ? and bpm <= ?`) over the whole-archive
     // browse list. A plain ASC btree — SQLite reverse-scans it, and a `desc()` index would poison
     // the drizzle snapshot into rebuilding every index on the next migration (the ratified trap).
-    // The hub's primary sort still rides `tracks_release_date_idx`; this index earns its keep for a
-    // narrow BPM range the planner can seek rather than filtering every scanned row. Builds like the
-    // `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that wedges hosted Turso).
+    // The hub's primary sort still rides `tracks_release_date_track_id_idx`; this index earns its
+    // keep for a narrow BPM range the planner can seek rather than filtering every scanned row.
+    // Builds like the `tracks_key_idx` btree beside it (never the vector `libsql_vector_idx` that
+    // wedges hosted Turso).
     index("tracks_bpm_idx").on(table.bpm),
-    index("tracks_nearest_finding_score_idx").on(table.nearestFindingScore),
     // THE METADATA-BACKFILL ORDER. This full index is load-bearing for the catalogue Apple and
     // Deezer worklists: both order by `capture_priority desc, track_id` without a
     // `capture_priority is not null` predicate, so the partial composite below cannot serve them.
@@ -1962,11 +1954,6 @@ export const operationReceipts = sqliteTable(
     index("operation_receipts_stale_accepted_idx")
       .on(table.state, table.updatedAt, table.operationKey)
       .where(sql`${table.state} = 'accepted'`),
-    index("operation_receipts_operation_audit_idx").on(
-      table.operationId,
-      table.createdAt,
-      table.operationKey,
-    ),
   ],
 );
 
@@ -2099,7 +2086,6 @@ export const artifactChanges = sqliteTable(
       table.revision,
     ),
     index("artifact_changes_stream_seq_idx").on(table.stream, table.streamVersion, table.seq),
-    index("artifact_changes_created_seq_idx").on(table.createdAt, table.seq),
   ],
 );
 
@@ -2168,9 +2154,6 @@ export const artifactChangeConsumers = sqliteTable(
         or (${table.state} = 'active' and ${table.snapshotSeq} is not null and ${table.snapshotSeq} >= 0 and ${table.appliedThroughSeq} is not null and ${table.appliedThroughSeq} >= ${table.snapshotSeq} and ${table.checkpointedAt} is not null)
         or (${table.state} = 'inactive' and ${table.snapshotSeq} is null and ${table.appliedThroughSeq} is null and ${table.checkpointedAt} is null)`,
     ),
-    index("artifact_change_consumers_compaction_idx")
-      .on(table.state, table.appliedThroughSeq, table.consumerId)
-      .where(sql`${table.state} = 'active'`),
   ],
 );
 
@@ -2235,9 +2218,6 @@ export const artifactChangeCheckpoints = sqliteTable(
       sql`(${table.state} = 'running' and ${table.completedAt} is null)
         or (${table.state} = 'complete' and ${table.completedAt} is not null and ${table.sourceDigest} is not null and ${table.consumerDigest} is not null)`,
     ),
-    index("artifact_change_checkpoints_running_idx")
-      .on(table.state, table.updatedAt, table.consumerId, table.stream, table.streamVersion)
-      .where(sql`${table.state} = 'running'`),
   ],
 );
 
