@@ -117,6 +117,7 @@ describe("database performance release proof", () => {
     inexact.fixture.counts.tracks -= 1;
     inexact.report.passed = false;
     delete inexact.report.criteria.projection;
+    inexact.indexAudit.passed = false;
     const rejected = validateProfileReport(JSON.stringify(inexact), "4x");
 
     expect(rejected.errors).toEqual(
@@ -124,6 +125,7 @@ describe("database performance release proof", () => {
         "profile 4x exactProfileCardinality is not true",
         "profile 4x fixture counts do not match the exact manifest cardinality",
         "profile 4x payload criterion projection is missing",
+        "profile 4x indexAudit.passed is not true",
         "profile 4x report.passed is not true",
       ]),
     );

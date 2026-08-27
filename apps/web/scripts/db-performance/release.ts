@@ -21,6 +21,9 @@ export const REQUIRED_RELEASE_CATEGORIES = [
   "sql-full-fixture-1x",
   "sql-full-fixture-2x",
   "sql-full-fixture-4x",
+  "dominant-regression-inventory",
+  "operation-registry-classification",
+  "compatibility-cutovers",
   "mixed-load",
   "admission-enforced",
   "admission-schema",
@@ -247,8 +250,10 @@ export function validateProfileReport(rawJson: string, profile: ScaleProfile): P
   if (!isRecord(parsed.clientBounds)) {
     malformedReport(`profile ${profile} report has no clientBounds object`);
   }
-  if (!(parsed.indexAudit === null || isRecord(parsed.indexAudit))) {
+  if (!isRecord(parsed.indexAudit)) {
     malformedReport(`profile ${profile} report has malformed indexAudit evidence`);
+  } else if (parsed.indexAudit.passed !== true) {
+    errors.push(`profile ${profile} indexAudit.passed is not true`);
   }
 
   const fixture = isRecord(parsed.fixture) ? parsed.fixture : null;
@@ -408,6 +413,30 @@ function profileCommand(profile: ScaleProfile): CommandDefinition {
 function releaseCommands(): CommandDefinition[] {
   return [
     ...SCALE_PROFILES.map(profileCommand),
+    {
+      categories: [
+        "dominant-regression-inventory",
+        "operation-registry-classification",
+        "compatibility-cutovers",
+      ],
+      command: [
+        "node",
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "scripts/db-performance/dominant-regression-inventory.test.ts",
+        "src/lib/server/database-operation-registry.test.ts",
+        "src/lib/server/backfill-due-work-cutover.integration.test.ts",
+        "src/lib/server/crawl-cutover.integration.test.ts",
+        "src/lib/server/due-work-cutover.integration.test.ts",
+        "src/lib/server/due-work-cutover-consumers.test.ts",
+        "src/lib/server/due-work-finding-bio-cutover.integration.test.ts",
+        "src/lib/server/due-work-image-cutovers.integration.test.ts",
+        "src/lib/server/due-work-vendor-core-cutover.integration.test.ts",
+        "src/lib/server/health-receipt-cutover.integration.test.ts",
+      ],
+      cwd: "apps/web",
+      id: "component-registry-and-cutovers",
+    },
     {
       categories: ["mixed-load"],
       command: [
