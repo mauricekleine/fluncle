@@ -68,12 +68,16 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 
 ```jsonc
 // apps/web/package.json
-"deploy:cf": "bun run db:migrate && bun run db:backfill && wrangler deploy"
+"deploy:cf": "bun run db:migrate:production && bun run db:backfill && wrangler deploy"
 ```
+
+`db:migrate:production` runs `scripts/guard-production-migrations.ts` before the ordinary `db:migrate`. Before constructing a database client, the guard reads `packages/contracts/src/orpc/admin-operation-receipts.ts`. A checkout that still exposes `get_operation_receipt_legacy` needs no caller floor. Once the route is absent, `FLUNCLE_OPERATION_RECEIPT_CALLER_FLOOR` must exactly equal the public floor `a58f9441088728efa03f8745813ac17425229c18`; keep that value in the deploy environment so ordinary later deploys remain authorized.
+
+The guard then reads the generated journal and the target database's Drizzle ledger, and computes which protected contractions are actually pending. No migration approval is needed when none are pending. If migration `0169`, `0170`, or `0171` is pending, `FLUNCLE_PROTECTED_MIGRATION_APPROVAL` must equal exactly the pending full tags in journal order, with no missing, applied, reordered, or extra tag; the guard prints the required non-secret value when it stops. Supply the value only for the attended deploy and unset it afterward. The local `db:migrate` command and the `dev` startup path never use this production-only approval guard.
 
 `db:backfill` is the idempotent data-backfill step folded into the deploy (a chain of `scripts/backfill-*.ts` scripts, beginning with `scripts/backfill-plan-recording-mixtape.ts`): DDL and the data it populates ship atomically, and because every backfill step is guarded (`where not exists` / convergent updates), re-running it on every deploy is a no-op once done. A new schema change that needs a data backfill appends another `backfill-*.ts` script to the chain rather than relying on a manual post-deploy step.
 
-The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the same `db:migrate` runs against prod there.
+The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so `db:migrate:production` inspects and migrates prod there.
 
 ## Files
 
@@ -81,6 +85,7 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 - `apps/web/scripts/render-dev-vars.ts` — render `apps/web/.dev.vars` from `apps/web/.dev.vars.tpl` via `op inject --account "$FLUNCLE_1PASSWORD_ACCOUNT"`; the 1Password item path comes from `FLUNCLE_1PASSWORD_ENV_ITEM`.
 - `apps/web/scripts/db-refresh.ts` — clone the snapshot into this worktree's `local.db` and point `.dev.vars` at a local port.
 - `apps/web/scripts/db-pull-prod.ts` — dump production to `.dev/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
+- `apps/web/scripts/guard-production-migrations.ts`: require the receipt caller floor when the checked-out contract has removed its legacy route, then compare the generated migration journal with the target's Drizzle ledger and require the exact pending protected-contraction approval before the production wrapper may call `db:migrate`.
 - `apps/web/.dev.vars.tpl` — committed 1Password reference template for local Worker secrets.
 - `apps/web/.dev/` — local database + snapshot (gitignored).
 

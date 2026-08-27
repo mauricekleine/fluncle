@@ -201,3 +201,12 @@ bun run --cwd apps/web db:performance --profile 1x --hosted --operator-approved
 ```
 
 The presence of credentials alone does nothing on normal/local/CI paths, and approval alone is rejected. Never use a production or shared development URL, never run the gate unattended, and never treat local timings as a substitute when the hosted confirmation remains pending.
+
+The older per-item `apps/web/scripts/bench-db-scale.ts` proof engine also mutates its supplied database by applying migrations, seeding synthetic rows, and trial-dropping indexes. Before that script constructs a client, `SCRATCH_TURSO_DATABASE_IDENTITY` must exactly match the canonical host parsed from `SCRATCH_TURSO_DATABASE_URL`; a production/development/local denylist remains defense in depth rather than the authority. Use placeholders in shared instructions and supply the real scratch identity only in the attended shell:
+
+```bash
+SCRATCH_TURSO_DATABASE_URL='libsql://<scratch-database-host>' \
+SCRATCH_TURSO_AUTH_TOKEN='<scratch-token>' \
+SCRATCH_TURSO_DATABASE_IDENTITY='<scratch-database-host>' \
+bun run apps/web/scripts/bench-db-scale.ts
+```

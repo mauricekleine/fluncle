@@ -28,6 +28,7 @@
  * ── USAGE ─────────────────────────────────────────────────────────────────────
  *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
  *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
+ *   SCRATCH_TURSO_DATABASE_IDENTITY=<exact-scratch-host> \
  *   bun run apps/web/scripts/bench-db-scale.ts
  *
  * Optional env:
@@ -36,9 +37,10 @@
  *   BENCH_ONLY=13,21,22,23   run only these item numbers (default: all)
  *   BENCH_SKIP_SEED=1        skip the seed phase and bench an already-seeded DB (iterate on benches)
  *
- * The operator CREATES the scratch DB before and DESTROYS it after — this only measures. It NEVER
- * points at `fluncle`/`fluncle-dev`/local (it refuses a URL containing either name, `127.0.0.1`, or
- * `file:`, exactly like the tracks-hub bench).
+ * The operator CREATES the scratch DB before and DESTROYS it after — this only measures. Before a
+ * client exists, the script requires a second, exact confirmation of the parsed URL host and also
+ * rejects production/development/local-looking targets. The confirmation is the positive identity
+ * gate; the denylist is defense in depth, never the authority.
  */
 import { createClient } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
@@ -48,6 +50,7 @@ import { fileURLToPath } from "node:url";
 
 import { ensureSearchIndex } from "../src/db/search-index";
 import { compileFilters } from "../src/lib/server/search";
+import { resolveScaleBenchTarget, type ScaleBenchTarget } from "./bench-db-scale-target";
 import { SEED_NOW, seedScale } from "./lib/scale-seed";
 
 function fail(message: string): never {
@@ -61,17 +64,15 @@ function envInt(name: string, fallback: number): number {
   return raw ? Number.parseInt(raw, 10) : fallback;
 }
 
-const url = process.env.SCRATCH_TURSO_DATABASE_URL;
-const authToken = process.env.SCRATCH_TURSO_AUTH_TOKEN;
-
-if (!url || !authToken) {
-  fail("set SCRATCH_TURSO_DATABASE_URL and SCRATCH_TURSO_AUTH_TOKEN (a THROWAWAY hosted DB)");
+function readScaleBenchTarget(): ScaleBenchTarget {
+  try {
+    return resolveScaleBenchTarget();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : "scratch target confirmation failed");
+  }
 }
 
-if (/fluncle(-dev)?\b/.test(url) || url.includes("127.0.0.1") || url.startsWith("file:")) {
-  fail(`refusing to run against ${url} — use a SCRATCH hosted Turso DB, never prod/dev/local`);
-}
-
+const target = readScaleBenchTarget();
 const scale = envInt("BENCH_SCALE", 150_000);
 const iterations = envInt("BENCH_ITERATIONS", 12);
 const only = (process.env.BENCH_ONLY ?? "")
@@ -80,7 +81,11 @@ const only = (process.env.BENCH_ONLY ?? "")
   .filter((value) => Number.isInteger(value));
 const skipSeed = process.env.BENCH_SKIP_SEED === "1";
 
-const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
+const client = createClient({
+  authToken: target.authToken,
+  concurrency: REMOTE_DB_CONCURRENCY,
+  url: target.url,
+});
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
 // ── The stamps the seeder wrote are relative to SEED_NOW, so the bench's cutoffs are too ──────────
