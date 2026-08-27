@@ -14,10 +14,12 @@ import { createClient, type Client } from "@libsql/client/web";
 import { readFileSync } from "node:fs";
 
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
+import {
+  guardCheckedOutOperationReceiptContract,
+  OPERATION_RECEIPT_CALLER_FLOOR_SHA,
+} from "./guard-production-contract";
 
 export const PROTECTED_MIGRATION_APPROVAL_ENV = "FLUNCLE_PROTECTED_MIGRATION_APPROVAL";
-export const OPERATION_RECEIPT_CALLER_FLOOR_ENV = "FLUNCLE_OPERATION_RECEIPT_CALLER_FLOOR";
-export const OPERATION_RECEIPT_CALLER_FLOOR_SHA = "a58f9441088728efa03f8745813ac17425229c18";
 export const PROTECTED_CONTRACTION_TAGS = [
   "0169_lonely_mariko_yashida",
   "0170_motionless_squadron_supreme",
@@ -43,30 +45,6 @@ type GuardResult = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Detect the exact compatibility operation in the checked-out oRPC contract source. */
-export function hasLegacyOperationReceiptRoute(contractSource: string): boolean {
-  return /^\s*["']?get_operation_receipt_legacy["']?\s*:/m.test(contractSource);
-}
-
-/** Require the durable deployed-caller floor only after this checkout removes the legacy route. */
-export function requireOperationReceiptCallerFloor(
-  contractSource: string,
-  callerFloor: string | undefined,
-): boolean {
-  const legacyRoutePresent = hasLegacyOperationReceiptRoute(contractSource);
-  if (legacyRoutePresent) {
-    return true;
-  }
-
-  if (callerFloor !== OPERATION_RECEIPT_CALLER_FLOOR_SHA) {
-    throw new Error(
-      `production migration guard: get_operation_receipt_legacy is absent; ${OPERATION_RECEIPT_CALLER_FLOOR_ENV} must exactly equal the deployed caller floor "${OPERATION_RECEIPT_CALLER_FLOOR_SHA}"`,
-    );
-  }
-
-  return false;
 }
 
 /** Parse the generated Drizzle journal and reject structural drift instead of guessing. */
@@ -227,14 +205,7 @@ export async function readLastAppliedMigrationWhen(
 }
 
 async function main(): Promise<void> {
-  const operationReceiptContractSource = readFileSync(
-    new URL("../../../packages/contracts/src/orpc/admin-operation-receipts.ts", import.meta.url),
-    "utf8",
-  );
-  const legacyOperationReceiptRoutePresent = requireOperationReceiptCallerFloor(
-    operationReceiptContractSource,
-    process.env[OPERATION_RECEIPT_CALLER_FLOOR_ENV],
-  );
+  const legacyOperationReceiptRoutePresent = guardCheckedOutOperationReceiptContract();
 
   const url = process.env.TURSO_DATABASE_URL?.trim();
   const authToken = process.env.TURSO_AUTH_TOKEN?.trim();

@@ -22,7 +22,7 @@
     "db:refresh-dev": "bun run scripts/db-refresh.ts",
     "db:restore-drill": "bun run scripts/restore-drill.ts",
     "db:secrets": "bun run scripts/render-dev-vars.ts",
-    "deploy": "bun run build && wrangler deploy",
+    "deploy": "bun run scripts/guard-production-contract.ts && bun run build && wrangler deploy",
     "deploy:cf": "bun run db:migrate:production && bun run db:backfill && wrangler deploy && bun scripts/purge-edge-cache.ts && bun run db:migrate:telemetry",
     "dev": "bun run scripts/dev.ts",
     "dev:vite": "bun run scripts/copy-sprites.ts && vite dev --host 127.0.0.1 --port 3000",

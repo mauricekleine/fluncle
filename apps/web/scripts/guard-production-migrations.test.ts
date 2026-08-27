@@ -3,16 +3,18 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  guardProtectedProductionMigrations,
   hasLegacyOperationReceiptRoute,
   OPERATION_RECEIPT_CALLER_FLOOR_ENV,
   OPERATION_RECEIPT_CALLER_FLOOR_SHA,
+  requireOperationReceiptCallerFloor,
+} from "./guard-production-contract";
+import {
+  guardProtectedProductionMigrations,
   parseMigrationJournal,
   pendingProtectedMigrationTags,
   PROTECTED_CONTRACTION_TAGS,
   PROTECTED_MIGRATION_APPROVAL_ENV,
   readLastAppliedMigrationWhen,
-  requireOperationReceiptCallerFloor,
   requireProtectedMigrationApproval,
 } from "./guard-production-migrations";
 
@@ -287,20 +289,40 @@ describe("production deploy migration boundary", () => {
     expect(chain).not.toContain("bun run db:migrate &&");
   });
 
+  it("routes a migration-free manual deploy through the local contract guard", () => {
+    const chain = pkg.scripts.deploy ?? "";
+    const guardAt = chain.indexOf("bun run scripts/guard-production-contract.ts");
+    const buildAt = chain.indexOf("bun run build");
+    const deployAt = chain.indexOf("wrangler deploy");
+
+    expect(guardAt).toBe(0);
+    expect(buildAt).toBeGreaterThan(guardAt);
+    expect(deployAt).toBeGreaterThan(buildAt);
+    expect(chain).not.toContain("db:migrate");
+  });
+
   it("checks the checked-out compatibility route before constructing a production client", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./guard-production-migrations.ts", import.meta.url)),
       "utf8",
     );
-    const contractReadAt = source.indexOf("const operationReceiptContractSource = readFileSync(");
     const callerFloorAt = source.indexOf(
-      "const legacyOperationReceiptRoutePresent = requireOperationReceiptCallerFloor(",
+      "const legacyOperationReceiptRoutePresent = guardCheckedOutOperationReceiptContract();",
     );
     const clientAt = source.indexOf("const client = createClient(");
 
-    expect(source).toContain('"../../../packages/contracts/src/orpc/admin-operation-receipts.ts"');
-    expect(contractReadAt).toBeGreaterThanOrEqual(0);
-    expect(callerFloorAt).toBeGreaterThan(contractReadAt);
+    expect(callerFloorAt).toBeGreaterThanOrEqual(0);
     expect(clientAt).toBeGreaterThan(callerFloorAt);
+  });
+
+  it("keeps the standalone deploy guard local and pointed at the checked-out contract", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./guard-production-contract.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain('"../../../packages/contracts/src/orpc/admin-operation-receipts.ts"');
+    expect(source).not.toContain("createClient");
+    expect(source).not.toContain("TURSO_");
   });
 });
