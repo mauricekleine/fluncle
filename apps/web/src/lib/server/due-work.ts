@@ -535,14 +535,16 @@ export function markDueWorkSourceMaintenanceStatements(
   ];
 }
 
-/** Build both maintenance rails from one bounded producer-owned `subject_id` selection. */
+/**
+ * Build both maintenance rails from one bounded producer-owned `subject_id` selection. The legacy
+ * marker is first because its affected-row count is the public epoch admission gate.
+ */
 export function markDueWorkSourceMaintenanceFromSelectStatements(
   subjectType: DueWorkSubjectType,
   selection: DueWorkPositionalStatement,
   options: {
     markerVersion?: string;
     now?: Date | string;
-    onlyIfPreviousStatementChanged?: boolean;
     producer: string;
   },
 ): DueWorkStatement[] {
@@ -560,10 +562,7 @@ export function markDueWorkSourceMaintenanceFromSelectStatements(
       subjectType,
       selection,
       markerVersion,
-      {
-        now: updatedAt,
-        onlyIfPreviousStatementChanged: options.onlyIfPreviousStatementChanged,
-      },
+      { now: updatedAt },
     ),
   ];
 }

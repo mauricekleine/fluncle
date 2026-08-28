@@ -492,15 +492,15 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: ["scripts/backfill-artist-socials-from-mb-dump.ts:insert:artist_socials:5a47a0b6"],
   },
   {
-    delegates: ["backfillHubCountStatement"],
+    delegates: ["applyHubCountsStatement"],
     disposition: "delegated-atomicity",
     file: "scripts/backfill-hub-counts.ts",
     rationale:
       "Each generated count backfill executes beside its entity marker in one write batch.",
     sites: [
-      "scripts/backfill-hub-counts.ts:update:labels:9bb0b2ff",
-      "scripts/backfill-hub-counts.ts:update:albums:a38bd285",
-      "scripts/backfill-hub-counts.ts:update:artists:69312875",
+      "scripts/backfill-hub-counts.ts:update:labels:6bb7f9a1",
+      "scripts/backfill-hub-counts.ts:update:albums:fd2fe11b",
+      "scripts/backfill-hub-counts.ts:update:artists:3f30ac21",
     ],
   },
   {
@@ -793,7 +793,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     disposition: "derived-projection-write",
     file: "scripts/backfill-hub-counts.ts",
     rationale: "Backfills maintained label hub counters only.",
-    sites: ["scripts/backfill-hub-counts.ts:update:labels:9bb0b2ff"],
+    sites: ["scripts/backfill-hub-counts.ts:update:labels:6bb7f9a1"],
   },
   {
     disposition: "non-projection-fact",

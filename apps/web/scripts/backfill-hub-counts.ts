@@ -9,11 +9,12 @@
  * pair as deltas (lib/server/hub-counts.ts) — but nothing in history was ever counted. This counts
  * it, once.
  *
- * THE SHAPE. One single-pass grouped `UPDATE … FROM (SELECT … GROUP BY fk)` per table — three
- * statements for the whole archive, not a per-entity loop. `certified` rides
- * `tracks.is_catalogue = 0` (keystone 1's materialized discriminator), never a `findings` join. The
- * artists pass groups over `track_artists ⋈ tracks`, the ~2×-tracks edge table. An entity with zero
- * linked tracks appears in no group and keeps its DDL default of 0 — correct by construction.
+ * THE SHAPE. One single-pass grouped aggregate per table is materialized into a connection-local
+ * TEMP relation, then both repair rails and the counter update read that bounded relation. There is
+ * no per-entity loop and no repeated archive scan. `certified` rides `tracks.is_catalogue = 0`
+ * (keystone 1's materialized discriminator), never a `findings` join. The artists pass groups over
+ * `track_artists ⋈ tracks`, the ~2×-tracks edge table. An entity with zero linked tracks appears in
+ * no group and keeps its DDL default of 0 — correct by construction.
  *
  * WHY THE GUARD, AND WHY IT IS NOT OPTIONAL. `db:backfill` runs on EVERY deploy, and this is the
  * one recompute-from-truth in the whole design — the exact shape the write paths are forbidden to
@@ -28,7 +29,7 @@
  * Reads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from the environment (locally from
  * apps/web/.dev.vars), exactly like `db:migrate`.
  */
-import { type Client, createClient } from "@libsql/client";
+import { type Client, type InStatement, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
@@ -42,82 +43,144 @@ export type HubCountsBackfillResult = {
   skipped: boolean;
 };
 
-/** The three grouped recomputes, in the order the result reports them. */
+/**
+ * Fixed internal identifiers only. A TEMP relation is connection-local, and create/populate/mark/
+ * apply/drop all run in one `client.batch`, so concurrent forced runs cannot share staged subjects.
+ */
+const LABELS_STAGE_TABLE = "backfill_hub_counts_labels_stage";
+const ALBUMS_STAGE_TABLE = "backfill_hub_counts_albums_stage";
+const ARTISTS_STAGE_TABLE = "backfill_hub_counts_artists_stage";
+
+type HubCountStageTable =
+  | typeof ALBUMS_STAGE_TABLE
+  | typeof ARTISTS_STAGE_TABLE
+  | typeof LABELS_STAGE_TABLE;
+
+type HubCountPass = {
+  applyHubCountsStatement: () => InStatement;
+  key: "albums" | "artists" | "labels";
+  marker: () => InStatement[];
+  stageHubCountsStatement: () => InStatement;
+  stageTable: HubCountStageTable;
+};
+
+function createStageStatement(stageTable: HubCountStageTable): InStatement {
+  return `create temp table if not exists ${stageTable} (
+    subject_id text primary key,
+    renderable integer not null,
+    certified integer not null
+  ) without rowid`;
+}
+
+function clearStageStatement(stageTable: HubCountStageTable): InStatement {
+  return `delete from temp.${stageTable}`;
+}
+
+function dropStageStatement(stageTable: HubCountStageTable): InStatement {
+  return `drop table temp.${stageTable}`;
+}
+
+/** The three staged recomputes, in the order the result reports them. */
 const PASSES = [
   {
-    backfillHubCountStatement: () => ({
+    applyHubCountsStatement: () => ({
       sql: `update labels
-            set renderable_track_count = src.renderable,
-                certified_finding_count = src.certified
-          from (select label_id,
-                       count(*) as renderable,
-                       sum(case when is_catalogue = 0 then 1 else 0 end) as certified
-                from tracks
-                where label_id is not null
-                group by label_id) src
-          where labels.id = src.label_id`,
+            set renderable_track_count = staged.renderable,
+                certified_finding_count = staged.certified
+          from temp.${LABELS_STAGE_TABLE} staged
+          where labels.id = staged.subject_id`,
     }),
     key: "labels" as const,
     marker: () =>
       markDueWorkSourceMaintenanceFromSelectStatements(
         "label",
         {
-          sql: `select label_id as subject_id from tracks
-                where label_id is not null group by label_id`,
+          sql: `select subject_id from temp.${LABELS_STAGE_TABLE}`,
         },
         { producer: "backfill-hub-counts-labels" },
       ),
+    stageHubCountsStatement: () => ({
+      sql: `insert into temp.${LABELS_STAGE_TABLE} (subject_id, renderable, certified)
+            select labels.id, src.renderable, src.certified
+            from labels
+            join (select label_id,
+                         count(*) as renderable,
+                         sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+                  from tracks
+                  where label_id is not null
+                  group by label_id) src on src.label_id = labels.id
+            where labels.renderable_track_count <> src.renderable
+               or labels.certified_finding_count <> src.certified`,
+    }),
+    stageTable: LABELS_STAGE_TABLE,
   },
   {
-    backfillHubCountStatement: () => ({
+    applyHubCountsStatement: () => ({
       sql: `update albums
-            set renderable_track_count = src.renderable,
-                certified_finding_count = src.certified
-          from (select album_id,
-                       count(*) as renderable,
-                       sum(case when is_catalogue = 0 then 1 else 0 end) as certified
-                from tracks
-                where album_id is not null
-                group by album_id) src
-          where albums.id = src.album_id`,
+            set renderable_track_count = staged.renderable,
+                certified_finding_count = staged.certified
+          from temp.${ALBUMS_STAGE_TABLE} staged
+          where albums.id = staged.subject_id`,
     }),
     key: "albums" as const,
     marker: () =>
       markDueWorkSourceMaintenanceFromSelectStatements(
         "album",
         {
-          sql: `select album_id as subject_id from tracks
-                where album_id is not null group by album_id`,
+          sql: `select subject_id from temp.${ALBUMS_STAGE_TABLE}`,
         },
         { producer: "backfill-hub-counts-albums" },
       ),
+    stageHubCountsStatement: () => ({
+      sql: `insert into temp.${ALBUMS_STAGE_TABLE} (subject_id, renderable, certified)
+            select albums.id, src.renderable, src.certified
+            from albums
+            join (select album_id,
+                         count(*) as renderable,
+                         sum(case when is_catalogue = 0 then 1 else 0 end) as certified
+                  from tracks
+                  where album_id is not null
+                  group by album_id) src on src.album_id = albums.id
+            where albums.renderable_track_count <> src.renderable
+               or albums.certified_finding_count <> src.certified`,
+    }),
+    stageTable: ALBUMS_STAGE_TABLE,
   },
   // The artists edge is the join table, so the group is over `track_artists ⋈ tracks` — the inner
   // join also drops an orphan edge whose track is gone, which is exactly right.
   {
-    backfillHubCountStatement: () => ({
+    applyHubCountsStatement: () => ({
       sql: `update artists
-            set renderable_track_count = src.renderable,
-                certified_finding_count = src.certified
-          from (select ta.artist_id,
-                       count(*) as renderable,
-                       sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified
-                from track_artists ta
-                join tracks t on t.track_id = ta.track_id
-                group by ta.artist_id) src
-          where artists.id = src.artist_id`,
+            set renderable_track_count = staged.renderable,
+                certified_finding_count = staged.certified
+          from temp.${ARTISTS_STAGE_TABLE} staged
+          where artists.id = staged.subject_id`,
     }),
     key: "artists" as const,
     marker: () =>
       markDueWorkSourceMaintenanceFromSelectStatements(
         "artist",
         {
-          sql: `select artist_id as subject_id from track_artists group by artist_id`,
+          sql: `select subject_id from temp.${ARTISTS_STAGE_TABLE}`,
         },
         { producer: "backfill-hub-counts-artists" },
       ),
+    stageHubCountsStatement: () => ({
+      sql: `insert into temp.${ARTISTS_STAGE_TABLE} (subject_id, renderable, certified)
+            select artists.id, src.renderable, src.certified
+            from artists
+            join (select ta.artist_id,
+                         count(*) as renderable,
+                         sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified
+                  from track_artists ta
+                  join tracks t on t.track_id = ta.track_id
+                  group by ta.artist_id) src on src.artist_id = artists.id
+            where artists.renderable_track_count <> src.renderable
+               or artists.certified_finding_count <> src.certified`,
+    }),
+    stageTable: ARTISTS_STAGE_TABLE,
   },
-];
+] satisfies HubCountPass[];
 
 /**
  * The core, taking any libSQL client so a test can drive it against an in-memory DB with the real
@@ -140,11 +203,16 @@ export async function backfillHubCounts(
   const filled = { albums: 0, artists: 0, labels: 0 };
 
   for (const pass of PASSES) {
-    const results = await client.batch(
-      [...pass.marker(), pass.backfillHubCountStatement()],
-      "write",
-    );
-    filled[pass.key] = results.at(-1)?.rowsAffected ?? 0;
+    const statements = [
+      createStageStatement(pass.stageTable),
+      clearStageStatement(pass.stageTable),
+      pass.stageHubCountsStatement(),
+      ...pass.marker(),
+      pass.applyHubCountsStatement(),
+      dropStageStatement(pass.stageTable),
+    ];
+    const results = await client.batch(statements, "write");
+    filled[pass.key] = results.at(-2)?.rowsAffected ?? 0;
   }
 
   return { filled, skipped: false };

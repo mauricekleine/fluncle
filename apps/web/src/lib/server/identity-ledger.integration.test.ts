@@ -36,6 +36,11 @@ vi.mock("./deezer", async (importOriginal) => {
 });
 
 import { backfillIdentityLedger } from "../../../scripts/backfill-identity-ledger";
+import {
+  initializePublicProjectionTestState,
+  readPublicProjectionMaintenanceSnapshot,
+  settlePublicProjectionTestState,
+} from "../../../scripts/lib/public-projection-test-state";
 import { recoverIsrcViaDeezer } from "./anchor";
 import { createIntegrationDb } from "./integration-db";
 
@@ -43,6 +48,7 @@ let db: Client;
 
 beforeEach(async () => {
   db = await createIntegrationDb();
+  await initializePublicProjectionTestState(db);
   holder.db = db;
   searchDeezerCandidates.mockReset();
 });
@@ -309,6 +315,43 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
     const first = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
     const before = [await ledger("sp_2"), await ledger("mb_2")];
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
+      aggregate: { projectionEpoch: 0, ready: false, sourceEpoch: 2 },
+      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 2 },
+      repairs: [
+        {
+          projection: "artist_qualification",
+          sourceEpoch: 1,
+          subjectId: "mb_2",
+          subjectType: "track",
+        },
+        {
+          projection: "artist_qualification",
+          sourceEpoch: 2,
+          subjectId: "sp_2",
+          subjectType: "track",
+        },
+        {
+          projection: "public_aggregates",
+          sourceEpoch: 1,
+          subjectId: "mb_2",
+          subjectType: "track",
+        },
+        {
+          projection: "public_aggregates",
+          sourceEpoch: 2,
+          subjectId: "sp_2",
+          subjectType: "track",
+        },
+      ],
+    });
+    await settlePublicProjectionTestState(db);
+    const ready = await readPublicProjectionMaintenanceSnapshot(db);
+    expect(ready).toEqual({
+      aggregate: { projectionEpoch: 2, ready: true, sourceEpoch: 2 },
+      artists: { projectionEpoch: 2, ready: true, sourceEpoch: 2 },
+      repairs: [],
+    });
 
     const second = await backfillIdentityLedger(db, "2026-07-30T00:00:00.000Z");
     const after = [await ledger("sp_2"), await ledger("mb_2")];
@@ -316,6 +359,7 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
     expect(first).toEqual({ discogsStamped: 1, isrcStamped: 2, publishAnchorsStamped: 0 });
     expect(second).toEqual({ discogsStamped: 0, isrcStamped: 0, publishAnchorsStamped: 0 });
     expect(after).toEqual(before);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual(ready);
   });
 
   it("never overwrites a stamp a real attempt has already written", async () => {

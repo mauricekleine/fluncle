@@ -14,6 +14,7 @@ import {
   hasReadyDueWork,
   listReadyDueWork,
   markDueWorkRepair,
+  markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceRepairsStatement,
   readDueWorkProjectionChunk,
   readDueWorkRebuild,
@@ -326,6 +327,26 @@ describe("due-work repair and drift", () => {
       sql: `select subject_id from due_work where work_kind = ?`,
     });
     expect(markers.rows).toEqual([]);
+    expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
+    expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);
+  });
+
+  it("does not advance public epochs when a bounded source selection is empty", async () => {
+    await db.execute(`create table selected_source_probe (id text primary key)`);
+    await db.batch(
+      [
+        ...markDueWorkSourceMaintenanceFromSelectStatements(
+          "track",
+          { sql: `select id as subject_id from selected_source_probe` },
+          { markerVersion: "empty-v1", now: T0, producer: "test-selected-writer" },
+        ),
+        { sql: `update selected_source_probe set id = id` },
+      ],
+      "write",
+    );
+
+    expect((await db.execute(`select subject_id from due_work`)).rows).toEqual([]);
     expect((await db.execute(`select subject_id from projection_repairs`)).rows).toEqual([]);
     expect((await db.execute(`select scope from public_aggregate_state`)).rows).toEqual([]);
     expect((await db.execute(`select scope from artist_qualification_state`)).rows).toEqual([]);

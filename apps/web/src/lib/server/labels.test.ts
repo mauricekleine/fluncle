@@ -17,6 +17,11 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { backfillLabels, linkTracksToLabels } from "../../../scripts/backfill-labels";
+import {
+  initializePublicProjectionTestState,
+  readPublicProjectionMaintenanceSnapshot,
+  settlePublicProjectionTestState,
+} from "../../../scripts/lib/public-projection-test-state";
 import { createIntegrationDb } from "./integration-db";
 import { bestAlbumCoverUrl } from "../media";
 import {
@@ -488,6 +493,47 @@ describe("listLabelReviewRows (the attention-queue source)", () => {
 });
 
 describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
+  it("advances only the changed label source and keeps an empty track selection ready", async () => {
+    await initializePublicProjectionTestState(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    await db.batch(
+      [
+        {
+          args: ["lab-enabled", "Hospital Records", "hospital-records", now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)`,
+        },
+        {
+          args: ["lab-held", "UKF", "ukf", now, now],
+          sql: `insert into labels (id, name, slug, created_at, updated_at)
+                values (?, ?, ?, ?, ?)`,
+        },
+      ],
+      "write",
+    );
+
+    await backfillLabels(db);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual({
+      aggregate: { projectionEpoch: 0, ready: true, sourceEpoch: 0 },
+      artists: { projectionEpoch: 0, ready: false, sourceEpoch: 1 },
+      repairs: [
+        {
+          projection: "artist_qualification",
+          sourceEpoch: 1,
+          subjectId: "lab-enabled",
+          subjectType: "label",
+        },
+      ],
+    });
+    await settlePublicProjectionTestState(db);
+    const ready = await readPublicProjectionMaintenanceSnapshot(db);
+
+    const second = await backfillLabels(db);
+
+    expect(second.bootstrapped).toBe(false);
+    expect(await readPublicProjectionMaintenanceSnapshot(db)).toEqual(ready);
+  });
+
   it("reconciles, applies the starting ruling, and never runs a second time", async () => {
     await seedFinding("t1", "Hospital Records");
     await seedFinding("t2", "Anjunabeats");

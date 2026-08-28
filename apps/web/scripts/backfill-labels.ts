@@ -327,7 +327,7 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
   const rows = await client.execute({
     // `ruled_at is null` is belt and braces: an operator ruling is never clobbered, even
     // if the marker were cleared by hand.
-    sql: `select id, slug from labels where ruled_at is null`,
+    sql: `select id, slug, seed_state from labels where ruled_at is null`,
   });
 
   for (const row of rows.rows) {
@@ -339,36 +339,43 @@ export async function backfillLabels(client: Client): Promise<LabelsBackfillResu
         : "enabled";
 
     const labelId = asText(row.id);
-    await client.batch(
-      [
-        {
-          // `ruled_at` stays NULL: this is the machine's bootstrap, not a human's ruling.
-          args: [state, now, labelId],
-          sql: `update labels set seed_state = ?, updated_at = ?
-                where id = ? and ruled_at is null`,
-        },
-        ...markDueWorkSourceMaintenanceStatements(
-          [
-            { subjectId: labelId, subjectType: "label" },
-            {
-              subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
-              subjectType: "track",
-            },
-          ],
-          { onlyIfPreviousStatementChanged: true, producer: "backfill-label-seed" },
-        ),
-        restaleCatalogueRankByLabelStatement(labelId),
-        ...markDueWorkSourceMaintenanceFromSelectStatements(
-          "track",
+    if (asText(row.seed_state) !== state) {
+      const restale = restaleCatalogueRankByLabelStatement(labelId);
+      await client.batch(
+        [
           {
-            args: [labelId],
-            sql: `select track_id as subject_id from tracks where label_id = ?`,
+            // `ruled_at` stays NULL: this is the machine's bootstrap, not a human's ruling.
+            args: [state, now, labelId, state],
+            sql: `update labels set seed_state = ?, updated_at = ?
+                  where id = ? and ruled_at is null and seed_state <> ?`,
           },
-          { producer: "backfill-label-seed" },
-        ),
-      ],
-      "write",
-    );
+          ...markDueWorkSourceMaintenanceStatements(
+            [
+              { subjectId: labelId, subjectType: "label" },
+              {
+                subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
+                subjectType: "track",
+              },
+            ],
+            { onlyIfPreviousStatementChanged: true, producer: "backfill-label-seed" },
+          ),
+          {
+            ...restale,
+            sql: `${restale.sql} and changes() > 0`,
+          },
+          ...markDueWorkSourceMaintenanceFromSelectStatements(
+            "track",
+            {
+              args: [labelId],
+              sql: `select track_id as subject_id from tracks
+                    where label_id = ? and changes() > 0`,
+            },
+            { producer: "backfill-label-seed" },
+          ),
+        ],
+        "write",
+      );
+    }
 
     result[state] += 1;
   }

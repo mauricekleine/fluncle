@@ -248,22 +248,26 @@ export function markPublicProjectionSourceChangedStatements(
   return statements;
 }
 
-/** Build public shadow markers from the same bounded selection used by a source write batch. */
+/**
+ * Build public shadow markers after a bounded selection marker. Epoch admission is deliberately
+ * non-configurable at this API boundary: every epoch statement checks `changes()` from the marker
+ * immediately before it, so an empty selection cannot initialize or advance public state.
+ */
 export function markPublicProjectionSourceChangedFromSelectStatements(
   subjectType: PublicProjectionSourceSubject["subjectType"],
   selection: PublicProjectionSourceSelection,
   sourceVersion: string,
-  options: { now?: Date | string; onlyIfPreviousStatementChanged?: boolean } = {},
+  options: { now?: Date | string } = {},
 ): PublicProjectionStatement[] {
   if (subjectType === "album") {
     return [];
   }
   assertNonEmpty(sourceVersion, "public projection source version");
+  assertNonEmpty(selection.sql, "public projection source selection");
   const now = iso(options.now ?? new Date(), "public projection marker time");
-  const conditional = options.onlyIfPreviousStatementChanged === true;
   if (subjectType === "track") {
     return [
-      advancePublicAggregateEpochStatement(now, conditional),
+      advancePublicAggregateEpochStatement(now, true),
       insertProjectionRepairsFromSelectionStatement(
         "public_aggregates",
         subjectType,
@@ -282,7 +286,7 @@ export function markPublicProjectionSourceChangedFromSelectStatements(
     ];
   }
   return [
-    advanceArtistQualificationEpochStatement(now, conditional),
+    advanceArtistQualificationEpochStatement(now, true),
     insertProjectionRepairsFromSelectionStatement(
       "artist_qualification",
       subjectType,
