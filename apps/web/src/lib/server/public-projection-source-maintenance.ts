@@ -1,10 +1,11 @@
 import { type InStatement, type InValue } from "@libsql/client";
-import { createHash } from "node:crypto";
 
 export const PUBLIC_PROJECTION_LIVE_GENERATION = "live";
 export const PUBLIC_PROJECTION_SYNTHETIC_TRACK_SUBJECT_ID = "@catalogue-rank-corpus";
 
-const EMPTY_DIGEST = createHash("sha256").digest("hex");
+// SHA-256 of an empty byte sequence. This is a fixed sentinel, so computing it at module load
+// only introduces a server-only runtime dependency into otherwise declarative SQL builders.
+const EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 export type PublicProjectionStatement = Exclude<InStatement, string>;
 export type PublicProjectionSourceSubject = {
