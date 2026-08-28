@@ -2,6 +2,8 @@ import { createClient } from "@libsql/client";
 import { type MigrationMeta } from "drizzle-orm/migrator";
 import { describe, expect, it } from "vitest";
 
+import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
+
 import {
   type MigrationJournalEntry,
   type ProductionMigrationPlan,
@@ -77,7 +79,7 @@ describe("production migration runner", () => {
   });
 
   it("applies and stamps only the authorized prefix in a real libSQL database", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
     try {
       await applyProductionMigrationPlan(
@@ -102,7 +104,7 @@ describe("production migration runner", () => {
   });
 
   it("propagates a migration failure and atomically withholds its schema and ledger stamp", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     const failingMigrations: MigrationMeta[] = [
       {
         bps: true,
