@@ -1862,20 +1862,31 @@ export async function runPublicProjectionRebuildChunk(
 
     if (cleanupComplete) {
       await client.execute({ args: [cleanupKey], sql: `delete from settings where key = ?` });
-      const stateTable =
-        projection === "public_aggregates"
-          ? "public_aggregate_state"
-          : "artist_qualification_state";
-      const scope = projection === "public_aggregates" ? "tracks" : "artists";
-      const epochColumn =
-        projection === "public_aggregates" ? "aggregate_epoch" : "projection_epoch";
-      await client.execute({
-        args: [now, now, "0".repeat(64), "0".repeat(64), checkpoint.generation, checkpoint.cursor],
-        sql: `update ${stateTable} set state = 'complete', completed_at = ?, updated_at = ?,
-            source_digest = ?, projected_digest = ?,
-            ${epochColumn} = rebuild_start_epoch
-          where scope = '${scope}' and generation = ? and state = 'running' and cursor is ?`,
-      });
+      const completionArgs = [
+        now,
+        now,
+        "0".repeat(64),
+        "0".repeat(64),
+        checkpoint.generation,
+        checkpoint.cursor,
+      ];
+      if (projection === "public_aggregates") {
+        await client.execute({
+          args: completionArgs,
+          sql: `update public_aggregate_state
+            set state = 'complete', completed_at = ?, updated_at = ?,
+                source_digest = ?, projected_digest = ?, aggregate_epoch = rebuild_start_epoch
+            where scope = 'tracks' and generation = ? and state = 'running' and cursor is ?`,
+        });
+      } else {
+        await client.execute({
+          args: completionArgs,
+          sql: `update artist_qualification_state
+            set state = 'complete', completed_at = ?, updated_at = ?,
+                source_digest = ?, projected_digest = ?, projection_epoch = rebuild_start_epoch
+            where scope = 'artists' and generation = ? and state = 'running' and cursor is ?`,
+        });
+      }
     } else {
       await client.execute({
         args: [cleanupKey, JSON.stringify(cleanup)],

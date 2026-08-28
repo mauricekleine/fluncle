@@ -1,6 +1,7 @@
 import { createClient, type Client, type InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 import {
   advanceProjectionAudit,
@@ -28,10 +29,10 @@ import { TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE } from "./tracks-hub";
 const EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 describe("projection production operations", () => {
-  let db = createClient({ url: ":memory:" });
+  let db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
   beforeEach(async () => {
-    db = createClient({ url: ":memory:" });
+    db = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     await db.executeMultiple(`
       create table settings (key text primary key, value text not null);
       create table due_work (

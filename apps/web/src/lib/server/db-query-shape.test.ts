@@ -513,11 +513,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The `/album/<slug>` unlit slice. Album-SEEKED (`tracks.album_id = ?` over tracks_album_id_idx), so the anti-join is a residual on one album's rows.",
   },
   {
-    count: 3,
+    count: 4,
     file: "lib/server/public-projections.ts",
     pattern: "anti-join:findings-is-null",
     reason:
-      "The artist-qualification shadow projection. One occurrence is a track-id-seeked repair; the other two are the exact source digest and bounded drift scheduler used by the local-only audit/backfill command, never a public request path. All three compute a contribution bit from a left join rather than filter the catalogue through an anti-join.",
+      "The artist-qualification shadow projection. One occurrence is a track-id-seeked repair; two are the exact source digest and bounded drift scheduler used by the local-only audit/backfill command, never a public request path. The operator audit lane is primary-key keyset paged on `(track_id, artist_id)` and capped at 100 rows, with its indexed SEARCH plan pinned in projection-cleanup-plans.integration.test.ts. All four compute a contribution bit from a left join rather than filter the catalogue through an anti-join.",
   },
 
   // ── the catalogue anti-join, `not exists (select 1 from findings …)` ────────────

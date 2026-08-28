@@ -1,8 +1,12 @@
-import { type Client, type InValue } from "@libsql/client";
+import { type Client, type InStatement, type InValue } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
-import { trackAnchorSourcePageQuery } from "./public-projections";
+import {
+  type PublicProjectionClient,
+  readPublicProjectionAuditChunk,
+  trackAnchorSourcePageQuery,
+} from "./public-projections";
 
 describe("bounded projection cleanup plans", () => {
   let db: Client;
@@ -80,6 +84,48 @@ describe("bounded projection cleanup plans", () => {
         .join("\n");
       expect(detail).toContain(
         "SEARCH tracks USING COVERING INDEX tracks_release_date_track_id_idx",
+      );
+      expect(detail).not.toContain("SCAN ");
+      expect(detail).not.toContain("USE TEMP B-TREE");
+    }
+  });
+
+  it("keyset-pages the artist contribution source audit through its ordered primary key", async () => {
+    const statements: Array<Exclude<InStatement, string>> = [];
+    const traced: PublicProjectionClient = {
+      batch: db.batch.bind(db),
+      execute: async (statement) => {
+        if (typeof statement === "string") {
+          return db.execute(statement);
+        }
+        statements.push(statement);
+        return db.execute(statement);
+      },
+    };
+
+    await readPublicProjectionAuditChunk(traced, "artist_source_contributions", {
+      cursor: null,
+      limit: 10,
+    });
+    await readPublicProjectionAuditChunk(traced, "artist_source_contributions", {
+      cursor: JSON.stringify(["track-a", "artist-a"]),
+      limit: 10,
+    });
+
+    expect(statements).toHaveLength(2);
+    for (const statement of statements) {
+      const args = statement.args;
+      if (!Array.isArray(args)) {
+        throw new Error("artist contribution audit query must use positional arguments");
+      }
+      expect(statement.sql).toContain("where (ta.track_id, ta.artist_id) > (?, ?)");
+      expect(statement.sql).toContain("order by ta.track_id, ta.artist_id limit ?");
+      expect(args.at(-1)).toBe(10);
+      const detail = (await db.execute({ args, sql: `explain query plan ${statement.sql}` })).rows
+        .flatMap((row) => (typeof row.detail === "string" ? [row.detail] : []))
+        .join("\n");
+      expect(detail).toMatch(
+        /SEARCH ta USING (?:COVERING )?INDEX sqlite_autoindex_track_artists_1 \(\(track_id,artist_id\)>\(\?,\?\)\)/,
       );
       expect(detail).not.toContain("SCAN ");
       expect(detail).not.toContain("USE TEMP B-TREE");
