@@ -8461,6 +8461,7 @@ function normalizeCommanderError(error: unknown): unknown {
 // is absent from this set — add every new value-taking option here.
 const stringOptions = new Set([
   "--isrc-refresh-limit",
+  "--action",
   "--against",
   "--analyzed-at",
   "--analyzed-from",
@@ -8488,6 +8489,7 @@ const stringOptions = new Set([
   "--duration-target-sec",
   "--embedding",
   "--embedding-file",
+  "--enabled",
   "--event-count",
   "--features",
   "--file",
@@ -8554,6 +8556,7 @@ const stringOptions = new Set([
   "--stream",
   "--stream-version",
   "--subject",
+  "--target",
   "--title",
   "--through-seq",
   "--token",
