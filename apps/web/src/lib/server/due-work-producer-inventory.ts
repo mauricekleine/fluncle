@@ -15,13 +15,16 @@ type DueWorkReviewedMutationSiteBase = {
 export type DueWorkReviewedWriterEntry = DueWorkReviewedMutationSiteBase &
   (
     | { delegates: readonly string[]; disposition: "delegated-atomicity" }
-    | { disposition: "non-eligibility" | "serialization" | "test-fixture" }
+    | {
+        disposition: "ephemeral-staging" | "non-eligibility" | "serialization" | "test-fixture";
+      }
   );
 
 export type GoalDReviewedWriterEntry = DueWorkReviewedMutationSiteBase & {
   disposition:
     | "delegated-atomicity"
     | "derived-projection-write"
+    | "ephemeral-staging"
     | "non-projection-fact"
     | "serialization"
     | "test-fixture";
@@ -498,9 +501,19 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     rationale:
       "Each generated count backfill executes beside its entity marker in one write batch.",
     sites: [
-      "scripts/backfill-hub-counts.ts:update:labels:6bb7f9a1",
-      "scripts/backfill-hub-counts.ts:update:albums:fd2fe11b",
-      "scripts/backfill-hub-counts.ts:update:artists:3f30ac21",
+      "scripts/backfill-hub-counts.ts:update:labels:4610a46b",
+      "scripts/backfill-hub-counts.ts:update:albums:f66095f3",
+      "scripts/backfill-hub-counts.ts:update:artists:213bb591",
+    ],
+  },
+  {
+    disposition: "ephemeral-staging",
+    file: "scripts/backfill-hub-counts.ts",
+    rationale: "Writes only invocation-scoped staging relations, never eligibility source truth.",
+    sites: [
+      "scripts/backfill-hub-counts.ts:insert:dynamic:9ae9c583",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:c0d12468",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:1305bca4",
     ],
   },
   {
@@ -793,7 +806,17 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     disposition: "derived-projection-write",
     file: "scripts/backfill-hub-counts.ts",
     rationale: "Backfills maintained label hub counters only.",
-    sites: ["scripts/backfill-hub-counts.ts:update:labels:6bb7f9a1"],
+    sites: ["scripts/backfill-hub-counts.ts:update:labels:4610a46b"],
+  },
+  {
+    disposition: "ephemeral-staging",
+    file: "scripts/backfill-hub-counts.ts",
+    rationale: "Writes invocation-scoped staging relations rather than public projection facts.",
+    sites: [
+      "scripts/backfill-hub-counts.ts:insert:dynamic:9ae9c583",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:c0d12468",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:1305bca4",
+    ],
   },
   {
     disposition: "non-projection-fact",
