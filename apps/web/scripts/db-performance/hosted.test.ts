@@ -32,7 +32,12 @@ describe("hosted Turso replay gate", () => {
     );
 
     expect(() =>
-      resolveHostedReplay({ hosted: true, operatorApproved: true, readEnvironment }),
+      resolveHostedReplay({
+        hosted: true,
+        operatorApproved: true,
+        preseededFixture: true,
+        readEnvironment,
+      }),
     ).toThrow("requires an explicit scratch URL and token");
     expect(readEnvironment).toHaveBeenCalledWith(HOSTED_SCRATCH_URL_ENV);
     expect(readEnvironment).toHaveBeenCalledWith(HOSTED_SCRATCH_TOKEN_ENV);
@@ -51,7 +56,12 @@ describe("hosted Turso replay gate", () => {
       name === HOSTED_SCRATCH_URL_ENV ? url : "synthetic-token-value";
 
     expect(() =>
-      resolveHostedReplay({ hosted: true, operatorApproved: true, readEnvironment }),
+      resolveHostedReplay({
+        hosted: true,
+        operatorApproved: true,
+        preseededFixture: true,
+        readEnvironment,
+      }),
     ).toThrow();
   });
 
@@ -61,10 +71,37 @@ describe("hosted Turso replay gate", () => {
         ? "libsql://scale-scratch.example.invalid"
         : "synthetic-token-value";
 
-    expect(resolveHostedReplay({ hosted: true, operatorApproved: true, readEnvironment })).toEqual({
+    expect(
+      resolveHostedReplay({
+        hosted: true,
+        operatorApproved: true,
+        preseededFixture: true,
+        readEnvironment,
+      }),
+    ).toEqual({
       mode: "hosted",
       token: "synthetic-token-value",
       url: "libsql://scale-scratch.example.invalid",
     });
+  });
+
+  it("rejects non-preseeded or full-fixture hosted modes before reading credentials", () => {
+    const readEnvironment = vi.fn(() => {
+      throw new Error("credentials were read");
+    });
+
+    expect(() =>
+      resolveHostedReplay({ hosted: true, operatorApproved: true, readEnvironment }),
+    ).toThrow("requires --preseeded-fixture");
+    expect(() =>
+      resolveHostedReplay({
+        fullFixture: true,
+        hosted: true,
+        operatorApproved: true,
+        preseededFixture: true,
+        readEnvironment,
+      }),
+    ).toThrow("cannot combine with --full-fixture");
+    expect(readEnvironment).not.toHaveBeenCalled();
   });
 });

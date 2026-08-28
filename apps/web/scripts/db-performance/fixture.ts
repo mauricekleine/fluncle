@@ -5,7 +5,10 @@ import { type Client, type ResultSet } from "@libsql/client";
 import { getScaleManifest, type FixtureCounts, type ScaleProfile } from "./manifest";
 
 export const DEFAULT_FIXTURE_CHUNK_SIZE = 500;
+export const FIXTURE_CENSUS_QUERY_CHUNK_SIZE = 8;
+export const HOSTED_FIXTURE_CENSUS_ROW_LIMIT = 50_000;
 export const SYNTHETIC_FIXTURE_EPOCH = "2026-01-01T00:00:00.000Z";
+export const FIXTURE_IDENTITY_TABLE = "perf_fixture_identity";
 
 export const FIXTURE_TABLES = [
   "perf_artists",
@@ -51,6 +54,11 @@ export type FixtureCensus = {
     expected: FixtureTableCardinalities;
     observed: FixtureTableCardinalities;
   };
+};
+export type FixtureCensusOptions = {
+  maxRowsPerStatement?: number;
+  onRequest?: (request: number, requests: number) => void;
+  statementsPerRequest?: number;
 };
 export type FixtureValue = null | number | string | Uint8Array;
 export type FixtureStatement = { args: FixtureValue[]; sql: string };
@@ -1684,7 +1692,7 @@ export async function applyFixtureSchema(sink: FixtureBatchSink): Promise<void> 
 /** Drops only the harness-owned allowlist so an exact profile cannot inherit rows from a prior run. */
 export async function resetFixture(sink: FixtureBatchSink): Promise<void> {
   await sink.batch(
-    [...FIXTURE_TABLES]
+    [FIXTURE_IDENTITY_TABLE, ...FIXTURE_TABLES]
       .reverse()
       .map((table) => ({ args: [], sql: `drop table if exists ${table}` })),
     "write",
@@ -1735,23 +1743,355 @@ function censusCount(result: Pick<ResultSet, "rows">, label: string): number {
   return count;
 }
 
+type BoundedCensusTarget =
+  | { kind: "distribution"; name: keyof FixtureCounts }
+  | { kind: "table"; table: FixtureTable };
+
+type BoundedCensusQuery =
+  | {
+      expectedCount: number | null;
+      kind: "range";
+      label: string;
+      statement: FixtureStatement;
+      target: BoundedCensusTarget;
+    }
+  | {
+      kind: "sentinel";
+      label: string;
+      statement: FixtureStatement;
+      table: FixtureTable;
+    };
+
+const BOUNDED_DISTRIBUTION_SOURCES = {
+  enabledLabelTracks: {
+    predicate: "label_scope = 'enabled'",
+    table: "perf_tracks",
+  },
+  fullAnalysisBacklog: {
+    predicate: "full_analysis_backlog = 1",
+    table: "perf_tracks",
+  },
+  musicbrainzIsrcBacklog: {
+    predicate: "musicbrainz_isrc_backlog = 1",
+    table: "perf_tracks",
+  },
+  pendingFrontier: {
+    predicate: "state = 'pending'",
+    table: "perf_crawl_frontier",
+  },
+  youtubeProvenanceBacklog: {
+    predicate: "youtube_backlog = 1",
+    table: "perf_tracks",
+  },
+} as const satisfies Partial<
+  Record<keyof FixtureCounts, { predicate: string; table: FixtureTable }>
+>;
+
+const TABLE_DISTRIBUTIONS = {
+  albums: "perf_albums",
+  artists: "perf_artists",
+  crawlFrontier: "perf_crawl_frontier",
+  findings: "perf_findings",
+  labels: "perf_labels",
+  trackArtists: "perf_track_artists",
+  trackEmbeddings: "perf_track_embeddings",
+  tracks: "perf_tracks",
+} as const satisfies Partial<Record<keyof FixtureCounts, FixtureTable>>;
+
+type FixtureDistributionPartition = {
+  filtered: readonly string[];
+  table: readonly string[];
+};
+
+export function assertBoundedFixtureDistributionCoverage(
+  expectedDistributions: FixtureCounts,
+  partition: FixtureDistributionPartition = {
+    filtered: Object.keys(BOUNDED_DISTRIBUTION_SOURCES),
+    table: Object.keys(TABLE_DISTRIBUTIONS),
+  },
+): void {
+  const expected = Object.keys(expectedDistributions).sort();
+  const combined = [...partition.filtered, ...partition.table];
+  const duplicates = [
+    ...new Set(combined.filter((name, index) => combined.indexOf(name) !== index)),
+  ].sort();
+  const actual = [...new Set(combined)].sort();
+  const missing = expected.filter((name) => !actual.includes(name));
+  const unexpected = actual.filter((name) => !expected.includes(name));
+
+  if (duplicates.length > 0 || missing.length > 0 || unexpected.length > 0) {
+    throw new Error(
+      `fixture census distribution partition invalid: missing [${missing.join(", ")}]; duplicated [${duplicates.join(", ")}]; unexpected [${unexpected.join(", ")}]`,
+    );
+  }
+}
+
+/**
+ * Fresh fixture construction creates every allowlisted rowid table once and inserts its stable rows
+ * in order, guaranteeing dense rowids 1..N. The census proves that construction invariant; the
+ * separate boundary sentinel prevents a deletion and an out-of-range insert from compensating.
+ */
+function boundedCensusQueriesForSource(options: {
+  expectedRows: number;
+  maxRowsPerStatement: number;
+  predicate?: string;
+  rangeRows?: number;
+  target: BoundedCensusTarget;
+  table: FixtureTable;
+}): BoundedCensusQuery[] {
+  const predicate = options.predicate === undefined ? "" : ` and ${options.predicate}`;
+  const label =
+    options.target.kind === "table"
+      ? `table ${options.target.table}`
+      : `distribution ${options.target.name}`;
+  const queries: BoundedCensusQuery[] = [];
+
+  if (options.target.kind === "table") {
+    queries.push({
+      kind: "sentinel",
+      label: `${label} rowid boundary`,
+      statement: {
+        args: [options.expectedRows],
+        sql: `select
+          exists(select 1 from ${options.table} not indexed where rowid < 1 limit 1) as underflow,
+          exists(select 1 from ${options.table} not indexed where rowid > ? limit 1) as overflow`,
+      },
+      table: options.table,
+    });
+  }
+
+  const rangeRows = options.rangeRows ?? options.expectedRows;
+  for (let start = 1; start <= rangeRows; start += options.maxRowsPerStatement) {
+    const end = Math.min(rangeRows, start + options.maxRowsPerStatement - 1);
+    const embeddingIndexRange =
+      options.table === "perf_track_embeddings" && options.target.kind === "table";
+    queries.push({
+      expectedCount:
+        options.target.kind === "table" && !embeddingIndexRange ? end - start + 1 : null,
+      kind: "range",
+      label: `${label} ${embeddingIndexRange ? "track_id" : "rowid"} ${start}-${end}`,
+      statement: embeddingIndexRange
+        ? {
+            args: [`synthetic-track-${padded(start - 1)}`, `synthetic-track-${padded(end - 1)}`],
+            sql: `select count(*) as count from perf_track_embeddings where track_id between ? and ?`,
+          }
+        : {
+            args: [start, end],
+            sql: `select count(*) as count from ${options.table} not indexed where rowid between ? and ?${predicate}`,
+          },
+      target: options.target,
+    });
+  }
+
+  return queries;
+}
+
+function buildBoundedCensusQueries(
+  expectedDistributions: FixtureCounts,
+  expectedTables: FixtureTableCardinalities,
+  maxRowsPerStatement: number,
+): BoundedCensusQuery[] {
+  const queries = FIXTURE_TABLES.flatMap((table) =>
+    boundedCensusQueriesForSource({
+      expectedRows: expectedTables[table],
+      maxRowsPerStatement,
+      // Embeddings are deterministically selected across the full track-key domain rather than
+      // packed into its first N keys, so the covering-index windows must span every synthetic track.
+      rangeRows: table === "perf_track_embeddings" ? expectedDistributions.tracks : undefined,
+      table,
+      target: { kind: "table", table },
+    }),
+  );
+
+  for (const [name, source] of Object.entries(BOUNDED_DISTRIBUTION_SOURCES) as [
+    keyof typeof BOUNDED_DISTRIBUTION_SOURCES,
+    (typeof BOUNDED_DISTRIBUTION_SOURCES)[keyof typeof BOUNDED_DISTRIBUTION_SOURCES],
+  ][]) {
+    queries.push(
+      ...boundedCensusQueriesForSource({
+        expectedRows: expectedTables[source.table],
+        maxRowsPerStatement,
+        predicate: source.predicate,
+        table: source.table,
+        target: { kind: "distribution", name },
+      }),
+    );
+  }
+
+  return queries;
+}
+
+export function boundedFixtureCensusRequestCount(
+  expectedDistributions: FixtureCounts,
+  options: { maxRowsPerStatement?: number; statementsPerRequest?: number } = {},
+): number {
+  const maxRowsPerStatement = options.maxRowsPerStatement ?? HOSTED_FIXTURE_CENSUS_ROW_LIMIT;
+  const statementsPerRequest = options.statementsPerRequest ?? 1;
+  assertBoundedFixtureDistributionCoverage(expectedDistributions);
+  if (
+    !Number.isSafeInteger(maxRowsPerStatement) ||
+    maxRowsPerStatement < 1 ||
+    maxRowsPerStatement > HOSTED_FIXTURE_CENSUS_ROW_LIMIT
+  ) {
+    throw new Error(
+      `fixture census rows per statement must be an integer from 1 through ${HOSTED_FIXTURE_CENSUS_ROW_LIMIT}`,
+    );
+  }
+  if (statementsPerRequest !== 1) {
+    throw new Error("bounded fixture census requires exactly one statement per request");
+  }
+  const queries = buildBoundedCensusQueries(
+    expectedDistributions,
+    expectedFixtureTableCardinalities(expectedDistributions),
+    maxRowsPerStatement,
+  );
+
+  return Math.ceil(queries.length / statementsPerRequest);
+}
+
+function censusSentinel(
+  result: Pick<ResultSet, "rows">,
+  field: "overflow" | "underflow",
+  label: string,
+): number {
+  const value = Number(result.rows[0]?.[field]);
+  if (value !== 0 && value !== 1) {
+    throw new Error(`fixture census ${label} did not return a boolean integer`);
+  }
+  return value;
+}
+
+async function auditBoundedFixtureCardinality(
+  client: Client,
+  expectedDistributions: FixtureCounts,
+  expectedTables: FixtureTableCardinalities,
+  options: FixtureCensusOptions & { maxRowsPerStatement: number },
+): Promise<FixtureCensus> {
+  const statementsPerRequest = options.statementsPerRequest ?? 1;
+  assertBoundedFixtureDistributionCoverage(expectedDistributions);
+  if (statementsPerRequest !== 1) {
+    throw new Error("bounded fixture census requires exactly one statement per request");
+  }
+  const queries = buildBoundedCensusQueries(
+    expectedDistributions,
+    expectedTables,
+    options.maxRowsPerStatement,
+  );
+  const requestCount = Math.ceil(queries.length / statementsPerRequest);
+  const observedTables = Object.fromEntries(
+    FIXTURE_TABLES.map((table) => [table, 0]),
+  ) as FixtureTableCardinalities;
+  const observedDistributions = Object.fromEntries(
+    (Object.keys(expectedDistributions) as (keyof FixtureCounts)[]).map((name) => [name, 0]),
+  ) as FixtureCounts;
+  const mismatches: string[] = [];
+
+  for (let offset = 0; offset < queries.length; offset += statementsPerRequest) {
+    const chunk = queries.slice(offset, offset + statementsPerRequest);
+    options.onRequest?.(Math.floor(offset / statementsPerRequest) + 1, requestCount);
+    const results = await client.batch(
+      chunk.map((query) => query.statement),
+      "read",
+    );
+
+    for (const [index, query] of chunk.entries()) {
+      const result = results[index] ?? { rows: [] };
+      if (query.kind === "sentinel") {
+        const underflow = censusSentinel(result, "underflow", `${query.label} underflow`);
+        const overflow = censusSentinel(result, "overflow", `${query.label} overflow`);
+        if (underflow !== 0) {
+          mismatches.push(`${query.label} underflow: expected 0, observed ${underflow}`);
+        }
+        if (overflow !== 0) {
+          mismatches.push(`${query.label} overflow: expected 0, observed ${overflow}`);
+        }
+        continue;
+      }
+
+      const count = censusCount(result, query.label);
+      if (query.target.kind === "table") {
+        observedTables[query.target.table] += count;
+      } else {
+        observedDistributions[query.target.name] += count;
+      }
+      if (query.expectedCount !== null && count !== query.expectedCount) {
+        mismatches.push(`${query.label}: expected ${query.expectedCount}, observed ${count}`);
+      }
+    }
+  }
+
+  for (const [name, table] of Object.entries(TABLE_DISTRIBUTIONS) as [
+    keyof typeof TABLE_DISTRIBUTIONS,
+    FixtureTable,
+  ][]) {
+    observedDistributions[name] = observedTables[table];
+  }
+
+  for (const table of FIXTURE_TABLES) {
+    if (observedTables[table] !== expectedTables[table]) {
+      mismatches.push(
+        `table ${table}: expected ${expectedTables[table]}, observed ${observedTables[table]}`,
+      );
+    }
+  }
+  for (const name of Object.keys(expectedDistributions) as (keyof FixtureCounts)[]) {
+    if (observedDistributions[name] !== expectedDistributions[name]) {
+      mismatches.push(
+        `distribution ${name}: expected ${expectedDistributions[name]}, observed ${observedDistributions[name]}`,
+      );
+    }
+  }
+
+  return {
+    distributions: { expected: expectedDistributions, observed: observedDistributions },
+    mismatches,
+    passed: mismatches.length === 0,
+    tables: { expected: expectedTables, observed: observedTables },
+  };
+}
+
 /** Reads the committed database state after fixture writes; generator attempt counts are not proof. */
 export async function auditFixtureCardinality(
   client: Client,
   expectedDistributions: FixtureCounts,
+  options: FixtureCensusOptions = {},
 ): Promise<FixtureCensus> {
   const expectedTables = expectedFixtureTableCardinalities(expectedDistributions);
+  if (options.maxRowsPerStatement !== undefined) {
+    if (
+      !Number.isSafeInteger(options.maxRowsPerStatement) ||
+      options.maxRowsPerStatement < 1 ||
+      options.maxRowsPerStatement > HOSTED_FIXTURE_CENSUS_ROW_LIMIT
+    ) {
+      throw new Error(
+        `fixture census rows per statement must be an integer from 1 through ${HOSTED_FIXTURE_CENSUS_ROW_LIMIT}`,
+      );
+    }
+    return auditBoundedFixtureCardinality(client, expectedDistributions, expectedTables, {
+      ...options,
+      maxRowsPerStatement: options.maxRowsPerStatement,
+    });
+  }
   const distributionEntries = Object.entries(FIXTURE_DISTRIBUTION_QUERIES) as [
     keyof FixtureCounts,
     string,
   ][];
-  const results = await client.batch(
-    [
-      ...FIXTURE_TABLES.map((table) => `select count(*) as count from ${table}`),
-      ...distributionEntries.map(([, sql]) => sql),
-    ],
-    "read",
-  );
+  const queries = [
+    ...FIXTURE_TABLES.map((table) => `select count(*) as count from ${table}`),
+    ...distributionEntries.map(([, sql]) => sql),
+  ];
+  const statementsPerRequest = options.statementsPerRequest ?? FIXTURE_CENSUS_QUERY_CHUNK_SIZE;
+  if (!Number.isSafeInteger(statementsPerRequest) || statementsPerRequest < 1) {
+    throw new Error("fixture census statements per request must be a positive safe integer");
+  }
+  const requestCount = Math.ceil(queries.length / statementsPerRequest);
+  const results: ResultSet[] = [];
+  for (let offset = 0; offset < queries.length; offset += statementsPerRequest) {
+    options.onRequest?.(Math.floor(offset / statementsPerRequest) + 1, requestCount);
+    results.push(
+      ...(await client.batch(queries.slice(offset, offset + statementsPerRequest), "read")),
+    );
+  }
   const observedTables = Object.fromEntries(
     FIXTURE_TABLES.map((table, index) => [
       table,

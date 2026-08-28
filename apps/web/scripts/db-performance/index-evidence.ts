@@ -17,6 +17,7 @@ import { analyzeExplainPlan, type ExplainPlanPolicy } from "./plan";
 
 const INDEX_EVIDENCE_LIMIT = 25;
 const INDEX_EVIDENCE_ITERATIONS = 2;
+const INDEX_EVIDENCE_WARMUP_ITERATIONS = 1;
 
 /** Inventory indexes whose production consumer deliberately carries an `INDEXED BY` lock. */
 export const INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES = [
@@ -517,35 +518,73 @@ function explainDetails(result: PerformanceResult): string[] {
   });
 }
 
-function executeSimpleIndexProof(
+/** Time only the statement a production consumer runs; structural proof requests stay untimed. */
+async function executeTimedFinalStatement(
+  context: ContractContext,
+  statement: PerformanceStatement,
+): Promise<{ durationMs: number; result: PerformanceResult }> {
+  const startedAt = context.now();
+  const result = await context.client.execute(statement);
+
+  return {
+    durationMs: Math.max(0, context.now() - startedAt),
+    result,
+  };
+}
+
+async function executeSimpleIndexStatement(
+  spec: IndexPlanSpec,
+  context: ContractContext,
+): Promise<ContractExecution> {
+  const finalStatement = await executeTimedFinalStatement(context, spec.statement);
+
+  return {
+    durationMs: finalStatement.durationMs,
+    metadata: {
+      finalStatementRequestCount: 1,
+      timingScope: "worst-single-final-statement",
+    },
+    rawResult: finalStatement.result,
+    resultRowCount: finalStatement.result.rows.length,
+  };
+}
+
+async function executeSimpleIndexProof(
   definition: IndexEvidenceDefinition,
   spec: IndexPlanSpec,
   context: ContractContext,
 ): Promise<ContractExecution> {
-  const startedAt = context.now();
-
-  return Promise.all([
-    context.client.execute(spec.statement),
+  const result = await context.client.execute(spec.statement);
+  const droppedIndex =
     definition.inventoryEntry.decision === "drop"
-      ? context.client.execute({
+      ? await context.client.execute({
           args: [fixtureIndexName(definition.inventoryEntry.name)],
           sql: "select name from sqlite_master where type = 'index' and name = ?",
         })
-      : Promise.resolve({ rows: [] }),
-  ]).then(([result, droppedIndex]) => ({
-    durationMs: Math.max(0, context.now() - startedAt),
+      : { rows: [] };
+  const terminalProofRequestCount = definition.inventoryEntry.decision === "drop" ? 2 : 1;
+
+  return {
     metadata: {
       cardinalityBound: result.rows.length >= spec.minRows && result.rows.length <= spec.maxRows,
       droppedIndexAbsent:
         definition.inventoryEntry.decision !== "drop" || droppedIndex.rows.length === 0,
       indexAuditEntry: definition.inventoryEntry.name,
+      measuredRequestCount: INDEX_EVIDENCE_ITERATIONS + INDEX_EVIDENCE_WARMUP_ITERATIONS,
       minimumResultRows: spec.minRows,
       requiredIndex: definition.requiredIndexName,
       resultBound: spec.maxRows,
+      terminalPlanRequestCount: 1,
+      terminalProofRequestCount,
+      totalRequestCount:
+        INDEX_EVIDENCE_ITERATIONS +
+        INDEX_EVIDENCE_WARMUP_ITERATIONS +
+        terminalProofRequestCount +
+        1,
     },
     rawResult: result,
     resultRowCount: result.rows.length,
-  }));
+  };
 }
 
 function validateSimpleIndexProof(
@@ -662,12 +701,38 @@ function defaultHubComparison(productionLocked = false): ComparisonSpec {
   };
 }
 
+async function executeComparisonStatements(
+  spec: ComparisonSpec,
+  context: ContractContext,
+): Promise<ContractExecution> {
+  const finalStatementDurations: number[] = [];
+  const referenceResults: PerformanceResult[] = [];
+
+  for (const reference of spec.references) {
+    const finalStatement = await executeTimedFinalStatement(context, reference);
+    referenceResults.push(finalStatement.result);
+    finalStatementDurations.push(finalStatement.durationMs);
+  }
+
+  return {
+    durationMs: finalStatementDurations.reduce(
+      (worst, durationMs) => Math.max(worst, durationMs),
+      0,
+    ),
+    metadata: {
+      finalStatementRequestCount: spec.references.length,
+      timingScope: "worst-single-final-statement",
+    },
+    resultRowCount: referenceResults.reduce((total, result) => total + result.rows.length, 0),
+  };
+}
+
+/** Terminal-only structural proof; measured comparison statements run in executeComparisonStatements. */
 async function executeComparisonProof(
   definition: IndexEvidenceDefinition,
   spec: ComparisonSpec,
   context: ContractContext,
 ): Promise<ContractExecution> {
-  const startedAt = context.now();
   const referenceResults: PerformanceResult[] = [];
   const referencePlanDetails: string[][] = [];
   const referencePlanAnalyses = [];
@@ -702,15 +767,20 @@ async function executeComparisonProof(
           sql: "select name from sqlite_master where type = 'index' and name = ?",
         })
       : { rows: [] };
+  const terminalProofRequestCount =
+    spec.references.length * 2 +
+    spec.supplementalStatements.length +
+    (definition.inventoryEntry.decision === "drop" ? 1 : 0);
 
   return {
-    durationMs: Math.max(0, context.now() - startedAt),
     metadata: {
       cardinalityBound:
         referenceRows.length >= spec.minRows && referenceRows.length <= spec.maxRows,
       droppedIndexAbsent:
         definition.inventoryEntry.decision !== "drop" || droppedIndex.rows.length === 0,
       indexAuditEntry: definition.inventoryEntry.name,
+      measuredRequestCount:
+        spec.references.length * (INDEX_EVIDENCE_ITERATIONS + INDEX_EVIDENCE_WARMUP_ITERATIONS),
       minimumResultRows: spec.minRows,
       outputsEquivalent: serializableRows(referenceRows) === serializableRows(supplementalRows),
       productionPlanDetails: JSON.stringify(referencePlanDetails),
@@ -730,6 +800,12 @@ async function executeComparisonProof(
       referenceResultRowCount: referenceRows.length,
       requiredIndex: definition.requiredIndexName,
       resultBound: spec.maxRows,
+      terminalPlanRequestCount: 1,
+      terminalProofRequestCount,
+      totalRequestCount:
+        spec.references.length * (INDEX_EVIDENCE_ITERATIONS + INDEX_EVIDENCE_WARMUP_ITERATIONS) +
+        terminalProofRequestCount +
+        1,
     },
     resultRowCount: referenceRows.length,
   };
@@ -1146,13 +1222,16 @@ function comparisonContract(
 
   return {
     description: `Index evidence for ${entry.name}: ${entry.finalConsumer.query}`,
-    execute: (context) => executeComparisonProof(definition, spec, context),
+    execute: (context) => executeComparisonStatements(spec, context),
     id: contractId,
     indexEvidence: definition,
     iterations: INDEX_EVIDENCE_ITERATIONS,
     plan: { policy: productionPolicy, statement: productionStatement },
-    validate: (execution) => validateComparisonProof(definition, spec, execution),
-    warmupIterations: 1,
+    terminalProof: {
+      execute: (context) => executeComparisonProof(definition, spec, context),
+      validate: (execution) => validateComparisonProof(definition, spec, execution),
+    },
+    warmupIterations: INDEX_EVIDENCE_WARMUP_ITERATIONS,
     workClass: "projection",
   };
 }
@@ -1170,14 +1249,17 @@ export function indexEvidenceContracts(): PerformanceContract[] {
       const plan = planFor(definition, spec);
       return {
         description: `Index evidence for ${entry.name}: ${entry.finalConsumer.query}`,
-        execute: (context: ContractContext) => executeSimpleIndexProof(definition, spec, context),
+        execute: (context: ContractContext) => executeSimpleIndexStatement(spec, context),
         id: reference.id,
         indexEvidence: definition,
         iterations: INDEX_EVIDENCE_ITERATIONS,
         plan,
-        validate: (execution: ContractExecution) =>
-          validateSimpleIndexProof(definition, spec, execution),
-        warmupIterations: 1,
+        terminalProof: {
+          execute: (context: ContractContext) => executeSimpleIndexProof(definition, spec, context),
+          validate: (execution: ContractExecution) =>
+            validateSimpleIndexProof(definition, spec, execution),
+        },
+        warmupIterations: INDEX_EVIDENCE_WARMUP_ITERATIONS,
         workClass: "projection",
       } satisfies PerformanceContract;
     }),

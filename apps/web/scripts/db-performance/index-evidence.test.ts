@@ -11,6 +11,7 @@ import {
   type IndexInventoryDocument,
 } from "./index-inventory";
 import { INDEX_EVIDENCE_RUNTIME_LOCKED_INDEXES, indexEvidenceContracts } from "./index-evidence";
+import { selectPerformanceContracts } from "./contracts";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
 import {
@@ -90,7 +91,7 @@ describe("final index plan evidence", () => {
         expect(coordinate.file, label).not.toBe("");
         expect(coordinate.marker, label).not.toBe("");
         const path = join(REPOSITORY_ROOT, coordinate.file);
-        await expect(access(path), label).resolves.toBeUndefined();
+        await access(path);
         await expect(readFile(path, "utf8"), label).resolves.toContain(coordinate.marker);
       }),
     );
@@ -100,12 +101,12 @@ describe("final index plan evidence", () => {
     const contract = indexEvidenceContracts().find(
       (candidate) => candidate.id === "index.tracks-capture-priority",
     );
-    if (!contract?.plan) {
+    if (!contract?.plan || !contract.terminalProof) {
       throw new Error("capture-priority comparison contract has no plan");
     }
 
     const executedSql: string[] = [];
-    const execution = await contract.execute({
+    const execution = await contract.terminalProof.execute({
       client: {
         async execute(statement) {
           const sql = typeof statement === "string" ? statement : statement.sql;
@@ -196,12 +197,12 @@ describe("final index plan evidence", () => {
     const contract = indexEvidenceContracts().find(
       (candidate) => candidate.id === "index.tracks-release-date-drop-default-hub",
     );
-    if (!contract?.plan) {
+    if (!contract?.plan || !contract.terminalProof) {
       throw new Error("default hub release-date comparison contract has no plan");
     }
 
     const executedSql: string[] = [];
-    const execution = await contract.execute({
+    const execution = await contract.terminalProof.execute({
       client: {
         async execute(statement) {
           const sql = typeof statement === "string" ? statement : statement.sql;
@@ -231,6 +232,176 @@ describe("final index plan evidence", () => {
         .slice(2)
         .every((sql) => /\bINDEXED\s+BY\s+perf_tracks_release_date_track_id_idx\b/i.test(sql)),
     ).toBe(true);
+  });
+
+  it("excludes structural drop proof latency from a single final consumer statement", async () => {
+    const contract = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.artifact-change-checkpoints-running",
+    );
+    if (!contract?.terminalProof) {
+      throw new Error("artifact checkpoint drop contract is missing");
+    }
+
+    let elapsedMs = 0;
+    const execution = await contract.execute({
+      client: {
+        async execute(candidate) {
+          const sql = typeof candidate === "string" ? candidate : candidate.sql;
+          if (/sqlite_master/i.test(sql)) {
+            elapsedMs += 900;
+            return { rows: [] };
+          }
+
+          elapsedMs += 17;
+          return {
+            rows: [
+              {
+                consumer_id: "synthetic-consumer-000000000",
+                stream: "synthetic-stream-0",
+                stream_version: 1,
+              },
+            ],
+          };
+        },
+      },
+      iteration: 0,
+      now: () => elapsedMs,
+      profile: "1x",
+    });
+    const proof = await contract.terminalProof.execute({
+      client: {
+        async execute(candidate) {
+          const sql = typeof candidate === "string" ? candidate : candidate.sql;
+          if (/sqlite_master/i.test(sql)) {
+            elapsedMs += 900;
+            return { rows: [] };
+          }
+
+          elapsedMs += 17;
+          return {
+            rows: [
+              {
+                consumer_id: "synthetic-consumer-000000000",
+                stream: "synthetic-stream-0",
+                stream_version: 1,
+              },
+            ],
+          };
+        },
+      },
+      iteration: 0,
+      now: () => elapsedMs,
+      profile: "1x",
+    });
+
+    expect(execution.durationMs).toBe(17);
+    expect(execution.metadata).toMatchObject({
+      finalStatementRequestCount: 1,
+      timingScope: "worst-single-final-statement",
+    });
+    expect(proof.metadata).toMatchObject({
+      measuredRequestCount: 3,
+      terminalPlanRequestCount: 1,
+      terminalProofRequestCount: 2,
+      totalRequestCount: 6,
+    });
+  });
+
+  it("budgets a multi-consumer proof by its slowest final statement", async () => {
+    const contract = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.tracks-release-date-drop-default-hub",
+    );
+    if (!contract) {
+      throw new Error("default hub release-date comparison contract is missing");
+    }
+
+    let elapsedMs = 0;
+    const report = await runPerformanceContracts({
+      client: {
+        async execute(candidate) {
+          const sql = typeof candidate === "string" ? candidate : candidate.sql;
+          if (/^EXPLAIN QUERY PLAN/i.test(sql)) {
+            elapsedMs += 900;
+            return {
+              rows: [
+                {
+                  detail:
+                    "SEARCH perf_tracks USING COVERING INDEX perf_tracks_release_date_track_id_idx",
+                },
+              ],
+            };
+          }
+          if (/sqlite_master/i.test(sql)) {
+            elapsedMs += 900;
+            return { rows: [] };
+          }
+          if (/\bINDEXED\s+BY\b/i.test(sql)) {
+            elapsedMs += 900;
+          } else {
+            elapsedMs += /release_date is null/i.test(sql) ? 300 : 20;
+          }
+
+          return { rows: [{ rd: "2026", track_id: "synthetic-track-000000000" }] };
+        },
+      },
+      contracts: [contract],
+      now: () => elapsedMs,
+      profile: "1x",
+    });
+    const evidence = report.contracts[0];
+
+    expect(evidence?.durationMs).toEqual({ max: 300, p50: 300, p95: 300, p99: 300 });
+    expect(evidence?.metadata[0]).toMatchObject({
+      finalStatementRequestCount: 2,
+      measuredRequestCount: 6,
+      terminalPlanRequestCount: 1,
+      terminalProofRequestCount: 7,
+      timingScope: "worst-single-final-statement",
+      totalRequestCount: 14,
+    });
+    expect(evidence?.budget.failures).toEqual(["p95 300ms exceeds 250ms"]);
+    expect(evidence?.validationFailures).toEqual([]);
+  });
+
+  it("runs a later production batch before terminal comparison-index proof", async () => {
+    const comparison = indexEvidenceContracts().find(
+      (candidate) => candidate.id === "index.tracks-capture-priority",
+    );
+    const dueWork = selectPerformanceContracts(["fixture.due-work-claim"])[0];
+    if (!comparison || !dueWork) {
+      throw new Error("comparison index or due-work contract is missing");
+    }
+
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    const progress: { contractId?: string; phase: string }[] = [];
+    try {
+      await applyFixtureSchema(client);
+      await writeFixture(client, "1x", { counts: createCiFixtureCounts("1x", 512) });
+      const report = await runPerformanceContracts({
+        client,
+        contracts: [comparison, dueWork],
+        onProgress: (event) => progress.push(event),
+        profile: "1x",
+      });
+      const comparisonReport = report.contracts[0];
+      const dueWorkReport = report.contracts[1];
+      const dueWorkMeasurement = progress.findIndex(
+        (event) =>
+          event.contractId === "fixture.due-work-claim" && event.phase === "measured-iteration",
+      );
+      const comparisonProof = progress.findIndex(
+        (event) =>
+          event.contractId === "index.tracks-capture-priority" && event.phase === "terminal-proof",
+      );
+
+      expect(comparisonReport?.passed).toBe(true);
+      expect(comparisonReport?.metadata[0]?.outputsEquivalent).toBe(true);
+      expect(dueWorkReport?.passed).toBe(true);
+      expect(dueWorkMeasurement).toBeGreaterThanOrEqual(0);
+      expect(comparisonProof).toBeGreaterThan(dueWorkMeasurement);
+    } finally {
+      client.close();
+    }
   });
 
   it("keeps the exact default-hub release lock in the production plan", () => {
@@ -363,6 +534,15 @@ describe("final index plan evidence", () => {
               contractEvidence.plan.violations.length === 0 &&
               Number(contractEvidence.metadata?.minimumResultRows) <=
                 contractEvidence.resultRowCount?.p50 &&
+              contractEvidence.metadata?.timingScope === "worst-single-final-statement" &&
+              Number(contractEvidence.metadata.finalStatementRequestCount) >= 1 &&
+              Number(contractEvidence.metadata.measuredRequestCount) >= 1 &&
+              Number(contractEvidence.metadata.terminalPlanRequestCount) === 1 &&
+              Number(contractEvidence.metadata.terminalProofRequestCount) >= 1 &&
+              Number(contractEvidence.metadata.totalRequestCount) ===
+                Number(contractEvidence.metadata.measuredRequestCount) +
+                  Number(contractEvidence.metadata.terminalPlanRequestCount) +
+                  Number(contractEvidence.metadata.terminalProofRequestCount) &&
               contractEvidence.requiredProfiles.join(",") === "1x,2x,4x",
           ),
         ).toBe(true);

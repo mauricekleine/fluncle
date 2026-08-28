@@ -4,7 +4,11 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { PERFORMANCE_BUDGETS, PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import {
+  PERFORMANCE_BUDGETS,
+  PERFORMANCE_CRITERION_CATEGORIES,
+  PERFORMANCE_RESOURCE_WARNING_THRESHOLDS,
+} from "./budgets";
 import { performanceRegistry } from "./contracts";
 import {
   deriveDominantRegressionVitestPaths,
@@ -222,9 +226,7 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
         sampleSource: ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE,
         unavailableReason: null,
         warningThresholds: {
-          heapUsedBytes: 1,
-          rssBytes: 2,
-          wallDurationMs: 3,
+          ...PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[profile],
         },
         warnings: [],
       },
@@ -636,6 +638,58 @@ describe("database performance release proof", () => {
         `profile 2x resource sampleSource is not ${ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE}`,
       ]),
     );
+  });
+
+  it("requires exact-local resource modes at every release scale", () => {
+    for (const profile of ["1x", "2x"] as const) {
+      const inexactMode = JSON.parse(validProfileReport(profile));
+      inexactMode.report.resources.mode = "bounded-memory-timing-warning";
+
+      expect(validateProfileReport(JSON.stringify(inexactMode), profile).errors).toContain(
+        `profile ${profile} resource mode is not required`,
+      );
+    }
+
+    const fourX = JSON.parse(validProfileReport("4x"));
+    fourX.report.resources.mode = "required";
+    expect(validateProfileReport(JSON.stringify(fourX), "4x").errors).toContain(
+      "profile 4x resource mode is not bounded-memory-timing-warning",
+    );
+  });
+
+  it("rejects malicious exact-local resource failure and warning splits", () => {
+    const reportedFailure = JSON.parse(validProfileReport("2x"));
+    reportedFailure.report.resources.failures = ["heapUsedBytes exceeded"];
+    expect(validateProfileReport(JSON.stringify(reportedFailure), "2x").errors).toContain(
+      "profile 2x resource failures are not empty",
+    );
+
+    const malformedFailure = JSON.parse(validProfileReport("1x"));
+    malformedFailure.report.resources.failures = [1];
+    expect(validateProfileReport(JSON.stringify(malformedFailure), "1x").errors).toContain(
+      "profile 1x resource failures are malformed",
+    );
+
+    const hiddenRequiredWall = JSON.parse(validProfileReport("2x"));
+    const twoXWall = PERFORMANCE_RESOURCE_WARNING_THRESHOLDS["2x"].wallDurationMs;
+    hiddenRequiredWall.report.resources.peak.wallDurationMs = twoXWall + 1;
+    hiddenRequiredWall.report.resources.warnings = [
+      `wallDurationMs ${twoXWall + 1} exceeds ${twoXWall}`,
+    ];
+    expect(validateProfileReport(JSON.stringify(hiddenRequiredWall), "2x").errors).toEqual(
+      expect.arrayContaining([
+        "profile 2x resource peak exceeds hard thresholds",
+        "profile 2x resource warnings are not allowed in required mode",
+      ]),
+    );
+
+    const boundedFourX = JSON.parse(validProfileReport("4x"));
+    const fourXWall = PERFORMANCE_RESOURCE_WARNING_THRESHOLDS["4x"].wallDurationMs;
+    boundedFourX.report.resources.peak.wallDurationMs = fourXWall + 1;
+    boundedFourX.report.resources.warnings = [
+      `wallDurationMs ${fourXWall + 1} exceeds ${fourXWall}`,
+    ];
+    expect(validateProfileReport(JSON.stringify(boundedFourX), "4x").errors).toEqual([]);
   });
 
   it("binds evidence to one clean candidate commit for the complete run", () => {

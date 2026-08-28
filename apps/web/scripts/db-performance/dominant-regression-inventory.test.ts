@@ -69,7 +69,7 @@ describe("Goal H dominant regression inventory", () => {
         expect(file).not.toBe("");
         expect(marker).not.toBe("");
         const path = join(REPOSITORY_ROOT, file);
-        await expect(access(path)).resolves.toBeUndefined();
+        await access(path);
         await expect(readFile(path, "utf8")).resolves.toContain(marker);
       }),
     );

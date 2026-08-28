@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PERFORMANCE_BUDGETS, PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
+import {
+  PERFORMANCE_BUDGETS,
+  PERFORMANCE_CRITERION_CATEGORIES,
+  PERFORMANCE_RESOURCE_WARNING_THRESHOLDS,
+} from "./budgets";
 import { performanceRegistry } from "./contracts";
 import {
   getScaleManifest,
@@ -648,14 +652,68 @@ function validateExactLocalResourceEvidence(
       `profile ${profile} resource sampleSource is not ${ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE}`,
     );
   }
+  const expectedMode = profile === "4x" ? "bounded-memory-timing-warning" : "required";
+  if (resources !== null && resources.mode !== expectedMode) {
+    errors.push(`profile ${profile} resource mode is not ${expectedMode}`);
+  }
 
   const warningThresholds = readNumericRecord(resources?.warningThresholds);
   if (warningThresholds === null) {
     malformedReport(`profile ${profile} resource warningThresholds are malformed`);
+  } else if (
+    !sameCardinality(warningThresholds, PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[profile])
+  ) {
+    malformedReport(`profile ${profile} resource warningThresholds do not match the profile`);
+  }
+  const failures = stringArray(resources?.failures);
+  if (failures === null) {
+    malformedReport(`profile ${profile} resource failures are malformed`);
+  } else if (failures.length > 0) {
+    errors.push(`profile ${profile} resource failures are not empty`);
   }
   const warnings = stringArray(resources?.warnings);
   if (warnings === null) {
     malformedReport(`profile ${profile} resource warnings are malformed`);
+  }
+
+  const peak = readNumericRecord(resources?.peak);
+  const resourceFields = ["heapUsedBytes", "rssBytes", "wallDurationMs"] as const;
+  if (
+    peak === null ||
+    Object.keys(peak).length !== resourceFields.length ||
+    resourceFields.some((field) => peak[field] === undefined)
+  ) {
+    malformedReport(`profile ${profile} resource peak is malformed`);
+  } else {
+    const thresholds = PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[profile];
+    const problems = resourceFields.flatMap((field) =>
+      peak[field] > thresholds[field]
+        ? [`${field} ${peak[field]} exceeds ${thresholds[field]}`]
+        : [],
+    );
+    const hardProblems =
+      profile === "4x"
+        ? problems.filter((problem) => !problem.startsWith("wallDurationMs "))
+        : problems;
+    if (hardProblems.length > 0) {
+      errors.push(`profile ${profile} resource peak exceeds hard thresholds`);
+    }
+
+    if (warnings !== null) {
+      if (profile === "4x") {
+        const expectedWarnings = problems.filter((problem) =>
+          problem.startsWith("wallDurationMs "),
+        );
+        if (
+          warnings.length !== expectedWarnings.length ||
+          warnings.some((warning, index) => warning !== expectedWarnings[index])
+        ) {
+          errors.push(`profile ${profile} resource warnings do not match bounded wall evidence`);
+        }
+      } else if (warnings.length > 0) {
+        errors.push(`profile ${profile} resource warnings are not allowed in required mode`);
+      }
+    }
   }
 
   return { warningThresholds, warnings: warnings ?? [] };

@@ -17,6 +17,7 @@ import {
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
 import { selectPerformanceContracts } from "./contracts";
+import { PERFORMANCE_RESOURCE_WARNING_THRESHOLDS } from "./budgets";
 import {
   type PerformanceClient,
   PERFORMANCE_REPORT_SCHEMA_VERSION,
@@ -250,6 +251,53 @@ describe("final database proof contracts", () => {
     expect(report.passed).toBe(true);
     expect(report.resources.failures).toEqual([]);
     expect(report.resources.warnings).toEqual(["wallDurationMs 180001 exceeds 180000"]);
+  });
+
+  it("warns on hosted aggregate wall at 1x and 2x while keeping memory hard", async () => {
+    for (const profile of ["1x", "2x"] as const) {
+      const thresholds = PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[profile];
+      const report = await runPerformanceContracts({
+        client: NOOP_CLIENT,
+        contracts: [
+          {
+            description: "hosted contract SLO pin",
+            async execute() {
+              return { durationMs: 1_000, resultRowCount: 0 };
+            },
+            id: "route.hosted-slo-pin",
+            iterations: 1,
+            workClass: "route-db",
+          },
+        ],
+        now: () => thresholds.wallDurationMs + 1,
+        profile,
+        resource: {
+          initial: {
+            heapUsedBytes: thresholds.heapUsedBytes + 1,
+            rssBytes: 1,
+          },
+          sample: () => ({
+            heapUsedBytes: thresholds.heapUsedBytes + 1,
+            rssBytes: 1,
+          }),
+          startedAtMs: 0,
+          wallDurationWarning: true,
+        },
+      });
+
+      expect(report.passed).toBe(false);
+      expect(report.contracts[0]?.budget.failures).toEqual([
+        "p95 1000ms exceeds 250ms",
+        "p99 1000ms exceeds 750ms",
+      ]);
+      expect(report.resources.mode).toBe("bounded-memory-timing-warning");
+      expect(report.resources.failures).toEqual([
+        `heapUsedBytes ${thresholds.heapUsedBytes + 1} exceeds ${thresholds.heapUsedBytes}`,
+      ]);
+      expect(report.resources.warnings).toEqual([
+        `wallDurationMs ${thresholds.wallDurationMs + 1} exceeds ${thresholds.wallDurationMs}`,
+      ]);
+    }
   });
 
   it("fails a required resource budget at current and 2x", async () => {

@@ -1,10 +1,17 @@
-import { createClient as createLocalClient } from "@libsql/client";
+import { type Client, createClient as createLocalClient } from "@libsql/client";
 
 import { LOCAL_DB_CONCURRENCY, REMOTE_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { performanceRegistry, selectPerformanceContracts } from "./contracts";
-import { applyFixtureSchema, auditFixtureCardinality, resetFixture, writeFixture } from "./fixture";
+import {
+  HOSTED_FIXTURE_CENSUS_ROW_LIMIT,
+  applyFixtureSchema,
+  auditFixtureCardinality,
+  resetFixture,
+  writeFixture,
+} from "./fixture";
 import { resolveHostedReplay } from "./hosted";
+import { type PerformanceFixtureIdentity, verifyFixtureIdentity } from "./materialize";
 import {
   type ScaleProfile,
   createCiFixtureCounts,
@@ -13,7 +20,11 @@ import {
 } from "./manifest";
 import {
   PERFORMANCE_REPORT_SCHEMA_VERSION,
+  executePerformancePhase,
+  formatPerformanceExecutionProgress,
   maxPerformanceResourceSample,
+  type PerformanceExecutionProgress,
+  type PerformanceResourceSample,
   readPerformanceResourceSample,
   runPerformanceContracts,
 } from "./registry";
@@ -26,23 +37,47 @@ const PROFILE_PROCESS_DEADLINE_MS: Record<ScaleProfile, number> = {
   "2x": 8 * 60_000,
   "4x": 12 * 60_000,
 };
+// Hosted preseed verification performs identity plus one remote request for every census statement
+// before contract timing begins. Its whole-process cap therefore adds one scale-matched bootstrap
+// window to the unchanged exact-run cap; contract timing remains separately measured post-bootstrap.
+const HOSTED_BOOTSTRAP_ALLOWANCE_MS: Record<ScaleProfile, number> = {
+  "1x": 5 * 60_000,
+  "2x": 8 * 60_000,
+  "4x": 12 * 60_000,
+};
 
-type CliOptions = {
+export type CliOptions = {
   contractIds: string[];
   fullFixture: boolean;
   hosted: boolean;
   list: boolean;
   operatorApproved: boolean;
+  preseededFixture: boolean;
   profile: ScaleProfile;
 };
 
-function parseArguments(args: readonly string[]): CliOptions {
+export function performanceProcessDeadlineMs(
+  options: Pick<CliOptions, "fullFixture" | "hosted" | "profile">,
+): number {
+  if (options.hosted) {
+    return (
+      PROFILE_PROCESS_DEADLINE_MS[options.profile] + HOSTED_BOOTSTRAP_ALLOWANCE_MS[options.profile]
+    );
+  }
+  if (options.fullFixture) {
+    return PROFILE_PROCESS_DEADLINE_MS[options.profile];
+  }
+  return CI_PROCESS_DEADLINE_MS;
+}
+
+export function parseArguments(args: readonly string[]): CliOptions {
   const options: CliOptions = {
     contractIds: [],
     fullFixture: false,
     hosted: false,
     list: false,
     operatorApproved: false,
+    preseededFixture: false,
     profile: "1x",
   };
 
@@ -55,6 +90,8 @@ function parseArguments(args: readonly string[]): CliOptions {
       options.operatorApproved = true;
     } else if (argument === "--full-fixture") {
       options.fullFixture = true;
+    } else if (argument === "--preseeded-fixture") {
+      options.preseededFixture = true;
     } else if (argument === "--list") {
       options.list = true;
     } else if (argument === "--profile") {
@@ -76,10 +113,118 @@ function parseArguments(args: readonly string[]): CliOptions {
     }
   }
 
+  if (options.hosted && !options.preseededFixture) {
+    throw new Error("--hosted requires --preseeded-fixture");
+  }
+  if (options.preseededFixture && !options.hosted) {
+    throw new Error("--preseeded-fixture requires --hosted");
+  }
+  if (options.hosted && options.fullFixture) {
+    throw new Error("--hosted --preseeded-fixture cannot combine with --full-fixture");
+  }
+  if (options.operatorApproved && !options.hosted) {
+    throw new Error("--operator-approved requires --hosted");
+  }
+  if (
+    options.list &&
+    (options.hosted || options.operatorApproved || options.preseededFixture || options.fullFixture)
+  ) {
+    throw new Error("--list cannot combine with fixture or hosted execution flags");
+  }
+
   return options;
 }
 
-async function main(options: CliOptions): Promise<void> {
+export type FixtureBootstrap = {
+  census: Awaited<ReturnType<typeof auditFixtureCardinality>>;
+  identity: PerformanceFixtureIdentity | null;
+  mode: "generated" | "preseeded-verified";
+  writeDurationMs: number | null;
+  written: Awaited<ReturnType<typeof writeFixture>> | null;
+};
+
+type RunDependencies = {
+  resolveReplay?: typeof resolveHostedReplay;
+};
+
+export function writeHostedPerformanceProgress(progress: PerformanceExecutionProgress): void {
+  process.stderr.write(`${formatPerformanceExecutionProgress(progress)}\n`);
+}
+
+export function performanceWallDurationWarning(environment: "hosted" | "local"): boolean {
+  return environment === "hosted";
+}
+
+export function contractPhaseResourceBoundary(options: {
+  databaseProcessIsolated: boolean;
+  fixtureResource: PerformanceResourceSample;
+  fixtureWriteCompletedAtMs: number;
+  initialResource: PerformanceResourceSample;
+  runStartedAtMs: number;
+}): { initial: PerformanceResourceSample; startedAtMs: number } {
+  return options.databaseProcessIsolated
+    ? {
+        initial: options.fixtureResource,
+        startedAtMs: options.fixtureWriteCompletedAtMs,
+      }
+    : {
+        initial: maxPerformanceResourceSample(options.initialResource, options.fixtureResource),
+        startedAtMs: options.runStartedAtMs,
+      };
+}
+
+export async function prepareFixture(
+  client: Client,
+  options: {
+    hosted: boolean;
+    profile: ScaleProfile;
+    counts: ReturnType<typeof getScaleManifest>["counts"];
+    onProgress?: (progress: PerformanceExecutionProgress) => void;
+  },
+): Promise<FixtureBootstrap> {
+  if (options.hosted) {
+    const identity = await executePerformancePhase(
+      { phase: "fixture-identity" },
+      options.onProgress,
+      () => verifyFixtureIdentity(client, options.profile, options.counts),
+    );
+    const census = await executePerformancePhase({ phase: "fixture-census" }, undefined, () =>
+      auditFixtureCardinality(client, options.counts, {
+        maxRowsPerStatement: HOSTED_FIXTURE_CENSUS_ROW_LIMIT,
+        onRequest: (iteration, iterations) =>
+          options.onProgress?.({ iteration, iterations, phase: "fixture-census" }),
+        statementsPerRequest: 1,
+      }),
+    );
+    if (!census.passed) {
+      throw new Error(`preseeded fixture census failed: ${census.mismatches.join("; ")}`);
+    }
+
+    return {
+      census,
+      identity,
+      mode: "preseeded-verified",
+      writeDurationMs: null,
+      written: null,
+    };
+  }
+
+  await resetFixture(client);
+  await applyFixtureSchema(client);
+  const fixtureWriteStartedAtMs = performance.now();
+  const written = await writeFixture(client, options.profile, { counts: options.counts });
+  const census = await auditFixtureCardinality(client, options.counts);
+
+  return {
+    census,
+    identity: null,
+    mode: "generated",
+    writeDurationMs: Math.max(0, performance.now() - fixtureWriteStartedAtMs),
+    written,
+  };
+}
+
+export async function main(options: CliOptions, dependencies: RunDependencies = {}): Promise<void> {
   if (options.list) {
     process.stdout.write(
       `${JSON.stringify(
@@ -96,9 +241,12 @@ async function main(options: CliOptions): Promise<void> {
     return;
   }
 
-  const replay = resolveHostedReplay({
+  const contracts = selectPerformanceContracts(options.contractIds);
+  const replay = (dependencies.resolveReplay ?? resolveHostedReplay)({
+    fullFixture: options.fullFixture,
     hosted: options.hosted,
     operatorApproved: options.operatorApproved,
+    preseededFixture: options.preseededFixture,
   });
   const localSidecar =
     replay.mode === "local" && options.fullFixture
@@ -121,30 +269,38 @@ async function main(options: CliOptions): Promise<void> {
   const initialResource = readPerformanceResourceSample();
 
   try {
-    await resetFixture(client);
-    await applyFixtureSchema(client);
+    const onProgress = replay.mode === "hosted" ? writeHostedPerformanceProgress : undefined;
     const exactFixture = replay.mode === "hosted" || options.fullFixture;
     const counts = exactFixture
       ? getScaleManifest(options.profile).counts
       : createCiFixtureCounts(options.profile);
-    const fixtureWriteStartedAtMs = performance.now();
-    const written = await writeFixture(client, options.profile, { counts });
-    const census = await auditFixtureCardinality(client, counts);
+    const bootstrap = await prepareFixture(client, {
+      counts,
+      hosted: replay.mode === "hosted",
+      onProgress,
+      profile: options.profile,
+    });
     const fixtureWriteCompletedAtMs = performance.now();
-    const fixtureWriteDurationMs = Math.max(0, fixtureWriteCompletedAtMs - fixtureWriteStartedAtMs);
     const fixtureResource = readPerformanceResourceSample();
     const isolatedExactLocalRun = localSidecar !== null;
+    const contractResourceBoundary = contractPhaseResourceBoundary({
+      databaseProcessIsolated: replay.mode === "hosted" || isolatedExactLocalRun,
+      fixtureResource,
+      fixtureWriteCompletedAtMs,
+      initialResource,
+      runStartedAtMs,
+    });
     const report = await runPerformanceContracts({
       client,
-      contracts: selectPerformanceContracts(options.contractIds),
+      contracts,
       fixtureCounts: counts,
+      onProgress,
       profile: options.profile,
       resource: {
-        initial: isolatedExactLocalRun
-          ? fixtureResource
-          : maxPerformanceResourceSample(initialResource, fixtureResource),
+        initial: contractResourceBoundary.initial,
         sampleSource: localSidecar?.resourceSampleSource,
-        startedAtMs: isolatedExactLocalRun ? fixtureWriteCompletedAtMs : runStartedAtMs,
+        startedAtMs: contractResourceBoundary.startedAtMs,
+        wallDurationWarning: performanceWallDurationWarning(replay.mode),
       },
     });
 
@@ -172,12 +328,14 @@ async function main(options: CliOptions): Promise<void> {
           },
           environment: replay.mode,
           fixture: {
-            census,
+            bootstrap: bootstrap.mode,
+            census: bootstrap.census,
             counts,
-            exactProfileCardinality: exactFixture && census.passed,
+            exactProfileCardinality: exactFixture && bootstrap.census.passed,
+            identity: bootstrap.identity,
             profile: options.profile,
-            writeDurationMs: fixtureWriteDurationMs,
-            written,
+            writeDurationMs: bootstrap.writeDurationMs,
+            written: bootstrap.written,
           },
           indexAudit: report.indexAudit,
           report,
@@ -188,7 +346,7 @@ async function main(options: CliOptions): Promise<void> {
       )}\n`,
     );
 
-    if (!report.passed || !census.passed) {
+    if (!report.passed || !bootstrap.census.passed) {
       process.exitCode = 1;
     }
   } finally {
@@ -200,19 +358,18 @@ async function main(options: CliOptions): Promise<void> {
   }
 }
 
-const options = parseArguments(process.argv.slice(2));
-const processDeadlineMs =
-  options.fullFixture || options.hosted
-    ? PROFILE_PROCESS_DEADLINE_MS[options.profile]
-    : CI_PROCESS_DEADLINE_MS;
-const processDeadline = setTimeout(() => {
-  process.stderr.write(
-    `database-performance profile exceeded its ${processDeadlineMs}ms absolute deadline\n`,
-  );
-  process.exit(124);
-}, processDeadlineMs);
-try {
-  await main(options);
-} finally {
-  clearTimeout(processDeadline);
+if (import.meta.main) {
+  const options = parseArguments(process.argv.slice(2));
+  const processDeadlineMs = performanceProcessDeadlineMs(options);
+  const processDeadline = setTimeout(() => {
+    process.stderr.write(
+      `database-performance profile exceeded its ${processDeadlineMs}ms absolute deadline\n`,
+    );
+    process.exit(124);
+  }, processDeadlineMs);
+  try {
+    await main(options);
+  } finally {
+    clearTimeout(processDeadline);
+  }
 }

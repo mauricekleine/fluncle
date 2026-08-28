@@ -9,7 +9,9 @@ import { createCiFixtureCounts } from "./manifest";
 import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
 import {
   PerformanceRegistry,
+  executePerformanceBatch,
   type PerformanceClient,
+  type PerformanceExecutionProgress,
   runPerformanceContracts,
   sqlContract,
 } from "./registry";
@@ -20,7 +22,150 @@ const NOOP_CLIENT: PerformanceClient = {
   },
 };
 
+function transportTimeout(secretDetail = "sensitive transport detail"): Error {
+  const timeout = new Error(secretDetail);
+  timeout.name = "TimeoutError";
+  return timeout;
+}
+
 describe("performance registry", () => {
+  it("requires one explicit write batch for transactional contract transport", async () => {
+    const calls: { mode: string; statementCount: number }[] = [];
+    const client: PerformanceClient = {
+      async batch(statements, mode) {
+        calls.push({ mode, statementCount: statements.length });
+        return statements.map(() => ({ rows: [] }));
+      },
+      async execute() {
+        return { rows: [] };
+      },
+    };
+
+    await expect(
+      executePerformanceBatch(client, [
+        { args: [], sql: "select 1" },
+        { args: [], sql: "select 2" },
+      ]),
+    ).resolves.toHaveLength(2);
+    expect(calls).toEqual([{ mode: "write", statementCount: 2 }]);
+    await expect(executePerformanceBatch(NOOP_CLIENT, [])).rejects.toThrow(
+      "performance contract requires transactional batch support",
+    );
+  });
+
+  it("times due-work and crawl claims as their single production transaction request", async () => {
+    const dueWorkBatches: { mode: string; statementCount: number }[] = [];
+    let dueWorkClock = 0;
+    const dueWorkRows = Array.from({ length: 25 }, (_value, index) => ({
+      claim_expires_at: "2099-01-01T00:01:00.000Z",
+      claim_token: "synthetic-claim-token",
+      claimed_by: "synthetic-worker",
+      generation: "live",
+      next_due_at: "2099-01-01T00:00:00.000Z",
+      sort_key: `${index}`,
+      source_version: `${index}`,
+      state: "leased",
+      subject_id: `${index}`,
+      subject_type: "track",
+      updated_at: "2099-01-01T00:00:00.000Z",
+      work_kind: "youtube-provenance-findings",
+    }));
+    const dueWorkClient: PerformanceClient = {
+      async batch(statements, mode) {
+        dueWorkBatches.push({ mode, statementCount: statements.length });
+        dueWorkClock += 17;
+        return [
+          { rows: [], rowsAffected: 0 },
+          { rows: [], rowsAffected: 0 },
+          { rows: [], rowsAffected: 25 },
+          { rows: dueWorkRows },
+          { rows: [{ subject_id: "remaining" }] },
+        ];
+      },
+      async execute() {
+        dueWorkClock += 100;
+        return { rows: [{ n: 100 }], rowsAffected: 25 };
+      },
+    };
+    const dueWorkContract = selectPerformanceContracts(["fixture.due-work-claim"])[0];
+    if (dueWorkContract === undefined) {
+      throw new Error("due-work claim contract is not registered");
+    }
+    const dueWork = await dueWorkContract.execute({
+      client: dueWorkClient,
+      iteration: 0,
+      now: () => dueWorkClock,
+      profile: "1x",
+    });
+
+    expect(dueWork.durationMs).toBe(17);
+    expect(dueWork.batchCount).toBe(1);
+    expect(dueWork.metadata).toEqual({
+      batchResultCount: 5,
+      claimResultColumnCount: 12,
+      claimResultRowsHaveProductionShape: true,
+      measuredRequestCount: 1,
+      measuredStatementCount: 5,
+      readySentinelRows: 1,
+      transactionalBatch: true,
+    });
+    expect(dueWork.convergence?.converged).toBe(true);
+    expect(dueWorkBatches).toEqual([{ mode: "write", statementCount: 5 }]);
+    expect(dueWorkContract.validate?.(dueWork)).toEqual([]);
+
+    const crawlBatches: { mode: string; statementCount: number }[] = [];
+    let crawlClock = 0;
+    const crawlRows = Array.from({ length: 500 }, (_value, index) => ({
+      claim_position: index,
+      node_id: `node-${index}`,
+      node_kind: index < 250 ? "release" : "artist",
+    }));
+    const crawlClient: PerformanceClient = {
+      async batch(statements, mode) {
+        crawlBatches.push({ mode, statementCount: statements.length });
+        crawlClock += 23;
+        return [
+          { rows: [], rowsAffected: 500 },
+          { rows: crawlRows },
+          { rows: [{ node_id: "remaining" }] },
+        ];
+      },
+      async execute(statement) {
+        crawlClock += 100;
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        return {
+          rows: [{ n: sql.includes("perf_crawl_projection_repairs") ? 0 : 1_000 }],
+          rowsAffected: 500,
+        };
+      },
+    };
+    const crawlContract = selectPerformanceContracts(["projection.crawl-two-lane-claim"])[0];
+    if (crawlContract === undefined) {
+      throw new Error("crawl claim contract is not registered");
+    }
+    const crawl = await crawlContract.execute({
+      client: crawlClient,
+      iteration: 0,
+      now: () => crawlClock,
+      profile: "1x",
+    });
+
+    expect(crawl.durationMs).toBe(23);
+    expect(crawl.batchCount).toBe(1);
+    expect(crawl.metadata).toMatchObject({
+      batchResultCount: 3,
+      measuredRequestCount: 1,
+      measuredStatementCount: 3,
+      transactionalBatch: true,
+    });
+    expect(crawl.convergence?.converged).toBe(true);
+    expect(crawlBatches).toEqual([{ mode: "write", statementCount: 3 }]);
+    expect(crawlContract.validate?.(crawl)).toEqual([]);
+    expect(JSON.stringify([dueWork.metadata, crawl.metadata])).not.toMatch(
+      /\b(?:select|update|insert|delete)\b/i,
+    );
+  });
+
   it("requires bounded stable unique contract IDs", () => {
     const registry = new PerformanceRegistry();
     const contract = {
@@ -144,6 +289,121 @@ describe("performance registry", () => {
     });
   });
 
+  it("adds safe contract and phase context to index-plan timeouts", async () => {
+    const progress: PerformanceExecutionProgress[] = [];
+    const timeout = new Error("outer transport detail", {
+      cause: transportTimeout("secret SQL and topology"),
+    });
+    const execution = runPerformanceContracts({
+      client: {
+        async execute() {
+          throw timeout;
+        },
+      },
+      contracts: [
+        {
+          description: "index timeout pin",
+          async execute() {
+            return { resultRowCount: 0 };
+          },
+          id: "route.index-timeout-pin",
+          iterations: 1,
+          plan: {
+            policy: { growingTables: [] },
+            statement: { args: [], sql: "select secret from private_topology" },
+          },
+          workClass: "route-db",
+        },
+      ],
+      onProgress: (event) => progress.push(event),
+      profile: "1x",
+    });
+
+    await expect(execution).rejects.toMatchObject({
+      message:
+        "[db-performance] phase=index-plan contract=route.index-timeout-pin request timed out",
+      name: "TimeoutError",
+    });
+    expect(progress).toEqual([
+      {
+        contractId: "route.index-timeout-pin",
+        iteration: 1,
+        iterations: 1,
+        phase: "measured-iteration",
+      },
+      { contractId: "route.index-timeout-pin", phase: "index-plan" },
+    ]);
+  });
+
+  it("adds safe contract and iteration context to warmup timeouts", async () => {
+    const progress: PerformanceExecutionProgress[] = [];
+    const execution = runPerformanceContracts({
+      client: NOOP_CLIENT,
+      contracts: [
+        {
+          description: "warmup timeout pin",
+          async execute() {
+            throw transportTimeout();
+          },
+          id: "route.warmup-timeout-pin",
+          iterations: 2,
+          warmupIterations: 3,
+          workClass: "route-db",
+        },
+      ],
+      onProgress: (event) => progress.push(event),
+      profile: "1x",
+    });
+
+    await expect(execution).rejects.toMatchObject({
+      message:
+        "[db-performance] phase=warmup contract=route.warmup-timeout-pin iteration=1/3 request timed out",
+      name: "TimeoutError",
+    });
+    expect(progress).toEqual([
+      {
+        contractId: "route.warmup-timeout-pin",
+        iteration: 1,
+        iterations: 3,
+        phase: "warmup",
+      },
+    ]);
+  });
+
+  it("adds safe contract and iteration context to measured timeouts", async () => {
+    const progress: PerformanceExecutionProgress[] = [];
+    const execution = runPerformanceContracts({
+      client: NOOP_CLIENT,
+      contracts: [
+        {
+          description: "measured timeout pin",
+          async execute() {
+            throw transportTimeout();
+          },
+          id: "route.measured-timeout-pin",
+          iterations: 4,
+          workClass: "route-db",
+        },
+      ],
+      onProgress: (event) => progress.push(event),
+      profile: "1x",
+    });
+
+    await expect(execution).rejects.toMatchObject({
+      message:
+        "[db-performance] phase=measured-iteration contract=route.measured-timeout-pin iteration=1/4 request timed out",
+      name: "TimeoutError",
+    });
+    expect(progress).toEqual([
+      {
+        contractId: "route.measured-timeout-pin",
+        iteration: 1,
+        iterations: 4,
+        phase: "measured-iteration",
+      },
+    ]);
+  });
+
   it("fails an EQP full scan or temporary sort independently of timing", async () => {
     const client: PerformanceClient = {
       async execute(statement) {
@@ -181,6 +441,112 @@ describe("performance registry", () => {
     expect(report.contracts[0]?.plan?.tempSorts).toHaveLength(1);
     expect(report.contracts[0]?.plan?.violations).toHaveLength(2);
     expect(report.contracts[0]?.passed).toBe(false);
+  });
+
+  it("finishes production-shaped write batches before terminal plan audits", async () => {
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    try {
+      await client.execute(
+        "create table batch_probe (id integer primary key, value text not null)",
+      );
+      await client.execute("insert into batch_probe (id, value) values (1, 'before')");
+      const report = await runPerformanceContracts({
+        client,
+        contracts: [
+          {
+            description: "late failing plan pin",
+            async execute() {
+              return { resultRowCount: 0 };
+            },
+            id: "route.late-plan-pin",
+            iterations: 1,
+            plan: {
+              policy: { forbidTempSort: true, growingTables: ["batch_probe"] },
+              statement: {
+                args: [],
+                sql: "select value from batch_probe order by value",
+              },
+            },
+            workClass: "route-db",
+          },
+          {
+            description: "production-shaped batch pin",
+            async execute(context) {
+              const startedAt = context.now();
+              const results = await executePerformanceBatch(context.client, [
+                { args: ["after", 1], sql: "update batch_probe set value = ? where id = ?" },
+                { args: [1], sql: "select value from batch_probe where id = ?" },
+              ]);
+              const result = results[1] ?? { rows: [] };
+              return {
+                batchCount: 1,
+                durationMs: Math.max(0, context.now() - startedAt),
+                resultRowCount: result.rows.length,
+              };
+            },
+            id: "queue.production-batch-pin",
+            iterations: 1,
+            workClass: "queue",
+          },
+        ],
+        profile: "1x",
+      });
+
+      expect(report.contracts[0]?.plan?.violations.length).toBeGreaterThan(0);
+      expect(report.contracts[0]?.passed).toBe(false);
+      expect(report.contracts[1]?.passed).toBe(true);
+      expect(report.passed).toBe(false);
+      expect((await client.execute("select value from batch_probe where id = 1")).rows[0]).toEqual({
+        value: "after",
+      });
+    } finally {
+      client.close();
+    }
+  });
+
+  it("attaches a late structural proof violation only to its owning report", async () => {
+    const report = await runPerformanceContracts({
+      client: NOOP_CLIENT,
+      contracts: [
+        {
+          description: "terminal structural failure pin",
+          async execute() {
+            return { durationMs: 1, resultRowCount: 1 };
+          },
+          id: "projection.terminal-structural-failure-pin",
+          iterations: 1,
+          terminalProof: {
+            async execute() {
+              return { metadata: { structuralOwner: "first" }, resultRowCount: 1 };
+            },
+            validate() {
+              return ["structural proof failed"];
+            },
+          },
+          workClass: "projection",
+        },
+        {
+          description: "terminal structural neighbour pin",
+          async execute() {
+            return { durationMs: 1, resultRowCount: 1 };
+          },
+          id: "projection.terminal-structural-neighbour-pin",
+          iterations: 1,
+          workClass: "projection",
+        },
+      ],
+      profile: "1x",
+    });
+
+    expect(report.contracts[0]?.validationFailures).toEqual([
+      "terminal proof: structural proof failed",
+    ]);
+    expect(report.contracts[0]?.metadata).toEqual([{ structuralOwner: "first" }]);
+    expect(report.contracts[0]?.passed).toBe(false);
+    expect(report.contracts[1]?.validationFailures).toEqual([]);
+    expect(report.contracts[1]?.metadata).toEqual([]);
+    expect(report.contracts[1]?.passed).toBe(true);
+    expect(report.passed).toBe(false);
   });
 
   it("proves empty, bounded-read, and bounded-claim due-work plans at 1x, 2x, and 4x", async () => {

@@ -14,6 +14,7 @@ import {
   type PerformanceResult,
   type PerformanceStatement,
   PerformanceRegistry,
+  executePerformanceBatch,
 } from "./registry";
 
 export const CONTRACT_D_WORK_CLASS = "projection" as const;
@@ -394,11 +395,15 @@ function observation(
   metadata: Record<string, boolean | number | string | null>,
   affectedRowCount?: number,
   convergence?: ConvergenceObservation,
+  batchCount?: number,
+  invariants?: ContractExecution["invariants"],
 ): ContractExecution {
   return {
     affectedRowCount,
+    batchCount,
     convergence,
     durationMs: Math.max(0, context.now() - startedAt),
+    invariants,
     metadata,
     rawResult: result,
     resultRowCount: result.rows.length,
@@ -446,20 +451,60 @@ async function executeCrawl(
   try {
     if (measureClaim) {
       startedAt = context.now();
-      const claim = await context.client.execute(CRAWL_CLAIM);
+      const results = await executePerformanceBatch(context.client, [
+        CRAWL_CLAIM,
+        CRAWL_READ,
+        CRAWL_READY_SENTINEL,
+      ]);
+      const claim = results[0] ?? { rows: [] };
+      const read = results[1] ?? { rows: [] };
+      const hasMore = results[2] ?? { rows: [] };
       claimRows = claim.rowsAffected ?? 0;
+      rows = read.rows;
+      hasMoreRows = hasMore.rows.length;
+      execution = observation(
+        read,
+        startedAt,
+        context,
+        {
+          ...crawlMetadata(claimRows, rows, hasMoreRows, CONTRACT_D_CRAWL_CLAIM_LIMIT),
+          batchResultCount: results.length,
+          measuredRequestCount: 1,
+          measuredStatementCount: 3,
+          transactionalBatch: true,
+        },
+        claimRows,
+        undefined,
+        1,
+        { atomicityViolations: results.length === 3 ? 0 : 1 },
+      );
     } else {
-      const claim = await context.client.execute(CRAWL_CLAIM);
+      const results = await executePerformanceBatch(context.client, [
+        CRAWL_CLAIM,
+        CRAWL_READ,
+        CRAWL_READY_SENTINEL,
+      ]);
+      const claim = results[0] ?? { rows: [] };
       claimRows = claim.rowsAffected ?? 0;
       startedAt = context.now();
+      const read = await context.client.execute(CRAWL_READ);
+      rows = read.rows;
+      const hasMore = results[2] ?? { rows: [] };
+      hasMoreRows = hasMore.rows.length;
+      execution = observation(
+        read,
+        startedAt,
+        context,
+        {
+          ...crawlMetadata(claimRows, rows, hasMoreRows, CONTRACT_D_CRAWL_CLAIM_LIMIT),
+          measuredRequestCount: 1,
+          measuredStatementCount: 1,
+          setupBatchResultCount: results.length,
+          setupTransactionalBatch: true,
+        },
+        claimRows,
+      );
     }
-
-    const read = await context.client.execute(CRAWL_READ);
-    rows = read.rows;
-    const hasMore = await context.client.execute(CRAWL_READY_SENTINEL);
-    hasMoreRows = hasMore.rows.length;
-    const metadata = crawlMetadata(claimRows, rows, hasMoreRows, CONTRACT_D_CRAWL_CLAIM_LIMIT);
-    execution = observation(read, startedAt, context, metadata, claimRows);
   } finally {
     await cleanupCrawl(context);
   }
@@ -493,6 +538,12 @@ function validateCrawl(execution: ContractExecution): readonly string[] {
   }
   if (metadata.positionsContiguous !== true) {
     failures.push("claim positions were not contiguous and non-empty");
+  }
+  if (
+    execution.batchCount === 1 &&
+    (metadata.batchResultCount !== 3 || metadata.transactionalBatch !== true)
+  ) {
+    failures.push("transactional crawl claim did not return all three statement results");
   }
 
   return failures;

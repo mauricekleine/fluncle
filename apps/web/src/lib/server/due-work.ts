@@ -1,6 +1,7 @@
 import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 
 import { getDb } from "./db";
+import { DUE_WORK_COLUMNS } from "./due-work-columns";
 import {
   markPublicProjectionSourceChangedFromSelectStatements,
   markPublicProjectionSourceChangedStatements,
@@ -164,8 +165,6 @@ type RebuildSqlRow = {
   work_kind: string;
 };
 
-const DUE_WORK_COLUMNS = `claim_expires_at, claim_token, claimed_by, generation, next_due_at,
-  sort_key, source_version, state, subject_id, subject_type, updated_at, work_kind`;
 const REBUILD_COLUMNS = `completed_at, cursor, generation, projected_count, scanned_count,
   started_at, state, subject_type, updated_at, work_kind`;
 

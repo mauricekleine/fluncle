@@ -54,6 +54,63 @@ export type PerformanceResourceSampleSource =
   | "process.memoryUsage.isolated-local-libsql-client"
   | "provided";
 
+export type PerformanceExecutionProgress = {
+  contractId?: string;
+  iteration?: number;
+  iterations?: number;
+  phase:
+    | "fixture-identity"
+    | "fixture-census"
+    | "index-plan"
+    | "warmup"
+    | "measured-iteration"
+    | "terminal-proof";
+};
+
+export function formatPerformanceExecutionProgress(progress: PerformanceExecutionProgress): string {
+  const fields = [`phase=${progress.phase}`];
+  if (progress.contractId !== undefined) {
+    fields.push(`contract=${progress.contractId}`);
+  }
+  if (progress.iteration !== undefined && progress.iterations !== undefined) {
+    fields.push(`iteration=${progress.iteration}/${progress.iterations}`);
+  }
+  return `[db-performance] ${fields.join(" ")}`;
+}
+
+export function isPerformanceTimeoutError(error: unknown): boolean {
+  let candidate = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!(candidate instanceof Error)) {
+      return false;
+    }
+    if (candidate.name === "TimeoutError") {
+      return true;
+    }
+    candidate = candidate.cause;
+  }
+  return false;
+}
+
+export async function executePerformancePhase<T>(
+  progress: PerformanceExecutionProgress,
+  onProgress: ((progress: PerformanceExecutionProgress) => void) | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  onProgress?.(progress);
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isPerformanceTimeoutError(error)) {
+      throw error;
+    }
+
+    const timeout = new Error(`${formatPerformanceExecutionProgress(progress)} request timed out`);
+    timeout.name = "TimeoutError";
+    throw timeout;
+  }
+}
+
 export type PerformanceResourceReport = {
   availability: "measured" | "unavailable";
   failures: string[];
@@ -66,8 +123,20 @@ export type PerformanceResourceReport = {
 };
 
 export type PerformanceClient = {
+  batch?: (statements: PerformanceStatement[], mode: "write") => Promise<PerformanceResult[]>;
   execute: (statement: PerformanceStatement | string) => Promise<PerformanceResult>;
 };
+
+export async function executePerformanceBatch(
+  client: PerformanceClient,
+  statements: readonly PerformanceStatement[],
+): Promise<PerformanceResult[]> {
+  if (client.batch === undefined) {
+    throw new Error("performance contract requires transactional batch support");
+  }
+
+  return client.batch([...statements], "write");
+}
 
 export type ContractObservation = {
   affectedRowCount?: number;
@@ -114,6 +183,10 @@ export type PerformanceContract = {
   plan?: {
     policy: ExplainPlanPolicy;
     statement: PerformanceStatement;
+  };
+  terminalProof?: {
+    execute: (context: ContractContext) => Promise<ContractExecution>;
+    validate?: (execution: ContractExecution) => readonly string[];
   };
   validate?: (execution: ContractExecution) => readonly string[];
   warmupIterations?: number;
@@ -375,13 +448,17 @@ function buildPerformanceResourceReport(options: {
   resource?: {
     sample?: () => PerformanceResourceSample;
     sampleSource?: PerformanceResourceSampleSource;
+    wallDurationWarning?: boolean;
   };
   wallStartedAt: number;
 }): PerformanceResourceReport {
   const resources: PerformanceResourceReport = {
     availability: options.hasResourceSampling ? "measured" : "unavailable",
     failures: [],
-    mode: options.profile === "4x" ? "bounded-memory-timing-warning" : "required",
+    mode:
+      options.profile === "4x" || options.resource?.wallDurationWarning === true
+        ? "bounded-memory-timing-warning"
+        : "required",
     peak:
       options.peak === null
         ? null
@@ -420,18 +497,85 @@ function buildPerformanceResourceReport(options: {
   return resources;
 }
 
+async function attachTerminalContractEvidence(options: {
+  client: PerformanceClient;
+  contracts: readonly PerformanceContract[];
+  fixtureCounts?: FixtureCounts;
+  now: () => number;
+  onProgress?: (progress: PerformanceExecutionProgress) => void;
+  onTerminalProof: () => void;
+  profile: ScaleProfile;
+  reports: ContractReport[];
+}): Promise<void> {
+  // The embedded local driver keeps EXPLAIN statements alive long enough to block a later explicit
+  // write-batch commit. Contracts therefore finish every production-shaped mutation first; plans
+  // and structural proofs remain mandatory evidence in this terminal read-only phase.
+  for (const [index, contract] of options.contracts.entries()) {
+    const report = options.reports[index];
+    if (report === undefined || report.contractId !== contract.id) {
+      throw new Error(`performance report order diverged at ${contract.id}`);
+    }
+
+    if (contract.plan !== undefined) {
+      const contractPlan = contract.plan;
+      const result = await executePerformancePhase(
+        { contractId: contract.id, phase: "index-plan" },
+        options.onProgress,
+        () =>
+          options.client.execute({
+            args: contractPlan.statement.args,
+            sql: `EXPLAIN QUERY PLAN ${contractPlan.statement.sql}`,
+          }),
+      );
+      const plan = analyzeExplainPlan(planDetails(result), contractPlan.policy);
+      report.plan = plan;
+      report.passed = report.passed && plan.violations.length === 0;
+    }
+
+    if (contract.terminalProof !== undefined) {
+      const terminalProofContract = contract.terminalProof;
+      const terminalProof = await executePerformancePhase(
+        { contractId: contract.id, phase: "terminal-proof" },
+        options.onProgress,
+        () =>
+          terminalProofContract.execute({
+            client: options.client,
+            fixtureCounts: options.fixtureCounts,
+            iteration: 0,
+            now: options.now,
+            profile: options.profile,
+          }),
+      );
+      const terminalFailures = terminalProofContract.validate?.(terminalProof) ?? [];
+      report.validationFailures.push(
+        ...terminalFailures.map((failure) => `terminal proof: ${failure}`),
+      );
+      if (terminalProof.metadata !== undefined) {
+        report.metadata =
+          report.metadata.length === 0
+            ? [terminalProof.metadata]
+            : report.metadata.map((metadata) => ({ ...metadata, ...terminalProof.metadata }));
+      }
+      report.passed = report.passed && terminalFailures.length === 0;
+      options.onTerminalProof();
+    }
+  }
+}
+
 export async function runPerformanceContracts(options: {
   client: PerformanceClient;
   contracts: readonly PerformanceContract[];
   fixtureCounts?: FixtureCounts;
   generatedAt?: string;
   now?: () => number;
+  onProgress?: (progress: PerformanceExecutionProgress) => void;
   profile: ScaleProfile;
   resource?: {
     initial?: PerformanceResourceSample;
     sample?: () => PerformanceResourceSample;
     sampleSource?: PerformanceResourceSampleSource;
     startedAtMs?: number;
+    wallDurationWarning?: boolean;
   };
 }): Promise<PerformanceRunReport> {
   const now = options.now ?? performance.now.bind(performance);
@@ -452,25 +596,25 @@ export async function runPerformanceContracts(options: {
   const reports: ContractReport[] = [];
 
   for (const contract of options.contracts) {
-    let plan: ExplainPlanAnalysis | null = null;
-
-    if (contract.plan) {
-      const result = await options.client.execute({
-        args: contract.plan.statement.args,
-        sql: `EXPLAIN QUERY PLAN ${contract.plan.statement.sql}`,
-      });
-      plan = analyzeExplainPlan(planDetails(result), contract.plan.policy);
-    }
-
     const warmups = contract.warmupIterations ?? 0;
     for (let iteration = 0; iteration < warmups; iteration += 1) {
-      await contract.execute({
-        client: options.client,
-        fixtureCounts: options.fixtureCounts,
-        iteration: -iteration - 1,
-        now,
-        profile: options.profile,
-      });
+      await executePerformancePhase(
+        {
+          contractId: contract.id,
+          iteration: iteration + 1,
+          iterations: warmups,
+          phase: "warmup",
+        },
+        options.onProgress,
+        () =>
+          contract.execute({
+            client: options.client,
+            fixtureCounts: options.fixtureCounts,
+            iteration: -iteration - 1,
+            now,
+            profile: options.profile,
+          }),
+      );
       peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
     }
 
@@ -478,13 +622,23 @@ export async function runPerformanceContracts(options: {
     const validationFailures: string[] = [];
 
     for (let iteration = 0; iteration < contract.iterations; iteration += 1) {
-      const observation = await contract.execute({
-        client: options.client,
-        fixtureCounts: options.fixtureCounts,
-        iteration,
-        now,
-        profile: options.profile,
-      });
+      const observation = await executePerformancePhase(
+        {
+          contractId: contract.id,
+          iteration: iteration + 1,
+          iterations: contract.iterations,
+          phase: "measured-iteration",
+        },
+        options.onProgress,
+        () =>
+          contract.execute({
+            client: options.client,
+            fixtureCounts: options.fixtureCounts,
+            iteration,
+            now,
+            profile: options.profile,
+          }),
+      );
       observations.push(observation);
       peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
 
@@ -557,7 +711,6 @@ export async function runPerformanceContracts(options: {
 
     const failures = [...invariantProblems, ...(required ? measurementProblems : [])];
     const warnings = required ? [] : measurementProblems;
-    const planFailures = plan?.violations ?? [];
 
     reports.push({
       affectedRowCount: affectedRowCounts.length > 0 ? distribution(affectedRowCounts) : null,
@@ -576,14 +729,27 @@ export async function runPerformanceContracts(options: {
       invariantTotals,
       iterations: observations.length,
       metadata,
-      passed: failures.length === 0 && validationFailures.length === 0 && planFailures.length === 0,
-      plan,
+      passed: failures.length === 0 && validationFailures.length === 0,
+      plan: null,
       queueMs: queueValues.length > 0 ? distribution(queueValues) : null,
       resultRowCount: resultCounts,
       validationFailures,
       workClass: contract.workClass,
     });
   }
+
+  await attachTerminalContractEvidence({
+    client: options.client,
+    contracts: options.contracts,
+    fixtureCounts: options.fixtureCounts,
+    now,
+    onProgress: options.onProgress,
+    onTerminalProof: () => {
+      peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
+    },
+    profile: options.profile,
+    reports,
+  });
 
   peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
   const resources = buildPerformanceResourceReport({

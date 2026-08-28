@@ -6,8 +6,10 @@ export type HostedReplayConfiguration =
   | { mode: "hosted"; token: string; url: string };
 
 export type HostedReplayGate = {
+  fullFixture?: boolean;
   hosted: boolean;
   operatorApproved: boolean;
+  preseededFixture?: boolean;
   readEnvironment?: (name: string) => string | undefined;
 };
 
@@ -54,11 +56,14 @@ function validateScratchUrl(rawUrl: string): string {
 }
 
 /**
- * Local mode returns before touching the environment. Hosted credentials are read only after both
+ * Local mode returns before touching the environment. Hosted credentials are read only after all
  * explicit gates are present, then validated before a client can be constructed.
  */
 export function resolveHostedReplay(gate: HostedReplayGate): HostedReplayConfiguration {
   if (!gate.hosted) {
+    if (gate.preseededFixture) {
+      throw new Error("--preseeded-fixture requires the explicit --hosted flag");
+    }
     if (gate.operatorApproved) {
       throw new Error("operator approval is inert without the explicit --hosted flag");
     }
@@ -68,6 +73,12 @@ export function resolveHostedReplay(gate: HostedReplayGate): HostedReplayConfigu
 
   if (!gate.operatorApproved) {
     throw new Error("hosted replay requires explicit operator approval");
+  }
+  if (!gate.preseededFixture) {
+    throw new Error("hosted replay requires --preseeded-fixture");
+  }
+  if (gate.fullFixture) {
+    throw new Error("hosted preseeded replay cannot combine with --full-fixture");
   }
 
   const readEnvironment = gate.readEnvironment ?? ((name: string) => process.env[name]);

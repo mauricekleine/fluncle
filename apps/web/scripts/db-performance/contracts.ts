@@ -1,4 +1,5 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
+import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
 import { registerContractD } from "./contract-d";
 import { registerFinalProofContracts } from "./final-proof";
 import { registerIndexEvidenceContracts } from "./index-evidence";
@@ -11,6 +12,7 @@ import {
   type PerformanceResult,
   type PerformanceStatement,
   PerformanceRegistry,
+  executePerformanceBatch,
   sqlContract,
 } from "./registry";
 
@@ -68,85 +70,84 @@ function trackRefsOrdered(rows: readonly unknown[]): unknown[] {
   });
 }
 
-type ComparisonContractOptions = Omit<PerformanceContract, "execute" | "plan" | "validate"> & {
+type ComparisonContractOptions = Omit<
+  PerformanceContract,
+  "execute" | "plan" | "terminalProof" | "validate"
+> & {
   after: PerformanceStatement;
   before: PerformanceStatement;
   normalizeRows?: (rows: readonly unknown[]) => unknown[];
   plan: NonNullable<PerformanceContract["plan"]>;
 };
 
+/** Keep baseline plans and equivalence reads in terminalProof; execute measures only `after`. */
 function comparisonContract(options: ComparisonContractOptions): PerformanceContract {
   const { after, before, normalizeRows, plan, ...contract } = options;
-  const beforeEvidenceByClient = new WeakMap<
-    object,
-    Promise<{
-      beforeFullScanCount: number;
-      beforeOutput: string;
-      beforePlanDetails: string;
-      beforePlanViolationCount: number;
-      beforeResultRowCount: number;
-    }>
-  >();
+  const measuredRequestCount = contract.iterations + (contract.warmupIterations ?? 0);
 
   return {
     ...contract,
     async execute(context): Promise<ContractExecution> {
-      let beforeEvidence = beforeEvidenceByClient.get(context.client);
-
-      if (!beforeEvidence) {
-        beforeEvidence = (async () => {
-          const beforePlanResult = await context.client.execute({
-            args: before.args,
-            sql: `EXPLAIN QUERY PLAN ${before.sql}`,
-          });
-          const beforePlan = analyzeExplainPlan(explainDetails(beforePlanResult), plan.policy);
-          const beforeResult = await context.client.execute(before);
-          const normalize = normalizeRows ?? ((rows: readonly unknown[]) => [...rows]);
-
-          return {
-            beforeFullScanCount: beforePlan.fullScans.length,
-            beforeOutput: serializableRows(normalize(beforeResult.rows)),
-            beforePlanDetails: beforePlan.details.join(" | "),
-            beforePlanViolationCount: beforePlan.violations.length,
-            beforeResultRowCount: beforeResult.rows.length,
-          };
-        })();
-        beforeEvidenceByClient.set(context.client, beforeEvidence);
-      }
-
-      const reference = await beforeEvidence;
       const startedAt = context.now();
       const afterResult = await context.client.execute(after);
-      const durationMs = Math.max(0, context.now() - startedAt);
-      const normalize = normalizeRows ?? ((rows: readonly unknown[]) => [...rows]);
-      const afterOutput = serializableRows(normalize(afterResult.rows));
 
       return {
         affectedRowCount: afterResult.rowsAffected ?? 0,
-        durationMs,
+        durationMs: Math.max(0, context.now() - startedAt),
         metadata: {
-          afterOutput,
-          afterResultRowCount: afterResult.rows.length,
-          ...reference,
-          outputsEquivalent: reference.beforeOutput === afterOutput,
+          finalStatementRequestCount: 1,
+          timingScope: "single-final-statement",
         },
         rawResult: afterResult,
         resultRowCount: afterResult.rows.length,
       };
     },
     plan,
-    validate(execution) {
-      const failures: string[] = [];
+    terminalProof: {
+      async execute(context): Promise<ContractExecution> {
+        const beforePlanResult = await context.client.execute({
+          args: before.args,
+          sql: `EXPLAIN QUERY PLAN ${before.sql}`,
+        });
+        const beforePlan = analyzeExplainPlan(explainDetails(beforePlanResult), plan.policy);
+        const beforeResult = await context.client.execute(before);
+        const afterResult = await context.client.execute(after);
+        const normalize = normalizeRows ?? ((rows: readonly unknown[]) => [...rows]);
+        const beforeOutput = serializableRows(normalize(beforeResult.rows));
+        const afterOutput = serializableRows(normalize(afterResult.rows));
 
-      if (execution.metadata?.outputsEquivalent !== true) {
-        failures.push("before and after outputs differ");
-      }
+        return {
+          metadata: {
+            afterOutput,
+            afterResultRowCount: afterResult.rows.length,
+            beforeFullScanCount: beforePlan.fullScans.length,
+            beforeOutput,
+            beforePlanDetails: beforePlan.details.join(" | "),
+            beforePlanViolationCount: beforePlan.violations.length,
+            beforeResultRowCount: beforeResult.rows.length,
+            measuredRequestCount,
+            outputsEquivalent: beforeOutput === afterOutput,
+            terminalPlanRequestCount: 1,
+            terminalProofRequestCount: 3,
+            totalRequestCount: measuredRequestCount + 4,
+          },
+          rawResult: afterResult,
+          resultRowCount: afterResult.rows.length,
+        };
+      },
+      validate(execution) {
+        const failures: string[] = [];
 
-      if (execution.metadata?.beforeResultRowCount !== execution.resultRowCount) {
-        failures.push("before and after row counts differ");
-      }
+        if (execution.metadata?.outputsEquivalent !== true) {
+          failures.push("before and after outputs differ");
+        }
 
-      return failures;
+        if (execution.metadata?.beforeResultRowCount !== execution.resultRowCount) {
+          failures.push("before and after row counts differ");
+        }
+
+        return failures;
+      },
     },
   };
 }
@@ -829,40 +830,93 @@ const DUE_WORK_REAP = {
     )`,
 };
 
-const DUE_WORK_CLAIM_RESULT = {
+export const DUE_WORK_PERFORMANCE_CLAIM_RESULT = {
   args: ["youtube-provenance-findings", "synthetic-worker", "synthetic-claim-token"],
-  sql: `select subject_id from due_work
+  sql: `select ${DUE_WORK_COLUMNS} from due_work
     where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?
     order by sort_key, subject_id`,
+} satisfies PerformanceStatement;
+
+const DUE_WORK_CLAIM_SENTINEL = {
+  args: ["youtube-provenance-findings"],
+  sql: `select subject_id from due_work
+    where work_kind = ? and state = 'ready'
+    order by sort_key, subject_id
+    limit 1`,
 };
+
+const DUE_WORK_CLAIM_CLEANUP = {
+  args: ["youtube-provenance-findings", "synthetic-worker", "synthetic-claim-token"],
+  sql: `update due_work set state = 'ready', claim_token = null,
+        claim_expires_at = null, claimed_by = null
+        where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?`,
+};
+
+function dueWorkClaimRowsHaveProductionShape(rows: readonly unknown[]): boolean {
+  return rows.every(
+    (row) =>
+      typeof row === "object" &&
+      row !== null &&
+      DUE_WORK_COLUMN_NAMES.every((column) => Object.hasOwn(row, column)) &&
+      Object.keys(row).length === DUE_WORK_COLUMN_NAMES.length,
+  );
+}
+
+async function cleanupPerformanceDueWorkClaim(
+  context: Parameters<PerformanceContract["execute"]>[0],
+): Promise<void> {
+  await context.client.execute(DUE_WORK_CLAIM_CLEANUP);
+}
 
 performanceRegistry.register({
   description: "A bounded due-work claim seeks and updates only the maintained backlog page",
   async execute(context) {
-    const startedAt = context.now();
-    await context.client.execute(DUE_WORK_PROMOTE);
-    await context.client.execute(DUE_WORK_REAP);
-    const mutation = await context.client.execute(DUE_WORK_CLAIM);
-    const result = await context.client.execute(DUE_WORK_CLAIM_RESULT);
-    await context.client.execute(DUE_WORK_EMPTY_READ);
-    const durationMs = Math.max(0, context.now() - startedAt);
-    await context.client.execute({
-      args: ["youtube-provenance-findings", "synthetic-worker", "synthetic-claim-token"],
-      sql: `update due_work set state = 'ready', claim_token = null,
-            claim_expires_at = null, claimed_by = null
-            where work_kind = ? and state = 'leased' and claimed_by = ? and claim_token = ?`,
-    });
+    await cleanupPerformanceDueWorkClaim(context);
+    let execution: ContractExecution | undefined;
+    try {
+      const startedAt = context.now();
+      const results = await executePerformanceBatch(context.client, [
+        DUE_WORK_PROMOTE,
+        DUE_WORK_REAP,
+        DUE_WORK_CLAIM,
+        DUE_WORK_PERFORMANCE_CLAIM_RESULT,
+        DUE_WORK_CLAIM_SENTINEL,
+      ]);
+      const durationMs = Math.max(0, context.now() - startedAt);
+      const mutation = results[2] ?? { rows: [] };
+      const result = results[3] ?? { rows: [] };
+      const sentinel = results[4] ?? { rows: [] };
+      execution = {
+        affectedRowCount: mutation.rowsAffected ?? 0,
+        batchCount: 1,
+        durationMs,
+        invariants: { atomicityViolations: results.length === 5 ? 0 : 1 },
+        metadata: {
+          batchResultCount: results.length,
+          claimResultColumnCount: Object.keys(result.rows[0] ?? {}).length,
+          claimResultRowsHaveProductionShape: dueWorkClaimRowsHaveProductionShape(result.rows),
+          measuredRequestCount: 1,
+          measuredStatementCount: 5,
+          readySentinelRows: sentinel.rows.length,
+          transactionalBatch: true,
+        },
+        rawResult: result,
+        resultRowCount: result.rows.length,
+      };
+    } finally {
+      await cleanupPerformanceDueWorkClaim(context);
+    }
+    if (execution === undefined) {
+      throw new Error("due-work claim contract did not produce an observation");
+    }
     const convergence = await dueWorkConvergence(
       context,
       "youtube-provenance-findings",
       "youtube_backlog",
     );
     return {
-      affectedRowCount: mutation.rowsAffected ?? 0,
+      ...execution,
       convergence,
-      durationMs,
-      rawResult: result,
-      resultRowCount: result.rows.length,
     };
   },
   id: "fixture.due-work-claim",
@@ -876,9 +930,27 @@ performanceRegistry.register({
     statement: DUE_WORK_CLAIM,
   },
   validate(execution) {
-    return execution.resultRowCount === 25
-      ? []
-      : [`bounded due-work claim returned ${execution.resultRowCount} rows`];
+    const failures: string[] = [];
+    if (execution.affectedRowCount !== 25) {
+      failures.push(`due-work claim affected ${execution.affectedRowCount ?? 0} rows, expected 25`);
+    }
+    if (execution.resultRowCount !== 25) {
+      failures.push(`bounded due-work claim returned ${execution.resultRowCount} rows`);
+    }
+    if (execution.metadata?.batchResultCount !== 5) {
+      failures.push("transactional due-work claim did not return all five statement results");
+    }
+    if (execution.metadata?.readySentinelRows !== 1) {
+      failures.push("due-work claim did not retain one ready sentinel row");
+    }
+    if (
+      execution.metadata?.claimResultColumnCount !== DUE_WORK_COLUMN_NAMES.length ||
+      execution.metadata?.claimResultRowsHaveProductionShape !== true
+    ) {
+      failures.push("due-work claim result did not match the production row shape");
+    }
+
+    return failures;
   },
   warmupIterations: 2,
   workClass: "queue",
