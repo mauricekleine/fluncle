@@ -34,7 +34,7 @@ For the Rekordbox tracklist step, quit Rekordbox fully before running any script
 
 The work splits across two Macs, and the split is non-obvious:
 
-- 🖥️ **M5 (capture/stream + CLI)** — the compose/author/stream laptop: a browser (`/admin/plans`, `/admin/studio`, `/admin/clips`), the `fluncle` CLI hitting prod (`https://www.fluncle.com`), **OBS + the audio/video masters, the recording upload, audio extraction (`ffmpeg`), and distribute**. This is where you plan, mix + record, upload the take, promote, mark cues, clip, and distribute.
+- 🖥️ **M5 (capture/stream + CLI)** — the compose/author/stream laptop: a browser (`/admin/plans`, `/admin/studio/<recordingId>`, `/admin/clips`), the `fluncle` CLI hitting prod (`https://www.fluncle.com`), **OBS + the audio/video masters, the recording upload, audio extraction (`ffmpeg`), and distribute**. This is where you plan, mix + record, upload the take, promote, mark cues, clip, and distribute.
 - 🎛️ **M2 (mixing)** — the DJ laptop where **Rekordbox + its `master.db`** live. **Only** the two Rekordbox scripts (`rekordbox-plan-export.py`, `rekordbox-derive-cues.py`) run here — they read/write `master.db`, which exists only on this machine. Their Fluncle reads/writes still go through the full Homebrew CLI and its uncommitted production profile on this Mac; pulling the repo does not update that standalone binary. No OBS, no browser: the FLX4's master leaves as analog, an M-Track splits it to the monitors + USB into the M5, and OBS captures on the M5. The physical rig is [docs/live-show-setup.md](../../../docs/live-show-setup.md).
 
 The runbook steps below are tagged 🖥️ (M5 — capture/stream + CLI) / 🎛️ (M2 — Rekordbox / `master.db`) so you know which Mac each one runs on.

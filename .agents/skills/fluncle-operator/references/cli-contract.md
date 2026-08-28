@@ -74,7 +74,7 @@ Recent:
 
 ## Publish Flow
 
-`fluncle admin tracks publish` calls `POST /api/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server should:
+`fluncle admin tracks publish` calls `POST /api/v1/admin/tracks` with `Authorization: Bearer <FLUNCLE_API_TOKEN>`. The server should:
 
 1. Parse track ID.
 2. Check Turso duplicate by `track_id`.

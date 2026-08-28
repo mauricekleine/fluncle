@@ -58,7 +58,7 @@ Notes:
 A mixtape slips **quietly into the existing track surfaces** (the feed, `recent`, the API) as one more row — the checkpoint row of DESIGN.md, not a banner. It **also gets a dedicated surface**:
 
 - **Web** — a `/mixtapes` index (the mixtape archive, newest first).
-- **API** — `/api/mixtapes` (mixtapes as JSON).
+- **API** — `/api/v1/mixtapes` (mixtapes as JSON).
 - **CLI** — `fluncle mixtapes`.
 - **SSH** — a mixtapes view in the rave terminal (`screenMixtapes` / `screenMixtapeDetail` / `fetchMixtapes` in `apps/ssh/main.go`).
 
@@ -120,7 +120,7 @@ Where a mixtape lands and what each surface renders:
 | Web index              | the archive                      | a dedicated **`/mixtapes`** overview                                                                     |
 | `/log/<id>`            | observation page                 | **compilation page**: member tracklist (each linked), embedded Mixcloud/YouTube, the dream note          |
 | CLI                    | `fluncle tracks get <idOrLogId>` | resolves to the mixtape; quiet in `recent`; listed by `fluncle mixtapes`                                 |
-| API                    | `/api/tracks/<id>`               | mixtape-typed payload (members, external URLs, duration); `/api/mixtapes` index                          |
+| API                    | `/api/v1/tracks/<id>`            | mixtape-typed payload (members, external URLs, duration); `/api/v1/mixtapes` index                       |
 | RSS                    | observation entry                | a flagged **mixtape** entry in the feed                                                                  |
 | MCP                    | list/random/search               | the mixtape reachable as the same typed object                                                           |
 | SSH                    | the rave terminal                | a checkpoint + a mixtapes view (`screenMixtapes` / `screenMixtapeDetail`)                                |

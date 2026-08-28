@@ -40,7 +40,7 @@ Rendering the per-track video is a **separate capability** — Remotion needs th
 fluncle admin tracks video <track_id|log_id> --dir out/<log-id>
 ```
 
-The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT each file to its R2 S3 URL → `POST .../video/finalize`), so the bytes never traverse the Worker and a large (crf-20, ~99MB/cut) bundle bypasses Cloudflare's ~100MB edge body limit. Each artifact lands at `<log-id>/<name>` on R2 (`found.fluncle.com`) and `video_url` is set to the review cut. **The Worker owns R2; the agent uploads with its admin token and never holds R2 credentials** — it only ever sees the expiring presigned URLs. Requires the track to have a Log ID (one identity everywhere). Small bundles may also use the single multipart `POST /api/admin/tracks/:id/video` endpoint.
+The CLI uploads each artifact **directly to R2** via short-lived presigned PUT URLs the Worker signs (`POST .../video/uploads` → PUT each file to its R2 S3 URL → `POST .../video/finalize`), so the bytes never traverse the Worker and a large (crf-20, ~99MB/cut) bundle bypasses Cloudflare's ~100MB edge body limit. Each artifact lands at `<log-id>/<name>` on R2 (`found.fluncle.com`) and `video_url` is set to the review cut. **The Worker owns R2; the agent uploads with its admin token and never holds R2 credentials** — it only ever sees the expiring presigned URLs. Requires the track to have a Log ID (one identity everywhere). Small bundles may also use the single multipart `POST /api/v1/admin/tracks/:id/video` endpoint.
 
 ## Publish draft (separate, via Postiz)
 
@@ -52,7 +52,7 @@ fluncle admin tracks social <track_id|log_id> [--platform tiktok]               
 fluncle admin tracks social <track_id|log_id> --platform tiktok --status published --url <url>     # record outcome
 ```
 
-- `track draft` → `POST /api/admin/tracks/:id/social/:platform/draft`: for TikTok the Worker hands Postiz the silenced (`audio=false` MT) social cut and creates a `content_posting_method: UPLOAD` + `SELF_ONLY` post, sent immediately, which lands in the TikTok app **Inbox** (the `tiktok.com/messages` notification — _not_ Create → Drafts). Returns the Postiz post id, recorded in `social_posts`.
+- `track draft` → `POST /api/v1/admin/tracks/:id/social/:platform/draft`: for TikTok the Worker hands Postiz the silenced (`audio=false` MT) social cut and creates a `content_posting_method: UPLOAD` + `SELF_ONLY` post, sent immediately, which lands in the TikTok app **Inbox** (the `tiktok.com/messages` notification — _not_ Create → Drafts). Returns the Postiz post id, recorded in `social_posts`.
 - `track social` with no `--status` → `GET …/social` lists per-platform state; with `--status` → `PATCH …/social/:platform` records `scheduled` / `published` (+ the live URL) or `failed`.
 
 The agent never holds the Postiz key — the Worker owns it, same pattern as R2.

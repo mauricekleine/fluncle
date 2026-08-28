@@ -31,7 +31,7 @@ Tell each agent to return a **structured findings report** (its final message is
 
 ### Phase 3 — Converge (the draft)
 
-Synthesize all findings into a draft RFC using the structure in `references/rfc-template.md`. Synthesize the reports around the unifying simplification: the framing or shared primitive that makes the separate threads fall into place. Where findings conflict, resolve them and say why. Write the draft to `docs/<topic>-rfc.md` with `Status: Draft`.
+Synthesize all findings into a draft RFC using the structure in `references/rfc-template.md`. Synthesize the reports around the unifying simplification: the framing or shared primitive that makes the separate threads fall into place. Where findings conflict, resolve them and say why. Write the draft to `docs/rfcs/<topic>.md` with `Status: Draft`.
 
 ### Phase 4 — Taste pass
 
@@ -62,4 +62,6 @@ Match the machinery to the size. A focused two-surface change: 2–3 research th
 
 ## Output
 
-The final RFC lives at `docs/<topic>-rfc.md` (in this repo, `docs/` is non-canonical planning — see AGENTS.md). Use the structure in `references/rfc-template.md`. The deliverable is a final, reviewed RFC suitable for implementation handoff. Relay the headline reframes and the open decisions to the user; the document carries the rest.
+The final RFC lives at `docs/rfcs/<topic>.md` (or `docs/<topic>-rfc.md`). In this repo that file is NON-CANONICAL by AGENTS.md — a plan, never specification — and the scope of that ruling is exactly `docs/rfcs/`, `docs/planning/`, and `docs/*-brief.md` / `docs/*-rfc.md`; the rest of `docs/` is doctrine the codebase defers to, so never write an RFC's claims into one of those. Use the structure in `references/rfc-template.md`. The deliverable is a final, reviewed RFC suitable for implementation handoff. Relay the headline reframes and the open decisions to the user; the document carries the rest.
+
+An RFC is a plan with an expiry date: once its work has SHIPPED, AGENTS.md's prune rule deletes the file rather than flipping it to a done status, and the shipped behaviour is documented in the code and the canon docs instead. Git history keeps the RFC.
