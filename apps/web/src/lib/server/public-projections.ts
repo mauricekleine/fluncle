@@ -1,4 +1,4 @@
-import { type Client } from "@libsql/client";
+import { type Client, type InValue } from "@libsql/client";
 import { createHash } from "node:crypto";
 
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
@@ -35,6 +35,17 @@ export const MAX_PUBLIC_PROJECTION_CHUNK_SIZE = 500;
 export type PublicProjectionClient = Pick<Client, "batch" | "execute">;
 export type { PublicProjectionStatement } from "./public-projection-source-maintenance";
 export type PublicProjectionName = "artist_qualification" | "public_aggregates";
+
+export type TrackAnchorSourceCursor = {
+  id: null | string;
+  key: null | string;
+  phase: "non_null" | "null";
+};
+
+export type TrackAnchorSourceRow = {
+  release_date: null | string;
+  track_id: string;
+};
 
 export type PublicProjectionAudit = {
   artistProjectionDigest: string;
@@ -127,6 +138,89 @@ function assertLimit(limit: number): void {
       `public projection limit must be an integer from 1 through ${MAX_PUBLIC_PROJECTION_CHUNK_SIZE}`,
     );
   }
+}
+
+/** One exact indexed phase of the default release-hub source walk. */
+export function trackAnchorSourcePageQuery(
+  cursor: TrackAnchorSourceCursor,
+  limit: number,
+): { args: InValue[]; sql: string } {
+  assertLimit(limit);
+  if (cursor.phase === "null") {
+    return cursor.id === null
+      ? {
+          args: [limit],
+          sql: `select release_date, track_id from tracks
+            indexed by tracks_release_date_track_id_idx
+            where release_date is null order by track_id desc limit ?`,
+        }
+      : {
+          args: [cursor.id, limit],
+          sql: `select release_date, track_id from tracks
+            indexed by tracks_release_date_track_id_idx
+            where release_date is null and track_id < ? order by track_id desc limit ?`,
+        };
+  }
+  if (cursor.id === null || cursor.key === null) {
+    if (cursor.id !== null || cursor.key !== null) {
+      throw new Error("non-NULL anchor cursor requires both key columns");
+    }
+    return {
+      args: [limit],
+      sql: `select release_date, track_id from tracks
+        indexed by tracks_release_date_track_id_idx
+        where release_date is not null order by release_date desc, track_id desc limit ?`,
+    };
+  }
+  return {
+    args: [cursor.key, cursor.id, limit],
+    sql: `select release_date, track_id from tracks
+      indexed by tracks_release_date_track_id_idx
+      where (release_date, track_id) < (?, ?)
+      order by release_date desc, track_id desc limit ?`,
+  };
+}
+
+/** Fill at most one bounded page while durably exposing the non-NULL → NULL phase transition. */
+export async function readTrackAnchorSourcePage(
+  client: Pick<Client, "execute">,
+  cursor: TrackAnchorSourceCursor,
+  limit: number,
+): Promise<{
+  complete: boolean;
+  cursor: TrackAnchorSourceCursor;
+  rows: TrackAnchorSourceRow[];
+}> {
+  const first = await client.execute(trackAnchorSourcePageQuery(cursor, limit));
+  const firstRows = first.rows as unknown as TrackAnchorSourceRow[];
+  if (cursor.phase === "null" || firstRows.length >= limit) {
+    const terminal = firstRows.at(-1);
+    return {
+      complete: firstRows.length < limit,
+      cursor: {
+        id: terminal?.track_id ?? cursor.id,
+        key: cursor.phase === "null" ? null : (terminal?.release_date ?? cursor.key),
+        phase: cursor.phase,
+      },
+      rows: firstRows,
+    };
+  }
+
+  const remaining = limit - firstRows.length;
+  const nullResult = await client.execute(
+    trackAnchorSourcePageQuery({ id: null, key: null, phase: "null" }, remaining),
+  );
+  const nullRows = nullResult.rows as unknown as TrackAnchorSourceRow[];
+  const terminal = nullRows.at(-1);
+  return {
+    complete: firstRows.length + nullRows.length < limit,
+    cursor: {
+      id: terminal?.track_id ?? null,
+      key: null,
+      phase: "null",
+    },
+    rows: [...firstRows, ...nullRows],
+  };
 }
 
 function nowIso(now: (() => Date) | undefined): string {
@@ -1241,28 +1335,38 @@ function pairCursor(value: null | string): [string, string] {
   }
 }
 
-function anchorSourceCursor(value: null | string): {
-  id: null | string;
-  key: null | string;
-  position: number;
-} {
+function anchorSourceCursor(value: null | string): TrackAnchorSourceCursor & { position: number } {
   if (value === null) {
-    return { id: null, key: null, position: 0 };
+    return { id: null, key: null, phase: "non_null", position: 0 };
   }
   try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    const id = parsed["id"];
-    const key = parsed["key"];
-    const position = Number(parsed["position"]);
-    return typeof id === "string" &&
-      id.length > 0 &&
-      (key === null || typeof key === "string") &&
-      Number.isSafeInteger(position) &&
-      position > 0
-      ? { id, key, position }
-      : { id: null, key: null, position: 0 };
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("malformed anchor audit cursor");
+    }
+    const state = parsed as Record<string, unknown>;
+    if (Object.keys(state).sort().join(",") !== "id,key,phase,position") {
+      throw new Error("malformed anchor audit cursor");
+    }
+    const id = state["id"];
+    const key = state["key"];
+    const phase = state["phase"];
+    const position = state["position"];
+    if (
+      typeof id !== "string" ||
+      id.length === 0 ||
+      (phase !== "non_null" && phase !== "null") ||
+      (phase === "non_null" && typeof key !== "string") ||
+      (phase === "null" && key !== null) ||
+      typeof position !== "number" ||
+      !Number.isSafeInteger(position) ||
+      position <= 0
+    ) {
+      throw new Error("malformed anchor audit cursor");
+    }
+    return { id, key: phase === "null" ? null : (key as string), phase, position };
   } catch {
-    return { id: null, key: null, position: 0 };
+    throw new Error("malformed anchor audit cursor");
   }
 }
 
@@ -1301,52 +1405,23 @@ export async function readPublicProjectionAuditChunk(
   client: PublicProjectionClient,
   lane: PublicProjectionAuditLane,
   options: { cursor: null | string; limit: number },
-): Promise<{ cursor: null | string; rows: unknown[][]; scanned: number }> {
+): Promise<{ complete?: boolean; cursor: null | string; rows: unknown[][]; scanned: number }> {
   assertLimit(options.limit);
   if (lane === "aggregate_source_anchors") {
     const after = anchorSourceCursor(options.cursor);
-    const result = await client.execute(
-      after.id === null
-        ? {
-            args: [options.limit],
-            sql: `select release_date, track_id from tracks
-              indexed by tracks_release_date_track_id_idx
-              order by release_date desc, track_id desc limit ?`,
-          }
-        : after.key === null
-          ? {
-              args: [after.id, options.limit],
-              sql: `select release_date, track_id from tracks
-                indexed by tracks_release_date_track_id_idx
-                where release_date is null and track_id < ?
-                order by release_date desc, track_id desc limit ?`,
-            }
-          : {
-              args: [after.key, after.key, after.id, options.limit],
-              sql: `select release_date, track_id from tracks
-                indexed by tracks_release_date_track_id_idx
-                where release_date < ? or (release_date = ? and track_id < ?)
-                  or release_date is null
-                order by release_date desc, track_id desc limit ?`,
-            },
-    );
-    const rows = result.rows as unknown as { release_date: null | string; track_id: string }[];
+    const page = await readTrackAnchorSourcePage(client, after, options.limit);
+    const rows = page.rows;
     const boundaries = rows.flatMap((row, index) => {
       const position = after.position + index + 1;
       return position % TRACKS_HUB_PAGE_SIZE === 0
         ? [["anchor", row.track_id, row.release_date, position / TRACKS_HUB_PAGE_SIZE + 1]]
         : [];
     });
-    const terminal = rows.at(-1);
     return {
-      cursor:
-        terminal === undefined
-          ? null
-          : JSON.stringify({
-              id: terminal.track_id,
-              key: terminal.release_date,
-              position: after.position + rows.length,
-            }),
+      complete: page.complete,
+      cursor: page.complete
+        ? null
+        : JSON.stringify({ ...page.cursor, position: after.position + rows.length }),
       rows: boundaries,
       scanned: rows.length,
     };

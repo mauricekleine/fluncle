@@ -39,7 +39,7 @@ type AuditState = {
   sourceFence: number;
   startedAt: string;
   target: ProjectionAuditTarget;
-  version: 2;
+  version: 3;
 };
 
 export type ProjectionAuditEvidence = Pick<
@@ -131,7 +131,7 @@ function newState(
     sourceFence: fence.sourceFence,
     startedAt: new Date().toISOString(),
     target,
-    version: 2,
+    version: 3,
   };
 }
 
@@ -141,7 +141,7 @@ function parseState(value: unknown, target: ProjectionAuditTarget): AuditState |
   }
   try {
     const state = JSON.parse(value) as Partial<AuditState>;
-    return state.version === 2 && state.target === target ? (state as AuditState) : undefined;
+    return state.version === 3 && state.target === target ? (state as AuditState) : undefined;
   } catch {
     return undefined;
   }
@@ -459,7 +459,7 @@ async function advancePublicAudit(
     state.projectedCount += page.rows.length;
   }
   state.cursor = page.cursor;
-  if (page.scanned < limit) {
+  if (page.complete ?? page.scanned < limit) {
     const index = lanes.indexOf(lane);
     if (lane === "aggregate_source_membership") {
       appendAggregateSourceCounts(state);

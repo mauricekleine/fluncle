@@ -9,6 +9,11 @@ import {
 } from "./projection-audit";
 import { readCurrentProjectedTrackHubAnchors } from "./public-projection-cutover";
 import {
+  readPublicProjectionAuditChunk,
+  readTrackAnchorSourcePage,
+  type TrackAnchorSourceCursor,
+} from "./public-projections";
+import {
   advanceProjectionFenceStatement,
   CRAWL_DUE_AUDIT_FENCE_KEY,
   TRACK_DUE_AUDIT_FENCE_KEY,
@@ -171,7 +176,7 @@ describe("projection production operations", () => {
             sourceFence: 0,
             startedAt: "2026-01-01T00:00:00.000Z",
             target,
-            version: 2,
+            version: 3,
           }),
         ],
         sql: `insert into settings (key, value) values (?, ?)`,
@@ -439,6 +444,80 @@ describe("projection production operations", () => {
     expect(complete).toBe(true);
   });
 
+  it("resumes both anchor source phases without gaps across duplicate dates and NULLs", async () => {
+    const expected = [
+      ["dated-z", "2026-01-01"],
+      ["dated-a", "2026-01-01"],
+      ["dated-mid", "2025-01-01"],
+      ["dated-low", "2024-01-01"],
+      ["null-z", null],
+      ["null-a", null],
+    ] as const;
+    for (const [id, releaseDate] of expected) {
+      await db.execute({
+        args: [id, releaseDate],
+        sql: `insert into tracks (track_id, release_date) values (?, ?)`,
+      });
+    }
+
+    let cursor: TrackAnchorSourceCursor = { id: null, key: null, phase: "non_null" };
+    const actual: [string, null | string][] = [];
+    const phases: string[] = [];
+    for (let step = 0; step < 5; step += 1) {
+      const page = await readTrackAnchorSourcePage(db, cursor, 2);
+      actual.push(
+        ...page.rows.map((row): [string, null | string] => [row.track_id, row.release_date]),
+      );
+      phases.push(page.cursor.phase);
+      cursor = JSON.parse(JSON.stringify(page.cursor)) as typeof cursor;
+      if (page.complete) {
+        break;
+      }
+    }
+    expect(actual).toEqual(expected);
+    expect(phases).toContain("non_null");
+    expect(phases).toContain("null");
+  });
+
+  it("persists anchor audit phase and absolute position across the NULL boundary", async () => {
+    const datedIds = Array.from(
+      { length: TRACKS_HUB_PAGE_SIZE + 1 },
+      (_, index) => `position-dated-${String(index).padStart(3, "0")}`,
+    );
+    const nullIds = ["position-null-z", "position-null-m", "position-null-a"];
+    for (const id of datedIds) {
+      await db.execute({
+        args: [id],
+        sql: `insert into tracks (track_id, release_date) values (?, '2026-01-01')`,
+      });
+    }
+    for (const id of nullIds) {
+      await db.execute({
+        args: [id],
+        sql: `insert into tracks (track_id, release_date) values (?, null)`,
+      });
+    }
+    const ordered = [...datedIds]
+      .sort()
+      .reverse()
+      .concat([...nullIds].sort().reverse());
+    let cursor: null | string = null;
+    const boundaries: unknown[][] = [];
+    let complete = false;
+    for (let step = 0; step < 10 && !complete; step += 1) {
+      const page = await readPublicProjectionAuditChunk(db, "aggregate_source_anchors", {
+        cursor,
+        limit: 17,
+      });
+      expect(page.scanned).toBeLessThanOrEqual(17);
+      boundaries.push(...page.rows);
+      cursor = page.cursor === null ? null : JSON.stringify(JSON.parse(page.cursor) as unknown);
+      complete = page.complete === true;
+    }
+    expect(complete).toBe(true);
+    expect(boundaries).toEqual([["anchor", ordered.at(TRACKS_HUB_PAGE_SIZE - 1), "2026-01-01", 2]]);
+  });
+
   it("audits every sharded anchor boundary exactly and fences later source mutations", async () => {
     const ids = Array.from(
       { length: TRACKS_HUB_PAGE_SIZE * 2 },
@@ -563,7 +642,7 @@ describe("projection production operations", () => {
     for (let index = 0; index < 250; index += 1) {
       const id = `scaled-${String(index).padStart(3, "0")}`;
       await db.execute({
-        args: [id, `2026-${String((index % 12) + 1).padStart(2, "0")}-01`],
+        args: [id, index < 230 ? `2026-${String((index % 12) + 1).padStart(2, "0")}-01` : null],
         sql: `insert into tracks (track_id, release_date) values (?, ?)`,
       });
     }
@@ -574,15 +653,17 @@ describe("projection production operations", () => {
 
     let complete = false;
     let maximumStateBytes = 0;
+    let sawNullPhase = false;
     for (let step = 0; step < 50 && !complete; step += 1) {
       const result = await advancePublicAnchors(db, 7);
       expect(result.processed).toBeLessThanOrEqual(7);
       complete = result.complete;
       const state = await db.execute(
-        `select length(value) as bytes from settings
+        `select length(value) as bytes, json_extract(value, '$.phase') as phase from settings
           where key = 'projection_rebuild_public_anchors_v1'`,
       );
       maximumStateBytes = Math.max(maximumStateBytes, Number(state.rows[0]?.bytes ?? 0));
+      sawNullPhase ||= state.rows[0]?.phase === "null";
       if (!complete) {
         const validityCount = Number(
           (
@@ -602,6 +683,7 @@ describe("projection production operations", () => {
       }
     }
     expect(complete).toBe(true);
+    expect(sawNullPhase).toBe(true);
     expect(maximumStateBytes).toBeLessThan(512);
     const shardStats = (
       await db.execute(`select count(*) as total, max(length(anchors_json)) as maximum_bytes
@@ -660,9 +742,10 @@ describe("projection production operations", () => {
       firstId: null,
       generation: "agg",
       orderEpoch: 0,
+      phase: "non_null",
       processed: 0,
       shard: 0,
-      version: 1,
+      version: 2,
     };
     const malformedStates: unknown[] = [
       { ...validState, extra: true },
@@ -673,7 +756,10 @@ describe("projection production operations", () => {
       { ...validState, orderEpoch: "0" },
       { ...validState, processed: "0" },
       { ...validState, shard: "0" },
-      { ...validState, version: 2 },
+      { ...validState, phase: "bad" },
+      { ...validState, phase: "null" },
+      { ...validState, version: 1 },
+      { ...validState, version: 3 },
       { ...validState, cursorId: "cursor" },
       {
         ...validState,

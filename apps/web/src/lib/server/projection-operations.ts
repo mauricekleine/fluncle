@@ -12,6 +12,7 @@ import { fanOutDueWorkSourceRepairs } from "./due-work-source-repair";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import {
   PUBLIC_ANCHOR_FORMAT_VERSION,
+  readTrackAnchorSourcePage,
   repairPublicProjectionChunk,
   runPublicProjectionRebuildChunk,
   type PublicProjectionName,
@@ -546,9 +547,10 @@ type AnchorRebuildState = {
   firstId: null | string;
   generation: string;
   orderEpoch: number;
+  phase: "non_null" | "null";
   processed: number;
   shard: number;
-  version: 1;
+  version: 2;
 };
 
 type AnchorProjectionState = {
@@ -591,7 +593,7 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
     const state = parsed as Record<string, unknown>;
     if (
       Object.keys(state).sort().join(",") !==
-      "cursorId,cursorKey,firstId,generation,orderEpoch,processed,shard,version"
+      "cursorId,cursorKey,firstId,generation,orderEpoch,phase,processed,shard,version"
     ) {
       return undefined;
     }
@@ -600,10 +602,11 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
     const firstId = state["firstId"];
     const generation = state["generation"];
     const orderEpoch = state["orderEpoch"];
+    const phase = state["phase"];
     const processed = state["processed"];
     const shard = state["shard"];
     if (
-      state["version"] !== 1 ||
+      state["version"] !== 2 ||
       (cursorId !== null && (typeof cursorId !== "string" || cursorId.length === 0)) ||
       (cursorKey !== null && typeof cursorKey !== "string") ||
       (firstId !== null && (typeof firstId !== "string" || firstId.length === 0)) ||
@@ -613,6 +616,7 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
       typeof orderEpoch !== "number" ||
       !Number.isSafeInteger(orderEpoch) ||
       orderEpoch < 0 ||
+      (phase !== "non_null" && phase !== "null") ||
       typeof processed !== "number" ||
       !Number.isSafeInteger(processed) ||
       processed < 0 ||
@@ -621,8 +625,17 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
       shard < 0 ||
       shard > processed ||
       (processed === 0 &&
-        (cursorId !== null || cursorKey !== null || firstId !== null || shard !== 0)) ||
-      (processed > 0 && (cursorId === null || firstId === null || shard === 0))
+        (cursorId !== null ||
+          cursorKey !== null ||
+          firstId !== null ||
+          phase !== "non_null" ||
+          shard !== 0)) ||
+      (processed > 0 &&
+        (cursorId === null ||
+          firstId === null ||
+          shard === 0 ||
+          (phase === "non_null" && typeof cursorKey !== "string") ||
+          (phase === "null" && cursorKey !== null)))
     ) {
       return undefined;
     }
@@ -632,9 +645,10 @@ function parseAnchorState(value: unknown): AnchorRebuildState | undefined {
       firstId,
       generation,
       orderEpoch,
+      phase,
       processed,
       shard,
-      version: 1,
+      version: 2,
     };
   } catch {
     return undefined;
@@ -724,34 +738,6 @@ function publishedAnchorIsCurrent(
   );
 }
 
-async function readAnchorSourcePage(
-  client: ProjectionClient,
-  state: AnchorRebuildState,
-  limit: number,
-) {
-  return client.execute(
-    state.cursorId === null
-      ? {
-          args: [limit],
-          sql: `select release_date, track_id from tracks indexed by tracks_release_date_track_id_idx
-            order by release_date desc, track_id desc limit ?`,
-        }
-      : state.cursorKey === null
-        ? {
-            args: [state.cursorId, limit],
-            sql: `select release_date, track_id from tracks indexed by tracks_release_date_track_id_idx
-              where release_date is null and track_id < ?
-              order by release_date desc, track_id desc limit ?`,
-          }
-        : {
-            args: [state.cursorKey, state.cursorKey, state.cursorId, limit],
-            sql: `select release_date, track_id from tracks indexed by tracks_release_date_track_id_idx
-              where release_date < ? or (release_date = ? and track_id < ?) or release_date is null
-              order by release_date desc, track_id desc limit ?`,
-          },
-  );
-}
-
 function anchorBuildState(
   saved: AnchorRebuildState | undefined,
   projection: AnchorProjectionState,
@@ -769,9 +755,10 @@ function anchorBuildState(
     firstId: null,
     generation: projection.generation,
     orderEpoch: projection.orderEpoch,
+    phase: "non_null",
     processed: 0,
     shard: 0,
-    version: 1,
+    version: 2,
   };
 }
 
@@ -969,16 +956,18 @@ export async function advancePublicAnchors(
     }
   }
   const state = anchorBuildState(saved, projectionState);
-  const page = await readAnchorSourcePage(client, state, limit);
-  const tracks = page.rows as unknown as { release_date: null | string; track_id: string }[];
+  const page = await readTrackAnchorSourcePage(
+    client,
+    { id: state.cursorId, key: state.cursorKey, phase: state.phase },
+    limit,
+  );
+  const tracks = page.rows;
   const anchors: HubPageAnchor[] = [];
   for (const track of tracks) {
     state.processed += 1;
     const trackId = track.track_id;
     const releaseDate = track.release_date;
     state.firstId ??= trackId;
-    state.cursorId = trackId;
-    state.cursorKey = releaseDate;
     if (state.processed % TRACKS_HUB_PAGE_SIZE === 0) {
       anchors.push({
         id: trackId,
@@ -987,6 +976,9 @@ export async function advancePublicAnchors(
       });
     }
   }
+  state.cursorId = page.cursor.id;
+  state.cursorKey = page.cursor.key;
+  state.phase = page.cursor.phase;
   const current = await client.execute(`select generation, release_hub_order_epoch
     from public_aggregate_state where scope = 'tracks' and state = 'complete'`);
   const currentRow = current.rows[0] as
@@ -1001,7 +993,7 @@ export async function advancePublicAnchors(
       args: [PUBLIC_ANCHOR_REBUILD_KEY],
       sql: `delete from settings where key = ?`,
     });
-    return { complete: false, processed: page.rows.length };
+    return { complete: false, processed: tracks.length };
   }
   const now = new Date().toISOString();
   const shardClauseHash = `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:${generation}:${String(
@@ -1020,7 +1012,7 @@ export async function advancePublicAnchors(
       on conflict(hub, clause_hash) do update set anchors_json = excluded.anchors_json,
         fingerprint = excluded.fingerprint, computed_at = excluded.computed_at`,
   };
-  if (page.rows.length >= limit) {
+  if (!page.complete) {
     state.shard += 1;
     const stateStatement = {
       args: [PUBLIC_ANCHOR_REBUILD_KEY, JSON.stringify(state)],
@@ -1031,7 +1023,7 @@ export async function advancePublicAnchors(
       anchors.length > 0 ? [shardStatement, stateStatement] : [stateStatement],
       "write",
     );
-    return { complete: false, processed: page.rows.length };
+    return { complete: false, processed: tracks.length };
   }
   if (state.processed !== total) {
     throw new Error("public anchor rebuild total changed without an order epoch change");
@@ -1106,11 +1098,11 @@ export async function advancePublicAnchors(
   );
   const results = await client.batch(statements, "write");
   if ((results[validityIndex]?.rowsAffected ?? 0) === 0) {
-    return { complete: false, processed: page.rows.length };
+    return { complete: false, processed: tracks.length };
   }
   return {
     complete: false,
-    processed: page.rows.length,
+    processed: tracks.length,
   };
 }
 
@@ -1236,7 +1228,7 @@ function matchingAuditSql(alias: string, target: ProjectionAuditTarget): string 
             and fence.value <> '' and fence.value not glob '*[^0-9]*'), 0)`
       : "";
   return `json_valid(${alias}.value)
-    and json_extract(${alias}.value, '$.version') = 2
+    and json_extract(${alias}.value, '$.version') = 3
     and json_extract(${alias}.value, '$.target') = '${target}'
     and json_extract(${alias}.value, '$.complete') = 1
     and json_extract(${alias}.value, '$.matched') = 1

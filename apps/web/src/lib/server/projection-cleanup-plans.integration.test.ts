@@ -2,6 +2,7 @@ import { type Client, type InValue } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
+import { trackAnchorSourcePageQuery } from "./public-projections";
 
 describe("bounded projection cleanup plans", () => {
   let db: Client;
@@ -57,6 +58,29 @@ describe("bounded projection cleanup plans", () => {
         .flatMap((row) => (typeof row.detail === "string" ? [row.detail] : []))
         .join("\n");
       expect(detail).toMatch(/SEARCH .* USING (?:COVERING )?INDEX/i);
+      expect(detail).not.toContain("SCAN ");
+      expect(detail).not.toContain("USE TEMP B-TREE");
+    }
+  });
+
+  it("uses an indexed SEARCH for every initial and resumed anchor source phase", async () => {
+    const queries = [
+      trackAnchorSourcePageQuery({ id: null, key: null, phase: "non_null" }, 10),
+      trackAnchorSourcePageQuery({ id: "dated-b", key: "2026-01-01", phase: "non_null" }, 10),
+      trackAnchorSourcePageQuery({ id: null, key: null, phase: "null" }, 10),
+      trackAnchorSourcePageQuery({ id: "null-b", key: null, phase: "null" }, 10),
+    ];
+
+    for (const query of queries) {
+      expect(query.sql.toLowerCase()).not.toContain(" or ");
+      const detail = (
+        await db.execute({ args: query.args, sql: `explain query plan ${query.sql}` })
+      ).rows
+        .flatMap((row) => (typeof row.detail === "string" ? [row.detail] : []))
+        .join("\n");
+      expect(detail).toContain(
+        "SEARCH tracks USING COVERING INDEX tracks_release_date_track_id_idx",
+      );
       expect(detail).not.toContain("SCAN ");
       expect(detail).not.toContain("USE TEMP B-TREE");
     }
