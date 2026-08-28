@@ -78,6 +78,7 @@ wait_ms=0
 yield_reason=""
 recovered=false
 payload_pid=""
+terminal_action_started=0
 
 json_field() {
   local json="$1" field="$2"
@@ -115,6 +116,19 @@ admission_post() {
   return 0
 }
 
+terminal_admission() {
+  local token
+  [ "$terminal_action_started" -eq 0 ] || return 0
+  terminal_action_started=1
+  token="$fencing_token"
+  fencing_token=""
+  if [ -n "$token" ]; then
+    admission_post release "$token" || true
+  else
+    admission_post cancel || true
+  fi
+}
+
 emit_admission_event() {
   local outcome="$1" hold_ms="$2"
   printf '{"event":"database.admission.runner","access_class":"%s","contender":"%s","enforced":%s,"heavy_read":%s,"hold_ms":%s,"operation_id":"%s","outcome":"%s","owner":"%s","queue_age_ms":%s,"recovered":%s,"run_id":"%s","wait_ms":%s,"yield_reason":"%s"}\n' \
@@ -139,15 +153,23 @@ acquisition_request_timeout() {
 
 stop_payload() {
   [ -n "$payload_pid" ] || return 0
-  payload_is_running || return 0
+  # The supervisor may already be reaped while one of its descendants still owns database work.
+  # The session process group, not the direct child job, is therefore the lease containment unit.
+  payload_group_is_alive || return 0
   kill -TERM -- "-${payload_pid}" 2>/dev/null || kill -TERM "$payload_pid" 2>/dev/null || true
   local deadline=$((SECONDS + ADMISSION_KILL_GRACE_SECS))
-  while payload_is_running && [ "$SECONDS" -lt "$deadline" ]; do
+  while payload_group_is_alive && [ "$SECONDS" -lt "$deadline" ]; do
     sleep 0.1
   done
-  if payload_is_running; then
+  if payload_group_is_alive; then
     kill -KILL -- "-${payload_pid}" 2>/dev/null || kill -KILL "$payload_pid" 2>/dev/null || true
+    sleep 0.1
   fi
+}
+
+payload_group_is_alive() {
+  [ -n "$payload_pid" ] || return 1
+  kill -0 -- "-${payload_pid}" 2>/dev/null
 }
 
 payload_is_running() {
@@ -163,11 +185,7 @@ payload_is_running() {
 # shellcheck disable=SC2329
 on_signal() {
   stop_payload
-  if [ -n "$fencing_token" ]; then
-    admission_post release "$fencing_token" || true
-  else
-    admission_post cancel || true
-  fi
+  terminal_admission
   emit_admission_event cancelled "$(( (SECONDS - started_seconds) * 1000 ))"
   exit 143
 }
@@ -182,7 +200,7 @@ while :; do
       emit_admission_event shadow-unavailable 0
       exec "$@"
     fi
-    admission_post cancel || true
+    terminal_admission
     yield_reason="coordinator-unavailable"
     emit_admission_event acquisition-unavailable 0
     exit 0
@@ -207,6 +225,7 @@ while :; do
   if [ "$response_enforced" != "true" ]; then
     if [ "$ADMISSION_FAIL_CLOSED" = "true" ] || [ "$enforced" -eq 1 ]; then
       yield_reason="enforcement-not-active"
+      terminal_admission
       emit_admission_event enforcement-not-active 0
       exit 0
     fi
@@ -220,12 +239,12 @@ while :; do
     fencing_token="$(json_number "$response" fencingToken)"
     heartbeat_after_ms="$(json_number "$response" heartbeatAfterMs)"
     if [ -z "$fencing_token" ] || [ -z "$heartbeat_after_ms" ]; then
-      admission_post cancel || true
+      terminal_admission
       emit_admission_event invalid-grant 0
       exit 0
     fi
     if [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
-      admission_post release "$fencing_token" || true
+      terminal_admission
       yield_reason="queue"
       emit_admission_event wait-expired 0
       exit 0
@@ -235,7 +254,7 @@ while :; do
 
   remaining_ms=$((acquisition_deadline_ms - $(current_time_ms)))
   if [ "$remaining_ms" -le 0 ]; then
-    admission_post cancel || true
+    terminal_admission
     emit_admission_event wait-expired 0
     exit 0
   fi
@@ -250,7 +269,7 @@ done
 # group leader a kernel-delivered TERM if this heartbeat owner dies abruptly; its trap fans that
 # signal across the group. An enforced grant is useless without both containment primitives.
 if ! command -v setsid >/dev/null 2>&1 || ! command -v setpriv >/dev/null 2>&1; then
-  admission_post release "$fencing_token" || true
+  terminal_admission
   yield_reason="containment-unavailable"
   emit_admission_event containment-unavailable 0
   exit 0
@@ -329,10 +348,11 @@ set +e
 wait "$payload_pid" 2>/dev/null
 payload_rc="$?"
 set -e
+stop_payload
 hold_ms="$(( (SECONDS - payload_started_seconds) * 1000 ))"
 
 if [ "$enforced" -eq 1 ]; then
-  admission_post release "$fencing_token" || true
+  terminal_admission
 fi
 if [ "$fence_lost" -eq 1 ]; then
   emit_admission_event fenced "$hold_ms"

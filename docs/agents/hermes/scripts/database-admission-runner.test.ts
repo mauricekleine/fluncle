@@ -122,6 +122,15 @@ function processIsExecuting(pid: number): boolean {
   }
 }
 
+function processGroupIsAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const SHADOW_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":false,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"shadow-acquire","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}'`;
 const ACQUIRED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":1,"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":null}'`;
 const QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue"}'`;
@@ -148,6 +157,38 @@ describe("database admission unit runner", () => {
     expect(result.status).toBe(0);
     expect(existsSync(payloadMarker)).toBe(false);
     expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+  });
+
+  it("cancels once when signals race an in-flight acquisition", async () => {
+    const acquireStarted = join(directory, "acquire-started");
+    fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"acquire"'; then
+  printf started > "${acquireStarted}"
+  sleep 1
+  exit 1
+fi
+echo '{}'
+`);
+    const runner = spawn("bash", [RUNNER, "fluncle-enrich", "--", "bash", "-c", "exit 0"], {
+      env: runnerEnvironment({ failClosed: true }),
+      stdio: "ignore",
+    });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolvePromise) => {
+        runner.once("exit", (code, signal) => resolvePromise({ code, signal }));
+      },
+    );
+
+    await waitUntil(() => existsSync(acquireStarted));
+    runner.kill("SIGTERM");
+    runner.kill("SIGINT");
+    runner.kill("SIGHUP");
+    const outcome = await exited;
+
+    expect(outcome.code).toBe(143);
+    expect(outcome.signal).toBeNull();
+    const calls = readFileSync(curlLog, "utf8");
+    expect(calls.match(/"action":"cancel"/g)?.length ?? 0).toBe(1);
   });
 
   it("fails closed before payload start while a locally armed unit still sees shadow mode", () => {
@@ -240,6 +281,74 @@ ${ACQUIRED_RESPONSE}`);
     expect(result.stderr).toContain('"run_id":"');
   });
 
+  it("kills an in-session descendant before releasing a completed payload", () => {
+    const descendantMarker = join(directory, "residual-descendant");
+    const releaseObservation = join(directory, "release-observation");
+    fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"release"'; then
+  descendant_pid="$(cat "${descendantMarker}")"
+  if kill -0 "$descendant_pid" 2>/dev/null; then
+    printf alive > "${releaseObservation}"
+  else
+    printf gone > "${releaseObservation}"
+  fi
+fi
+${ACQUIRED_RESPONSE}
+`);
+    const result = run([
+      "bash",
+      "-c",
+      `(
+        trap "" TERM HUP
+        printf "%s" "$$" > "$1"
+        while :; do sleep 1; done
+      ) &
+      while [ ! -s "$1" ]; do sleep 0.01; done`,
+      "payload",
+      descendantMarker,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(releaseObservation, "utf8")).toBe("gone");
+    const calls = readFileSync(curlLog, "utf8");
+    expect(calls.match(/"action":"release"/g)?.length ?? 0).toBe(1);
+  });
+
+  it("kills residual group work and releases once when the supervisor dies", () => {
+    const descendantMarker = join(directory, "orphaned-descendant");
+    const releaseObservation = join(directory, "orphan-release-observation");
+    fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"release"'; then
+  descendant_pid="$(cat "${descendantMarker}")"
+  if kill -0 "$descendant_pid" 2>/dev/null; then
+    printf alive > "${releaseObservation}"
+  else
+    printf gone > "${releaseObservation}"
+  fi
+fi
+${ACQUIRED_RESPONSE}
+`);
+    const result = run([
+      "bash",
+      "-c",
+      `(
+        trap "" TERM HUP
+        printf "%s" "$$" > "$1"
+        while :; do sleep 1; done
+      ) &
+      while [ ! -s "$1" ]; do sleep 0.01; done
+      kill -KILL "$PPID"
+      while :; do sleep 1; done`,
+      "payload",
+      descendantMarker,
+    ]);
+
+    expect(result.status).toBe(137);
+    expect(readFileSync(releaseObservation, "utf8")).toBe("gone");
+    const calls = readFileSync(curlLog, "utf8");
+    expect(calls.match(/"action":"release"/g)?.length ?? 0).toBe(1);
+  });
+
   it("kills the payload process group and fails fenced when a heartbeat is partitioned", () => {
     fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
@@ -293,10 +402,16 @@ ${ACQUIRED_RESPONSE}
 
   it("does not start the payload if the owner dies before parent-death arming completes", async () => {
     const setprivStarted = join(directory, "setpriv-started");
+    const setprivFinished = join(directory, "setpriv-finished");
     fakeExecutable(
       "setpriv",
-      `printf '%s' "$$" > "${setprivStarted}"
+      `owner_pid="$PPID"
+printf '%s' "$$" > "${setprivStarted}"
 sleep 1
+if ! kill -0 "$owner_pid" 2>/dev/null; then
+  printf finished > "${setprivFinished}"
+  exit 75
+fi
 shift 2
 exec "$@"`,
     );
@@ -313,7 +428,7 @@ exec "$@"`,
     expect(Number.isInteger(setprivPid)).toBe(true);
     runner.kill("SIGKILL");
     try {
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_300));
+      await waitUntil(() => existsSync(setprivFinished) && !processGroupIsAlive(setprivPid), 5_000);
       expect(existsSync(payloadMarker)).toBe(false);
     } finally {
       try {
@@ -342,13 +457,14 @@ ${ACQUIRED_RESPONSE}
     const result = run([
       "bash",
       "-c",
-      'kill -TERM "$FLUNCLE_ADMISSION_RUNNER_PID"; while :; do sleep 1; done',
+      'kill -TERM "$FLUNCLE_ADMISSION_RUNNER_PID"; kill -INT "$FLUNCLE_ADMISSION_RUNNER_PID" 2>/dev/null || true; kill -HUP "$FLUNCLE_ADMISSION_RUNNER_PID" 2>/dev/null || true; while :; do sleep 1; done',
     ]);
 
     expect(result.status).toBe(143);
     const calls = readFileSync(curlLog, "utf8");
     expect(calls).toContain('"action":"release"');
     expect(calls).toContain('"fencingToken":7');
+    expect(calls.match(/"action":"release"/g)?.length ?? 0).toBe(1);
     expect(result.stderr).toContain('"outcome":"cancelled"');
   });
 });
