@@ -8,10 +8,11 @@
 // FTS index is a DERIVED artifact, not schema history: every byte in it is reconstructible
 // from `tracks` in a single SELECT, and dropping it loses nothing. So it is built the way
 // derived artifacts are built here — an IDEMPOTENT, self-healing step folded into
-// `db:migrate` (package.json), which is exactly the set of places a migration would have
-// reached: the Cloudflare deploy (`deploy:cf` → `db:migrate`), every local dev boot
-// (`scripts/dev.ts` → `db:migrate`), and the in-memory integration harness
-// (`lib/server/integration-db.ts` calls `ensureSearchIndex` right after `migrate()`).
+// both the local full-journal migration and the bounded production migration (package.json),
+// which is exactly the set of places a migration would have reached: the Cloudflare deploy
+// (`deploy:cf` → `db:migrate:production`), every local dev boot (`scripts/dev.ts` →
+// `db:migrate`), and the in-memory integration harness (`lib/server/integration-db.ts` calls
+// `ensureSearchIndex` right after `migrate()`).
 //
 // It also sidesteps libsql#1811 — the open FTS5-inside-`db.batch()` panic — for free:
 // `drizzle-kit migrate` applies a migration file through `batch()`, and these statements

@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Build (or repair) the FTS5 search index over `tracks` — the second half of `db:migrate`.
+ * Build (or repair) the FTS5 search index over `tracks` after either migration runner.
  *
  * The DDL and the reasoning live in `src/db/search-index.ts`; this is only the runner that
- * hands it a client. Wiring it into `db:migrate` (rather than `db:backfill`) is deliberate:
- * `db:migrate` is what EVERY environment runs — the Cloudflare deploy (`deploy:cf`), a
- * local dev boot (`scripts/dev.ts`), and a worktree refresh — so the index exists wherever
- * the schema does. The integration harness (`src/lib/server/integration-db.ts`) calls the
- * same `ensureSearchIndex` straight after applying the migrations.
+ * hands it a client. Wiring it into local `db:migrate` and each bounded production phase (rather
+ * than `db:backfill`) is deliberate: the Cloudflare deploy, local dev boot, and worktree refresh
+ * all rebuild it, so the index exists wherever the schema does. The integration harness
+ * (`src/lib/server/integration-db.ts`) calls the same `ensureSearchIndex` straight after applying
+ * the migrations.
  *
  * Idempotent: on a steady-state database it is three `if not exists` no-ops and one count.
  *

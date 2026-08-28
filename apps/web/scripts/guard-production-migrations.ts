@@ -1,30 +1,22 @@
-#!/usr/bin/env bun
 /**
- * Fail closed before the production deploy path can remove a compatibility route or apply a
- * protected schema contraction.
+ * Plan and authorize the production migration prefix a command may apply.
  *
- * The checked-out operation-receipt contract determines whether the keyed GET compatibility route
- * remains. Once it is absent, every deploy requires the persistent public caller-floor SHA. Drizzle
- * decides what is pending from the greatest `created_at` value in `__drizzle_migrations`; this guard
- * reads the same ledger coordinate and the generated journal, then requires a one-run approval whose
- * value is exactly the pending protected tags in journal order. The ordinary `db:migrate` command
- * deliberately remains unchanged for local databases.
+ * The ordinary deploy phase stops immediately before the first pending protected contraction. The
+ * two attended phases stop at the exact release-manifest boundaries: H4 applies 0169–0170 and H8
+ * applies 0171. A caller cannot widen those bounds with an arbitrary tag or environment value.
  */
-import { createClient, type Client } from "@libsql/client/web";
-import { readFileSync } from "node:fs";
-
-import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
-import {
-  guardCheckedOutOperationReceiptContract,
-  OPERATION_RECEIPT_CALLER_FLOOR_SHA,
-} from "./guard-production-contract";
+import { type Client } from "@libsql/client/web";
 
 export const PROTECTED_MIGRATION_APPROVAL_ENV = "FLUNCLE_PROTECTED_MIGRATION_APPROVAL";
+export const EXPANSION_CEILING_TAG = "0168_melted_the_liberteens";
 export const PROTECTED_CONTRACTION_TAGS = [
   "0169_lonely_mariko_yashida",
   "0170_motionless_squadron_supreme",
   "0171_watery_skreet",
 ] as const;
+export const PRODUCTION_MIGRATION_PHASES = ["deploy", "h4", "h8"] as const;
+
+export type ProductionMigrationPhase = (typeof PRODUCTION_MIGRATION_PHASES)[number];
 
 export type MigrationJournalEntry = {
   idx: number;
@@ -35,12 +27,18 @@ export type MigrationJournalEntry = {
 type GuardDependencies = {
   approval: string | undefined;
   journalJson: string;
+  phase: ProductionMigrationPhase;
   readLastAppliedWhen: () => Promise<null | number>;
 };
 
-type GuardResult = {
+export type ProductionMigrationPlan = {
+  blockedProtectedTags: string[];
   lastAppliedWhen: null | number;
-  pendingTags: string[];
+  pendingEntries: MigrationJournalEntry[];
+  pendingProtectedTags: string[];
+  phase: ProductionMigrationPhase;
+  throughTag: null | string;
+  throughWhen: null | number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -95,13 +93,20 @@ function protectedJournalEntries(
 ): MigrationJournalEntry[] {
   const protectedTags = new Set<string>(PROTECTED_CONTRACTION_TAGS);
   const protectedEntries = entries.filter((entry) => protectedTags.has(entry.tag));
+  const firstProtected = protectedEntries[0];
+  const expansionCeiling = firstProtected ? entries[firstProtected.idx - 1] : undefined;
 
   if (
     protectedEntries.length !== PROTECTED_CONTRACTION_TAGS.length ||
-    protectedEntries.some((entry, index) => entry.tag !== PROTECTED_CONTRACTION_TAGS[index])
+    protectedEntries.some(
+      (entry, index) =>
+        entry.tag !== PROTECTED_CONTRACTION_TAGS[index] ||
+        (firstProtected !== undefined && entry.idx !== firstProtected.idx + index),
+    ) ||
+    expansionCeiling?.tag !== EXPANSION_CEILING_TAG
   ) {
     throw new Error(
-      "production migration guard: protected contraction tags are missing or out of journal order",
+      `production migration guard: ${EXPANSION_CEILING_TAG} and the protected contraction tags are missing or out of journal order`,
     );
   }
 
@@ -124,7 +129,7 @@ export function pendingProtectedMigrationTags(
 
 /**
  * Approval is deliberately literal: no sorting, trimming, subsets, supersets, or stale values.
- * This makes the operator acknowledge the exact contraction set the target would apply now.
+ * This makes the operator acknowledge the exact contraction set this attended phase can apply.
  */
 export function requireProtectedMigrationApproval(
   pendingTags: readonly string[],
@@ -136,7 +141,7 @@ export function requireProtectedMigrationApproval(
   if (pendingTags.length === 0) {
     if (supplied !== "") {
       throw new Error(
-        `production migration guard: ${PROTECTED_MIGRATION_APPROVAL_ENV} must be unset when no protected contraction is pending`,
+        `production migration guard: ${PROTECTED_MIGRATION_APPROVAL_ENV} must be unset when this phase has no protected contraction to apply`,
       );
     }
 
@@ -145,22 +150,106 @@ export function requireProtectedMigrationApproval(
 
   if (supplied !== expected) {
     throw new Error(
-      `production migration guard: protected contractions are pending; set ${PROTECTED_MIGRATION_APPROVAL_ENV} exactly to "${expected}" for this attended deploy`,
+      `production migration guard: protected contractions are pending in this attended phase; set ${PROTECTED_MIGRATION_APPROVAL_ENV} exactly to "${expected}" for this one run`,
     );
   }
 }
 
-/** Purely orchestrate journal parsing, ledger inspection, and the exact approval decision. */
+function entryByTag(entries: readonly MigrationJournalEntry[], tag: string): MigrationJournalEntry {
+  const entry = entries.find((candidate) => candidate.tag === tag);
+  if (!entry) {
+    throw new Error(`production migration guard: required journal tag ${tag} is absent`);
+  }
+
+  return entry;
+}
+
+function requireAppliedThrough(
+  prerequisite: MigrationJournalEntry,
+  lastAppliedWhen: null | number,
+  phase: ProductionMigrationPhase,
+): void {
+  if (lastAppliedWhen === null || lastAppliedWhen < prerequisite.when) {
+    throw new Error(
+      `production migration guard: phase ${phase} requires the target ledger through ${prerequisite.tag} before it may run`,
+    );
+  }
+}
+
+/** Build the one deterministic journal prefix allowed for this phase. */
+export function planProductionMigrations(input: {
+  approval: string | undefined;
+  entries: readonly MigrationJournalEntry[];
+  lastAppliedWhen: null | number;
+  phase: ProductionMigrationPhase;
+}): ProductionMigrationPlan {
+  const { approval, entries, lastAppliedWhen, phase } = input;
+  if (lastAppliedWhen !== null && !Number.isSafeInteger(lastAppliedWhen)) {
+    throw new Error("production migration guard: migration ledger timestamp is invalid");
+  }
+
+  const protectedEntries = protectedJournalEntries(entries);
+  const pendingProtected = protectedEntries.filter(
+    (entry) => lastAppliedWhen === null || entry.when > lastAppliedWhen,
+  );
+  let through: MigrationJournalEntry | undefined;
+
+  if (phase === "deploy") {
+    const firstPendingProtected = pendingProtected[0];
+    through = firstPendingProtected ? entries[firstPendingProtected.idx - 1] : entries.at(-1);
+  } else if (phase === "h4") {
+    const prerequisite = entryByTag(entries, EXPANSION_CEILING_TAG);
+    requireAppliedThrough(prerequisite, lastAppliedWhen, phase);
+    through = entryByTag(entries, PROTECTED_CONTRACTION_TAGS[1]);
+  } else {
+    const prerequisite = entryByTag(entries, PROTECTED_CONTRACTION_TAGS[1]);
+    requireAppliedThrough(prerequisite, lastAppliedWhen, phase);
+    through = entryByTag(entries, PROTECTED_CONTRACTION_TAGS[2]);
+  }
+
+  const pendingEntries = entries.filter(
+    (entry) =>
+      (lastAppliedWhen === null || entry.when > lastAppliedWhen) &&
+      through !== undefined &&
+      entry.when <= through.when,
+  );
+  const protectedTags = new Set<string>(PROTECTED_CONTRACTION_TAGS);
+  const pendingProtectedTags = pendingEntries
+    .filter((entry) => protectedTags.has(entry.tag))
+    .map((entry) => entry.tag);
+
+  if (phase === "deploy" && pendingProtectedTags.length > 0) {
+    throw new Error("production migration guard: ordinary deploy planned a protected contraction");
+  }
+
+  requireProtectedMigrationApproval(pendingProtectedTags, approval);
+
+  return {
+    blockedProtectedTags: pendingProtected
+      .filter((entry) => through === undefined || entry.when > through.when)
+      .map((entry) => entry.tag),
+    lastAppliedWhen,
+    pendingEntries,
+    pendingProtectedTags,
+    phase,
+    throughTag: through?.tag ?? null,
+    throughWhen: through?.when ?? null,
+  };
+}
+
+/** Purely orchestrate journal parsing, ledger inspection, and the exact phase decision. */
 export async function guardProtectedProductionMigrations(
   dependencies: GuardDependencies,
-): Promise<GuardResult> {
+): Promise<ProductionMigrationPlan> {
   const entries = parseMigrationJournal(dependencies.journalJson);
   const lastAppliedWhen = await dependencies.readLastAppliedWhen();
-  const pendingTags = pendingProtectedMigrationTags(entries, lastAppliedWhen);
 
-  requireProtectedMigrationApproval(pendingTags, dependencies.approval);
-
-  return { lastAppliedWhen, pendingTags };
+  return planProductionMigrations({
+    approval: dependencies.approval,
+    entries,
+    lastAppliedWhen,
+    phase: dependencies.phase,
+  });
 }
 
 function migrationTimestamp(value: unknown): number {
@@ -202,58 +291,4 @@ export async function readLastAppliedMigrationWhen(
   }
 
   return migrationTimestamp(row.created_at);
-}
-
-async function main(): Promise<void> {
-  const legacyOperationReceiptRoutePresent = guardCheckedOutOperationReceiptContract();
-
-  const url = process.env.TURSO_DATABASE_URL?.trim();
-  const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
-  if (!url || !authToken) {
-    throw new Error(
-      "production migration guard: TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required",
-    );
-  }
-
-  const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
-  try {
-    const journalJson = readFileSync(
-      new URL("../drizzle/meta/_journal.json", import.meta.url),
-      "utf8",
-    );
-    const result = await guardProtectedProductionMigrations({
-      approval: process.env[PROTECTED_MIGRATION_APPROVAL_ENV],
-      journalJson,
-      readLastAppliedWhen: () => readLastAppliedMigrationWhen(client),
-    });
-
-    if (legacyOperationReceiptRoutePresent) {
-      console.warn(
-        "PRODUCTION MIGRATION GUARD: clear — get_operation_receipt_legacy remains in this checkout.",
-      );
-    } else {
-      console.warn(
-        `PRODUCTION MIGRATION GUARD: caller floor confirmed — ${OPERATION_RECEIPT_CALLER_FLOOR_SHA}.`,
-      );
-    }
-
-    if (result.pendingTags.length === 0) {
-      console.warn("PRODUCTION MIGRATION GUARD: clear — no protected contraction is pending.");
-    } else {
-      console.warn(
-        `PRODUCTION MIGRATION GUARD: approved — ${result.pendingTags.join(",")} may run in this deploy.`,
-      );
-    }
-  } finally {
-    client.close();
-  }
-}
-
-if (import.meta.main) {
-  try {
-    await main();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : "production migration guard failed");
-    process.exitCode = 1;
-  }
 }

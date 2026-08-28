@@ -18,10 +18,11 @@
  * embedded. An under-report, never an over-report, and never a wrong RANKING (the vector reads
  * join the satellite itself).
  *
- * DEPLOY ORDER IS WHAT MAKES THAT SAFE. `deploy:cf` is `db:migrate:production && db:backfill &&
- * wrangler deploy` (package.json), so the guarded wrapper adds the column before the backfill flips
- * it and before the Worker that reads it ships. The old Worker in front of a migrated database
- * reads a column it never mentions; the new Worker never sees an unflipped one.
+ * DEPLOY ORDER IS WHAT MAKES THAT SAFE. `deploy:cf` runs the bounded primary migration, then
+ * `db:backfill`, then the required telemetry migration and `wrangler deploy` (package.json), so the
+ * column exists before the backfill flips it and before the Worker that reads it ships. The old
+ * Worker in front of a migrated database reads a column it never mentions; the new Worker never
+ * sees an unflipped one.
  *
  * THE SHAPE, AND WHY IT CORRECTS BOTH DIRECTIONS. It sets the flag to the satellite's answer
  * wherever the two disagree — not the narrower "flip the un-flagged embedded rows". Seeding
