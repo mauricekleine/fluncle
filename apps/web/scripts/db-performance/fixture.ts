@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { type Client, type ResultSet } from "@libsql/client";
+
 import { getScaleManifest, type FixtureCounts, type ScaleProfile } from "./manifest";
 
 export const DEFAULT_FIXTURE_CHUNK_SIZE = 500;
@@ -37,6 +39,19 @@ export const FIXTURE_TABLES = [
 ] as const;
 
 export type FixtureTable = (typeof FIXTURE_TABLES)[number];
+export type FixtureTableCardinalities = Record<FixtureTable, number>;
+export type FixtureCensus = {
+  distributions: {
+    expected: FixtureCounts;
+    observed: FixtureCounts;
+  };
+  mismatches: string[];
+  passed: boolean;
+  tables: {
+    expected: FixtureTableCardinalities;
+    observed: FixtureTableCardinalities;
+  };
+};
 export type FixtureValue = null | number | string | Uint8Array;
 export type FixtureStatement = { args: FixtureValue[]; sql: string };
 export type FixtureChunk = { statements: FixtureStatement[]; table: FixtureTable };
@@ -189,6 +204,45 @@ export function indexFixtureCardinalities(counts: FixtureCounts): IndexFixtureCa
     perf_database_admission_contenders: proportionalIndexCount(counts, 0.03, 12, 256),
     perf_due_work: proportionalIndexCount(counts, 0.4, 32),
     perf_operation_receipts: proportionalIndexCount(counts, 0.08, 16),
+  };
+}
+
+export function expectedFixtureTableCardinalities(
+  counts: FixtureCounts,
+): FixtureTableCardinalities {
+  const indexCounts = indexFixtureCardinalities(counts);
+  const projectionCounts = projectionFixtureCardinalities(counts);
+
+  return {
+    due_work: counts.youtubeProvenanceBacklog + counts.musicbrainzIsrcBacklog,
+    perf_albums: counts.albums,
+    perf_artifact_change_checkpoints: indexCounts.perf_artifact_change_checkpoints,
+    perf_artifact_change_consumers: indexCounts.perf_artifact_change_consumers,
+    perf_artifact_change_revisions: indexCounts.perf_artifact_change_revisions,
+    perf_artifact_changes: indexCounts.perf_artifact_changes,
+    perf_artist_qualification: projectionCounts.perf_artist_qualification,
+    perf_artist_qualification_contributions:
+      projectionCounts.perf_artist_qualification_contributions,
+    perf_artist_qualification_state: projectionCounts.perf_artist_qualification_state,
+    perf_artists: counts.artists,
+    perf_crawl_due_work: projectionCounts.perf_crawl_due_work,
+    perf_crawl_frontier: counts.crawlFrontier,
+    perf_crawl_projection_repairs: projectionCounts.perf_crawl_projection_repairs,
+    perf_database_admission_contenders: indexCounts.perf_database_admission_contenders,
+    perf_due_work: indexCounts.perf_due_work,
+    perf_findings: counts.findings,
+    perf_galaxies: 0,
+    perf_hub_page_anchor_validity: projectionCounts.perf_hub_page_anchor_validity,
+    perf_hub_page_anchors: projectionCounts.perf_hub_page_anchors,
+    perf_labels: counts.labels,
+    perf_operation_receipts: indexCounts.perf_operation_receipts,
+    perf_projection_repairs: projectionCounts.perf_projection_repairs,
+    perf_public_aggregate_counts: projectionCounts.perf_public_aggregate_counts,
+    perf_public_aggregate_membership: projectionCounts.perf_public_aggregate_membership,
+    perf_public_aggregate_state: projectionCounts.perf_public_aggregate_state,
+    perf_track_artists: counts.trackArtists,
+    perf_track_embeddings: counts.trackEmbeddings,
+    perf_tracks: counts.tracks,
   };
 }
 
@@ -1653,6 +1707,86 @@ export async function writeFixture(
   }
 
   return written;
+}
+
+const FIXTURE_DISTRIBUTION_QUERIES = {
+  albums: "select count(*) as count from perf_albums",
+  artists: "select count(*) as count from perf_artists",
+  crawlFrontier: "select count(*) as count from perf_crawl_frontier",
+  enabledLabelTracks: "select count(*) as count from perf_tracks where label_scope = 'enabled'",
+  findings: "select count(*) as count from perf_findings",
+  fullAnalysisBacklog: "select count(*) as count from perf_tracks where full_analysis_backlog = 1",
+  labels: "select count(*) as count from perf_labels",
+  musicbrainzIsrcBacklog:
+    "select count(*) as count from perf_tracks where musicbrainz_isrc_backlog = 1",
+  pendingFrontier: "select count(*) as count from perf_crawl_frontier where state = 'pending'",
+  trackArtists: "select count(*) as count from perf_track_artists",
+  trackEmbeddings: "select count(*) as count from perf_track_embeddings",
+  tracks: "select count(*) as count from perf_tracks",
+  youtubeProvenanceBacklog: "select count(*) as count from perf_tracks where youtube_backlog = 1",
+} as const satisfies Record<keyof FixtureCounts, string>;
+
+function censusCount(result: Pick<ResultSet, "rows">, label: string): number {
+  const value = result.rows[0]?.count;
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error(`fixture census ${label} did not return one non-negative safe integer`);
+  }
+  return count;
+}
+
+/** Reads the committed database state after fixture writes; generator attempt counts are not proof. */
+export async function auditFixtureCardinality(
+  client: Client,
+  expectedDistributions: FixtureCounts,
+): Promise<FixtureCensus> {
+  const expectedTables = expectedFixtureTableCardinalities(expectedDistributions);
+  const distributionEntries = Object.entries(FIXTURE_DISTRIBUTION_QUERIES) as [
+    keyof FixtureCounts,
+    string,
+  ][];
+  const results = await client.batch(
+    [
+      ...FIXTURE_TABLES.map((table) => `select count(*) as count from ${table}`),
+      ...distributionEntries.map(([, sql]) => sql),
+    ],
+    "read",
+  );
+  const observedTables = Object.fromEntries(
+    FIXTURE_TABLES.map((table, index) => [
+      table,
+      censusCount(results[index] ?? { rows: [] }, `table ${table}`),
+    ]),
+  ) as FixtureTableCardinalities;
+  const observedDistributions = Object.fromEntries(
+    distributionEntries.map(([name], index) => [
+      name,
+      censusCount(results[FIXTURE_TABLES.length + index] ?? { rows: [] }, `distribution ${name}`),
+    ]),
+  ) as FixtureCounts;
+  const mismatches: string[] = [];
+
+  for (const table of FIXTURE_TABLES) {
+    if (observedTables[table] !== expectedTables[table]) {
+      mismatches.push(
+        `table ${table}: expected ${expectedTables[table]}, observed ${observedTables[table]}`,
+      );
+    }
+  }
+  for (const name of Object.keys(expectedDistributions) as (keyof FixtureCounts)[]) {
+    if (observedDistributions[name] !== expectedDistributions[name]) {
+      mismatches.push(
+        `distribution ${name}: expected ${expectedDistributions[name]}, observed ${observedDistributions[name]}`,
+      );
+    }
+  }
+
+  return {
+    distributions: { expected: expectedDistributions, observed: observedDistributions },
+    mismatches,
+    passed: mismatches.length === 0,
+    tables: { expected: expectedTables, observed: observedTables },
+  };
 }
 
 /** A streaming fingerprint used to prove repeatability without retaining generated rows. */

@@ -3,7 +3,7 @@ import { createClient as createLocalClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY, REMOTE_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
 import { performanceRegistry, selectPerformanceContracts } from "./contracts";
-import { applyFixtureSchema, resetFixture, writeFixture } from "./fixture";
+import { applyFixtureSchema, auditFixtureCardinality, resetFixture, writeFixture } from "./fixture";
 import { resolveHostedReplay } from "./hosted";
 import {
   type ScaleProfile,
@@ -17,7 +17,15 @@ import {
   readPerformanceResourceSample,
   runPerformanceContracts,
 } from "./registry";
-import { startLocalLibsqlSidecar } from "./local-sidecar";
+import { performanceFetchWithTimeout, startLocalLibsqlSidecar } from "./local-sidecar";
+
+const REMOTE_REQUEST_TIMEOUT_MS = 60_000;
+const CI_PROCESS_DEADLINE_MS = 2 * 60_000;
+const PROFILE_PROCESS_DEADLINE_MS: Record<ScaleProfile, number> = {
+  "1x": 5 * 60_000,
+  "2x": 8 * 60_000,
+  "4x": 12 * 60_000,
+};
 
 type CliOptions = {
   contractIds: string[];
@@ -71,9 +79,7 @@ function parseArguments(args: readonly string[]): CliOptions {
   return options;
 }
 
-async function main(): Promise<void> {
-  const options = parseArguments(process.argv.slice(2));
-
+async function main(options: CliOptions): Promise<void> {
   if (options.list) {
     process.stdout.write(
       `${JSON.stringify(
@@ -103,6 +109,7 @@ async function main(): Promise<void> {
       ? (await import("@libsql/client/web")).createClient({
           authToken: replay.token,
           concurrency: REMOTE_DB_CONCURRENCY,
+          fetch: performanceFetchWithTimeout(REMOTE_REQUEST_TIMEOUT_MS),
           url: replay.url,
         })
       : (localSidecar?.client ??
@@ -119,6 +126,7 @@ async function main(): Promise<void> {
       : createCiFixtureCounts(options.profile);
     const fixtureWriteStartedAtMs = performance.now();
     const written = await writeFixture(client, options.profile, { counts });
+    const census = await auditFixtureCardinality(client, counts);
     const fixtureWriteCompletedAtMs = performance.now();
     const fixtureWriteDurationMs = Math.max(0, fixtureWriteCompletedAtMs - fixtureWriteStartedAtMs);
     const fixtureResource = readPerformanceResourceSample();
@@ -161,8 +169,9 @@ async function main(): Promise<void> {
           },
           environment: replay.mode,
           fixture: {
+            census,
             counts,
-            exactProfileCardinality: exactFixture,
+            exactProfileCardinality: exactFixture && census.passed,
             profile: options.profile,
             writeDurationMs: fixtureWriteDurationMs,
             written,
@@ -176,7 +185,7 @@ async function main(): Promise<void> {
       )}\n`,
     );
 
-    if (!report.passed) {
+    if (!report.passed || !census.passed) {
       process.exitCode = 1;
     }
   } finally {
@@ -188,4 +197,19 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+const options = parseArguments(process.argv.slice(2));
+const processDeadlineMs =
+  options.fullFixture || options.hosted
+    ? PROFILE_PROCESS_DEADLINE_MS[options.profile]
+    : CI_PROCESS_DEADLINE_MS;
+const processDeadline = setTimeout(() => {
+  process.stderr.write(
+    `database-performance profile exceeded its ${processDeadlineMs}ms absolute deadline\n`,
+  );
+  process.exit(124);
+}, processDeadlineMs);
+try {
+  await main(options);
+} finally {
+  clearTimeout(processDeadline);
+}

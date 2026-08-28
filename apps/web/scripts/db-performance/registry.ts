@@ -18,7 +18,7 @@ import {
 import { type ExplainPlanAnalysis, type ExplainPlanPolicy, analyzeExplainPlan } from "./plan";
 
 export const PERFORMANCE_CONTRACT_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
-export const PERFORMANCE_REPORT_SCHEMA_VERSION = 4 as const;
+export const PERFORMANCE_REPORT_SCHEMA_VERSION = 5 as const;
 
 export type PerformanceStatement = { args: InValue[]; sql: string };
 

@@ -5,6 +5,8 @@ import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import {
   FIXTURE_TABLES,
   applyFixtureSchema,
+  auditFixtureCardinality,
+  expectedFixtureTableCardinalities,
   fixtureFingerprint,
   generateFixture,
   indexFixtureCardinalities,
@@ -157,6 +159,17 @@ describe("synthetic database performance fixture", () => {
     try {
       await applyFixtureSchema(client);
       await writeFixture(client, "1x", { counts: SMALL_COUNTS });
+      const census = await auditFixtureCardinality(client, SMALL_COUNTS);
+
+      expect(census).toEqual({
+        distributions: { expected: SMALL_COUNTS, observed: SMALL_COUNTS },
+        mismatches: [],
+        passed: true,
+        tables: {
+          expected: expectedFixtureTableCardinalities(SMALL_COUNTS),
+          observed: expectedFixtureTableCardinalities(SMALL_COUNTS),
+        },
+      });
 
       expect(await scalar(client, "select count(*) as n from perf_tracks")).toBe(41);
       expect(await scalar(client, "select count(*) as n from perf_track_artists")).toBe(53);
@@ -237,6 +250,27 @@ describe("synthetic database performance fixture", () => {
       );
       expect(await scalar(client, "select count(*) as n from due_work where state = 'ready'")).toBe(
         30,
+      );
+    } finally {
+      client.close();
+    }
+  });
+
+  it("fails the post-write census when committed rows differ from the exact fixture", async () => {
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+
+    try {
+      await applyFixtureSchema(client);
+      await writeFixture(client, "1x", { counts: SMALL_COUNTS });
+      await client.execute("delete from perf_tracks where id = 'synthetic-track-000000000'");
+      const census = await auditFixtureCardinality(client, SMALL_COUNTS);
+
+      expect(census.passed).toBe(false);
+      expect(census.mismatches).toEqual(
+        expect.arrayContaining([
+          "table perf_tracks: expected 41, observed 40",
+          "distribution tracks: expected 41, observed 40",
+        ]),
       );
     } finally {
       client.close();

@@ -16,12 +16,22 @@ const DEFAULT_START_ATTEMPTS = 3;
 const PROCESS_STOP_GRACE_MS = 2_000;
 const LOG_TAIL_CHARACTER_LIMIT = 16_384;
 const LOG_READ_TIMEOUT_MS = 250;
+const BENCHMARK_REQUEST_TIMEOUT_MS = 60_000;
 const SUPERVISOR_PATH = fileURLToPath(new URL("./local-sidecar-supervisor.ts", import.meta.url));
 
 export const ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE =
   "process.memoryUsage.isolated-local-libsql-client" as const;
 
 export type LocalLibsqlClient = ReturnType<typeof createClient>;
+
+export function performanceFetchWithTimeout(
+  requestTimeoutMs: number,
+): (request: Request) => Promise<Response> {
+  return (request) =>
+    globalThis.fetch(request, {
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(requestTimeoutMs)]),
+    });
+}
 
 export type ManagedSidecarProcess = {
   exitCode: number | null;
@@ -266,6 +276,7 @@ const DEFAULT_RUNTIME: LocalLibsqlSidecarRuntime = {
     return createClient({
       authToken,
       concurrency: LOCAL_DB_CONCURRENCY,
+      fetch: performanceFetchWithTimeout(BENCHMARK_REQUEST_TIMEOUT_MS),
       url,
     });
   },
@@ -274,9 +285,7 @@ const DEFAULT_RUNTIME: LocalLibsqlSidecarRuntime = {
     return createClient({
       authToken,
       concurrency: 1,
-      fetch(request: Request) {
-        return globalThis.fetch(request, { signal: AbortSignal.timeout(requestTimeoutMs) });
-      },
+      fetch: performanceFetchWithTimeout(requestTimeoutMs),
       url,
     });
   },

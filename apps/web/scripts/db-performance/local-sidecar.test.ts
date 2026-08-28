@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE,
+  performanceFetchWithTimeout,
   type LocalLibsqlClient,
   type LocalLibsqlSidecarRuntime,
   type ManagedSidecarProcess,
@@ -113,6 +114,26 @@ function sidecarHarness(options: {
 }
 
 describe("exact-fixture local libSQL sidecar", () => {
+  it("aborts benchmark HTTP requests at their absolute request deadline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      (_request: Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        }),
+    );
+
+    try {
+      await expect(
+        performanceFetchWithTimeout(10)(new Request("http://127.0.0.1")),
+      ).rejects.toBeDefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("waits for a real query and idempotently cleans the client, process group, and database", async () => {
     const harness = sidecarHarness({ failuresBeforeReady: 1 });
     const sidecar = await startLocalLibsqlSidecar({

@@ -1,3 +1,6 @@
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { PERFORMANCE_BUDGETS, PERFORMANCE_CRITERION_CATEGORIES } from "./budgets";
@@ -7,6 +10,7 @@ import {
   DOMINANT_REGRESSION_INVENTORY,
 } from "./dominant-regression-inventory";
 import { getScaleManifest } from "./manifest";
+import { expectedFixtureTableCardinalities } from "./fixture";
 import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
 import { PERFORMANCE_REPORT_SCHEMA_VERSION } from "./registry";
 import {
@@ -14,6 +18,8 @@ import {
   assessReleaseSourceEvidence,
   assessCategoryCompleteness,
   buildArtifactEvidence,
+  buildArtifactRoot,
+  captureChild,
   DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS,
   parseReleaseArguments,
   REQUIRED_RELEASE_CATEGORIES,
@@ -26,6 +32,40 @@ import {
   validateProfileReport,
   validatePortableArtifactFilename,
 } from "./release";
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ESRCH"
+    );
+  }
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (await predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`condition was not met within ${timeoutMs}ms`);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function validProfileReport(profile: "1x" | "2x" | "4x"): string {
   const registeredContracts = performanceRegistry.list();
@@ -41,6 +81,15 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
     },
     environment: "local",
     fixture: {
+      census: {
+        distributions: { expected: counts, observed: counts },
+        mismatches: [],
+        passed: true,
+        tables: {
+          expected: expectedFixtureTableCardinalities(counts),
+          observed: expectedFixtureTableCardinalities(counts),
+        },
+      },
       counts,
       exactProfileCardinality: true,
       profile,
@@ -116,6 +165,7 @@ function child(overrides: Partial<ChildResult> = {}): ChildResult {
     spawnError: null,
     stderr: "",
     stdout: "",
+    timedOut: false,
     ...overrides,
   };
 }
@@ -126,6 +176,7 @@ function commandResult(overrides: Partial<ReleaseCommandResult> = {}): ReleaseCo
     categories: ["mixed-load"],
     command: ["bun", "test"],
     cwd: ".",
+    deadlineMs: 1_000,
     durationMs: 1,
     exitCode: 0,
     id: "component",
@@ -133,6 +184,7 @@ function commandResult(overrides: Partial<ReleaseCommandResult> = {}): ReleaseCo
     spawnError: null,
     startedAt: "2026-08-27T00:00:00.000Z",
     status: "passed",
+    timedOut: false,
     validationFailures: [],
     ...overrides,
   };
@@ -172,7 +224,52 @@ describe("database performance release proof", () => {
     expect(validateChildResult(child({ durationMs: Number.NaN }))).toContain(
       "child duration is not a non-negative finite number",
     );
+    expect(validateChildResult(child({ timedOut: true }))).toContain(
+      "child process exceeded its absolute deadline",
+    );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "enforces an absolute command deadline and kills the owned process group",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-command-deadline-");
+      const descendantPidPath = join(testDirectory, "descendant.pid");
+      const program = `const { spawn } = await import("node:child_process"); const { writeFile } = await import("node:fs/promises"); const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1000)"], { stdio: "ignore" }); await writeFile(${JSON.stringify(descendantPidPath)}, String(child.pid)); process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000);`;
+      let descendantPid: number | null = null;
+
+      try {
+        const result = await captureChild({
+          categories: [],
+          command: [process.execPath, "-e", program],
+          cwd: ".",
+          id: "deadline-fixture",
+          timeoutMs: 100,
+        });
+        await waitFor(() => pathExists(descendantPidPath));
+        descendantPid = Number.parseInt(await readFile(descendantPidPath, "utf8"), 10);
+
+        expect(result.timedOut).toBe(true);
+        expect(validateChildResult(result)).toEqual(
+          expect.arrayContaining([
+            "child process exceeded its absolute deadline",
+            "child process has no valid exit code",
+          ]),
+        );
+        await waitFor(() => !processExists(descendantPid ?? -1));
+        expect(processExists(descendantPid)).toBe(false);
+      } finally {
+        if (descendantPid !== null && processExists(descendantPid)) {
+          try {
+            process.kill(descendantPid, "SIGKILL");
+          } catch {
+            // The process exited between the liveness check and signal.
+          }
+        }
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    8_000,
+  );
 
   it("binds portable relative artifacts to their exact bytes", () => {
     const evidence = buildArtifactEvidence("profiles/2x.json", '{"passed":true}\n');
@@ -205,7 +302,30 @@ describe("database performance release proof", () => {
     }
   });
 
-  it("requires a complete passing schema-v4 isolated report at exact profile cardinality", () => {
+  it("root-binds the complete artifact set and candidate commit", () => {
+    const artifacts = [
+      buildArtifactEvidence("logs/command.stderr.log", ""),
+      buildArtifactEvidence("profiles/1x.json", "{}\n"),
+    ];
+    const candidate = "afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf";
+    const root = buildArtifactRoot(artifacts, candidate);
+
+    expect(root).toMatchObject({
+      algorithm: "sha256",
+      artifactCount: 2,
+      candidateCommit: candidate,
+    });
+    expect(root.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(buildArtifactRoot([...artifacts].reverse(), candidate)).toEqual(root);
+    expect(buildArtifactRoot(artifacts, "356463239bb2e927766dae9239cb98703cf5ab05")).not.toEqual(
+      root,
+    );
+    expect(
+      buildArtifactRoot([buildArtifactEvidence("profiles/1x.json", "tampered")], candidate),
+    ).not.toEqual(root);
+  });
+
+  it("requires a complete passing isolated report with a post-write census", () => {
     const valid = validateProfileReport(validProfileReport("2x"), "2x");
     expect(valid.errors).toEqual([]);
     expect(valid.exactProfileCardinality).toBe(true);
@@ -215,6 +335,9 @@ describe("database performance release proof", () => {
     const inexact = JSON.parse(validProfileReport("4x"));
     inexact.fixture.exactProfileCardinality = false;
     inexact.fixture.counts.tracks -= 1;
+    inexact.fixture.census.passed = false;
+    inexact.fixture.census.mismatches = ["table perf_tracks mismatch"];
+    inexact.fixture.census.tables.observed.perf_tracks -= 1;
     inexact.report.passed = false;
     delete inexact.report.criteria.projection;
     inexact.indexAudit.passed = false;
@@ -227,6 +350,9 @@ describe("database performance release proof", () => {
         "profile 4x payload criterion projection is missing",
         "profile 4x indexAudit.passed is not true",
         "profile 4x report.passed is not true",
+        "profile 4x fixture census.passed is not true",
+        "profile 4x fixture census reports mismatches",
+        "profile 4x fixture census observed tables do not match expected",
       ]),
     );
     expect(validateProfileReport("not-json", "1x").errors[0]).toContain(
@@ -251,7 +377,13 @@ describe("database performance release proof", () => {
 
   it("binds evidence to one clean candidate commit for the complete run", () => {
     const candidate = "afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf";
-    const clean = { clean: true, commit: candidate, failure: null };
+    const clean = {
+      clean: true,
+      commit: candidate,
+      failure: null,
+      indexHash: "index-a",
+      treeHash: "tree-a",
+    };
 
     expect(
       assessReleaseSourceEvidence({
@@ -275,8 +407,16 @@ describe("database performance release proof", () => {
         clean: true,
         commit: "356463239bb2e927766dae9239cb98703cf5ab05",
         failure: null,
+        indexHash: "index-b",
+        treeHash: "tree-b",
       },
-      started: { clean: false, commit: candidate, failure: null },
+      started: {
+        clean: false,
+        commit: candidate,
+        failure: null,
+        indexHash: "index-a",
+        treeHash: "tree-a",
+      },
     });
     expect(dirtyAndChanged.passed).toBe(false);
     expect(dirtyAndChanged.actualCommit).toBeNull();
@@ -285,6 +425,39 @@ describe("database performance release proof", () => {
         "source tree is not clean at start",
         "source completion commit 356463239bb2e927766dae9239cb98703cf5ab05 does not match candidate afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf",
         "source commit changed during proof: afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf -> 356463239bb2e927766dae9239cb98703cf5ab05",
+      ]),
+    );
+  });
+
+  it("fails source binding when any command checkpoint sees dirty or changed source", () => {
+    const candidate = "afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf";
+    const clean = {
+      clean: true,
+      commit: candidate,
+      failure: null,
+      indexHash: "index-a",
+      treeHash: "tree-a",
+    };
+    const evidence = assessReleaseSourceEvidence({
+      candidateCommit: candidate,
+      candidateSelection: "explicit",
+      checkpoints: [
+        {
+          commandId: "sql-exact-2x",
+          phase: "before-command",
+          snapshot: { ...clean, clean: false, indexHash: "index-b" },
+        },
+      ],
+      completed: clean,
+      started: clean,
+    });
+
+    expect(evidence.clean).toBe(false);
+    expect(evidence.passed).toBe(false);
+    expect(evidence.failures).toEqual(
+      expect.arrayContaining([
+        "source before-command sql-exact-2x index hash changed during proof",
+        "source tree is not clean at before-command sql-exact-2x",
       ]),
     );
   });

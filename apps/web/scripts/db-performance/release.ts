@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
+import { spawn as spawnChild } from "node:child_process";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,11 +23,22 @@ import {
 } from "./dominant-regression-inventory";
 import { PERFORMANCE_REPORT_SCHEMA_VERSION, type PerformanceContract } from "./registry";
 import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
+import { expectedFixtureTableCardinalities } from "./fixture";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DEFAULT_ARTIFACT_ROOT = join(REPOSITORY_ROOT, "apps/web/.dev/db-performance-release");
 
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 2 as const;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 3 as const;
+const PROCESS_STOP_GRACE_MS = 2_000;
+const GIT_INSPECTION_TIMEOUT_MS = 30_000;
+const CHILD_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
+const COMPONENT_COMMAND_TIMEOUT_MS = 5 * 60_000;
+const SONAR_COMMAND_TIMEOUT_MS = 10 * 60_000;
+const PROFILE_COMMAND_TIMEOUT_MS: Record<ScaleProfile, number> = {
+  "1x": 5 * 60_000,
+  "2x": 8 * 60_000,
+  "4x": 12 * 60_000,
+};
 
 export const REQUIRED_RELEASE_CATEGORIES = [
   "sql-full-fixture-1x",
@@ -96,6 +108,14 @@ export type RepositorySnapshot = {
   clean: boolean | null;
   commit: string | null;
   failure: string | null;
+  indexHash: string | null;
+  treeHash: string | null;
+};
+
+export type ReleaseSourceCheckpoint = {
+  commandId: string;
+  phase: "after-command" | "before-command";
+  snapshot: RepositorySnapshot;
 };
 
 export type ReleaseSourceEvidence = {
@@ -103,6 +123,7 @@ export type ReleaseSourceEvidence = {
   candidateCommit: string | null;
   candidateSelection: "current-head" | "explicit";
   clean: boolean;
+  checkpoints: ReleaseSourceCheckpoint[];
   completed: RepositorySnapshot;
   failures: string[];
   passed: boolean;
@@ -115,6 +136,7 @@ export type ChildResult = {
   spawnError: string | null;
   stderr: string;
   stdout: string;
+  timedOut: boolean;
 };
 
 export type ReleaseCommandResult = {
@@ -123,18 +145,27 @@ export type ReleaseCommandResult = {
   command: string[];
   cwd: string;
   durationMs: number;
+  deadlineMs: number;
   exitCode: number | null;
   id: string;
   profile: ScaleProfile | null;
   spawnError: string | null;
   startedAt: string;
   status: "failed" | "passed";
+  timedOut: boolean;
   validationFailures: string[];
 };
 
 export type ReleaseArtifactEvidence = {
   byteSize: number;
   filename: string;
+  sha256: string;
+};
+
+export type ReleaseArtifactRoot = {
+  algorithm: "sha256";
+  artifactCount: number;
+  candidateCommit: string | null;
   sha256: string;
 };
 
@@ -165,6 +196,7 @@ export type ReleaseCommandDefinition = {
   cwd: string;
   id: string;
   profile?: ScaleProfile;
+  timeoutMs: number;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -231,6 +263,9 @@ export function validateChildResult(result: ChildResult): string[] {
   if (result.spawnError !== null) {
     failures.push(`process could not start: ${result.spawnError}`);
   }
+  if (result.timedOut) {
+    failures.push("child process exceeded its absolute deadline");
+  }
   if (!Number.isSafeInteger(result.exitCode) || (result.exitCode ?? -1) < 0) {
     failures.push("child process has no valid exit code");
   } else if (result.exitCode !== 0) {
@@ -266,7 +301,7 @@ function readNumericRecord(value: unknown): Record<string, number> | null {
 
 function sameCardinality(
   observed: Record<string, number> | null,
-  expected: FixtureCounts,
+  expected: Record<string, number>,
 ): boolean {
   if (observed === null) {
     return false;
@@ -278,8 +313,7 @@ function sameCardinality(
   return (
     observedKeys.length === expectedKeys.length &&
     observedKeys.every(
-      (key, index) =>
-        key === expectedKeys[index] && observed[key] === expected[key as keyof FixtureCounts],
+      (key, index) => key === expectedKeys[index] && observed[key] === expected[key],
     )
   );
 }
@@ -576,6 +610,62 @@ function validateExactLocalResourceEvidence(
   return { warningThresholds, warnings: warnings ?? [] };
 }
 
+function validateFixtureCensus(options: {
+  errors: string[];
+  malformedReport: (message: string) => void;
+  profile: ScaleProfile;
+  value: unknown;
+}): void {
+  const { errors, malformedReport, profile } = options;
+  const census = isRecord(options.value) ? options.value : null;
+  const censusTables = isRecord(census?.tables) ? census.tables : null;
+  const censusDistributions = isRecord(census?.distributions) ? census.distributions : null;
+  const expectedCensusTables = readNumericRecord(censusTables?.expected);
+  const observedCensusTables = readNumericRecord(censusTables?.observed);
+  const expectedCensusDistributions = readNumericRecord(censusDistributions?.expected);
+  const observedCensusDistributions = readNumericRecord(censusDistributions?.observed);
+  const manifestCounts = getScaleManifest(profile).counts;
+
+  if (census === null) {
+    malformedReport(`profile ${profile} fixture census is missing`);
+  } else {
+    if (census.passed !== true) {
+      errors.push(`profile ${profile} fixture census.passed is not true`);
+    }
+    if (stringArray(census.mismatches) === null) {
+      malformedReport(`profile ${profile} fixture census mismatches are malformed`);
+    } else if (census.mismatches.length > 0) {
+      errors.push(`profile ${profile} fixture census reports mismatches`);
+    }
+  }
+  if (
+    expectedCensusTables === null ||
+    !sameCardinality(expectedCensusTables, expectedFixtureTableCardinalities(manifestCounts))
+  ) {
+    malformedReport(`profile ${profile} fixture census expected tables are incomplete`);
+  }
+  if (
+    observedCensusTables === null ||
+    expectedCensusTables === null ||
+    !sameCardinality(observedCensusTables, expectedCensusTables)
+  ) {
+    errors.push(`profile ${profile} fixture census observed tables do not match expected`);
+  }
+  if (
+    expectedCensusDistributions === null ||
+    !sameCardinality(expectedCensusDistributions, manifestCounts)
+  ) {
+    malformedReport(`profile ${profile} fixture census expected distributions are incomplete`);
+  }
+  if (
+    observedCensusDistributions === null ||
+    expectedCensusDistributions === null ||
+    !sameCardinality(observedCensusDistributions, expectedCensusDistributions)
+  ) {
+    errors.push(`profile ${profile} fixture census observed distributions do not match expected`);
+  }
+}
+
 export function validateProfileReport(rawJson: string, profile: ScaleProfile): ProfileValidation {
   const errors: string[] = [];
   let malformed = false;
@@ -658,6 +748,7 @@ export function validateProfileReport(rawJson: string, profile: ScaleProfile): P
   if (readNumericRecord(fixture?.written) === null) {
     malformedReport(`profile ${profile} fixture written counts are missing`);
   }
+  validateFixtureCensus({ errors, malformedReport, profile, value: fixture?.census });
 
   const report = isRecord(parsed.report) ? parsed.report : null;
   if (report === null) {
@@ -860,6 +951,7 @@ function profileCommand(profile: ScaleProfile): ReleaseCommandDefinition {
     cwd: "apps/web",
     id: `sql-exact-${profile}`,
     profile,
+    timeoutMs: PROFILE_COMMAND_TIMEOUT_MS[profile],
   };
 }
 
@@ -904,6 +996,7 @@ function buildReleaseCommands(
       ],
       cwd: "apps/web",
       id: "component-registry-and-cutovers",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["mixed-load"],
@@ -915,6 +1008,7 @@ function buildReleaseCommands(
       ],
       cwd: "apps/web",
       id: "component-mixed-load",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["admission-enforced", "admission-schema", "admission-shadow"],
@@ -928,6 +1022,7 @@ function buildReleaseCommands(
       ],
       cwd: "apps/web",
       id: "component-admission",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: [
@@ -944,6 +1039,7 @@ function buildReleaseCommands(
       ],
       cwd: "apps/web",
       id: "component-operation-receipts",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["public-projection-convergence"],
@@ -955,6 +1051,7 @@ function buildReleaseCommands(
       ],
       cwd: "apps/web",
       id: "component-public-projections",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["device-derivation"],
@@ -967,12 +1064,14 @@ function buildReleaseCommands(
       ],
       cwd: "apps/web",
       id: "component-device-derivation",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["device-mirror", "device-scaled-convergence", "device-resource-bounds"],
       command: ["bun", "test", "device-mirror-derivation.test.ts", "device-mirror.test.ts"],
       cwd: "docs/agents/hermes/scripts",
       id: "component-device-mirror",
+      timeoutMs: COMPONENT_COMMAND_TIMEOUT_MS,
     },
     {
       categories: ["sonar-rust", "sonar-scaled-delta-full-rebuild"],
@@ -986,6 +1085,7 @@ function buildReleaseCommands(
       ],
       cwd: ".",
       id: "component-sonar-rust",
+      timeoutMs: SONAR_COMMAND_TIMEOUT_MS,
     },
   ];
 }
@@ -1041,20 +1141,18 @@ async function captureGitCommand(args: readonly string[]): Promise<{
   stderr: string;
   stdout: string;
 }> {
-  const child = Bun.spawn(["git", ...args], {
-    cwd: REPOSITORY_ROOT,
-    env: childEnvironment(),
-    stderr: "pipe",
-    stdin: "ignore",
-    stdout: "pipe",
+  const result = await captureChild({
+    categories: [],
+    command: ["git", ...args],
+    cwd: ".",
+    id: "source-inspection",
+    timeoutMs: GIT_INSPECTION_TIMEOUT_MS,
   });
-  const [exitCode, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-
-  return { exitCode, stderr, stdout };
+  return {
+    exitCode: result.exitCode ?? 1,
+    stderr: result.spawnError === null ? result.stderr : `${result.spawnError}\n${result.stderr}`,
+    stdout: result.stdout,
+  };
 }
 
 function sourcePathExclusion(path: string): string | null {
@@ -1072,8 +1170,10 @@ async function readRepositorySnapshot(outputDirectory: string): Promise<Reposito
       statusArguments.push(exclusion);
     }
 
-    const [commit, status] = await Promise.all([
+    const [commit, tree, index, status] = await Promise.all([
       captureGitCommand(["rev-parse", "--verify", "HEAD^{commit}"]),
+      captureGitCommand(["rev-parse", "--verify", "HEAD^{tree}"]),
+      captureGitCommand(["ls-files", "--stage", "-z"]),
       captureGitCommand(statusArguments),
     ]);
     const failures: string[] = [];
@@ -1083,28 +1183,52 @@ async function readRepositorySnapshot(outputDirectory: string): Promise<Reposito
     if (status.exitCode !== 0) {
       failures.push(`git status failed: ${status.stderr.trim() || `exit ${status.exitCode}`}`);
     }
+    if (tree.exitCode !== 0) {
+      failures.push(`git tree inspection failed: ${tree.stderr.trim() || `exit ${tree.exitCode}`}`);
+    }
+    if (index.exitCode !== 0) {
+      failures.push(
+        `git index inspection failed: ${index.stderr.trim() || `exit ${index.exitCode}`}`,
+      );
+    }
 
     return {
       clean: status.exitCode === 0 ? status.stdout.trim().length === 0 : null,
       commit: commit.exitCode === 0 ? commit.stdout.trim() : null,
       failure: failures.length === 0 ? null : failures.join("; "),
+      indexHash:
+        index.exitCode === 0 ? createHash("sha256").update(index.stdout).digest("hex") : null,
+      treeHash: tree.exitCode === 0 ? tree.stdout.trim() : null,
     };
   } catch (error) {
-    return { clean: null, commit: null, failure: errorMessage(error) };
+    return {
+      clean: null,
+      commit: null,
+      failure: errorMessage(error),
+      indexHash: null,
+      treeHash: null,
+    };
   }
 }
 
 export function assessReleaseSourceEvidence(options: {
   candidateCommit: string | null;
   candidateSelection: ReleaseSourceEvidence["candidateSelection"];
+  checkpoints?: readonly ReleaseSourceCheckpoint[];
   completed: RepositorySnapshot;
   started: RepositorySnapshot;
 }): ReleaseSourceEvidence {
   const failures = new Set<string>();
   const candidateCommit = options.candidateCommit;
+  const checkpoints = [...(options.checkpoints ?? [])];
+  const startedTreeHash = options.started.treeHash;
+  const startedIndexHash = options.started.indexHash;
 
   for (const [label, snapshot] of [
     ["start", options.started],
+    ...checkpoints.map(
+      (checkpoint) => [`${checkpoint.phase} ${checkpoint.commandId}`, checkpoint.snapshot] as const,
+    ),
     ["completion", options.completed],
   ] as const) {
     if (snapshot.failure !== null) {
@@ -1112,6 +1236,16 @@ export function assessReleaseSourceEvidence(options: {
     }
     if (snapshot.commit === null) {
       failures.add(`source ${label} commit is unavailable`);
+    }
+    if (snapshot.treeHash === null) {
+      failures.add(`source ${label} tree hash is unavailable`);
+    } else if (startedTreeHash !== null && snapshot.treeHash !== startedTreeHash) {
+      failures.add(`source ${label} tree hash changed during proof`);
+    }
+    if (snapshot.indexHash === null) {
+      failures.add(`source ${label} index hash is unavailable`);
+    } else if (startedIndexHash !== null && snapshot.indexHash !== startedIndexHash) {
+      failures.add(`source ${label} index hash changed during proof`);
     }
     if (snapshot.clean !== true) {
       failures.add(`source tree is not clean at ${label}`);
@@ -1146,7 +1280,11 @@ export function assessReleaseSourceEvidence(options: {
     actualCommit,
     candidateCommit,
     candidateSelection: options.candidateSelection,
-    clean: options.started.clean === true && options.completed.clean === true,
+    checkpoints,
+    clean:
+      options.started.clean === true &&
+      checkpoints.every((checkpoint) => checkpoint.snapshot.clean === true) &&
+      options.completed.clean === true,
     completed: options.completed,
     failures: sourceFailures,
     passed: sourceFailures.length === 0,
@@ -1154,37 +1292,134 @@ export function assessReleaseSourceEvidence(options: {
   };
 }
 
-async function captureChild(definition: ReleaseCommandDefinition): Promise<ChildResult> {
+function signalProcessGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessGroupExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (!signalProcessGroup(pid, 0)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !signalProcessGroup(pid, 0);
+}
+
+export async function captureChild(definition: ReleaseCommandDefinition): Promise<ChildResult> {
   const startedAtMs = performance.now();
+  const executable = definition.command[0];
+  if (executable === undefined) {
+    return {
+      durationMs: 0,
+      exitCode: null,
+      spawnError: "child command is empty",
+      stderr: "",
+      stdout: "",
+      timedOut: false,
+    };
+  }
+
+  let stdout = "";
+  let stderr = "";
+  let spawnError: string | null = null;
+  let observedExitCode: number | null = null;
+  const append = (current: string, chunk: Uint8Array): string => {
+    const combined = current + Buffer.from(chunk).toString("utf8");
+    return Buffer.byteLength(combined, "utf8") <= CHILD_OUTPUT_LIMIT_BYTES
+      ? combined
+      : `[output truncated to final ${CHILD_OUTPUT_LIMIT_BYTES} bytes]\n${combined.slice(-CHILD_OUTPUT_LIMIT_BYTES)}`;
+  };
 
   try {
-    const process = Bun.spawn(definition.command, {
+    const subprocess = spawnChild(executable, definition.command.slice(1), {
       cwd: join(REPOSITORY_ROOT, definition.cwd),
+      detached: true,
       env: childEnvironment(),
-      stderr: "pipe",
-      stdin: "ignore",
-      stdout: "pipe",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      process.exited,
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
+    subprocess.stdout.on("data", (chunk: Uint8Array) => {
+      stdout = append(stdout, chunk);
+    });
+    subprocess.stderr.on("data", (chunk: Uint8Array) => {
+      stderr = append(stderr, chunk);
+    });
+    const exited = new Promise<void>((resolve) => {
+      subprocess.once("error", (error) => {
+        spawnError = errorMessage(error);
+        resolve();
+      });
+      subprocess.once("exit", (code) => {
+        observedExitCode = code;
+        resolve();
+      });
+    });
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = await Promise.race([
+      exited.then(() => false),
+      new Promise<true>((resolve) => {
+        deadlineTimer = setTimeout(() => resolve(true), definition.timeoutMs);
+      }),
     ]);
+    if (deadlineTimer !== undefined) {
+      clearTimeout(deadlineTimer);
+    }
+
+    if (timedOut) {
+      const pid = subprocess.pid;
+      if (pid !== undefined) {
+        if (!signalProcessGroup(pid, "SIGTERM")) {
+          try {
+            subprocess.kill("SIGTERM");
+          } catch {
+            // The child exited between the liveness observation and the signal.
+          }
+        }
+      }
+      await Promise.race([
+        exited,
+        new Promise<void>((resolve) => setTimeout(resolve, PROCESS_STOP_GRACE_MS)),
+      ]);
+      if (pid !== undefined && signalProcessGroup(pid, 0)) {
+        if (!signalProcessGroup(pid, "SIGKILL")) {
+          try {
+            subprocess.kill("SIGKILL");
+          } catch {
+            // The child exited between the liveness observation and the signal.
+          }
+        }
+        await Promise.race([
+          exited,
+          new Promise<void>((resolve) => setTimeout(resolve, PROCESS_STOP_GRACE_MS)),
+        ]);
+        if (!(await waitForProcessGroupExit(pid, PROCESS_STOP_GRACE_MS))) {
+          spawnError ??= "owned child process group survived SIGKILL";
+        }
+      }
+    }
 
     return {
       durationMs: Math.max(0, performance.now() - startedAtMs),
-      exitCode,
-      spawnError: null,
+      exitCode: observedExitCode,
+      spawnError,
       stderr,
       stdout,
+      timedOut,
     };
   } catch (error) {
     return {
       durationMs: Math.max(0, performance.now() - startedAtMs),
       exitCode: null,
       spawnError: errorMessage(error),
-      stderr: "",
-      stdout: "",
+      stderr,
+      stdout,
+      timedOut: false,
     };
   }
 }
@@ -1269,6 +1504,21 @@ export function validateArtifactContents(
   return failures;
 }
 
+export function buildArtifactRoot(
+  artifacts: readonly ReleaseArtifactEvidence[],
+  candidateCommit: string | null,
+): ReleaseArtifactRoot {
+  const sorted = [...artifacts].sort((left, right) => left.filename.localeCompare(right.filename));
+  return {
+    algorithm: "sha256",
+    artifactCount: sorted.length,
+    candidateCommit,
+    sha256: createHash("sha256")
+      .update(JSON.stringify({ artifacts: sorted, candidateCommit }))
+      .digest("hex"),
+  };
+}
+
 async function writeText(path: string, contents: string): Promise<void> {
   await Bun.write(path, contents);
 }
@@ -1285,10 +1535,16 @@ async function runRelease(
   const candidateCommit = options.candidateCommit ?? startedSource.commit;
   const commandResults: ReleaseCommandResult[] = [];
   const profileEvidence: ProfileEvidence[] = [];
+  const sourceCheckpoints: ReleaseSourceCheckpoint[] = [];
   const artifactFilenames = new Set<string>();
   const artifacts = new Map<string, ReleaseArtifactEvidence>();
 
   for (const definition of definitions) {
+    sourceCheckpoints.push({
+      commandId: definition.id,
+      phase: "before-command",
+      snapshot: await readRepositorySnapshot(outputDirectory),
+    });
     process.stderr.write(`[db:performance:release] running ${definition.id}\n`);
     const commandStartedAt = new Date().toISOString();
     const child = await captureChild(definition);
@@ -1350,6 +1606,7 @@ async function runRelease(
       categories: definition.categories,
       command: definition.command,
       cwd: definition.cwd,
+      deadlineMs: definition.timeoutMs,
       durationMs: child.durationMs,
       exitCode: child.exitCode,
       id: definition.id,
@@ -1357,9 +1614,15 @@ async function runRelease(
       spawnError: child.spawnError,
       startedAt: commandStartedAt,
       status: validationFailures.length === 0 ? "passed" : "failed",
+      timedOut: child.timedOut,
       validationFailures,
     };
     commandResults.push(result);
+    sourceCheckpoints.push({
+      commandId: definition.id,
+      phase: "after-command",
+      snapshot: await readRepositorySnapshot(outputDirectory),
+    });
     process.stderr.write(`[db:performance:release] ${definition.id} ${result.status}\n`);
   }
 
@@ -1368,6 +1631,7 @@ async function runRelease(
   const source = assessReleaseSourceEvidence({
     candidateCommit,
     candidateSelection,
+    checkpoints: sourceCheckpoints,
     completed: completedSource,
     started: startedSource,
   });
@@ -1392,13 +1656,13 @@ async function runRelease(
   ]);
   const completedAt = new Date();
   const manifestPath = join(outputDirectory, "release-manifest.json");
-  const manifestFilename = manifestArtifactPath(outputDirectory, manifestPath);
-  artifactFilenames.add(manifestFilename);
+  const sortedArtifacts = [...artifacts.values()].sort((left, right) =>
+    left.filename.localeCompare(right.filename),
+  );
   const manifest = {
     artifactFilenames: [...artifactFilenames].sort(),
-    artifacts: [...artifacts.values()].sort((left, right) =>
-      left.filename.localeCompare(right.filename),
-    ),
+    artifactRoot: buildArtifactRoot(sortedArtifacts, candidateCommit),
+    artifacts: sortedArtifacts,
     categoryCoverage,
     commands: commandResults,
     completedAt: completedAt.toISOString(),
