@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
 import { spawn as spawnChild } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,14 +27,16 @@ import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
 import { expectedFixtureTableCardinalities } from "./fixture";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
-const DEFAULT_ARTIFACT_ROOT = join(REPOSITORY_ROOT, "apps/web/.dev/db-performance-release");
+const DEFAULT_ARTIFACT_ROOT = join(tmpdir(), "fluncle-db-performance-release");
 
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 4 as const;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 5 as const;
 const PROCESS_STOP_GRACE_MS = 2_000;
 const GIT_INSPECTION_TIMEOUT_MS = 30_000;
 const WORKTREE_SETUP_TIMEOUT_MS = 60_000;
 const WORKTREE_CLEANUP_TIMEOUT_MS = 30_000;
 const FILESYSTEM_CLEANUP_TIMEOUT_MS = 10_000;
+const DEPENDENCY_INSTALL_TIMEOUT_MS = 5 * 60_000;
+const DEPENDENCY_PREPARATION_TIMEOUT_MS = DEPENDENCY_INSTALL_TIMEOUT_MS + PROCESS_STOP_GRACE_MS * 6;
 const CHILD_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 const COMPONENT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const SONAR_COMMAND_TIMEOUT_MS = 10 * 60_000;
@@ -209,7 +211,9 @@ export type DetachedExecution = {
   candidateCommit: string;
   cargoTargetDirectory: string;
   dependencyLockSha256: string;
-  dependencySource: "shared-install-bound-by-candidate-lockfile";
+  dependencyInstallMethod: "bun-install-offline-frozen-copyfile-ignore-scripts";
+  dependencyInstallerVersion: string;
+  dependencySource: "candidate-local-offline-install";
   rootDirectory: string;
   scratchDirectory: string;
   sourceDirectory: string;
@@ -218,6 +222,8 @@ export type DetachedExecution = {
 export type DetachedExecutionEvidence = {
   candidateCommit: string | null;
   cleanupFailures: string[];
+  dependencyInstallMethod: DetachedExecution["dependencyInstallMethod"];
+  dependencyInstallerVersion: string | null;
   dependencyLockSha256: string | null;
   dependencySource: DetachedExecution["dependencySource"];
   mode: "detached-candidate-worktree";
@@ -231,10 +237,13 @@ export type CaptureChildOptions = {
 };
 
 export type DetachedExecutionRuntime = {
+  installDependencies: (
+    sourceDirectory: string,
+    scratchDirectory: string,
+  ) => Promise<{ installerVersion: string }>;
   makeTemporaryDirectory: (prefix: string) => Promise<string>;
   makeDirectory: (path: string) => Promise<void>;
   removeDirectory: (path: string) => Promise<void>;
-  symlinkDirectory: (target: string, path: string) => Promise<void>;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -1209,24 +1218,9 @@ async function captureGitCommand(
   };
 }
 
-function sourcePathExclusion(repositoryRoot: string, path: string): string | null {
-  const candidate = relative(repositoryRoot, path).split("\\").join("/");
-  return candidate.length > 0 && candidate !== ".." && !candidate.startsWith("../")
-    ? `:(exclude)${candidate}/**`
-    : null;
-}
-
-export async function readRepositorySnapshot(
-  repositoryRoot: string,
-  outputDirectory: string | null = null,
-): Promise<RepositorySnapshot> {
+export async function readRepositorySnapshot(repositoryRoot: string): Promise<RepositorySnapshot> {
   try {
-    const exclusion =
-      outputDirectory === null ? null : sourcePathExclusion(repositoryRoot, outputDirectory);
     const statusArguments = ["status", "--porcelain=v1", "--untracked-files=all", "--", "."];
-    if (exclusion !== null) {
-      statusArguments.push(exclusion);
-    }
 
     const [commit, tree, index, status] = await Promise.all([
       captureGitCommand(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]),
@@ -1407,7 +1401,11 @@ export async function captureChild(
   };
 
   try {
-    const subprocess = spawnChild(executable, definition.command.slice(1), {
+    const resolvedExecutable =
+      executable === "bun" && typeof process.versions.bun === "string"
+        ? process.execPath
+        : executable;
+    const subprocess = spawnChild(resolvedExecutable, definition.command.slice(1), {
       cwd: join(options.repositoryRoot ?? REPOSITORY_ROOT, definition.cwd),
       detached: true,
       env: { ...childEnvironment(), ...options.environment },
@@ -1532,16 +1530,64 @@ async function withAbsoluteTimeout<T>(
   }
 }
 
+async function installCandidateDependencies(
+  sourceDirectory: string,
+  scratchDirectory: string,
+): Promise<{ installerVersion: string }> {
+  const installerVersion = process.versions.bun;
+  if (typeof installerVersion !== "string" || installerVersion.length === 0) {
+    throw new Error("candidate dependency install must be executed by Bun");
+  }
+  const environment = {
+    TEMP: scratchDirectory,
+    TMP: scratchDirectory,
+    TMPDIR: scratchDirectory,
+  };
+  const install = await captureChild(
+    {
+      categories: [],
+      command: [
+        "bun",
+        "install",
+        "--offline",
+        "--frozen-lockfile",
+        "--ignore-scripts",
+        "--backend=copyfile",
+        "--no-progress",
+        "--no-summary",
+      ],
+      cwd: ".",
+      id: "candidate-dependency-install",
+      timeoutMs: DEPENDENCY_INSTALL_TIMEOUT_MS,
+    },
+    { environment, repositoryRoot: sourceDirectory },
+  );
+  const installFailures = validateChildResult(install);
+  if (installFailures.length > 0) {
+    throw new Error(
+      `offline frozen candidate dependency install failed: ${[
+        ...installFailures,
+        install.stderr.trim(),
+      ]
+        .filter((value) => value.length > 0)
+        .join("; ")}`,
+    );
+  }
+  const installed = await stat(join(sourceDirectory, "node_modules"));
+  if (!installed.isDirectory()) {
+    throw new Error("offline frozen candidate dependency install produced no node_modules tree");
+  }
+  return { installerVersion };
+}
+
 const DEFAULT_DETACHED_EXECUTION_RUNTIME: DetachedExecutionRuntime = {
+  installDependencies: installCandidateDependencies,
   async makeDirectory(path) {
     await mkdir(path, { recursive: true });
   },
   makeTemporaryDirectory: mkdtemp,
   async removeDirectory(path) {
     await rm(path, { force: true, recursive: true });
-  },
-  async symlinkDirectory(target, path) {
-    await symlink(target, path, "dir");
   },
 };
 
@@ -1606,11 +1652,6 @@ export async function prepareDetachedExecution(options: {
   const partialExecution = { rootDirectory, sourceDirectory };
 
   try {
-    const dependencyDirectory = join(invocationRoot, "node_modules");
-    const dependencyStat = await stat(dependencyDirectory);
-    if (!dependencyStat.isDirectory()) {
-      throw new Error("the shared dependency install is not a directory");
-    }
     const addWorktree = await captureGitCommand(
       invocationRoot,
       ["worktree", "add", "--detach", sourceDirectory, options.candidateCommit],
@@ -1634,29 +1675,29 @@ export async function prepareDetachedExecution(options: {
         WORKTREE_SETUP_TIMEOUT_MS,
         "detached Cargo target creation",
       ),
-      withAbsoluteTimeout(
-        runtime.symlinkDirectory(dependencyDirectory, join(sourceDirectory, "node_modules")),
-        WORKTREE_SETUP_TIMEOUT_MS,
-        "detached dependency binding",
-      ),
     ]);
-    const [candidateLockfile, invocationLockfile] = await Promise.all([
-      readFile(join(sourceDirectory, "bun.lock")),
-      readFile(join(invocationRoot, "bun.lock")),
-    ]);
-    const candidateLockSha256 = createHash("sha256").update(candidateLockfile).digest("hex");
-    const invocationLockSha256 = createHash("sha256").update(invocationLockfile).digest("hex");
-    if (candidateLockSha256 !== invocationLockSha256) {
-      throw new Error(
-        "shared dependency install is not bound to the candidate bun.lock; install the candidate dependencies before release proof",
-      );
+    const candidateLockSha256 = createHash("sha256")
+      .update(await readFile(join(sourceDirectory, "bun.lock")))
+      .digest("hex");
+    const installation = await withAbsoluteTimeout(
+      runtime.installDependencies(sourceDirectory, scratchDirectory),
+      DEPENDENCY_PREPARATION_TIMEOUT_MS,
+      "offline frozen candidate dependency install",
+    );
+    const installedLockSha256 = createHash("sha256")
+      .update(await readFile(join(sourceDirectory, "bun.lock")))
+      .digest("hex");
+    if (installedLockSha256 !== candidateLockSha256) {
+      throw new Error("offline frozen candidate dependency install changed the candidate bun.lock");
     }
 
     return {
       candidateCommit: options.candidateCommit,
       cargoTargetDirectory,
+      dependencyInstallMethod: "bun-install-offline-frozen-copyfile-ignore-scripts",
+      dependencyInstallerVersion: installation.installerVersion,
       dependencyLockSha256: candidateLockSha256,
-      dependencySource: "shared-install-bound-by-candidate-lockfile",
+      dependencySource: "candidate-local-offline-install",
       rootDirectory,
       scratchDirectory,
       sourceDirectory,
@@ -1691,9 +1732,34 @@ async function prepareOutputDirectory(option: string | null, startedAt: Date): P
     throw new Error(`release artifact directory already exists: ${outputDirectory}`);
   }
 
+  validateExternalArtifactDirectory(REPOSITORY_ROOT, outputDirectory);
+
   await mkdir(join(outputDirectory, "logs"), { recursive: true });
   await mkdir(join(outputDirectory, "profiles"), { recursive: true });
+  const [canonicalRepositoryRoot, canonicalOutputDirectory] = await Promise.all([
+    realpath(REPOSITORY_ROOT),
+    realpath(outputDirectory),
+  ]);
+  try {
+    validateExternalArtifactDirectory(canonicalRepositoryRoot, canonicalOutputDirectory);
+  } catch (error) {
+    await rm(outputDirectory, { force: true, recursive: true });
+    throw error;
+  }
   return outputDirectory;
+}
+
+export function validateExternalArtifactDirectory(
+  repositoryRoot: string,
+  outputDirectory: string,
+): void {
+  const candidate = relative(resolve(repositoryRoot), resolve(outputDirectory));
+  if (
+    candidate === "" ||
+    (candidate !== ".." && !candidate.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
+  ) {
+    throw new Error("release artifact directory must be outside the invocation repository");
+  }
 }
 
 export function validatePortableArtifactFilename(filename: string): string {
@@ -1769,7 +1835,7 @@ async function runRelease(
   const startedAtMs = performance.now();
   const definitions = releaseCommands();
   const outputDirectory = await prepareOutputDirectory(options.outputDirectory, startedAt);
-  const invocationSource = await readRepositorySnapshot(REPOSITORY_ROOT, outputDirectory);
+  const invocationSource = await readRepositorySnapshot(REPOSITORY_ROOT);
   const candidateSelection = options.candidateCommit === null ? "current-head" : "explicit";
   const candidateCommit = options.candidateCommit ?? invocationSource.commit;
   const commandResults: ReleaseCommandResult[] = [];
@@ -1971,8 +2037,10 @@ async function runRelease(
     execution: {
       candidateCommit,
       cleanupFailures,
+      dependencyInstallMethod: "bun-install-offline-frozen-copyfile-ignore-scripts",
+      dependencyInstallerVersion: execution?.dependencyInstallerVersion ?? null,
       dependencyLockSha256: execution?.dependencyLockSha256 ?? null,
-      dependencySource: "shared-install-bound-by-candidate-lockfile",
+      dependencySource: "candidate-local-offline-install",
       mode: "detached-candidate-worktree",
       passed: execution !== null && cleanupFailures.length === 0 && source.passed,
       sourceRoot: "detached-candidate-worktree",

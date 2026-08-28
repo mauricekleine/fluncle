@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -35,6 +35,7 @@ import {
   validateArtifactContents,
   validateChildResult,
   validateDominantRegressionRuntimeCoverage,
+  validateExternalArtifactDirectory,
   validateProfileReport,
   validatePortableArtifactFilename,
 } from "./release";
@@ -67,11 +68,15 @@ async function makeCandidateRepository(testDirectory: string): Promise<{
   repository: string;
 }> {
   const repository = join(testDirectory, "repository");
-  await mkdir(join(repository, "node_modules"), { recursive: true });
+  await mkdir(join(repository, "node_modules", "proof-dependency"), { recursive: true });
   await git(repository, ["init"]);
   await Promise.all([
     writeFile(join(repository, ".gitignore"), "node_modules\n"),
     writeFile(join(repository, "bun.lock"), "candidate-lock\n"),
+    writeFile(
+      join(repository, "node_modules", "proof-dependency", "value.txt"),
+      "live-dependency\n",
+    ),
     writeFile(join(repository, "source.txt"), "candidate-source\n"),
   ]);
   await git(repository, ["add", ".gitignore", "bun.lock", "source.txt"]);
@@ -89,15 +94,18 @@ async function makeCandidateRepository(testDirectory: string): Promise<{
 }
 
 const FILESYSTEM_RUNTIME: DetachedExecutionRuntime = {
+  async installDependencies(sourceDirectory) {
+    const dependencyDirectory = join(sourceDirectory, "node_modules", "proof-dependency");
+    await mkdir(dependencyDirectory, { recursive: true });
+    await writeFile(join(dependencyDirectory, "value.txt"), "candidate-dependency\n");
+    return { installerVersion: "test-bun" };
+  },
   async makeDirectory(path) {
     await mkdir(path, { recursive: true });
   },
   makeTemporaryDirectory: mkdtemp,
   async removeDirectory(path) {
     await rm(path, { force: true, recursive: true });
-  },
-  async symlinkDirectory(target, path) {
-    await symlink(target, path, "dir");
   },
 };
 
@@ -341,7 +349,7 @@ describe("database performance release proof", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "executes candidate bytes from a detached root while the invocation worktree mutates and restores",
+    "executes candidate source and dependencies while the invocation worktree mutates and restores",
     async () => {
       const testDirectory = await mkdtemp("/tmp/db-performance-detached-source-");
       const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
@@ -349,7 +357,11 @@ describe("database performance release proof", () => {
 
       try {
         const invocation = await readRepositorySnapshot(repository);
-        execution = await prepareDetachedExecution({ candidateCommit, invocationRoot: repository });
+        execution = await prepareDetachedExecution({
+          candidateCommit,
+          invocationRoot: repository,
+          runtime: FILESYSTEM_RUNTIME,
+        });
         const started = await readRepositorySnapshot(execution.sourceDirectory);
         const childPromise = captureChild(
           {
@@ -357,7 +369,7 @@ describe("database performance release proof", () => {
             command: [
               process.execPath,
               "-e",
-              'const { readFile } = await import("node:fs/promises"); await new Promise((resolve) => setTimeout(resolve, 150)); process.stdout.write(await readFile("source.txt", "utf8"));',
+              'const { readFile } = await import("node:fs/promises"); await new Promise((resolve) => setTimeout(resolve, 150)); const [source, dependency] = await Promise.all([readFile("source.txt", "utf8"), readFile("node_modules/proof-dependency/value.txt", "utf8")]); process.stdout.write(JSON.stringify({ dependency, source }));',
             ],
             cwd: ".",
             id: "detached-source-fixture",
@@ -367,8 +379,16 @@ describe("database performance release proof", () => {
         );
 
         await writeFile(join(repository, "source.txt"), "transient-live-mutation\n");
+        await writeFile(
+          join(repository, "node_modules", "proof-dependency", "value.txt"),
+          "transient-live-dependency-mutation\n",
+        );
         await new Promise((resolve) => setTimeout(resolve, 50));
         await writeFile(join(repository, "source.txt"), "candidate-source\n");
+        await writeFile(
+          join(repository, "node_modules", "proof-dependency", "value.txt"),
+          "live-dependency\n",
+        );
         const child = await childPromise;
         const completed = await readRepositorySnapshot(execution.sourceDirectory);
         const evidence = assessReleaseSourceEvidence({
@@ -379,8 +399,16 @@ describe("database performance release proof", () => {
           started,
         });
 
-        expect(child.stdout).toBe("candidate-source\n");
+        expect(JSON.parse(child.stdout)).toEqual({
+          dependency: "candidate-dependency\n",
+          source: "candidate-source\n",
+        });
         expect(validateChildResult(child)).toEqual([]);
+        expect(execution).toMatchObject({
+          dependencyInstallMethod: "bun-install-offline-frozen-copyfile-ignore-scripts",
+          dependencyInstallerVersion: "test-bun",
+          dependencySource: "candidate-local-offline-install",
+        });
         expect(evidence).toMatchObject({
           actualCommit: candidateCommit,
           candidateCommit,
@@ -407,21 +435,21 @@ describe("database performance release proof", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "removes a partially prepared worktree when dependency binding fails",
+    "removes a partially prepared worktree when the offline dependency install fails",
     async () => {
       const testDirectory = await mkdtemp("/tmp/db-performance-detached-setup-");
       const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
       const runtime: DetachedExecutionRuntime = {
         ...FILESYSTEM_RUNTIME,
-        async symlinkDirectory() {
-          throw new Error("dependency binding refused");
+        async installDependencies() {
+          throw new Error("offline install refused");
         },
       };
 
       try {
         await expect(
           prepareDetachedExecution({ candidateCommit, invocationRoot: repository, runtime }),
-        ).rejects.toThrow("dependency binding refused");
+        ).rejects.toThrow("offline install refused");
         const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
         expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
       } finally {
@@ -432,16 +460,28 @@ describe("database performance release proof", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "rejects a shared dependency install whose live lockfile differs from the candidate",
+    "rejects an offline dependency install that changes the candidate lockfile",
     async () => {
       const testDirectory = await mkdtemp("/tmp/db-performance-detached-lock-");
       const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
+      const runtime: DetachedExecutionRuntime = {
+        ...FILESYSTEM_RUNTIME,
+        async installDependencies(sourceDirectory, scratchDirectory) {
+          const installed = await FILESYSTEM_RUNTIME.installDependencies(
+            sourceDirectory,
+            scratchDirectory,
+          );
+          await writeFile(join(sourceDirectory, "bun.lock"), "mutated-candidate-lock\n");
+          return installed;
+        },
+      };
 
       try {
-        await writeFile(join(repository, "bun.lock"), "different-live-lock\n");
         await expect(
-          prepareDetachedExecution({ candidateCommit, invocationRoot: repository }),
-        ).rejects.toThrow("shared dependency install is not bound to the candidate bun.lock");
+          prepareDetachedExecution({ candidateCommit, invocationRoot: repository, runtime }),
+        ).rejects.toThrow(
+          "offline frozen candidate dependency install changed the candidate bun.lock",
+        );
         const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
         expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
       } finally {
@@ -459,6 +499,7 @@ describe("database performance release proof", () => {
       const execution = await prepareDetachedExecution({
         candidateCommit,
         invocationRoot: repository,
+        runtime: FILESYSTEM_RUNTIME,
       });
       const runtime: DetachedExecutionRuntime = {
         ...FILESYSTEM_RUNTIME,
@@ -512,6 +553,15 @@ describe("database performance release proof", () => {
       expect(() => validatePortableArtifactFilename(filename)).toThrow(
         "not a portable relative path",
       );
+    }
+  });
+
+  it("requires artifact output outside the repository without interpreting pathspec characters", () => {
+    for (const name of ["proof*", "proof?", "proof[1]"]) {
+      expect(() => validateExternalArtifactDirectory("/repo", `/repo/${name}`)).toThrow(
+        "release artifact directory must be outside the invocation repository",
+      );
+      expect(() => validateExternalArtifactDirectory("/repo", `/outside/${name}`)).not.toThrow();
     }
   });
 
