@@ -6,6 +6,7 @@ import { performanceRegistry, selectPerformanceContracts } from "./contracts";
 import { CONTRACT_D_CONTRACT_IDS } from "./contract-d";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
+import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
 import {
   PerformanceRegistry,
   type PerformanceClient,
@@ -127,6 +128,20 @@ describe("performance registry", () => {
         },
       }),
     ).rejects.toThrow("resource sampling returned an invalid heapUsedBytes value");
+  });
+
+  it("retains an explicit process-boundary source with the default sampler", async () => {
+    const report = await runPerformanceContracts({
+      client: NOOP_CLIENT,
+      contracts: [],
+      profile: "1x",
+      resource: { sampleSource: ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE },
+    });
+
+    expect(report.resources).toMatchObject({
+      availability: "measured",
+      sampleSource: ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE,
+    });
   });
 
   it("fails an EQP full scan or temporary sort independently of timing", async () => {

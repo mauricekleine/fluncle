@@ -18,7 +18,7 @@ import {
 import { type ExplainPlanAnalysis, type ExplainPlanPolicy, analyzeExplainPlan } from "./plan";
 
 export const PERFORMANCE_CONTRACT_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
-export const PERFORMANCE_REPORT_SCHEMA_VERSION = 3 as const;
+export const PERFORMANCE_REPORT_SCHEMA_VERSION = 4 as const;
 
 export type PerformanceStatement = { args: InValue[]; sql: string };
 
@@ -51,7 +51,7 @@ export type PerformanceResourceSample = {
 
 export type PerformanceResourceSampleSource =
   | "process.memoryUsage"
-  | "process.memoryUsage.fixture-baseline-adjusted"
+  | "process.memoryUsage.isolated-local-libsql-client"
   | "provided";
 
 export type PerformanceResourceReport = {
@@ -288,22 +288,6 @@ export function maxPerformanceResourceSample(
   };
 }
 
-/**
- * Keep the application process baseline and report only RSS growth above a completed local fixture.
- * Exact local profiles embed the disposable database engine in this process; its resident pages are
- * test infrastructure, while hosted Turso keeps them outside the Worker whose memory budget matters.
- */
-export function fixtureBaselineAdjustedResourceSample(
-  current: PerformanceResourceSample,
-  processBaseline: PerformanceResourceSample,
-  fixtureBaseline: PerformanceResourceSample,
-): PerformanceResourceSample {
-  return {
-    heapUsedBytes: current.heapUsedBytes,
-    rssBytes: processBaseline.rssBytes + Math.max(0, current.rssBytes - fixtureBaseline.rssBytes),
-  };
-}
-
 function resourceWarnings(
   peak: NonNullable<PerformanceResourceReport["peak"]>,
   thresholds: PerformanceResourceThresholds,
@@ -406,9 +390,8 @@ function buildPerformanceResourceReport(options: {
             wallDurationMs: Math.max(0, options.now() - options.wallStartedAt),
           },
     sampleSource: options.hasResourceSampling
-      ? options.resource?.sample
-        ? (options.resource.sampleSource ?? "provided")
-        : "process.memoryUsage"
+      ? (options.resource?.sampleSource ??
+        (options.resource?.sample ? "provided" : "process.memoryUsage"))
       : null,
     unavailableReason: options.hasResourceSampling
       ? null

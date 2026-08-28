@@ -2,7 +2,7 @@
 
 This manifest packages the database-scale release candidate for attended rollout from `program/turso-scale`. It is evidence and ordering metadata only: it executes no migration, deployment, flag change, backfill, hosted replay, or production action.
 
-The exact release-candidate commit is `356463239bb2e927766dae9239cb98703cf5ab05`. This manifest is packaging metadata; its history is not a rollout leg and does not alter application or schema state.
+Candidate identity is re-runnable evidence, not a hard-coded property of this document. Capture the intended clean checkout with `candidate_commit="$(git rev-parse --verify HEAD^{commit})"`, then run `bun run --cwd apps/web db:performance:release --candidate-commit "$candidate_commit"`. The generated `release-manifest.json` records the candidate, the actual commit at start and completion, both cleanliness checks, the candidate on every exact-profile envelope, and a SHA-256 plus byte size for every relative profile/log artifact; a dirty tree, an explicit-candidate mismatch, a commit change during the proof, or artifact-integrity drift makes the verdict `no-go`. The historical leg hashes and caller-floor SHA below remain immutable rollout coordinates rather than claims about the current candidate.
 
 ## Range law
 

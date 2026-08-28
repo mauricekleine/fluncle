@@ -1,6 +1,3 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-
 import { createClient as createLocalClient } from "@libsql/client";
 
 import { LOCAL_DB_CONCURRENCY, REMOTE_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
@@ -16,11 +13,11 @@ import {
 } from "./manifest";
 import {
   PERFORMANCE_REPORT_SCHEMA_VERSION,
-  fixtureBaselineAdjustedResourceSample,
   maxPerformanceResourceSample,
   readPerformanceResourceSample,
   runPerformanceContracts,
 } from "./registry";
+import { startLocalLibsqlSidecar } from "./local-sidecar";
 
 type CliOptions = {
   contractIds: string[];
@@ -97,12 +94,10 @@ async function main(): Promise<void> {
     hosted: options.hosted,
     operatorApproved: options.operatorApproved,
   });
-  const scratchDirectory =
+  const localSidecar =
     replay.mode === "local" && options.fullFixture
-      ? await mkdtemp(join(process.cwd(), ".db-performance-"))
+      ? await startLocalLibsqlSidecar({ cwd: process.cwd() })
       : null;
-  const localUrl =
-    scratchDirectory === null ? ":memory:" : `file:${join(scratchDirectory, "fixture.db")}`;
   const client =
     replay.mode === "hosted"
       ? (await import("@libsql/client/web")).createClient({
@@ -110,7 +105,8 @@ async function main(): Promise<void> {
           concurrency: REMOTE_DB_CONCURRENCY,
           url: replay.url,
         })
-      : createLocalClient({ concurrency: LOCAL_DB_CONCURRENCY, url: localUrl });
+      : (localSidecar?.client ??
+        createLocalClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" }));
   const runStartedAtMs = performance.now();
   const initialResource = readPerformanceResourceSample();
 
@@ -126,32 +122,18 @@ async function main(): Promise<void> {
     const fixtureWriteCompletedAtMs = performance.now();
     const fixtureWriteDurationMs = Math.max(0, fixtureWriteCompletedAtMs - fixtureWriteStartedAtMs);
     const fixtureResource = readPerformanceResourceSample();
-    const fixtureAdjustedSample =
-      replay.mode === "local" && options.fullFixture
-        ? () =>
-            fixtureBaselineAdjustedResourceSample(
-              readPerformanceResourceSample(),
-              initialResource,
-              fixtureResource,
-            )
-        : undefined;
+    const isolatedExactLocalRun = localSidecar !== null;
     const report = await runPerformanceContracts({
       client,
       contracts: selectPerformanceContracts(options.contractIds),
       fixtureCounts: counts,
       profile: options.profile,
       resource: {
-        initial:
-          fixtureAdjustedSample === undefined
-            ? maxPerformanceResourceSample(initialResource, fixtureResource)
-            : initialResource,
-        sample: fixtureAdjustedSample,
-        sampleSource:
-          fixtureAdjustedSample === undefined
-            ? undefined
-            : "process.memoryUsage.fixture-baseline-adjusted",
-        startedAtMs:
-          fixtureAdjustedSample === undefined ? runStartedAtMs : fixtureWriteCompletedAtMs,
+        initial: isolatedExactLocalRun
+          ? fixtureResource
+          : maxPerformanceResourceSample(initialResource, fixtureResource),
+        sampleSource: localSidecar?.resourceSampleSource,
+        startedAtMs: isolatedExactLocalRun ? fixtureWriteCompletedAtMs : runStartedAtMs,
       },
     });
 
@@ -159,6 +141,24 @@ async function main(): Promise<void> {
       `${JSON.stringify(
         {
           clientBounds: DATABASE_CLIENT_BOUNDS,
+          database: {
+            isolation:
+              replay.mode === "hosted"
+                ? "hosted-remote"
+                : isolatedExactLocalRun
+                  ? "local-sidecar-process"
+                  : "embedded-client-process",
+            resourceScope:
+              replay.mode === "hosted" || isolatedExactLocalRun
+                ? "benchmark-client-process"
+                : "benchmark-client-and-database-process",
+            transport:
+              replay.mode === "hosted"
+                ? "remote-libsql"
+                : isolatedExactLocalRun
+                  ? "local-http"
+                  : "embedded",
+          },
           environment: replay.mode,
           fixture: {
             counts,
@@ -180,9 +180,10 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    client.close();
-    if (scratchDirectory !== null) {
-      await rm(scratchDirectory, { force: true, recursive: true });
+    if (localSidecar === null) {
+      client.close();
+    } else {
+      await localSidecar.close();
     }
   }
 }

@@ -19,7 +19,7 @@ import { createCiFixtureCounts } from "./manifest";
 import { selectPerformanceContracts } from "./contracts";
 import {
   type PerformanceClient,
-  fixtureBaselineAdjustedResourceSample,
+  PERFORMANCE_REPORT_SCHEMA_VERSION,
   runPerformanceContracts,
 } from "./registry";
 
@@ -30,23 +30,6 @@ const NOOP_CLIENT: PerformanceClient = {
 };
 
 describe("final database proof contracts", () => {
-  it("removes embedded fixture RSS while retaining the application baseline", () => {
-    expect(
-      fixtureBaselineAdjustedResourceSample(
-        { heapUsedBytes: 80, rssBytes: 1_250 },
-        { heapUsedBytes: 50, rssBytes: 200 },
-        { heapUsedBytes: 70, rssBytes: 1_200 },
-      ),
-    ).toEqual({ heapUsedBytes: 80, rssBytes: 250 });
-    expect(
-      fixtureBaselineAdjustedResourceSample(
-        { heapUsedBytes: 60, rssBytes: 1_100 },
-        { heapUsedBytes: 50, rssBytes: 200 },
-        { heapUsedBytes: 70, rssBytes: 1_200 },
-      ),
-    ).toEqual({ heapUsedBytes: 60, rssBytes: 200 });
-  });
-
   it("passes the deterministic admission, receipt, Sonar, and device proofs", async () => {
     const admission = simulateFencedAdmission();
     const receipts = classifyReceiptStates();
@@ -247,7 +230,7 @@ describe("final database proof contracts", () => {
     expect(report.criteria.resources.warnings).toEqual(report.resources.warnings);
     expect(JSON.parse(JSON.stringify(report))).toMatchObject({
       resources: { mode: "bounded-memory-timing-warning", sampleSource: "provided" },
-      schemaVersion: 3,
+      schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
     });
   });
 

@@ -7,18 +7,24 @@ import {
   DOMINANT_REGRESSION_INVENTORY,
 } from "./dominant-regression-inventory";
 import { getScaleManifest } from "./manifest";
+import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
+import { PERFORMANCE_REPORT_SCHEMA_VERSION } from "./registry";
 import {
   aggregateNoGo,
+  assessReleaseSourceEvidence,
   assessCategoryCompleteness,
+  buildArtifactEvidence,
   DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS,
   parseReleaseArguments,
   REQUIRED_RELEASE_CATEGORIES,
   releaseCommands,
   type ChildResult,
   type ReleaseCommandResult,
+  validateArtifactContents,
   validateChildResult,
   validateDominantRegressionRuntimeCoverage,
   validateProfileReport,
+  validatePortableArtifactFilename,
 } from "./release";
 
 function validProfileReport(profile: "1x" | "2x" | "4x"): string {
@@ -28,6 +34,11 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
 
   return JSON.stringify({
     clientBounds: { local: 1 },
+    database: {
+      isolation: "local-sidecar-process",
+      resourceScope: "benchmark-client-process",
+      transport: "local-http",
+    },
     environment: "local",
     fixture: {
       counts,
@@ -83,7 +94,7 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
         failures: [],
         mode: profile === "4x" ? "bounded-memory-timing-warning" : "required",
         peak: { heapUsedBytes: 1, rssBytes: 2, wallDurationMs: 3 },
-        sampleSource: "provided",
+        sampleSource: ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE,
         unavailableReason: null,
         warningThresholds: {
           heapUsedBytes: 1,
@@ -92,9 +103,9 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
         },
         warnings: [],
       },
-      schemaVersion: 3,
+      schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
     },
-    schemaVersion: 3,
+    schemaVersion: PERFORMANCE_REPORT_SCHEMA_VERSION,
   });
 }
 
@@ -129,15 +140,25 @@ function commandResult(overrides: Partial<ReleaseCommandResult> = {}): ReleaseCo
 
 describe("database performance release proof", () => {
   it("parses only one optional output directory", () => {
-    expect(parseReleaseArguments([])).toEqual({ outputDirectory: null });
+    expect(parseReleaseArguments([])).toEqual({ candidateCommit: null, outputDirectory: null });
     expect(parseReleaseArguments(["--output-dir", "/tmp/proof"])).toEqual({
+      candidateCommit: null,
       outputDirectory: "/tmp/proof",
+    });
+    expect(
+      parseReleaseArguments(["--candidate-commit", "afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf"]),
+    ).toEqual({
+      candidateCommit: "afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf",
+      outputDirectory: null,
     });
     expect(() => parseReleaseArguments(["--output-dir"])).toThrow(
       "--output-dir requires a directory path",
     );
     expect(() => parseReleaseArguments(["--output-dir", "one", "--output-dir", "two"])).toThrow(
       "--output-dir may be supplied only once",
+    );
+    expect(() => parseReleaseArguments(["--candidate-commit", "afeec3b9"])).toThrow(
+      "lowercase 40-character git SHA",
     );
     expect(() => parseReleaseArguments(["--hosted"])).toThrow("unknown");
   });
@@ -153,7 +174,38 @@ describe("database performance release proof", () => {
     );
   });
 
-  it("requires a complete passing schema-v3 report at exact profile cardinality", () => {
+  it("binds portable relative artifacts to their exact bytes", () => {
+    const evidence = buildArtifactEvidence("profiles/2x.json", '{"passed":true}\n');
+
+    expect(evidence).toEqual({
+      byteSize: 16,
+      filename: "profiles/2x.json",
+      sha256: "1ea63e7fda68e7ce49b013af8410102e9228f7591e79ef602dd23d95556d03bc",
+    });
+    expect(validateArtifactContents(evidence, '{"passed":true}\n')).toEqual([]);
+    expect(validateArtifactContents(evidence, '{"passed":false}\n')).toEqual([
+      "artifact profiles/2x.json byte size 17 does not match 16",
+      "artifact profiles/2x.json SHA-256 does not match",
+    ]);
+  });
+
+  it("rejects absolute, traversing, and platform-specific artifact paths", () => {
+    expect(validatePortableArtifactFilename("logs/command.stdout.log")).toBe(
+      "logs/command.stdout.log",
+    );
+    for (const filename of [
+      "/tmp/proof.log",
+      "../proof.log",
+      "logs\\proof.log",
+      "logs//proof.log",
+    ]) {
+      expect(() => validatePortableArtifactFilename(filename)).toThrow(
+        "not a portable relative path",
+      );
+    }
+  });
+
+  it("requires a complete passing schema-v4 isolated report at exact profile cardinality", () => {
     const valid = validateProfileReport(validProfileReport("2x"), "2x");
     expect(valid.errors).toEqual([]);
     expect(valid.exactProfileCardinality).toBe(true);
@@ -179,6 +231,61 @@ describe("database performance release proof", () => {
     );
     expect(validateProfileReport("not-json", "1x").errors[0]).toContain(
       "stdout is not one JSON document",
+    );
+  });
+
+  it("rejects embedded or adjusted resource evidence for an exact release profile", () => {
+    const embedded = JSON.parse(validProfileReport("2x"));
+    embedded.database.isolation = "embedded-client-process";
+    embedded.database.resourceScope = "benchmark-client-and-database-process";
+    embedded.report.resources.sampleSource = "process.memoryUsage.fixture-baseline-adjusted";
+
+    expect(validateProfileReport(JSON.stringify(embedded), "2x").errors).toEqual(
+      expect.arrayContaining([
+        "profile 2x database isolation is not local-sidecar-process",
+        "profile 2x database resourceScope is not benchmark-client-process",
+        `profile 2x resource sampleSource is not ${ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE}`,
+      ]),
+    );
+  });
+
+  it("binds evidence to one clean candidate commit for the complete run", () => {
+    const candidate = "afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf";
+    const clean = { clean: true, commit: candidate, failure: null };
+
+    expect(
+      assessReleaseSourceEvidence({
+        candidateCommit: candidate,
+        candidateSelection: "explicit",
+        completed: clean,
+        started: clean,
+      }),
+    ).toMatchObject({
+      actualCommit: candidate,
+      candidateCommit: candidate,
+      clean: true,
+      failures: [],
+      passed: true,
+    });
+
+    const dirtyAndChanged = assessReleaseSourceEvidence({
+      candidateCommit: candidate,
+      candidateSelection: "explicit",
+      completed: {
+        clean: true,
+        commit: "356463239bb2e927766dae9239cb98703cf5ab05",
+        failure: null,
+      },
+      started: { clean: false, commit: candidate, failure: null },
+    });
+    expect(dirtyAndChanged.passed).toBe(false);
+    expect(dirtyAndChanged.actualCommit).toBeNull();
+    expect(dirtyAndChanged.failures).toEqual(
+      expect.arrayContaining([
+        "source tree is not clean at start",
+        "source completion commit 356463239bb2e927766dae9239cb98703cf5ab05 does not match candidate afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf",
+        "source commit changed during proof: afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf -> 356463239bb2e927766dae9239cb98703cf5ab05",
+      ]),
     );
   });
 
