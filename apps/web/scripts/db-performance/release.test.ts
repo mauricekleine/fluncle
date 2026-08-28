@@ -353,6 +353,8 @@ describe("database performance release proof", () => {
     async () => {
       const testDirectory = await mkdtemp("/tmp/db-performance-detached-source-");
       const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
+      const childReadyPath = join(testDirectory, "child-ready");
+      const childReadPath = join(testDirectory, "child-read");
       let execution: DetachedExecution | null = null;
 
       try {
@@ -363,14 +365,11 @@ describe("database performance release proof", () => {
           runtime: FILESYSTEM_RUNTIME,
         });
         const started = await readRepositorySnapshot(execution.sourceDirectory);
+        const program = `const { access, readFile, writeFile } = await import("node:fs/promises"); await writeFile(${JSON.stringify(childReadyPath)}, "ready"); while (true) { try { await access(${JSON.stringify(childReadPath)}); break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); } } const [source, dependency] = await Promise.all([readFile("source.txt", "utf8"), readFile("node_modules/proof-dependency/value.txt", "utf8")]); process.stdout.write(JSON.stringify({ dependency, source }));`;
         const childPromise = captureChild(
           {
             categories: [],
-            command: [
-              process.execPath,
-              "-e",
-              'const { readFile } = await import("node:fs/promises"); await new Promise((resolve) => setTimeout(resolve, 150)); const [source, dependency] = await Promise.all([readFile("source.txt", "utf8"), readFile("node_modules/proof-dependency/value.txt", "utf8")]); process.stdout.write(JSON.stringify({ dependency, source }));',
-            ],
+            command: [process.execPath, "-e", program],
             cwd: ".",
             id: "detached-source-fixture",
             timeoutMs: 2_000,
@@ -378,18 +377,19 @@ describe("database performance release proof", () => {
           { repositoryRoot: execution.sourceDirectory },
         );
 
+        await waitFor(() => pathExists(childReadyPath));
         await writeFile(join(repository, "source.txt"), "transient-live-mutation\n");
         await writeFile(
           join(repository, "node_modules", "proof-dependency", "value.txt"),
           "transient-live-dependency-mutation\n",
         );
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await writeFile(childReadPath, "read-now\n");
+        const child = await childPromise;
         await writeFile(join(repository, "source.txt"), "candidate-source\n");
         await writeFile(
           join(repository, "node_modules", "proof-dependency", "value.txt"),
           "live-dependency\n",
         );
-        const child = await childPromise;
         const completed = await readRepositorySnapshot(execution.sourceDirectory);
         const evidence = assessReleaseSourceEvidence({
           candidateCommit,
