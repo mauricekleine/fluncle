@@ -55,7 +55,7 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(number) && number >= 0 ? number : undefined;
 }
 
-function parseAnchorDocument(value: unknown): HubPageAnchor[] | undefined {
+export function parseAnchorDocument(value: unknown): HubPageAnchor[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -95,7 +95,7 @@ function parseAnchorDocument(value: unknown): HubPageAnchor[] | undefined {
   }
 }
 
-function completeAnchorDocument(
+export function completeAnchorDocument(
   anchors: readonly HubPageAnchor[],
   pageSize: number,
   total: number,
@@ -104,7 +104,11 @@ function completeAnchorDocument(
     return false;
   }
   const expected = Math.floor(total / pageSize);
-  return anchors.length === expected && anchors.every((anchor, index) => anchor.page === index + 2);
+  return (
+    anchors.length === expected &&
+    new Set(anchors.map((anchor) => anchor.id)).size === anchors.length &&
+    anchors.every((anchor, index) => anchor.page === index + 2)
+  );
 }
 
 const AGGREGATE_READY = `aggregate.state = 'complete'
@@ -227,30 +231,83 @@ export async function readProjectedTrackHubAnchors(
   address: PublicProjectionAnchorAddress,
   pageSize: number,
 ): Promise<ProjectedTrackHubAnchors | undefined> {
-  if (!(await isPublicProjectionCutoverEnabledFor(client))) {
+  return readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
+    allowLegacyDocument: true,
+    requireCutover: true,
+  });
+}
+
+/** The exact runtime validator without the flag prerequisite, used by the atomic open gate. */
+export async function readCurrentProjectedTrackHubAnchors(
+  client: PublicProjectionReadClient,
+  address: PublicProjectionAnchorAddress,
+  pageSize: number,
+): Promise<ProjectedTrackHubAnchors | undefined> {
+  return readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
+    allowLegacyDocument: false,
+    requireCutover: false,
+  });
+}
+
+async function readProjectedTrackHubAnchorsSnapshot(
+  client: PublicProjectionReadClient,
+  address: PublicProjectionAnchorAddress,
+  pageSize: number,
+  options: { allowLegacyDocument: boolean; requireCutover: boolean },
+): Promise<ProjectedTrackHubAnchors | undefined> {
+  if (options.requireCutover && !(await isPublicProjectionCutoverEnabledFor(client))) {
     return undefined;
   }
 
   try {
     const result = await client.execute({
       args: [address.hub, address.clauseHash, PUBLIC_ANCHOR_FORMAT_VERSION],
-      sql: `select anchors.anchors_json, aggregate.default_track_total as total
+      sql: `select aggregate.default_track_total as total, validity.generation
         from public_aggregate_state as aggregate
         join hub_page_anchor_validity as validity
           on validity.hub = ? and validity.clause_hash = ?
          and validity.anchor_format_version = ?
          and validity.order_epoch = aggregate.release_hub_order_epoch
          and validity.generation = aggregate.generation
-        join hub_page_anchors as anchors
-          on anchors.hub = validity.hub and anchors.clause_hash = validity.clause_hash
         where aggregate.scope = 'tracks' and aggregate.generation <> '' and ${AGGREGATE_READY}
         limit 1`,
     });
     const row = result.rows[0];
     const total = nonNegativeInteger(row?.total);
-    const anchors = parseAnchorDocument(row?.anchors_json);
-    if (total === undefined || anchors === undefined) {
+    const generation = row?.generation;
+    if (total === undefined || typeof generation !== "string") {
       return undefined;
+    }
+    const prefix = `${address.clauseHash}:${generation}:`;
+    const documents = await client.execute(
+      options.allowLegacyDocument
+        ? {
+            args: [address.hub, address.clauseHash, prefix, `${prefix}\uffff`],
+            sql: `select anchors_json, clause_hash from hub_page_anchors
+              where hub = ? and (clause_hash = ? or (clause_hash >= ? and clause_hash < ?))
+              order by clause_hash`,
+          }
+        : {
+            args: [address.hub, prefix, `${prefix}\uffff`],
+            sql: `select anchors_json, clause_hash from hub_page_anchors
+              where hub = ? and clause_hash >= ? and clause_hash < ? order by clause_hash`,
+          },
+    );
+    const shardRows = documents.rows.filter(
+      (candidate) => candidate.clause_hash !== address.clauseHash,
+    );
+    const selected =
+      shardRows.length > 0 ? shardRows : options.allowLegacyDocument ? documents.rows : [];
+    if (selected.length === 0) {
+      return undefined;
+    }
+    const anchors: HubPageAnchor[] = [];
+    for (const document of selected) {
+      const parsed = parseAnchorDocument(document.anchors_json);
+      if (parsed === undefined) {
+        return undefined;
+      }
+      anchors.push(...parsed);
     }
     return completeAnchorDocument(anchors, pageSize, total) ? { anchors, total } : undefined;
   } catch {

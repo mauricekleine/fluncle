@@ -1146,6 +1146,86 @@ async function finishRebuild<WorkKind extends string>(
   return current;
 }
 
+async function finishRebuildBounded<WorkKind extends string>(
+  client: DueWorkClient,
+  checkpoint: DueWorkRebuildCheckpoint<WorkKind>,
+  limit: number,
+  updatedAt: string,
+): Promise<{ checkpoint: DueWorkRebuildCheckpoint<WorkKind>; removed: number }> {
+  const cleanupKey = `projection_cleanup_due_work_v1:${checkpoint.workKind}:${checkpoint.subjectType}:${checkpoint.generation}`;
+  const saved = await client.execute({
+    args: [cleanupKey],
+    sql: `select value from settings where key = ? limit 1`,
+  });
+  const after = typeof saved.rows[0]?.value === "string" ? saved.rows[0].value : "";
+  const page = await client.execute({
+    args: [checkpoint.workKind, checkpoint.subjectType, after, limit],
+    sql: `select generation, state, subject_id, updated_at from due_work
+      where work_kind = ? and subject_type = ? and subject_id > ?
+      order by subject_id limit ?`,
+  });
+  const rows = page.rows as unknown as {
+    generation: string;
+    state: string;
+    subject_id: string;
+    updated_at: string;
+  }[];
+  const subjectIds = rows
+    .filter(
+      (row) =>
+        row.generation !== checkpoint.generation &&
+        row.state !== "repair" &&
+        (row.generation !== DUE_WORK_LIVE_GENERATION || row.updated_at < checkpoint.startedAt),
+    )
+    .map((row) => row.subject_id);
+  const guard = checkpointGuard(
+    checkpoint.workKind,
+    checkpoint.subjectType,
+    checkpoint.generation,
+    checkpoint.cursor,
+  );
+  if (subjectIds.length > 0) {
+    const placeholders = subjectIds.map(() => "?").join(", ");
+    await client.execute({
+      args: [
+        checkpoint.workKind,
+        checkpoint.subjectType,
+        ...subjectIds,
+        checkpoint.generation,
+        checkpoint.startedAt,
+        ...guard.args,
+      ],
+      sql: `delete from due_work
+        where work_kind = ? and subject_type = ? and subject_id in (${placeholders})
+          and generation <> ? and state <> 'repair' and (generation <> 'live' or updated_at < ?)
+          and exists (select 1 from due_work_rebuilds where ${guard.sql})`,
+    });
+  }
+  const terminal = rows.at(-1)?.subject_id;
+  if (terminal !== undefined) {
+    await client.execute({
+      args: [cleanupKey, terminal],
+      sql: `insert into settings (key, value) values (?, ?)
+        on conflict(key) do update set value = excluded.value`,
+    });
+  } else {
+    await client.execute({
+      args: [cleanupKey],
+      sql: `delete from settings where key = ?`,
+    });
+    await client.execute({
+      args: [updatedAt, updatedAt, ...guard.args],
+      sql: `update due_work_rebuilds set state = 'complete', completed_at = ?, updated_at = ?
+        where ${guard.sql}`,
+    });
+  }
+  const current = await readDueWorkRebuild(client, checkpoint);
+  if (current === undefined) {
+    throw new Error("due-work rebuild checkpoint disappeared during bounded completion");
+  }
+  return { checkpoint: current, removed: rows.length };
+}
+
 export async function runDueWorkRebuildChunk<
   WorkKind extends string,
   Source extends DueWorkRebuildSource,
@@ -1153,6 +1233,7 @@ export async function runDueWorkRebuildChunk<
   client: DueWorkClient,
   definition: DueWorkRebuildDefinition<WorkKind, Source>,
   options: {
+    boundedCleanup?: boolean;
     generation?: string;
     limit?: number;
     newGeneration?: boolean;
@@ -1187,6 +1268,16 @@ export async function runDueWorkRebuildChunk<
 
   const updatedAt = nowIso(options.now);
   if (sources.length === 0) {
+    if (options.boundedCleanup === true) {
+      const result = await finishRebuildBounded(client, checkpoint, limit, updatedAt);
+      return {
+        checkpoint: result.checkpoint,
+        complete: result.checkpoint.state === "complete",
+        noOp: false,
+        projected: 0,
+        scanned: result.removed,
+      };
+    }
     const completed = await finishRebuild(client, checkpoint, updatedAt);
     return {
       checkpoint: completed,
@@ -1239,7 +1330,7 @@ export async function runDueWorkRebuildChunk<
   });
 
   const shouldComplete = sources.length < limit;
-  if (shouldComplete) {
+  if (shouldComplete && options.boundedCleanup !== true) {
     const advancedGuard = checkpointGuard(
       checkpoint.workKind,
       checkpoint.subjectType,

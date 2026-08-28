@@ -644,6 +644,28 @@ describe("due-work rebuild", () => {
       "source-5",
       "source-6",
     ]);
+
+    await db.execute({ args: ["source-2"], sql: `delete from sample_due_source where id = ?` });
+    let boundedComplete = false;
+    for (let chunk = 0; chunk < 10 && !boundedComplete; chunk += 1) {
+      const bounded = await runDueWorkRebuildChunk(db, definition, {
+        boundedCleanup: true,
+        generation: "generation-3",
+        limit: 2,
+        newGeneration: chunk === 0,
+        now: () => new Date("2026-01-01T00:00:05.000Z"),
+      });
+      expect(bounded.scanned).toBeLessThanOrEqual(2);
+      boundedComplete = bounded.complete;
+    }
+    expect(boundedComplete).toBe(true);
+    expect(
+      (
+        await db.execute(
+          `select subject_id from due_work where work_kind = 'sample-rebuild' order by subject_id`,
+        )
+      ).rows.map((row) => row.subject_id),
+    ).toEqual(["source-4", "source-5", "source-6"]);
   });
 
   it("never overwrites or prunes a live repair that wins after the rebuild source read", async () => {

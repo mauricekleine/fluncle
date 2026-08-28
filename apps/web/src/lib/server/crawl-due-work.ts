@@ -1246,6 +1246,40 @@ function canonicalCrawlProjection(row: CrawlDueProjection | CrawlDueRow): unknow
   ];
 }
 
+/** One bounded canonical audit page. The caller persists cursors/digests between requests. */
+export async function readCrawlDueAuditChunk(
+  client: CrawlDueClient,
+  side: "projected" | "source",
+  options: { after?: string; limit: number },
+): Promise<{ cursor: null | string; rows: unknown[][]; scanned: number }> {
+  assertLimit(options.limit);
+  if (side === "source") {
+    const source = await readCrawlSourceChunk(client, {
+      after: options.after ?? "",
+      limit: options.limit,
+    });
+    return {
+      cursor: source.at(-1)?.id ?? null,
+      rows: source.flatMap((row) => {
+        const projection = projectCrawlSource(row);
+        return projection === null ? [] : [canonicalCrawlProjection(projection)];
+      }),
+      scanned: source.length,
+    };
+  }
+  const result = await client.execute({
+    args: [options.after ?? "", options.limit],
+    sql: `select ${CRAWL_DUE_COLUMNS} from crawl_due_work
+      where node_id > ? and state <> 'repair' order by node_id limit ?`,
+  });
+  const rows = crawlDueRows(result);
+  return {
+    cursor: rows.at(-1)?.nodeId ?? null,
+    rows: rows.map(canonicalCrawlProjection),
+    scanned: rows.length,
+  };
+}
+
 function crawlProjectionEqual(expected: CrawlDueProjection, actual: CrawlDueRow): boolean {
   return (
     JSON.stringify(canonicalCrawlProjection(expected)) ===
@@ -1389,6 +1423,7 @@ export async function auditCrawlDueWork(
 export async function runCrawlDueRebuildChunk(
   client: CrawlDueClient,
   options: {
+    boundedCleanup?: boolean;
     generation?: string;
     limit?: number;
     newGeneration?: boolean;
@@ -1407,11 +1442,89 @@ export async function runCrawlDueRebuildChunk(
     return { checkpoint, complete: true, projected: 0, scanned: 0 };
   }
   const rows = await readCrawlSourceChunk(client, { after: checkpoint.cursor ?? "", limit });
+  const updatedAt = nowIso(options.now);
+  if (rows.length === 0 && options.boundedCleanup === true) {
+    const cleanupKey = `projection_cleanup_crawl_due_work_v1:${checkpoint.generation}`;
+    const saved = await client.execute({
+      args: [cleanupKey],
+      sql: `select value from settings where key = ? limit 1`,
+    });
+    const after = typeof saved.rows[0]?.value === "string" ? saved.rows[0].value : "";
+    const page = await client.execute({
+      args: [after, limit],
+      sql: `select generation, node_id, state, updated_at from crawl_due_work
+        where node_id > ? order by node_id limit ?`,
+    });
+    const pageRows = page.rows as unknown as {
+      generation: string;
+      node_id: string;
+      state: string;
+      updated_at: string;
+    }[];
+    const nodeIds = pageRows
+      .filter(
+        (row) =>
+          row.generation !== checkpoint.generation &&
+          row.state !== "repair" &&
+          (row.generation !== CRAWL_DUE_LIVE_GENERATION || row.updated_at < checkpoint.startedAt),
+      )
+      .map((row) => row.node_id);
+    if (nodeIds.length > 0) {
+      const placeholders = nodeIds.map(() => "?").join(", ");
+      await client.execute({
+        args: [
+          ...nodeIds,
+          checkpoint.generation,
+          checkpoint.startedAt,
+          checkpoint.generation,
+          checkpoint.cursor,
+        ],
+        sql: `delete from crawl_due_work where node_id in (${placeholders})
+          and generation <> ? and state <> 'repair'
+          and (generation <> '${CRAWL_DUE_LIVE_GENERATION}' or updated_at < ?)
+          and exists (select 1 from crawl_due_work_rebuilds
+            where scope = 'frontier' and generation = ? and state = 'running' and cursor is ?)`,
+      });
+    }
+    const terminal = pageRows.at(-1)?.node_id;
+    if (terminal !== undefined) {
+      await client.execute({
+        args: [cleanupKey, terminal],
+        sql: `insert into settings (key, value) values (?, ?)
+          on conflict(key) do update set value = excluded.value`,
+      });
+    } else {
+      await client.execute({ args: [cleanupKey], sql: `delete from settings where key = ?` });
+      await client.execute({
+        args: [
+          updatedAt,
+          updatedAt,
+          "0".repeat(64),
+          "0".repeat(64),
+          checkpoint.generation,
+          checkpoint.cursor,
+        ],
+        sql: `update crawl_due_work_rebuilds
+          set state = 'complete', completed_at = ?, updated_at = ?,
+              source_digest = ?, projected_digest = ?
+          where scope = 'frontier' and generation = ? and state = 'running' and cursor is ?`,
+      });
+    }
+    const current = await readCrawlDueRebuild(client);
+    if (current === undefined) {
+      throw new Error("crawl due-work rebuild checkpoint disappeared");
+    }
+    return {
+      checkpoint: current,
+      complete: current.state === "complete",
+      projected: 0,
+      scanned: pageRows.length,
+    };
+  }
   const projections = rows.flatMap((row) => {
     const projection = projectCrawlSource(row);
     return projection === null ? [] : [projection];
   });
-  const updatedAt = nowIso(options.now);
   const nextCursor = rows.at(-1)?.id ?? checkpoint.cursor;
   const guardArgs = [checkpoint.generation, checkpoint.cursor];
   const guard = `scope = 'frontier' and generation = ? and state = 'running' and cursor is ?`;
@@ -1447,7 +1560,7 @@ export async function runCrawlDueRebuildChunk(
   });
   await client.batch(writes, "write");
 
-  if (rows.length < limit) {
+  if (rows.length < limit && options.boundedCleanup !== true) {
     await client.execute({
       args: [checkpoint.generation, checkpoint.startedAt],
       sql: `delete from crawl_due_work

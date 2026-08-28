@@ -626,4 +626,28 @@ describe("crawl due-work shadow runtime", () => {
     ).toBe(0);
     expect((await auditCrawlDueWork(db)).matched).toBe(true);
   });
+
+  it("bounds source and stale-row cleanup pages in the production rebuild mode", async () => {
+    for (let index = 0; index < 3; index += 1) {
+      await node({
+        externalId: `bounded-${index}`,
+        hop: 0,
+        id: `artist:bounded-${index}`,
+        kind: "artist",
+      });
+    }
+    let complete = false;
+    for (let chunk = 0; chunk < 10 && !complete; chunk += 1) {
+      const result = await runCrawlDueRebuildChunk(db, {
+        boundedCleanup: true,
+        generation: "crawl-bounded",
+        limit: 1,
+        newGeneration: chunk === 0,
+      });
+      expect(result.scanned).toBeLessThanOrEqual(1);
+      complete = result.complete;
+    }
+    expect(complete).toBe(true);
+    expect((await auditCrawlDueWork(db)).matched).toBe(true);
+  });
 });

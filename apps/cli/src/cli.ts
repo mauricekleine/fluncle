@@ -60,6 +60,17 @@ type AdminReceiptRepairOptions = JsonOptions & {
   staleBefore: string;
 };
 
+type AdminProjectionStepOptions = JsonOptions & {
+  action: string;
+  limit: string;
+  target: string;
+};
+
+type AdminProjectionCutoverOptions = JsonOptions & {
+  enabled: string;
+  target: string;
+};
+
 type AdminArtifactRegisterOptions = JsonOptions & {
   contract: string[];
 };
@@ -949,6 +960,73 @@ JSON field reference:
 
       const noun = result.repaired === 1 ? "receipt" : "receipts";
       console.log(`Repaired ${result.repaired} stale ${noun} after scanning ${result.scanned}.`);
+    });
+
+  const adminProjections = configureCommand(
+    admin.command("projections").description("Projection convergence and cutover controls"),
+  );
+
+  adminProjections.action(() => {
+    adminProjections.outputHelp();
+  });
+
+  adminProjections
+    .command("get")
+    .description("Read bounded projection convergence and cutover readiness")
+    .option("--json", "Print the complete machine-readable readiness contract", false)
+    .action(async (options: JsonOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.getProjectionStatusCommand();
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(projections.projectionStatusLines(result.status).join("\n"));
+    });
+
+  adminProjections
+    .command("advance")
+    .description("Run one bounded, resumable rebuild, repair, or audit step")
+    .requiredOption(
+      "--target <target>",
+      "track_due_work, crawl_due_work, public_aggregates, or artist_qualification",
+    )
+    .requiredOption("--action <action>", "rebuild, repair, or audit")
+    .option("--limit <limit>", "Maximum rows or repairs in this request (1-100)", "100")
+    .option("--json", "Print the step result and current readiness as JSON", false)
+    .action(async (options: AdminProjectionStepOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.advanceProjectionCommand({
+        action: projections.parseProjectionAction(options.action),
+        limit: projections.parseProjectionLimit(options.limit),
+        target: projections.parseProjectionTarget(options.target),
+      });
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(
+        `${result.target} ${result.action}: processed ${result.processed}, scheduled ${result.scheduled}, ${result.complete ? "complete" : "more work remains"}.`,
+      );
+    });
+
+  adminProjections
+    .command("set")
+    .description("Open or close one readiness-gated projection cutover")
+    .requiredOption("--target <target>", "track_due_work, crawl_due_work, or public_projections")
+    .requiredOption("--enabled <boolean>", "true opens; false closes unconditionally")
+    .option("--json", "Print the stored flag and current readiness as JSON", false)
+    .action(async (options: AdminProjectionCutoverOptions) => {
+      const projections = await import("./commands/admin-projections");
+      const result = await projections.setProjectionCutoverCommand({
+        enabled: projections.parseProjectionEnabled(options.enabled),
+        target: projections.parseProjectionCutover(options.target),
+      });
+      if (options.json) {
+        printJson(result);
+        return;
+      }
+      console.log(`${result.target}: cutover ${result.enabled ? "open" : "dark"}.`);
     });
 
   // The versioned artifact-log transport. These are deliberately literal operator controls: the

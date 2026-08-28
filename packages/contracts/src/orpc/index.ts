@@ -34,6 +34,7 @@ import { adminCostsContract } from "./admin-costs";
 import { adminDatabaseAdmissionContract } from "./admin-database-admission";
 import { adminGalaxiesContract } from "./admin-galaxies";
 import { adminPromptsContract } from "./admin-prompts";
+import { adminProjectionsContract } from "./admin-projections";
 import { adminReachContract } from "./admin-reach";
 import { albumsContract } from "./albums";
 import { artistsContract } from "./artists";
@@ -177,6 +178,17 @@ export {
   reconcileOperationReceipts,
   resolveOperationReceipt,
 } from "./admin-operation-receipts";
+export {
+  advanceProjection,
+  adminProjectionsContract,
+  getProjectionStatus,
+  PROJECTION_STEP_LIMIT_MAX,
+  ProjectionCutoverSchema,
+  ProjectionStatusSchema,
+  ProjectionStepActionSchema,
+  ProjectionTargetSchema,
+  setProjectionCutover,
+} from "./admin-projections";
 export {
   addArtistRule,
   AddArtistRuleInputSchema,
@@ -560,6 +572,7 @@ export const contract = {
   ...adminDatabaseAdmissionContract,
   ...adminGalaxiesContract,
   ...adminPromptsContract,
+  ...adminProjectionsContract,
   ...adminReachContract,
   ...albumsContract,
   ...artistsContract,

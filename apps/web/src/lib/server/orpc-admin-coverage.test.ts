@@ -174,6 +174,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The observation echo gate's ledger — contract-only oRPC (no TanStack route file), the
   // spoken sibling of the note-rejections ledger.
   "GET /admin/observation-rejections": "list_observation_rejections",
+  // The projection rollout control plane is contract-only and operator-only. Status exposes
+  // bounded aggregate evidence; advance accepts only fixed targets/actions and bounded limits.
+  "GET /admin/projections/status": "get_projection_status",
   // The prompt registry (docs/agents/prompt-registry.md) — contract-only oRPC (no
   // TanStack route file; oRPC owns the paths directly). `GET /admin/prompts/{slug}` is
   // the AGENT-tier per-tick resolve the on-box sweeps live on — the box runs a pinned CLI
@@ -518,6 +521,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
+  "POST /admin/projections/advance": "advance_projection",
   // Appending a prompt version — an edit, a rollback, or a reset (they are one op, because
   // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.
   "POST /admin/prompts/{slug}": "update_prompt",
@@ -619,6 +623,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // The hardened post-publish cue backfill (Fluncle Studio Unit D, panel M1):
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
+  // The only supported projection-flag writer. Opening is convergence-gated; closing always works.
+  "PUT /admin/projections/cutover": "set_projection_cutover",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
   // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only

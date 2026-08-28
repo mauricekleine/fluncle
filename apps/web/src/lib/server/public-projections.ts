@@ -909,11 +909,14 @@ async function firstRepairOfType(
 
 export async function repairPublicProjectionChunk(
   client: PublicProjectionClient,
-  options: { limit?: number; now?: () => Date } = {},
+  options: { limit?: number; now?: () => Date; projection?: PublicProjectionName } = {},
 ): Promise<{ fanout: number; repaired: number }> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
-  const label = await firstRepairOfType(client, "artist_qualification", "label");
+  const label =
+    options.projection === "public_aggregates"
+      ? undefined
+      : await firstRepairOfType(client, "artist_qualification", "label");
   if (label !== undefined) {
     const result = await fanOutArtistQualificationLabelRepair(client, label.subjectId, options);
     return { fanout: result.expanded, repaired: 0 };
@@ -921,7 +924,10 @@ export async function repairPublicProjectionChunk(
 
   let attempted = 0;
   let repaired = 0;
-  for (const projection of ["public_aggregates", "artist_qualification"] as const) {
+  const projections = options.projection
+    ? ([options.projection] as const)
+    : (["public_aggregates", "artist_qualification"] as const);
+  for (const projection of projections) {
     const result = await client.execute({
       args: [projection, limit - attempted],
       sql: `select subject_id from projection_repairs indexed by projection_repairs_order_idx
@@ -940,7 +946,7 @@ export async function repairPublicProjectionChunk(
       }
     }
   }
-  while (attempted < limit) {
+  while (attempted < limit && options.projection !== "public_aggregates") {
     const artist = await firstRepairOfType(client, "artist_qualification", "artist");
     if (artist === undefined) {
       break;
@@ -1205,6 +1211,194 @@ async function artistDigests(client: PublicProjectionClient): Promise<{
   };
 }
 
+export type PublicProjectionAuditLane =
+  | "aggregate_projected_counts"
+  | "aggregate_projected_membership"
+  | "aggregate_source_membership"
+  | "artist_projected_contributions"
+  | "artist_projected_rollups"
+  | "artist_source_contributions"
+  | "artist_source_rollups";
+
+function pairCursor(value: null | string): [string, string] {
+  if (value === null) {
+    return ["", ""];
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      parsed.every((item) => typeof item === "string")
+      ? [parsed[0] as string, parsed[1] as string]
+      : ["", ""];
+  } catch {
+    return ["", ""];
+  }
+}
+
+type PublicCleanupState = {
+  cursor: null | string;
+  phase: "contributions" | "membership" | "qualification";
+};
+
+function parsePublicCleanupState(
+  value: unknown,
+  projection: PublicProjectionName,
+): PublicCleanupState {
+  if (typeof value !== "string") {
+    throw new Error("missing cleanup cursor");
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("malformed cleanup cursor");
+  }
+  const candidate = parsed as Record<string, unknown>;
+  const cursor = candidate["cursor"];
+  const phase = candidate["phase"];
+  if (
+    (cursor !== null && typeof cursor !== "string") ||
+    (phase !== "contributions" && phase !== "membership" && phase !== "qualification") ||
+    (projection === "public_aggregates" && phase !== "membership") ||
+    (projection === "artist_qualification" && phase === "membership")
+  ) {
+    throw new Error("malformed cleanup cursor");
+  }
+  return { cursor, phase };
+}
+
+/** One bounded canonical audit page. The operator control plane owns durable cursors/digests. */
+export async function readPublicProjectionAuditChunk(
+  client: PublicProjectionClient,
+  lane: PublicProjectionAuditLane,
+  options: { cursor: null | string; limit: number },
+): Promise<{ cursor: null | string; rows: unknown[][]; scanned: number }> {
+  assertLimit(options.limit);
+  if (lane === "aggregate_source_membership" || lane === "aggregate_projected_membership") {
+    const source = lane === "aggregate_source_membership";
+    const result = await client.execute({
+      args: [options.cursor ?? "", options.limit],
+      sql: source
+        ? `select track_id, substr(release_date, 1, 4) as release_date_bucket, key as key_bucket
+          from tracks where track_id > ? order by track_id limit ?`
+        : `select track_id, release_date_bucket, key_bucket from public_aggregate_membership
+          where track_id > ? order by track_id limit ?`,
+    });
+    return {
+      cursor:
+        typeof result.rows.at(-1)?.track_id === "string"
+          ? (result.rows.at(-1)?.track_id as string)
+          : null,
+      rows: result.rows.map((row) => [
+        "track",
+        row.track_id,
+        row.release_date_bucket,
+        row.key_bucket,
+      ]),
+      scanned: result.rows.length,
+    };
+  }
+  if (lane === "aggregate_projected_counts") {
+    const [kind, bucket] = pairCursor(options.cursor);
+    const result = await client.execute({
+      args: [kind, kind, bucket, options.limit],
+      sql: `select aggregate_kind, bucket, track_count from public_aggregate_counts
+        where aggregate_kind > ? or (aggregate_kind = ? and bucket > ?)
+        order by aggregate_kind, bucket limit ?`,
+    });
+    const terminal = result.rows.at(-1);
+    return {
+      cursor:
+        typeof terminal?.aggregate_kind === "string" && typeof terminal.bucket === "string"
+          ? JSON.stringify([terminal.aggregate_kind, terminal.bucket])
+          : null,
+      rows: result.rows.map((row) => [
+        "count",
+        row.aggregate_kind,
+        row.bucket,
+        Number(row.track_count),
+      ]),
+      scanned: result.rows.length,
+    };
+  }
+
+  const source = lane.startsWith("artist_source_");
+  const contributions = lane.endsWith("contributions");
+  if (contributions) {
+    const [trackId, artistId] = pairCursor(options.cursor);
+    const result = await client.execute({
+      args: [trackId, artistId, options.limit],
+      sql: source
+        ? `select ta.track_id, ta.artist_id,
+            case when f.track_id is null then 0 else 1 end as certified_contribution,
+            case when l.seed_state = 'enabled'
+              then case when ta.role = 'remixer' then 1 else 2 end else 0 end
+              as enabled_credit_half_units
+          from track_artists ta join tracks t on t.track_id = ta.track_id
+          left join findings f on f.track_id = ta.track_id left join labels l on l.id = t.label_id
+          where (ta.track_id, ta.artist_id) > (?, ?)
+          order by ta.track_id, ta.artist_id limit ?`
+        : `select track_id, artist_id, certified_contribution, enabled_credit_half_units
+          from artist_qualification_contributions where (track_id, artist_id) > (?, ?)
+          order by track_id, artist_id limit ?`,
+    });
+    const terminal = result.rows.at(-1);
+    return {
+      cursor:
+        typeof terminal?.track_id === "string" && typeof terminal.artist_id === "string"
+          ? JSON.stringify([terminal.track_id, terminal.artist_id])
+          : null,
+      rows: result.rows.map((row) => [
+        "contribution",
+        row.track_id,
+        row.artist_id,
+        Number(row.certified_contribution),
+        Number(row.enabled_credit_half_units),
+      ]),
+      scanned: result.rows.length,
+    };
+  }
+
+  const result = await client.execute({
+    args: [options.cursor ?? "", options.limit],
+    sql: source
+      ? `with page as (select id from artists where id > ? order by id limit ?)
+        select page.id as artist_id,
+          count(case when f.track_id is not null then 1 end) as certified_finding_count,
+          coalesce(sum(case when l.seed_state = 'enabled'
+            then case when ta.role = 'remixer' then 1 else 2 end else 0 end), 0)
+            as enabled_credit_half_units
+        from page left join track_artists ta on ta.artist_id = page.id
+        left join tracks t on t.track_id = ta.track_id left join findings f on f.track_id = ta.track_id
+        left join labels l on l.id = t.label_id group by page.id order by page.id`
+      : `select artist_id, certified_finding_count, enabled_credit_half_units, is_qualified
+        from artist_qualification where artist_id > ? order by artist_id limit ?`,
+  });
+  const filtered = source
+    ? result.rows.filter(
+        (row) =>
+          Number(row.certified_finding_count) > 0 || Number(row.enabled_credit_half_units) > 0,
+      )
+    : result.rows;
+  return {
+    cursor:
+      typeof result.rows.at(-1)?.artist_id === "string"
+        ? (result.rows.at(-1)?.artist_id as string)
+        : null,
+    rows: filtered.map((row) => [
+      "artist",
+      row.artist_id,
+      Number(row.certified_finding_count),
+      Number(row.enabled_credit_half_units),
+      source
+        ? Number(row.certified_finding_count) > 0 || Number(row.enabled_credit_half_units) >= 6
+          ? 1
+          : 0
+        : Number(row.is_qualified),
+    ]),
+    scanned: result.rows.length,
+  };
+}
+
 async function finishAggregateRebuild(
   client: PublicProjectionClient,
   checkpoint: PublicProjectionRebuildCheckpoint,
@@ -1315,6 +1509,7 @@ export async function runPublicProjectionRebuildChunk(
   client: PublicProjectionClient,
   projection: PublicProjectionName,
   options: {
+    boundedCleanup?: boolean;
     generation?: string;
     limit?: number;
     newGeneration?: boolean;
@@ -1329,6 +1524,169 @@ export async function runPublicProjectionRebuildChunk(
   }
   const trackIds = await readSortedTrackIds(client, checkpoint.cursor, limit);
   const now = nowIso(options.now);
+  if (trackIds.length === 0 && options.boundedCleanup === true) {
+    const cleanupKey = `projection_cleanup_${projection}_v1:${checkpoint.generation}`;
+    const saved = await client.execute({
+      args: [cleanupKey],
+      sql: `select value from settings where key = ? limit 1`,
+    });
+    let cleanup: PublicCleanupState;
+    try {
+      cleanup = parsePublicCleanupState(saved.rows[0]?.value, projection);
+    } catch {
+      cleanup = {
+        cursor: null,
+        phase: projection === "public_aggregates" ? "membership" : "contributions",
+      };
+    }
+    let scanned = 0;
+    let cleanupComplete = false;
+    if (projection === "public_aggregates") {
+      const page = await client.execute({
+        args: [cleanup.cursor ?? "", limit],
+        sql: `select generation, track_id, updated_at from public_aggregate_membership
+          where track_id > ? order by track_id limit ?`,
+      });
+      const pageRows = page.rows as unknown as {
+        generation: string;
+        track_id: string;
+        updated_at: string;
+      }[];
+      scanned = pageRows.length;
+      const staleTrackIds = pageRows
+        .filter(
+          (row) =>
+            row.generation !== checkpoint.generation &&
+            (row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
+              row.updated_at < checkpoint.startedAt),
+        )
+        .map((row) => row.track_id);
+      for (const trackId of staleTrackIds) {
+        await repairPublicAggregateTrackProjection(client, trackId, {
+          generation: checkpoint.generation,
+          now,
+          preserveAfter: checkpoint.startedAt,
+        });
+      }
+      cleanup.cursor = pageRows.at(-1)?.track_id ?? null;
+      cleanupComplete = pageRows.length === 0;
+    } else {
+      if (cleanup.phase === "contributions") {
+        const [afterTrack, afterArtist] = pairCursor(cleanup.cursor);
+        const page = await client.execute({
+          args: [afterTrack, afterArtist, limit],
+          sql: `select artist_id, generation, track_id, updated_at
+            from artist_qualification_contributions
+            where (track_id, artist_id) > (?, ?) order by track_id, artist_id limit ?`,
+        });
+        const pageRows = page.rows as unknown as {
+          artist_id: string;
+          generation: string;
+          track_id: string;
+          updated_at: string;
+        }[];
+        scanned = pageRows.length;
+        const staleTrackIds = [
+          ...new Set(
+            pageRows
+              .filter(
+                (row) =>
+                  row.generation !== checkpoint.generation &&
+                  (row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
+                    row.updated_at < checkpoint.startedAt),
+              )
+              .map((row) => row.track_id),
+          ),
+        ];
+        for (const trackId of staleTrackIds) {
+          const source = await readTrackProjectionSource(client, trackId);
+          await repairArtistContributionTrackProjection(client, trackId, {
+            generation: checkpoint.generation,
+            now,
+            preserveAfter: checkpoint.startedAt,
+            sourceVersion:
+              source?.sourceVersion ?? publicTrackSourceVersion({ key: null, releaseDate: null }),
+          });
+        }
+        const terminal = pageRows.at(-1);
+        cleanup.cursor =
+          terminal === undefined ? null : JSON.stringify([terminal.track_id, terminal.artist_id]);
+        if (pageRows.length === 0) {
+          cleanup = { cursor: null, phase: "qualification" };
+        }
+      } else {
+        const page = await client.execute({
+          args: [cleanup.cursor ?? "", limit],
+          sql: `select artist_id, generation, updated_at from artist_qualification
+            where artist_id > ? order by artist_id limit ?`,
+        });
+        const pageRows = page.rows as unknown as {
+          artist_id: string;
+          generation: string;
+          updated_at: string;
+        }[];
+        scanned = pageRows.length;
+        const artistIds = pageRows
+          .filter(
+            (row) =>
+              row.generation !== checkpoint.generation &&
+              (row.generation !== PUBLIC_PROJECTION_LIVE_GENERATION ||
+                row.updated_at < checkpoint.startedAt),
+          )
+          .map((row) => row.artist_id);
+        if (artistIds.length > 0) {
+          const placeholders = artistIds.map(() => "?").join(", ");
+          await client.execute({
+            args: [
+              ...artistIds,
+              checkpoint.generation,
+              checkpoint.startedAt,
+              checkpoint.generation,
+              checkpoint.cursor,
+            ],
+            sql: `delete from artist_qualification where artist_id in (${placeholders})
+              and generation <> ? and (generation <> '${PUBLIC_PROJECTION_LIVE_GENERATION}'
+                or updated_at < ?)
+              and not exists (select 1 from artist_qualification_contributions contribution
+                where contribution.artist_id = artist_qualification.artist_id)
+              and exists (select 1 from artist_qualification_state where scope = 'artists'
+                and generation = ? and state = 'running' and cursor is ?)`,
+          });
+        }
+        cleanup.cursor = pageRows.at(-1)?.artist_id ?? null;
+        cleanupComplete = pageRows.length === 0;
+      }
+    }
+
+    if (cleanupComplete) {
+      await client.execute({ args: [cleanupKey], sql: `delete from settings where key = ?` });
+      const stateTable =
+        projection === "public_aggregates"
+          ? "public_aggregate_state"
+          : "artist_qualification_state";
+      const scope = projection === "public_aggregates" ? "tracks" : "artists";
+      const epochColumn =
+        projection === "public_aggregates" ? "aggregate_epoch" : "projection_epoch";
+      await client.execute({
+        args: [now, now, "0".repeat(64), "0".repeat(64), checkpoint.generation, checkpoint.cursor],
+        sql: `update ${stateTable} set state = 'complete', completed_at = ?, updated_at = ?,
+            source_digest = ?, projected_digest = ?,
+            ${epochColumn} = rebuild_start_epoch
+          where scope = '${scope}' and generation = ? and state = 'running' and cursor is ?`,
+      });
+    } else {
+      await client.execute({
+        args: [cleanupKey, JSON.stringify(cleanup)],
+        sql: `insert into settings (key, value) values (?, ?)
+          on conflict(key) do update set value = excluded.value`,
+      });
+    }
+    const current = await projectionStateRow(client, projection);
+    if (current === undefined) {
+      throw new Error(`${projection} rebuild state disappeared`);
+    }
+    return { checkpoint: current, complete: current.state === "complete", scanned };
+  }
   for (const trackId of trackIds) {
     if (projection === "public_aggregates") {
       await repairPublicAggregateTrackProjection(client, trackId, {
@@ -1357,7 +1715,7 @@ export async function runPublicProjectionRebuildChunk(
       set cursor = ?, scanned_count = scanned_count + ?, updated_at = ?
       where scope = '${scope}' and generation = ? and state = 'running' and cursor is ?`,
   });
-  if (trackIds.length < limit) {
+  if (trackIds.length < limit && options.boundedCleanup !== true) {
     if (projection === "public_aggregates") {
       await finishAggregateRebuild(client, checkpoint, now);
     } else {

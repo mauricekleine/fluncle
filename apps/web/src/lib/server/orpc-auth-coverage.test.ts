@@ -202,6 +202,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The `/admin/artists` follow queue's inline add (Unit 5, Epic B) — operator tier: an
   // operator-entered social lands confirmed + public at once.
   add_artist_social: "operator",
+  // Production projection convergence is a rollout act even though it only writes derived state.
+  advance_projection: "operator",
   // The render → publish AUTO-ADVANCE tick — ADMIN tier (adminAuth only, no
   // operatorGuard): the on-box `fluncle-publish-advance` cron drives it with the agent
   // token (the `drip_clips` / `capture_post_urls` precedent — the Worker owns the Postiz
@@ -437,6 +439,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_private_preferences: "private-session",
   // The recording reads — admin tier (agent-allowed): the box's clip-cut cron resolves a
   // clip's recording (r2Key + tracklist + promoted logId) via `get_recording`.
+  get_projection_status: "operator",
   // The prompt registry's per-tick resolve — AGENT tier (adminAuth only, no
   // operatorGuard), the record_cost/context_track precedent. This is THE read that lets a
   // prompt live in the database at all: the box runs a pinned CLI and a baked image, so
@@ -797,6 +800,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   // The hardened post-publish cue backfill — operator tier: it rewrites a published
   // set's surface, so the agent token 403s.
   set_mixtape_cues: "operator",
+  // The only supported cutover writer; opening is readiness-gated and closing is the rollback rail.
+  set_projection_cutover: "operator",
   // The auto-advance kill switch — operator tier, like `set_clip_drip`: pausing/resuming
   // the whole auto-publish is the operator's control, never the box's.
   set_publish_advance: "operator",

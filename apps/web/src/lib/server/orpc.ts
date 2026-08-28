@@ -43,6 +43,7 @@ import { adminCostsHandlers } from "./orpc/admin-costs";
 import { adminDatabaseAdmissionHandlers } from "./orpc/admin-database-admission";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
+import { adminProjectionHandlers } from "./orpc/admin-projections";
 import { adminReachHandlers } from "./orpc/admin-reach";
 import { albumsHandlers } from "./orpc/albums";
 import { artistsHandlers } from "./orpc/artists";
@@ -119,6 +120,7 @@ export const router = os.router({
   ...adminDatabaseAdmissionHandlers(os),
   ...adminGalaxiesHandlers(os),
   ...adminPromptsHandlers(os),
+  ...adminProjectionHandlers(os),
   ...adminReachHandlers(os),
   ...albumsHandlers(os),
   ...artistsHandlers(os),

@@ -741,4 +741,25 @@ describe("public shadow projections", () => {
       ).rows[0],
     ).toMatchObject({ audited_at: expect.any(String), digests_match: 1 });
   });
+
+  it("bounds source and cleanup pages for both production rebuild targets", async () => {
+    await seedProjectionWorld();
+    for (const projection of ["public_aggregates", "artist_qualification"] as const) {
+      let complete = false;
+      for (let chunk = 0; chunk < 20 && !complete; chunk += 1) {
+        const result = await runPublicProjectionRebuildChunk(db, projection, {
+          boundedCleanup: true,
+          generation: `${projection}-bounded`,
+          limit: 1,
+          newGeneration: chunk === 0,
+        });
+        expect(result.scanned).toBeLessThanOrEqual(1);
+        complete = result.complete;
+      }
+      expect(complete).toBe(true);
+    }
+    const audit = await auditPublicProjections(db);
+    expect(audit.aggregatesMatched).toBe(true);
+    expect(audit.artistMatched).toBe(true);
+  });
 });
