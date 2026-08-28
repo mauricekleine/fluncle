@@ -104,6 +104,12 @@ function metaDescription(data: unknown): string | undefined {
   return headMeta(data).find((entry) => entry.name === "description")?.content;
 }
 
+/** The `<title>` — the same string og:title / twitter:title carry. */
+function headTitle(data: unknown): string | undefined {
+  return (headMeta(data) as Array<{ title?: string }>).find((entry) => entry.title !== undefined)
+    ?.title;
+}
+
 /** The head's first JSON-LD payload — the MusicGroup (`jsonLdScript` children still parse as JSON). */
 function musicGroupFromHead(data: unknown): Record<string, unknown> {
   const head = Route.options.head?.({ loaderData: data } as never) as
@@ -352,6 +358,33 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(metaDescription(withoutBio)).toBe(
       "Drum & bass tracks by Drift that Fluncle recommends, 1 so far, with the labels and releases behind them.",
     );
+  });
+
+  it("varies BOTH the title and the description by page (the /artists hub rule)", async () => {
+    // Every `?page=N` is self-canonical, so it is submitted as its own indexable URL. Two such
+    // URLs may not wear one title and one description; the paged pair names the page and the
+    // records band the pager actually moves, and the bio never rides a page past the first.
+    getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
+    countArtistFindings.mockResolvedValue(1);
+    getArtistBySlug.mockResolvedValue({
+      ...ARTIST,
+      bio: "Drift is a British drum and bass producer known for deep, rolling liquid cuts.",
+    });
+    listArtistCatalogue.mockResolvedValue({ ...NO_CATALOGUE, page: 2, pageCount: 4 });
+
+    const paged = await resolveArtistPageData("drift", "name", 2);
+
+    expect(headTitle(paged)).toBe("Drift, page 2 · Fluncle");
+    expect(metaDescription(paged)).toBe(
+      "Page 2 of the drum & bass records by Drift that Fluncle holds.",
+    );
+
+    // Page 1 is untouched: the bio still leads, under the bare entity title.
+    listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+    const first = await resolveArtistPageData("drift", "name", 1);
+
+    expect(headTitle(first)).toBe("Drift · Fluncle");
+    expect(metaDescription(first)?.startsWith("Drift is a British")).toBe(true);
   });
 });
 

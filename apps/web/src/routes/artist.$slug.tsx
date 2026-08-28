@@ -120,17 +120,30 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       : `${siteUrl}/artist/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the
   // first person lives only in the on-page voice frame.
-  const title = `${name} · Fluncle`;
+  const baseTitle = `${name} · Fluncle`;
   // The factual bio is the honest, UNIQUE description when one is authored — the same objective
   // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
   // many artists), it falls back to the templated line verbatim, so nothing regresses. This one
   // string flows to meta + og + twitter below, so all three go unique together.
-  const description =
+  const baseDescription =
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
         ? `Drum & bass tracks by ${name} that Fluncle recommends, ${findings.length} so far, with the labels and releases behind them.`
         : `Drum & bass tracks by ${name}, with the labels and releases behind them.`;
+  // PAGED VARIANTS BAKE THE PAGE NUMBER INTO BOTH STRINGS — the `/artists` hub rule
+  // (artists.index.tsx) applied to the entity page, which paginates the same way. The canonical
+  // above is self-referencing per page, so `?page=N` is submitted as its own indexable URL; left
+  // wearing page 1's title and description it is a duplicate-meta URL competing with the page it
+  // came from. The paged description names what the page actually carries (the records band, the
+  // one section the pager moves), never the entity's bio, which describes only page 1's masthead.
+  const { description, title } =
+    catalogue.page > 1
+      ? {
+          description: `Page ${catalogue.page} of the drum & bass records by ${name} that Fluncle holds.`,
+          title: `${name}, page ${catalogue.page} · Fluncle`,
+        }
+      : { description: baseDescription, title: baseTitle };
   // The artist's OWN portrait leads: its owned avatar master (or Spotify image) is the entity's
   // true image. Only when it has none does the page fall back to its freshest finding's cover, then
   // the site cover as the floor. This one URL flows to og:image, twitter:image, and MusicGroup.image.

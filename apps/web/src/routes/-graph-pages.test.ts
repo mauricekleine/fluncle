@@ -80,6 +80,15 @@ function labelMetaDescription(data: unknown): string | undefined {
   return head?.meta?.find((entry) => entry.name === "description")?.content;
 }
 
+/** The label route's `<title>` — the same string og:title / twitter:title carry. */
+function labelHeadTitle(data: unknown): string | undefined {
+  const head = LabelRoute.options.head?.({ loaderData: data } as never) as
+    | { meta?: Array<{ title?: string }> }
+    | undefined;
+
+  return head?.meta?.find((entry) => entry.title !== undefined)?.title;
+}
+
 const LABEL = { id: "lbl_1", name: "Hospital Records", slug: "hospital-records" };
 const ALBUM = { id: "alb_1", name: "Wormhole", slug: "wormhole" };
 
@@ -294,6 +303,31 @@ describe("the label page", () => {
     expect(await resolveLabelPageData("hospital-records", "name", 99)).toEqual({
       status: "missing",
     });
+  });
+
+  it("varies BOTH the title and the description by page (the /labels hub rule)", async () => {
+    // Every `?page=N` is self-canonical, so it is submitted as its own indexable URL. Two such
+    // URLs may not wear one title and one description; the paged pair names the page and the
+    // artists band the pager actually moves, and the bio never rides a page past the first.
+    const bio =
+      "Hospital Records is a British drum and bass label founded in 1996 by London Elektricity.";
+    getLabelBySlug.mockResolvedValue({ ...LABEL, bio });
+    getFindingsByLabel.mockResolvedValue(findings(1));
+    listLabelCatalogue.mockResolvedValue({ ...labelCatalogue(4), page: 3, pageCount: 5 });
+
+    const paged = await resolveLabelPageData("hospital-records", "name", 3);
+
+    expect(labelHeadTitle(paged)).toBe("Hospital Records, page 3 · Fluncle");
+    expect(labelMetaDescription(paged)).toBe(
+      "Page 3 of the drum & bass artists released on Hospital Records that Fluncle holds.",
+    );
+
+    // Page 1 is untouched: the bio still leads, under the bare entity title.
+    listLabelCatalogue.mockResolvedValue(labelCatalogue(4));
+    const first = await resolveLabelPageData("hospital-records", "name", 1);
+
+    expect(labelHeadTitle(first)).toBe("Hospital Records · Fluncle");
+    expect(labelMetaDescription(first)?.startsWith("Hospital Records is a British")).toBe(true);
   });
 });
 
