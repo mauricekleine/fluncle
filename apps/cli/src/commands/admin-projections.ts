@@ -77,16 +77,18 @@ export async function advanceProjectionCommand(input: {
   limit: number;
   target: ProjectionTarget;
 }): Promise<ProjectionStepResponse> {
-  return adminApiPost<ProjectionStepResponse>("/api/v1/admin/projections/advance", input);
+  const { target, ...body } = input;
+  return adminApiPost<ProjectionStepResponse>(`/api/v1/admin/projections/${target}/advance`, body);
 }
 
 export async function setProjectionCutoverCommand(input: {
   enabled: boolean;
   target: ProjectionCutover;
 }): Promise<ProjectionStatusResponse & { enabled: boolean; target: ProjectionCutover }> {
+  const { enabled, target } = input;
   return adminApiPut<ProjectionStatusResponse & { enabled: boolean; target: ProjectionCutover }>(
-    "/api/v1/admin/projections/cutover",
-    input,
+    `/api/v1/admin/projections/${target}/cutover`,
+    { enabled },
   );
 }
 

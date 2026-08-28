@@ -87,14 +87,14 @@ describe("projection operator commands", () => {
     expect(calls).toEqual([
       { method: "GET", path: "/api/v1/admin/projections/status" },
       {
-        body: { action: "repair", limit: 25, target: "crawl_due_work" },
+        body: { action: "repair", limit: 25 },
         method: "POST",
-        path: "/api/v1/admin/projections/advance",
+        path: "/api/v1/admin/projections/crawl_due_work/advance",
       },
       {
-        body: { enabled: false, target: "public_projections" },
+        body: { enabled: false },
         method: "PUT",
-        path: "/api/v1/admin/projections/cutover",
+        path: "/api/v1/admin/projections/public_projections/cutover",
       },
     ]);
   });

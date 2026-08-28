@@ -95,7 +95,7 @@ export const advanceProjection = oc
   .route({
     method: "POST",
     operationId: "advanceProjection",
-    path: "/admin/projections/advance",
+    path: "/admin/projections/{target}/advance",
     summary: "Advance one bounded projection rebuild, repair, or audit step",
     tags: ["Admin"],
   })
@@ -123,7 +123,7 @@ export const setProjectionCutover = oc
   .route({
     method: "PUT",
     operationId: "setProjectionCutover",
-    path: "/admin/projections/cutover",
+    path: "/admin/projections/{target}/cutover",
     summary: "Open or close one readiness-gated projection cutover",
     tags: ["Admin"],
   })

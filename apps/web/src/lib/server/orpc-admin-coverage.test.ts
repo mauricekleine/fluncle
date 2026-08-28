@@ -521,7 +521,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // the whole devices domain is contract-first oRPC), so it has no file-enumeration
   // entry; it lives here only to satisfy the "registry holds EXACTLY this map's
   // ops" check. An EXTERNAL cron calls it (TanStack has no `scheduled()`).
-  "POST /admin/projections/advance": "advance_projection",
+  "POST /admin/projections/{target}/advance": "advance_projection",
   // Appending a prompt version — an edit, a rollback, or a reset (they are one op, because
   // the history is append-only). OPERATOR tier: a prompt IS code, so an agent token 403s.
   "POST /admin/prompts/{slug}": "update_prompt",
@@ -624,7 +624,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   // re-times an existing minted tracklist's start_ms; operator tier.
   "PUT /admin/mixtapes/{mixtapeId}/cues": "set_mixtape_cues",
   // The only supported projection-flag writer. Opening is convergence-gated; closing always works.
-  "PUT /admin/projections/cutover": "set_projection_cutover",
+  "PUT /admin/projections/{target}/cutover": "set_projection_cutover",
   // The PUT shares the `members` file/path with the POST above (append vs replace);
   // oRPC routes the two methods to distinct ops, so each gets its own entry.
   // Replace a recording's whole cue set (RFC plan→recording→mixtape §4) — contract-only
