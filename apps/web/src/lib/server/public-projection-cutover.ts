@@ -249,6 +249,49 @@ export async function readCurrentProjectedTrackHubAnchors(
   });
 }
 
+/** Shadow-only exact document reader; content and epoch agreement are reported separately. */
+export async function readStoredTrackHubAnchorsForAudit(
+  client: PublicProjectionReadClient,
+  address: PublicProjectionAnchorAddress,
+  pageSize: number,
+): Promise<ProjectedTrackHubAnchors | undefined> {
+  try {
+    const result = await client.execute({
+      args: [address.hub, address.clauseHash, PUBLIC_ANCHOR_FORMAT_VERSION],
+      sql: `select aggregate.default_track_total as total, validity.generation
+        from public_aggregate_state aggregate
+        join hub_page_anchor_validity validity
+          on validity.hub = ? and validity.clause_hash = ? and validity.anchor_format_version = ?
+        where aggregate.scope = 'tracks' limit 1`,
+    });
+    const total = nonNegativeInteger(result.rows[0]?.total);
+    const generation = result.rows[0]?.generation;
+    if (total === undefined || typeof generation !== "string") {
+      return undefined;
+    }
+    const prefix = `${address.clauseHash}:${generation}:`;
+    const documents = await client.execute({
+      args: [address.hub, address.clauseHash, prefix, `${prefix}\uffff`],
+      sql: `select anchors_json, clause_hash from hub_page_anchors
+        where hub = ? and (clause_hash = ? or (clause_hash >= ? and clause_hash < ?))
+        order by clause_hash`,
+    });
+    const shards = documents.rows.filter((row) => row.clause_hash !== address.clauseHash);
+    const selected = shards.length > 0 ? shards : documents.rows;
+    const anchors: HubPageAnchor[] = [];
+    for (const document of selected) {
+      const parsed = parseAnchorDocument(document.anchors_json);
+      if (parsed === undefined) {
+        return undefined;
+      }
+      anchors.push(...parsed);
+    }
+    return completeAnchorDocument(anchors, pageSize, total) ? { anchors, total } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function readProjectedTrackHubAnchorsSnapshot(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,

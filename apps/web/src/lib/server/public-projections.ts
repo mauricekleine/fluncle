@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
 import { hubCorpusFingerprint, hubPageAnchorsFromRows } from "./hub-page-anchors";
-import { PUBLIC_ANCHOR_FORMAT_VERSION } from "./public-projection-cutover";
+import {
+  PUBLIC_ANCHOR_FORMAT_VERSION,
+  readStoredTrackHubAnchorsForAudit,
+} from "./public-projection-cutover";
 import {
   TRACKS_HUB_ANCHOR_ADDRESS,
   TRACKS_HUB_PAGE_SIZE,
@@ -1212,8 +1215,10 @@ async function artistDigests(client: PublicProjectionClient): Promise<{
 }
 
 export type PublicProjectionAuditLane =
+  | "aggregate_projected_anchors"
   | "aggregate_projected_counts"
   | "aggregate_projected_membership"
+  | "aggregate_source_anchors"
   | "aggregate_source_membership"
   | "artist_projected_contributions"
   | "artist_projected_rollups"
@@ -1233,6 +1238,31 @@ function pairCursor(value: null | string): [string, string] {
       : ["", ""];
   } catch {
     return ["", ""];
+  }
+}
+
+function anchorSourceCursor(value: null | string): {
+  id: null | string;
+  key: null | string;
+  position: number;
+} {
+  if (value === null) {
+    return { id: null, key: null, position: 0 };
+  }
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const id = parsed["id"];
+    const key = parsed["key"];
+    const position = Number(parsed["position"]);
+    return typeof id === "string" &&
+      id.length > 0 &&
+      (key === null || typeof key === "string") &&
+      Number.isSafeInteger(position) &&
+      position > 0
+      ? { id, key, position }
+      : { id: null, key: null, position: 0 };
+  } catch {
+    return { id: null, key: null, position: 0 };
   }
 }
 
@@ -1273,6 +1303,103 @@ export async function readPublicProjectionAuditChunk(
   options: { cursor: null | string; limit: number },
 ): Promise<{ cursor: null | string; rows: unknown[][]; scanned: number }> {
   assertLimit(options.limit);
+  if (lane === "aggregate_source_anchors") {
+    const after = anchorSourceCursor(options.cursor);
+    const result = await client.execute(
+      after.id === null
+        ? {
+            args: [options.limit],
+            sql: `select release_date, track_id from tracks
+              indexed by tracks_release_date_track_id_idx
+              order by release_date desc, track_id desc limit ?`,
+          }
+        : after.key === null
+          ? {
+              args: [after.id, options.limit],
+              sql: `select release_date, track_id from tracks
+                indexed by tracks_release_date_track_id_idx
+                where release_date is null and track_id < ?
+                order by release_date desc, track_id desc limit ?`,
+            }
+          : {
+              args: [after.key, after.key, after.id, options.limit],
+              sql: `select release_date, track_id from tracks
+                indexed by tracks_release_date_track_id_idx
+                where release_date < ? or (release_date = ? and track_id < ?)
+                  or release_date is null
+                order by release_date desc, track_id desc limit ?`,
+            },
+    );
+    const rows = result.rows as unknown as { release_date: null | string; track_id: string }[];
+    const boundaries = rows.flatMap((row, index) => {
+      const position = after.position + index + 1;
+      return position % TRACKS_HUB_PAGE_SIZE === 0
+        ? [["anchor", row.track_id, row.release_date, position / TRACKS_HUB_PAGE_SIZE + 1]]
+        : [];
+    });
+    const terminal = rows.at(-1);
+    return {
+      cursor:
+        terminal === undefined
+          ? null
+          : JSON.stringify({
+              id: terminal.track_id,
+              key: terminal.release_date,
+              position: after.position + rows.length,
+            }),
+      rows: boundaries,
+      scanned: rows.length,
+    };
+  }
+  if (lane === "aggregate_projected_anchors") {
+    const [clauseHash, itemIndex] = pairCursor(options.cursor);
+    const result = await client.execute({
+      args: [
+        TRACKS_HUB_ANCHOR_ADDRESS.hub,
+        TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
+        clauseHash,
+        clauseHash,
+        Number(itemIndex || -1),
+        options.limit,
+      ],
+      sql: `select shard.clause_hash, cast(item.key as integer) as item_index,
+          json_extract(item.value, '$.id') as anchor_id,
+          json_extract(item.value, '$.key') as anchor_key,
+          json_extract(item.value, '$.page') as anchor_page
+        from public_aggregate_state aggregate
+        join hub_page_anchor_validity validity
+          on validity.hub = ? and validity.clause_hash = ?
+         and validity.generation = aggregate.generation
+         and validity.order_epoch = aggregate.release_hub_order_epoch
+        join hub_page_anchors shard
+          on shard.hub = validity.hub
+         and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
+         and shard.clause_hash < validity.clause_hash || ':' || validity.generation || ':\uffff'
+        join json_each(case when json_valid(shard.anchors_json)
+          and json_type(case when json_valid(shard.anchors_json)
+            then shard.anchors_json else 'null' end) = 'array'
+          then shard.anchors_json else '[]' end) item
+        where aggregate.scope = 'tracks'
+          and (shard.clause_hash > ?
+            or (shard.clause_hash = ? and cast(item.key as integer) > ?))
+        order by shard.clause_hash, cast(item.key as integer) limit ?`,
+    });
+    const terminal = result.rows.at(-1);
+    const terminalItemIndex = Number(terminal?.item_index);
+    return {
+      cursor:
+        typeof terminal?.clause_hash === "string" && Number.isSafeInteger(terminalItemIndex)
+          ? JSON.stringify([terminal.clause_hash, String(terminalItemIndex)])
+          : null,
+      rows: result.rows.map((row) => [
+        "anchor",
+        row.anchor_id,
+        row.anchor_key,
+        Number(row.anchor_page),
+      ]),
+      scanned: result.rows.length,
+    };
+  }
   if (lane === "aggregate_source_membership" || lane === "aggregate_projected_membership") {
     const source = lane === "aggregate_source_membership";
     const result = await client.execute({
@@ -2157,10 +2284,7 @@ export async function shadowPublicProjections(client: PublicProjectionClient): P
     client.execute(`select artist_id from artist_qualification
         where is_qualified = 1 order by artist_id`),
     client.execute(tracksHubAnchorExtractionQuery({})),
-    client.execute({
-      args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
-      sql: `select anchors_json from hub_page_anchors where hub = ? and clause_hash = ?`,
-    }),
+    readStoredTrackHubAnchorsForAudit(client, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
     client.execute(`select release_hub_order_epoch as order_epoch
       from public_aggregate_state where scope = 'tracks'`),
     client.execute({
@@ -2186,13 +2310,7 @@ export async function shadowPublicProjections(client: PublicProjectionClient): P
     "rd",
     TRACKS_HUB_PAGE_SIZE,
   );
-  const storedAnchorRow = storedAnchors.rows[0] as { anchors_json: string } | undefined;
-  let storedAnchorRows: unknown = [];
-  try {
-    storedAnchorRows = JSON.parse(storedAnchorRow?.anchors_json ?? "[]");
-  } catch {
-    storedAnchorRows = null;
-  }
+  const storedAnchorRows = storedAnchors?.anchors ?? null;
   const anchorOrderMatched =
     JSON.stringify(expectedAnchorRows) === JSON.stringify(storedAnchorRows);
   const anchorEpochMatched =

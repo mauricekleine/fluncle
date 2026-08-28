@@ -5,6 +5,7 @@ import {
   markPublicProjectionSourceChangedFromSelectStatements,
   markPublicProjectionSourceChangedStatements,
 } from "./public-projection-source-maintenance";
+import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
 export const DUE_WORK_LIVE_GENERATION = "live";
 export const DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID = "@catalogue-rank-corpus";
@@ -982,8 +983,11 @@ export async function repairDueWorkChunk<WorkKind extends string>(
               returning subject_id`,
           }
         : conditionalRepairProjectionStatement(projection, marker, updatedAt);
-    const applied = await client.execute(write);
-    if (applied.rows.length > 0) {
+    const results = await client.batch(
+      [write, advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY)],
+      "write",
+    );
+    if ((results[0]?.rows.length ?? 0) > 0) {
       repaired += 1;
     } else {
       deferred += 1;

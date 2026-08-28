@@ -41,6 +41,12 @@ describe("bounded projection cleanup plans", () => {
         sql: `select artist_id, generation, updated_at from artist_qualification
           where artist_id > ? order by artist_id limit ?`,
       },
+      {
+        args: ["tracks", "all:", "all:\uffff", "all:", 10],
+        sql: `select clause_hash from hub_page_anchors
+          where hub = ? and clause_hash >= ? and clause_hash < ? and clause_hash > ?
+          order by clause_hash limit ?`,
+      },
     ];
 
     for (const page of pages) {

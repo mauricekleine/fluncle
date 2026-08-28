@@ -1,6 +1,8 @@
 import { type Client, type InStatement, type InValue, type ResultSet } from "@libsql/client";
 import { createHash } from "node:crypto";
 
+import { advanceProjectionFenceStatement, CRAWL_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
+
 export const CRAWL_DUE_LIVE_GENERATION = "live";
 export const CRAWL_REARM_TAIL_CURSOR = -1;
 export const CRAWL_STALE_ARTIST_REARM_LIMIT = 10;
@@ -600,8 +602,11 @@ export async function repairCrawlDueNode(
               claim_expires_at = null, claim_position = null, claim_token = null,
               claimed_by = null, updated_at = excluded.updated_at`,
         };
-  const result = await client.execute(statement);
-  return result.rowsAffected > 0;
+  const results = await client.batch(
+    [statement, advanceProjectionFenceStatement(CRAWL_DUE_AUDIT_FENCE_KEY)],
+    "write",
+  );
+  return (results[0]?.rowsAffected ?? 0) > 0;
 }
 
 export async function repairCrawlDueNodes(
@@ -760,8 +765,10 @@ export async function fanOutCrawlProjectionRepairs(
       where source_type = ?1 and source_id = ?2 and source_epoch = ?3 and source_version = ?4
         and ${noRemaining}`,
   });
+  const clearIndex = writes.length - 1;
+  writes.push(advanceProjectionFenceStatement(CRAWL_DUE_AUDIT_FENCE_KEY));
   const results = await client.batch(writes, "write");
-  const cleared = (results.at(-1)?.rowsAffected ?? 0) > 0;
+  const cleared = (results[clearIndex]?.rowsAffected ?? 0) > 0;
   return { complete: cleared, expanded: ids.length, marker };
 }
 

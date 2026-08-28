@@ -9,6 +9,11 @@ import {
 } from "./projection-audit";
 import { readCurrentProjectedTrackHubAnchors } from "./public-projection-cutover";
 import {
+  advanceProjectionFenceStatement,
+  CRAWL_DUE_AUDIT_FENCE_KEY,
+  TRACK_DUE_AUDIT_FENCE_KEY,
+} from "./projection-fences";
+import {
   advancePublicAnchors,
   getProjectionStatusFor,
   setProjectionCutoverFor,
@@ -149,6 +154,8 @@ describe("projection production operations", () => {
         args: [
           PROJECTION_AUDIT_SETTING_KEYS[target],
           JSON.stringify({
+            anchorGeneration: target === "public_aggregates" ? "agg" : null,
+            anchorOrderEpoch: target === "public_aggregates" ? 0 : null,
             buckets: {},
             complete: true,
             cursor: null,
@@ -161,9 +168,10 @@ describe("projection production operations", () => {
             sourceDigest: "0".repeat(64),
             sourceEpoch:
               target === "artist_qualification" || target === "public_aggregates" ? 0 : null,
+            sourceFence: 0,
             startedAt: "2026-01-01T00:00:00.000Z",
             target,
-            version: 1,
+            version: 2,
           }),
         ],
         sql: `insert into settings (key, value) values (?, ?)`,
@@ -308,6 +316,46 @@ describe("projection production operations", () => {
     ).toHaveLength(0);
   });
 
+  it("rejects track and crawl audit evidence after mutation debt is drained", async () => {
+    await db.execute(`insert into due_work
+      (work_kind, subject_type, subject_id, state)
+      values ('source-repair', 'track', 'after-audit', 'repair')`);
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: `delete from due_work where work_kind = 'source-repair'
+            and subject_id = 'after-audit'`,
+        },
+        advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY),
+      ],
+      "write",
+    );
+    const trackStatus = await getProjectionStatusFor(db);
+    expect(trackStatus.projections.trackDueWork.repairs.total.count).toBe(0);
+    expect(trackStatus.readyToOpen.trackDueWork).toBe(false);
+    await expect(
+      setProjectionCutoverFor(db, { enabled: true, target: "track_due_work" }),
+    ).rejects.toThrow(/not converged/);
+
+    await db.execute(
+      `insert into crawl_due_work (node_id, state) values ('after-audit', 'repair')`,
+    );
+    await db.batch(
+      [
+        { args: [], sql: `delete from crawl_due_work where node_id = 'after-audit'` },
+        advanceProjectionFenceStatement(CRAWL_DUE_AUDIT_FENCE_KEY),
+      ],
+      "write",
+    );
+    const crawlStatus = await getProjectionStatusFor(db);
+    expect(crawlStatus.projections.crawlDueWork.repairs.total.count).toBe(0);
+    expect(crawlStatus.readyToOpen.crawlDueWork).toBe(false);
+    await expect(
+      setProjectionCutoverFor(db, { enabled: true, target: "crawl_due_work" }),
+    ).rejects.toThrow(/not converged/);
+  });
+
   it("rejects structurally valid JSON that fails the runtime anchor completeness rules", async () => {
     await db.execute({
       args: [TRACKS_HUB_PAGE_SIZE],
@@ -391,9 +439,127 @@ describe("projection production operations", () => {
     expect(complete).toBe(true);
   });
 
+  it("audits every sharded anchor boundary exactly and fences later source mutations", async () => {
+    const ids = Array.from(
+      { length: TRACKS_HUB_PAGE_SIZE * 2 },
+      (_, index) => `audit-${String(index).padStart(3, "0")}`,
+    );
+    for (const id of ids) {
+      await db.batch(
+        [
+          {
+            args: [id],
+            sql: `insert into tracks (track_id, release_date, key)
+              values (?, '2026-01-01', null)`,
+          },
+          {
+            args: [id],
+            sql: `insert into public_aggregate_membership
+              (track_id, release_date_bucket, key_bucket) values (?, '2026', null)`,
+          },
+        ],
+        "write",
+      );
+    }
+    await db.execute({
+      args: [ids.length],
+      sql: `insert into public_aggregate_counts (aggregate_kind, bucket, track_count)
+        values ('release_date_bucket', '2026', ?)`,
+    });
+    await db.execute({
+      args: [ids.length, ids.length],
+      sql: `update public_aggregate_state
+        set default_track_total = ?, projected_entry_count = ? where scope = 'tracks'`,
+    });
+    const descending = [...ids].sort().reverse();
+    const firstBoundary = descending.at(TRACKS_HUB_PAGE_SIZE - 1);
+    const secondBoundary = descending.at(TRACKS_HUB_PAGE_SIZE * 2 - 1);
+    const changedId = ids.at(0);
+    if (firstBoundary === undefined || secondBoundary === undefined || changedId === undefined) {
+      throw new Error("anchor audit fixture boundaries are missing");
+    }
+    const correctAnchors = [
+      { id: firstBoundary, key: "2026-01-01", page: 2 },
+      { id: secondBoundary, key: "2026-01-01", page: 3 },
+    ] satisfies [
+      { id: string; key: string; page: number },
+      { id: string; key: string; page: number },
+    ];
+    const writeAnchors = async (anchors: readonly (typeof correctAnchors)[number][]) => {
+      await db.execute({
+        args: [
+          JSON.stringify(anchors),
+          TRACKS_HUB_ANCHOR_ADDRESS.hub,
+          `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:agg:0000000000`,
+        ],
+        sql: `update hub_page_anchors set anchors_json = ?
+          where hub = ? and clause_hash = ?`,
+      });
+    };
+    const audit = async () => {
+      await db.execute({
+        args: [PROJECTION_AUDIT_SETTING_KEYS.public_aggregates],
+        sql: `delete from settings where key = ?`,
+      });
+      for (let step = 0; step < 10; step += 1) {
+        const result = await advanceProjectionAudit(db, "public_aggregates", 100);
+        expect(result.processed).toBeLessThanOrEqual(100);
+        if (result.complete) {
+          return result;
+        }
+      }
+      throw new Error("public anchor audit did not complete");
+    };
+
+    const invalidDocuments: (typeof correctAnchors)[number][][] = [
+      [{ ...correctAnchors[0], id: "wrong-id" }, correctAnchors[1]],
+      [{ ...correctAnchors[0], key: "wrong-key" }, correctAnchors[1]],
+      [
+        { id: secondBoundary, key: "2026-01-01", page: 2 },
+        { id: firstBoundary, key: "2026-01-01", page: 3 },
+      ],
+    ];
+    for (const anchors of invalidDocuments) {
+      await writeAnchors(anchors);
+      expect(await audit()).toMatchObject({ complete: true, matched: false });
+    }
+
+    await writeAnchors(correctAnchors);
+    expect(await audit()).toMatchObject({ complete: true, matched: true });
+
+    await db.execute({
+      args: [changedId],
+      sql: `update tracks set key = 'Dm' where track_id = ?`,
+    });
+    await db.execute({
+      args: [changedId],
+      sql: `update public_aggregate_membership set key_bucket = 'Dm' where track_id = ?`,
+    });
+    await db.execute(`insert into public_aggregate_counts
+      (aggregate_kind, bucket, track_count) values ('key', 'Dm', 1)`);
+    await db.execute(`update public_aggregate_state
+      set source_epoch = 1, aggregate_epoch = 1 where scope = 'tracks'`);
+
+    const status = await getProjectionStatusFor(db);
+    expect(status.projections.publicAggregates.convergence.epochMatched).toBe(true);
+    expect(status.projections.publicAggregates.convergence.digestMatched).toBe(false);
+    expect(status.readyToOpen.publicProjections).toBe(false);
+    await expect(
+      setProjectionCutoverFor(db, { enabled: true, target: "public_projections" }),
+    ).rejects.toThrow(/not converged/);
+  });
+
   it("builds scaled anchors in bounded shards and publishes only a complete document", async () => {
-    await db.execute(`delete from hub_page_anchor_validity`);
-    await db.execute(`delete from hub_page_anchors`);
+    for (let index = 0; index < 20; index += 1) {
+      await db.execute({
+        args: [
+          TRACKS_HUB_ANCHOR_ADDRESS.hub,
+          `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:stale:${String(index).padStart(10, "0")}`,
+        ],
+        sql: `insert into hub_page_anchors (hub, clause_hash, anchors_json)
+          values (?, ?, '[]')`,
+      });
+    }
     for (let index = 0; index < 250; index += 1) {
       const id = `scaled-${String(index).padStart(3, "0")}`;
       await db.execute({
@@ -418,10 +584,21 @@ describe("projection production operations", () => {
       );
       maximumStateBytes = Math.max(maximumStateBytes, Number(state.rows[0]?.bytes ?? 0));
       if (!complete) {
-        expect(
-          (await db.execute(`select count(*) as total from hub_page_anchor_validity`)).rows[0]
-            ?.total,
-        ).toBe(0);
+        const validityCount = Number(
+          (
+            await db.execute(`select count(*) as total from hub_page_anchor_validity
+              where generation = 'scaled'`)
+          ).rows[0]?.total ?? 0,
+        );
+        if (validityCount > 0) {
+          expect(
+            await readCurrentProjectedTrackHubAnchors(
+              db,
+              TRACKS_HUB_ANCHOR_ADDRESS,
+              TRACKS_HUB_PAGE_SIZE,
+            ),
+          ).toBeDefined();
+        }
       }
     }
     expect(complete).toBe(true);
@@ -432,6 +609,37 @@ describe("projection production operations", () => {
     ).rows[0];
     expect(Number(shardStats?.total)).toBeGreaterThan(1);
     expect(Number(shardStats?.maximum_bytes)).toBeLessThan(512);
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: [
+              TRACKS_HUB_ANCHOR_ADDRESS.hub,
+              `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:stale:%`,
+            ],
+            sql: `select count(*) as total from hub_page_anchors
+              where hub = ? and clause_hash like ?`,
+          })
+        ).rows[0]?.total ?? -1,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:agg:%`],
+            sql: `select count(*) as total from hub_page_anchors
+              where hub = ? and clause_hash like ?`,
+          })
+        ).rows[0]?.total ?? 0,
+      ),
+    ).toBeGreaterThan(0);
+    expect(
+      (
+        await db.execute(`select value from settings
+          where key = 'projection_public_anchor_rollback_generation_v1'`)
+      ).rows[0]?.value,
+    ).toBe("agg");
     const published = await readCurrentProjectedTrackHubAnchors(
       db,
       TRACKS_HUB_ANCHOR_ADDRESS,
@@ -441,5 +649,99 @@ describe("projection production operations", () => {
     expect(published?.anchors.map((anchor) => anchor.page)).toEqual(
       Array.from({ length: Math.floor(250 / TRACKS_HUB_PAGE_SIZE) }, (_, index) => index + 2),
     );
+  });
+
+  it("rejects every malformed anchor-build field and restarts partial shards in bounded pages", async () => {
+    await db.execute(`delete from hub_page_anchor_validity`);
+    await db.execute(`delete from hub_page_anchors`);
+    const validState = {
+      cursorId: null,
+      cursorKey: null,
+      firstId: null,
+      generation: "agg",
+      orderEpoch: 0,
+      processed: 0,
+      shard: 0,
+      version: 1,
+    };
+    const malformedStates: unknown[] = [
+      { ...validState, extra: true },
+      { ...validState, cursorId: 1 },
+      { ...validState, cursorKey: 1 },
+      { ...validState, firstId: 1 },
+      { ...validState, generation: "" },
+      { ...validState, orderEpoch: "0" },
+      { ...validState, processed: "0" },
+      { ...validState, shard: "0" },
+      { ...validState, version: 2 },
+      { ...validState, cursorId: "cursor" },
+      {
+        ...validState,
+        cursorId: "cursor",
+        firstId: "first",
+        processed: 1,
+        shard: 0,
+      },
+    ];
+    for (const malformed of malformedStates) {
+      await db.execute({
+        args: [JSON.stringify(malformed)],
+        sql: `insert into settings (key, value)
+          values ('projection_rebuild_public_anchors_v1', ?)
+          on conflict(key) do update set value = excluded.value`,
+      });
+      expect(await advancePublicAnchors(db, 2)).toEqual({ complete: false, processed: 0 });
+      expect(
+        (
+          await db.execute(`select 1 from settings
+            where key = 'projection_rebuild_public_anchors_v1'`)
+        ).rows,
+      ).toHaveLength(0);
+    }
+
+    for (let index = 0; index < 3; index += 1) {
+      await db.execute({
+        args: [
+          TRACKS_HUB_ANCHOR_ADDRESS.hub,
+          `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:agg:${String(index).padStart(10, "0")}`,
+        ],
+        sql: `insert into hub_page_anchors (hub, clause_hash, anchors_json)
+          values (?, ?, '[{"id":"partial","key":null,"page":2}]')`,
+      });
+    }
+    await db.execute({
+      args: [JSON.stringify({ ...validState, processed: 1, shard: 2 })],
+      sql: `insert into settings (key, value)
+        values ('projection_rebuild_public_anchors_v1', ?)`,
+    });
+    expect(await advancePublicAnchors(db, 2)).toEqual({ complete: false, processed: 2 });
+    expect(await advancePublicAnchors(db, 2)).toEqual({ complete: false, processed: 1 });
+    expect(await advancePublicAnchors(db, 2)).toEqual({ complete: false, processed: 0 });
+    expect(
+      Number(
+        (
+          await db.execute({
+            args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:agg:%`],
+            sql: `select count(*) as total from hub_page_anchors
+              where hub = ? and clause_hash like ?`,
+          })
+        ).rows[0]?.total ?? -1,
+      ),
+    ).toBe(0);
+
+    let complete = false;
+    for (let step = 0; step < 5 && !complete; step += 1) {
+      const result = await advancePublicAnchors(db, 2);
+      expect(result.processed).toBeLessThanOrEqual(2);
+      complete = result.complete;
+    }
+    expect(complete).toBe(true);
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toMatchObject({ anchors: [], total: 0 });
   });
 });

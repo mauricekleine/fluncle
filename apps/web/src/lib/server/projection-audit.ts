@@ -8,6 +8,11 @@ import {
   readPublicProjectionAuditChunk,
   type PublicProjectionAuditLane,
 } from "./public-projections";
+import {
+  CRAWL_DUE_AUDIT_FENCE_KEY,
+  readProjectionFence,
+  TRACK_DUE_AUDIT_FENCE_KEY,
+} from "./projection-fences";
 
 export type ProjectionAuditTarget =
   | "artist_qualification"
@@ -18,6 +23,8 @@ export type ProjectionAuditTarget =
 type ProjectionAuditClient = Pick<Client, "batch" | "execute">;
 
 type AuditState = {
+  anchorGeneration: null | string;
+  anchorOrderEpoch: null | number;
   buckets: Record<string, number>;
   complete: boolean;
   cursor: null | string;
@@ -29,13 +36,16 @@ type AuditState = {
   sourceCount: number;
   sourceDigest: string;
   sourceEpoch: null | number;
+  sourceFence: number;
   startedAt: string;
   target: ProjectionAuditTarget;
-  version: 1;
+  version: 2;
 };
 
 export type ProjectionAuditEvidence = Pick<
   AuditState,
+  | "anchorGeneration"
+  | "anchorOrderEpoch"
   | "complete"
   | "matched"
   | "projectedCount"
@@ -43,6 +53,7 @@ export type ProjectionAuditEvidence = Pick<
   | "sourceCount"
   | "sourceDigest"
   | "sourceEpoch"
+  | "sourceFence"
   | "target"
 >;
 
@@ -67,8 +78,10 @@ const PUBLIC_LANES: Record<
   ],
   public_aggregates: [
     "aggregate_source_membership",
+    "aggregate_source_anchors",
     "aggregate_projected_membership",
     "aggregate_projected_counts",
+    "aggregate_projected_anchors",
   ],
 };
 
@@ -84,8 +97,18 @@ function chainDigest(current: string, rows: readonly unknown[][]): string {
   return value;
 }
 
-function newState(target: ProjectionAuditTarget, sourceEpoch: null | number): AuditState {
+function newState(
+  target: ProjectionAuditTarget,
+  fence: {
+    anchorGeneration: null | string;
+    anchorOrderEpoch: null | number;
+    sourceEpoch: null | number;
+    sourceFence: number;
+  },
+): AuditState {
   return {
+    anchorGeneration: fence.anchorGeneration,
+    anchorOrderEpoch: fence.anchorOrderEpoch,
     buckets: {},
     complete: false,
     cursor: null,
@@ -104,10 +127,11 @@ function newState(target: ProjectionAuditTarget, sourceEpoch: null | number): Au
     projectedDigest: ZERO_DIGEST,
     sourceCount: 0,
     sourceDigest: ZERO_DIGEST,
-    sourceEpoch,
+    sourceEpoch: fence.sourceEpoch,
+    sourceFence: fence.sourceFence,
     startedAt: new Date().toISOString(),
     target,
-    version: 1,
+    version: 2,
   };
 }
 
@@ -117,7 +141,7 @@ function parseState(value: unknown, target: ProjectionAuditTarget): AuditState |
   }
   try {
     const state = JSON.parse(value) as Partial<AuditState>;
-    return state.version === 1 && state.target === target ? (state as AuditState) : undefined;
+    return state.version === 2 && state.target === target ? (state as AuditState) : undefined;
   } catch {
     return undefined;
   }
@@ -157,6 +181,60 @@ async function currentSourceEpoch(
   return value === undefined ? null : Number(value);
 }
 
+async function currentAuditFence(
+  client: ProjectionAuditClient,
+  target: ProjectionAuditTarget,
+): Promise<{
+  anchorGeneration: null | string;
+  anchorOrderEpoch: null | number;
+  sourceEpoch: null | number;
+  sourceFence: number;
+}> {
+  if (target === "track_due_work" || target === "crawl_due_work") {
+    const sourceFence = await readProjectionFence(
+      client,
+      target === "track_due_work" ? TRACK_DUE_AUDIT_FENCE_KEY : CRAWL_DUE_AUDIT_FENCE_KEY,
+    );
+    return {
+      anchorGeneration: null,
+      anchorOrderEpoch: null,
+      sourceEpoch: null,
+      sourceFence,
+    };
+  }
+  const sourceEpoch = await currentSourceEpoch(client, target);
+  if (target === "artist_qualification") {
+    return {
+      anchorGeneration: null,
+      anchorOrderEpoch: null,
+      sourceEpoch,
+      sourceFence: sourceEpoch ?? -1,
+    };
+  }
+  const result = await client.execute(`select generation, release_hub_order_epoch
+    from public_aggregate_state where scope = 'tracks' limit 1`);
+  const generation = result.rows[0]?.generation;
+  const orderEpoch = Number(result.rows[0]?.release_hub_order_epoch ?? -1);
+  return {
+    anchorGeneration: typeof generation === "string" && generation.length > 0 ? generation : null,
+    anchorOrderEpoch: Number.isSafeInteger(orderEpoch) && orderEpoch >= 0 ? orderEpoch : null,
+    sourceEpoch,
+    sourceFence: sourceEpoch ?? -1,
+  };
+}
+
+function sameAuditFence(
+  state: AuditState,
+  fence: Awaited<ReturnType<typeof currentAuditFence>>,
+): boolean {
+  return (
+    state.anchorGeneration === fence.anchorGeneration &&
+    state.anchorOrderEpoch === fence.anchorOrderEpoch &&
+    state.sourceEpoch === fence.sourceEpoch &&
+    state.sourceFence === fence.sourceFence
+  );
+}
+
 export async function readProjectionAuditEvidence(
   client: ProjectionAuditClient,
   target: ProjectionAuditTarget,
@@ -166,6 +244,8 @@ export async function readProjectionAuditEvidence(
     return undefined;
   }
   const {
+    anchorGeneration,
+    anchorOrderEpoch,
     complete,
     matched,
     projectedCount,
@@ -173,8 +253,11 @@ export async function readProjectionAuditEvidence(
     sourceCount,
     sourceDigest,
     sourceEpoch,
+    sourceFence,
   } = state;
   return {
+    anchorGeneration,
+    anchorOrderEpoch,
     complete,
     matched,
     projectedCount,
@@ -182,6 +265,7 @@ export async function readProjectionAuditEvidence(
     sourceCount,
     sourceDigest,
     sourceEpoch,
+    sourceFence,
     target,
   };
 }
@@ -380,18 +464,18 @@ async function advancePublicAudit(
     if (lane === "aggregate_source_membership") {
       appendAggregateSourceCounts(state);
     }
+    if (lane === "aggregate_projected_counts") {
+      await appendAggregateProjectedTotal(client, state);
+    }
     if (index + 1 < lanes.length) {
       state.lane = lanes[index + 1] ?? lane;
       state.cursor = null;
     } else {
-      if (target === "public_aggregates") {
-        await appendAggregateProjectedTotal(client, state);
-      }
-      const epoch = await currentSourceEpoch(client, target);
+      const fence = await currentAuditFence(client, target);
       state.complete = true;
       state.matched =
-        epoch !== null &&
-        epoch === state.sourceEpoch &&
+        fence.sourceEpoch !== null &&
+        sameAuditFence(state, fence) &&
         state.sourceDigest === state.projectedDigest;
     }
   }
@@ -405,9 +489,9 @@ export async function advanceProjectionAudit(
   limit: number,
 ): Promise<{ complete: boolean; matched: boolean; processed: number }> {
   let state = await readState(client, target);
-  const epoch = await currentSourceEpoch(client, target);
-  if (state === undefined || (state.complete && state.sourceEpoch !== epoch)) {
-    state = newState(target, epoch);
+  const fence = await currentAuditFence(client, target);
+  if (state === undefined || !sameAuditFence(state, fence)) {
+    state = newState(target, fence);
   }
   if (state.complete) {
     return { complete: true, matched: state.matched, processed: 0 };

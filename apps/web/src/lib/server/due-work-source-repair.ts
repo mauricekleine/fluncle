@@ -15,6 +15,7 @@ import {
   type DueWorkSubjectType,
 } from "./due-work";
 import { DUE_WORK_BACKFILLS, dueWorkRepairDefinitions } from "./due-work-registry";
+import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
 const SOURCE_REPAIR_LIMIT = 5;
 const PHYSICAL_REPAIR_LIMIT = 50;
@@ -77,8 +78,10 @@ async function expandSourceMarker(
   }
 
   statements.push(clearDueWorkSourceRepairStatement(marker));
+  const clearIndex = statements.length - 1;
+  statements.push(advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY));
   const results = await client.batch(statements, "write");
-  return (results.at(-1)?.rowsAffected ?? 0) > 0;
+  return (results[clearIndex]?.rowsAffected ?? 0) > 0;
 }
 
 async function advanceCatalogueRankRebuild(
@@ -99,7 +102,13 @@ async function advanceCatalogueRankRebuild(
   });
 
   if (result.complete) {
-    await client.execute(clearDueWorkSourceRepairStatement(marker));
+    await client.batch(
+      [
+        clearDueWorkSourceRepairStatement(marker),
+        advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY),
+      ],
+      "write",
+    );
   }
   return { complete: result.complete, scanned: result.scanned };
 }
