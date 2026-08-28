@@ -43,12 +43,28 @@ bounded_uint DATABASE_ADMISSION_HTTP_TIMEOUT_SECS "$ADMISSION_HTTP_TIMEOUT_SECS"
 bounded_uint DATABASE_ADMISSION_KILL_GRACE_SECS "$ADMISSION_KILL_GRACE_SECS" 0 10
 [ "$ADMISSION_FAIL_CLOSED" = "true" ] || ADMISSION_FAIL_CLOSED=false
 
+current_time_ms() {
+  local timestamp seconds
+  timestamp="$(date +%s%3N)"
+  case "$timestamp" in
+    '' | *[!0-9]*)
+      if command -v perl >/dev/null 2>&1; then
+        perl -MTime::HiRes=time -e 'printf "%.0f", time() * 1000'
+      else
+        seconds="$(date +%s)"
+        printf '%s000' "$seconds"
+      fi
+      ;;
+    *) printf '%s' "$timestamp" ;;
+  esac
+}
+
 api_base="${FLUNCLE_API_BASE_URL-https://www.fluncle.com}"
 api_base="${api_base%/}"
 api_token="${FLUNCLE_API_TOKEN:-}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM:-0}"
 started_seconds="$SECONDS"
-started_at_ms="$(date +%s%3N)"
+started_at_ms="$(current_time_ms)"
 acquisition_deadline_ms=$((started_at_ms + ADMISSION_MAX_WAIT_SECS * 1000))
 enforced=0
 enforcement_mode=false
@@ -75,7 +91,9 @@ json_number() {
 
 json_boolean() {
   local json="$1" field="$2"
-  printf '%s' "$json" | sed -n "s/.*\"${field}\":[[:space:]]*\(true\|false\).*/\1/p"
+  local value
+  value="$(printf '%s' "$json" | sed -n "s/.*\"${field}\":[[:space:]]*\([a-z][a-z]*\).*/\1/p")"
+  case "$value" in true | false) printf '%s' "$value" ;; esac
 }
 
 admission_post() {
@@ -111,7 +129,7 @@ duration_ms_as_seconds() {
 
 acquisition_request_timeout() {
   local now_ms remaining_ms configured_ms
-  now_ms="$(date +%s%3N)"
+  now_ms="$(current_time_ms)"
   remaining_ms=$((acquisition_deadline_ms - now_ms))
   configured_ms=$((ADMISSION_HTTP_TIMEOUT_SECS * 1000))
   [ "$remaining_ms" -gt 0 ] || remaining_ms=1
@@ -121,15 +139,24 @@ acquisition_request_timeout() {
 
 stop_payload() {
   [ -n "$payload_pid" ] || return 0
-  kill -0 "$payload_pid" 2>/dev/null || return 0
+  payload_is_running || return 0
   kill -TERM -- "-${payload_pid}" 2>/dev/null || kill -TERM "$payload_pid" 2>/dev/null || true
   local deadline=$((SECONDS + ADMISSION_KILL_GRACE_SECS))
-  while kill -0 "$payload_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
-    sleep 1
+  while payload_is_running && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 0.1
   done
-  if kill -0 "$payload_pid" 2>/dev/null; then
+  if payload_is_running; then
     kill -KILL -- "-${payload_pid}" 2>/dev/null || kill -KILL "$payload_pid" 2>/dev/null || true
   fi
+}
+
+payload_is_running() {
+  local running_pid
+  [ -n "$payload_pid" ] || return 1
+  for running_pid in $(jobs -pr); do
+    [ "$running_pid" = "$payload_pid" ] && return 0
+  done
+  return 1
 }
 
 # Invoked indirectly by the trap below.
@@ -197,7 +224,7 @@ while :; do
       emit_admission_event invalid-grant 0
       exit 0
     fi
-    if [ "$(date +%s%3N)" -gt "$acquisition_deadline_ms" ]; then
+    if [ "$(current_time_ms)" -ge "$acquisition_deadline_ms" ]; then
       admission_post release "$fencing_token" || true
       yield_reason="queue"
       emit_admission_event wait-expired 0
@@ -206,7 +233,7 @@ while :; do
     break
   fi
 
-  remaining_ms=$((acquisition_deadline_ms - $(date +%s%3N)))
+  remaining_ms=$((acquisition_deadline_ms - $(current_time_ms)))
   if [ "$remaining_ms" -le 0 ]; then
     admission_post cancel || true
     emit_admission_event wait-expired 0
@@ -237,6 +264,7 @@ setsid setpriv --pdeathsig TERM bash -c '
   kill_grace="$2"
   shift 2
   [ "$PPID" = "$expected_parent" ] || exit 75
+  supervisor_pid="$$"
   on_parent_loss() {
     trap "" TERM INT HUP
     kill -TERM -- "-$$" 2>/dev/null || true
@@ -244,10 +272,22 @@ setsid setpriv --pdeathsig TERM bash -c '
     kill -KILL -- "-$$" 2>/dev/null || true
   }
   trap on_parent_loss TERM INT HUP
-  "$@" &
+  FLUNCLE_ADMISSION_RUNNER_PID="$expected_parent" "$@" &
   child_pid="$!"
+  (
+    while kill -0 "$child_pid" 2>/dev/null; do
+      if ! kill -0 "$expected_parent" 2>/dev/null; then
+        kill -TERM "$supervisor_pid" 2>/dev/null || true
+        exit 0
+      fi
+      sleep 0.1
+    done
+  ) &
+  watchdog_pid="$!"
   wait "$child_pid"
   child_rc="$?"
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
   trap - TERM INT HUP
   exit "$child_rc"
 ' database-admission-payload "$owner_pid" "$ADMISSION_KILL_GRACE_SECS" "$@" &
@@ -258,7 +298,7 @@ heartbeat_seconds=$(( (heartbeat_after_ms + 999) / 1000 ))
 next_heartbeat=$((SECONDS + heartbeat_seconds))
 fence_lost=0
 
-while kill -0 "$payload_pid" 2>/dev/null; do
+while payload_is_running; do
   if [ "$SECONDS" -ge "$next_heartbeat" ]; then
     if ! admission_post heartbeat "$fencing_token"; then
       fence_lost=1

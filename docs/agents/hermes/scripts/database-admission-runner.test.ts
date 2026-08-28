@@ -22,6 +22,18 @@ beforeEach(() => {
   binDirectory = join(directory, "bin");
   curlLog = join(directory, "curl.log");
   mkdirSync(binDirectory);
+
+  if (process.platform === "darwin") {
+    fakeExecutable(
+      "setsid",
+      `exec perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- "$@"`,
+    );
+    fakeExecutable(
+      "setpriv",
+      `shift 2
+exec "$@"`,
+    );
+  }
 });
 
 afterEach(() => {
@@ -236,7 +248,6 @@ fi
 ${ACQUIRED_RESPONSE}
 `);
     const result = run(["bash", "-c", "while :; do sleep 1; done"]);
-
     expect(result.status).toBe(75);
     expect(result.signal).toBeNull();
     expect(result.stderr).toContain('"outcome":"fenced"');
@@ -282,14 +293,12 @@ ${ACQUIRED_RESPONSE}
 
   it("does not start the payload if the owner dies before parent-death arming completes", async () => {
     const setprivStarted = join(directory, "setpriv-started");
-    const setprivFinished = join(directory, "setpriv-finished");
     fakeExecutable(
       "setpriv",
-      `printf started > "${setprivStarted}"
+      `printf '%s' "$$" > "${setprivStarted}"
 sleep 1
 shift 2
-"$@"
-printf finished > "${setprivFinished}"`,
+exec "$@"`,
     );
     fakeCurl(ACQUIRED_RESPONSE);
     const payloadMarker = join(directory, "payload-started");
@@ -300,9 +309,19 @@ printf finished > "${setprivFinished}"`,
     );
 
     await waitUntil(() => existsSync(setprivStarted));
+    const setprivPid = Number(readFileSync(setprivStarted, "utf8"));
+    expect(Number.isInteger(setprivPid)).toBe(true);
     runner.kill("SIGKILL");
-    await waitUntil(() => existsSync(setprivFinished));
-    expect(existsSync(payloadMarker)).toBe(false);
+    try {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_300));
+      expect(existsSync(payloadMarker)).toBe(false);
+    } finally {
+      try {
+        process.kill(-setprivPid, "SIGKILL");
+      } catch {
+        // The expected parent-identity check already ended the delayed supervisor.
+      }
+    }
   });
 
   it("fences a running payload when an enforced heartbeat downgrades to shadow", () => {
@@ -314,7 +333,6 @@ fi
 ${ACQUIRED_RESPONSE}
 `);
     const result = run(["bash", "-c", "while :; do sleep 1; done"]);
-
     expect(result.status).toBe(75);
     expect(result.stderr).toContain('"yield_reason":"enforcement-not-active"');
   });
@@ -324,7 +342,7 @@ ${ACQUIRED_RESPONSE}
     const result = run([
       "bash",
       "-c",
-      'if [ -r "/proc/$PPID/stat" ]; then read -r group_pid group_comm group_state owner_pid group_rest < "/proc/$PPID/stat"; else read -r owner_pid < <(ps -o ppid= -p "$PPID"); fi; kill -TERM "$owner_pid"; while :; do sleep 1; done',
+      'kill -TERM "$FLUNCLE_ADMISSION_RUNNER_PID"; while :; do sleep 1; done',
     ]);
 
     expect(result.status).toBe(143);
