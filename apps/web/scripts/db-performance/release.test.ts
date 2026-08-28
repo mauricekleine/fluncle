@@ -1,4 +1,5 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -20,11 +21,16 @@ import {
   buildArtifactEvidence,
   buildArtifactRoot,
   captureChild,
+  cleanupDetachedExecution,
   DOMINANT_REGRESSION_RUNTIME_COMPONENT_ASSIGNMENTS,
   parseReleaseArguments,
+  prepareDetachedExecution,
+  readRepositorySnapshot,
   REQUIRED_RELEASE_CATEGORIES,
   releaseCommands,
   type ChildResult,
+  type DetachedExecution,
+  type DetachedExecutionRuntime,
   type ReleaseCommandResult,
   validateArtifactContents,
   validateChildResult,
@@ -32,6 +38,68 @@ import {
   validateProfileReport,
   validatePortableArtifactFilename,
 } from "./release";
+
+async function git(cwd: string, args: readonly string[]): Promise<string> {
+  const child = spawn("git", [...args], {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Uint8Array) => {
+    stdout += Buffer.from(chunk).toString("utf8");
+  });
+  child.stderr.on("data", (chunk: Uint8Array) => {
+    stderr += Buffer.from(chunk).toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+  if (exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${stderr}`);
+  }
+  return stdout.trim();
+}
+
+async function makeCandidateRepository(testDirectory: string): Promise<{
+  candidateCommit: string;
+  repository: string;
+}> {
+  const repository = join(testDirectory, "repository");
+  await mkdir(join(repository, "node_modules"), { recursive: true });
+  await git(repository, ["init"]);
+  await Promise.all([
+    writeFile(join(repository, ".gitignore"), "node_modules\n"),
+    writeFile(join(repository, "bun.lock"), "candidate-lock\n"),
+    writeFile(join(repository, "source.txt"), "candidate-source\n"),
+  ]);
+  await git(repository, ["add", ".gitignore", "bun.lock", "source.txt"]);
+  await git(repository, [
+    "-c",
+    "user.name=Release Proof Test",
+    "-c",
+    "user.email=release-proof@example.invalid",
+    "commit",
+    "--no-gpg-sign",
+    "-m",
+    "candidate",
+  ]);
+  return { candidateCommit: await git(repository, ["rev-parse", "HEAD"]), repository };
+}
+
+const FILESYSTEM_RUNTIME: DetachedExecutionRuntime = {
+  async makeDirectory(path) {
+    await mkdir(path, { recursive: true });
+  },
+  makeTemporaryDirectory: mkdtemp,
+  async removeDirectory(path) {
+    await rm(path, { force: true, recursive: true });
+  },
+  async symlinkDirectory(target, path) {
+    await symlink(target, path, "dir");
+  },
+};
 
 function processExists(pid: number): boolean {
   try {
@@ -161,6 +229,7 @@ function validProfileReport(profile: "1x" | "2x" | "4x"): string {
 function child(overrides: Partial<ChildResult> = {}): ChildResult {
   return {
     durationMs: 1,
+    executionRoot: "detached-candidate-worktree",
     exitCode: 0,
     spawnError: null,
     stderr: "",
@@ -269,6 +338,150 @@ describe("database performance release proof", () => {
       }
     },
     8_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "executes candidate bytes from a detached root while the invocation worktree mutates and restores",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-detached-source-");
+      const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
+      let execution: DetachedExecution | null = null;
+
+      try {
+        const invocation = await readRepositorySnapshot(repository);
+        execution = await prepareDetachedExecution({ candidateCommit, invocationRoot: repository });
+        const started = await readRepositorySnapshot(execution.sourceDirectory);
+        const childPromise = captureChild(
+          {
+            categories: [],
+            command: [
+              process.execPath,
+              "-e",
+              'const { readFile } = await import("node:fs/promises"); await new Promise((resolve) => setTimeout(resolve, 150)); process.stdout.write(await readFile("source.txt", "utf8"));',
+            ],
+            cwd: ".",
+            id: "detached-source-fixture",
+            timeoutMs: 2_000,
+          },
+          { repositoryRoot: execution.sourceDirectory },
+        );
+
+        await writeFile(join(repository, "source.txt"), "transient-live-mutation\n");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await writeFile(join(repository, "source.txt"), "candidate-source\n");
+        const child = await childPromise;
+        const completed = await readRepositorySnapshot(execution.sourceDirectory);
+        const evidence = assessReleaseSourceEvidence({
+          candidateCommit,
+          candidateSelection: "explicit",
+          completed,
+          invocation,
+          started,
+        });
+
+        expect(child.stdout).toBe("candidate-source\n");
+        expect(validateChildResult(child)).toEqual([]);
+        expect(evidence).toMatchObject({
+          actualCommit: candidateCommit,
+          candidateCommit,
+          clean: true,
+          failures: [],
+          passed: true,
+        });
+        expect(await cleanupDetachedExecution(execution, { invocationRoot: repository })).toEqual(
+          [],
+        );
+        expect(await pathExists(execution.rootDirectory)).toBe(false);
+        expect(await git(repository, ["worktree", "list", "--porcelain"])).not.toContain(
+          execution.sourceDirectory,
+        );
+        execution = null;
+      } finally {
+        if (execution !== null) {
+          await cleanupDetachedExecution(execution, { invocationRoot: repository });
+        }
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    10_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "removes a partially prepared worktree when dependency binding fails",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-detached-setup-");
+      const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
+      const runtime: DetachedExecutionRuntime = {
+        ...FILESYSTEM_RUNTIME,
+        async symlinkDirectory() {
+          throw new Error("dependency binding refused");
+        },
+      };
+
+      try {
+        await expect(
+          prepareDetachedExecution({ candidateCommit, invocationRoot: repository, runtime }),
+        ).rejects.toThrow("dependency binding refused");
+        const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
+        expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
+      } finally {
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    10_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a shared dependency install whose live lockfile differs from the candidate",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-detached-lock-");
+      const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
+
+      try {
+        await writeFile(join(repository, "bun.lock"), "different-live-lock\n");
+        await expect(
+          prepareDetachedExecution({ candidateCommit, invocationRoot: repository }),
+        ).rejects.toThrow("shared dependency install is not bound to the candidate bun.lock");
+        const worktrees = await git(repository, ["worktree", "list", "--porcelain"]);
+        expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
+      } finally {
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    10_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "bounds detached-directory cleanup and reports it as a failure",
+    async () => {
+      const testDirectory = await mkdtemp("/tmp/db-performance-detached-cleanup-");
+      const { candidateCommit, repository } = await makeCandidateRepository(testDirectory);
+      const execution = await prepareDetachedExecution({
+        candidateCommit,
+        invocationRoot: repository,
+      });
+      const runtime: DetachedExecutionRuntime = {
+        ...FILESYSTEM_RUNTIME,
+        removeDirectory: async () => await new Promise<void>(() => undefined),
+      };
+
+      try {
+        const failures = await cleanupDetachedExecution(execution, {
+          cleanupTimeoutMs: 10,
+          invocationRoot: repository,
+          runtime,
+        });
+        expect(failures).toEqual([
+          "detached execution directory cleanup failed: detached execution directory cleanup timed out after 10ms",
+        ]);
+        expect(await git(repository, ["worktree", "list", "--porcelain"])).not.toContain(
+          execution.sourceDirectory,
+        );
+      } finally {
+        await rm(testDirectory, { force: true, recursive: true });
+      }
+    },
+    10_000,
   );
 
   it("binds portable relative artifacts to their exact bytes", () => {
@@ -422,7 +635,7 @@ describe("database performance release proof", () => {
     expect(dirtyAndChanged.actualCommit).toBeNull();
     expect(dirtyAndChanged.failures).toEqual(
       expect.arrayContaining([
-        "source tree is not clean at start",
+        "source tree is not clean at invocation",
         "source completion commit 356463239bb2e927766dae9239cb98703cf5ab05 does not match candidate afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf",
         "source commit changed during proof: afeec3b9c15fb2350dcc9dc34c72d1d60e9b69cf -> 356463239bb2e927766dae9239cb98703cf5ab05",
       ]),

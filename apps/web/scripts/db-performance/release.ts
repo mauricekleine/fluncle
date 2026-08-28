@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
 import { spawn as spawnChild } from "node:child_process";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,9 +29,12 @@ import { expectedFixtureTableCardinalities } from "./fixture";
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DEFAULT_ARTIFACT_ROOT = join(REPOSITORY_ROOT, "apps/web/.dev/db-performance-release");
 
-export const RELEASE_MANIFEST_SCHEMA_VERSION = 3 as const;
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 4 as const;
 const PROCESS_STOP_GRACE_MS = 2_000;
 const GIT_INSPECTION_TIMEOUT_MS = 30_000;
+const WORKTREE_SETUP_TIMEOUT_MS = 60_000;
+const WORKTREE_CLEANUP_TIMEOUT_MS = 30_000;
+const FILESYSTEM_CLEANUP_TIMEOUT_MS = 10_000;
 const CHILD_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 const COMPONENT_COMMAND_TIMEOUT_MS = 5 * 60_000;
 const SONAR_COMMAND_TIMEOUT_MS = 10 * 60_000;
@@ -126,6 +130,7 @@ export type ReleaseSourceEvidence = {
   checkpoints: ReleaseSourceCheckpoint[];
   completed: RepositorySnapshot;
   failures: string[];
+  invocation: RepositorySnapshot;
   passed: boolean;
   started: RepositorySnapshot;
 };
@@ -147,6 +152,7 @@ export type ReleaseCommandResult = {
   durationMs: number;
   deadlineMs: number;
   exitCode: number | null;
+  executionRoot: "detached-candidate-worktree";
   id: string;
   profile: ScaleProfile | null;
   spawnError: string | null;
@@ -197,6 +203,38 @@ export type ReleaseCommandDefinition = {
   id: string;
   profile?: ScaleProfile;
   timeoutMs: number;
+};
+
+export type DetachedExecution = {
+  candidateCommit: string;
+  cargoTargetDirectory: string;
+  dependencyLockSha256: string;
+  dependencySource: "shared-install-bound-by-candidate-lockfile";
+  rootDirectory: string;
+  scratchDirectory: string;
+  sourceDirectory: string;
+};
+
+export type DetachedExecutionEvidence = {
+  candidateCommit: string | null;
+  cleanupFailures: string[];
+  dependencyLockSha256: string | null;
+  dependencySource: DetachedExecution["dependencySource"];
+  mode: "detached-candidate-worktree";
+  passed: boolean;
+  sourceRoot: "detached-candidate-worktree";
+};
+
+export type CaptureChildOptions = {
+  environment?: Readonly<Record<string, string>>;
+  repositoryRoot?: string;
+};
+
+export type DetachedExecutionRuntime = {
+  makeTemporaryDirectory: (prefix: string) => Promise<string>;
+  makeDirectory: (path: string) => Promise<void>;
+  removeDirectory: (path: string) => Promise<void>;
+  symlinkDirectory: (target: string, path: string) => Promise<void>;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -554,6 +592,10 @@ function validateCriteria(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function redactLocalPath(message: string, path: string, replacement: string): string {
+  return path.length === 0 ? message : message.split(path).join(replacement);
 }
 
 function validateExactLocalDatabaseEvidence(
@@ -1136,45 +1178,61 @@ function childEnvironment(): Record<string, string> {
   return environment;
 }
 
-async function captureGitCommand(args: readonly string[]): Promise<{
+async function captureGitCommand(
+  repositoryRoot: string,
+  args: readonly string[],
+  timeoutMs = GIT_INSPECTION_TIMEOUT_MS,
+): Promise<{
   exitCode: number;
+  failure: string | null;
   stderr: string;
   stdout: string;
 }> {
-  const result = await captureChild({
-    categories: [],
-    command: ["git", ...args],
-    cwd: ".",
-    id: "source-inspection",
-    timeoutMs: GIT_INSPECTION_TIMEOUT_MS,
-  });
+  const result = await captureChild(
+    {
+      categories: [],
+      command: ["git", ...args],
+      cwd: ".",
+      id: "source-inspection",
+      timeoutMs,
+    },
+    {
+      repositoryRoot,
+    },
+  );
+  const failures = validateChildResult(result);
   return {
     exitCode: result.exitCode ?? 1,
+    failure: failures.length === 0 ? null : failures.join("; "),
     stderr: result.spawnError === null ? result.stderr : `${result.spawnError}\n${result.stderr}`,
     stdout: result.stdout,
   };
 }
 
-function sourcePathExclusion(path: string): string | null {
-  const candidate = relative(REPOSITORY_ROOT, path).split("\\").join("/");
+function sourcePathExclusion(repositoryRoot: string, path: string): string | null {
+  const candidate = relative(repositoryRoot, path).split("\\").join("/");
   return candidate.length > 0 && candidate !== ".." && !candidate.startsWith("../")
     ? `:(exclude)${candidate}/**`
     : null;
 }
 
-async function readRepositorySnapshot(outputDirectory: string): Promise<RepositorySnapshot> {
+export async function readRepositorySnapshot(
+  repositoryRoot: string,
+  outputDirectory: string | null = null,
+): Promise<RepositorySnapshot> {
   try {
-    const exclusion = sourcePathExclusion(outputDirectory);
+    const exclusion =
+      outputDirectory === null ? null : sourcePathExclusion(repositoryRoot, outputDirectory);
     const statusArguments = ["status", "--porcelain=v1", "--untracked-files=all", "--", "."];
     if (exclusion !== null) {
       statusArguments.push(exclusion);
     }
 
     const [commit, tree, index, status] = await Promise.all([
-      captureGitCommand(["rev-parse", "--verify", "HEAD^{commit}"]),
-      captureGitCommand(["rev-parse", "--verify", "HEAD^{tree}"]),
-      captureGitCommand(["ls-files", "--stage", "-z"]),
-      captureGitCommand(statusArguments),
+      captureGitCommand(repositoryRoot, ["rev-parse", "--verify", "HEAD^{commit}"]),
+      captureGitCommand(repositoryRoot, ["rev-parse", "--verify", "HEAD^{tree}"]),
+      captureGitCommand(repositoryRoot, ["ls-files", "--stage", "-z"]),
+      captureGitCommand(repositoryRoot, statusArguments),
     ]);
     const failures: string[] = [];
     if (commit.exitCode !== 0) {
@@ -1195,7 +1253,10 @@ async function readRepositorySnapshot(outputDirectory: string): Promise<Reposito
     return {
       clean: status.exitCode === 0 ? status.stdout.trim().length === 0 : null,
       commit: commit.exitCode === 0 ? commit.stdout.trim() : null,
-      failure: failures.length === 0 ? null : failures.join("; "),
+      failure:
+        failures.length === 0
+          ? null
+          : redactLocalPath(failures.join("; "), repositoryRoot, "<repository-root>"),
       indexHash:
         index.exitCode === 0 ? createHash("sha256").update(index.stdout).digest("hex") : null,
       treeHash: tree.exitCode === 0 ? tree.stdout.trim() : null,
@@ -1204,7 +1265,7 @@ async function readRepositorySnapshot(outputDirectory: string): Promise<Reposito
     return {
       clean: null,
       commit: null,
-      failure: errorMessage(error),
+      failure: redactLocalPath(errorMessage(error), repositoryRoot, "<repository-root>"),
       indexHash: null,
       treeHash: null,
     };
@@ -1216,16 +1277,19 @@ export function assessReleaseSourceEvidence(options: {
   candidateSelection: ReleaseSourceEvidence["candidateSelection"];
   checkpoints?: readonly ReleaseSourceCheckpoint[];
   completed: RepositorySnapshot;
+  invocation?: RepositorySnapshot;
   started: RepositorySnapshot;
 }): ReleaseSourceEvidence {
   const failures = new Set<string>();
   const candidateCommit = options.candidateCommit;
   const checkpoints = [...(options.checkpoints ?? [])];
+  const invocation = options.invocation ?? options.started;
   const startedTreeHash = options.started.treeHash;
   const startedIndexHash = options.started.indexHash;
 
   for (const [label, snapshot] of [
-    ["start", options.started],
+    ["invocation", invocation],
+    ["execution start", options.started],
     ...checkpoints.map(
       (checkpoint) => [`${checkpoint.phase} ${checkpoint.commandId}`, checkpoint.snapshot] as const,
     ),
@@ -1282,11 +1346,13 @@ export function assessReleaseSourceEvidence(options: {
     candidateSelection: options.candidateSelection,
     checkpoints,
     clean:
+      invocation.clean === true &&
       options.started.clean === true &&
       checkpoints.every((checkpoint) => checkpoint.snapshot.clean === true) &&
       options.completed.clean === true,
     completed: options.completed,
     failures: sourceFailures,
+    invocation,
     passed: sourceFailures.length === 0,
     started: options.started,
   };
@@ -1312,7 +1378,10 @@ async function waitForProcessGroupExit(pid: number, timeoutMs: number): Promise<
   return !signalProcessGroup(pid, 0);
 }
 
-export async function captureChild(definition: ReleaseCommandDefinition): Promise<ChildResult> {
+export async function captureChild(
+  definition: ReleaseCommandDefinition,
+  options: CaptureChildOptions = {},
+): Promise<ChildResult> {
   const startedAtMs = performance.now();
   const executable = definition.command[0];
   if (executable === undefined) {
@@ -1339,9 +1408,9 @@ export async function captureChild(definition: ReleaseCommandDefinition): Promis
 
   try {
     const subprocess = spawnChild(executable, definition.command.slice(1), {
-      cwd: join(REPOSITORY_ROOT, definition.cwd),
+      cwd: join(options.repositoryRoot ?? REPOSITORY_ROOT, definition.cwd),
       detached: true,
-      env: childEnvironment(),
+      env: { ...childEnvironment(), ...options.environment },
       stdio: ["ignore", "pipe", "pipe"],
     });
     subprocess.stdout.on("data", (chunk: Uint8Array) => {
@@ -1440,6 +1509,176 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function withAbsoluteTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+const DEFAULT_DETACHED_EXECUTION_RUNTIME: DetachedExecutionRuntime = {
+  async makeDirectory(path) {
+    await mkdir(path, { recursive: true });
+  },
+  makeTemporaryDirectory: mkdtemp,
+  async removeDirectory(path) {
+    await rm(path, { force: true, recursive: true });
+  },
+  async symlinkDirectory(target, path) {
+    await symlink(target, path, "dir");
+  },
+};
+
+function gitCommandFailure(command: string, result: Awaited<ReturnType<typeof captureGitCommand>>) {
+  return result.failure === null
+    ? null
+    : `${command} failed: ${result.failure}${result.stderr.trim().length > 0 ? `; ${result.stderr.trim()}` : ""}`;
+}
+
+export async function cleanupDetachedExecution(
+  execution: Pick<DetachedExecution, "rootDirectory" | "sourceDirectory">,
+  options: {
+    cleanupTimeoutMs?: number;
+    invocationRoot?: string;
+    runtime?: DetachedExecutionRuntime;
+  } = {},
+): Promise<string[]> {
+  const cleanupTimeoutMs = options.cleanupTimeoutMs ?? FILESYSTEM_CLEANUP_TIMEOUT_MS;
+  const invocationRoot = options.invocationRoot ?? REPOSITORY_ROOT;
+  const runtime = options.runtime ?? DEFAULT_DETACHED_EXECUTION_RUNTIME;
+  const failures: string[] = [];
+  const removeWorktree = await captureGitCommand(
+    invocationRoot,
+    ["worktree", "remove", "--force", execution.sourceDirectory],
+    WORKTREE_CLEANUP_TIMEOUT_MS,
+  );
+  const worktreeFailure = gitCommandFailure("git worktree remove", removeWorktree);
+  if (worktreeFailure !== null) {
+    failures.push(worktreeFailure);
+  }
+  try {
+    await withAbsoluteTimeout(
+      runtime.removeDirectory(execution.rootDirectory),
+      cleanupTimeoutMs,
+      "detached execution directory cleanup",
+    );
+  } catch (error) {
+    failures.push(`detached execution directory cleanup failed: ${errorMessage(error)}`);
+  }
+  return failures.map((failure) =>
+    redactLocalPath(
+      redactLocalPath(failure, execution.rootDirectory, "<detached-execution-root>"),
+      invocationRoot,
+      "<invocation-root>",
+    ),
+  );
+}
+
+export async function prepareDetachedExecution(options: {
+  candidateCommit: string;
+  invocationRoot?: string;
+  runtime?: DetachedExecutionRuntime;
+}): Promise<DetachedExecution> {
+  const invocationRoot = options.invocationRoot ?? REPOSITORY_ROOT;
+  const runtime = options.runtime ?? DEFAULT_DETACHED_EXECUTION_RUNTIME;
+  const rootDirectory = await withAbsoluteTimeout(
+    runtime.makeTemporaryDirectory(join(tmpdir(), "fluncle-db-release-source-")),
+    WORKTREE_SETUP_TIMEOUT_MS,
+    "detached execution directory creation",
+  );
+  const sourceDirectory = join(rootDirectory, "source");
+  const partialExecution = { rootDirectory, sourceDirectory };
+
+  try {
+    const dependencyDirectory = join(invocationRoot, "node_modules");
+    const dependencyStat = await stat(dependencyDirectory);
+    if (!dependencyStat.isDirectory()) {
+      throw new Error("the shared dependency install is not a directory");
+    }
+    const addWorktree = await captureGitCommand(
+      invocationRoot,
+      ["worktree", "add", "--detach", sourceDirectory, options.candidateCommit],
+      WORKTREE_SETUP_TIMEOUT_MS,
+    );
+    const addFailure = gitCommandFailure("git worktree add", addWorktree);
+    if (addFailure !== null) {
+      throw new Error(addFailure);
+    }
+
+    const scratchDirectory = join(rootDirectory, "scratch");
+    const cargoTargetDirectory = join(rootDirectory, "cargo-target");
+    await Promise.all([
+      withAbsoluteTimeout(
+        runtime.makeDirectory(scratchDirectory),
+        WORKTREE_SETUP_TIMEOUT_MS,
+        "detached database scratch creation",
+      ),
+      withAbsoluteTimeout(
+        runtime.makeDirectory(cargoTargetDirectory),
+        WORKTREE_SETUP_TIMEOUT_MS,
+        "detached Cargo target creation",
+      ),
+      withAbsoluteTimeout(
+        runtime.symlinkDirectory(dependencyDirectory, join(sourceDirectory, "node_modules")),
+        WORKTREE_SETUP_TIMEOUT_MS,
+        "detached dependency binding",
+      ),
+    ]);
+    const [candidateLockfile, invocationLockfile] = await Promise.all([
+      readFile(join(sourceDirectory, "bun.lock")),
+      readFile(join(invocationRoot, "bun.lock")),
+    ]);
+    const candidateLockSha256 = createHash("sha256").update(candidateLockfile).digest("hex");
+    const invocationLockSha256 = createHash("sha256").update(invocationLockfile).digest("hex");
+    if (candidateLockSha256 !== invocationLockSha256) {
+      throw new Error(
+        "shared dependency install is not bound to the candidate bun.lock; install the candidate dependencies before release proof",
+      );
+    }
+
+    return {
+      candidateCommit: options.candidateCommit,
+      cargoTargetDirectory,
+      dependencyLockSha256: candidateLockSha256,
+      dependencySource: "shared-install-bound-by-candidate-lockfile",
+      rootDirectory,
+      scratchDirectory,
+      sourceDirectory,
+    };
+  } catch (error) {
+    const cleanupFailures = await cleanupDetachedExecution(partialExecution, {
+      invocationRoot,
+      runtime,
+    });
+    const failure = [errorMessage(error), ...cleanupFailures]
+      .filter((value) => value.length > 0)
+      .join("; ");
+    throw new Error(
+      redactLocalPath(
+        redactLocalPath(failure, rootDirectory, "<detached-execution-root>"),
+        invocationRoot,
+        "<invocation-root>",
+      ),
+    );
+  }
+}
+
 async function prepareOutputDirectory(option: string | null, startedAt: Date): Promise<string> {
   const outputDirectory =
     option === null
@@ -1530,111 +1769,172 @@ async function runRelease(
   const startedAtMs = performance.now();
   const definitions = releaseCommands();
   const outputDirectory = await prepareOutputDirectory(options.outputDirectory, startedAt);
-  const startedSource = await readRepositorySnapshot(outputDirectory);
+  const invocationSource = await readRepositorySnapshot(REPOSITORY_ROOT, outputDirectory);
   const candidateSelection = options.candidateCommit === null ? "current-head" : "explicit";
-  const candidateCommit = options.candidateCommit ?? startedSource.commit;
+  const candidateCommit = options.candidateCommit ?? invocationSource.commit;
   const commandResults: ReleaseCommandResult[] = [];
   const profileEvidence: ProfileEvidence[] = [];
   const sourceCheckpoints: ReleaseSourceCheckpoint[] = [];
   const artifactFilenames = new Set<string>();
   const artifacts = new Map<string, ReleaseArtifactEvidence>();
+  const runnerFailures: string[] = [];
+  let execution: DetachedExecution | null = null;
+  let startedSource: RepositorySnapshot = {
+    clean: null,
+    commit: null,
+    failure: "detached candidate execution was not prepared",
+    indexHash: null,
+    treeHash: null,
+  };
+  let completedSource = startedSource;
 
-  for (const definition of definitions) {
-    sourceCheckpoints.push({
-      commandId: definition.id,
-      phase: "before-command",
-      snapshot: await readRepositorySnapshot(outputDirectory),
-    });
-    process.stderr.write(`[db:performance:release] running ${definition.id}\n`);
-    const commandStartedAt = new Date().toISOString();
-    const child = await captureChild(definition);
-    const stdoutPath = join(outputDirectory, "logs", `${definition.id}.stdout.log`);
-    const stderrPath = join(outputDirectory, "logs", `${definition.id}.stderr.log`);
-    const stderrContents =
-      child.spawnError === null ? child.stderr : `${child.spawnError}\n${child.stderr}`;
-    await Promise.all([writeText(stdoutPath, child.stdout), writeText(stderrPath, stderrContents)]);
-    const commandArtifacts = [
-      manifestArtifactPath(outputDirectory, stdoutPath),
-      manifestArtifactPath(outputDirectory, stderrPath),
-    ];
-    for (const [filename, contents] of [
-      [commandArtifacts[0], child.stdout],
-      [commandArtifacts[1], stderrContents],
-    ] as const) {
-      artifactFilenames.add(filename);
-      artifacts.set(filename, buildArtifactEvidence(filename, contents));
+  if (invocationSource.failure !== null) {
+    runnerFailures.push(`invocation source inspection failed: ${invocationSource.failure}`);
+  } else if (invocationSource.clean !== true) {
+    runnerFailures.push("invocation source tree is not clean");
+  } else if (candidateCommit === null) {
+    runnerFailures.push("detached execution candidate commit is unavailable");
+  } else if (invocationSource.commit !== candidateCommit) {
+    runnerFailures.push(
+      `invocation commit ${invocationSource.commit ?? "<unavailable>"} does not match candidate ${candidateCommit}`,
+    );
+  } else {
+    try {
+      execution = await prepareDetachedExecution({ candidateCommit });
+      startedSource = await readRepositorySnapshot(execution.sourceDirectory);
+      completedSource = startedSource;
+    } catch (error) {
+      runnerFailures.push(`detached execution setup failed: ${errorMessage(error)}`);
     }
+  }
 
-    const validationFailures = validateChildResult(child);
-
-    if (definition.profile !== undefined) {
-      const profile = definition.profile;
-      const validation = validateProfileReport(child.stdout, profile);
-      validationFailures.push(...validation.errors);
-      let reportArtifact: string | null = null;
-
-      if (validation.report !== null) {
-        const reportPath = join(outputDirectory, "profiles", `${profile}.json`);
-        await writeText(reportPath, `${JSON.stringify(validation.report, null, 2)}\n`);
-        reportArtifact = manifestArtifactPath(outputDirectory, reportPath);
-        commandArtifacts.push(reportArtifact);
-        artifactFilenames.add(reportArtifact);
-        artifacts.set(
-          reportArtifact,
-          buildArtifactEvidence(reportArtifact, `${JSON.stringify(validation.report, null, 2)}\n`),
-        );
+  try {
+    for (const definition of execution === null ? [] : definitions) {
+      sourceCheckpoints.push({
+        commandId: definition.id,
+        phase: "before-command",
+        snapshot: await readRepositorySnapshot(execution.sourceDirectory),
+      });
+      process.stderr.write(`[db:performance:release] running ${definition.id}\n`);
+      const commandStartedAt = new Date().toISOString();
+      const child = await captureChild(definition, {
+        environment: {
+          CARGO_TARGET_DIR: execution.cargoTargetDirectory,
+          FLUNCLE_DB_PERFORMANCE_SCRATCH_ROOT: execution.scratchDirectory,
+          TEMP: execution.scratchDirectory,
+          TMP: execution.scratchDirectory,
+          TMPDIR: execution.scratchDirectory,
+        },
+        repositoryRoot: execution.sourceDirectory,
+      });
+      const stdoutPath = join(outputDirectory, "logs", `${definition.id}.stdout.log`);
+      const stderrPath = join(outputDirectory, "logs", `${definition.id}.stderr.log`);
+      const stderrContents =
+        child.spawnError === null ? child.stderr : `${child.spawnError}\n${child.stderr}`;
+      await Promise.all([
+        writeText(stdoutPath, child.stdout),
+        writeText(stderrPath, stderrContents),
+      ]);
+      const commandArtifacts = [
+        manifestArtifactPath(outputDirectory, stdoutPath),
+        manifestArtifactPath(outputDirectory, stderrPath),
+      ];
+      for (const [filename, contents] of [
+        [commandArtifacts[0], child.stdout],
+        [commandArtifacts[1], stderrContents],
+      ] as const) {
+        artifactFilenames.add(filename);
+        artifacts.set(filename, buildArtifactEvidence(filename, contents));
       }
 
-      profileEvidence.push({
-        candidateCommit,
-        commandId: definition.id,
-        exactProfileCardinality: validation.exactProfileCardinality,
-        expectedCardinality: getScaleManifest(profile).counts,
-        observedCardinality: validation.observedCardinality,
-        profile,
-        reportArtifact,
-        reportPassed: validation.reportPassed,
-        status: validationFailures.length === 0 ? "passed" : "failed",
-        validationFailures: [...validationFailures],
-        warningThresholds: validation.warningThresholds,
-        warnings: validation.warnings,
-      });
-    }
+      const validationFailures = validateChildResult(child);
 
-    const result: ReleaseCommandResult = {
-      artifactFilenames: commandArtifacts,
-      categories: definition.categories,
-      command: definition.command,
-      cwd: definition.cwd,
-      deadlineMs: definition.timeoutMs,
-      durationMs: child.durationMs,
-      exitCode: child.exitCode,
-      id: definition.id,
-      profile: definition.profile ?? null,
-      spawnError: child.spawnError,
-      startedAt: commandStartedAt,
-      status: validationFailures.length === 0 ? "passed" : "failed",
-      timedOut: child.timedOut,
-      validationFailures,
-    };
-    commandResults.push(result);
-    sourceCheckpoints.push({
-      commandId: definition.id,
-      phase: "after-command",
-      snapshot: await readRepositorySnapshot(outputDirectory),
-    });
-    process.stderr.write(`[db:performance:release] ${definition.id} ${result.status}\n`);
+      if (definition.profile !== undefined) {
+        const profile = definition.profile;
+        const validation = validateProfileReport(child.stdout, profile);
+        validationFailures.push(...validation.errors);
+        let reportArtifact: string | null = null;
+
+        if (validation.report !== null) {
+          const reportPath = join(outputDirectory, "profiles", `${profile}.json`);
+          await writeText(reportPath, `${JSON.stringify(validation.report, null, 2)}\n`);
+          reportArtifact = manifestArtifactPath(outputDirectory, reportPath);
+          commandArtifacts.push(reportArtifact);
+          artifactFilenames.add(reportArtifact);
+          artifacts.set(
+            reportArtifact,
+            buildArtifactEvidence(
+              reportArtifact,
+              `${JSON.stringify(validation.report, null, 2)}\n`,
+            ),
+          );
+        }
+
+        profileEvidence.push({
+          candidateCommit,
+          commandId: definition.id,
+          exactProfileCardinality: validation.exactProfileCardinality,
+          expectedCardinality: getScaleManifest(profile).counts,
+          observedCardinality: validation.observedCardinality,
+          profile,
+          reportArtifact,
+          reportPassed: validation.reportPassed,
+          status: validationFailures.length === 0 ? "passed" : "failed",
+          validationFailures: [...validationFailures],
+          warningThresholds: validation.warningThresholds,
+          warnings: validation.warnings,
+        });
+      }
+
+      const result: ReleaseCommandResult = {
+        artifactFilenames: commandArtifacts,
+        categories: definition.categories,
+        command: definition.command,
+        cwd: definition.cwd,
+        deadlineMs: definition.timeoutMs,
+        durationMs: child.durationMs,
+        executionRoot: "detached-candidate-worktree",
+        exitCode: child.exitCode,
+        id: definition.id,
+        profile: definition.profile ?? null,
+        spawnError: child.spawnError,
+        startedAt: commandStartedAt,
+        status: validationFailures.length === 0 ? "passed" : "failed",
+        timedOut: child.timedOut,
+        validationFailures,
+      };
+      commandResults.push(result);
+      sourceCheckpoints.push({
+        commandId: definition.id,
+        phase: "after-command",
+        snapshot: await readRepositorySnapshot(execution.sourceDirectory),
+      });
+      process.stderr.write(`[db:performance:release] ${definition.id} ${result.status}\n`);
+    }
+    if (execution !== null) {
+      completedSource = await readRepositorySnapshot(execution.sourceDirectory);
+    }
+  } catch (error) {
+    runnerFailures.push(`detached execution failed: ${errorMessage(error)}`);
+    if (execution !== null) {
+      completedSource = await readRepositorySnapshot(execution.sourceDirectory);
+    }
   }
 
   const categoryCoverage = assessCategoryCompleteness(commandResults);
-  const completedSource = await readRepositorySnapshot(outputDirectory);
   const source = assessReleaseSourceEvidence({
     candidateCommit,
     candidateSelection,
     checkpoints: sourceCheckpoints,
     completed: completedSource,
+    invocation: invocationSource,
     started: startedSource,
   });
+  let cleanupFailures: string[] = [];
+  if (execution !== null) {
+    cleanupFailures = await cleanupDetachedExecution(execution);
+    runnerFailures.push(...cleanupFailures.map((failure) => `detached execution ${failure}`));
+  }
   const artifactFailures: string[] = [];
   for (const evidence of artifacts.values()) {
     try {
@@ -1651,6 +1951,7 @@ async function runRelease(
     }
   }
   const noGoReasons = aggregateNoGo(commandResults, categoryCoverage, [
+    ...runnerFailures,
     ...source.failures,
     ...artifactFailures,
   ]);
@@ -1667,6 +1968,15 @@ async function runRelease(
     commands: commandResults,
     completedAt: completedAt.toISOString(),
     durationMs: Math.max(0, performance.now() - startedAtMs),
+    execution: {
+      candidateCommit,
+      cleanupFailures,
+      dependencyLockSha256: execution?.dependencyLockSha256 ?? null,
+      dependencySource: "shared-install-bound-by-candidate-lockfile",
+      mode: "detached-candidate-worktree",
+      passed: execution !== null && cleanupFailures.length === 0 && source.passed,
+      sourceRoot: "detached-candidate-worktree",
+    } satisfies DetachedExecutionEvidence,
     kind: "fluncle.database-performance.release-proof",
     noGoReasons,
     passed: noGoReasons.length === 0,

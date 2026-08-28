@@ -77,6 +77,7 @@ type StartLocalLibsqlSidecarOptions = {
   readinessRequestTimeoutMs?: number;
   readinessTimeoutMs?: number;
   runtime?: LocalLibsqlSidecarRuntime;
+  scratchRoot?: string;
   startAttempts?: number;
 };
 
@@ -346,6 +347,7 @@ export async function startLocalLibsqlSidecar(
     options.readinessRequestTimeoutMs ?? DEFAULT_READINESS_REQUEST_TIMEOUT_MS;
   const readinessTimeoutMs = options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS;
   const runtime = options.runtime ?? DEFAULT_RUNTIME;
+  const scratchRoot = options.scratchRoot ?? cwd;
   const startAttempts = options.startAttempts ?? DEFAULT_START_ATTEMPTS;
   const attemptFailures: string[] = [];
 
@@ -356,7 +358,9 @@ export async function startLocalLibsqlSidecar(
     let readinessClient: LocalLibsqlClient | null = null;
 
     try {
-      scratchDirectory = await runtime.makeScratchDirectory(join(cwd, ".db-performance-"));
+      scratchDirectory = await runtime.makeScratchDirectory(
+        join(scratchRoot, options.scratchRoot === undefined ? ".db-performance-" : "database-"),
+      );
       const identity = await runtime.createIdentity(scratchDirectory);
       const port = await runtime.allocatePort();
       const url = `http://127.0.0.1:${port}`;

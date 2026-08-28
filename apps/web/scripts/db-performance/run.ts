@@ -102,7 +102,10 @@ async function main(options: CliOptions): Promise<void> {
   });
   const localSidecar =
     replay.mode === "local" && options.fullFixture
-      ? await startLocalLibsqlSidecar({ cwd: process.cwd() })
+      ? await startLocalLibsqlSidecar({
+          cwd: process.cwd(),
+          scratchRoot: process.env.FLUNCLE_DB_PERFORMANCE_SCRATCH_ROOT,
+        })
       : null;
   const client =
     replay.mode === "hosted"

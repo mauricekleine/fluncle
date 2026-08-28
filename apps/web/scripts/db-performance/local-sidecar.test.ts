@@ -15,6 +15,7 @@ type Harness = {
   processTerminateCalls: number;
   removedDirectories: string[];
   runtime: LocalLibsqlSidecarRuntime;
+  scratchPrefixes: string[];
   spawnedCommands: readonly string[][];
 };
 
@@ -33,6 +34,7 @@ function sidecarHarness(options: {
   let processTerminateCalls = 0;
   let clock = 0;
   const removedDirectories: string[] = [];
+  const scratchPrefixes: string[] = [];
   const spawnedCommands: string[][] = [];
   const defaultSidecarProcess: ManagedSidecarProcess = {
     exitCode: options.exitCode ?? null,
@@ -71,7 +73,10 @@ function sidecarHarness(options: {
       publicKeyPath: "/tmp/db-performance-test/auth-public.pem",
     }),
     createReadinessClient: () => client,
-    makeScratchDirectory: async () => "/tmp/db-performance-test",
+    makeScratchDirectory: async (prefix) => {
+      scratchPrefixes.push(prefix);
+      return "/tmp/db-performance-test";
+    },
     now: () => clock,
     async removeScratchDirectory(path) {
       removedDirectories.push(path);
@@ -109,6 +114,7 @@ function sidecarHarness(options: {
     },
     removedDirectories,
     runtime,
+    scratchPrefixes,
     spawnedCommands,
   };
 }
@@ -168,6 +174,18 @@ describe("exact-fixture local libSQL sidecar", () => {
     expect(harness.clientCloseCalls).toBe(2);
     expect(harness.processTerminateCalls).toBe(1);
     expect(harness.removedDirectories).toEqual(["/tmp/db-performance-test"]);
+  });
+
+  it("places release-run database artifacts under the external scratch root", async () => {
+    const harness = sidecarHarness({});
+    const sidecar = await startLocalLibsqlSidecar({
+      cwd: "/workspace/detached-source/apps/web",
+      runtime: harness.runtime,
+      scratchRoot: "/tmp/release-execution/scratch",
+    });
+
+    await sidecar.close();
+    expect(harness.scratchPrefixes).toEqual(["/tmp/release-execution/scratch/database-"]);
   });
 
   it("fails closed with diagnostics and removes every owned resource after boot failure", async () => {
