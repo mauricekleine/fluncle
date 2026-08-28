@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -34,6 +35,19 @@ beforeEach(() => {
 exec "$@"`,
     );
   }
+
+  fakeExecutable(
+    "process-is-executing",
+    `pid="$1"
+if [ -r "/proc/$pid/stat" ]; then
+  stat="$(cat "/proc/$pid/stat")" || exit 1
+  state="\${stat##*) }"
+  state="\${state%% *}"
+  [ "$state" != "X" ] && [ "$state" != "Z" ]
+else
+  kill -0 "$pid" 2>/dev/null
+fi`,
+  );
 });
 
 afterEach(() => {
@@ -122,9 +136,33 @@ function processIsExecuting(pid: number): boolean {
   }
 }
 
-function processGroupIsAlive(pid: number): boolean {
+function processGroupHasExecutingMembers(groupPid: number): boolean {
+  if (process.platform === "linux") {
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) {
+        continue;
+      }
+      try {
+        const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+        const fieldsOffset = stat.lastIndexOf(") ") + 2;
+        if (fieldsOffset < 2) {
+          continue;
+        }
+        const fields = stat.slice(fieldsOffset).split(" ");
+        const state = fields[0];
+        const processGroup = Number(fields[2]);
+        if (processGroup === groupPid && state !== "X" && state !== "Z") {
+          return true;
+        }
+      } catch {
+        // The process exited between the directory and stat reads.
+      }
+    }
+    return false;
+  }
+
   try {
-    process.kill(-pid, 0);
+    process.kill(-groupPid, 0);
     return true;
   } catch {
     return false;
@@ -287,7 +325,7 @@ ${ACQUIRED_RESPONSE}`);
     fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"release"'; then
   descendant_pid="$(cat "${descendantMarker}")"
-  if kill -0 "$descendant_pid" 2>/dev/null; then
+  if process-is-executing "$descendant_pid"; then
     printf alive > "${releaseObservation}"
   else
     printf gone > "${releaseObservation}"
@@ -300,9 +338,9 @@ ${ACQUIRED_RESPONSE}
       "-c",
       `(
         trap "" TERM HUP
-        printf "%s" "$$" > "$1"
         while :; do sleep 1; done
       ) &
+      printf "%s" "$!" > "$1"
       while [ ! -s "$1" ]; do sleep 0.01; done`,
       "payload",
       descendantMarker,
@@ -320,7 +358,7 @@ ${ACQUIRED_RESPONSE}
     fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"release"'; then
   descendant_pid="$(cat "${descendantMarker}")"
-  if kill -0 "$descendant_pid" 2>/dev/null; then
+  if process-is-executing "$descendant_pid"; then
     printf alive > "${releaseObservation}"
   else
     printf gone > "${releaseObservation}"
@@ -333,9 +371,9 @@ ${ACQUIRED_RESPONSE}
       "-c",
       `(
         trap "" TERM HUP
-        printf "%s" "$$" > "$1"
         while :; do sleep 1; done
       ) &
+      printf "%s" "$!" > "$1"
       while [ ! -s "$1" ]; do sleep 0.01; done
       kill -KILL "$PPID"
       while :; do sleep 1; done`,
@@ -402,17 +440,13 @@ ${ACQUIRED_RESPONSE}
 
   it("does not start the payload if the owner dies before parent-death arming completes", async () => {
     const setprivStarted = join(directory, "setpriv-started");
-    const setprivFinished = join(directory, "setpriv-finished");
+    const setprivExecStarted = join(directory, "setpriv-exec-started");
     fakeExecutable(
       "setpriv",
-      `owner_pid="$PPID"
-printf '%s' "$$" > "${setprivStarted}"
+      `printf '%s' "$$" > "${setprivStarted}"
 sleep 1
-if ! kill -0 "$owner_pid" 2>/dev/null; then
-  printf finished > "${setprivFinished}"
-  exit 75
-fi
 shift 2
+printf exec > "${setprivExecStarted}"
 exec "$@"`,
     );
     fakeCurl(ACQUIRED_RESPONSE);
@@ -428,7 +462,10 @@ exec "$@"`,
     expect(Number.isInteger(setprivPid)).toBe(true);
     runner.kill("SIGKILL");
     try {
-      await waitUntil(() => existsSync(setprivFinished) && !processGroupIsAlive(setprivPid), 5_000);
+      await waitUntil(
+        () => existsSync(setprivExecStarted) && !processGroupHasExecutingMembers(setprivPid),
+        5_000,
+      );
       expect(existsSync(payloadMarker)).toBe(false);
     } finally {
       try {
