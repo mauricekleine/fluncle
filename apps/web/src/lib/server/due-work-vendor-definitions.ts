@@ -321,6 +321,17 @@ function dueAt(
           )
         : undefined;
     }
+    default:
+      return remainingDueAt(kind, source, now);
+  }
+}
+
+function remainingDueAt(
+  kind: DueWorkVendorKind,
+  source: DueWorkVendorSource,
+  now: string,
+): string | undefined {
+  switch (kind) {
     case "apple-finding":
       return isPublishedFinding(source) && source.appleMusicUrl === null && hasIsrc(source)
         ? reliabilityDueAt(
@@ -389,6 +400,8 @@ function dueAt(
         : undefined;
     case "artist-edges":
       return !source.hasArtistEdge && source.artistEdgesBackfilledAt === null ? now : undefined;
+    default:
+      return undefined;
   }
 }
 

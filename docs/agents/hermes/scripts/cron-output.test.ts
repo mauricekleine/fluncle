@@ -12,7 +12,7 @@
 // and then hand the resulting file to the REAL prober functions. Nothing is hand-written.
 //
 //   bun test docs/agents/hermes/scripts/cron-output.test.ts
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -21,6 +21,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -38,6 +39,13 @@ import {
 } from "./fluncle-healthcheck";
 
 const HELPER = join(import.meta.dir, "cron-output.sh");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 type EmitOptions = { env?: Record<string, string>; sharedRoot?: string };
 type EmitResult = { code: number; dir: string; marker: string; stderr: string; stdout: string };
@@ -58,6 +66,9 @@ function writeRunner(
   options: EmitOptions = {},
 ): { outputDir: string; script: string } {
   const root = options.sharedRoot ?? mkdtempSync(join(tmpdir(), "fluncle-cron-output-"));
+  if (options.sharedRoot === undefined) {
+    temporaryDirectories.push(root);
+  }
   const outputDir = join(root, "output");
   const script = join(root, "run.sh");
   // The payload gets its own file rather than riding a `bash -c "…"` argument: embedded in the
@@ -472,6 +483,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
   // URL the box would really have dialled.
   function withCurlRecorder(): { bin: string; log: string; urls: () => string[] } {
     const root = mkdtempSync(join(tmpdir(), "fluncle-curl-recorder-"));
+    temporaryDirectories.push(root);
     const bin = join(root, "bin");
     const log = join(root, "urls.txt");
 
@@ -569,6 +581,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
   // not there. The emitter guards on `command -v curl`, and a sweep must not care.
   test("no curl on PATH ⇒ the sweep runs, the marker lands, the exit code stands", async () => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-no-curl-"));
+    temporaryDirectories.push(root);
     const bin = join(root, "bin");
 
     mkdirSync(bin, { recursive: true });
@@ -638,6 +651,7 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
   /** The real bio-gate line, run through the real wrapper N times into one output dir. */
   function runTicks(payload: string, ticks: number): string {
     const root = mkdtempSync(join(tmpdir(), "fluncle-cron-chain-"));
+    temporaryDirectories.push(root);
     let dir = "";
 
     for (let index = 0; index < ticks; index += 1) {

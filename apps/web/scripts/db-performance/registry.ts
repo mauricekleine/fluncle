@@ -383,6 +383,60 @@ function buildCriteria(
   return criteria;
 }
 
+function buildPerformanceResourceReport(options: {
+  hasResourceSampling: boolean;
+  now: () => number;
+  peak: null | PerformanceResourceSample;
+  profile: ScaleProfile;
+  resource?: {
+    sample?: () => PerformanceResourceSample;
+    sampleSource?: PerformanceResourceSampleSource;
+  };
+  wallStartedAt: number;
+}): PerformanceResourceReport {
+  const resources: PerformanceResourceReport = {
+    availability: options.hasResourceSampling ? "measured" : "unavailable",
+    failures: [],
+    mode: options.profile === "4x" ? "bounded-memory-timing-warning" : "required",
+    peak:
+      options.peak === null
+        ? null
+        : {
+            ...options.peak,
+            wallDurationMs: Math.max(0, options.now() - options.wallStartedAt),
+          },
+    sampleSource: options.hasResourceSampling
+      ? options.resource?.sample
+        ? (options.resource.sampleSource ?? "provided")
+        : "process.memoryUsage"
+      : null,
+    unavailableReason: options.hasResourceSampling
+      ? null
+      : "resource sampling was not supplied for this contract-only run",
+    warningThresholds: PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[options.profile],
+    warnings: [],
+  };
+
+  if (resources.peak === null) {
+    resources.warnings.push(resources.unavailableReason ?? "resource sampling is unavailable");
+    return resources;
+  }
+
+  const resourceProblems = resourceWarnings(resources.peak, resources.warningThresholds);
+  if (resources.mode === "required") {
+    resources.failures = resourceProblems;
+  } else {
+    resources.failures = resourceProblems.filter(
+      (problem) => !problem.startsWith("wallDurationMs "),
+    );
+    resources.warnings = resourceProblems.filter((problem) =>
+      problem.startsWith("wallDurationMs "),
+    );
+  }
+
+  return resources;
+}
+
 export async function runPerformanceContracts(options: {
   client: PerformanceClient;
   contracts: readonly PerformanceContract[];
@@ -549,43 +603,14 @@ export async function runPerformanceContracts(options: {
   }
 
   peak = peak === null ? null : maxPerformanceResourceSample(peak, resourceSample());
-  const resources: PerformanceResourceReport = {
-    availability: hasResourceSampling ? "measured" : "unavailable",
-    failures: [],
-    mode: options.profile === "4x" ? "bounded-memory-timing-warning" : "required",
-    peak:
-      peak === null
-        ? null
-        : {
-            ...peak,
-            wallDurationMs: Math.max(0, now() - wallStartedAt),
-          },
-    sampleSource: hasResourceSampling
-      ? options.resource?.sample
-        ? (options.resource.sampleSource ?? "provided")
-        : "process.memoryUsage"
-      : null,
-    unavailableReason: hasResourceSampling
-      ? null
-      : "resource sampling was not supplied for this contract-only run",
-    warningThresholds: PERFORMANCE_RESOURCE_WARNING_THRESHOLDS[options.profile],
-    warnings: [],
-  };
-  if (resources.peak === null) {
-    resources.warnings.push(resources.unavailableReason ?? "resource sampling is unavailable");
-  } else {
-    const resourceProblems = resourceWarnings(resources.peak, resources.warningThresholds);
-    if (resources.mode === "required") {
-      resources.failures = resourceProblems;
-    } else {
-      resources.failures = resourceProblems.filter(
-        (problem) => !problem.startsWith("wallDurationMs "),
-      );
-      resources.warnings = resourceProblems.filter((problem) =>
-        problem.startsWith("wallDurationMs "),
-      );
-    }
-  }
+  const resources = buildPerformanceResourceReport({
+    hasResourceSampling,
+    now,
+    peak,
+    profile: options.profile,
+    resource: options.resource,
+    wallStartedAt,
+  });
 
   const indexAudit = buildIndexAudit({
     contracts: options.contracts,

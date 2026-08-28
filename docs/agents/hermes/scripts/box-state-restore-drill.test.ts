@@ -16,7 +16,7 @@
 //
 //   bun test docs/agents/hermes/scripts/box-state-restore-drill.test.ts
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,13 @@ import {
 } from "./box-state-restore-drill";
 
 const KEY = new Uint8Array(32).fill(9);
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 /** The message a rejected promise carries — `expect().rejects` is not type-aware-lint clean. */
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
@@ -62,6 +69,7 @@ type Produced = { cipher: Uint8Array; manifest: BoxStateManifest; root: string }
  */
 async function produce(omit: readonly string[] = []): Promise<Produced> {
   const root = mkdtempSync(join(tmpdir(), "fluncle-drill-src-"));
+  temporaryDirectories.push(root);
   const home = join(root, "home");
 
   mkdirSync(join(root, "memories"), { recursive: true });
@@ -84,6 +92,7 @@ async function produce(omit: readonly string[] = []): Promise<Produced> {
   ].filter((path) => !omit.some((tail) => path.endsWith(tail)));
 
   const out = mkdtempSync(join(tmpdir(), "fluncle-drill-out-"));
+  temporaryDirectories.push(out);
   const outPath = join(out, "box-state.tar.gz.enc");
 
   const { manifest } = await buildBoxStateArchive({
@@ -109,6 +118,7 @@ async function drill(
     manifest: produced.manifest,
   });
   const scratch = mkdtempSync(join(tmpdir(), "fluncle-drill-unpack-"));
+  temporaryDirectories.push(scratch);
 
   unpackArchive(plaintext, scratch);
 
@@ -306,6 +316,7 @@ describe("everything a restore must refuse", () => {
       manifest: produced.manifest,
     });
     const scratch = mkdtempSync(join(tmpdir(), "fluncle-drill-unpack-"));
+    temporaryDirectories.push(scratch);
 
     try {
       unpackArchive(plaintext, scratch);
@@ -332,6 +343,7 @@ describe("everything a restore must refuse", () => {
       manifest: produced.manifest,
     });
     const scratch = mkdtempSync(join(tmpdir(), "fluncle-drill-unpack-"));
+    temporaryDirectories.push(scratch);
 
     try {
       unpackArchive(plaintext, scratch);

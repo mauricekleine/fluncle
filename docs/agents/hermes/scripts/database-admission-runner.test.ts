@@ -83,6 +83,33 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 3_000): Promise<v
   }
 }
 
+function processIsExecuting(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+
+  if (process.platform !== "linux") {
+    return true;
+  }
+
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const stateOffset = stat.lastIndexOf(") ") + 2;
+    if (stateOffset < 2) {
+      return true;
+    }
+
+    // A container's PID 1 may leave a killed child as a zombie beyond this test's deadline.
+    // Signal zero still succeeds for that PID even though the payload cannot execute.
+    const state = stat[stateOffset];
+    return state !== "X" && state !== "Z";
+  } catch {
+    return false;
+  }
+}
+
 const SHADOW_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":false,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"shadow-acquire","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}'`;
 const ACQUIRED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":1,"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":null}'`;
 const QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue"}'`;
@@ -243,14 +270,7 @@ ${ACQUIRED_RESPONSE}
 
     runner.kill("SIGKILL");
     try {
-      await waitUntil(() => {
-        try {
-          process.kill(payloadPid, 0);
-          return false;
-        } catch {
-          return true;
-        }
-      });
+      await waitUntil(() => !processIsExecuting(payloadPid));
     } finally {
       try {
         process.kill(-groupPid, "SIGKILL");
@@ -304,7 +324,7 @@ ${ACQUIRED_RESPONSE}
     const result = run([
       "bash",
       "-c",
-      'read -r owner_pid < <(ps -o ppid= -p "$PPID"); kill -TERM "$owner_pid"; while :; do sleep 1; done',
+      'if [ -r "/proc/$PPID/stat" ]; then read -r group_pid group_comm group_state owner_pid group_rest < "/proc/$PPID/stat"; else read -r owner_pid < <(ps -o ppid= -p "$PPID"); fi; kill -TERM "$owner_pid"; while :; do sleep 1; done',
     ]);
 
     expect(result.status).toBe(143);

@@ -1251,6 +1251,126 @@ function catalogueDuplicateOf(
   return byIsrc && byIsrc !== candidate.track_id ? byIsrc : null;
 }
 
+async function readProjectedCatalogueRankBatch(
+  db: Awaited<ReturnType<typeof getDb>>,
+  limit: number,
+): Promise<{ candidates: CandidateRow[]; hasMore: boolean }> {
+  const selectedIds: string[] = [];
+  let continuation: { sortKey: string; subjectId: string } | undefined;
+  let hasMore = false;
+
+  // The shared projection reader caps one operation at 500 rows. Use 250-row seeks so each
+  // promotion can also expose the +1 sentinel, preserving rankCatalogue's public 1,000-row cap.
+  while (selectedIds.length < limit) {
+    const pageLimit = Math.min(250, limit - selectedIds.length);
+    const page = await readPromotedDueWorkPage(db, "catalogue-rank", {
+      continuation,
+      limit: pageLimit,
+    });
+    selectedIds.push(...page.subjectIds);
+    hasMore = page.hasMore;
+
+    const lastId = page.subjectIds.at(-1);
+    if (lastId === undefined || page.subjectIds.length < pageLimit) {
+      break;
+    }
+    continuation = {
+      sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: lastId }]),
+      subjectId: lastId,
+    };
+  }
+
+  if (selectedIds.length === 0) {
+    return { candidates: [], hasMore };
+  }
+
+  const candidateResult = await db.execute({
+    args: selectedIds,
+    sql: `select ct.track_id as track_id,
+                 ct.title as title,
+                 ct.artists_json as artists_json,
+                 ct.label as label,
+                 ct.isrc as isrc,
+                 ct.capture_status as capture_status,
+                 ct.source_audio_key as source_audio_key,
+                 ct.source_audio_rejected as source_audio_rejected,
+                 ct.has_embedding as has_vector
+          from tracks ct
+          where ct.track_id in (${selectedIds.map(() => "?").join(", ")})`,
+  });
+  const byId = new Map(
+    typedRows<CandidateRow>(candidateResult.rows).map((row) => [row.track_id, row]),
+  );
+
+  return {
+    candidates: selectedIds.flatMap((trackId) => {
+      const row = byId.get(trackId);
+      return row === undefined ? [] : [row];
+    }),
+    hasMore,
+  };
+}
+
+async function emptyCatalogueRankSummary(options: {
+  corpus: string;
+  db: Awaited<ReturnType<typeof getDb>>;
+  dueWorkCutoverEnabled: boolean;
+  embeddedFindings: number;
+  findings: number;
+  limit: number;
+  projectionHasMore: boolean;
+}): Promise<RankCatalogueSummary> {
+  // Refresh the cached counts + affinity even on an idle legacy tick so the first empty tick
+  // after a deploy warms the request-path cache.
+  if (!options.dueWorkCutoverEnabled) {
+    await persistCatalogueCaches();
+  }
+
+  let remaining = 0;
+  if (options.limit <= 0) {
+    remaining = options.dueWorkCutoverEnabled
+      ? await countDueWorkNow(options.db, "catalogue-rank")
+      : await countStale(options.corpus);
+  } else if (options.dueWorkCutoverEnabled && options.projectionHasMore) {
+    remaining = RANK_MORE_REMAIN;
+  }
+
+  return {
+    catalogueDuplicates: 0,
+    corpus: options.corpus,
+    embeddedFindings: options.embeddedFindings,
+    findings: options.findings,
+    prioritized: 0,
+    quarantined: 0,
+    remaining,
+    scored: 0,
+  };
+}
+
+async function remainingCatalogueRankWork(options: {
+  candidateCount: number;
+  corpus: string;
+  countRemaining: boolean;
+  db: Awaited<ReturnType<typeof getDb>>;
+  dueWorkCutoverEnabled: boolean;
+  limit: number;
+  projectionHasMore: boolean;
+}): Promise<number> {
+  if (options.countRemaining) {
+    return options.dueWorkCutoverEnabled
+      ? countDueWorkNow(options.db, "catalogue-rank")
+      : countStale(options.corpus);
+  }
+
+  return options.dueWorkCutoverEnabled
+    ? options.projectionHasMore
+      ? RANK_MORE_REMAIN
+      : 0
+    : options.candidateCount >= options.limit
+      ? RANK_MORE_REMAIN
+      : 0;
+}
+
 /**
  * ONE TICK of the ranking sweep — the whole of The Ear's arithmetic, and the only writer of
  * the five `tracks` ranking columns.
@@ -1297,62 +1417,15 @@ export async function rankCatalogue(
   // operator's actions) is excluded here so the sweep never spends cosine work re-ranking a row
   // the operator has taken out of the telescope; on restore it re-enters this candidate set and
   // re-ranks if its fingerprint has drifted.
-  let candidates: CandidateRow[];
-  let projectionHasMore = false;
-
-  if (dueWorkCutoverEnabled && limit > 0) {
-    const selectedIds: string[] = [];
-    let continuation: { sortKey: string; subjectId: string } | undefined;
-
-    // The shared projection reader caps one operation at 500 rows. Use 250-row seeks so each
-    // promotion can also expose the +1 sentinel, preserving rankCatalogue's public 1,000-row cap.
-    while (selectedIds.length < limit) {
-      const pageLimit = Math.min(250, limit - selectedIds.length);
-      const page = await readPromotedDueWorkPage(db, "catalogue-rank", {
-        continuation,
-        limit: pageLimit,
-      });
-      selectedIds.push(...page.subjectIds);
-      projectionHasMore = page.hasMore;
-
-      const lastId = page.subjectIds.at(-1);
-      if (lastId === undefined || page.subjectIds.length < pageLimit) {
-        break;
-      }
-      continuation = {
-        sortKey: encodeDueWorkOrder([{ direction: "asc", kind: "text", value: lastId }]),
-        subjectId: lastId,
-      };
-    }
-
-    if (selectedIds.length === 0) {
-      candidates = [];
-    } else {
-      const candidateResult = await db.execute({
-        args: selectedIds,
-        sql: `select ct.track_id as track_id,
-                   ct.title as title,
-                   ct.artists_json as artists_json,
-                   ct.label as label,
-                   ct.isrc as isrc,
-                   ct.capture_status as capture_status,
-                   ct.source_audio_key as source_audio_key,
-                   ct.source_audio_rejected as source_audio_rejected,
-                   ct.has_embedding as has_vector
-            from tracks ct
-            where ct.track_id in (${selectedIds.map(() => "?").join(", ")})`,
-      });
-      const byId = new Map(
-        typedRows<CandidateRow>(candidateResult.rows).map((row) => [row.track_id, row]),
-      );
-      candidates = selectedIds.flatMap((trackId) => {
-        const row = byId.get(trackId);
-        return row === undefined ? [] : [row];
-      });
-    }
-  } else {
-    candidates = [];
+  let projectedBatch: Awaited<ReturnType<typeof readProjectedCatalogueRankBatch>> = {
+    candidates: [],
+    hasMore: false,
+  };
+  if (dueWorkCutoverEnabled) {
+    projectedBatch = await readProjectedCatalogueRankBatch(db, Math.max(0, limit));
   }
+  let candidates = projectedBatch.candidates;
+  const projectionHasMore = projectedBatch.hasMore;
 
   // A projected empty check reaches this point after only repair/index probes. Its legacy response
   // fields come from the cache written by the completed backfill (and by every default-off tick),
@@ -1397,35 +1470,20 @@ export async function rankCatalogue(
   }
 
   if (candidates.length === 0) {
-    // Refresh the cached counts + affinity even on an idle tick: nothing changed this tick, but
-    // this is the read `getCatalogueSummary` serves off the hot path, so keeping it warm here means
-    // a fresh deploy's very first (empty) rank tick already populates the cache.
-    if (!dueWorkCutoverEnabled) {
-      await persistCatalogueCaches();
-    }
-
     // `remaining` on an empty batch: with a POSITIVE `limit` the stale set is genuinely drained (an
     // empty page over `order by track_id asc limit N` means no stale row exists), so the drain
     // signal is 0 with no scan. The real COUNT survives ONLY for the `limit <= 0` guard — there no
     // batch was observed, so an assumed 0 would stop a cron while rows were still stale, and the one
     // cheap scoped COUNT is paid only on that already-idle, can't-have-looked tick.
-    return {
-      catalogueDuplicates: 0,
+    return emptyCatalogueRankSummary({
       corpus,
+      db,
+      dueWorkCutoverEnabled,
       embeddedFindings,
       findings,
-      prioritized: 0,
-      quarantined: 0,
-      remaining:
-        limit <= 0
-          ? dueWorkCutoverEnabled
-            ? await countDueWorkNow(db, "catalogue-rank")
-            : await countStale(corpus)
-          : dueWorkCutoverEnabled && projectionHasMore
-            ? RANK_MORE_REMAIN
-            : 0,
-      scored: 0,
-    };
+      limit,
+      projectionHasMore,
+    });
   }
 
   const vectored = candidates.filter((row) => Number(row.has_vector) === 1);
@@ -1840,15 +1898,15 @@ export async function rankCatalogue(
   // batch exhausted the stale set (0). `countRemaining` opts into the real live COUNT for the
   // human-facing CLI readout — one ~19s scan on a deliberate manual run, never on the box sweep,
   // which keeps the default sentinel (docs/db-scale-backlog Wave 1 #1).
-  let remaining = 0;
-
-  if (countRemaining) {
-    remaining = dueWorkCutoverEnabled
-      ? await countDueWorkNow(db, "catalogue-rank")
-      : await countStale(corpus);
-  } else if (dueWorkCutoverEnabled ? projectionHasMore : candidates.length >= limit) {
-    remaining = RANK_MORE_REMAIN;
-  }
+  const remaining = await remainingCatalogueRankWork({
+    candidateCount: candidates.length,
+    corpus,
+    countRemaining,
+    db,
+    dueWorkCutoverEnabled,
+    limit,
+    projectionHasMore,
+  });
 
   return {
     catalogueDuplicates,

@@ -9,17 +9,25 @@
 // are what this suite asserts. The end-to-end proof that the real driver actually applies this to a
 // real child process lives in sentry-triage-sweep.test.ts.
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const AGENT_ENV_SH = join(import.meta.dir, "agent-env.sh");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 /** A secrets file shaped like the box's: `export`-prefixed and bare lines, comments, blanks. */
 function writeSecrets(keys: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-agent-env-"));
+  temporaryDirectories.push(dir);
   const file = join(dir, "secrets.env");
   writeFileSync(
     file,

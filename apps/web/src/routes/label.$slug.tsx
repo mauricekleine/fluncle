@@ -89,7 +89,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
       : `${siteUrl}/label/${slug}`;
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
   // lives only in the on-page voice frame.
-  const title = `${name} · Fluncle`;
+  const baseTitle = `${name} · Fluncle`;
   // The factual bio is the honest, UNIQUE description when one is authored — the same objective
   // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
   // many labels), it falls back to the templated line verbatim, so nothing regresses: it still
@@ -97,12 +97,25 @@ function labelHead(loaderData: LabelPageData | undefined) {
   // label put out), never claiming findings a page does not have and never naming the unlit tier
   // (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet. This one string flows
   // to meta + og + twitter below, so all three go unique together.
-  const description =
+  const baseDescription =
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
         ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
         : `Drum & bass records released on ${name}, with the artists behind them.`;
+  // PAGED VARIANTS BAKE THE PAGE NUMBER INTO BOTH STRINGS — the `/labels` hub rule
+  // (labels.index.tsx) applied to the entity page, which paginates the same way. The canonical
+  // above is self-referencing per page, so `?page=N` is submitted as its own indexable URL; left
+  // wearing page 1's title and description it is a duplicate-meta URL competing with the page it
+  // came from. The paged description names what the page actually carries (the artists band, the
+  // one section the pager moves), never the entity's bio, which describes only page 1's masthead.
+  const { description, title } =
+    catalogue.page > 1
+      ? {
+          description: `Page ${catalogue.page} of the drum & bass artists released on ${name} that Fluncle holds.`,
+          title: `${name}, page ${catalogue.page} · Fluncle`,
+        }
+      : { description: baseDescription, title: baseTitle };
   // The label's representative image, up the same ladder every surface uses: its OWN logo first,
   // then the freshest finding's cover, then the site cover as the final floor.
   const coverFinding = findings[0];

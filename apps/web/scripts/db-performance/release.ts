@@ -475,6 +475,10 @@ function validateCriteria(
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function validateProfileReport(rawJson: string, profile: ScaleProfile): ProfileValidation {
   const errors: string[] = [];
   let malformed = false;
@@ -488,9 +492,7 @@ export function validateProfileReport(rawJson: string, profile: ScaleProfile): P
     parsed = JSON.parse(rawJson);
   } catch (error) {
     return {
-      errors: [
-        `profile ${profile} stdout is not one JSON document: ${error instanceof Error ? error.message : String(error)}`,
-      ],
+      errors: [`profile ${profile} stdout is not one JSON document: ${errorMessage(error)}`],
       exactProfileCardinality: null,
       observedCardinality: null,
       report: null,
@@ -970,7 +972,7 @@ async function captureChild(definition: ReleaseCommandDefinition): Promise<Child
     return {
       durationMs: Math.max(0, performance.now() - startedAtMs),
       exitCode: null,
-      spawnError: error instanceof Error ? error.message : String(error),
+      spawnError: errorMessage(error),
       stderr: "",
       stdout: "",
     };
@@ -1144,7 +1146,7 @@ async function main(): Promise<void> {
     process.exitCode = result.passed ? 0 : 1;
   } catch (error) {
     process.stderr.write(
-      `db:performance:release failed before the manifest could be completed: ${error instanceof Error ? error.message : String(error)}\n`,
+      `db:performance:release failed before the manifest could be completed: ${errorMessage(error)}\n`,
     );
     process.exitCode = 1;
   }

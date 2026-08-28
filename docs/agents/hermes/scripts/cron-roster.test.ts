@@ -42,8 +42,8 @@
 //   bun test docs/agents/hermes/scripts/cron-roster.test.ts
 
 import { SURFACES } from "@fluncle/registry";
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -57,6 +57,14 @@ import {
   readTimer,
 } from "./cron-roster";
 import { AUTOMATION_CRONS } from "./fluncle-healthcheck";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
 
 const HERMES_DIR = join(import.meta.dir, "..");
 const ROSTER = deriveTimerRoster(HERMES_DIR);
@@ -317,6 +325,7 @@ describe("the guard fires — a synthetic drift", () => {
     unit: string;
   }): string {
     const root = mkdtempSync(join(tmpdir(), "fluncle-roster-"));
+    temporaryDirectories.push(root);
     const unitDir = join(root, "some-timer");
 
     mkdirSync(unitDir, { recursive: true });
@@ -403,6 +412,7 @@ describe("the guard fires — a synthetic drift", () => {
 
   test("a timer with no service beside it is unreadable", () => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-roster-"));
+    temporaryDirectories.push(root);
 
     mkdirSync(join(root, "orphan-timer"), { recursive: true });
     writeFileSync(
@@ -444,6 +454,7 @@ describe("the guard fires — a synthetic drift", () => {
     // itself, on the same line as the script it wraps. Resolving scripts first would have to
     // choose between two candidates when the unit has already answered.
     const root = mkdtempSync(join(tmpdir(), "fluncle-roster-"));
+    temporaryDirectories.push(root);
     const unitDir = join(root, "render-timer");
 
     mkdirSync(unitDir, { recursive: true });
@@ -459,6 +470,7 @@ describe("the guard fires — a synthetic drift", () => {
 
   test("a template unit is skipped, exactly as the installer skips it", () => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-roster-"));
+    temporaryDirectories.push(root);
 
     mkdirSync(join(root, "sweep-failure"), { recursive: true });
     writeFileSync(join(root, "sweep-failure", "fluncle-sweep-failure@.timer"), "[Timer]\n");

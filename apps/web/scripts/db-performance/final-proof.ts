@@ -117,10 +117,7 @@ function validAdmissionRequest(request: AdmissionRequest): boolean {
   );
 }
 
-/** Discrete-event proof of the durable two-resource FIFO and fencing rules. */
-export function simulateFencedAdmission(
-  requests: readonly AdmissionRequest[] = DEFAULT_ADMISSION_REQUESTS,
-): AdmissionSimulation {
+function admissionRequestViolations(requests: readonly AdmissionRequest[]): string[] {
   const violations: string[] = [];
   const ids = new Set<string>();
 
@@ -141,6 +138,44 @@ export function simulateFencedAdmission(
   if (requests.length > 100) {
     violations.push("admission request set exceeds the deterministic proof bound");
   }
+
+  return violations;
+}
+
+function countAdmissionFifoViolations(
+  requests: readonly AdmissionRequest[],
+  events: readonly AdmissionEvent[],
+): number {
+  let violations = 0;
+
+  for (let leftIndex = 0; leftIndex < requests.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < requests.length; rightIndex += 1) {
+      const left = requests[leftIndex];
+      const right = requests[rightIndex];
+      if (!left || !right || !requestsConflict(left, right)) {
+        continue;
+      }
+      const leftEvent = events.find((event) => event.id === left.id);
+      const rightEvent = events.find((event) => event.id === right.id);
+      if (
+        leftEvent !== undefined &&
+        rightEvent !== undefined &&
+        compareAdmissionRequests(left, right) < 0 &&
+        leftEvent.acquiredAtMs > rightEvent.acquiredAtMs
+      ) {
+        violations += 1;
+      }
+    }
+  }
+
+  return violations;
+}
+
+/** Discrete-event proof of the durable two-resource FIFO and fencing rules. */
+export function simulateFencedAdmission(
+  requests: readonly AdmissionRequest[] = DEFAULT_ADMISSION_REQUESTS,
+): AdmissionSimulation {
+  const violations = admissionRequestViolations(requests);
 
   if (violations.length > 0) {
     return {
@@ -229,26 +264,7 @@ export function simulateFencedAdmission(
   }
 
   const sortedEvents = [...events].sort((left, right) => left.acquiredAtMs - right.acquiredAtMs);
-  let fifoViolations = 0;
-  for (let leftIndex = 0; leftIndex < requests.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < requests.length; rightIndex += 1) {
-      const left = requests[leftIndex];
-      const right = requests[rightIndex];
-      if (!left || !right || !requestsConflict(left, right)) {
-        continue;
-      }
-      const leftEvent = events.find((event) => event.id === left.id);
-      const rightEvent = events.find((event) => event.id === right.id);
-      if (
-        leftEvent !== undefined &&
-        rightEvent !== undefined &&
-        compareAdmissionRequests(left, right) < 0 &&
-        leftEvent.acquiredAtMs > rightEvent.acquiredAtMs
-      ) {
-        fifoViolations += 1;
-      }
-    }
-  }
+  const fifoViolations = countAdmissionFifoViolations(requests, events);
 
   const writeEvents = sortedEvents.filter((event) => event.lane === "write");
   const staleFenceRejected =

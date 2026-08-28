@@ -314,6 +314,10 @@ const flag = (argv: string[], name: string): string | undefined => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 
+function runHeading(repointOnly: boolean, confirm: boolean): string {
+  return `\n===== ${repointOnly ? "IDENTITY REPOINT (no merge)" : "DUPLICATE-ROW MERGE"} (${confirm ? "WRITE" : "DRY RUN"}) =====`;
+}
+
 /** `select *` of one reference's rows for the artist — the rollback + the report read this. */
 async function selectRefRows(
   db: Client,
@@ -359,10 +363,7 @@ export async function main(
   // written, no hub count moves.
   const repointOnly = !duplicateSlug;
 
-  console.log(
-    `\n===== ${repointOnly ? "IDENTITY REPOINT (no merge)" : "DUPLICATE-ROW MERGE"}` +
-      ` (${confirm ? "WRITE" : "DRY RUN"}) =====`,
-  );
+  console.log(runHeading(repointOnly, confirm));
 
   // Cheapest rail first — it needs no catalogue at all.
   if (canonicalSlug === duplicateSlug) {
@@ -403,62 +404,75 @@ export async function main(
         movedTrackIds: [],
       };
 
-  console.log(`canonical (SURVIVES): ${canonical.name} (${canonical.slug})  id=${canonical.id}`);
+  const printMergePlan = (): void => {
+    console.log(`canonical (SURVIVES): ${canonical.name} (${canonical.slug})  id=${canonical.id}`);
 
-  if (duplicate) {
-    console.log(`duplicate (REMOVED):  ${duplicate.name} (${duplicate.slug})  id=${duplicate.id}`);
-    console.log(
-      `\ntrack credit: ${plan.movedTrackIds.length} moving · ` +
-        `${plan.collapsedTrackIds.length} double edge(s) collapsing · 0 tracks deleted (never).`,
-    );
-
-    for (const id of plan.movedTrackIds.slice(0, 25)) {
-      const track = cat.trackById.get(id);
+    if (duplicate) {
       console.log(
-        `  MOVE     "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}`,
+        `duplicate (REMOVED):  ${duplicate.name} (${duplicate.slug})  id=${duplicate.id}`,
+      );
+      console.log(
+        `\ntrack credit: ${plan.movedTrackIds.length} moving · ` +
+          `${plan.collapsedTrackIds.length} double edge(s) collapsing · 0 tracks deleted (never).`,
+      );
+
+      for (const id of plan.movedTrackIds.slice(0, 25)) {
+        const track = cat.trackById.get(id);
+        console.log(
+          `  MOVE     "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}`,
+        );
+      }
+
+      if (plan.movedTrackIds.length > 25) {
+        console.log(`  … and ${plan.movedTrackIds.length - 25} more`);
+      }
+
+      for (const id of plan.collapsedTrackIds) {
+        const track = cat.trackById.get(id);
+        console.log(
+          `  COLLAPSE "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}` +
+            ` (both rows credit it)`,
+        );
+      }
+    } else {
+      console.log(
+        `\nno --duplicate: this run touches IDENTITY ONLY. No edge moves, no row is deleted, and the` +
+          ` artist keeps every one of its ${cat.edges.filter((e) => e.artist_id === canonical.id).length} track credit(s).`,
       );
     }
+  };
 
-    if (plan.movedTrackIds.length > 25) {
-      console.log(`  … and ${plan.movedTrackIds.length - 25} more`);
-    }
-
-    for (const id of plan.collapsedTrackIds) {
-      const track = cat.trackById.get(id);
-      console.log(
-        `  COLLAPSE "${track?.title ?? "(untitled)"}"  ·  ${track?.label ?? "(no label)"}` +
-          ` (both rows credit it)`,
-      );
-    }
-  } else {
-    console.log(
-      `\nno --duplicate: this run touches IDENTITY ONLY. No edge moves, no row is deleted, and the` +
-        ` artist keeps every one of its ${cat.edges.filter((e) => e.artist_id === canonical.id).length} track credit(s).`,
-    );
-  }
+  printMergePlan();
 
   // ── THE FINDINGS RULE (see the header) ────────────────────────────────────────────────────────
-  if (plan.findingInheritedTrackIds.length > 0) {
-    console.log(
-      `\nfindings inherited cleanly: ${plan.findingInheritedTrackIds.length}` +
-        ` (the canonical already credits them — the page does not change)`,
-    );
-  }
-
-  if (plan.findingBlockerTrackIds.length > 0) {
-    console.log(
-      `\nABORTED — ${plan.findingBlockerTrackIds.length} finding-bearing track(s) would MOVE to a` +
-        ` different artist page, and the canonical does not credit them yet:`,
-    );
-
-    for (const id of plan.findingBlockerTrackIds) {
-      console.log(`  "${cat.trackById.get(id)?.title ?? "(untitled)"}"  (${id})`);
+  const hasFindingBlocker = (): boolean => {
+    if (plan.findingInheritedTrackIds.length > 0) {
+      console.log(
+        `\nfindings inherited cleanly: ${plan.findingInheritedTrackIds.length}` +
+          ` (the canonical already credits them — the page does not change)`,
+      );
     }
 
-    console.log(
-      `  A finding is Maurice's logged work. Re-attributing one needs a human ruling, not a merge.`,
-    );
+    if (plan.findingBlockerTrackIds.length > 0) {
+      console.log(
+        `\nABORTED — ${plan.findingBlockerTrackIds.length} finding-bearing track(s) would MOVE to a` +
+          ` different artist page, and the canonical does not credit them yet:`,
+      );
 
+      for (const id of plan.findingBlockerTrackIds) {
+        console.log(`  "${cat.trackById.get(id)?.title ?? "(untitled)"}"  (${id})`);
+      }
+
+      console.log(
+        `  A finding is Maurice's logged work. Re-attributing one needs a human ruling, not a merge.`,
+      );
+
+      return true;
+    }
+    return false;
+  };
+
+  if (hasFindingBlocker()) {
     return 1;
   }
 
@@ -469,17 +483,25 @@ export async function main(
   const duplicateRefRows = new Map<string, unknown[]>();
   const canonicalRefRows = new Map<string, unknown[]>();
 
-  if (duplicate) {
-    console.log(`\nreferences to the duplicate row (every one is settled — nothing is stranded):`);
+  const readReferenceRows = async (): Promise<void> => {
+    if (duplicate) {
+      console.log(
+        `\nreferences to the duplicate row (every one is settled — nothing is stranded):`,
+      );
 
-    for (const ref of references) {
-      const key = `${ref.table}.${ref.column}`;
-      const rows = await selectRefRows(db, ref, duplicate.id);
-      duplicateRefRows.set(key, rows);
-      canonicalRefRows.set(key, await selectRefRows(db, ref, canonical.id));
-      console.log(`  ${ref.mode.toUpperCase().padEnd(7)} ${key.padEnd(34)} ${rows.length} row(s)`);
+      for (const ref of references) {
+        const key = `${ref.table}.${ref.column}`;
+        const rows = await selectRefRows(db, ref, duplicate.id);
+        duplicateRefRows.set(key, rows);
+        canonicalRefRows.set(key, await selectRefRows(db, ref, canonical.id));
+        console.log(
+          `  ${ref.mode.toUpperCase().padEnd(7)} ${key.padEnd(34)} ${rows.length} row(s)`,
+        );
+      }
     }
-  }
+  };
+
+  await readReferenceRows();
 
   const dupSocials = duplicateRefRows.get("artist_socials.artist_id") ?? [];
 

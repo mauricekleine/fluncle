@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fluncleEntityId, fluncleWebsiteId } from "@/lib/fluncle-links";
-import { fluncleDescription } from "@/lib/identity";
+import { fluncleDescription, fluncleMetaDescription } from "@/lib/identity";
 import { faqAnchor, Route as AboutRoute } from "./about";
 import { Route as HomeRoute } from "./index";
 import { MEASURED_FAQ_ANCHOR } from "./log.$logId";
@@ -11,8 +11,14 @@ import { Route as ReachRoute } from "./reach";
 
 type HeadResult = {
   links?: Array<{ href: string; rel: string }>;
+  meta?: Array<{ content?: string; name?: string; title?: string }>;
   scripts?: Array<{ children: string; type: string }>;
 };
+
+/** A head's `<meta name="description">` — the same string og:/twitter: description carry. */
+function metaDescriptionOf(head: HeadResult): string | undefined {
+  return head.meta?.find((entry) => entry.name === "description")?.content;
+}
 
 // JSON-LD is emitted via `jsonLdScript`, which HTML-escapes the serialized JSON
 // (`<`/`>`/`&`/U+2028/U+2029 → `\uXXXX`). Those escapes are still valid JSON, so
@@ -124,6 +130,18 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
     expect(playlist?.creator).toEqual({ "@id": fluncleEntityId });
     // The identity graph lives once (on /about), not duplicated here.
     expect(playlist).not.toHaveProperty("sameAs");
+  });
+
+  it("carries its OWN meta description, never the homepage's entity line", () => {
+    // Two indexable pages may not go to search wearing one description. `/` keeps the canonical
+    // ≤155-char entity line; `/about` describes what /about answers, under the same cap.
+    const aboutHead = AboutRoute.options.head?.({} as never) as HeadResult;
+    const aboutDescription = metaDescriptionOf(aboutHead);
+
+    expect(aboutDescription).toBeDefined();
+    expect(aboutDescription).not.toBe(metaDescriptionOf(homeHead));
+    expect(aboutDescription).not.toBe(fluncleMetaDescription);
+    expect((aboutDescription ?? "").length).toBeLessThanOrEqual(155);
   });
 
   it("the reach page hangs its interactionStatistic on the canonical node (not a parallel entity)", () => {

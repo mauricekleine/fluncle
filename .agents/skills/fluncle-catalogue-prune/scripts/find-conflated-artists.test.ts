@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 import {
   type ArtistRow,
@@ -24,7 +24,12 @@ import {
 // the run must issue nothing but `select`s. The rest pins the classification — which is the part
 // that must never guess, because its output is the input to a destructive repair.
 
-process.env.PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "find-conflated-"));
+const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "find-conflated-"));
+process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
+
+afterAll(() => {
+  rmSync(PRUNE_OUT_DIR, { force: true, recursive: true });
+});
 
 const MB_DNB = "b78f09e9-dnb";
 const MB_JPOP = "1a7b4a25-jpop";

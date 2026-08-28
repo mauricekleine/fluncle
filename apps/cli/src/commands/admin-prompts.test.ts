@@ -251,20 +251,25 @@ describe("diff — the live body against a version, or against the repo", () => 
 describe("update — the one write", () => {
   test("appends the file's body, carrying the operator's why", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-prompts-"));
-    const file = join(dir, "body.txt");
-    writeFileSync(file, "A new body.\n");
+    try {
+      const file = join(dir, "body.txt");
+      writeFileSync(file, "A new body.\n");
 
-    const result = await promptUpdateCommand("note_author", { bodyFile: file, note: "tightened" });
+      const result = await promptUpdateCommand("note_author", {
+        bodyFile: file,
+        note: "tightened",
+      });
 
-    expect(posts).toEqual([
-      {
-        body: { body: "A new body.\n", note: "tightened" },
-        path: "/api/v1/admin/prompts/note_author",
-      },
-    ]);
-    expect(result.version).toBe(3);
-
-    rmSync(dir, { force: true, recursive: true });
+      expect(posts).toEqual([
+        {
+          body: { body: "A new body.\n", note: "tightened" },
+          path: "/api/v1/admin/prompts/note_author",
+        },
+      ]);
+      expect(result.version).toBe(3);
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 
   test("without a body file it asks for one, and writes nothing", async () => {
@@ -287,18 +292,20 @@ describe("update — the one write", () => {
 
   test("an empty file never becomes an empty prompt", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-prompts-"));
-    const file = join(dir, "blank.txt");
-    writeFileSync(file, "   \n");
+    try {
+      const file = join(dir, "blank.txt");
+      writeFileSync(file, "   \n");
 
-    const failure = await promptUpdateCommand("note_author", { bodyFile: file }).catch(
-      (error: unknown) => error,
-    );
+      const failure = await promptUpdateCommand("note_author", { bodyFile: file }).catch(
+        (error: unknown) => error,
+      );
 
-    expect(failure).toBeInstanceOf(CliError);
-    expect((failure as CliError).code).toBe("empty_body");
-    expect(posts).toEqual([]);
-
-    rmSync(dir, { force: true, recursive: true });
+      expect(failure).toBeInstanceOf(CliError);
+      expect((failure as CliError).code).toBe("empty_body");
+      expect(posts).toEqual([]);
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
   });
 });
 

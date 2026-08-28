@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 import { type Client } from "@libsql/client/web";
 
@@ -25,7 +25,12 @@ const writes = (s: Stub): Statement[] => s.executed.filter((st) => isWrite(st.sq
 // Redirect the rollback snapshot before ANY test runs. The script defaults `PRUNE_OUT_DIR` to `.`,
 // so a confirm-path test without this writes a `*-rollback.json` into the repo — and in a real run
 // that file is verbatim production rows. Set once, at the top, so a future test cannot forget.
-process.env.PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "reseed-label-"));
+const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "reseed-label-"));
+process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
+
+afterAll(() => {
+  rmSync(PRUNE_OUT_DIR, { force: true, recursive: true });
+});
 
 function stub(rowsFor: (sql: string) => Row[] = () => []): Stub {
   const executed: Statement[] = [];
