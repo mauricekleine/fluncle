@@ -97,11 +97,12 @@ type AdmissionResourceProfile = Readonly<{
 }>;
 
 type SqlPredicate = Readonly<{
-  args: readonly string[];
+  args: readonly (number | string)[];
   sql: string;
 }>;
 
 const HEAVY_READER_OPERATION_SUFFIX = "|heavy-read";
+const HEALTH_SNAPSHOT_OPERATION_ID = "health.snapshot";
 
 function boundedDuration(value: number): number {
   return Math.max(0, Math.round(value));
@@ -169,6 +170,59 @@ function persistedOperationId(profile: AdmissionResourceProfile): string {
   return operationId;
 }
 
+/**
+ * Stored health can make every ordinary writer ineligible while only the snapshot writer can
+ * clear that state. Its eligible FIFO is therefore chosen from the stored health visible inside
+ * the same serialized statement that grants the lease: recovery writers alone while blocked, or
+ * every conflicting writer once healthy. Active exclusion always uses the complete conflicting
+ * resource predicate.
+ */
+function queuedResourcePredicate(
+  profile: AdmissionResourceProfile,
+  nowMs: number,
+  tableAlias?: string,
+): SqlPredicate {
+  const conflict = conflictingResourcePredicate(profile, tableAlias);
+  if (profile.operationId !== HEALTH_SNAPSHOT_OPERATION_ID) {
+    return conflict;
+  }
+  const operationId = tableAlias === undefined ? "operation_id" : `${tableAlias}.operation_id`;
+  return {
+    args: [
+      ...conflict.args,
+      HEALTH_SNAPSHOT_OPERATION_ID,
+      `${HEALTH_SNAPSHOT_OPERATION_ID}${HEAVY_READER_OPERATION_SUFFIX}`,
+      nowMs,
+      DATABASE_ADMISSION_HEALTH_STALE_MS,
+      nowMs,
+      DATABASE_ADMISSION_HEALTH_STALE_MS,
+      DATABASE_ADMISSION_PUBLIC_LATENCY_LIMIT_MS,
+    ],
+    sql: `(${conflict.sql}) and (
+            ${operationId} in (?, ?)
+            or not exists (
+              select 1 from service_status as stored_health
+              where (
+                stored_health.service = 'db'
+                and (
+                  stored_health.status != 'ok'
+                  or unixepoch(stored_health.checked_at, 'subsec') is null
+                  or ? - cast(unixepoch(stored_health.checked_at, 'subsec') * 1000 as integer) > ?
+                )
+              ) or (
+                stored_health.service = 'web'
+                and (
+                  stored_health.status != 'ok'
+                  or unixepoch(stored_health.checked_at, 'subsec') is null
+                  or ? - cast(unixepoch(stored_health.checked_at, 'subsec') * 1000 as integer) > ?
+                  or stored_health.latency_ms > ?
+                )
+              )
+            )
+          )`,
+  };
+}
+
 function rowNumber(value: unknown): number | null {
   return typeof value === "number" || typeof value === "bigint" ? Number(value) : null;
 }
@@ -228,7 +282,8 @@ async function observeGuardrails(
 
   // The snapshot writer is the mechanism that clears a stored degraded/down row after a live
   // probe recovers. Its current harmless DB read remains load-bearing, but gating it on its own
-  // previous snapshot would make recovery impossible.
+  // previous snapshot would make recovery impossible. Its queue predicate independently reads the
+  // stored state inside the serialized grant transaction so a concurrent recovery cannot stale it.
   if (!includeStoredHealth) {
     return { directReadLatencyMs, nowMs, reason: null };
   }
@@ -369,6 +424,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
   const mayAcquire = guardrails.reason === null ? 1 : 0;
   const leaseExpiresAtMs = guardrails.nowMs + DATABASE_ADMISSION_LEASE_MS;
   const conflict = conflictingResourcePredicate(profile);
+  const queuedResource = queuedResourcePredicate(profile, guardrails.nowMs);
   const results = await client.batch(
     [
       {
@@ -425,7 +481,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
           mayAcquire,
           ...conflict.args,
           contenderId,
-          ...conflict.args,
+          ...queuedResource.args,
         ],
         sql: `update database_admission_lanes
               set next_fencing_token = next_fencing_token + 1, updated_at_ms = ?
@@ -436,7 +492,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
                 )
                 and ? = (
                   select contender_id from database_admission_contenders
-                  where ${conflict.sql} and state = 'queued'
+                  where ${queuedResource.sql} and state = 'queued'
                   order by enqueued_at_ms asc, contender_id asc limit 1
                 )`,
       },
@@ -449,7 +505,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
           contenderId,
           mayAcquire,
           ...conflict.args,
-          ...conflict.args,
+          ...queuedResource.args,
         ],
         sql: `update database_admission_contenders
               set state = 'active', acquired_at_ms = ?,
@@ -462,7 +518,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
                 )
                 and contender_id = (
                   select contender_id from database_admission_contenders
-                  where ${conflict.sql} and state = 'queued'
+                  where ${queuedResource.sql} and state = 'queued'
                   order by enqueued_at_ms asc, contender_id asc limit 1
                 )`,
       },
@@ -629,17 +685,19 @@ export async function observeDatabaseAdmissionFor(
   const guardrails = await observeGuardrails(
     client,
     dependencies,
-    profile.operationId !== "health.snapshot",
+    profile.operationId !== HEALTH_SNAPSHOT_OPERATION_ID,
   );
   const conflict = conflictingResourcePredicate(profile);
+  const queuedResource = queuedResourcePredicate(profile, guardrails.nowMs);
   const queue = await client.execute({
-    args: [...conflict.args],
+    args: [...conflict.args, ...queuedResource.args, ...queuedResource.args],
     sql: `select
-            sum(case when state = 'active' then 1 else 0 end) as active_count,
-            sum(case when state = 'queued' then 1 else 0 end) as queued_count,
-            min(case when state = 'queued' then enqueued_at_ms end) as oldest_enqueued_at_ms
-          from database_admission_contenders
-          where ${conflict.sql}`,
+            sum(case when state = 'active' and (${conflict.sql}) then 1 else 0 end) as active_count,
+            sum(case when state = 'queued' and (${queuedResource.sql}) then 1 else 0 end)
+              as queued_count,
+            min(case when state = 'queued' and (${queuedResource.sql}) then enqueued_at_ms end)
+              as oldest_enqueued_at_ms
+          from database_admission_contenders`,
   });
   const first = queue.rows[0];
   const queueRow: QueueRow = {
@@ -695,7 +753,7 @@ export async function coordinateDatabaseAdmissionFor(
   const guardrails = await observeGuardrails(
     client,
     dependencies,
-    profile.operationId !== "health.snapshot",
+    profile.operationId !== HEALTH_SNAPSHOT_OPERATION_ID,
   );
   let result: DatabaseAdmissionResult;
   if (request.action === "acquire") {
