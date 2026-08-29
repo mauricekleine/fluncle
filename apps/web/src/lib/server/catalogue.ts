@@ -57,6 +57,7 @@ import {
   countDueWorkNow,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DueWorkMaintenancePendingError,
+  MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
@@ -777,6 +778,28 @@ export async function refreshCatalogueRankStateCache(): Promise<CatalogueRankSta
 
 /** The default candidates per tick. `batch × findings` bounds the tick's cosine work. */
 export const RANK_BATCH_SIZE = 250;
+
+/**
+ * Shape ranked-track maintenance below SQLite's compound SELECT ceiling. The maintenance builder
+ * represents its subject set as one `UNION ALL` arm per track, while the public rank contract
+ * deliberately accepts up to 1,000 candidates. Every returned statement still joins the source
+ * writes in one transaction; later chunks may advance the shadow epochs again, and every moved
+ * subject carries the epoch it entered under so reconciliation remains complete and race-token safe.
+ */
+function rankMaintenanceStatements(movedIds: string[], now: string): InStatement[] {
+  const maintenance: InStatement[] = [];
+  for (let start = 0; start < movedIds.length; start += MAX_DUE_WORK_CHUNK_SIZE) {
+    maintenance.push(
+      ...markDueWorkSourceMaintenanceStatements(
+        movedIds
+          .slice(start, start + MAX_DUE_WORK_CHUNK_SIZE)
+          .map((subjectId) => ({ subjectId, subjectType: "track" })),
+        { now, producer: "catalogue-rank" },
+      ),
+    );
+  }
+  return maintenance;
+}
 
 /**
  * The `remaining` "run me again" sentinel returned on a FULL batch (docs/db-scale-backlog Wave 1 #1).
@@ -1864,19 +1887,11 @@ export async function rankCatalogue(
   // batch, pair with the AFTER read below into a batch delta.
   const movedIds = candidates.map((candidate) => candidate.track_id);
   const before = await readBatchRowBuckets(movedIds);
+  const maintenance = rankMaintenanceStatements(movedIds, new Date().toISOString());
 
   // One implicit write transaction. Every statement is PK-keyed and idempotent, so a retry
   // after a partial failure converges on the same rows.
-  await db.batch(
-    [
-      ...writes,
-      ...markDueWorkSourceMaintenanceStatements(
-        movedIds.map((subjectId) => ({ subjectId, subjectType: "track" })),
-        { producer: "catalogue-rank" },
-      ),
-    ],
-    "write",
-  );
+  await db.batch([...writes, ...maintenance], "write");
 
   // The tick's writes have landed. The cached six counts move by a BATCH DELTA — the moved rows'
   // (after − before) buckets, the batched twin of `withSummaryDelta` — NOT the O(catalogue) full

@@ -399,6 +399,72 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     }
   });
 
+  it("shapes rank maintenance above SQLite's 500-term compound SELECT ceiling", async () => {
+    const { rankCatalogue } = await import("./catalogue");
+
+    // 501 moved tracks is the smallest rank batch whose one-subject-per-UNION-arm maintenance
+    // statement would exceed SQLite's compound SELECT limit. Keep the fixture unvectored so each
+    // candidate contributes exactly one source update; this isolates the maintenance cardinality.
+    const batchSize = 501;
+    for (let index = 0; index < batchSize; index += 1) {
+      await seedCatalogue(`cat-wide-${String(index).padStart(3, "0")}`);
+    }
+
+    const batchSpy = vi.spyOn(db, "batch");
+    const summary = await rankCatalogue(batchSize);
+
+    expect(summary.prioritized).toBe(batchSize);
+    expect(summary.remaining).toBeGreaterThan(0);
+
+    const rankBatch = batchSpy.mock.calls.find(([statements]) =>
+      statements.some((statement) =>
+        String(
+          typeof statement === "string"
+            ? statement
+            : Array.isArray(statement)
+              ? statement[0]
+              : statement.sql,
+        ).includes("catalogue_rank_corpus"),
+      ),
+    )?.[0];
+    expect(rankBatch).toBeDefined();
+
+    const compoundTerms = (rankBatch ?? [])
+      .filter(
+        (statement) =>
+          typeof statement !== "string" &&
+          !Array.isArray(statement) &&
+          statement.sql.includes("select ? as work_kind"),
+      )
+      .map((statement) =>
+        typeof statement === "string" || Array.isArray(statement)
+          ? 0
+          : statement.sql.split("select ? as work_kind").length - 1,
+      );
+    expect(compoundTerms).toEqual([500, 1]);
+    batchSpy.mockRestore();
+
+    // Chunking changes only the marker statement shape: the rank stamp still makes a retry a no-op.
+    const retry = await rankCatalogue(batchSize);
+    expect(retry.prioritized).toBe(0);
+    expect(retry.scored).toBe(0);
+
+    const sourceRepairs = await db.execute(`select count(*) as n from due_work
+      where work_kind = 'source-repair' and subject_type = 'track'
+        and subject_id like 'cat-wide-%'`);
+    expect(Number(sourceRepairs.rows[0]?.n ?? 0)).toBe(batchSize);
+
+    const publicRepairs = await db.execute(`select projection, count(*) as n
+      from projection_repairs
+      where subject_type = 'track' and subject_id like 'cat-wide-%'
+      group by projection
+      order by projection`);
+    expect(publicRepairs.rows).toEqual([
+      { n: batchSize, projection: "artist_qualification" },
+      { n: batchSize, projection: "public_aggregates" },
+    ]);
+  });
+
   it("the sweep's `remaining > 0` drain loop TERMINATES and fully ranks the backlog", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
