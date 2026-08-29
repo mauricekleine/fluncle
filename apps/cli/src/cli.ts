@@ -992,7 +992,7 @@ JSON field reference:
       "track_due_work, crawl_due_work, public_aggregates, or artist_qualification",
     )
     .requiredOption("--action <action>", "rebuild, repair, or audit")
-    .option("--limit <limit>", "Maximum rows or repairs in this request (1-100)", "100")
+    .option("--limit <limit>", "Maximum rows or repairs in this request (1-1000)", "100")
     .option("--json", "Print the step result and current readiness as JSON", false)
     .action(async (options: AdminProjectionStepOptions) => {
       const projections = await import("./commands/admin-projections");

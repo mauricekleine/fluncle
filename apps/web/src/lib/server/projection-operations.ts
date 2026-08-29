@@ -1185,7 +1185,7 @@ export async function advanceProjectionFor(
         newGeneration: previousAudit?.complete === true,
       });
       if (projection === "public_aggregates" && result.complete && result.scanned === 0) {
-        const anchors = await advancePublicAnchors(client, input.limit);
+        const anchors = await advancePublicAnchors(client, Math.min(input.limit, 100));
         outcome = {
           complete: anchors.complete,
           processed: anchors.processed,

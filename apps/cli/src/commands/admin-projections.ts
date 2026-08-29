@@ -1,6 +1,8 @@
+import { PROJECTION_STEP_LIMIT_MAX } from "@fluncle/contracts/orpc";
+
 import { adminApiGet, adminApiPost, adminApiPut } from "../api";
 
-export const PROJECTION_STEP_LIMIT_MAX = 100;
+export { PROJECTION_STEP_LIMIT_MAX };
 
 export type ProjectionTarget =
   | "artist_qualification"
