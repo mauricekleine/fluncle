@@ -399,12 +399,12 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     }
   });
 
-  it("shapes rank maintenance above SQLite's 500-term compound SELECT ceiling", async () => {
+  it("shapes rank maintenance at the 500-subject due-work API boundary", async () => {
     const { rankCatalogue } = await import("./catalogue");
 
-    // 501 moved tracks is the smallest rank batch whose one-subject-per-UNION-arm maintenance
-    // statement would exceed SQLite's compound SELECT limit. Keep the fixture unvectored so each
-    // candidate contributes exactly one source update; this isolates the maintenance cardinality.
+    // 501 moved tracks is the smallest public rank batch that needs two maintenance calls under the
+    // due-work helper's 500-subject API contract. Keep the fixture unvectored so each candidate
+    // contributes exactly one source update; this isolates the maintenance cardinality.
     const batchSize = 501;
     for (let index = 0; index < batchSize; index += 1) {
       await seedCatalogue(`cat-wide-${String(index).padStart(3, "0")}`);
@@ -429,19 +429,28 @@ describe("the sweep — batching, staleness, and self-healing", () => {
     )?.[0];
     expect(rankBatch).toBeDefined();
 
-    const compoundTerms = (rankBatch ?? [])
+    const sourceRepairRows = (rankBatch ?? [])
       .filter(
         (statement) =>
           typeof statement !== "string" &&
           !Array.isArray(statement) &&
-          statement.sql.includes("select ? as work_kind"),
+          statement.sql.includes("insert into due_work") &&
+          statement.sql.includes("with source"),
       )
       .map((statement) =>
         typeof statement === "string" || Array.isArray(statement)
           ? 0
-          : statement.sql.split("select ? as work_kind").length - 1,
+          : statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?)").length - 1,
       );
-    expect(compoundTerms).toEqual([500, 1]);
+    expect(sourceRepairRows).toEqual([500, 1]);
+    expect(
+      (rankBatch ?? []).every(
+        (statement) =>
+          typeof statement === "string" ||
+          Array.isArray(statement) ||
+          !statement.sql.toLowerCase().includes("union all"),
+      ),
+    ).toBe(true);
     batchSpy.mockRestore();
 
     // Chunking changes only the marker statement shape: the rank stamp still makes a retry a no-op.

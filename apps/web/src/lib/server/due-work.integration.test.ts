@@ -13,6 +13,7 @@ import {
   DUE_WORK_SOURCE_REPAIR_KIND,
   hasReadyDueWork,
   listReadyDueWork,
+  MAX_DUE_WORK_CHUNK_SIZE,
   markDueWorkRepair,
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceRepairsStatement,
@@ -392,6 +393,31 @@ describe("due-work repair and drift", () => {
       clearDueWorkSourceRepairStatement({ ...source, sourceVersion: "source-v2" }),
     );
     expect(cleared.rowsAffected).toBe(1);
+  });
+
+  it("marks the full source-repair API batch without a compound SELECT", async () => {
+    const subjects = Array.from({ length: MAX_DUE_WORK_CHUNK_SIZE }, (_, index) => ({
+      subjectId: `wide-${String(index).padStart(3, "0")}`,
+      subjectType: "track" as const,
+    }));
+    const statement = markDueWorkSourceRepairsStatement(subjects, {
+      markerVersion: "wide-v1",
+      now: T0,
+      producer: "test-wide-source-writer",
+    });
+
+    expect(statement.sql).toContain("with source");
+    expect(statement.sql.toLowerCase()).not.toContain("union all");
+    expect(statement.sql.split("(?, ?, ?, 'repair', '', ?, ?, ?, ?)")).toHaveLength(
+      MAX_DUE_WORK_CHUNK_SIZE + 1,
+    );
+
+    await db.execute(statement);
+    const marked = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND, "track"],
+      sql: `select count(*) as n from due_work where work_kind = ? and subject_type = ?`,
+    });
+    expect(Number(marked.rows[0]?.n ?? 0)).toBe(MAX_DUE_WORK_CHUNK_SIZE);
   });
 
   it("keeps a newer repair marker when its source version changes during computation", async () => {

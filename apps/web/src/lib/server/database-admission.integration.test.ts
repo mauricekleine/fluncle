@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   coordinateDatabaseAdmissionFor,
+  DATABASE_ADMISSION_HEALTH_STALE_MS,
   DATABASE_ADMISSION_LEASE_MS,
   DATABASE_ADMISSION_QUEUE_TTL_MS,
   type DatabaseAdmissionAction,
@@ -331,6 +332,94 @@ describe("enforced database admission", () => {
     await seedHealth("web", "down", 1_000);
     const healthWriter = await coordinate("fluncle-healthcheck", "recovery-probe");
     expect(healthWriter).toMatchObject({ outcome: "acquired", yieldReason: null });
+  });
+
+  it("admits the recovery writer past health-blocked contenders and resumes their durable FIFO", async () => {
+    await seedHealth("db", "degraded", 251);
+    expect(await coordinate("fluncle-enrich", "blocked-oldest")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "database-health",
+    });
+    nowMs += 1;
+    expect(await coordinate("fluncle-note", "blocked-next")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "database-health",
+    });
+    nowMs += 1;
+
+    const recovery = await coordinate("fluncle-healthcheck", "recovery");
+    expect(recovery).toMatchObject({ outcome: "acquired", yieldReason: null });
+    expect(await activeCounts()).toEqual({ write: 1 });
+
+    await coordinate(
+      "fluncle-healthcheck",
+      "recovery",
+      "release",
+      recovery.fencingToken ?? undefined,
+    );
+    await seedHealth("db", "ok", 10);
+    nowMs += 1;
+
+    expect(await coordinate("fluncle-healthcheck", "healthy-later")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "queue",
+    });
+    const oldest = await coordinate("fluncle-enrich", "blocked-oldest");
+    expect(oldest.outcome).toBe("acquired");
+    await coordinate(
+      "fluncle-enrich",
+      "blocked-oldest",
+      "release",
+      oldest.fencingToken ?? undefined,
+    );
+
+    expect((await coordinate("fluncle-healthcheck", "healthy-later")).outcome).toBe("queued");
+    const next = await coordinate("fluncle-note", "blocked-next");
+    expect(next.outcome).toBe("acquired");
+    await coordinate("fluncle-note", "blocked-next", "release", next.fencingToken ?? undefined);
+    expect((await coordinate("fluncle-healthcheck", "healthy-later")).outcome).toBe("acquired");
+  });
+
+  it("admits the recovery writer past a contender blocked by stale stored health", async () => {
+    await seedHealth("db", "ok", 10);
+    nowMs += DATABASE_ADMISSION_HEALTH_STALE_MS + 1;
+    expect(await coordinate("fluncle-enrich", "stale-health-blocked")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "database-health",
+    });
+
+    expect(await coordinate("fluncle-healthcheck", "stale-health-recovery")).toMatchObject({
+      outcome: "acquired",
+      yieldReason: null,
+    });
+  });
+
+  it("never lets a recovery writer bypass an active writer", async () => {
+    const active = await coordinate("fluncle-enrich", "active-before-degradation");
+    await seedHealth("db", "degraded", 251);
+    nowMs += 1;
+    expect(await coordinate("fluncle-note", "health-blocked")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "database-health",
+    });
+    nowMs += 1;
+
+    expect(await coordinate("fluncle-healthcheck", "recovery-behind-active")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "queue",
+    });
+    expect(await activeCounts()).toEqual({ write: 1 });
+
+    await coordinate(
+      "fluncle-enrich",
+      "active-before-degradation",
+      "release",
+      active.fencingToken ?? undefined,
+    );
+    expect(await coordinate("fluncle-healthcheck", "recovery-behind-active")).toMatchObject({
+      outcome: "acquired",
+      yieldReason: null,
+    });
   });
 
   it("cancels a bounded wait without disturbing older work and drains every remaining contender", async () => {
