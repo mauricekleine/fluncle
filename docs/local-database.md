@@ -71,15 +71,15 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 "deploy:cf": "bun run db:migrate:production && bun run db:backfill && bun run db:migrate:telemetry:production && wrangler deploy && bun scripts/purge-edge-cache.ts"
 ```
 
-`db:migrate:production` runs the phase-bounded `scripts/migrate.ts --phase deploy`, not the ordinary full-journal Drizzle command. Before constructing a database client, the runner reads `packages/contracts/src/orpc/admin-operation-receipts.ts`. A checkout that still exposes `get_operation_receipt_legacy` needs no caller floor. Once the route is absent, `FLUNCLE_OPERATION_RECEIPT_CALLER_FLOOR` must exactly equal the public floor `a58f9441088728efa03f8745813ac17425229c18`; keep that value in the deploy environment so ordinary later deploys remain authorized.
+`db:migrate:production` runs the phase-bounded `scripts/migrate.ts --phase deploy`, not the ordinary full-journal Drizzle command.
 
 The deploy phase reads the generated journal and the target database's Drizzle ledger, then constructs one atomic libSQL batch ending immediately before the first pending protected contraction. It can apply expansions `0161` through `0168`, but it cannot execute `0169`, `0170`, or `0171`; setting `FLUNCLE_PROTECTED_MIGRATION_APPROVAL` on this path is rejected rather than treated as permission. Once all three contractions have been applied by their attended phases, the same rule advances to later journal entries normally. The local `db:migrate` command and the `dev` startup path remain the full-journal Drizzle path.
 
 The contractions have two fixed attended commands, matching the release manifest rather than accepting an arbitrary `--through` tag. H4 requires the target ledger through `0168`, stops through `0170`, and requires the exact tags it would apply; H8 requires the ledger through `0170`, stops through `0171`, and requires only `0171`. From the initial `0168` state the exact invocations are:
 
 ```bash
-FLUNCLE_OPERATION_RECEIPT_CALLER_FLOOR=a58f9441088728efa03f8745813ac17425229c18 FLUNCLE_PROTECTED_MIGRATION_APPROVAL=0169_lonely_mariko_yashida,0170_motionless_squadron_supreme bun run --cwd apps/web db:migrate:production:h4
-FLUNCLE_OPERATION_RECEIPT_CALLER_FLOOR=a58f9441088728efa03f8745813ac17425229c18 FLUNCLE_PROTECTED_MIGRATION_APPROVAL=0171_watery_skreet bun run --cwd apps/web db:migrate:production:h8
+FLUNCLE_PROTECTED_MIGRATION_APPROVAL=0169_lonely_mariko_yashida,0170_motionless_squadron_supreme bun run --cwd apps/web db:migrate:production:h4
+FLUNCLE_PROTECTED_MIGRATION_APPROVAL=0171_watery_skreet bun run --cwd apps/web db:migrate:production:h8
 ```
 
 Run H4 only after H1–H3, clean-checkout 1×/2×/4× proof, package gates, and attended hosted scratch evidence are green. Run H8 only after H7 and the final 171-index/29-track-index/67-consumer proof is green. A partially applied earlier phase changes the required approval to only its still-pending suffix; never reuse a stale approval. Each bounded migration batch includes its matching Drizzle ledger stamps in the same transaction, so a failed statement rolls back that batch. Applied expansions stay in place on application rollback. Applied contractions are never down-migrated: restore any required index forward before rolling application code back.

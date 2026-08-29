@@ -3,12 +3,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  hasLegacyOperationReceiptRoute,
-  OPERATION_RECEIPT_CALLER_FLOOR_ENV,
-  OPERATION_RECEIPT_CALLER_FLOOR_SHA,
-  requireOperationReceiptCallerFloor,
-} from "./guard-production-contract";
-import {
   EXPANSION_CEILING_TAG,
   guardProtectedProductionMigrations,
   parseMigrationJournal,
@@ -53,68 +47,6 @@ const JOURNAL_JSON = JSON.stringify({
 const ENTRIES = parseMigrationJournal(JOURNAL_JSON);
 const H4_APPROVAL = PROTECTED_CONTRACTION_TAGS.slice(0, 2).join(",");
 const H8_APPROVAL = PROTECTED_CONTRACTION_TAGS[2];
-const LEGACY_OPERATION_RECEIPT_CONTRACT = `
-export const adminOperationReceiptsContract = {
-  get_operation_receipt: getOperationReceipt,
-  get_operation_receipt_legacy: getOperationReceiptLegacy,
-};
-`;
-const CONTRACT_WITHOUT_LEGACY_ROUTE = `
-export const adminOperationReceiptsContract = {
-  get_operation_receipt: getOperationReceipt,
-};
-`;
-
-describe("operation receipt caller floor", () => {
-  it("detects that the checked-out contract has removed the legacy compatibility route", () => {
-    const contractSource = readFileSync(
-      fileURLToPath(
-        new URL(
-          "../../../packages/contracts/src/orpc/admin-operation-receipts.ts",
-          import.meta.url,
-        ),
-      ),
-      "utf8",
-    );
-
-    expect(hasLegacyOperationReceiptRoute(contractSource)).toBe(false);
-    expect(() =>
-      requireOperationReceiptCallerFloor(contractSource, OPERATION_RECEIPT_CALLER_FLOOR_SHA),
-    ).not.toThrow();
-  });
-
-  it("does not require the caller floor while the legacy route remains in the checkout", () => {
-    expect(hasLegacyOperationReceiptRoute(LEGACY_OPERATION_RECEIPT_CONTRACT)).toBe(true);
-
-    for (const callerFloor of [undefined, "", "not-the-floor"]) {
-      expect(() =>
-        requireOperationReceiptCallerFloor(LEGACY_OPERATION_RECEIPT_CONTRACT, callerFloor),
-      ).not.toThrow();
-    }
-  });
-
-  it("accepts only the exact persistent caller floor after the legacy route is absent", () => {
-    expect(() =>
-      requireOperationReceiptCallerFloor(
-        CONTRACT_WITHOUT_LEGACY_ROUTE,
-        OPERATION_RECEIPT_CALLER_FLOOR_SHA,
-      ),
-    ).not.toThrow();
-
-    for (const callerFloor of [
-      undefined,
-      "",
-      OPERATION_RECEIPT_CALLER_FLOOR_SHA.slice(0, 8),
-      ` ${OPERATION_RECEIPT_CALLER_FLOOR_SHA}`,
-      `${OPERATION_RECEIPT_CALLER_FLOOR_SHA} `,
-      "e44acfb9531d80255eb800fea72f12d1c708ae9b",
-    ]) {
-      expect(() =>
-        requireOperationReceiptCallerFloor(CONTRACT_WITHOUT_LEGACY_ROUTE, callerFloor),
-      ).toThrow(new RegExp(OPERATION_RECEIPT_CALLER_FLOOR_ENV));
-    }
-  });
-});
 
 describe("protected production migration journal", () => {
   it("finds the checked-in expansion ceiling and protected tags in exact contiguous order", () => {
@@ -368,21 +300,10 @@ describe("production deploy migration boundary", () => {
     expect(chain).not.toContain("bun run db:migrate &&");
   });
 
-  it("checks the checked-out compatibility route before constructing a production client", () => {
-    const source = readFileSync(fileURLToPath(new URL("./migrate.ts", import.meta.url)), "utf8");
-    const callerFloorAt = source.indexOf(
-      "const legacyOperationReceiptRoutePresent = guardCheckedOutOperationReceiptContract();",
-    );
-    const clientAt = source.indexOf("const client = createClient(");
-
-    expect(callerFloorAt).toBeGreaterThanOrEqual(0);
-    expect(clientAt).toBeGreaterThan(callerFloorAt);
-  });
-
-  it("keeps the standalone deploy guard migration-free", () => {
+  it("keeps the standalone deploy command migration-free", () => {
     const chain = pkg.scripts.deploy ?? "";
 
-    expect(chain.indexOf("bun run scripts/guard-production-contract.ts")).toBe(0);
+    expect(chain.indexOf("bun run build")).toBe(0);
     expect(chain).not.toContain("db:migrate");
   });
 });
